@@ -32,7 +32,7 @@
 #define INVITEMXLEN 7
 #define INVITEMYLEN 3
 
-extern void blt_inv_item(item *tmp, int x, int y);
+extern void blt_inv_item(item *tmp, int x, int y, int nrof);
 extern int get_inventory_data(item *op, int *cflag, int *slot, int *start, int *count, int wxlen, int wylen);
 extern void examine_range_inv();
 extern void examine_range_marks(int tag);
