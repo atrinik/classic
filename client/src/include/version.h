@@ -30,10 +30,10 @@
 #define PACKAGE_NAME "Atrinik Client"
 
 /* Major version of the package. */
-#define PACKAGE_VERSION_MAJOR 2
+#define PACKAGE_VERSION_MAJOR 3
 
 /* Minor version of the package. */
-#define PACKAGE_VERSION_MINOR 5
+#define PACKAGE_VERSION_MINOR 0
 
 /* Patch version of the package. */
 #define PACKAGE_VERSION_PATCH 0
