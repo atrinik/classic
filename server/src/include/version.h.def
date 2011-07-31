@@ -27,9 +27,9 @@
 #define VERSION_H
 
 /* Name of the package. */
-#define PACKAGE_NAME "Atrinik Server"
+#define PACKAGE_NAME "@PACKAGE_NAME@"
 
 /* Version of the package. */
-#define PACKAGE_VERSION "3.0"
+#define PACKAGE_VERSION "@PACKAGE_VERSION@"
 
 #endif
