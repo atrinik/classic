@@ -62,4 +62,27 @@ typedef struct sound_data_struct
 /** This value is defined in server too - change only both at once */
 #define MAX_SOUND_DISTANCE 12
 
+/**
+ * One ambient sound effect. */
+typedef struct sound_ambient_struct
+{
+	/** Next ambient sound effect in a doubly-linked list. */
+	struct sound_ambient_struct *next;
+
+	/** Previous ambient sound effect in a doubly-linked list. */
+	struct sound_ambient_struct *prev;
+
+	/** ID of the object the sound is coming from. */
+	int tag;
+
+	/** Channel ID we are playing the sound effect on. */
+	int channel;
+
+	/** X position of the sound effect object on the client map. */
+	int x;
+
+	/** Y position of the sound effect object on the client map. */
+	int y;
+} sound_ambient_struct;
+
 #endif
