@@ -25,51 +25,36 @@
 
 /**
  * @file
- * Book GUI header. */
+ * Keybindings header file. */
 
-#ifndef BOOK_H
-#define BOOK_H
+#ifndef KEYBIND_H
+#define KEYBIND_H
 
-/**
- * @defgroup BOOK_TEXT_xxx Book text coords
- * Book text coordinates.
- *@{*/
-/** X position of the text. */
-#define BOOK_TEXT_STARTX 27
-/** Y position of the text. */
-#define BOOK_TEXT_STARTY 58
-/** Width of the text. */
-#define BOOK_TEXT_WIDTH 621
-/** Height of the text. */
-#define BOOK_TEXT_HEIGHT 365
-/*@}*/
+/** Where keybindings are saved. */
+#define FILE_KEYBIND "settings/keys.dat"
 
 /**
- * @defgroup BOOK_TITLE_xxx Book title coords
- * Book title coordinates.
- *@{*/
-/** X position of the title. */
-#define BOOK_TITLE_STARTX 63
-/** Y position of the title. */
-#define BOOK_TITLE_STARTY 27
-/** Width of the title. */
-#define BOOK_TITLE_WIDTH 573
-/** Height of the title. */
-#define BOOK_TITLE_HEIGHT 22
-/*@}*/
+ * One keybind. */
+typedef struct keybind_struct
+{
+	/** Command to execute. */
+	char *command;
 
-/**
- * @defgroup BOOK_SCROLLBAR_xxx Book scrollbar coords
- * Book scrollbar coordinates.
- *@{*/
-/** X position of the scrollbar. */
-#define BOOK_SCROLLBAR_STARTX 660
-/** Y position of the scrollbar. */
-#define BOOK_SCROLLBAR_STARTY 56
-/** Width of the scrollbar. */
-#define BOOK_SCROLLBAR_WIDTH 15
-/** Height of the scrollbar. */
-#define BOOK_SCROLLBAR_HEIGHT 369
-/*@}*/
+	/** Key bound. */
+	SDLKey key;
+
+	/** Ctrl/shift/etc modifiers. */
+	SDLMod mod;
+
+	/** Whether to trigger repeat. */
+	uint8 repeat;
+} keybind_struct;
+
+/** How quickly the key repeats. */
+#define KEY_REPEAT_TIME (35)
+/** Ticks that must pass before the key begins repeating. */
+#define KEY_REPEAT_TIME_INIT (175)
+/** Check whether the specified key is a modifier key. */
+#define KEY_IS_MODIFIER(_key) ((_key) == SDLK_LSHIFT || (_key) == SDLK_RSHIFT || (_key) == SDLK_LALT || (_key) == SDLK_RALT || (_key) == SDLK_LCTRL || (_key) == SDLK_RCTRL || (_key) == SDLK_LSUPER || (_key) == SDLK_RSUPER || (_key) == SDLK_LMETA || (_key) == SDLK_RMETA)
 
 #endif
