@@ -23,9 +23,13 @@
 * The author can be reached at admin@atrinik.org                        *
 ************************************************************************/
 
-#ifndef EXPAND2X_H
-#define EXPAND2X_H
+#ifndef VERSION_H
+#define VERSION_H
 
-char **expand2x(char **layout, int xsize, int ysize);
+/* Name of the package. */
+#define PACKAGE_NAME "@PACKAGE_NAME@"
+
+/* Version of the package. */
+#define PACKAGE_VERSION "@PACKAGE_VERSION@"
 
 #endif
