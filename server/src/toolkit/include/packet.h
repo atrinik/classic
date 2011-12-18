@@ -25,98 +25,57 @@
 
 /**
  * @file
- * Party code header file. */
+ * Packet API header file.
+ *
+ * @author Alex Tokar */
 
-#ifndef PARTY_H
-#define PARTY_H
-
-/**
- * @defgroup PARTY_MESSAGE_xxx Party message types
- * Party message types.
- *@{*/
-/**
- * Status is used for party messages like password change, join/leave,
- * etc. */
-#define PARTY_MESSAGE_STATUS 1
-/**
- * Chat is used for party chat messages from party members. */
-#define PARTY_MESSAGE_CHAT 2
-/*@}*/
+#ifndef PACKET_H
+#define PACKET_H
 
 /**
- * Party looting modes.
- * @anchor PARTY_LOOT_xxx */
-enum
+ * A single data packet. */
+typedef struct packet_struct
 {
 	/**
-	 * Normal looting: any party member can loot the corpse. */
-	PARTY_LOOT_NORMAL,
-	/**
-	 * Only leader can loot the corpse. */
-	PARTY_LOOT_LEADER,
-	/**
-	 * Loot is randomly split between party members when the corpse is
-	 * opened. */
-	PARTY_LOOT_RANDOM,
-	/**
-	 * Total number of the modes. */
-	PARTY_LOOT_MAX
-};
-
-/**
- * Party structure. */
-typedef struct party_struct
-{
-	/**
-	 * Name of the party leader. */
-	shstr *leader;
+	 * Next packet to send. */
+	struct packet_struct *next;
 
 	/**
-	 * Name of the party. */
-	shstr *name;
+	 * Previous packet. */
+	struct packet_struct *prev;
 
 	/**
-	 * Password this party requires. */
-	char passwd[9];
+	 * The data. */
+	uint8 *data;
 
 	/**
-	 * Looting mode. One of @ref PARTY_LOOT_xxx. */
-	uint8 loot;
+	 * Length of 'data'. */
+	size_t len;
 
 	/**
-	 * Party members. */
-	objectlink *members;
+	 * Current size of 'data'. */
+	size_t size;
 
 	/**
-	 * Next party in the list. */
-	struct party_struct *next;
-} party_struct;
+	 * Expand size. */
+	size_t expand;
+
+	/**
+	 * Position in 'data'. */
+	size_t pos;
+
+	/**
+	 * Whether to enable NDELAY on this packet. */
+	uint8 ndelay;
+
+	/**
+	 * The packet's command type. */
+    uint8 type;
+} packet_struct;
 
 /**
- * @defgroup CMD_PARTY_xxx Party socket command types
- * Various types of the CLIENT_CMD_PARTY socket command.
- *@{*/
-/**
- * Show a list of all parties in the game. */
-#define CMD_PARTY_LIST 1
-/**
- * Show current members of your party. */
-#define CMD_PARTY_WHO 2
-/**
- * Successfully joined a party. */
-#define CMD_PARTY_JOIN 3
-/**
- * Joining a party requires a password. */
-#define CMD_PARTY_PASSWORD 4
-/**
- * We're leaving a party. */
-#define CMD_PARTY_LEAVE 5
-/**
- * Update party's who list. */
-#define CMD_PARTY_UPDATE 6
-/**
- * Remove memebr from party's who list. */
-#define CMD_PARTY_REMOVE_MEMBER 7
-/*@}*/
+ * How many packet structures to allocate when expanding the packets
+ * memory pool. */
+#define PACKET_EXPAND 10
 
 #endif
