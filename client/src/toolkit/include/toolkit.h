@@ -25,93 +25,28 @@
 
 /**
  * @file
- * The main include file, included by most C files. */
+ * Toolkit system header file.
+ *
+ * @author Alex Tokar */
 
-#ifndef GLOBAL_H
-#define GLOBAL_H
+#ifndef TOOLKIT_H
+#define TOOLKIT_H
 
-/* Include standard headers. */
-#include <SDL.h>
-#include <SDL_main.h>
-#include <SDL_image.h>
-#include <SDL_ttf.h>
-#include <curl/curl.h>
-#include <zlib.h>
-#include <pthread.h>
-#include <config.h>
-#include <porting.h>
-#include <toolkit.h>
-#define HASH_FUNCTION HASH_BER
-#include <uthash.h>
-#include <utlist.h>
-#include <utarray.h>
+typedef void (*toolkit_func)(void);
 
-#ifdef HAVE_SDL_MIXER
-#	include <SDL_mixer.h>
-#endif
+#define toolkit_imported(__api_name) toolkit_check_imported(toolkit_##__api_name##_deinit)
+#define toolkit_import(__api_name) toolkit_##__api_name##_init()
 
-/** The log levels. */
-typedef enum LogLevel
-{
-	/** System-related message. */
-	llevSystem,
-	/** An irrecoverable error. */
-	llevError,
-	/** Bug report. */
-	llevBug,
-	/** Debugging message. */
-	llevDebug,
-	/** Information. */
-	llevInfo
-} LogLevel;
+#define TOOLKIT_INIT_FUNC_START(__api_name) \
+{ \
+	toolkit_func __deinit_func = toolkit_##__api_name##_deinit; \
+	if (toolkit_imported(__api_name)) \
+	{ \
+		return; \
+	}
 
-#define HUGE_BUF 4096
-#define MAX_BUF 256
-
-#include <binreloc.h>
-#include <mempool.h>
-#include <packet.h>
-#include <shstr.h>
-#include <socket.h>
-#include <stringbuffer.h>
-
-#include <version.h>
-#include <scrollbar.h>
-#include <item.h>
-#include <text.h>
-#include <curl.h>
-#include <book.h>
-#include <interface.h>
-#include <commands.h>
-#include <main.h>
-#include <client.h>
-#include <effects.h>
-#include <sprite.h>
-#include <widget.h>
-#include <textwin.h>
-#include <player.h>
-#include <party.h>
-#include <misc.h>
-#include <event.h>
-#include <ignore.h>
-#include <sound.h>
-#include <map.h>
-#include <inventory.h>
-#include <menu.h>
-#include <list.h>
-#include <button.h>
-#include <popup.h>
-#include <server_settings.h>
-#include <server_files.h>
-#include <image.h>
-#include <settings.h>
-#include <keybind.h>
-#include <sha1.h>
-#include <progress.h>
-#include <updater.h>
-
-#ifndef __CPROTO__
-#	include <proto.h>
-#endif
+#define TOOLKIT_INIT_FUNC_END() \
+	toolkit_import_register(__deinit_func); \
+}
 
 #endif
