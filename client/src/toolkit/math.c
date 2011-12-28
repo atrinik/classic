@@ -25,93 +25,93 @@
 
 /**
  * @file
- * The main include file, included by most C files. */
+ * Math related functions. */
 
-#ifndef GLOBAL_H
-#define GLOBAL_H
+#include <global.h>
 
-/* Include standard headers. */
-#include <SDL.h>
-#include <SDL_main.h>
-#include <SDL_image.h>
-#include <SDL_ttf.h>
-#include <curl/curl.h>
-#include <zlib.h>
-#include <pthread.h>
-#include <config.h>
-#include <porting.h>
-#include <toolkit.h>
-#define HASH_FUNCTION HASH_BER
-#include <uthash.h>
-#include <utlist.h>
-#include <utarray.h>
-
-#ifdef HAVE_SDL_MIXER
-#	include <SDL_mixer.h>
-#endif
-
-/** The log levels. */
-typedef enum LogLevel
+/**
+ * Initialize the math API.
+ * @internal */
+void toolkit_math_init(void)
 {
-	/** System-related message. */
-	llevSystem,
-	/** An irrecoverable error. */
-	llevError,
-	/** Bug report. */
-	llevBug,
-	/** Debugging message. */
-	llevDebug,
-	/** Information. */
-	llevInfo
-} LogLevel;
+	TOOLKIT_INIT_FUNC_START(math)
+	{
+	}
+	TOOLKIT_INIT_FUNC_END()
+}
 
-#define HUGE_BUF 4096
-#define MAX_BUF 256
+/**
+ * Deinitialize the math API.
+ * @internal */
+void toolkit_math_deinit(void)
+{
+}
 
-#include <binreloc.h>
-#include <mempool.h>
-#include <packet.h>
-#include <shstr.h>
-#include <socket.h>
-#include <stringbuffer.h>
+/**
+ * Computes the integer square root.
+ * @param n Number of which to compute the root.
+ * @return Integer square root. */
+unsigned long isqrt(unsigned long n)
+{
+	unsigned long op = n, res = 0, one;
 
-#include <version.h>
-#include <scrollbar.h>
-#include <item.h>
-#include <text.h>
-#include <curl.h>
-#include <book.h>
-#include <interface.h>
-#include <commands.h>
-#include <main.h>
-#include <client.h>
-#include <effects.h>
-#include <sprite.h>
-#include <widget.h>
-#include <textwin.h>
-#include <player.h>
-#include <party.h>
-#include <misc.h>
-#include <event.h>
-#include <ignore.h>
-#include <sound.h>
-#include <map.h>
-#include <inventory.h>
-#include <menu.h>
-#include <list.h>
-#include <button.h>
-#include <popup.h>
-#include <server_settings.h>
-#include <server_files.h>
-#include <image.h>
-#include <settings.h>
-#include <keybind.h>
-#include <sha1.h>
-#include <progress.h>
-#include <updater.h>
+	/* "one" starts at the highest power of four <= than the argument. */
+	one = 1 << 30;
 
-#ifndef __CPROTO__
-#	include <proto.h>
-#endif
+	while (one > op)
+	{
+		one >>= 2;
+	}
 
-#endif
+	while (one != 0)
+	{
+		if (op >= res + one)
+		{
+			op -= res + one;
+			/* Faster than 2 * one. */
+			res += one << 1;
+		}
+
+		res >>= 1;
+		one >>= 2;
+	}
+
+	return res;
+}
+
+/**
+ * Calculates a random number between min and max.
+ *
+ * It is suggested one uses this function rather than RANDOM()%, as it
+ * would appear that a number of off-by-one-errors exist due to improper
+ * use of %.
+ *
+ * This should also prevent SIGFPE.
+ * @param min Starting range.
+ * @param max Ending range.
+ * @return The random number. */
+int rndm(int min, int max)
+{
+	if (max < 1 || max - min + 1 < 1)
+	{
+		LOG(llevBug, "Calling rndm() with min=%d max=%d\n", min, max);
+		return min;
+	}
+
+	return min + RANDOM() / (RAND_MAX / (max - min + 1) + 1);
+}
+
+/**
+ * Calculates a chance of 1 in 'n'.
+ * @param n Number.
+ * @return 1 if the chance of 1/n was successful, 0 otherwise. */
+int rndm_chance(uint32 n)
+{
+	if (!n)
+	{
+		LOG(llevBug, "Calling rndm_chance() with n=0.\n");
+		return 0;
+	}
+
+	return (uint32) RANDOM() < (RAND_MAX + 1U) / n;
+}
