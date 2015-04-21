@@ -22,42 +22,45 @@
  * The author can be reached at admin@atrinik.org                        *
  ************************************************************************/
 
-/**
- * @file
- * Implements the /shutdown command.
- *
- * @author Alex Tokar */
-
 #include <global.h>
-#include <toolkit_string.h>
+#include <check.h>
+#include <check_proto.h>
 
-/** @copydoc command_func */
-void command_shutdown(object *op, const char *command, char *params)
+static void check_re_cmp(const char *str, const char *regex)
 {
-    char when[MAX_BUF];
-    int mins, secs;
-    size_t pos;
+    ck_assert_msg(re_cmp(str, regex) != NULL,
+            "Failed to match '%s' with regex '%s'.", str, regex);
+}
 
-    pos = 0;
+START_TEST(test_re_cmp)
+{
+    check_re_cmp("dragon183", "dragon[1-9]+$");
+    check_re_cmp("dragon18", "dragon[1-9][1-9]");
+    check_re_cmp("dragon18", "dragon[1-2][1-9]$");
+    check_re_cmp("dragon18", "dragon[81]+");
+    check_re_cmp("treasure", "^treas");
+    check_re_cmp("treasure", "^treasure$");
+    check_re_cmp("where is treasure", "treasure$");
+    check_re_cmp("where is treasure?", "treasure[?.]$");
+}
 
-    if (!string_get_word(params, &pos, ' ', when, sizeof(when), 0)) {
-        return;
-    }
+END_TEST
 
-    if (strcasecmp(when, "stop") == 0) {
-        shutdown_timer_stop();
-        draw_info_type(CHAT_TYPE_CHAT, NULL, COLOR_GREEN, NULL, "[Server]: Server shut down stopped.");
-    } else if (sscanf(when, "%d:%d", &mins, &secs) == 2) {
-        char *reason;
+static Suite *suite(void)
+{
+    Suite *s = suite_create("re_cmp");
+    TCase *tc_core = tcase_create("Core");
 
-        secs = MAX(30, MAX(0, MIN(60, secs)) + MAX(0, mins) * 60);
-        reason = player_sanitize_input(params + pos);
+    tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
 
-        shutdown_timer_start(secs);
-        draw_info_type_format(CHAT_TYPE_CHAT, NULL, COLOR_GREEN, NULL, "[Server]: Server shut down started; will shut down in %02d:%02d minutes.", secs / 60, secs % 60);
+    suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_re_cmp);
 
-        if (reason) {
-            draw_info_type_format(CHAT_TYPE_CHAT, NULL, COLOR_GREEN, NULL, "[Server]: %s", reason);
-        }
-    }
+    return s;
+}
+
+void check_server_re_cmp(void)
+{
+    check_run_suite(suite(), __FILE__);
 }
