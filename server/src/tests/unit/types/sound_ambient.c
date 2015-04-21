@@ -27,26 +27,82 @@
 #include <check_proto.h>
 #include <stdarg.h>
 
-static Suite *utils_suite(void)
+START_TEST(test_sound_ambient_match_parse)
 {
-    Suite *s = suite_create("utils");
+    object *ob;
+    const char *match[] = {
+        "hour == 1",
+        "hour > 1",
+        "hour < 1",
+        "hour >= 1",
+        "hour <= 1",
+
+        "minute == 5",
+        "minute > 5",
+        "minute < 5",
+        "minute >= 5",
+        "minute <= 5",
+
+        "hour + 5 == 1",
+        "hour - 5 > 1",
+        "hour * 5 < 1",
+        "hour / 5 >= 1",
+        "hour % 5 <= 1",
+
+        "hour == 1 && minute == 5",
+        "hour > 1 && minute > 5",
+        "hour < 1 && minute < 5",
+        "hour >= 1 && minute >= 5",
+        "hour <= 1 && minute <= 5",
+
+        "hour == 1 || minute == 5",
+        "hour > 1 || minute > 5",
+        "hour < 1 || minute < 5",
+        "hour >= 1 || minute >= 5",
+        "hour <= 1 || minute <= 5",
+
+        "(hour == 1 || minute == 5)",
+        "((hour == 1 || minute == 5))",
+        "(hour == 1 || (minute == 5))",
+        "((hour == 1) || minute == 5)",
+        "((hour == 1) || (minute == 5))",
+        "(hour == 1) || (minute == 5)",
+
+        "hour < 10 && ((minute > 5 && hour < 1) || "
+                "(minute < 10 && minute > 10)) && hour > 1",
+        "(minute > 5 || minute < 10) && hour < 10 && hour > 1",
+
+        NULL};
+    size_t i;
+
+    ob = get_archetype("sound_ambient");
+    ck_assert_ptr_ne(ob, NULL);
+
+    for (i = 0; match[i] != NULL; i++) {
+        sound_ambient_match_parse(ob, match[i]);
+        ck_assert_str_eq(match[i], sound_ambient_match_str(ob));
+    }
+
+    object_destroy(ob);
+}
+
+END_TEST
+
+static Suite *suite(void)
+{
+    Suite *s = suite_create("sound_ambient");
     TCase *tc_core = tcase_create("Core");
 
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
 
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_sound_ambient_match_parse);
 
     return s;
 }
 
-void check_server_utils(void)
+void check_types_sound_ambient(void)
 {
-    Suite *s = utils_suite();
-    SRunner *sr = srunner_create(s);
-
-    srunner_set_xml(sr, "unit/server/utils.xml");
-    srunner_set_log(sr, "unit/server/utils.out");
-    srunner_run_all(sr, CK_ENV);
-    srunner_ntests_failed(sr);
-    srunner_free(sr);
+    check_run_suite(suite(), __FILE__);
 }

@@ -22,66 +22,41 @@
  * The author can be reached at admin@atrinik.org                        *
  ************************************************************************/
 
-/**
- * @file
- * This is a unit tests file for bug #85: Cursed minor shielding amulet.
- *
- * Location: http://bugzilla.atrinik.org/show_bug.cgi?id=85 */
-
 #include <global.h>
-#include <check_proto.h>
 #include <check.h>
+#include <check_proto.h>
+#include <toolkit_string.h>
 
-START_TEST(test_run)
+START_TEST(test_PKCS5_PBKDF2_HMAC_SHA2)
 {
-    int i;
-    treasurelist *list;
-    object *tmp;
+    unsigned char result[32];
+    char hex[64 + 1];
 
-    list = find_treasurelist("random_talisman");
+    PKCS5_PBKDF2_HMAC_SHA2((unsigned char *) "Pa$$w0rd", strlen("Pa$$w0rd"),
+            (unsigned char *) "xxx", strlen("xxx"), 4096, 32, result);
 
-    fail_if(list == NULL, "Couldn't find 'random_talisman' treasure list to start the test.");
-
-    for (i = 0; i < 2000; i++) {
-        tmp = generate_treasure(list, 999, 100);
-
-        if (tmp == NULL) {
-            continue;
-        }
-
-        if (strcmp(tmp->arch->name, "amulet_shielding") == 0) {
-            if (QUERY_FLAG(tmp, FLAG_CURSED) || QUERY_FLAG(tmp, FLAG_DAMNED)) {
-                fail("Managed to create cursed amulet of minor shielding (i: %d).", i);
-            }
-        }
-
-        object_destroy(tmp);
-    }
+    ck_assert_int_eq(string_tohex(result, 32, hex, sizeof(hex), false), 64);
+    ck_assert_str_eq(hex,
+            "1A27DBE11B730C53A42951F40026F148D65708CCF4829BA89F618CF8720BF5FA");
 }
 
 END_TEST
 
-static Suite *bug_suite(void)
+static Suite *suite(void)
 {
-    Suite *s = suite_create("bug");
+    Suite *s = suite_create("pbkdf2");
     TCase *tc_core = tcase_create("Core");
 
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
 
     suite_add_tcase(s, tc_core);
-    tcase_add_test(tc_core, test_run);
+    tcase_add_test(tc_core, test_PKCS5_PBKDF2_HMAC_SHA2);
 
     return s;
 }
 
-void check_bug_85(void)
+void check_server_pbkdf2(void)
 {
-    Suite *s = bug_suite();
-    SRunner *sr = srunner_create(s);
-
-    srunner_set_xml(sr, "unit/bugs/85.xml");
-    srunner_set_log(sr, "unit/bugs/85.out");
-    srunner_run_all(sr, CK_ENV);
-    srunner_ntests_failed(sr);
-    srunner_free(sr);
+    check_run_suite(suite(), __FILE__);
 }
