@@ -22,26 +22,21 @@
  * The author can be reached at admin@atrinik.org                        *
  ************************************************************************/
 
-#include <global.h>
-#include <check.h>
-#include <checkstd.h>
-#include <check_proto.h>
-#include <stdarg.h>
+/**
+ * @file
+ * Header file related to @ref MONSTER "monster" guards.
+ *
+ * @author Alex Tokar
+ */
 
-static Suite *suite(void)
-{
-    Suite *s = suite_create("utils");
-    TCase *tc_core = tcase_create("Core");
+#ifndef MONSTER_GUARD_H
+#define MONSTER_GUARD_H
 
-    tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
-    tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
+/* Prototypes */
 
-    suite_add_tcase(s, tc_core);
+void monster_guard_activate_gate(object *op, int state);
+bool monster_guard_check(object *op, object *target, const char *msg,
+        uint32_t distance);
+void monster_guard_check_close(object *op, object *target);
 
-    return s;
-}
-
-void check_server_utils(void)
-{
-    check_run_suite(suite(), __FILE__);
-}
+#endif
