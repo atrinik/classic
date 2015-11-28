@@ -24,15 +24,29 @@
 
 /**
  * @file
- * Handles code for @ref GREAVES "greaves".
+ * Structures and prototypes for the faction code.
  *
- * @author Alex Tokar */
+ * @author Alex Tokar
+ */
 
-#include <global.h>
+#ifndef FACTION_H
+#define FACTION_H
 
 /**
- * Initialize the greaves type object methods. */
-void object_type_init_greaves(void)
-{
-    object_type_methods[GREAVES].apply_func = object_apply_item;
-}
+ * Pointer to a faction structure.
+ */
+typedef struct faction * faction_t;
+
+/* Prototypes */
+
+void toolkit_faction_init(void);
+void toolkit_faction_deinit(void);
+faction_t faction_find(shstr *name);
+void faction_update(faction_t faction, player *pl, double reputation);
+void faction_update_kill(faction_t faction, player *pl);
+bool faction_is_friend(faction_t faction, object *op);
+bool faction_is_alliance(faction_t faction, faction_t faction2);
+double faction_get_bounty(faction_t faction, player *pl);
+void faction_clear_bounty(faction_t faction, player *pl);
+
+#endif
