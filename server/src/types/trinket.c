@@ -24,57 +24,17 @@
 
 /**
  * @file
- * This is a unit tests file for bug #85: Cursed minor shielding amulet.
+ * Handles code for @ref TRINKET "trinkets".
  *
- * Location: http://bugzilla.atrinik.org/show_bug.cgi?id=85 */
+ * @author Alex Tokar
+ */
 
 #include <global.h>
-#include <check.h>
-#include <checkstd.h>
-#include <check_proto.h>
 
-START_TEST(test_run)
+/**
+ * Initialize the trinket type object methods.
+ */
+void object_type_init_trinket(void)
 {
-    int i;
-    treasurelist *list;
-    object *tmp;
-
-    list = find_treasurelist("random_talisman");
-    ck_assert_msg(list != NULL, "Couldn't find 'random_talisman' treasure list "
-            "to start the test.");
-
-    for (i = 0; i < 2000; i++) {
-        tmp = generate_treasure(list, 999, 100);
-        ck_assert_msg(tmp != NULL, "Didn't generate anything: %d", i);
-
-        if (strcmp(tmp->arch->name, "amulet_shielding") == 0) {
-            if (QUERY_FLAG(tmp, FLAG_CURSED) || QUERY_FLAG(tmp, FLAG_DAMNED)) {
-                ck_abort_msg("Managed to create cursed amulet of minor "
-                        "shielding (i: %d).", i);
-            }
-        }
-
-        object_destroy(tmp);
-    }
-}
-
-END_TEST
-
-static Suite *suite(void)
-{
-    Suite *s = suite_create("bug");
-    TCase *tc_core = tcase_create("Core");
-
-    tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
-    tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
-
-    suite_add_tcase(s, tc_core);
-    tcase_add_test(tc_core, test_run);
-
-    return s;
-}
-
-void check_bug_85(void)
-{
-    check_run_suite(suite(), __FILE__);
+    object_type_methods[TRINKET].apply_func = object_apply_item;
 }
