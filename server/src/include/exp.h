@@ -24,14 +24,48 @@
 
 /**
  * @file
- * Handles code for @ref CLASS "classes".
+ * Experience related header file.
  *
- * @author Alex Tokar */
+ * @author Alex Tokar
+ */
+
+#ifndef EXP_H
+#define EXP_H
 
 #include <global.h>
 
-/**
- * Initialize the class type object methods. */
-void object_type_init_class(void)
-{
-}
+/** Level color structure. */
+typedef struct level_color {
+    /** Green level. */
+    int green;
+
+    /** Blue level. */
+    int blue;
+
+    /** Yellow level. */
+    int yellow;
+
+    /** Orange level. */
+    int orange;
+
+    /** Red level. */
+    int red;
+
+    /** Purple level. */
+    int purple;
+} level_color_t;
+
+/* Prototypes */
+uint64_t new_levels[MAXLEVEL + 2];
+level_color_t level_color[201];
+
+uint64_t
+level_exp(int level, double expmul);
+int64_t
+add_exp(object *op, int64_t exp_gain, int skill_nr, int exact);
+int
+exp_lvl_adj(object *who, object *op);
+float
+calc_level_difference(int who_lvl, int op_lvl);
+
+#endif
