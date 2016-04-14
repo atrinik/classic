@@ -47,10 +47,22 @@ bool
 socket_crypto_has_curves(void);
 bool
 socket_crypto_curve_supported(const char *name, int *nid);
+const char *
+socket_crypto_get_cert(void);
+const char *
+socket_crypto_get_cert_chain(void);
+bool
+socket_crypto_check_cmd(uint8_t type, socket_crypto_t *crypto);
 void
-socket_crypto_create(socket_t *sc, int nid);
+socket_crypto_create(socket_t *sc);
+void
+socket_crypto_set_nid(socket_crypto_t *crypto, int nid);
 void
 socket_crypto_destroy(socket_crypto_t *crypto);
+bool
+socket_crypto_load_cert(socket_crypto_t *crypto,
+                        char            *cert_str,
+                        char            *chain_str);
 bool
 socket_crypto_load_pub_key(socket_crypto_t *crypto, char *buf, size_t len);
 char *
