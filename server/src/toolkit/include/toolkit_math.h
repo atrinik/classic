@@ -24,53 +24,57 @@
 
 /**
  * @file
- * Path API header file.
+ * Toolkit math API header file.
  *
  * @author Alex Tokar
  */
 
-#ifndef PATH_H
-#define PATH_H
+#ifndef TOOLKIT_MATH_H
+#define	TOOLKIT_MATH_H
 
 #include <toolkit.h>
 
-/**
- * Prototype for the ::path_fopen function signature.
- *
- * @param filename
- * Filename.
- * @param modes
- * Modes to open the file in.
- */
-typedef FILE *(*path_fopen_t)(const char *filename, const char *modes);
-
 /* Prototypes */
 
-path_fopen_t path_fopen;
+TOOLKIT_FUNCS_DECLARE(math);
 
-TOOLKIT_FUNCS_DECLARE(path);
-
-char *
-path_join(const char *path, const char *path2);
-char *
-path_dirname(const char *path);
-char *
-path_basename(const char *path);
-char *
-path_normalize(const char *path);
-void
-path_ensure_directories(const char *path);
+unsigned long
+isqrt (unsigned long n);
 int
-path_copy_file(const char *src, FILE *dst, const char *mode);
+rndm(int min, int max);
 int
-path_exists(const char *path);
-int
-path_touch(const char *path);
+rndm_chance(uint32_t n);
+uint64_t
+rndm_u64(void);
+void *
+sort_linked_list(void          *p,
+                 unsigned      index,
+                 int          (*compare)(void *, void *, void *),
+                 void          *pointer,
+                 unsigned long *pcount,
+                 void          *end_marker);
 size_t
-path_size(const char *path);
-char *
-path_file_contents(const char *path);
-int
-path_rename(const char *old, const char *new);
+nearest_pow_two_exp(size_t n);
+bool
+math_point_in_ellipse(int    x,
+                      int    y,
+                      double cx,
+                      double cy,
+                      int    dx,
+                      int    dy,
+                      double angle);
+bool
+math_point_edge_ellipse(int    x,
+                        int    y,
+                        double cx,
+                        double cy,
+                        int    dx,
+                        int    dy,
+                        double angle,
+                        int   *deg);
+bool
+math_base64_decode(const char     *str,
+                   unsigned char **buf,
+                   size_t         *buf_len);
 
 #endif
