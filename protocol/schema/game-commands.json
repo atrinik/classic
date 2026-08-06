@@ -24,8 +24,7 @@
     {"id": 19, "symbol": "COMBAT", "wire_name": "combat"},
     {"id": 20, "symbol": "TALK", "wire_name": "talk"},
     {"id": 21, "symbol": "MOVE", "wire_name": "move"},
-    {"id": 22, "symbol": "TARGET", "wire_name": "target"},
-    {"id": 23, "symbol": "ASSET", "wire_name": "asset"}
+    {"id": 22, "symbol": "TARGET", "wire_name": "target"}
   ],
   "server_to_client": [
     {"id": 0, "symbol": "MAP", "wire_name": "map"},
@@ -55,7 +54,6 @@
     {"id": 24, "symbol": "SOUND_AMBIENT", "wire_name": "sound_ambient"},
     {"id": 25, "symbol": "INTERFACE", "wire_name": "interface"},
     {"id": 26, "symbol": "NOTIFICATION", "wire_name": "notification"},
-    {"id": 27, "symbol": "KEEPALIVE", "wire_name": "keepalive"},
-    {"id": 28, "symbol": "ASSET", "wire_name": "asset"}
+    {"id": 27, "symbol": "KEEPALIVE", "wire_name": "keepalive"}
   ]
 }

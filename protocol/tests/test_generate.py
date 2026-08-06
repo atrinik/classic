@@ -16,13 +16,13 @@ SPEC.loader.exec_module(GENERATE)
 
 class GenerateTests(unittest.TestCase):
     def test_repository_schema_is_valid(self) -> None:
-        schema = GENERATE.load_schema(ROOT / "schema/legacy-commands.json")
+        schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
         self.assertEqual(schema["protocol_version"], 1072)
-        self.assertEqual(len(schema["client_to_server"]), 24)
-        self.assertEqual(len(schema["server_to_client"]), 29)
+        self.assertEqual(len(schema["client_to_server"]), 23)
+        self.assertEqual(len(schema["server_to_client"]), 28)
 
     def test_repository_outputs_are_current(self) -> None:
-        schema = GENERATE.load_schema(ROOT / "schema/legacy-commands.json")
+        schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
         self.assertTrue(GENERATE.update_outputs(GENERATE.expected_outputs(ROOT, schema), True))
 
     def test_duplicate_json_key_is_rejected(self) -> None:
@@ -33,7 +33,7 @@ class GenerateTests(unittest.TestCase):
                 GENERATE.load_schema(path)
 
     def test_noncontiguous_command_id_is_rejected(self) -> None:
-        data = json.loads((ROOT / "schema/legacy-commands.json").read_text(encoding="utf-8"))
+        data = json.loads((ROOT / "schema/game-commands.json").read_text(encoding="utf-8"))
         data["client_to_server"][1]["id"] = 9
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "schema.json"
@@ -42,7 +42,7 @@ class GenerateTests(unittest.TestCase):
                 GENERATE.load_schema(path)
 
     def test_duplicate_symbol_is_rejected(self) -> None:
-        data = json.loads((ROOT / "schema/legacy-commands.json").read_text(encoding="utf-8"))
+        data = json.loads((ROOT / "schema/game-commands.json").read_text(encoding="utf-8"))
         data["server_to_client"][1]["symbol"] = data["server_to_client"][0]["symbol"]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "schema.json"

@@ -16,7 +16,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_custom_target(protocol-generate-check ALL
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate.py" --check
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-    COMMENT "Checking generated legacy protocol bindings"
+    COMMENT "Checking generated classic game protocol bindings"
     VERBATIM)
 
 if (BUILD_TESTING)
@@ -46,4 +46,3 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/AtrinikProtocolConfig.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/AtrinikProtocolConfigVersion.cmake"
     DESTINATION lib/cmake/AtrinikProtocol)
-
