@@ -26,6 +26,8 @@ RUN apt-get update \
 WORKDIR /src
 COPY . .
 
+RUN python3 tools/dependencies.py sync
+
 RUN ATRINIK_PACKAGE_VERSION="${ATRINIK_PACKAGE_VERSION}" \
     cmake -S . -B build/server-release \
         -DCMAKE_BUILD_TYPE=Release \

@@ -17,6 +17,11 @@ endif ()
 
 set(ATRINIK_RUNTIME_DIR "${normalized_runtime_dir}")
 set(runtime_server "${ATRINIK_RUNTIME_DIR}/server")
+if (NOT EXISTS "${ATRINIK_SOURCE_DIR}/server/resources/.atrinik-dependency.json")
+    message(FATAL_ERROR
+        "Locked server resources are missing; run "
+        "'python3 tools/dependencies.py sync' from the repository root")
+endif ()
 file(REMOVE_RECURSE "${ATRINIK_RUNTIME_DIR}")
 file(MAKE_DIRECTORY
     "${runtime_server}"
