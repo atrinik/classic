@@ -32,28 +32,7 @@
 
 #include "toolkit.h"
 #include "socket_dec.h"
-
-/**
- * Commands used for sending data from client to server.
- */
-enum {
-#define ATRINIK_SERVER_COMMAND(_id, _name, _handler, _player_only) SERVER_CMD_##_id,
-#include "socket_commands.def"
-#undef ATRINIK_SERVER_COMMAND
-
-    SERVER_CMD_NROF
-};
-
-/**
- * All the possible socket commands.
- */
-enum {
-#define ATRINIK_CLIENT_COMMAND(_id, _name, _handler) CLIENT_CMD_##_id,
-#include "socket_commands.def"
-#undef ATRINIK_CLIENT_COMMAND
-
-    CLIENT_CMD_NROF
-};
+#include <atrinik/protocol/legacy_commands.h>
 
 /**
  * Possible socket roles.
