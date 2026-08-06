@@ -1,7 +1,6 @@
 if (NOT DEFINED ATRINIK_SOURCE_DIR OR NOT DEFINED ATRINIK_BINARY_DIR OR
         NOT DEFINED ATRINIK_RUNTIME_DIR OR
-        NOT DEFINED ATRINIK_ARENA_PLUGIN OR
-        NOT DEFINED Python3_EXECUTABLE)
+        NOT DEFINED ATRINIK_ARENA_PLUGIN)
     message(FATAL_ERROR "Missing server test runtime preparation input")
 endif ()
 
@@ -17,9 +16,10 @@ endif ()
 
 set(ATRINIK_RUNTIME_DIR "${normalized_runtime_dir}")
 set(runtime_server "${ATRINIK_RUNTIME_DIR}/server")
-if (NOT EXISTS "${ATRINIK_SOURCE_DIR}/server/resources/.atrinik-dependency.json")
+if (NOT EXISTS "${ATRINIK_SOURCE_DIR}/resources/.atrinik-dependency.json" OR
+        NOT EXISTS "${ATRINIK_SOURCE_DIR}/runtime/content/.atrinik-dependency.json")
     message(FATAL_ERROR
-        "Locked server resources are missing; run "
+        "Locked runtime dependencies are missing; run "
         "'python3 tools/dependencies.py sync' from the repository root")
 endif ()
 file(REMOVE_RECURSE "${ATRINIK_RUNTIME_DIR}")
@@ -28,12 +28,12 @@ file(MAKE_DIRECTORY
     "${runtime_server}/data/tmp"
     "${runtime_server}/lib")
 
-file(COPY "${ATRINIK_SOURCE_DIR}/server/install_data/"
+file(COPY "${ATRINIK_SOURCE_DIR}/install_data/"
     DESTINATION "${runtime_server}/data")
 file(COPY
-    "${ATRINIK_SOURCE_DIR}/server/ca-bundle.crt"
-    "${ATRINIK_SOURCE_DIR}/server/permissions.cfg"
-    "${ATRINIK_SOURCE_DIR}/server/server.cfg"
+    "${ATRINIK_SOURCE_DIR}/ca-bundle.crt"
+    "${ATRINIK_SOURCE_DIR}/permissions.cfg"
+    "${ATRINIK_SOURCE_DIR}/server.cfg"
     DESTINATION "${runtime_server}")
 file(COPY
     "${ATRINIK_ARENA_PLUGIN}"
@@ -42,24 +42,11 @@ if (DEFINED ATRINIK_PYTHON_PLUGIN)
     file(COPY "${ATRINIK_PYTHON_PLUGIN}" DESTINATION "${runtime_server}")
 endif ()
 
-file(CREATE_LINK
-    "${ATRINIK_SOURCE_DIR}/maps"
-    "${ATRINIK_RUNTIME_DIR}/maps"
-    SYMBOLIC)
-file(CREATE_LINK
-    "${ATRINIK_SOURCE_DIR}/server/resources"
-    "${runtime_server}/resources"
-    SYMBOLIC)
-
-execute_process(
-    COMMAND "${Python3_EXECUTABLE}"
-        "${ATRINIK_SOURCE_DIR}/tools/collect.py"
-        --dir "${ATRINIK_SOURCE_DIR}"
-        --out "${runtime_server}/lib"
-    RESULT_VARIABLE collect_result)
-if (NOT collect_result EQUAL 0)
-    message(FATAL_ERROR
-        "Server resource collection failed with status ${collect_result}")
-endif ()
+file(COPY "${ATRINIK_SOURCE_DIR}/runtime/content/maps"
+    DESTINATION "${ATRINIK_RUNTIME_DIR}")
+file(COPY "${ATRINIK_SOURCE_DIR}/runtime/content/lib/"
+    DESTINATION "${runtime_server}/lib")
+file(COPY "${ATRINIK_SOURCE_DIR}/resources"
+    DESTINATION "${runtime_server}")
 
 file(TOUCH "${ATRINIK_RUNTIME_DIR}/.prepared")

@@ -127,11 +127,11 @@ def load_lock(path: Path, *, allow_file_urls: bool = False) -> list[dict[str, ob
         destination = PurePosixPath(values["destination"])
         if (
             destination.is_absolute()
-            or len(destination.parts) < 2
+            or len(destination.parts) < 1
             or any(part in {"", ".", ".."} for part in destination.parts)
             or destination.parts[0].startswith(".")
         ):
-            raise DependencyError(f"{context}.destination must be a safe nested path")
+            raise DependencyError(f"{context}.destination must be a safe relative path")
         normalized_destination = destination.as_posix()
         if normalized_destination in destinations:
             raise DependencyError(f"duplicate dependency destination: {normalized_destination}")

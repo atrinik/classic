@@ -23,9 +23,9 @@ function(atrinik_add_pcpnatpmp)
     endif ()
 
     FetchContent_Declare(libpcpnatpmp
-        GIT_REPOSITORY https://github.com/libpcpnatpmp/libpcpnatpmp.git
-        GIT_TAG 866d283da99f5e98eecff702a8df63e2ae57ffca
-        GIT_PROGRESS TRUE
+        URL https://github.com/libpcpnatpmp/libpcpnatpmp/archive/866d283da99f5e98eecff702a8df63e2ae57ffca.tar.gz
+        URL_HASH SHA256=65ab99547ecc8277434527607d24f8a1b02a2344ed4cea475bed751606e60202
+        DOWNLOAD_EXTRACT_TIMESTAMP false
         ${pcpnatpmp_patch_args})
     FetchContent_MakeAvailable(libpcpnatpmp)
 

@@ -1,12 +1,99 @@
-# The Atrinik server CMakeLists file.
+cmake_minimum_required(VERSION 3.21)
+project(atrinik-server VERSION 1.0.0 LANGUAGES C)
+
+include(CTest)
+include(FetchContent)
+
+option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
+option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
+option(ENABLE_PYTHON_PLUGIN "Build the Python plugin" ON)
+set(PACKAGE_TYPE "none" CACHE STRING "Package type (none or zip)")
+
+set(PACKAGE_VERSION "${PROJECT_VERSION}" CACHE STRING
+    "Semantic version shown by the server and used for packages")
+if (NOT PACKAGE_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)$")
+    message(FATAL_ERROR "PACKAGE_VERSION must be a three-part semantic version")
+endif ()
+set(PACKAGE_VERSION_MAJOR "${CMAKE_MATCH_1}")
+set(PACKAGE_VERSION_MINOR "${CMAKE_MATCH_2}")
+set(PACKAGE_VERSION_PATCH "${CMAKE_MATCH_3}")
+
+if (MINGW)
+    set(PLUGIN_SUFFIX ".dll")
+    add_compile_definitions(HAVE_STRUCT_TIMESPEC NOCRYPT __USE_MINGW_ANSI_STDIO=0)
+else ()
+    set(LINUX true)
+    set(PLUGIN_SUFFIX ".so")
+endif ()
+
+function(atrinik_configure_target target)
+    target_compile_features(${target} PRIVATE c_std_17)
+    target_compile_definitions(${target} PRIVATE _GNU_SOURCE)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${target} PRIVATE
+            -Wall -Wextra -Wno-unused-parameter -fno-common)
+        if (ENABLE_WARNING_ERRORS)
+            target_compile_options(${target} PRIVATE -Werror)
+        endif ()
+    endif ()
+    if (ENABLE_SANITIZERS)
+        if (MINGW OR NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            message(FATAL_ERROR "ENABLE_SANITIZERS requires native GCC or Clang")
+        endif ()
+        target_compile_options(${target} PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(${target} PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+    endif ()
+endfunction()
+
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies.lock.json"
+    ATRINIK_SOURCE_LOCK)
+string(JSON ATRINIK_SOURCE_LOCK_SCHEMA ERROR_VARIABLE lock_error
+    GET "${ATRINIK_SOURCE_LOCK}" schema_version)
+if (lock_error OR NOT ATRINIK_SOURCE_LOCK_SCHEMA EQUAL 1)
+    message(FATAL_ERROR "cmake/dependencies.lock.json has an unsupported schema")
+endif ()
+
+function(atrinik_fetch_source name expected_repository expected_archive)
+    foreach (field IN ITEMS repository tag commit url sha256)
+        string(JSON dependency_${field} ERROR_VARIABLE lock_error
+            GET "${ATRINIK_SOURCE_LOCK}" dependencies ${name} ${field})
+        if (lock_error OR dependency_${field} STREQUAL "")
+            message(FATAL_ERROR "Source dependency ${name}.${field} is missing")
+        endif ()
+    endforeach ()
+    string(REGEX REPLACE "^v" "" dependency_version "${dependency_tag}")
+    set(expected_url
+        "https://github.com/${expected_repository}/releases/download/${dependency_tag}/${expected_archive}-${dependency_version}.tar.gz")
+    string(LENGTH "${dependency_commit}" commit_length)
+    string(LENGTH "${dependency_sha256}" digest_length)
+    if (NOT dependency_repository STREQUAL expected_repository OR
+            NOT dependency_tag MATCHES "^v[0-9]+\\.[0-9]+\\.[0-9]+$" OR
+            NOT dependency_commit MATCHES "^[0-9a-f]+$" OR
+            NOT commit_length EQUAL 40 OR
+            NOT dependency_url STREQUAL expected_url OR
+            NOT dependency_sha256 MATCHES "^[0-9a-f]+$" OR
+            NOT digest_length EQUAL 64)
+        message(FATAL_ERROR "Source dependency ${name} has invalid lock metadata")
+    endif ()
+    FetchContent_Declare(${name}
+        URL "${dependency_url}"
+        URL_HASH "SHA256=${dependency_sha256}"
+        DOWNLOAD_EXTRACT_TIMESTAMP false)
+endfunction()
+
+atrinik_fetch_source(atrinik_protocol "atrinik/protocol" "atrinik-protocol")
+FetchContent_MakeAvailable(atrinik_protocol)
+set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
+atrinik_fetch_source(libatrinik "atrinik/libatrinik" "libatrinik")
+FetchContent_MakeAvailable(libatrinik)
+include(cmake/pcpnatpmp.cmake)
 
 set(EXECUTABLE atrinik-server)
 set(PACKAGE_NAME "Atrinik Server")
 
 set(ATRINIK_SERVER_INCLUDE_DIRS
-    ${CMAKE_SOURCE_DIR}/common
-    ${CMAKE_BINARY_DIR}/common
-    ${CMAKE_BINARY_DIR}/common/toolkit
     ${CMAKE_CURRENT_BINARY_DIR}/src/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http_server
@@ -91,14 +178,14 @@ add_executable(${EXECUTABLE} src/server/entrypoint.c)
 atrinik_configure_target(${EXECUTABLE})
 target_include_directories(${EXECUTABLE} BEFORE PRIVATE
     ${ATRINIK_SERVER_INCLUDE_DIRS})
-target_link_libraries(${EXECUTABLE} PRIVATE atrinik-server-core)
+target_link_libraries(${EXECUTABLE} PRIVATE atrinik-server-core Atrinik::Core)
 
 add_library(plugin_arena MODULE
     src/plugins/plugin_arena/plugin_arena.c)
 atrinik_configure_target(plugin_arena)
 target_include_directories(plugin_arena BEFORE PRIVATE
     ${ATRINIK_SERVER_INCLUDE_DIRS})
-target_link_libraries(plugin_arena PRIVATE Atrinik::Protocol)
+target_link_libraries(plugin_arena PRIVATE Atrinik::Core)
 
 # Create the Python plugin, if requested and Python was found.
 if (ENABLE_PYTHON_PLUGIN)
@@ -141,7 +228,7 @@ if (ENABLE_PYTHON_PLUGIN)
             ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/plugin_python/include
             ${PYTHON_INCLUDE_DIRS})
         target_link_libraries(plugin_python PRIVATE
-            Atrinik::Protocol
+            Atrinik::Core
             ${PYTHON_LIBRARIES})
         add_dependencies(${EXECUTABLE} plugin_python)
     else ()
@@ -198,7 +285,7 @@ if (BUILD_TESTING AND NOT MINGW)
         target_compile_definitions(atrinik-server-tests PRIVATE
             ATRINIK_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data")
         target_link_libraries(atrinik-server-tests PRIVATE
-            Atrinik::Protocol
+            Atrinik::Core
             atrinik-server-core
             PkgConfig::CHECK_PKG)
 
@@ -210,8 +297,7 @@ if (BUILD_TESTING AND NOT MINGW)
             -DATRINIK_SOURCE_DIR=${CMAKE_SOURCE_DIR}
             -DATRINIK_BINARY_DIR=${CMAKE_BINARY_DIR}
             -DATRINIK_RUNTIME_DIR=${ATRINIK_SERVER_TEST_RUNTIME}
-            -DATRINIK_ARENA_PLUGIN=$<TARGET_FILE:plugin_arena>
-            -DPython3_EXECUTABLE=${Python3_EXECUTABLE})
+            -DATRINIK_ARENA_PLUGIN=$<TARGET_FILE:plugin_arena>)
         set(ATRINIK_SERVER_TEST_RUNTIME_DEPENDS plugin_arena)
         if (TARGET plugin_python)
             list(APPEND ATRINIK_SERVER_TEST_RUNTIME_ARGS
@@ -222,15 +308,13 @@ if (BUILD_TESTING AND NOT MINGW)
         file(GLOB_RECURSE ATRINIK_SERVER_TEST_RESOURCE_INPUTS
             CONFIGURE_DEPENDS
             LIST_DIRECTORIES false
-            "${CMAKE_SOURCE_DIR}/arch/*"
-            "${CMAKE_SOURCE_DIR}/server/install_data/*"
-            "${CMAKE_SOURCE_DIR}/tools/compilers/*.py")
+            "${CMAKE_SOURCE_DIR}/runtime/content/*"
+            "${CMAKE_SOURCE_DIR}/install_data/*")
         list(APPEND ATRINIK_SERVER_TEST_RESOURCE_INPUTS
-            ${CMAKE_SOURCE_DIR}/server/ca-bundle.crt
-            ${CMAKE_SOURCE_DIR}/server/permissions.cfg
-            ${CMAKE_SOURCE_DIR}/server/server.cfg
-            ${CMAKE_SOURCE_DIR}/tools/collect.py
-            ${CMAKE_SOURCE_DIR}/tools/utils.py)
+            ${CMAKE_SOURCE_DIR}/ca-bundle.crt
+            ${CMAKE_SOURCE_DIR}/permissions.cfg
+            ${CMAKE_SOURCE_DIR}/server.cfg
+            ${CMAKE_SOURCE_DIR}/dependencies.lock.json)
 
         add_custom_command(
             OUTPUT "${ATRINIK_SERVER_TEST_RUNTIME_STAMP}"
