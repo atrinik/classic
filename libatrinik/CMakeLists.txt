@@ -30,11 +30,53 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     if (NOT TARGET Atrinik::Protocol)
         set(ATRINIK_PROTOCOL_SOURCE_DIR "" CACHE PATH
             "Path to an Atrinik protocol source checkout")
+        option(LIBATRINIK_USE_INSTALLED_PROTOCOL
+            "Use an installed AtrinikProtocol package instead of the locked release"
+            OFF)
         if (ATRINIK_PROTOCOL_SOURCE_DIR)
             add_subdirectory("${ATRINIK_PROTOCOL_SOURCE_DIR}"
                 "${CMAKE_CURRENT_BINARY_DIR}/atrinik-protocol")
-        else ()
+        elseif (LIBATRINIK_USE_INSTALLED_PROTOCOL)
             find_package(AtrinikProtocol 1 CONFIG REQUIRED)
+        else ()
+            include(FetchContent)
+            file(READ "${CMAKE_CURRENT_SOURCE_DIR}/dependencies.lock.json"
+                LIBATRINIK_DEPENDENCY_LOCK)
+            string(JSON LIBATRINIK_LOCK_SCHEMA ERROR_VARIABLE lock_error
+                GET "${LIBATRINIK_DEPENDENCY_LOCK}" schema_version)
+            if (lock_error OR NOT LIBATRINIK_LOCK_SCHEMA EQUAL 1)
+                message(FATAL_ERROR
+                    "dependencies.lock.json has an unsupported schema")
+            endif ()
+            foreach (field IN ITEMS repository tag commit url sha256)
+                string(JSON protocol_${field} ERROR_VARIABLE lock_error
+                    GET "${LIBATRINIK_DEPENDENCY_LOCK}"
+                    dependencies protocol ${field})
+                if (lock_error OR protocol_${field} STREQUAL "")
+                    message(FATAL_ERROR
+                        "dependencies.lock.json has no protocol.${field}")
+                endif ()
+            endforeach ()
+            string(REGEX REPLACE "^v" "" protocol_version "${protocol_tag}")
+            set(expected_protocol_url
+                "https://github.com/atrinik/protocol/releases/download/${protocol_tag}/atrinik-protocol-${protocol_version}.tar.gz")
+            string(LENGTH "${protocol_commit}" protocol_commit_length)
+            string(LENGTH "${protocol_sha256}" protocol_sha256_length)
+            if (NOT protocol_repository STREQUAL "atrinik/protocol" OR
+                    NOT protocol_tag MATCHES "^v[0-9]+\\.[0-9]+\\.[0-9]+$" OR
+                    NOT protocol_commit MATCHES "^[0-9a-f]+$" OR
+                    NOT protocol_commit_length EQUAL 40 OR
+                    NOT protocol_url STREQUAL expected_protocol_url OR
+                    NOT protocol_sha256 MATCHES "^[0-9a-f]+$" OR
+                    NOT protocol_sha256_length EQUAL 64)
+                message(FATAL_ERROR
+                    "dependencies.lock.json has invalid protocol metadata")
+            endif ()
+            FetchContent_Declare(atrinik_protocol
+                URL "${protocol_url}"
+                URL_HASH "SHA256=${protocol_sha256}"
+                DOWNLOAD_EXTRACT_TIMESTAMP false)
+            FetchContent_MakeAvailable(atrinik_protocol)
         endif ()
     endif ()
 
@@ -164,8 +206,10 @@ try_compile(HAVE_IPV6 ${CMAKE_CURRENT_BINARY_DIR}/compile_tests ${CMAKE_CURRENT_
 
 # Generate the CMake configuration header and a namespaced build include tree.
 if (LIBATRINIK_STANDALONE)
+    set(LIBATRINIK_BUILD_INCLUDE_ROOT
+        "${CMAKE_CURRENT_BINARY_DIR}/include")
     set(LIBATRINIK_GENERATED_INCLUDE_DIR
-        "${CMAKE_CURRENT_BINARY_DIR}/include/toolkit")
+        "${LIBATRINIK_BUILD_INCLUDE_ROOT}/toolkit")
     file(MAKE_DIRECTORY "${LIBATRINIK_GENERATED_INCLUDE_DIR}")
     file(GLOB LIBATRINIK_BUILD_HEADERS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
@@ -176,6 +220,8 @@ if (LIBATRINIK_STANDALONE)
     endforeach ()
     configure_file(cmake.h.def
         "${LIBATRINIK_GENERATED_INCLUDE_DIR}/toolkit_cmake.h")
+    configure_file(cmake.h.def
+        "${LIBATRINIK_BUILD_INCLUDE_ROOT}/toolkit_cmake.h")
 else ()
     set(LIBATRINIK_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}")
     configure_file(cmake.h.def
@@ -223,11 +269,8 @@ endif ()
 if (LIBATRINIK_STANDALONE)
     target_include_directories(${ATRINIK_TOOLKIT}
         PUBLIC
-            $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
-            $<INSTALL_INTERFACE:include>
-        PRIVATE
-            "${CMAKE_CURRENT_SOURCE_DIR}"
-            "${LIBATRINIK_GENERATED_INCLUDE_DIR}")
+            $<BUILD_INTERFACE:${LIBATRINIK_BUILD_INCLUDE_ROOT}>
+            $<INSTALL_INTERFACE:include>)
 else ()
     target_include_directories(${ATRINIK_TOOLKIT}
         PUBLIC
