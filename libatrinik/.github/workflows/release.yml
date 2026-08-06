@@ -19,6 +19,7 @@ jobs:
   publish:
     name: Publish libatrinik package
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
@@ -46,4 +47,3 @@ jobs:
           mapfile -t assets < <(find build/release -maxdepth 1 -type f -print | sort)
           gh release create "${RELEASE_TAG}" --verify-tag --generate-notes \
             --title "libatrinik ${RELEASE_TAG}" "${assets[@]}"
-
