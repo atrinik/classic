@@ -2,130 +2,70 @@
 =                Atrinik Server                 =
 =================================================
 
- Website: http://www.atrinik.org/
+ Website: https://www.atrinik.org/
 
- Server package for the Atrinik game.
+ Dedicated server for the Atrinik game. Protocol declarations and shared C
+ facilities come from checksum-pinned source releases. Game content and
+ runtime resources come from separately versioned, checksum-pinned archives;
+ no Git submodules are required.
 
 =================================================
 = 1. Compiling the Atrinik server               =
 =================================================
 
- See the INSTALL file in the Atrinik root directory for complete dependency
- and devcontainer instructions.
+ See INSTALL for complete dependency instructions. From this repository root:
+  $ python3 tools/dependencies.py sync
+  $ cmake --preset linux-debug
+  $ cmake --build --preset linux-debug
+  $ ctest --preset linux-debug
 
- From the repository root, build a Linux debug server with:
-  $ ./build.sh atrinik-server
-
- The executable and plugins are written to build/linux-debug/server/.
-
- Dedicated C tests use an isolated generated runtime and require no source-tree
- setup:
-  $ cmake --preset gcc-debug
-  $ cmake --build --preset gcc-debug
-  $ ctest --preset gcc-debug
-
- Each C suite is a separately addressable CTest test. List or select suites
- with:
-  $ ctest --test-dir build/gcc-debug -N
-  $ ctest --test-dir build/gcc-debug --output-on-failure \
+ The executable and plugins are written directly to build/linux-debug/. Each C
+ suite is a separately addressable CTest test. List or select suites with:
+  $ ctest --test-dir build/linux-debug -N
+  $ ctest --test-dir build/linux-debug --output-on-failure \
       -R '^server-unit-toolkit.packet$'
 
  The server's simulation, monotonic, UTC wall, round-generation, and authored
- world-time domains are documented in ../doc/SERVER_CLOCKS.md. New deadlines
- must use the typed server clock API described there.
+ world-time domains are documented in doc/SERVER_CLOCKS.md. New deadlines must
+ use the typed server clock API described there.
 
- The `check` build target remains available for compatibility and prepares the
- same build-owned runtime automatically.
+ The exact source dependencies are recorded in cmake/dependencies.lock.json.
+ The first configure downloads their release archives and verifies their
+ SHA-256 digests. CMake's FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL and
+ FETCHCONTENT_SOURCE_DIR_LIBATRINIK overrides support coordinated local work.
 
 =================================================
 = 2. Running the server                         =
 =================================================
 
- A source-tree build needs collected resources, an initialized data directory,
- and the server plugins beside the executable. From the repository root, run:
-  $ mkdir -p server/lib
-  $ python3 tools/collect.py --dir . --out server/lib
-  $ test -d server/data || cp -R server/install_data server/data
-  $ mkdir -p server/data/tmp
-  $ ln -sf ../build/linux-debug/server/atrinik-server server/atrinik-server
-  $ ln -sf ../build/linux-debug/server/libplugin_arena.so server/libplugin_arena.so
-  $ ln -sf ../build/linux-debug/server/libplugin_python.so server/libplugin_python.so
-
- The collection script collects resources from the 'arch' directory and
- compiles the NPC interface definitions. You should see output like:
-  $ python3 tools/collect.py --dir . --out server/lib
-  Starting resource collection...
-  Collecting factions...
-  Collecting treasures...
-  Collecting animations...
-  Collecting archetypes...
-  Collecting artifacts...
-  Collecting images...
-  Collecting interfaces...
-  Done!
-
- Use --dir to specify another Atrinik source directory and --out to copy the
- collected server resources directly into its runtime lib directory.
-
- The script should be executed every time you update the repository or make
- manual changes to archetypes/artifacts/images/interfaces/etc.
-
- Afterwards, start the server through its launcher, which also handles
- first-time runtime initialization:
-  $ cd server
+ Synchronize the pinned runtime archives, build, and prepare managed links:
+  $ python3 tools/dependencies.py sync
+  $ cmake --preset linux-debug
+  $ cmake --build --preset linux-debug
+  $ ./tools/prepare-runtime.sh build/linux-debug
   $ ./server.sh
 
- For example, you should see something like this:
-  $ ./server.sh
- [15:04:46.112927] INFO   [main:634] Server ready. Waiting for connections...
+ The preparation script initializes data/ without replacing existing mutable
+ state and creates links to the built server, plugins, content, and resources.
+ It refuses to overwrite unmanaged lib or maps paths. Run it again after
+ updating a dependency lock or changing build directories.
 
- For a quiet, local-only devcontainer run that exercises QUIC without public
- discovery, use:
-
+ For a quiet, local-only run that exercises QUIC without public discovery:
   $ ./server.sh --port_mapping=off --stun_server=off
 
  The startup log prints the QUIC certificate SHA-256 fingerprint. The matching
- pinned client command is documented in client/README section 2.1.
+ pinned-client procedure is documented in the client repository.
 
- Developers can validate the transport without preparing or modifying this
- source-tree runtime. From the repository root, the `network-e2e` target uses
- temporary identities and isolated loopback sockets:
-
-  $ cmake --build --preset linux-debug --target network-e2e
-
- It exercises a real QUIC handshake and data exchange, local STUN and UDP
- punching, and deterministic port-mapping fallback. See tests/e2e/README.md for
- focused scenarios.
-
- The startup scripts will also pass any extra options straight to the
- binary, for example:
+ The launcher passes extra options straight to the binary:
   $ ./server.sh --version
-  [15:07:12.638483] INFO   [version:94] This is Atrinik v4.0 (master/7fc333e
-  by Zoey Rose)
 
- If you use a different BUILD_DIR or CMake preset, adjust the three symlink
- targets above. To run the binary without server.sh, you will need to do the
- following (working from the server directory):
-  - Create 'lib' directory if it doesn't exist
-  - If the 'data' directory doesn't exist, copy 'install_data' as 'data'
-    and create a 'data/tmp' directory
-  - Copy all files (not directories) from ../arch to the 'lib' directory;
-    this will need to be done every time you run the collect.py script.
-    Alternatively, use the --out option shown above to copy them automatically.
-  - Now you can launch the atrinik-server binary manually.
-
- It is recommended to generate the region maps prior to starting up the server.
- As this can take some time, they are not generated automatically, but you need
- to use the --worldmaker switch, eg, run this prior to starting up your server:
-  $ ./server.sh --worldmaker
-
- From a repository build, the root-level helper performs the complete build,
- resource collection, runtime setup, and generation sequence:
+ It is recommended to generate region maps before starting the server. The
+ repository helper performs the build, dependency synchronization, runtime
+ preparation, and generation sequence:
   $ ./generate-region-maps.sh
 
- The generator does not open the game or HTTP listening sockets, so it can be
- run while another server instance is using the configured ports. Generated
- PNG and definition files are written to server/data/http/client-maps/.
+ The generator does not open game or HTTP listening sockets. Generated PNG and
+ definition files are written to data/http/client-maps/.
 
  The region maps are not mandatory to play the game, however, some features may
  not work (specifically, the client will only be able to work with dynamic area
@@ -183,8 +123,8 @@
  in-band QUIC delivery. Non-loopback origins must use HTTPS.
 
  You will need to map the following URLs to their directory counterparts:
-  - https://cdn.example.com/atrinik/          -> server/data/http/
-  - https://cdn.example.com/atrinik/resources -> server/resources/
+  - https://cdn.example.com/atrinik/          -> data/http/
+  - https://cdn.example.com/atrinik/resources -> resources/
 
  The bundled HTTP server can be enabled for testing with http_server = on, but
  production deployments should normally use a real HTTPS origin/CDN.
@@ -252,33 +192,6 @@
  before starting the container. Set ATRINIK_PORT_MAPPING=off only when the host
  has a direct global address or the route is managed outside Atrinik.
 
-
-=================================================
-= 2.4. Running natively on Windows              =
-=================================================
-
- The shared MXE build produces a self-contained native Windows server package:
-  $ docker compose -f compose.windows.yaml run --build --rm windows-build
-
- Extract build/packages/atrinik-server-4.0-windows-x86_64.zip on the Windows
- machine, enter its server/ directory, copy server-custom.cfg.example to
- server-custom.cfg, configure it, and launch server.bat. The launcher keeps
- the working directory correct, initializes data/ only when it is absent, and
- passes additional command-line arguments to atrinik-server.exe. Back up data/
- because it contains players, metaserver credentials, and the persistent QUIC
- identity.
-
- The package includes generated region-map PNG and definition files under
- install_data/http/client-maps/. A new data/ directory receives them on first
- launch. On later launches, server.bat refreshes only these read-only files in
- data/http/client-maps/, so QUIC clients receive the packaged maps without
- replacing any other runtime data.
-
- The executable runs directly on Windows; Docker is only used to produce the
- package. This lets PCP/NAT-PMP/UPnP discovery use the physical Windows network
- interfaces and router. Permit atrinik-server.exe through Windows Defender
- Firewall, including inbound UDP on port_quic (1730 by default). The server
- package includes the Python runtime required by normal map and NPC scripts.
 
 Account password storage and upgrades
 -------------------------------------
@@ -451,7 +364,7 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  Be aware that the first time the server uploads the information to the
  metaserver, a secret key is generated. If you LOSE this key, you will be
  LOCKED out of updating the metaserver ever again (for the particular
- identity). It is stored in server/data/metaserver_key.
+ identity). It is stored in data/metaserver_key.
 
 =================================================
 = 3.1. Metaserver-exposed information           =
@@ -473,7 +386,7 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  The above information is sent to https://meta.atrinik.org/ (unless otherwise
  specified), again, only if enabled as per section 3. Application-based HPKP is
  used to pin the signature of the outermost leaf certificate for security
- reasons. The ultimate-trust keys can be found in server/data/keys.
+ reasons. The ultimate-trust keys can be found in data/keys.
 
 =================================================
 = 3.2. Ports used by Atrinik                    =

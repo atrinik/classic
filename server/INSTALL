@@ -1,0 +1,20 @@
+# Building Atrinik server
+
+Install CMake 3.21 or newer, Ninja, a C17 compiler, Flex, MiniUPnPc,
+libcurl, OpenSSL, zlib, libgd, Python development headers, and Check. Then run:
+
+```sh
+python3 tools/dependencies.py sync
+cmake --preset linux-debug
+cmake --build --preset linux-debug
+ctest --preset linux-debug
+```
+
+The first configure downloads the exact protocol and libatrinik source release
+archives recorded in `cmake/dependencies.lock.json` and verifies their SHA-256
+digests. Runtime content and server resources are installed from the release
+archives recorded in `dependencies.lock.json`.
+
+CMake's `FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL` and
+`FETCHCONTENT_SOURCE_DIR_LIBATRINIK` overrides support coordinated local work.
+
