@@ -1,0 +1,20 @@
+# libatrinik
+
+`libatrinik` is the reusable C17 networking and utility library shared by the
+Atrinik legacy client, server, tests, and tooling. Its public CMake target is
+`Atrinik::Core`; the installed static library is named `libatrinik`.
+
+The library directly depends on the separately released `atrinik/protocol`
+package. Configure with either an installed `AtrinikProtocol` CMake package or
+an explicit source checkout:
+
+```sh
+cmake -S . -B build \
+  -DATRINIK_PROTOCOL_SOURCE_DIR=/path/to/protocol
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+cmake --install build --prefix /path/to/prefix
+```
+
+The first standalone release preserves the inherited GPL-2.0-or-later license.
+Extraction into an independent repository does not relicense the code.
