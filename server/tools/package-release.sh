@@ -17,9 +17,12 @@ fi
 version=${BASH_REMATCH[1]}
 package=atrinik-server-${version}
 mkdir -p "${output_directory}"
-git archive --format=tar.gz --prefix="${package}/" \
-  --output="${output_directory}/${package}.tar.gz" "${tag}"
-(
-  cd "${output_directory}"
-  sha256sum "${package}.tar.gz" >SHA256SUMS
-)
+staging_directory=$(mktemp -d)
+trap 'rm -rf "${staging_directory}"' EXIT
+git archive --format=tar --prefix="${package}/" "${tag}" \
+  | tar -xf - -C "${staging_directory}"
+printf '%s\n' "${version}" >"${staging_directory}/${package}/VERSION"
+tar --sort=name --owner=0 --group=0 --numeric-owner \
+  --mtime="@$(git show -s --format=%ct "${tag}^{commit}")" \
+  -czf "${output_directory}/${package}.tar.gz" \
+  -C "${staging_directory}" "${package}"

@@ -3,7 +3,7 @@ services:
     image: ${ATRINIK_SERVER_IMAGE:-atrinik-server}
     build:
       context: .
-      dockerfile: Dockerfile.server
+      dockerfile: Dockerfile
     environment:
       ATRINIK_HTTP_URL: ${ATRINIK_HTTP_URL:-off}
       ATRINIK_SERVER_PUBLIC: ${ATRINIK_SERVER_PUBLIC:-false}

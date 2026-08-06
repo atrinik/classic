@@ -34,6 +34,14 @@
  SHA-256 digests. CMake's FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL and
  FETCHCONTENT_SOURCE_DIR_LIBATRINIK overrides support coordinated local work.
 
+ Releases are produced from every squash merge to master. semantic-release
+ parses the Conventional Commits pull-request title: a breaking marker or
+ BREAKING CHANGE produces a major release, feat produces a minor release, and
+ every other conventional type produces at least a patch release. Each release
+ contains a deterministic source archive, a portable Windows x86_64 ZIP,
+ SHA-256 checksums, and a versioned `ghcr.io/atrinik/atrinik-server` image. The
+ newest release also updates the `latest` image alias.
+
 =================================================
 = 2. Running the server                         =
 =================================================
