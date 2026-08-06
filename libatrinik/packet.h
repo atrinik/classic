@@ -36,7 +36,7 @@
 #include "stringbuffer_dec.h"
 #include "packet_dec.h"
 
-/** Maximum payload carried by one legacy game-protocol envelope. */
+/** Maximum payload carried by one classic game-protocol envelope. */
 #define PACKET_PAYLOAD_MAX (UINT16_MAX - 1U)
 
 /** Explicit packet parsing and construction failures. */
@@ -63,7 +63,7 @@ typedef struct packet_reader {
     size_t len;
     size_t pos;
     packet_error_t error;
-    /** Optional legacy position mirror used only during whole-tree migration. */
+    /** Optional position mirror used only during whole-tree migration. */
     size_t *position;
     struct packet_reader_scope *scope;
 } packet_reader_t;

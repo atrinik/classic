@@ -32,7 +32,7 @@
 
 #include "toolkit.h"
 #include "socket_dec.h"
-#include <atrinik/protocol/legacy_commands.h>
+#include <atrinik/protocol/game_commands.h>
 
 /**
  * Possible socket roles.
