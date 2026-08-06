@@ -23,20 +23,27 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install native dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential ca-certificates check cmake flex \
-            libcurl4-openssl-dev libgd-dev libminiupnpc-dev \
-            libreadline-dev libssl-dev libsubunit-dev ninja-build pkgconf \
-            python3-dev zlib1g-dev
+      - name: Pull pinned build environment
+        run: docker pull ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
 
       - name: Validate, build, and test
         run: |
-          python3 -m unittest discover -s tools/tests -p 'test_*.py'
-          python3 tools/dependencies.py sync
-          python3 tools/dependencies.py verify
-          cmake --preset linux-debug
-          cmake --build --preset linux-debug --parallel
-          ctest --preset linux-debug
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --workdir /workspace \
+            ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03 \
+            bash -euo pipefail -c '
+              apt-get update -qq
+              env DEBIAN_FRONTEND=noninteractive \
+                apt-get install -y -qq --no-install-recommends \
+                  build-essential ca-certificates check cmake flex \
+                  libcurl4-openssl-dev libgd-dev libminiupnpc-dev \
+                  libreadline-dev libssl-dev libsubunit-dev ninja-build \
+                  pkgconf python3-dev zlib1g-dev
+              python3 -m unittest discover -s tools/tests -p "test_*.py"
+              python3 tools/dependencies.py sync
+              python3 tools/dependencies.py verify
+              cmake --preset linux-debug
+              cmake --build --preset linux-debug --parallel
+              ctest --preset linux-debug
+            '
