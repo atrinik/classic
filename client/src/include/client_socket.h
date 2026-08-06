@@ -22,32 +22,40 @@
  * The author can be reached at admin@atrinik.org                        *
  ************************************************************************/
 
+#ifndef CLIENT_SOCKET_H
+#define CLIENT_SOCKET_H
+
 /**
  * @file
- * Misc definitions.
+ * Public declarations for the corresponding client module.
  */
 
-#ifndef MISC_H
-#define MISC_H
+/** Public API implemented in src/client/socket.c. */
 
-#define MAX_INPUT_STR 256
+extern command_buffer *command_buffer_new(size_t len, uint8_t *data);
 
-/** Public API implemented in src/client/misc.c. */
+extern void command_buffer_free(command_buffer *buf);
 
-extern void browser_open(const char *url);
+extern void socket_send_packet(struct packet_struct *packet);
 
-extern char *package_get_version_full(char *dst, size_t dstlen);
+extern command_buffer *get_next_input_command(void);
 
-extern char *package_get_version_partial(char *dst, size_t dstlen);
+extern void add_input_command(command_buffer *buf);
 
-extern int bmp2png(const char *path);
+extern void socket_thread_start(void);
 
-extern void screenshot_create(SDL_Surface *surface);
+extern void socket_thread_stop(void);
 
-/** Public API implemented in src/client/upgrader.c. */
+extern int handle_socket_shutdown(void);
 
-extern void upgrader_init(void);
+extern void client_socket_close(client_socket_t *csock);
 
-extern char *upgrader_get_version_partial(char *dst, size_t dstlen);
+extern void client_socket_deinitialize(void);
+
+extern bool client_socket_open(client_socket_t *csock,
+                               const char *host,
+                               int port,
+                               const char *quic_certificate_sha256,
+                               socket_connection_preference_t preference);
 
 #endif

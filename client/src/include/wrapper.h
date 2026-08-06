@@ -22,32 +22,42 @@
  * The author can be reached at admin@atrinik.org                        *
  ************************************************************************/
 
+#ifndef WRAPPER_H
+#define WRAPPER_H
+
 /**
  * @file
- * Misc definitions.
+ * Public declarations for the corresponding client module.
  */
 
-#ifndef MISC_H
-#define MISC_H
+/** Public API implemented in src/client/wrapper.c. */
 
-#define MAX_INPUT_STR 256
+extern void system_start(void);
 
-/** Public API implemented in src/client/misc.c. */
+extern void system_end(void);
 
-extern void browser_open(const char *url);
+extern void mkdir_ensure(const char *path);
 
-extern char *package_get_version_full(char *dst, size_t dstlen);
+extern void copy_file(const char *filename, const char *filename_out);
 
-extern char *package_get_version_partial(char *dst, size_t dstlen);
+extern void copy_if_exists(const char *from, const char *to, const char *src, const char *dst);
 
-extern int bmp2png(const char *path);
+extern void copy_rec(const char *src, const char *dst);
 
-extern void screenshot_create(SDL_Surface *surface);
+extern const char *get_config_dir(void);
 
-/** Public API implemented in src/client/upgrader.c. */
+extern void get_data_dir_file(char *buf, size_t len, const char *fname);
 
-extern void upgrader_init(void);
+extern char *file_path(const char *path, const char *mode);
 
-extern char *upgrader_get_version_partial(char *dst, size_t dstlen);
+extern char *file_path_player(const char *path);
+
+extern char *file_path_server(const char *path);
+
+extern FILE *client_fopen_wrapper(const char *fname, const char *mode);
+
+extern SDL_Surface *IMG_Load_wrapper(const char *file);
+
+extern TTF_Font *TTF_OpenFont_wrapper(const char *file, int ptsize);
 
 #endif

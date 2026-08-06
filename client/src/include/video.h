@@ -22,32 +22,30 @@
  * The author can be reached at admin@atrinik.org                        *
  ************************************************************************/
 
+#ifndef VIDEO_H
+#define VIDEO_H
+
 /**
  * @file
- * Misc definitions.
+ * Public declarations for the corresponding client module.
  */
 
-#ifndef MISC_H
-#define MISC_H
+/** Public API implemented in src/client/video.c. */
 
-#define MAX_INPUT_STR 256
+extern x11_display_type SDL_display;
 
-/** Public API implemented in src/client/misc.c. */
+extern x11_window_type SDL_window;
 
-extern void browser_open(const char *url);
+extern void video_init(void);
 
-extern char *package_get_version_full(char *dst, size_t dstlen);
+extern int video_get_bpp(void);
 
-extern char *package_get_version_partial(char *dst, size_t dstlen);
+extern void video_set_icon(SDL_Surface *icon);
 
-extern int bmp2png(const char *path);
+extern int video_set_size(void);
 
-extern void screenshot_create(SDL_Surface *surface);
+extern uint32_t get_video_flags(void);
 
-/** Public API implemented in src/client/upgrader.c. */
-
-extern void upgrader_init(void);
-
-extern char *upgrader_get_version_partial(char *dst, size_t dstlen);
+extern int video_fullscreen_toggle(SDL_Surface **surface, uint32_t *flags);
 
 #endif
