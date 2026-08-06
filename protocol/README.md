@@ -1,0 +1,24 @@
+# Atrinik protocol
+
+This directory is the canonical source for Atrinik's legacy wire command IDs.
+It generates matching C and Python bindings so the client, server, tests, and
+future automation do not maintain independent numeric constants.
+
+The legacy game, metaserver, and Atrinik Next protocols are separate contract
+families. This package currently publishes only the legacy game command
+registry. Add another family only with its own namespace, specification,
+version, fixtures, and validation.
+
+Regenerate bindings after editing the schema:
+
+```sh
+python3 tools/generate.py
+python3 -m unittest discover -s tests -p 'test_*.py'
+cmake -S . -B build
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+The first release preserves the existing GPL-2.0-or-later licensing posture.
+Moving the protocol into an independent package does not relicense it.
+
