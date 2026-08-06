@@ -111,12 +111,12 @@ static size_t client_sockets_count;
  * Defines all the possible socket commands.
  */
 static const socket_command_t socket_commands[] = {
-#define ATRINIK_SERVER_COMMAND(_id, _name, _handler, _player_only)                  \
-    [SERVER_CMD_##_id] = {.handle_func = (_handler),                                \
-                          .flags = (_player_only) ? SOCKET_COMMAND_PLAYER_ONLY : 0, \
-                          .name = (_name)},
-#include <toolkit/socket_commands.def>
-#undef ATRINIK_SERVER_COMMAND
+#define ATRINIK_SERVER_COMMAND_HANDLER(_symbol, _handler, _player_only)                 \
+    [SERVER_CMD_##_symbol] = {.handle_func = (_handler),                                \
+                              .flags = (_player_only) ? SOCKET_COMMAND_PLAYER_ONLY : 0, \
+                              .name = SERVER_CMD_NAME_##_symbol},
+#include "command_handlers.def"
+#undef ATRINIK_SERVER_COMMAND_HANDLER
 };
 CASSERT_ARRAY(socket_commands, SERVER_CMD_NROF);
 
