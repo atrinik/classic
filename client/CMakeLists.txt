@@ -1,5 +1,29 @@
 cmake_minimum_required(VERSION 3.21)
-project(atrinik-client VERSION 5.1.0 LANGUAGES C)
+
+set(ATRINIK_SOURCE_VERSION "5.1.0")
+if (DEFINED ENV{ATRINIK_PACKAGE_VERSION})
+    set(ATRINIK_SOURCE_VERSION "$ENV{ATRINIK_PACKAGE_VERSION}")
+elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
+        ATRINIK_SOURCE_VERSION LIMIT_COUNT 1)
+elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+    execute_process(
+        COMMAND git describe --tags --exact-match --match "v[0-9]*"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE ATRINIK_GIT_TAG
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE ATRINIK_GIT_TAG_RESULT)
+    if (ATRINIK_GIT_TAG_RESULT EQUAL 0)
+        string(REGEX REPLACE "^v" "" ATRINIK_SOURCE_VERSION
+            "${ATRINIK_GIT_TAG}")
+    endif ()
+endif ()
+if (NOT ATRINIK_SOURCE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+    message(FATAL_ERROR "Atrinik source version must be MAJOR.MINOR.PATCH")
+endif ()
+
+project(atrinik-client VERSION "${ATRINIK_SOURCE_VERSION}" LANGUAGES C)
 
 include(CTest)
 include(FetchContent)
@@ -8,10 +32,14 @@ option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
 option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
 set(PACKAGE_TYPE "none" CACHE STRING "Package type (none, deb, rpm, nsis, or zip)")
 
-set(PACKAGE_VERSION "${PROJECT_VERSION}")
-set(PACKAGE_VERSION_MAJOR "${PROJECT_VERSION_MAJOR}")
-set(PACKAGE_VERSION_MINOR "${PROJECT_VERSION_MINOR}")
-set(PACKAGE_VERSION_PATCH "${PROJECT_VERSION_PATCH}")
+set(PACKAGE_VERSION "${PROJECT_VERSION}" CACHE STRING
+    "Semantic version shown by the client and used for packages")
+if (NOT PACKAGE_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)$")
+    message(FATAL_ERROR "PACKAGE_VERSION must be a three-part semantic version")
+endif ()
+set(PACKAGE_VERSION_MAJOR "${CMAKE_MATCH_1}")
+set(PACKAGE_VERSION_MINOR "${CMAKE_MATCH_2}")
+set(PACKAGE_VERSION_PATCH "${CMAKE_MATCH_3}")
 
 if (MINGW)
     set(PLUGIN_SUFFIX ".dll")
