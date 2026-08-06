@@ -71,6 +71,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.tag.outputs.tag }}
         run: |
-          gh workflow run release.yml --repo "${GITHUB_REPOSITORY}" \
-            --ref master --field "tag=${RELEASE_TAG}"
-
+          for attempt in {1..6}; do
+            if gh workflow run release.yml --repo "${GITHUB_REPOSITORY}" \
+                --ref master --field "tag=${RELEASE_TAG}"; then
+              exit 0
+            fi
+            ((attempt < 6)) || exit 1
+            sleep 5
+          done
