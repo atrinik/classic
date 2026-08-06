@@ -73,9 +73,15 @@ int process_delay;
 
 static long shutdown_time;
 static uint8_t shutdown_active = 0;
+static volatile sig_atomic_t shutdown_requested;
 
 static void dequeue_path_requests(void);
 static void do_specials(void);
+
+static void shutdown_signal_handler(int signum) {
+    (void)signum;
+    shutdown_requested = 1;
+}
 
 /**
  * Shows version information.
@@ -598,6 +604,12 @@ int server_run(int argc, char **argv) {
 
     atexit(cleanup);
 
+    if (signal(SIGINT, shutdown_signal_handler) == SIG_ERR ||
+        signal(SIGTERM, shutdown_signal_handler) == SIG_ERR) {
+        LOG(ERROR, "Cannot install graceful shutdown signal handlers.");
+        return EXIT_FAILURE;
+    }
+
     if (settings.world_maker) {
 #ifdef HAVE_WORLD_MAKER
         LOG(INFO, "Running the world maker...");
@@ -619,7 +631,7 @@ int server_run(int argc, char **argv) {
 
     for (;;) {
         uint64_t loop_started_us = datetime_monotonic_us();
-        if (unlikely(shutdown_timer_check())) {
+        if (unlikely(shutdown_requested || shutdown_timer_check())) {
             break;
         }
 

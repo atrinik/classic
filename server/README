@@ -67,6 +67,10 @@
  The launcher passes extra options straight to the binary:
   $ ./server.sh --version
 
+ SIGINT and SIGTERM request the same orderly save and cleanup path as the
+ console `shutdown` command. Process supervisors should allow that cleanup to
+ finish before using a forced termination.
+
  It is recommended to generate region maps before starting the server. The
  repository helper performs the build, dependency synchronization, runtime
  preparation, and generation sequence:
