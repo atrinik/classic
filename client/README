@@ -40,6 +40,12 @@
  configuration, graphics, fonts, sounds, and other data files:
   $ build/linux-debug/atrinik
 
+ Set `ATRINIK_CONFIG_DIR` to give a process an isolated configuration base.
+ The client creates its normal `.atrinik/<version>/` hierarchy below that
+ directory. This is useful when running concurrent development clients without
+ sharing settings, cached server data, or connection preferences:
+  $ ATRINIK_CONFIG_DIR=/absolute/path/to/client-state build/linux-debug/atrinik
+
  If you used a different BUILD_DIR or CMake preset, adjust the executable path
  accordingly. Extracted portable Windows packages contain atrinik.exe and all
  required runtime assets and DLLs; run atrinik.exe from inside that package.

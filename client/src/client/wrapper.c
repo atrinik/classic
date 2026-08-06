@@ -251,8 +251,11 @@ void copy_rec(const char *src, const char *dst) {
  * The configuration directory.
  */
 const char *get_config_dir(void) {
-    const char *desc;
+    const char *desc = getenv("ATRINIK_CONFIG_DIR");
 
+    if (desc && *desc) {
+        return desc;
+    }
 #ifndef WIN32
     desc = getenv("HOME");
 #else
