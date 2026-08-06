@@ -137,7 +137,7 @@
  version for a persistent deployment, then start it from the repository root:
   $ cp server-custom.cfg.example server-custom.cfg
   $ mkdir -p server-data
-  $ ATRINIK_SERVER_IMAGE=ghcr.io/atrinik/atrinik-server:5.0.6 \
+  $ ATRINIK_SERVER_IMAGE=ghcr.io/atrinik/atrinik-server:5.1.0 \
       LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) \
       docker compose -f compose.server.yaml up --no-build -d
 
