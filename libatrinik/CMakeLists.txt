@@ -3,7 +3,6 @@ cmake_minimum_required(VERSION 3.21)
 # This directory is both an in-tree dependency of the classic game superbuild and
 # the source root of the independently released libatrinik package.
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    set(LIBATRINIK_STANDALONE true)
     project(libatrinik VERSION 1.0.0 LANGUAGES C)
 
     include(CTest)
@@ -87,6 +86,14 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         set(PLUGIN_SUFFIX ".so")
     endif ()
 endif ()
+
+set(LIBATRINIK_PACKAGE_LAYOUT_DEFAULT false)
+if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(LIBATRINIK_PACKAGE_LAYOUT_DEFAULT true)
+endif ()
+option(LIBATRINIK_PACKAGE_LAYOUT
+    "Use the namespaced include layout from the standalone source package"
+    ${LIBATRINIK_PACKAGE_LAYOUT_DEFAULT})
 
 set(ATRINIK_TOOLKIT atrinik-core)
 
@@ -205,7 +212,7 @@ endif ()
 try_compile(HAVE_IPV6 ${CMAKE_CURRENT_BINARY_DIR}/compile_tests ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ipv6test.c)
 
 # Generate the CMake configuration header and a namespaced build include tree.
-if (LIBATRINIK_STANDALONE)
+if (LIBATRINIK_PACKAGE_LAYOUT)
     set(LIBATRINIK_BUILD_INCLUDE_ROOT
         "${CMAKE_CURRENT_BINARY_DIR}/include")
     set(LIBATRINIK_GENERATED_INCLUDE_DIR
@@ -266,7 +273,7 @@ target_link_libraries(${ATRINIK_TOOLKIT} PUBLIC Atrinik::Protocol)
 if (BUILD_FUZZING)
     target_compile_options(${ATRINIK_TOOLKIT} PRIVATE -fsanitize=fuzzer-no-link)
 endif ()
-if (LIBATRINIK_STANDALONE)
+if (LIBATRINIK_PACKAGE_LAYOUT)
     target_include_directories(${ATRINIK_TOOLKIT}
         PUBLIC
             $<BUILD_INTERFACE:${LIBATRINIK_BUILD_INCLUDE_ROOT}>
