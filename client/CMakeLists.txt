@@ -1,4 +1,88 @@
-# The Atrinik CMakeLists file.
+cmake_minimum_required(VERSION 3.21)
+project(atrinik-client VERSION 1.0.0 LANGUAGES C)
+
+include(CTest)
+include(FetchContent)
+
+option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
+option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
+set(PACKAGE_TYPE "none" CACHE STRING "Package type (none, deb, rpm, nsis, or zip)")
+
+set(PACKAGE_VERSION "${PROJECT_VERSION}")
+set(PACKAGE_VERSION_MAJOR "${PROJECT_VERSION_MAJOR}")
+set(PACKAGE_VERSION_MINOR "${PROJECT_VERSION_MINOR}")
+set(PACKAGE_VERSION_PATCH "${PROJECT_VERSION_PATCH}")
+
+if (MINGW)
+    set(PLUGIN_SUFFIX ".dll")
+    add_compile_definitions(HAVE_STRUCT_TIMESPEC NOCRYPT __USE_MINGW_ANSI_STDIO=0)
+else ()
+    set(LINUX true)
+    set(PLUGIN_SUFFIX ".so")
+endif ()
+
+function(atrinik_configure_target target)
+    target_compile_features(${target} PRIVATE c_std_17)
+    target_compile_definitions(${target} PRIVATE _GNU_SOURCE)
+    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${target} PRIVATE
+            -Wall -Wextra -Wno-unused-parameter -fno-common)
+        if (ENABLE_WARNING_ERRORS)
+            target_compile_options(${target} PRIVATE -Werror)
+        endif ()
+    endif ()
+    if (ENABLE_SANITIZERS)
+        if (MINGW OR NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            message(FATAL_ERROR "ENABLE_SANITIZERS requires native GCC or Clang")
+        endif ()
+        target_compile_options(${target} PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(${target} PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+    endif ()
+endfunction()
+
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies.lock.json"
+    ATRINIK_SOURCE_LOCK)
+string(JSON ATRINIK_SOURCE_LOCK_SCHEMA ERROR_VARIABLE lock_error
+    GET "${ATRINIK_SOURCE_LOCK}" schema_version)
+if (lock_error OR NOT ATRINIK_SOURCE_LOCK_SCHEMA EQUAL 1)
+    message(FATAL_ERROR "cmake/dependencies.lock.json has an unsupported schema")
+endif ()
+
+function(atrinik_fetch_source name expected_repository expected_archive)
+    foreach (field IN ITEMS repository tag commit url sha256)
+        string(JSON dependency_${field} ERROR_VARIABLE lock_error
+            GET "${ATRINIK_SOURCE_LOCK}" dependencies ${name} ${field})
+        if (lock_error OR dependency_${field} STREQUAL "")
+            message(FATAL_ERROR "Source dependency ${name}.${field} is missing")
+        endif ()
+    endforeach ()
+    string(REGEX REPLACE "^v" "" dependency_version "${dependency_tag}")
+    set(expected_url
+        "https://github.com/${expected_repository}/releases/download/${dependency_tag}/${expected_archive}-${dependency_version}.tar.gz")
+    string(LENGTH "${dependency_commit}" commit_length)
+    string(LENGTH "${dependency_sha256}" digest_length)
+    if (NOT dependency_repository STREQUAL expected_repository OR
+            NOT dependency_tag MATCHES "^v[0-9]+\\.[0-9]+\\.[0-9]+$" OR
+            NOT dependency_commit MATCHES "^[0-9a-f]+$" OR
+            NOT commit_length EQUAL 40 OR
+            NOT dependency_url STREQUAL expected_url OR
+            NOT dependency_sha256 MATCHES "^[0-9a-f]+$" OR
+            NOT digest_length EQUAL 64)
+        message(FATAL_ERROR "Source dependency ${name} has invalid lock metadata")
+    endif ()
+    FetchContent_Declare(${name}
+        URL "${dependency_url}"
+        URL_HASH "SHA256=${dependency_sha256}"
+        DOWNLOAD_EXTRACT_TIMESTAMP false)
+endfunction()
+
+atrinik_fetch_source(atrinik_protocol "atrinik/protocol" "atrinik-protocol")
+FetchContent_MakeAvailable(atrinik_protocol)
+set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
+atrinik_fetch_source(libatrinik "atrinik/libatrinik" "libatrinik")
+FetchContent_MakeAvailable(libatrinik)
 
 set(EXECUTABLE atrinik)
 set(PACKAGE_NAME "Atrinik Client")
