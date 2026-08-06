@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 # This directory is both an in-tree dependency of the classic game superbuild and
 # the source root of the independently released libatrinik package.
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(LIBATRINIK_STANDALONE true)
     project(libatrinik VERSION 1.0.0 LANGUAGES C)
 
     include(CTest)
@@ -161,38 +162,25 @@ endif ()
 
 try_compile(HAVE_IPV6 ${CMAKE_CURRENT_BINARY_DIR}/compile_tests ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ipv6test.c)
 
-# Generate the CMake configuration header file.
-configure_file(cmake.h.def toolkit_cmake.h)
-
-# Generate a header file with the Git version used to compile the library.
-find_program(GIT_SCM git DOC "Git version control")
-mark_as_advanced(GIT_SCM)
-find_file(GITDIR NAMES .git PATHS ../ NO_DEFAULT_PATH)
-set(GITVERSION_H gitversion.h)
-
-if (GIT_SCM AND GITDIR)
-    add_custom_command(OUTPUT ${GITVERSION_H}
-        COMMAND ${CMAKE_COMMAND} -E echo "#ifndef GITVERSION_H" > ${GITVERSION_H}
-        COMMAND ${CMAKE_COMMAND} -E echo_append "#define GITVERSION " >> ${GITVERSION_H}
-        COMMAND ${GIT_SCM} --git-dir "${GITDIR}" log -1 "--pretty=format:%h" >> ${GITVERSION_H}
-        COMMAND ${CMAKE_COMMAND} -E echo "" >> ${GITVERSION_H}
-        COMMAND ${CMAKE_COMMAND} -E echo_append "#define GITAUTHOR " >> ${GITVERSION_H}
-        COMMAND ${GIT_SCM} --git-dir "${GITDIR}" log -1 "--pretty=format:%an" >> ${GITVERSION_H}
-        COMMAND ${CMAKE_COMMAND} -E echo "" >> ${GITVERSION_H}
-        COMMAND ${CMAKE_COMMAND} -E echo_append "#define GITBRANCH " >> ${GITVERSION_H}
-        COMMAND ${GIT_SCM} --git-dir "${GITDIR}" rev-parse --abbrev-ref HEAD >> ${GITVERSION_H}
-        COMMAND ${CMAKE_COMMAND} -E echo "#endif" >> ${GITVERSION_H}
-        DEPENDS ${GITDIR}/logs/HEAD
-        VERBATIM
-    )
+# Generate the CMake configuration header and a namespaced build include tree.
+if (LIBATRINIK_STANDALONE)
+    set(LIBATRINIK_GENERATED_INCLUDE_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/include/toolkit")
+    file(MAKE_DIRECTORY "${LIBATRINIK_GENERATED_INCLUDE_DIR}")
+    file(GLOB LIBATRINIK_BUILD_HEADERS CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
+    foreach (header IN LISTS LIBATRINIK_BUILD_HEADERS)
+        cmake_path(GET header FILENAME header_name)
+        configure_file("${header}"
+            "${LIBATRINIK_GENERATED_INCLUDE_DIR}/${header_name}" COPYONLY)
+    endforeach ()
+    configure_file(cmake.h.def
+        "${LIBATRINIK_GENERATED_INCLUDE_DIR}/toolkit_cmake.h")
 else ()
-    add_custom_command(OUTPUT ${GITVERSION_H}
-        COMMAND ${CMAKE_COMMAND} -E echo_append "" > ${GITVERSION_H}
-        VERBATIM
-    )
+    set(LIBATRINIK_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+    configure_file(cmake.h.def
+        "${LIBATRINIK_GENERATED_INCLUDE_DIR}/toolkit_cmake.h")
 endif ()
-
-add_custom_target(git_branch DEPENDS ${GITVERSION_H})
 
 set(TOOLKIT_SOURCES
     binreloc.c
@@ -232,12 +220,22 @@ target_link_libraries(${ATRINIK_TOOLKIT} PUBLIC Atrinik::Protocol)
 if (BUILD_FUZZING)
     target_compile_options(${ATRINIK_TOOLKIT} PRIVATE -fsanitize=fuzzer-no-link)
 endif ()
-target_include_directories(${ATRINIK_TOOLKIT}
-    PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/..>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
-        $<INSTALL_INTERFACE:include>)
+if (LIBATRINIK_STANDALONE)
+    target_include_directories(${ATRINIK_TOOLKIT}
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+            $<INSTALL_INTERFACE:include>
+        PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${LIBATRINIK_GENERATED_INCLUDE_DIR}")
+else ()
+    target_include_directories(${ATRINIK_TOOLKIT}
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/..>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+            $<INSTALL_INTERFACE:include>)
+endif ()
 
 if (CURL_INCLUDE_DIRS)
     target_include_directories(${ATRINIK_TOOLKIT} PRIVATE ${CURL_INCLUDE_DIRS})
@@ -288,8 +286,6 @@ else ()
     target_link_libraries(${ATRINIK_TOOLKIT} PRIVATE ${OPENSSL_LIBRARIES})
 endif ()
 
-add_dependencies(${ATRINIK_TOOLKIT} git_branch)
-
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     install(TARGETS ${ATRINIK_TOOLKIT}
         EXPORT LibAtrinikTargets
@@ -298,7 +294,7 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
     list(FILTER ATRINIK_PUBLIC_HEADERS EXCLUDE REGEX "_private\\.h$")
     install(FILES ${ATRINIK_PUBLIC_HEADERS} DESTINATION include/toolkit)
-    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/toolkit_cmake.h"
+    install(FILES "${LIBATRINIK_GENERATED_INCLUDE_DIR}/toolkit_cmake.h"
         DESTINATION include/toolkit)
     install(EXPORT LibAtrinikTargets
         FILE LibAtrinikTargets.cmake
