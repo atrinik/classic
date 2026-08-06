@@ -1,6 +1,51 @@
-# The Atrinik toolkit CMakeLists file.
+cmake_minimum_required(VERSION 3.21)
 
-set(ATRINIK_TOOLKIT atrinik-toolkit)
+# This directory is both an in-tree dependency of the legacy superbuild and
+# the source root of the independently released libatrinik package.
+if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    project(libatrinik VERSION 1.0.0 LANGUAGES C)
+
+    include(CTest)
+    include(CMakePackageConfigHelpers)
+
+    option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
+    option(BUILD_FUZZING "Build bounded libFuzzer protocol targets" OFF)
+
+    function(atrinik_configure_target target)
+        target_compile_features(${target} PRIVATE c_std_17)
+        target_compile_definitions(${target} PRIVATE _GNU_SOURCE)
+        if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(${target} PRIVATE
+                -Wall
+                -Wextra
+                -Wno-unused-parameter
+                -fno-common)
+            if (ENABLE_WARNING_ERRORS)
+                target_compile_options(${target} PRIVATE -Werror)
+            endif ()
+        endif ()
+    endfunction()
+
+    if (NOT TARGET Atrinik::Protocol)
+        set(ATRINIK_PROTOCOL_SOURCE_DIR "" CACHE PATH
+            "Path to an Atrinik protocol source checkout")
+        if (ATRINIK_PROTOCOL_SOURCE_DIR)
+            add_subdirectory("${ATRINIK_PROTOCOL_SOURCE_DIR}"
+                "${CMAKE_CURRENT_BINARY_DIR}/atrinik-protocol")
+        else ()
+            find_package(AtrinikProtocol 1 CONFIG REQUIRED)
+        endif ()
+    endif ()
+
+    if (MINGW)
+        set(PLUGIN_SUFFIX ".dll")
+    else ()
+        set(LINUX true)
+        set(PLUGIN_SUFFIX ".so")
+    endif ()
+endif ()
+
+set(ATRINIK_TOOLKIT atrinik-core)
 
 # cURL is required by the metaserver.
 find_package(CURL REQUIRED)
@@ -178,7 +223,12 @@ set(TOOLKIT_SOURCES
     )
 
 add_library(${ATRINIK_TOOLKIT} STATIC ${TOOLKIT_SOURCES})
+add_library(Atrinik::Core ALIAS ${ATRINIK_TOOLKIT})
+set_target_properties(${ATRINIK_TOOLKIT} PROPERTIES
+    EXPORT_NAME Core
+    OUTPUT_NAME atrinik)
 atrinik_configure_target(${ATRINIK_TOOLKIT})
+target_link_libraries(${ATRINIK_TOOLKIT} PUBLIC Atrinik::Protocol)
 if (BUILD_FUZZING)
     target_compile_options(${ATRINIK_TOOLKIT} PRIVATE -fsanitize=fuzzer-no-link)
 endif ()
@@ -186,7 +236,8 @@ target_include_directories(${ATRINIK_TOOLKIT}
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/..>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>)
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+        $<INSTALL_INTERFACE:include>)
 
 if (CURL_INCLUDE_DIRS)
     target_include_directories(${ATRINIK_TOOLKIT} PRIVATE ${CURL_INCLUDE_DIRS})
@@ -238,3 +289,39 @@ else ()
 endif ()
 
 add_dependencies(${ATRINIK_TOOLKIT} git_branch)
+
+if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    install(TARGETS ${ATRINIK_TOOLKIT}
+        EXPORT LibAtrinikTargets
+        ARCHIVE DESTINATION lib)
+    file(GLOB ATRINIK_PUBLIC_HEADERS CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
+    list(FILTER ATRINIK_PUBLIC_HEADERS EXCLUDE REGEX "_private\\.h$")
+    install(FILES ${ATRINIK_PUBLIC_HEADERS} DESTINATION include/toolkit)
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/toolkit_cmake.h"
+        DESTINATION include/toolkit)
+    install(EXPORT LibAtrinikTargets
+        FILE LibAtrinikTargets.cmake
+        NAMESPACE Atrinik::
+        DESTINATION lib/cmake/LibAtrinik)
+
+    configure_package_config_file(
+        cmake/LibAtrinikConfig.cmake.in
+        "${CMAKE_CURRENT_BINARY_DIR}/LibAtrinikConfig.cmake"
+        INSTALL_DESTINATION lib/cmake/LibAtrinik)
+    write_basic_package_version_file(
+        "${CMAKE_CURRENT_BINARY_DIR}/LibAtrinikConfigVersion.cmake"
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion)
+    install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/LibAtrinikConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/LibAtrinikConfigVersion.cmake"
+        DESTINATION lib/cmake/LibAtrinik)
+
+    if (BUILD_TESTING)
+        add_executable(libatrinik-smoke tests/smoke.c)
+        atrinik_configure_target(libatrinik-smoke)
+        target_link_libraries(libatrinik-smoke PRIVATE Atrinik::Core)
+        add_test(NAME libatrinik-smoke COMMAND libatrinik-smoke)
+    endif ()
+endif ()
