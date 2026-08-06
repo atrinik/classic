@@ -43,7 +43,7 @@ if (DEFINED ATRINIK_PYTHON_PLUGIN)
 endif ()
 
 file(COPY "${ATRINIK_SOURCE_DIR}/runtime/content/maps"
-    DESTINATION "${ATRINIK_RUNTIME_DIR}")
+    DESTINATION "${runtime_server}")
 file(COPY "${ATRINIK_SOURCE_DIR}/runtime/content/lib/"
     DESTINATION "${runtime_server}/lib")
 file(COPY "${ATRINIK_SOURCE_DIR}/resources"
