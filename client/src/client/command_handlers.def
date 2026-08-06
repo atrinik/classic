@@ -1,4 +1,4 @@
-/* Client-owned handlers for server-to-client legacy protocol commands. */
+/* Client-owned handlers for server-to-client classic game protocol commands. */
 
 ATRINIK_CLIENT_COMMAND_HANDLER(MAP, socket_command_map)
 ATRINIK_CLIENT_COMMAND_HANDLER(DRAWINFO, socket_command_drawinfo)
