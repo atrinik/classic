@@ -3,10 +3,10 @@ name: Check
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     branches:
-      - master
+      - main
 
 permissions:
   contents: read
@@ -38,4 +38,3 @@ jobs:
             -DCMAKE_PREFIX_PATH="$PWD/build/install"
           cmake --build build/consumer --parallel
           build/consumer/libatrinik-consumer
-
