@@ -37,7 +37,7 @@ jobs:
         run: |
           [[ ${RELEASE_TAG} =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$(git rev-parse HEAD)"
-          git merge-base --is-ancestor HEAD refs/remotes/origin/master
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main
           latest_tag=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -1)
           {
             echo "commit=$(git rev-parse HEAD)"
