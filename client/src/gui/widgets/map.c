@@ -1564,7 +1564,7 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
             .bounds_w = MAX(1, bounds_w),
             .bounds_h = MAX(1, bounds_h),
             .sort_x = data->xpos,
-            /* Preserve the legacy world-tile traversal from the top corner
+            /* Preserve the established world-tile traversal from the top corner
              * down. The physical level's 46-pixel display lift must not move
              * that tile earlier or later in painter order; levels sharing the
              * same world diagonal retain their low-to-high queue sequence. */
