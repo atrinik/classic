@@ -10,7 +10,7 @@ fi
 tag=v$1
 for attempt in {1..6}; do
   if gh workflow run package-release.yml \
-      --repo "${GITHUB_REPOSITORY}" --ref master --field "tag=${tag}"; then
+      --repo "${GITHUB_REPOSITORY}" --ref main --field "tag=${tag}"; then
     exit 0
   fi
   ((attempt < 6)) || exit 1
