@@ -74,6 +74,12 @@ jobs:
         with:
           ref: ${{ needs.metadata.outputs.tag }}
           fetch-depth: 0
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
       - name: Pull pinned Windows build environment
         run: docker pull ghcr.io/atrinik/windows-build:1.0.0
       - name: Build portable Windows package
