@@ -22,32 +22,38 @@
  * The author can be reached at admin@atrinik.org                        *
  ************************************************************************/
 
+#ifndef METASERVER_H
+#define METASERVER_H
+
 /**
  * @file
- * Misc definitions.
+ * Public declarations for the corresponding client module.
  */
 
-#ifndef MISC_H
-#define MISC_H
+/** Public API implemented in src/client/metaserver.c. */
 
-#define MAX_INPUT_STR 256
+extern void metaserver_init(void);
 
-/** Public API implemented in src/client/misc.c. */
+extern void metaserver_disable(void);
 
-extern void browser_open(const char *url);
+extern server_struct *server_get_id(size_t num);
 
-extern char *package_get_version_full(char *dst, size_t dstlen);
+bool metaserver_rendezvous_url(const server_struct *server, char *url, size_t url_size);
 
-extern char *package_get_version_partial(char *dst, size_t dstlen);
+extern size_t server_get_count(void);
 
-extern int bmp2png(const char *path);
+extern int ms_connecting(int val);
 
-extern void screenshot_create(SDL_Surface *surface);
+extern void metaserver_clear_data(void);
 
-/** Public API implemented in src/client/upgrader.c. */
+extern server_struct *metaserver_add(const char *hostname,
+                                     int port,
+                                     const char *name,
+                                     const char *version,
+                                     const char *desc);
 
-extern void upgrader_init(void);
+extern int metaserver_thread(void *dummy);
 
-extern char *upgrader_get_version_partial(char *dst, size_t dstlen);
+extern void metaserver_get_servers(void);
 
 #endif

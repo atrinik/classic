@@ -22,32 +22,25 @@
  * The author can be reached at admin@atrinik.org                        *
  ************************************************************************/
 
+#ifndef ANIMATIONS_H
+#define ANIMATIONS_H
+
 /**
  * @file
- * Misc definitions.
+ * Public declarations for the corresponding client module.
  */
 
-#ifndef MISC_H
-#define MISC_H
+/** Public API implemented in src/client/animations.c. */
 
-#define MAX_INPUT_STR 256
+extern void read_anims(void);
 
-/** Public API implemented in src/client/misc.c. */
+extern void anims_deinit(void);
 
-extern void browser_open(const char *url);
+extern void anims_reset(void);
 
-extern char *package_get_version_full(char *dst, size_t dstlen);
+extern Animations *animation_get(uint16_t animation_id);
 
-extern char *package_get_version_partial(char *dst, size_t dstlen);
-
-extern int bmp2png(const char *path);
-
-extern void screenshot_create(SDL_Surface *surface);
-
-/** Public API implemented in src/client/upgrader.c. */
-
-extern void upgrader_init(void);
-
-extern char *upgrader_get_version_partial(char *dst, size_t dstlen);
+extern bool
+animation_get_face(uint16_t animation_id, uint8_t direction, size_t state, uint16_t *face);
 
 #endif

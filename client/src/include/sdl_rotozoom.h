@@ -22,32 +22,27 @@
  * The author can be reached at admin@atrinik.org                        *
  ************************************************************************/
 
+#ifndef SDL_ROTOZOOM_H
+#define SDL_ROTOZOOM_H
+
 /**
  * @file
- * Misc definitions.
+ * Public declarations for the corresponding client module.
  */
 
-#ifndef MISC_H
-#define MISC_H
-
-#define MAX_INPUT_STR 256
-
-/** Public API implemented in src/client/misc.c. */
-
-extern void browser_open(const char *url);
-
-extern char *package_get_version_full(char *dst, size_t dstlen);
-
-extern char *package_get_version_partial(char *dst, size_t dstlen);
-
-extern int bmp2png(const char *path);
-
-extern void screenshot_create(SDL_Surface *surface);
-
-/** Public API implemented in src/client/upgrader.c. */
-
-extern void upgrader_init(void);
-
-extern char *upgrader_get_version_partial(char *dst, size_t dstlen);
+/** Public API implemented by the bundled SDL helper module. */
+extern void rotozoomSurfaceSizeXY(int width,
+                                  int height,
+                                  double angle,
+                                  double zoomx,
+                                  double zoomy,
+                                  int *dstwidth,
+                                  int *dstheight);
+extern SDL_Surface *rotozoomSurface(SDL_Surface *src, double angle, double zoom, int smooth);
+extern SDL_Surface *
+rotozoomSurfaceXY(SDL_Surface *src, double angle, double zoomx, double zoomy, int smooth);
+extern void
+zoomSurfaceSize(int width, int height, double zoomx, double zoomy, int *dstwidth, int *dstheight);
+extern SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth);
 
 #endif
