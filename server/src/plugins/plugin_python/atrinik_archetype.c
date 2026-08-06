@@ -105,7 +105,7 @@ static PyObject *Atrinik_Archetype_new(PyTypeObject *type, PyObject *args, PyObj
  */
 static void Atrinik_Archetype_dealloc(Atrinik_Archetype *at) {
     at->at = NULL;
-#ifndef IS_PY_LEGACY
+#ifndef IS_PY_PRE26
     Py_TYPE(at)->tp_free((PyObject *)at);
 #else
     at->ob_type->tp_free((PyObject *)at);

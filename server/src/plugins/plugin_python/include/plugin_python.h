@@ -51,7 +51,7 @@
 #if PY_MINOR_VERSION >= 6
 #define IS_PY26
 #else
-#define IS_PY_LEGACY
+#define IS_PY_PRE26
 #endif
 #if PY_MINOR_VERSION >= 5
 #define IS_PY25
