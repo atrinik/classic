@@ -46,7 +46,7 @@ class DependencyTests(unittest.TestCase):
     def dependency(self, archive: Path) -> dict[str, object]:
         return {
             "name": "sound",
-            "repository": "atrinik/atrinik-sound",
+            "repository": "atrinik/sound",
             "tag": "v1.0.0",
             "commit": "1" * 40,
             "url": archive.as_uri(),
