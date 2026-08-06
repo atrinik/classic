@@ -19,5 +19,5 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The first release preserves the existing GPL-2.0-or-later licensing posture.
-Moving the protocol into an independent package does not relicense it.
+The schema, generators, and generated bindings are available under the MIT
+License. See [LICENSE](LICENSE).
