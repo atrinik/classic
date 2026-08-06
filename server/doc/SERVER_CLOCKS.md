@@ -1,6 +1,6 @@
-# Legacy server clock domains
+# Classic server clock domains
 
-The legacy server has three explicit clock domains. New code must store typed
+The classic server has three explicit clock domains. New code must store typed
 absolute deadlines from `server/src/include/server_clock.h` and must not compare
 values from different domains.
 
@@ -66,7 +66,7 @@ use the typed service.
 | Location | Current purpose and classification | Migration |
 | --- | --- | --- |
 | `server/server_clock.c` | The sole production adapters for monotonic and UTC wall time. | Keep. |
-| `server/time.c`, `server/main.c` (`GETTIMEOFDAY`) | Legacy loop cadence, spare pathfinding budget, and the legacy `seconds()` accessor. Cadence is a separate scheduling mechanism; `seconds()` is ambiguous. | Preserve cadence for now; later replace its wall-based measurement with monotonic scheduling in a dedicated behavior review and remove or retag `seconds()` callers. |
+| `server/time.c`, `server/main.c` (`GETTIMEOFDAY`) | Established loop cadence, spare pathfinding budget, and the ambiguous `seconds()` accessor. Cadence is a separate scheduling mechanism. | Preserve cadence for now; later replace its wall-based measurement with monotonic scheduling in a dedicated behavior review and remove or retag `seconds()` callers. |
 | `server/main.c` (`pticks` periodic work) | Gameplay/world updates are correctly simulation-based, but metaserver publication is process I/O and currently shares that schedule. | Keep gameplay periodic work on typed simulation deadlines; move metaserver retry/backoff and publication cadence to typed monotonic deadlines. |
 | `server/main.c` (`datetime_monotonic_us`) | Game-loop performance metric. Correct domain, but bypasses the server type. | Replace with typed monotonic elapsed helpers. |
 | `server/plugins.c`, `plugins/plugin_python/plugin_python.c` | Plugin performance measurements using `gettimeofday()`. Wrong domain because wall jumps can corrupt durations. | Replace with typed monotonic elapsed helpers. |

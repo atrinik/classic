@@ -46,7 +46,7 @@
 #include <openssl/crypto.h>
 
 #define ACCOUNT_CHARACTERS_LIMIT 16
-#define ACCOUNT_LEGACY_PASSWORD_SIZE 32
+#define ACCOUNT_PBKDF2_FIELD_SIZE 32
 #define ACCOUNT_AUTH_WORK_BURST 8
 #define ACCOUNT_AUTH_WORK_REFILL_SECONDS 2
 
@@ -56,12 +56,12 @@ static unsigned int account_auth_work_tokens;
 typedef struct account_struct {
     char password_record[PASSWORD_RECORD_SIZE];
 
-    unsigned char legacy_password[ACCOUNT_LEGACY_PASSWORD_SIZE];
+    unsigned char pbkdf2_password[ACCOUNT_PBKDF2_FIELD_SIZE];
 
-    unsigned char legacy_salt[ACCOUNT_LEGACY_PASSWORD_SIZE];
+    unsigned char pbkdf2_salt[ACCOUNT_PBKDF2_FIELD_SIZE];
 
-    bool has_legacy_pbkdf2;
-    bool has_legacy_salt;
+    bool has_pbkdf2_password;
+    bool has_pbkdf2_salt;
 
     char *password_old;
 
@@ -129,8 +129,8 @@ static void account_free(account_struct *account) {
 
     free(account->characters);
     OPENSSL_cleanse(account->password_record, sizeof(account->password_record));
-    OPENSSL_cleanse(account->legacy_password, sizeof(account->legacy_password));
-    OPENSSL_cleanse(account->legacy_salt, sizeof(account->legacy_salt));
+    OPENSSL_cleanse(account->pbkdf2_password, sizeof(account->pbkdf2_password));
+    OPENSSL_cleanse(account->pbkdf2_salt, sizeof(account->pbkdf2_salt));
 }
 
 static char *account_old_crypt(char *str, const char *salt) {
@@ -147,10 +147,10 @@ static bool account_set_password(account_struct *account, const char *password) 
         return false;
     }
 
-    OPENSSL_cleanse(account->legacy_password, sizeof(account->legacy_password));
-    OPENSSL_cleanse(account->legacy_salt, sizeof(account->legacy_salt));
-    account->has_legacy_pbkdf2 = false;
-    account->has_legacy_salt = false;
+    OPENSSL_cleanse(account->pbkdf2_password, sizeof(account->pbkdf2_password));
+    OPENSSL_cleanse(account->pbkdf2_salt, sizeof(account->pbkdf2_salt));
+    account->has_pbkdf2_password = false;
+    account->has_pbkdf2_salt = false;
     free(account->password_old);
     account->password_old = NULL;
     return true;
@@ -167,10 +167,10 @@ static password_verify_result_t account_check_password(account_struct *account,
                    : PASSWORD_VERIFY_MISMATCH;
     }
 
-    if (account->has_legacy_pbkdf2 && account->has_legacy_salt) {
-        return password_legacy_pbkdf2_verify(password,
-                                             account->legacy_salt,
-                                             account->legacy_password);
+    if (account->has_pbkdf2_password && account->has_pbkdf2_salt) {
+        return password_pbkdf2_sha256_verify(password,
+                                             account->pbkdf2_salt,
+                                             account->pbkdf2_password);
     }
 
     return password_record_verify(password, account->password_record);
@@ -251,24 +251,23 @@ static int account_load(account_struct *account, const char *path) {
                 account->password_old = xstrdup(buf + 5);
             } else if (string_fromhex(buf + 5,
                                       len,
-                                      account->legacy_password,
-                                      ACCOUNT_LEGACY_PASSWORD_SIZE) !=
-                       ACCOUNT_LEGACY_PASSWORD_SIZE) {
+                                      account->pbkdf2_password,
+                                      ACCOUNT_PBKDF2_FIELD_SIZE) != ACCOUNT_PBKDF2_FIELD_SIZE) {
                 LOG(BUG, "Invalid password entry in file: %s", path);
-                OPENSSL_cleanse(account->legacy_password, sizeof(account->legacy_password));
+                OPENSSL_cleanse(account->pbkdf2_password, sizeof(account->pbkdf2_password));
             } else {
-                account->has_legacy_pbkdf2 = true;
+                account->has_pbkdf2_password = true;
             }
         } else if (strncmp(buf, "salt ", 5) == 0) {
             if (string_fromhex(buf + 5,
                                strlen(buf + 5),
-                               account->legacy_salt,
-                               ACCOUNT_LEGACY_PASSWORD_SIZE) != ACCOUNT_LEGACY_PASSWORD_SIZE) {
+                               account->pbkdf2_salt,
+                               ACCOUNT_PBKDF2_FIELD_SIZE) != ACCOUNT_PBKDF2_FIELD_SIZE) {
                 LOG(BUG, "Invalid salt entry in file: %s", path);
-                OPENSSL_cleanse(account->legacy_salt, sizeof(account->legacy_salt));
-                account->has_legacy_salt = false;
+                OPENSSL_cleanse(account->pbkdf2_salt, sizeof(account->pbkdf2_salt));
+                account->has_pbkdf2_salt = false;
             } else {
-                account->has_legacy_salt = true;
+                account->has_pbkdf2_salt = true;
             }
         } else if (strncmp(buf, "connection ", 11) == 0) {
             free(account->last_connection_id);
@@ -298,7 +297,7 @@ static int account_load(account_struct *account, const char *path) {
 
     if (credential_count != 1 ||
         (account->password_record[0] == '\0' && account->password_old == NULL &&
-         !(account->has_legacy_pbkdf2 && account->has_legacy_salt))) {
+         !(account->has_pbkdf2_password && account->has_pbkdf2_salt))) {
         LOG(BUG, "Account file has no valid password record: %s", path);
         account_free(account);
         return 0;
@@ -399,7 +398,7 @@ void account_login(socket_struct *ns, char *name, char *password) {
         return;
     }
 
-    unsigned int auth_cost = account.password_old || account.has_legacy_pbkdf2 ||
+    unsigned int auth_cost = account.password_old || account.has_pbkdf2_password ||
                                      password_record_needs_rehash(account.password_record)
                                  ? 2
                                  : 1;
@@ -444,7 +443,7 @@ void account_login(socket_struct *ns, char *name, char *password) {
         return;
     }
 
-    if ((account.password_old || account.has_legacy_pbkdf2 ||
+    if ((account.password_old || account.has_pbkdf2_password ||
          password_record_needs_rehash(account.password_record)) &&
         !account_set_password(&account, password)) {
         draw_info_send(CHAT_TYPE_GAME,

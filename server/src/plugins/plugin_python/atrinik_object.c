@@ -2873,7 +2873,7 @@ static PyObject *Atrinik_Object_new(PyTypeObject *type, PyObject *args, PyObject
 static void Atrinik_Object_dealloc(PyObject *self) {
     ((Atrinik_Object *)self)->obj = NULL;
     ((Atrinik_Object *)self)->count = 0;
-#ifndef IS_PY_LEGACY
+#ifndef IS_PY_PRE26
     Py_TYPE(self)->tp_free(self);
 #else
     self->ob_type->tp_free(self);

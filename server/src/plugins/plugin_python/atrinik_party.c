@@ -279,7 +279,7 @@ static PyObject *Atrinik_Party_new(PyTypeObject *type, PyObject *args, PyObject 
  */
 static void Atrinik_Party_dealloc(Atrinik_Party *self) {
     self->party = NULL;
-#ifndef IS_PY_LEGACY
+#ifndef IS_PY_PRE26
     Py_TYPE(self)->tp_free((PyObject *)self);
 #else
     self->ob_type->tp_free((PyObject *)self);
