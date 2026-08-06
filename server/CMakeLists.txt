@@ -58,7 +58,7 @@ atrinik_configure_target(atrinik-server-core)
 target_include_directories(atrinik-server-core BEFORE PRIVATE
     ${ATRINIK_SERVER_INCLUDE_DIRS})
 target_link_libraries(atrinik-server-core PRIVATE
-    atrinik-toolkit
+    Atrinik::Core
     pcpnatpmp::pcpnatpmp)
 
 if (MINGW)
@@ -98,6 +98,7 @@ add_library(plugin_arena MODULE
 atrinik_configure_target(plugin_arena)
 target_include_directories(plugin_arena BEFORE PRIVATE
     ${ATRINIK_SERVER_INCLUDE_DIRS})
+target_link_libraries(plugin_arena PRIVATE Atrinik::Protocol)
 
 # Create the Python plugin, if requested and Python was found.
 if (ENABLE_PYTHON_PLUGIN)
@@ -139,7 +140,9 @@ if (ENABLE_PYTHON_PLUGIN)
             ${ATRINIK_SERVER_INCLUDE_DIRS}
             ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/plugin_python/include
             ${PYTHON_INCLUDE_DIRS})
-        target_link_libraries(plugin_python PRIVATE ${PYTHON_LIBRARIES})
+        target_link_libraries(plugin_python PRIVATE
+            Atrinik::Protocol
+            ${PYTHON_LIBRARIES})
         add_dependencies(${EXECUTABLE} plugin_python)
     else ()
         message(FATAL_ERROR "Python development files are required for the Python plugin.")
@@ -195,6 +198,7 @@ if (BUILD_TESTING AND NOT MINGW)
         target_compile_definitions(atrinik-server-tests PRIVATE
             ATRINIK_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data")
         target_link_libraries(atrinik-server-tests PRIVATE
+            Atrinik::Protocol
             atrinik-server-core
             PkgConfig::CHECK_PKG)
 
