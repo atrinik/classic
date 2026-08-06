@@ -1,0 +1,14 @@
+.git
+.github
+build
+data
+runtime
+resources
+atrinik-server
+libplugin_*.so
+libplugin_*.dll
+server-custom.cfg
+server-data
+*.pem
+*.key
+*.log
