@@ -22,32 +22,23 @@
  * The author can be reached at admin@atrinik.org                        *
  ************************************************************************/
 
+#ifndef CONNECTION_PREFERENCES_H
+#define CONNECTION_PREFERENCES_H
+
 /**
  * @file
- * Misc definitions.
+ * Public declarations for the corresponding client module.
  */
 
-#ifndef MISC_H
-#define MISC_H
+/** Public API implemented in src/client/connection_preferences.c. */
 
-#define MAX_INPUT_STR 256
+extern void connection_preferences_init(void);
 
-/** Public API implemented in src/client/misc.c. */
+extern void connection_preferences_deinit(void);
 
-extern void browser_open(const char *url);
+extern socket_connection_preference_t connection_preference_get(const server_struct *server);
 
-extern char *package_get_version_full(char *dst, size_t dstlen);
-
-extern char *package_get_version_partial(char *dst, size_t dstlen);
-
-extern int bmp2png(const char *path);
-
-extern void screenshot_create(SDL_Surface *surface);
-
-/** Public API implemented in src/client/upgrader.c. */
-
-extern void upgrader_init(void);
-
-extern char *upgrader_get_version_partial(char *dst, size_t dstlen);
+extern void connection_preference_set(const server_struct *server,
+                                      socket_connection_preference_t preference);
 
 #endif

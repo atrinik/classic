@@ -22,32 +22,34 @@
  * The author can be reached at admin@atrinik.org                        *
  ************************************************************************/
 
+#ifndef SDL_GFX_H
+#define SDL_GFX_H
+
 /**
  * @file
- * Misc definitions.
+ * Public declarations for the corresponding client module.
  */
 
-#ifndef MISC_H
-#define MISC_H
-
-#define MAX_INPUT_STR 256
-
-/** Public API implemented in src/client/misc.c. */
-
-extern void browser_open(const char *url);
-
-extern char *package_get_version_full(char *dst, size_t dstlen);
-
-extern char *package_get_version_partial(char *dst, size_t dstlen);
-
-extern int bmp2png(const char *path);
-
-extern void screenshot_create(SDL_Surface *surface);
-
-/** Public API implemented in src/client/upgrader.c. */
-
-extern void upgrader_init(void);
-
-extern char *upgrader_get_version_partial(char *dst, size_t dstlen);
+/** Public API implemented by the bundled SDL helper module. */
+extern int
+filledRectAlpha(SDL_Surface *dst, Sint16 x, Sint16 y, Sint16 x2, Sint16 y2, Uint32 color);
+extern int boxRGBA(SDL_Surface *dst,
+                   Sint16 x,
+                   Sint16 y,
+                   Sint16 x2,
+                   Sint16 y2,
+                   Uint8 r,
+                   Uint8 g,
+                   Uint8 b,
+                   Uint8 a);
+extern int lineRGBA(SDL_Surface *dst,
+                    Sint16 x,
+                    Sint16 y,
+                    Sint16 x2,
+                    Sint16 y2,
+                    Uint8 r,
+                    Uint8 g,
+                    Uint8 b,
+                    Uint8 a);
 
 #endif
