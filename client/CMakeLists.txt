@@ -99,7 +99,7 @@ if (BUILD_TESTING AND NOT MINGW)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(client-surface-primitives-tests PRIVATE atrinik-toolkit SDL3::SDL3)
+    target_link_libraries(client-surface-primitives-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-surface-primitives COMMAND client-surface-primitives-tests)
 endif ()
 
