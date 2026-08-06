@@ -132,7 +132,7 @@ static PyObject *Atrinik_Region_new(PyTypeObject *type, PyObject *args, PyObject
  */
 static void Atrinik_Region_dealloc(Atrinik_Region *self) {
     self->region = NULL;
-#ifndef IS_PY_LEGACY
+#ifndef IS_PY_PRE26
     Py_TYPE(self)->tp_free((PyObject *)self);
 #else
     self->ob_type->tp_free((PyObject *)self);

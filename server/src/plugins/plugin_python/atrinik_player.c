@@ -1144,7 +1144,7 @@ static PyObject *Atrinik_Player_new(PyTypeObject *type, PyObject *args, PyObject
  */
 static void Atrinik_Player_dealloc(Atrinik_Player *pl) {
     pl->pl = NULL;
-#ifndef IS_PY_LEGACY
+#ifndef IS_PY_PRE26
     Py_TYPE(pl)->tp_free((PyObject *)pl);
 #else
     pl->ob_type->tp_free((PyObject *)pl);

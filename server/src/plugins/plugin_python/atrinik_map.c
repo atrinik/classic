@@ -1038,7 +1038,7 @@ static PyObject *Atrinik_Map_new(PyTypeObject *type, PyObject *args, PyObject *k
  */
 static void Atrinik_Map_dealloc(Atrinik_Map *self) {
     self->map = NULL;
-#ifndef IS_PY_LEGACY
+#ifndef IS_PY_PRE26
     Py_TYPE(self)->tp_free((PyObject *)self);
 #else
     self->ob_type->tp_free((PyObject *)self);

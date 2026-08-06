@@ -73,7 +73,7 @@ START_TEST(test_password_rehash_policy) {
 }
 END_TEST
 
-START_TEST(test_legacy_pbkdf2_known_answer) {
+START_TEST(test_pbkdf2_sha256_known_answer) {
     const unsigned char salt[32] = "salt";
     const unsigned char expected[32] = {
         0x72, 0xd3, 0xad, 0xf1, 0x1c, 0x90, 0x73, 0x6f, 0xf9, 0x7b, 0xbe,
@@ -81,9 +81,9 @@ START_TEST(test_legacy_pbkdf2_known_answer) {
         0x3e, 0x39, 0x0a, 0x7c, 0x40, 0x8c, 0x17, 0xe5, 0x8d, 0x37,
     };
 
-    ck_assert_int_eq(password_legacy_pbkdf2_verify("password", salt, expected),
+    ck_assert_int_eq(password_pbkdf2_sha256_verify("password", salt, expected),
                      PASSWORD_VERIFY_MATCH);
-    ck_assert_int_eq(password_legacy_pbkdf2_verify("wrong", salt, expected),
+    ck_assert_int_eq(password_pbkdf2_sha256_verify("wrong", salt, expected),
                      PASSWORD_VERIFY_MISMATCH);
 }
 END_TEST
@@ -97,7 +97,7 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_password_create_round_trip);
     tcase_add_test(tc, test_password_rejects_malformed_and_unbounded_records);
     tcase_add_test(tc, test_password_rehash_policy);
-    tcase_add_test(tc, test_legacy_pbkdf2_known_answer);
+    tcase_add_test(tc, test_pbkdf2_sha256_known_answer);
     suite_add_tcase(s, tc);
     return s;
 }

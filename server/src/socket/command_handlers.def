@@ -1,4 +1,4 @@
-/* Server-owned handlers for client-to-server legacy protocol commands. */
+/* Server-owned handlers for client-to-server classic game protocol commands. */
 
 ATRINIK_SERVER_COMMAND_HANDLER(CONTROL, socket_command_control, false)
 ATRINIK_SERVER_COMMAND_HANDLER(ASK_FACE, socket_command_ask_face, false)
