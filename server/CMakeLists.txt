@@ -1,5 +1,29 @@
 cmake_minimum_required(VERSION 3.21)
-project(atrinik-server VERSION 5.1.0 LANGUAGES C)
+
+set(ATRINIK_SOURCE_VERSION "5.1.0")
+if (DEFINED ENV{ATRINIK_PACKAGE_VERSION})
+    set(ATRINIK_SOURCE_VERSION "$ENV{ATRINIK_PACKAGE_VERSION}")
+elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
+        ATRINIK_SOURCE_VERSION LIMIT_COUNT 1)
+elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+    execute_process(
+        COMMAND git describe --tags --exact-match --match "v[0-9]*"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE ATRINIK_GIT_TAG
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE ATRINIK_GIT_TAG_RESULT)
+    if (ATRINIK_GIT_TAG_RESULT EQUAL 0)
+        string(REGEX REPLACE "^v" "" ATRINIK_SOURCE_VERSION
+            "${ATRINIK_GIT_TAG}")
+    endif ()
+endif ()
+if (NOT ATRINIK_SOURCE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+    message(FATAL_ERROR "Atrinik source version must be MAJOR.MINOR.PATCH")
+endif ()
+
+project(atrinik-server VERSION "${ATRINIK_SOURCE_VERSION}" LANGUAGES C)
 
 include(CTest)
 include(FetchContent)

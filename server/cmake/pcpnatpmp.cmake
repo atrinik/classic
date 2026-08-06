@@ -12,11 +12,11 @@ function(atrinik_add_pcpnatpmp)
 
     set(pcpnatpmp_patch_args)
     if (MINGW)
-        find_package(Git REQUIRED)
+        find_program(PATCH_EXECUTABLE patch REQUIRED)
         set(pcpnatpmp_patch_args
             PATCH_COMMAND
                 ${CMAKE_COMMAND}
-                -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
+                -DPATCH_EXECUTABLE=${PATCH_EXECUTABLE}
                 -DSOURCE_DIR=<SOURCE_DIR>
                 -DPATCH_FILE=${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/libpcpnatpmp-mingw.patch
                 -P ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/apply_patch_idempotent.cmake)

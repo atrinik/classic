@@ -1,11 +1,11 @@
-if (NOT DEFINED GIT_EXECUTABLE OR NOT DEFINED SOURCE_DIR OR
+if (NOT DEFINED PATCH_EXECUTABLE OR NOT DEFINED SOURCE_DIR OR
         NOT DEFINED PATCH_FILE)
     message(FATAL_ERROR "Missing idempotent patch input")
 endif ()
 
 execute_process(
-    COMMAND "${GIT_EXECUTABLE}" apply --check --unidiff-zero
-        --whitespace=nowarn "${PATCH_FILE}"
+    COMMAND "${PATCH_EXECUTABLE}" --batch --forward --dry-run
+        --strip=1 --input "${PATCH_FILE}"
     WORKING_DIRECTORY "${SOURCE_DIR}"
     RESULT_VARIABLE apply_check_result
     OUTPUT_QUIET
@@ -13,8 +13,8 @@ execute_process(
 
 if (apply_check_result EQUAL 0)
     execute_process(
-        COMMAND "${GIT_EXECUTABLE}" apply --unidiff-zero
-            --whitespace=nowarn "${PATCH_FILE}"
+        COMMAND "${PATCH_EXECUTABLE}" --batch --forward
+            --strip=1 --input "${PATCH_FILE}"
         WORKING_DIRECTORY "${SOURCE_DIR}"
         RESULT_VARIABLE apply_result)
     if (NOT apply_result EQUAL 0)
@@ -24,8 +24,8 @@ if (apply_check_result EQUAL 0)
 endif ()
 
 execute_process(
-    COMMAND "${GIT_EXECUTABLE}" apply --reverse --check --unidiff-zero
-        --whitespace=nowarn "${PATCH_FILE}"
+    COMMAND "${PATCH_EXECUTABLE}" --batch --reverse --dry-run
+        --strip=1 --input "${PATCH_FILE}"
     WORKING_DIRECTORY "${SOURCE_DIR}"
     RESULT_VARIABLE reverse_check_result
     OUTPUT_QUIET
@@ -36,4 +36,3 @@ if (NOT reverse_check_result EQUAL 0)
 endif ()
 
 message(STATUS "Patch already applied: ${PATCH_FILE}")
-
