@@ -960,7 +960,7 @@ static int curl_ssl_verify(int preverify_ok, X509_STORE_CTX *ctx) {
     X509 *cert = X509_STORE_CTX_get_current_cert(ctx);
     SOFT_ASSERT_RC(cert != NULL, 0, "Failed to get X509 pointer");
 
-    /* Acquire the certificate's common name and store it. Avoid the legacy
+    /* Acquire the certificate's common name and store it. Avoid the obsolete
      * text helper: it is deprecated in OpenSSL 4 and could silently leave the
      * destination buffer uninitialized when the name was absent. */
     const X509_NAME *subject_name = X509_get_subject_name(cert);

@@ -24,7 +24,7 @@ bool password_record_needs_rehash(const char *record);
 
 /* Verification-only support for repository account records written before
  * Argon2id. Successful logins are immediately rehashed by the account layer. */
-password_verify_result_t password_legacy_pbkdf2_verify(const char *password,
+password_verify_result_t password_pbkdf2_sha256_verify(const char *password,
                                                        const unsigned char salt[32],
                                                        const unsigned char expected[32]);
 

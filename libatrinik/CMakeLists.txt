@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-# This directory is both an in-tree dependency of the legacy superbuild and
+# This directory is both an in-tree dependency of the classic game superbuild and
 # the source root of the independently released libatrinik package.
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     project(libatrinik VERSION 1.0.0 LANGUAGES C)
