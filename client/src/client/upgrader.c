@@ -31,6 +31,7 @@
 
 #include <global.h>
 #include <wrapper.h>
+#include <toolkit/path.h>
 
 /**
  * Client versions we know about. The process how these are checked is
@@ -52,12 +53,13 @@ static int64_t version_id_migrating = -1;
  * The new setting directory.
  */
 static void upgrade_20_to_25(const char *from, const char *to) {
-    char src[MAX_BUF], buf[HUGE_BUF];
+    char buf[HUGE_BUF];
     FILE *fp;
 
     /* Try to upgrade keybindings, if they exist. */
-    snprintf(src, sizeof(src), "%s/keys.dat", from);
+    char *src = path_join(from, "keys.dat");
     fp = fopen(src, "r");
+    free(src);
 
     if (fp) {
         int keycode, repeat;
@@ -162,8 +164,9 @@ static void upgrade_20_to_25(const char *from, const char *to) {
     }
 
     /* Try to upgrade options. */
-    snprintf(src, sizeof(src), "%s/options.dat", from);
+    src = path_join(from, "options.dat");
     fp = fopen(src, "r");
+    free(src);
 
     if (fp) {
         char option_name[MAX_BUF];

@@ -102,36 +102,6 @@ char *package_get_version_partial(char *dst, size_t dstlen) {
 }
 
 /**
- * Convert BMP file to PNG, if supported by the platform.
- * @param path
- * File to convert.
- * @return
- * 1 if the file was converted to PNG, 0 otherwise.
- */
-int bmp2png(const char *path) {
-#if defined(__GNUC__) && !defined(WIN32)
-    char buf[HUGE_BUF];
-
-    snprintf(buf,
-             sizeof(buf),
-             "convert \"%s\" \"`echo \"%s\" | sed -e 's/.bmp/.png/'`\" && rm \"%s\"",
-             path,
-             path,
-             path);
-
-    if (system(buf) != 0) {
-        LOG(INFO, "Could not convert %s from BMP to PNG.", path);
-        return 0;
-    }
-
-    return 1;
-#else
-    (void)path;
-    return 0;
-#endif
-}
-
-/**
  * Create a screenshot of the specified surface.
  * @param surface
  * The surface to take a screenshot of.
@@ -162,17 +132,13 @@ void screenshot_create(SDL_Surface *surface) {
 
     snprintf(path,
              sizeof(path),
-             "%s/.atrinik/screenshots/Atrinik-%s.bmp",
+             "%s/.atrinik/screenshots/Atrinik-%s.png",
              get_config_dir(),
              timebuf);
     mkdir_ensure(path);
 
-    if (SDL_SaveBMP(surface, path)) {
+    if (IMG_SavePNG(surface, path)) {
         draw_info_format(COLOR_GREEN, "Saved screenshot as %s successfully.", path);
-
-        if (bmp2png(path)) {
-            draw_info(COLOR_GREEN, "Converted to PNG successfully.");
-        }
     } else {
         draw_info_format(COLOR_RED, "Failed to write screenshot data (path: %s).", path);
     }
