@@ -56,10 +56,10 @@ Client_Player cpl;
 
 /** Structure of all the socket commands */
 static socket_command_struct commands[CLIENT_CMD_NROF] = {
-#define ATRINIK_CLIENT_COMMAND(_id, _name, _handler) \
-    [CLIENT_CMD_##_id] = {.handle_func = (_handler), .name = (_name)},
-#include <toolkit/socket_commands.def>
-#undef ATRINIK_CLIENT_COMMAND
+#define ATRINIK_CLIENT_COMMAND_HANDLER(_symbol, _handler) \
+    [CLIENT_CMD_##_symbol] = {.handle_func = (_handler), .name = CLIENT_CMD_NAME_##_symbol},
+#include "command_handlers.def"
+#undef ATRINIK_CLIENT_COMMAND_HANDLER
 };
 CASSERT_ARRAY(commands, CLIENT_CMD_NROF);
 

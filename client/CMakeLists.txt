@@ -47,7 +47,7 @@ target_include_directories(${EXECUTABLE} BEFORE PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${LIBXML2_INCLUDE_DIR})
 
-target_link_libraries(${EXECUTABLE} PRIVATE atrinik-toolkit)
+target_link_libraries(${EXECUTABLE} PRIVATE Atrinik::Core)
 
 # Link all the available libraries.
 target_link_libraries(${EXECUTABLE} PRIVATE
@@ -86,7 +86,7 @@ if (BUILD_TESTING AND NOT MINGW)
     atrinik_configure_target(client-packet-payload-tests)
     target_include_directories(client-packet-payload-tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
-    target_link_libraries(client-packet-payload-tests PRIVATE atrinik-toolkit)
+    target_link_libraries(client-packet-payload-tests PRIVATE Atrinik::Core)
     add_test(NAME client-packet-payload COMMAND client-packet-payload-tests)
 
     add_executable(client-surface-primitives-tests

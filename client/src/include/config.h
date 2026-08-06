@@ -30,9 +30,6 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-/** Socket version. */
-#define SOCKET_VERSION 1072
-
 /** File the the arch definitions. */
 #define ARCHDEF_FILE "data/archdef.dat"
 /** File with the widgets' positions. */
