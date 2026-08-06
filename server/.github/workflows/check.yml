@@ -17,21 +17,26 @@ jobs:
   server-validation:
     name: Server validation
     runs-on: ubuntu-24.04
-    container:
-      image: ghcr.io/atrinik/linux-build:0.0.5
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Validate and install pinned runtime dependencies
+
+      - name: Pull public build environment
+        run: docker pull ghcr.io/atrinik/linux-build:0.0.5
+
+      - name: Validate, build, and test
         run: |
-          python3 -m unittest discover -s tools/tests -p 'test_*.py'
-          python3 tools/dependencies.py sync
-          python3 tools/dependencies.py verify
-      - name: Configure
-        run: cmake --preset linux-debug
-      - name: Build and test
-        run: |
-          cmake --build --preset linux-debug --parallel
-          ctest --preset linux-debug
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --workdir /workspace \
+            ghcr.io/atrinik/linux-build:0.0.5 \
+            bash -euo pipefail -c '
+              python3 -m unittest discover -s tools/tests -p "test_*.py"
+              python3 tools/dependencies.py sync
+              python3 tools/dependencies.py verify
+              cmake --preset linux-debug
+              cmake --build --preset linux-debug --parallel
+              ctest --preset linux-debug
+            '
