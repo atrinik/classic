@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(atrinik-client VERSION 1.0.0 LANGUAGES C)
+project(atrinik-client VERSION 5.1.0 LANGUAGES C)
 
 include(CTest)
 include(FetchContent)
