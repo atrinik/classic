@@ -15,7 +15,9 @@ concurrency:
 jobs:
   tag:
     name: Tag merged pull request
-    if: github.event.pull_request.merged == true
+    if: >-
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.title, 'chore(release): ')
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
@@ -62,11 +64,10 @@ jobs:
           RELEASE_TAG: ${{ needs.tag.outputs.tag }}
         run: |
           for attempt in {1..6}; do
-            if gh workflow run release.yml --repo "${GITHUB_REPOSITORY}" \
+            if gh workflow run publish-release.yml --repo "${GITHUB_REPOSITORY}" \
                 --ref master --field "tag=${RELEASE_TAG}"; then
               exit 0
             fi
             ((attempt < 6)) || exit 1
             sleep 5
           done
-
