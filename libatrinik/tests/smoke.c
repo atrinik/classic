@@ -1,6 +1,6 @@
 #include <toolkit/packet.h>
 
-#include <atrinik/protocol/legacy_commands.h>
+#include <atrinik/protocol/game_commands.h>
 
 int main(void) {
     toolkit_import(packet);
