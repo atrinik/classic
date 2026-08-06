@@ -23,20 +23,20 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Pull public build environment
-        run: docker pull ghcr.io/atrinik/linux-build:0.0.5
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ca-certificates check cmake flex \
+            libcurl4-openssl-dev libgd-dev libminiupnpc-dev \
+            libreadline-dev libssl-dev libsubunit-dev ninja-build pkgconf \
+            python3-dev zlib1g-dev
 
       - name: Validate, build, and test
         run: |
-          docker run --rm \
-            --volume "${GITHUB_WORKSPACE}:/workspace" \
-            --workdir /workspace \
-            ghcr.io/atrinik/linux-build:0.0.5 \
-            bash -euo pipefail -c '
-              python3 -m unittest discover -s tools/tests -p "test_*.py"
-              python3 tools/dependencies.py sync
-              python3 tools/dependencies.py verify
-              cmake --preset linux-debug
-              cmake --build --preset linux-debug --parallel
-              ctest --preset linux-debug
-            '
+          python3 -m unittest discover -s tools/tests -p 'test_*.py'
+          python3 tools/dependencies.py sync
+          python3 tools/dependencies.py verify
+          cmake --preset linux-debug
+          cmake --build --preset linux-debug --parallel
+          ctest --preset linux-debug
