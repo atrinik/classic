@@ -20,5 +20,10 @@ cmake --install build --prefix /path/to/prefix
 Set `LIBATRINIK_USE_INSTALLED_PROTOCOL=ON` to use an installed
 `AtrinikProtocol` CMake package instead of the locked source release.
 
+Parent CMake projects that consume this source archive with `add_subdirectory`
+must provide `Atrinik::Protocol` first and set `LIBATRINIK_PACKAGE_LAYOUT=ON`.
+That selects the archive's namespaced public-header layout without enabling
+standalone install or test targets.
+
 The first standalone release preserves the inherited GPL-2.0-or-later license.
 Extraction into an independent repository does not relicense the code.
