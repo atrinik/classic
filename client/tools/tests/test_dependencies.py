@@ -51,7 +51,7 @@ class DependencyTests(unittest.TestCase):
             "commit": "1" * 40,
             "url": archive.as_uri(),
             "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
-            "destination": "client/sound",
+            "destination": "sound",
             "strip_components": 1,
         }
 
@@ -64,7 +64,7 @@ class DependencyTests(unittest.TestCase):
             dependency,
         )
         self.assertEqual(status, "installed")
-        self.assertEqual((self.root / "client/sound/effects/test.ogg").read_bytes(), b"sound")
+        self.assertEqual((self.root / "sound/effects/test.ogg").read_bytes(), b"sound")
         dependencies.verify_dependency(self.root, dependency)
         self.assertEqual(
             dependencies.install_dependency(self.root, self.root / "build/cache", dependency),
@@ -73,7 +73,7 @@ class DependencyTests(unittest.TestCase):
 
     def test_refuses_unmanaged_destination(self) -> None:
         archive = self.make_archive([("sound-v1.0.0/test.ogg", b"sound", "file")])
-        (self.root / "client/sound").mkdir()
+        (self.root / "sound").mkdir()
         with self.assertRaisesRegex(dependencies.DependencyError, "unmanaged"):
             dependencies.install_dependency(
                 self.root,
