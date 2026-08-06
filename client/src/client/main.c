@@ -34,7 +34,6 @@
 #include <connection_preferences.h>
 #include <client_socket.h>
 #include <SDL3/SDL_main.h>
-#include <toolkit/gitversion.h>
 #include <region_map.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
@@ -727,12 +726,6 @@ int main(int argc, char *argv[]) {
 
     char buf[HUGE_BUF];
     snprintf(VS(buf), "Welcome to Atrinik version %s", version);
-#ifdef GITVERSION
-    snprintfcat(
-        VS(buf),
-        "%s",
-        " (" STRINGIFY(GITBRANCH) "/" STRINGIFY(GITVERSION) " by " STRINGIFY(GITAUTHOR) ")");
-#endif
     draw_info(COLOR_HGOLD, buf);
 
     settings_apply();
