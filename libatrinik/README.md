@@ -1,5 +1,7 @@
 # libatrinik
 
+[![Coverage](https://codecov.io/gh/atrinik/libatrinik/graph/badge.svg?branch=main)](https://codecov.io/gh/atrinik/libatrinik)
+
 `libatrinik` is the reusable C17 networking and utility library shared by the
 Atrinik classic client, server, tests, and tooling. Its public CMake target is
 `Atrinik::Core`; the installed static library is named `libatrinik`.
@@ -15,6 +17,16 @@ cmake -S . -B build \
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 cmake --install build --prefix /path/to/prefix
+```
+
+To collect line, function, and branch coverage from the native tests:
+
+```sh
+cmake --preset linux-coverage
+cmake --build --preset linux-coverage
+ctest --preset linux-coverage
+gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
+  --exclude '.*/build/.*' --print-summary
 ```
 
 Set `LIBATRINIK_USE_INSTALLED_PROTOCOL=ON` to use an installed

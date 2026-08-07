@@ -4,3 +4,4 @@ build/
 *.o
 *.so
 __pycache__/
+coverage.*

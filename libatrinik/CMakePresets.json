@@ -1,0 +1,26 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "linux-coverage",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-coverage",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install",
+        "BUILD_TESTING": true,
+        "ENABLE_COVERAGE": true
+      }
+    }
+  ],
+  "buildPresets": [
+    {"name": "linux-coverage", "configurePreset": "linux-coverage"}
+  ],
+  "testPresets": [
+    {
+      "name": "linux-coverage",
+      "configurePreset": "linux-coverage",
+      "output": {"outputOnFailure": true}
+    }
+  ]
+}
