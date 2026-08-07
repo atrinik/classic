@@ -38,6 +38,7 @@
  */
 
 #include <global.h>
+#include <atrinik/pathfinding.h>
 #include <server_main.h>
 #include <initialization.h>
 #include <toolkit/string.h>
@@ -46,6 +47,9 @@
 #include <object.h>
 #include <exit.h>
 #include <toolkit/clioptions.h>
+
+#include <errno.h>
+#include <math.h>
 
 /**
  * Turns pathfinding profiling on/off.
@@ -63,24 +67,22 @@
 #define PATHFINDER_QUEUE_SIZE 100
 
 /**
- * Maximum number of node buffers.
- */
-#define PATHFINDER_NODEBUF 1000
-
-/**
  * Path cost when moving in a straight line.
  */
-#define PATH_COST 1.0
+#define PATH_COST 1000U
 
 /**
  * Path cost when moving diagonally.
  */
-#define PATH_COST_DIAG 1.01
+#define PATH_COST_DIAG 1010U
 
 /**
  * Path cost per z level.
  */
-#define PATH_COST_LEVEL 1000.
+#define PATH_COST_LEVEL 1000000U
+
+/** Transition leaves its source through an exit. */
+#define PATH_TRANSITION_SOURCE_EXIT UINT64_C(1)
 
 /**
  * The pathfinder queue.
@@ -99,33 +101,23 @@ static int pathfinder_queue_first = 0;
  */
 static int pathfinder_queue_last = 0;
 
-/**
- * The node buffers. Used to avoid lots of mallocs.
- */
-static path_node_t pathfinder_nodebuf[PATHFINDER_NODEBUF];
-/**
- * Next node buf.
- */
-static int pathfinder_nodebuf_next = 0;
-
-/**
- * Used to avoid branching when computing sum of node cost/heuristic
- * depending on selected algorithm.
- */
-static const double algo_modifiers[] = {
-    0,
-    0.5,
-    1.0,
+/** Generic-core algorithm corresponding to each public server setting. */
+static const atrinik_pf_algorithm core_algorithms[] = {
+    ATRINIK_PF_ASTAR,
+    ATRINIK_PF_DIJKSTRA,
+    ATRINIK_PF_BREADTH_FIRST,
+    ATRINIK_PF_GREEDY_BEST_FIRST,
 };
-CASSERT_ARRAY(algo_modifiers, PATH_ALGO_NUM);
+CASSERT_ARRAY(core_algorithms, PATH_ALGO_NUM);
 
 /**
  * Text representation of the algorithms.
  */
 static const char *const algo_strs[] = {
-    "BFS",
     "A*",
     "Dijkstra",
+    "BFS",
+    "Greedy",
 };
 CASSERT_ARRAY(algo_strs, PATH_ALGO_NUM);
 
@@ -138,6 +130,9 @@ static path_algo_t path_algo = PATH_ALGO_ASTAR;
  * Heuristic greed modifier.
  */
 static double path_greed = 1.0;
+
+/** Default per-search generated-state budget; zero means unlimited. */
+static size_t path_max_generated = 10000U;
 TOOLKIT_API(IMPORTS(clioptions), DEPENDS(logger));
 
 /**
@@ -145,7 +140,7 @@ TOOLKIT_API(IMPORTS(clioptions), DEPENDS(logger));
  */
 static const char *clioptions_option_pathfinder_algorithm_desc =
     "Changes the algorithm used for pathfinding.\n\n"
-    "Available algorithms: BFS, A*, Dijkstra";
+    "Available algorithms: A*, Dijkstra, BFS, Greedy";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_pathfinder_algorithm(const char *arg, char **errmsg) {
     path_algo_t algo;
@@ -169,7 +164,6 @@ static bool clioptions_option_pathfinder_algorithm(const char *arg, char **errms
     path_algo = algo;
     return true;
 }
-
 /**
  * Description of the --pathfinder_greed command.
  */
@@ -177,7 +171,14 @@ static const char *clioptions_option_pathfinder_greed_desc =
     "Sets the pathfinding heuristics greed modifier.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_pathfinder_greed(const char *arg, char **errmsg) {
-    double greed = atof(arg);
+    char *end;
+    errno = 0;
+    double greed = strtod(arg, &end);
+    if (errno != 0 || end == arg || *end != '\0' || !isfinite(greed) || greed < 0.0 ||
+        greed > 1000.0) {
+        *errmsg = xstrdup("Greed modifier must be a finite number between 0 and 1000");
+        return false;
+    }
     if (DBL_EQUAL(path_greed, greed)) {
         *errmsg = xstrdup("Greed modifier unchanged");
         return false;
@@ -188,11 +189,38 @@ static bool clioptions_option_pathfinder_greed(const char *arg, char **errmsg) {
     return true;
 }
 
+/** Description of the --pathfinder_max_nodes command. */
+static const char *clioptions_option_pathfinder_max_nodes_desc =
+    "Sets the generated-state budget for each path search (zero is unlimited).";
+/** @copydoc clioptions_handler_func */
+static bool clioptions_option_pathfinder_max_nodes(const char *arg, char **errmsg) {
+    char *end;
+    errno = 0;
+    unsigned long long value = strtoull(arg, &end, 10);
+    if (errno != 0 || end == arg || *end != '\0' || arg[0] == '-' || value > SIZE_MAX) {
+        *errmsg = xstrdup("Node budget must be a non-negative integer representable by size_t");
+        return false;
+    }
+    if (path_max_generated == (size_t)value) {
+        *errmsg = xstrdup("Node budget unchanged");
+        return false;
+    }
+
+    LOG(INFO,
+        "Pathfinding generated-state budget changed from %zu to %zu",
+        path_max_generated,
+        (size_t)value);
+    path_max_generated = (size_t)value;
+    return true;
+}
+
 TOOLKIT_INIT_FUNC(pathfinder) {
     clioption_t *cli;
     CLIOPTIONS_CREATE_ARGUMENT(cli, pathfinder_algorithm, "Set pathfinding algorithm");
     clioptions_enable_changeable(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, pathfinder_greed, "Set pathfinding greed modifier");
+    clioptions_enable_changeable(cli);
+    CLIOPTIONS_CREATE_ARGUMENT(cli, pathfinder_max_nodes, "Set pathfinding node budget");
     clioptions_enable_changeable(cli);
 }
 TOOLKIT_INIT_FUNC_FINISH
@@ -312,100 +340,6 @@ object *path_get_next_request(void) {
 }
 
 /**
- * Allocate and initialize a node.
- *
- * Also calculates the appropriate heuristics from 'start' and 'goal'
- * parameters.
- *
- * @param map
- * Map.
- * @param x
- * X position.
- * @param y
- * Y position.
- * @param cost
- * Cost.
- * @param start
- * Starting node.
- * @param goal
- * Goal node.
- * @param parent
- * Parent node.
- * @return
- * New node.
- */
-static path_node_t *path_node_new(mapstruct *map,
-                                  int16_t x,
-                                  int16_t y,
-                                  double cost,
-                                  path_node_t *start,
-                                  path_node_t *goal,
-                                  path_node_t *parent) {
-    HARD_ASSERT(map != NULL);
-    HARD_ASSERT(start != NULL);
-    HARD_ASSERT(goal != NULL);
-
-    SOFT_ASSERT_RC(!OUT_OF_MAP(map, x, y), NULL, "Out of map: %s %d,%d", map->path, x, y);
-
-    /* Out of memory? */
-    if (unlikely(pathfinder_nodebuf_next == PATHFINDER_NODEBUF)) {
-#ifdef DEBUG_PATHFINDING
-        LOG(DEBUG, "Out of static buffer memory");
-#endif
-        return NULL;
-    }
-
-    rv_vector rv;
-    if (!get_rangevector_from_mapcoords(map,
-                                        x,
-                                        y,
-                                        goal->map,
-                                        goal->x,
-                                        goal->y,
-                                        &rv,
-                                        RV_RECURSIVE_SEARCH | RV_NO_DISTANCE)) {
-        return NULL;
-    }
-
-    rv_vector rv2;
-    if (!get_rangevector_from_mapcoords(start->map,
-                                        start->x,
-                                        start->y,
-                                        goal->map,
-                                        goal->x,
-                                        goal->y,
-                                        &rv2,
-                                        RV_RECURSIVE_SEARCH | RV_NO_DISTANCE)) {
-        return NULL;
-    }
-
-    int cross = abs(rv.distance_x * rv2.distance_y - rv2.distance_x * rv.distance_y);
-    int straight = abs(abs(rv.distance_x) - abs(rv.distance_y));
-    int diagonal = MAX(abs(rv.distance_x), abs(rv.distance_y)) - straight;
-
-    path_node_t *node = &pathfinder_nodebuf[pathfinder_nodebuf_next++];
-
-    node->next = NULL;
-    node->prev = NULL;
-    node->parent = parent;
-    node->map = map;
-    node->x = x;
-    node->y = y;
-    node->cost = cost;
-    node->flags = 0;
-    node->distance_z = abs(rv.distance_z);
-    node->heuristic =
-        straight + PATH_COST_DIAG * diagonal + cross * 0.001 + abs(rv.distance_z) * PATH_COST_LEVEL;
-    node->heuristic *= path_greed;
-
-    const double modifier = algo_modifiers[path_algo];
-    node->sum =
-        (modifier * node->cost + (1 - modifier) * node->heuristic) / MAX(modifier, 1 - modifier);
-
-    return node;
-}
-
-/**
  * Remove a node from a list.
  *
  * @param node
@@ -433,72 +367,6 @@ static void path_node_remove(path_node_t *node, path_node_t **list) {
     }
 
     node->next = node->prev = NULL;
-}
-
-/**
- * Insert a node into a list.
- *
- * @param node
- * Node to insert.
- * @param[out] list List to insert into.
- */
-static void path_node_insert(path_node_t *node, path_node_t **list) {
-    HARD_ASSERT(node != NULL);
-    HARD_ASSERT(list != NULL);
-
-    if (*list != NULL) {
-        (*list)->prev = node;
-    }
-
-    node->next = *list;
-    node->prev = NULL;
-
-    *list = node;
-}
-
-/**
- * Insert a node in a sorted list (lowest path_node_t::sum first in list).
- *
- * @param node
- * Node to insert.
- * @param list
- * List to insert into.
- * @todo Make more efficient by using skip list or heaps.
- */
-static void path_node_insert_priority(path_node_t *node, path_node_t **list) {
-    HARD_ASSERT(node != NULL);
-    HARD_ASSERT(list != NULL);
-
-    /* Figure out which node to insert in front of. */
-    path_node_t *insert_before = NULL;
-    path_node_t *last;
-    for (path_node_t *tmp = *list; tmp != NULL; tmp = tmp->next) {
-        last = tmp;
-
-        if (node->sum <= tmp->sum) {
-            insert_before = tmp;
-            break;
-        }
-    }
-
-    if (insert_before == *list) {
-        /* Insert first. */
-        path_node_insert(node, list);
-    } else if (insert_before == NULL) {
-        /* Insert last. */
-        node->next = NULL;
-        node->prev = last;
-        last->next = node;
-    } else {
-        /* Insert in middle. */
-        node->next = insert_before;
-        node->prev = insert_before->prev;
-        insert_before->prev = node;
-
-        if (node->prev != NULL) {
-            node->prev->next = node;
-        }
-    }
 }
 
 /**
@@ -762,6 +630,7 @@ path_node_t *path_compress(path_node_t *path) {
 
         if (last_dir == v.direction) {
             path_node_remove(tmp, &path);
+            free(tmp);
 #ifdef DEBUG_PATHFINDING
             removed_nodes++;
 #endif
@@ -807,428 +676,542 @@ void path_visualize(path_visualization_t **visualization, path_visualizer_t **vi
     }
 }
 
-/**
- * Find a path for op from location on map1 to location on map2.
- * @param op
- * Object.
- * @param map1
- * From map.
- * @param x1
- * From X position.
- * @param y1
- * From Y position.
- * @param map2
- * To map.
- * @param x2
- * To X position.
- * @param y2
- * To Y position.
- * @param visualizer[out]
- * Visualizer pointer where to store visited/closed
- * nodes. Can be NULL, otherwise the pointer MUST be initialized to NULL.
- * @return
- * Found path.
- */
-path_node_t *path_find(object *op,
-                       mapstruct *map1,
-                       int x,
-                       int y,
-                       mapstruct *map2,
-                       int x2,
-                       int y2,
-                       path_visualizer_t **visualizer) {
-    path_node_t *open_list, *found_path, *visited, *node, *new_node, *best;
-    path_node_t start, goal;
-    static uint32_t traversal_id = 0;
-    int i, nx, ny, is_diagonal, node_x, node_y;
-    mapstruct *m, *node_map;
-    double cost;
+typedef struct path_state_key {
+    mapstruct *map;
+    int16_t x;
+    int16_t y;
+} path_state_key_t;
+
+typedef struct path_state {
+    path_state_key_t key;
+    atrinik_pf_state_id id;
+    bool exit_landing;
+    UT_hash_handle hh;
+} path_state_t;
+
+typedef struct server_path_adapter {
+    object *op;
+    mapstruct *goal_map;
+    int goal_x;
+    int goal_y;
+    int64_t start_distance_x;
+    int64_t start_distance_y;
+    path_state_t *states;
+    path_state_t **states_by_id;
+    size_t state_count;
+    size_t state_capacity;
+    path_visualizer_t **visualizer;
+    uint32_t visualizer_id;
+    bool out_of_memory;
+} server_path_adapter_t;
+
+static uint64_t path_saturating_add(uint64_t left, uint64_t right) {
+    return UINT64_MAX - left < right ? UINT64_MAX : left + right;
+}
+
+static uint64_t path_saturating_multiply(uint64_t left, uint64_t right) {
+    return left != 0U && right > UINT64_MAX / left ? UINT64_MAX : left * right;
+}
+
+static uint64_t path_abs_i64(int64_t value) {
+    if (value >= 0) {
+        return (uint64_t)value;
+    }
+    return value == INT64_MIN ? (uint64_t)INT64_MAX + 1U : (uint64_t)-value;
+}
+
+/** Return |a*b - c*d| without signed overflow. */
+static uint64_t path_saturating_cross(int64_t a, int64_t b, int64_t c, int64_t d) {
+    uint64_t a_abs = path_abs_i64(a);
+    uint64_t b_abs = path_abs_i64(b);
+    uint64_t c_abs = path_abs_i64(c);
+    uint64_t d_abs = path_abs_i64(d);
+    if ((a_abs != 0U && b_abs > UINT64_MAX / a_abs) ||
+        (c_abs != 0U && d_abs > UINT64_MAX / c_abs)) {
+        return UINT64_MAX;
+    }
+
+    uint64_t left = a_abs * b_abs;
+    uint64_t right = c_abs * d_abs;
+    bool left_negative = (a < 0) != (b < 0);
+    bool right_negative = (c < 0) != (d < 0);
+    if (left_negative != right_negative) {
+        return path_saturating_add(left, right);
+    }
+    return left > right ? left - right : right - left;
+}
+
+static uint64_t
+path_heuristic_value(const server_path_adapter_t *adapter, mapstruct *map, int x, int y) {
     rv_vector rv;
-    uint32_t node_id;
-#if VISUALIZE_PATHFINDING
-    path_visualizer_t *visualizer_tmp;
-#endif
-#if TIME_PATHFINDING
-    int searched;
-#endif
+    if (!get_rangevector_from_mapcoords(map,
+                                        x,
+                                        y,
+                                        adapter->goal_map,
+                                        adapter->goal_x,
+                                        adapter->goal_y,
+                                        &rv,
+                                        RV_RECURSIVE_SEARCH | RV_NO_DISTANCE)) {
+        return UINT64_MAX;
+    }
 
-    start.x = x;
-    start.y = y;
-    start.map = map1;
+    uint64_t dx = path_abs_i64(rv.distance_x);
+    uint64_t dy = path_abs_i64(rv.distance_y);
+    uint64_t straight = dx > dy ? dx - dy : dy - dx;
+    uint64_t diagonal = MIN(dx, dy);
+    uint64_t cross = path_saturating_cross(rv.distance_x,
+                                           adapter->start_distance_y,
+                                           adapter->start_distance_x,
+                                           rv.distance_y);
+    uint64_t result = path_saturating_multiply(straight, PATH_COST);
+    result = path_saturating_add(result, path_saturating_multiply(diagonal, PATH_COST_DIAG));
+    result = path_saturating_add(result, cross);
+    result =
+        path_saturating_add(result,
+                            path_saturating_multiply(path_abs_i64(rv.distance_z), PATH_COST_LEVEL));
+    return result;
+}
 
-    goal.x = x2;
-    goal.y = y2;
-    goal.map = map2;
-
-    /* Avoid overflow of traversal_id */
-    if (traversal_id == UINT32_MAX) {
-        DL_FOREACH(first_map, m) {
-            m->pathfinding_id = 0;
+static path_state_t *path_state_get(server_path_adapter_t *adapter,
+                                    mapstruct *map,
+                                    int x,
+                                    int y,
+                                    bool create,
+                                    bool *created) {
+    path_state_key_t key;
+    /* uthash hashes the complete object representation, including padding. */
+    memset(&key, 0, sizeof(key));
+    key.map = map;
+    key.x = (int16_t)x;
+    key.y = (int16_t)y;
+    path_state_t *state;
+    HASH_FIND(hh, adapter->states, &key, sizeof(key), state);
+    if (state != NULL || !create) {
+        if (created != NULL) {
+            *created = false;
         }
-
-        traversal_id = 0;
+        return state;
     }
 
-#if TIME_PATHFINDING
-    searched = 0;
-    TIMER_START(1);
-#endif
-
-    traversal_id++;
-    pathfinder_nodebuf_next = 0;
-    node_id = 0;
-    found_path = NULL;
-
-#if VISUALIZE_PATHFINDING
-    visualizer_tmp = NULL;
-
-    if (visualizer == NULL) {
-        visualizer = &visualizer_tmp;
+    if (adapter->state_count == adapter->state_capacity) {
+        size_t capacity = adapter->state_capacity == 0U ? 64U : adapter->state_capacity * 2U;
+        if (capacity < adapter->state_capacity ||
+            capacity > SIZE_MAX / sizeof(*adapter->states_by_id)) {
+            adapter->out_of_memory = true;
+            return NULL;
+        }
+        path_state_t **replacement =
+            realloc(adapter->states_by_id, capacity * sizeof(*adapter->states_by_id));
+        if (replacement == NULL) {
+            adapter->out_of_memory = true;
+            return NULL;
+        }
+        adapter->states_by_id = replacement;
+        adapter->state_capacity = capacity;
     }
-#endif
 
-    /* The initial tile. */
-    open_list = best = path_node_new(map1, x, y, 0.0, &start, &goal, NULL);
-    if (open_list == NULL) {
+    state = calloc(1U, sizeof(*state));
+    if (state == NULL) {
+        adapter->out_of_memory = true;
         return NULL;
     }
+    state->key = key;
+    state->id = adapter->state_count;
+    HASH_ADD(hh, adapter->states, key, sizeof(state->key), state);
+    adapter->states_by_id[adapter->state_count++] = state;
+    if (created != NULL) {
+        *created = true;
+    }
+    return state;
+}
 
-    while (open_list != NULL && pathfinder_nodebuf_next < PATHFINDER_NODEBUF) {
-        node = open_list;
-        path_node_remove(node, &open_list);
+static path_state_t *path_state_by_id(server_path_adapter_t *adapter, atrinik_pf_state_id id) {
+    if (id >= adapter->state_count) {
+        return NULL;
+    }
+    return adapter->states_by_id[(size_t)id];
+}
 
-        bool reached_goal = node->heuristic <= 1.2;
-        if (op->more != NULL && !reached_goal && node->heuristic <= (op->quick_pos >> 4) + 1) {
-            for (object *tmp = op; tmp != NULL; tmp = tmp->more) {
-                int tmp_x = node->x + tmp->arch->clone.x;
-                int tmp_y = node->y + tmp->arch->clone.y;
-                mapstruct *tmp_map = get_map_from_coord(node->map, &tmp_x, &tmp_y);
-                if (tmp_map == NULL) {
-                    continue;
-                }
+static void path_states_free(server_path_adapter_t *adapter) {
+    path_state_t *state;
+    path_state_t *next;
+    HASH_ITER(hh, adapter->states, state, next) {
+        HASH_DEL(adapter->states, state);
+        free(state);
+    }
+    free(adapter->states_by_id);
+}
 
-                get_rangevector_from_mapcoords(tmp_map,
-                                               tmp_x,
-                                               tmp_y,
-                                               goal.map,
-                                               goal.x,
-                                               goal.y,
+static void
+path_visualizer_append(server_path_adapter_t *adapter, const path_state_t *state, bool closed) {
+    if (adapter->visualizer == NULL) {
+        return;
+    }
+
+    path_visualizer_t *node = xcalloc(1U, sizeof(*node));
+    node->map = state->key.map;
+    node->x = state->key.x;
+    node->y = state->key.y;
+    node->closed = closed;
+    node->id = adapter->visualizer_id++;
+    DL_APPEND(*adapter->visualizer, node);
+}
+
+static bool path_core_goal(void *context, atrinik_pf_state_id id) {
+    server_path_adapter_t *adapter = context;
+    path_state_t *state = path_state_by_id(adapter, id);
+    if (state == NULL) {
+        return false;
+    }
+
+    bool reached = path_heuristic_value(adapter, state->key.map, state->key.x, state->key.y) <=
+                   PATH_COST + PATH_COST / 5U;
+    if (!reached && adapter->op->more != NULL) {
+        for (object *part = adapter->op; part != NULL; part = part->more) {
+            int x = state->key.x + part->arch->clone.x;
+            int y = state->key.y + part->arch->clone.y;
+            mapstruct *map = get_map_from_coord(state->key.map, &x, &y);
+            rv_vector rv;
+            if (map != NULL &&
+                get_rangevector_from_mapcoords(map,
+                                               x,
+                                               y,
+                                               adapter->goal_map,
+                                               adapter->goal_x,
+                                               adapter->goal_y,
                                                &rv,
-                                               0);
-                if (rv.distance <= 1) {
-                    reached_goal = true;
-                    break;
-                }
+                                               0) &&
+                rv.distance <= 1) {
+                reached = true;
+                break;
             }
         }
+    }
+    if (reached) {
+        path_visualizer_append(adapter, state, true);
+        path_state_t goal = {
+            .key =
+                {
+                    .map = adapter->goal_map,
+                    .x = (int16_t)adapter->goal_x,
+                    .y = (int16_t)adapter->goal_y,
+                },
+        };
+        path_visualizer_append(adapter, &goal, true);
+    }
+    return reached;
+}
 
-        if (reached_goal) {
-            if (visualizer != NULL) {
-                PATHFINDING_SET_CLOSED(node->map, node->x, node->y, traversal_id, visualizer);
-                PATHFINDING_SET_CLOSED(goal.map, goal.x, goal.y, traversal_id, visualizer);
+static uint64_t path_core_heuristic(void *context, atrinik_pf_state_id id) {
+    server_path_adapter_t *adapter = context;
+    path_state_t *state = path_state_by_id(adapter, id);
+    if (state == NULL) {
+        return UINT64_MAX;
+    }
+
+    uint64_t heuristic = path_heuristic_value(adapter, state->key.map, state->key.x, state->key.y);
+    if (heuristic == UINT64_MAX || path_greed == 1.0) {
+        return heuristic;
+    }
+    long double weighted = (long double)heuristic * (long double)path_greed;
+    return weighted >= (long double)UINT64_MAX ? UINT64_MAX : (uint64_t)weighted;
+}
+
+static uint64_t path_core_partial_rank(void *context, atrinik_pf_state_id id) {
+    server_path_adapter_t *adapter = context;
+    path_state_t *state = path_state_by_id(adapter, id);
+    return state == NULL
+               ? UINT64_MAX
+               : path_heuristic_value(adapter, state->key.map, state->key.x, state->key.y);
+}
+
+static bool path_core_neighbors(void *context,
+                                atrinik_pf_state_id id,
+                                atrinik_pf_emit_fn emit,
+                                void *emit_context) {
+    server_path_adapter_t *adapter = context;
+    path_state_t *state = path_state_by_id(adapter, id);
+    if (state == NULL) {
+        return false;
+    }
+
+    path_visualizer_append(adapter, state, true);
+    mapstruct *origin_map = state->key.map;
+    int origin_x = state->key.x;
+    int origin_y = state->key.y;
+    bool used_exit = false;
+
+    if ((GET_MAP_FLAGS(origin_map, origin_x, origin_y) & P_IS_EXIT) != 0 &&
+        (adapter->op->behavior & BEHAVIOR_EXITS) != 0) {
+        rv_vector current_distance;
+        bool have_current_distance = get_rangevector_from_mapcoords(origin_map,
+                                                                    origin_x,
+                                                                    origin_y,
+                                                                    adapter->goal_map,
+                                                                    adapter->goal_x,
+                                                                    adapter->goal_y,
+                                                                    &current_distance,
+                                                                    RV_RECURSIVE_SEARCH);
+        for (object *candidate = GET_MAP_OB(origin_map, origin_x, origin_y); candidate != NULL;
+             candidate = candidate->above) {
+            if (candidate->type != EXIT) {
+                continue;
+            }
+            int destination_x;
+            int destination_y;
+            mapstruct *destination =
+                exit_get_destination(candidate, &destination_x, &destination_y, true);
+            rv_vector destination_distance;
+            if (destination == NULL || !have_current_distance ||
+                !get_rangevector_from_mapcoords(destination,
+                                                destination_x,
+                                                destination_y,
+                                                adapter->goal_map,
+                                                adapter->goal_x,
+                                                adapter->goal_y,
+                                                &destination_distance,
+                                                RV_RECURSIVE_SEARCH) ||
+                path_abs_i64(destination_distance.distance_z) >
+                    path_abs_i64(current_distance.distance_z)) {
+                continue;
             }
 
-            for (; node != NULL; node = node->parent) {
-                path_node_insert(node, &found_path);
+            path_state_t *landing =
+                path_state_get(adapter, destination, destination_x, destination_y, true, NULL);
+            if (landing == NULL) {
+                return false;
             }
-
+            landing->exit_landing = true;
+            origin_map = destination;
+            origin_x = destination_x;
+            origin_y = destination_y;
+            used_exit = true;
             break;
         }
-
-        /* Close this tile. */
-        PATHFINDING_SET_CLOSED(node->map, node->x, node->y, traversal_id, visualizer);
-
-        node_map = node->map;
-        node_x = node->x;
-        node_y = node->y;
-
-        if (GET_MAP_FLAGS(node_map, node_x, node_y) & P_IS_EXIT && op->behavior & BEHAVIOR_EXITS) {
-            object *tmp;
-
-            for (tmp = GET_MAP_OB(node_map, node_x, node_y); tmp != NULL; tmp = tmp->above) {
-                if (tmp->type == EXIT) {
-                    m = exit_get_destination(tmp, &nx, &ny, true);
-
-                    /* Do not enter exits that have worse z distance than the
-                     * current node. */
-                    if (m != NULL &&
-                        get_rangevector_from_mapcoords(m,
-                                                       node_x,
-                                                       node_y,
-                                                       goal.map,
-                                                       goal.x,
-                                                       goal.y,
-                                                       &rv,
-                                                       RV_RECURSIVE_SEARCH) &&
-                        abs(rv.distance_z) <= node->distance_z) {
-                        node_map = m;
-                        node_x = nx;
-                        node_y = ny;
-
-                        /* Add exit flag to the node with the exit, to indicate
-                         * that the path user needs to use an exit on that tile
-                         * (possibly having to apply it, in case it's not a
-                         * portal or the like). */
-                        node->flags |= PATH_NODE_EXIT;
-
-                        /* Close the tile that the exit leads to. */
-                        PATHFINDING_SET_CLOSED(node_map, node_x, node_y, traversal_id, visualizer);
-
-                        break;
-                    }
-                }
-            }
-        }
-
-        for (i = 1; i <= SIZEOFFREE1; i++) {
-            nx = node_x + freearr_x[i];
-            ny = node_y + freearr_y[i];
-            is_diagonal = nx != node_x && ny != node_y;
-
-            m = get_map_from_coord(node_map, &nx, &ny);
-
-            if (m == NULL) {
-                continue;
-            }
-
-            /* Skip closed tiles. */
-            if (PATHFINDING_QUERY_CLOSED(m, nx, ny, traversal_id)) {
-                continue;
-            }
-
-            /* Skip blocked tiles. */
-            if (tile_is_blocked(op, m, nx, ny) != 0) {
-                continue;
-            }
-
-            /* If the object can't use secret passages and they're a player or a
-             * that is not chasing an enemy, and this tile is a secret passage,
-             * skip it. */
-            if (!(GET_MAP_FLAGS(m, nx, ny) & P_DOOR_CLOSED) &&
-                (op->type != PLAYER || !CONTR(op)->tcl) &&
-                !(op->behavior & BEHAVIOR_SECRET_PASSAGES) &&
-                (op->type == PLAYER || !OBJECT_VALID(op->enemy, op->enemy_count)) &&
-                blocks_view(m, nx, ny)) {
-                continue;
-            }
-
-            /* Calculate the cost. */
-            cost = node->cost + (is_diagonal ? PATH_COST_DIAG : PATH_COST);
-            cost += GET_MAP_MOVE_FLAGS(m, nx, ny) * 0.001;
-
-            if (op->behavior & BEHAVIOR_STEALTH) {
-                cost += GET_MAP_LIGHT(m, nx, ny) * 0.001;
-            }
-
-            /* Get the visited path node on this tile, if any. */
-            visited = PATHFINDING_NODE_GET(m, nx, ny, traversal_id);
-
-            /* If we have visited this node previously, and the cost is not any
-             * better, skip it. */
-            if (visited != NULL && cost >= visited->cost) {
-                continue;
-            }
-
-            if (visited != NULL) {
-                /* Remove previously visited node from the open list. */
-                path_node_remove(visited, &open_list);
-
-                if (visited == best) {
-                    best = NULL;
-                }
-            } else {
-#if TIME_PATHFINDING
-                searched++;
-#endif
-            }
-
-            new_node = path_node_new(m, nx, ny, cost, &start, &goal, node);
-
-            if (new_node == NULL) {
-                continue;
-            }
-
-            path_node_insert_priority(new_node, &open_list);
-            PATHFINDING_NODE_SET(m, nx, ny, traversal_id, new_node, visualizer);
-
-            if (best == NULL || new_node->sum < best->sum) {
-                best = new_node;
-            }
-        }
     }
 
-    if (found_path == NULL) {
-        for (node = best; node != NULL; node = node->parent) {
-            path_node_insert(node, &found_path);
+    for (int direction = 1; direction <= SIZEOFFREE1; direction++) {
+        int x = origin_x + freearr_x[direction];
+        int y = origin_y + freearr_y[direction];
+        bool diagonal = x != origin_x && y != origin_y;
+        mapstruct *map = get_map_from_coord(origin_map, &x, &y);
+        if (map == NULL || tile_is_blocked(adapter->op, map, x, y) != 0) {
+            continue;
+        }
+        if ((GET_MAP_FLAGS(map, x, y) & P_DOOR_CLOSED) == 0 &&
+            (adapter->op->type != PLAYER || !CONTR(adapter->op)->tcl) &&
+            (adapter->op->behavior & BEHAVIOR_SECRET_PASSAGES) == 0 &&
+            (adapter->op->type == PLAYER ||
+             !OBJECT_VALID(adapter->op->enemy, adapter->op->enemy_count)) &&
+            blocks_view(map, x, y)) {
+            continue;
+        }
+
+        bool created;
+        path_state_t *neighbor = path_state_get(adapter, map, x, y, true, &created);
+        if (neighbor == NULL) {
+            return false;
+        }
+        if (neighbor->exit_landing) {
+            continue;
+        }
+        if (created) {
+            path_visualizer_append(adapter, neighbor, false);
+        }
+
+        uint64_t cost = diagonal ? PATH_COST_DIAG : PATH_COST;
+        cost = path_saturating_add(cost, GET_MAP_MOVE_FLAGS(map, x, y));
+        if ((adapter->op->behavior & BEHAVIOR_STEALTH) != 0) {
+            cost = path_saturating_add(cost, (uint64_t)MAX(0, GET_MAP_LIGHT(map, x, y)));
+        }
+        atrinik_pf_transition transition = {
+            .state = neighbor->id,
+            .cost = cost,
+            .data = used_exit ? PATH_TRANSITION_SOURCE_EXIT : 0U,
+        };
+        if (!emit(emit_context, &transition)) {
+            return false;
         }
     }
+    return true;
+}
 
-#if TIME_PATHFINDING
-    TIMER_UPDATE(1);
-    LOG(DEVEL, "Pathfinding took %f seconds (searched %d nodes)", TIMER_GET(1), searched);
-#endif
+static path_status_t path_status_from_core(atrinik_pf_status status) {
+    switch (status) {
+        case ATRINIK_PF_FOUND:
+            return PATH_STATUS_FOUND;
+        case ATRINIK_PF_NO_PATH:
+            return PATH_STATUS_NO_PATH;
+        case ATRINIK_PF_LIMIT_REACHED:
+            return PATH_STATUS_LIMIT_REACHED;
+        case ATRINIK_PF_CANCELLED:
+            return PATH_STATUS_CANCELLED;
+        case ATRINIK_PF_PARTIAL:
+            return PATH_STATUS_PARTIAL;
+        case ATRINIK_PF_INVALID_INPUT:
+            return PATH_STATUS_INVALID_INPUT;
+        case ATRINIK_PF_ADAPTER_ERROR:
+            return PATH_STATUS_ADAPTER_ERROR;
+        case ATRINIK_PF_OUT_OF_MEMORY:
+            return PATH_STATUS_OUT_OF_MEMORY;
+        case ATRINIK_PF_COST_OVERFLOW:
+            return PATH_STATUS_COST_OVERFLOW;
+        case ATRINIK_PF_COMPLETE:
+            return PATH_STATUS_ADAPTER_ERROR;
+    }
+    return PATH_STATUS_ADAPTER_ERROR;
+}
 
-#if VISUALIZE_PATHFINDING
-    {
-        char path[HUGE_BUF];
-        FILE *fp;
+void path_search_options_init(path_search_options_t *options) {
+    if (options == NULL) {
+        return;
+    }
+    memset(options, 0, sizeof(*options));
+    options->max_generated = path_max_generated;
+}
 
-        snprintf(path, sizeof(path), "%s/pathfinding/%u.json", settings.datapath, traversal_id);
-        path_ensure_directories(path);
-
-        fp = fopen(path, "w");
-
-        if (fp == NULL) {
-            LOG(BUG, "Could not open %s for writing.", path);
+static bool path_result_build(path_result_t *result,
+                              server_path_adapter_t *adapter,
+                              const atrinik_pf_result *core_result) {
+    path_node_t *last = NULL;
+    for (size_t i = 0U; i < core_result->step_count; i++) {
+        path_state_t *state = path_state_by_id(adapter, core_result->steps[i].state);
+        if (state == NULL) {
+            return false;
+        }
+        path_node_t *node = calloc(1U, sizeof(*node));
+        if (node == NULL) {
+            return false;
+        }
+        node->map = state->key.map;
+        node->x = state->key.x;
+        node->y = state->key.y;
+        node->prev = last;
+        if (last == NULL) {
+            result->path = node;
         } else {
-            path_visualization_t *visualization, *curr, *tmp;
-            path_visualizer_t *visualizer_node, *visualizer_node_tmp;
-            StringBuffer *sb;
-            char *cp;
-
-            visualization = NULL;
-            path_visualize(&visualization, visualizer);
-
-            fprintf(fp,
-                    "{\"start\": {\"map\": \"%s\", \"x\": %d, \"y\": %d},\n"
-                    "\"goal\": {\"map\": \"%s\", \"x\": %d, \"y\": %d},\n"
-                    "\"nodes\": {\n",
-                    start.map->path,
-                    start.x,
-                    start.y,
-                    goal.map->path,
-                    goal.x,
-                    goal.y);
-
-            HASH_ITER(hh, visualization, curr, tmp) {
-                m = has_been_loaded_sh(curr->path);
-                fprintf(fp, "\"%s\": {\"walked\": [\n", m->path);
-
-                DL_FOREACH_SAFE(curr->nodes, visualizer_node, visualizer_node_tmp) {
-                    fprintf(fp,
-                            "{\"id\": %u, \"x\": %d, \"y\": %d, "
-                            "\"closed\": %s, \"exit\": %s",
-                            visualizer_node->id,
-                            visualizer_node->x,
-                            visualizer_node->y,
-                            visualizer_node->closed ? "true" : "false",
-                            GET_MAP_FLAGS(m, visualizer_node->x, visualizer_node->y) & P_IS_EXIT
-                                ? "true"
-                                : "false");
-
-                    if (visualizer_node->node == NULL) {
-                        fprintf(fp,
-                                ", \"cost\": NaN, \"heuristic\": NaN, "
-                                "\"sum\": NaN");
-                    } else {
-                        fprintf(fp,
-                                ", \"cost\": %f, \"heuristic\": %f, "
-                                "\"sum\": %f",
-                                visualizer_node->node->cost,
-                                visualizer_node->node->heuristic,
-                                visualizer_node->node->sum);
-                    }
-
-                    fprintf(fp, "}");
-
-                    if (visualizer_node_tmp != NULL) {
-                        fprintf(fp, ",");
-                    }
-
-                    fprintf(fp, "\n");
-
-                    DL_DELETE(curr->nodes, visualizer_node);
-                    free(visualizer_node);
-                }
-
-                sb = stringbuffer_new();
-
-                for (x = 0; x < m->width; x++) {
-                    for (y = 0; y < m->height; y++) {
-                        if (!tile_is_blocked(op, m, x, y)) {
-                            continue;
-                        }
-
-                        if (stringbuffer_length(sb) != 0) {
-                            stringbuffer_append_char(sb, ',');
-                        }
-
-                        stringbuffer_append_printf(sb,
-                                                   "\n{\"x\": %d, "
-                                                   "\"y\": %d}",
-                                                   x,
-                                                   y);
-                    }
-                }
-
-                cp = stringbuffer_finish(sb);
-                fprintf(fp, "],\n\"walls\": [%s\n]}%s\n", cp, tmp != NULL ? "," : "");
-                free(cp);
-
-                HASH_DEL(visualization, curr);
-                FREE_ONLY_HASH(curr->path);
-                free(curr);
-            }
-
-            fprintf(fp, "},\n\"path\": [\n");
-
-            for (node = found_path; node != NULL; node = node->next) {
-                m = NULL;
-
-                if (node->flags & PATH_NODE_EXIT) {
-                    object *exit;
-
-                    for (exit = GET_MAP_OB(node->map, node->x, node->y); exit != NULL;
-                         exit = exit->above) {
-                        if (exit->type == EXIT) {
-                            m = exit_get_destination(exit, &nx, &ny, true);
-                        }
-                    }
-                }
-
-                fprintf(fp,
-                        "{\"map\": \"%s\", \"x\": %d, \"y\": %d, "
-                        "\"flags\": %d}%s\n",
-                        node->map->path,
-                        node->x,
-                        node->y,
-                        node->flags,
-                        node->next != NULL || m != NULL ? "," : "");
-
-                if (m != NULL) {
-                    fprintf(fp,
-                            "{\"map\": \"%s\", \"x\": %d, \"y\": %d}%s\n",
-                            m->path,
-                            nx,
-                            ny,
-                            node->next != NULL ? "," : "");
-                }
-            }
-
-            fprintf(fp, "],\n\"time_taken\": ");
-
-#if TIME_PATHFINDING
-            fprintf(fp, "%f", TIMER_GET(1));
-#else
-            fprintf(fp, "NaN");
-#endif
-
-            fprintf(fp, ",\n\"num_searched\": ");
-
-#if TIME_PATHFINDING
-            fprintf(fp, "%d", searched);
-#else
-            fprintf(fp, "NaN");
-#endif
-
-            fprintf(fp, "\n}\n");
-
-            fclose(fp);
-
-            LOG(DEVEL, "Generated pathfinding visualization for '%s': %s", op->name, path);
+            last->next = node;
+        }
+        last = node;
+        if (i + 1U < core_result->step_count &&
+            (core_result->steps[i + 1U].data & PATH_TRANSITION_SOURCE_EXIT) != 0U) {
+            node->flags |= PATH_NODE_EXIT;
         }
     }
-#endif
+    return true;
+}
 
-    return found_path;
+path_result_t path_search(object *op,
+                          mapstruct *map1,
+                          int x,
+                          int y,
+                          mapstruct *map2,
+                          int x2,
+                          int y2,
+                          const path_search_options_t *options,
+                          path_visualizer_t **visualizer) {
+    path_result_t result = {
+        .status = PATH_STATUS_INVALID_INPUT,
+    };
+    path_search_options_t defaults;
+    if (options == NULL) {
+        path_search_options_init(&defaults);
+        options = &defaults;
+    }
+    if (op == NULL || map1 == NULL || map2 == NULL || OUT_OF_MAP(map1, x, y) ||
+        OUT_OF_MAP(map2, x2, y2)) {
+        return result;
+    }
+
+    rv_vector start_distance;
+    if (!get_rangevector_from_mapcoords(map1,
+                                        x,
+                                        y,
+                                        map2,
+                                        x2,
+                                        y2,
+                                        &start_distance,
+                                        RV_RECURSIVE_SEARCH | RV_NO_DISTANCE)) {
+        result.status = PATH_STATUS_NO_PATH;
+        return result;
+    }
+    server_path_adapter_t server_adapter = {
+        .op = op,
+        .goal_map = map2,
+        .goal_x = x2,
+        .goal_y = y2,
+        .start_distance_x = start_distance.distance_x,
+        .start_distance_y = start_distance.distance_y,
+        .visualizer = visualizer,
+    };
+    path_state_t *start = path_state_get(&server_adapter, map1, x, y, true, NULL);
+    atrinik_pf_context *context = atrinik_pf_context_create();
+    if (start == NULL || context == NULL) {
+        result.status = PATH_STATUS_OUT_OF_MEMORY;
+        atrinik_pf_context_destroy(context);
+        path_states_free(&server_adapter);
+        return result;
+    }
+
+    atrinik_pf_adapter adapter = {
+        .context = &server_adapter,
+        .neighbors = path_core_neighbors,
+        .goal = path_core_goal,
+        .heuristic = path_core_heuristic,
+        .partial_rank = path_core_partial_rank,
+    };
+    atrinik_pf_options core_options;
+    atrinik_pf_options_init(&core_options);
+    core_options.algorithm = core_algorithms[path_algo];
+    core_options.max_expanded = options->max_expanded;
+    core_options.max_generated = options->max_generated;
+    core_options.max_transitions = options->max_transitions;
+    core_options.max_frontier = options->max_frontier;
+    core_options.return_partial = options->return_partial;
+
+    atrinik_pf_result core_result = atrinik_pf_search(context, &adapter, start->id, &core_options);
+    result.status = server_adapter.out_of_memory ? PATH_STATUS_OUT_OF_MEMORY
+                                                 : path_status_from_core(core_result.status);
+    result.expanded = core_result.metrics.expanded;
+    result.generated = core_result.metrics.generated;
+    result.examined_transitions = core_result.metrics.examined_transitions;
+    result.peak_frontier = core_result.metrics.peak_frontier;
+    result.total_cost = core_result.metrics.total_cost;
+    if (!server_adapter.out_of_memory && core_result.steps != NULL &&
+        !path_result_build(&result, &server_adapter, &core_result)) {
+        path_result_free(&result);
+        result.status = PATH_STATUS_OUT_OF_MEMORY;
+    }
+
+    atrinik_pf_context_destroy(context);
+    path_states_free(&server_adapter);
+    return result;
+}
+
+void path_result_free(path_result_t *result) {
+    if (result == NULL) {
+        return;
+    }
+    path_node_t *node = result->path;
+    while (node != NULL) {
+        path_node_t *next = node->next;
+        free(node);
+        node = next;
+    }
+    result->path = NULL;
+}
+
+const char *path_status_string(path_status_t status) {
+    static const char *const names[] = {
+        "found",
+        "no path",
+        "limit reached",
+        "partial",
+        "cancelled",
+        "invalid input",
+        "adapter error",
+        "out of memory",
+        "cost overflow",
+    };
+    return (size_t)status < arraysize(names) ? names[status] : "unknown";
 }
