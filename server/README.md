@@ -260,6 +260,35 @@ client login then follows normal character initialization, including the
 configured starting map, skills, and items. Existing account or character
 files are never replaced, and a partial provisioning attempt is rolled back.
 
+Offline authored-content benchmarks
+-----------------------------------
+
+`--content_benchmark` measures the existing text-loader path without opening
+listeners or initializing asset serving, plugins, metaserver registration, or
+the console. Supply one to sixteen unique logical map IDs as a comma-separated
+argument. The mode reports tab-separated, machine-readable records prefixed by
+`ATRINIK_CONTENT_BENCHMARK` and exits after measuring initialization, peak
+startup RSS where the operating system supports it, forced original map loads,
+warm in-memory lookups, swaps, and temporary-map reloads. Nine samples per map
+are collected by default; `--content_benchmark_iterations=1..100` overrides
+that count.
+
+Use the workspace wrapper with a dedicated profile and isolated state so the
+benchmark has exact component inputs and cannot mix its temporary map files
+with a running world. For example:
+
+```
+./atrinik run server --profile syntax-decision --state syntax-benchmark -- \
+  --content_benchmark=/maps/small,/maps/medium,/maps/large \
+  --content_benchmark_iterations=9
+```
+
+The map IDs above are placeholders; use the representative IDs recorded by the
+content syntax evaluation. Original-load samples use `MAP_FLUSH` deliberately
+to isolate authored map parsing and instantiation from unique-item overlays,
+and the harness deletes each reloaded instance after timing so the next sample
+cannot take the server's early warm-map return.
+
 Authoritative gameplay metrics
 ------------------------------
 
