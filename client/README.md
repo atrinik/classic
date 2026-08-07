@@ -2,6 +2,8 @@
 =                Atrinik Client                 =
 =================================================
 
+[![Coverage](https://codecov.io/gh/atrinik/client/graph/badge.svg?branch=main)](https://codecov.io/gh/atrinik/client)
+
  Website: http://www.atrinik.org/
 
  Client package for the Atrinik game.
@@ -19,6 +21,12 @@
   $ ctest --preset linux-debug
 
  The executable is written to build/linux-debug/atrinik.
+
+ To collect line, function, and branch coverage from the native tests:
+  $ cmake --preset linux-coverage
+  $ cmake --build --preset linux-coverage
+  $ ctest --preset linux-coverage
+  $ gcovr --root . --filter 'src/' --exclude 'src/tests/' --print-summary
 
  The client requires SDL 3.4 or newer, SDL3_image 3.2 or newer, SDL3_ttf 3.2
  or newer, and SDL3_mixer 3.2.4 or newer. Sound effects and music are required
