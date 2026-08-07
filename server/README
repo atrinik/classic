@@ -232,6 +232,26 @@ replaced. SHA-1-named certificate-chain cache entries are intentionally ignored
 after this upgrade and recreated under SHA-256 names; they are cache data and
 must not be migrated.
 
+Offline local scenario provisioning
+-----------------------------------
+
+The server can provision one account and first-login character into an
+isolated, stopped data directory for local manual testing. The Atrinik
+workspace wrapper owns the supported workflow; use its `scenario` commands
+instead of invoking this mode directly or constructing account/player files.
+
+`--provision_scenario` requires `--provision_account`,
+`--provision_character`, `--provision_archetype`, and
+`--provision_password_file`. The password file must be a regular,
+non-symlink file owned by the current user with mode 0600. It contains one
+password with either no line terminator or one LF/CRLF terminator.
+The mode initializes game data but starts no listeners, plugins, metaserver,
+or console, creates the account through the normal Argon2id persistence code,
+reserves an empty player file through exclusive creation, and exits. The first
+client login then follows normal character initialization, including the
+configured starting map, skills, and items. Existing account or character
+files are never replaced, and a partial provisioning attempt is rolled back.
+
 =================================================
 = 2.5. Direct QUIC hosting (no port forwarding) =
 =================================================

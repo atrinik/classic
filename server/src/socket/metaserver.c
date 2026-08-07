@@ -455,6 +455,10 @@ static void metaserver_rendezvous_response(curl_request_t *request) {
  * True if the meta-server is enabled, false otherwise.
  */
 static bool metaserver_enabled(void) {
+    if (settings.provision_scenario) {
+        return false;
+    }
+
     char identity[MAX_BUF];
     if (!metaserver_identity(VS(identity))) {
         return false;
