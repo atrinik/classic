@@ -45,6 +45,7 @@
 #include <toolkit/datetime.h>
 #include <cmake.h>
 #include <world_maker.h>
+#include <account.h>
 
 #include <toolkit/process.h>
 #include <toolkit/console.h>
@@ -600,6 +601,25 @@ int server_run(int argc, char **argv) {
         LOG(ERROR, "Unit tests are provided by the atrinik-server-tests executable.");
         cleanup();
         return EXIT_FAILURE;
+    }
+
+    if (settings.provision_scenario) {
+        char error[HUGE_BUF];
+        bool ok = account_provision_from_file(settings.provision_account,
+                                              settings.provision_password_file,
+                                              settings.provision_character,
+                                              settings.provision_archetype,
+                                              VS(error));
+        if (ok) {
+            LOG(INFO,
+                "Provisioned local scenario account %s with character %s.",
+                settings.provision_account,
+                settings.provision_character);
+        } else {
+            LOG(ERROR, "Could not provision local scenario: %s", error);
+        }
+        cleanup();
+        return ok ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
     atexit(cleanup);

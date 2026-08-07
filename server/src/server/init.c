@@ -251,6 +251,41 @@ static bool clioptions_option_worldmaker(const char *arg, char **errmsg) {
     return true;
 }
 
+static const char *clioptions_option_provision_scenario_desc =
+    "Provisions one local test account and character, then exits.";
+static bool clioptions_option_provision_scenario(const char *arg, char **errmsg) {
+    settings.provision_scenario = true;
+    return true;
+}
+
+static const char *clioptions_option_provision_account_desc =
+    "Account name for --provision_scenario.";
+static bool clioptions_option_provision_account(const char *arg, char **errmsg) {
+    snprintf(VS(settings.provision_account), "%s", arg);
+    return true;
+}
+
+static const char *clioptions_option_provision_character_desc =
+    "Character name for --provision_scenario.";
+static bool clioptions_option_provision_character(const char *arg, char **errmsg) {
+    snprintf(VS(settings.provision_character), "%s", arg);
+    return true;
+}
+
+static const char *clioptions_option_provision_archetype_desc =
+    "Player archetype for --provision_scenario.";
+static bool clioptions_option_provision_archetype(const char *arg, char **errmsg) {
+    snprintf(VS(settings.provision_archetype), "%s", arg);
+    return true;
+}
+
+static const char *clioptions_option_provision_password_file_desc =
+    "Protected password file for --provision_scenario.";
+static bool clioptions_option_provision_password_file(const char *arg, char **errmsg) {
+    snprintf(VS(settings.provision_password_file), "%s", arg);
+    return true;
+}
+
 /**
  * Description of the --no_console command.
  */
@@ -879,6 +914,7 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE(cli, unit, "Runs the unit tests");
     CLIOPTIONS_CREATE(cli, plugin_unit, "Runs the plugin unit tests");
     CLIOPTIONS_CREATE(cli, worldmaker, "Generates the region maps");
+    CLIOPTIONS_CREATE(cli, provision_scenario, "Provisions a local test scenario");
     CLIOPTIONS_CREATE(cli, no_console, "Disables the interactive console");
     CLIOPTIONS_CREATE(cli, version, "Displays the server version");
 
@@ -900,6 +936,10 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, server_name, "Name of the server");
     CLIOPTIONS_CREATE_ARGUMENT(cli, server_desc, "Description of the server");
     CLIOPTIONS_CREATE_ARGUMENT(cli, allowed_chars, "Limits for accounts/names");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, provision_account, "Scenario account name");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, provision_character, "Scenario character name");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, provision_archetype, "Scenario player archetype");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, provision_password_file, "Scenario password file");
 
     /* Changeable options */
     CLIOPTIONS_CREATE_ARGUMENT(cli, magic_devices_level, "Magic devices level");
@@ -1009,7 +1049,8 @@ static void init_library(int argc, char *argv[]) {
     toolkit_import(ban);
     toolkit_import(faction);
 
-    if (!settings.world_maker && !settings.unit_tests && !settings.plugin_unit_tests) {
+    if (!settings.world_maker && !settings.unit_tests && !settings.plugin_unit_tests &&
+        !settings.provision_scenario) {
         toolkit_import(socket_server);
         toolkit_import(http_server);
     }
@@ -1152,13 +1193,16 @@ void init(int argc, char **argv) {
     /* init_srv_files() creates the listing and compressed data files served
      * over QUIC. Cache the complete immutable asset snapshot only after those
      * generated files exist. */
-    if (!settings.world_maker && !settings.unit_tests && !settings.plugin_unit_tests) {
+    if (!settings.world_maker && !settings.unit_tests && !settings.plugin_unit_tests &&
+        !settings.provision_scenario) {
         socket_assets_init();
     }
-    metaserver_init();
+    if (!settings.provision_scenario) {
+        metaserver_init();
+    }
     statistics_init();
     reset_sleep();
-    if (!settings.unit_tests) {
+    if (!settings.unit_tests && !settings.provision_scenario) {
         init_plugins();
     }
 }
