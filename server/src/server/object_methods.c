@@ -96,10 +96,10 @@ void object_methods_init(void) {
  * The object methods for the specified type, never NULL.
  */
 object_methods_t *object_methods_get(int type) {
-    SOFT_ASSERT_RC(type >= 0 && type < OBJECT_TYPE_MAX,
-                   &object_methods_base,
-                   "Invalid object type: %d",
-                   type);
+    if (type < 0 || type >= OBJECT_TYPE_MAX) {
+        LOG(ERROR, "Invalid object type: %d", type);
+        return &object_methods_base;
+    }
     return &object_type_methods[type];
 }
 
@@ -108,7 +108,7 @@ void object_cb_init(object *op) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(op->head == NULL);
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->init_func != NULL) {
             methods->init_func(op);
@@ -122,7 +122,7 @@ void object_cb_deinit(object *op) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(op->head == NULL);
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->deinit_func != NULL) {
             methods->deinit_func(op);
@@ -138,7 +138,7 @@ int object_apply(object *op, object *applier, int aflags) {
 
     applier = HEAD(applier);
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->apply_func != NULL) {
             return methods->apply_func(op, applier, aflags);
@@ -166,7 +166,7 @@ void object_process(object *op) {
         return;
     }
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->process_func != NULL) {
             methods->process_func(op);
@@ -181,7 +181,7 @@ char *object_describe(object *op, object *observer, char *buf, size_t size) {
     HARD_ASSERT(observer != NULL);
     HARD_ASSERT(buf != NULL);
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->describe_func != NULL) {
             methods->describe_func(op, observer, buf, size);
@@ -205,7 +205,7 @@ int object_move_on(object *op, object *victim, object *originator, int state) {
         return OBJECT_METHOD_OK;
     }
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->move_on_func != NULL) {
             if (object_move_on_recursion_depth >= 500) {
@@ -232,7 +232,7 @@ int object_trigger(object *op, object *cause, int state) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(cause != NULL);
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->trigger_func != NULL) {
             return methods->trigger_func(op, cause, state);
@@ -247,7 +247,7 @@ int object_trigger_button(object *op, object *cause, int state) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(cause != NULL);
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->trigger_button_func != NULL) {
             return methods->trigger_button_func(op, cause, state);
@@ -261,7 +261,7 @@ int object_trigger_button(object *op, object *cause, int state) {
 void object_cb_insert_map(object *op) {
     HARD_ASSERT(op != NULL);
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->insert_map_func != NULL) {
             methods->insert_map_func(op);
@@ -274,7 +274,7 @@ void object_cb_insert_map(object *op) {
 void object_cb_remove_map(object *op) {
     HARD_ASSERT(op != NULL);
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->remove_map_func != NULL) {
             methods->remove_map_func(op);
@@ -287,7 +287,7 @@ void object_cb_remove_map(object *op) {
 void object_cb_remove_inv(object *op) {
     HARD_ASSERT(op != NULL);
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->remove_inv_func != NULL) {
             methods->remove_inv_func(op);
@@ -301,7 +301,7 @@ object *object_projectile_fire(object *op, object *shooter, int dir) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(shooter != NULL);
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->projectile_fire_func != NULL) {
             return methods->projectile_fire_func(op, shooter, dir);
@@ -315,7 +315,7 @@ object *object_projectile_fire(object *op, object *shooter, int dir) {
 object *object_projectile_move(object *op) {
     HARD_ASSERT(op != NULL);
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->projectile_move_func != NULL) {
             return methods->projectile_move_func(op);
@@ -330,7 +330,7 @@ int object_projectile_hit(object *op, object *victim) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(victim != NULL);
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->projectile_hit_func != NULL) {
             return methods->projectile_hit_func(op, victim);
@@ -348,7 +348,7 @@ object *object_projectile_stop(object *op, int reason) {
         return op;
     }
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->projectile_stop_func != NULL) {
             return methods->projectile_stop_func(op, reason);
@@ -384,7 +384,7 @@ int object_ranged_fire(object *op, object *shooter, int dir, double *delay) {
 
     shooter->direction = dir;
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->ranged_fire_func != NULL) {
             return methods->ranged_fire_func(op, shooter, dir, delay);
@@ -409,7 +409,7 @@ void object_auto_apply(object *op) {
         return;
     }
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->auto_apply_func != NULL) {
             methods->auto_apply_func(op);
@@ -439,7 +439,7 @@ int object_process_treasure(object *op,
 
     *ret = op;
 
-    for (object_methods_t *methods = &object_type_methods[op->type]; methods != NULL;
+    for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {
         if (methods->process_treasure_func != NULL) {
             return methods->process_treasure_func(op, ret, difficulty, affinity, flags);

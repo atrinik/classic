@@ -198,15 +198,19 @@ void waypoint_compute_path(object *op) {
         return;
     }
 
-    path_node_t *path = path_find(op->env,
-                                  op->env->map,
-                                  op->env->x,
-                                  op->env->y,
-                                  destmap,
-                                  op->stats.hp,
-                                  op->stats.sp,
-                                  NULL);
-    path = path_compress(path);
+    path_search_options_t options;
+    path_search_options_init(&options);
+    options.return_partial = true;
+    path_result_t result = path_search(op->env,
+                                       op->env->map,
+                                       op->env->x,
+                                       op->env->y,
+                                       destmap,
+                                       op->stats.hp,
+                                       op->stats.sp,
+                                       &options,
+                                       NULL);
+    path_node_t *path = path_compress(result.path);
     if (path == NULL) {
         if (!QUERY_FLAG(op, FLAG_DAMNED)) {
             LOG(ERROR,
@@ -222,8 +226,15 @@ void waypoint_compute_path(object *op) {
                 op->stats.sp,
                 object_get_str(op));
         }
-
+        path_result_free(&result);
         return;
+    }
+
+    if (result.status == PATH_STATUS_PARTIAL) {
+        LOG(DEBUG,
+            "Waypoint path used explicit best effort after %zu generated states: %s",
+            result.generated,
+            object_get_str(op));
     }
 
     /* Skip the first path element (always the starting position), but only
@@ -231,6 +242,7 @@ void waypoint_compute_path(object *op) {
     if (!(path->flags & PATH_NODE_EXIT)) {
         path = path->next;
         if (path == NULL) {
+            path_result_free(&result);
             return;
         }
     }
@@ -241,6 +253,7 @@ void waypoint_compute_path(object *op) {
     FREE_AND_CLEAR_HASH(op->race);
 
     op->msg = path_encode(path);
+    path_result_free(&result);
     /* Path offset */
     op->stats.food = 0;
     /* Msg boundary */

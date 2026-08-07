@@ -1014,14 +1014,10 @@ mapstruct *get_linked_map(void) {
 static void allocate_map(mapstruct *m) {
     SOFT_ASSERT(m->spaces == NULL, "Map spaces are not NULL: %s", m->path);
     SOFT_ASSERT(m->buttons == NULL, "Buttons are not NULL: %s", m->path);
-    SOFT_ASSERT(m->bitmap == NULL, "Bitmap is not NULL: %s", m->path);
-    SOFT_ASSERT(m->path_nodes == NULL, "Path nodes are not NULL: %s", m->path);
 
     m->in_memory = MAP_LOADING;
 
     m->spaces = xcalloc(MAP_WIDTH(m) * MAP_HEIGHT(m), sizeof(*m->spaces));
-    m->bitmap = xmallocarray(((MAP_WIDTH(m) + 31) / 32) * MAP_HEIGHT(m), sizeof(*m->bitmap));
-    m->path_nodes = xmallocarray(MAP_WIDTH(m) * MAP_HEIGHT(m), sizeof(*m->path_nodes));
 }
 
 /**
@@ -1597,8 +1593,6 @@ void free_map(mapstruct *m, int flag) {
         m->events = NULL;
     }
 
-    FREE_AND_NULL_PTR(m->bitmap);
-    FREE_AND_NULL_PTR(m->path_nodes);
     m->in_memory = MAP_SWAPPED;
 }
 

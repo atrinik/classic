@@ -10,10 +10,10 @@
     },
     "libatrinik": {
       "repository": "atrinik/libatrinik",
-      "tag": "v1.0.3",
-      "commit": "2996df2866eb220d45a1493408f4e54851f72c8e",
-      "url": "https://github.com/atrinik/libatrinik/releases/download/v1.0.3/libatrinik-1.0.3.tar.gz",
-      "sha256": "6dc6823aca9cf24242bd67f5aed7469da9ca57fe2cdf7ada30e105b908a396d4"
+      "tag": "v1.1.5",
+      "commit": "4c3410063972ea22689b66ad7dd8c7949cc1fbff",
+      "url": "https://github.com/atrinik/libatrinik/releases/download/v1.1.5/libatrinik-1.1.5.tar.gz",
+      "sha256": "3c07b178cc236881f52272df6e38bc2d4186943b782e4cee34b2e733da9c8f9a"
     }
   }
 }

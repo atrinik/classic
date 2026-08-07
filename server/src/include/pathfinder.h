@@ -43,9 +43,10 @@
 /*@}*/
 
 typedef enum path_algo {
-    PATH_ALGO_BFS, ///< BFS
     PATH_ALGO_ASTAR, ///< A*
     PATH_ALGO_DIJKSTRA, ///< Dijkstra
+    PATH_ALGO_BFS, ///< Unweighted breadth-first search.
+    PATH_ALGO_GREEDY, ///< Greedy best-first search.
 
     PATH_ALGO_NUM /// Total number of algorithms.
 } path_algo_t;
@@ -56,18 +57,45 @@ typedef enum path_algo {
 typedef struct path_node {
     struct path_node *next; ///< Next node in a linked list.
     struct path_node *prev; ///< Previous node in a linked list
-    struct path_node *parent; ///< Node this was reached from.
 
     struct mapdef *map; ///< Pointer to the map.
     int16_t x; ///< X position on the map for this node.
     int16_t y; ///< Y position on the map for this node.
     uint8_t flags; ///< A combination of @ref PATH_NODE_xxx.
-    int distance_z; ///< Z distance from this node to the goal.
-
-    double cost; ///< Cost of reaching this node (distance from origin).
-    double heuristic; ///< Estimated cost of reaching the goal from this node.
-    double sum; ///< Sum of ::cost and ::heuristic.
 } path_node_t;
+
+/** Server-facing path-search status. */
+typedef enum path_status {
+    PATH_STATUS_FOUND,
+    PATH_STATUS_NO_PATH,
+    PATH_STATUS_LIMIT_REACHED,
+    PATH_STATUS_PARTIAL,
+    PATH_STATUS_CANCELLED,
+    PATH_STATUS_INVALID_INPUT,
+    PATH_STATUS_ADAPTER_ERROR,
+    PATH_STATUS_OUT_OF_MEMORY,
+    PATH_STATUS_COST_OVERFLOW
+} path_status_t;
+
+/** Per-search policy. Zero budgets are unlimited. */
+typedef struct path_search_options {
+    size_t max_expanded;
+    size_t max_generated;
+    size_t max_transitions;
+    size_t max_frontier;
+    bool return_partial;
+} path_search_options_t;
+
+/** Search result. The path is owned by this structure. */
+typedef struct path_result {
+    path_status_t status;
+    path_node_t *path;
+    size_t expanded;
+    size_t generated;
+    size_t examined_transitions;
+    size_t peak_frontier;
+    uint64_t total_cost;
+} path_result_t;
 
 /**
  * Used for visualization of path nodes; represents one node.
@@ -79,8 +107,6 @@ typedef struct path_visualizer {
     mapstruct *map; ///< Map.
     int16_t x; ///< X position.
     int16_t y; ///< Y position.
-
-    path_node_t *node; ///< The actual node. Can be NULL.
 
     uint32_t id; ///< UID of the node; can be used for insertion order sorting.
     bool closed; ///< Whether the node is closed or just visited.
@@ -95,48 +121,6 @@ typedef struct path_visualization {
     path_visualizer_t *nodes; ///< Visited nodes on this map.
     UT_hash_handle hh; ///< Hash handle.
 } path_visualization_t;
-
-#define PATHFINDING_CHECK_ID(m, id)                                                                \
-    if ((m)->pathfinding_id != (id)) {                                                             \
-        (m)->pathfinding_id = (id);                                                                \
-        memset((m)->bitmap, 0, ((MAP_WIDTH(m) + 31) / 32) * MAP_HEIGHT(m) * sizeof(*(m)->bitmap)); \
-        memset((m)->path_nodes, 0, MAP_WIDTH(m) * MAP_HEIGHT(m) * sizeof(*(m)->path_nodes));       \
-    }
-
-#define PATHFINDING_VISUALIZER_APPEND(visualizer, _m, _x, _y, _closed, _node) \
-    if (visualizer != NULL) {                                                 \
-        path_visualizer_t *__tmp;                                             \
-                                                                              \
-        __tmp = xcalloc(1, sizeof(*__tmp));                                   \
-        __tmp->map = (_m);                                                    \
-        __tmp->x = (_x);                                                      \
-        __tmp->y = (_y);                                                      \
-        __tmp->closed = (_closed);                                            \
-        __tmp->node = (_node);                                                \
-        __tmp->id = node_id++;                                                \
-        DL_APPEND(*visualizer, __tmp);                                        \
-    }
-
-#define PATHFINDING_SET_CLOSED(m, x, y, id, visualizer)                                 \
-    {                                                                                   \
-        PATHFINDING_CHECK_ID(m, id);                                                    \
-        PATHFINDING_VISUALIZER_APPEND(visualizer, m, x, y, true, NULL);                 \
-        (m)->bitmap[(x) / 32 + ((MAP_WIDTH(m) + 31) / 32) * (y)] |= (1U << ((x) % 32)); \
-    }
-
-#define PATHFINDING_QUERY_CLOSED(m, x, y, id) \
-    ((m)->pathfinding_id == (id) &&           \
-     ((m)->bitmap[(x) / 32 + ((MAP_WIDTH(m) + 31) / 32) * (y)] & (1U << ((x) % 32))))
-
-#define PATHFINDING_NODE_SET(m, x, y, id, node, visualizer)              \
-    {                                                                    \
-        PATHFINDING_CHECK_ID(m, id);                                     \
-        PATHFINDING_VISUALIZER_APPEND(visualizer, m, x, y, false, node); \
-        (m)->path_nodes[(x) + MAP_WIDTH(m) * (y)] = node;                \
-    }
-
-#define PATHFINDING_NODE_GET(m, x, y, id) \
-    ((m)->pathfinding_id != (id) ? NULL : (m)->path_nodes[(x) + MAP_WIDTH(m) * (y)])
 
 /**
  * Pseudo-flag used to mark waypoints as "has requested path".
@@ -177,13 +161,20 @@ extern path_node_t *path_compress(path_node_t *path);
 
 extern void path_visualize(path_visualization_t **visualization, path_visualizer_t **visualizer);
 
-extern path_node_t *path_find(object *op,
-                              mapstruct *map1,
-                              int x,
-                              int y,
-                              mapstruct *map2,
-                              int x2,
-                              int y2,
-                              path_visualizer_t **visualizer);
+extern void path_search_options_init(path_search_options_t *options);
+
+extern path_result_t path_search(object *op,
+                                 mapstruct *map1,
+                                 int x,
+                                 int y,
+                                 mapstruct *map2,
+                                 int x2,
+                                 int y2,
+                                 const path_search_options_t *options,
+                                 path_visualizer_t **visualizer);
+
+extern void path_result_free(path_result_t *result);
+
+extern const char *path_status_string(path_status_t status);
 
 #endif

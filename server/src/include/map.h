@@ -502,8 +502,6 @@ typedef struct map_exit {
     object *obj;
 } map_exit_t;
 
-struct path_node;
-
 /**
  * In general, code should always use the macros above (or functions in
  * map.c) to access many of the values in the map structure. Failure to
@@ -572,14 +570,6 @@ typedef struct mapdef {
 
     /** Chained list of players on this map */
     object *player_first;
-
-    /** Bitmap used for marking visited tiles in pathfinding */
-    uint32_t *bitmap;
-
-    /** For which traversal is @ref mapstruct::bitmap valid. */
-    uint32_t pathfinding_id;
-
-    struct path_node **path_nodes;
 
     /** Map flags for various map settings */
     uint32_t map_flags;
