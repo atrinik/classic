@@ -43,6 +43,7 @@
 #include <artifact.h>
 #include <toolkit/packet.h>
 #include <faction.h>
+#include <loader.h>
 #include <player.h>
 #include <object.h>
 
@@ -2458,7 +2459,8 @@ static const char doc_Atrinik_Object_Load[] =
     "    '''"
     "\n\n"
     ":param lines: Lines to load into the object.\n"
-    ":type lines: str";
+    ":type lines: str\n"
+    ":raises Atrinik.AtrinikError: If the object attributes are invalid.";
 
 /**
  * Implements Atrinik.Object.Object.Load() Python method.
@@ -2471,7 +2473,10 @@ static PyObject *Atrinik_Object_Load(Atrinik_Object *self, PyObject *args) {
         return NULL;
     }
 
-    hooks->set_variable(self->obj, lines);
+    if (hooks->set_variable(self->obj, lines) == LL_ERROR) {
+        PyErr_SetString(AtrinikError, "Invalid object attributes.");
+        return NULL;
+    }
 
     Py_INCREF(Py_None);
     return Py_None;

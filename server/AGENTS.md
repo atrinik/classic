@@ -7,6 +7,8 @@
   releases in `cmake/dependencies.lock.json`.
 - Content and runtime resources must come from immutable, checksum-pinned
   releases in `dependencies.lock.json`; do not introduce Git submodules.
+- Persist spell and skill identities as stable `spell_id` and `skill_id`
+  strings; numeric `stats.sp` table positions are runtime-only.
 - Pull request titles and commits use Conventional Commits style.
 - Every squash merge is released by semantic-release; preserve the source,
   Windows server package, checksum, and server-image release jobs together.

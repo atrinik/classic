@@ -40,20 +40,31 @@
 #include <object_methods.h>
 #include <sound_ambient.h>
 
+typedef struct stable_identity_state {
+    bool saw_numeric_sp;
+    int numeric_sp;
+    bool saw_spell_id;
+    int spell_index;
+    bool saw_skill_id;
+    int skill_index;
+} stable_identity_state;
+
 #define YY_DECL                 \
 static int                      \
 lex_load (int     *depth,       \
           object **items,       \
           int      maxdepth,    \
           int      map_flags,   \
-          int      linemode)
+          int      linemode,    \
+          stable_identity_state *identities)
 #define MAXDEPTH 10
 
 static const char *yval(void);
+static stable_identity_state stable_identity_state_init(void);
+static int validate_stable_identity(object *op, const stable_identity_state *identity);
 
 /* that's needed to track the used buffers for recursive ccalling */
 static void *cur_buffer;
-static int lex_error;
 static char msgbuf[HUGE_BUF * 4];
 static size_t msgbuf_len;
 static artifact_t *art_amask;
@@ -167,7 +178,8 @@ WS  [ \t]*{NL}
 %{
 int ismore = 0;
 object *op = items[*depth];
-lex_error = 0;
+int lex_error = 0;
+stable_identity_state *identity = &identities[*depth];
 %}
 
 ^arch{S}             {
@@ -194,12 +206,22 @@ lex_error = 0;
                 log_error("Exhausted maximum items stack size, exiting...");
                 exit(1);
             }
+
+            identities[*depth] = stable_identity_state_init();
         }
 
         items[*depth] = tmp;
 
         if (linemode == 0) {
-            lex_load(depth, items, maxdepth, map_flags, linemode);
+            stable_identity_state nested_identity = stable_identity_state_init();
+            if (lex_load(depth,
+                         items,
+                         maxdepth,
+                         map_flags,
+                         linemode,
+                         &nested_identity) == LL_ERROR) {
+                lex_error = 1;
+            }
 
             if (tmp->arch != NULL) {
                 tmp = object_insert_into(tmp, op, 0);
@@ -360,6 +382,14 @@ lex_error = 0;
 }
 
 ^end{WS}             {
+    if (lex_error == 0 && validate_stable_identity(op, identity) != 0) {
+        lex_error = 1;
+    }
+
+    if (lex_error != 0) {
+        return LL_ERROR;
+    }
+
     if (linemode) {
         /* Linemode is only set for artifact loading. */
         if ((*depth) > 0) {
@@ -411,7 +441,40 @@ lex_error = 0;
 ^pow{S}              op->stats.Pow = IVAL;
 ^hp{S}               op->stats.hp = IVAL;
 ^maxhp{S}            op->stats.maxhp = IVAL;
-^sp{S}               op->stats.sp = IVAL;
+^sp{S}               {
+    identity->numeric_sp = IVAL;
+    identity->saw_numeric_sp = true;
+}
+^spell_id{S}         {
+    if (identity->saw_spell_id) {
+        LOG(ERROR, "Duplicate spell_id for object %s.", object_get_str(op));
+        lex_error = 1;
+    } else {
+        identity->saw_spell_id = true;
+        int spell = spell_index_from_id(yval());
+        if (spell == SP_NO_SPELL) {
+            LOG(ERROR, "Unknown stable spell ID %s for object %s.", yval(), object_get_str(op));
+            lex_error = 1;
+        } else {
+            identity->spell_index = spell;
+        }
+    }
+}
+^skill_id{S}         {
+    if (identity->saw_skill_id) {
+        LOG(ERROR, "Duplicate skill_id for object %s.", object_get_str(op));
+        lex_error = 1;
+    } else {
+        identity->saw_skill_id = true;
+        int skill = skill_index_from_id(yval());
+        if (skill < 0) {
+            LOG(ERROR, "Unknown stable skill ID %s for object %s.", yval(), object_get_str(op));
+            lex_error = 1;
+        } else {
+            identity->skill_index = skill;
+        }
+    }
+}
 ^maxsp{S}            op->stats.maxsp = IVAL;
 ^exp{S}              op->stats.exp = atoll(yval());
 ^food{S}             op->stats.food = IVAL;
@@ -727,10 +790,14 @@ lex_error = 0;
 #.*{NL}              {}
 
 <<EOF>>              {
+    if (!linemode && lex_error == 0 && validate_stable_identity(op, identity) != 0) {
+        lex_error = 1;
+    }
+
     /* If we got an error, return the error. Otherwise, return that we got
      * EOF. */
     if (lex_error != 0) {
-        return lex_error;
+        return LL_ERROR;
     }
     else {
         return LL_EOF;
@@ -740,6 +807,72 @@ lex_error = 0;
 %%
 
 #pragma GCC diagnostic pop
+
+static stable_identity_state
+stable_identity_state_init (void)
+{
+    return (stable_identity_state) {
+        .numeric_sp = SP_NO_SPELL,
+        .spell_index = SP_NO_SPELL,
+        .skill_index = -1,
+    };
+}
+
+/**
+ * Validate fields whose meaning depends on the object's final type.
+ *
+ * Object attributes may appear in any order, so this check must run only
+ * after the complete object has been read.
+ */
+static int
+validate_stable_identity (object *op, const stable_identity_state *identity)
+{
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(identity != NULL);
+
+    int invalid = 0;
+    bool uses_spell_index = op->type == SPELL || OBJECT_IS_SPELL_TOOL(op);
+    if (identity->saw_numeric_sp && identity->numeric_sp != SP_NO_SPELL &&
+            (op->type == SKILL || uses_spell_index)) {
+        LOG(ERROR,
+            "Numeric spell/skill ID %d is not stable for object %s.",
+            identity->numeric_sp,
+            object_get_str(op));
+        invalid = 1;
+    }
+
+    if (identity->saw_spell_id && !uses_spell_index) {
+        LOG(ERROR, "spell_id is invalid for object %s.", object_get_str(op));
+        invalid = 1;
+    }
+
+    if (identity->saw_skill_id && op->type != SKILL) {
+        LOG(ERROR, "skill_id is invalid for object %s.", object_get_str(op));
+        invalid = 1;
+    }
+
+    if (identity->saw_numeric_sp &&
+            (identity->saw_spell_id || identity->saw_skill_id)) {
+        LOG(ERROR,
+            "Numeric and stable spell/skill IDs cannot be combined for object %s.",
+            object_get_str(op));
+        invalid = 1;
+    }
+
+    if (invalid != 0) {
+        return invalid;
+    }
+
+    if (identity->saw_spell_id) {
+        op->stats.sp = identity->spell_index;
+    } else if (identity->saw_skill_id) {
+        op->stats.sp = identity->skill_index;
+    } else if (identity->saw_numeric_sp) {
+        op->stats.sp = identity->numeric_sp;
+    }
+
+    return 0;
+}
 
 /**
  * Returns the next token for lex.
@@ -891,16 +1024,22 @@ load_object (const char *str, object *op, int map_flags)
     load_object_begin(op, items);
 
     size_t lcount = 0;
+    stable_identity_state identity = stable_identity_state_init();
 
     for ( ; ; ) {
         str += lcount;
         lcount = strlen(str) + 1;
         YY_BUFFER_STATE yybufstate = yy_scan_string(str);
-        int retval = lex_load(&depth, items, MAXDEPTH, map_flags, 0);
+        int retval = lex_load(&depth, items, MAXDEPTH, map_flags, 0, &identity);
         yy_delete_buffer(yybufstate);
 
         if (retval == LL_NORMAL) {
             break;
+        } else if (retval == LL_ERROR) {
+            if (cur_buffer != NULL) {
+                yy_switch_to_buffer(cur_buffer);
+            }
+            return LL_ERROR;
         }
     }
 
@@ -940,11 +1079,20 @@ load_object_fp (FILE *fp, object *op, int map_flags)
     load_object_begin(op, items);
 
     static char buf[HUGE_BUF * 16];
+    stable_identity_state identities[MAXDEPTH] = {0};
+    identities[0] = stable_identity_state_init();
     int retval = LL_EOF;
     while (fgets(VS(buf), fp)) {
         YY_BUFFER_STATE yybufstate = yy_scan_string(buf);
-        retval = lex_load(&depth, items, MAXDEPTH, map_flags, 1);
+        retval = lex_load(&depth, items, MAXDEPTH, map_flags, 1, identities);
         yy_delete_buffer(yybufstate);
+
+        if (retval == LL_ERROR) {
+            if (cur_buffer != NULL) {
+                yy_switch_to_buffer(cur_buffer);
+            }
+            return LL_ERROR;
+        }
 
         if (retval == LL_NORMAL) {
             /* Be sure we work on the right buffer */
@@ -1001,8 +1149,11 @@ load_object_buffer (void *buffer, object *op, int map_flags)
     }
 
     int depth = 0;
-    int retval = lex_load(&depth, items, MAXDEPTH, map_flags, 0);
-    load_object_finish(op, map_flags);
+    stable_identity_state identity = stable_identity_state_init();
+    int retval = lex_load(&depth, items, MAXDEPTH, map_flags, 0, &identity);
+    if (retval != LL_ERROR) {
+        load_object_finish(op, map_flags);
+    }
     return retval;
 }
 
@@ -1025,7 +1176,8 @@ set_variable (object *op, const char *buf)
     object *items[MAXDEPTH];
     items[0] = op;
     int depth = 0;
-    int retval = lex_load(&depth, items, MAXDEPTH, 0, 0);
+    stable_identity_state identity = stable_identity_state_init();
+    int retval = lex_load(&depth, items, MAXDEPTH, 0, 0, &identity);
 
     if (yycurbuf != NULL) {
         yy_switch_to_buffer(yycurbuf);
@@ -1215,7 +1367,29 @@ get_ob_diff (StringBuffer *sb, const object *op, const object *op2)
     }
 
     if (op->stats.sp != op2->stats.sp) {
-        SAVE_INT(sb, "sp", op->stats.sp);
+        const char *stable_id = NULL;
+        const char *field_name = NULL;
+        if (op->type == SKILL) {
+            stable_id = skill_id_from_index(op->stats.sp);
+            field_name = "skill_id";
+        } else if (op->type == SPELL || OBJECT_IS_SPELL_TOOL(op)) {
+            stable_id = spell_id_from_index(op->stats.sp);
+            field_name = "spell_id";
+        }
+
+        if (stable_id != NULL) {
+            SAVE_STRING(sb, field_name, stable_id);
+        } else if (field_name != NULL && op->stats.sp != SP_NO_SPELL) {
+            LOG(BUG,
+                "Object %s has invalid runtime %s index %d.",
+                object_get_str(op),
+                field_name,
+                op->stats.sp);
+            stringbuffer_append_printf(
+                sb, "%s __invalid_runtime_index_%d\n", field_name, op->stats.sp);
+        } else {
+            SAVE_INT(sb, "sp", op->stats.sp);
+        }
     }
 
     if (op->stats.maxsp != op2->stats.maxsp) {
