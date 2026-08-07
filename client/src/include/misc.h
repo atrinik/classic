@@ -40,7 +40,6 @@ extern char *package_get_version_full(char *dst, size_t dstlen);
 
 extern char *package_get_version_partial(char *dst, size_t dstlen);
 
-
 extern void screenshot_create(SDL_Surface *surface);
 
 /** Public API implemented in src/client/upgrader.c. */
