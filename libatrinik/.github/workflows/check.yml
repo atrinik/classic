@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   library-validation:
@@ -17,20 +18,38 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libssl-dev zlib1g-dev
+        run: sudo apt-get update && sudo apt-get install -y gcovr libcurl4-openssl-dev libssl-dev zlib1g-dev
 
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/build/install"
+        run: cmake --preset linux-coverage
 
       - name: Build and test
         run: |
-          cmake --build build --parallel
-          ctest --test-dir build --output-on-failure
+          cmake --build --preset linux-coverage --parallel
+          ctest --preset linux-coverage
+          gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
+            --exclude '.*/build/.*' \
+            --print-summary --xml coverage.xml --html-details coverage.html
 
-      - name: Install package
-        run: cmake --install build
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v6
+        with:
+          disable_search: true
+          fail_ci_if_error: false
+          files: coverage.xml
+          use_oidc: true
+
+      - name: Configure release package
+        run: cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/build/install"
+
+      - name: Build and install package
+        run: |
+          cmake --build build/release --parallel
+          cmake --install build/release
 
       - name: Validate installed consumer
         run: |
