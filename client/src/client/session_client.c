@@ -34,6 +34,21 @@ static void copy_text(char *destination, size_t size, const char *source) {
     destination[length] = '\0';
 }
 
+static void
+copy_text_bounded(char *destination, size_t size, const char *source, size_t source_size) {
+    HARD_ASSERT(destination != NULL);
+    HARD_ASSERT(size > 0);
+    if (source == NULL || source_size == 0) {
+        destination[0] = '\0';
+        return;
+    }
+
+    size_t maximum = size - 1 < source_size ? size - 1 : source_size;
+    size_t length = strnlen(source, maximum);
+    memcpy(destination, source, length);
+    destination[length] = '\0';
+}
+
 static bool text_fits(const char *text, size_t size, bool allow_empty) {
     if (text == NULL) {
         return false;
@@ -308,7 +323,10 @@ void client_session_sync_target(void) {
         .combat_force = cpl.combat_force != 0,
     };
     copy_text(target.name, sizeof(target.name), cpl.target_name);
-    copy_text(target.color, sizeof(cpl.target_color), cpl.target_color);
+    copy_text_bounded(target.color,
+                      sizeof(target.color),
+                      cpl.target_color,
+                      sizeof(cpl.target_color));
     session_reduce_target(client_session_get(), &target);
 }
 

@@ -220,6 +220,31 @@ if (BUILD_TESTING AND NOT MINGW)
     target_link_libraries(client-session-tests PRIVATE Atrinik::Session)
     add_test(NAME client-session COMMAND client-session-tests)
 
+    add_executable(client-session-adapter-tests
+        src/tests/session_client.c
+        src/client/session_client.c)
+    atrinik_configure_target(client-session-adapter-tests)
+    target_compile_definitions(client-session-adapter-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-session-adapter-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-session-adapter-tests PRIVATE
+        Atrinik::Core
+        Atrinik::Session
+        SDL3::SDL3
+        SDL3_image::SDL3_image
+        SDL3_ttf::SDL3_ttf
+        SDL3_mixer::SDL3_mixer)
+    if (TARGET LibXml2::LibXml2)
+        target_link_libraries(client-session-adapter-tests PRIVATE LibXml2::LibXml2)
+    else ()
+        target_include_directories(client-session-adapter-tests PRIVATE ${LIBXML2_INCLUDE_DIR})
+        target_link_libraries(client-session-adapter-tests PRIVATE ${LIBXML2_LIBRARIES})
+    endif ()
+    add_test(NAME client-session-adapter COMMAND client-session-adapter-tests)
+
     add_executable(client-packet-payload-tests
         src/tests/packet_payload.c
         src/client/packet_payload.c)
