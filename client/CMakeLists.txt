@@ -243,6 +243,32 @@ if (BUILD_TESTING AND NOT MINGW)
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(client-textwin-event-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-textwin-event COMMAND client-textwin-event-tests)
+
+    set(player_view_fixtures
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/player_view")
+    add_test(NAME client-player-view-smooth
+        COMMAND atrinik --player-view "${player_view_fixtures}/smooth.xml" -)
+    add_test(NAME client-player-view-discrete
+        COMMAND atrinik --player-view "${player_view_fixtures}/discrete.xml" -)
+    add_test(NAME client-player-view-output
+        COMMAND ${CMAKE_COMMAND}
+            "-DATRINIK_CLIENT=$<TARGET_FILE:atrinik>"
+            "-DPLAYER_VIEW_MANIFEST=${player_view_fixtures}/smooth.xml"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_player_view.cmake")
+    add_test(NAME client-player-view-malformed-snapshot
+        COMMAND atrinik --player-view "${player_view_fixtures}/malformed.xml" -)
+    add_test(NAME client-player-view-mismatched-asset
+        COMMAND atrinik --player-view "${player_view_fixtures}/mismatched-asset.xml" -)
+    add_test(NAME client-player-view-missing-face
+        COMMAND atrinik --player-view "${player_view_fixtures}/missing-face.xml" -)
+    add_test(NAME client-player-view-unknown-field
+        COMMAND atrinik --player-view "${player_view_fixtures}/unknown-field.xml" -)
+    set_tests_properties(
+        client-player-view-malformed-snapshot
+        client-player-view-mismatched-asset
+        client-player-view-missing-face
+        client-player-view-unknown-field
+        PROPERTIES WILL_FAIL TRUE)
 endif ()
 
 # Installer.
