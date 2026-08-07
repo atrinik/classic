@@ -88,21 +88,11 @@ static void setting_load_value(setting_struct *setting, const char *str) {
     }
 }
 
-/**
- * Initialize the setting defaults.
- */
-void settings_init(void) {
-    FILE *fp;
+/** Parse setting defaults from an already-open stream. */
+static void settings_init_stream(FILE *fp) {
     char buf[HUGE_BUF], *cp;
     setting_category *category;
     setting_struct *setting;
-
-    fp = path_fopen(FILE_SETTINGS_TXT, "r");
-
-    if (!fp) {
-        LOG(ERROR, "Missing " FILE_SETTINGS_TXT ", cannot continue.");
-        exit(1);
-    }
 
     category = NULL;
     setting = NULL;
@@ -207,11 +197,39 @@ void settings_init(void) {
             category->name = xstrdup(cp + 9);
         }
     }
+}
 
+/**
+ * Initialize the setting defaults and mutable user overrides.
+ */
+void settings_init(void) {
+    FILE *fp = path_fopen(FILE_SETTINGS_TXT, "r");
+    if (fp == NULL) {
+        LOG(ERROR, "Missing " FILE_SETTINGS_TXT ", cannot continue.");
+        exit(1);
+    }
+
+    settings_init_stream(fp);
     fclose(fp);
 
     /* Now load the user's settings (if any). */
     settings_load();
+}
+
+bool settings_init_read_only(const char *path) {
+    HARD_ASSERT(path != NULL);
+
+    FILE *fp = fopen(path, "r");
+    if (fp == NULL) {
+        return false;
+    }
+
+    settings_init_stream(fp);
+    bool success = !ferror(fp);
+    if (fclose(fp) != 0) {
+        success = false;
+    }
+    return success;
 }
 
 /**
@@ -308,11 +326,12 @@ void settings_save(void) {
  *
  * User's settings are also saved to file using settings_save().
  */
-void settings_deinit(void) {
+static void settings_deinit_internal(bool save) {
     size_t cat, setting;
 
-    /* Save the user's settings first. */
-    settings_save();
+    if (save) {
+        settings_save();
+    }
 
     /* Start deinitializing. */
     for (cat = 0; cat < setting_categories_num; cat++) {
@@ -352,6 +371,14 @@ void settings_deinit(void) {
     setting_categories = NULL;
 
     setting_categories_num = 0;
+}
+
+void settings_deinit(void) {
+    settings_deinit_internal(true);
+}
+
+void settings_deinit_read_only(void) {
+    settings_deinit_internal(false);
 }
 
 /**

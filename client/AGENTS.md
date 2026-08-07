@@ -15,6 +15,10 @@
   texture invalidation, and mutable-backbuffer semantics. Exact black remains
   the transparency key when image decoding falls back, and mutable chat
   backbuffers must not be RLE encoded.
+- Keep offline player-view proofs on the normal MAP decoder and
+  `map_draw_map()` path. Their closed manifests must pin every immutable input
+  and renderer choice, remain bounded and network-free, and never read or
+  write the normal user configuration/cache hierarchy.
 - Focused text inputs own their key-down, key-up, text-input, and text-editing
   events. Do not let gameplay bindings observe an event already consumed by a
   focused widget.

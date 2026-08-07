@@ -40,6 +40,7 @@
 #include <toolkit/clioptions.h>
 #include <toolkit/path.h>
 #include <resources.h>
+#include <player_view.h>
 #include <toolkit/signals.h>
 #include <toolkit/colorspace.h>
 #include <toolkit/binreloc.h>
@@ -643,6 +644,10 @@ int main(int argc, char *argv[]) {
     toolkit_import(stringbuffer);
 
     path_fopen = client_fopen_wrapper;
+
+    if (argc > 1 && strcmp(argv[1], "--player-view") == 0) {
+        return player_view_main(argc - 1, &argv[1]);
+    }
 
     char version[MAX_BUF];
     package_get_version_full(VS(version));
