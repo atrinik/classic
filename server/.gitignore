@@ -9,3 +9,4 @@
 /libplugin_*.dll
 __pycache__/
 *.py[cod]
+coverage.*

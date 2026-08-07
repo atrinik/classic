@@ -2,6 +2,8 @@
 =                Atrinik Server                 =
 =================================================
 
+[![Coverage](https://codecov.io/gh/atrinik/server/graph/badge.svg?branch=main)](https://codecov.io/gh/atrinik/server)
+
  Website: https://www.atrinik.org/
 
  Dedicated server for the Atrinik game. Protocol declarations and shared C
@@ -24,6 +26,12 @@
   $ ctest --test-dir build/linux-debug -N
   $ ctest --test-dir build/linux-debug --output-on-failure \
       -R '^server-unit-toolkit.packet$'
+
+ To collect line, function, and branch coverage from the native tests:
+  $ cmake --preset linux-coverage
+  $ cmake --build --preset linux-coverage
+  $ ctest --preset linux-coverage
+  $ gcovr --root . --filter 'src/' --exclude 'src/tests/' --print-summary
 
  The server's simulation, monotonic, UTC wall, round-generation, and authored
  world-time domains are documented in doc/SERVER_CLOCKS.md. New deadlines must

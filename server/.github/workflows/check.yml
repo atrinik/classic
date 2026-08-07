@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: server-${{ github.workflow }}-${{ github.ref }}
@@ -36,14 +37,24 @@ jobs:
               apt-get update -qq
               env DEBIAN_FRONTEND=noninteractive \
                 apt-get install -y -qq --no-install-recommends \
-                  build-essential ca-certificates check cmake flex \
+                  build-essential ca-certificates check cmake flex gcovr \
                   libcurl4-openssl-dev libgd-dev libminiupnpc-dev \
                   libreadline-dev libssl-dev libsubunit-dev ninja-build \
                   pkgconf python3-dev zlib1g-dev
               python3 -m unittest discover -s tools/tests -p "test_*.py"
               python3 tools/dependencies.py sync
               python3 tools/dependencies.py verify
-              cmake --preset linux-debug
-              cmake --build --preset linux-debug --parallel
-              ctest --preset linux-debug
+              cmake --preset linux-coverage
+              cmake --build --preset linux-coverage --parallel
+              ctest --preset linux-coverage
+              gcovr --root . --filter "src/" --exclude "src/tests/" \
+                --print-summary --xml coverage.xml --html-details coverage.html
             '
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v6
+        with:
+          disable_search: true
+          fail_ci_if_error: false
+          files: coverage.xml
+          use_oidc: true

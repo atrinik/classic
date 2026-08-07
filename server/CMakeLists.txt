@@ -30,6 +30,7 @@ include(FetchContent)
 
 option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
 option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
+option(ENABLE_COVERAGE "Enable GCC coverage instrumentation" OFF)
 option(ENABLE_PYTHON_PLUGIN "Build the Python plugin" ON)
 set(PACKAGE_TYPE "none" CACHE STRING "Package type (none or zip)")
 
@@ -68,6 +69,17 @@ function(atrinik_configure_target target)
             -fsanitize=address,undefined -fno-omit-frame-pointer)
         target_link_options(${target} PRIVATE
             -fsanitize=address,undefined -fno-omit-frame-pointer)
+    endif ()
+    if (ENABLE_COVERAGE)
+        if (NOT CMAKE_C_COMPILER_ID STREQUAL "GNU")
+            message(FATAL_ERROR "ENABLE_COVERAGE requires GCC")
+        endif ()
+        target_compile_options(${target} PRIVATE
+            --coverage -fprofile-abs-path -O0 -g)
+        get_target_property(target_type ${target} TYPE)
+        if (target_type MATCHES "^(EXECUTABLE|MODULE_LIBRARY|SHARED_LIBRARY)$")
+            target_link_options(${target} PRIVATE --coverage)
+        endif ()
     endif ()
 endfunction()
 
@@ -469,7 +481,7 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
         DESTINATION server
         PATTERN ".git" EXCLUDE)
     install(FILES
-        README
+        README.md
         COPYING
         ca-bundle.crt
         permissions.cfg
