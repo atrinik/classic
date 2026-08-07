@@ -82,6 +82,15 @@ function(atrinik_configure_target target)
     endif ()
 endfunction()
 
+# The authoritative local game/session model has no SDL, widget, renderer, or
+# platform-input dependency. Keep it independently linkable for unit tests and
+# future headless/API consumers.
+add_library(atrinik-session STATIC src/client/session.c)
+add_library(Atrinik::Session ALIAS atrinik-session)
+atrinik_configure_target(atrinik-session)
+target_include_directories(atrinik-session PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies.lock.json"
     ATRINIK_SOURCE_LOCK)
 string(JSON ATRINIK_SOURCE_LOCK_SCHEMA ERROR_VARIABLE lock_error
@@ -171,7 +180,7 @@ target_include_directories(${EXECUTABLE} BEFORE PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${LIBXML2_INCLUDE_DIR})
 
-target_link_libraries(${EXECUTABLE} PRIVATE Atrinik::Core)
+target_link_libraries(${EXECUTABLE} PRIVATE Atrinik::Core Atrinik::Session)
 
 # Link all the available libraries.
 target_link_libraries(${EXECUTABLE} PRIVATE
@@ -204,6 +213,13 @@ if (MINGW)
 endif ()
 
 if (BUILD_TESTING AND NOT MINGW)
+    add_executable(client-session-tests src/tests/session.c)
+    atrinik_configure_target(client-session-tests)
+    target_compile_definitions(client-session-tests PRIVATE
+        ATRINIK_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(client-session-tests PRIVATE Atrinik::Session)
+    add_test(NAME client-session COMMAND client-session-tests)
+
     add_executable(client-packet-payload-tests
         src/tests/packet_payload.c
         src/client/packet_payload.c)

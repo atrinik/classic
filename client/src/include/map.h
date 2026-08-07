@@ -403,6 +403,10 @@ extern int map_get_player_direction(void);
 
 extern void map_get_real_coords(int *x, int *y);
 
+extern int map_get_width(void);
+
+extern int map_get_height(void);
+
 extern void init_map_data(int xl, int yl, int px, int py);
 
 extern void adjust_tile_stretch(void);

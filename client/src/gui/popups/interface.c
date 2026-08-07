@@ -31,6 +31,7 @@
 
 #include <global.h>
 #include <client_socket.h>
+#include <session_client.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 
@@ -97,13 +98,11 @@ static int
 text_anchor_handle(const char *anchor_action, const char *buf, size_t len, void *custom_data) {
     if (anchor_action[0] == '\0' && buf[0] != '/') {
         if (!interface_data->progressed || SDL_GetTicks() >= interface_data->progressed_ticks) {
-            StringBuffer *sb = stringbuffer_new();
-            char *cp;
-
-            stringbuffer_append_printf(sb, "/talk 1 %s", buf);
-            cp = stringbuffer_finish(sb);
-            send_command_check(cp);
-            free(cp);
+            session_action_result_t result = client_session_reply(0, buf);
+            if (result != SESSION_ACTION_ACCEPTED) {
+                LOG(INFO, "Rejected dialog reply action: %s", session_action_result_string(result));
+                return 1;
+            }
 
             interface_data->progressed = 1;
             interface_data->progressed_ticks = SDL_GetTicks() + INTERFACE_PROGRESSED_TICKS;
@@ -415,6 +414,8 @@ void socket_command_interface(uint8_t *data, size_t len, size_t pos) {
             interface_data->destroy = 1;
         }
 
+        session_reduce_dialog(client_session_get(), "", "");
+
         return;
     }
 
@@ -623,6 +624,10 @@ void socket_command_interface(uint8_t *data, size_t len, size_t pos) {
     if (!interface_data->message) {
         interface_data->message = xstrdup("");
     }
+
+    session_reduce_dialog(client_session_get(),
+                          interface_data->title != NULL ? interface_data->title : "",
+                          interface_data->message);
 
     box.w = INTERFACE_TEXT_WIDTH;
     box.h = INTERFACE_TEXT_HEIGHT;

@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <session_client.h>
 
 /**
  * Target widget data structure.
@@ -46,22 +47,26 @@ static void widget_draw(widgetdata *widget) {
     }
 
     const char *str;
+    session_target_t target = {0};
+    session_player_t player = {0};
+    HARD_ASSERT(session_target_view(client_session_get(), &target));
+    HARD_ASSERT(session_player_view(client_session_get(), &player));
 
-    if (cpl.target_code == CMD_TARGET_SELF) {
-        if (cpl.combat) {
+    if (target.code == CMD_TARGET_SELF) {
+        if (target.combat) {
             str = "target self (hold attack)";
         } else {
             str = "target self";
         }
-    } else if (cpl.target_code == CMD_TARGET_ENEMY) {
-        if (cpl.combat) {
+    } else if (target.code == CMD_TARGET_ENEMY) {
+        if (target.combat) {
             str = "target and attack enemy";
         } else {
             str = "target enemy";
         }
-    } else if (cpl.target_code == CMD_TARGET_NEUTRAL || cpl.target_code == CMD_TARGET_FRIEND) {
-        if (cpl.combat) {
-            if (cpl.combat_force && cpl.target_code != CMD_TARGET_FRIEND) {
+    } else if (target.code == CMD_TARGET_NEUTRAL || target.code == CMD_TARGET_FRIEND) {
+        if (target.combat) {
+            if (target.combat_force && target.code != CMD_TARGET_FRIEND) {
                 str = "target and attack friend";
             } else {
                 str = "target friend (hold attack)";
@@ -70,7 +75,7 @@ static void widget_draw(widgetdata *widget) {
             str = "target friend";
         }
     } else {
-        LOG(ERROR, "Invalid target code: %d", cpl.target_code);
+        LOG(ERROR, "Invalid target code: %d", target.code);
         str = "invalid target";
     }
 
@@ -78,7 +83,7 @@ static void widget_draw(widgetdata *widget) {
 
     target_widget->button_combat.texture = target_widget->button_combat.texture_over =
         target_widget->button_combat.texture_pressed =
-            texture_get(TEXTURE_TYPE_CLIENT, cpl.combat ? "target_attack" : "target_normal");
+            texture_get(TEXTURE_TYPE_CLIENT, target.combat ? "target_attack" : "target_normal");
 
     target_widget->button_combat.surface = widget->surface;
     button_set_parent(&target_widget->button_combat, widget->x, widget->y);
@@ -92,7 +97,7 @@ static void widget_draw(widgetdata *widget) {
             texture_surface(target_widget->button_combat.texture)->h - 3;
     surface_show(widget->surface, x, y, NULL, TEXTURE_CLIENT("target_hp_b"));
 
-    if (cpl.target_code != CMD_TARGET_SELF) {
+    if (target.code != CMD_TARGET_SELF) {
         target_widget->button_talk.surface = widget->surface;
         target_widget->button_talk.x =
             widget->w - texture_surface(target_widget->button_talk.texture)->w - 5;
@@ -102,11 +107,11 @@ static void widget_draw(widgetdata *widget) {
         button_show(&target_widget->button_talk, "");
     }
 
-    if (setting_get_int(OPT_CAT_GENERAL, OPT_TARGET_SELF) || cpl.target_code != 0) {
-        int hp = cpl.target_hp;
+    if (setting_get_int(OPT_CAT_GENERAL, OPT_TARGET_SELF) || target.code != 0) {
+        int hp = target.hp;
 
-        if (cpl.target_code == CMD_TARGET_SELF) {
-            hp = (int)(((double)cpl.stats.hp / (double)cpl.stats.maxhp) * 100.0);
+        if (target.code == CMD_TARGET_SELF) {
+            hp = (int)(((double)player.stats.hp / (double)player.stats.max_hp) * 100.0);
         } else {
             hp = MIN(100, MAX(0, hp));
         }
@@ -145,12 +150,12 @@ static void widget_draw(widgetdata *widget) {
                          FONT_ARIAL11,
                          box.x,
                          box.y,
-                         cpl.target_color,
+                         target.color,
                          TEXT_MARKUP | TEXT_VALIGN_CENTER,
                          &box,
                          "%s (level %u)\n[c=#%s]HP: %d%%[/c] %s",
-                         cpl.target_name,
-                         cpl.target_level,
+                         target.name,
+                         target.level,
                          hp_color,
                          hp,
                          str);
@@ -160,13 +165,15 @@ static void widget_draw(widgetdata *widget) {
 /** @copydoc widgetdata::event_func */
 static int widget_event(widgetdata *widget, SDL_Event *event) {
     target_widget_t *target_widget = widget->subwidget;
+    session_target_t target = {0};
+    HARD_ASSERT(session_target_view(client_session_get(), &target));
 
     if (button_event(&target_widget->button_combat, event)) {
         keybind_process_command("?COMBAT");
         return 1;
     }
 
-    if (cpl.target_code != CMD_TARGET_SELF) {
+    if (target.code != CMD_TARGET_SELF) {
         if (button_event(&target_widget->button_talk, event)) {
             keybind_process_command("?HELLO");
             return 1;

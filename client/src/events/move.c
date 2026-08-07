@@ -28,8 +28,7 @@
  */
 
 #include <global.h>
-#include <client_socket.h>
-#include <toolkit/packet.h>
+#include <session_client.h>
 
 /**
  * Number of the possible directions.
@@ -42,32 +41,44 @@
 static const int directions_fire[DIRECTIONS_NUM] = {6, 5, 4, 7, 0, 3, 8, 1, 2};
 
 void client_send_fire(int num, tag_t tag) {
-    packet_struct *packet;
-
-    packet = packet_new(SERVER_CMD_FIRE, 64, 64);
-    packet_writer_write_uint8(packet, directions_fire[num - 1]);
-
-    if (tag) {
-        packet_writer_write_uint32(packet, tag);
+    if (num < 1 || num > DIRECTIONS_NUM) {
+        LOG(BUG, "Invalid fire direction index: %d", num);
+        return;
     }
 
-    socket_send_packet(packet);
+    session_intent_t intent = {0};
+    HARD_ASSERT(session_intent_view(client_session_get(), &intent));
+    session_action_result_t result =
+        tag != 0 ? client_session_cast(tag, directions_fire[num - 1])
+                 : client_session_move(directions_fire[num - 1], intent.run, true);
+    if (result != SESSION_ACTION_ACCEPTED) {
+        LOG(INFO, "Rejected fire action: %s", session_action_result_string(result));
+    }
 }
 
 void move_keys(int num) {
-    if (cpl.fire_on) {
+    session_intent_t intent = {0};
+    HARD_ASSERT(session_intent_view(client_session_get(), &intent));
+    if (intent.fire) {
         client_send_fire(num, 0);
     } else {
-        packet_struct *packet;
-
+        session_action_result_t result;
         if (num == 5) {
-            packet = packet_new(SERVER_CMD_CLEAR, 0, 0);
-            socket_send_packet(packet);
+            result = client_session_stop();
         } else {
-            packet = packet_new(SERVER_CMD_MOVE, 8, 0);
-            packet_writer_write_uint8(packet, num ? directions_fire[num - 1] : 0);
-            packet_writer_write_uint8(packet, cpl.run_on);
-            socket_send_packet(packet);
+            uint8_t direction = 0;
+            if (num != 0) {
+                if (num < 1 || num > DIRECTIONS_NUM) {
+                    LOG(BUG, "Invalid movement direction index: %d", num);
+                    return;
+                }
+                direction = directions_fire[num - 1];
+            }
+            result = client_session_move(direction, intent.run, false);
+        }
+
+        if (result != SESSION_ACTION_ACCEPTED) {
+            LOG(INFO, "Rejected movement action: %s", session_action_result_string(result));
         }
     }
 }

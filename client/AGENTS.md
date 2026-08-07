@@ -22,6 +22,15 @@
 - Focused text inputs own their key-down, key-up, text-input, and text-editing
   events. Do not let gameplay bindings observe an event already consumed by a
   focused widget.
+- Keep `Atrinik::Session` C17-only and free of SDL, widget, renderer, audio,
+  and platform-input dependencies. Packet mutations enter typed reducers only
+  after parsing completes; GUI, keybindings, tests, and automation share typed
+  semantic actions. Never expose raw object pointers or bare reusable tags to
+  session consumers.
+- The main thread owns mutable session state. Preserve monotonic revisions,
+  bounded event/action/message queues, explicit gap recovery, generation
+  invalidation on lifecycle/map/replay boundaries, and snapshot/event
+  reconstruction when adding gameplay state.
 - Follow `.clang-format`, existing allocation/error conventions, and CMake
   source lists. Add focused tests for renderer, input, parser, and lifecycle
   regressions.
