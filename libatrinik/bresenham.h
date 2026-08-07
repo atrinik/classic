@@ -39,12 +39,14 @@
 /**
  * Bresenham init.
  * dx & dy are input only and will not be changed.
+ * Their magnitudes must not exceed INT_MAX / 2 so that their doubled
+ * magnitudes are representable by the output variables.
  * All other parameters are the outputs which will be initialized
  */
 #define BRESENHAM_INIT(dx, dy, fraction, stepx, stepy, dx2, dy2) \
     {                                                            \
-        (dx2) = (dx) << 1;                                       \
-        (dy2) = (dy) << 1;                                       \
+        (dx2) = (dx) * 2;                                        \
+        (dy2) = (dy) * 2;                                        \
                                                                  \
         if ((dy) < 0) {                                          \
             (dy2) = -(dy2);                                      \
