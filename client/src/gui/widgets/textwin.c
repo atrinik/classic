@@ -818,6 +818,7 @@ static void widget_background(widgetdata *widget, int draw) {
 /** @copydoc widgetdata::event_func */
 static int widget_event(widgetdata *widget, SDL_Event *event) {
     textwin_struct *textwin = TEXTWIN(widget);
+    textwin_tab_struct *chat_input_tab;
 
     if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
         widgetdata *tmp;
@@ -857,40 +858,39 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
         }
     }
 
-    if (textwin->tabs != NULL &&
-        (event->type == SDL_EVENT_TEXT_INPUT || event->type == SDL_EVENT_TEXT_EDITING) &&
-        textwin->tabs[textwin->tab_selected].text_input.focus == 1 &&
-        widget == widget_find(NULL, CHATWIN_ID, NULL, NULL)) {
-        if (text_input_event(&textwin->tabs[textwin->tab_selected].text_input, event)) {
+    chat_input_tab = textwin_chat_input_event_tab(widget, event);
+
+    if (chat_input_tab != NULL &&
+        (event->type == SDL_EVENT_TEXT_INPUT || event->type == SDL_EVENT_TEXT_EDITING)) {
+        if (text_input_event(&chat_input_tab->text_input, event)) {
             WIDGET_REDRAW(widget);
-            return 1;
         }
+
+        return 1;
     }
 
-    if (textwin->tabs != NULL && event->type == SDL_EVENT_KEY_DOWN &&
-        textwin->tabs[textwin->tab_selected].text_input.focus == 1 &&
-        widget == widget_find(NULL, CHATWIN_ID, NULL, NULL)) {
-        if (IS_ENTER(event->key.key) &&
-            *(textwin->tabs[textwin->tab_selected].text_input.str) != '\0') {
+    if (chat_input_tab != NULL && event->type == SDL_EVENT_KEY_UP) {
+        return 1;
+    }
+
+    if (chat_input_tab != NULL && event->type == SDL_EVENT_KEY_DOWN) {
+        if (IS_ENTER(event->key.key) && *chat_input_tab->text_input.str != '\0') {
             StringBuffer *sb;
             char *cp, *str;
 
             sb = stringbuffer_new();
 
-            if (*(textwin->tabs[textwin->tab_selected].text_input.str) != '/') {
-                if (textwin->tabs[textwin->tab_selected].name != NULL) {
-                    stringbuffer_append_printf(sb,
-                                               "/tell \"%s\" ",
-                                               textwin->tabs[textwin->tab_selected].name);
+            if (*chat_input_tab->text_input.str != '/') {
+                if (chat_input_tab->name != NULL) {
+                    stringbuffer_append_printf(sb, "/tell \"%s\" ", chat_input_tab->name);
                 } else {
-                    stringbuffer_append_printf(
-                        sb,
-                        "/%s ",
-                        textwin_tab_commands[textwin->tabs[textwin->tab_selected].type - 1]);
+                    stringbuffer_append_printf(sb,
+                                               "/%s ",
+                                               textwin_tab_commands[chat_input_tab->type - 1]);
                 }
             }
 
-            str = text_escape_markup(textwin->tabs[textwin->tab_selected].text_input.str);
+            str = text_escape_markup(chat_input_tab->text_input.str);
             stringbuffer_append_string(sb, str);
             free(str);
 
@@ -900,23 +900,25 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
         }
 
         if (event->key.key == SDLK_ESCAPE) {
-            textwin->tabs[textwin->tab_selected].text_input.focus = 0;
-            text_input_reset(&textwin->tabs[textwin->tab_selected].text_input);
+            chat_input_tab->text_input.focus = 0;
+            text_input_reset(&chat_input_tab->text_input);
             WIDGET_REDRAW(widget);
             return 1;
         } else if (event->key.key == SDLK_TAB) {
-            help_handle_tabulator(&textwin->tabs[textwin->tab_selected].text_input);
+            help_handle_tabulator(&chat_input_tab->text_input);
             WIDGET_REDRAW(widget);
             return 1;
-        } else if (text_input_event(&textwin->tabs[textwin->tab_selected].text_input, event)) {
+        } else if (text_input_event(&chat_input_tab->text_input, event)) {
             if (IS_ENTER(event->key.key)) {
-                text_input_reset(&textwin->tabs[textwin->tab_selected].text_input);
-                textwin->tabs[textwin->tab_selected].text_input.focus = 0;
+                text_input_reset(&chat_input_tab->text_input);
+                chat_input_tab->text_input.focus = 0;
             }
 
             WIDGET_REDRAW(widget);
             return 1;
         }
+
+        return 1;
     }
 
     if (scrollbar_event(&textwin->scrollbar, event)) {
