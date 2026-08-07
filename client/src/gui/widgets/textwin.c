@@ -659,7 +659,6 @@ static void widget_draw(widgetdata *widget) {
                                              0,
                                              0);
         SDL_SetSurfaceColorKey(widget->surface, true, 0);
-        SDL_SetSurfaceRLE(widget->surface, true);
         textwin_readjust(widget);
     }
 
@@ -994,7 +993,7 @@ static int widget_load(widgetdata *widget, const char *keyword, const char *para
         char font_name[MAX_BUF];
         int font_size;
 
-        if (sscanf(parameter, "%s %d", font_name, &font_size) == 2) {
+        if (sscanf(parameter, "%255s %d", font_name, &font_size) == 2) {
             font_free(textwin->font);
             textwin->font = font_get(font_name, font_size);
             return 1;

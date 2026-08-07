@@ -139,10 +139,10 @@ static int texture_data_new(texture_struct *tmp) {
             return 0;
         }
 
-        Uint32 color_key;
-        if (SDL_GetSurfaceColorKey(surface, &color_key)) {
-            SDL_SetSurfaceColorKey(surface, true, color_key);
-            SDL_SetSurfaceRLE(surface, true);
+        if (!surface_set_transparent_black(surface)) {
+            LOG(BUG, "Could not configure texture transparency for %s: %s", path, SDL_GetError());
+            SDL_DestroySurface(surface);
+            return 0;
         }
         texture_data_free(tmp);
         tmp->surface = surface_to_display_alpha(surface);
