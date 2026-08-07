@@ -32,6 +32,8 @@
 #include <arch.h>
 #include <object.h>
 #include <object_methods.h>
+#include <metrics.h>
+#include <player.h>
 
 START_TEST(test_shop_get_cost) {
     object *money = arch_get("coppercoin");
@@ -154,6 +156,7 @@ START_TEST(test_shop_pay) {
     mapstruct *map;
     object *pl;
     check_setup_env_pl(&map, &pl);
+    ck_assert(!shop_pay(pl, -1));
     ck_assert(shop_pay(pl, 0));
     object *sack = arch_get("sack");
     sack = object_insert_into(sack, pl, 0);
@@ -174,6 +177,7 @@ START_TEST(test_shop_pay) {
     ck_assert_uint_eq(value, 500);
     ck_assert_uint_eq(bank_get_balance(pl), 500);
     int64_t total = 100161150;
+    int64_t initial_total = total;
     ck_assert_uint_eq(shop_get_money(pl), total);
     ck_assert(shop_pay(pl, 0));
     ck_assert_uint_eq(shop_get_money(pl), total);
@@ -205,6 +209,8 @@ START_TEST(test_shop_pay) {
     ck_assert(!shop_pay(pl, 43534));
     ck_assert(!shop_pay(pl, 1));
     ck_assert(shop_pay(pl, 0));
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_CURRENCY_SPENT),
+                      initial_total);
 }
 END_TEST
 
@@ -284,6 +290,9 @@ START_TEST(test_shop_pay_item) {
     ck_assert(!shop_pay_item(pl, sword));
     sword->value = 0;
     ck_assert(shop_pay_item(pl, sword));
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_SHOP_PURCHASES), 6);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_SHOP_CURRENCY_SPENT),
+                      101844950);
     object_destroy(sword);
 }
 END_TEST
@@ -360,6 +369,9 @@ START_TEST(test_shop_sell_item) {
     total += sword->value * 0.2;
     ck_assert_uint_eq(shop_get_money(pl), total);
     ck_assert_ptr_eq(sword->custom_name, NULL);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_SHOP_SALES), 3);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_SHOP_CURRENCY_EARNED),
+                      total);
     object_destroy(sword);
 }
 END_TEST

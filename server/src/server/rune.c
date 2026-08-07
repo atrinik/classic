@@ -104,7 +104,7 @@ int trap_see(object *op, object *trap, int level) {
         draw_info_format(COLOR_WHITE, op, "You spot a %s (lvl %d)!", trap->name, trap->level);
 
         if (trap->stats.Int != 1) {
-            CONTR(op)->stat_traps_found++;
+            metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_TRAPS_FOUND, 1);
             trap_award_exp(op, trap, SK_FIND_TRAPS);
             /* Mark it as found immediately so repeated checks cannot award
              * experience before trap_show() updates its presentation. */
@@ -182,7 +182,7 @@ int trap_disarm(object *disarmer, object *trap) {
                          trap->level);
         object_remove(trap, 0);
         set_trapped_flag(env);
-        CONTR(disarmer)->stat_traps_disarmed++;
+        metrics_add(&CONTR(disarmer)->metrics, METRIC_CHARACTER_TRAPS_DISARMED, 1);
         trap_award_exp(disarmer, trap, SK_REMOVE_TRAPS);
         return TRAP_DISARM_SUCCESS;
     } else {

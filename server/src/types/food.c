@@ -258,7 +258,9 @@ static int apply_func(object *op, object *applier, int aflags) {
         }
 
         applier->stats.food = MAX(0, MIN(FOOD_MAX, applier->stats.food + ABS(op->stats.food)));
-        CONTR(applier)->stat_food_consumed += op->stats.food;
+        metrics_add(&CONTR(applier)->metrics,
+                    METRIC_CHARACTER_FOOD_POINTS_CONSUMED,
+                    MAX(0, op->stats.food));
 
         /* Heal for a bit */
         applier->stats.hp += MIN(capacity_remaining, op->stats.food) / 50;
@@ -270,7 +272,15 @@ static int apply_func(object *op, object *applier, int aflags) {
         applier->stats.food = MAX(0, MIN(FOOD_MAX, applier->stats.food - ABS(op->stats.food)));
     }
 
-    CONTR(applier)->stat_food_num_consumed++;
+    metrics_add(&CONTR(applier)->metrics, METRIC_CHARACTER_FOOD_ITEMS_CONSUMED, 1);
+    if (op->arch != NULL) {
+        char id[METRICS_UNIQUE_ID_MAX + 1];
+        if (metrics_format_content_id(VS(id), "archetype", op->arch->name)) {
+            metrics_mark_unique(&CONTR(applier)->metrics,
+                                METRIC_COLLECTION_CHARACTER_FOOD_ARCHETYPES_USED,
+                                id);
+        }
+    }
 
     if (op->title != NULL || QUERY_FLAG(op, FLAG_CURSED) || QUERY_FLAG(op, FLAG_DAMNED)) {
         food_eat_special(applier, op);

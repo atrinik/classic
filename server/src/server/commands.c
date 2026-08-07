@@ -69,6 +69,7 @@ TOOLKIT_INIT_FUNC(commands) {
     commands_add(COMMAND(kick), 0.0, COMMAND_PERMISSION);
     commands_add(COMMAND(memfree), 0.0, COMMAND_PERMISSION);
     commands_add(COMMAND(memleak), 0.0, COMMAND_PERMISSION);
+    commands_add(COMMAND(metrics), 0.0, COMMAND_PERMISSION);
     commands_add(COMMAND(mod_chat), 0.0, COMMAND_PERMISSION);
     commands_add(COMMAND(no_chat), 0.0, COMMAND_PERMISSION);
     commands_add(COMMAND(opsay), 0.0, COMMAND_PERMISSION);

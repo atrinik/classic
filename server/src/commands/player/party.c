@@ -327,7 +327,7 @@ void command_party(object *op, const char *command, char *params) {
              * */
             if (party->passwd[0] == '\0' || (cps[1] && strcmp(party->passwd, cps[1]) == 0)) {
                 add_party_member(party, op);
-                CONTR(op)->stat_joined_party++;
+                metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_PARTIES_JOINED, 1);
                 draw_info_format(COLOR_GREEN, op, "You have joined party: %s.", party->name);
                 snprintf(buf, sizeof(buf), "%s joined party %s.", op->name, party->name);
                 send_party_message(party, buf, PARTY_MESSAGE_STATUS, op, op);

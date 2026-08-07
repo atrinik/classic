@@ -160,6 +160,9 @@ static bool container_open(object *applier, object *op) {
         CONTR(op->attacked_by)->container_below = applier;
     } else {
         /* Not open yet. */
+        if (!container_is_corpse(op)) {
+            metrics_add(&pl->metrics, METRIC_CHARACTER_CONTAINERS_OPENED, 1);
+        }
         tag_t tripped_trap = traps_auto_disarm(applier, op);
         SET_FLAG(op, FLAG_APPLIED);
 
@@ -457,7 +460,7 @@ static int apply_func(object *op, object *applier, int aflags) {
     if ((op->sub_type == ST1_CONTAINER_CORPSE_party ||
          op->sub_type == ST1_CONTAINER_CORPSE_player) &&
         !QUERY_FLAG(op, FLAG_BEEN_APPLIED)) {
-        CONTR(applier)->stat_corpses_searched++;
+        metrics_add(&CONTR(applier)->metrics, METRIC_CHARACTER_CORPSES_SEARCHED, 1);
     }
 
     /* Only after actually readying/opening the container we know more

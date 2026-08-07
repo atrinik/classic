@@ -128,8 +128,8 @@ int object_move_to(object *op, int dir, object *originator, mapstruct *m, int x,
         }
     }
 
-    if (op->type == PLAYER) {
-        CONTR(op)->stat_steps_taken++;
+    if (op->type == PLAYER && originator == op) {
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_STEPS, 1);
     }
 
     return 1;

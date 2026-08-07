@@ -33,6 +33,7 @@
 #include <server_main.h>
 #include <server_item.h>
 #include <server.h>
+#include <arch.h>
 #include <player.h>
 #include <object.h>
 #include <object_methods.h>
@@ -72,7 +73,15 @@ static int apply_func(object *op, object *applier, int aflags) {
             return OBJECT_METHOD_OK;
         }
 
-        CONTR(applier)->stat_scrolls_used++;
+        metrics_add(&CONTR(applier)->metrics, METRIC_CHARACTER_SCROLLS_USED, 1);
+        if (op->arch != NULL) {
+            char id[METRICS_UNIQUE_ID_MAX + 1];
+            if (metrics_format_content_id(VS(id), "archetype", op->arch->name)) {
+                metrics_mark_unique(&CONTR(applier)->metrics,
+                                    METRIC_COLLECTION_CHARACTER_SCROLL_ARCHETYPES_USED,
+                                    id);
+            }
+        }
     }
 
     draw_info_format(COLOR_WHITE,

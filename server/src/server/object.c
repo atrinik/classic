@@ -3206,6 +3206,7 @@ bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool
         if (CONTR(op) != NULL) {
             snprintf(VS(CONTR(op)->maplevel), "%s", m->path);
             CONTR(op)->count = 0;
+            metrics_character_visit(CONTR(op), m, oldmap != NULL && oldmap != m);
         }
 
         /* If the player is changing maps, we need to do some special things

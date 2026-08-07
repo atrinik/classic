@@ -90,7 +90,7 @@ void command_rename(object *op, const char *command, char *params) {
         /* Set custom name. */
         FREE_AND_COPY_HASH(tmp->custom_name, params);
         draw_info_format(COLOR_WHITE, op, "Your %s will now be called %s.", name, tmp->custom_name);
-        CONTR(op)->stat_renamed_items++;
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_ITEMS_RENAMED, 1);
         free(name);
     }
 

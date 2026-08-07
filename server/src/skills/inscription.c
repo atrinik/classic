@@ -77,7 +77,7 @@ static int inscribe_book(object *op, const char *msg, object *marked) {
 
     FREE_AND_COPY_HASH(marked->msg, buf);
     draw_info_format(COLOR_WHITE, op, "You write in the %s.", name);
-    CONTR(op)->stat_books_inscribed++;
+    metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_BOOKS_INSCRIBED, 1);
 
     free(name);
     return strlen(msg);

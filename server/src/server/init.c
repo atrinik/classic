@@ -30,7 +30,6 @@
 #include <global.h>
 #include <weather.h>
 #include <swap.h>
-#include <statistics.h>
 #include <server_main.h>
 #include <region.h>
 #include <plugin.h>
@@ -1200,7 +1199,6 @@ void init(int argc, char **argv) {
     if (!settings.provision_scenario) {
         metaserver_init();
     }
-    statistics_init();
     reset_sleep();
     if (!settings.unit_tests && !settings.provision_scenario) {
         init_plugins();

@@ -26,6 +26,7 @@
 #define ACCOUNT_H
 
 #include <decls.h>
+#include <metrics.h>
 
 /**
  * @file
@@ -83,6 +84,10 @@ extern void account_new_char(socket_struct *ns, char *name, char *archname);
 extern void account_login_char(socket_struct *ns, char *name);
 
 extern void account_logout_char(socket_struct *ns, player *pl);
+
+extern void account_character_session_start(socket_struct *ns, player *pl);
+
+extern bool account_metrics_load(const char *name, metric_store_t *metrics);
 
 extern void
 account_password_change(socket_struct *ns, char *password, char *password_new, char *password_new2);

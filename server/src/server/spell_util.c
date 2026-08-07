@@ -395,7 +395,6 @@ int cast_spell(object *op,
     }
 
     if (caster->type == PLAYER) {
-        CONTR(caster)->stat_spells_cast++;
         CONTR(caster)->last_combat = pticks;
     }
 

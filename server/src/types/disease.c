@@ -43,6 +43,8 @@
 #include <object.h>
 #include <object_methods.h>
 #include <disease.h>
+#include <metrics.h>
+#include <player.h>
 
 /**
  * Check if victim is susceptible to disease.
@@ -460,6 +462,7 @@ bool disease_infect(object *op, object *victim, bool force) {
     }
 
     if (victim->type == PLAYER) {
+        metrics_add(&CONTR(victim)->metrics, METRIC_CHARACTER_TIMES_DISEASED, 1);
         draw_info(COLOR_RED, victim, "You suddenly feel ill.");
     }
 

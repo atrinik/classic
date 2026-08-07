@@ -35,6 +35,8 @@
 #include <initialization.h>
 #include <toolkit/string.h>
 #include <arch.h>
+#include <metrics.h>
+#include <player.h>
 
 /**
  * Calculate the price of an item.
@@ -433,6 +435,9 @@ static int64_t shop_pay_amount(object *op, int64_t to_pay) {
  * if money was removed.
  */
 bool shop_pay(object *op, int64_t to_pay) {
+    if (to_pay < 0) {
+        return false;
+    }
     if (to_pay == 0) {
         return true;
     }
@@ -441,6 +446,7 @@ bool shop_pay(object *op, int64_t to_pay) {
         return false;
     }
 
+    int64_t amount = to_pay;
     to_pay = shop_pay_amount(op, to_pay);
     if (to_pay != 0) {
         object *bank = bank_find_info(op);
@@ -464,6 +470,10 @@ bool shop_pay(object *op, int64_t to_pay) {
                    to_pay,
                    object_get_str(op));
 
+    if (op->type == PLAYER) {
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_CURRENCY_SPENT, (uint64_t)amount);
+    }
+
     return true;
 }
 
@@ -477,7 +487,15 @@ bool shop_pay(object *op, int64_t to_pay) {
  * Whether the object was purchased successfully (and money removed).
  */
 bool shop_pay_item(object *op, object *item) {
-    return shop_pay(op, shop_get_cost(item, COST_BUY));
+    int64_t cost = shop_get_cost(item, COST_BUY);
+    if (!shop_pay(op, cost)) {
+        return false;
+    }
+    if (op->type == PLAYER && cost > 0) {
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_SHOP_PURCHASES, 1);
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_SHOP_CURRENCY_SPENT, (uint64_t)cost);
+    }
+    return true;
 }
 
 /**
@@ -581,6 +599,10 @@ void shop_sell_item(object *op, object *item) {
     }
 
     shop_insert_coins(op, value);
+    if (op->type == PLAYER && value > 0) {
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_SHOP_SALES, 1);
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_SHOP_CURRENCY_EARNED, (uint64_t)value);
+    }
     draw_info_format(COLOR_WHITE, op, "You receive %s for %s.", shop_get_cost_string(value), name);
 
     SET_FLAG(item, FLAG_UNPAID);

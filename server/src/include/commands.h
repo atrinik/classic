@@ -155,6 +155,10 @@ extern void command_memfree(object *op, const char *command, char *params);
 
 extern void command_memleak(object *op, const char *command, char *params);
 
+/** Public API implemented in src/commands/permission/metrics.c. */
+
+extern void command_metrics(object *op, const char *command, char *params);
+
 /** Public API implemented in src/commands/permission/mod_chat.c. */
 
 extern void command_mod_chat(object *op, const char *command, char *params);

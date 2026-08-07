@@ -34,6 +34,7 @@
 #include <player.h>
 #include <object.h>
 #include <object_methods.h>
+#include <region.h>
 
 /** @copydoc object_methods_t::apply_func */
 static int apply_func(object *op, object *applier, int aflags) {
@@ -48,6 +49,15 @@ static int apply_func(object *op, object *applier, int aflags) {
     snprintf(VS(CONTR(applier)->savebed_map), "%s", applier->map->path);
     CONTR(applier)->bed_x = applier->x;
     CONTR(applier)->bed_y = applier->y;
+    metrics_add(&CONTR(applier)->metrics, METRIC_CHARACTER_SAVEBEDS_BOUND, 1);
+    if (applier->map->region != NULL && applier->map->region->name != NULL) {
+        char id[METRICS_UNIQUE_ID_MAX + 1];
+        if (metrics_format_content_id(VS(id), "region", applier->map->region->name)) {
+            metrics_mark_unique(&CONTR(applier)->metrics,
+                                METRIC_COLLECTION_CHARACTER_SAVEBED_REGIONS,
+                                id);
+        }
+    }
 
     draw_info(COLOR_WHITE, applier, "You save and your save bed location is updated.");
     hiscore_check(applier, 0);

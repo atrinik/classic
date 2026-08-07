@@ -29,7 +29,6 @@
 
 #include <global.h>
 #include <movement.h>
-#include <statistics.h>
 #include <shop.h>
 #include <server_main.h>
 #include <server_item.h>
@@ -212,6 +211,7 @@ static player *get_player(player *p) {
     p->update_los = 1;
 
     p->last_stats.exp = -1;
+    metrics_store_init(&p->metrics, METRIC_SCOPE_CHARACTER, 0);
 
     return p;
 }
@@ -254,6 +254,7 @@ void free_player(player *pl) {
     }
 
     player_path_clear(pl);
+    metrics_store_free(&pl->metrics);
 
     /* Now remove from list of players. */
     if (pl->prev) {
@@ -566,8 +567,9 @@ static void player_do_some_living(object *op) {
     if (op->stats.hp < op->stats.maxhp && op->stats.food) {
         int add = get_regen_amount(gen_real_hp, &pl->gen_hp_remainder);
         if (add != 0) {
+            int effective = MIN(add, op->stats.maxhp - op->stats.hp);
             op->stats.hp += add;
-            pl->stat_hp_regen += add;
+            metrics_add(&pl->metrics, METRIC_CHARACTER_HP_REGENERATED, (uint64_t)effective);
 
             if (op->stats.hp > op->stats.maxhp) {
                 op->stats.hp = op->stats.maxhp;
@@ -591,8 +593,9 @@ static void player_do_some_living(object *op) {
     if (op->stats.sp < op->stats.maxsp && op->stats.food) {
         int add = get_regen_amount(gen_real_sp, &pl->gen_sp_remainder);
         if (add != 0) {
+            int effective = MIN(add, op->stats.maxsp - op->stats.sp);
             op->stats.sp += add;
-            pl->stat_sp_regen += add;
+            metrics_add(&pl->metrics, METRIC_CHARACTER_MANA_REGENERATED, (uint64_t)effective);
 
             if (op->stats.sp > op->stats.maxsp) {
                 op->stats.sp = op->stats.maxsp;
@@ -666,7 +669,7 @@ static void player_do_some_living(object *op) {
     if ((op->stats.hp <= 0 || op->stats.food < 0) && !pl->tgm) {
         draw_info_format(COLOR_WHITE, NULL, "%s starved to death.", op->name);
         player_set_killer(pl, "starvation");
-        kill_player(op);
+        kill_player(op, false, true);
     }
 }
 
@@ -752,11 +755,12 @@ static void player_death_deplete_stats(object *op) {
  * @param op
  * The player in jeopardy.
  */
-void kill_player(object *op) {
+void kill_player(object *op, bool pvp, bool environmental) {
     char buf[HUGE_BUF];
     object *tmp;
 
     if (pvp_area(NULL, op)) {
+        metrics_character_death(CONTR(op), pvp, environmental);
         draw_info(COLOR_NAVY, op, "You have been defeated in combat!");
         draw_info(COLOR_NAVY, op, "Local medics have saved your life...");
 
@@ -803,11 +807,14 @@ void kill_player(object *op) {
         player_clear_killer(CONTR(op));
 
         /* Teleport defeated player to new destination */
-        transfer_ob(op, MAP_ENTER_X(op->map), MAP_ENTER_Y(op->map), 0, NULL, NULL);
+        if (transfer_ob(op, MAP_ENTER_X(op->map), MAP_ENTER_Y(op->map), 0, NULL, NULL)) {
+            metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_RESPAWNS, 1);
+        }
         return;
     }
 
     if (save_life(op)) {
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_DEATHS_AVOIDED, 1);
         return;
     }
 
@@ -816,7 +823,7 @@ void kill_player(object *op) {
         return;
     }
 
-    CONTR(op)->stat_deaths++;
+    metrics_character_death(CONTR(op), pvp, environmental);
 
     /* Trigger the global GDEATH event */
     trigger_global_event(GEVENT_PLAYER_DEATH, NULL, op);
@@ -880,12 +887,14 @@ void kill_player(object *op) {
     }
 
     /* Move player to his current respawn position (last savebed). */
-    object_enter_map(op,
-                     NULL,
-                     ready_map_name(CONTR(op)->savebed_map, NULL, 0),
-                     CONTR(op)->bed_x,
-                     CONTR(op)->bed_y,
-                     true);
+    if (object_enter_map(op,
+                         NULL,
+                         ready_map_name(CONTR(op)->savebed_map, NULL, 0),
+                         CONTR(op)->bed_x,
+                         CONTR(op)->bed_y,
+                         true)) {
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_RESPAWNS, 1);
+    }
 
     /* Show a nasty message */
     draw_info(COLOR_WHITE, op, "YOU HAVE DIED.");
@@ -2316,7 +2325,9 @@ static void pick_up_object(object *pl, object *op, object *tmp, int nrof, int no
     }
 
     if (pl->type == PLAYER) {
-        CONTR(pl)->stat_items_picked++;
+        metrics_add(&CONTR(pl)->metrics,
+                    METRIC_CHARACTER_ITEM_UNITS_PICKED_UP,
+                    (uint64_t)MAX(1, nrof));
     }
 
     tmp = get_pickup_object(pl, tmp, nrof);
@@ -2541,7 +2552,9 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
     tmp = object_stack_get_removed(tmp, nrof);
 
     if (op->type == PLAYER) {
-        CONTR(op)->stat_items_dropped++;
+        metrics_add(&CONTR(op)->metrics,
+                    METRIC_CHARACTER_ITEM_UNITS_DROPPED,
+                    (uint64_t)MAX(1, tmp->nrof));
     }
 
     if (QUERY_FLAG(tmp, FLAG_STARTEQUIP) || QUERY_FLAG(tmp, FLAG_UNPAID)) {
@@ -2702,6 +2715,9 @@ void player_save(object *op) {
 
     /* Is this a map players can't save on? */
     if (op->map != NULL && MAP_PLAYER_NO_SAVE(op->map)) {
+        if (!metrics_character_save(CONTR(op))) {
+            draw_info(COLOR_RED, op, "Your character metrics couldn't be saved.");
+        }
         return;
     }
 
@@ -2763,6 +2779,10 @@ void player_save(object *op) {
     if (unlikely(path_rename(path_tmp, path) != 0)) {
         LOG(ERROR, "Failure renaming %s to %s: %s", path_tmp, path, strerror(errno));
         goto error;
+    }
+
+    if (!metrics_character_save(pl)) {
+        draw_info(COLOR_RED, op, "Your character metrics couldn't be saved.");
     }
 
     goto out;
@@ -3131,6 +3151,19 @@ void player_login(socket_struct *ns, const char *name, struct archetype *at) {
     object_weight_sum(pl->ob);
     living_update_player(pl->ob);
     link_player_skills(pl->ob);
+    if (pl->metrics.epoch == 0) {
+        server_wall_utc_t now = server_wall_utc_now();
+        pl->metrics.epoch = now.seconds > 0 ? (uint64_t)now.seconds : 0;
+        pl->metrics.dirty = true;
+    }
+    metrics_character_load(pl);
+    if (statbuf.st_size == 0) {
+        server_wall_utc_t now = server_wall_utc_now();
+        metrics_set(&pl->metrics,
+                    METRIC_CHARACTER_CREATED_AT,
+                    now.seconds > 0 ? (uint64_t)now.seconds : 0);
+    }
+    metrics_character_backfill(pl);
 
     pl->cs->state = ST_PLAYING;
 
@@ -3181,6 +3214,10 @@ void player_login(socket_struct *ns, const char *name, struct archetype *at) {
         trigger_map_event(MEVENT_LOGIN, pl->ob->map, pl->ob, NULL, NULL, NULL, 0);
     }
 
+    metrics_character_session_start(pl);
+    metrics_character_visit(pl, pl->ob->map, false);
+    account_character_session_start(pl->cs, pl);
+
 out:
     if (fp != NULL) {
         fclose(fp);
@@ -3208,7 +3245,7 @@ void player_logout(player *pl) {
     char connection_id[SOCKET_CONNECTION_ID_SIZE];
     memcpy(connection_id, socket_get_id(pl->cs->sc), sizeof(connection_id));
     trigger_global_event(GEVENT_LOGOUT, pl->ob, connection_id);
-    statistics_player_logout(pl);
+    metrics_character_session_end(pl);
 
     draw_info_format(COLOR_DK_ORANGE, NULL, "%s left the game.", pl->ob->name);
 
@@ -3499,17 +3536,6 @@ static void process_func(object *op) {
         hiscore_check(pl->ob, 1);
     }
 #endif
-
-    /* Update total playing time. */
-    if (pl->cs->state == ST_PLAYING && time(NULL) > pl->last_stat_time_played) {
-        pl->last_stat_time_played = time(NULL);
-
-        if (pl->afk) {
-            pl->stat_time_afk++;
-        } else {
-            pl->stat_time_played++;
-        }
-    }
 
     /* Check if our target is still valid - if not, update client. */
     if (pl->ob->map &&

@@ -567,6 +567,30 @@ struct plugin_hooklist
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                *,
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            object
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                *)
+                                                                PLUGIN_HOOK_FUNCTION(bool,
+                                                                                     metrics_character_add_by_name,
+                                                                                     player *,
+                                                                                     const char *,
+                                                                                     uint64_t)
+                                                                PLUGIN_HOOK_FUNCTION(bool,
+                                                                                     metrics_character_keyed_add_by_name,
+                                                                                     player *,
+                                                                                     const char *,
+                                                                                     const char *,
+                                                                                     uint64_t)
+                                                                PLUGIN_HOOK_FUNCTION(bool,
+                                                                                     metrics_character_mark_unique_by_name,
+                                                                                     player *,
+                                                                                     const char *,
+                                                                                     const char *)
+                                                                PLUGIN_HOOK_FUNCTION(void,
+                                                                                     metrics_character_spells_changed,
+                                                                                     player *)
+                                                                PLUGIN_HOOK_FUNCTION(bool,
+                                                                                     metrics_character_quest_status,
+                                                                                     player *,
+                                                                                     const char *,
+                                                                                     int)
 
                                                                 PLUGIN_HOOK_ARRAY(const char *, season_name) PLUGIN_HOOK_ARRAY(
                                                                     const char *,
