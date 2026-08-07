@@ -22,16 +22,30 @@
         "BUILD_TESTING": true,
         "PACKAGE_TYPE": "none"
       }
+    },
+    {
+      "name": "linux-coverage",
+      "inherits": "linux-debug",
+      "binaryDir": "${sourceDir}/build/linux-coverage",
+      "cacheVariables": {
+        "ENABLE_COVERAGE": true
+      }
     }
   ],
   "buildPresets": [
     {"name": "linux-debug", "configurePreset": "linux-debug"},
+    {"name": "linux-coverage", "configurePreset": "linux-coverage"},
     {"name": "linux-release", "configurePreset": "linux-release"}
   ],
   "testPresets": [
     {
       "name": "linux-debug",
       "configurePreset": "linux-debug",
+      "output": {"outputOnFailure": true}
+    },
+    {
+      "name": "linux-coverage",
+      "configurePreset": "linux-coverage",
       "output": {"outputOnFailure": true}
     },
     {

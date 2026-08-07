@@ -62,7 +62,7 @@ Section "Client (required)"
   File "atrinik.exe"
   File "*.dll"
   File "COPYING"
-  File "README"
+  File "README.md"
   File "INSTALL"
   File "timidity.cfg"
 
