@@ -31,6 +31,8 @@
 #include <toolkit/string.h>
 #include <arch.h>
 #include <object.h>
+#include <metrics.h>
+#include <player.h>
 
 START_TEST(test_bank_find_info) {
     mapstruct *map;
@@ -119,6 +121,9 @@ START_TEST(test_bank_deposit) {
     ck_assert_uint_eq(value, 0);
     ck_assert_uint_eq(bank_get_balance(pl), total);
     ck_assert_uint_eq(shop_get_money(pl), total);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_BANK_DEPOSITS), 4);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_BANK_CURRENCY_DEPOSITED),
+                      total);
 }
 END_TEST
 
@@ -208,6 +213,9 @@ START_TEST(test_bank_withdraw) {
     ck_assert_uint_eq(value, 0);
     ck_assert_uint_eq(bank_get_balance(pl), 0);
     ck_assert_uint_eq(shop_get_money(pl), total);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_BANK_WITHDRAWALS), 3);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_BANK_CURRENCY_WITHDRAWN),
+                      total);
 }
 END_TEST
 

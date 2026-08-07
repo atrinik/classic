@@ -28,7 +28,6 @@
  */
 
 #include <global.h>
-#include <statistics.h>
 #include <server_main.h>
 #include <server_item.h>
 #include <server.h>
@@ -400,6 +399,10 @@ int attack_object(object *op, object *hitter) {
         return MAX(0, ret);
     }
 
+    object *metrics_owner = OWNER(hitter);
+    bool metrics_melee = hitter->type == PLAYER;
+    bool metrics_projectile = hitter->type == ARROW && metrics_owner->type == PLAYER;
+
     /* Face the victim. */
     rv_vector dir;
     if (get_rangevector(hitter, op, &dir, 0)) {
@@ -420,6 +423,9 @@ int attack_object(object *op, object *hitter) {
 
     if (unlikely(hitter->stats.dam == 0)) {
         return 0;
+    }
+    if (metrics_melee) {
+        metrics_add(&CONTR(metrics_owner)->metrics, METRIC_CHARACTER_MELEE_ATTACKS, 1);
     }
 
     int roll_adjust = 0;
@@ -525,6 +531,14 @@ int attack_object(object *op, object *hitter) {
 #endif
     }
     OBJECTS_DESTROYED_END();
+
+    if (dam > 0 && metrics_owner->type == PLAYER) {
+        if (metrics_melee) {
+            metrics_add(&CONTR(metrics_owner)->metrics, METRIC_CHARACTER_MELEE_HITS, 1);
+        } else if (metrics_projectile) {
+            metrics_add(&CONTR(metrics_owner)->metrics, METRIC_CHARACTER_PROJECTILE_HITS, 1);
+        }
+    }
 
     return dam;
 }
@@ -878,12 +892,10 @@ int attack_hit(object *op, object *hitter, int dam) {
 
     if (hitter_owner->type == PLAYER) {
         CONTR(hitter_owner)->last_combat = pticks;
-        CONTR(hitter_owner)->stat_damage_dealt += maxdam;
     }
 
     if (op->type == PLAYER) {
         CONTR(op)->last_combat = pticks;
-        CONTR(op)->stat_damage_taken += maxdam;
         if (maxdam > 0.0) {
             play_sound_player_only(CONTR(op),
                                    CMD_SOUND_EFFECT,
@@ -903,6 +915,25 @@ int attack_hit(object *op, object *hitter, int dam) {
      * object's hp. */
     if (maxdam > op->stats.hp) {
         maxdam = op->stats.hp;
+    }
+
+    if (maxdam > 0 && hitter_owner->type == PLAYER) {
+        metrics_add(&CONTR(hitter_owner)->metrics, METRIC_CHARACTER_DAMAGE_DEALT, (uint64_t)maxdam);
+        metrics_update_max(&CONTR(hitter_owner)->metrics,
+                           METRIC_CHARACTER_LARGEST_HIT_DEALT,
+                           (uint64_t)maxdam);
+    }
+    if (maxdam > 0 && op->type == PLAYER) {
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_DAMAGE_TAKEN, (uint64_t)maxdam);
+        metrics_update_max(&CONTR(op)->metrics,
+                           METRIC_CHARACTER_LARGEST_HIT_TAKEN,
+                           (uint64_t)maxdam);
+    }
+    if (maxdam > 0 && hitter_owner->type == PLAYER && op->type == PLAYER) {
+        metrics_add(&CONTR(hitter_owner)->metrics,
+                    METRIC_CHARACTER_PVP_DAMAGE_DEALT,
+                    (uint64_t)maxdam);
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_PVP_DAMAGE_TAKEN, (uint64_t)maxdam);
     }
 
     object *damage_skill = hitter->chosen_skill;
@@ -1208,9 +1239,28 @@ bool attack_kill(object *op, object *hitter) {
         free(name);
 
         if (op->type == MONSTER) {
-            CONTR(owner)->stat_kills_mob++;
-            statistic_update("kills", owner, 1, op->name);
-
+            metrics_add(&CONTR(owner)->metrics, METRIC_CHARACTER_MONSTERS_KILLED, 1);
+            if (op->arch != NULL) {
+                char id[METRICS_UNIQUE_ID_MAX + 1];
+                if (metrics_format_content_id(VS(id), "archetype", op->arch->name)) {
+                    metrics_keyed_add(&CONTR(owner)->metrics,
+                                      METRIC_KEYED_CHARACTER_MONSTER_KILLS,
+                                      id,
+                                      1);
+                }
+            }
+            if (op->race != NULL) {
+                char id[METRICS_UNIQUE_ID_MAX + 1];
+                if (metrics_format_content_id(VS(id), "monster-family", op->race)) {
+                    metrics_keyed_add(&CONTR(owner)->metrics,
+                                      METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_FAMILY,
+                                      id,
+                                      1);
+                }
+            }
+            if (CONTR(owner)->party != NULL) {
+                metrics_add(&CONTR(owner)->metrics, METRIC_CHARACTER_PARTY_KILLS, 1);
+            }
             if (object_get_value(op, "was_provoked") == NULL) {
                 shstr *faction_name = object_get_value(op, "faction");
                 if (faction_name != NULL) {
@@ -1223,7 +1273,7 @@ bool attack_kill(object *op, object *hitter) {
                 }
             }
         } else if (op->type == PLAYER) {
-            CONTR(owner)->stat_kills_pvp++;
+            metrics_add(&CONTR(owner)->metrics, METRIC_CHARACTER_PVP_KILLS, 1);
         }
     }
 
@@ -1293,7 +1343,7 @@ bool attack_kill(object *op, object *hitter) {
         free(owner_name);
 
         /* And actually kill the player. */
-        kill_player(op);
+        kill_player(op, owner->type == PLAYER, owner->type != PLAYER && owner->type != MONSTER);
     } else {
         /* Monster or something else has been killed, so remove it from the
          * active list. */
@@ -1387,6 +1437,7 @@ void attack_perform_poison(object *op, object *hitter, double dam) {
         SOFT_ASSERT(tmp != NULL, "Failed to insert poisoning into %s", object_get_str(op));
 
         if (op->type == PLAYER) {
+            metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_TIMES_POISONED, 1);
             char *name = object_get_name_s(hitter, op);
             draw_info_format(COLOR_WHITE, op, "%s has poisoned you!", name);
             free(name);

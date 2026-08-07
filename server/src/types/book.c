@@ -38,6 +38,7 @@
 #include <exp.h>
 #include <object_methods.h>
 #include <artifact.h>
+#include <arch.h>
 
 #include "common/process_treasure.h"
 
@@ -120,7 +121,7 @@ static int apply_func(object *op, object *applier, int aflags) {
     }
 
     draw_info_format(COLOR_WHITE, applier, "You open the %s and start reading.", op->name);
-    CONTR(applier)->stat_books_read++;
+    metrics_add(&CONTR(applier)->metrics, METRIC_CHARACTER_BOOKS_READ, 1);
 
     packet_struct *packet = packet_new(CLIENT_CMD_BOOK, 512, 512);
     packet_debug_data(packet, 0, "Book interface header");
@@ -135,7 +136,17 @@ static int apply_func(object *op, object *applier, int aflags) {
 
     /* Gain xp from reading but only if not read before. */
     if (!QUERY_FLAG(op, FLAG_NO_SKILL_IDENT)) {
-        CONTR(applier)->stat_unique_books_read++;
+        metrics_add(&CONTR(applier)->metrics, METRIC_CHARACTER_UNIQUE_BOOKS_READ, 1);
+        if (op->arch != NULL) {
+            const char *domain = op->artifact != NULL ? "artifact" : "archetype";
+            const char *key = op->artifact != NULL ? op->artifact : op->arch->name;
+            char id[METRICS_UNIQUE_ID_MAX + 1];
+            if (metrics_format_content_id(VS(id), domain, key)) {
+                metrics_mark_unique(&CONTR(applier)->metrics,
+                                    METRIC_COLLECTION_CHARACTER_BOOKS_READ,
+                                    id);
+            }
+        }
 
         /* Store original exp value. We want to keep the experience cap
          * from calc_skill_exp() below, so we temporarily adjust the exp

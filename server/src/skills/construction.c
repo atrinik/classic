@@ -35,6 +35,23 @@
 #include <player.h>
 #include <object.h>
 
+static void construction_record_success(object *op,
+                                        metric_id_t metric,
+                                        metric_keyed_id_t keyed,
+                                        const archetype_t *arch) {
+    player *pl = CONTR(op);
+    metrics_add(&pl->metrics, METRIC_CHARACTER_SUCCESSFUL_SKILL_USES, 1);
+    const char *skill_id = skill_id_from_index(SK_CONSTRUCTION);
+    char id[METRICS_UNIQUE_ID_MAX + 1];
+    if (skill_id != NULL && metrics_format_content_id(VS(id), "skill", skill_id)) {
+        metrics_keyed_add(&pl->metrics, METRIC_KEYED_CHARACTER_SKILL_SUCCESSFUL_USES, id, 1);
+    }
+    metrics_add(&pl->metrics, metric, 1);
+    if (arch != NULL && metrics_format_content_id(VS(id), "archetype", arch->name)) {
+        metrics_keyed_add(&pl->metrics, keyed, id, 1);
+    }
+}
+
 /**
  * Check if objects on a square interfere with building.
  * @param m
@@ -656,6 +673,10 @@ static void construction_builder(object *op, int x, int y) {
     if (built) {
         decrease_ob(material);
         living_update(op);
+        construction_record_success(op,
+                                    METRIC_CHARACTER_CONSTRUCTIONS_BUILT,
+                                    METRIC_KEYED_CHARACTER_CONSTRUCTIONS_BUILT,
+                                    new_arch);
     }
 }
 
@@ -718,6 +739,11 @@ static void construction_destroyer(object *op, int x, int y) {
     char *name = object_get_name_s(item, op);
     draw_info_format(COLOR_WHITE, op, "You remove the %s.", name);
     free(name);
+
+    construction_record_success(op,
+                                METRIC_CHARACTER_CONSTRUCTIONS_REMOVED,
+                                METRIC_KEYED_CHARACTER_CONSTRUCTIONS_REMOVED,
+                                item->arch);
 
     object_destroy(item);
 }

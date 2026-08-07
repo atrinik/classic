@@ -32,6 +32,7 @@
 
 #include <decls.h>
 #include <attack.h>
+#include <metrics.h>
 
 /** Level color structure. */
 typedef struct _level_color {
@@ -318,119 +319,41 @@ struct pl_player {
     /** Skill experience for all skills. */
     int64_t skill_exp[NROFSKILLS];
 
-    /** Number of deaths. */
-    uint64_t stat_deaths;
+    /** Durable, authoritative per-character gameplay metrics. */
+    metric_store_t metrics;
 
-    /** Number of monsters killed. */
-    uint64_t stat_kills_mob;
+    /** Monotonic beginning of the current successfully started session. */
+    server_monotonic_t metrics_session_started;
 
-    /** Number of players killed in PvP. */
-    uint64_t stat_kills_pvp;
+    /** Monotonic beginning of the current active/AFK timing segment. */
+    server_monotonic_t metrics_segment_started;
 
-    /** Total damage taken. */
-    uint64_t stat_damage_taken;
+    /** Whole active seconds accumulated in the current session. */
+    uint64_t metrics_session_active_seconds;
 
-    /** Total damage dealt. */
-    uint64_t stat_damage_dealt;
+    /** Duration of the most recently ended session. */
+    uint64_t metrics_completed_session_seconds;
 
-    /** HP regenerated. */
-    uint64_t stat_hp_regen;
+    /** Whole session seconds already added at a persistence checkpoint. */
+    uint64_t metrics_session_accounted_seconds;
 
-    /** Mana regenerated. */
-    uint64_t stat_sp_regen;
+    /** Subsecond remainder retained across active timing checkpoints. */
+    uint64_t metrics_active_remainder_us;
 
-    /** How many food points have been consumed. */
-    uint64_t stat_food_consumed;
+    /** Subsecond remainder retained across AFK timing checkpoints. */
+    uint64_t metrics_afk_remainder_us;
 
-    /** Number of food items consumed. */
-    uint64_t stat_food_num_consumed;
+    /** Subsecond remainder retained across party timing checkpoints. */
+    uint64_t metrics_party_remainder_us;
 
-    /** Amount of HP healed using heal spells. */
-    uint64_t stat_damage_healed;
+    /** Whether authoritative progression occurred in the current session. */
+    bool metrics_session_progressed;
 
-    /** Amount of HP healed using heal spells on friendly targets. */
-    uint64_t stat_damage_healed_other;
+    /** Whether the current timing segment is AFK time. */
+    bool metrics_segment_afk;
 
-    /** Amount of HP healed by receiving healing from friendly creatures. */
-    uint64_t stat_damage_heal_received;
-
-    /** Number of steps taken. */
-    uint64_t stat_steps_taken;
-
-    /** Number of spells cast. */
-    uint64_t stat_spells_cast;
-
-    /** Number of seconds played. */
-    uint64_t stat_time_played;
-
-    /** Number of seconds spent AFK. */
-    uint64_t stat_time_afk;
-
-    /** Cache for value of ::stat_time_played. */
-    time_t last_stat_time_played;
-
-    /** Number of arrows/bolts/etc fired. */
-    uint64_t stat_arrows_fired;
-
-    /** Number of missiles thrown. */
-    uint64_t stat_missiles_thrown;
-
-    /** Number of books read. */
-    uint64_t stat_books_read;
-
-    /** Number of unique books read (the ones that give exp). */
-    uint64_t stat_unique_books_read;
-
-    /** Number of potions used. */
-    uint64_t stat_potions_used;
-
-    /** Number of scrolls used. */
-    uint64_t stat_scrolls_used;
-
-    /** Total experience gained. */
-    uint64_t stat_exp_gained;
-
-    /** Total experience lost. */
-    uint64_t stat_exp_lost;
-
-    /** Total number of items dropped. */
-    uint64_t stat_items_dropped;
-
-    /** Total number of items picked up. */
-    uint64_t stat_items_picked;
-
-    /** Total number of unique corpses searched. */
-    uint64_t stat_corpses_searched;
-
-    /** Number of traps found using the find traps skill. */
-    uint64_t stat_traps_found;
-
-    /** Number of traps successfully disarmed. */
-    uint64_t stat_traps_disarmed;
-
-    /** Number of traps sprung. */
-    uint64_t stat_traps_sprung;
-
-    /** Number of times the player has enabled AFK mode. */
-    uint64_t stat_afk_used;
-
-    /** Number of times the player has formed a party. */
-    uint64_t stat_formed_party;
-
-    /** Number of times the player has joined a party. */
-    uint64_t stat_joined_party;
-
-    /** Number of items the player has renamed an item. */
-    uint64_t stat_renamed_items;
-
-    /** Number of times the player has used an emote command. */
-    uint64_t stat_emotes_used;
-
-    /**
-     * Number of times the player used inscription skill to write in a
-     * book.
-     */
-    uint64_t stat_books_inscribed;
+    /** A malformed sidecar is preserved and never overwritten this session. */
+    bool metrics_load_failed;
 
     /** Count of target. */
     uint32_t target_object_count;
@@ -598,7 +521,7 @@ void display_motd(object *op);
 void free_player(player *pl);
 void give_initial_items(object *pl, treasure_list_t *items);
 int handle_newcs_player(player *pl);
-void kill_player(object *op);
+void kill_player(object *op, bool pvp, bool environmental);
 void cast_dust(object *op, object *throw_ob, int dir);
 int pvp_area(object *attacker, object *victim);
 object *find_skill(object *op, int skillnr);

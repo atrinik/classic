@@ -424,6 +424,9 @@ int cast_heal(object *op, object *caster, int level, object *target, int spell_t
 
             if (disease_cure(target, caster)) {
                 success = 1;
+                if (op != target && op->type == PLAYER && target->type == PLAYER) {
+                    metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_DISEASE_CURED, 1);
+                }
             }
 
             break;
@@ -453,6 +456,9 @@ int cast_heal(object *op, object *caster, int level, object *target, int spell_t
             }
 
             if (success) {
+                if (op != target && op->type == PLAYER && target->type == PLAYER) {
+                    metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_POISON_CURED, 1);
+                }
                 if (target->type == PLAYER) {
                     draw_info(COLOR_WHITE, target, "Your body feels cleansed.");
                 }
@@ -628,18 +634,21 @@ int cast_heal(object *op, object *caster, int level, object *target, int spell_t
         if (target->stats.hp < target->stats.maxhp) {
             if (target == op) {
                 if (op->type == PLAYER) {
-                    CONTR(op)->stat_damage_healed +=
-                        MIN(heal, target->stats.maxhp - target->stats.hp);
+                    metrics_add(&CONTR(op)->metrics,
+                                METRIC_CHARACTER_HEALING_SELF,
+                                (uint64_t)MIN(heal, target->stats.maxhp - target->stats.hp));
                 }
             } else {
                 if (op->type == PLAYER) {
-                    CONTR(op)->stat_damage_healed_other +=
-                        MIN(heal, target->stats.maxhp - target->stats.hp);
+                    metrics_add(&CONTR(op)->metrics,
+                                METRIC_CHARACTER_HEALING_OTHERS,
+                                (uint64_t)MIN(heal, target->stats.maxhp - target->stats.hp));
                 }
 
                 if (target->type == PLAYER) {
-                    CONTR(target)->stat_damage_heal_received +=
-                        MIN(heal, target->stats.maxhp - target->stats.hp);
+                    metrics_add(&CONTR(target)->metrics,
+                                METRIC_CHARACTER_HEALING_RECEIVED,
+                                (uint64_t)MIN(heal, target->stats.maxhp - target->stats.hp));
                 }
             }
 

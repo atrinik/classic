@@ -28,6 +28,11 @@ metrics, watchdogs, session elapsed time, and bounded worker waits. Its absolute
 value is process-local: never persist it, log it as a calendar fact, or send it
 as a meaningful protocol timestamp.
 
+Character session, active-play, and AFK metrics use this domain. Normal
+character saves checkpoint whole elapsed seconds while retaining subsecond
+remainders in memory; logout accounts for the final segment. Persisted metric
+timestamps and the collection epoch use the UTC wall domain instead.
+
 ### UTC wall time
 
 `server_wall_utc_t` is a Unix timestamp. Use it only for durable calendar facts
@@ -79,7 +84,7 @@ use the typed service.
 | `src/server/account.c` (`datetime_getutc`) | Persisted account timestamps are correct wall facts; authentication-work refill is an in-process duration and is in the wrong domain. | Keep persisted facts as typed wall time and migrate work refill to monotonic time. |
 | `src/server/swap.c` (`time(NULL)`) | Converts persisted map reset targets into remaining time during shutdown. Correct persistence boundary, but negative and unreasonable values are not clamped here. | Route through wall time and `server_wall_utc_remaining()` with a map-reset-specific maximum. |
 | `types/player.c` gravestone timestamp | Authored calendar text. Correct wall domain. | Route through wall accessor before formatting. |
-| `types/player.c` save throttling and session counters | In-process durations use wall time and can be distorted by clock changes. | Store monotonic session/save deadlines; persist only validated UTC facts that must survive restart. This is the session/autosave stage needed by issue #123. |
+| `types/player.c` save throttling | Compile-time `SAVE_INTERVAL` throttling still uses wall time and can be distorted by clock changes. Authoritative session, active-play, and AFK metrics now use typed monotonic time. | Store a typed monotonic save deadline; persisted metric timestamps remain validated UTC facts. |
 
 The gameplay migration order is: monster-dialog and encounter expiry; named
 spawn cooldowns; target-dummy measurement windows; then action wind-ups and

@@ -211,7 +211,15 @@ static int apply_func(object *op, object *applier, int aflags) {
         identify(op);
     }
 
-    CONTR(applier)->stat_potions_used++;
+    metrics_add(&CONTR(applier)->metrics, METRIC_CHARACTER_POTIONS_USED, 1);
+    if (op->arch != NULL) {
+        char id[METRICS_UNIQUE_ID_MAX + 1];
+        if (metrics_format_content_id(VS(id), "archetype", op->arch->name)) {
+            metrics_mark_unique(&CONTR(applier)->metrics,
+                                METRIC_COLLECTION_CHARACTER_POTION_ARCHETYPES_USED,
+                                id);
+        }
+    }
 
     /* REMOVEME:
      * Old potions of remove depletion used a custom flag instead of using

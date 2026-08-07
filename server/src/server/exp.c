@@ -490,10 +490,27 @@ int64_t add_exp(object *op, int64_t exp_gain, int skill_nr, int exact) {
             }
         }
 
-        CONTR(op)->stat_exp_gained += exp_gain;
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_EXPERIENCE_GAINED, (uint64_t)exp_gain);
+        const char *skill_id = skill_id_from_index(skill_nr);
+        char id[METRICS_UNIQUE_ID_MAX + 1];
+        if (skill_id != NULL && metrics_format_content_id(VS(id), "skill", skill_id)) {
+            metrics_keyed_add(&CONTR(op)->metrics,
+                              METRIC_KEYED_CHARACTER_SKILL_EXPERIENCE_GAINED,
+                              id,
+                              (uint64_t)exp_gain);
+        }
+        metrics_character_progressed(CONTR(op));
     } else if (exp_gain < 0) {
         link_player_skills(op);
-        CONTR(op)->stat_exp_lost += -exp_gain;
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_EXPERIENCE_LOST, (uint64_t)-exp_gain);
+        const char *skill_id = skill_id_from_index(skill_nr);
+        char id[METRICS_UNIQUE_ID_MAX + 1];
+        if (skill_id != NULL && metrics_format_content_id(VS(id), "skill", skill_id)) {
+            metrics_keyed_add(&CONTR(op)->metrics,
+                              METRIC_KEYED_CHARACTER_SKILL_EXPERIENCE_LOST,
+                              id,
+                              (uint64_t)-exp_gain);
+        }
     }
 
     /* Notify the player of the exp gain/loss. */
@@ -563,6 +580,33 @@ int exp_lvl_adj(object *who, object *op) {
     if (op->level < MAXLEVEL && op->stats.exp >= (int64_t)level_exp(op->level + 1, 1.0)) {
         op->level++;
 
+        if (op->type == PLAYER) {
+            metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_LEVELS_GAINED, 1);
+            server_wall_utc_t now = server_wall_utc_now();
+            metrics_set(&CONTR(op)->metrics,
+                        METRIC_CHARACTER_LAST_LEVEL_GAINED_AT,
+                        now.seconds > 0 ? (uint64_t)now.seconds : 0);
+            metrics_set(&CONTR(op)->metrics, METRIC_CHARACTER_CURRENT_LEVEL, op->level);
+            metrics_update_max(&CONTR(op)->metrics, METRIC_CHARACTER_HIGHEST_LEVEL, op->level);
+        } else if (who->type == PLAYER && op->type == SKILL) {
+            const char *skill_id = skill_id_from_index(op->stats.sp);
+            char id[METRICS_UNIQUE_ID_MAX + 1];
+            if (skill_id != NULL && metrics_format_content_id(VS(id), "skill", skill_id)) {
+                metrics_keyed_set(&CONTR(who)->metrics,
+                                  METRIC_KEYED_CHARACTER_SKILL_CURRENT_LEVEL,
+                                  id,
+                                  op->level);
+                metrics_keyed_update_max(&CONTR(who)->metrics,
+                                         METRIC_KEYED_CHARACTER_SKILL_HIGHEST_LEVEL,
+                                         id,
+                                         op->level);
+                metrics_keyed_add(&CONTR(who)->metrics,
+                                  METRIC_KEYED_CHARACTER_SKILL_LEVELS_GAINED,
+                                  id,
+                                  1);
+            }
+        }
+
         if (op->level > 1 && op->type == SKILL) {
             draw_info_format(COLOR_RED,
                              who,
@@ -577,6 +621,19 @@ int exp_lvl_adj(object *who, object *op) {
         return exp_lvl_adj(who, op) + 1;
     } else if (op->level > 1 && op->stats.exp < (int64_t)level_exp(op->level, 1.0)) {
         op->level--;
+
+        if (op->type == PLAYER) {
+            metrics_set(&CONTR(op)->metrics, METRIC_CHARACTER_CURRENT_LEVEL, op->level);
+        } else if (who->type == PLAYER && op->type == SKILL) {
+            const char *skill_id = skill_id_from_index(op->stats.sp);
+            char id[METRICS_UNIQUE_ID_MAX + 1];
+            if (skill_id != NULL && metrics_format_content_id(VS(id), "skill", skill_id)) {
+                metrics_keyed_set(&CONTR(who)->metrics,
+                                  METRIC_KEYED_CHARACTER_SKILL_CURRENT_LEVEL,
+                                  id,
+                                  op->level);
+            }
+        }
 
         if (op->type == SKILL) {
             draw_info_format(COLOR_RED,

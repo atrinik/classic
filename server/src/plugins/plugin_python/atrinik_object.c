@@ -1304,6 +1304,10 @@ Atrinik_Object_CreateObject(Atrinik_Object *self, PyObject *args, PyObject *keyw
     }
 
     tmp = hooks->object_insert_into(tmp, self->obj, 0);
+    if (tmp != NULL && self->obj->type == PLAYER && tmp->type == SPELL) {
+        hooks->metrics_character_add_by_name(CONTR(self->obj), "magic.spells_learned", 1);
+        hooks->metrics_character_spells_changed(CONTR(self->obj));
+    }
 
     return wrap_object(tmp);
 }

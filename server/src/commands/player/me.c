@@ -45,6 +45,8 @@ void command_me(object *op, const char *command, char *params) {
         return;
     }
 
+    metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_EMOTES_USED, 1);
+
     LOG(CHAT, "[ME] [%s] %s", op->name, params);
     snprintf(buf, sizeof(buf), "[a=#charname]%s[/a] %s", op->name, params);
     draw_info_map(CHAT_TYPE_LOCAL,

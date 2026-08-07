@@ -165,6 +165,8 @@ static void quest_check_item_drop(object *op, object *quest, object *quest_pl, o
         /* Insert it inside player's quest container. */
         object_insert_into(quest_pl, CONTR(op)->quest_container, 0);
 
+        metrics_character_quest_status(CONTR(op), quest->name, QUEST_STATUS_COMPLETED);
+
         snprintf(VS(buf), "You solved the one drop quest %s!\n", QUEST_NAME(quest_pl));
     } else {
         char *name = object_get_short_name_s(clone, op);

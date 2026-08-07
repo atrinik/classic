@@ -109,6 +109,8 @@ static int apply_func(object *op, object *applier, int aflags) {
                                  tmp->name);
                 object_remove(tmp, 0);
                 object_destroy(tmp);
+                metrics_add(&pl->metrics, METRIC_CHARACTER_SPELLS_FORGOTTEN, 1);
+                metrics_character_spells_changed(pl);
             }
         }
 
@@ -171,6 +173,8 @@ static int apply_func(object *op, object *applier, int aflags) {
                          applier,
                          "You succeed in learning %s.",
                          spell->at->clone.name);
+        metrics_add(&pl->metrics, METRIC_CHARACTER_SPELLS_LEARNED, 1);
+        metrics_character_spells_changed(pl);
     }
 
     object_decrease(op, 1);
