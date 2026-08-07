@@ -30,6 +30,7 @@ include(FetchContent)
 
 option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
 option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
+option(ENABLE_COVERAGE "Enable GCC coverage instrumentation" OFF)
 set(PACKAGE_TYPE "none" CACHE STRING "Package type (none, deb, rpm, nsis, or zip)")
 
 set(PACKAGE_VERSION "${PROJECT_VERSION}" CACHE STRING
@@ -67,6 +68,17 @@ function(atrinik_configure_target target)
             -fsanitize=address,undefined -fno-omit-frame-pointer)
         target_link_options(${target} PRIVATE
             -fsanitize=address,undefined -fno-omit-frame-pointer)
+    endif ()
+    if (ENABLE_COVERAGE)
+        if (NOT CMAKE_C_COMPILER_ID STREQUAL "GNU")
+            message(FATAL_ERROR "ENABLE_COVERAGE requires GCC")
+        endif ()
+        target_compile_options(${target} PRIVATE
+            --coverage -fprofile-abs-path -O0 -g)
+        get_target_property(target_type ${target} TYPE)
+        if (target_type MATCHES "^(EXECUTABLE|MODULE_LIBRARY|SHARED_LIBRARY)$")
+            target_link_options(${target} PRIVATE --coverage)
+        endif ()
     endif ()
 endfunction()
 
@@ -285,7 +297,7 @@ if (NOT WIN32 OR UNIX)
 endif ()
 install(FILES
         ${CMAKE_SOURCE_DIR}/INSTALL
-        ${CMAKE_CURRENT_SOURCE_DIR}/README
+        ${CMAKE_CURRENT_SOURCE_DIR}/README.md
         ${CMAKE_CURRENT_SOURCE_DIR}/COPYING
         ${CMAKE_CURRENT_SOURCE_DIR}/client.cfg
         DESTINATION ${INSTALL_SUBDIR_DOC})
@@ -299,7 +311,7 @@ include(InstallRequiredSystemLibraries)
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Fantasy multiplayer online role-playing game")
 set(CPACK_PACKAGE_VENDOR "Atrinik Development Team")
 set(CPACK_PACKAGE_CONTACT "Atrinik Development Team <admin@atrinik.org>")
-set(CPACK_PACKAGE_DESCRIPTION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/README")
+set(CPACK_PACKAGE_DESCRIPTION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/COPYING")
 set(CPACK_PACKAGE_VERSION_MAJOR "${PACKAGE_VERSION_MAJOR}")
 set(CPACK_PACKAGE_VERSION_MINOR "${PACKAGE_VERSION_MINOR}")
