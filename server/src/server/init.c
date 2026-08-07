@@ -1031,9 +1031,6 @@ static void init_library(int argc, char *argv[]) {
     init_clocks();
     account_init();
     resources_init();
-    if (!settings.world_maker && !settings.unit_tests && !settings.plugin_unit_tests) {
-        socket_assets_init();
-    }
 }
 
 /**
@@ -1152,6 +1149,12 @@ void init(int argc, char **argv) {
     read_client_images();
     updates_init();
     init_srv_files();
+    /* init_srv_files() creates the listing and compressed data files served
+     * over QUIC. Cache the complete immutable asset snapshot only after those
+     * generated files exist. */
+    if (!settings.world_maker && !settings.unit_tests && !settings.plugin_unit_tests) {
+        socket_assets_init();
+    }
     metaserver_init();
     statistics_init();
     reset_sleep();
