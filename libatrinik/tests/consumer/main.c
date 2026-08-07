@@ -1,8 +1,7 @@
 #include <toolkit/packet.h>
 #include <atrinik/protocol/game_commands.h>
 
-int main(void)
-{
+int main(void) {
     toolkit_import(packet);
     packet_struct *packet = packet_new(SERVER_CMD_KEEPALIVE, 0, 0);
     if (packet == NULL) {
