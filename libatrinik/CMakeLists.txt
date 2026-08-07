@@ -97,6 +97,18 @@ option(LIBATRINIK_PACKAGE_LAYOUT
 
 set(ATRINIK_TOOLKIT atrinik-core)
 
+# This target is deliberately configured before the toolkit dependencies. It
+# can also be built and installed directly from pathfinding/ without them.
+set(ATRINIK_PATHFINDING_PARENT_TESTING false)
+set(ATRINIK_PATHFINDING_PARENT_INSTALL false)
+if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND BUILD_TESTING)
+    set(ATRINIK_PATHFINDING_PARENT_TESTING true)
+endif ()
+if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(ATRINIK_PATHFINDING_PARENT_INSTALL true)
+endif ()
+add_subdirectory(pathfinding)
+
 # cURL is required by the metaserver.
 find_package(CURL REQUIRED)
 set(HAVE_CURL true)
