@@ -93,5 +93,6 @@ set(SOURCES
 	src/gui/widgets/target.c
 	src/gui/widgets/texture.c
 	src/gui/widgets/textwin.c
+	src/gui/widgets/textwin_event.c
 	src/gui/widgets/xp_tracker.c
 	${SOURCES_TOOLKIT})
