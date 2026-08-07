@@ -77,6 +77,26 @@ SDL_Surface *surface_to_display_alpha(SDL_Surface *surface) {
     return SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA32);
 }
 
+/** Preserve a decoded color key or restore the exact-black legacy default. */
+bool surface_set_transparent_black(SDL_Surface *surface) {
+    HARD_ASSERT(surface != NULL);
+
+    Uint32 color_key;
+    if (!SDL_GetSurfaceColorKey(surface, &color_key)) {
+        const SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(surface->format);
+        if (details == NULL) {
+            return false;
+        }
+
+        color_key = SDL_MapRGB(details, SDL_GetSurfacePalette(surface), 0, 0, 0);
+        if (!SDL_SetSurfaceColorKey(surface, true, color_key)) {
+            return false;
+        }
+    }
+
+    return SDL_SetSurfaceRLE(surface, true);
+}
+
 /**
  * Convert packed indexed surfaces to a format supported by SDL's blitters.
  *

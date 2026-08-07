@@ -205,13 +205,18 @@ if (BUILD_TESTING AND NOT MINGW)
         src/tests/surface_primitives.c
         src/gui/toolkit/surface_primitives.c)
     atrinik_configure_target(client-surface-primitives-tests)
-    target_compile_definitions(client-surface-primitives-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_compile_definitions(client-surface-primitives-tests PRIVATE
+        ATRINIK_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        SDL_DISABLE_OLD_NAMES)
     target_include_directories(client-surface-primitives-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(client-surface-primitives-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    target_link_libraries(client-surface-primitives-tests PRIVATE
+        Atrinik::Core
+        SDL3::SDL3
+        SDL3_image::SDL3_image)
     add_test(NAME client-surface-primitives COMMAND client-surface-primitives-tests)
 
     add_executable(client-textwin-event-tests
