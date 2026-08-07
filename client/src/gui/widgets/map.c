@@ -35,6 +35,7 @@
 #include <client_socket.h>
 #include <animations.h>
 #include <region_map.h>
+#include <session_client.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 #include <toolkit/bresenham.h>
@@ -629,6 +630,14 @@ int map_get_player_direction(void) {
 void map_get_real_coords(int *x, int *y) {
     *x = MapData.posx - (map_width / 2);
     *y = MapData.posy - (map_height / 2);
+}
+
+int map_get_width(void) {
+    return map_width;
+}
+
+int map_get_height(void) {
+    return map_height;
 }
 
 /**
@@ -2701,6 +2710,8 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool do
 /** Draw map annotations and target UI after the unified world pass. */
 static void map_draw_ui(SDL_Surface *surface, map_render_context_t *context) {
     uint64_t profile_ui_started = render_profiler_begin();
+    session_target_t target = {0};
+    HARD_ASSERT(session_target_view(client_session_get(), &target));
     map_draw_annotations(surface, context);
 
     for (size_t i = 0; i < context->tiles_num; i++) {
@@ -2725,18 +2736,18 @@ static void map_draw_ui(SDL_Surface *surface, map_render_context_t *context) {
     context->tiles = NULL;
     context->tiles_num = 0;
 
-    if (context->target_cell != NULL && cpl.target_code != 0) {
+    if (context->target_cell != NULL && target.code != 0) {
         const char *hp_color;
 
-        if (cpl.target_hp > 90) {
+        if (target.hp > 90) {
             hp_color = COLOR_GREEN;
-        } else if (cpl.target_hp > 75) {
+        } else if (target.hp > 75) {
             hp_color = COLOR_DGOLD;
-        } else if (cpl.target_hp > 50) {
+        } else if (target.hp > 50) {
             hp_color = COLOR_HGOLD;
-        } else if (cpl.target_hp > 25) {
+        } else if (target.hp > 25) {
             hp_color = COLOR_YELLOW;
-        } else if (cpl.target_hp > 10) {
+        } else if (target.hp > 10) {
             hp_color = COLOR_ORANGE;
         } else {
             hp_color = COLOR_RED;
@@ -2746,11 +2757,11 @@ static void map_draw_ui(SDL_Surface *surface, map_render_context_t *context) {
               context->target_cell->pname[context->target_sub_layer][0] != '\0')) {
             text_show(surface,
                       FONT_SANS9,
-                      cpl.target_name,
+                      target.name,
                       context->target_rect.x + context->target_rect.w / 2 -
-                          text_get_width(FONT_SANS9, cpl.target_name, 0) / 2,
+                          text_get_width(FONT_SANS9, target.name, 0) / 2,
                       context->target_rect.y - 15,
-                      cpl.target_color,
+                      target.color,
                       TEXT_OUTLINE,
                       NULL);
         }
@@ -2921,16 +2932,14 @@ void map_draw_one(int x, int y, SDL_Surface *surface) {
  * Square Y position.
  */
 static void send_move_path(int tx, int ty) {
-    packet_struct *packet;
-
     if (tx < 0 || ty < 0 || tx >= map_width || ty >= map_height) {
         return;
     }
 
-    packet = packet_new(SERVER_CMD_MOVE_PATH, 8, 0);
-    packet_writer_write_uint8(packet, tx);
-    packet_writer_write_uint8(packet, ty);
-    socket_send_packet(packet);
+    session_action_result_t result = client_session_move_path(tx, ty);
+    if (result != SESSION_ACTION_ACCEPTED) {
+        LOG(INFO, "Rejected move-path action: %s", session_action_result_string(result));
+    }
 }
 
 /**
@@ -2943,24 +2952,14 @@ static void send_move_path(int tx, int ty) {
  * NPC's UID.
  */
 static void send_target(int x, int y, uint32_t count) {
-    packet_struct *packet;
-
     if ((x < 0 || y < 0 || x >= map_width || y >= map_height) && !(x == -1 && y == -1)) {
         return;
     }
 
-    packet = packet_new(SERVER_CMD_TARGET, 16, 0);
-
-    if (x == -1 && y == -1) {
-        packet_writer_write_uint8(packet, CMD_TARGET_CLEAR);
-    } else {
-        packet_writer_write_uint8(packet, CMD_TARGET_MAPXY);
-        packet_writer_write_uint8(packet, x);
-        packet_writer_write_uint8(packet, y);
-        packet_writer_write_uint32(packet, count);
+    session_action_result_t result = client_session_target_at(x, y, count);
+    if (result != SESSION_ACTION_ACCEPTED) {
+        LOG(INFO, "Rejected target action: %s", session_action_result_string(result));
     }
-
-    socket_send_packet(packet);
 }
 
 /**
@@ -3173,9 +3172,11 @@ bool map_mouse_fire(void) {
     int rx = tx - map_width * (MAP_FOW_SIZE / 2);
     int ry = ty - map_height * (MAP_FOW_SIZE / 2);
 
-    cpl.fire_on = 1;
+    session_intent_t intent = {0};
+    HARD_ASSERT(session_intent_view(client_session_get(), &intent));
+    client_session_controls(intent.run, true);
     move_keys(dir_from_tile_coords(rx, ry));
-    cpl.fire_on = 0;
+    client_session_controls(intent.run, false);
     return true;
 }
 
@@ -3223,6 +3224,8 @@ static void widget_draw(widgetdata *widget) {
     static int gfx_toggle = 0;
     SDL_Rect box;
     int mx, my;
+    session_player_t player = {0};
+    HARD_ASSERT(session_player_view(client_session_get(), &player));
 
     if (widget->surface == NULL || widget->surface->w != widget->w ||
         widget->surface->h != widget->h) {
@@ -3306,7 +3309,7 @@ static void widget_draw(widgetdata *widget) {
     /* Draw warning icons above player */
     if ((gfx_toggle++ & 63) < 25) {
         int warn = setting_get_int(OPT_CAT_MAP, OPT_HEALTH_WARNING);
-        double hp_percent = (double)cpl.stats.hp / cpl.stats.maxhp * 100.0;
+        double hp_percent = (double)player.stats.hp / player.stats.max_hp * 100.0;
         if (warn != 0 && warn >= hp_percent) {
             SDL_Surface *texture = TEXTURE_CLIENT("warn_hp");
             surface_show(ScreenSurface,
@@ -3317,7 +3320,7 @@ static void widget_draw(widgetdata *widget) {
         }
     } else {
         int warn = setting_get_int(OPT_CAT_MAP, OPT_FOOD_WARNING);
-        double food_percent = (double)cpl.stats.food / 1000.0 * 100.0;
+        double food_percent = (double)player.stats.food / 1000.0 * 100.0;
         if (warn != 0 && warn >= food_percent) {
             SDL_Surface *texture = TEXTURE_CLIENT("warn_food");
             surface_show(ScreenSurface,
@@ -3407,7 +3410,9 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
         } else if (mouse_get_state(NULL, NULL) == SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) {
             /* Running */
 
-            if (cpl.fire_on || cpl.run_on) {
+            session_intent_t intent = {0};
+            HARD_ASSERT(session_intent_view(client_session_get(), &intent));
+            if (intent.fire || intent.run) {
                 move_keys(dir_from_tile_coords(rx, ry));
             } else {
                 send_move_path(rx, ry);

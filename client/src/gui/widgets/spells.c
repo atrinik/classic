@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <session_client.h>
 
 /**
  * The spell list. This is a multi-dimensional array, containing
@@ -351,6 +352,8 @@ static void widget_draw(widgetdata *widget) {
     SDL_Rect box;
     size_t i;
     spell_entry_struct *spell;
+    session_player_t player = {0};
+    HARD_ASSERT(session_player_view(client_session_get(), &player));
 
     /* Create the spell list. */
     if (list_spells == NULL) {
@@ -438,11 +441,11 @@ static void widget_draw(widgetdata *widget) {
                          "[b]Cost[/b]: %d",
                          (int)((double)spell->cost * (double)PATH_SP_MULT(&cpl, spell)));
 
-        if (cpl.path_denied & spell->path) {
+        if (player.path_denied & spell->path) {
             status = "Denied";
-        } else if (cpl.path_attuned & spell->path && !(cpl.path_repelled & spell->path)) {
+        } else if (player.path_attuned & spell->path && !(player.path_repelled & spell->path)) {
             status = "Attuned";
-        } else if (cpl.path_repelled & spell->path && !(cpl.path_attuned & spell->path)) {
+        } else if (player.path_repelled & spell->path && !(player.path_attuned & spell->path)) {
             status = "Repelled";
         } else {
             status = "Normal";

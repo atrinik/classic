@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <session_client.h>
 #include <toolkit/string.h>
 
 /** @copydoc widgetdata::draw_func */
@@ -42,6 +43,9 @@ static void widget_draw(widgetdata *widget) {
     if (!widget->redraw) {
         return;
     }
+
+    session_player_t player = {0};
+    HARD_ASSERT(session_player_view(client_session_get(), &player));
 
     for (i = 0; i < arraysize(cpl.stats.protection) / 5; i++) {
 #define PAD_BORDER 10
@@ -62,11 +66,11 @@ static void widget_draw(widgetdata *widget) {
                  s_settings->protection_groups[i]);
 
         for (j = 0; j < 5; j++) {
-            if (cpl.stats.protection[i * 5 + j] == 0) {
+            if (player.stats.protections[i * 5 + j] == 0) {
                 color = COLOR_GRAY;
-            } else if (cpl.stats.protection[i * 5 + j] < 0) {
+            } else if (player.stats.protections[i * 5 + j] < 0) {
                 color = COLOR_RED;
-            } else if (cpl.stats.protection[i * 5 + j] >= 100) {
+            } else if (player.stats.protections[i * 5 + j] >= 100) {
                 color = COLOR_ORANGE;
             } else {
                 color = COLOR_WHITE;
@@ -77,7 +81,7 @@ static void widget_draw(widgetdata *widget) {
                         "\n%s[c=#%s][right][font=mono]%02d[/font][/right][/c]",
                         s_settings->protection_full[i * 5 + j],
                         color,
-                        cpl.stats.protection[i * 5 + j]);
+                        player.stats.protections[i * 5 + j]);
         }
 
         text_show(widget->surface,

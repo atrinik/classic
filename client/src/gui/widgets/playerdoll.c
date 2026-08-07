@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <session_client.h>
 #include <toolkit/string.h>
 
 /**
@@ -97,33 +98,35 @@ static const char *player_doll_text_abbr =
     "WC[c=#ffffff][right][font=mono]%02d[/font][/right][/c]\n"
     "WS[c=#ffffff][right][font=mono]%3.2fs[/font][/right][/c]\n";
 
-#define PLAYER_DOLL_TEXT_RENDER(flags, box)  \
-    text_show_format(widget->surface,        \
-                     FONT_ARIAL10,           \
-                     10,                     \
-                     10,                     \
-                     COLOR_HGOLD,            \
-                     TEXT_MARKUP | flags,    \
-                     box,                    \
-                     text,                   \
-                     cpl.stats.Str,          \
-                     cpl.stats.Dex,          \
-                     cpl.stats.Con,          \
-                     cpl.stats.Int,          \
-                     cpl.stats.Pow,          \
-                     cpl.stats.speed,        \
-                     cpl.stats.ac,           \
-                     cpl.stats.dam,          \
-                     cpl.stats.wc,           \
-                     cpl.stats.weapon_speed, \
-                     cpl.stats.ranged_dam,   \
-                     cpl.stats.ranged_wc,    \
-                     cpl.stats.ranged_ws);
+#define PLAYER_DOLL_TEXT_RENDER(flags, box)      \
+    text_show_format(widget->surface,            \
+                     FONT_ARIAL10,               \
+                     10,                         \
+                     10,                         \
+                     COLOR_HGOLD,                \
+                     TEXT_MARKUP | flags,        \
+                     box,                        \
+                     text,                       \
+                     player.stats.strength,      \
+                     player.stats.dexterity,     \
+                     player.stats.constitution,  \
+                     player.stats.intelligence,  \
+                     player.stats.power,         \
+                     player.stats.speed,         \
+                     player.stats.ac,            \
+                     player.stats.damage,        \
+                     player.stats.wc,            \
+                     player.stats.weapon_speed,  \
+                     player.stats.ranged_damage, \
+                     player.stats.ranged_wc,     \
+                     player.stats.ranged_weapon_speed);
 
 object *playerdoll_get_equipment(int i, int *xpos, int *ypos) {
     object *obj;
+    session_player_t player = {0};
+    HARD_ASSERT(session_player_view(client_session_get(), &player));
 
-    if (cpl.equipment[i] == 0) {
+    if (player.equipment[i] == 0) {
         return NULL;
     }
 
@@ -131,7 +134,7 @@ object *playerdoll_get_equipment(int i, int *xpos, int *ypos) {
         return NULL;
     }
 
-    obj = object_find(cpl.equipment[i]);
+    obj = object_find(player.equipment[i]);
 
     if (obj == NULL) {
         return NULL;
@@ -140,10 +143,10 @@ object *playerdoll_get_equipment(int i, int *xpos, int *ypos) {
     if (i == PLAYER_EQUIP_SHIELD) {
         object *obj2 = NULL;
 
-        if (cpl.equipment[PLAYER_EQUIP_WEAPON_RANGED] != 0) {
-            obj2 = object_find(cpl.equipment[PLAYER_EQUIP_WEAPON_RANGED]);
-        } else if (cpl.equipment[PLAYER_EQUIP_WEAPON] != 0) {
-            obj2 = object_find(cpl.equipment[PLAYER_EQUIP_WEAPON]);
+        if (player.equipment[PLAYER_EQUIP_WEAPON_RANGED] != 0) {
+            obj2 = object_find(player.equipment[PLAYER_EQUIP_WEAPON_RANGED]);
+        } else if (player.equipment[PLAYER_EQUIP_WEAPON] != 0) {
+            obj2 = object_find(player.equipment[PLAYER_EQUIP_WEAPON]);
         }
 
         if (obj2 != NULL && obj2->flags & CS_FLAG_WEAPON_2H) {
@@ -168,12 +171,15 @@ static void widget_draw(widgetdata *widget) {
     object *obj;
     SDL_Rect box, box2;
     const char *text;
+    session_player_t player = {0};
 
     if (!widget->redraw) {
         return;
     }
 
-    if (cpl.gender == GENDER_FEMALE) {
+    HARD_ASSERT(session_player_view(client_session_get(), &player));
+
+    if (player.gender == GENDER_FEMALE) {
         texture = TEXTURE_CLIENT("player_doll_f");
     } else {
         texture = TEXTURE_CLIENT("player_doll");

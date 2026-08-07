@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <session_client.h>
 #include <toolkit/string.h>
 
 /**
@@ -55,24 +56,28 @@ static const char *const display_modes[] = {"Sphere", "Bar", "Text"};
  * True on success, false on failure.
  */
 static bool stat_get_data(widgetdata *widget, int64_t *curr, int64_t *max, double *regen) {
+    session_player_t player = {0};
+    HARD_ASSERT(session_player_view(client_session_get(), &player));
+
     if (strcmp(widget->id, "health") == 0) {
-        *curr = cpl.stats.hp;
-        *max = cpl.stats.maxhp;
-        *regen = cpl.gen_hp;
+        *curr = player.stats.hp;
+        *max = player.stats.max_hp;
+        *regen = player.stats.hp_regeneration;
         return true;
     } else if (strcmp(widget->id, "mana") == 0) {
-        *curr = cpl.stats.sp;
-        *max = cpl.stats.maxsp;
-        *regen = cpl.gen_sp;
+        *curr = player.stats.sp;
+        *max = player.stats.max_sp;
+        *regen = player.stats.sp_regeneration;
         return true;
     } else if (strcmp(widget->id, "food") == 0) {
-        *curr = cpl.stats.food;
+        *curr = player.stats.food;
         *max = 999;
         *regen = 0.0;
         return true;
     } else if (strcmp(widget->id, "exp") == 0) {
-        *curr = cpl.stats.exp - s_settings->level_exp[cpl.stats.level];
-        *max = s_settings->level_exp[cpl.stats.level + 1] - s_settings->level_exp[cpl.stats.level];
+        *curr = player.stats.experience - s_settings->level_exp[player.stats.level];
+        *max = s_settings->level_exp[player.stats.level + 1] -
+               s_settings->level_exp[player.stats.level];
         *regen = 0.0;
         return true;
     }
