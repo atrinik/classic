@@ -205,16 +205,26 @@ int64_t calc_skill_exp(object *who, object *op, int level) {
 void init_new_exp_system(void) {
     int i;
     archetype_t *at;
-    char buf[MAX_BUF];
 
     for (i = 0; i < NROFSKILLS; i++) {
-        snprintf(buf, sizeof(buf), "skill_%s", skills[i].name);
-        string_replace_char(buf, " ", '_');
+        if (skill_index_from_id(skills[i].id) != i) {
+            LOG(ERROR, "Stable skill ID %s is not unique.", skills[i].id);
+            exit(1);
+        }
 
-        at = arch_find(buf);
+        at = arch_find(skills[i].id);
 
         if (!at) {
             continue;
+        }
+
+        if (at->clone.type != SKILL) {
+            LOG(ERROR,
+                "Stable skill ID %s resolves to archetype type %d instead of %d.",
+                skills[i].id,
+                at->clone.type,
+                SKILL);
+            exit(1);
         }
 
         skills[i].at = at;

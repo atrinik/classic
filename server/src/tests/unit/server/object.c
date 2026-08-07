@@ -29,6 +29,7 @@
 #include <check_utils.h>
 #include <toolkit/string.h>
 #include <arch.h>
+#include <loader.h>
 #include <object.h>
 #include <toolkit/path.h>
 
@@ -384,6 +385,121 @@ START_TEST(test_object_load_str) {
 }
 END_TEST
 
+START_TEST(test_object_stable_identity_lookup) {
+    for (int i = 0; i < NROFREALSPELLS; i++) {
+        ck_assert_int_eq(spell_index_from_id(spells[i].id), i);
+        ck_assert_str_eq(spell_id_from_index(i), spells[i].id);
+    }
+
+    ck_assert_int_eq(spell_index_from_id("unknown"), SP_NO_SPELL);
+    ck_assert_int_eq(spell_index_from_id(NULL), SP_NO_SPELL);
+    ck_assert_ptr_eq(spell_id_from_index(SP_NO_SPELL), NULL);
+
+    for (int i = 0; i < NROFSKILLS; i++) {
+        ck_assert_int_eq(skill_index_from_id(skills[i].id), i);
+        ck_assert_str_eq(skill_id_from_index(i), skills[i].id);
+    }
+
+    ck_assert_int_eq(skill_index_from_id("unknown"), -1);
+    ck_assert_int_eq(skill_index_from_id(NULL), -1);
+    ck_assert_ptr_eq(skill_id_from_index(-1), NULL);
+    ck_assert_ptr_eq(skill_id_from_index(NROFSKILLS), NULL);
+}
+END_TEST
+
+START_TEST(test_object_stable_identity_serialization) {
+    object *ob = object_load_str("arch wand\nspell_id spell_firestorm\nend\n");
+    ck_assert_ptr_ne(ob, NULL);
+    ck_assert_int_eq(ob->stats.sp, SP_FIRESTORM);
+    StringBuffer *sb = stringbuffer_new();
+    object_dump_rec(ob, sb);
+    char *dump = stringbuffer_finish(sb);
+    ck_assert_ptr_ne(strstr(dump, "spell_id spell_firestorm\n"), NULL);
+    ck_assert_ptr_eq(strstr(dump, "\nsp "), NULL);
+    free(dump);
+    object_destroy(ob);
+
+    ob = object_load_str("arch skill_literacy\nskill_id skill_throwing\nend\n");
+    ck_assert_ptr_ne(ob, NULL);
+    ck_assert_int_eq(ob->stats.sp, SK_THROWING);
+    sb = stringbuffer_new();
+    object_dump_rec(ob, sb);
+    dump = stringbuffer_finish(sb);
+    ck_assert_ptr_ne(strstr(dump, "skill_id skill_throwing\n"), NULL);
+    ck_assert_ptr_eq(strstr(dump, "\nsp "), NULL);
+    free(dump);
+    object_destroy(ob);
+}
+END_TEST
+
+START_TEST(test_object_stable_identity_validation) {
+    object *ob;
+
+    ck_assert_ptr_eq(object_load_str("arch wand\nsp 19\nend\n"), NULL);
+    ck_assert_ptr_eq(object_load_str("arch wand\nspell_id unknown\nend\n"), NULL);
+    ck_assert_ptr_eq(object_load_str("arch sack\nspell_id spell_firestorm\nend\n"), NULL);
+    ck_assert_ptr_eq(object_load_str("arch sack\nskill_id skill_literacy\nend\n"), NULL);
+    ck_assert_ptr_eq(object_load_str("arch wand\narch wand\nsp 19\nend\nend\n"), NULL);
+    ck_assert_ptr_eq(object_load_str("arch wand\nsp -1\nspell_id spell_firestorm\nend\n"), NULL);
+    ck_assert_ptr_eq(object_load_str("arch wand\nspell_id spell_firestorm\n"
+                                     "spell_id spell_icestorm\nend\n"),
+                     NULL);
+    ck_assert_ptr_eq(object_load_str("arch skill_literacy\nskill_id skill_literacy\n"
+                                     "skill_id skill_throwing\nend\n"),
+                     NULL);
+
+    ob = object_load_str("arch sack\nspell_id spell_firestorm\ntype 109\nend\n");
+    ck_assert_ptr_nonnull(ob);
+    ck_assert_int_eq(ob->stats.sp, spell_index_from_id("spell_firestorm"));
+    object_destroy(ob);
+
+    ob = object_load_str("arch sack\nskill_id skill_literacy\ntype 43\nend\n");
+    ck_assert_ptr_nonnull(ob);
+    ck_assert_int_eq(ob->stats.sp, skill_index_from_id("skill_literacy"));
+    object_destroy(ob);
+
+    ob = object_load_str("arch wand\nend\n");
+    ck_assert_ptr_nonnull(ob);
+    ob->stats.sp = 9999;
+    StringBuffer *sb = stringbuffer_new();
+    object_dump_rec(ob, sb);
+    char *dump = stringbuffer_finish(sb);
+    ck_assert_ptr_nonnull(strstr(dump, "spell_id __invalid_runtime_index_9999"));
+    ck_assert_ptr_eq(strstr(dump, "\nsp 9999"), NULL);
+    free(dump);
+    object_destroy(ob);
+
+    ob = object_load_str("arch wand\nend\n");
+    ck_assert_ptr_nonnull(ob);
+    int original_spell = ob->stats.sp;
+    ck_assert_int_eq(set_variable(ob, "sp 19\n"), LL_ERROR);
+    ck_assert_int_eq(ob->stats.sp, original_spell);
+    object_destroy(ob);
+}
+END_TEST
+
+START_TEST(test_object_stable_identity_file_ordering) {
+    FILE *fp = tmpfile();
+    ck_assert_ptr_nonnull(fp);
+    ck_assert_int_ge(fputs("arch sack\nspell_id spell_firestorm\ntype 109\nend\n", fp), 0);
+    rewind(fp);
+    object *ob = object_get();
+    ck_assert_int_eq(load_object_fp(fp, ob, 0), LL_NORMAL);
+    ck_assert_int_eq(ob->stats.sp, SP_FIRESTORM);
+    object_destroy(ob);
+    fclose(fp);
+
+    fp = tmpfile();
+    ck_assert_ptr_nonnull(fp);
+    ck_assert_int_ge(fputs("arch sack\nsp 19\ntype 109\nend\n", fp), 0);
+    rewind(fp);
+    ob = object_get();
+    ck_assert_int_eq(load_object_fp(fp, ob, 0), LL_ERROR);
+    object_destroy(ob);
+    fclose(fp);
+}
+END_TEST
+
 START_TEST(test_object_reverse_inventory) {
     char *cp, *cp2;
     object *ob;
@@ -468,6 +584,10 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_object_can_pick);
     tcase_add_test(tc_core, test_object_clone);
     tcase_add_test(tc_core, test_object_load_str);
+    tcase_add_test(tc_core, test_object_stable_identity_lookup);
+    tcase_add_test(tc_core, test_object_stable_identity_serialization);
+    tcase_add_test(tc_core, test_object_stable_identity_validation);
+    tcase_add_test(tc_core, test_object_stable_identity_file_ordering);
     tcase_add_test(tc_core, test_object_reverse_inventory);
     tcase_add_test(tc_core, test_object_create_singularity);
     tcase_add_test(tc_core, test_OBJECT_DESTROYED);

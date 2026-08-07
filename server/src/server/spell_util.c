@@ -73,16 +73,26 @@ void init_spells(void) {
     init_spells_done = 1;
 
     for (i = 0; i < NROFREALSPELLS; i++) {
-        char spellname[HUGE_BUF], tmpresult[MAX_BUF];
+        if (spell_index_from_id(spells[i].id) != i) {
+            LOG(ERROR, "Stable spell ID %s is not unique.", spells[i].id);
+            exit(1);
+        }
+
         archetype_t *at;
 
-        string_replace(spells[i].name, " ", "_", tmpresult, sizeof(spellname));
-        snprintf(spellname, sizeof(spellname), "spell_%s", tmpresult);
-
-        at = arch_find(spellname);
+        at = arch_find(spells[i].id);
 
         if (!at) {
-            LOG(ERROR, "Could not find required archetype %s.", spellname);
+            LOG(ERROR, "Could not find required archetype %s.", spells[i].id);
+            exit(1);
+        }
+
+        if (at->clone.type != SPELL) {
+            LOG(ERROR,
+                "Stable spell ID %s resolves to archetype type %d instead of %d.",
+                spells[i].id,
+                at->clone.type,
+                SPELL);
             exit(1);
         }
 
@@ -173,6 +183,37 @@ spell_struct *find_spell(int spelltype) {
     }
 
     return &spells[spelltype];
+}
+
+/**
+ * Resolve a stable spell ID to its process-local table index.
+ *
+ * @param id Stable spell archetype key.
+ * @return Spell index, or ::SP_NO_SPELL when the ID is unknown.
+ */
+int spell_index_from_id(const char *id) {
+    if (id == NULL) {
+        return SP_NO_SPELL;
+    }
+
+    for (int i = 0; i < NROFREALSPELLS; i++) {
+        if (strcmp(spells[i].id, id) == 0) {
+            return i;
+        }
+    }
+
+    return SP_NO_SPELL;
+}
+
+/**
+ * Get the stable ID for a process-local spell table index.
+ *
+ * @param spelltype Spell index.
+ * @return Stable spell ID, or NULL when the index is invalid.
+ */
+const char *spell_id_from_index(int spelltype) {
+    spell_struct *spell = find_spell(spelltype);
+    return spell != NULL ? spell->id : NULL;
 }
 
 /**
