@@ -31,6 +31,7 @@
 #include <arch.h>
 #include <loader.h>
 #include <object.h>
+#include <object_methods.h>
 #include <toolkit/path.h>
 
 START_TEST(test_object_can_merge) {
@@ -539,6 +540,19 @@ START_TEST(test_object_create_singularity) {
 }
 END_TEST
 
+START_TEST(test_invalid_object_type_uses_base_method_fallback) {
+    object *ob = arch_get("sack");
+    uint8_t original_type = ob->type;
+
+    ob->type = UINT8_MAX;
+    ck_assert_ptr_ne(object_methods_get(ob->type), NULL);
+    object_cb_deinit(ob);
+
+    ob->type = original_type;
+    object_destroy(ob);
+}
+END_TEST
+
 START_TEST(test_OBJECT_DESTROYED) {
     object *ob, *ob2;
     tag_t ob_tag, ob2_tag;
@@ -590,6 +604,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_object_stable_identity_file_ordering);
     tcase_add_test(tc_core, test_object_reverse_inventory);
     tcase_add_test(tc_core, test_object_create_singularity);
+    tcase_add_test(tc_core, test_invalid_object_type_uses_base_method_fallback);
     tcase_add_test(tc_core, test_OBJECT_DESTROYED);
 
     return s;

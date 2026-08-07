@@ -182,6 +182,7 @@ target_include_directories(atrinik-server-core BEFORE PRIVATE
     ${ATRINIK_SERVER_INCLUDE_DIRS})
 target_link_libraries(atrinik-server-core PRIVATE
     Atrinik::Core
+    Atrinik::Pathfinding
     pcpnatpmp::pcpnatpmp)
 
 if (MINGW)

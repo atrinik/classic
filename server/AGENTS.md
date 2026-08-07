@@ -143,7 +143,8 @@
   when useful, a test scenario.
 - For substantial native logic changes, also run the `linux-coverage` preset
   and gcovr summary documented in `README.md`; keep source/test exclusions
-  intentional.
+  intentional. Pull-request CI also runs the `linux-sanitizers` preset with
+  address and undefined-behavior sanitizers.
 - Pull request titles and commits use Conventional Commits style. Every squash
   merge is released by semantic-release; preserve the source, Windows server
   package, checksum, and server-image release jobs together.

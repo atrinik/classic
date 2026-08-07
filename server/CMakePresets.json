@@ -32,10 +32,19 @@
       "cacheVariables": {
         "ENABLE_COVERAGE": true
       }
+    },
+    {
+      "name": "linux-sanitizers",
+      "inherits": "linux-debug",
+      "binaryDir": "${sourceDir}/build/linux-sanitizers",
+      "cacheVariables": {
+        "ENABLE_SANITIZERS": true
+      }
     }
   ],
   "buildPresets": [
     {"name": "linux-debug", "configurePreset": "linux-debug"},
+    {"name": "linux-sanitizers", "configurePreset": "linux-sanitizers"},
     {"name": "linux-coverage", "configurePreset": "linux-coverage"},
     {"name": "linux-release", "configurePreset": "linux-release"}
   ],
@@ -43,6 +52,11 @@
     {
       "name": "linux-debug",
       "configurePreset": "linux-debug",
+      "output": {"outputOnFailure": true}
+    },
+    {
+      "name": "linux-sanitizers",
+      "configurePreset": "linux-sanitizers",
       "output": {"outputOnFailure": true}
     },
     {
