@@ -55,6 +55,7 @@
 #include <server.h>
 #include <toolkit/path.h>
 #include <resources.h>
+#include <content_benchmark.h>
 #include <http_server.h>
 #include <toolkit/signals.h>
 #include <toolkit/console.h>
@@ -282,6 +283,34 @@ static const char *clioptions_option_provision_password_file_desc =
     "Protected password file for --provision_scenario.";
 static bool clioptions_option_provision_password_file(const char *arg, char **errmsg) {
     snprintf(VS(settings.provision_password_file), "%s", arg);
+    return true;
+}
+
+static const char *clioptions_option_content_benchmark_desc =
+    "Runs the offline authored-content benchmark for comma-separated logical map IDs, then exits.";
+static bool clioptions_option_content_benchmark(const char *arg, char **errmsg) {
+    if (!content_benchmark_maps_valid(arg)) {
+        string_fmt(*errmsg,
+                   "%s",
+                   "Expected 1-16 unique, canonical logical map IDs separated by commas");
+        return false;
+    }
+
+    settings.content_benchmark = true;
+    snprintf(VS(settings.content_benchmark_maps), "%s", arg);
+    return true;
+}
+
+static const char *clioptions_option_content_benchmark_iterations_desc =
+    "Number of samples per map for --content_benchmark (1-100).";
+static bool clioptions_option_content_benchmark_iterations(const char *arg, char **errmsg) {
+    uint64_t value;
+    if (!string_parse_uint64(arg, 10, 1, 100, &value)) {
+        string_fmt(*errmsg, "%s is an invalid benchmark iteration count, must be 1-100", arg);
+        return false;
+    }
+
+    settings.content_benchmark_iterations = (uint16_t)value;
     return true;
 }
 
@@ -862,6 +891,7 @@ static void init_library(int argc, char *argv[]) {
     toolkit_import(console);
     toolkit_import(curl);
     toolkit_import(datetime);
+    content_benchmark_startup_begin();
     toolkit_import(logger);
     toolkit_import(math);
     toolkit_import(mempool);
@@ -939,6 +969,10 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, provision_character, "Scenario character name");
     CLIOPTIONS_CREATE_ARGUMENT(cli, provision_archetype, "Scenario player archetype");
     CLIOPTIONS_CREATE_ARGUMENT(cli, provision_password_file, "Scenario password file");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, content_benchmark, "Authored-content benchmark map IDs");
+    CLIOPTIONS_CREATE_ARGUMENT(cli,
+                               content_benchmark_iterations,
+                               "Authored-content benchmark samples");
 
     /* Changeable options */
     CLIOPTIONS_CREATE_ARGUMENT(cli, magic_devices_level, "Magic devices level");
@@ -970,6 +1004,7 @@ static void init_library(int argc, char *argv[]) {
     toolkit_import(pathfinder);
 
     memset(&settings, 0, sizeof(settings));
+    settings.content_benchmark_iterations = 9;
 
     clioptions_load("server.cfg", NULL);
     clioptions_load("server-custom.cfg", NULL);
@@ -1049,7 +1084,7 @@ static void init_library(int argc, char *argv[]) {
     toolkit_import(faction);
 
     if (!settings.world_maker && !settings.unit_tests && !settings.plugin_unit_tests &&
-        !settings.provision_scenario) {
+        !settings.provision_scenario && !settings.content_benchmark) {
         toolkit_import(socket_server);
         toolkit_import(http_server);
     }
@@ -1066,7 +1101,9 @@ static void init_library(int argc, char *argv[]) {
     /* Must be after we read in the bitmaps */
     init_anim();
     /* Reads all archetypes from file */
+    content_benchmark_arch_begin();
     arch_init();
+    content_benchmark_arch_end();
     init_dynamic();
     init_clocks();
     account_init();
@@ -1193,14 +1230,14 @@ void init(int argc, char **argv) {
      * over QUIC. Cache the complete immutable asset snapshot only after those
      * generated files exist. */
     if (!settings.world_maker && !settings.unit_tests && !settings.plugin_unit_tests &&
-        !settings.provision_scenario) {
+        !settings.provision_scenario && !settings.content_benchmark) {
         socket_assets_init();
     }
-    if (!settings.provision_scenario) {
+    if (!settings.provision_scenario && !settings.content_benchmark) {
         metaserver_init();
     }
     reset_sleep();
-    if (!settings.unit_tests && !settings.provision_scenario) {
+    if (!settings.unit_tests && !settings.provision_scenario && !settings.content_benchmark) {
         init_plugins();
     }
 }

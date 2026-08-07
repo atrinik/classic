@@ -46,6 +46,7 @@
 #include <cmake.h>
 #include <world_maker.h>
 #include <account.h>
+#include <content_benchmark.h>
 
 #include <toolkit/process.h>
 #include <toolkit/console.h>
@@ -620,6 +621,12 @@ int server_run(int argc, char **argv) {
         }
         cleanup();
         return ok ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
+    if (settings.content_benchmark) {
+        int result = content_benchmark_run();
+        cleanup();
+        return result;
     }
 
     atexit(cleanup);
