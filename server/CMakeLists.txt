@@ -350,7 +350,8 @@ if (BUILD_TESTING AND NOT MINGW)
             ${CMAKE_SOURCE_DIR}/ca-bundle.crt
             ${CMAKE_SOURCE_DIR}/permissions.cfg
             ${CMAKE_SOURCE_DIR}/server.cfg
-            ${CMAKE_SOURCE_DIR}/dependencies.lock.json)
+            ${CMAKE_SOURCE_DIR}/dependencies.lock.json
+            ${CMAKE_SOURCE_DIR}/src/tests/data/content_benchmark)
 
         add_custom_command(
             OUTPUT "${ATRINIK_SERVER_TEST_RUNTIME_STAMP}"
@@ -405,6 +406,17 @@ if (BUILD_TESTING AND NOT MINGW)
                 TIMEOUT 300
                 WORKING_DIRECTORY "${ATRINIK_SERVER_TEST_RUNTIME}/server")
         endif ()
+
+        add_test(NAME server-content-benchmark
+            COMMAND ${EXECUTABLE}
+                --content_benchmark=/tests/content_benchmark
+                --content_benchmark_iterations=2
+                --port_mapping=off)
+        set_tests_properties(server-content-benchmark PROPERTIES
+            LABELS "server;runtime;benchmark"
+            RESOURCE_LOCK server-test-runtime
+            TIMEOUT 300
+            WORKING_DIRECTORY "${ATRINIK_SERVER_TEST_RUNTIME}/server")
 
         add_custom_target(check
             COMMAND ${CMAKE_CTEST_COMMAND}

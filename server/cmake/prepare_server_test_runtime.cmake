@@ -44,6 +44,8 @@ endif ()
 
 file(COPY "${ATRINIK_SOURCE_DIR}/runtime/content/maps"
     DESTINATION "${runtime_server}")
+file(COPY "${ATRINIK_SOURCE_DIR}/src/tests/data/content_benchmark"
+    DESTINATION "${runtime_server}/maps/tests")
 file(COPY "${ATRINIK_SOURCE_DIR}/runtime/content/lib/"
     DESTINATION "${runtime_server}/lib")
 file(COPY "${ATRINIK_SOURCE_DIR}/resources"

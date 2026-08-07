@@ -404,6 +404,15 @@ typedef struct settings_struct {
     /** Protected file containing the scenario account password. */
     char provision_password_file[HUGE_BUF];
 
+    /** Run the offline authored-content loader benchmark and exit. */
+    bool content_benchmark;
+
+    /** Comma-delimited logical map IDs used by the content benchmark. */
+    char content_benchmark_maps[HUGE_BUF];
+
+    /** Number of samples collected for every benchmark map. */
+    uint16_t content_benchmark_iterations;
+
     /**
      * Running unit tests?
      */

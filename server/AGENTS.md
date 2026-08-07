@@ -34,6 +34,10 @@
 - `install_data/` defines new-runtime defaults. Preserve initialized workspace
   state and never handcraft, replace, or delete player, account, key, or
   identity files unless the task explicitly concerns that mutable state.
+- Keep `--content_benchmark` offline and development-only: it must not start
+  listeners, asset serving, plugins, metaserver registration, or the console.
+  Run it through an isolated workspace profile/state and supply canonical
+  logical map IDs rather than collected filesystem paths.
 - Keep `--provision_scenario` offline: it must not start listeners, plugins,
   metaserver registration, or an interactive console, and it must persist via
   normal password/account APIs. Use `./atrinik scenario` from the workspace.
