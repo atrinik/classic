@@ -117,7 +117,7 @@ static int ranged_fire_func(object *op, object *shooter, int dir, double *delay)
     }
 
     if (shooter->type == PLAYER) {
-        CONTR(shooter)->stat_missiles_thrown++;
+        metrics_add(&CONTR(shooter)->metrics, METRIC_CHARACTER_MISSILES_THROWN, 1);
     }
 
     play_sound_map(shooter->map, CMD_SOUND_EFFECT, "throw.ogg", shooter->x, shooter->y, 0, 0);

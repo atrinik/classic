@@ -7,6 +7,7 @@ set(SERVER_CORE_SOURCES
 	src/commands/permission/kick.c
 	src/commands/permission/memfree.c
 	src/commands/permission/memleak.c
+	src/commands/permission/metrics.c
 	src/commands/permission/mod_chat.c
 	src/commands/permission/no_chat.c
 	src/commands/permission/opsay.c
@@ -87,6 +88,7 @@ set(SERVER_CORE_SOURCES
 	src/server/los.c
 	src/server/main.c
 	src/server/map.c
+	src/server/metrics.c
 	src/server/material.c
 	src/server/move.c
 	src/server/object.c
@@ -107,7 +109,6 @@ set(SERVER_CORE_SOURCES
 	src/server/skills.c
 	src/server/spell_effect.c
 	src/server/spell_util.c
-	src/server/statistics.c
 	src/server/swap.c
 	src/server/time.c
 	src/server/treasure.c

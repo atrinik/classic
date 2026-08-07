@@ -344,6 +344,88 @@ static PyObject *Atrinik_Player_AddExp(Atrinik_Player *self, PyObject *args) {
     return Py_None;
 }
 
+static const char doc_Atrinik_Player_MetricAdd[] =
+    ".. method:: MetricAdd(name, amount=1).\n\n"
+    "Increment a registered character counter or duration by stable save name. "
+    "This trusted-content API rejects account, current, timestamp, maximum, and minimum "
+    "metrics.\n\n"
+    ":param name: Stable character metric save name.\n:type name: str\n"
+    ":param amount: Non-negative increment.\n:type amount: int\n"
+    ":raises ValueError: If the name, kind, or amount is invalid.";
+
+static PyObject *Atrinik_Player_MetricAdd(Atrinik_Player *self, PyObject *args) {
+    const char *name;
+    unsigned long long amount = 1;
+    if (!PyArg_ParseTuple(args, "s|K", &name, &amount)) {
+        return NULL;
+    }
+    if (!hooks->metrics_character_add_by_name(self->pl, name, (uint64_t)amount)) {
+        PyErr_Format(PyExc_ValueError, "Character metric '%s' is not an additive metric.", name);
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static const char doc_Atrinik_Player_MetricKeyedAdd[] =
+    ".. method:: MetricKeyedAdd(name, subject, amount=1).\n\n"
+    "Increment a registered bounded character counter grouped by a stable subject ID.\n\n"
+    ":param name: Stable keyed metric save name.\n:type name: str\n"
+    ":param subject: Stable bounded subject identifier.\n:type subject: str\n"
+    ":param amount: Non-negative increment.\n:type amount: int\n"
+    ":raises ValueError: If the name, subject, or amount is invalid.";
+
+static PyObject *Atrinik_Player_MetricKeyedAdd(Atrinik_Player *self, PyObject *args) {
+    const char *name, *subject;
+    unsigned long long amount = 1;
+    if (!PyArg_ParseTuple(args, "ss|K", &name, &subject, &amount)) {
+        return NULL;
+    }
+    if (!hooks->metrics_character_keyed_add_by_name(self->pl, name, subject, (uint64_t)amount)) {
+        PyErr_Format(PyExc_ValueError, "Invalid or full character keyed metric '%s'.", name);
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static const char doc_Atrinik_Player_MetricMarkUnique[] =
+    ".. method:: MetricMarkUnique(name, subject).\n\n"
+    "Mark a stable subject in a registered character unique collection.\n\n"
+    ":param name: Stable collection save name.\n:type name: str\n"
+    ":param subject: Stable bounded subject identifier.\n:type subject: str\n"
+    ":raises ValueError: If the collection or subject is invalid.";
+
+static PyObject *Atrinik_Player_MetricMarkUnique(Atrinik_Player *self, PyObject *args) {
+    const char *name, *subject;
+    if (!PyArg_ParseTuple(args, "ss", &name, &subject)) {
+        return NULL;
+    }
+    if (!hooks->metrics_character_mark_unique_by_name(self->pl, name, subject)) {
+        PyErr_Format(PyExc_ValueError, "Invalid or full character metric collection '%s'.", name);
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static const char doc_Atrinik_Player_QuestStatus[] =
+    ".. method:: QuestStatus(uid, status).\n\n"
+    "Record an authoritative top-level quest lifecycle transition.\n\n"
+    ":param uid: Stable quest UID.\n:type uid: str\n"
+    ":param status: One of QUEST_STATUS_STARTED, QUEST_STATUS_COMPLETED, or QUEST_STATUS_FAILED.\n"
+    ":type status: int\n:raises ValueError: If the UID or status is invalid.";
+
+static PyObject *Atrinik_Player_QuestStatus(Atrinik_Player *self, PyObject *args) {
+    const char *uid;
+    int status;
+    if (!PyArg_ParseTuple(args, "si", &uid, &status)) {
+        return NULL;
+    }
+    if (!hooks->metrics_character_quest_status(self->pl, uid, status)) {
+        PyErr_SetString(PyExc_ValueError, "Invalid quest UID or status.");
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
 /** Documentation for Atrinik_Player_BankDeposit(). */
 static const char doc_Atrinik_Player_BankDeposit[] =
     ".. method:: BankDeposit(text).\n\n"
@@ -986,6 +1068,19 @@ static PyMethodDef methods[] = {
      doc_Atrinik_Player_GetEquipment},
     {"CanCarry", PY_METHOD(Atrinik_Player_CanCarry), METH_O, doc_Atrinik_Player_CanCarry},
     {"AddExp", PY_METHOD(Atrinik_Player_AddExp), METH_VARARGS, doc_Atrinik_Player_AddExp},
+    {"MetricAdd", PY_METHOD(Atrinik_Player_MetricAdd), METH_VARARGS, doc_Atrinik_Player_MetricAdd},
+    {"MetricKeyedAdd",
+     PY_METHOD(Atrinik_Player_MetricKeyedAdd),
+     METH_VARARGS,
+     doc_Atrinik_Player_MetricKeyedAdd},
+    {"MetricMarkUnique",
+     PY_METHOD(Atrinik_Player_MetricMarkUnique),
+     METH_VARARGS,
+     doc_Atrinik_Player_MetricMarkUnique},
+    {"QuestStatus",
+     PY_METHOD(Atrinik_Player_QuestStatus),
+     METH_VARARGS,
+     doc_Atrinik_Player_QuestStatus},
     {"BankDeposit",
      PY_METHOD(Atrinik_Player_BankDeposit),
      METH_VARARGS,

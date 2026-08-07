@@ -104,7 +104,7 @@ static int ranged_fire_func(object *op, object *shooter, int dir, double *delay)
     }
 
     if (shooter->type == PLAYER) {
-        CONTR(shooter)->stat_arrows_fired++;
+        metrics_add(&CONTR(shooter)->metrics, METRIC_CHARACTER_ARROWS_FIRED, 1);
         CONTR(shooter)->last_combat = pticks;
     }
 

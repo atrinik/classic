@@ -378,6 +378,12 @@ int bank_deposit(object *op, const char *text, int64_t *value) {
         bank->value += *value;
     }
 
+    if (op->type == PLAYER && *value > 0) {
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_BANK_DEPOSITS, 1);
+        metrics_add(&CONTR(op)->metrics,
+                    METRIC_CHARACTER_BANK_CURRENCY_DEPOSITED,
+                    (uint64_t)*value);
+    }
     return BANK_SUCCESS;
 }
 
@@ -467,5 +473,11 @@ int bank_withdraw(object *op, const char *text, int64_t *value) {
         bank->value -= big_value;
     }
 
+    if (op->type == PLAYER && *value > 0) {
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_BANK_WITHDRAWALS, 1);
+        metrics_add(&CONTR(op)->metrics,
+                    METRIC_CHARACTER_BANK_CURRENCY_WITHDRAWN,
+                    (uint64_t)*value);
+    }
     return BANK_SUCCESS;
 }

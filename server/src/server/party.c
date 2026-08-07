@@ -94,12 +94,24 @@ void add_party_member(party_struct *party, object *op) {
     objectlink *ol;
     packet_struct *packet;
 
+    metrics_character_party_changed(CONTR(op));
     ol = get_objectlink();
     /* Add the player to the party's linked list of members. */
     ol->objlink.ob = op;
     objectlink_link(&party->members, NULL, NULL, party->members, ol);
     /* And set up player's pointer to the party. */
     CONTR(op)->party = party;
+    CONTR(op)->metrics_party_remainder_us = 0;
+
+    size_t party_size = 0;
+    for (objectlink *member = party->members; member != NULL; member = member->next) {
+        party_size++;
+    }
+    for (objectlink *member = party->members; member != NULL; member = member->next) {
+        metrics_update_max(&CONTR(member->objlink.ob)->metrics,
+                           METRIC_CHARACTER_HIGHEST_PARTY_SIZE,
+                           party_size);
+    }
 
     packet = packet_new(CLIENT_CMD_PARTY, 64, 64);
     packet_debug_data(packet, 0, "Party command type");
@@ -122,6 +134,8 @@ void add_party_member(party_struct *party, object *op) {
 void remove_party_member(party_struct *party, object *op) {
     objectlink *ol;
     packet_struct *packet;
+
+    metrics_character_party_changed(CONTR(op));
 
     /* Go through the party members, and remove the player that is
      * leaving. */
@@ -167,6 +181,7 @@ void remove_party_member(party_struct *party, object *op) {
     socket_send_packet(CONTR(op)->cs, packet);
 
     CONTR(op)->party = NULL;
+    CONTR(op)->metrics_party_remainder_us = 0;
 }
 
 /**
@@ -200,7 +215,7 @@ void form_party(object *op, const char *name) {
     add_party_member(party, op);
     draw_info_format(COLOR_WHITE, op, "You have formed party: %s", name);
     FREE_AND_ADD_REF_HASH(party->leader, op->name);
-    CONTR(op)->stat_formed_party++;
+    metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_PARTIES_FORMED, 1);
 }
 
 /**

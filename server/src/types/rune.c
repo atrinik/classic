@@ -134,7 +134,7 @@ void rune_spring(object *op, object *victim) {
     trap_show(op, env);
 
     if (victim->type == PLAYER) {
-        CONTR(victim)->stat_traps_sprung++;
+        metrics_add(&CONTR(victim)->metrics, METRIC_CHARACTER_TRAPS_SPRUNG, 1);
     }
 
     /* Direct damage. */

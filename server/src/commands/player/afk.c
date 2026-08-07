@@ -45,19 +45,19 @@ void command_afk(object *op, const char *command, char *params) {
 
         /* Currently afk */
         if (CONTR(op)->afk) {
+            metrics_character_afk_changed(CONTR(op), false);
             CONTR(op)->afk = 0;
             draw_info(COLOR_WHITE, op, "You are no longer AFK.");
         } else {
             /* Currently not afk */
+            metrics_character_afk_changed(CONTR(op), true);
             CONTR(op)->afk = 1;
-            CONTR(op)->stat_afk_used++;
             draw_info(COLOR_WHITE, op, "You are now AFK.");
         }
     } else {
         /* Auto-reply message given */
-
+        metrics_character_afk_changed(CONTR(op), true);
         CONTR(op)->afk = 1;
-        CONTR(op)->stat_afk_used++;
         draw_info_format(COLOR_WHITE, op, "You are now AFK. Auto-reply: %s", params);
 
         LOG(CHAT, "[AFK] [%s] %s", op->name, params);

@@ -80,6 +80,10 @@ typedef struct account_struct {
     } *characters;
 
     size_t characters_num;
+
+    metric_store_t metrics;
+
+    bool metrics_valid;
 } account_struct;
 
 void account_init(void) {
@@ -128,6 +132,7 @@ static void account_free(account_struct *account) {
     }
 
     free(account->characters);
+    metrics_store_free(&account->metrics);
     OPENSSL_cleanse(account->password_record, sizeof(account->password_record));
     OPENSSL_cleanse(account->pbkdf2_password, sizeof(account->pbkdf2_password));
     OPENSSL_cleanse(account->pbkdf2_salt, sizeof(account->pbkdf2_salt));
@@ -185,6 +190,10 @@ static int account_save(account_struct *account, const char *path) {
         LOG(BUG, "Refusing to save account with an invalid password record: %s", path);
         return 0;
     }
+    if (!account->metrics_valid) {
+        LOG(BUG, "Refusing to overwrite account with malformed metrics: %s", path);
+        return 0;
+    }
 
     buffer = stringbuffer_new();
     stringbuffer_append_printf(buffer, "password %s\n", account->password_record);
@@ -200,6 +209,8 @@ static int account_save(account_struct *account, const char *path) {
                                    account->characters[i].level);
     }
 
+    metrics_append(buffer, &account->metrics);
+
     contents = stringbuffer_finish(buffer);
     bool ok = path_write_atomic(path, contents, strlen(contents), 0600);
     OPENSSL_cleanse(contents, strlen(contents));
@@ -214,7 +225,7 @@ static int account_save(account_struct *account, const char *path) {
 
 static int account_load(account_struct *account, const char *path) {
     FILE *fp;
-    char buf[MAX_BUF], *end;
+    char buf[1024], *end;
     unsigned int credential_count = 0;
 
     fp = fopen(path, "rb");
@@ -225,6 +236,8 @@ static int account_load(account_struct *account, const char *path) {
     }
 
     memset(account, 0, sizeof(*account));
+    metrics_store_init(&account->metrics, METRIC_SCOPE_ACCOUNT, 0);
+    account->metrics_valid = true;
     account->last_connection_id = xstrdup("");
 
     while (fgets(buf, sizeof(buf), fp)) {
@@ -232,6 +245,15 @@ static int account_load(account_struct *account, const char *path) {
 
         if (end) {
             *end = '\0';
+        } else if (!feof(fp)) {
+            LOG(BUG, "Oversized entry in account file: %s", path);
+            account->metrics_valid = false;
+            int ch;
+            while ((ch = fgetc(fp)) != '\n' && ch != EOF) {}
+            if (ch == EOF) {
+                break;
+            }
+            continue;
         }
 
         if (strncmp(buf, "password ", 9) == 0) {
@@ -290,6 +312,13 @@ static int account_load(account_struct *account, const char *path) {
             account->characters[account->characters_num].region_name = xstrdup(cps[2]);
             account->characters[account->characters_num].level = atoi(cps[3]);
             account->characters_num++;
+        } else if (strncmp(buf, "metrics_", 8) == 0 || strncmp(buf, "metric ", 7) == 0 ||
+                   strncmp(buf, "unique ", 7) == 0 || strncmp(buf, "keyed ", 6) == 0) {
+            bool recognized;
+            if (!metrics_parse_line(&account->metrics, buf, &recognized) || !recognized) {
+                LOG(BUG, "Invalid metrics entry detected in account file: %s", path);
+                account->metrics_valid = false;
+            }
         }
     }
 
@@ -303,7 +332,63 @@ static int account_load(account_struct *account, const char *path) {
         return 0;
     }
 
+    account->metrics.dirty = false;
+
     return 1;
+}
+
+static void account_metrics_merge_character(metric_store_t *account,
+                                            const metric_store_t *character) {
+    static const struct {
+        metric_collection_id_t character;
+        metric_collection_id_t account;
+    } collections[] = {
+        {METRIC_COLLECTION_CHARACTER_QUESTS_COMPLETED, METRIC_COLLECTION_ACCOUNT_QUESTS_COMPLETED},
+        {METRIC_COLLECTION_CHARACTER_QUEST_PARTS_COMPLETED,
+         METRIC_COLLECTION_ACCOUNT_QUEST_PARTS_COMPLETED},
+        {METRIC_COLLECTION_CHARACTER_MAPS_VISITED, METRIC_COLLECTION_ACCOUNT_MAPS_VISITED},
+        {METRIC_COLLECTION_CHARACTER_REGIONS_VISITED, METRIC_COLLECTION_ACCOUNT_REGIONS_VISITED},
+        {METRIC_COLLECTION_CHARACTER_REGION_MAPS_DISCOVERED,
+         METRIC_COLLECTION_ACCOUNT_REGION_MAPS_DISCOVERED},
+        {METRIC_COLLECTION_CHARACTER_LANDMARKS_DISCOVERED,
+         METRIC_COLLECTION_ACCOUNT_LANDMARKS_DISCOVERED},
+        {METRIC_COLLECTION_CHARACTER_LORE_TOPICS_DISCOVERED,
+         METRIC_COLLECTION_ACCOUNT_LORE_TOPICS_DISCOVERED},
+        {METRIC_COLLECTION_CHARACTER_BOOKS_READ, METRIC_COLLECTION_ACCOUNT_BOOKS_READ},
+        {METRIC_COLLECTION_CHARACTER_FOOD_ARCHETYPES_USED,
+         METRIC_COLLECTION_ACCOUNT_FOOD_ARCHETYPES_USED},
+        {METRIC_COLLECTION_CHARACTER_POTION_ARCHETYPES_USED,
+         METRIC_COLLECTION_ACCOUNT_POTION_ARCHETYPES_USED},
+        {METRIC_COLLECTION_CHARACTER_SCROLL_ARCHETYPES_USED,
+         METRIC_COLLECTION_ACCOUNT_SCROLL_ARCHETYPES_USED},
+        {METRIC_COLLECTION_CHARACTER_SPELLS_LEARNED, METRIC_COLLECTION_ACCOUNT_SPELLS_LEARNED},
+        {METRIC_COLLECTION_CHARACTER_SKILLS_LEARNED, METRIC_COLLECTION_ACCOUNT_SKILLS_LEARNED},
+        {METRIC_COLLECTION_CHARACTER_BOSSES_DEFEATED, METRIC_COLLECTION_ACCOUNT_BOSSES_DEFEATED},
+        {METRIC_COLLECTION_CHARACTER_SAVEBED_REGIONS, METRIC_COLLECTION_ACCOUNT_SAVEBED_REGIONS},
+        {METRIC_COLLECTION_CHARACTER_ACTIVE_DAYS, METRIC_COLLECTION_ACCOUNT_ACTIVE_DAYS},
+    };
+
+    for (size_t collection = 0; collection < arraysize(collections); collection++) {
+        const metric_unique_set_t *set = &character->collections[collections[collection].character];
+        for (size_t entry = 0; entry < set->count; entry++) {
+            metrics_mark_unique(account, collections[collection].account, set->ids[entry]);
+        }
+    }
+}
+
+bool account_metrics_load(const char *name, metric_store_t *metrics) {
+    HARD_ASSERT(name != NULL);
+    HARD_ASSERT(metrics != NULL);
+    char *path = account_make_path(name);
+    account_struct account;
+    if (!account_load(&account, path)) {
+        free(path);
+        return false;
+    }
+    free(path);
+    metrics_store_move(metrics, &account.metrics);
+    account_free(&account);
+    return true;
 }
 
 static void account_send_characters(socket_struct *ns, account_struct *account) {
@@ -399,6 +484,8 @@ bool account_provision(const char *name,
 
     *error = '\0';
     memset(&account, 0, sizeof(account));
+    metrics_store_init(&account.metrics, METRIC_SCOPE_ACCOUNT, 0);
+    account.metrics_valid = true;
     snprintf(VS(account_name), "%s", name);
     snprintf(VS(character_name), "%s", character);
 
@@ -664,13 +751,32 @@ void account_login(socket_struct *ns, char *name, char *password) {
         return;
     }
 
-    ns->account = xstrdup(name);
-    account_send_characters(ns, &account);
-
     free(account.last_connection_id);
     account.last_connection_id = xstrdup(socket_get_id(ns->sc));
     account.last_time = datetime_getutc();
-    account_save(&account, path);
+    if (account.metrics.epoch == 0) {
+        account.metrics.epoch = (uint64_t)account.last_time;
+        account.metrics.dirty = true;
+    }
+    if (metrics_get(&account.metrics, METRIC_ACCOUNT_FIRST_LOGIN_AT) == 0) {
+        metrics_set(&account.metrics, METRIC_ACCOUNT_FIRST_LOGIN_AT, (uint64_t)account.last_time);
+    }
+    metrics_set(&account.metrics, METRIC_ACCOUNT_LAST_LOGIN_AT, (uint64_t)account.last_time);
+    metrics_add(&account.metrics, METRIC_ACCOUNT_SUCCESSFUL_AUTHENTICATIONS, 1);
+    if (!account_save(&account, path)) {
+        draw_info_send(CHAT_TYPE_GAME,
+                       NULL,
+                       COLOR_RED,
+                       ns,
+                       "Account metrics could not be saved; authentication was not completed.");
+        account_send_characters(ns, NULL);
+        account_free(&account);
+        free(path);
+        return;
+    }
+
+    ns->account = xstrdup(name);
+    account_send_characters(ns, &account);
     account_free(&account);
     free(path);
 }
@@ -681,6 +787,8 @@ void account_register(socket_struct *ns, char *name, char *password, char *passw
     account_struct account;
 
     memset(&account, 0, sizeof(account));
+    metrics_store_init(&account.metrics, METRIC_SCOPE_ACCOUNT, 0);
+    account.metrics_valid = true;
 
     if (ns->account) {
         ns->state = ST_DEAD;
@@ -753,6 +861,8 @@ void account_register(socket_struct *ns, char *name, char *password, char *passw
     path_ensure_directories(path);
     account.last_connection_id = xstrdup(socket_get_id(ns->sc));
     account.last_time = datetime_getutc();
+    account.metrics.epoch = (uint64_t)account.last_time;
+    metrics_set(&account.metrics, METRIC_ACCOUNT_CREATED_AT, (uint64_t)account.last_time);
     account.characters = NULL;
     account.characters_num = 0;
 
@@ -863,6 +973,15 @@ void account_new_char(socket_struct *ns, char *name, char *archname) {
     account.characters[account.characters_num].region_name = xstrdup("");
     account.characters[account.characters_num].level = 1;
     account.characters_num++;
+    metrics_add(&account.metrics, METRIC_ACCOUNT_CHARACTERS_CREATED, 1);
+    metrics_set(&account.metrics, METRIC_ACCOUNT_CURRENT_ROSTER_SIZE, account.characters_num);
+    metrics_update_max(&account.metrics,
+                       METRIC_ACCOUNT_HIGHEST_ROSTER_SIZE,
+                       account.characters_num);
+    char race_id[METRICS_UNIQUE_ID_MAX + 1];
+    if (metrics_format_content_id(VS(race_id), "archetype", at->name)) {
+        metrics_mark_unique(&account.metrics, METRIC_COLLECTION_ACCOUNT_RACES_CREATED, race_id);
+    }
 
     if (!account_save(&account, path)) {
         draw_info_send(CHAT_TYPE_GAME,
@@ -939,7 +1058,59 @@ void account_logout_char(socket_struct *ns, player *pl) {
         }
     }
 
+    metrics_add(&account.metrics,
+                METRIC_ACCOUNT_ACTIVE_PLAY_TIME,
+                pl->metrics_session_active_seconds);
+    metrics_update_max(&account.metrics,
+                       METRIC_ACCOUNT_LONGEST_CHARACTER_SESSION,
+                       pl->metrics_completed_session_seconds);
+    metrics_update_max(&account.metrics,
+                       METRIC_ACCOUNT_HIGHEST_CHARACTER_LEVEL,
+                       MAX(0, pl->ob->level));
+    metrics_add(&account.metrics, METRIC_ACCOUNT_CHARACTER_SESSIONS_COMPLETED, 1);
+    metrics_set(&account.metrics,
+                METRIC_ACCOUNT_LAST_LOGOUT_AT,
+                metrics_get(&pl->metrics, METRIC_CHARACTER_LAST_LOGOUT_AT));
+    account_metrics_merge_character(&account.metrics, &pl->metrics);
+
     account_save(&account, path);
+    account_free(&account);
+    free(path);
+}
+
+void account_character_session_start(socket_struct *ns, player *pl) {
+    HARD_ASSERT(ns != NULL);
+    HARD_ASSERT(pl != NULL);
+    HARD_ASSERT(ns->account != NULL);
+
+    char *path = account_make_path(ns->account);
+    account_struct account;
+    if (!account_load(&account, path)) {
+        free(path);
+        return;
+    }
+
+    metrics_add(&account.metrics, METRIC_ACCOUNT_CHARACTER_SESSIONS_STARTED, 1);
+    metrics_set(&account.metrics, METRIC_ACCOUNT_CURRENT_ROSTER_SIZE, account.characters_num);
+    metrics_update_max(&account.metrics,
+                       METRIC_ACCOUNT_HIGHEST_ROSTER_SIZE,
+                       account.characters_num);
+    metrics_update_max(&account.metrics,
+                       METRIC_ACCOUNT_HIGHEST_CHARACTER_LEVEL,
+                       MAX(0, pl->ob->level));
+    metrics_mark_unique(&account.metrics,
+                        METRIC_COLLECTION_ACCOUNT_CHARACTERS_PLAYED,
+                        pl->ob->name);
+    if (pl->ob->arch != NULL) {
+        char race_id[METRICS_UNIQUE_ID_MAX + 1];
+        if (metrics_format_content_id(VS(race_id), "archetype", pl->ob->arch->name)) {
+            metrics_mark_unique(&account.metrics, METRIC_COLLECTION_ACCOUNT_RACES_PLAYED, race_id);
+        }
+    }
+    account_metrics_merge_character(&account.metrics, &pl->metrics);
+    if (!account_save(&account, path)) {
+        LOG(ERROR, "Failed to save account session metrics for %s", ns->account);
+    }
     account_free(&account);
     free(path);
 }

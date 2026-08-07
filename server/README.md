@@ -260,6 +260,18 @@ client login then follows normal character initialization, including the
 configured starting map, skills, and items. Existing account or character
 files are never replaced, and a partial provisioning attempt is rolled back.
 
+Authoritative gameplay metrics
+------------------------------
+
+Lifetime character and account gameplay metrics are private server state.
+Character metrics are stored beside `player.dat` in a versioned, atomically
+written mode-0600 `metrics.dat`; account metrics are part of the atomic account
+file. Back up and restore the complete `data/players` and `data/accounts`
+trees, never just one file from a character directory. The operator-only
+`/metrics <player> [character|account|all] [category]` command can inspect an
+online character and its authenticated owning account. See `doc/METRICS.md`
+for registry, persistence, event, privacy, and analytics semantics.
+
 =================================================
 = 2.5. Direct QUIC hosting (no port forwarding) =
 =================================================

@@ -86,6 +86,15 @@ int64_t do_skill(object *op, int dir, const char *params) {
     int64_t success = 0;
     int skill = op->chosen_skill->stats.sp;
 
+    if (op->type == PLAYER) {
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_SKILL_USES, 1);
+        const char *skill_id = skill_id_from_index(skill);
+        char id[METRICS_UNIQUE_ID_MAX + 1];
+        if (skill_id != NULL && metrics_format_content_id(VS(id), "skill", skill_id)) {
+            metrics_keyed_add(&CONTR(op)->metrics, METRIC_KEYED_CHARACTER_SKILL_USES, id, 1);
+        }
+    }
+
     /* Trigger the map-wide skill event. */
     if (op->map && op->map->events) {
         int retval = trigger_map_event(MEVENT_SKILL_USED, op->map, op, NULL, NULL, NULL, dir);
@@ -122,6 +131,17 @@ int64_t do_skill(object *op, int dir, const char *params) {
      * Note that add_exp() will figure out player/monster experience
      * gain problems. */
     if (success) {
+        if (op->type == PLAYER) {
+            metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_SUCCESSFUL_SKILL_USES, 1);
+            const char *skill_id = skill_id_from_index(skill);
+            char id[METRICS_UNIQUE_ID_MAX + 1];
+            if (skill_id != NULL && metrics_format_content_id(VS(id), "skill", skill_id)) {
+                metrics_keyed_add(&CONTR(op)->metrics,
+                                  METRIC_KEYED_CHARACTER_SKILL_SUCCESSFUL_USES,
+                                  id,
+                                  1);
+            }
+        }
         add_exp(op, success, op->chosen_skill->stats.sp, 0);
     }
 
