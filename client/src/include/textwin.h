@@ -161,6 +161,18 @@ extern int textwin_tabs_height(widgetdata *widget);
 
 extern void textwin_create_scrollbar(widgetdata *widget);
 
+/**
+ * Get the focused primary-chat tab that exclusively owns an event.
+ * @param widget
+ * Text window receiving the event.
+ * @param event
+ * Event to classify.
+ * @return
+ * Borrowed selected-tab pointer for keyboard/text events owned by the focused
+ * primary chat input, otherwise NULL.
+ */
+extern textwin_tab_struct *textwin_chat_input_event_tab(widgetdata *widget, const SDL_Event *event);
+
 extern void widget_textwin_init(widgetdata *widget);
 
 extern void widget_xp_tracker_init(widgetdata *widget);

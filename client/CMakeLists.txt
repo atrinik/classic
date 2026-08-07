@@ -213,6 +213,19 @@ if (BUILD_TESTING AND NOT MINGW)
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(client-surface-primitives-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-surface-primitives COMMAND client-surface-primitives-tests)
+
+    add_executable(client-textwin-event-tests
+        src/tests/textwin_event.c
+        src/gui/widgets/textwin_event.c)
+    atrinik_configure_target(client-textwin-event-tests)
+    target_compile_definitions(client-textwin-event-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-textwin-event-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-textwin-event-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-textwin-event COMMAND client-textwin-event-tests)
 endif ()
 
 # Installer.
