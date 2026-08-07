@@ -58,6 +58,52 @@ static void test_packed_indexed_conversion(void) {
     SDL_DestroySurface(surface);
 }
 
+static void test_legacy_texture_transparency(void) {
+    char path[1024];
+    int length = snprintf(path, sizeof(path), "%s/textures/invslot.png", ATRINIK_TEST_SOURCE_DIR);
+    TEST_CHECK(length > 0 && (size_t)length < sizeof(path));
+    SDL_Surface *surface = IMG_Load(path);
+    TEST_CHECK(surface != NULL);
+
+    Uint32 color_key;
+    TEST_CHECK(!SDL_GetSurfaceColorKey(surface, &color_key));
+    TEST_CHECK(surface_set_transparent_black(surface));
+
+    SDL_Surface *converted = surface_to_display_alpha(surface);
+    TEST_CHECK(converted != NULL);
+    Uint8 red, green, blue, alpha;
+    TEST_CHECK(SDL_ReadSurfacePixel(converted,
+                                    converted->w / 2,
+                                    converted->h / 2,
+                                    &red,
+                                    &green,
+                                    &blue,
+                                    &alpha));
+    TEST_CHECK(alpha == SDL_ALPHA_TRANSPARENT);
+    TEST_CHECK(SDL_ReadSurfacePixel(converted, 0, 0, &red, &green, &blue, &alpha));
+    TEST_CHECK(alpha == SDL_ALPHA_OPAQUE);
+
+    SDL_DestroySurface(converted);
+    SDL_DestroySurface(surface);
+
+    length = snprintf(path, sizeof(path), "%s/textures/apply.png", ATRINIK_TEST_SOURCE_DIR);
+    TEST_CHECK(length > 0 && (size_t)length < sizeof(path));
+    surface = IMG_Load(path);
+    TEST_CHECK(surface != NULL);
+    TEST_CHECK(surface_set_transparent_black(surface));
+    converted = surface_to_display_alpha(surface);
+    TEST_CHECK(converted != NULL);
+    TEST_CHECK(SDL_ReadSurfacePixel(converted,
+                                    converted->w / 2,
+                                    converted->h / 2,
+                                    &red,
+                                    &green,
+                                    &blue,
+                                    &alpha));
+    TEST_CHECK(alpha == SDL_ALPHA_OPAQUE);
+    SDL_DestroySurface(converted);
+    SDL_DestroySurface(surface);
+}
 static void test_darken_preserves_alpha(void) {
     SDL_Surface *surface = SDL_CreateSurface(2, 1, SDL_PIXELFORMAT_RGBA32);
     TEST_CHECK(surface != NULL);
@@ -77,6 +123,7 @@ static void test_darken_preserves_alpha(void) {
 
 int main(void) {
     test_packed_indexed_conversion();
+    test_legacy_texture_transparency();
     test_darken_preserves_alpha();
     return 0;
 }
