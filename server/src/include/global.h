@@ -389,6 +389,21 @@ typedef struct settings_struct {
      */
     uint8_t world_maker;
 
+    /** Provision one local test scenario and exit without serving clients. */
+    bool provision_scenario;
+
+    /** Account name used by the offline scenario provisioner. */
+    char provision_account[MAX_BUF];
+
+    /** Character name used by the offline scenario provisioner. */
+    char provision_character[MAX_BUF];
+
+    /** Player archetype used by the offline scenario provisioner. */
+    char provision_archetype[MAX_BUF];
+
+    /** Protected file containing the scenario account password. */
+    char provision_password_file[HUGE_BUF];
+
     /**
      * Running unit tests?
      */

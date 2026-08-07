@@ -360,6 +360,214 @@ char *account_make_path(const char *name) {
     return cp;
 }
 
+static bool account_reserve_file(const char *path, char *error, size_t error_size) {
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, SAVE_MODE);
+    if (fd < 0) {
+        snprintf(error, error_size, "cannot reserve %s: %s", path, strerror(errno));
+        return false;
+    }
+    if (close(fd) != 0) {
+        int saved_errno = errno;
+        unlink(path);
+        snprintf(error, error_size, "cannot close %s: %s", path, strerror(saved_errno));
+        return false;
+    }
+    return true;
+}
+
+bool account_provision(const char *name,
+                       const char *password,
+                       const char *character,
+                       const char *archname,
+                       char *error,
+                       size_t error_size) {
+    account_struct account;
+    char account_name[MAX_BUF];
+    char character_name[MAX_BUF];
+    char *account_path = NULL;
+    char *player_path = NULL;
+    bool account_reserved = false;
+    bool player_reserved = false;
+    bool ok = false;
+
+    HARD_ASSERT(name != NULL);
+    HARD_ASSERT(password != NULL);
+    HARD_ASSERT(character != NULL);
+    HARD_ASSERT(archname != NULL);
+    HARD_ASSERT(error != NULL);
+    HARD_ASSERT(error_size > 0);
+
+    *error = '\0';
+    memset(&account, 0, sizeof(account));
+    snprintf(VS(account_name), "%s", name);
+    snprintf(VS(character_name), "%s", character);
+
+    size_t account_length = strlen(account_name);
+    size_t password_length = strlen(password);
+    size_t character_length = strlen(character_name);
+    if (account_length < settings.limits[ALLOWED_CHARS_ACCOUNT][0] ||
+        account_length > settings.limits[ALLOWED_CHARS_ACCOUNT][1] ||
+        string_contains_other(account_name, settings.allowed_chars[ALLOWED_CHARS_ACCOUNT])) {
+        snprintf(error, error_size, "invalid account name");
+        goto out;
+    }
+    if (password_length < settings.limits[ALLOWED_CHARS_PASSWORD][0] ||
+        password_length > settings.limits[ALLOWED_CHARS_PASSWORD][1] ||
+        string_contains_other(password, settings.allowed_chars[ALLOWED_CHARS_PASSWORD])) {
+        snprintf(error, error_size, "invalid password");
+        goto out;
+    }
+    if (character_length < settings.limits[ALLOWED_CHARS_CHARNAME][0] ||
+        character_length > settings.limits[ALLOWED_CHARS_CHARNAME][1] ||
+        string_contains_other(character_name, settings.allowed_chars[ALLOWED_CHARS_CHARNAME])) {
+        snprintf(error, error_size, "invalid character name");
+        goto out;
+    }
+
+    string_tolower(account_name);
+    string_title(character_name);
+    if (strcasecmp(account_name, ACCOUNT_TESTING_NAME) == 0 ||
+        strcmp(character_name, PLAYER_TESTING_NAME1) == 0 ||
+        strcmp(character_name, PLAYER_TESTING_NAME2) == 0) {
+        snprintf(error, error_size, "account or character name is reserved");
+        goto out;
+    }
+
+    archetype_t *at = arch_find(archname);
+    if (at == NULL || at->clone.type != PLAYER) {
+        snprintf(error, error_size, "invalid player archetype: %s", archname);
+        goto out;
+    }
+    if (!account_set_password(&account, password)) {
+        snprintf(error, error_size, "could not create password record");
+        goto out;
+    }
+
+    account_path = account_make_path(account_name);
+    player_path = player_make_path(character_name, "player.dat");
+    path_ensure_directories(account_path);
+    path_ensure_directories(player_path);
+    if (!account_reserve_file(account_path, error, error_size)) {
+        goto out;
+    }
+    account_reserved = true;
+    if (!account_reserve_file(player_path, error, error_size)) {
+        goto out;
+    }
+    player_reserved = true;
+
+    account.last_connection_id = xstrdup("");
+    account.last_time = datetime_getutc();
+    account.characters = xcalloc(1, sizeof(*account.characters));
+    account.characters[0].at = at;
+    account.characters[0].name = xstrdup(character_name);
+    account.characters[0].region_name = xstrdup("");
+    account.characters[0].level = 1;
+    account.characters_num = 1;
+    if (!account_save(&account, account_path)) {
+        snprintf(error, error_size, "could not save provisioned account");
+        goto out;
+    }
+    account_reserved = false;
+    player_reserved = false;
+    ok = true;
+
+out:
+    if (player_reserved && unlink(player_path) != 0 && errno != ENOENT) {
+        LOG(ERROR,
+            "Could not roll back provisioned player file %s: %s",
+            player_path,
+            strerror(errno));
+    }
+    if (account_reserved && unlink(account_path) != 0 && errno != ENOENT) {
+        LOG(ERROR,
+            "Could not roll back provisioned account file %s: %s",
+            account_path,
+            strerror(errno));
+    }
+    account_free(&account);
+    free(account_path);
+    free(player_path);
+    return ok;
+}
+
+bool account_provision_from_file(const char *name,
+                                 const char *password_file,
+                                 const char *character,
+                                 const char *archname,
+                                 char *error,
+                                 size_t error_size) {
+    char password[MAX_BUF];
+    bool ok = false;
+    int fd = -1;
+    FILE *fp = NULL;
+
+    HARD_ASSERT(password_file != NULL);
+    HARD_ASSERT(error != NULL);
+    HARD_ASSERT(error_size > 0);
+
+    memset(password, 0, sizeof(password));
+    int flags = O_RDONLY;
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+    flags |= O_NOFOLLOW;
+#endif
+    fd = open(password_file, flags);
+    if (fd < 0) {
+        snprintf(error, error_size, "cannot open password file: %s", strerror(errno));
+        goto out;
+    }
+
+    struct stat statbuf;
+    if (fstat(fd, &statbuf) != 0 || !S_ISREG(statbuf.st_mode)) {
+        snprintf(error, error_size, "password file is not a regular file");
+        goto out;
+    }
+#ifndef WIN32
+    if (statbuf.st_uid != geteuid() || (statbuf.st_mode & 0777) != SAVE_MODE) {
+        snprintf(error, error_size, "password file must be owned by this user and mode 0600");
+        goto out;
+    }
+#endif
+    fp = fdopen(fd, "rb");
+    if (fp == NULL) {
+        snprintf(error, error_size, "cannot read password file: %s", strerror(errno));
+        goto out;
+    }
+    fd = -1;
+    size_t length = fread(password, 1, sizeof(password) - 1, fp);
+    if (ferror(fp) || !feof(fp)) {
+        snprintf(error, error_size, "password file is too large or unreadable");
+        goto out;
+    }
+    if (memchr(password, '\0', length) != NULL) {
+        snprintf(error, error_size, "password file contains a NUL byte");
+        goto out;
+    }
+    if (length > 0 && password[length - 1] == '\n') {
+        password[--length] = '\0';
+        if (length > 0 && password[length - 1] == '\r') {
+            password[--length] = '\0';
+        }
+    }
+    if (memchr(password, '\n', length) != NULL || memchr(password, '\r', length) != NULL) {
+        snprintf(error, error_size, "password file must contain exactly one line");
+        goto out;
+    }
+    ok = account_provision(name, password, character, archname, error, error_size);
+
+out:
+    if (fp != NULL) {
+        fclose(fp);
+    } else if (fd >= 0) {
+        close(fd);
+    }
+    OPENSSL_cleanse(password, sizeof(password));
+    return ok;
+}
+
 void account_login(socket_struct *ns, char *name, char *password) {
     account_struct account;
     char *path;

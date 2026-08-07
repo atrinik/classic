@@ -40,6 +40,40 @@ extern void account_deinit(void);
 
 extern char *account_make_path(const char *name);
 
+/**
+ * Provision one account and first-login character in a stopped local state.
+ * Existing account or player files are never replaced. Newly reserved files
+ * are rolled back on failure.
+ *
+ * @param name Account name.
+ * @param password Plaintext password, consumed synchronously and not retained.
+ * @param character Character name.
+ * @param archname Player archetype name.
+ * @param error Output buffer for a non-secret failure description.
+ * @param error_size Size of error.
+ * @return True on success, false on failure.
+ */
+extern bool account_provision(const char *name,
+                              const char *password,
+                              const char *character,
+                              const char *archname,
+                              char *error,
+                              size_t error_size);
+
+/**
+ * Read a plaintext password from a protected file and call
+ * account_provision(). The file must be regular, non-symlink, owned by the
+ * current user, and mode 0600. It may have no terminator or one LF/CRLF.
+ *
+ * @see account_provision
+ */
+extern bool account_provision_from_file(const char *name,
+                                        const char *password_file,
+                                        const char *character,
+                                        const char *archname,
+                                        char *error,
+                                        size_t error_size);
+
 extern void account_login(socket_struct *ns, char *name, char *password);
 
 extern void account_register(socket_struct *ns, char *name, char *password, char *password2);
