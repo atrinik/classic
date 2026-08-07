@@ -197,73 +197,115 @@ static bool clioptions_option_tiles_debug(const char *arg, char **errmsg) {
     return true;
 }
 
+/** Parse the complete fixed-size multipart geometry table. */
+static bool load_mapdef_line(const char *line, _multi_part_obj *object) {
+    int values[34];
+    const char *cursor = line;
+
+    for (size_t i = 0; i < arraysize(values); i++) {
+        while (isspace((unsigned char)*cursor)) {
+            cursor++;
+        }
+        if (*cursor == '\0') {
+            return false;
+        }
+
+        errno = 0;
+        char *end;
+        long value = strtol(cursor, &end, 10);
+        int minimum = i < 2 ? 0 : -4096;
+        if (errno != 0 || end == cursor || value < minimum || value > 4096) {
+            return false;
+        }
+        values[i] = (int)value;
+        cursor = end;
+    }
+    while (isspace((unsigned char)*cursor)) {
+        cursor++;
+    }
+    if (*cursor != '\0') {
+        return false;
+    }
+
+    object->xlen = values[0];
+    object->ylen = values[1];
+    for (size_t i = 0; i < arraysize(object->part); i++) {
+        object->part[i].xoff = values[2 + i * 2];
+        object->part[i].yoff = values[3 + i * 2];
+    }
+    return true;
+}
+
+static bool load_mapdef_stream(FILE *stream) {
+    _multi_part_obj parsed[arraysize(MultiArchs)];
+    char line[MAX_BUF];
+    memset(parsed, 0, sizeof(parsed));
+
+    for (size_t i = 0; i < arraysize(parsed); i++) {
+        if (fgets(line, sizeof(line), stream) == NULL) {
+            return false;
+        }
+        if (strchr(line, '\n') == NULL && !feof(stream)) {
+            return false;
+        }
+        char *newline = strchr(line, '\n');
+        if (newline != NULL) {
+            *newline = '\0';
+        }
+        size_t line_length = strlen(line);
+        if (line_length != 0 && line[line_length - 1] == '\r') {
+            line[line_length - 1] = '\0';
+        }
+        if (!load_mapdef_line(line, &parsed[i])) {
+            return false;
+        }
+    }
+
+    while (fgets(line, sizeof(line), stream) != NULL) {
+        for (const char *cp = line; *cp != '\0'; cp++) {
+            if (!isspace((unsigned char)*cp)) {
+                return false;
+            }
+        }
+    }
+    if (ferror(stream)) {
+        return false;
+    }
+
+    memcpy(MultiArchs, parsed, sizeof(parsed));
+    return true;
+}
+
+bool load_mapdef_file(const char *path) {
+    HARD_ASSERT(path != NULL);
+
+    FILE *stream = fopen(path, "r");
+    if (stream == NULL) {
+        return false;
+    }
+    bool success = load_mapdef_stream(stream);
+    if (fclose(stream) != 0) {
+        success = false;
+    }
+    return success;
+}
+
 /**
  * Loads multi-arch object data offsets.
  */
 void load_mapdef_dat(void) {
-    FILE *stream;
-    int i, ii, x, y, d[32];
-    char line[MAX_BUF];
 
     clioption_t *cli;
     CLIOPTIONS_CREATE(cli, tiles_debug, "Enable map tiles debugging");
 
-    stream = path_fopen(ARCHDEF_FILE, "r");
+    FILE *stream = path_fopen(ARCHDEF_FILE, "r");
 
     if (stream == NULL) {
         LOG(BUG, "Can't open file %s", ARCHDEF_FILE);
         return;
     }
-
-    for (i = 0; i < 16; i++) {
-        if (!fgets(line, 255, stream)) {
-            break;
-        }
-
-        sscanf(line,
-               "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d "
-               "%d %d %d %d %d %d %d %d %d %d %d %d %d %d",
-               &x,
-               &y,
-               &d[0],
-               &d[1],
-               &d[2],
-               &d[3],
-               &d[4],
-               &d[5],
-               &d[6],
-               &d[7],
-               &d[8],
-               &d[9],
-               &d[10],
-               &d[11],
-               &d[12],
-               &d[13],
-               &d[14],
-               &d[15],
-               &d[16],
-               &d[17],
-               &d[18],
-               &d[19],
-               &d[20],
-               &d[21],
-               &d[22],
-               &d[23],
-               &d[24],
-               &d[25],
-               &d[26],
-               &d[27],
-               &d[28],
-               &d[29],
-               &d[30],
-               &d[31]);
-        MultiArchs[i].xlen = x;
-        MultiArchs[i].ylen = y;
-
-        for (ii = 0; ii < 16; ii++) {
-            MultiArchs[i].part[ii].xoff = d[ii * 2];
-            MultiArchs[i].part[ii].yoff = d[ii * 2 + 1];
-        }
+    if (!load_mapdef_stream(stream)) {
+        LOG(BUG, "Invalid multipart geometry in %s", ARCHDEF_FILE);
     }
 
     fclose(stream);
@@ -3394,7 +3436,7 @@ static void widget_background(widgetdata *widget, int draw) {
 }
 
 /** @copydoc widgetdata::deinit_func */
-static void widget_deinit(widgetdata *widget) {
+void map_runtime_deinit(void) {
     lighting_deinit();
 
     for (size_t i = 0; i < arraysize(map_level_surfaces); i++) {
@@ -3410,17 +3452,28 @@ static void widget_deinit(widgetdata *widget) {
     }
     cells = NULL;
 
-    region_map_free(MapData.region_map);
-    MapData.region_map = NULL;
+    if (MapData.region_map != NULL) {
+        region_map_free(MapData.region_map);
+        MapData.region_map = NULL;
+    }
+}
+
+/** @copydoc widgetdata::deinit_func */
+static void widget_deinit(widgetdata *widget) {
+    map_runtime_deinit();
+}
+
+void map_runtime_init(void) {
+    HARD_ASSERT(MapData.region_map == NULL);
+    MapData.region_map = region_map_create();
+    HARD_ASSERT(MapData.region_map != NULL);
 }
 
 /**
  * Initialize one map widget.
  */
 void widget_map_init(widgetdata *widget) {
-    HARD_ASSERT(MapData.region_map == NULL);
-
-    MapData.region_map = region_map_create();
+    map_runtime_init();
 
     widget->draw_func = widget_draw;
     widget->event_func = widget_event;

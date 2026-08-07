@@ -372,6 +372,15 @@ extern int map_anims_need_redraw(void);
 
 extern void load_mapdef_dat(void);
 
+/** Load multipart geometry from an explicit immutable input. */
+extern bool load_mapdef_file(const char *path);
+
+/** Initialize map state without registering a graphical widget. */
+extern void map_runtime_init(void);
+
+/** Release map state initialized for either graphical or offscreen use. */
+extern void map_runtime_deinit(void);
+
 extern void clear_map(_Bool hard);
 
 extern void map_update_size(int w, int h);

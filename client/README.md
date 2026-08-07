@@ -100,6 +100,32 @@
  into the same bounded scheduler instead of downloading serially.
 
 =================================================
+= 2.1. Replaying an offline player view         =
+=================================================
+
+ The client can replay a bounded MAP command through its normal decoder and
+ software map renderer without opening a window, initializing audio, reading
+ user settings, or connecting to a server:
+  $ build/linux-debug/atrinik --player-view \
+      src/tests/fixtures/player_view/smooth.xml \
+      build/linux-debug/player-view.png
+
+ Use `-` as the output to verify the canonical RGBA hash without writing a PNG.
+ Output files must not already exist and must be outside the manifest's frozen
+ input tree. Publication uses an exclusive same-directory temporary file,
+ verifies the encoded pixels, and then publishes atomically without replacing
+ another file.
+
+ The closed version-1 XML manifest pins the settings defaults, multipart
+ geometry, exact MAP payload, and every sprite by SHA-256. It also freezes the
+ viewport, logical map dimensions, software renderer, clock, zoom, and smooth
+ or discrete lighting choice. Unknown fields, external XML declarations,
+ missing or changed inputs, malformed packets, unavailable faces, and pixel
+ drift fail before publishing an output. The maintained fixtures cover normal
+ and stretched terrain, multipart and animated sprites, fog/cutaway behavior,
+ lighting modes, and physical depths zero, +1, and +2.
+
+=================================================
 = 3.1. Licensing (Atrinik client)               =
 =================================================
 

@@ -271,11 +271,17 @@ extern size_t setting_categories_num;
 
 extern void settings_init(void);
 
+/** Load only the defaults from an explicit file, without user persistence. */
+extern bool settings_init_read_only(const char *path);
+
 extern void settings_load(void);
 
 extern void settings_save(void);
 
 extern void settings_deinit(void);
+
+/** Release settings loaded by settings_init_read_only() without saving them. */
+extern void settings_deinit_read_only(void);
 
 extern void *setting_get(setting_struct *setting);
 

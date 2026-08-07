@@ -45,6 +45,16 @@ static bmap_t *image_bmaps = NULL;
  * Number of entries in ::image_bmaps.
  */
 static size_t image_bmaps_size = 0;
+/** Tracks incomplete immutable/offline map inputs without changing request APIs. */
+static bool image_missing_faces;
+
+void image_missing_faces_reset(void) {
+    image_missing_faces = false;
+}
+
+bool image_missing_faces_detected(void) {
+    return image_missing_faces;
+}
 
 /**
  * Check whether a face ID can be used to index ::FaceList.
@@ -405,9 +415,22 @@ void image_request_face(int pnum) {
     char buf[MAX_BUF];
     uint16_t num = (uint16_t)(pnum & FACE_ID_MASK);
 
-    if (!image_face_valid(num) || num >= image_bmaps_size) {
+    if (!image_face_valid(num)) {
+        image_missing_faces = true;
+        LOG(ERROR, "Ignoring invalid face ID %d (normalized: %u)", pnum, num);
+        return;
+    }
+
+    /* Immutable offline fixtures may preload a verified face without a
+     * mutable server bitmap catalog. A loaded face never needs a request. */
+    if (FaceList[num].name != NULL) {
+        return;
+    }
+
+    if (num >= image_bmaps_size) {
+        image_missing_faces = true;
         LOG(ERROR,
-            "Ignoring invalid face ID %d (normalized: %u, catalog size: %" PRIu64 ")",
+            "Ignoring unavailable face ID %d (normalized: %u, catalog size: %" PRIu64 ")",
             pnum,
             num,
             (uint64_t)image_bmaps_size);
@@ -419,7 +442,7 @@ void image_request_face(int pnum) {
     }
 
     /* Loaded or requested */
-    if (FaceList[num].name != NULL || FaceList[num].flags & FACE_REQUESTED) {
+    if (FaceList[num].flags & FACE_REQUESTED) {
         return;
     }
 
