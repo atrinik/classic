@@ -43,6 +43,9 @@ permissions:
   contents: read
   packages: read
 
+env:
+  WINDOWS_BUILD_CACHE_EPOCH: 1.0.5-9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7
+
 concurrency:
   group: >-
     classic-release-candidate-${{ inputs.tag || inputs.revision || github.run_id }}
@@ -99,7 +102,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           ref: ${{ needs.metadata.outputs.commit }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -163,8 +165,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           ref: ${{ needs.metadata.outputs.commit }}
+      - name: Restore Windows client compiler cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: client/build/ccache
+          key: >-
+            classic-${{ runner.os }}-${{ runner.arch }}-windows-client-ccache-v1-${{ env.WINDOWS_BUILD_CACHE_EPOCH }}-${{ needs.metadata.outputs.version }}-${{
+            hashFiles('client/CMakeLists.txt', 'client/CMakePresets.json',
+            'client/cmake/**', 'client/dependencies.lock.json', 'client/src/**',
+            'protocol/CMakeLists.txt', 'protocol/cmake/**', 'protocol/generated/c/**',
+            'protocol/schema/**', 'libatrinik/CMakeLists.txt', 'libatrinik/cmake/**',
+            'libatrinik/dependencies.lock.json', 'libatrinik/**/*.c',
+            'libatrinik/**/*.h') }}
+          restore-keys: |
+            classic-${{ runner.os }}-${{ runner.arch }}-windows-client-ccache-v1-${{ env.WINDOWS_BUILD_CACHE_EPOCH }}-
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
@@ -179,10 +194,16 @@ jobs:
             --user "$(id -u):$(id -g)" \
             --env ATRINIK_PACKAGE_VERSION="${RELEASE_VERSION}" \
             --env CCACHE_DIR=/workspace/client/build/ccache \
+            --env CCACHE_MAXSIZE=500M \
+            --env CCACHE_TEMPDIR=/tmp/atrinik-client-ccache \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace/client \
             ghcr.io/atrinik/windows-build:1.0.5@sha256:9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7 \
-            bash tools/build-windows-package.sh build/packages
+            bash -c \
+              'set -euo pipefail
+               ccache --zero-stats
+               bash tools/build-windows-package.sh build/packages
+               ccache --show-stats'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-client-windows-${{ needs.metadata.outputs.tag }}
@@ -199,8 +220,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           ref: ${{ needs.metadata.outputs.commit }}
+      - name: Restore Windows server compiler cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: server/build/ccache
+          key: >-
+            classic-${{ runner.os }}-${{ runner.arch }}-windows-server-ccache-v1-${{ env.WINDOWS_BUILD_CACHE_EPOCH }}-${{ needs.metadata.outputs.version }}-${{
+            hashFiles('server/CMakeLists.txt', 'server/CMakePresets.json',
+            'server/cmake/**', 'server/dependencies.lock.json', 'server/src/**',
+            'protocol/CMakeLists.txt', 'protocol/cmake/**', 'protocol/generated/c/**',
+            'protocol/schema/**', 'libatrinik/CMakeLists.txt', 'libatrinik/cmake/**',
+            'libatrinik/dependencies.lock.json', 'libatrinik/**/*.c',
+            'libatrinik/**/*.h') }}
+          restore-keys: |
+            classic-${{ runner.os }}-${{ runner.arch }}-windows-server-ccache-v1-${{ env.WINDOWS_BUILD_CACHE_EPOCH }}-
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
@@ -215,10 +249,16 @@ jobs:
             --user "$(id -u):$(id -g)" \
             --env ATRINIK_PACKAGE_VERSION="${RELEASE_VERSION}" \
             --env CCACHE_DIR=/workspace/server/build/ccache \
+            --env CCACHE_MAXSIZE=500M \
+            --env CCACHE_TEMPDIR=/tmp/atrinik-server-ccache \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace/server \
             ghcr.io/atrinik/windows-build:1.0.5@sha256:9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7 \
-            bash tools/build-windows-package.sh build/packages
+            bash -c \
+              'set -euo pipefail
+               ccache --zero-stats
+               bash tools/build-windows-package.sh build/packages
+               ccache --show-stats'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-server-windows-${{ needs.metadata.outputs.tag }}
@@ -235,7 +275,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           ref: ${{ needs.metadata.outputs.commit }}
       - id: release-inputs
         name: Record locked server image inputs
@@ -278,7 +317,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           ref: ${{ needs.metadata.outputs.commit }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:

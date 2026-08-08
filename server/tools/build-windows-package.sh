@@ -23,12 +23,18 @@ python3 tools/dependencies.py sync
 python3 tools/dependencies.py verify
 
 dependency_arguments=()
+native_compiler_arguments=()
 monorepo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
 if [[ -n ${monorepo_root} && -f ${monorepo_root}/protocol/CMakeLists.txt &&
     -f ${monorepo_root}/libatrinik/CMakeLists.txt ]]; then
   dependency_arguments+=(
     "-DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=${monorepo_root}/protocol"
     "-DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=${monorepo_root}/libatrinik"
+  )
+fi
+if command -v ccache >/dev/null; then
+  native_compiler_arguments+=(
+    "-DCMAKE_C_COMPILER_LAUNCHER=$(command -v ccache)"
   )
 fi
 
@@ -47,6 +53,7 @@ cmake -S . -B "${region_build}" -G Ninja \
   -DBUILD_TESTING=OFF \
   -DPACKAGE_TYPE=none \
   -DPACKAGE_VERSION="${version}" \
+  "${native_compiler_arguments[@]}" \
   "${dependency_arguments[@]}"
 cmake --build "${region_build}" \
   --target atrinik-server plugin_arena plugin_python --parallel "$(nproc)"
