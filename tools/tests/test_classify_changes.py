@@ -45,6 +45,11 @@ class ClassifyChangesTests(unittest.TestCase):
         self.assertFalse(result["codeql_server"])
         self.assertTrue(result["codeql_core_cpp"])
 
+    def test_release_configuration_selects_both_native_components(self) -> None:
+        result = classify_changes.classify([".releaserc.cjs"])
+        self.assertTrue(result["client"])
+        self.assertTrue(result["server"])
+
     def test_python_and_workflow_changes_select_matching_languages(self) -> None:
         result = classify_changes.classify(
             ["editor/tool.py", ".github/workflows/release.yml"]

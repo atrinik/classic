@@ -13,7 +13,10 @@ The immutable historical sequence begins with `v5.0.19` at
 release line through `v5.5.1`. `docs/history/release-tags.json` fixes those
 names and targets, requires `v5.6.0` as the first new tag, and admits later
 unprefixed `v5.x.x` versions only on the post-consolidation first-parent main
-line. `docs/history/component-release-map.json` maps the last five independent
+line. Version analysis and release notes select that same first-parent line by
+full commit ID; commits reachable only through imported component parents are
+provenance and never become unified release changes.
+`docs/history/component-release-map.json` maps the last five independent
 component releases to their imported commits and unified artifact names.
 
 Never create a release tag by hand. The immutable-tag ruleset prevents moving
@@ -27,7 +30,8 @@ mandatory. If Semantic Release fails before it creates a tag, rerun that
 workflow. If it creates the tag but no release, dispatch
 Recover Missing Release for that tag; the guarded workflow proves ancestry,
 policy, checks, and release absence before it
-creates a draft and queues packaging. If the draft already exists, rerun or
+regenerates the same first-parent notes with the pinned official formatter,
+creates a draft, and queues packaging. If the draft already exists, rerun or
 manually dispatch Package Release from the exact matching tag ref only when no
 packaging run has produced a candidate or uploaded an asset. Otherwise use
 **Re-run failed jobs** on the original Package Release run. Never delete or
@@ -40,8 +44,9 @@ recreate a tag or draft to recover.
 2. Once automatic release triggering is enabled, a successful Check run for
    the current `main` commit triggers Semantic Release. A stale successful run
    cannot release a newer, unvalidated commit.
-3. Semantic-release creates the unprefixed tag and draft GitHub release notes,
-   then dispatches Package Release from that exact immutable tag ref.
+3. Semantic-release analyzes and formats only exact first-parent commits,
+   creates the unprefixed tag and draft GitHub release notes, then dispatches
+   Package Release from that exact immutable tag ref.
 4. The read-only Build Release Candidate workflow revalidates the tag, draft,
    main ancestry, and successful aggregate check.
    Independent jobs build every artifact, install/import the wheel, consume the
@@ -63,7 +68,8 @@ recreate a tag or draft to recover.
    requires the GitHub/Sigstore attestation. GitHub assigns the release's Latest designation
    from semantic versions when the draft is published.
 
-Publication uses the root `.releaserc.json`,
+Publication uses the root executable `.releaserc.cjs` and its fail-closed
+first-parent selector,
 `.github/workflows/release.yml`, and
 `.github/workflows/package-release.yml`; both production and rehearsal call the
 read-only `.github/workflows/build-release-candidate.yml`, and
@@ -79,7 +85,9 @@ After that phase is on `main`, dispatch Release Rehearsal and review every
 source, wheel, Windows, image, and finalizer job. A small `ci(release)`
 follow-up pull request then adds the successful Check `workflow_run` trigger to
 Semantic Release. Semantic-release analyzes the already-merged
-`feat(release)` pipeline commit and must produce `v5.6.0`. Do not enable the
+`feat(release)` pipeline commit and must produce `v5.6.0`; imported component
+features, breaking markers, and old issue numbers must not appear in that
+analysis or its notes. Do not enable the
 trigger or manually dispatch Semantic Release until the full post-merge
 rehearsal succeeds and an administrator has live-audited repository immutable
 releases as enabled through the governance rollout.

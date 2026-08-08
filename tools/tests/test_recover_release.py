@@ -78,6 +78,28 @@ class RecoverReleaseTests(unittest.TestCase):
             )
         )
 
+    def test_previous_release_is_highest_reachable_version_on_same_major(self) -> None:
+        self.assertEqual(
+            recover_release.select_previous_release_tag(
+                "v5.6.0",
+                ["v1.0.11", "v5.4.2", "v5.5.1", "server-v5.9.0", "v6.0.0"],
+            ),
+            "v5.5.1",
+        )
+        with self.assertRaisesRegex(
+            recover_release.RecoveryError, "no earlier reachable unified release"
+        ):
+            recover_release.select_previous_release_tag("v5.6.0", ["v6.0.0"])
+
+    def test_recovery_outputs_are_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "github-output"
+            recover_release.write_github_output(output, "v5.5.1", "a" * 40)
+            self.assertEqual(
+                output.read_text(encoding="utf-8"),
+                f"previous_tag=v5.5.1\ntag_commit={'a' * 40}\n",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

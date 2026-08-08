@@ -45,6 +45,10 @@
   `client`, `server`, `editor`, `libatrinik`, `protocol`, `build`, `ci`, `docs`,
   and `release`.
 - Root semantic-release owns one unprefixed version for the complete repository.
+  Analyze and describe only commits on `main`'s first-parent line; imported
+  component parents are provenance, not new unified release changes. Missing-release
+  recovery must use the same repository-owned first-parent selector and official
+  pinned notes generator as automatic publication.
   Publication requires the exact successful `Classic validation` commit,
   finalized closed-set artifacts, draft-first digest reconciliation,
   checksums, SBOMs, locked-input evidence, attestations, and an immutable final
