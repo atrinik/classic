@@ -7,6 +7,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import fnmatch
+import io
 import json
 from pathlib import Path, PurePosixPath
 import re
@@ -18,6 +19,30 @@ from locked_inputs import load_locked_inputs
 
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 MODULES = ("client", "server", "editor", "libatrinik", "protocol")
+EMBEDDED_PYTHON_STDLIB_RE = re.compile(
+    r"server/python(?P<abi>[0-9]{2,}[a-z]*)\.zip"
+)
+EMBEDDED_PYTHON_STDLIB_MEMBERS = (
+    "encodings/__init__.pyc",
+    "os.pyc",
+)
+SERVER_WINDOWS_REQUIRED_PATTERNS = (
+    "server/atrinik-server.exe",
+    "server/LICENSE.md",
+    "server/ATTRIBUTIONS.md",
+    "server/server.cfg",
+    "server/permissions.cfg",
+    "server/ca-bundle.crt",
+    "server/LICENSE.txt",
+    "server/*plugin_arena*.dll",
+    "server/*plugin_python*.dll",
+    "server/python3.dll",
+    "maps/*",
+    "server/lib/*",
+    "server/resources/*",
+    "server/install_data/*",
+    "server/install_data/http/client-maps/*",
+)
 
 
 def sha256(path: Path) -> str:
@@ -30,7 +55,12 @@ def sha256(path: Path) -> str:
 
 def validate_member(name: str) -> None:
     path = PurePosixPath(name)
-    if path.is_absolute() or ".." in path.parts:
+    if (
+        path.is_absolute()
+        or ".." in path.parts
+        or "\\" in name
+        or re.match(r"^[A-Za-z]:", name)
+    ):
         raise RuntimeError(f"unsafe packaged path: {name}")
 
 
@@ -102,8 +132,14 @@ def validate_zip(
         if not archive.infolist():
             raise RuntimeError(f"empty ZIP artifact: {path.name}")
         files: dict[str, int] = {}
+        member_names = set()
         for member in archive.infolist():
             validate_member(member.filename)
+            if member.filename in member_names:
+                raise RuntimeError(
+                    f"{path.name} contains duplicate member: {member.filename}"
+                )
+            member_names.add(member.filename)
             if not member.is_dir():
                 prefix = f"{package_root}/"
                 if not member.filename.startswith(prefix):
@@ -112,6 +148,11 @@ def validate_zip(
                     )
                 relative = member.filename.removeprefix(prefix)
                 files[relative] = member.file_size
+        corrupt_member = archive.testzip()
+        if corrupt_member is not None:
+            raise RuntimeError(
+                f"{path.name} has a corrupt ZIP member: {corrupt_member}"
+            )
         for pattern in required_patterns:
             matches = [
                 size
@@ -122,6 +163,116 @@ def validate_zip(
                 raise RuntimeError(f"{path.name} is missing packaged {pattern}")
             if not any(size > 0 for size in matches):
                 raise RuntimeError(f"{path.name} has only empty packaged {pattern}")
+
+
+def validate_embedded_python_runtime(path: Path, package_root: str) -> None:
+    prefix = f"{package_root}/"
+    with zipfile.ZipFile(path) as archive:
+        standard_libraries = []
+        extension_modules = []
+        for member in archive.infolist():
+            if member.is_dir() or not member.filename.startswith(prefix):
+                continue
+            relative = member.filename.removeprefix(prefix)
+            match = EMBEDDED_PYTHON_STDLIB_RE.fullmatch(relative)
+            if match is not None:
+                standard_libraries.append((match.group("abi"), relative, member))
+            relative_path = PurePosixPath(relative)
+            if (
+                relative_path.parent == PurePosixPath("server")
+                and relative_path.suffix == ".pyd"
+            ):
+                extension_modules.append(member)
+
+        if len(standard_libraries) != 1:
+            raise RuntimeError(
+                f"{path.name} must contain exactly one embedded Python "
+                "standard-library ZIP"
+            )
+
+        abi, standard_library_name, standard_library = standard_libraries[0]
+        if standard_library.file_size == 0:
+            raise RuntimeError(
+                f"{path.name} has an empty embedded Python standard-library ZIP"
+            )
+
+        dll_name = f"server/python{abi}.dll"
+        pth_name = f"server/python{abi}._pth"
+        for runtime_name in (dll_name, pth_name):
+            try:
+                runtime_member = archive.getinfo(f"{prefix}{runtime_name}")
+            except KeyError as error:
+                raise RuntimeError(
+                    f"{path.name} is missing matching embedded Python "
+                    f"{runtime_name}"
+                ) from error
+            if runtime_member.file_size == 0:
+                raise RuntimeError(
+                    f"{path.name} has an empty embedded Python {runtime_name}"
+                )
+
+        try:
+            pth = archive.read(f"{prefix}{pth_name}").decode("utf-8-sig")
+        except UnicodeDecodeError as error:
+            raise RuntimeError(f"{path.name} has a non-UTF-8 {pth_name}") from error
+        pth_entries = tuple(
+            line.strip()
+            for line in pth.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+        standard_library_basename = PurePosixPath(standard_library_name).name
+        expected_pth_entries = (standard_library_basename, ".")
+        if pth_entries != expected_pth_entries:
+            raise RuntimeError(
+                f"{path.name} {pth_name} must contain only "
+                f"{standard_library_basename} followed by ."
+            )
+
+        try:
+            with zipfile.ZipFile(
+                io.BytesIO(archive.read(f"{prefix}{standard_library_name}"))
+            ) as standard_library_archive:
+                member_names = set()
+                for member in standard_library_archive.infolist():
+                    validate_member(member.filename)
+                    if member.filename in member_names:
+                        raise RuntimeError(
+                            f"{path.name} embedded Python standard-library ZIP "
+                            f"contains duplicate member: {member.filename}"
+                        )
+                    member_names.add(member.filename)
+                corrupt_member = standard_library_archive.testzip()
+                if corrupt_member is not None:
+                    raise RuntimeError(
+                        f"{path.name} has a corrupt embedded Python "
+                        f"standard-library member: {corrupt_member}"
+                    )
+                for required in EMBEDDED_PYTHON_STDLIB_MEMBERS:
+                    try:
+                        member = standard_library_archive.getinfo(required)
+                    except KeyError as error:
+                        raise RuntimeError(
+                            f"{path.name} embedded Python standard-library ZIP "
+                            f"is missing {required}"
+                        ) from error
+                    if member.file_size == 0:
+                        raise RuntimeError(
+                            f"{path.name} embedded Python standard-library ZIP "
+                            f"has an empty {required}"
+                        )
+        except zipfile.BadZipFile as error:
+            raise RuntimeError(
+                f"{path.name} has an invalid embedded Python standard-library ZIP"
+            ) from error
+
+        if not extension_modules:
+            raise RuntimeError(
+                f"{path.name} has no embedded Python extension modules"
+            )
+        if not any(member.file_size > 0 for member in extension_modules):
+            raise RuntimeError(
+                f"{path.name} has only empty embedded Python extension modules"
+            )
 
 
 def validate_wheel(path: Path, version: str) -> None:
@@ -332,23 +483,11 @@ def main() -> int:
     validate_zip(
         directory / f"atrinik-classic-server-{arguments.version}-windows-x86_64.zip",
         f"atrinik-classic-server-{arguments.version}-windows-x86_64",
-        (
-            "server/atrinik-server.exe",
-            "server/LICENSE.md",
-            "server/ATTRIBUTIONS.md",
-            "server/server.cfg",
-            "server/permissions.cfg",
-            "server/ca-bundle.crt",
-            "server/*plugin_arena*.dll",
-            "server/*plugin_python*.dll",
-            "server/python*.dll",
-            "server/Lib/*",
-            "maps/*",
-            "server/lib/*",
-            "server/resources/*",
-            "server/install_data/*",
-            "server/install_data/http/client-maps/*",
-        ),
+        SERVER_WINDOWS_REQUIRED_PATTERNS,
+    )
+    validate_embedded_python_runtime(
+        directory / f"atrinik-classic-server-{arguments.version}-windows-x86_64.zip",
+        f"atrinik-classic-server-{arguments.version}-windows-x86_64",
     )
     validate_wheel(wheel_path, arguments.version)
 
