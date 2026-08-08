@@ -207,9 +207,9 @@ static bool clioptions_option_pathfinder_max_nodes(const char *arg, char **errms
     }
 
     LOG(INFO,
-        "Pathfinding generated-state budget changed from %zu to %zu",
-        path_max_generated,
-        (size_t)value);
+        "Pathfinding generated-state budget changed from %" PRIuMAX " to %" PRIuMAX,
+        (uintmax_t)path_max_generated,
+        (uintmax_t)value);
     path_max_generated = (size_t)value;
     return true;
 }

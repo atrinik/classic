@@ -71,7 +71,11 @@ static void metrics_draw_store(object *op,
             (category != NULL && strcasecmp(metadata->category, category) != 0)) {
             continue;
         }
-        draw_info_format(COLOR_WHITE, op, "  %s: %zu unique IDs", metadata->name, count);
+        draw_info_format(COLOR_WHITE,
+                         op,
+                         "  %s: %" PRIuMAX " unique IDs",
+                         metadata->name,
+                         (uintmax_t)count);
         any = true;
     }
 
@@ -82,7 +86,11 @@ static void metrics_draw_store(object *op,
             (category != NULL && strcasecmp(metadata->category, category) != 0)) {
             continue;
         }
-        draw_info_format(COLOR_WHITE, op, "  %s: %zu keyed IDs", metadata->name, count);
+        draw_info_format(COLOR_WHITE,
+                         op,
+                         "  %s: %" PRIuMAX " keyed IDs",
+                         metadata->name,
+                         (uintmax_t)count);
         any = true;
     }
 

@@ -232,8 +232,8 @@ void waypoint_compute_path(object *op) {
 
     if (result.status == PATH_STATUS_PARTIAL) {
         LOG(DEBUG,
-            "Waypoint path used explicit best effort after %zu generated states: %s",
-            result.generated,
+            "Waypoint path used explicit best effort after %" PRIuMAX " generated states: %s",
+            (uintmax_t)result.generated,
             object_get_str(op));
     }
 
