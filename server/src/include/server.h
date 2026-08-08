@@ -58,6 +58,10 @@ void socket_server_handle_client(player *pl);
 bool socket_server_remove(socket_struct *cs);
 void socket_server_process(void);
 void socket_server_post_process(void);
+bool socket_server_quic_identity(char certificate_sha256[65]);
+/* Returns listener metadata even when no public host was explicitly
+ * configured. In that case host is empty and port is the local listener port
+ * required by the directory update API. */
 bool socket_server_quic_info(char *host,
                              size_t host_size,
                              uint16_t *port,

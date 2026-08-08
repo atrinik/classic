@@ -311,6 +311,7 @@ set(TOOLKIT_SOURCES
     path.c
     porting.c
     process.c
+    rendezvous.c
     shstr.c
     signals.c
     socket.c
@@ -365,7 +366,7 @@ target_link_libraries(${ATRINIK_TOOLKIT} PRIVATE Threads::Threads)
 
 if (MINGW)
     target_link_libraries(${ATRINIK_TOOLKIT} PRIVATE wsock32 wldap32 winmm ws2_32
-            imagehlp iphlpapi)
+            imagehlp iphlpapi advapi32)
 endif ()
 
 if (TARGET ZLIB::ZLIB)
@@ -433,5 +434,17 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         atrinik_configure_target(libatrinik-bresenham)
         target_link_libraries(libatrinik-bresenham PRIVATE Atrinik::Core)
         add_test(NAME libatrinik-bresenham COMMAND libatrinik-bresenham)
+
+        add_executable(libatrinik-path tests/path.c)
+        atrinik_configure_target(libatrinik-path)
+        target_link_libraries(libatrinik-path PRIVATE Atrinik::Core)
+        add_test(NAME libatrinik-path COMMAND libatrinik-path)
+
+        add_executable(libatrinik-rendezvous tests/rendezvous.c)
+        atrinik_configure_target(libatrinik-rendezvous)
+        target_link_libraries(libatrinik-rendezvous PRIVATE Atrinik::Core)
+        add_test(NAME libatrinik-rendezvous COMMAND libatrinik-rendezvous
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/rendezvous-invite-v1.json"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/rendezvous-invite-v1-negative.json")
     endif ()
 endif ()

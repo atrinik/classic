@@ -277,6 +277,39 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("command -v ccache", script)
         self.assertIn("-DCMAKE_C_COMPILER_LAUNCHER=", script)
 
+    def test_native_windows_security_tests_are_cross_built_and_run_on_windows(self) -> None:
+        workflow = self.text("check.yml")
+        build = workflow[
+            workflow.index("  windows-test-build:") : workflow.index("  windows-test:")
+        ]
+        run_start = workflow.index("  windows-test:")
+        run = workflow[run_start : workflow.index("  server:", run_start)]
+        aggregate = workflow[workflow.index("  classic-validation:") :]
+        digest = "9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7"
+
+        self.assertIn("if: needs.changes.outputs.windows == 'true'", build)
+        self.assertEqual(build.count(digest), 2)
+        self.assertIn("--network none", build)
+        self.assertIn("--env CCACHE_DIR=/tmp/atrinik-libatrinik-ccache", build)
+        self.assertIn(
+            "--env CCACHE_TEMPDIR=/tmp/atrinik-libatrinik-ccache-tmp", build
+        )
+        self.assertIn("--env CCACHE_MAXSIZE=250M", build)
+        self.assertNotIn("--env CCACHE_DIR=/opt/mxe", build)
+        self.assertIn("-DBUILD_TESTING=ON", build)
+        self.assertIn("--target libatrinik-path libatrinik-rendezvous", build)
+        self.assertIn("python3 tools/ci/stage_windows_runtime.py", build)
+        self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", build)
+
+        self.assertIn("runs-on: windows-2025", run)
+        self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", run)
+        self.assertIn('"libatrinik-path.exe"', run)
+        self.assertIn('"libatrinik-rendezvous.exe"', run)
+
+        self.assertIn("- windows-test", aggregate)
+        self.assertIn("--windows-required", aggregate)
+        self.assertIn("--windows-result", aggregate)
+
 
 if __name__ == "__main__":
     unittest.main()

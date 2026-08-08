@@ -43,6 +43,35 @@ GPL-2.0-or-later license. The archive version matches the complete monorepo and
 includes matching protocol source under `dependencies/protocol`; a standalone
 CMake build selects that source automatically.
 
+## Direct connection and rendezvous API
+
+`socket_quic_client_create` owns the complete client connection attempt. It
+pins any rendezvous invite's server ID to the expected QUIC certificate
+fingerprint before discovery, and applies one absolute 15-second deadline to
+address resolution, STUN, WebSocket authorization, candidate collection, and
+the QUIC candidate race. Its optional `socket_connect_failure_t` output is a
+bounded, credential-free value owned by the caller. The function borrows all
+string and invite inputs only for the duration of the call.
+
+Lower-level rendezvous consumers allocate a `socket_rendezvous_attempt_t` with
+`socket_rendezvous_attempt_create`. The object copies its server ID, ticket,
+invite, deadline, protocol state, and counters. It is mutable, must be released
+with `socket_rendezvous_attempt_destroy`, and is not safe to share between
+threads; independent attempts may run concurrently. Server candidate output is
+transactional and remains empty if any frame is malformed, out of order,
+over-budget, or belongs to another ticket. Invite and proof operations use
+OpenSSL's compatible EVP signing interface; QUIC transport itself is enabled
+only when building with OpenSSL 3.5 or newer.
+
+Secret files use the shared `path_read_secret` primitive, which reads from the
+same verified file handle, rejects another owner and symbolic-link/reparse
+indirection, and reports non-owner permissions through its explicit
+`permissive_mode` output. `path_secret_create_atomic` publishes an owner-only
+file only after its contents are flushed, never replaces an existing path, and
+returns a distinct collision result so concurrent creators can securely reread
+the winner. Input and output buffers remain caller-owned; callers must cleanse
+their own secret material after use.
+
 ## Pathfinding core
 
 `Atrinik::Pathfinding` is a separate dependency-free C17 target for reusable

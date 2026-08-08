@@ -25,6 +25,11 @@ class RequireChecksTests(unittest.TestCase):
         ):
             require_checks.require_component("server", "false", "success")
 
+    def test_selected_native_windows_check_must_succeed(self) -> None:
+        require_checks.require_component("native Windows", "true", "success")
+        with self.assertRaisesRegex(require_checks.CheckResultError, "did not succeed"):
+            require_checks.require_component("native Windows", "true", "skipped")
+
     def test_missing_or_malformed_classifier_output_fails_closed(self) -> None:
         for required in ("", "TRUE", "yes", "0"):
             with self.subTest(required=required):

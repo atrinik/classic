@@ -32,6 +32,7 @@
 
 #include "toolkit.h"
 #include "socket_dec.h"
+#include "rendezvous.h"
 #include <atrinik/protocol/game_commands.h>
 
 /**
@@ -893,6 +894,50 @@ typedef struct socket_direct_candidate {
     socket_candidate_kind_t kind;
 } socket_direct_candidate_t;
 
+/** One protected or passwordless client rendezvous transaction. */
+typedef struct socket_rendezvous_attempt socket_rendezvous_attempt_t;
+
+/** Result of consuming one server-to-client rendezvous frame. */
+typedef enum socket_rendezvous_frame_result {
+    SOCKET_RENDEZVOUS_FRAME_INVALID,
+    SOCKET_RENDEZVOUS_FRAME_CHALLENGE,
+    SOCKET_RENDEZVOUS_FRAME_AUTHORIZED,
+    SOCKET_RENDEZVOUS_FRAME_DENIED,
+    SOCKET_RENDEZVOUS_FRAME_CANDIDATE,
+    SOCKET_RENDEZVOUS_FRAME_COMPLETE
+} socket_rendezvous_frame_result_t;
+
+/** Bounded diagnostic counters for a client rendezvous transaction. */
+typedef struct socket_rendezvous_stats {
+    size_t client_frames;
+    size_t server_frames;
+    size_t server_candidates;
+    size_t signal_bytes;
+} socket_rendezvous_stats_t;
+
+/** Typed reason why a client connection could not be established. */
+typedef enum socket_connect_failure_code {
+    SOCKET_CONNECT_FAILURE_NONE,
+    SOCKET_CONNECT_FAILURE_UNAVAILABLE,
+    SOCKET_CONNECT_FAILURE_AUTHORIZATION,
+    SOCKET_CONNECT_FAILURE_INVITE_EXPIRED,
+    SOCKET_CONNECT_FAILURE_RATE_LIMITED,
+    SOCKET_CONNECT_FAILURE_SERVER_OFFLINE,
+    SOCKET_CONNECT_FAILURE_TIMEOUT,
+    SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION
+} socket_connect_failure_code_t;
+
+/**
+ * Bounded failure detail returned by ::socket_quic_client_create.
+ *
+ * `retry_after_seconds` is nonzero only for RATE_LIMITED and never exceeds one
+ * day. The structure contains no endpoint, ticket, invite, or credential.
+ */
+typedef struct socket_connect_failure {
+    socket_connect_failure_code_t code;
+    uint32_t retry_after_seconds;
+} socket_connect_failure_t;
+
 typedef enum socket_websocket_receive_state {
     SOCKET_WEBSOCKET_EMPTY,
     SOCKET_WEBSOCKET_PARTIAL,
@@ -970,27 +1015,97 @@ socket_t *socket_quic_client_create(const char *host,
                                     const char *certificate_sha256,
                                     const char *rendezvous_url,
                                     const char *stun_endpoint,
-                                    socket_connection_preference_t preference);
+                                    const rendezvous_invite_t *invite,
+                                    socket_connection_preference_t preference,
+                                    socket_connect_failure_t *failure);
 const char *socket_connection_preference_name(socket_connection_preference_t preference);
 const char *socket_candidate_kind_name(socket_candidate_kind_t kind);
 bool socket_candidate_kind_parse(const char *name, socket_candidate_kind_t *kind);
 socket_connection_mode_t socket_candidate_kind_mode(socket_candidate_kind_t kind);
 bool socket_rendezvous_client_candidate_parse(const char *message,
+                                              const char *expected_ticket,
+                                              bool authorization_required,
+                                              rendezvous_server_auth_state_t authorization,
                                               char *host,
                                               size_t host_size,
                                               uint16_t *port,
-                                              char ticket[65]);
-bool socket_rendezvous_server_candidate_parse(const char *message,
-                                              const char *expected_ticket,
-                                              socket_direct_candidate_t *candidate);
-bool socket_rendezvous_message_render(char *buffer,
-                                      size_t size,
-                                      const char *type,
-                                      const char *host,
-                                      uint16_t port,
-                                      socket_candidate_kind_t kind,
-                                      const char *ticket);
+                                              char ticket[RENDEZVOUS_TICKET_HEX_SIZE + 1U]);
+bool socket_rendezvous_server_candidate_render(char *buffer,
+                                               size_t size,
+                                               const socket_direct_candidate_t *candidate,
+                                               const char *ticket,
+                                               bool authorization_required,
+                                               rendezvous_server_auth_state_t authorization);
+bool socket_rendezvous_complete_render(char *buffer, size_t size, const char *ticket);
 bool socket_rendezvous_complete_parse(const char *message, const char *expected_ticket);
+
+/**
+ * Allocate one client rendezvous attempt.
+ *
+ * The returned object copies and owns the server ID, ticket, optional invite,
+ * absolute monotonic deadline, protocol-selection state, authorization state,
+ * and all signaling counters. `invite` remains caller-owned. The object is
+ * mutable, must be destroyed with ::socket_rendezvous_attempt_destroy, and is
+ * not safe for concurrent calls; independent objects may be used concurrently.
+ * A protected attempt rejects an invite for a different `server_id`.
+ */
+socket_rendezvous_attempt_t *socket_rendezvous_attempt_create(const char *server_id,
+                                                              const char *ticket,
+                                                              const rendezvous_invite_t *invite,
+                                                              uint64_t deadline_ms);
+/** Cleanse and free an attempt. Accepts NULL. */
+void socket_rendezvous_attempt_destroy(socket_rendezvous_attempt_t *attempt);
+/** True once the single absolute monotonic deadline has elapsed. */
+bool socket_rendezvous_attempt_expired(const socket_rendezvous_attempt_t *attempt, uint64_t now_ms);
+/** libcurl header callback that records the final selected subprotocol. */
+size_t socket_rendezvous_attempt_header(char *data, size_t size, size_t count, void *user_data);
+/** True when a protected upgrade echoed exactly the required subprotocol. */
+bool socket_rendezvous_attempt_protocol_valid(const socket_rendezvous_attempt_t *attempt);
+/** Return the bounded numeric Retry-After value parsed from the latest response. */
+uint32_t socket_rendezvous_attempt_retry_after(const socket_rendezvous_attempt_t *attempt);
+/** True only when directory probing cannot bypass protected authorization. */
+bool socket_rendezvous_attempt_directory_probe_allowed(const socket_rendezvous_attempt_t *attempt);
+/** True only after the attempt has consumed its one authorized client candidate. */
+bool socket_rendezvous_attempt_peer_traffic_allowed(const socket_rendezvous_attempt_t *attempt);
+/** Render and consume the one auth_init transition. */
+bool socket_rendezvous_attempt_auth_init(socket_rendezvous_attempt_t *attempt,
+                                         char *frame,
+                                         size_t frame_size);
+/**
+ * Consume one complete auth_challenge and render the matching proof.
+ * Failure is terminal and clears `proof_frame`.
+ */
+socket_rendezvous_frame_result_t
+socket_rendezvous_attempt_challenge(socket_rendezvous_attempt_t *attempt,
+                                    const char *frame,
+                                    size_t frame_size,
+                                    char *proof_frame,
+                                    size_t proof_frame_size);
+/** Consume the one canonical auth_result; denial and all parse failures are terminal. */
+socket_rendezvous_frame_result_t
+socket_rendezvous_attempt_auth_result(socket_rendezvous_attempt_t *attempt,
+                                      const char *frame,
+                                      size_t frame_size);
+/** Render the only client candidate and consume the authorized transition. */
+bool socket_rendezvous_attempt_client_candidate(socket_rendezvous_attempt_t *attempt,
+                                                const char *host,
+                                                uint16_t port,
+                                                char *frame,
+                                                size_t frame_size);
+/**
+ * Transactionally consume one candidate-or-complete server frame.
+ *
+ * `candidate` is cleared unless CANDIDATE is returned. Malformed, wrong-ticket,
+ * over-budget, extra, or out-of-order frames make the attempt terminal.
+ */
+socket_rendezvous_frame_result_t
+socket_rendezvous_attempt_server_frame(socket_rendezvous_attempt_t *attempt,
+                                       const char *frame,
+                                       size_t frame_size,
+                                       socket_direct_candidate_t *candidate);
+/** Copy non-sensitive bounded counters from an attempt. */
+bool socket_rendezvous_attempt_stats(const socket_rendezvous_attempt_t *attempt,
+                                     socket_rendezvous_stats_t *stats);
 socket_websocket_receive_state_t
 socket_websocket_receive(void *handle, char *buffer, size_t capacity, size_t *used);
 bool socket_is_quic(socket_t *sc);

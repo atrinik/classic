@@ -5,15 +5,18 @@ set(SOURCES
 	src/client/client.c
 	src/client/cmd_aliases.c
 	src/client/commands.c
+	src/client/connection_failure.c
 	src/client/connection_preferences.c
 	src/client/image.c
 	src/client/item.c
+	src/client/join_credentials.c
 	src/client/keybind.c
 	src/client/lighting.c
 	src/client/main.c
 	src/client/menu.c
 	src/client/metaserver.c
 	src/client/metaserver_direct.c
+	src/client/metaserver_identity.c
 	src/client/misc.c
 	src/client/packet_payload.c
 	src/client/player.c

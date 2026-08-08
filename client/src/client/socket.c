@@ -406,6 +406,11 @@ int handle_socket_shutdown(void) {
 void client_socket_close(client_socket_t *csock) {
     HARD_ASSERT(csock != NULL);
 
+    client_attempt_secrets_clear(selected_server != NULL ? &selected_server->join_password : NULL,
+                                 &clioption_settings.join_password,
+                                 selected_server != NULL ? &selected_server->rendezvous_invite
+                                                         : NULL);
+
     if (socket_mutex == NULL) {
         if (csock->sc != NULL) {
             socket_destroy(csock->sc);
@@ -470,20 +475,53 @@ bool client_socket_open(client_socket_t *csock,
                         const char *quic_certificate_sha256,
                         socket_connection_preference_t preference) {
     HARD_ASSERT(csock != NULL);
-    HARD_ASSERT(host != NULL);
-
-    SOFT_ASSERT_RC(quic_certificate_sha256 != NULL, false, "Missing QUIC certificate fingerprint");
+    csock->failure.code = SOCKET_CONNECT_FAILURE_UNAVAILABLE;
+    csock->failure.retry_after_seconds = 0;
+    if (quic_certificate_sha256 == NULL) {
+        csock->failure.code = SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+        client_attempt_secrets_clear(
+            selected_server != NULL ? &selected_server->join_password : NULL,
+            &clioption_settings.join_password,
+            selected_server != NULL ? &selected_server->rendezvous_invite : NULL);
+        SOFT_ASSERT_RC(false, false, "Missing QUIC certificate fingerprint");
+    }
+    if (selected_server == NULL) {
+        client_attempt_secrets_clear(NULL, &clioption_settings.join_password, NULL);
+        SOFT_ASSERT_RC(false, false, "Missing selected server");
+    }
+    bool has_directory_address = host != NULL && *host != '\0' && port > 0 && port <= UINT16_MAX;
+    if (selected_server->password_required && !has_directory_address &&
+        selected_server->rendezvous_invite == NULL) {
+        csock->failure.code = SOCKET_CONNECT_FAILURE_AUTHORIZATION;
+        client_attempt_secrets_clear(&selected_server->join_password,
+                                     &clioption_settings.join_password,
+                                     &selected_server->rendezvous_invite);
+        SOFT_ASSERT_RC(false, false, "Missing protected rendezvous invite");
+    }
 
     char rendezvous_url[HUGE_BUF];
-    const char *rendezvous =
-        metaserver_rendezvous_url(selected_server, VS(rendezvous_url)) ? rendezvous_url : NULL;
+    const char *rendezvous = NULL;
+    if ((!selected_server->password_required || selected_server->rendezvous_invite != NULL) &&
+        metaserver_rendezvous_url(selected_server, VS(rendezvous_url))) {
+        rendezvous = rendezvous_url;
+    }
     csock->sc = socket_quic_client_create(host,
                                           port,
                                           quic_certificate_sha256,
                                           rendezvous,
                                           clioption_settings.stun_server,
-                                          preference);
+                                          selected_server->rendezvous_invite,
+                                          preference,
+                                          &csock->failure);
+    if (selected_server->rendezvous_invite != NULL) {
+        rendezvous_invite_cleanse(selected_server->rendezvous_invite);
+        free(selected_server->rendezvous_invite);
+        selected_server->rendezvous_invite = NULL;
+    }
     if (csock->sc == NULL) {
+        client_attempt_secrets_clear(&selected_server->join_password,
+                                     &clioption_settings.join_password,
+                                     &selected_server->rendezvous_invite);
         return false;
     }
 
@@ -496,5 +534,10 @@ bool client_socket_open(client_socket_t *csock,
 error:
     socket_destroy(csock->sc);
     csock->sc = NULL;
+    csock->failure.code = SOCKET_CONNECT_FAILURE_UNAVAILABLE;
+    csock->failure.retry_after_seconds = 0;
+    client_attempt_secrets_clear(&selected_server->join_password,
+                                 &clioption_settings.join_password,
+                                 &selected_server->rendezvous_invite);
     return false;
 }

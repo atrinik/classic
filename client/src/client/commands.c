@@ -71,19 +71,12 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
         } else if (type == CMD_SETUP_CONNECTION_MODE) {
             packet_reader_read_uint8(&reader);
         } else if (type == CMD_SETUP_JOIN_PASSWORD) {
-            if (packet_reader_read_uint8(&reader) == 0) {
-                if (selected_server != NULL && selected_server->join_password != NULL) {
-                    OPENSSL_cleanse(selected_server->join_password,
-                                    strlen(selected_server->join_password));
-                    free(selected_server->join_password);
-                    selected_server->join_password = NULL;
-                }
-                if (clioption_settings.join_password != NULL) {
-                    OPENSSL_cleanse(clioption_settings.join_password,
-                                    strlen(clioption_settings.join_password));
-                    free(clioption_settings.join_password);
-                    clioption_settings.join_password = NULL;
-                }
+            bool accepted = packet_reader_read_uint8(&reader) != 0;
+            client_attempt_secrets_clear(
+                selected_server != NULL ? &selected_server->join_password : NULL,
+                &clioption_settings.join_password,
+                selected_server != NULL ? &selected_server->rendezvous_invite : NULL);
+            if (!accepted) {
                 draw_info(COLOR_RED, "The server rejected the join password.");
                 cpl.state = ST_START;
                 return;
@@ -1192,6 +1185,10 @@ void socket_command_version(uint8_t *data, size_t len, size_t pos) {
     cpl.server_socket_version = packet_reader_read_uint32(&reader);
     if (cpl.server_socket_version != SOCKET_VERSION) {
         draw_info(COLOR_RED, "The client and server use incompatible gameplay protocol versions.");
+        client_attempt_secrets_clear(
+            selected_server != NULL ? &selected_server->join_password : NULL,
+            &clioption_settings.join_password,
+            selected_server != NULL ? &selected_server->rendezvous_invite : NULL);
         cpl.state = ST_START;
         return;
     }
