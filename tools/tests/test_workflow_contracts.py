@@ -43,6 +43,29 @@ class WorkflowContractTests(unittest.TestCase):
             workflow.index("gh release edit"),
         )
 
+    def test_production_metadata_can_read_drafts_without_broad_write_access(self) -> None:
+        package = self.text("package-release.yml")
+        candidate = self.text("build-release-candidate.yml")
+        candidate_job = package[
+            package.index("  candidate:") : package.index("  publish:")
+        ]
+        metadata_job = candidate[
+            candidate.index("  metadata:") : candidate.index("  sources:")
+        ]
+        for job in (candidate_job, metadata_job):
+            self.assertIn("permissions:\n", job)
+            self.assertIn("contents: write", job)
+        self.assertEqual(package[: package.index("jobs:")].count("contents: read"), 1)
+        self.assertNotIn("gh release edit", metadata_job)
+
+    def test_semantic_release_skips_cross_repository_issue_comments(self) -> None:
+        config = (ROOT / ".releaserc.cjs").read_text(encoding="utf-8")
+        workflow = self.text("release.yml")
+        self.assertIn("failCommentCondition: false", config)
+        self.assertIn("successCommentCondition: false", config)
+        self.assertNotIn("issues: write", workflow)
+        self.assertNotIn("pull-requests: write", workflow)
+
     def test_candidate_and_package_use_distinct_concurrency_namespaces(self) -> None:
         package = self.text("package-release.yml")
         candidate = self.text("build-release-candidate.yml")

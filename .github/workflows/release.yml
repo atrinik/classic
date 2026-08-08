@@ -10,8 +10,6 @@ permissions:
   actions: write
   checks: read
   contents: write
-  issues: write
-  pull-requests: write
 
 concurrency:
   group: classic-semantic-release
