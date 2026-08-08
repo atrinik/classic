@@ -1,0 +1,9 @@
+* text=auto
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ogg binary
+*.wav binary
+*.zip binary
+docs/history/*-commit-map.txt linguist-generated=true
