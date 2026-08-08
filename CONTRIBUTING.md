@@ -20,7 +20,9 @@ Conventional Commit type bumps the patch version.
 
 Do not vendor content, sound, resources, generated dependency trees, or copies
 of sibling source. Do not edit imported history maps or archive refs. Security
-reports follow [SECURITY.md](SECURITY.md).
+reports follow [SECURITY.md](SECURITY.md). All Atrinik-authored classic source
+remains GPL-2.0-or-later under [LICENSE.md](LICENSE.md); preserve compatible
+third-party licenses, notices, and attributions.
 
 The repository will use a unified classic release line. Until the root release
 pipeline is enabled, changes merged to `main` are unreleased. Nested component
