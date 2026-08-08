@@ -56,8 +56,7 @@ repository_root=$(pwd)
     --mapspath="${repository_root}/${package_root}/maps" \
     --datapath="${repository_root}/${region_data}" \
     --httppath="${repository_root}/${region_data}/http" \
-    --resourcespath="${repository_root}/resources" \
-    --http_server=off
+    --resourcespath="${repository_root}/resources"
 )
 test -d "${region_data}/http/client-maps"
 cmake -E copy_directory "${region_data}/http/client-maps" \

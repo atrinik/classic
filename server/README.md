@@ -94,13 +94,13 @@
  By default, QUIC clients download the manifest, required game data, resources,
  and region maps on separate typed streams of the established game connection.
  Up to three downloads make concurrent progress, while the long-lived game
- stream is serviced first on every network pass. The optional HTTP
- server/CDN path is described in section 2.2. At startup the server reads each
- immutable allowed asset once, computes its SHA-256 digest, and keeps both bytes
- and digest in memory. Region maps are cached per server; later QUIC requests
- send the cached size and digest so an unchanged map is confirmed without
- retransmitting its contents. Restart after changing collected assets so the
- server publishes a new immutable snapshot.
+ stream is serviced first on every network pass. The optional operator-managed
+ HTTP origin/CDN path is described in section 2.2. At startup the server reads
+ each immutable allowed asset once, computes its SHA-256 digest, and keeps both
+ bytes and digest in memory. Region maps are cached per server; later QUIC
+ requests send the cached size and digest so an unchanged map is confirmed
+ without retransmitting its contents. Restart after changing collected assets
+ so the server publishes a new immutable snapshot.
 
 =================================================
 = 2.1. Configuring the server                   =
@@ -123,18 +123,19 @@
  configuration.
 
 =================================================
-= 2.2. Optional HTTP CDN                        =
+= 2.2. External HTTP origin/CDN                 =
 =================================================
 
- HTTP asset delivery is optional and disabled by default:
-  http_server = off
+ HTTP asset delivery through an operator-managed origin is optional and
+ disabled by default:
   http_url = off
 
  With http_url set to off, QUIC clients retrieve assets directly from the game
  server. This is the recommended configuration for community and friend
  servers because it needs no additional public port or hostname.
 
- A large dedicated server can put the generated files behind an HTTPS CDN:
+ A large dedicated server can explicitly deploy a static HTTPS origin or CDN
+ and then configure its public base URL:
   http_url = https://cdn.example.com/atrinik
 
  When http_url is configured, clients first obtain each asset's immutable size
@@ -142,12 +143,25 @@
  body only when both match. A failed or mismatched request falls back to
  in-band QUIC delivery. Non-loopback origins must use HTTPS.
 
- You will need to map the following URLs to their directory counterparts:
+ The external service must map the following URLs to their directory
+ counterparts:
   - https://cdn.example.com/atrinik/          -> data/http/
   - https://cdn.example.com/atrinik/resources -> resources/
 
- The bundled HTTP server can be enabled for testing with http_server = on, but
- production deployments should normally use a real HTTPS origin/CDN.
+ Publish the exact `data/http/` and release-matched `resources/` snapshot before
+ starting the game server with `http_url`. Update the origin atomically and
+ invalidate stale CDN entries before restarting after an asset change;
+ otherwise clients will reject stale bodies and transfer them again over QUIC.
+ Use a public base URL without embedded credentials, query parameters, or a
+ fragment because the URL is advertised to every connecting client.
+
+ Atrinik generates or stages the files and advertises `http_url`; it never
+ starts or supervises an HTTP listener. Serve only these roots as read-only
+ static content, disable uploads and directory listings, and never expose the
+ rest of `data/`, which contains mutable and private server state. The operator
+ owns deployment, TLS, access controls, cache policy, monitoring, and
+ availability. Non-loopback origins must use HTTPS; plain HTTP remains accepted
+ only for loopback development origins.
 
 =================================================
 = 2.3. Running with Docker Compose               =
@@ -173,13 +187,14 @@
  host's interfaces and default gateway. Docker Desktop still runs Linux
  containers inside its VM; host mode there can expose the VM gateway instead
  of the physical router, preventing automatic router discovery. There are no
- Docker `ports` translations: direct gameplay and
- in-band asset delivery bind host UDP port 1730, and the optional HTTP server
- binds host port 8080. Player data, the persistent QUIC
- identity, and other mutable state are kept directly in the host's
- server-data/ folder. Region maps are generated while building the image and
- refreshed into that folder when the container starts. On Linux, LOCAL_UID and
- LOCAL_GID keep those files owned by the user running Docker.
+ Docker `ports` translations: direct gameplay and in-band asset delivery bind
+ host UDP port 1730. The container does not provide an HTTP listener; an origin
+ configured through `ATRINIK_HTTP_URL` is a separate operator-managed
+ deployment. Player data, the persistent QUIC identity, and other mutable state
+ are kept directly in the host's server-data/ folder. Region maps are generated
+ while building the image and refreshed into that folder when the container
+ starts. On Linux, LOCAL_UID and LOCAL_GID keep those files owned by the user
+ running Docker.
 
  To follow logs or stop the service:
   $ docker compose -f compose.server.yaml logs -f
@@ -198,8 +213,9 @@
 
  For a public direct server, set ATRINIK_SERVER_PUBLIC=true and optionally
  ATRINIK_JOIN_PASSWORD. No hostname or HTTP URL is required. Large dedicated
- servers can set ATRINIK_HTTP_URL to an HTTPS CDN base URL; clients will prefer
- it and fall back to QUIC if it is unavailable:
+ servers can deploy an HTTPS origin/CDN separately and set ATRINIK_HTTP_URL to
+ its base URL; clients will prefer it and fall back to QUIC if it is
+ unavailable:
   $ ATRINIK_SERVER_PUBLIC=true \
       ATRINIK_HTTP_URL=https://cdn.example.com/atrinik \
       docker compose -f compose.server.yaml up -d
@@ -372,12 +388,12 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  Asset requests use the same punched QUIC connection as gameplay by default,
  but use independent QUIC streams so loss or ordering on a bulk transfer
  cannot hold later gameplay bytes behind an asset body.
- Setting http_url enables a separate CDN path and makes it the preferred asset
- source after its body is pinned to metadata from the authenticated game
- connection, with automatic QUIC fallback. Region-map responses are verified
- by SHA-256 and stored in a cache scoped by stable server identity; matching
- cached files receive a compact not-modified response. The metaserver never
- carries assets or live game traffic.
+ Setting http_url advertises a separately managed origin/CDN and makes it the
+ preferred asset source after its body is pinned to metadata from the
+ authenticated game connection, with automatic QUIC fallback. Region-map
+ responses are verified by SHA-256 and stored in a cache scoped by stable
+ server identity; matching cached files receive a compact not-modified
+ response. The metaserver never carries assets or live game traffic.
 
  The startup asset snapshot accepts files up to 128 MiB and at most 1 GiB in
  aggregate. Each authenticated connection is limited to 256 asset requests and
@@ -473,14 +489,15 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
 = 3.2. Ports used by Atrinik                    =
 =================================================
 
- The following ports are used by the Atrinik server and need to be opened in
- order for other players to connect successfully (they can all be changed in
- the configuration).
+ The following port is used by the Atrinik game server and must be reachable for
+ other players to connect successfully. It can be changed in the
+ configuration.
 
   - 1730/UDP: Direct QUIC gameplay and asset delivery. PCP/NAT-PMP/UPnP mapping,
               IPv6, and rendezvous normally avoid a manual forwarding rule.
-  - 8080: Optional bundled HTTP asset server. It is unused when http_server is
-          off, and external CDN deployments normally use HTTPS port 443.
+
+ An external HTTP origin/CDN has its own independently managed listener and
+ network policy; it is not a port exposed by the Atrinik game server.
 
 =================================================
 = 4.1. Licensing (Atrinik server)               =

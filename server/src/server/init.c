@@ -56,7 +56,6 @@
 #include <toolkit/path.h>
 #include <resources.h>
 #include <content_benchmark.h>
-#include <http_server.h>
 #include <toolkit/signals.h>
 #include <toolkit/console.h>
 #include <toolkit/datetime.h>
@@ -393,7 +392,7 @@ static bool clioptions_option_mapspath(const char *arg, char **errmsg) {
  * Description of the --httppath command.
  */
 static const char *clioptions_option_httppath_desc =
-    "Where the HTTP server data files reside.\n\n"
+    "Where generated and staged HTTP asset files reside.\n\n"
     "The server must have read/write access to this directory, as it will create "
     "files inside it.";
 /** @copydoc clioptions_handler_func */
@@ -797,9 +796,9 @@ static bool clioptions_option_recycle_tmp_maps(const char *arg, char **errmsg) {
  * Description of the --http_url command.
  */
 static const char *clioptions_option_http_url_desc =
-    "Specifies the URL to use for data HTTP requests, or 'off' to use in-band "
-    "QUIC asset delivery. The files under the "
-    "directory specified by --httppath must be reachable using this URL.\n\n"
+    "Specifies the operator-managed HTTP asset origin, or 'off' to use in-band "
+    "QUIC asset delivery. The files under the directory specified by --httppath "
+    "must be published at this URL by a separately deployed service.\n\n"
     "If this URL is incorrect or inaccessible from the public network, clients "
     "will fall back to QUIC when available.";
 /** @copydoc clioptions_handler_func */
@@ -849,28 +848,6 @@ static const char *clioptions_option_network_stack_desc =
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_network_stack(const char *arg, char **errmsg) {
     snprintf(VS(settings.network_stack), "%s", arg);
-    return true;
-}
-
-/**
- * Description of the --http_server command.
- */
-static const char *clioptions_option_http_server_desc =
-    "Enables/disables the bundled HTTP server, which is required in order to "
-    "connect to the server (by most clients). Refer to the README file for "
-    "information related to running your own HTTP server instead of the bundled "
-    "one.";
-/** @copydoc clioptions_handler_func */
-static bool clioptions_option_http_server(const char *arg, char **errmsg) {
-    if (KEYWORD_IS_TRUE(arg)) {
-        settings.http_server = true;
-    } else if (KEYWORD_IS_FALSE(arg)) {
-        settings.http_server = false;
-    } else {
-        string_fmt(*errmsg, "Invalid value: %s", arg);
-        return false;
-    }
-
     return true;
 }
 
@@ -952,10 +929,10 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, libpath, "Read-only data files location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, datapath, "Read/write data files location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, mapspath, "Map files location");
-    CLIOPTIONS_CREATE_ARGUMENT(cli, httppath, "HTTP data files location");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, httppath, "HTTP asset staging location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, resourcespath, "Resource files location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, metaserver_url, "URL of the metaserver");
-    CLIOPTIONS_CREATE_ARGUMENT(cli, http_url, "URL of the HTTP server");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, http_url, "Operator-managed HTTP asset origin");
     CLIOPTIONS_CREATE_ARGUMENT(cli, stun_server, "STUN discovery endpoint");
     CLIOPTIONS_CREATE_ARGUMENT(cli, port_mapping, "Router port mapping policy");
     CLIOPTIONS_CREATE_ARGUMENT(cli, join_password, "Private server password");
@@ -996,8 +973,6 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, speed_multiplier, "Speed multiplier");
     clioptions_enable_changeable(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, network_stack, "Configure network stack");
-
-    CLIOPTIONS_CREATE_ARGUMENT(cli, http_server, "Enable the HTTP server");
 
     /* Import game APIs that don't need settings */
     toolkit_import(commands);
@@ -1086,7 +1061,6 @@ static void init_library(int argc, char *argv[]) {
     if (!settings.world_maker && !settings.unit_tests && !settings.plugin_unit_tests &&
         !settings.provision_scenario && !settings.content_benchmark) {
         toolkit_import(socket_server);
-        toolkit_import(http_server);
     }
 
     map_init();
