@@ -25,6 +25,7 @@ jobs:
     outputs:
       client: ${{ steps.classify.outputs.client }}
       server: ${{ steps.classify.outputs.server }}
+      windows: ${{ steps.classify.outputs.windows }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -131,6 +132,95 @@ jobs:
           bash -n editor/build.sh
           shellcheck editor/build.sh
 
+  windows-test-build:
+    name: Build native Windows tests
+    needs: changes
+    if: needs.changes.outputs.windows == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Pull pinned Windows build environment
+        run: docker pull ghcr.io/atrinik/windows-build:1.0.5@sha256:9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7
+      - name: Cross-build and stage standalone tests
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --network none \
+            --env PATH=/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --workdir /workspace \
+            ghcr.io/atrinik/windows-build:1.0.5@sha256:9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7 \
+            bash -c '
+              set -euo pipefail
+              x86_64-w64-mingw32.shared-cmake \
+                -S libatrinik \
+                -B libatrinik/build/windows-tests \
+                -G Ninja \
+                -DBUILD_TESTING=ON \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DATRINIK_PROTOCOL_SOURCE_DIR=/workspace/protocol
+              cmake --build libatrinik/build/windows-tests \
+                --target libatrinik-path libatrinik-rendezvous \
+                --parallel "$(nproc)"
+              stage=libatrinik/build/windows-test-bundle
+              cmake -E remove_directory "${stage}"
+              python3 tools/ci/stage_windows_runtime.py \
+                --objdump x86_64-w64-mingw32.shared-objdump \
+                --runtime-dir "${MXE_RUNTIME_DIR}" \
+                --output-dir "${stage}" \
+                libatrinik/build/windows-tests/libatrinik-path.exe \
+                libatrinik/build/windows-tests/libatrinik-rendezvous.exe
+              cmake -E copy_directory libatrinik/tests/fixtures "${stage}/fixtures"
+            '
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-windows-tests
+          path: libatrinik/build/windows-test-bundle
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-test:
+    name: Native Windows security tests
+    needs:
+      - changes
+      - windows-test-build
+    if: needs.changes.outputs.windows == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: native-windows-tests
+          path: build/native-windows-tests
+      - name: Execute path and rendezvous tests on Windows
+        shell: pwsh
+        run: |
+          $bundle = (Resolve-Path "build/native-windows-tests").Path
+          $env:PATH = "${bundle};${env:PATH}"
+
+          & (Join-Path $bundle "libatrinik-path.exe")
+          if ($LASTEXITCODE -ne 0) {
+            throw "libatrinik-path.exe failed with exit code ${LASTEXITCODE}"
+          }
+
+          $positive = Join-Path $bundle "fixtures/rendezvous-invite-v1.json"
+          $negative = Join-Path $bundle "fixtures/rendezvous-invite-v1-negative.json"
+          & (Join-Path $bundle "libatrinik-rendezvous.exe") $positive $negative
+          if ($LASTEXITCODE -ne 0) {
+            throw "libatrinik-rendezvous.exe failed with exit code ${LASTEXITCODE}"
+          }
+
   server:
     name: Server validation
     needs: changes
@@ -232,6 +322,7 @@ jobs:
       - core
       - server
       - client
+      - windows-test
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
@@ -244,4 +335,6 @@ jobs:
             --client-required '${{ needs.changes.outputs.client }}' \
             --client-result '${{ needs.client.result }}' \
             --server-required '${{ needs.changes.outputs.server }}' \
-            --server-result '${{ needs.server.result }}'
+            --server-result '${{ needs.server.result }}' \
+            --windows-required '${{ needs.changes.outputs.windows }}' \
+            --windows-result '${{ needs.windows-test.result }}'

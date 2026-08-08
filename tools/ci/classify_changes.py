@@ -31,6 +31,12 @@ NATIVE_SHARED_TOOL_PREFIXES = (
     "tools/ci/",
     "tools/release/",
 )
+WINDOWS_TEST_PREFIXES = (
+    ".github/workflows/",
+    "libatrinik/",
+    "protocol/",
+    "tools/ci/",
+)
 
 
 class ClassificationError(RuntimeError):
@@ -93,6 +99,7 @@ def classify(
     server = full or any(
         path.startswith("server/") or is_native_shared(path) for path in checked
     )
+    windows = full or any(path.startswith(WINDOWS_TEST_PREFIXES) for path in checked)
 
     codeql_client = full or any(path.startswith("client/") for path in checked)
     codeql_server = full or any(path.startswith("server/") for path in checked)
@@ -144,6 +151,7 @@ def classify(
     return {
         "client": client,
         "server": server,
+        "windows": windows,
         "codeql_run": bool(languages),
         "codeql_languages": ",".join(languages),
         "codeql_client": codeql_client,
@@ -233,6 +241,7 @@ def write_outputs(path: Path, result: dict[str, object], config: Path) -> None:
     values = {
         "client": str(result["client"]).lower(),
         "server": str(result["server"]).lower(),
+        "windows": str(result["windows"]).lower(),
         "codeql_run": str(result["codeql_run"]).lower(),
         "codeql_languages": str(result["codeql_languages"]),
         "codeql_matrix": json.dumps(matrix, separators=(",", ":")),
