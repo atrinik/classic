@@ -32,10 +32,16 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("refs/remotes/origin/main", workflow)
         self.assertIn("needs: preflight", workflow)
 
-    def test_package_dispatch_is_bound_to_its_exact_tag_ref(self) -> None:
+    def test_package_dispatch_is_bound_to_a_tag_or_current_main_recovery(self) -> None:
         workflow = self.text("package-release.yml")
         self.assertIn('test "${RELEASE_REF_TYPE}" = tag', workflow)
         self.assertIn('test "${GITHUB_REF}" = "refs/tags/${RELEASE_TAG}"', workflow)
+        self.assertIn('test "${RELEASE_REF_TYPE}" = branch', workflow)
+        self.assertIn('test "${GITHUB_REF}" = refs/heads/main', workflow)
+        self.assertIn('refs/remotes/origin/main', workflow)
+        self.assertIn('test "$(git rev-parse HEAD)"', workflow)
+        self.assertIn('refs/tags/${RELEASE_TAG}^{commit}', workflow)
+        self.assertIn('select(.name == "Classic validation"', workflow)
         self.assertNotIn("immutable-releases", workflow)
         self.assertIn("--verify-only", workflow)
         self.assertLess(
@@ -65,6 +71,18 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("successCommentCondition: false", config)
         self.assertNotIn("issues: write", workflow)
         self.assertNotIn("pull-requests: write", workflow)
+
+    def test_semantic_release_resumes_one_pending_draft_before_analysis(self) -> None:
+        workflow = self.text("release.yml")
+        detection = workflow.index("id: pending-release")
+        recovery = workflow.index("Resume the incomplete package release")
+        analysis = workflow.index("Analyze commits, tag, and publish release notes")
+        self.assertLess(detection, recovery)
+        self.assertLess(recovery, analysis)
+        self.assertIn("if ((${#drafts[@]} > 1))", workflow)
+        self.assertIn("git merge-base --is-ancestor", workflow)
+        self.assertIn("--ref main", workflow)
+        self.assertIn("if: steps.pending-release.outputs.tag == ''", workflow)
 
     def test_candidate_and_package_use_distinct_concurrency_namespaces(self) -> None:
         package = self.text("package-release.yml")

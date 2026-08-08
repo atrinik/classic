@@ -37,6 +37,14 @@ packaging run has produced a candidate or uploaded an asset. Otherwise use
 **Re-run failed jobs** on the original Package Release run. Never delete or
 recreate a tag or draft to recover.
 
+If a release-automation defect is fixed after the tag and draft exist but
+before a candidate is produced, the next successful Semantic Release run
+detects the single reachable draft, dispatches Package Release from the
+validated current `main` workflow definition, and skips version analysis. This
+is the guarded escape hatch for a broken tag-bound workflow definition; normal
+publication remains bound to the exact tag definition. Multiple drafts fail
+closed for manual investigation.
+
 ## Publication flow
 
 1. The root Check workflow validates import evidence and every module. Its
