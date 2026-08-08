@@ -257,11 +257,14 @@ static int account_load(account_struct *account, const char *path) {
         }
 
         if (strncmp(buf, "password ", 9) == 0) {
+            size_t password_record_length = strlen(buf + 9);
+
             credential_count++;
-            if (!password_record_is_valid(buf + 9)) {
+            if (password_record_length >= sizeof(account->password_record) ||
+                !password_record_is_valid(buf + 9)) {
                 LOG(BUG, "Invalid password record in file: %s", path);
             } else {
-                snprintf(VS(account->password_record), "%s", buf + 9);
+                memcpy(account->password_record, buf + 9, password_record_length + 1);
             }
         } else if (strncmp(buf, "pswd ", 5) == 0) {
             size_t len;
