@@ -83,6 +83,32 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("git merge-base --is-ancestor", workflow)
         self.assertIn("--ref main", workflow)
         self.assertIn("if: steps.pending-release.outputs.tag == ''", workflow)
+        self.assertIn("gh api --paginate \\\n", workflow)
+        self.assertIn(".[] | select(.draft == true)", workflow)
+        self.assertIn("(.assets | length)", workflow)
+        self.assertIn("retained-candidate recovery is required", workflow)
+        self.assertNotIn("gh api --paginate --slurp", workflow)
+
+    def test_retained_candidate_recovery_is_bound_and_does_not_rebuild(self) -> None:
+        workflow = self.text("package-release.yml")
+        self.assertIn("candidate_run_id:", workflow)
+        self.assertIn("if: inputs.candidate_run_id == ''", workflow)
+        self.assertIn("if: inputs.candidate_run_id != ''", workflow)
+        self.assertIn("complete-release-candidate-'", workflow)
+        self.assertIn("Validate complete release candidate", workflow)
+        self.assertIn("Publish unified release", workflow)
+        self.assertIn(".size_in_bytes > 0", workflow)
+        self.assertIn('startswith("sha256:")', workflow)
+        self.assertIn(".github/workflows/package-release.yml", workflow)
+        self.assertIn(".head_repository.full_name", workflow)
+        self.assertIn('"${run_commit}" HEAD', workflow)
+        self.assertIn("run-id: ${{ inputs.candidate_run_id || github.run_id }}", workflow)
+        self.assertIn("retained candidate has no matching versioned server image", workflow)
+        self.assertIn("--recovery-main", workflow)
+        self.assertIn(
+            "build/release-automation/tools/release/locked_inputs.py", workflow
+        )
+        self.assertNotIn("--clobber", workflow)
 
     def test_candidate_and_package_use_distinct_concurrency_namespaces(self) -> None:
         package = self.text("package-release.yml")

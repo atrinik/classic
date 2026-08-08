@@ -7,6 +7,10 @@ on:
         description: Existing unified semantic-release tag to package
         required: true
         type: string
+      candidate_run_id:
+        description: Failed Package Release run with a retained complete candidate
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -23,6 +27,15 @@ jobs:
     name: Bind workflow definition to release tag
     runs-on: ubuntu-24.04
     timeout-minutes: 2
+    permissions:
+      actions: read
+      checks: read
+      contents: write
+    outputs:
+      commit: ${{ steps.retained.outputs.commit }}
+      source_epoch: ${{ steps.retained.outputs.source_epoch }}
+      tag: ${{ steps.retained.outputs.tag }}
+      version: ${{ steps.retained.outputs.version }}
     steps:
       - name: Check out the current main recovery definition
         if: github.ref == 'refs/heads/main'
@@ -56,10 +69,52 @@ jobs:
               --jq '[.check_runs[] | select(.name == "Classic validation" and .conclusion == "success" and .app.id == 15368)] | length')
             test "${successful}" -ge 1
           fi
+      - id: retained
+        name: Validate the retained complete candidate
+        if: inputs.candidate_run_id != ''
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          test "${GITHUB_REF}" = refs/heads/main
+          [[ ${CANDIDATE_RUN_ID} =~ ^[1-9][0-9]*$ ]]
+          run_fields=$(gh api \
+            "repos/${RELEASE_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}" \
+            --jq '[.name, .path, .event, .head_repository.full_name, .conclusion, .head_sha] | @tsv')
+          IFS=$'\t' read -r run_name run_path run_event run_repository \
+            run_conclusion run_commit <<<"${run_fields}"
+          test "${run_name}" = 'Package Release'
+          test "${run_path}" = '.github/workflows/package-release.yml'
+          test "${run_event}" = workflow_dispatch
+          test "${run_repository}" = "${RELEASE_REPOSITORY}"
+          test "${run_conclusion}" = failure
+          git merge-base --is-ancestor \
+            "refs/tags/${RELEASE_TAG}^{commit}" "${run_commit}"
+          git merge-base --is-ancestor "${run_commit}" HEAD
+          finalized=$(gh api \
+            "repos/${RELEASE_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}/jobs?filter=latest&per_page=100" \
+            --jq '[.jobs[] | select(.name == "Build and validate immutable candidate / Validate complete release candidate" and .conclusion == "success")] | length')
+          test "${finalized}" -eq 1
+          failed_publish=$(gh api \
+            "repos/${RELEASE_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}/jobs?filter=latest&per_page=100" \
+            --jq '[.jobs[] | select(.name == "Publish unified release" and .conclusion == "failure")] | length')
+          test "${failed_publish}" -eq 1
+          candidates=$(gh api \
+            "repos/${RELEASE_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}/artifacts?per_page=100" \
+            --jq '[.artifacts[] | select(.name == "complete-release-candidate-'"${RELEASE_TAG}"'" and .expired == false and .size_in_bytes > 0 and (.digest | startswith("sha256:")))] | length')
+          test "${candidates}" -eq 1
+          python3 tools/release/validate_release.py \
+            --tag "${RELEASE_TAG}" \
+            --repository "${RELEASE_REPOSITORY}" \
+            --recovery-main \
+            --github-output "${GITHUB_OUTPUT}"
 
   candidate:
     name: Build and validate immutable candidate
     needs: preflight
+    if: inputs.candidate_run_id == ''
     permissions:
       actions: read
       checks: read
@@ -72,7 +127,12 @@ jobs:
 
   publish:
     name: Publish unified release
-    needs: candidate
+    needs: [preflight, candidate]
+    if: >-
+      always() &&
+      needs.preflight.result == 'success' &&
+      (needs.candidate.result == 'success' ||
+      (needs.candidate.result == 'skipped' && inputs.candidate_run_id != ''))
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     permissions:
@@ -82,15 +142,28 @@ jobs:
       contents: write
       id-token: write
       packages: write
+    env:
+      RELEASE_COMMIT: ${{ needs.candidate.outputs.commit || needs.preflight.outputs.commit }}
+      RELEASE_TAG: ${{ needs.candidate.outputs.tag || needs.preflight.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.candidate.outputs.version || needs.preflight.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: ${{ needs.candidate.outputs.commit }}
+          ref: ${{ env.RELEASE_COMMIT }}
+      - name: Check out the trusted recovery verifier
+        if: github.ref == 'refs/heads/main'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: build/release-automation
+          ref: ${{ github.sha }}
+          sparse-checkout: tools/release
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: complete-release-candidate-${{ needs.candidate.outputs.tag }}
+          github-token: ${{ github.token }}
+          name: complete-release-candidate-${{ env.RELEASE_TAG }}
           path: build/release
+          run-id: ${{ inputs.candidate_run_id || github.run_id }}
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
@@ -101,14 +174,14 @@ jobs:
         name: Record locked server image inputs
         run: |
           python3 tools/release/locked_inputs.py \
-            --version '${{ needs.candidate.outputs.version }}' \
+            --version "${RELEASE_VERSION}" \
             --component server \
             --github-output "${GITHUB_OUTPUT}"
       - id: registry
         name: Inspect the versioned server image
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ needs.candidate.outputs.version }}
+          RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
         run: |
           python3 tools/release/check_registry_version.py \
             --organization atrinik --package classic-server \
@@ -130,13 +203,13 @@ jobs:
             build/release/*.tar.gz
             build/release/*.whl
             build/release/*.zip
-          sbom-path: build/release/atrinik-classic-${{ needs.candidate.outputs.version }}.spdx.json
+          sbom-path: build/release/atrinik-classic-${{ env.RELEASE_VERSION }}.spdx.json
       - id: assets
         name: Resume draft assets or verify the immutable release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPOSITORY: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
           python3 tools/release/sync_release_assets.py \
             --directory build/release \
@@ -150,6 +223,13 @@ jobs:
         run: |
           echo "published immutable release has no versioned server image" >&2
           exit 1
+      - name: Refuse retained-candidate recovery with a missing image
+        if: >-
+          inputs.candidate_run_id != '' &&
+          steps.registry.outputs.exists != 'true'
+        run: |
+          echo "retained candidate has no matching versioned server image" >&2
+          exit 1
       - name: Build and publish immutable server image
         id: image
         if: >-
@@ -157,17 +237,17 @@ jobs:
           steps.registry.outputs.exists == 'false'
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
-          build-args: ATRINIK_PACKAGE_VERSION=${{ needs.candidate.outputs.version }}
+          build-args: ATRINIK_PACKAGE_VERSION=${{ env.RELEASE_VERSION }}
           cache-from: type=gha,scope=classic-server
           cache-to: type=gha,mode=max,scope=classic-server
           context: .
           file: server/Dockerfile
           labels: |
             org.opencontainers.image.licenses=GPL-2.0-or-later
-            org.opencontainers.image.revision=${{ needs.candidate.outputs.commit }}
+            org.opencontainers.image.revision=${{ env.RELEASE_COMMIT }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.title=Atrinik Classic Server
-            org.opencontainers.image.version=${{ needs.candidate.outputs.version }}
+            org.opencontainers.image.version=${{ env.RELEASE_VERSION }}
             ${{ steps.release-inputs.outputs.labels }}
           provenance: mode=max
           push: true
@@ -175,17 +255,22 @@ jobs:
           tags: ghcr.io/atrinik/classic-server:${{ needs.candidate.outputs.version }}
       - name: Verify the exact image, labels, provenance, and SBOM
         env:
-          IMAGE: ghcr.io/atrinik/classic-server:${{ needs.candidate.outputs.version }}
+          IMAGE: ghcr.io/atrinik/classic-server:${{ env.RELEASE_VERSION }}
           IMAGE_DIGEST: ${{ steps.image.outputs.digest || steps.registry.outputs.digest }}
         run: |
           test -n "${IMAGE_DIGEST}"
           docker pull "${IMAGE}@${IMAGE_DIGEST}"
-          python3 tools/release/locked_inputs.py \
-            --version '${{ needs.candidate.outputs.version }}' \
+          verifier=tools/release/locked_inputs.py
+          if test '${{ github.ref }}' = refs/heads/main; then
+            verifier=build/release-automation/tools/release/locked_inputs.py
+          fi
+          python3 "${verifier}" \
+            --version "${RELEASE_VERSION}" \
             --component server \
             --verify-image "${IMAGE}" \
-            --revision '${{ needs.candidate.outputs.commit }}' \
-            --digest "${IMAGE_DIGEST}"
+            --revision "${RELEASE_COMMIT}" \
+            --digest "${IMAGE_DIGEST}" \
+            --root "${GITHUB_WORKSPACE}"
       - name: Attest the exact published server image
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
@@ -206,7 +291,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPOSITORY: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
           python3 tools/release/sync_release_assets.py \
             --directory build/release \
@@ -219,7 +304,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPOSITORY: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
           gh release edit "${RELEASE_TAG}" \
             --repo "${RELEASE_REPOSITORY}" \
@@ -228,7 +313,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPOSITORY: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
           for attempt in {1..6}; do
             if python3 tools/release/sync_release_assets.py \
