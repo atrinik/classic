@@ -6,9 +6,10 @@ if (DEFINED ENV{ATRINIK_PACKAGE_VERSION})
 elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
     file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
         ATRINIK_SOURCE_VERSION LIMIT_COUNT 1)
-elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+else ()
     execute_process(
-        COMMAND git describe --tags --exact-match --match "v[0-9]*"
+        COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}"
+            describe --tags --exact-match --match "v[0-9]*"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         OUTPUT_VARIABLE ATRINIK_GIT_TAG
         OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -27,6 +28,27 @@ project(atrinik-client VERSION "${ATRINIK_SOURCE_VERSION}" LANGUAGES C)
 
 include(CTest)
 include(FetchContent)
+
+function(atrinik_find_root_document output filename)
+    file(REAL_PATH "${CMAKE_CURRENT_LIST_FILE}" ATRINIK_REAL_CMAKE_FILE)
+    get_filename_component(ATRINIK_REAL_SOURCE_DIR
+        "${ATRINIK_REAL_CMAKE_FILE}" DIRECTORY)
+    foreach (candidate
+            "${CMAKE_CURRENT_SOURCE_DIR}/${filename}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../${filename}"
+            "${ATRINIK_REAL_SOURCE_DIR}/${filename}"
+            "${ATRINIK_REAL_SOURCE_DIR}/../${filename}")
+        if (EXISTS "${candidate}")
+            file(REAL_PATH "${candidate}" resolved)
+            set(${output} "${resolved}" PARENT_SCOPE)
+            return()
+        endif ()
+    endforeach ()
+    message(FATAL_ERROR "Cannot locate required root document: ${filename}")
+endfunction()
+
+atrinik_find_root_document(ATRINIK_LICENSE_FILE LICENSE.md)
+atrinik_find_root_document(ATRINIK_ATTRIBUTIONS_FILE ATTRIBUTIONS.md)
 
 option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
 option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
@@ -117,6 +139,31 @@ function(atrinik_fetch_source name expected_repository expected_archive)
         URL_HASH "SHA256=${dependency_sha256}"
         DOWNLOAD_EXTRACT_TIMESTAMP false)
 endfunction()
+
+if (NOT FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL)
+    foreach (candidate
+            "${CMAKE_CURRENT_SOURCE_DIR}/../protocol"
+            "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/protocol")
+        if (EXISTS "${candidate}/CMakeLists.txt")
+            file(REAL_PATH "${candidate}" resolved)
+            set(FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL "${resolved}"
+                CACHE PATH "Atrinik protocol source" FORCE)
+            break()
+        endif ()
+    endforeach ()
+endif ()
+if (NOT FETCHCONTENT_SOURCE_DIR_LIBATRINIK)
+    foreach (candidate
+            "${CMAKE_CURRENT_SOURCE_DIR}/../libatrinik"
+            "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/libatrinik")
+        if (EXISTS "${candidate}/CMakeLists.txt")
+            file(REAL_PATH "${candidate}" resolved)
+            set(FETCHCONTENT_SOURCE_DIR_LIBATRINIK "${resolved}"
+                CACHE PATH "libatrinik source" FORCE)
+            break()
+        endif ()
+    endforeach ()
+endif ()
 
 atrinik_fetch_source(atrinik_protocol "atrinik/protocol" "atrinik-protocol")
 FetchContent_MakeAvailable(atrinik_protocol)
@@ -324,8 +371,8 @@ endif ()
 install(FILES
         ${CMAKE_SOURCE_DIR}/INSTALL
         ${CMAKE_CURRENT_SOURCE_DIR}/README.md
-        ${CMAKE_CURRENT_SOURCE_DIR}/../LICENSE.md
-        ${CMAKE_CURRENT_SOURCE_DIR}/../ATTRIBUTIONS.md
+        ${ATRINIK_LICENSE_FILE}
+        ${ATRINIK_ATTRIBUTIONS_FILE}
         ${CMAKE_CURRENT_SOURCE_DIR}/client.cfg
         DESTINATION ${INSTALL_SUBDIR_DOC})
 install(DIRECTORY
@@ -339,7 +386,7 @@ set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Fantasy multiplayer online role-playing g
 set(CPACK_PACKAGE_VENDOR "Atrinik Development Team")
 set(CPACK_PACKAGE_CONTACT "Atrinik Development Team <admin@atrinik.org>")
 set(CPACK_PACKAGE_DESCRIPTION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
-set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/../LICENSE.md")
+set(CPACK_RESOURCE_FILE_LICENSE "${ATRINIK_LICENSE_FILE}")
 set(CPACK_PACKAGE_VERSION_MAJOR "${PACKAGE_VERSION_MAJOR}")
 set(CPACK_PACKAGE_VERSION_MINOR "${PACKAGE_VERSION_MINOR}")
 set(CPACK_PACKAGE_VERSION_PATCH "${PACKAGE_VERSION_PATCH}")
@@ -352,7 +399,7 @@ endif ()
 
 if (MINGW)
     set(CPACK_PACKAGE_FILE_NAME
-        "atrinik-client-${PACKAGE_VERSION}-windows-x86_64")
+        "atrinik-classic-client-${PACKAGE_VERSION}-windows-x86_64")
 endif ()
 
 set(CPACK_DEBIAN_PACKAGE_NAME "atrinik")

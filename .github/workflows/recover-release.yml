@@ -1,0 +1,56 @@
+name: Recover Missing Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing immutable tag whose GitHub release is missing
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  checks: read
+  contents: write
+
+concurrency:
+  group: classic-release-recovery-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    name: Recover missing GitHub release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Require the default-branch workflow definition
+        run: test "${GITHUB_REF}" = refs/heads/main
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: main
+      - name: Prove the exact recoverable state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          python3 tools/release/recover_release.py \
+            --tag "${RELEASE_TAG}" \
+            --repository "${RELEASE_REPOSITORY}"
+      - name: Create release notes for the existing tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          gh release create "${RELEASE_TAG}" \
+            --draft \
+            --generate-notes \
+            --title "Atrinik Classic ${RELEASE_TAG}" \
+            --verify-tag
+      - name: Queue packaging from the immutable tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: tools/release/queue_package_release.sh "${RELEASE_TAG#v}"

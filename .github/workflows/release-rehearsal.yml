@@ -1,0 +1,41 @@
+name: Release Rehearsal
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  packages: read
+
+jobs:
+  preflight:
+    name: Bind rehearsal to current main
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      revision: ${{ steps.revision.outputs.commit }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - id: revision
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          test "${DISPATCH_REF}" = refs/heads/main
+          commit=$(git rev-parse HEAD)
+          test "${commit}" = "${DISPATCH_SHA}"
+          test "${commit}" = "$(git rev-parse refs/remotes/origin/main)"
+          echo "commit=${commit}" >>"${GITHUB_OUTPUT}"
+
+  rehearse:
+    needs: preflight
+    uses: ./.github/workflows/build-release-candidate.yml
+    with:
+      rehearsal: true
+      revision: ${{ needs.preflight.outputs.revision }}
+      version: 0.0.0

@@ -12,6 +12,11 @@ The script performs no repository update, upload, or remote synchronization.
 It runs the upstream Gradle build and copies the resulting JAR and optional
 update metadata into the selected local output directory.
 
+Unified releases include `atrinik-classic-editor-VERSION.tar.gz`, containing
+this packaging utility, the root license, and import provenance. They do not
+publish a Gridarta JAR until an immutable upstream source and dependency
+contract has been reviewed.
+
 ## License
 
 The extracted utility retains its GNU General Public License terms. See the

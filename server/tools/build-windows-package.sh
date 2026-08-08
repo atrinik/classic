@@ -22,6 +22,16 @@ command -v "${mxe_cmake}" >/dev/null
 python3 tools/dependencies.py sync
 python3 tools/dependencies.py verify
 
+dependency_arguments=()
+monorepo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+if [[ -n ${monorepo_root} && -f ${monorepo_root}/protocol/CMakeLists.txt &&
+    -f ${monorepo_root}/libatrinik/CMakeLists.txt ]]; then
+  dependency_arguments+=(
+    "-DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=${monorepo_root}/protocol"
+    "-DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=${monorepo_root}/libatrinik"
+  )
+fi
+
 package_root=build/windows-package-root
 region_build=build/windows-region-generator
 region_runtime=${package_root}/region-runtime
@@ -36,7 +46,8 @@ cmake -S . -B "${region_build}" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_TESTING=OFF \
   -DPACKAGE_TYPE=none \
-  -DPACKAGE_VERSION="${version}"
+  -DPACKAGE_VERSION="${version}" \
+  "${dependency_arguments[@]}"
 cmake --build "${region_build}" \
   --target atrinik-server plugin_arena plugin_python --parallel "$(nproc)"
 
@@ -74,14 +85,15 @@ cmake -E remove_directory "${region_data}"
   -DATRINIK_WINDOWS_PYTHON_INCLUDE_DIR="${ATRINIK_WINDOWS_PYTHON_INCLUDE_DIR}" \
   -DATRINIK_WINDOWS_PYTHON_LIBRARY="${ATRINIK_WINDOWS_PYTHON_LIBRARY}" \
   -DATRINIK_WINDOWS_PYTHON_RUNTIME_DIR="${ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR}" \
-  -DATRINIK_SERVER_PACKAGE_ROOT="${repository_root}/${package_root}"
+  -DATRINIK_SERVER_PACKAGE_ROOT="${repository_root}/${package_root}" \
+  "${dependency_arguments[@]}"
 cmake --build build/windows-release --parallel "$(nproc)"
 mkdir -p "${output_directory}"
 cpack --config build/windows-release/CPackConfig.cmake \
   -G ZIP -B "${output_directory}"
 
 mapfile -t packages < <(find "${output_directory}" -maxdepth 1 \
-  -type f -name 'atrinik-server-*-windows-x86_64.zip' -print)
+  -type f -name 'atrinik-classic-server-*-windows-x86_64.zip' -print)
 if [[ ${#packages[@]} -ne 1 ]]; then
   echo "Expected exactly one Windows server package, found ${#packages[@]}" >&2
   exit 1

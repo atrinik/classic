@@ -3,7 +3,7 @@ requires = ["setuptools>=77", "setuptools-scm>=8,<11"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "atrinik-protocol"
+name = "atrinik-classic-protocol"
 dynamic = ["version"]
 description = "Canonical generated bindings for Atrinik wire protocols"
 readme = "README.md"

@@ -10,6 +10,9 @@
   locks remain immutable checksum-pinned fallbacks; update lock files and
   dependency tests together. Do not add Git submodules or copied protocol
   constants.
+- The scoped client source release embeds matching protocol and libatrinik
+  trees under `dependencies/`; standalone CMake configuration must select them
+  without network access when ordinary monorepo siblings are absent.
 - Command identifiers are generated from the sibling `protocol/` module. Treat
   packet-layout changes as coordinated monorepo protocol work and update both
   producer and consumer in one pull request and profile.

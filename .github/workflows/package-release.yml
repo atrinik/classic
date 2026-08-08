@@ -1,0 +1,231 @@
+name: Package Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing unified semantic-release tag to package
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  packages: read
+
+concurrency:
+  group: classic-package-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Bind workflow definition to release tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require the immutable tag workflow ref
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+        run: |
+          test "${RELEASE_REF_TYPE}" = tag
+          test "${GITHUB_REF}" = "refs/tags/${RELEASE_TAG}"
+
+  candidate:
+    name: Build and validate immutable candidate
+    needs: preflight
+    uses: ./.github/workflows/build-release-candidate.yml
+    with:
+      rehearsal: false
+      tag: ${{ inputs.tag }}
+
+  publish:
+    name: Publish unified release
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      actions: read
+      artifact-metadata: write
+      attestations: write
+      contents: write
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.candidate.outputs.commit }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: complete-release-candidate-${{ needs.candidate.outputs.tag }}
+          path: build/release
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - id: release-inputs
+        name: Record locked server image inputs
+        run: |
+          python3 tools/release/locked_inputs.py \
+            --version '${{ needs.candidate.outputs.version }}' \
+            --component server \
+            --github-output "${GITHUB_OUTPUT}"
+      - id: registry
+        name: Inspect the versioned server image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.candidate.outputs.version }}
+        run: |
+          python3 tools/release/check_registry_version.py \
+            --organization atrinik --package classic-server \
+            --tag "${RELEASE_VERSION}" \
+            --github-output "${GITHUB_OUTPUT}"
+      - name: Recheck candidate hashes before publication
+        working-directory: build/release
+        run: |
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 12
+          sha256sum --check SHA256SUMS
+      - name: Attest downloadable artifact provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: build/release/*
+      - name: Attest downloadable artifact SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            build/release/*.tar.gz
+            build/release/*.whl
+            build/release/*.zip
+          sbom-path: build/release/atrinik-classic-${{ needs.candidate.outputs.version }}.spdx.json
+      - id: assets
+        name: Resume draft assets or verify the immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+        run: |
+          python3 tools/release/sync_release_assets.py \
+            --directory build/release \
+            --repository "${RELEASE_REPOSITORY}" \
+            --tag "${RELEASE_TAG}" \
+            --github-output "${GITHUB_OUTPUT}"
+      - name: Refuse a published release with a missing image
+        if: >-
+          steps.assets.outputs.state == 'published' &&
+          steps.registry.outputs.exists != 'true'
+        run: |
+          echo "published immutable release has no versioned server image" >&2
+          exit 1
+      - name: Build and publish immutable server image
+        id: image
+        if: >-
+          steps.assets.outputs.state == 'draft' &&
+          steps.registry.outputs.exists == 'false'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          build-args: ATRINIK_PACKAGE_VERSION=${{ needs.candidate.outputs.version }}
+          cache-from: type=gha,scope=classic-server
+          cache-to: type=gha,mode=max,scope=classic-server
+          context: .
+          file: server/Dockerfile
+          labels: |
+            org.opencontainers.image.licenses=GPL-2.0-or-later
+            org.opencontainers.image.revision=${{ needs.candidate.outputs.commit }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.title=Atrinik Classic Server
+            org.opencontainers.image.version=${{ needs.candidate.outputs.version }}
+            ${{ steps.release-inputs.outputs.labels }}
+          provenance: mode=max
+          push: true
+          sbom: true
+          tags: ghcr.io/atrinik/classic-server:${{ needs.candidate.outputs.version }}
+      - name: Verify the exact image, labels, provenance, and SBOM
+        env:
+          IMAGE: ghcr.io/atrinik/classic-server:${{ needs.candidate.outputs.version }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest || steps.registry.outputs.digest }}
+        run: |
+          test -n "${IMAGE_DIGEST}"
+          docker pull "${IMAGE}@${IMAGE_DIGEST}"
+          python3 tools/release/locked_inputs.py \
+            --version '${{ needs.candidate.outputs.version }}' \
+            --component server \
+            --verify-image "${IMAGE}" \
+            --revision '${{ needs.candidate.outputs.commit }}' \
+            --digest "${IMAGE_DIGEST}"
+      - name: Attest the exact published server image
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ghcr.io/atrinik/classic-server
+          subject-digest: ${{ steps.image.outputs.digest || steps.registry.outputs.digest }}
+          push-to-registry: true
+      - name: Verify the GitHub server-image attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest || steps.registry.outputs.digest }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: >-
+          gh attestation verify
+          "oci://ghcr.io/atrinik/classic-server@${IMAGE_DIGEST}"
+          --repo "${RELEASE_REPOSITORY}"
+      - id: final-assets
+        name: Recheck the exact release assets immediately before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+        run: |
+          python3 tools/release/sync_release_assets.py \
+            --directory build/release \
+            --repository "${RELEASE_REPOSITORY}" \
+            --tag "${RELEASE_TAG}" \
+            --verify-only \
+            --github-output "${GITHUB_OUTPUT}"
+      - name: Publish the complete draft release
+        if: steps.final-assets.outputs.state == 'draft'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+        run: |
+          gh release edit "${RELEASE_TAG}" \
+            --repo "${RELEASE_REPOSITORY}" \
+            --draft=false
+      - name: Verify the published immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+        run: |
+          for attempt in {1..6}; do
+            if python3 tools/release/sync_release_assets.py \
+                --directory build/release \
+                --repository "${RELEASE_REPOSITORY}" \
+                --tag "${RELEASE_TAG}" \
+                --verify-published; then
+              exit 0
+            fi
+            ((attempt < 6)) || exit 1
+            sleep 10
+          done
+
+  queue-latest:
+    name: Queue latest alias reconciliation
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      contents: write
+    steps:
+      - name: Dispatch the default-branch promoter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: >-
+          gh api
+          --method POST
+          "repos/${RELEASE_REPOSITORY}/dispatches"
+          -f event_type=promote-classic-latest
