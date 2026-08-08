@@ -2,7 +2,9 @@
 
 #include <openssl/crypto.h>
 
-#ifndef WIN32
+#ifdef WIN32
+#include <aclapi.h>
+#else
 #include <sys/stat.h>
 #endif
 
@@ -31,12 +33,78 @@ require_failed(const char *expression, const char *file, int line, unsigned long
         }                                                                         \
     } while (0)
 
+#ifdef WIN32
+static wchar_t *path_to_wide(const char *path) {
+    int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
+    require(length > 0);
+    wchar_t *wide = calloc((size_t)length, sizeof(*wide));
+    require(wide != NULL);
+    require(MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, length) == length);
+    return wide;
+}
+
+static void unprotect_file_dacl(const char *path) {
+    wchar_t *wide = path_to_wide(path);
+    HANDLE file = CreateFileW(wide,
+                              READ_CONTROL | WRITE_DAC,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                              NULL,
+                              OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                              NULL);
+    require(file != INVALID_HANDLE_VALUE);
+
+    PSID owner = NULL;
+    PACL dacl = NULL;
+    PSECURITY_DESCRIPTOR descriptor = NULL;
+    require(GetSecurityInfo(file,
+                            SE_FILE_OBJECT,
+                            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                            &owner,
+                            NULL,
+                            &dacl,
+                            NULL,
+                            &descriptor) == ERROR_SUCCESS);
+    require(owner != NULL && dacl != NULL && descriptor != NULL);
+    require(SetSecurityInfo(file,
+                            SE_FILE_OBJECT,
+                            DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION,
+                            NULL,
+                            NULL,
+                            dacl,
+                            NULL) == ERROR_SUCCESS);
+
+    PSID updated_owner = NULL;
+    PSECURITY_DESCRIPTOR updated_descriptor = NULL;
+    require(GetSecurityInfo(file,
+                            SE_FILE_OBJECT,
+                            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                            &updated_owner,
+                            NULL,
+                            NULL,
+                            NULL,
+                            &updated_descriptor) == ERROR_SUCCESS);
+    SECURITY_DESCRIPTOR_CONTROL control = 0;
+    DWORD revision = 0;
+    require(updated_owner != NULL && EqualSid(owner, updated_owner));
+    require(GetSecurityDescriptorControl(updated_descriptor, &control, &revision));
+    require((control & SE_DACL_PROTECTED) == 0);
+
+    require(LocalFree(updated_descriptor) == NULL);
+    require(LocalFree(descriptor) == NULL);
+    require(CloseHandle(file));
+    free(wide);
+}
+#endif
+
+#ifndef WIN32
 static void setup_file(const char *path, const char *contents) {
     FILE *fp = fopen(path, "wb");
     require(fp != NULL);
     require(fwrite(contents, 1, strlen(contents), fp) == strlen(contents));
     require(fclose(fp) == 0);
 }
+#endif
 
 int main(void) {
     toolkit_import(path);
@@ -81,25 +149,18 @@ int main(void) {
 #ifdef WIN32
     char broad[HUGE_BUF];
     require(snprintf(VS(broad), "%s/broad", directory) < (int)sizeof(broad));
-    setup_file(broad, "broad-secret\n");
+    static const char broad_secret[] = "broad-secret\n";
+    require(path_secret_create_atomic(broad, broad_secret, sizeof(broad_secret) - 1U) ==
+            PATH_SECRET_CREATE_OK);
+    unprotect_file_dacl(broad);
     permissive = false;
     require(path_read_secret(broad, VS(secret), &permissive) == PATH_SECRET_OK);
     require(strcmp(secret, "broad-secret") == 0 && permissive);
 
     char link_path[HUGE_BUF];
     require(snprintf(VS(link_path), "%s/link", directory) < (int)sizeof(link_path));
-    int target_length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
-    int link_length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, link_path, -1, NULL, 0);
-    wchar_t *target_wide =
-        target_length > 0 ? calloc((size_t)target_length, sizeof(wchar_t)) : NULL;
-    wchar_t *link_wide = link_length > 0 ? calloc((size_t)link_length, sizeof(wchar_t)) : NULL;
-    require(target_wide != NULL && link_wide != NULL);
-    require(
-        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, target_wide, target_length) ==
-        target_length);
-    require(
-        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, link_path, -1, link_wide, link_length) ==
-        link_length);
+    wchar_t *target_wide = path_to_wide(path);
+    wchar_t *link_wide = path_to_wide(link_path);
 #ifndef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
 #define SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE 0x2
 #endif
@@ -132,7 +193,9 @@ int main(void) {
 
     char too_long[HUGE_BUF];
     require(snprintf(VS(too_long), "%s/too-long", directory) < (int)sizeof(too_long));
-    setup_file(too_long, "12345678");
+    static const char too_long_secret[] = "12345678";
+    require(path_secret_create_atomic(too_long, too_long_secret, sizeof(too_long_secret) - 1U) ==
+            PATH_SECRET_CREATE_OK);
 #ifndef WIN32
     require(chmod(too_long, 0600) == 0);
 #endif
@@ -144,7 +207,9 @@ int main(void) {
 
     char trailing[HUGE_BUF];
     require(snprintf(VS(trailing), "%s/trailing", directory) < (int)sizeof(trailing));
-    setup_file(trailing, "secret\nother\n");
+    static const char trailing_secret[] = "secret\nother\n";
+    require(path_secret_create_atomic(trailing, trailing_secret, sizeof(trailing_secret) - 1U) ==
+            PATH_SECRET_CREATE_OK);
 #ifndef WIN32
     require(chmod(trailing, 0600) == 0);
 #endif
