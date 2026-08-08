@@ -1,0 +1,300 @@
+name: Build Release Candidate
+
+on:
+  workflow_call:
+    inputs:
+      rehearsal:
+        description: Build and validate without publishing
+        default: true
+        required: false
+        type: boolean
+      revision:
+        description: Commit to rehearse without publishing
+        default: ""
+        required: false
+        type: string
+      tag:
+        description: Existing unified semantic-release tag to package
+        default: ""
+        required: false
+        type: string
+      version:
+        description: Non-production semantic version used in rehearsal artifacts
+        default: 0.0.0
+        required: false
+        type: string
+    outputs:
+      commit:
+        description: Exact candidate commit
+        value: ${{ jobs.metadata.outputs.commit }}
+      source_epoch:
+        description: Candidate source epoch
+        value: ${{ jobs.metadata.outputs.source_epoch }}
+      tag:
+        description: Candidate artifact namespace
+        value: ${{ jobs.metadata.outputs.tag }}
+      version:
+        description: Candidate semantic version
+        value: ${{ jobs.metadata.outputs.version }}
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  packages: read
+
+concurrency:
+  group: >-
+    classic-release-candidate-${{ inputs.tag || inputs.revision || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    name: Validate unified release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      commit: ${{ steps.metadata.outputs.commit || steps.rehearsal.outputs.commit }}
+      source_epoch: ${{ steps.metadata.outputs.source_epoch || steps.rehearsal.outputs.source_epoch }}
+      tag: ${{ steps.metadata.outputs.tag || steps.rehearsal.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version || steps.rehearsal.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.rehearsal && inputs.revision || inputs.tag }}
+      - id: metadata
+        name: Validate tag, release, checks, and ancestry
+        if: inputs.rehearsal != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          python3 tools/release/validate_release.py \
+            --tag "${RELEASE_TAG}" \
+            --repository "${RELEASE_REPOSITORY}"
+      - id: rehearsal
+        name: Validate non-publishing rehearsal inputs
+        if: inputs.rehearsal == true
+        env:
+          REHEARSAL_REVISION: ${{ inputs.revision }}
+          REHEARSAL_VERSION: ${{ inputs.version }}
+        run: |
+          [[ ${REHEARSAL_VERSION} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          commit=$(git rev-parse "${REHEARSAL_REVISION}^{commit}")
+          test "${commit}" = "$(git rev-parse HEAD)"
+          {
+            echo "tag=rehearsal-${commit}"
+            echo "version=${REHEARSAL_VERSION}"
+            echo "commit=${commit}"
+            echo "source_epoch=$(git show -s --format=%ct "${commit}")"
+          } >>"${GITHUB_OUTPUT}"
+
+  sources:
+    name: Build source packages and protocol wheel
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.metadata.outputs.commit }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+      - run: >-
+          python3 tools/release/package_sources.py
+          --version '${{ needs.metadata.outputs.version }}'
+          --revision '${{ needs.metadata.outputs.commit }}'
+          --output build/release
+      - name: Build wheel from the scoped source package
+        run: |
+          python3 -m pip install build==1.3.0
+          python3 tools/release/build_protocol_wheel.py \
+            --version '${{ needs.metadata.outputs.version }}' \
+            --source 'build/release/atrinik-classic-protocol-${{ needs.metadata.outputs.version }}.tar.gz' \
+            --source-epoch '${{ needs.metadata.outputs.source_epoch }}' \
+            --output build/release
+      - name: Install and import the wheel without dependencies
+        run: |
+          python3 -m venv build/wheel-smoke
+          build/wheel-smoke/bin/python -m pip install --no-deps \
+            build/release/atrinik_classic_protocol-*-py3-none-any.whl
+          build/wheel-smoke/bin/python -c \
+            'import atrinik_protocol; assert atrinik_protocol.PROTOCOL_VERSION > 0'
+      - name: Build the extracted unified library and exact-version consumer
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libssl-dev zlib1g-dev
+          mkdir -p build/extracted
+          tar -xzf \
+            "build/release/atrinik-classic-libatrinik-${RELEASE_VERSION}.tar.gz" \
+            -C build/extracted
+          library_source="build/extracted/atrinik-classic-libatrinik-${RELEASE_VERSION}"
+          cmake -S "${library_source}" -B build/extracted-library \
+            -DBUILD_TESTING=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${PWD}/build/extracted-install"
+          cmake --build build/extracted-library --parallel
+          cmake --install build/extracted-library
+          cmake -S "${library_source}/tests/consumer" -B build/extracted-consumer \
+            -DATRINIK_CONSUMER_VERSION="${RELEASE_VERSION}" \
+            -DCMAKE_PREFIX_PATH="${PWD}/build/extracted-install"
+          cmake --build build/extracted-consumer --parallel
+          build/extracted-consumer/libatrinik-consumer
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-source-protocol-${{ needs.metadata.outputs.tag }}
+          path: |
+            build/release/*.tar.gz
+            build/release/*.whl
+          if-no-files-found: error
+          retention-days: 30
+
+  client-windows:
+    name: Build Windows client package
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.metadata.outputs.commit }}
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - run: docker pull ghcr.io/atrinik/windows-build:1.0.5@sha256:9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7
+      - name: Build portable package from monorepo siblings
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env ATRINIK_PACKAGE_VERSION="${RELEASE_VERSION}" \
+            --env CCACHE_DIR=/workspace/client/build/ccache \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --workdir /workspace/client \
+            ghcr.io/atrinik/windows-build:1.0.5@sha256:9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7 \
+            bash tools/build-windows-package.sh build/packages
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-client-windows-${{ needs.metadata.outputs.tag }}
+          path: client/build/packages/*.zip
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
+
+  server-windows:
+    name: Build Windows server package
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.metadata.outputs.commit }}
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - run: docker pull ghcr.io/atrinik/windows-build:1.0.5@sha256:9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7
+      - name: Build portable package from monorepo siblings
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env ATRINIK_PACKAGE_VERSION="${RELEASE_VERSION}" \
+            --env CCACHE_DIR=/workspace/server/build/ccache \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --workdir /workspace/server \
+            ghcr.io/atrinik/windows-build:1.0.5@sha256:9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7 \
+            bash tools/build-windows-package.sh build/packages
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-server-windows-${{ needs.metadata.outputs.tag }}
+          path: server/build/packages/*.zip
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
+
+  server-image:
+    name: Build classic server image without publishing
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.metadata.outputs.commit }}
+      - id: release-inputs
+        name: Record locked server image inputs
+        run: |
+          python3 tools/release/locked_inputs.py \
+            --version '${{ needs.metadata.outputs.version }}' \
+            --component server \
+            --github-output "${GITHUB_OUTPUT}"
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          build-args: ATRINIK_PACKAGE_VERSION=${{ needs.metadata.outputs.version }}
+          cache-from: type=gha,scope=classic-server
+          cache-to: type=gha,mode=max,scope=classic-server
+          context: .
+          file: server/Dockerfile
+          labels: |
+            org.opencontainers.image.licenses=GPL-2.0-or-later
+            org.opencontainers.image.revision=${{ needs.metadata.outputs.commit }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.title=Atrinik Classic Server
+            org.opencontainers.image.version=${{ needs.metadata.outputs.version }}
+            ${{ steps.release-inputs.outputs.labels }}
+          load: false
+          provenance: mode=max
+          push: false
+          sbom: true
+          tags: ghcr.io/atrinik/classic-server:${{ needs.metadata.outputs.version }}
+
+  candidate:
+    name: Validate complete release candidate
+    needs:
+      - metadata
+      - sources
+      - client-windows
+      - server-windows
+      - server-image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.metadata.outputs.commit }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: release-*-${{ needs.metadata.outputs.tag }}
+          path: build/release
+          merge-multiple: true
+      - name: Validate and index the complete candidate
+        run: >-
+          python3 tools/release/finalize_artifacts.py
+          --version '${{ needs.metadata.outputs.version }}'
+          --revision '${{ needs.metadata.outputs.commit }}'
+          --source-epoch '${{ needs.metadata.outputs.source_epoch }}'
+          --directory build/release
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: complete-release-candidate-${{ needs.metadata.outputs.tag }}
+          path: build/release/*
+          if-no-files-found: error
+          retention-days: 30

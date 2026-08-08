@@ -14,9 +14,9 @@ and exact validation requirements.
 6. Use a Conventional Commit title such as `fix(server): ...` or
    `feat(protocol)!: ...`.
 
-The squash-merge title is the unified release input: breaking changes bump the
-major version, `feat` bumps the minor version, and every other accepted
-Conventional Commit type bumps the patch version.
+The squash-merge title is the unified release input. Classic stays on the
+`5.x.x` line: a breaking marker or `feat` advances the minor version, and every
+other accepted Conventional Commit type advances the patch version.
 
 Do not vendor content, sound, resources, generated dependency trees, or copies
 of sibling source. Do not edit imported history maps or archive refs. Security
@@ -24,12 +24,12 @@ reports follow [SECURITY.md](SECURITY.md). All Atrinik-authored classic source
 remains GPL-2.0-or-later under [LICENSE.md](LICENSE.md); preserve compatible
 third-party licenses, notices, and attributions.
 
-The repository will use a unified classic release line. Until the root release
-pipeline is enabled, changes merged to `main` are unreleased. Nested component
-workflows and semantic-release files are inert migration inputs, not active
-configuration. Do not enable, update, or remove them independently; they are
-retired only when root automation preserves their build, packaging, tagging,
-publication, and dependency-update capabilities.
+The root workflows own the unified classic release line. After the initial
+manual-only pipeline passes its full post-merge rehearsal and the automatic
+trigger is enabled in a separate pull request, a successful aggregate check for
+the current `main` commit triggers semantic-release and the guarded package
+workflow. Nested component workflows and semantic-release files remain inert
+migration inputs; never enable or update them as independent release trains.
 
 ## Module requirements
 

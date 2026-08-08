@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "unified_release": {
+    "first_tag": "v5.6.0",
+    "ancestry_floor": "6960d16988e6925d7e421dc549780ac5feb0914d",
+    "repository": "atrinik/classic",
+    "version_source": "semantic-release"
+  },
+  "components": [
+    {
+      "name": "client",
+      "archived_repository": "atrinik/legacy-client",
+      "last_component_tag": "v5.3.1",
+      "original_commit": "a8d0ab66cafac894f6f9375eddb60fd02ed4c778",
+      "rewritten_commit": "8004d4420445ad717a364827944d8790e0a34062",
+      "unified_artifact": "atrinik-classic-client-${version}.tar.gz"
+    },
+    {
+      "name": "server",
+      "archived_repository": "atrinik/legacy-server",
+      "last_component_tag": "v5.5.1",
+      "original_commit": "b3c32b13a220fb9cc330133183de5b1818b29d41",
+      "rewritten_commit": "7cae183c396cd0855d4969092389c968c0d20f30",
+      "unified_artifact": "atrinik-classic-server-${version}.tar.gz"
+    },
+    {
+      "name": "editor",
+      "archived_repository": "atrinik/legacy-editor",
+      "last_component_tag": "v1.0.7",
+      "original_commit": "ac547a5ba8259bbde649caabdabe51c2861352f4",
+      "rewritten_commit": "26e9139ca3da0a3cea5903e8cd42e114ad9029a3",
+      "unified_artifact": "atrinik-classic-editor-${version}.tar.gz"
+    },
+    {
+      "name": "libatrinik",
+      "archived_repository": "atrinik/legacy-libatrinik",
+      "last_component_tag": "v1.1.6",
+      "original_commit": "a5e161f5dae6896ae0ee218b807f547ffdeb49c8",
+      "rewritten_commit": "c23cf3a5777e15483ff7a5305f37dd9de8939b28",
+      "unified_artifact": "atrinik-classic-libatrinik-${version}.tar.gz"
+    },
+    {
+      "name": "protocol",
+      "archived_repository": "atrinik/legacy-protocol",
+      "last_component_tag": "v1.0.11",
+      "original_commit": "eebc3921f364108a0ddd6d4beb9e1f86a274c862",
+      "rewritten_commit": "89579d3b6ccea3a0978990cfe9189ce49282e22d",
+      "unified_artifact": "atrinik-classic-protocol-${version}.tar.gz"
+    }
+  ]
+}

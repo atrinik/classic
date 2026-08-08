@@ -153,6 +153,9 @@
 - Pull request titles and commits use Conventional Commits style. Classic uses
   one repository-wide release line; preserve the source, Windows server
   package, checksum, and server-image release contracts together.
+- The scoped server source release embeds matching protocol and libatrinik
+  trees under `dependencies/`; standalone CMake configuration must select them
+  without network access when ordinary monorepo siblings are absent.
 - Preserve unrelated work, keep generated output under `build/`, and finish
   with `git diff --check`.
 - Update this `AGENTS.md` in the same change when major rework alters ownership,
