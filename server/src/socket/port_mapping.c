@@ -241,10 +241,8 @@ bool socket_port_mapping_init(uint16_t port,
                                             host_size,
                                             external_port)) {
         LOG(INFO,
-            "Created %s UDP mapping %s:%" PRIu16,
-            socket_port_mapping_controller_name(&mapping_controller),
-            host,
-            *external_port);
+            "Created a %s UDP mapping",
+            socket_port_mapping_controller_name(&mapping_controller));
         server_metrics_mapping(socket_port_mapping_controller_name(&mapping_controller),
                                false,
                                false);

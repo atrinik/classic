@@ -38,6 +38,8 @@ def main() -> int:
     classic.add_argument("--client-result", required=True)
     classic.add_argument("--server-required", required=True)
     classic.add_argument("--server-result", required=True)
+    classic.add_argument("--windows-required", required=True)
+    classic.add_argument("--windows-result", required=True)
     optional = commands.add_parser("optional")
     optional.add_argument("--label", required=True)
     optional.add_argument("--classifier-result", required=True)
@@ -54,6 +56,11 @@ def main() -> int:
             )
             require_component(
                 "server", arguments.server_required, arguments.server_result
+            )
+            require_component(
+                "native Windows",
+                arguments.windows_required,
+                arguments.windows_result,
             )
         else:
             require_component(arguments.label, arguments.required, arguments.result)

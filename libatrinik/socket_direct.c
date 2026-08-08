@@ -9,6 +9,7 @@
 #include "datetime.h"
 
 #include <curl/curl.h>
+#include <openssl/crypto.h>
 #include <openssl/rand.h>
 #ifdef WIN32
 #include <iphlpapi.h>
@@ -18,6 +19,40 @@
 #endif
 #define SOCKET_STUN_MAGIC 0x2112a442U
 #define SOCKET_PUNCH_PROBE "ATRINIK-PUNCH-1"
+#define SOCKET_RENDEZVOUS_CLIENT_FRAMES_MAX 3U
+#define SOCKET_RENDEZVOUS_SERVER_FRAMES_MAX 15U
+#define SOCKET_RENDEZVOUS_SERVER_CANDIDATES_MAX 12U
+#define SOCKET_RENDEZVOUS_AUTH_FRAMES_MAX 4U
+#define SOCKET_RENDEZVOUS_AUTH_BYTES_MAX 2048U
+#define SOCKET_RENDEZVOUS_SIGNAL_BYTES_MAX 9216U
+#define SOCKET_RENDEZVOUS_RETRY_AFTER_MAX (24U * 60U * 60U)
+
+typedef enum socket_rendezvous_attempt_state {
+    SOCKET_RENDEZVOUS_ATTEMPT_READY,
+    SOCKET_RENDEZVOUS_ATTEMPT_NEW,
+    SOCKET_RENDEZVOUS_ATTEMPT_WAIT_CHALLENGE,
+    SOCKET_RENDEZVOUS_ATTEMPT_WAIT_RESULT,
+    SOCKET_RENDEZVOUS_ATTEMPT_AUTHORIZED,
+    SOCKET_RENDEZVOUS_ATTEMPT_WAIT_SERVER,
+    SOCKET_RENDEZVOUS_ATTEMPT_COMPLETE,
+    SOCKET_RENDEZVOUS_ATTEMPT_TERMINAL
+} socket_rendezvous_attempt_state_t;
+
+struct socket_rendezvous_attempt {
+    char server_id[RENDEZVOUS_SERVER_ID_HEX_SIZE + 1U];
+    char ticket[RENDEZVOUS_TICKET_HEX_SIZE + 1U];
+    rendezvous_invite_t invite;
+    rendezvous_websocket_protocol_t protocol;
+    uint64_t deadline_ms;
+    socket_rendezvous_attempt_state_t state;
+    socket_rendezvous_stats_t stats;
+    size_t authorization_frames;
+    size_t authorization_bytes;
+    uint32_t retry_after_seconds;
+    bool authorization_required;
+    bool has_invite;
+};
+
 typedef struct socket_punch_job {
     socket_direct_candidate_t candidate;
     socket_punch_pacer_t pacer;
@@ -84,25 +119,35 @@ static bool socket_rendezvous_host_valid(const char *host) {
 #endif
 }
 
-bool socket_rendezvous_client_candidate_parse(const char *message,
-                                              char *host,
-                                              size_t host_size,
-                                              uint16_t *port,
-                                              char ticket[65]) {
-    char parsed_host[65], parsed_ticket[65];
-    unsigned int parsed_port;
+static bool socket_rendezvous_client_candidate_parse_raw(const char *message,
+                                                         char *host,
+                                                         size_t host_size,
+                                                         uint16_t *port,
+                                                         char ticket[65]) {
+    char parsed_host[65], parsed_ticket[65], canonical[256];
+    char port_text[6];
+    uint64_t parsed_port;
     int consumed = 0;
     if (message == NULL || host == NULL || host_size == 0 || port == NULL || ticket == NULL ||
+        strlen(message) > RENDEZVOUS_FRAME_MAX ||
         sscanf(message,
                "{\"type\":\"client_candidate\",\"host\":\"%64[0-9a-fA-F:.]\","
-               "\"port\":%u,\"ticket\":\"%64[0-9a-f]\"}%n",
+               "\"port\":%5[0-9],\"ticket\":\"%64[0-9a-f]\"}%n",
                parsed_host,
-               &parsed_port,
+               port_text,
                parsed_ticket,
                &consumed) != 3 ||
-        message[consumed] != '\0' || parsed_port == 0 || parsed_port > UINT16_MAX ||
+        message[consumed] != '\0' ||
+        !string_parse_uint64(port_text, 10, 1, UINT16_MAX, &parsed_port) ||
         !socket_rendezvous_host_valid(parsed_host) ||
-        !socket_rendezvous_ticket_valid(parsed_ticket) || strlen(parsed_host) >= host_size) {
+        !socket_rendezvous_ticket_valid(parsed_ticket) || strlen(parsed_host) >= host_size ||
+        snprintf(VS(canonical),
+                 "{\"type\":\"client_candidate\",\"host\":\"%s\","
+                 "\"port\":%u,\"ticket\":\"%s\"}",
+                 parsed_host,
+                 (unsigned int)parsed_port,
+                 parsed_ticket) >= (int)sizeof(canonical) ||
+        strcmp(message, canonical) != 0) {
         return false;
     }
     snprintf(host, host_size, "%s", parsed_host);
@@ -111,27 +156,37 @@ bool socket_rendezvous_client_candidate_parse(const char *message,
     return true;
 }
 
-bool socket_rendezvous_server_candidate_parse(const char *message,
-                                              const char *expected_ticket,
-                                              socket_direct_candidate_t *candidate) {
-    char host[65], kind[16], ticket[65];
-    unsigned int port;
+static bool socket_rendezvous_server_candidate_parse_raw(const char *message,
+                                                         const char *expected_ticket,
+                                                         socket_direct_candidate_t *candidate) {
+    char host[65], kind[16], ticket[65], canonical[256];
+    char port_text[6];
+    uint64_t port;
     int consumed = 0;
     socket_candidate_kind_t parsed_kind;
     if (message == NULL || expected_ticket == NULL || candidate == NULL ||
         !socket_rendezvous_ticket_valid(expected_ticket) ||
+        strlen(message) > RENDEZVOUS_FRAME_MAX ||
         sscanf(message,
                "{\"type\":\"server_candidate\",\"host\":\"%64[0-9a-fA-F:.]\","
-               "\"port\":%u,\"kind\":\"%15[a-z0-9]\","
+               "\"port\":%5[0-9],\"kind\":\"%15[a-z0-9]\","
                "\"ticket\":\"%64[0-9a-f]\"}%n",
                host,
-               &port,
+               port_text,
                kind,
                ticket,
                &consumed) != 4 ||
-        message[consumed] != '\0' || port == 0 || port > UINT16_MAX ||
+        message[consumed] != '\0' || !string_parse_uint64(port_text, 10, 1, UINT16_MAX, &port) ||
         strcmp(ticket, expected_ticket) != 0 || !socket_rendezvous_host_valid(host) ||
-        !socket_candidate_kind_parse(kind, &parsed_kind)) {
+        !socket_candidate_kind_parse(kind, &parsed_kind) ||
+        snprintf(VS(canonical),
+                 "{\"type\":\"server_candidate\",\"host\":\"%s\","
+                 "\"port\":%u,\"kind\":\"%s\",\"ticket\":\"%s\"}",
+                 host,
+                 (unsigned int)port,
+                 socket_candidate_kind_name(parsed_kind),
+                 ticket) >= (int)sizeof(canonical) ||
+        strcmp(message, canonical) != 0) {
         return false;
     }
     snprintf(VS(candidate->host), "%s", host);
@@ -140,20 +195,24 @@ bool socket_rendezvous_server_candidate_parse(const char *message,
     return true;
 }
 
-bool socket_rendezvous_message_render(char *buffer,
-                                      size_t size,
-                                      const char *type,
-                                      const char *host,
-                                      uint16_t port,
-                                      socket_candidate_kind_t kind,
-                                      const char *ticket) {
+static bool socket_rendezvous_message_render(char *buffer,
+                                             size_t size,
+                                             const char *type,
+                                             const char *host,
+                                             uint16_t port,
+                                             socket_candidate_kind_t kind,
+                                             const char *ticket) {
+    if (buffer != NULL && size != 0) {
+        buffer[0] = '\0';
+    }
     if (buffer == NULL || size == 0 || type == NULL || !socket_rendezvous_ticket_valid(ticket)) {
         return false;
     }
     int length;
     if (strcmp(type, "complete") == 0) {
         length = snprintf(buffer, size, "{\"type\":\"complete\",\"ticket\":\"%s\"}", ticket);
-    } else if (strcmp(type, "client_candidate") == 0 && socket_rendezvous_host_valid(host)) {
+    } else if (strcmp(type, "client_candidate") == 0 && port != 0 &&
+               socket_rendezvous_host_valid(host)) {
         length = snprintf(buffer,
                           size,
                           "{\"type\":\"client_candidate\",\"host\":\"%s\","
@@ -161,8 +220,8 @@ bool socket_rendezvous_message_render(char *buffer,
                           host,
                           port,
                           ticket);
-    } else if (strcmp(type, "server_candidate") == 0 && socket_rendezvous_host_valid(host) &&
-               (unsigned int)kind < SOCKET_CANDIDATE_NUM) {
+    } else if (strcmp(type, "server_candidate") == 0 && port != 0 &&
+               socket_rendezvous_host_valid(host) && (unsigned int)kind < SOCKET_CANDIDATE_NUM) {
         length = snprintf(buffer,
                           size,
                           "{\"type\":\"server_candidate\",\"host\":\"%s\","
@@ -178,16 +237,387 @@ bool socket_rendezvous_message_render(char *buffer,
     return length >= 0 && (size_t)length < size;
 }
 
-bool socket_rendezvous_complete_parse(const char *message, const char *expected_ticket) {
-    char expected[128];
-    return message != NULL &&
-           socket_rendezvous_message_render(VS(expected),
+bool socket_rendezvous_client_candidate_parse(const char *message,
+                                              const char *expected_ticket,
+                                              bool authorization_required,
+                                              rendezvous_server_auth_state_t authorization,
+                                              char *host,
+                                              size_t host_size,
+                                              uint16_t *port,
+                                              char ticket[65]) {
+    char parsed_host[65], parsed_ticket[65];
+    uint16_t parsed_port;
+    if (host != NULL && host_size != 0) {
+        host[0] = '\0';
+    }
+    if (port != NULL) {
+        *port = 0;
+    }
+    if (ticket != NULL) {
+        ticket[0] = '\0';
+    }
+    if (host == NULL || host_size == 0 || port == NULL || ticket == NULL ||
+        (authorization_required && authorization != RENDEZVOUS_SERVER_AUTH_AUTHORIZED) ||
+        !socket_rendezvous_client_candidate_parse_raw(message,
+                                                      VS(parsed_host),
+                                                      &parsed_port,
+                                                      parsed_ticket) ||
+        (expected_ticket != NULL && strcmp(parsed_ticket, expected_ticket) != 0) ||
+        strlen(parsed_host) >= host_size) {
+        return false;
+    }
+    snprintf(host, host_size, "%s", parsed_host);
+    *port = parsed_port;
+    snprintf(ticket, 65, "%s", parsed_ticket);
+    return true;
+}
+
+bool socket_rendezvous_server_candidate_render(char *buffer,
+                                               size_t size,
+                                               const socket_direct_candidate_t *candidate,
+                                               const char *ticket,
+                                               bool authorization_required,
+                                               rendezvous_server_auth_state_t authorization) {
+    if (buffer != NULL && size != 0) {
+        buffer[0] = '\0';
+    }
+    return candidate != NULL &&
+           (!authorization_required || authorization == RENDEZVOUS_SERVER_AUTH_AUTHORIZED) &&
+           socket_rendezvous_message_render(buffer,
+                                            size,
+                                            "server_candidate",
+                                            candidate->host,
+                                            candidate->port,
+                                            candidate->kind,
+                                            ticket);
+}
+
+bool socket_rendezvous_complete_render(char *buffer, size_t size, const char *ticket) {
+    return socket_rendezvous_message_render(buffer,
+                                            size,
                                             "complete",
                                             NULL,
                                             0,
                                             SOCKET_CANDIDATE_NUM,
-                                            expected_ticket) &&
+                                            ticket);
+}
+
+bool socket_rendezvous_complete_parse(const char *message, const char *expected_ticket) {
+    char expected[128];
+    return message != NULL && socket_rendezvous_complete_render(VS(expected), expected_ticket) &&
            strcmp(message, expected) == 0;
+}
+
+static void socket_rendezvous_attempt_fail(socket_rendezvous_attempt_t *attempt) {
+    if (attempt == NULL) {
+        return;
+    }
+    attempt->state = SOCKET_RENDEZVOUS_ATTEMPT_TERMINAL;
+    if (attempt->has_invite) {
+        rendezvous_invite_cleanse(&attempt->invite);
+        attempt->has_invite = false;
+    }
+}
+
+static bool socket_rendezvous_attempt_record(socket_rendezvous_attempt_t *attempt,
+                                             bool server_frame,
+                                             bool authorization_frame,
+                                             size_t bytes) {
+    if (attempt == NULL || attempt->state == SOCKET_RENDEZVOUS_ATTEMPT_TERMINAL ||
+        attempt->state == SOCKET_RENDEZVOUS_ATTEMPT_COMPLETE || bytes == 0 ||
+        bytes > RENDEZVOUS_FRAME_MAX ||
+        attempt->stats.signal_bytes > SOCKET_RENDEZVOUS_SIGNAL_BYTES_MAX - bytes ||
+        (server_frame && attempt->stats.server_frames >= SOCKET_RENDEZVOUS_SERVER_FRAMES_MAX) ||
+        (!server_frame && attempt->stats.client_frames >= SOCKET_RENDEZVOUS_CLIENT_FRAMES_MAX) ||
+        (authorization_frame &&
+         (attempt->authorization_frames >= SOCKET_RENDEZVOUS_AUTH_FRAMES_MAX ||
+          attempt->authorization_bytes > SOCKET_RENDEZVOUS_AUTH_BYTES_MAX - bytes))) {
+        socket_rendezvous_attempt_fail(attempt);
+        return false;
+    }
+    if (server_frame) {
+        attempt->stats.server_frames++;
+    } else {
+        attempt->stats.client_frames++;
+    }
+    attempt->stats.signal_bytes += bytes;
+    if (authorization_frame) {
+        attempt->authorization_frames++;
+        attempt->authorization_bytes += bytes;
+    }
+    return true;
+}
+
+static bool socket_rendezvous_attempt_input(socket_rendezvous_attempt_t *attempt,
+                                            const char *frame,
+                                            size_t frame_size,
+                                            bool authorization_frame,
+                                            char canonical[RENDEZVOUS_FRAME_MAX + 1U]) {
+    if (!socket_rendezvous_attempt_record(attempt, true, authorization_frame, frame_size) ||
+        frame == NULL || memchr(frame, '\0', frame_size) != NULL) {
+        socket_rendezvous_attempt_fail(attempt);
+        return false;
+    }
+    memcpy(canonical, frame, frame_size);
+    canonical[frame_size] = '\0';
+    return true;
+}
+
+socket_rendezvous_attempt_t *socket_rendezvous_attempt_create(const char *server_id,
+                                                              const char *ticket,
+                                                              const rendezvous_invite_t *invite,
+                                                              uint64_t deadline_ms) {
+    if (!string_is_hex_fixed(server_id, RENDEZVOUS_SERVER_ID_HEX_SIZE, true) ||
+        !socket_rendezvous_ticket_valid(ticket) || deadline_ms == 0 ||
+        (invite != NULL && !rendezvous_invite_matches_server(invite, server_id))) {
+        return NULL;
+    }
+    socket_rendezvous_attempt_t *attempt = calloc(1, sizeof(*attempt));
+    if (attempt == NULL) {
+        return NULL;
+    }
+    memcpy(attempt->server_id, server_id, sizeof(attempt->server_id));
+    memcpy(attempt->ticket, ticket, sizeof(attempt->ticket));
+    attempt->deadline_ms = deadline_ms;
+    attempt->authorization_required = invite != NULL;
+    attempt->state =
+        invite != NULL ? SOCKET_RENDEZVOUS_ATTEMPT_NEW : SOCKET_RENDEZVOUS_ATTEMPT_READY;
+    if (invite != NULL) {
+        attempt->invite = *invite;
+        attempt->has_invite = true;
+    }
+    return attempt;
+}
+
+void socket_rendezvous_attempt_destroy(socket_rendezvous_attempt_t *attempt) {
+    if (attempt != NULL) {
+        OPENSSL_cleanse(attempt, sizeof(*attempt));
+        free(attempt);
+    }
+}
+
+bool socket_rendezvous_attempt_expired(const socket_rendezvous_attempt_t *attempt,
+                                       uint64_t now_ms) {
+    return attempt == NULL || now_ms >= attempt->deadline_ms;
+}
+
+size_t socket_rendezvous_attempt_header(char *data, size_t size, size_t count, void *user_data) {
+    socket_rendezvous_attempt_t *attempt = user_data;
+    if (attempt == NULL || (size != 0 && count > SIZE_MAX / size)) {
+        return 0;
+    }
+    size_t bytes = size * count;
+    if (bytes != 0 && data == NULL) {
+        return 0;
+    }
+    static const char status_prefix[] = "HTTP/";
+    static const char retry_name[] = "Retry-After:";
+    if (bytes >= sizeof(status_prefix) - 1U &&
+        memcmp(data, status_prefix, sizeof(status_prefix) - 1U) == 0) {
+        attempt->retry_after_seconds = 0;
+    } else if (bytes >= sizeof(retry_name) - 1U &&
+               strncasecmp(data, retry_name, sizeof(retry_name) - 1U) == 0) {
+        attempt->retry_after_seconds = 0;
+        const char *cursor = data + sizeof(retry_name) - 1U;
+        const char *end = data + bytes;
+        while (cursor < end && (*cursor == ' ' || *cursor == '\t')) {
+            cursor++;
+        }
+        while (end > cursor &&
+               (end[-1] == '\r' || end[-1] == '\n' || end[-1] == ' ' || end[-1] == '\t')) {
+            end--;
+        }
+        char value[11];
+        size_t length = (size_t)(end - cursor);
+        uint64_t parsed;
+        if (length > 0 && length < sizeof(value)) {
+            memcpy(value, cursor, length);
+            value[length] = '\0';
+            if (string_parse_uint64(value, 10, 1, SOCKET_RENDEZVOUS_RETRY_AFTER_MAX, &parsed)) {
+                attempt->retry_after_seconds = (uint32_t)parsed;
+            }
+        }
+    }
+    return rendezvous_websocket_protocol_header(data, size, count, &attempt->protocol);
+}
+
+bool socket_rendezvous_attempt_protocol_valid(const socket_rendezvous_attempt_t *attempt) {
+    return attempt != NULL && (attempt->authorization_required
+                                   ? rendezvous_websocket_protocol_valid(&attempt->protocol)
+                                   : attempt->protocol.echoes == 0 && !attempt->protocol.invalid);
+}
+
+uint32_t socket_rendezvous_attempt_retry_after(const socket_rendezvous_attempt_t *attempt) {
+    return attempt != NULL ? attempt->retry_after_seconds : 0;
+}
+
+bool socket_rendezvous_attempt_directory_probe_allowed(const socket_rendezvous_attempt_t *attempt) {
+    return attempt != NULL && !attempt->authorization_required;
+}
+
+bool socket_rendezvous_attempt_peer_traffic_allowed(const socket_rendezvous_attempt_t *attempt) {
+    return attempt != NULL && attempt->state == SOCKET_RENDEZVOUS_ATTEMPT_WAIT_SERVER;
+}
+
+bool socket_rendezvous_attempt_auth_init(socket_rendezvous_attempt_t *attempt,
+                                         char *frame,
+                                         size_t frame_size) {
+    if (frame == NULL || frame_size == 0) {
+        socket_rendezvous_attempt_fail(attempt);
+        return false;
+    }
+    frame[0] = '\0';
+    if (attempt == NULL || attempt->state != SOCKET_RENDEZVOUS_ATTEMPT_NEW ||
+        socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms()) ||
+        !rendezvous_auth_init_render(frame,
+                                     frame_size,
+                                     attempt->ticket,
+                                     attempt->invite.invite_id) ||
+        !socket_rendezvous_attempt_record(attempt, false, true, strlen(frame))) {
+        socket_rendezvous_attempt_fail(attempt);
+        frame[0] = '\0';
+        return false;
+    }
+    attempt->state = SOCKET_RENDEZVOUS_ATTEMPT_WAIT_CHALLENGE;
+    return true;
+}
+
+socket_rendezvous_frame_result_t
+socket_rendezvous_attempt_challenge(socket_rendezvous_attempt_t *attempt,
+                                    const char *frame,
+                                    size_t frame_size,
+                                    char *proof_frame,
+                                    size_t proof_frame_size) {
+    unsigned char challenge[RENDEZVOUS_CHALLENGE_SIZE] = {0};
+    unsigned char proof[RENDEZVOUS_PROOF_SIZE] = {0};
+    char canonical[RENDEZVOUS_FRAME_MAX + 1U];
+    if (proof_frame != NULL && proof_frame_size != 0) {
+        proof_frame[0] = '\0';
+    }
+    bool ok = attempt != NULL && proof_frame != NULL && proof_frame_size != 0 &&
+              attempt->state == SOCKET_RENDEZVOUS_ATTEMPT_WAIT_CHALLENGE &&
+              !socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms()) &&
+              socket_rendezvous_attempt_input(attempt, frame, frame_size, true, canonical) &&
+              rendezvous_auth_challenge_parse(canonical, attempt->ticket, challenge) &&
+              attempt->has_invite &&
+              rendezvous_invite_proof(&attempt->invite, attempt->ticket, challenge, proof) &&
+              rendezvous_auth_proof_render(proof_frame, proof_frame_size, attempt->ticket, proof) &&
+              socket_rendezvous_attempt_record(attempt, false, true, strlen(proof_frame));
+    OPENSSL_cleanse(challenge, sizeof(challenge));
+    OPENSSL_cleanse(proof, sizeof(proof));
+    OPENSSL_cleanse(canonical, sizeof(canonical));
+    if (!ok) {
+        socket_rendezvous_attempt_fail(attempt);
+        if (proof_frame != NULL && proof_frame_size != 0) {
+            proof_frame[0] = '\0';
+        }
+        return SOCKET_RENDEZVOUS_FRAME_INVALID;
+    }
+    attempt->state = SOCKET_RENDEZVOUS_ATTEMPT_WAIT_RESULT;
+    return SOCKET_RENDEZVOUS_FRAME_CHALLENGE;
+}
+
+socket_rendezvous_frame_result_t
+socket_rendezvous_attempt_auth_result(socket_rendezvous_attempt_t *attempt,
+                                      const char *frame,
+                                      size_t frame_size) {
+    char canonical[RENDEZVOUS_FRAME_MAX + 1U];
+    bool authorized = false;
+    bool ok = attempt != NULL && attempt->state == SOCKET_RENDEZVOUS_ATTEMPT_WAIT_RESULT &&
+              !socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms()) &&
+              socket_rendezvous_attempt_input(attempt, frame, frame_size, true, canonical) &&
+              rendezvous_auth_result_parse(canonical, attempt->ticket, &authorized);
+    OPENSSL_cleanse(canonical, sizeof(canonical));
+    if (!ok) {
+        socket_rendezvous_attempt_fail(attempt);
+        return SOCKET_RENDEZVOUS_FRAME_INVALID;
+    }
+    if (!authorized) {
+        socket_rendezvous_attempt_fail(attempt);
+        return SOCKET_RENDEZVOUS_FRAME_DENIED;
+    }
+    rendezvous_invite_cleanse(&attempt->invite);
+    attempt->has_invite = false;
+    attempt->state = SOCKET_RENDEZVOUS_ATTEMPT_AUTHORIZED;
+    return SOCKET_RENDEZVOUS_FRAME_AUTHORIZED;
+}
+
+bool socket_rendezvous_attempt_client_candidate(socket_rendezvous_attempt_t *attempt,
+                                                const char *host,
+                                                uint16_t port,
+                                                char *frame,
+                                                size_t frame_size) {
+    if (frame == NULL || frame_size == 0) {
+        socket_rendezvous_attempt_fail(attempt);
+        return false;
+    }
+    frame[0] = '\0';
+    if (attempt == NULL ||
+        (attempt->state != SOCKET_RENDEZVOUS_ATTEMPT_READY &&
+         attempt->state != SOCKET_RENDEZVOUS_ATTEMPT_AUTHORIZED) ||
+        socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms()) ||
+        !socket_rendezvous_message_render(frame,
+                                          frame_size,
+                                          "client_candidate",
+                                          host,
+                                          port,
+                                          SOCKET_CANDIDATE_NUM,
+                                          attempt->ticket) ||
+        !socket_rendezvous_attempt_record(attempt, false, false, strlen(frame))) {
+        socket_rendezvous_attempt_fail(attempt);
+        frame[0] = '\0';
+        return false;
+    }
+    attempt->state = SOCKET_RENDEZVOUS_ATTEMPT_WAIT_SERVER;
+    return true;
+}
+
+socket_rendezvous_frame_result_t
+socket_rendezvous_attempt_server_frame(socket_rendezvous_attempt_t *attempt,
+                                       const char *frame,
+                                       size_t frame_size,
+                                       socket_direct_candidate_t *candidate) {
+    char canonical[RENDEZVOUS_FRAME_MAX + 1U] = {0};
+    socket_direct_candidate_t parsed = {0};
+    if (candidate != NULL) {
+        memset(candidate, 0, sizeof(*candidate));
+    }
+    if (attempt == NULL || candidate == NULL ||
+        attempt->state != SOCKET_RENDEZVOUS_ATTEMPT_WAIT_SERVER ||
+        socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms()) ||
+        !socket_rendezvous_attempt_input(attempt, frame, frame_size, false, canonical)) {
+        socket_rendezvous_attempt_fail(attempt);
+        OPENSSL_cleanse(canonical, sizeof(canonical));
+        return SOCKET_RENDEZVOUS_FRAME_INVALID;
+    }
+    if (socket_rendezvous_server_candidate_parse_raw(canonical, attempt->ticket, &parsed)) {
+        if (attempt->stats.server_candidates >= SOCKET_RENDEZVOUS_SERVER_CANDIDATES_MAX) {
+            socket_rendezvous_attempt_fail(attempt);
+            OPENSSL_cleanse(canonical, sizeof(canonical));
+            return SOCKET_RENDEZVOUS_FRAME_INVALID;
+        }
+        attempt->stats.server_candidates++;
+        *candidate = parsed;
+        OPENSSL_cleanse(canonical, sizeof(canonical));
+        return SOCKET_RENDEZVOUS_FRAME_CANDIDATE;
+    }
+    if (socket_rendezvous_complete_parse(canonical, attempt->ticket)) {
+        attempt->state = SOCKET_RENDEZVOUS_ATTEMPT_COMPLETE;
+        OPENSSL_cleanse(canonical, sizeof(canonical));
+        return SOCKET_RENDEZVOUS_FRAME_COMPLETE;
+    }
+    socket_rendezvous_attempt_fail(attempt);
+    OPENSSL_cleanse(canonical, sizeof(canonical));
+    return SOCKET_RENDEZVOUS_FRAME_INVALID;
+}
+
+bool socket_rendezvous_attempt_stats(const socket_rendezvous_attempt_t *attempt,
+                                     socket_rendezvous_stats_t *stats) {
+    if (attempt == NULL || stats == NULL) {
+        return false;
+    }
+    *stats = attempt->stats;
+    return true;
 }
 
 static bool socket_candidate_add(socket_direct_candidate_t *candidates,
@@ -362,11 +792,12 @@ static uint32_t socket_stun_u32(const unsigned char *b) {
     return ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) | ((uint32_t)b[2] << 8) | b[3];
 }
 
-bool socket_stun_discover(socket_t *sc,
-                          const char *endpoint,
-                          char *host,
-                          size_t host_size,
-                          uint16_t *port) {
+static bool socket_stun_discover_until(socket_t *sc,
+                                       const char *endpoint,
+                                       char *host,
+                                       size_t host_size,
+                                       uint16_t *port,
+                                       uint64_t deadline_ms) {
     HARD_ASSERT(sc != NULL);
     HARD_ASSERT(endpoint != NULL);
     HARD_ASSERT(host != NULL);
@@ -393,6 +824,9 @@ bool socket_stun_discover(socket_t *sc,
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_protocol = IPPROTO_UDP;
     hints.ai_flags = AI_NUMERICSERV;
+    if (datetime_monotonic_ms() >= deadline_ms) {
+        return false;
+    }
     int rc = getaddrinfo(stun_host, stun_port, &hints, &addresses);
     if (rc != 0) {
         LOG(ERROR, "Cannot resolve STUN endpoint %s: %s", endpoint, gai_strerror(rc));
@@ -428,10 +862,16 @@ bool socket_stun_discover(socket_t *sc,
         return false;
     }
 
+    uint64_t now_ms = datetime_monotonic_ms();
+    if (now_ms >= deadline_ms) {
+        return false;
+    }
+    uint64_t timeout_ms = MIN(deadline_ms - now_ms, 3000U);
     fd_set readfds;
     FD_ZERO(&readfds);
     FD_SET(sc->handle, &readfds);
-    struct timeval timeout = {.tv_sec = 3, .tv_usec = 0};
+    struct timeval timeout = {.tv_sec = (long)(timeout_ms / 1000U),
+                              .tv_usec = (long)((timeout_ms % 1000U) * 1000U)};
     if (select(sc->handle + 1, &readfds, NULL, NULL, &timeout) != 1) {
         LOG(ERROR, "STUN request to %s timed out", endpoint);
         return false;
@@ -477,6 +917,15 @@ bool socket_stun_discover(socket_t *sc,
 
     LOG(ERROR, "STUN response did not contain XOR-MAPPED-ADDRESS");
     return false;
+}
+
+bool socket_stun_discover(socket_t *sc,
+                          const char *endpoint,
+                          char *host,
+                          size_t host_size,
+                          uint16_t *port) {
+    uint64_t now_ms = datetime_monotonic_ms();
+    return socket_stun_discover_until(sc, endpoint, host, host_size, port, now_ms + 3000U);
 }
 
 bool socket_udp_punch(socket_t *sc, const char *host, uint16_t port) {
@@ -584,7 +1033,60 @@ void socket_punch_pacer_advance(socket_punch_pacer_t *pacer,
     }
 }
 
+static bool
+socket_bound_local_candidate(socket_t *sc, char *host, size_t host_size, uint16_t *port) {
+    int family = ((struct sockaddr *)&sc->addr)->sa_family;
+    struct sockaddr_storage wildcard;
+    socklen_t wildcard_length;
+    memset(&wildcard, 0, sizeof(wildcard));
+    if (family == AF_INET) {
+        struct sockaddr_in *address4 = (struct sockaddr_in *)&wildcard;
+        address4->sin_family = AF_INET;
+        address4->sin_addr.s_addr = htonl(INADDR_ANY);
+        wildcard_length = sizeof(*address4);
+#ifdef HAVE_IPV6
+    } else if (family == AF_INET6) {
+        struct sockaddr_in6 *address6 = (struct sockaddr_in6 *)&wildcard;
+        address6->sin6_family = AF_INET6;
+        address6->sin6_addr = in6addr_any;
+        wildcard_length = sizeof(*address6);
+#endif
+    } else {
+        return false;
+    }
+
+    uint16_t local_port;
+    if (!socket_local_port(sc, &local_port)) {
+        if (bind(sc->handle, (const struct sockaddr *)&wildcard, wildcard_length) != 0 ||
+            !socket_local_port(sc, &local_port)) {
+            return false;
+        }
+    }
+
+    socket_direct_candidate_t local_candidates[SOCKET_DIRECT_MAX_CANDIDATES];
+    size_t count =
+        socket_local_candidates(local_port, local_candidates, arraysize(local_candidates));
+    for (size_t i = 0; i < count; i++) {
+        bool family_ipv6 = false;
+#ifdef HAVE_IPV6
+        family_ipv6 = family == AF_INET6;
+#endif
+        bool candidate_ipv6 = strchr(local_candidates[i].host, ':') != NULL;
+        if (family_ipv6 != candidate_ipv6 || strlen(local_candidates[i].host) >= host_size) {
+            continue;
+        }
+        snprintf(host, host_size, "%s", local_candidates[i].host);
+        *port = local_port;
+        return true;
+    }
+    return false;
+}
+
 static bool socket_local_candidate(socket_t *sc, char *host, size_t host_size, uint16_t *port) {
+    if (!socket_candidate_address_valid((const struct sockaddr *)&sc->addr)) {
+        return socket_bound_local_candidate(sc, host, host_size, port);
+    }
+
     socklen_t peer_length;
     int family = ((struct sockaddr *)&sc->addr)->sa_family;
     if (family == AF_INET) {
@@ -653,11 +1155,7 @@ static void socket_udp_punch_schedule(socket_punch_job_t *jobs,
 
     available->candidate = *candidate;
     socket_punch_pacer_start(&available->pacer, datetime_monotonic_ms(), 0);
-    LOG(INFO,
-        "Opening a paced UDP path to %s QUIC candidate %s:%" PRIu16,
-        socket_candidate_kind_name(candidate->kind),
-        candidate->host,
-        candidate->port);
+    LOG(INFO, "Opening a paced UDP path to a rendezvous QUIC candidate");
 }
 
 static void socket_udp_punch_update(socket_t *sc,
@@ -708,11 +1206,7 @@ static size_t socket_udp_punch_collect(socket_t *sc,
             if (candidates[i].port == port && strcmp(candidates[i].host, host) == 0) {
                 if (candidates[i].kind != SOCKET_CANDIDATE_PRFLX) {
                     candidates[i].kind = SOCKET_CANDIDATE_PRFLX;
-                    LOG(INFO,
-                        "Confirmed peer-reflexive QUIC candidate %s:%lu "
-                        "from a UDP punch",
-                        host,
-                        (unsigned long)port);
+                    LOG(INFO, "Confirmed a peer-reflexive QUIC candidate from a UDP punch");
                 }
                 already_recorded = true;
                 break;
@@ -725,11 +1219,7 @@ static size_t socket_udp_punch_collect(socket_t *sc,
         size_t previous_count = *count;
         socket_candidate_add(candidates, count, capacity, host, port, SOCKET_CANDIDATE_PRFLX);
         if (*count != previous_count) {
-            LOG(INFO,
-                "Learned peer-reflexive QUIC candidate %s:%lu from a UDP "
-                "punch",
-                host,
-                (unsigned long)port);
+            LOG(INFO, "Learned a peer-reflexive QUIC candidate from a UDP punch");
         }
     }
     return received;
@@ -774,6 +1264,76 @@ bool socket_rendezvous_url(const char *base_url,
 }
 
 #if LIBCURL_VERSION_NUM >= 0x075600
+static bool socket_websocket_send_text(CURL *curl, const char *message) {
+    size_t sent = 0;
+    size_t length = strlen(message);
+    return curl_ws_send(curl, message, length, &sent, 0, CURLWS_TEXT) == CURLE_OK && sent == length;
+}
+
+static socket_connect_failure_code_t
+socket_rendezvous_authorize(CURL *curl, socket_rendezvous_attempt_t *attempt) {
+    char frame[RENDEZVOUS_FRAME_MAX + 1U];
+    size_t used = 0;
+    char proof_frame[RENDEZVOUS_FRAME_MAX + 1U];
+    socket_connect_failure_code_t failure = SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+
+    if (!socket_rendezvous_attempt_auth_init(attempt, VS(frame)) ||
+        !socket_websocket_send_text(curl, frame)) {
+        goto out;
+    }
+    while (!socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())) {
+        socket_websocket_receive_state_t state = socket_websocket_receive(curl, VS(frame), &used);
+        if (state == SOCKET_WEBSOCKET_EMPTY) {
+            usleep(20000);
+            continue;
+        }
+        if (state == SOCKET_WEBSOCKET_PARTIAL) {
+            continue;
+        }
+        if (state != SOCKET_WEBSOCKET_MESSAGE ||
+            socket_rendezvous_attempt_challenge(attempt, frame, used, VS(proof_frame)) !=
+                SOCKET_RENDEZVOUS_FRAME_CHALLENGE ||
+            !socket_websocket_send_text(curl, proof_frame)) {
+            goto out;
+        }
+        break;
+    }
+    if (used == 0) {
+        failure = SOCKET_CONNECT_FAILURE_TIMEOUT;
+        goto out;
+    }
+
+    used = 0;
+    while (!socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())) {
+        socket_websocket_receive_state_t state = socket_websocket_receive(curl, VS(frame), &used);
+        if (state == SOCKET_WEBSOCKET_EMPTY) {
+            usleep(20000);
+            continue;
+        }
+        if (state == SOCKET_WEBSOCKET_PARTIAL) {
+            continue;
+        }
+        if (state != SOCKET_WEBSOCKET_MESSAGE) {
+            goto out;
+        }
+        socket_rendezvous_frame_result_t result =
+            socket_rendezvous_attempt_auth_result(attempt, frame, used);
+        failure = result == SOCKET_RENDEZVOUS_FRAME_AUTHORIZED ? SOCKET_CONNECT_FAILURE_NONE
+                  : result == SOCKET_RENDEZVOUS_FRAME_DENIED
+                      ? SOCKET_CONNECT_FAILURE_AUTHORIZATION
+                      : SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+        break;
+    }
+    if (used == 0) {
+        failure = SOCKET_CONNECT_FAILURE_TIMEOUT;
+    }
+
+out:
+    OPENSSL_cleanse(frame, sizeof(frame));
+    OPENSSL_cleanse(proof_frame, sizeof(proof_frame));
+    return failure;
+}
+
 socket_websocket_receive_state_t
 socket_websocket_receive(void *handle, char *buffer, size_t capacity, size_t *used) {
     HARD_ASSERT(handle != NULL);
@@ -809,89 +1369,160 @@ socket_websocket_receive(void *handle, char *buffer, size_t capacity, size_t *us
 size_t socket_rendezvous_client(socket_t *sc,
                                 const char *url,
                                 const char *stun_endpoint,
+                                socket_rendezvous_attempt_t *attempt,
                                 socket_direct_candidate_t *candidates,
-                                size_t capacity) {
+                                size_t capacity,
+                                socket_connect_failure_t *failure) {
     char host[65];
     uint16_t port;
-    if (url == NULL) {
+    if (url == NULL || attempt == NULL || candidates == NULL || capacity == 0 ||
+        capacity > SOCKET_DIRECT_MAX_CANDIDATES + 1U || failure == NULL) {
+        return 0;
+    }
+    memset(candidates, 0, capacity * sizeof(*candidates));
+    if (socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())) {
+        failure->code = SOCKET_CONNECT_FAILURE_TIMEOUT;
         return 0;
     }
     bool have_candidate =
-        stun_endpoint != NULL && socket_stun_discover(sc, stun_endpoint, VS(host), &port);
+        stun_endpoint != NULL &&
+        socket_stun_discover_until(sc, stun_endpoint, VS(host), &port, attempt->deadline_ms);
     if (!have_candidate) {
-        have_candidate = socket_local_candidate(sc, VS(host), &port);
+        have_candidate = socket_rendezvous_attempt_directory_probe_allowed(attempt)
+                             ? socket_local_candidate(sc, VS(host), &port)
+                             : socket_bound_local_candidate(sc, VS(host), &port);
     }
     if (!have_candidate) {
         LOG(ERROR, "Cannot determine a local rendezvous candidate");
+        failure->code = socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())
+                            ? SOCKET_CONNECT_FAILURE_TIMEOUT
+                            : SOCKET_CONNECT_FAILURE_UNAVAILABLE;
         return 0;
     }
-
-    unsigned char random_ticket[32];
-    char ticket[65];
-    if (RAND_bytes(VS(random_ticket)) != 1 ||
-        string_tohex(VS(random_ticket), VS(ticket), false) != 64) {
-        return 0;
-    }
-    string_tolower(ticket);
 
     CURL *curl = curl_easy_init();
     if (curl == NULL) {
         return 0;
     }
+    struct curl_slist *headers = NULL;
+    if (attempt->authorization_required) {
+        headers = curl_slist_append(NULL, "Sec-WebSocket-Protocol: " RENDEZVOUS_INVITE_SUBPROTOCOL);
+        if (headers == NULL) {
+            curl_easy_cleanup(curl);
+            return 0;
+        }
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    }
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, socket_rendezvous_attempt_header);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, attempt);
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+    uint64_t now_ms = datetime_monotonic_ms();
+    if (socket_rendezvous_attempt_expired(attempt, now_ms)) {
+        failure->code = SOCKET_CONNECT_FAILURE_TIMEOUT;
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+        return 0;
+    }
+    uint64_t remaining_ms = attempt->deadline_ms - now_ms;
+    long curl_timeout_ms = remaining_ms > LONG_MAX ? LONG_MAX : (long)remaining_ms;
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, curl_timeout_ms);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, curl_timeout_ms);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 #ifdef WIN32
     curl_easy_setopt(curl, CURLOPT_CAINFO, "ca-bundle.crt");
 #endif
     CURLcode result = curl_easy_perform(curl);
-    if (result != CURLE_OK) {
-        LOG(ERROR, "Rendezvous connection failed: %s", curl_easy_strerror(result));
+    long response_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+    if (result != CURLE_OK || !socket_rendezvous_attempt_protocol_valid(attempt)) {
+        if (response_code == 401 || response_code == 403) {
+            failure->code = SOCKET_CONNECT_FAILURE_AUTHORIZATION;
+        } else if (response_code == 404 || response_code == 503) {
+            failure->code = SOCKET_CONNECT_FAILURE_SERVER_OFFLINE;
+        } else if (response_code == 429) {
+            failure->code = SOCKET_CONNECT_FAILURE_RATE_LIMITED;
+            failure->retry_after_seconds = socket_rendezvous_attempt_retry_after(attempt);
+        } else if (response_code == 400 || response_code == 426 ||
+                   (result == CURLE_OK && !socket_rendezvous_attempt_protocol_valid(attempt))) {
+            failure->code = SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+        } else if (result == CURLE_OPERATION_TIMEDOUT ||
+                   socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())) {
+            failure->code = SOCKET_CONNECT_FAILURE_TIMEOUT;
+        } else {
+            failure->code = SOCKET_CONNECT_FAILURE_UNAVAILABLE;
+        }
+        if (result != CURLE_OK) {
+            LOG(ERROR, "Rendezvous connection failed: %s", curl_easy_strerror(result));
+        } else {
+            LOG(ERROR, "Rendezvous connection failed: invite subprotocol was not selected");
+        }
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+        return 0;
+    }
+
+    if (attempt->authorization_required) {
+        socket_connect_failure_code_t authorization = socket_rendezvous_authorize(curl, attempt);
+        if (authorization != SOCKET_CONNECT_FAILURE_NONE) {
+            failure->code = authorization;
+            LOG(ERROR, "Rendezvous invite authorization failed");
+            curl_slist_free_all(headers);
+            curl_easy_cleanup(curl);
+            return 0;
+        }
+    }
+    if (socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())) {
+        failure->code = SOCKET_CONNECT_FAILURE_TIMEOUT;
+        LOG(ERROR, "Rendezvous invite authorization failed");
+        curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
         return 0;
     }
 
     char candidate[256];
-    if (!socket_rendezvous_message_render(VS(candidate),
-                                          "client_candidate",
-                                          host,
-                                          port,
-                                          SOCKET_CANDIDATE_NUM,
-                                          ticket)) {
+    if (!socket_rendezvous_attempt_client_candidate(attempt, host, port, VS(candidate))) {
+        failure->code = SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+        curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
         return 0;
     }
-    size_t sent = 0;
-    result = curl_ws_send(curl, candidate, strlen(candidate), &sent, 0, CURLWS_TEXT);
-    if (result != CURLE_OK || sent != strlen(candidate)) {
+    if (!socket_websocket_send_text(curl, candidate)) {
+        failure->code = SOCKET_CONNECT_FAILURE_UNAVAILABLE;
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+        return 0;
+    }
+    if (!socket_rendezvous_attempt_peer_traffic_allowed(attempt)) {
+        failure->code = SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+        curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
         return 0;
     }
 
-    char response[512];
+    char response[RENDEZVOUS_FRAME_MAX + 1U];
     size_t used = 0;
-    uint64_t deadline_ms = datetime_monotonic_ms() + 5000;
+    socket_direct_candidate_t parsed_candidates[SOCKET_DIRECT_MAX_CANDIDATES + 1U] = {0};
     size_t count = 0;
     bool complete = false;
+    bool valid = true;
     socket_punch_job_t punch_jobs[SOCKET_DIRECT_MAX_CANDIDATES] = {0};
     unsigned int punch_attempts = 0;
     unsigned int punches_sent = 0;
     size_t punches_received = 0;
-    while (!complete) {
+    while (!complete && valid &&
+           !socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())) {
         socket_udp_punch_update(sc,
                                 punch_jobs,
                                 arraysize(punch_jobs),
                                 &punch_attempts,
                                 &punches_sent);
-        punches_received += socket_udp_punch_collect(sc, candidates, &count, capacity);
+        punches_received +=
+            socket_udp_punch_collect(sc, parsed_candidates, &count, arraysize(parsed_candidates));
 
         socket_websocket_receive_state_t receive_state =
             socket_websocket_receive(curl, VS(response), &used);
         if (receive_state == SOCKET_WEBSOCKET_EMPTY) {
-            if (datetime_monotonic_ms() >= deadline_ms) {
-                break;
-            }
             usleep(20000);
             continue;
         }
@@ -899,32 +1530,58 @@ size_t socket_rendezvous_client(socket_t *sc,
             continue;
         }
         if (receive_state != SOCKET_WEBSOCKET_MESSAGE) {
+            valid = false;
             break;
         }
         socket_direct_candidate_t parsed_candidate;
-        if (socket_rendezvous_server_candidate_parse(response, ticket, &parsed_candidate)) {
-            socket_candidate_add(candidates,
-                                 &count,
-                                 capacity,
-                                 parsed_candidate.host,
-                                 parsed_candidate.port,
-                                 parsed_candidate.kind);
-            socket_udp_punch_schedule(punch_jobs, arraysize(punch_jobs), &parsed_candidate);
+        socket_rendezvous_frame_result_t frame_result =
+            socket_rendezvous_attempt_server_frame(attempt, response, used, &parsed_candidate);
+        if (frame_result == SOCKET_RENDEZVOUS_FRAME_CANDIDATE) {
+            valid = socket_candidate_add(parsed_candidates,
+                                         &count,
+                                         arraysize(parsed_candidates),
+                                         parsed_candidate.host,
+                                         parsed_candidate.port,
+                                         parsed_candidate.kind);
+            if (valid) {
+                socket_udp_punch_schedule(punch_jobs, arraysize(punch_jobs), &parsed_candidate);
+            }
+        } else if (frame_result == SOCKET_RENDEZVOUS_FRAME_COMPLETE) {
+            complete = true;
         } else {
-            complete = socket_rendezvous_complete_parse(response, ticket);
+            valid = false;
         }
         used = 0;
     }
 
-    socket_udp_punch_update(sc, punch_jobs, arraysize(punch_jobs), &punch_attempts, &punches_sent);
-    punches_received += socket_udp_punch_collect(sc, candidates, &count, capacity);
+    if (valid) {
+        socket_udp_punch_update(sc,
+                                punch_jobs,
+                                arraysize(punch_jobs),
+                                &punch_attempts,
+                                &punches_sent);
+        punches_received +=
+            socket_udp_punch_collect(sc, parsed_candidates, &count, arraysize(parsed_candidates));
+    }
     LOG(INFO,
         "Rendezvous UDP punch summary: sent %u/%u probes, received %" PRIu64,
         punches_sent,
         punch_attempts,
         (uint64_t)punches_received);
+    curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
-    return complete ? count : 0;
+    if (!complete || !valid || count == 0 || count > capacity) {
+        memset(candidates, 0, capacity * sizeof(*candidates));
+        failure->code = socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())
+                            ? SOCKET_CONNECT_FAILURE_TIMEOUT
+                        : valid ? SOCKET_CONNECT_FAILURE_SERVER_OFFLINE
+                                : SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+        return 0;
+    }
+    memcpy(candidates, parsed_candidates, count * sizeof(*candidates));
+    failure->code = SOCKET_CONNECT_FAILURE_NONE;
+    failure->retry_after_seconds = 0;
+    return count;
 }
 #else
 socket_websocket_receive_state_t
@@ -939,8 +1596,15 @@ socket_websocket_receive(void *handle, char *buffer, size_t capacity, size_t *us
 size_t socket_rendezvous_client(socket_t *sc,
                                 const char *url,
                                 const char *stun_endpoint,
+                                socket_rendezvous_attempt_t *attempt,
                                 socket_direct_candidate_t *candidates,
-                                size_t capacity) {
+                                size_t capacity,
+                                socket_connect_failure_t *failure) {
+    (void)attempt;
+    if (failure != NULL) {
+        failure->code = SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+        failure->retry_after_seconds = 0;
+    }
     return 0;
 }
 #endif

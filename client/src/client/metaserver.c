@@ -63,10 +63,7 @@ void metaserver_server_free(server_struct *server) {
     free(server->server_id);
     free(server->quic_certificate_sha256);
     free(server->rendezvous_origin);
-    if (server->join_password != NULL) {
-        OPENSSL_cleanse(server->join_password, strlen(server->join_password));
-        free(server->join_password);
-    }
+    client_attempt_secrets_clear(&server->join_password, NULL, &server->rendezvous_invite);
     free(server->name);
     free(server->version);
     free(server->desc);
@@ -125,6 +122,12 @@ int ms_connecting(int val) {
 }
 
 void metaserver_clear_data(void) {
+    if (selected_server != NULL) {
+        client_attempt_secrets_clear(&selected_server->join_password,
+                                     &clioption_settings.join_password,
+                                     &selected_server->rendezvous_invite);
+        selected_server = NULL;
+    }
     SDL_LockMutex(server_head_mutex);
     server_struct *node, *tmp;
     DL_FOREACH_SAFE(server_head, node, tmp) {
