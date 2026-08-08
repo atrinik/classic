@@ -1,0 +1,187 @@
+=================================================
+=                Atrinik Client                 =
+=================================================
+
+[![Coverage](https://codecov.io/gh/atrinik/client/graph/badge.svg?branch=main)](https://codecov.io/gh/atrinik/client)
+
+ Website: http://www.atrinik.org/
+
+ Client package for the Atrinik game.
+
+=================================================
+= 1. Compiling the Atrinik client               =
+=================================================
+
+ See INSTALL for complete dependency and source-artifact instructions.
+
+ From the repository root, build a Linux debug client with:
+  $ python3 tools/dependencies.py sync
+  $ cmake --preset linux-debug
+  $ cmake --build --preset linux-debug
+  $ ctest --preset linux-debug
+
+ The executable is written to build/linux-debug/atrinik.
+
+ To collect line, function, and branch coverage from the native tests:
+  $ cmake --preset linux-coverage
+  $ cmake --build --preset linux-coverage
+  $ ctest --preset linux-coverage
+  $ gcovr --root . --filter 'src/' --exclude 'src/tests/' --print-summary
+
+ The client requires SDL 3.4 or newer, SDL3_image 3.2 or newer, SDL3_ttf 3.2
+ or newer, and SDL3_mixer 3.2.4 or newer. Sound effects and music are required
+ on every supported platform. The client uses an SDL window-backed CPU
+ surface; it does not require a hardware renderer.
+
+ Releases are produced from every squash merge to main. semantic-release
+ parses the Conventional Commits pull-request title: a breaking marker or
+ BREAKING CHANGE produces a major release, feat produces a minor release, and
+ every other conventional type produces at least a patch release. Each release
+ contains a deterministic source archive, a portable Windows x86_64 ZIP, and
+ SHA-256 checksums. The release tag is the authoritative build version.
+
+=================================================
+= 2. Running the client                         =
+=================================================
+
+ Run the executable with the repository root as the working directory so it can find its
+ configuration, graphics, fonts, sounds, and other data files:
+  $ build/linux-debug/atrinik
+
+ Set `ATRINIK_CONFIG_DIR` to give a process an isolated configuration base.
+ The client creates its normal `.atrinik/<version>/` hierarchy below that
+ directory. This is useful when running concurrent development clients without
+ sharing settings, cached server data, or connection preferences:
+  $ ATRINIK_CONFIG_DIR=/absolute/path/to/client-state build/linux-debug/atrinik
+
+ If you used a different BUILD_DIR or CMake preset, adjust the executable path
+ accordingly. Extracted portable Windows packages contain atrinik.exe and all
+ required runtime assets and DLLs; run atrinik.exe from inside that package.
+
+ The main server screen has a Route button for choosing a preferred direct
+ route per server. The client races all candidates concurrently and selects a
+ successful route in the order LAN, global IPv6, peer-reflexive, mapped, STUN,
+ then directory. A specific choice is moved to the front of its direct or NAT
+ group without disabling fallback routes. Private/ULA IPv6 addresses are
+ treated as LAN candidates. The log reports punch send/receive totals for
+ diagnosing restrictive NATs. These choices are stored in
+ settings/connection-preferences.dat beneath the client's versioned user
+ configuration directory.
+
+ Password-protected metaserver entries prompt for their server join password
+ before connecting. The password is kept only in memory for that server and
+ is not written to the connection-preferences file or another persistent
+ client file. Automated launches should provide it through a restricted file
+ with `--join_password_file=PATH`; `--join_password=PASSWORD` remains available
+ for interactive debugging but exposes the value in the process argument list.
+ The password file must be a regular, non-symlink file containing exactly one
+ nonempty line shorter than 1024 bytes. Group/other permissions produce a
+ warning; mode 0600 is recommended.
+
+ The client has no built-in public STUN provider. Configure one explicitly with
+ `--stun_server=HOST:PORT`, or use `--stun_server=off` to disable discovery.
+ LAN, global IPv6, mapped, and directory routes remain available without STUN.
+
+ Region maps are stored beneath a directory scoped by the stable server ID or
+ authenticated certificate fingerprint, so a reused hostname and port cannot
+ inherit another server's cache. On later visits the client sends the cached
+ size and SHA-256 digest; the server returns a compact not-modified response
+ when they match. A changed map is downloaded once, digest-verified, and
+ atomically replaces the cached copy. HTTP/CDN bodies are accepted only after
+ their size and SHA-256 match metadata obtained over authenticated QUIC;
+ non-loopback origins must use HTTPS.
+
+ In-band bodies use up to three independent QUIC asset streams. Gameplay keeps
+ its own long-lived stream and receives the first service opportunity on every
+ transport-thread pass. Each asset response declares one immutable size and
+ SHA-256 digest, streams the body without per-chunk request round trips, and is
+ rejected on early EOF, surplus bytes, reset, oversize, or digest mismatch.
+ Cancelling one request resets only its stream. Required startup files are fed
+ into the same bounded scheduler instead of downloading serially.
+
+=================================================
+= 2.1. Replaying an offline player view         =
+=================================================
+
+ The client can replay a bounded MAP command through its normal decoder and
+ software map renderer without opening a window, initializing audio, reading
+ user settings, or connecting to a server:
+  $ build/linux-debug/atrinik --player-view \
+      src/tests/fixtures/player_view/smooth.xml \
+      build/linux-debug/player-view.png
+
+ Use `-` as the output to verify the canonical RGBA hash without writing a PNG.
+ Output files must not already exist and must be outside the manifest's frozen
+ input tree. Publication uses an exclusive same-directory temporary file,
+ verifies the encoded pixels, and then publishes atomically without replacing
+ another file.
+
+ The closed version-1 XML manifest pins the settings defaults, multipart
+ geometry, exact MAP payload, and every sprite by SHA-256. It also freezes the
+ viewport, logical map dimensions, software renderer, clock, zoom, and smooth
+ or discrete lighting choice. Unknown fields, external XML declarations,
+ missing or changed inputs, malformed packets, unavailable faces, and pixel
+ drift fail before publishing an output. The maintained fixtures cover normal
+ and stretched terrain, multipart and animated sprites, fog/cutaway behavior,
+ lighting modes, and physical depths zero, +1, and +2.
+
+=================================================
+= 3.1. Licensing (Atrinik client)               =
+=================================================
+
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; either version 2 of the License, or
+ (at your option) any later version.
+
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with this program; if not, write to the Free Software
+ Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+
+ The author can be reached at admin@atrinik.org
+
+=================================================
+= 3.2. Licensing (Atrinik client graphics)      =
+=================================================
+ See the LICENSE file in the 'textures' directory.
+
+=================================================
+= 3.3. Licensing (Atrinik client sounds)        =
+=================================================
+ See the LICENSE file in the 'sound/background' directory for background music,
+ or the LICENSE file in the 'sound/effects' directory for sound effects.
+
+=================================================
+= 3.4. Licensing (Atrinik client fonts)         =
+=================================================
+ See the respective font file's copyright field.
+
+=================================================
+= 3.5. Licensing (uthash)                       =
+=================================================
+
+ Copyright (c) 2005-2011, Troy D. Hanson    http://uthash.sourceforge.net
+ All rights reserved.
+
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are met:
+
+     * Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer.
+
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+ IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+ TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+ PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+ OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

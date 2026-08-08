@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "dependencies": [
+    {
+      "name": "sound",
+      "repository": "atrinik/sound",
+      "tag": "v1.0.3",
+      "commit": "18234cce19bf641f24d81333d8abcc0f1e34cd08",
+      "url": "https://github.com/atrinik/sound/releases/download/v1.0.3/atrinik-sound-1.0.3.tar.gz",
+      "sha256": "5427d2d2b5b73bad30c279ea5b7f012c380fd402249d45d9363b85ea7674e4bb",
+      "destination": "sound",
+      "strip_components": 1
+    }
+  ]
+}

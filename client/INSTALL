@@ -1,0 +1,17 @@
+# Building Atrinik client
+
+Install CMake 3.21 or newer, a C17 compiler, SDL 3, SDL3_image, SDL3_ttf,
+SDL3_mixer, and LibXml2. Then run:
+
+```sh
+python3 tools/dependencies.py sync
+cmake --preset linux-debug
+cmake --build --preset linux-debug
+ctest --preset linux-debug
+```
+
+The first configure downloads the exact protocol and libatrinik source release
+archives recorded in `cmake/dependencies.lock.json` and verifies their SHA-256
+digests. Use CMake's `FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL` and
+`FETCHCONTENT_SOURCE_DIR_LIBATRINIK` overrides for coordinated local work.
+
