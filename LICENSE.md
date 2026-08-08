@@ -6,8 +6,9 @@ version 2 or (at your option) any later version. The complete license text
 follows.
 
 Bundled third-party code, fonts, and graphical assets retain their compatible
-copyright and attribution notices. Those notices do not change the GPL terms
-for Atrinik-authored source code and must remain with redistributed artifacts.
+copyright and attribution notices recorded in `ATTRIBUTIONS.md` and applicable
+source files. Those notices do not change the GPL terms for Atrinik-authored
+source code and must remain with redistributed artifacts.
 
                     GNU GENERAL PUBLIC LICENSE
                        Version 2, June 1991

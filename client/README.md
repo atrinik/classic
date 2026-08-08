@@ -148,7 +148,7 @@
 =================================================
 = 3.2. Licensing (Atrinik client graphics)      =
 =================================================
- See `textures/ATTRIBUTIONS.md`.
+ See the monorepo's root `ATTRIBUTIONS.md`.
 
 =================================================
 = 3.3. Licensing (Atrinik client sounds)        =
