@@ -136,8 +136,11 @@ class WorkflowContractTests(unittest.TestCase):
     def test_latest_alias_has_one_globally_serialized_owner(self) -> None:
         package = self.text("package-release.yml")
         promoter = self.text("promote-latest.yml")
+        queue_job = package[package.index("  queue-latest:") :]
         self.assertNotIn("imagetools create", package)
         self.assertIn("push-to-registry: true", package)
+        self.assertIn("needs: publish", queue_job)
+        self.assertIn("if: always() && needs.publish.result == 'success'", queue_job)
         self.assertIn("group: classic-promote-latest", promoter)
         self.assertIn("gh attestation verify", promoter)
         self.assertIn("--tag latest", promoter)

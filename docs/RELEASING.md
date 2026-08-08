@@ -91,11 +91,14 @@ gh workflow run package-release.yml --repo atrinik/classic --ref main \
    immutable, non-prerelease release with the exact asset digests. A retry also
    accepts that exact published state and skips every immutable release write.
 7. A separate job dispatches the globally serialized Promote Latest Release
-   workflow. It recomputes GitHub's authoritative latest release, revalidates
-   its closed asset set and exact versioned image, and reconciles only the
-   mutable GHCR `latest` alias, verifies its resulting registry digest, and
-   requires the GitHub/Sigstore attestation. GitHub assigns the release's Latest designation
-   from semantic versions when the draft is published.
+   workflow after successful publication. It recomputes GitHub's authoritative
+   latest release, revalidates its closed asset set and exact versioned image,
+   and reconciles only the mutable GHCR `latest` alias, verifies its resulting
+   registry digest, and requires the GitHub/Sigstore attestation. The explicit
+   successful-publication guard ensures that an intentionally skipped build in
+   retained-candidate recovery cannot suppress reconciliation. GitHub assigns
+   the release's Latest designation from semantic versions when the draft is
+   published.
 
 Publication uses the root executable `.releaserc.cjs` and its fail-closed
 first-parent selector,

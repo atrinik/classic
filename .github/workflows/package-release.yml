@@ -330,6 +330,7 @@ jobs:
   queue-latest:
     name: Queue latest alias reconciliation
     needs: publish
+    if: always() && needs.publish.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions:
