@@ -10,6 +10,8 @@ python_reload_modules = off
 
 # Leave http_url set to 'off' for direct QUIC asset delivery, or deploy a
 # separate HTTPS origin/CDN and set its base URL for a large dedicated server.
+# Publish the exact asset snapshot first and use a public URL without embedded
+# credentials, query parameters, or a fragment.
 # http_url = https://cdn.example.com/atrinik
 
 # Optional public-server identity:

@@ -148,6 +148,13 @@
   - https://cdn.example.com/atrinik/          -> data/http/
   - https://cdn.example.com/atrinik/resources -> resources/
 
+ Publish the exact `data/http/` and release-matched `resources/` snapshot before
+ starting the game server with `http_url`. Update the origin atomically and
+ invalidate stale CDN entries before restarting after an asset change;
+ otherwise clients will reject stale bodies and transfer them again over QUIC.
+ Use a public base URL without embedded credentials, query parameters, or a
+ fragment because the URL is advertised to every connecting client.
+
  Atrinik generates or stages the files and advertises `http_url`; it never
  starts or supervises an HTTP listener. Serve only these roots as read-only
  static content, disable uploads and directory listings, and never expose the
