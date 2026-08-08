@@ -78,7 +78,10 @@ with an isolated classic profile and state:
 ```sh
 ./atrinik profile create classic-release-review --from classic
 ./atrinik profile show classic-release-review
-./atrinik build all --profile classic-release-review --test
+./atrinik build protocol --profile classic-release-review --test
+./atrinik build libatrinik --profile classic-release-review --test
+./atrinik build server --profile classic-release-review --test
+./atrinik build client --profile classic-release-review --test
 ./atrinik supply-chain audit --profile classic-release-review
 ./atrinik state add classic-release-v6
 ./atrinik topology show classic-release-review --json
@@ -88,6 +91,11 @@ with an isolated classic profile and state:
 ./atrinik logs classic-release-v6 server --follow
 ./atrinik down classic-release-v6
 ```
+
+A classic editor wrapper build contract has not landed yet. Until it does,
+validate the maintained packaging helper from the wrapper root with
+`bash -n classic/editor/build.sh` and `shellcheck classic/editor/build.sh`;
+the root Check and Release Rehearsal workflows enforce the same contract.
 
 A display is required when the client is included. Confirm that the client can
 log in, load its map, and exchange commands with the paired server before
