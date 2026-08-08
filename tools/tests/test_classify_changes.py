@@ -20,6 +20,7 @@ class ClassifyChangesTests(unittest.TestCase):
         result = classify_changes.classify([], full=True)
         self.assertTrue(result["client"])
         self.assertTrue(result["server"])
+        self.assertTrue(result["windows"])
         self.assertEqual(result["codeql_languages"], "c-cpp,python,actions")
         self.assertEqual(result["codeql_paths"], ["."])
 
@@ -27,12 +28,14 @@ class ClassifyChangesTests(unittest.TestCase):
         result = classify_changes.classify(["docs/RELEASING.md"])
         self.assertFalse(result["client"])
         self.assertFalse(result["server"])
+        self.assertFalse(result["windows"])
         self.assertFalse(result["codeql_run"])
 
     def test_component_change_selects_only_its_native_closure(self) -> None:
         result = classify_changes.classify(["client/src/client/main.c"])
         self.assertTrue(result["client"])
         self.assertFalse(result["server"])
+        self.assertFalse(result["windows"])
         self.assertEqual(result["codeql_languages"], "c-cpp")
         self.assertEqual(result["codeql_paths"], ["client"])
 
@@ -40,6 +43,7 @@ class ClassifyChangesTests(unittest.TestCase):
         result = classify_changes.classify(["protocol/schema/commands.jsonl"])
         self.assertTrue(result["client"])
         self.assertTrue(result["server"])
+        self.assertTrue(result["windows"])
         self.assertEqual(result["codeql_languages"], "c-cpp")
         self.assertFalse(result["codeql_client"])
         self.assertFalse(result["codeql_server"])
@@ -49,6 +53,17 @@ class ClassifyChangesTests(unittest.TestCase):
         result = classify_changes.classify([".releaserc.cjs"])
         self.assertTrue(result["client"])
         self.assertTrue(result["server"])
+        self.assertFalse(result["windows"])
+
+    def test_libatrinik_and_ci_contract_changes_select_windows_tests(self) -> None:
+        for path in (
+            "libatrinik/path.c",
+            "protocol/generated/c/commands.c",
+            "tools/ci/classify_changes.py",
+            ".github/workflows/check.yml",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify_changes.classify([path])["windows"])
 
     def test_python_and_workflow_changes_select_matching_languages(self) -> None:
         result = classify_changes.classify(
@@ -160,6 +175,10 @@ class ClassifyChangesTests(unittest.TestCase):
                 values = dict(
                     line.split("=", 1)
                     for line in output.read_text(encoding="utf-8").splitlines()
+                )
+                self.assertEqual(
+                    values["windows"],
+                    "true" if changed.startswith("libatrinik/") else "false",
                 )
                 matrix = json.loads(values["codeql_matrix"])
                 self.assertEqual(

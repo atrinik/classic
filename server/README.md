@@ -349,13 +349,37 @@ for registry, persistence, event, privacy, and analytics semantics.
  nonempty line shorter than 1024 bytes. Mode 0600 is recommended; group/other
  permissions produce a startup warning.
 
- The server advertises same-LAN and direct global IPv6 addresses, tries PCP
+ A listed password-protected server also requires a high-entropy rendezvous
+ invite before the metaserver reveals any transient QUIC candidate. On first
+ protected start, the server creates `data/rendezvous-invite` as an exclusive
+ owner-only regular file (mode 0600 on POSIX, protected owner DACL on Windows)
+ containing one capability bound to this server's QUIC identity and valid for
+ at most seven days. Share the file itself with invited players through a
+ protected channel; never paste its contents into server configuration, a
+ command line, chat, or logs. The path alone can be changed with
+ `rendezvous_invite_file` or `--rendezvous_invite_file=PATH`.
+
+ The server reuses a valid capability across restarts. To revoke or rotate it,
+ stop the server, delete that file, and restart; a replacement is generated.
+ An expired, permissively readable, malformed, replaced, or wrong-server file
+ fails closed instead of being silently overwritten. The separate human join
+ password is still authenticated by the game server only after certificate-
+ pinned QUIC has connected.
+
+ Addressless listings expose no direct endpoint, so their only connection path
+ is the invite-authorized rendezvous exchange. The legacy numeric `server_host`
+ setting is no longer published: a future dedicated DNS-hostname setting and
+ matching metaserver contract will provide the explicit direct fallback
+ without persisting a raw IP address.
+
+ The server discovers same-LAN and direct global IPv6 addresses, tries PCP
  with automatic NAT-PMP negotiation and UPnP IGD to create and renew a UDP
  router mapping, and optionally uses configured STUN for a server-reflexive
- fallback. Rendezvous
+ fallback. These automatically discovered endpoints are transient rendezvous
+ candidates only; they are never written to the public directory. Rendezvous
  opens a bounded bilateral punch window before QUIC checks begin. Both sides
  send ten paced probes over approximately one second. The QUIC listener
- recognizes an incoming probe before OpenSSL, logs its actual source, and
+ recognizes an incoming probe before OpenSSL and
  replies one-for-one so the client can learn a peer-reflexive server endpoint.
  The client races candidate handshakes concurrently, preferring LAN and global
  IPv6 routes by default. Its STUN-created IPv4 socket is retained for the
@@ -371,7 +395,8 @@ is no global IPv6 address. There is intentionally no TURN/game relay fallback,
 so those networks must use IPv6, a VPN/overlay, or a separately managed direct
 route. Failure is reported explicitly as “No confirmed direct route”.
 
-The client log lists every candidate attempt and the selected route. Operators
+The client log reports candidate kinds, timing, and the selected route without
+recording transient addresses. Operators
 with the `stats` or `/stats` command permission also see each player's reported
 mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
 ...)`. This is client-reported diagnostic metadata, not an authorization
@@ -448,9 +473,10 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
   server_name = Your Server Name
   server_desc = Description about your server.
 
- QUIC does not require server_host or an HTTP URL. When set, server_host must be
- a public IP literal; automatic mapping or STUN discovery normally publishes
- the endpoint instead.
+ QUIC does not require server_host or an HTTP URL. `server_host` is a retained
+ legacy numeric-IP option and is no longer published; leave it unset for an
+ addressless listing. Automatic mapping, STUN, LAN, and global IPv6 discovery
+ remain transient rendezvous candidates.
 
  Direct mode automatically tries a router mapping and does not normally require
  a manual port-forwarding rule. The local firewall must still allow the server
@@ -474,8 +500,8 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  (such as the server IP address), the following information is exposed to the
  metaserver, and flooded in periodic intervals, if reporting to the metaserver
  has been enabled (as per section 3.):
-  - Configured server name and description, plus an optional public IP address
-  - QUIC endpoint, certificate fingerprint, and server identity
+  - Configured server name and description
+  - QUIC certificate fingerprint and server identity; no raw address
   - Server version
   - Atrinik HTTP client version and platform (Windows/Linux/other)
   - One-time authentication proofs derived from the generated metaserver key;

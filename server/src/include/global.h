@@ -364,6 +364,9 @@ typedef struct settings_struct {
      */
     char join_password[MAX_BUF];
 
+    /** Protected file containing the current rendezvous invite capability. */
+    char rendezvous_invite_file[HUGE_BUF];
+
     /**
      * Whether this server should be listed publicly.
      */

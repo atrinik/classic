@@ -76,7 +76,13 @@ static void list_handle_enter(list_struct *list, SDL_Event *event) {
         size_t pos;
 
         /* Get selected server. */
-        selected_server = server_get_id(list->row_selected - 1);
+        server_struct *next_server = server_get_id(list->row_selected - 1);
+        if (selected_server != NULL && selected_server != next_server) {
+            client_attempt_secrets_clear(&selected_server->join_password,
+                                         &clioption_settings.join_password,
+                                         &selected_server->rendezvous_invite);
+        }
+        selected_server = next_server;
 
         if (selected_server == NULL) {
             return;
@@ -95,8 +101,11 @@ static void list_handle_enter(list_struct *list, SDL_Event *event) {
             return;
         }
 
-        if (selected_server->password_required && selected_server->join_password == NULL &&
-            clioption_settings.join_password == NULL) {
+        bool invite_required = selected_server->hostname == NULL || selected_server->port == 0;
+        if (selected_server->password_required &&
+            ((invite_required && selected_server->rendezvous_invite == NULL) ||
+             (selected_server->join_password == NULL &&
+              clioption_settings.join_password == NULL))) {
             join_password_open(selected_server);
         } else {
             login_start();
@@ -248,7 +257,11 @@ void intro_show(void) {
             node = server_get_id(i);
 
             list_add(list_servers, i, 0, node->name);
-            snprintf(VS(buf), "%d", node->port);
+            if (node->port > 0) {
+                snprintf(VS(buf), "%d", node->port);
+            } else {
+                snprintf(VS(buf), "-");
+            }
             list_add(list_servers, i, 1, buf);
 
             if (node->player >= 0) {

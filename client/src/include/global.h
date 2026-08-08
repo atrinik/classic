@@ -88,7 +88,10 @@ struct packet_reader;
 #include <book.h>
 #include <interface.h>
 #include <commands.h>
+#include <connection_failure.h>
+#include <join_credentials.h>
 #include <main.h>
+#include <metaserver_direct.h>
 #include <client.h>
 #include <effects.h>
 #include <sprite.h>

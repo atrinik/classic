@@ -62,6 +62,9 @@ typedef struct server_struct {
     /** Session-only password for joining this server. */
     char *join_password;
 
+    /** Session-only protected-rendezvous invite capability. */
+    rendezvous_invite_t *rendezvous_invite;
+
     /** Server version. */
     char *version;
 

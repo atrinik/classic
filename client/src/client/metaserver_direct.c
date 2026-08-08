@@ -105,9 +105,10 @@ static void parse_direct_server(xmlNodePtr node, const char *origin) {
         }
     }
 
-    if (!string_is_hex_fixed(server->server_id, 64, true) ||
-        !string_is_hex_fixed(server->quic_certificate_sha256, 64, true) ||
-        server->hostname == NULL || server->port <= 0 || server->port > UINT16_MAX ||
+    bool has_directory_address = server->hostname != NULL || server->port != 0;
+    if (!metaserver_direct_identity_valid(server->server_id, server->quic_certificate_sha256) ||
+        (has_directory_address &&
+         (server->hostname == NULL || server->port <= 0 || server->port > UINT16_MAX)) ||
         server->name == NULL || server->version == NULL || server->desc == NULL) {
         LOG(ERROR, "Incomplete or invalid direct server entry");
         goto error;
