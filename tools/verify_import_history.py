@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 from typing import Any
@@ -55,7 +56,7 @@ def verify_commits(name: str, commits: list[str]) -> None:
 
 def load_manifest() -> dict[str, Any]:
     value = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    require(value.get("schema_version") == 1, "unsupported import manifest")
+    require(value.get("schema_version") == 2, "unsupported import manifest")
     components = value.get("components")
     require(isinstance(components, list) and components, "no imported components")
     return value
@@ -67,6 +68,16 @@ def verify_component(component: dict[str, Any]) -> None:
     integration = component["integration_commit"]
     rewritten = component["rewritten_tip"]
     source = component["source_tip"]
+    original_history_ref = component["original_history_ref"]
+
+    original_ref_targets = [
+        git("rev-parse", ref, check=False)
+        for ref in (
+            f"refs/heads/{original_history_ref}",
+            f"refs/remotes/origin/{original_history_ref}",
+        )
+    ]
+    require(source in original_ref_targets, f"{name}: original history ref is missing")
 
     require(
         subprocess.run(
@@ -113,8 +124,47 @@ def verify_component(component: dict[str, Any]) -> None:
 
     verify_commits(name, [mapped for _, mapped in pairs] + [source])
 
-    tags = git("for-each-ref", "--format=%(refname)", f"refs/tags/{name}/").splitlines()
-    require(len(tags) == component["tag_count"], f"{name}: rewritten tag count changed")
+
+
+def verify_release_tags(manifest: dict[str, Any]) -> None:
+    policy_path = ROOT / manifest["active_release_tags"]
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    require(policy.get("schema_version") == 1, "unsupported release-tag policy")
+    require(policy.get("policy") == "unified-classic", "unexpected release-tag policy")
+    tags = policy.get("tags")
+    require(isinstance(tags, dict) and tags, "no active release tags")
+    require(
+        policy.get("baseline")
+        == {
+            "tag": "v5.0.19",
+            "commit": "f2cdf68710d157d4fae44a0582972129e6c4db9e",
+        },
+        "unexpected release-tag baseline",
+    )
+    require(
+        all(re.fullmatch(r"v\d+\.\d+\.\d+", tag) for tag in tags),
+        "release tags must be unprefixed semantic versions",
+    )
+    require(
+        all(isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit) for commit in tags.values()),
+        "release tag targets must be full lowercase commit IDs",
+    )
+    require(len(tags) == len(set(tags.values())), "release tags must have unique targets")
+
+    actual_refs = git("for-each-ref", "--format=%(refname:short)", "refs/tags/").splitlines()
+    require(sorted(actual_refs) == sorted(tags), "active tag names differ from release-tag policy")
+    for tag, commit in tags.items():
+        require(git("rev-parse", f"{tag}^{{commit}}") == commit, f"{tag}: target changed")
+        require(
+            subprocess.run(
+                ["git", "-C", str(ROOT), "merge-base", "--is-ancestor", commit, "HEAD"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ).returncode
+            == 0,
+            f"{tag}: target is not in HEAD",
+        )
 
 
 def main() -> int:
@@ -122,6 +172,7 @@ def main() -> int:
         manifest = load_manifest()
         for component in manifest["components"]:
             verify_component(component)
+        verify_release_tags(manifest)
     except (OSError, KeyError, ValueError, RuntimeError) as error:
         print(f"history verification failed: {error}", file=sys.stderr)
         return 1

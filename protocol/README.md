@@ -18,6 +18,3 @@ cmake -S . -B build
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
-
-The schema, generators, and generated bindings are available under the MIT
-License. See [LICENSE](LICENSE).

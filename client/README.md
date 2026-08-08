@@ -153,7 +153,7 @@
 =================================================
 = 3.2. Licensing (Atrinik client graphics)      =
 =================================================
- See the LICENSE file in the 'textures' directory.
+ See the monorepo's root `ATTRIBUTIONS.md`.
 
 =================================================
 = 3.3. Licensing (Atrinik client sounds)        =

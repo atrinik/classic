@@ -1,8 +1,8 @@
 # Classic monorepo architecture
 
 The repository is one physical Git checkout with five logical modules. Module
-boundaries remain explicit because they encode runtime ownership, independent
-licenses, focused tests, and reusable APIs.
+boundaries remain explicit because they encode runtime ownership, focused
+tests, and reusable APIs.
 
 ```text
 protocol ──> libatrinik ──> client
