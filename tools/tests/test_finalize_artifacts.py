@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import zipfile
 import sys
+import warnings
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "release" / "finalize_artifacts.py"
@@ -25,6 +26,14 @@ class FinalizeArtifactsTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    @staticmethod
+    def embedded_python_standard_library() -> bytes:
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w") as archive:
+            archive.writestr("encodings/__init__.pyc", b"compiled encodings")
+            archive.writestr("os.pyc", b"compiled os")
+        return output.getvalue()
 
     def test_source_archive_requires_version_and_license(self) -> None:
         path = self.root / "atrinik-classic-client-5.6.0.tar.gz"
@@ -139,26 +148,37 @@ class FinalizeArtifactsTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "only empty"):
             finalize_artifacts.validate_zip(empty, "expected", ("atrinik.exe",))
 
+    def test_windows_zip_rejects_corrupt_unsafe_or_duplicate_members(self) -> None:
+        corrupt = self.root / "corrupt.zip"
+        with zipfile.ZipFile(corrupt, "w", compression=zipfile.ZIP_STORED) as archive:
+            archive.writestr("expected/atrinik.exe", b"unique payload")
+        contents = bytearray(corrupt.read_bytes())
+        payload_offset = contents.index(b"unique payload")
+        contents[payload_offset] ^= 1
+        corrupt.write_bytes(contents)
+        with self.assertRaisesRegex(RuntimeError, "corrupt ZIP member"):
+            finalize_artifacts.validate_zip(
+                corrupt, "expected", ("atrinik.exe",)
+            )
+
+        unsafe = self.root / "unsafe.zip"
+        with zipfile.ZipFile(unsafe, "w") as archive:
+            archive.writestr("expected\\..\\other\\payload", b"payload")
+        with self.assertRaisesRegex(RuntimeError, "unsafe packaged path"):
+            finalize_artifacts.validate_zip(unsafe, "expected", ("payload",))
+
+        duplicate = self.root / "duplicate.zip"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with zipfile.ZipFile(duplicate, "w") as archive:
+                archive.writestr("expected/payload", b"first")
+                archive.writestr("expected/payload", b"second")
+        with self.assertRaisesRegex(RuntimeError, "duplicate member"):
+            finalize_artifacts.validate_zip(duplicate, "expected", ("payload",))
+
     def test_windows_server_zip_requires_runtime_payload(self) -> None:
         path = self.root / "server.zip"
         package = "atrinik-classic-server-5.6.0-windows-x86_64"
-        required = (
-            "server/atrinik-server.exe",
-            "server/LICENSE.md",
-            "server/ATTRIBUTIONS.md",
-            "server/server.cfg",
-            "server/permissions.cfg",
-            "server/ca-bundle.crt",
-            "server/*plugin_arena*.dll",
-            "server/*plugin_python*.dll",
-            "server/python*.dll",
-            "server/Lib/*",
-            "maps/*",
-            "server/lib/*",
-            "server/resources/*",
-            "server/install_data/*",
-            "server/install_data/http/client-maps/*",
-        )
         files = (
             "server/atrinik-server.exe",
             "server/LICENSE.md",
@@ -166,10 +186,12 @@ class FinalizeArtifactsTests(unittest.TestCase):
             "server/server.cfg",
             "server/permissions.cfg",
             "server/ca-bundle.crt",
+            "server/LICENSE.txt",
             "server/plugin_arena.dll",
             "server/plugin_python.dll",
+            "server/python3.dll",
             "server/python313.dll",
-            "server/Lib/os.py",
+            "server/_socket.pyd",
             "maps/world.map",
             "server/lib/helper.dll",
             "server/resources/archetypes",
@@ -179,7 +201,180 @@ class FinalizeArtifactsTests(unittest.TestCase):
         with zipfile.ZipFile(path, "w") as archive:
             for name in files:
                 archive.writestr(f"{package}/{name}", b"fixture")
-        finalize_artifacts.validate_zip(path, package, required)
+            archive.writestr(
+                f"{package}/server/python313.zip",
+                self.embedded_python_standard_library(),
+            )
+            archive.writestr(
+                f"{package}/server/python313._pth",
+                "python313.zip\n.\n",
+            )
+        finalize_artifacts.validate_zip(
+            path,
+            package,
+            finalize_artifacts.SERVER_WINDOWS_REQUIRED_PATTERNS,
+        )
+        finalize_artifacts.validate_embedded_python_runtime(path, package)
+
+    def test_embedded_python_requires_nonempty_standard_library_zip(self) -> None:
+        path = self.root / "server.zip"
+        package = "atrinik-classic-server-5.6.0-windows-x86_64"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(f"{package}/server/python313.dll", b"runtime")
+            archive.writestr(
+                f"{package}/server/python313._pth",
+                "python313.zip\n.\n",
+            )
+        with self.assertRaisesRegex(RuntimeError, "exactly one embedded Python"):
+            finalize_artifacts.validate_embedded_python_runtime(path, package)
+
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(f"{package}/server/python313.dll", b"runtime")
+            archive.writestr(
+                f"{package}/server/python313._pth",
+                "python313.zip\n.\n",
+            )
+            archive.writestr(f"{package}/server/python313.zip", b"")
+        with self.assertRaisesRegex(
+            RuntimeError, "empty embedded Python standard-library ZIP"
+        ):
+            finalize_artifacts.validate_embedded_python_runtime(path, package)
+
+    def test_embedded_python_requires_matching_pth_reference(self) -> None:
+        path = self.root / "server.zip"
+        package = "atrinik-classic-server-5.6.0-windows-x86_64"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(f"{package}/server/python313.dll", b"runtime")
+            archive.writestr(
+                f"{package}/server/python312._pth",
+                "python313.zip\n.\n",
+            )
+            archive.writestr(
+                f"{package}/server/python313.zip",
+                self.embedded_python_standard_library(),
+            )
+        with self.assertRaisesRegex(RuntimeError, "server/python313._pth"):
+            finalize_artifacts.validate_embedded_python_runtime(path, package)
+
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(f"{package}/server/python313.dll", b"runtime")
+            archive.writestr(
+                f"{package}/server/python313._pth",
+                "python312.zip\n.\n",
+            )
+            archive.writestr(
+                f"{package}/server/python313.zip",
+                self.embedded_python_standard_library(),
+            )
+        with self.assertRaisesRegex(RuntimeError, "python313.zip followed by"):
+            finalize_artifacts.validate_embedded_python_runtime(path, package)
+
+        for entries in (
+            "python313.zip\n",
+            "python313.zip\n.\n..\\shared\n",
+            "python313.zip\n.\nimport site\n",
+        ):
+            with self.subTest(entries=entries):
+                with zipfile.ZipFile(path, "w") as archive:
+                    archive.writestr(
+                        f"{package}/server/python313.dll",
+                        b"runtime",
+                    )
+                    archive.writestr(
+                        f"{package}/server/python313._pth",
+                        entries,
+                    )
+                    archive.writestr(
+                        f"{package}/server/python313.zip",
+                        self.embedded_python_standard_library(),
+                    )
+                with self.assertRaisesRegex(RuntimeError, "must contain only"):
+                    finalize_artifacts.validate_embedded_python_runtime(
+                        path, package
+                    )
+
+    def test_embedded_python_validates_matching_abi_and_nested_zip(self) -> None:
+        path = self.root / "server.zip"
+        package = "atrinik-classic-server-5.6.0-windows-x86_64"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(f"{package}/server/python312.dll", b"runtime")
+            archive.writestr(
+                f"{package}/server/python313._pth",
+                "python313.zip\n.\n",
+            )
+            archive.writestr(
+                f"{package}/server/python313.zip",
+                self.embedded_python_standard_library(),
+            )
+        with self.assertRaisesRegex(RuntimeError, "server/python313.dll"):
+            finalize_artifacts.validate_embedded_python_runtime(path, package)
+
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(f"{package}/server/python313.dll", b"runtime")
+            archive.writestr(
+                f"{package}/server/python313._pth",
+                "python313.zip\n.\n",
+            )
+            archive.writestr(f"{package}/server/python313.zip", b"not a ZIP")
+        with self.assertRaisesRegex(
+            RuntimeError, "invalid embedded Python standard-library ZIP"
+        ):
+            finalize_artifacts.validate_embedded_python_runtime(path, package)
+
+    def test_embedded_python_requires_standard_library_members(self) -> None:
+        path = self.root / "server.zip"
+        package = "atrinik-classic-server-5.6.0-windows-x86_64"
+        standard_library = io.BytesIO()
+        with zipfile.ZipFile(standard_library, "w") as archive:
+            archive.writestr("os.pyc", b"compiled os")
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(f"{package}/server/python313.dll", b"runtime")
+            archive.writestr(
+                f"{package}/server/python313._pth",
+                "python313.zip\n.\n",
+            )
+            archive.writestr(
+                f"{package}/server/python313.zip",
+                standard_library.getvalue(),
+            )
+        with self.assertRaisesRegex(RuntimeError, "encodings/__init__.pyc"):
+            finalize_artifacts.validate_embedded_python_runtime(path, package)
+
+    def test_embedded_python_rejects_unversioned_runtime_stem(self) -> None:
+        path = self.root / "server.zip"
+        package = "atrinik-classic-server-5.6.0-windows-x86_64"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(f"{package}/server/python3.dll", b"runtime")
+            archive.writestr(
+                f"{package}/server/python3._pth",
+                "python3.zip\n.\n",
+            )
+            archive.writestr(
+                f"{package}/server/python3.zip",
+                self.embedded_python_standard_library(),
+            )
+        with self.assertRaisesRegex(RuntimeError, "exactly one embedded Python"):
+            finalize_artifacts.validate_embedded_python_runtime(path, package)
+
+    def test_embedded_python_requires_root_extension_module(self) -> None:
+        path = self.root / "server.zip"
+        package = "atrinik-classic-server-5.6.0-windows-x86_64"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(f"{package}/server/python313.dll", b"runtime")
+            archive.writestr(
+                f"{package}/server/python313._pth",
+                "python313.zip\n.\n",
+            )
+            archive.writestr(
+                f"{package}/server/python313.zip",
+                self.embedded_python_standard_library(),
+            )
+            archive.writestr(
+                f"{package}/server/extensions/_socket.pyd",
+                b"extension",
+            )
+        with self.assertRaisesRegex(RuntimeError, "no embedded Python extension"):
+            finalize_artifacts.validate_embedded_python_runtime(path, package)
 
     def test_spdx_maps_locked_inputs_to_affected_artifacts(self) -> None:
         artifact = self.root / "atrinik-classic-server-5.6.0-windows-x86_64.zip"
