@@ -48,6 +48,34 @@ def semantic_version(tag: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
 
 
+def select_previous_release_tag(current_tag: str, tags: list[str]) -> str:
+    current = semantic_version(current_tag)
+    candidates = []
+    for tag in tags:
+        try:
+            candidate = semantic_version(tag)
+        except RecoveryError:
+            continue
+        if candidate[0] == current[0] and candidate < current:
+            candidates.append((candidate, tag))
+    if not candidates:
+        raise RecoveryError("recovery tag has no earlier reachable unified release")
+    return max(candidates)[1]
+
+
+def previous_release_tag(current_tag: str, tag_commit: str) -> str:
+    tags = command(
+        "git", "tag", "--merged", tag_commit, "--list", "v[0-9]*.[0-9]*.[0-9]*"
+    ).splitlines()
+    return select_previous_release_tag(current_tag, tags)
+
+
+def write_github_output(path: Path, previous_tag: str, tag_commit: str) -> None:
+    with path.open("a", encoding="utf-8") as output:
+        output.write(f"previous_tag={previous_tag}\n")
+        output.write(f"tag_commit={tag_commit}\n")
+
+
 def verify_version_policy(tag: str, policy_path: Path = POLICY) -> None:
     proposed = semantic_version(tag)
     policy = json.loads(policy_path.read_text(encoding="utf-8"))
@@ -81,6 +109,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", required=True)
     parser.add_argument("--repository", required=True)
+    parser.add_argument("--github-output", type=Path)
     arguments = parser.parse_args()
 
     try:
@@ -113,6 +142,9 @@ def main() -> int:
         )
         if not has_successful_classic_check(checks):
             raise RecoveryError("tag commit has no successful Classic validation")
+        previous_tag = previous_release_tag(arguments.tag, tag_commit)
+        if arguments.github_output is not None:
+            write_github_output(arguments.github_output, previous_tag, tag_commit)
     except (
         GitHubReleaseError,
         OSError,
@@ -122,7 +154,10 @@ def main() -> int:
     ) as error:
         parser.exit(1, f"release recovery validation failed: {error}\n")
 
-    print(f"validated missing GitHub release recovery for {arguments.tag}")
+    print(
+        f"validated missing GitHub release recovery for {arguments.tag} "
+        f"after {previous_tag}"
+    )
     return 0
 
 

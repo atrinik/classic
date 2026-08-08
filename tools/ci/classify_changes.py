@@ -17,7 +17,7 @@ NATIVE_SHARED_PREFIXES = ("libatrinik/", "protocol/")
 NATIVE_SHARED_PATHS = {
     ".clang-format",
     ".gitattributes",
-    ".releaserc.json",
+    ".releaserc.cjs",
     "ATTRIBUTIONS.md",
     "CMakeLists.txt",
     "CMakePresets.json",

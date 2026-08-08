@@ -15,7 +15,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "docs" / "history" / "imports.json"
 COMPONENT_RELEASE_MAP = ROOT / "docs" / "history" / "component-release-map.json"
-RELEASE_CONFIG = ROOT / ".releaserc.json"
+RELEASE_CONFIG = ROOT / ".releaserc.cjs"
 SEMVER_RE = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
 LAST_COMPONENT_TAGS = {
     "client": "v5.3.1",
@@ -43,6 +43,32 @@ def git(*arguments: str, check: bool = True) -> str:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
+
+
+def load_release_config() -> dict[str, Any]:
+    result = subprocess.run(
+        [
+            "node",
+            "-e",
+            "const c=require(process.argv[1]);"
+            "process.stdout.write(JSON.stringify(c,(_k,v)=>"
+            "typeof v==='function'?'__function__':v));",
+            str(RELEASE_CONFIG),
+        ],
+        cwd=ROOT,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode:
+        raise RuntimeError(
+            "cannot load semantic-release configuration: "
+            + (result.stderr.strip() or result.stdout.strip())
+        )
+    value = json.loads(result.stdout)
+    require(isinstance(value, dict), "release configuration is not an object")
+    return value
 
 
 def semantic_version(tag: str) -> tuple[int, int, int]:
@@ -294,7 +320,8 @@ def verify_release_tags(manifest: dict[str, Any]) -> None:
     floor = future_policy["ancestry_floor"]
     require(is_ancestor(floor, "HEAD"), "future-tag ancestry floor is not in HEAD")
 
-    release_config = json.loads(RELEASE_CONFIG.read_text(encoding="utf-8"))
+    first_parent_commits = set(git("rev-list", "--first-parent", "HEAD").splitlines())
+    release_config = load_release_config()
     require(
         release_config.get("branches") == ["main"],
         "unexpected release branches",
@@ -314,17 +341,50 @@ def verify_release_tags(manifest: dict[str, Any]) -> None:
         "unexpected commit analyzer configuration",
     )
     release_rules = analyzer[1].get("releaseRules")
-    require(isinstance(release_rules, list), "commit analyzer has no release rules")
     require(
-        {"breaking": True, "release": "minor"} in release_rules,
-        "breaking commits must remain on the classic major-version line",
+        isinstance(release_rules, list) and release_rules,
+        "commit analyzer has no release rules",
     )
     require(
-        all(
-            not isinstance(rule, dict) or rule.get("release") != "major"
-            for rule in release_rules
-        ),
-        "classic release rules must not produce a major version",
+        release_rules[0] == {"release": False},
+        "non-first-parent commits are not denied by default",
+    )
+    expected_rules = [
+        {"breaking": True, "release": "minor"},
+        {"type": "feat", "release": "minor"},
+        {"type": "*", "release": "patch"},
+    ]
+    rules_by_hash: dict[str, list[dict[str, Any]]] = {}
+    for rule in release_rules[1:]:
+        require(isinstance(rule, dict), "release rule is not an object")
+        commit = rule.get("hash")
+        require(
+            isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit),
+            "release rule has no full commit ID",
+        )
+        rules_by_hash.setdefault(commit, []).append(
+            {key: value for key, value in rule.items() if key != "hash"}
+        )
+    require(
+        set(rules_by_hash) == first_parent_commits,
+        "release rules do not select exactly main's first-parent history",
+    )
+    require(
+        all(rules == expected_rules for rules in rules_by_hash.values()),
+        "a first-parent commit has unexpected release rules",
+    )
+    notes_plugins = [
+        plugin
+        for plugin in plugins
+        if isinstance(plugin, list)
+        and len(plugin) == 2
+        and plugin[0] == "@semantic-release/release-notes-generator"
+        and isinstance(plugin[1], dict)
+    ]
+    require(len(notes_plugins) == 1, "release configuration has no unique notes plugin")
+    require(
+        notes_plugins[0][1].get("writerOpts", {}).get("skip") == "__function__",
+        "release notes do not filter non-first-parent commits",
     )
     exec_plugins = [
         plugin
@@ -374,7 +434,6 @@ def verify_release_tags(manifest: dict[str, Any]) -> None:
             semantic_version(future_tags[0]) == first_version,
             "the first post-consolidation release must be v5.6.0",
         )
-    first_parent_commits = set(git("rev-list", "--first-parent", "HEAD").splitlines())
     previous_commit = floor
     targets = set(historical_tags.values())
     for tag in future_tags:

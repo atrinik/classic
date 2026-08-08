@@ -29,7 +29,11 @@ jobs:
         with:
           fetch-depth: 0
           ref: main
-      - name: Prove the exact recoverable state
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - id: recovery
+        name: Prove the exact recoverable state
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPOSITORY: ${{ github.repository }}
@@ -37,15 +41,28 @@ jobs:
         run: |
           python3 tools/release/recover_release.py \
             --tag "${RELEASE_TAG}" \
-            --repository "${RELEASE_REPOSITORY}"
+            --repository "${RELEASE_REPOSITORY}" \
+            --github-output "${GITHUB_OUTPUT}"
       - name: Create release notes for the existing tag
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
+          npx --yes \
+            --package=semantic-release@25.0.9 \
+            --package=@semantic-release/commit-analyzer@13.0.1 \
+            --package=@semantic-release/release-notes-generator@14.1.1 \
+            --package=@semantic-release/exec@7.1.0 \
+            --package=conventional-changelog-conventionalcommits@9.3.1 \
+            node tools/release/generate_release_notes.mjs \
+              --tag "${RELEASE_TAG}" \
+              --previous-tag '${{ steps.recovery.outputs.previous_tag }}' \
+              --repository-url "https://github.com/${RELEASE_REPOSITORY}.git" \
+              --output build/release-notes.md
           gh release create "${RELEASE_TAG}" \
             --draft \
-            --generate-notes \
+            --notes-file build/release-notes.md \
             --title "Atrinik Classic ${RELEASE_TAG}" \
             --verify-tag
       - name: Queue packaging from the immutable tag
