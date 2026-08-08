@@ -22,6 +22,11 @@
 
  The executable is written to build/linux-debug/atrinik.
 
+ The renderer-independent local session model is built as `Atrinik::Session`.
+ It has no SDL or widget dependency; its revisioned snapshots, bounded events,
+ stable handles, and semantic action contract are documented in
+ `doc/session.md`.
+
  To collect line, function, and branch coverage from the native tests:
   $ cmake --preset linux-coverage
   $ cmake --build --preset linux-coverage

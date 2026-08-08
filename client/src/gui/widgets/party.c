@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <session_client.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 
@@ -75,6 +76,12 @@ static list_struct *list_party = NULL;
  * otherwise one of @ref CMD_PARTY_xxx.
  */
 static int8_t list_contents = -1;
+
+static bool party_joined(void) {
+    char party[SESSION_NAME_SIZE] = {0};
+    HARD_ASSERT(session_party_name_view(client_session_get(), party, sizeof(party)));
+    return party[0] != '\0';
+}
 
 /**
  * Handle enter/double click for the party list.
@@ -127,6 +134,9 @@ void socket_command_party(uint8_t *data, size_t len, size_t pos) {
     /* List of parties, or list of party members. */
     if (type == CMD_PARTY_LIST || type == CMD_PARTY_WHO) {
         list_clear(list_party);
+        if (type == CMD_PARTY_WHO) {
+            session_reduce_party_members_clear(client_session_get());
+        }
 
         while (pos < len) {
             if (type == CMD_PARTY_LIST) {
@@ -143,6 +153,13 @@ void socket_command_party(uint8_t *data, size_t len, size_t pos) {
                 packet_reader_read_string(&reader, name, sizeof(name));
                 hp = packet_reader_read_uint8(&reader);
                 sp = packet_reader_read_uint8(&reader);
+                session_party_member_t member = {.hp = hp, .sp = sp};
+                snprintf(member.name,
+                         sizeof(member.name),
+                         "%.*s",
+                         (int)sizeof(member.name) - 1,
+                         name);
+                session_reduce_party_member(client_session_get(), &member);
                 list_add(list_party, list_party->rows, 0, name);
                 PARTY_STAT_BAR();
                 list_add(list_party, list_party->rows - 1, 1, bars);
@@ -171,6 +188,7 @@ void socket_command_party(uint8_t *data, size_t len, size_t pos) {
         /* Join command; store the party name we're member of, and show the
          * list of party members, if the party widget is not hidden. */
         packet_reader_read_string(&reader, cpl.partyname, sizeof(cpl.partyname));
+        session_reduce_party(client_session_get(), cpl.partyname);
 
         if (cur_widget[PARTY_ID]->show) {
             send_command("/party who");
@@ -180,6 +198,8 @@ void socket_command_party(uint8_t *data, size_t len, size_t pos) {
          * the party widget is hidden). */
 
         cpl.partyname[0] = '\0';
+        session_reduce_party(client_session_get(), "");
+        session_reduce_party_members_clear(client_session_get());
 
         if (cur_widget[PARTY_ID]->show) {
             send_command("/party list");
@@ -200,13 +220,16 @@ void socket_command_party(uint8_t *data, size_t len, size_t pos) {
 
         /* Update list of party members. */
 
-        if (list_contents != CMD_PARTY_WHO) {
-            return;
-        }
-
         packet_reader_read_string(&reader, name, sizeof(name));
         hp = packet_reader_read_uint8(&reader);
         sp = packet_reader_read_uint8(&reader);
+        session_party_member_t member = {.hp = hp, .sp = sp};
+        snprintf(member.name, sizeof(member.name), "%.*s", (int)sizeof(member.name) - 1, name);
+        session_reduce_party_member(client_session_get(), &member);
+
+        if (list_contents != CMD_PARTY_WHO) {
+            return;
+        }
 
         PARTY_STAT_BAR();
         cur_widget[PARTY_ID]->redraw = 1;
@@ -228,11 +251,12 @@ void socket_command_party(uint8_t *data, size_t len, size_t pos) {
 
         /* Remove member from the list of party members. */
 
+        packet_reader_read_string(&reader, name, sizeof(name));
+        session_reduce_party_member_remove(client_session_get(), name);
+
         if (list_contents != CMD_PARTY_WHO) {
             return;
         }
-
-        packet_reader_read_string(&reader, name, sizeof(name));
         cur_widget[PARTY_ID]->redraw = 1;
 
         for (row = 0; row < list_party->rows; row++) {
@@ -289,7 +313,7 @@ static void widget_draw(widgetdata *widget) {
         buttons[BUTTON_MEMBERS].x = buttons[BUTTON_FORM].x = 244;
         buttons[BUTTON_MEMBERS].y = buttons[BUTTON_FORM].y = 60;
 
-        if (cpl.partyname[0] == '\0') {
+        if (!party_joined()) {
             button_show(&buttons[BUTTON_FORM], "Form");
         } else {
             button_show(&buttons[BUTTON_MEMBERS],
@@ -355,6 +379,7 @@ static void widget_background(widgetdata *widget, int draw) {
 static int widget_event(widgetdata *widget, SDL_Event *event) {
     char buf[MAX_BUF];
     size_t i;
+    bool joined = party_joined();
 
     /* If the list has handled the mouse event, we need to redraw the
      * widget. */
@@ -364,9 +389,9 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
     }
 
     for (i = 0; i < BUTTON_NUM; i++) {
-        if ((cpl.partyname[0] == '\0' && (i == BUTTON_PASSWORD || i == BUTTON_LEAVE ||
-                                          i == BUTTON_CHAT || i == BUTTON_MEMBERS)) ||
-            (cpl.partyname[0] != '\0' && (i == BUTTON_FORM))) {
+        if ((!joined && (i == BUTTON_PASSWORD || i == BUTTON_LEAVE || i == BUTTON_CHAT ||
+                         i == BUTTON_MEMBERS)) ||
+            (joined && (i == BUTTON_FORM))) {
             continue;
         }
 

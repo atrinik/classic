@@ -36,6 +36,7 @@
 
 #include <global.h>
 #include <client_socket.h>
+#include <session_client.h>
 #include <toolkit/packet.h>
 
 /**
@@ -67,6 +68,7 @@ const char *gender_reflexive[GENDER_MAX] = {"itself", "himself", "herself", "its
  * Clear the player data like quickslots, inventory items, etc.
  */
 void clear_player(void) {
+    client_session_character_reset();
     objects_deinit();
     skills_deinit();
     spells_deinit();
@@ -105,16 +107,13 @@ void new_player(tag_t tag, long weight, uint16_t face) {
  * Object to apply.
  */
 void client_send_apply(object *op) {
-    packet_struct *packet;
-
-    packet = packet_new(SERVER_CMD_ITEM_APPLY, 8, 0);
-    packet_writer_write_uint32(packet, op->tag);
-
-    if (op->tag == 0) {
-        packet_writer_write_uint8(packet, op->apply_action);
+    session_action_result_t result = client_session_apply(op->tag, op->apply_action);
+    if (result != SESSION_ACTION_ACCEPTED) {
+        LOG(INFO,
+            "Rejected apply action for item %" PRIu32 ": %s",
+            op->tag,
+            session_action_result_string(result));
     }
-
-    socket_send_packet(packet);
 }
 
 /**
@@ -140,13 +139,15 @@ void client_send_examine(tag_t tag) {
  * Number of objects from tag.
  */
 void client_send_move(tag_t loc, tag_t tag, uint32_t nrof) {
-    packet_struct *packet;
-
-    packet = packet_new(SERVER_CMD_ITEM_MOVE, 32, 0);
-    packet_writer_write_uint32(packet, loc);
-    packet_writer_write_uint32(packet, tag);
-    packet_writer_write_uint32(packet, nrof);
-    socket_send_packet(packet);
+    object *item = object_find(tag);
+    bool get = item != NULL && item->env == cpl.below;
+    session_action_result_t result = client_session_move_item(loc, tag, nrof, get);
+    if (result != SESSION_ACTION_ACCEPTED) {
+        LOG(INFO,
+            "Rejected item move action for item %" PRIu32 ": %s",
+            tag,
+            session_action_result_string(result));
+    }
 }
 
 /**
@@ -158,11 +159,10 @@ void client_send_move(tag_t loc, tag_t tag, uint32_t nrof) {
  * 1 if command was sent, 0 otherwise.
  */
 void send_command(const char *command) {
-    packet_struct *packet;
-
-    packet = packet_new(SERVER_CMD_PLAYER_CMD, 256, 128);
-    packet_writer_write_cstring(packet, command);
-    socket_send_packet(packet);
+    session_action_result_t result = client_session_player_command(command);
+    if (result != SESSION_ACTION_ACCEPTED) {
+        LOG(INFO, "Rejected player command: %s", session_action_result_string(result));
+    }
 }
 
 /**

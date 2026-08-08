@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <session_client.h>
 #include <toolkit/string.h>
 
 /**
@@ -298,7 +299,9 @@ inventory_render_object(widgetdata *widget, object *ob, uint32_t i, uint32_t *r,
                     level = skill_get(skill_id)->level;
                     snprintf(VS(buf2), "level %d %s", ob->item_level, skill->s_name);
                 } else {
-                    level = cpl.stats.level;
+                    session_player_t player = {0};
+                    HARD_ASSERT(session_player_view(client_session_get(), &player));
+                    level = (int)player.stats.level;
                     snprintf(VS(buf2), "level %d", ob->item_level);
                 }
 
@@ -339,11 +342,13 @@ inventory_render_object(widgetdata *widget, object *ob, uint32_t i, uint32_t *r,
         }
 
         /* Append the active filter(s) and carrying capacity of the player */
+        session_player_t player = {0};
+        HARD_ASSERT(session_player_view(client_session_get(), &player));
         snprintfcat(VS(buf),
                     "Showing: %s [right]Carrying: %4.3f/%4.3f kg[/right]",
                     filter,
-                    cpl.real_weight,
-                    cpl.weight_limit);
+                    player.weight,
+                    player.weight_limit);
     }
 
     snprintfcat(VS(buf), "\n[/alpha]");
@@ -426,17 +431,6 @@ static void widget_draw(widgetdata *widget) {
     }
 
     if (inventory->display == INVENTORY_DISPLAY_MAIN) {
-        /* Recalculate the weight, as it may have changed. */
-        cpl.real_weight = 0.0;
-
-        for (tmp = INVENTORY_WHERE(inventory)->inv; tmp; tmp = tmp->next) {
-            if (!inventory_matches_filter(tmp)) {
-                continue;
-            }
-
-            cpl.real_weight += tmp->weight * (double)tmp->nrof;
-        }
-
         surface_show(widget->surface,
                      inventory->x - 1,
                      inventory->y - 1,

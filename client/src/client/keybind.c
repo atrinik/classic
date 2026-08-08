@@ -46,6 +46,7 @@
 
 #include <global.h>
 #include <client_socket.h>
+#include <session_client.h>
 #include <notification.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
@@ -490,21 +491,23 @@ void keybind_process(keybind_struct *keybind, SDL_EventType type, bool repeated)
  */
 int keybind_process_command_up(const char *cmd) {
     const char *cmd_orig = cmd;
+    session_intent_t intent = {0};
+    HARD_ASSERT(session_intent_view(client_session_get(), &intent));
 
     if (*cmd == '?') {
         cmd++;
 
         if (!strcmp(cmd, "RUNON")) {
-            cpl.run_on = 0;
+            client_session_controls(false, intent.fire);
             move_keys(0);
         } else if (!strcmp(cmd, "FIREON")) {
-            cpl.fire_on = 0;
+            client_session_controls(intent.run, false);
         } else if (!strncmp(cmd, "MOVE_", 5)) {
             keybind_struct *keybind;
 
             cmd += 5;
 
-            if (strcmp(cmd, "STAY") != 0 && !cpl.fire_on &&
+            if (strcmp(cmd, "STAY") != 0 && !intent.fire &&
                 (keybind = keybind_find_by_command(cmd_orig))) {
                 SDL_Scancode scancode = SDL_GetScancodeFromKey(keybind->key, NULL);
                 if (scancode != SDL_SCANCODE_UNKNOWN && keys[scancode].repeated) {
@@ -524,11 +527,13 @@ int keybind_process_command_up(const char *cmd) {
  * done so, even if the 'key up' event was handled by something else.
  */
 void keybind_state_ensure(void) {
-    if (cpl.run_on && !keybind_command_matches_state("?RUNON")) {
+    session_intent_t intent = {0};
+    HARD_ASSERT(session_intent_view(client_session_get(), &intent));
+    if (intent.run && !keybind_command_matches_state("?RUNON")) {
         keybind_process_command_up("?RUNON");
     }
 
-    if (cpl.fire_on && !keybind_command_matches_state("?FIREON")) {
+    if (intent.fire && !keybind_command_matches_state("?FIREON")) {
         keybind_process_command_up("?FIREON");
     }
 }
@@ -626,21 +631,28 @@ int keybind_process_command(const char *cmd) {
         } else if (!strcmp(cmd, "RIGHT")) {
             widget_inventory_handle_arrow_key(cpl.inventory_focus, SDLK_RIGHT);
         } else if (!strncmp(cmd, "RUNON", 5)) {
+            session_intent_t intent = {0};
+            HARD_ASSERT(session_intent_view(client_session_get(), &intent));
+            bool run;
             if (!strcmp(cmd + 5, "_TOGGLE")) {
-                if (cpl.run_on) {
+                if (intent.run) {
                     move_keys(5);
                 }
-
-                cpl.run_on = !cpl.run_on;
+                run = !intent.run;
             } else {
-                cpl.run_on = 1;
+                run = true;
             }
+            client_session_controls(run, intent.fire);
         } else if (!strncmp(cmd, "FIREON", 6)) {
+            session_intent_t intent = {0};
+            HARD_ASSERT(session_intent_view(client_session_get(), &intent));
+            bool fire;
             if (!strcmp(cmd + 6, "_TOGGLE")) {
-                cpl.fire_on = !cpl.fire_on;
+                fire = !intent.fire;
             } else {
-                cpl.fire_on = 1;
+                fire = true;
             }
+            client_session_controls(intent.run, fire);
         } else if (!strncmp(cmd, "QUICKSLOT_", 10)) {
             cmd += 10;
 
@@ -663,9 +675,18 @@ int keybind_process_command(const char *cmd) {
         } else if (!strcmp(cmd, "COPY")) {
             textwin_handle_copy(NULL);
         } else if (!strcmp(cmd, "HELLO")) {
-            send_command_check("/talk 1 hello");
+            session_intent_t intent = {0};
+            if (session_intent_view(client_session_get(), &intent)) {
+                session_action_result_t result = client_session_talk(intent.target.id);
+                if (result != SESSION_ACTION_ACCEPTED) {
+                    LOG(INFO, "Rejected talk action: %s", session_action_result_string(result));
+                }
+            }
         } else if (strcmp(cmd, "COMBAT") == 0 || strcmp(cmd, "COMBAT_FORCE") == 0) {
-            uint8_t combat = cpl.combat, combat_force = cpl.combat_force;
+            session_intent_t intent = {0};
+            HARD_ASSERT(session_intent_view(client_session_get(), &intent));
+            bool combat = intent.combat;
+            bool combat_force = intent.combat_force;
 
             if (strcmp(cmd, "COMBAT") == 0) {
                 combat = !combat;
@@ -674,11 +695,10 @@ int keybind_process_command(const char *cmd) {
             }
 
             WIDGET_REDRAW_ALL(TARGET_ID);
-
-            packet_struct *packet = packet_new(SERVER_CMD_COMBAT, 8, 0);
-            packet_writer_write_uint8(packet, combat);
-            packet_writer_write_uint8(packet, combat_force);
-            socket_send_packet(packet);
+            session_action_result_t result = client_session_attack(combat, combat_force);
+            if (result != SESSION_ACTION_ACCEPTED) {
+                LOG(INFO, "Rejected combat action: %s", session_action_result_string(result));
+            }
         }
 
         return 1;
