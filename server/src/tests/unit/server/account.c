@@ -48,6 +48,11 @@ START_TEST(test_account_provision) {
     ck_assert_ptr_nonnull(strstr(contents, "password $argon2id$"));
     ck_assert_ptr_nonnull(strstr(contents, "char human_male:Scenario Hero::1"));
 
+    metric_store_t metrics;
+    metrics_store_init(&metrics, METRIC_SCOPE_ACCOUNT, 0);
+    ck_assert(account_metrics_load(account_name, &metrics));
+    metrics_store_free(&metrics);
+
     ck_assert(!account_provision(account_name, password, character_name, "human_male", VS(error)));
     ck_assert_ptr_nonnull(strstr(error, "cannot reserve"));
     ck_assert_int_eq(stat(player_path, &statbuf), 0);
