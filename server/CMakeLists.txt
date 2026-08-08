@@ -495,7 +495,7 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
         PATTERN ".git" EXCLUDE)
     install(FILES
         README.md
-        COPYING
+        ${CMAKE_CURRENT_SOURCE_DIR}/../LICENSE.md
         ca-bundle.crt
         permissions.cfg
         server.bat

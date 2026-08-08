@@ -23,12 +23,13 @@
 - Prefer sibling `protocol/` and `libatrinik/` sources for integrated builds.
   Component release locks remain integrity fallbacks until deliberately
   migrated; update lock and fallback validation when their contract changes.
-- Preserve every component license, asset notice, attribution, imported commit
-  map, namespaced historical tag, and archival ref. The MIT `protocol/` subtree
-  does not relicense the GPL components or the aggregate repository.
-- New cross-cutting classic code is GPL-2.0-or-later unless it is independently
-  separable and carries an explicit compatible license. Never use provenance
-  grants intended for clean-room MIT replacements to infer a license here.
+- All Atrinik-authored source in this monorepo, including `protocol/`, is
+  GPL-2.0-or-later under the single root `LICENSE.md`. Preserve every compatible
+  third-party asset/code notice, attribution, imported commit map,
+  original-history branch, and the unprefixed release-tag policy.
+- New classic code must be GPL-2.0-or-later compatible. Never use provenance
+  grants intended for clean-room MIT replacements to infer a different license
+  here.
 - Operational language is “classic.” Historical `legacy-*` coordinates may
   appear only in provenance, import maps, migrated issue history, or archival
   references.

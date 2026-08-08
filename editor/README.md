@@ -14,6 +14,5 @@ update metadata into the selected local output directory.
 
 ## License
 
-The extracted utility retains its GNU General Public License terms. See
-[COPYING](COPYING).
-
+The extracted utility retains its GNU General Public License terms. See the
+monorepo's root [`LICENSE.md`](../LICENSE.md).
