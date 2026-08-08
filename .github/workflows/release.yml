@@ -49,6 +49,8 @@ jobs:
         run: >-
           npx --yes
           --package=semantic-release@25.0.9
+          --package=@semantic-release/commit-analyzer@13.0.1
+          --package=@semantic-release/release-notes-generator@14.1.1
           --package=@semantic-release/exec@7.1.0
           --package=conventional-changelog-conventionalcommits@9.3.1
-          semantic-release
+          node tools/release/run_semantic_release.mjs

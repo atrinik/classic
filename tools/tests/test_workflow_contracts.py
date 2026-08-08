@@ -59,6 +59,32 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('test "${GITHUB_REF}" = refs/heads/main', recovery)
         self.assertIn('test "${GITHUB_REF}" = refs/heads/main', promoter)
 
+    def test_automatic_and_recovery_notes_use_the_same_pinned_toolchain(self) -> None:
+        release = self.text("release.yml")
+        recovery = self.text("recover-release.yml")
+        check = self.text("check.yml")
+        packages = (
+            "--package=semantic-release@25.0.9",
+            "--package=@semantic-release/commit-analyzer@13.0.1",
+            "--package=@semantic-release/release-notes-generator@14.1.1",
+            "--package=@semantic-release/exec@7.1.0",
+            "--package=conventional-changelog-conventionalcommits@9.3.1",
+        )
+        for workflow in (release, recovery, check):
+            for package in packages:
+                with self.subTest(package=package):
+                    self.assertEqual(workflow.count(package), 1)
+        self.assertIn("node tools/release/run_semantic_release.mjs", release)
+        self.assertIn("node tools/release/generate_release_notes.mjs", recovery)
+        self.assertIn("node --test tools/tests/test_first_parent_release.mjs", check)
+
+    def test_recovery_uses_first_parent_notes_file(self) -> None:
+        recovery = self.text("recover-release.yml")
+        self.assertIn("--github-output", recovery)
+        self.assertIn("steps.recovery.outputs.previous_tag", recovery)
+        self.assertIn("--notes-file build/release-notes.md", recovery)
+        self.assertNotIn("--generate-notes", recovery)
+
     def test_rehearsal_image_requests_provenance_and_sbom(self) -> None:
         candidate = self.text("build-release-candidate.yml")
         self.assertGreaterEqual(candidate.count("provenance: mode=max"), 1)
