@@ -1,0 +1,4 @@
+interface:
+  display_name: "Classic Native Change"
+  short_description: "Build and validate coordinated classic C17 changes"
+  default_prompt: "Implement and validate this native Atrinik classic monorepo change across the affected modules."

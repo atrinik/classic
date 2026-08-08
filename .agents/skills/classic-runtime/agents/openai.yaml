@@ -1,0 +1,4 @@
+interface:
+  display_name: "Classic Runtime"
+  short_description: "Run and diagnose the classic stack safely"
+  default_prompt: "Prepare and validate this Atrinik classic runtime scenario through the workspace wrapper."

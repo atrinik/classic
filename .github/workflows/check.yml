@@ -1,0 +1,204 @@
+name: Check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: classic-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  history:
+    name: History validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: python3 tools/verify_import_history.py
+
+  protocol:
+    name: Protocol validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: protocol
+    env:
+      SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Check generated bindings
+        run: python3 tools/generate.py --check
+      - name: Run generator tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: Build and test C package
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+      - name: Build Python wheel
+        run: |
+          python3 -m pip install build==1.3.0
+          python3 -m build --wheel
+
+  library:
+    name: Library validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: libatrinik
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcovr libcurl4-openssl-dev libssl-dev zlib1g-dev
+      - name: Configure sibling protocol
+        run: cmake --preset linux-coverage -DATRINIK_PROTOCOL_SOURCE_DIR="$GITHUB_WORKSPACE/protocol"
+      - name: Build, test, and cover
+        run: |
+          cmake --build --preset linux-coverage --parallel
+          ctest --preset linux-coverage
+          gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
+            --exclude '.*/build/.*' --print-summary --xml coverage.xml
+      - name: Upload coverage
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        with:
+          disable_search: true
+          fail_ci_if_error: false
+          files: libatrinik/coverage.xml
+          flags: libatrinik
+          use_oidc: true
+
+  server:
+    name: Server validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Pull pinned build environment
+        run: docker pull ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
+      - name: Validate, build, and test
+        run: |
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --workdir /workspace/server \
+            ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03 \
+            bash -euo pipefail -c '
+              apt-get update -qq
+              env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+                build-essential ca-certificates check cmake flex gcovr \
+                libcurl4-openssl-dev libgd-dev libminiupnpc-dev libreadline-dev \
+                libssl-dev libsubunit-dev ninja-build pkgconf python3-dev zlib1g-dev
+              python3 -m unittest discover -s tools/tests -p "test_*.py"
+              python3 tools/dependencies.py verify
+              cmake --preset linux-coverage \
+                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
+                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
+              cmake --build --preset linux-coverage --parallel
+              ctest --preset linux-coverage
+              gcovr --root . --filter "src/" --exclude "src/tests/" \
+                --print-summary --xml coverage.xml
+              cmake --preset linux-sanitizers \
+                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
+                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
+              cmake --build --preset linux-sanitizers --parallel
+              env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
+                ctest --preset linux-sanitizers
+            '
+      - name: Upload coverage
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        with:
+          disable_search: true
+          fail_ci_if_error: false
+          files: server/coverage.xml
+          flags: server
+          use_oidc: true
+
+  client:
+    name: Client validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: client/build/ci-prefix
+          key: classic-client-sdl-mixer-ubuntu-26.04-x64-3.2.4-v1
+      - name: Pull pinned build environment
+        run: docker pull ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
+      - name: Validate, build, and test
+        run: |
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --workdir /workspace/client \
+            ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03 \
+            bash -euo pipefail -c '
+              tools/install-linux-ci-dependencies.sh build/ci-prefix
+              export CMAKE_PREFIX_PATH=/workspace/client/build/ci-prefix
+              export LD_LIBRARY_PATH=/workspace/client/build/ci-prefix/lib
+              export PKG_CONFIG_PATH=/workspace/client/build/ci-prefix/lib/pkgconfig
+              python3 -m unittest discover -s tools/tests -p "test_*.py"
+              python3 tools/dependencies.py verify
+              cmake --preset linux-coverage \
+                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
+                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
+              cmake --build --preset linux-coverage --parallel
+              ctest --preset linux-coverage
+              gcovr --root . --filter "src/" --exclude "src/tests/" \
+                --print-summary --xml coverage.xml
+            '
+      - name: Upload coverage
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        with:
+          disable_search: true
+          fail_ci_if_error: false
+          files: client/coverage.xml
+          flags: client
+          use_oidc: true
+
+  editor:
+    name: Editor validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash -n editor/build.sh
+      - run: shellcheck editor/build.sh
+
+  classic-validation:
+    name: Classic validation
+    if: always()
+    needs:
+      - history
+      - protocol
+      - library
+      - server
+      - client
+      - editor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every component check
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in ${RESULTS}; do
+            test "${result}" = success
+          done

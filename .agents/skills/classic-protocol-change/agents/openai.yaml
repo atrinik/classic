@@ -1,0 +1,4 @@
+interface:
+  display_name: "Classic Protocol Change"
+  short_description: "Change classic wire contracts across all consumers"
+  default_prompt: "Trace, implement, and validate this Atrinik classic protocol change across schema, generators, producers, and consumers."
