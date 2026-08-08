@@ -110,9 +110,10 @@ first-parent selector,
 `.github/workflows/release.yml`, and
 `.github/workflows/package-release.yml`; both production and rehearsal call the
 non-publishing `.github/workflows/build-release-candidate.yml`, and
-`.github/workflows/promote-latest.yml` owns only alias reconciliation. Nested component workflows and
-release configurations remain inert migration evidence while the first root
-release is reviewed and rehearsed; they do not define another version train.
+`.github/workflows/promote-latest.yml` owns only alias reconciliation. Nested
+component workflow/release copies were retired after the root rehearsal and
+unified releases proved equivalence; Git history preserves their migration
+evidence.
 
 ### Initial activation
 
