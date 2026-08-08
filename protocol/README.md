@@ -18,3 +18,8 @@ cmake -S . -B build
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
+
+Unified releases publish the Python distribution as
+`atrinik-classic-protocol` while preserving the `atrinik_protocol` import
+package. Its wheel and scoped source archive use the repository-wide classic
+version and include the root GPL license and provenance evidence.

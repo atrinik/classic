@@ -1,11 +1,18 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "policy": "unified-classic",
   "retired_component_tag_count": 70,
   "retired_archival_tag_ref_count": 217,
   "baseline": {
     "tag": "v5.0.19",
     "commit": "f2cdf68710d157d4fae44a0582972129e6c4db9e"
+  },
+  "future_tags": {
+    "first_version": "v6.0.0",
+    "minimum_version": "v6.0.0",
+    "ancestry_floor": "6960d16988e6925d7e421dc549780ac5feb0914d",
+    "branch": "main",
+    "driver": "semantic-release"
   },
   "tags": {
     "v5.0.19": "f2cdf68710d157d4fae44a0582972129e6c4db9e",

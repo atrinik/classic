@@ -28,8 +28,11 @@ git fsck --full --strict
 
 The 70 prefixed component tags and 217 temporary tag-namespace archival refs
 used to verify the import were retired when classic adopted one release line.
-Active tags are the exact unprefixed set in `release-tags.json`, beginning with
-`v5.0.19` at `f2cdf68710d157d4fae44a0582972129e6c4db9e`. The complete
+Historical tags are the exact unprefixed set recorded in `release-tags.json`,
+beginning with `v5.0.19` at
+`f2cdf68710d157d4fae44a0582972129e6c4db9e`. New automatic tags begin at
+`v6.0.0` and must follow that file's post-consolidation ancestry and semantic
+ordering rules. The complete
 `history/*` branch namespace was retired after import and workspace-migration
 verification; `imports.json` preserves the final ref targets as evidence. The
 former repositories remain the authoritative home of original branches and
@@ -45,3 +48,7 @@ ten component-history refs in `imports.json`.
 
 Do not regenerate a commit map in place. A later import must add a new,
 reviewable manifest entry and map while retaining this evidence.
+
+`component-release-map.json` records the last release in each former component
+repository and its corresponding rewritten commit. It is the compatibility
+bridge from independent version trains to the unified release line.

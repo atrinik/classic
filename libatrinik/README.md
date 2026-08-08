@@ -1,15 +1,15 @@
 # libatrinik
 
-[![Coverage](https://codecov.io/gh/atrinik/libatrinik/graph/badge.svg?branch=main)](https://codecov.io/gh/atrinik/libatrinik)
+[![Coverage](https://codecov.io/gh/atrinik/classic/graph/badge.svg?branch=main&flag=libatrinik)](https://codecov.io/gh/atrinik/classic)
 
 `libatrinik` is the reusable C17 networking and utility library shared by the
 Atrinik classic client, server, tests, and tooling. Its public CMake target is
 `Atrinik::Core`; the installed static library is named `libatrinik`.
 
-The library directly depends on the separately released `atrinik/protocol`
-package. By default CMake downloads the exact release archive and verifies the
-SHA-256 recorded in `dependencies.lock.json`. For local protocol development,
-override that source explicitly:
+Integrated classic builds use the sibling `protocol/` source from the same
+commit. Standalone builds retain a checksum-pinned protocol archive fallback
+from `dependencies.lock.json`. Override that source explicitly when composing
+another checkout:
 
 ```sh
 cmake -S . -B build \
@@ -37,8 +37,9 @@ must provide `Atrinik::Protocol` first and set `LIBATRINIK_PACKAGE_LAYOUT=ON`.
 That selects the archive's namespaced public-header layout without enabling
 standalone install or test targets.
 
-The first standalone release preserves the inherited GPL-2.0-or-later license.
-Extraction into an independent repository does not relicense the code.
+Unified releases publish a scoped
+`atrinik-classic-libatrinik-VERSION.tar.gz` development archive under the root
+GPL-2.0-or-later license. The archive version matches the complete monorepo.
 
 ## Pathfinding core
 

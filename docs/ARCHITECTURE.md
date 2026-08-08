@@ -26,13 +26,11 @@ collection, builds, mutable state, deterministic scenarios, and supervised
 topologies. This repository must not reconstruct those paths or vendor the
 external inputs.
 
-Root formatting, ignore, contribution, GitHub, dependency-update, and future
-release metadata are authoritative for the whole monorepo. Nested component
-workflows and semantic-release configurations are inert migration inputs: they
-remain in the current tree until root automation faithfully restores their
-build, packaging, automatic tagging, publication, and dependency-update
-capabilities, then they are retired atomically. Module-specific build presets,
-locks, documentation, agent guidance, release packaging tools, provenance, and
-attribution remain with their owning modules. Future classic releases use one
-repository-wide version and commit; only the unprefixed unified tag sequence
-drives release calculation.
+Root formatting, ignore, contribution, GitHub, dependency-update, validation,
+and release metadata are authoritative for the whole monorepo. The root release
+pipeline builds every module from one commit and one unprefixed version. Nested
+component workflows and semantic-release configurations remain inert migration
+evidence through the first complete root rehearsal; they are never alternate
+release trains. Module-specific build presets, fallback locks, documentation,
+agent guidance, packaging tools, provenance, and attribution remain with their
+owning modules.

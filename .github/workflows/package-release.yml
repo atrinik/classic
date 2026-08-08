@@ -56,10 +56,12 @@ jobs:
         if: inputs.rehearsal != true
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          python3 tools/release/validate_release.py
-          --tag '${{ inputs.tag }}'
-          --repository '${{ github.repository }}'
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          python3 tools/release/validate_release.py \
+            --tag "${RELEASE_TAG}" \
+            --repository "${RELEASE_REPOSITORY}"
       - id: rehearsal
         name: Validate non-publishing rehearsal inputs
         if: inputs.rehearsal == true
@@ -269,11 +271,9 @@ jobs:
         run: |
           assets=$(gh api "repos/${RELEASE_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.assets | length')
           test "${assets}" -eq 0
-          if docker buildx imagetools inspect \
-              "ghcr.io/atrinik/classic-server:${RELEASE_VERSION}" >/dev/null 2>&1; then
-            echo "Versioned classic server image already exists; refusing overwrite" >&2
-            exit 1
-          fi
+          python3 tools/release/check_registry_version.py \
+            --organization atrinik --package classic-server \
+            --tag "${RELEASE_VERSION}"
       - name: Validate and index every downloadable artifact
         run: >-
           python3 tools/release/finalize_artifacts.py

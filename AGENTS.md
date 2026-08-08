@@ -44,6 +44,12 @@
 - Commits and pull-request titles use Conventional Commits. Preferred scopes are
   `client`, `server`, `editor`, `libatrinik`, `protocol`, `build`, `ci`, `docs`,
   and `release`.
+- Root semantic-release owns one unprefixed version for the complete repository.
+  Publication requires the exact successful `Classic validation` commit,
+  deterministic closed-set artifacts, duplicate refusal, checksums, SBOMs, and
+  attestations. Never create, move, delete, or replace a release tag, versioned
+  image, or release asset manually; use the documented rehearsal and recovery
+  procedures in `docs/RELEASING.md`.
 - Run every affected module's tests, `python3 tools/verify_import_history.py`,
   and `git diff --check` before finishing. Keep generated files in ignored build
   directories and preserve unrelated work.

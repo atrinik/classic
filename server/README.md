@@ -2,7 +2,7 @@
 =                Atrinik Server                 =
 =================================================
 
-[![Coverage](https://codecov.io/gh/atrinik/server/graph/badge.svg?branch=main)](https://codecov.io/gh/atrinik/server)
+[![Coverage](https://codecov.io/gh/atrinik/classic/graph/badge.svg?branch=main&flag=server)](https://codecov.io/gh/atrinik/classic)
 
  Website: https://www.atrinik.org/
 
@@ -45,10 +45,11 @@
  Releases are produced from every squash merge to main. semantic-release
  parses the Conventional Commits pull-request title: a breaking marker or
  BREAKING CHANGE produces a major release, feat produces a minor release, and
- every other conventional type produces at least a patch release. Each release
- contains a deterministic source archive, a portable Windows x86_64 ZIP,
- SHA-256 checksums, and a versioned `ghcr.io/atrinik/atrinik-server` image. The
- newest release also updates the `latest` image alias.
+ every other conventional type produces at least a patch release. Each unified
+ release contains an atrinik-classic-server-VERSION source archive, a portable
+ atrinik-classic-server-VERSION-windows-x86_64 ZIP, SHA-256 checksums, and a
+ versioned `ghcr.io/atrinik/classic-server` image. The newest release also
+ updates the `latest` image alias.
 
 =================================================
 = 2. Running the server                         =
@@ -167,11 +168,11 @@
 = 2.3. Running with Docker Compose               =
 =================================================
 
- Release images are published to `ghcr.io/atrinik/atrinik-server`. Pin a
+ Release images are published to `ghcr.io/atrinik/classic-server`. Pin a
  version for a persistent deployment, then start it from the repository root:
   $ cp server-custom.cfg.example server-custom.cfg
   $ mkdir -p server-data
-  $ ATRINIK_SERVER_IMAGE=ghcr.io/atrinik/atrinik-server:5.1.0 \
+  $ ATRINIK_SERVER_IMAGE=ghcr.io/atrinik/classic-server:6.0.0 \
       LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) \
       docker compose -f compose.server.yaml up --no-build -d
 

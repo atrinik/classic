@@ -24,12 +24,11 @@ reports follow [SECURITY.md](SECURITY.md). All Atrinik-authored classic source
 remains GPL-2.0-or-later under [LICENSE.md](LICENSE.md); preserve compatible
 third-party licenses, notices, and attributions.
 
-The repository will use a unified classic release line. Until the root release
-pipeline is enabled, changes merged to `main` are unreleased. Nested component
-workflows and semantic-release files are inert migration inputs, not active
-configuration. Do not enable, update, or remove them independently; they are
-retired only when root automation preserves their build, packaging, tagging,
-publication, and dependency-update capabilities.
+The root workflows own the unified classic release line. A successful aggregate
+check for the current `main` commit triggers semantic-release and the guarded
+package workflow. Nested component workflows and semantic-release files remain
+inert migration inputs while the first unified rehearsal is reviewed; never
+enable or update them as independent release trains.
 
 ## Module requirements
 

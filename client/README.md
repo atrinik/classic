@@ -2,7 +2,7 @@
 =                Atrinik Client                 =
 =================================================
 
-[![Coverage](https://codecov.io/gh/atrinik/client/graph/badge.svg?branch=main)](https://codecov.io/gh/atrinik/client)
+[![Coverage](https://codecov.io/gh/atrinik/classic/graph/badge.svg?branch=main&flag=client)](https://codecov.io/gh/atrinik/classic)
 
  Website: http://www.atrinik.org/
 
@@ -36,9 +36,10 @@
  Releases are produced from every squash merge to main. semantic-release
  parses the Conventional Commits pull-request title: a breaking marker or
  BREAKING CHANGE produces a major release, feat produces a minor release, and
- every other conventional type produces at least a patch release. Each release
- contains a deterministic source archive, a portable Windows x86_64 ZIP, and
- SHA-256 checksums. The release tag is the authoritative build version.
+ every other conventional type produces at least a patch release. Each unified
+ release contains an atrinik-classic-client-VERSION source archive, a portable
+ atrinik-classic-client-VERSION-windows-x86_64 ZIP, and SHA-256 checksums. The
+ repository tag is the authoritative build version.
 
 =================================================
 = 2. Running the client                         =
