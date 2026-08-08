@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<player-view version="1"
+             renderer="software"
+             input-root="../../../.."
+             settings="data/settings.txt"
+             settings-sha256="b9b6f48ed15c7df1e389b6d23cba6595998fb290c8d258d33a9d4eac98f1bb0e"
+             archdef="data/archdef.dat"
+             archdef-sha256="977ce63e38f4795545f42bd2f4a9c62bd38fcdb4cfde7cb7fe3c2cd9fe73983e"
+             snapshot="src/tests/fixtures/player_view/scene.map2.hex"
+             snapshot-sha256="e9efb6e401ca235583ff50672e476e836e891821bf0d55b5d394fe206c7f3819"
+             viewport-width="320"
+             viewport-height="240"
+             look-width="9"
+             look-height="9"
+             map-zoom="100"
+             smooth-lighting="true"
+             zoom-smoothing="false"
+             clock-ms="1200"
+             expected-pixels-sha256="0000000000000000000000000000000000000000000000000000000000000000"
+             unexpected="rejected">
+  <asset face="1" path="textures/square_highlight.png" sha256="fecfd2da236702bc874c58a767d0d237f5425e423e6699742accb26215c9676b"/>
+</player-view>
