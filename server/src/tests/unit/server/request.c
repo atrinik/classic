@@ -10,6 +10,7 @@
 #include <check_utils.h>
 #include <toolkit/packet.h>
 #include <arch.h>
+#include <initialization.h>
 #include <object.h>
 #include <player.h>
 
@@ -41,6 +42,96 @@ static void request_version(socket_struct *cs, player *pl, uint32_t version) {
     socket_command_version(cs, pl, request->data, request->len, 0);
     packet_free(request);
 }
+
+enum command_phase_mask {
+    COMMAND_PHASE_CONNECTED = 1U << 0,
+    COMMAND_PHASE_VERSIONED = 1U << 1,
+    COMMAND_PHASE_SETUP_UNAUTHENTICATED = 1U << 2,
+    COMMAND_PHASE_ADMITTED_LOGIN = 1U << 3,
+    COMMAND_PHASE_PLAYING = 1U << 4,
+    COMMAND_PHASE_PLAYING_UNAUTHENTICATED = 1U << 5,
+};
+
+#define COMMAND_PHASE_LOGIN_MASK                                                               \
+    (COMMAND_PHASE_CONNECTED | COMMAND_PHASE_VERSIONED | COMMAND_PHASE_SETUP_UNAUTHENTICATED | \
+     COMMAND_PHASE_ADMITTED_LOGIN)
+#define COMMAND_PHASE_PLAYING_MASK (COMMAND_PHASE_PLAYING | COMMAND_PHASE_PLAYING_UNAUTHENTICATED)
+#define COMMAND_PHASE_ALL_MASK (COMMAND_PHASE_LOGIN_MASK | COMMAND_PHASE_PLAYING_MASK)
+
+typedef struct command_phase {
+    const char *name;
+    unsigned int mask;
+    int state;
+    uint32_t socket_version;
+    bool setup_completed;
+    bool join_authenticated;
+} command_phase_t;
+
+static const command_phase_t command_phases[] = {
+    {"connected", COMMAND_PHASE_CONNECTED, ST_LOGIN, 0, false, false},
+    {"versioned", COMMAND_PHASE_VERSIONED, ST_LOGIN, SOCKET_VERSION, false, false},
+    {"setup-unauthenticated",
+     COMMAND_PHASE_SETUP_UNAUTHENTICATED,
+     ST_LOGIN,
+     SOCKET_VERSION,
+     true,
+     false},
+    {"admitted-login", COMMAND_PHASE_ADMITTED_LOGIN, ST_LOGIN, SOCKET_VERSION, true, true},
+    {"playing", COMMAND_PHASE_PLAYING, ST_PLAYING, SOCKET_VERSION, true, true},
+    {"playing-unauthenticated",
+     COMMAND_PHASE_PLAYING_UNAUTHENTICATED,
+     ST_PLAYING,
+     SOCKET_VERSION,
+     true,
+     false},
+};
+
+typedef struct command_policy_expectation {
+    const char *name;
+    unsigned int without_join_password;
+    unsigned int with_join_password;
+} command_policy_expectation_t;
+
+#define COMMAND_POLICY(_symbol, _without, _with) \
+    [SERVER_CMD_##_symbol] = {SERVER_CMD_NAME_##_symbol, (_without), (_with)}
+
+static const command_policy_expectation_t command_policy_expectations[] = {
+    COMMAND_POLICY(CONTROL, COMMAND_PHASE_LOGIN_MASK, COMMAND_PHASE_LOGIN_MASK),
+    COMMAND_POLICY(ASK_FACE,
+                   COMMAND_PHASE_SETUP_UNAUTHENTICATED | COMMAND_PHASE_ADMITTED_LOGIN |
+                       COMMAND_PHASE_PLAYING_MASK,
+                   COMMAND_PHASE_ADMITTED_LOGIN | COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(SETUP,
+                   COMMAND_PHASE_VERSIONED | COMMAND_PHASE_PLAYING_MASK,
+                   COMMAND_PHASE_VERSIONED | COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(VERSION, COMMAND_PHASE_CONNECTED, COMMAND_PHASE_CONNECTED),
+    COMMAND_POLICY(CLEAR, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(REQUEST_UPDATE,
+                   COMMAND_PHASE_SETUP_UNAUTHENTICATED | COMMAND_PHASE_ADMITTED_LOGIN,
+                   COMMAND_PHASE_ADMITTED_LOGIN),
+    COMMAND_POLICY(KEEPALIVE, COMMAND_PHASE_ALL_MASK, COMMAND_PHASE_ALL_MASK),
+    COMMAND_POLICY(ACCOUNT,
+                   COMMAND_PHASE_SETUP_UNAUTHENTICATED | COMMAND_PHASE_ADMITTED_LOGIN,
+                   COMMAND_PHASE_ADMITTED_LOGIN),
+    COMMAND_POLICY(ITEM_EXAMINE, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(ITEM_APPLY, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(ITEM_MOVE, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(ASK_RESOURCE, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(PLAYER_CMD, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(ITEM_LOCK, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(ITEM_MARK, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(FIRE, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(QUICKSLOT, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(QUESTLIST, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(MOVE_PATH, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(COMBAT, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(TALK, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(MOVE, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(TARGET, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+};
+
+#undef COMMAND_POLICY
+CASSERT_ARRAY(command_policy_expectations, SERVER_CMD_NROF);
 
 START_TEST(test_target_packet_includes_current_level_and_plain_name) {
     mapstruct *map;
@@ -144,6 +235,135 @@ START_TEST(test_setup_rejects_unknown_option) {
 }
 END_TEST
 
+START_TEST(test_initial_setup_completion_is_transactional) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    socket_struct *cs = CONTR(pl)->cs;
+    cs->state = ST_LOGIN;
+    cs->socket_version = SOCKET_VERSION;
+    cs->setup_completed = false;
+    settings.join_password[0] = '\0';
+    socket_buffer_clear(cs);
+
+    uint8_t truncated[] = {CMD_SETUP_MAPSIZE, 13};
+    socket_command_setup(cs, CONTR(pl), truncated, sizeof(truncated), 0);
+    ck_assert(!cs->setup_completed);
+    ck_assert_ptr_null(queued_command_find(cs, CLIENT_CMD_SETUP));
+
+    uint8_t valid[] = {CMD_SETUP_MAPSIZE, 13, 15};
+    socket_command_setup(cs, CONTR(pl), valid, sizeof(valid), 0);
+    ck_assert(cs->setup_completed);
+    ck_assert_ptr_nonnull(queued_command_find(cs, CLIENT_CMD_SETUP));
+}
+END_TEST
+
+START_TEST(test_initial_setup_requires_valid_join_password) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    socket_struct *cs = CONTR(pl)->cs;
+    cs->state = ST_LOGIN;
+    cs->socket_version = SOCKET_VERSION;
+    cs->join_authenticated = false;
+    cs->setup_completed = false;
+    memset(settings.join_password, 0, sizeof(settings.join_password));
+    snprintf(VS(settings.join_password), "%s", "secret");
+    socket_buffer_clear(cs);
+
+    packet_struct *request = packet_new(0, 32, 0);
+    packet_writer_write_uint8(request, CMD_SETUP_JOIN_PASSWORD);
+    packet_writer_write_cstring(request, "secret");
+    socket_command_setup(cs, CONTR(pl), request->data, request->len, 0);
+    packet_free(request);
+    ck_assert(cs->join_authenticated);
+    ck_assert(cs->setup_completed);
+    ck_assert_int_eq(cs->state, ST_LOGIN);
+
+    packet_struct *response = queued_command_find(cs, CLIENT_CMD_SETUP);
+    ck_assert_ptr_nonnull(response);
+    packet_reader_t reader;
+    packet_reader_init(&reader, response->data, response->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), CMD_SETUP_JOIN_PASSWORD);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), 1);
+    ck_assert(packet_reader_finish(&reader));
+
+    socket_buffer_clear(cs);
+    cs->state = ST_LOGIN;
+    cs->join_authenticated = false;
+    cs->setup_completed = false;
+    request = packet_new(0, 32, 0);
+    packet_writer_write_uint8(request, CMD_SETUP_JOIN_PASSWORD);
+    packet_writer_write_cstring(request, "wrong");
+    socket_command_setup(cs, CONTR(pl), request->data, request->len, 0);
+    packet_free(request);
+    ck_assert(!cs->join_authenticated);
+    ck_assert(!cs->setup_completed);
+    ck_assert_int_eq(cs->state, ST_ZOMBIE);
+}
+END_TEST
+
+START_TEST(test_command_policy_covers_every_connection_phase) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    socket_struct *cs = CONTR(pl)->cs;
+
+    for (size_t join_required = 0; join_required < 2; join_required++) {
+        memset(settings.join_password, 0, sizeof(settings.join_password));
+        snprintf(VS(settings.join_password), "%s", join_required ? "secret" : "");
+
+        for (size_t phase_index = 0; phase_index < arraysize(command_phases); phase_index++) {
+            const command_phase_t *phase = &command_phases[phase_index];
+            cs->state = phase->state;
+            cs->socket_version = phase->socket_version;
+            cs->setup_completed = phase->setup_completed;
+            cs->join_authenticated = phase->join_authenticated;
+
+            for (size_t command = 0; command < arraysize(command_policy_expectations); command++) {
+                const command_policy_expectation_t *expectation =
+                    &command_policy_expectations[command];
+                unsigned int allowed = join_required ? expectation->with_join_password
+                                                     : expectation->without_join_password;
+                bool expected = (allowed & phase->mask) != 0;
+                bool actual = socket_server_command_phase_allowed(cs, (uint8_t)command);
+                ck_assert_msg(actual == expected,
+                              "%s was unexpectedly %s in phase %s with join password %s",
+                              expectation->name,
+                              actual ? "allowed" : "rejected",
+                              phase->name,
+                              join_required ? "enabled" : "disabled");
+            }
+        }
+    }
+}
+END_TEST
+
+START_TEST(test_out_of_order_player_command_is_not_queued) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    socket_struct *cs = CONTR(pl)->cs;
+    settings.join_password[0] = '\0';
+    uint8_t request[] = {SERVER_CMD_MOVE};
+
+    cs->state = ST_LOGIN;
+    cs->socket_version = 0;
+    cs->setup_completed = false;
+    ck_assert(socket_server_handle_command(cs, NULL, request, sizeof(request)));
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, 0);
+
+    cs->state = ST_PLAYING;
+    cs->socket_version = SOCKET_VERSION;
+    cs->setup_completed = true;
+    ck_assert(!socket_server_handle_command(cs, NULL, request, sizeof(request)));
+}
+END_TEST
+
 START_TEST(test_version_requires_exact_match) {
     mapstruct *map;
     object *pl;
@@ -194,6 +414,10 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_wizardry_level_change_refreshes_spell_cost_once);
     tcase_add_test(tc_core, test_setup_round_trip_uses_current_option_ids);
     tcase_add_test(tc_core, test_setup_rejects_unknown_option);
+    tcase_add_test(tc_core, test_initial_setup_completion_is_transactional);
+    tcase_add_test(tc_core, test_initial_setup_requires_valid_join_password);
+    tcase_add_test(tc_core, test_command_policy_covers_every_connection_phase);
+    tcase_add_test(tc_core, test_out_of_order_player_command_is_not_queued);
     tcase_add_test(tc_core, test_version_requires_exact_match);
     return s;
 }

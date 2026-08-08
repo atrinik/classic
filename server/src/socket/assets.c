@@ -322,10 +322,8 @@ static bool asset_stream_prepare(socket_struct *ns, asset_stream_state_t *state)
     if (!asset_request_rate_allow(ns)) {
         return false;
     }
-    if (*settings.join_password != '\0' && !ns->join_authenticated) {
-        LOG(ERROR,
-            "Connection %s opened an asset stream before authentication",
-            socket_get_id(ns->sc));
+    if (!socket_connection_admitted(ns)) {
+        LOG(ERROR, "Connection %s opened an asset stream before admission", socket_get_id(ns->sc));
         return false;
     }
 

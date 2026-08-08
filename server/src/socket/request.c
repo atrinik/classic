@@ -219,6 +219,11 @@ void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t l
         }
     }
 
+    if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
+        packet_free(packet);
+        return;
+    }
+
     if (*settings.join_password != '\0' && !ns->join_authenticated) {
         LOG(SYSTEM,
             "Connection %s rejected: incorrect or missing join password",
@@ -236,6 +241,7 @@ void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t l
         return;
     }
 
+    ns->setup_completed = true;
     socket_send_packet(ns, packet);
 }
 
@@ -2843,49 +2849,9 @@ void socket_command_talk(socket_struct *ns, player *pl, uint8_t *data, size_t le
 void socket_command_control(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
-    char word[MAX_BUF], app_name[MAX_BUF];
+    char app_name[MAX_BUF];
     uint8_t type, sub_type;
     packet_struct *packet;
-
-    if (strcasecmp(settings.control_allowed_ips, "none") == 0) {
-        LOG(PACKET, "Control command received but no IPs are allowed.");
-        return;
-    }
-
-    bool ip_match = false;
-
-    size_t pos2 = 0;
-    while (string_get_word(settings.control_allowed_ips, &pos2, ',', VS(word), 0)) {
-        char *split[2];
-        if (string_split(word, split, arraysize(split), '/') < 1) {
-            continue;
-        }
-
-        struct sockaddr_storage addr;
-        if (!socket_host2addr(split[0], &addr)) {
-            continue;
-        }
-
-        unsigned short plen = socket_addr_plen(&addr);
-        if (split[1] != NULL) {
-            uint64_t value;
-            if (!string_parse_uint64(split[1], 10, 0, plen, &value)) {
-                LOG(ERROR, "Ignoring invalid control CIDR prefix: %s", word);
-                continue;
-            }
-            plen = (unsigned short)value;
-        }
-
-        if (socket_cmp_addr(ns->sc, &addr, plen) == 0) {
-            ip_match = true;
-            break;
-        }
-    }
-
-    if (!ip_match) {
-        LOG(PACKET, "Received control command from unauthorized IP: %s", socket_get_id(ns->sc));
-        return;
-    }
 
     packet_reader_read_string(&reader, app_name, sizeof(app_name));
 
