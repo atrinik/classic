@@ -108,6 +108,56 @@ class LockedInputsTests(unittest.TestCase):
                     "example.invalid/image:5.6.0", "sha256:" + "a" * 64
                 )
 
+    def test_image_attestations_accept_slsa_v1_provenance(self) -> None:
+        with mock.patch.object(
+            locked_inputs,
+            "inspect_attestation",
+            side_effect=[
+                {
+                    "SLSA": {
+                        "buildDefinition": {
+                            "buildType": "https://mobyproject.org/buildkit@v1",
+                            "resolvedDependencies": [],
+                        },
+                        "runDetails": {
+                            "builder": {
+                                "id": "https://github.com/atrinik/classic/actions/runs/1"
+                            }
+                        },
+                    }
+                },
+                {
+                    "SPDX": {
+                        "spdxVersion": "SPDX-2.3",
+                        "SPDXID": "SPDXRef-DOCUMENT",
+                        "packages": [],
+                    }
+                },
+            ],
+        ):
+            locked_inputs.verify_attestations(
+                "example.invalid/image:5.6.1", "sha256:" + "a" * 64
+            )
+
+    def test_slsa_v1_requires_builder_and_resolved_dependencies(self) -> None:
+        provenance = {
+            "SLSA": {
+                "buildDefinition": {
+                    "buildType": "https://mobyproject.org/buildkit@v1"
+                },
+                "runDetails": {"builder": {"id": "builder"}},
+            }
+        }
+        with mock.patch.object(
+            locked_inputs,
+            "inspect_attestation",
+            side_effect=[provenance, {"SPDX": {}}],
+        ):
+            with self.assertRaises(locked_inputs.LockedInputError):
+                locked_inputs.verify_attestations(
+                    "example.invalid/image:5.6.1", "sha256:" + "a" * 64
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

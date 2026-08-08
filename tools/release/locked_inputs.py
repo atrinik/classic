@@ -162,10 +162,24 @@ def nested_objects(value: object) -> list[dict[str, object]]:
 def verify_attestations(image: str, digest: str) -> None:
     provenance = inspect_attestation(image, digest, "Provenance")
     if not any(
-        isinstance(item.get("builder"), dict)
-        and isinstance(item.get("buildType"), str)
-        and bool(item["buildType"])
-        and isinstance(item.get("materials"), list)
+        (
+            isinstance(item.get("builder"), dict)
+            and isinstance(item.get("buildType"), str)
+            and bool(item["buildType"])
+            and isinstance(item.get("materials"), list)
+        )
+        or (
+            isinstance(item.get("buildDefinition"), dict)
+            and isinstance(item["buildDefinition"].get("buildType"), str)
+            and bool(item["buildDefinition"]["buildType"])
+            and isinstance(
+                item["buildDefinition"].get("resolvedDependencies"), list
+            )
+            and isinstance(item.get("runDetails"), dict)
+            and isinstance(item["runDetails"].get("builder"), dict)
+            and isinstance(item["runDetails"]["builder"].get("id"), str)
+            and bool(item["runDetails"]["builder"]["id"])
+        )
         for item in nested_objects(provenance)
     ):
         raise LockedInputError("image provenance is not a SLSA predicate")
@@ -240,9 +254,10 @@ def main() -> int:
     action.add_argument("--verify-image")
     parser.add_argument("--revision", default="")
     parser.add_argument("--digest", default="")
+    parser.add_argument("--root", type=Path, default=ROOT)
     arguments = parser.parse_args()
     try:
-        inputs = load_locked_inputs(arguments.version)
+        inputs = load_locked_inputs(arguments.version, arguments.root)
         if arguments.github_output is not None:
             write_multiline_output(
                 arguments.github_output,

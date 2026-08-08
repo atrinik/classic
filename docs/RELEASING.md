@@ -45,6 +45,21 @@ is the guarded escape hatch for a broken tag-bound workflow definition; normal
 publication remains bound to the exact tag definition. Multiple drafts fail
 closed for manual investigation.
 
+If the failed run reached complete-candidate validation but a defect in its
+tag-bound publication code makes a job rerun impossible, dispatch Package
+Release from current `main` with both the release tag and the numeric failed
+run ID. The recovery preflight requires the original run to have exactly one
+successful complete-candidate finalizer, a failed publication job, and one
+unexpired candidate artifact named for that tag. It skips every candidate
+build, downloads that retained artifact by run ID, rejects any draft-asset
+mismatch, and uses only the validated current-main verifier against the tagged
+source tree. This is the sole exception to recovery within the original run.
+
+```sh
+gh workflow run package-release.yml --repo atrinik/classic --ref main \
+  -f tag=v5.6.1 -f candidate_run_id=RUN_ID
+```
+
 ## Publication flow
 
 1. The root Check workflow validates import evidence and every module. Its
@@ -193,9 +208,12 @@ produced its finalized candidate or uploaded any asset, use **Re-run failed
 jobs** on that original run. Never use Re-run all jobs or start a fresh Package
 Release candidate to reconcile a partial draft: retained candidate artifacts
 are the only permitted byte set, and Windows packages are not assumed to be
-reproducible. A tag with no release uses Recover Missing Release. A draft with
-no packaging run may start Package Release from its exact tag ref; after that,
-recovery stays with the original run. Never edit an already published
+reproducible. If the original publication code itself is defective, use the
+guarded current-main retained-candidate recovery described above with that
+exact failed run ID. A tag with no release uses Recover Missing Release. A
+draft with no packaging run may start Package Release from its exact tag ref;
+after that, recovery stays with the original run or its retained-candidate
+continuation. Never edit an already published
 immutable release for recovery; publish a correction as the next semantic
 version. The mutable `latest` alias is convenience only. Its globally serialized
 promoter recomputes GitHub's latest complete immutable release on every run, and
