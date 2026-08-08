@@ -56,6 +56,12 @@ jobs:
     name: Validate unified release
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # GitHub exposes drafts only to tokens with push access. Production callers
+    # grant this job contents:write so it can inspect (but never mutate) the
+    # semantic-release draft; rehearsal callers cap it at contents:read.
+    permissions:
+      checks: read
+      contents: write
     outputs:
       commit: ${{ steps.metadata.outputs.commit || steps.rehearsal.outputs.commit }}
       source_epoch: ${{ steps.metadata.outputs.source_epoch || steps.rehearsal.outputs.source_epoch }}

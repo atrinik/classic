@@ -37,6 +37,14 @@ packaging run has produced a candidate or uploaded an asset. Otherwise use
 **Re-run failed jobs** on the original Package Release run. Never delete or
 recreate a tag or draft to recover.
 
+If a release-automation defect is fixed after the tag and draft exist but
+before a candidate is produced, the next successful Semantic Release run
+detects the single reachable draft, dispatches Package Release from the
+validated current `main` workflow definition, and skips version analysis. This
+is the guarded escape hatch for a broken tag-bound workflow definition; normal
+publication remains bound to the exact tag definition. Multiple drafts fail
+closed for manual investigation.
+
 ## Publication flow
 
 1. The root Check workflow validates import evidence and every module. Its
@@ -47,8 +55,11 @@ recreate a tag or draft to recover.
 3. Semantic-release analyzes and formats only exact first-parent commits,
    creates the unprefixed tag and draft GitHub release notes, then dispatches
    Package Release from that exact immutable tag ref.
-4. The read-only Build Release Candidate workflow revalidates the tag, draft,
-   main ancestry, and successful aggregate check.
+4. The non-publishing Build Release Candidate workflow revalidates the tag,
+   draft, main ancestry, and successful aggregate check. GitHub exposes drafts
+   only to tokens with push access, so production grants `contents: write` only
+   to its metadata job; that job performs no mutations. Rehearsals remain
+   read-only.
    Independent jobs build every artifact, install/import the wheel, consume the
    extracted same-version library archive, and build the root-context server
    image without publishing it.
@@ -72,7 +83,7 @@ Publication uses the root executable `.releaserc.cjs` and its fail-closed
 first-parent selector,
 `.github/workflows/release.yml`, and
 `.github/workflows/package-release.yml`; both production and rehearsal call the
-read-only `.github/workflows/build-release-candidate.yml`, and
+non-publishing `.github/workflows/build-release-candidate.yml`, and
 `.github/workflows/promote-latest.yml` owns only alias reconciliation. Nested component workflows and
 release configurations remain inert migration evidence while the first root
 release is reviewed and rehearsed; they do not define another version train.
