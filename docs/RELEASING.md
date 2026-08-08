@@ -98,9 +98,10 @@ gh workflow run package-release.yml --repo atrinik/classic --ref main \
    successful-publication guard ensures that an intentionally skipped build in
    retained-candidate recovery cannot suppress reconciliation. Image policy is
    checked by the exact current-main workflow verifier against the immutable
-   tagged image, allowing a verifier-only recovery without changing release
-   inputs. GitHub assigns the release's Latest designation from semantic
-   versions when the draft is published.
+   tagged image and the dependency locks in its tagged source checkout,
+   allowing a verifier-only recovery without changing release inputs. GitHub
+   assigns the release's Latest designation from semantic versions when the
+   draft is published.
 
 Publication uses the root executable `.releaserc.cjs` and its fail-closed
 first-parent selector,

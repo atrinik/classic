@@ -148,6 +148,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn(
             "build/release-automation/tools/release/locked_inputs.py", promoter
         )
+        self.assertIn('--root "${GITHUB_WORKSPACE}"', promoter)
         self.assertIn(
             "build/release-automation/tools/release/check_registry_version.py",
             promoter,

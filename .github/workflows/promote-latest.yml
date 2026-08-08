@@ -83,7 +83,8 @@ jobs:
             --component server \
             --verify-image "${IMAGE}" \
             --revision '${{ steps.revision.outputs.commit }}' \
-            --digest "${IMAGE_DIGEST}"
+            --digest "${IMAGE_DIGEST}" \
+            --root "${GITHUB_WORKSPACE}"
       - name: Verify the GitHub server-image attestation
         env:
           GH_TOKEN: ${{ github.token }}
