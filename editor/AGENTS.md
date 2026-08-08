@@ -1,4 +1,4 @@
-# Atrinik editor packaging repository guide
+# Atrinik classic editor packaging module guide
 
 - This repository is a thin packaging utility for an external Gridarta
   checkout. Gridarta source and generated JARs do not belong here.
@@ -11,7 +11,7 @@
   explicitly authorizes that external action.
 - Validate changes with `bash -n build.sh`, `shellcheck build.sh`, a disposable
   upstream fixture or checkout, and `git diff --check`.
-- Commits and pull-request titles use Conventional Commits. Every squash merge
-  is released by semantic-release.
+- Commits and pull-request titles use Conventional Commits. Classic uses one
+  repository-wide release line.
 - Update this `AGENTS.md` in the same change when major rework alters packaging
   ownership, the Gridarta contract, artifact layout, or validation.

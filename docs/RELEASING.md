@@ -21,6 +21,12 @@ Before enabling an automatic root release workflow, all of these must be true:
 - checksums cover every artifact and the wrapper supply-chain inventory records
   the release commit.
 
-The five nested release workflows must not be copied or enabled at the root:
+The five nested release workflows and `.releaserc.json` files are inert
+migration inputs. They must not be copied verbatim or enabled at the root:
 their contexts and independent version trains would publish incorrect assets.
-Historical releases remain in the archived source repositories.
+They also must not be removed until a root pipeline has proven equivalent
+automatic tagging, GitHub release, source/package/checksum publication,
+Windows client and server builds, server-image publication, protocol wheel,
+library archive, and dependency-update behavior. Retire the nested inputs in
+the same change that enables that parity. Historical releases remain in the
+archived source repositories.

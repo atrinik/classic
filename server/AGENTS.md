@@ -2,10 +2,10 @@
 
 ## Ownership and orientation
 
-- This repository owns the C17 classic game server, its persistence and runtime
+- The `server/` module owns the C17 classic game server, its persistence and runtime
   contracts, and offline scenario provisioning. Authored world data and media
   remain in `content` and `resources`.
-- Read `CONTRIBUTING.md`, the affected subsystem, and its tests before editing.
+- Read the root `CONTRIBUTING.md`, the affected subsystem, and its tests before editing.
   Use precise component and protocol names; do not reference confidential or
   unreleased work.
 - `src/server/main.c` initializes the authoritative server and main loop.
@@ -44,8 +44,9 @@
 
 ## Dependencies, protocols, and generated files
 
-- Protocol and libatrinik sources must come from immutable, checksum-pinned
-  releases in `cmake/dependencies.lock.json`.
+- Integrated builds use sibling `protocol/` and `libatrinik/` sources. Their
+  immutable, checksum-pinned entries in `cmake/dependencies.lock.json` remain
+  release and standalone-build fallbacks.
 - Content and runtime resources must come from immutable, checksum-pinned
   releases in `dependencies.lock.json`; do not introduce Git submodules.
 - Treat a packet-layout change as coordinated protocol work. Generated command
@@ -135,7 +136,7 @@
 
 ## Validation and release
 
-- Follow `.clang-format`, update CMake source lists, and treat warnings and
+- Follow the root `.clang-format`, update CMake source lists, and treat warnings and
   sanitizer findings as defects. Validate dependency locks when they change.
 - Build and test through `./atrinik build server --profile PROFILE --test`.
   For runtime behavior, use the wrapper's exact
@@ -145,9 +146,9 @@
   and gcovr summary documented in `README.md`; keep source/test exclusions
   intentional. Pull-request CI also runs the `linux-sanitizers` preset with
   address and undefined-behavior sanitizers.
-- Pull request titles and commits use Conventional Commits style. Every squash
-  merge is released by semantic-release; preserve the source, Windows server
-  package, checksum, and server-image release jobs together.
+- Pull request titles and commits use Conventional Commits style. Classic uses
+  one repository-wide release line; preserve the source, Windows server
+  package, checksum, and server-image release contracts together.
 - Preserve unrelated work, keep generated output under `build/`, and finish
   with `git diff --check`.
 - Update this `AGENTS.md` in the same change when major rework alters ownership,
