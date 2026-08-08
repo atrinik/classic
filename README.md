@@ -38,9 +38,9 @@ explicitly when needed:
 Create a full monorepo worktree for coordinated work:
 
 ```sh
-./atrinik worktree create classic my-change
+./atrinik worktree create classic my-change --branch feat/my-change
 ./atrinik profile create my-change --from classic
-./atrinik profile set my-change classic worktree my-change
+./atrinik profile set my-change classic --worktree my-change
 ./atrinik build server --profile my-change --test
 ./atrinik build client --profile my-change --test
 ```
@@ -61,3 +61,15 @@ git log --follow -- server/src/server/main.c
 Original-to-rewritten commit maps and verification instructions are in
 [docs/history/README.md](docs/history/README.md). The former repositories remain
 available as read-only release and closed-issue archives.
+
+## Releases
+
+After the documented post-merge rehearsal and activation step, one successful
+`Classic validation` result on `main` drives the complete repository through
+semantic-release. The first unified version is `v5.6.0`; later tags remain on
+the unprefixed `v5.x.x` line and are derived from the squash-merge title.
+Source archives, the protocol wheel, portable Windows packages, SPDX,
+checksums, locked runtime-input evidence, attestations, and
+`ghcr.io/atrinik/classic-server` are built from the same commit. See
+[docs/RELEASING.md](docs/RELEASING.md) for the artifact,
+rehearsal, recovery, and rollback contracts.

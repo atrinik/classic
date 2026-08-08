@@ -20,6 +20,10 @@
 - Commits and pull-request titles use Conventional Commits. Classic uses one
   repository-wide release line; update sibling consumers in the same pull
   request when generated bindings change.
+- Installed protocol packages use same-minor compatibility because a classic
+  breaking change advances the minor version while major stays 5. Embedded
+  scoped dependencies must carry the same generated `VERSION` as their parent
+  release archive.
 - Keep build/package output under `build/`, preserve unrelated work, and finish
   with `git diff --check`.
 - Update this `AGENTS.md` in the same change when major rework alters ownership,

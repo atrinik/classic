@@ -3,7 +3,30 @@ cmake_minimum_required(VERSION 3.21)
 # This directory is both an in-tree dependency of the classic game superbuild and
 # the source root of the independently released libatrinik package.
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    project(libatrinik VERSION 1.0.0 LANGUAGES C)
+    set(ATRINIK_SOURCE_VERSION "1.0.0")
+    if (DEFINED ENV{ATRINIK_PACKAGE_VERSION})
+        set(ATRINIK_SOURCE_VERSION "$ENV{ATRINIK_PACKAGE_VERSION}")
+    elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
+        file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
+            ATRINIK_SOURCE_VERSION LIMIT_COUNT 1)
+    else ()
+        execute_process(
+            COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}"
+                describe --tags --exact-match --match "v[0-9]*"
+            OUTPUT_VARIABLE ATRINIK_GIT_TAG
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+            RESULT_VARIABLE ATRINIK_GIT_TAG_RESULT)
+        if (ATRINIK_GIT_TAG_RESULT EQUAL 0)
+            string(REGEX REPLACE "^v" "" ATRINIK_SOURCE_VERSION
+                "${ATRINIK_GIT_TAG}")
+        endif ()
+    endif ()
+    if (NOT ATRINIK_SOURCE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+        message(FATAL_ERROR "Atrinik source version must be MAJOR.MINOR.PATCH")
+    endif ()
+
+    project(libatrinik VERSION "${ATRINIK_SOURCE_VERSION}" LANGUAGES C)
 
     include(CTest)
     include(CMakePackageConfigHelpers)
@@ -41,6 +64,18 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     if (NOT TARGET Atrinik::Protocol)
         set(ATRINIK_PROTOCOL_SOURCE_DIR "" CACHE PATH
             "Path to an Atrinik protocol source checkout")
+        if (NOT ATRINIK_PROTOCOL_SOURCE_DIR)
+            foreach (candidate
+                    "${CMAKE_CURRENT_SOURCE_DIR}/../protocol"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/protocol")
+                if (EXISTS "${candidate}/CMakeLists.txt")
+                    file(REAL_PATH "${candidate}" resolved)
+                    set(ATRINIK_PROTOCOL_SOURCE_DIR "${resolved}"
+                        CACHE PATH "Path to an Atrinik protocol source checkout" FORCE)
+                    break()
+                endif ()
+            endforeach ()
+        endif ()
         option(LIBATRINIK_USE_INSTALLED_PROTOCOL
             "Use an installed AtrinikProtocol package instead of the locked release"
             OFF)
@@ -48,7 +83,7 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
             add_subdirectory("${ATRINIK_PROTOCOL_SOURCE_DIR}"
                 "${CMAKE_CURRENT_BINARY_DIR}/atrinik-protocol")
         elseif (LIBATRINIK_USE_INSTALLED_PROTOCOL)
-            find_package(AtrinikProtocol 1 CONFIG REQUIRED)
+            find_package(AtrinikProtocol "${PROJECT_VERSION}" EXACT CONFIG REQUIRED)
         else ()
             include(FetchContent)
             file(READ "${CMAKE_CURRENT_SOURCE_DIR}/dependencies.lock.json"
@@ -382,7 +417,7 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     write_basic_package_version_file(
         "${CMAKE_CURRENT_BINARY_DIR}/LibAtrinikConfigVersion.cmake"
         VERSION ${PROJECT_VERSION}
-        COMPATIBILITY SameMajorVersion)
+        COMPATIBILITY SameMinorVersion)
     install(FILES
         "${CMAKE_CURRENT_BINARY_DIR}/LibAtrinikConfig.cmake"
         "${CMAKE_CURRENT_BINARY_DIR}/LibAtrinikConfigVersion.cmake"

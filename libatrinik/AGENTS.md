@@ -10,6 +10,10 @@
   immutable, checksum-pinned lock remains a release and standalone-build
   fallback. Update the lock, generated dependency, and consumer builds
   together; do not copy identifiers into library code.
+- Scoped releases embed a same-version protocol tree under `dependencies/`.
+  Standalone builds and installed CMake consumers must preserve that exact
+  unified version relationship; package compatibility is same-minor because a
+  classic breaking change advances the minor version while major stays 5.
 - Pathfinding adapters own map and traversal state. A context owns its search
   heap and returned storage; results remain valid only until the next operation
   on that context or its destruction. Preserve deterministic tie-breaking, exact

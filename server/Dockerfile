@@ -13,7 +13,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-COPY . .
+COPY LICENSE.md ATTRIBUTIONS.md ./
+COPY protocol ./protocol
+COPY libatrinik ./libatrinik
+COPY server ./server
+WORKDIR /src/server
 RUN python3 tools/dependencies.py sync \
     && python3 tools/dependencies.py verify \
     && cmake -S . -B build/release -G Ninja \
@@ -21,6 +25,8 @@ RUN python3 tools/dependencies.py sync \
         -DBUILD_TESTING=OFF \
         -DPACKAGE_TYPE=none \
         -DPACKAGE_VERSION="${ATRINIK_PACKAGE_VERSION}" \
+        -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/src/protocol \
+        -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/src/libatrinik \
     && cmake --build build/release \
         --target atrinik-server plugin_arena plugin_python --parallel
 
@@ -33,11 +39,11 @@ RUN mkdir -p /tmp/worldmaker /tmp/atrinik-data/http /tmp/atrinik-data/tmp \
     && cd /tmp/worldmaker \
     && ./atrinik-server \
         --worldmaker \
-        --libpath=/src/runtime/content/lib \
-        --mapspath=/src/runtime/content/maps \
+        --libpath=/src/server/runtime/content/lib \
+        --mapspath=/src/server/runtime/content/maps \
         --datapath=/tmp/atrinik-data \
         --httppath=/tmp/atrinik-data/http \
-        --resourcespath=/src/resources \
+        --resourcespath=/src/server/resources \
     && test -d /tmp/atrinik-data/http/client-maps
 
 FROM ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
@@ -51,22 +57,24 @@ RUN apt-get update \
     && useradd --create-home --uid 10001 atrinik
 
 WORKDIR /opt/atrinik
-COPY --from=build /src/runtime/content/maps ./maps
+COPY --from=build /src/server/runtime/content/maps ./maps
 RUN rm ./maps/python/events/init/documentation.py
-COPY --from=build /src/runtime/content/lib ./server/lib
-COPY --from=build /src/resources ./server/resources
-COPY --from=build /src/install_data ./server/install_data
+COPY --from=build /src/server/runtime/content/lib ./server/lib
+COPY --from=build /src/server/resources ./server/resources
+COPY --from=build /src/server/install_data ./server/install_data
 COPY --from=build /tmp/atrinik-data/http/client-maps ./server/install_data/http/client-maps
-COPY --from=build /src/atrinikloop.sh ./server/atrinikloop.sh
-COPY --from=build /src/ca-bundle.crt ./server/ca-bundle.crt
-COPY --from=build /src/permissions.cfg ./server/permissions.cfg
-COPY --from=build /src/server.cfg ./server/server.cfg
-COPY --from=build /src/tools ./server/tools
-COPY --from=build /src/build/release/atrinik-server ./server/atrinik-server
-COPY --from=build /src/build/release/libplugin_arena.so ./server/libplugin_arena.so
-COPY --from=build /src/build/release/libplugin_python.so ./server/libplugin_python.so
-COPY --chmod=0755 docker/server-entrypoint.sh /usr/local/bin/atrinik-server-entrypoint
-COPY --chmod=0755 docker/server-healthcheck.sh /usr/local/bin/atrinik-server-healthcheck
+COPY --from=build /src/server/atrinikloop.sh ./server/atrinikloop.sh
+COPY --from=build /src/server/ca-bundle.crt ./server/ca-bundle.crt
+COPY --from=build /src/server/permissions.cfg ./server/permissions.cfg
+COPY --from=build /src/server/server.cfg ./server/server.cfg
+COPY --from=build /src/server/tools ./server/tools
+COPY --from=build /src/server/build/release/atrinik-server ./server/atrinik-server
+COPY --from=build /src/server/build/release/libplugin_arena.so ./server/libplugin_arena.so
+COPY --from=build /src/server/build/release/libplugin_python.so ./server/libplugin_python.so
+COPY --from=build /src/LICENSE.md /usr/share/licenses/atrinik-classic/LICENSE.md
+COPY --from=build /src/ATTRIBUTIONS.md /usr/share/doc/atrinik-classic/ATTRIBUTIONS.md
+COPY --chmod=0755 server/docker/server-entrypoint.sh /usr/local/bin/atrinik-server-entrypoint
+COPY --chmod=0755 server/docker/server-healthcheck.sh /usr/local/bin/atrinik-server-healthcheck
 
 RUN mkdir -p server/data \
     && chown -R atrinik:atrinik /opt/atrinik

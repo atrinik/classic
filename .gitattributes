@@ -11,19 +11,24 @@ docs/history/*-commit-map.txt linguist-generated=true
 # Module release bookkeeping is not part of exported source archives.
 client/.github export-ignore
 client/.github/** export-ignore
+client/.releaserc.json export-ignore
 client/release-line.txt export-ignore
 client/tools/package-release.sh export-ignore
 server/.github export-ignore
 server/.github/** export-ignore
+server/.releaserc.json export-ignore
 server/release-line.txt export-ignore
 server/tools/package-release.sh export-ignore
 editor/.github export-ignore
 editor/.github/** export-ignore
+editor/.releaserc.json export-ignore
 libatrinik/.github export-ignore
 libatrinik/.github/** export-ignore
+libatrinik/.releaserc.json export-ignore
 libatrinik/release-line.txt export-ignore
 libatrinik/tools/package-release.sh export-ignore
 protocol/.github export-ignore
 protocol/.github/** export-ignore
+protocol/.releaserc.json export-ignore
 protocol/release-line.txt export-ignore
 protocol/tools/package-release.sh export-ignore

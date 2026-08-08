@@ -14,6 +14,16 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "docs" / "history" / "imports.json"
+COMPONENT_RELEASE_MAP = ROOT / "docs" / "history" / "component-release-map.json"
+RELEASE_CONFIG = ROOT / ".releaserc.json"
+SEMVER_RE = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
+LAST_COMPONENT_TAGS = {
+    "client": "v5.3.1",
+    "server": "v5.5.1",
+    "editor": "v1.0.7",
+    "libatrinik": "v1.1.6",
+    "protocol": "v1.0.11",
+}
 
 
 def git(*arguments: str, check: bool = True) -> str:
@@ -33,6 +43,25 @@ def git(*arguments: str, check: bool = True) -> str:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
+
+
+def semantic_version(tag: str) -> tuple[int, int, int]:
+    match = SEMVER_RE.fullmatch(tag)
+    if match is None:
+        raise RuntimeError(f"release tag is not an unprefixed semantic version: {tag}")
+    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+
+
+def is_ancestor(older: str, newer: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "-C", str(ROOT), "merge-base", "--is-ancestor", older, newer],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+        == 0
+    )
 
 
 def verify_commits(name: str, commits: list[str]) -> None:
@@ -166,14 +195,53 @@ def verify_component(
     verify_commits(name, [rewritten])
 
 
+def verify_component_release_map(manifest: dict[str, Any]) -> None:
+    value = json.loads(COMPONENT_RELEASE_MAP.read_text(encoding="utf-8"))
+    require(value.get("schema_version") == 1, "unsupported component release map")
+    require(
+        value.get("unified_release")
+        == {
+            "first_tag": "v5.6.0",
+            "ancestry_floor": "6960d16988e6925d7e421dc549780ac5feb0914d",
+            "repository": "atrinik/classic",
+            "version_source": "semantic-release",
+        },
+        "unexpected unified component-release boundary",
+    )
+    records = value.get("components")
+    require(isinstance(records, list), "component release map has no records")
+    by_name = {
+        record.get("name"): record for record in records if isinstance(record, dict)
+    }
+    require(len(records) == len(by_name), "component release map has duplicate records")
+    require(set(by_name) == set(LAST_COMPONENT_TAGS), "component release map names differ")
+    for component in manifest["components"]:
+        name = component["name"]
+        record = by_name[name]
+        require(
+            record
+            == {
+                "name": name,
+                "archived_repository": component["source_repository"],
+                "last_component_tag": LAST_COMPONENT_TAGS[name],
+                "original_commit": component["source_tip"],
+                "rewritten_commit": component["rewritten_tip"],
+                "unified_artifact": f"atrinik-classic-{name}-${{version}}.tar.gz",
+            },
+            f"{name}: component release boundary changed",
+        )
+
 
 def verify_release_tags(manifest: dict[str, Any]) -> None:
     policy_path = ROOT / manifest["active_release_tags"]
     policy = json.loads(policy_path.read_text(encoding="utf-8"))
-    require(policy.get("schema_version") == 1, "unsupported release-tag policy")
+    require(policy.get("schema_version") == 2, "unsupported release-tag policy")
     require(policy.get("policy") == "unified-classic", "unexpected release-tag policy")
-    tags = policy.get("tags")
-    require(isinstance(tags, dict) and tags, "no active release tags")
+    historical_tags = policy.get("tags")
+    require(
+        isinstance(historical_tags, dict) and historical_tags,
+        "no historical release tags",
+    )
     require(
         policy.get("baseline")
         == {
@@ -183,29 +251,151 @@ def verify_release_tags(manifest: dict[str, Any]) -> None:
         "unexpected release-tag baseline",
     )
     require(
-        all(re.fullmatch(r"v\d+\.\d+\.\d+", tag) for tag in tags),
+        all(SEMVER_RE.fullmatch(tag) for tag in historical_tags),
         "release tags must be unprefixed semantic versions",
     )
     require(
-        all(isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit) for commit in tags.values()),
+        all(
+            isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit)
+            for commit in historical_tags.values()
+        ),
         "release tag targets must be full lowercase commit IDs",
     )
-    require(len(tags) == len(set(tags.values())), "release tags must have unique targets")
+    require(
+        len(historical_tags) == len(set(historical_tags.values())),
+        "historical release tags must have unique targets",
+    )
 
-    actual_refs = git("for-each-ref", "--format=%(refname:short)", "refs/tags/").splitlines()
-    require(sorted(actual_refs) == sorted(tags), "active tag names differ from release-tag policy")
-    for tag, commit in tags.items():
+    future_policy = policy.get("future_tags")
+    require(isinstance(future_policy, dict), "no future release-tag policy")
+    require(
+        future_policy
+        == {
+            "first_version": "v5.6.0",
+            "minimum_version": "v5.6.0",
+            "maximum_major": 5,
+            "ancestry_floor": "6960d16988e6925d7e421dc549780ac5feb0914d",
+            "branch": "main",
+            "driver": "semantic-release",
+        },
+        "unexpected future release-tag policy",
+    )
+    first_version = semantic_version(future_policy["first_version"])
+    minimum_version = semantic_version(future_policy["minimum_version"])
+    maximum_major = future_policy["maximum_major"]
+    require(
+        first_version == minimum_version,
+        "first and minimum future versions differ",
+    )
+    require(
+        first_version[0] == maximum_major,
+        "first version exceeds the major-version cap",
+    )
+    floor = future_policy["ancestry_floor"]
+    require(is_ancestor(floor, "HEAD"), "future-tag ancestry floor is not in HEAD")
+
+    release_config = json.loads(RELEASE_CONFIG.read_text(encoding="utf-8"))
+    require(
+        release_config.get("branches") == ["main"],
+        "unexpected release branches",
+    )
+    require(release_config.get("tagFormat") == "v${version}", "unexpected tag format")
+    plugins = release_config.get("plugins")
+    require(
+        isinstance(plugins, list) and plugins,
+        "release configuration has no plugins",
+    )
+    analyzer = plugins[0]
+    require(
+        isinstance(analyzer, list)
+        and len(analyzer) == 2
+        and analyzer[0] == "@semantic-release/commit-analyzer"
+        and isinstance(analyzer[1], dict),
+        "unexpected commit analyzer configuration",
+    )
+    release_rules = analyzer[1].get("releaseRules")
+    require(isinstance(release_rules, list), "commit analyzer has no release rules")
+    require(
+        {"breaking": True, "release": "minor"} in release_rules,
+        "breaking commits must remain on the classic major-version line",
+    )
+    require(
+        all(
+            not isinstance(rule, dict) or rule.get("release") != "major"
+            for rule in release_rules
+        ),
+        "classic release rules must not produce a major version",
+    )
+    exec_plugins = [
+        plugin
+        for plugin in plugins
+        if isinstance(plugin, list)
+        and len(plugin) == 2
+        and plugin[0] == "@semantic-release/exec"
+        and isinstance(plugin[1], dict)
+    ]
+    require(len(exec_plugins) == 1, "release configuration has no unique exec plugin")
+    github_plugins = [
+        plugin
+        for plugin in plugins
+        if isinstance(plugin, list)
+        and len(plugin) == 2
+        and plugin[0] == "@semantic-release/github"
+        and plugin[1] == {"draftRelease": True}
+    ]
+    require(
+        len(github_plugins) == 1,
+        "semantic-release must create a draft before artifact publication",
+    )
+    require(
+        exec_plugins[0][1].get("verifyReleaseCmd")
+        == "python3 tools/release/verify_next_version.py ${nextRelease.version}",
+        "release configuration has no immutable pre-tag version guard",
+    )
+    require(
+        exec_plugins[0][1].get("publishCmd")
+        == "tools/release/queue_package_release.sh ${nextRelease.version}",
+        "release configuration does not queue the unified package workflow",
+    )
+
+    actual_refs = git(
+        "for-each-ref", "--format=%(refname:short)", "refs/tags/"
+    ).splitlines()
+    actual = set(actual_refs)
+    historical = set(historical_tags)
+    require(historical <= actual, "an immutable historical release tag is missing")
+    for tag, commit in historical_tags.items():
         require(git("rev-parse", f"{tag}^{{commit}}") == commit, f"{tag}: target changed")
+        require(is_ancestor(commit, "HEAD"), f"{tag}: target is not in HEAD")
+
+    future_tags = sorted(actual - historical, key=semantic_version)
+    if future_tags:
         require(
-            subprocess.run(
-                ["git", "-C", str(ROOT), "merge-base", "--is-ancestor", commit, "HEAD"],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            ).returncode
-            == 0,
-            f"{tag}: target is not in HEAD",
+            semantic_version(future_tags[0]) == first_version,
+            "the first post-consolidation release must be v5.6.0",
         )
+    first_parent_commits = set(git("rev-list", "--first-parent", "HEAD").splitlines())
+    previous_commit = floor
+    targets = set(historical_tags.values())
+    for tag in future_tags:
+        require(
+            semantic_version(tag) >= minimum_version,
+            f"{tag}: future release version predates v5.6.0",
+        )
+        require(
+            semantic_version(tag)[0] == maximum_major,
+            f"{tag}: classic releases must remain on major version 5",
+        )
+        commit = git("rev-parse", f"{tag}^{{commit}}")
+        require(commit not in targets, f"{tag}: release tag target is not unique")
+        require(
+            commit in first_parent_commits,
+            f"{tag}: target is not on main's first-parent line",
+        )
+        require(is_ancestor(previous_commit, commit), f"{tag}: versions are not ancestry ordered")
+        require(is_ancestor(commit, "HEAD"), f"{tag}: target is not in HEAD")
+        targets.add(commit)
+        previous_commit = commit
 
 
 def main() -> int:
@@ -213,6 +403,7 @@ def main() -> int:
         manifest = load_manifest()
         for component in manifest["components"]:
             verify_component(component, manifest["retired_history_refs"])
+        verify_component_release_map(manifest)
         verify_release_tags(manifest)
     except (OSError, KeyError, ValueError, RuntimeError) as error:
         print(f"history verification failed: {error}", file=sys.stderr)
