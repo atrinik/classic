@@ -30,7 +30,14 @@ module.exports = {
         writerOpts: firstParentWriterOptions(firstParent),
       },
     ],
-    ["@semantic-release/github", { draftRelease: true }],
+    [
+      "@semantic-release/github",
+      {
+        draftRelease: true,
+        failCommentCondition: false,
+        successCommentCondition: false,
+      },
+    ],
     [
       "@semantic-release/exec",
       {
