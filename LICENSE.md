@@ -1,3 +1,14 @@
+# Atrinik Classic license
+
+Atrinik Classic source code, including the protocol schema, generators, and
+generated bindings, is distributed under the GNU General Public License,
+version 2 or (at your option) any later version. The complete license text
+follows.
+
+Bundled third-party code, fonts, and graphical assets retain their compatible
+copyright and attribution notices. Those notices do not change the GPL terms
+for Atrinik-authored source code and must remain with redistributed artifacts.
+
                     GNU GENERAL PUBLIC LICENSE
                        Version 2, June 1991
 

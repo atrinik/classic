@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Canonical generated bindings for Atrinik wire protocols"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "MIT"
+license = "GPL-2.0-or-later"
 authors = [{name = "Atrinik Development Team"}]
 classifiers = [
   "Programming Language :: Python :: 3",

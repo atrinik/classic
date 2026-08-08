@@ -61,7 +61,7 @@ Section "Client (required)"
   SetOutPath $INSTDIR
   File "atrinik.exe"
   File "*.dll"
-  File "COPYING"
+  File "LICENSE.md"
   File "README.md"
   File "INSTALL"
   File "timidity.cfg"

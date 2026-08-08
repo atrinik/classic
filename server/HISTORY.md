@@ -5,5 +5,6 @@ server's relevant Git history preserved. The first standalone release replaces
 in-tree protocol, shared C, content, and runtime-resource inputs with explicit
 checksum-pinned release dependencies.
 
-Licensing remains GPL-2.0-or-later as recorded in `COPYING`; extracting the
-component does not change the rights or attribution of existing work.
+Licensing remains GPL-2.0-or-later as recorded in the monorepo's root
+`LICENSE.md`; extracting the component does not change the rights or
+attribution of existing work.
