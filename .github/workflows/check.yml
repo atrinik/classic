@@ -54,10 +54,22 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
       - name: Validate imported history and release helpers
         run: |
           python3 tools/verify_import_history.py
           python3 -m unittest discover -s tools/tests -p 'test_*.py'
+      - name: Validate first-parent release analysis
+        run: >-
+          npx --yes
+          --package=semantic-release@25.0.9
+          --package=@semantic-release/commit-analyzer@13.0.1
+          --package=@semantic-release/release-notes-generator@14.1.1
+          --package=@semantic-release/exec@7.1.0
+          --package=conventional-changelog-conventionalcommits@9.3.1
+          node --test tools/tests/test_first_parent_release.mjs
       - name: Check generated bindings
         run: python3 tools/generate.py --check
         working-directory: protocol
