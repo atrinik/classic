@@ -122,9 +122,13 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertIn(
                     f"--env CCACHE_TEMPDIR=/tmp/atrinik-{component}-ccache", job
                 )
+                self.assertIn(
+                    "--env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:", job
+                )
         self.assertEqual(candidate.count("ccache --zero-stats"), 2)
         self.assertEqual(candidate.count("ccache --show-stats"), 2)
         self.assertEqual(candidate.count("--env CCACHE_MAXSIZE=500M"), 2)
+        self.assertEqual(candidate.count("--env PATH=/opt/mxe/.ccache/bin:"), 2)
 
     def test_only_release_metadata_checkout_requires_full_history(self) -> None:
         candidate = self.text("build-release-candidate.yml")
