@@ -142,6 +142,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("needs: publish", queue_job)
         self.assertIn("if: always() && needs.publish.result == 'success'", queue_job)
         self.assertIn("group: classic-promote-latest", promoter)
+        self.assertIn("contents: write", promoter)
         self.assertIn("Check out the trusted promotion verifier", promoter)
         self.assertIn("path: build/release-automation", promoter)
         self.assertIn("ref: ${{ github.sha }}", promoter)
@@ -166,11 +167,17 @@ class WorkflowContractTests(unittest.TestCase):
             2,
         )
         self.assertIn("gh attestation verify", promoter)
+        self.assertIn("Reconcile GitHub's latest release designation", promoter)
+        self.assertIn("-f make_latest=true", promoter)
         self.assertIn("--tag latest", promoter)
         resolver = (ROOT / "tools" / "release" / "check_latest_release.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn("/releases/latest", resolver)
+        self.assertIn("--paginate", resolver)
+        self.assertIn('"--jq"', resolver)
+        self.assertIn('".[]"', resolver)
+        self.assertNotIn("--slurp", resolver)
+        self.assertIn("/releases?per_page=100", resolver)
 
     def test_recovery_and_manual_promotion_require_main_definitions(self) -> None:
         recovery = self.text("recover-release.yml")

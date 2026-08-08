@@ -91,17 +91,19 @@ gh workflow run package-release.yml --repo atrinik/classic --ref main \
    immutable, non-prerelease release with the exact asset digests. A retry also
    accepts that exact published state and skips every immutable release write.
 7. A separate job dispatches the globally serialized Promote Latest Release
-   workflow after successful publication. It recomputes GitHub's authoritative
-   latest release, revalidates its closed asset set and exact versioned image,
-   and reconciles only the mutable GHCR `latest` alias, verifies its resulting
-   registry digest, and requires the GitHub/Sigstore attestation. The explicit
-   successful-publication guard ensures that an intentionally skipped build in
-   retained-candidate recovery cannot suppress reconciliation. Image policy is
+   workflow after successful publication. It selects the highest published
+   unified semantic version regardless of publication order, revalidates its
+   immutable closed asset set and exact versioned image, and reconciles both
+   GitHub's Latest designation and the mutable GHCR `latest` alias. It verifies
+   the resulting registry digest and requires the GitHub/Sigstore attestation.
+   The explicit successful-publication guard ensures that an intentionally
+   skipped build in retained-candidate recovery cannot suppress reconciliation.
+   Image policy is
    checked by the exact current-main workflow verifier against the immutable
    tagged image and the dependency locks in its tagged source checkout,
    allowing a verifier-only recovery without changing release inputs. GitHub
-   assigns the release's Latest designation from semantic versions when the
-   draft is published.
+   may initially assign Latest by publication order when an older draft is
+   recovered after a newer release; the promoter corrects that designation.
 
 Publication uses the root executable `.releaserc.cjs` and its fail-closed
 first-parent selector,

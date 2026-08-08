@@ -7,7 +7,7 @@ on:
 
 permissions:
   attestations: read
-  contents: read
+  contents: write
   packages: write
 
 concurrency:
@@ -33,7 +33,7 @@ jobs:
           test "$(git rev-parse refs/remotes/origin/main)" = \
             "${PROMOTION_WORKFLOW_SHA}"
       - id: latest
-        name: Resolve GitHub's authoritative latest release
+        name: Resolve the highest immutable release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPOSITORY: ${{ github.repository }}
@@ -95,7 +95,7 @@ jobs:
           "oci://ghcr.io/atrinik/classic-server@${IMAGE_DIGEST}"
           --repo "${RELEASE_REPOSITORY}"
       - id: recheck
-        name: Recheck GitHub latest immediately before promotion
+        name: Recheck the highest release immediately before promotion
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPOSITORY: ${{ github.repository }}
@@ -104,6 +104,20 @@ jobs:
             --repository "${RELEASE_REPOSITORY}" \
             --github-output "${GITHUB_OUTPUT}"
           test '${{ steps.latest.outputs.tag }}' = "$(sed -n 's/^tag=//p' "${GITHUB_OUTPUT}")"
+      - name: Reconcile GitHub's latest release designation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.latest.outputs.release_id }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          current=$(gh api "repos/${RELEASE_REPOSITORY}/releases/latest" --jq .id)
+          if test "${current}" != "${RELEASE_ID}"; then
+            gh api --method PATCH \
+              "repos/${RELEASE_REPOSITORY}/releases/${RELEASE_ID}" \
+              -f make_latest=true >/dev/null
+          fi
+          test "$(gh api "repos/${RELEASE_REPOSITORY}/releases/latest" --jq .id)" = \
+            "${RELEASE_ID}"
       - name: Reconcile the mutable latest image alias
         env:
           IMAGE_DIGEST: ${{ steps.registry.outputs.digest }}

@@ -15,6 +15,7 @@ SPEC.loader.exec_module(check_latest_release)
 def release(tag: str = "v5.6.0") -> dict[str, object]:
     release_version = tag.removeprefix("v")
     return {
+        "id": 1,
         "tag_name": tag,
         "draft": False,
         "prerelease": False,
@@ -54,6 +55,27 @@ class CheckLatestReleaseTests(unittest.TestCase):
             with self.subTest(tag=tag):
                 with self.assertRaises(check_latest_release.LatestTagError):
                     check_latest_release.validate_latest(release(tag))
+
+    def test_highest_semantic_release_wins_over_publication_order(self) -> None:
+        older = {**release("v5.6.0"), "id": 10}
+        newer = {**release("v5.6.1"), "id": 11}
+        self.assertEqual(
+            check_latest_release.select_latest([older, newer]),
+            newer,
+        )
+
+    def test_highest_published_release_must_be_complete_and_immutable(self) -> None:
+        incomplete = {**release("v5.6.1"), "id": 11, "immutable": False}
+        with self.assertRaises(check_latest_release.LatestTagError):
+            check_latest_release.select_latest([release("v5.6.0"), incomplete])
+
+    def test_drafts_do_not_displace_the_highest_published_release(self) -> None:
+        draft = {**release("v5.7.0"), "id": 12, "draft": True}
+        current = {**release("v5.6.1"), "id": 11}
+        self.assertEqual(
+            check_latest_release.select_latest([draft, current]),
+            current,
+        )
 
 
 if __name__ == "__main__":
