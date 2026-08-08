@@ -1,0 +1,39 @@
+# Atrinik client repository guide
+
+- This repository owns the SDL3 C17 game client. Keep server, protocol,
+  libatrinik, sound, and content implementation in their standalone owners.
+- Read `CONTRIBUTING.md`, `INSTALL`, the affected subsystem, and its tests before
+  editing. Use precise component and protocol names; do not reference
+  confidential or unreleased work.
+- Protocol, libatrinik, and sound inputs come from immutable checksum-pinned
+  releases. Update lock files and dependency tests together; do not add Git
+  submodules or copied protocol constants.
+- Command identifiers are generated from the standalone `protocol` repository.
+  Treat packet-layout changes as cross-repository protocol work and update both
+  producer and consumer in one coordinated profile.
+- Preserve SDL3 surface ownership, color keys, alpha/blend modes, clipping,
+  texture invalidation, and mutable-backbuffer semantics. Exact black remains
+  the transparency key when image decoding falls back, and mutable chat
+  backbuffers must not be RLE encoded.
+- Keep offline player-view proofs on the normal MAP decoder and
+  `map_draw_map()` path. Their closed manifests must pin every immutable input
+  and renderer choice, remain bounded and network-free, and never read or
+  write the normal user configuration/cache hierarchy.
+- Focused text inputs own their key-down, key-up, text-input, and text-editing
+  events. Do not let gameplay bindings observe an event already consumed by a
+  focused widget.
+- Follow `.clang-format`, existing allocation/error conventions, and CMake
+  source lists. Add focused tests for renderer, input, parser, and lifecycle
+  regressions.
+- Validate dependency changes with `python3 tools/dependencies.py verify` and
+  all native changes with `./atrinik build client --profile PROFILE --test`
+  from the workspace. Use the workspace topology lifecycle for live checks.
+- For substantial native logic changes, also run the `linux-coverage` preset
+  and gcovr summary documented in `README.md`; keep source/test exclusions
+  intentional.
+- Commits and pull-request titles use Conventional Commits. Every squash merge
+  is released by semantic-release; keep release assets and checks coherent.
+- Keep generated output under `build/`, preserve unrelated work, and finish
+  with `git diff --check`.
+- Update this `AGENTS.md` in the same change when major rework alters ownership,
+  layout, commands, UI/runtime invariants, or validation expectations.
