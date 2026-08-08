@@ -6,9 +6,10 @@ if (DEFINED ENV{ATRINIK_PACKAGE_VERSION})
 elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
     file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
         ATRINIK_SOURCE_VERSION LIMIT_COUNT 1)
-elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+else ()
     execute_process(
-        COMMAND git describe --tags --exact-match --match "v[0-9]*"
+        COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}"
+            describe --tags --exact-match --match "v[0-9]*"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         OUTPUT_VARIABLE ATRINIK_GIT_TAG
         OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -352,7 +353,7 @@ endif ()
 
 if (MINGW)
     set(CPACK_PACKAGE_FILE_NAME
-        "atrinik-client-${PACKAGE_VERSION}-windows-x86_64")
+        "atrinik-classic-client-${PACKAGE_VERSION}-windows-x86_64")
 endif ()
 
 set(CPACK_DEBIAN_PACKAGE_NAME "atrinik")

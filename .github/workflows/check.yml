@@ -29,6 +29,7 @@ jobs:
         with:
           python-version: "3.13"
       - run: python3 tools/verify_import_history.py
+      - run: python3 -m unittest discover -s tools/tests -p 'test_*.py'
 
   protocol:
     name: Protocol validation
@@ -56,7 +57,14 @@ jobs:
       - name: Build Python wheel
         run: |
           python3 -m pip install build==1.3.0
-          python3 -m build --wheel
+          python3 ../tools/release/package_sources.py \
+            --version 0.0.0 --revision HEAD --scope protocol \
+            --output build/package-source
+          python3 ../tools/release/build_protocol_wheel.py \
+            --version 0.0.0 \
+            --source build/package-source/atrinik-classic-protocol-0.0.0.tar.gz \
+            --source-epoch "$(git show -s --format=%ct HEAD)" \
+            --output build/wheel
 
   library:
     name: Library validation
@@ -77,6 +85,17 @@ jobs:
           ctest --preset linux-coverage
           gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
             --exclude '.*/build/.*' --print-summary --xml coverage.xml
+      - name: Validate installed consumer
+        run: |
+          cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/build/install" \
+            -DATRINIK_PROTOCOL_SOURCE_DIR="$GITHUB_WORKSPACE/protocol"
+          cmake --build build/release --parallel
+          cmake --install build/release
+          cmake -S tests/consumer -B build/consumer \
+            -DCMAKE_PREFIX_PATH="$PWD/build/install"
+          cmake --build build/consumer --parallel
+          build/consumer/libatrinik-consumer
       - name: Upload coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:

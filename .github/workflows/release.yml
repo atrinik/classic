@@ -1,0 +1,63 @@
+name: Semantic Release
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - Check
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  actions: write
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: classic-semantic-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Semantic release
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the validated main commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: >-
+            ${{ github.event_name == 'workflow_run' &&
+                github.event.workflow_run.head_sha || 'main' }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - name: Require the validated current main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          commit=$(git rev-parse HEAD)
+          test "${commit}" = "$(git rev-parse refs/remotes/origin/main)"
+          successful=$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${RELEASE_REPOSITORY}/commits/${commit}/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "Classic validation" and .conclusion == "success")] | length')
+          test "${successful}" -ge 1
+          python3 tools/verify_import_history.py
+      - name: Analyze commits, tag, and publish release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          npx --yes
+          --package=semantic-release@25.0.9
+          --package=@semantic-release/exec@7.1.0
+          --package=conventional-changelog-conventionalcommits@9.3.1
+          semantic-release
