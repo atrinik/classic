@@ -1,6 +1,9 @@
 name: Semantic Release
 
 on:
+  workflow_run:
+    workflows: [Check]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -17,11 +20,23 @@ concurrency:
 jobs:
   release:
     name: Semantic release
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Require the default-branch workflow definition
-        run: test "${GITHUB_REF}" = refs/heads/main
+        env:
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+        run: |
+          test "${GITHUB_REF}" = refs/heads/main
+          if test "${RELEASE_EVENT}" = workflow_run; then
+            test -n "${RELEASE_TRIGGER_SHA}"
+          fi
       - name: Check out the validated main commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,10 +48,15 @@ jobs:
       - name: Require the validated current main commit
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_EVENT: ${{ github.event_name }}
           RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha || '' }}
         run: |
           commit=$(git rev-parse HEAD)
           test "${commit}" = "$(git rev-parse refs/remotes/origin/main)"
+          if test "${RELEASE_EVENT}" = workflow_run; then
+            test "${commit}" = "${RELEASE_TRIGGER_SHA}"
+          fi
           successful=$(gh api \
             -H 'Accept: application/vnd.github+json' \
             "repos/${RELEASE_REPOSITORY}/commits/${commit}/check-runs?per_page=100" \
