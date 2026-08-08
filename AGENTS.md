@@ -27,8 +27,10 @@
   migrated; update lock and fallback validation when their contract changes.
 - All Atrinik-authored source in this monorepo, including `protocol/`, is
   GPL-2.0-or-later under the single root `LICENSE.md`. Preserve every compatible
-  third-party asset/code notice, attribution, imported commit map,
-  original-history branch, and the unprefixed release-tag policy.
+  third-party asset/code notice, attribution, imported commit map, retired-ref
+  record, and the unprefixed release-tag policy. Original source graphs remain
+  authoritative in the archived source repositories; do not recreate a live
+  `history/*` branch namespace here.
 - New classic code must be GPL-2.0-or-later compatible. Never use provenance
   grants intended for clean-room MIT replacements to infer a different license
   here.
