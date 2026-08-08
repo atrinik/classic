@@ -78,6 +78,8 @@ bool init_connection(socket_struct *ns) {
     ns->connection_mode = socket_connection_mode_get(ns->sc);
     ns->account = NULL;
     ns->socket_version = 0;
+    ns->join_authenticated = false;
+    ns->setup_completed = false;
 
     ns->packet_recv = packet_new(0, 1024 * 3, 0);
     ns->packet_recv_cmd = packet_new(0, 1024 * 64, 0);

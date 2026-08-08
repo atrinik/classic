@@ -182,6 +182,9 @@ typedef struct socket_struct {
     /** Whether the configured server join password was accepted. */
     bool join_authenticated;
 
+    /** Whether the initial client setup exchange completed successfully. */
+    bool setup_completed;
+
     /** Abuse-rate window and paced in-band asset response token bucket. */
     uint64_t asset_request_window_ms;
     unsigned int asset_window_requests;

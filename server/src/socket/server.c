@@ -54,6 +54,17 @@ TOOLKIT_API(DEPENDS(socket), IMPORTS(logger));
 #define SOCKET_COMMAND_PLAYER_ONLY 1
 /*@}*/
 
+/** Connection-phase policies enforced before command dispatch. */
+typedef enum socket_command_policy {
+    SOCKET_COMMAND_POLICY_CONTROL,
+    SOCKET_COMMAND_POLICY_ADMITTED,
+    SOCKET_COMMAND_POLICY_SETUP,
+    SOCKET_COMMAND_POLICY_VERSION,
+    SOCKET_COMMAND_POLICY_PLAYING,
+    SOCKET_COMMAND_POLICY_LOGIN,
+    SOCKET_COMMAND_POLICY_LIVENESS,
+} socket_command_policy_t;
+
 /**
  * Maximum number of commands a player is able to issue in a single
  * iteration.
@@ -82,6 +93,10 @@ typedef struct socket_command {
      * A combination of ::SOCKET_COMMAND_xxx.
      */
     int flags;
+
+    /** Connection phase in which the command is valid. */
+    socket_command_policy_t policy;
+
     const char *name;
 } socket_command_t;
 
@@ -111,14 +126,61 @@ static size_t client_sockets_count;
  * Defines all the possible socket commands.
  */
 static const socket_command_t socket_commands[] = {
-#define ATRINIK_SERVER_COMMAND_HANDLER(_symbol, _handler, _player_only)                 \
+#define ATRINIK_SERVER_COMMAND_HANDLER(_symbol, _handler, _policy, _player_only)        \
     [SERVER_CMD_##_symbol] = {.handle_func = (_handler),                                \
                               .flags = (_player_only) ? SOCKET_COMMAND_PLAYER_ONLY : 0, \
+                              .policy = SOCKET_COMMAND_POLICY_##_policy,                \
                               .name = SERVER_CMD_NAME_##_symbol},
 #include "command_handlers.def"
 #undef ATRINIK_SERVER_COMMAND_HANDLER
 };
 CASSERT_ARRAY(socket_commands, SERVER_CMD_NROF);
+
+bool socket_connection_admitted(const socket_struct *cs) {
+    HARD_ASSERT(cs != NULL);
+
+    return cs->socket_version == SOCKET_VERSION && cs->setup_completed &&
+           (*settings.join_password == '\0' || cs->join_authenticated);
+}
+
+bool socket_server_command_phase_allowed(const socket_struct *cs, uint8_t type) {
+    HARD_ASSERT(cs != NULL);
+
+    if (type >= SERVER_CMD_NROF || socket_commands[type].handle_func == NULL) {
+        return false;
+    }
+
+    switch (socket_commands[type].policy) {
+        case SOCKET_COMMAND_POLICY_CONTROL:
+            /* The central dispatcher separately applies the control
+             * protocol's source-IP authentication before invoking it. */
+            return cs->state == ST_LOGIN;
+
+        case SOCKET_COMMAND_POLICY_LIVENESS:
+            return cs->state == ST_LOGIN || cs->state == ST_PLAYING;
+
+        case SOCKET_COMMAND_POLICY_VERSION:
+            return cs->state == ST_LOGIN && cs->socket_version == 0 && !cs->setup_completed;
+
+        case SOCKET_COMMAND_POLICY_SETUP:
+            if (cs->state == ST_LOGIN) {
+                return cs->socket_version == SOCKET_VERSION && !cs->setup_completed;
+            }
+            return cs->state == ST_PLAYING && socket_connection_admitted(cs);
+
+        case SOCKET_COMMAND_POLICY_LOGIN:
+            return cs->state == ST_LOGIN && socket_connection_admitted(cs);
+
+        case SOCKET_COMMAND_POLICY_ADMITTED:
+            return (cs->state == ST_LOGIN || cs->state == ST_PLAYING) &&
+                   socket_connection_admitted(cs);
+
+        case SOCKET_COMMAND_POLICY_PLAYING:
+            return cs->state == ST_PLAYING && socket_connection_admitted(cs);
+    }
+
+    return false;
+}
 
 /**
  * Initialize the socket server API.
@@ -407,22 +469,53 @@ static bool socket_server_quic_punch_receive(socket_t *server_socket) {
     return true;
 }
 
+/** Check whether the control protocol accepts the connection's source IP. */
+static bool socket_server_control_authorized(socket_struct *cs) {
+    if (strcasecmp(settings.control_allowed_ips, "none") == 0) {
+        LOG(PACKET, "Control command received but no IPs are allowed.");
+        return false;
+    }
+
+    char word[MAX_BUF];
+    size_t pos = 0;
+    while (string_get_word(settings.control_allowed_ips, &pos, ',', VS(word), 0)) {
+        char *split[2];
+        if (string_split(word, split, arraysize(split), '/') < 1) {
+            continue;
+        }
+
+        struct sockaddr_storage addr;
+        if (!socket_host2addr(split[0], &addr)) {
+            continue;
+        }
+
+        unsigned short plen = socket_addr_plen(&addr);
+        if (split[1] != NULL) {
+            uint64_t value;
+            if (!string_parse_uint64(split[1], 10, 0, plen, &value)) {
+                LOG(ERROR, "Ignoring invalid control CIDR prefix: %s", word);
+                continue;
+            }
+            plen = (unsigned short)value;
+        }
+
+        if (socket_cmp_addr(cs->sc, &addr, plen) == 0) {
+            return true;
+        }
+    }
+
+    LOG(PACKET, "Received control command from unauthorized IP: %s", socket_get_id(cs->sc));
+    return false;
+}
+
 /**
  * Attempt to handle a command from the client.
  *
- * @param cs
- * Client socket.
- * @param pl
- * Player associated with the client. Can be NULL if the client is not
- * playing yet.
- * @param data
- * Network data buffer containing the command to handle.
- * @param len
- * Length of the command.
  * @return
- * True if the command was handled, false otherwise.
+ * True if the command was handled or rejected. False only when a valid
+ * playing-only command must be queued for its player.
  */
-static bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_t len) {
+bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_t len) {
     size_t pos = 0;
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
@@ -448,8 +541,21 @@ static bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t 
         return true;
     }
 
-    /* If the command is only for players and the client is not logged in yet,
-     * do not handle the command. */
+    if (!socket_server_command_phase_allowed(cs, type)) {
+        LOG(DEVEL,
+            "Rejected out-of-order %s command in connection state %d",
+            socket_commands[type].name,
+            cs->state);
+        return true;
+    }
+
+    if (socket_commands[type].policy == SOCKET_COMMAND_POLICY_CONTROL &&
+        !socket_server_control_authorized(cs)) {
+        return true;
+    }
+
+    /* Playing-only commands read directly from the transport are queued for
+     * the associated player. The phase check above drops them before login. */
     if (socket_commands[type].flags & SOCKET_COMMAND_PLAYER_ONLY && pl == NULL) {
         return false;
     }
