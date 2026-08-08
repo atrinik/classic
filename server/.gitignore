@@ -1,0 +1,13 @@
+/build/
+/data/
+/lib
+/maps
+/resources/
+/runtime/
+/atrinik-server
+/libplugin_*.so
+/libplugin_*.dll
+__pycache__/
+*.py[cod]
+coverage.*
+*:Zone.Identifier
