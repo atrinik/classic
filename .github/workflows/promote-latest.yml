@@ -20,13 +20,18 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Require main for a manual dispatch
-        if: github.event_name == 'workflow_dispatch'
-        run: test "${GITHUB_REF}" = refs/heads/main
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: main
+          ref: ${{ github.sha }}
+      - name: Require the exact current main promotion definition
+        env:
+          PROMOTION_WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          test "${GITHUB_REF}" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "${PROMOTION_WORKFLOW_SHA}"
+          test "$(git rev-parse refs/remotes/origin/main)" = \
+            "${PROMOTION_WORKFLOW_SHA}"
       - id: latest
         name: Resolve GitHub's authoritative latest release
         env:
@@ -41,6 +46,12 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ steps.latest.outputs.tag }}
+      - name: Check out the trusted promotion verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: build/release-automation
+          ref: ${{ github.sha }}
+          sparse-checkout: tools/release
       - id: revision
         name: Resolve the tagged revision
         run: echo "commit=$(git rev-parse HEAD)" >>"${GITHUB_OUTPUT}"
@@ -55,7 +66,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 tools/release/check_registry_version.py \
+          python3 build/release-automation/tools/release/check_registry_version.py \
             --organization atrinik \
             --package classic-server \
             --tag '${{ steps.latest.outputs.version }}' \
@@ -67,7 +78,7 @@ jobs:
           IMAGE_DIGEST: ${{ steps.registry.outputs.digest }}
         run: |
           docker pull "${IMAGE}@${IMAGE_DIGEST}"
-          python3 tools/release/locked_inputs.py \
+          python3 build/release-automation/tools/release/locked_inputs.py \
             --version '${{ steps.latest.outputs.version }}' \
             --component server \
             --verify-image "${IMAGE}" \
@@ -88,7 +99,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
-          python3 tools/release/check_latest_release.py \
+          python3 build/release-automation/tools/release/check_latest_release.py \
             --repository "${RELEASE_REPOSITORY}" \
             --github-output "${GITHUB_OUTPUT}"
           test '${{ steps.latest.outputs.tag }}' = "$(sed -n 's/^tag=//p' "${GITHUB_OUTPUT}")"
@@ -105,7 +116,7 @@ jobs:
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
           output=$(mktemp)
-          python3 tools/release/check_latest_release.py \
+          python3 build/release-automation/tools/release/check_latest_release.py \
             --repository "${RELEASE_REPOSITORY}" \
             --github-output "${output}"
           test '${{ steps.latest.outputs.tag }}' = "$(sed -n 's/^tag=//p' "${output}")"
@@ -117,7 +128,7 @@ jobs:
           output=$(mktemp)
           for attempt in {1..6}; do
             : >"${output}"
-            python3 tools/release/check_registry_version.py \
+            python3 build/release-automation/tools/release/check_registry_version.py \
               --organization atrinik \
               --package classic-server \
               --tag latest \
