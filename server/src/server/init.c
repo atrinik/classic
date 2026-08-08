@@ -494,6 +494,18 @@ static bool clioptions_option_join_password_file(const char *arg, char **errmsg)
     return ok;
 }
 
+static const char *clioptions_option_rendezvous_invite_file_desc =
+    "Protected path for the generated rendezvous invite capability.";
+
+static bool clioptions_option_rendezvous_invite_file(const char *arg, char **errmsg) {
+    if (arg[0] == '\0' || strlen(arg) >= sizeof(settings.rendezvous_invite_file)) {
+        *errmsg = xstrdup("Rendezvous invite file path is empty or too long");
+        return false;
+    }
+    snprintf(VS(settings.rendezvous_invite_file), "%s", arg);
+    return true;
+}
+
 /**
  * Description of the --server_public command.
  */
@@ -517,7 +529,7 @@ static bool clioptions_option_server_public(const char *arg, char **errmsg) {
  * Description of the --server_host command.
  */
 static const char *clioptions_option_server_host_desc =
-    "Optional public QUIC IP address published through the metaserver.";
+    "Legacy public QUIC IP address (accepted but no longer published).";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_server_host(const char *arg, char **errmsg) {
     struct in_addr address4;
@@ -937,8 +949,11 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, port_mapping, "Router port mapping policy");
     CLIOPTIONS_CREATE_ARGUMENT(cli, join_password, "Private server password");
     CLIOPTIONS_CREATE_ARGUMENT(cli, join_password_file, "Private server password file");
+    CLIOPTIONS_CREATE_ARGUMENT(cli,
+                               rendezvous_invite_file,
+                               "Protected rendezvous invite capability path");
     CLIOPTIONS_CREATE_ARGUMENT(cli, server_public, "Public server listing");
-    CLIOPTIONS_CREATE_ARGUMENT(cli, server_host, "Public IP address of the server");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, server_host, "Legacy public IP address (not published)");
     CLIOPTIONS_CREATE_ARGUMENT(cli, server_name, "Name of the server");
     CLIOPTIONS_CREATE_ARGUMENT(cli, server_desc, "Description of the server");
     CLIOPTIONS_CREATE_ARGUMENT(cli, allowed_chars, "Limits for accounts/names");

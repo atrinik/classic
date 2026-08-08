@@ -251,6 +251,17 @@ if (MINGW)
 endif ()
 
 if (BUILD_TESTING AND NOT MINGW)
+    add_executable(client-connection-failure-tests
+        src/tests/connection_failure.c
+        src/client/connection_failure.c
+        src/client/join_credentials.c
+        src/client/metaserver_identity.c)
+    atrinik_configure_target(client-connection-failure-tests)
+    target_include_directories(client-connection-failure-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-connection-failure-tests PRIVATE Atrinik::Core)
+    add_test(NAME client-connection-failure COMMAND client-connection-failure-tests)
+
     add_executable(client-packet-payload-tests
         src/tests/packet_payload.c
         src/client/packet_payload.c)

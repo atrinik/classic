@@ -268,19 +268,18 @@ static int game_status_chain(void) {
         map_redraw_flag = minimap_redraw_flag = 1;
         cpl.state = ST_WAITLOOP;
     } else if (cpl.state == ST_STARTCONNECT) {
-        draw_info_format(COLOR_GREEN,
-                         "Trying server %s (%d)...",
-                         selected_server->name,
-                         selected_server->port);
+        draw_info_format(COLOR_GREEN, "Trying server %s...", selected_server->name);
         keepalive_reset();
         cpl.state = ST_CONNECT;
     } else if (cpl.state == ST_CONNECT) {
         if (!string_is_hex_fixed(selected_server->quic_certificate_sha256, 64, true)) {
             draw_info_format(COLOR_RED,
-                             "The server %s (%d) does not have a valid QUIC certificate "
+                             "The server %s does not have a valid QUIC certificate "
                              "fingerprint, refusing to connect.",
-                             selected_server->name,
-                             selected_server->port);
+                             selected_server->name);
+            client_attempt_secrets_clear(&selected_server->join_password,
+                                         &clioption_settings.join_password,
+                                         &selected_server->rendezvous_invite);
             cpl.state = ST_START;
             return 1;
         }
@@ -290,7 +289,14 @@ static int game_status_chain(void) {
                                 selected_server->port,
                                 selected_server->quic_certificate_sha256,
                                 connection_preference_get(selected_server))) {
-            draw_info(COLOR_RED, "Connection failed!");
+            char failure_message[160];
+            if (!client_connection_failure_format(&csocket.failure, VS(failure_message))) {
+                snprintf(VS(failure_message), "Connection failed; please try again.");
+            }
+            draw_info(COLOR_RED, failure_message);
+            client_attempt_secrets_clear(&selected_server->join_password,
+                                         &clioption_settings.join_password,
+                                         &selected_server->rendezvous_invite);
             cpl.state = ST_START;
             return 1;
         }
@@ -426,10 +432,9 @@ void clioption_settings_deinit(void) {
 
     free(clioption_settings.game_news_url);
 
-    if (clioption_settings.join_password != NULL) {
-        OPENSSL_cleanse(clioption_settings.join_password, strlen(clioption_settings.join_password));
-        free(clioption_settings.join_password);
-    }
+    client_join_credentials_clear(NULL, &clioption_settings.join_password);
+
+    free(clioption_settings.rendezvous_invite_file);
 
     free(clioption_settings.stun_server);
 }
@@ -510,10 +515,7 @@ static bool clioptions_option_join_password(const char *arg, char **errmsg) {
         return false;
     }
 
-    if (clioption_settings.join_password != NULL) {
-        OPENSSL_cleanse(clioption_settings.join_password, strlen(clioption_settings.join_password));
-        free(clioption_settings.join_password);
-    }
+    client_join_credentials_clear(NULL, &clioption_settings.join_password);
     clioption_settings.join_password = xstrdup(arg);
     return true;
 }
@@ -542,6 +544,19 @@ static bool clioptions_option_join_password_file(const char *arg, char **errmsg)
     bool ok = clioptions_option_join_password(password, errmsg);
     OPENSSL_cleanse(password, sizeof(password));
     return ok;
+}
+
+static const char *const clioptions_option_rendezvous_invite_file_desc =
+    "Read a protected rendezvous invite through this file path when connecting.";
+
+static bool clioptions_option_rendezvous_invite_file(const char *arg, char **errmsg) {
+    if (arg[0] == '\0' || strlen(arg) >= HUGE_BUF) {
+        *errmsg = xstrdup("Rendezvous invite file path is empty or too long");
+        return false;
+    }
+    free(clioption_settings.rendezvous_invite_file);
+    clioption_settings.rendezvous_invite_file = xstrdup(arg);
+    return true;
 }
 
 static const char *const clioptions_option_stun_server_desc =
@@ -680,6 +695,9 @@ int main(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, game_news_url, "Set game news URL");
     CLIOPTIONS_CREATE_ARGUMENT(cli, join_password, "Private server password");
     CLIOPTIONS_CREATE_ARGUMENT(cli, join_password_file, "Private server password file");
+    CLIOPTIONS_CREATE_ARGUMENT(cli,
+                               rendezvous_invite_file,
+                               "Protected rendezvous invite file path");
     CLIOPTIONS_CREATE_ARGUMENT(cli, stun_server, "Direct rendezvous STUN endpoint");
 
     /* Argument options*/
@@ -758,6 +776,10 @@ int main(int argc, char *argv[]) {
 
         /* Have we been shutdown? */
         if (handle_socket_shutdown()) {
+            client_attempt_secrets_clear(
+                selected_server != NULL ? &selected_server->join_password : NULL,
+                &clioption_settings.join_password,
+                selected_server != NULL ? &selected_server->rendezvous_invite : NULL);
             if (cpl.state != ST_STARTCONNECT) {
                 cpl.state = ST_START;
                 /* Make sure no popup is visible. */

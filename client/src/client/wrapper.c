@@ -379,10 +379,6 @@ char *file_path(const char *path, const char *mode) {
  */
 static StringBuffer *file_path_server_internal(void) {
     SOFT_ASSERT_RC(selected_server != NULL, NULL, "Selected server is NULL.");
-    SOFT_ASSERT_RC(!string_isempty(selected_server->hostname),
-                   NULL,
-                   "Selected server has empty hostname.");
-
     StringBuffer *sb = stringbuffer_new();
     stringbuffer_append_string(sb, "settings/");
 
@@ -398,6 +394,9 @@ static StringBuffer *file_path_server_internal(void) {
         snprintf(VS(scope), "%s", identity);
         string_tolower(scope);
     } else {
+        SOFT_ASSERT_RC(!string_isempty(selected_server->hostname),
+                       NULL,
+                       "Selected server has neither identity nor hostname.");
         EVP_MD_CTX *context = EVP_MD_CTX_new();
         unsigned char digest[EVP_MAX_MD_SIZE];
         unsigned int digest_size = 0;

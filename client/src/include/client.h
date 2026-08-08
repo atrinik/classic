@@ -88,6 +88,8 @@ typedef struct command_buffer {
  * of globals. */
 typedef struct client_socket {
     socket_t *sc;
+    /** Bounded, non-sensitive reason for the most recent failed open. */
+    socket_connect_failure_t failure;
 } client_socket_t;
 
 /** Copies information from one color structure into another. */
@@ -134,6 +136,9 @@ typedef struct clioption_settings_struct {
     char *game_news_url;
 
     char *join_password;
+
+    /** Path to a protected rendezvous invite file; never the capability. */
+    char *rendezvous_invite_file;
 
     /** Optional STUN endpoint used for direct rendezvous. */
     char *stun_server;

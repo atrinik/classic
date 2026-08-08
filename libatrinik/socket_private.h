@@ -80,8 +80,10 @@ struct sock_struct {
 size_t socket_rendezvous_client(socket_t *sc,
                                 const char *url,
                                 const char *stun_endpoint,
+                                socket_rendezvous_attempt_t *attempt,
                                 socket_direct_candidate_t *candidates,
-                                size_t capacity);
+                                size_t capacity,
+                                socket_connect_failure_t *failure);
 
 bool socket_connection_id_generate(socket_t *sc);
 bool socket_connection_id_export(socket_t *sc);

@@ -11,6 +11,7 @@
 
 #include <openssl/err.h>
 #include <openssl/pem.h>
+#include <openssl/rand.h>
 #include <openssl/sha.h>
 
 #ifdef WIN32
@@ -23,6 +24,8 @@
 #endif
 
 #if OPENSSL_VERSION_NUMBER >= 0x30500000L
+
+#define SOCKET_CLIENT_ATTEMPT_TIMEOUT_MS 15000U
 
 static const unsigned char socket_quic_alpn[] = {9, 'a', 't', 'r', 'i', 'n', 'i', 'k', '/', '2'};
 
@@ -411,7 +414,7 @@ static socket_t *socket_quic_client_socket(const char *host,
 
     int rc = getaddrinfo(host, port_str, &hints, &addresses);
     if (rc != 0) {
-        LOG(ERROR, "Cannot resolve QUIC peer %s: %s", host, gai_strerror(rc));
+        LOG(ERROR, "Cannot resolve the directory QUIC endpoint: %s", gai_strerror(rc));
         return NULL;
     }
 
@@ -430,6 +433,52 @@ static socket_t *socket_quic_client_socket(const char *host,
     return sc;
 }
 
+static socket_t *socket_quic_client_socket_unresolved(void) {
+    socket_direct_candidate_t local_candidates[SOCKET_DIRECT_MAX_CANDIDATES];
+    size_t local_count = socket_local_candidates(1, local_candidates, arraysize(local_candidates));
+    int family = AF_INET;
+#ifdef HAVE_IPV6
+    bool have_ipv4 = false, have_ipv6 = false;
+    for (size_t i = 0; i < local_count; i++) {
+        if (strchr(local_candidates[i].host, ':') != NULL) {
+            have_ipv6 = true;
+        } else {
+            have_ipv4 = true;
+        }
+    }
+    if (!have_ipv4 && have_ipv6) {
+        family = AF_INET6;
+    }
+#else
+    (void)local_count;
+#endif
+    struct sockaddr_storage local;
+    socklen_t local_length;
+    memset(&local, 0, sizeof(local));
+    if (family == AF_INET) {
+        struct sockaddr_in *address4 = (struct sockaddr_in *)&local;
+        address4->sin_family = AF_INET;
+        address4->sin_addr.s_addr = htonl(INADDR_ANY);
+        local_length = sizeof(*address4);
+#ifdef HAVE_IPV6
+    } else {
+        struct sockaddr_in6 *address6 = (struct sockaddr_in6 *)&local;
+        address6->sin6_family = AF_INET6;
+        address6->sin6_addr = in6addr_any;
+        local_length = sizeof(*address6);
+#endif
+    }
+    socket_t *sc =
+        socket_quic_client_socket_resolved("", 0, (const struct sockaddr *)&local, local_length);
+    if (sc == NULL || bind(sc->handle, (const struct sockaddr *)&local, local_length) != 0) {
+        if (sc != NULL) {
+            socket_destroy(sc);
+        }
+        return NULL;
+    }
+    return sc;
+}
+
 typedef bool (*socket_quic_cancelled_t)(void *data);
 
 static bool socket_quic_client_handshake(socket_t *sc,
@@ -438,8 +487,13 @@ static bool socket_quic_client_handshake(socket_t *sc,
                                          const char *certificate_sha256,
                                          const char *host,
                                          double timeout,
+                                         uint64_t absolute_deadline_ms,
                                          socket_quic_cancelled_t cancelled,
                                          void *cancel_data) {
+    uint64_t now = datetime_monotonic_ms();
+    if (now >= absolute_deadline_ms) {
+        return false;
+    }
     memcpy(&sc->addr, address, address_length);
     if (connect(sc->handle, address, address_length) != 0) {
         return false;
@@ -492,7 +546,7 @@ static bool socket_quic_client_handshake(socket_t *sc,
         return false;
     }
 
-    uint64_t deadline = datetime_monotonic_ms() + (uint64_t)(timeout * 1000.0);
+    uint64_t deadline = MIN(now + (uint64_t)(timeout * 1000.0), absolute_deadline_ms);
     for (;;) {
         if (cancelled != NULL && cancelled(cancel_data)) {
             return false;
@@ -509,9 +563,14 @@ static bool socket_quic_client_handshake(socket_t *sc,
         }
 
         if (datetime_monotonic_ms() >= deadline || !socket_quic_wait(sc->quic)) {
-            LOG(DEBUG, "QUIC candidate %s timed out", host);
+            LOG(DEBUG, "QUIC candidate handshake timed out");
             return false;
         }
+    }
+
+    if (datetime_monotonic_ms() >= deadline) {
+        LOG(DEBUG, "QUIC candidate handshake exceeded its connection deadline");
+        return false;
     }
 
     if (!socket_quic_check_fingerprint(sc->quic, certificate_sha256)) {
@@ -573,6 +632,7 @@ typedef struct socket_quic_candidate_task {
     size_t ranks[SOCKET_DIRECT_MAX_CANDIDATES + 2];
     size_t candidate_count;
     const char *certificate_sha256;
+    uint64_t deadline_ms;
     socket_quic_candidate_race_t *race;
     socket_t *socket;
     socket_t *result;
@@ -607,7 +667,8 @@ static void *socket_quic_candidate_thread(void *data) {
     socket_quic_candidate_task_t *task = data;
     for (size_t i = 0; i < task->candidate_count; i++) {
         socket_direct_candidate_t *candidate = &task->candidates[i];
-        if (socket_quic_candidate_cancelled(task->race)) {
+        if (socket_quic_candidate_cancelled(task->race) ||
+            datetime_monotonic_ms() >= task->deadline_ms) {
             break;
         }
         if (task->socket == NULL) {
@@ -621,11 +682,7 @@ static void *socket_quic_candidate_thread(void *data) {
             continue;
         }
 
-        LOG(INFO,
-            "Checking %s QUIC candidate %s:%" PRIu16,
-            socket_candidate_kind_name(candidate->kind),
-            candidate->host,
-            candidate->port);
+        LOG(INFO, "Checking a %s QUIC candidate", socket_candidate_kind_name(candidate->kind));
         uint64_t started_ms = datetime_monotonic_ms();
         bool connected =
             socket_quic_client_handshake(task->socket,
@@ -634,6 +691,7 @@ static void *socket_quic_candidate_thread(void *data) {
                                          task->certificate_sha256,
                                          candidate->host,
                                          socket_candidate_kind_timeout(candidate->kind),
+                                         task->deadline_ms,
                                          socket_quic_candidate_cancelled,
                                          task->race);
         uint64_t elapsed_ms = datetime_monotonic_ms() - started_ms;
@@ -649,19 +707,15 @@ static void *socket_quic_candidate_thread(void *data) {
         pthread_mutex_unlock(&task->race->lock);
         if (!connected) {
             LOG(INFO,
-                "%s QUIC candidate %s:%" PRIu16 " failed after %" PRIu64 " ms",
+                "%s QUIC candidate failed after %" PRIu64 " ms",
                 socket_candidate_kind_name(candidate->kind),
-                candidate->host,
-                candidate->port,
                 elapsed_ms);
             continue;
         }
 
         LOG(INFO,
-            "%s QUIC candidate %s:%" PRIu16 " succeeded after %" PRIu64 " ms",
+            "%s QUIC candidate succeeded after %" PRIu64 " ms",
             socket_candidate_kind_name(candidate->kind),
-            candidate->host,
-            candidate->port,
             elapsed_ms);
         task->socket->connection_mode = socket_candidate_kind_mode(candidate->kind);
         free(task->socket->host);
@@ -688,6 +742,9 @@ static bool socket_quic_candidate_address(const socket_direct_candidate_t *candi
                                           struct sockaddr_storage *address,
                                           socklen_t *address_length) {
     if (candidate->kind == SOCKET_CANDIDATE_DIRECTORY) {
+        if (initial_length == 0) {
+            return false;
+        }
         memcpy(address, initial_address, initial_length);
         *address_length = initial_length;
         return true;
@@ -704,10 +761,8 @@ static bool socket_quic_candidate_address(const socket_direct_candidate_t *candi
     int rc = getaddrinfo(candidate->host, service, &hints, &addresses);
     if (rc != 0 || addresses == NULL || addresses->ai_addrlen > sizeof(*address)) {
         LOG(ERROR,
-            "Invalid numeric %s QUIC candidate %s:%" PRIu16,
-            socket_candidate_kind_name(candidate->kind),
-            candidate->host,
-            candidate->port);
+            "Invalid numeric %s QUIC rendezvous candidate",
+            socket_candidate_kind_name(candidate->kind));
         if (addresses != NULL) {
             freeaddrinfo(addresses);
         }
@@ -740,13 +795,70 @@ socket_t *socket_quic_client_create(const char *host,
                                     const char *certificate_sha256,
                                     const char *rendezvous_url,
                                     const char *stun_endpoint,
-                                    socket_connection_preference_t preference) {
-    HARD_ASSERT(host != NULL);
+                                    const rendezvous_invite_t *invite,
+                                    socket_connection_preference_t preference,
+                                    socket_connect_failure_t *failure) {
+    socket_connect_failure_t local_failure = {0};
+    if (failure == NULL) {
+        failure = &local_failure;
+    }
+    failure->code = SOCKET_CONNECT_FAILURE_UNAVAILABLE;
+    failure->retry_after_seconds = 0;
+
+    uint64_t started_ms = datetime_monotonic_ms();
+    uint64_t deadline_ms = started_ms > UINT64_MAX - SOCKET_CLIENT_ATTEMPT_TIMEOUT_MS
+                               ? UINT64_MAX
+                               : started_ms + SOCKET_CLIENT_ATTEMPT_TIMEOUT_MS;
+    time_t wall_time = time(NULL);
+    if (!string_is_hex_fixed(certificate_sha256, RENDEZVOUS_SERVER_ID_HEX_SIZE, true) ||
+        wall_time < 0) {
+        return NULL;
+    }
+    uint64_t now = (uint64_t)wall_time;
+    if (invite != NULL && rendezvous_invite_expired_at(invite, now)) {
+        failure->code = SOCKET_CONNECT_FAILURE_INVITE_EXPIRED;
+        return NULL;
+    }
+    if (invite != NULL && !rendezvous_invite_valid_at(invite, certificate_sha256, now)) {
+        failure->code = SOCKET_CONNECT_FAILURE_AUTHORIZATION;
+        return NULL;
+    }
+
+    unsigned char ticket_bytes[RENDEZVOUS_TICKET_HEX_SIZE / 2U];
+    char ticket[RENDEZVOUS_TICKET_HEX_SIZE + 1U];
+    socket_rendezvous_attempt_t *attempt = NULL;
+    bool ticket_ok = RAND_bytes(ticket_bytes, sizeof(ticket_bytes)) == 1 &&
+                     string_tohex(ticket_bytes, sizeof(ticket_bytes), VS(ticket), false) ==
+                         RENDEZVOUS_TICKET_HEX_SIZE;
+    if (ticket_ok) {
+        string_tolower(ticket);
+        attempt = socket_rendezvous_attempt_create(certificate_sha256, ticket, invite, deadline_ms);
+    }
+    OPENSSL_cleanse(ticket_bytes, sizeof(ticket_bytes));
+    OPENSSL_cleanse(ticket, sizeof(ticket));
+    if (attempt == NULL) {
+        return NULL;
+    }
+
+    bool has_directory_address = host != NULL && *host != '\0' && port != 0;
+    if (!has_directory_address && rendezvous_url == NULL) {
+        socket_rendezvous_attempt_destroy(attempt);
+        return NULL;
+    }
 
     struct sockaddr_storage initial_address;
     socklen_t initial_length = 0;
-    socket_t *sc = socket_quic_client_socket(host, port, &initial_address, &initial_length);
+    socket_t *sc = has_directory_address
+                       ? socket_quic_client_socket(host, port, &initial_address, &initial_length)
+                       : socket_quic_client_socket_unresolved();
     if (sc == NULL) {
+        socket_rendezvous_attempt_destroy(attempt);
+        return NULL;
+    }
+    if (datetime_monotonic_ms() >= deadline_ms) {
+        failure->code = SOCKET_CONNECT_FAILURE_TIMEOUT;
+        socket_destroy(sc);
+        socket_rendezvous_attempt_destroy(attempt);
         return NULL;
     }
     socket_direct_candidate_t candidates[SOCKET_DIRECT_MAX_CANDIDATES + 2];
@@ -755,33 +867,25 @@ socket_t *socket_quic_client_create(const char *host,
         count = socket_rendezvous_client(sc,
                                          rendezvous_url,
                                          stun_endpoint,
+                                         attempt,
                                          candidates,
-                                         SOCKET_DIRECT_MAX_CANDIDATES + 1);
+                                         SOCKET_DIRECT_MAX_CANDIDATES + 1,
+                                         failure);
         if (count == 0) {
-            LOG(ERROR,
-                "Rendezvous signaling returned no direct candidates; "
-                "trying the directory candidate");
+            LOG(ERROR, "Rendezvous signaling returned no direct candidates");
         }
     }
-    snprintf(VS(candidates[count].host), "%s", host);
-    candidates[count].port = port;
-    candidates[count].kind = SOCKET_CANDIDATE_DIRECTORY;
-    count++;
+    if (has_directory_address) {
+        snprintf(VS(candidates[count].host), "%s", host);
+        candidates[count].port = port;
+        candidates[count].kind = SOCKET_CANDIDATE_DIRECTORY;
+        count++;
+    }
 
     LOG(INFO,
         "Testing %" PRIu64 " direct QUIC candidate%s",
         (uint64_t)count,
         count == 1 ? "" : "s");
-    for (size_t i = 0; i < count; i++) {
-        LOG(INFO,
-            "Direct QUIC candidate %" PRIu64 "/%" PRIu64 ": %s %s:%" PRIu16,
-            (uint64_t)(i + 1),
-            (uint64_t)count,
-            socket_candidate_kind_name(candidates[i].kind),
-            candidates[i].host,
-            candidates[i].port);
-    }
-
     static const socket_candidate_kind_t priorities[] = {
         SOCKET_CANDIDATE_LAN,
         SOCKET_CANDIDATE_IPV6,
@@ -859,9 +963,18 @@ socket_t *socket_quic_client_create(const char *host,
         task->address_lengths[slot] = address_length;
         task->ranks[slot] = rank;
         task->certificate_sha256 = certificate_sha256;
+        task->deadline_ms = deadline_ms;
     }
     if (task_count == 0) {
         socket_destroy(sc);
+        socket_rendezvous_attempt_destroy(attempt);
+        if (datetime_monotonic_ms() >= deadline_ms) {
+            failure->code = SOCKET_CONNECT_FAILURE_TIMEOUT;
+            failure->retry_after_seconds = 0;
+        } else if (failure->code == SOCKET_CONNECT_FAILURE_NONE ||
+                   failure->code == SOCKET_CONNECT_FAILURE_UNAVAILABLE) {
+            failure->code = SOCKET_CONNECT_FAILURE_SERVER_OFFLINE;
+        }
         return NULL;
     }
 
@@ -869,8 +982,7 @@ socket_t *socket_quic_client_create(const char *host,
      * for STUN and punching. This preserves the externally mapped source port
      * while LAN, global IPv6 and directory candidates race independently. */
     size_t initial_socket_task = nat_task;
-    if (initial_socket_task == SIZE_MAX) {
-        initial_socket_task = 0;
+    if (initial_socket_task == SIZE_MAX && has_directory_address) {
         for (size_t i = 0; i < task_count; i++) {
             if (tasks[i].candidates[0].kind == SOCKET_CANDIDATE_DIRECTORY) {
                 initial_socket_task = i;
@@ -878,7 +990,20 @@ socket_t *socket_quic_client_create(const char *host,
             }
         }
     }
-    tasks[initial_socket_task].socket = sc;
+    if (initial_socket_task == SIZE_MAX) {
+        int socket_family = ((struct sockaddr *)&sc->addr)->sa_family;
+        for (size_t i = 0; i < task_count; i++) {
+            if (((struct sockaddr *)&tasks[i].addresses[0])->sa_family == socket_family) {
+                initial_socket_task = i;
+                break;
+            }
+        }
+    }
+    if (initial_socket_task != SIZE_MAX) {
+        tasks[initial_socket_task].socket = sc;
+    } else {
+        socket_destroy(sc);
+    }
 
     socket_quic_candidate_race_t race = {.task_count = task_count, .best_rank = SIZE_MAX};
     pthread_mutex_init(&race.lock, NULL);
@@ -897,13 +1022,13 @@ socket_t *socket_quic_client_create(const char *host,
     pthread_mutex_lock(&race.lock);
     while (race.completed < race.task_count) {
         uint64_t now = datetime_monotonic_ms();
-        if (race.best_rank == 0 ||
+        if (now >= deadline_ms || race.best_rank == 0 ||
             (race.best_rank != SIZE_MAX && now - race.first_success_ms >= 150)) {
             break;
         }
-        socket_quic_candidate_wait(&race, 20);
+        socket_quic_candidate_wait(&race, (unsigned int)MIN(deadline_ms - now, 20U));
     }
-    if (race.best_rank != SIZE_MAX) {
+    if (race.best_rank != SIZE_MAX || datetime_monotonic_ms() >= deadline_ms) {
         race.cancelled = true;
         pthread_cond_broadcast(&race.condition);
     }
@@ -941,19 +1066,27 @@ socket_t *socket_quic_client_create(const char *host,
         race.maximum_handshake_ms);
     pthread_cond_destroy(&race.condition);
     pthread_mutex_destroy(&race.lock);
+    socket_rendezvous_attempt_destroy(attempt);
     if (selected != NULL) {
+        failure->code = SOCKET_CONNECT_FAILURE_NONE;
+        failure->retry_after_seconds = 0;
         LOG(SYSTEM,
-            "Connection %s selected %s direct QUIC route %s:%" PRIu16,
+            "Connection %s selected a %s direct QUIC route",
             socket_get_id(selected),
-            socket_candidate_kind_name(tasks[selected_index].selected_candidate.kind),
-            tasks[selected_index].selected_candidate.host,
-            tasks[selected_index].selected_candidate.port);
+            socket_candidate_kind_name(tasks[selected_index].selected_candidate.kind));
         return selected;
     }
 
     LOG(ERROR,
         "No confirmed direct route to the server; game traffic relay is "
         "disabled");
+    if (datetime_monotonic_ms() >= deadline_ms) {
+        failure->code = SOCKET_CONNECT_FAILURE_TIMEOUT;
+        failure->retry_after_seconds = 0;
+    } else if (failure->code == SOCKET_CONNECT_FAILURE_NONE ||
+               failure->code == SOCKET_CONNECT_FAILURE_UNAVAILABLE) {
+        failure->code = SOCKET_CONNECT_FAILURE_SERVER_OFFLINE;
+    }
     return NULL;
 }
 
@@ -1058,7 +1191,14 @@ socket_t *socket_quic_client_create(const char *host,
                                     const char *certificate_sha256,
                                     const char *rendezvous_url,
                                     const char *stun_endpoint,
-                                    socket_connection_preference_t preference) {
+                                    const rendezvous_invite_t *invite,
+                                    socket_connection_preference_t preference,
+                                    socket_connect_failure_t *failure) {
+    if (failure != NULL) {
+        failure->code = SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+        failure->retry_after_seconds = 0;
+    }
+    (void)invite;
     (void)preference;
     LOG(ERROR, "QUIC requires OpenSSL 3.5 or newer");
     return NULL;

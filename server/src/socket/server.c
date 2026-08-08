@@ -40,6 +40,7 @@
 #include <player.h>
 #include <object.h>
 #include <ban.h>
+#include <metaserver_internal.h>
 #include <network_metrics.h>
 
 TOOLKIT_API(DEPENDS(socket), IMPORTS(logger));
@@ -277,32 +278,22 @@ TOOLKIT_INIT_FUNC(socket_server) {
         LOG(SYSTEM, "QUIC certificate SHA-256: %s", quic_certificate_sha256);
 
         quic_candidate_count = 0;
-        quic_public_host[0] = '\0';
-        struct in_addr configured_address4;
-#ifdef HAVE_IPV6
-        struct in6_addr configured_address6;
-#endif
-        if ((inet_pton(AF_INET, settings.server_host, &configured_address4) == 1
-#ifdef HAVE_IPV6
-             || inet_pton(AF_INET6, settings.server_host, &configured_address6) == 1
-#endif
-             ) &&
-            socket_host_is_global(settings.server_host)) {
-            snprintf(VS(quic_public_host), "%s", settings.server_host);
+        metaserver_public_endpoint_from_config(settings.server_host,
+                                               settings.port_quic,
+                                               VS(quic_public_host),
+                                               &quic_public_port);
+        if (*settings.server_host != '\0') {
+            LOG(INFO,
+                "The legacy server_host IP is not published; this server will use an "
+                "addressless directory listing");
         }
-        quic_public_port = settings.port_quic;
         char mapped_host[65];
         uint16_t mapped_port;
         if (socket_port_mapping_init(settings.port_quic, VS(mapped_host), &mapped_port)) {
-            if (socket_host_is_global(mapped_host)) {
-                snprintf(VS(quic_public_host), "%s", mapped_host);
-                quic_public_port = mapped_port;
-            } else {
+            if (!socket_host_is_global(mapped_host)) {
                 LOG(INFO,
-                    "Router mapping %s:%" PRIu16 " is not globally "
-                    "routable; retaining it as an intermediate candidate",
-                    mapped_host,
-                    mapped_port);
+                    "Router mapping is not globally routable; retaining it as an intermediate "
+                    "candidate");
             }
             snprintf(VS(quic_candidates[quic_candidate_count].host), "%s", mapped_host);
             quic_candidates[quic_candidate_count].port = mapped_port;
@@ -326,18 +317,12 @@ TOOLKIT_INIT_FUNC(socket_server) {
                 quic_candidates[quic_candidate_count].kind = SOCKET_CANDIDATE_SRFLX;
                 quic_candidate_count++;
             }
-            if (*quic_public_host == '\0' && socket_host_is_global(stun_host)) {
-                snprintf(VS(quic_public_host), "%s", stun_host);
-                quic_public_port = stun_port;
-            }
-        } else if (*quic_public_host == '\0' && quic_server_sockets[1] != NULL &&
-                   *settings.stun_server != '\0' && strcmp(settings.stun_server, "off") != 0 &&
+        } else if (quic_server_sockets[1] != NULL && *settings.stun_server != '\0' &&
+                   strcmp(settings.stun_server, "off") != 0 &&
                    socket_stun_discover(quic_server_sockets[1],
                                         settings.stun_server,
                                         VS(stun_host),
                                         &stun_port)) {
-            snprintf(VS(quic_public_host), "%s", stun_host);
-            quic_public_port = stun_port;
             snprintf(VS(quic_candidates[quic_candidate_count].host), "%s", stun_host);
             quic_candidates[quic_candidate_count].port = stun_port;
             quic_candidates[quic_candidate_count].kind = SOCKET_CANDIDATE_IPV6;
@@ -359,31 +344,10 @@ TOOLKIT_INIT_FUNC(socket_server) {
             socket_local_candidates(settings.port_quic,
                                     quic_candidates + quic_candidate_count,
                                     arraysize(quic_candidates) - quic_candidate_count);
-#ifdef HAVE_IPV6
-        if (*quic_public_host == '\0') {
-            for (size_t i = 0; i < quic_candidate_count; i++) {
-                struct in6_addr address6;
-                if (quic_candidates[i].kind == SOCKET_CANDIDATE_IPV6 &&
-                    inet_pton(AF_INET6, quic_candidates[i].host, &address6) == 1) {
-                    size_t host_length =
-                        strnlen(quic_candidates[i].host, sizeof(quic_candidates[i].host));
-                    if (host_length == sizeof(quic_candidates[i].host)) {
-                        continue;
-                    }
-
-                    memcpy(quic_public_host, quic_candidates[i].host, host_length + 1);
-                    quic_public_port = quic_candidates[i].port;
-                    break;
-                }
-            }
-        }
-#endif
         for (size_t i = 0; i < quic_candidate_count; i++) {
             LOG(INFO,
-                "Direct %s candidate: %s:%" PRIu16,
-                socket_candidate_kind_name(quic_candidates[i].kind),
-                quic_candidates[i].host,
-                quic_candidates[i].port);
+                "Discovered a direct %s QUIC candidate",
+                socket_candidate_kind_name(quic_candidates[i].kind));
         }
     }
 
@@ -409,6 +373,16 @@ TOOLKIT_DEINIT_FUNC(socket_server) {
     }
 }
 TOOLKIT_DEINIT_FUNC_FINISH
+bool socket_server_quic_identity(char certificate_sha256[65]) {
+    HARD_ASSERT(certificate_sha256 != NULL);
+
+    if (quic_server_sockets[0] == NULL && quic_server_sockets[1] == NULL) {
+        return false;
+    }
+    memcpy(certificate_sha256, quic_certificate_sha256, sizeof(quic_certificate_sha256));
+    return true;
+}
+
 bool socket_server_quic_info(char *host,
                              size_t host_size,
                              uint16_t *port,
@@ -417,15 +391,12 @@ bool socket_server_quic_info(char *host,
     HARD_ASSERT(port != NULL);
     HARD_ASSERT(certificate_sha256 != NULL);
 
-    if ((quic_server_sockets[0] == NULL && quic_server_sockets[1] == NULL) ||
-        *quic_public_host == '\0') {
+    if (!socket_server_quic_identity(certificate_sha256)) {
         return false;
     }
 
     snprintf(host, host_size, "%s", quic_public_host);
-    *port = quic_public_port;
-    memcpy(certificate_sha256, quic_certificate_sha256, sizeof(quic_certificate_sha256));
-
+    *port = *quic_public_host != '\0' ? quic_public_port : settings.port_quic;
     return true;
 }
 
@@ -459,10 +430,7 @@ static bool socket_server_quic_punch_receive(socket_t *server_socket) {
         quic_punches_echoed++;
     }
     LOG(DEBUG,
-        "Received direct UDP punch from %s:%" PRIu16 "; echo %s "
-        "(received=%" PRIu64 ", echoed=%" PRIu64 ")",
-        host,
-        port,
+        "Received direct UDP punch; echo %s (received=%" PRIu64 ", echoed=%" PRIu64 ")",
         echoed ? "sent" : "failed",
         quic_punches_received,
         quic_punches_echoed);
