@@ -1,6 +1,0 @@
-/build/
-/sound/
-__pycache__/
-*.py[cod]
-coverage.*
-*:Zone.Identifier

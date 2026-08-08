@@ -1,7 +1,51 @@
+# Repository-level tooling
 /build/
 /.cache/
 /.coverage
 /coverage*.xml
 /coverage*.html
+
+# Python bytecode and caches
 *.pyc
 __pycache__/
+/client/**/*.py[od]
+/server/**/*.py[od]
+
+# Platform metadata in native modules
+/client/**/*:Zone.Identifier
+/server/**/*:Zone.Identifier
+/libatrinik/**/*:Zone.Identifier
+
+# Client-generated dependencies and output
+/client/build/
+/client/sound/
+/client/**/coverage.*
+
+# Server runtime, collected inputs, binaries, and output
+/server/build/
+/server/data/
+/server/lib
+/server/maps
+/server/resources/
+/server/runtime/
+/server/atrinik-server
+/server/libplugin_*.so
+/server/libplugin_*.dll
+/server/**/coverage.*
+
+# Editor packaging output
+/editor/**/build/
+/editor/**/*.jar
+
+# Library compilation and coverage output
+/libatrinik/**/build/
+/libatrinik/**/*.log
+/libatrinik/**/*.a
+/libatrinik/**/*.o
+/libatrinik/**/*.so
+/libatrinik/**/coverage.*
+
+# Protocol packages and generated build output
+/protocol/**/build/
+/protocol/**/dist/
+/protocol/**/*.egg-info/

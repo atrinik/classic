@@ -5,13 +5,15 @@
   separate replacement repositories.
 - Logical ownership remains split across `client/`, `server/`, `editor/`,
   `libatrinik/`, and `protocol/`. Read this file and the nearest subtree
-  `AGENTS.md` before editing. The imported guides deliberately retain their
-  original wording; “standalone repository” there means the logical component
-  boundary inside this monorepo.
+  `AGENTS.md` before editing. Module guides preserve their component-specific
+  invariants while using monorepo ownership and release terminology.
 - Content is not vendored here. Classic runtime content comes from
   `atrinik/content@1.x`; sound and resources remain separate repositories.
 - Root `.github/` is the only active GitHub configuration. Nested component
-  `.github/` directories are preserved historical inputs and are inert.
+  `.github/` directories and `.releaserc.json` files are inert migration inputs
+  that record capabilities the unified release pipeline must preserve. Do not
+  enable, update, or remove them independently; retire them atomically only
+  after root automation has proven equivalent behavior.
 - Use `.agents/skills/classic-native-change` for C17/CMake work,
   `.agents/skills/classic-protocol-change` for wire contracts, and
   `.agents/skills/classic-runtime` for integrated execution. Cross-repository

@@ -7,3 +7,23 @@
 *.wav binary
 *.zip binary
 docs/history/*-commit-map.txt linguist-generated=true
+
+# Module release bookkeeping is not part of exported source archives.
+client/.github export-ignore
+client/.github/** export-ignore
+client/release-line.txt export-ignore
+client/tools/package-release.sh export-ignore
+server/.github export-ignore
+server/.github/** export-ignore
+server/release-line.txt export-ignore
+server/tools/package-release.sh export-ignore
+editor/.github export-ignore
+editor/.github/** export-ignore
+libatrinik/.github export-ignore
+libatrinik/.github/** export-ignore
+libatrinik/release-line.txt export-ignore
+libatrinik/tools/package-release.sh export-ignore
+protocol/.github export-ignore
+protocol/.github/** export-ignore
+protocol/release-line.txt export-ignore
+protocol/tools/package-release.sh export-ignore
