@@ -1,0 +1,4 @@
+# Bundled third-party sources retain their upstream formatting.
+uthash.h
+utlist.h
+utarray.h
