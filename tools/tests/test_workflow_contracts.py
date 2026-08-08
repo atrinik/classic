@@ -64,6 +64,57 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertGreaterEqual(candidate.count("provenance: mode=max"), 1)
         self.assertGreaterEqual(candidate.count("sbom: true"), 1)
 
+    def test_windows_packages_persist_toolchain_bound_compiler_caches(self) -> None:
+        candidate = self.text("build-release-candidate.yml")
+        cache_action = (
+            "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+        )
+        self.assertEqual(candidate.count(cache_action), 2)
+        client_job = candidate[
+            candidate.index("  client-windows:") : candidate.index("  server-windows:")
+        ]
+        server_job = candidate[
+            candidate.index("  server-windows:") : candidate.index("  server-image:")
+        ]
+        digest = "9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7"
+        self.assertEqual(
+            candidate.count(f"WINDOWS_BUILD_CACHE_EPOCH: 1.0.5-{digest}"), 1
+        )
+        for job, component in ((client_job, "client"), (server_job, "server")):
+            with self.subTest(component=component):
+                self.assertIn(f"path: {component}/build/ccache", job)
+                self.assertIn(f"windows-{component}-ccache-v1-", job)
+                self.assertEqual(job.count(digest), 2)
+                self.assertEqual(job.count("${{ env.WINDOWS_BUILD_CACHE_EPOCH }}"), 2)
+                self.assertIn("${{ runner.os }}-${{ runner.arch }}", job)
+                self.assertIn("${{ needs.metadata.outputs.version }}", job)
+                self.assertIn(f"'{component}/src/**'", job)
+                self.assertNotIn(f"'{component}/**'", job)
+                self.assertIn("ccache --zero-stats", job)
+                self.assertIn("ccache --show-stats", job)
+                self.assertIn("--env CCACHE_MAXSIZE=500M", job)
+                self.assertIn(
+                    f"--env CCACHE_TEMPDIR=/tmp/atrinik-{component}-ccache", job
+                )
+        self.assertEqual(candidate.count("ccache --zero-stats"), 2)
+        self.assertEqual(candidate.count("ccache --show-stats"), 2)
+        self.assertEqual(candidate.count("--env CCACHE_MAXSIZE=500M"), 2)
+
+    def test_only_release_metadata_checkout_requires_full_history(self) -> None:
+        candidate = self.text("build-release-candidate.yml")
+        self.assertEqual(candidate.count("fetch-depth: 0"), 1)
+        metadata_job = candidate[
+            candidate.index("  metadata:") : candidate.index("  sources:")
+        ]
+        self.assertIn("fetch-depth: 0", metadata_job)
+
+    def test_native_worldmaker_build_uses_the_server_compiler_cache(self) -> None:
+        script = (ROOT / "server" / "tools" / "build-windows-package.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("command -v ccache", script)
+        self.assertIn("-DCMAKE_C_COMPILER_LAUNCHER=", script)
+
 
 if __name__ == "__main__":
     unittest.main()
