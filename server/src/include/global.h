@@ -337,7 +337,7 @@ typedef struct settings_struct {
     char mapspath[MAX_BUF];
 
     /**
-     * Where the HTTP files are.
+     * Where generated and staged HTTP asset files reside.
      */
     char httppath[MAX_BUF];
 
@@ -480,12 +480,7 @@ typedef struct settings_struct {
     bool recycle_tmp_maps : 1;
 
     /**
-     * Whether to start the bundled HTTP server.
-     */
-    bool http_server : 1;
-
-    /**
-     * URL to the HTTP server.
+     * URL of the operator-managed HTTP asset origin.
      */
     char http_url[MAX_BUF];
 

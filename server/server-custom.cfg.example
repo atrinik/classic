@@ -8,8 +8,9 @@
 default_permission_groups = None
 python_reload_modules = off
 
-# Leave http_url set to 'off' for direct QUIC asset delivery, or set it to a
-# CDN base URL for a large dedicated server.
+# Leave http_url set to 'off' for direct QUIC asset delivery, or deploy a
+# separate HTTPS origin/CDN and set its base URL for a large dedicated server.
+# http_url = https://cdn.example.com/atrinik
 
 # Optional public-server identity:
 # server_name = My Atrinik Server

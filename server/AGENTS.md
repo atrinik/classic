@@ -16,6 +16,10 @@
 - `src/plugins/plugin_arena/` and `src/plugins/plugin_python/` build loadable
   modules. The Python plugin is required by normal scripted content.
 - Runtime fixtures and C unit tests live under `src/tests/`.
+- The server owns HTTP asset staging, immutable size/digest metadata, and
+  in-band QUIC delivery. `http_url` names a separately deployed,
+  operator-managed origin; the game server must never start or supervise an
+  HTTP listener.
 
 ## Change and persistence rules
 

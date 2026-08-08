@@ -132,7 +132,6 @@ set(PACKAGE_NAME "Atrinik Server")
 set(ATRINIK_SERVER_INCLUDE_DIRS
     ${CMAKE_CURRENT_BINARY_DIR}/src/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http_server
     ${CMAKE_CURRENT_SOURCE_DIR}/src/random_maps
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tests
     ${CMAKE_CURRENT_SOURCE_DIR}/src/types/monster/include
