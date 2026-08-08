@@ -24,17 +24,47 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
-      - name: Require the immutable tag workflow ref
+      - name: Check out the current main recovery definition
+        if: github.ref == 'refs/heads/main'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: main
+      - name: Require an immutable tag or validated main recovery definition
         env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_REF_TYPE: ${{ github.ref_type }}
+          RELEASE_WORKFLOW_SHA: ${{ github.sha }}
         run: |
-          test "${RELEASE_REF_TYPE}" = tag
-          test "${GITHUB_REF}" = "refs/tags/${RELEASE_TAG}"
+          [[ ${RELEASE_TAG} =~ ^v5\.[0-9]+\.[0-9]+$ ]]
+          if test "${RELEASE_REF_TYPE}" = tag; then
+            test "${GITHUB_REF}" = "refs/tags/${RELEASE_TAG}"
+          else
+            test "${RELEASE_REF_TYPE}" = branch
+            test "${GITHUB_REF}" = refs/heads/main
+            test "$(git rev-parse HEAD)" = "${RELEASE_WORKFLOW_SHA}"
+            test "$(git rev-parse refs/remotes/origin/main)" = \
+              "${RELEASE_WORKFLOW_SHA}"
+            release_commit=$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")
+            git merge-base --is-ancestor "${release_commit}" \
+              "${RELEASE_WORKFLOW_SHA}"
+            successful=$(gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "repos/${RELEASE_REPOSITORY}/commits/${RELEASE_WORKFLOW_SHA}/check-runs?per_page=100" \
+              --jq '[.check_runs[] | select(.name == "Classic validation" and .conclusion == "success" and .app.id == 15368)] | length')
+            test "${successful}" -ge 1
+          fi
 
   candidate:
     name: Build and validate immutable candidate
     needs: preflight
+    permissions:
+      actions: read
+      checks: read
+      contents: write
+      packages: read
     uses: ./.github/workflows/build-release-candidate.yml
     with:
       rehearsal: false

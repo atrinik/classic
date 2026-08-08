@@ -10,8 +10,6 @@ permissions:
   actions: write
   checks: read
   contents: write
-  issues: write
-  pull-requests: write
 
 concurrency:
   group: classic-semantic-release
@@ -63,7 +61,41 @@ jobs:
             --jq '[.check_runs[] | select(.name == "Classic validation" and .conclusion == "success" and .app.id == 15368)] | length')
           test "${successful}" -ge 1
           python3 tools/verify_import_history.py
+      - id: pending-release
+        name: Detect an incomplete semantic release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          mapfile -t drafts < <(
+            gh api --paginate --slurp \
+              "repos/${RELEASE_REPOSITORY}/releases?per_page=100" \
+              --jq '.[][] | select(.draft == true) | .tag_name'
+          )
+          if ((${#drafts[@]} > 1)); then
+            echo "multiple draft releases require manual investigation" >&2
+            exit 1
+          fi
+          tag=${drafts[0]:-}
+          if test -n "${tag}"; then
+            [[ ${tag} =~ ^v5\.[0-9]+\.[0-9]+$ ]]
+            commit=$(git rev-parse "refs/tags/${tag}^{commit}")
+            git merge-base --is-ancestor "${commit}" HEAD
+          fi
+          echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
+      - name: Resume the incomplete package release
+        if: steps.pending-release.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.pending-release.outputs.tag }}
+        run: >-
+          gh workflow run package-release.yml
+          --repo "${RELEASE_REPOSITORY}"
+          --ref main
+          --field "tag=${RELEASE_TAG}"
       - name: Analyze commits, tag, and publish release notes
+        if: steps.pending-release.outputs.tag == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-

@@ -401,7 +401,12 @@ def verify_release_tags(manifest: dict[str, Any]) -> None:
         if isinstance(plugin, list)
         and len(plugin) == 2
         and plugin[0] == "@semantic-release/github"
-        and plugin[1] == {"draftRelease": True}
+        and plugin[1]
+        == {
+            "draftRelease": True,
+            "failCommentCondition": False,
+            "successCommentCondition": False,
+        }
     ]
     require(
         len(github_plugins) == 1,
