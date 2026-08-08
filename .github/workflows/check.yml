@@ -107,6 +107,7 @@ jobs:
                 libcurl4-openssl-dev libgd-dev libminiupnpc-dev libreadline-dev \
                 libssl-dev libsubunit-dev ninja-build pkgconf python3-dev zlib1g-dev
               python3 -m unittest discover -s tools/tests -p "test_*.py"
+              python3 tools/dependencies.py sync
               python3 tools/dependencies.py verify
               cmake --preset linux-coverage \
                 -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
@@ -155,6 +156,7 @@ jobs:
               export LD_LIBRARY_PATH=/workspace/client/build/ci-prefix/lib
               export PKG_CONFIG_PATH=/workspace/client/build/ci-prefix/lib/pkgconfig
               python3 -m unittest discover -s tools/tests -p "test_*.py"
+              python3 tools/dependencies.py sync
               python3 tools/dependencies.py verify
               cmake --preset linux-coverage \
                 -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
