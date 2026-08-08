@@ -64,6 +64,23 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(package[: package.index("jobs:")].count("contents: read"), 1)
         self.assertNotIn("gh release edit", metadata_job)
 
+    def test_current_main_candidate_uses_the_trusted_recovery_verifier(self) -> None:
+        workflow = self.text("build-release-candidate.yml")
+        metadata_job = workflow[
+            workflow.index("  metadata:") : workflow.index("  sources:")
+        ]
+        self.assertIn("Check out the trusted recovery verifier", metadata_job)
+        self.assertIn("fetch-depth: 0", metadata_job)
+        self.assertIn("path: build/release-automation", metadata_job)
+        self.assertIn("ref: ${{ github.sha }}", metadata_job)
+        self.assertIn("if test \"${GITHUB_REF}\" = refs/heads/main", metadata_job)
+        self.assertIn(
+            "build/release-automation/tools/release/validate_release.py",
+            metadata_job,
+        )
+        self.assertIn("recovery_arguments+=(--recovery-main)", metadata_job)
+        self.assertIn("verifier=tools/release/validate_release.py", metadata_job)
+
     def test_semantic_release_skips_cross_repository_issue_comments(self) -> None:
         config = (ROOT / ".releaserc.cjs").read_text(encoding="utf-8")
         workflow = self.text("release.yml")
@@ -206,13 +223,15 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(candidate.count("--env CCACHE_MAXSIZE=500M"), 2)
         self.assertEqual(candidate.count("--env PATH=/opt/mxe/.ccache/bin:"), 2)
 
-    def test_only_release_metadata_checkout_requires_full_history(self) -> None:
+    def test_only_release_metadata_checkouts_require_full_history(self) -> None:
         candidate = self.text("build-release-candidate.yml")
-        self.assertEqual(candidate.count("fetch-depth: 0"), 1)
         metadata_job = candidate[
             candidate.index("  metadata:") : candidate.index("  sources:")
         ]
-        self.assertIn("fetch-depth: 0", metadata_job)
+        remaining_jobs = candidate[candidate.index("  sources:") :]
+        self.assertEqual(candidate.count("fetch-depth: 0"), 2)
+        self.assertEqual(metadata_job.count("fetch-depth: 0"), 2)
+        self.assertNotIn("fetch-depth: 0", remaining_jobs)
 
     def test_native_worldmaker_build_uses_the_server_compiler_cache(self) -> None:
         script = (ROOT / "server" / "tools" / "build-windows-package.sh").read_text(

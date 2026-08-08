@@ -72,6 +72,13 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ inputs.rehearsal && inputs.revision || inputs.tag }}
+      - name: Check out the trusted recovery verifier
+        if: inputs.rehearsal != true && github.ref == 'refs/heads/main'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          path: build/release-automation
+          ref: ${{ github.sha }}
       - id: metadata
         name: Validate tag, release, checks, and ancestry
         if: inputs.rehearsal != true
@@ -80,9 +87,16 @@ jobs:
           RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          python3 tools/release/validate_release.py \
+          verifier=tools/release/validate_release.py
+          recovery_arguments=()
+          if test "${GITHUB_REF}" = refs/heads/main; then
+            verifier=build/release-automation/tools/release/validate_release.py
+            recovery_arguments+=(--recovery-main)
+          fi
+          python3 "${verifier}" \
             --tag "${RELEASE_TAG}" \
-            --repository "${RELEASE_REPOSITORY}"
+            --repository "${RELEASE_REPOSITORY}" \
+            "${recovery_arguments[@]}"
       - id: rehearsal
         name: Validate non-publishing rehearsal inputs
         if: inputs.rehearsal == true

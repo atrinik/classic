@@ -42,8 +42,11 @@ before a candidate is produced, the next successful Semantic Release run
 detects the single reachable draft, dispatches Package Release from the
 validated current `main` workflow definition, and skips version analysis. This
 is the guarded escape hatch for a broken tag-bound workflow definition; normal
-publication remains bound to the exact tag definition. Multiple drafts fail
-closed for manual investigation.
+publication remains bound to the exact tag definition. Candidate metadata in
+this recovery path is validated by the exact checked current-main revision, so
+an older pending tag is checked against the complete current release history
+rather than running validation code and history policy frozen at that tag.
+Multiple drafts fail closed for manual investigation.
 
 If the failed run reached complete-candidate validation but a defect in its
 tag-bound publication code makes a job rerun impossible, dispatch Package
