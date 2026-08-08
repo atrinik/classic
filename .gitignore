@@ -5,9 +5,11 @@
 /coverage*.xml
 /coverage*.html
 
-# Python output in any module
-*.py[cod]
+# Python bytecode and caches
+*.pyc
 __pycache__/
+/client/**/*.py[od]
+/server/**/*.py[od]
 
 # Platform metadata in native modules
 /client/**/*:Zone.Identifier
