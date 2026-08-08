@@ -73,6 +73,7 @@ def main() -> int:
     parser.add_argument("--tag", required=True)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--github-output", type=Path)
+    parser.add_argument("--recovery-main", action="store_true")
     arguments = parser.parse_args()
 
     release_version = version(arguments.tag)
@@ -95,7 +96,13 @@ def main() -> int:
         )
 
     commit = git("rev-parse", f"{arguments.tag}^{{commit}}")
-    if git("rev-parse", "HEAD") != commit:
+    head = git("rev-parse", "HEAD")
+    if arguments.recovery_main:
+        if head != git("rev-parse", "refs/remotes/origin/main"):
+            raise ValidationError("recovery workflow is not current origin/main")
+        if not is_ancestor(commit, head):
+            raise ValidationError("release commit is not an ancestor of recovery main")
+    elif head != commit:
         raise ValidationError("checked-out tag does not resolve to HEAD")
     if not is_ancestor(floor, commit):
         raise ValidationError("release tag predates the unified release floor")

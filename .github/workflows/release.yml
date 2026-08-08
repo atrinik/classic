@@ -68,17 +68,25 @@ jobs:
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
           mapfile -t drafts < <(
-            gh api --paginate --slurp \
+            gh api --paginate \
               "repos/${RELEASE_REPOSITORY}/releases?per_page=100" \
-              --jq '.[][] | select(.draft == true) | .tag_name'
+              --jq '.[] | select(.draft == true) | [.tag_name, (.assets | length)] | @tsv'
           )
           if ((${#drafts[@]} > 1)); then
             echo "multiple draft releases require manual investigation" >&2
             exit 1
           fi
-          tag=${drafts[0]:-}
+          tag=
+          assets=0
+          if ((${#drafts[@]} == 1)); then
+            IFS=$'\t' read -r tag assets <<<"${drafts[0]}"
+          fi
           if test -n "${tag}"; then
             [[ ${tag} =~ ^v5\.[0-9]+\.[0-9]+$ ]]
+            if ((assets > 0)); then
+              echo "draft ${tag} has assets; retained-candidate recovery is required" >&2
+              exit 1
+            fi
             commit=$(git rev-parse "refs/tags/${tag}^{commit}")
             git merge-base --is-ancestor "${commit}" HEAD
           fi
