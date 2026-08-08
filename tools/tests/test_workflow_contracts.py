@@ -176,6 +176,10 @@ class WorkflowContractTests(unittest.TestCase):
         promoter = self.text("promote-latest.yml")
         self.assertIn('test "${GITHUB_REF}" = refs/heads/main', recovery)
         self.assertIn('test "${GITHUB_REF}" = refs/heads/main', promoter)
+        self.assertIn("Require the exact current main promotion definition", promoter)
+        self.assertIn("PROMOTION_WORKFLOW_SHA: ${{ github.sha }}", promoter)
+        self.assertIn('test "$(git rev-parse HEAD)"', promoter)
+        self.assertIn("refs/remotes/origin/main", promoter)
 
     def test_automatic_and_recovery_notes_use_the_same_pinned_toolchain(self) -> None:
         release = self.text("release.yml")

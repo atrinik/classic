@@ -20,13 +20,18 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Require main for a manual dispatch
-        if: github.event_name == 'workflow_dispatch'
-        run: test "${GITHUB_REF}" = refs/heads/main
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: main
+          ref: ${{ github.sha }}
+      - name: Require the exact current main promotion definition
+        env:
+          PROMOTION_WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          test "${GITHUB_REF}" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "${PROMOTION_WORKFLOW_SHA}"
+          test "$(git rev-parse refs/remotes/origin/main)" = \
+            "${PROMOTION_WORKFLOW_SHA}"
       - id: latest
         name: Resolve GitHub's authoritative latest release
         env:
