@@ -1,6 +1,6 @@
-# Atrinik protocol repository guide
+# Atrinik classic protocol module guide
 
-- This repository is the source of truth for shared game-command identities and
+- The `protocol/` module is the source of truth for shared game-command identities and
   their generated C and Python bindings. It does not own all packet payload
   layouts; trace those through their client/server producers and consumers.
 - Edit `schema/game-commands.json`, then run `python3 tools/generate.py`.
@@ -17,9 +17,9 @@
 - Validate with `python3 tools/generate.py --check`,
   `python3 -m unittest discover -s tests -p 'test_*.py'`, the repository CMake
   and CTest suites, and wrapper builds for every affected consumer.
-- Commits and pull-request titles use Conventional Commits. Every squash merge
-  is released by semantic-release; coordinate a release-consuming update when
-  generated bindings change.
+- Commits and pull-request titles use Conventional Commits. Classic uses one
+  repository-wide release line; update sibling consumers in the same pull
+  request when generated bindings change.
 - Keep build/package output under `build/`, preserve unrelated work, and finish
   with `git diff --check`.
 - Update this `AGENTS.md` in the same change when major rework alters ownership,

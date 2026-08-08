@@ -8,7 +8,7 @@ description: Implement and validate C17, CMake, headers, native tests, and cross
 ## Orient the change
 
 1. Read the root `AGENTS.md`, then every affected module's nearest
-   `AGENTS.md`, `CONTRIBUTING.md`, build files, and tests.
+   `AGENTS.md`, the root `CONTRIBUTING.md`, module build files, and tests.
 2. Identify module ownership before editing. Shared reusable native code belongs
    in `libatrinik/`; client and server policy stays in its consumer.
 3. Trace public API, generated protocol, runtime, and persistence effects across
