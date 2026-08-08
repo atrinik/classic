@@ -15,13 +15,15 @@ necessarily changed because every path gained a prefix.
 | `atrinik/legacy-protocol` | `eebc3921f364108a0ddd6d4beb9e1f86a274c862` | `protocol/` | `89579d3b6ccea3a0978990cfe9189ce49282e22d` | `148486ab814839dec0ce3069b8205b660215bc29` |
 
 The exact machine-readable manifest, commit maps, tool digest, source trees,
-and preserved `AGENTS.md` blobs are under `docs/history/`. Original source
-commit graphs remain reachable through `history/original/<component>/main`.
-After import verification, classic retired every component-prefixed and
-tag-namespace archival ref and rebuilt one unprefixed release sequence from
-`v5.0.19`; `docs/history/release-tags.json` records its exact targets.
-Historical component tag objects, releases, notes, pull refs, and assets remain
-in the former repositories.
+preserved `AGENTS.md` blobs, and retired branch targets are under
+`docs/history/`. Rewritten component histories are ancestors of `main`; the
+archived source repositories remain authoritative for the unchanged original
+commit graphs. After import and local-workspace migration verification, classic
+retired the complete `history/*` branch namespace as well as every
+component-prefixed and tag-namespace archival ref. It rebuilt one unprefixed
+release sequence from `v5.0.19`; `docs/history/release-tags.json` records its
+exact targets. Historical component branches, tag objects, releases, notes,
+pull refs, and assets remain in the former repositories.
 
 Atrinik-authored source throughout the classic monorepo, including the protocol
 module, is distributed under GPL-2.0-or-later through the root `LICENSE.md`.
