@@ -6,11 +6,30 @@
 #include <sys/stat.h>
 #endif
 
-static void require(bool condition) {
-    if (!condition) {
-        abort();
-    }
+static void
+require_failed(const char *expression, const char *file, int line, unsigned long system_error) {
+    fprintf(stderr,
+            "%s:%d: requirement failed: %s (last system error: %lu)\n",
+            file,
+            line,
+            expression,
+            system_error);
+    fflush(stderr);
+    abort();
 }
+
+#ifdef WIN32
+#define REQUIRE_SYSTEM_ERROR ((unsigned long)GetLastError())
+#else
+#define REQUIRE_SYSTEM_ERROR ((unsigned long)errno)
+#endif
+
+#define require(condition)                                                        \
+    do {                                                                          \
+        if (!(condition)) {                                                       \
+            require_failed(#condition, __FILE__, __LINE__, REQUIRE_SYSTEM_ERROR); \
+        }                                                                         \
+    } while (0)
 
 static void setup_file(const char *path, const char *contents) {
     FILE *fp = fopen(path, "wb");
