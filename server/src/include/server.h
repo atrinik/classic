@@ -282,6 +282,50 @@ extern void send_target_command(player *pl);
 extern void
 socket_command_account(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos);
 
+/**
+ * Check whether a connection completed the gameplay admission exchange.
+ *
+ * @param cs
+ * Client connection.
+ * @return
+ * True after the version and initial setup exchanges completed and any
+ * configured join password was accepted, false otherwise.
+ */
+extern bool socket_connection_admitted(const socket_struct *cs);
+
+/**
+ * Check whether a gameplay command is valid in the connection's current
+ * protocol phase.
+ *
+ * The separate control command still requires its IP allowlist check at the
+ * central dispatch boundary.
+ *
+ * @param cs
+ * Client connection.
+ * @param type
+ * One of the SERVER_CMD_xxx values.
+ * @return
+ * True if the command is valid in the current phase, false otherwise.
+ */
+extern bool socket_server_command_phase_allowed(const socket_struct *cs, uint8_t type);
+
+/**
+ * Dispatch one complete gameplay command.
+ *
+ * @param cs
+ * Client connection.
+ * @param pl
+ * Associated player, or NULL while reading directly from the transport.
+ * @param data
+ * Complete command, including its command byte.
+ * @param len
+ * Length of data.
+ * @return
+ * True if the command was handled or rejected. False only when an admitted
+ * playing-only command must be queued for the associated player.
+ */
+extern bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_t len);
+
 extern void generate_quick_name(player *pl);
 
 extern void
