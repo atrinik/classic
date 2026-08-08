@@ -1,3 +1,5 @@
+# Bundled asset attributions
+
 Zoey Rose - GPLv2:
 	apply.png
 	button.png

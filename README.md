@@ -6,18 +6,17 @@ editor, libatrinik, and protocol repositories so coordinated maintenance can
 happen in one branch and pull request.
 
 The modern replacement implementation remains a clean-room, MIT-licensed set of
-repositories. Consolidating classic Atrinik does not change that direction and
-does not relicense classic GPL code.
+repositories. Consolidating classic Atrinik does not change that direction.
 
 ## Layout
 
-| Path | Ownership | License |
-| --- | --- | --- |
-| `client/` | SDL3 C17 graphical client | GPL-2.0-or-later plus retained notices |
-| `server/` | C17 game server and classic scripting runtime | GPL-2.0-or-later plus retained notices |
-| `editor/` | Gridarta packaging utility | GPL-2.0-or-later |
-| `libatrinik/` | Shared C17 libraries | GPL-2.0-or-later |
-| `protocol/` | Classic command schema and bindings | MIT |
+| Path | Ownership |
+| --- | --- |
+| `client/` | SDL3 C17 graphical client |
+| `server/` | C17 game server and classic scripting runtime |
+| `editor/` | Gridarta packaging utility |
+| `libatrinik/` | Shared C17 libraries |
+| `protocol/` | Classic command schema and bindings |
 
 Authored maps and gameplay content remain in
 [`atrinik/content`](https://github.com/atrinik/content). Classic builds select
@@ -62,9 +61,3 @@ git log --follow -- server/src/server/main.c
 Original-to-rewritten commit maps and verification instructions are in
 [docs/history/README.md](docs/history/README.md). The former repositories remain
 available as read-only release and closed-issue archives.
-
-## Licensing
-
-The repository is an aggregate with a GPL-2.0-or-later default and an MIT
-protocol subtree. See [LICENSES.md](LICENSES.md) and the component notices. No
-blanket MIT relicensing is implied.

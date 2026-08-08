@@ -1,6 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "imported_at": "2026-08-08T00:00:00Z",
+  "active_release_tags": "docs/history/release-tags.json",
   "tool": {
     "name": "git-filter-repo",
     "version": "2.47.0",
@@ -11,6 +12,7 @@
       "name": "client",
       "source_repository": "atrinik/legacy-client",
       "source_tip": "a8d0ab66cafac894f6f9375eddb60fd02ed4c778",
+      "original_history_ref": "history/original/client/main",
       "source_tree": "f6b8f496927daa23a238cf697377a102c79ccc8d",
       "prefix": "client",
       "rewritten_tip": "8004d4420445ad717a364827944d8790e0a34062",
@@ -19,12 +21,13 @@
       "commit_map_sha256": "9ed064f940dd1a6ce1296a058b4b615da0a2a3a36329d49c354a2cfe27db4d97",
       "commit_count": 2779,
       "agents_blob": "136294523f0f7c5b4357c41a91c0b49ecdb5045f",
-      "tag_count": 16
+      "imported_tag_count": 16
     },
     {
       "name": "server",
       "source_repository": "atrinik/legacy-server",
       "source_tip": "b3c32b13a220fb9cc330133183de5b1818b29d41",
+      "original_history_ref": "history/original/server/main",
       "source_tree": "a9d3dd56161f39fa3d8c11525273f869b5174133",
       "prefix": "server",
       "rewritten_tip": "7cae183c396cd0855d4969092389c968c0d20f30",
@@ -33,12 +36,13 @@
       "commit_map_sha256": "13f37825ec7aff4496302beee4b79bc35a643d5af5124fe7e40629b78e696782",
       "commit_count": 3920,
       "agents_blob": "cde22bcb31a03e818abf15009d4240e6a6173033",
-      "tag_count": 19
+      "imported_tag_count": 19
     },
     {
       "name": "editor",
       "source_repository": "atrinik/legacy-editor",
       "source_tip": "ac547a5ba8259bbde649caabdabe51c2861352f4",
+      "original_history_ref": "history/original/editor/main",
       "source_tree": "a1198168da299cb8ef2eb9823e7d9d15e9b11824",
       "prefix": "editor",
       "rewritten_tip": "26e9139ca3da0a3cea5903e8cd42e114ad9029a3",
@@ -47,12 +51,13 @@
       "commit_map_sha256": "ff02879cbd8868f9a15e56ab97fab37aa725cdcaadff8a83af6069df824493b2",
       "commit_count": 29,
       "agents_blob": "8d59b922fbf9e3780101bc24e2c1c67cff3778f0",
-      "tag_count": 8
+      "imported_tag_count": 8
     },
     {
       "name": "libatrinik",
       "source_repository": "atrinik/legacy-libatrinik",
       "source_tip": "a5e161f5dae6896ae0ee218b807f547ffdeb49c8",
+      "original_history_ref": "history/original/libatrinik/main",
       "source_tree": "b7ddb6de42dda015dfb6c72447b3d44a2127582a",
       "prefix": "libatrinik",
       "rewritten_tip": "c23cf3a5777e15483ff7a5305f37dd9de8939b28",
@@ -61,12 +66,13 @@
       "commit_map_sha256": "79672abe14b2bea9204b9914a59713f96558fec0880f2ff582b351473a35068c",
       "commit_count": 45,
       "agents_blob": "9cd2939ddfe576dda331b00edaf06f994dd7df6c",
-      "tag_count": 15
+      "imported_tag_count": 15
     },
     {
       "name": "protocol",
       "source_repository": "atrinik/legacy-protocol",
       "source_tip": "eebc3921f364108a0ddd6d4beb9e1f86a274c862",
+      "original_history_ref": "history/original/protocol/main",
       "source_tree": "1fdba82278e722bc3d7aef42f59926e39e48d6b5",
       "prefix": "protocol",
       "rewritten_tip": "89579d3b6ccea3a0978990cfe9189ce49282e22d",
@@ -75,7 +81,7 @@
       "commit_map_sha256": "668a161e41218460a59fbf03cc4c45e2f2a0e8515a6bc65ed4796cfc9eb4b804",
       "commit_count": 16,
       "agents_blob": "829e817af0b26f8fc2395f051e9de50285e1dea2",
-      "tag_count": 12
+      "imported_tag_count": 12
     }
   ]
 }

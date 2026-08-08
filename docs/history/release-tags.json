@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "policy": "unified-classic",
+  "retired_component_tag_count": 70,
+  "retired_archival_tag_ref_count": 217,
+  "baseline": {
+    "tag": "v5.0.19",
+    "commit": "f2cdf68710d157d4fae44a0582972129e6c4db9e"
+  },
+  "tags": {
+    "v5.0.19": "f2cdf68710d157d4fae44a0582972129e6c4db9e",
+    "v5.1.0": "ea01c95c5bf99e7044ca1082c9f40d8678911fa0",
+    "v5.1.1": "dc5d3be79701ceb84cd59f7972b37065e4e895e3",
+    "v5.1.2": "dadd77af5400ac8b9c454d59c31b4d8da59171ef",
+    "v5.1.3": "8fea025cfbc143cbd7122307f5033bfd694750a4",
+    "v5.1.4": "cdceeac735995f9a656368b3d527032a68f416f8",
+    "v5.1.5": "84ad46cf099a5328829c30f76848d881142a9be4",
+    "v5.1.6": "8fb84982d7b6550659af78a80513a7e692007855",
+    "v5.1.7": "6627eaa3da9d393760c424cb8235d8d412f8fe9c",
+    "v5.1.8": "4bbd6b53cdd5e86e1a2ac23974491b1b7d81a20e",
+    "v5.2.0": "e94b7723dcc2f50bdeb7c5fe0c9bd80024ae8536",
+    "v5.3.0": "a031b39b644112e50f4c023ea49dfc3228e99d52",
+    "v5.3.1": "43cf6ddb86fbe21496f37e6409fabdf0747754c9",
+    "v5.3.2": "672fd35fc6e3dc879dbd22578a4625912ab23750",
+    "v5.3.3": "884575e9aa40bab33329caf02543ead0a5751613",
+    "v5.4.0": "e38f1a8b416dac1d5f63277bd50876237ac4140f",
+    "v5.4.1": "3d89bf9eb2625e357ff242663e4deefbbddbc916",
+    "v5.4.2": "47d393a8c320e2ca4bc18ba23cec1fb42587bed4",
+    "v5.5.0": "98bd5cd261501095a19af09e0767d7baaee51579",
+    "v5.5.1": "7cae183c396cd0855d4969092389c968c0d20f30"
+  }
+}
