@@ -128,7 +128,7 @@ START_TEST(test_unique_collections_validate_deduplicate_and_bound) {
 
     for (size_t i = 1; i < METRICS_UNIQUE_DEFAULT_LIMIT; i++) {
         char id[32];
-        snprintf(VS(id), "map/%zu", i);
+        snprintf(VS(id), "map/%" PRIuMAX, (uintmax_t)i);
         ck_assert(metrics_mark_unique(&store, METRIC_COLLECTION_CHARACTER_REGIONS_VISITED, id));
     }
     ck_assert_uint_eq(metrics_unique_count(&store, METRIC_COLLECTION_CHARACTER_REGIONS_VISITED),
@@ -171,7 +171,7 @@ START_TEST(test_keyed_metrics_validate_kinds_sort_bound_and_saturate) {
 
     for (size_t i = 2; i < METRICS_KEYED_DEFAULT_LIMIT; i++) {
         char id[32];
-        snprintf(VS(id), "quest/%zu", i);
+        snprintf(VS(id), "quest/%" PRIuMAX, (uintmax_t)i);
         ck_assert(metrics_keyed_add(&store, METRIC_KEYED_CHARACTER_QUEST_COMPLETIONS, id, 1));
     }
     ck_assert_uint_eq(metrics_keyed_count(&store, METRIC_KEYED_CHARACTER_QUEST_COMPLETIONS),
@@ -189,7 +189,7 @@ START_TEST(test_content_by_name_updates_are_best_effort_at_capacity) {
 
     for (size_t i = 0; i < METRICS_UNIQUE_DEFAULT_LIMIT; i++) {
         char id[32];
-        snprintf(VS(id), "region:test_%zu", i);
+        snprintf(VS(id), "region:test_%" PRIuMAX, (uintmax_t)i);
         ck_assert(
             metrics_mark_unique(&pl.metrics, METRIC_COLLECTION_CHARACTER_REGIONS_VISITED, id));
     }
@@ -202,7 +202,7 @@ START_TEST(test_content_by_name_updates_are_best_effort_at_capacity) {
 
     for (size_t i = 0; i < METRICS_KEYED_DEFAULT_LIMIT; i++) {
         char id[32];
-        snprintf(VS(id), "quest:test_%zu", i);
+        snprintf(VS(id), "quest:test_%" PRIuMAX, (uintmax_t)i);
         ck_assert(metrics_keyed_add(&pl.metrics, METRIC_KEYED_CHARACTER_QUEST_COMPLETIONS, id, 1));
     }
     ck_assert(metrics_character_keyed_add_by_name(&pl,
