@@ -56,28 +56,64 @@ def verify_commits(name: str, commits: list[str]) -> None:
 
 def load_manifest() -> dict[str, Any]:
     value = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    require(value.get("schema_version") == 2, "unsupported import manifest")
+    require(value.get("schema_version") == 3, "unsupported import manifest")
+    require(
+        value.get("source_history_policy")
+        == {
+            "classic_history_refs": "retired",
+            "original_graphs": "archived-source-repositories",
+        },
+        "unexpected source-history policy",
+    )
+    retired_refs = value.get("retired_history_refs")
+    require(isinstance(retired_refs, dict) and retired_refs, "no retired history refs")
+    require(
+        all(
+            isinstance(ref, str)
+            and ref.startswith("history/")
+            and isinstance(commit, str)
+            and re.fullmatch(r"[0-9a-f]{40}", commit)
+            for ref, commit in retired_refs.items()
+        ),
+        "invalid retired history ref evidence",
+    )
     components = value.get("components")
     require(isinstance(components, list) and components, "no imported components")
+    component_names = {component["name"] for component in components}
+    expected_refs = {
+        f"history/{name}/main" for name in component_names
+    } | {
+        f"history/original/{name}/main" for name in component_names
+    }
+    expected_refs.update(
+        {
+            "history/client/pr-48",
+            "history/server/feat/stable-content-identities-port",
+        }
+    )
+    require(
+        set(retired_refs) == expected_refs,
+        "retired history ref evidence is incomplete or unexpected",
+    )
     return value
 
 
-def verify_component(component: dict[str, Any]) -> None:
+def verify_component(
+    component: dict[str, Any], retired_refs: dict[str, str]
+) -> None:
     name = component["name"]
     prefix = component["prefix"]
     integration = component["integration_commit"]
     rewritten = component["rewritten_tip"]
     source = component["source_tip"]
-    original_history_ref = component["original_history_ref"]
-
-    original_ref_targets = [
-        git("rev-parse", ref, check=False)
-        for ref in (
-            f"refs/heads/{original_history_ref}",
-            f"refs/remotes/origin/{original_history_ref}",
-        )
-    ]
-    require(source in original_ref_targets, f"{name}: original history ref is missing")
+    require(
+        retired_refs.get(f"history/{name}/main") == rewritten,
+        f"{name}: rewritten retired-ref target changed",
+    )
+    require(
+        retired_refs.get(f"history/original/{name}/main") == source,
+        f"{name}: original retired-ref target changed",
+    )
 
     require(
         subprocess.run(
@@ -122,7 +158,12 @@ def verify_component(component: dict[str, Any]) -> None:
     require(len(pairs) == component["commit_count"], f"{name}: commit count changed")
     require(mapping.get(source) == rewritten, f"{name}: source tip mapping changed")
 
-    verify_commits(name, [mapped for _, mapped in pairs] + [source])
+    # The immutable map records rewritten commits from every imported ref, while
+    # only the component main graph is integrated into the monorepo main line.
+    # Branch-only rewritten objects are intentionally allowed to disappear
+    # after the history namespace is retired; their originals remain in the
+    # archived source repository.
+    verify_commits(name, [rewritten])
 
 
 
@@ -171,7 +212,7 @@ def main() -> int:
     try:
         manifest = load_manifest()
         for component in manifest["components"]:
-            verify_component(component)
+            verify_component(component, manifest["retired_history_refs"])
         verify_release_tags(manifest)
     except (OSError, KeyError, ValueError, RuntimeError) as error:
         print(f"history verification failed: {error}", file=sys.stderr)
