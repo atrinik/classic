@@ -42,8 +42,11 @@ before a candidate is produced, the next successful Semantic Release run
 detects the single reachable draft, dispatches Package Release from the
 validated current `main` workflow definition, and skips version analysis. This
 is the guarded escape hatch for a broken tag-bound workflow definition; normal
-publication remains bound to the exact tag definition. Multiple drafts fail
-closed for manual investigation.
+publication remains bound to the exact tag definition. Candidate metadata in
+this recovery path is validated by the exact checked current-main revision, so
+an older pending tag is checked against the complete current release history
+rather than running validation code and history policy frozen at that tag.
+Multiple drafts fail closed for manual investigation.
 
 If the failed run reached complete-candidate validation but a defect in its
 tag-bound publication code makes a job rerun impossible, dispatch Package
@@ -88,11 +91,16 @@ gh workflow run package-release.yml --repo atrinik/classic --ref main \
    immutable, non-prerelease release with the exact asset digests. A retry also
    accepts that exact published state and skips every immutable release write.
 7. A separate job dispatches the globally serialized Promote Latest Release
-   workflow. It recomputes GitHub's authoritative latest release, revalidates
-   its closed asset set and exact versioned image, and reconciles only the
-   mutable GHCR `latest` alias, verifies its resulting registry digest, and
-   requires the GitHub/Sigstore attestation. GitHub assigns the release's Latest designation
-   from semantic versions when the draft is published.
+   workflow after successful publication. It recomputes GitHub's authoritative
+   latest release, revalidates its closed asset set and exact versioned image,
+   and reconciles only the mutable GHCR `latest` alias, verifies its resulting
+   registry digest, and requires the GitHub/Sigstore attestation. The explicit
+   successful-publication guard ensures that an intentionally skipped build in
+   retained-candidate recovery cannot suppress reconciliation. Image policy is
+   checked by the exact current-main workflow verifier against the immutable
+   tagged image, allowing a verifier-only recovery without changing release
+   inputs. GitHub assigns the release's Latest designation from semantic
+   versions when the draft is published.
 
 Publication uses the root executable `.releaserc.cjs` and its fail-closed
 first-parent selector,
