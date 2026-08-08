@@ -48,7 +48,6 @@ set(SERVER_CORE_SOURCES
 	src/commands/player/version.c
 	src/commands/player/whereami.c
 	src/commands/player/who.c
-	src/http_server/http_server.c
 	src/random_maps/decor.c
 	src/random_maps/door.c
 	src/random_maps/exit.c

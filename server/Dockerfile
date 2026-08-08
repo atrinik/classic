@@ -38,7 +38,6 @@ RUN mkdir -p /tmp/worldmaker /tmp/atrinik-data/http /tmp/atrinik-data/tmp \
         --datapath=/tmp/atrinik-data \
         --httppath=/tmp/atrinik-data/http \
         --resourcespath=/src/resources \
-        --http_server=off \
     && test -d /tmp/atrinik-data/http/client-maps
 
 FROM ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
@@ -73,7 +72,7 @@ RUN mkdir -p server/data \
     && chown -R atrinik:atrinik /opt/atrinik
 USER atrinik
 WORKDIR /opt/atrinik/server
-EXPOSE 1730/udp 8080
+EXPOSE 1730/udp
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD ["/usr/local/bin/atrinik-server-healthcheck"]
 ENTRYPOINT ["atrinik-server-entrypoint"]

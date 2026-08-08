@@ -47,8 +47,6 @@
 #include <world_maker.h>
 #include <account.h>
 #include <content_benchmark.h>
-
-#include <toolkit/process.h>
 #include <toolkit/console.h>
 
 /** Object used in process_events(). */
@@ -507,10 +505,6 @@ static void do_specials(void) {
 
     if (!(pticks % 2521)) {
         metaserver_info_update();
-    }
-
-    if (!(pticks % 80)) {
-        process_check_all();
     }
 }
 
