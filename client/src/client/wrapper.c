@@ -33,6 +33,7 @@
 #include <metaserver.h>
 #include <connection_preferences.h>
 #include <client_socket.h>
+#include <session_client.h>
 #include <animations.h>
 #include <notification.h>
 #include <toolkit/string.h>
@@ -64,6 +65,7 @@ void system_end(void) {
     resources_deinit();
     toolkit_widget_deinit();
     client_socket_deinitialize();
+    client_session_deinit();
     metaserver_deinit();
     effects_deinit();
     sound_ambient_clear();

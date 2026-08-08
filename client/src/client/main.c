@@ -33,6 +33,7 @@
 #include <metaserver.h>
 #include <connection_preferences.h>
 #include <client_socket.h>
+#include <session_client.h>
 #include <SDL3/SDL_main.h>
 #include <region_map.h>
 #include <toolkit/packet.h>
@@ -196,6 +197,7 @@ static void init_game_data(void) {
     init_keys();
     memset(&cpl, 0, sizeof(cpl));
     object_init();
+    client_session_init();
     clear_player();
 
     memset(&MapData, 0, sizeof(MapData));
@@ -297,6 +299,7 @@ static int game_status_chain(void) {
 
         socket_thread_start();
         clear_player();
+        client_session_connected(selected_server->name);
         cpl.state = ST_START_DATA;
     } else if (cpl.state == ST_START_DATA) {
         packet_struct *packet = packet_new(SERVER_CMD_VERSION, 16, 0);
@@ -752,6 +755,7 @@ int main(int argc, char *argv[]) {
 
         uint64_t profile_events_started = render_profiler_begin();
         done = Event_PollInputDevice();
+        client_session_drain_actions();
         render_profiler_end(RENDER_PROFILE_EVENTS, profile_events_started);
 
         uint64_t profile_game_started = render_profiler_begin();

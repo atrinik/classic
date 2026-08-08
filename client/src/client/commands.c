@@ -34,6 +34,7 @@
 #include <openssl/crypto.h>
 #include <packet_payload.h>
 #include <region_map.h>
+#include <session_client.h>
 #include <wrapper.h>
 #include <toolkit/map_protocol.h>
 #include <toolkit/packet.h>
@@ -42,8 +43,21 @@
 
 /** @copydoc socket_command_struct::handle_func */
 void socket_command_book(uint8_t *data, size_t len, size_t pos) {
+    if (pos > len) {
+        LOG(PACKET, "Rejected malformed book packet.");
+        return;
+    }
     sound_play_effect("book.ogg", 100);
     book_load((char *)data + pos, len);
+
+    size_t text_length = MIN(len - pos, (size_t)SESSION_TEXT_SIZE - 1);
+    char text[SESSION_TEXT_SIZE];
+    memcpy(text, data + pos, text_length);
+    text[text_length] = '\0';
+    session_reduce_dialog(client_session_get(), "Book", text);
+    if (strstr(text, "Quest List") != NULL || strstr(text, "No quests to speak of") != NULL) {
+        session_reduce_quest(client_session_get(), "Quest List", text);
+    }
 }
 /** @copydoc socket_command_struct::handle_func */
 void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
@@ -203,6 +217,7 @@ void socket_command_drawinfo(uint8_t *data, size_t len, size_t pos) {
     str = stringbuffer_finish(sb);
 
     draw_info_tab(type, color, str);
+    session_reduce_message(client_session_get(), type, color, str);
 
     free(str);
 }
@@ -217,6 +232,7 @@ void socket_command_target(uint8_t *data, size_t len, size_t pos) {
     cpl.target_level = packet_reader_read_uint8(&reader);
     cpl.combat = packet_reader_read_uint8(&reader);
     cpl.combat_force = packet_reader_read_uint8(&reader);
+    client_session_sync_target();
     WIDGET_REDRAW_ALL(TARGET_ID);
 
     map_redraw_flag = 1;
@@ -400,6 +416,9 @@ void socket_command_stats(uint8_t *data, size_t len, size_t pos) {
             }
         }
     }
+
+    client_session_sync_player();
+    client_session_sync_target();
 }
 
 /** @copydoc socket_command_struct::handle_func */
@@ -425,15 +444,17 @@ void socket_command_player(uint8_t *data, size_t len, size_t pos) {
 
     cur_widget[INPUT_ID]->show = 0;
 
+    cpl.state = ST_PLAY;
+    client_session_playing();
+
     if (cur_widget[PARTY_ID]->show) {
         send_command("/party list");
     }
-
-    cpl.state = ST_PLAY;
 }
 
 void command_item_update(packet_reader_t *reader, uint32_t flags, object *tmp) {
     bool force_anim = false;
+    bool session_item_synced = false;
 
     if (flags & UPD_LOCATION) {
         /* Currently unused. */
@@ -542,6 +563,8 @@ void command_item_update(packet_reader_t *reader, uint32_t flags, object *tmp) {
             packet_reader_read_string(reader, spell_msg, sizeof(spell_msg));
 
             spells_update(tmp, spell_cost, spell_path, spell_flags, spell_msg);
+            client_session_sync_spell(tmp, spell_cost, spell_path, spell_flags, spell_msg);
+            session_item_synced = true;
         } else if (tmp->itype == TYPE_SKILL) {
             uint8_t skill_level = packet_reader_read_uint8(reader);
             int64_t skill_exp = packet_reader_read_int64(reader);
@@ -549,6 +572,8 @@ void command_item_update(packet_reader_t *reader, uint32_t flags, object *tmp) {
             packet_reader_read_string(reader, VS(skill_msg));
 
             skills_update(tmp, skill_level, skill_exp, skill_msg);
+            client_session_sync_skill(tmp, skill_level, skill_exp, skill_msg);
+            session_item_synced = true;
         } else if (tmp->itype == TYPE_FORCE || tmp->itype == TYPE_POISONING) {
             int32_t sec;
             char msg[HUGE_BUF];
@@ -557,6 +582,8 @@ void command_item_update(packet_reader_t *reader, uint32_t flags, object *tmp) {
             packet_reader_read_string(reader, msg, sizeof(msg));
 
             widget_active_effects_update(cur_widget[ACTIVE_EFFECTS_ID], tmp, sec, msg);
+            client_session_sync_effect(tmp, sec, msg);
+            session_item_synced = true;
         }
     }
 
@@ -576,6 +603,9 @@ void command_item_update(packet_reader_t *reader, uint32_t flags, object *tmp) {
     }
 
     object_redraw(tmp);
+    if (!session_item_synced) {
+        client_session_sync_item(tmp);
+    }
 }
 
 /** @copydoc socket_command_struct::handle_func */
@@ -590,7 +620,9 @@ void socket_command_item(uint8_t *data, size_t len, size_t pos) {
             return;
         }
 
+        client_session_inventory_begin(loc_delete, true, false);
         object_remove_inventory(env);
+        client_session_inventory_end(loc_delete);
 
         if (pos == len) {
             return;
@@ -609,6 +641,8 @@ void socket_command_item(uint8_t *data, size_t len, size_t pos) {
     }
 
     uint8_t bflag = packet_reader_read_uint8(&reader);
+
+    client_session_inventory_begin(loc, false, env != cpl.below && env != cpl.ob);
 
     while (pos < len) {
         tag_t tag = packet_reader_read_uint32(&reader);
@@ -650,6 +684,8 @@ void socket_command_item(uint8_t *data, size_t len, size_t pos) {
 
         command_item_update(&reader, flags, tmp);
     }
+
+    client_session_inventory_end(loc);
 }
 
 /** @copydoc socket_command_struct::handle_func */
@@ -679,6 +715,7 @@ void socket_command_item_delete(uint8_t *data, size_t len, size_t pos) {
 
     while (pos < len) {
         tag = packet_reader_read_uint32(&reader);
+        client_session_remove_item(tag);
         delete_object(tag);
     }
 }
@@ -752,6 +789,8 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     uint8_t num_layers;
     region_map_def_map_t *def_map;
     bool region_map_fow_need_update;
+    bool session_map_reset = false;
+    int session_xoff = 0, session_yoff = 0, session_zoff = 0;
 
     if (!map_protocol_validate(
             data,
@@ -789,6 +828,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
             mx = xpos;
             my = ypos;
             init_map_data(map_w, map_h, xpos, ypos);
+            session_map_reset = true;
         } else {
             int xoff, yoff, zoff;
 
@@ -796,6 +836,9 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
             xoff = packet_reader_read_int8(&reader);
             yoff = packet_reader_read_int8(&reader);
             zoff = packet_reader_read_int8(&reader);
+            session_xoff = xoff;
+            session_yoff = yoff;
+            session_zoff = zoff;
             xpos = packet_reader_read_uint8(&reader);
             ypos = packet_reader_read_uint8(&reader);
             mx = xpos;
@@ -819,7 +862,9 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
 
         /* Have we moved? */
         if ((xpos - mx || ypos - my)) {
-            display_mapscroll(xpos - mx, ypos - my, 0, 0);
+            session_xoff = xpos - mx;
+            session_yoff = ypos - my;
+            display_mapscroll(session_xoff, session_yoff, 0, 0);
             map_play_footstep();
         }
 
@@ -830,6 +875,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     MapData.posx = xpos;
     MapData.posy = ypos;
     MapData.player_sub_layer = packet_reader_read_uint8(&reader);
+    client_session_sync_map(session_map_reset, session_xoff, session_yoff, session_zoff);
     def_map = region_map_find_map(MapData.region_map, MapData.map_path);
 
     map_get_real_coords(&rx, &ry);
@@ -887,7 +933,9 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
 
             /* Clear the whole cell? */
             if (mask & MAP2_MASK_CLEAR) {
-                map_clear_cell(x, y, (mask & MAP2_MASK_HARD_CLEAR) != 0);
+                bool hard_clear = (mask & MAP2_MASK_HARD_CLEAR) != 0;
+                client_session_clear_map_cell(x, y, depth, -1, hard_clear);
+                map_clear_cell(x, y, hard_clear);
                 continue;
             }
 
@@ -916,17 +964,23 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
             bool fow_updated = (mask & MAP2_MASK_FOW) != 0;
             bool tile_fow =
                 fow_updated ? packet_reader_read_uint8(&reader) != 0 : map_get_fow(x, y);
+            uint8_t session_light_levels[NUM_SUB_LAYERS] = {0};
+            bool session_light_known[NUM_SUB_LAYERS] = {false};
 
             /* Do we have light-level information? */
             if (mask & MAP2_MASK_LIGHT_LEVEL) {
-                map_set_light_level(x, y, 0, packet_reader_read_uint8(&reader));
+                session_light_levels[0] = packet_reader_read_uint8(&reader);
+                session_light_known[0] = true;
+                map_set_light_level(x, y, 0, session_light_levels[0]);
             }
 
             if (mask & MAP2_MASK_LIGHT_LEVEL_MORE) {
                 int sub_layer;
 
                 for (sub_layer = 1; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                    map_set_light_level(x, y, sub_layer, packet_reader_read_uint8(&reader));
+                    session_light_levels[sub_layer] = packet_reader_read_uint8(&reader);
+                    session_light_known[sub_layer] = true;
+                    map_set_light_level(x, y, sub_layer, session_light_levels[sub_layer]);
                 }
             }
 
@@ -940,9 +994,16 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
 
                 /* Clear this layer. */
                 if (type == MAP2_LAYER_CLEAR) {
+                    uint8_t clear_layer = packet_reader_read_uint8(&reader);
+                    uint8_t object_layer = (clear_layer % NUM_LAYERS) + 1;
+                    uint8_t sub_layer = clear_layer / NUM_LAYERS;
+                    client_session_clear_map_layer(x, y, depth, object_layer, sub_layer);
+                    if (object_layer == LAYER_LIVING) {
+                        client_session_clear_map_entities(x, y, depth, sub_layer);
+                    }
                     map_set_data(x,
                                  y,
-                                 packet_reader_read_uint8(&reader),
+                                 clear_layer,
                                  0,
                                  0,
                                  0,
@@ -1113,6 +1174,37 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
                                  door,
                                  glow,
                                  glow_speed);
+                    uint8_t object_layer = (type % NUM_LAYERS) + 1;
+                    uint8_t sub_layer = type / NUM_LAYERS;
+                    client_session_sync_map_cell(x,
+                                                 y,
+                                                 depth,
+                                                 object_layer,
+                                                 sub_layer,
+                                                 (uint16_t)face,
+                                                 obj_flags,
+                                                 height,
+                                                 session_light_levels[sub_layer],
+                                                 session_light_known[sub_layer],
+                                                 tile_fow,
+                                                 true,
+                                                 player_name);
+                    if (object_layer == LAYER_LIVING) {
+                        if (target_object_count != 0) {
+                            client_session_sync_map_entity(target_object_count,
+                                                           x,
+                                                           y,
+                                                           depth,
+                                                           sub_layer,
+                                                           (uint16_t)face,
+                                                           obj_flags,
+                                                           probe,
+                                                           target_is_friend != 0,
+                                                           player_name);
+                        } else {
+                            client_session_clear_map_entities(x, y, depth, sub_layer);
+                        }
+                    }
                 }
             }
 
@@ -1129,6 +1221,24 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
                     int16_t anim_value = packet_reader_read_int16(&reader);
 
                     map_anims_add(anim_type, x, y, sub_layer, depth, anim_value);
+                }
+            }
+
+            for (uint8_t sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                if (fow_updated || session_light_known[sub_layer]) {
+                    client_session_sync_map_cell(x,
+                                                 y,
+                                                 depth,
+                                                 SESSION_MAP_LAYER_METADATA,
+                                                 sub_layer,
+                                                 0,
+                                                 0,
+                                                 0,
+                                                 session_light_levels[sub_layer],
+                                                 session_light_known[sub_layer],
+                                                 tile_fow,
+                                                 fow_updated,
+                                                 "");
                 }
             }
 

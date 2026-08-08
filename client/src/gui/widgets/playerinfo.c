@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <session_client.h>
 
 /** @copydoc widgetdata::draw_func */
 static void widget_draw(widgetdata *widget) {
@@ -38,6 +39,8 @@ static void widget_draw(widgetdata *widget) {
     }
 
     SDL_Rect box;
+    session_player_t player = {0};
+    HARD_ASSERT(session_player_view(client_session_get(), &player));
     box.w = widget->w;
     box.h = widget->h;
 
@@ -53,7 +56,7 @@ static void widget_draw(widgetdata *widget) {
                      "the amount of time before the next skill-based action "
                      "can be performed (such as spell casting or firing a "
                      "bow).][/font]%1.2f[/tooltip]",
-                     cpl.action_timer);
+                     player.action_timer);
     text_show_format(widget->surface,
                      FONT_SERIF14,
                      0,
@@ -62,12 +65,12 @@ static void widget_draw(widgetdata *widget) {
                      TEXT_ALIGN_CENTER | TEXT_VALIGN_CENTER | TEXT_OUTLINE | TEXT_MARKUP,
                      &box,
                      "[b]%s[/b]",
-                     cpl.name);
+                     player.name);
 
     char buf[32];
-    snprintf(VS(buf), "[b]%d[/b]", cpl.stats.level);
+    snprintf(VS(buf), "[b]%d[/b]", player.stats.level);
     int wd = text_get_width(FONT_SERIF14, buf, TEXT_MARKUP);
-    const char *color = cpl.stats.level == s_settings->max_level ? COLOR_HGOLD : COLOR_WHITE;
+    const char *color = player.stats.level == s_settings->max_level ? COLOR_HGOLD : COLOR_WHITE;
     text_show_format(widget->surface,
                      FONT_SERIF14,
                      widget->w - 4 - wd,
@@ -85,15 +88,19 @@ static void widget_draw(widgetdata *widget) {
 /** @copydoc widgetdata::background_func */
 static void widget_background(widgetdata *widget, int draw) {
     static uint32_t action_tick = 0;
+    session_player_t player = {0};
+    HARD_ASSERT(session_player_view(client_session_get(), &player));
 
     /* Pre-emptively tick down the skill delay timer */
-    if (cpl.action_timer > 0.0) {
+    if (player.action_timer > 0.0f) {
         if (LastTick - action_tick > 125) {
-            cpl.action_timer -= (LastTick - action_tick) / 1000.0f;
-            if (cpl.action_timer < 0.0) {
-                cpl.action_timer = 0.0;
+            player.action_timer -= (LastTick - action_tick) / 1000.0f;
+            if (player.action_timer < 0.0f) {
+                player.action_timer = 0.0f;
             }
 
+            session_reduce_player(client_session_get(), &player);
+            cpl.action_timer = player.action_timer;
             action_tick = LastTick;
             WIDGET_REDRAW(widget);
         }

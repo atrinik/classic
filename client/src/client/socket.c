@@ -30,6 +30,7 @@
 #include <global.h>
 #include <metaserver.h>
 #include <client_socket.h>
+#include <session_client.h>
 #include <toolkit/packet.h>
 #include <network_graph.h>
 
@@ -405,6 +406,8 @@ int handle_socket_shutdown(void) {
  */
 void client_socket_close(client_socket_t *csock) {
     HARD_ASSERT(csock != NULL);
+
+    client_session_disconnected();
 
     if (socket_mutex == NULL) {
         if (csock->sc != NULL) {

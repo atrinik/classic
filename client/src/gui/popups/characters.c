@@ -31,6 +31,7 @@
 
 #include <global.h>
 #include <client_socket.h>
+#include <session_client.h>
 #include <animations.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
@@ -190,14 +191,14 @@ static void list_post_column(list_struct *list, uint32_t row, uint32_t col) {
 static int
 text_anchor_handle(const char *anchor_action, const char *buf, size_t len, void *custom_data) {
     if (strcmp(anchor_action, "charname") == 0) {
-        packet_struct *packet;
-
-        packet = packet_new(SERVER_CMD_ACCOUNT, 64, 64);
-        packet_writer_write_uint8(packet, CMD_ACCOUNT_LOGIN_CHAR);
-        packet_writer_write_cstring(packet, buf);
-        socket_send_packet(packet);
-
-        cpl.state = ST_WAITFORPLAY;
+        session_action_result_t result = client_session_select_character(buf);
+        if (result == SESSION_ACTION_ACCEPTED) {
+            cpl.state = ST_WAITFORPLAY;
+        } else {
+            LOG(INFO,
+                "Rejected character-selection action: %s",
+                session_action_result_string(result));
+        }
 
         return 1;
     }
