@@ -196,6 +196,7 @@ jobs:
             --env CCACHE_DIR=/workspace/client/build/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env CCACHE_TEMPDIR=/tmp/atrinik-client-ccache \
+            --env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace/client \
             ghcr.io/atrinik/windows-build:1.0.5@sha256:9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7 \
@@ -251,6 +252,7 @@ jobs:
             --env CCACHE_DIR=/workspace/server/build/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env CCACHE_TEMPDIR=/tmp/atrinik-server-ccache \
+            --env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace/server \
             ghcr.io/atrinik/windows-build:1.0.5@sha256:9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7 \
