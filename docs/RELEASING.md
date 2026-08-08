@@ -96,9 +96,11 @@ gh workflow run package-release.yml --repo atrinik/classic --ref main \
    and reconciles only the mutable GHCR `latest` alias, verifies its resulting
    registry digest, and requires the GitHub/Sigstore attestation. The explicit
    successful-publication guard ensures that an intentionally skipped build in
-   retained-candidate recovery cannot suppress reconciliation. GitHub assigns
-   the release's Latest designation from semantic versions when the draft is
-   published.
+   retained-candidate recovery cannot suppress reconciliation. Image policy is
+   checked by the exact current-main workflow verifier against the immutable
+   tagged image, allowing a verifier-only recovery without changing release
+   inputs. GitHub assigns the release's Latest designation from semantic
+   versions when the draft is published.
 
 Publication uses the root executable `.releaserc.cjs` and its fail-closed
 first-parent selector,

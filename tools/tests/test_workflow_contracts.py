@@ -142,6 +142,28 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("needs: publish", queue_job)
         self.assertIn("if: always() && needs.publish.result == 'success'", queue_job)
         self.assertIn("group: classic-promote-latest", promoter)
+        self.assertIn("Check out the trusted promotion verifier", promoter)
+        self.assertIn("path: build/release-automation", promoter)
+        self.assertIn("ref: ${{ github.sha }}", promoter)
+        self.assertIn(
+            "build/release-automation/tools/release/locked_inputs.py", promoter
+        )
+        self.assertIn(
+            "build/release-automation/tools/release/check_registry_version.py",
+            promoter,
+        )
+        self.assertEqual(
+            promoter.count(
+                "build/release-automation/tools/release/check_latest_release.py"
+            ),
+            2,
+        )
+        self.assertEqual(
+            promoter.count(
+                "build/release-automation/tools/release/check_registry_version.py"
+            ),
+            2,
+        )
         self.assertIn("gh attestation verify", promoter)
         self.assertIn("--tag latest", promoter)
         resolver = (ROOT / "tools" / "release" / "check_latest_release.py").read_text(
