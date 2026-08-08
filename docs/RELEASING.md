@@ -41,9 +41,9 @@ recreate a tag or draft to recover.
 
 1. The root Check workflow validates import evidence and every module. Its
    aggregate result is `Classic validation`.
-2. Once automatic release triggering is enabled, a successful Check run for
-   the current `main` commit triggers Semantic Release. A stale successful run
-   cannot release a newer, unvalidated commit.
+2. A successful Check run for the current `main` commit triggers Semantic
+   Release. Pull-request, merge-group, failed, stale, and non-main Check runs
+   cannot publish.
 3. Semantic-release analyzes and formats only exact first-parent commits,
    creates the unprefixed tag and draft GitHub release notes, then dispatches
    Package Release from that exact immutable tag ref.
@@ -79,18 +79,16 @@ release is reviewed and rehearsed; they do not define another version train.
 
 ### Initial activation
 
-The pipeline lands in two phases so merging its implementation cannot publish
-an untested first release. In the first phase, Semantic Release is manual-only.
-After that phase is on `main`, dispatch Release Rehearsal and review every
-source, wheel, Windows, image, and finalizer job. A small `ci(release)`
-follow-up pull request then adds the successful Check `workflow_run` trigger to
-Semantic Release. Semantic-release analyzes the already-merged
-`feat(release)` pipeline commit and must produce `v5.6.0`; imported component
-features, breaking markers, and old issue numbers must not appear in that
-analysis or its notes. Do not enable the
-trigger or manually dispatch Semantic Release until the full post-merge
-rehearsal succeeds and an administrator has live-audited repository immutable
-releases as enabled through the governance rollout.
+The pipeline was activated in two phases so merging its implementation could
+not publish an untested first release. Semantic Release remained manual-only
+until a complete post-merge rehearsal succeeded and an administrator
+live-audited repository immutable releases as enabled through the governance
+rollout. The separate activation change then added only the successful current
+`main` Check trigger.
+
+The first automatic analysis must produce `v5.6.0` from the already-merged
+unified release work. Imported component features, breaking markers, and old
+issue numbers must not affect its version or appear in its notes.
 
 ## Artifact contract
 
@@ -130,12 +128,11 @@ as machine-readable OCI labels.
 
 ## Rehearsal and verification
 
-After the manual-only workflow exists on `main`, dispatch Release Rehearsal
-before the automatic release trigger is enabled. It invokes the same source,
-wheel, Windows, image, and closed-set validation jobs with version `0.0.0`,
-retains the candidate assets for 30 days, and has no publishing job or write
-permissions. The
-versioned image build uses `push: false`.
+Release Rehearsal invokes the same source, wheel, Windows, image, and closed-set
+validation jobs with version `0.0.0`, retains the candidate assets for 30 days,
+and has no publishing job or write permissions. Run it before initial
+activation and after material release-pipeline changes. The versioned image
+build uses `push: false`.
 
 From the `atrinik/atrinik` wrapper root, verify the candidate source and runtime
 with an isolated classic profile and state:

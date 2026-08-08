@@ -11,10 +11,19 @@ class WorkflowContractTests(unittest.TestCase):
     def text(self, name: str) -> str:
         return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
-    def test_first_phase_semantic_release_is_manual_only(self) -> None:
+    def test_semantic_release_follows_successful_current_main_check(self) -> None:
         workflow = self.text("release.yml")
         self.assertIn("  workflow_dispatch:\n", workflow)
-        self.assertNotIn("workflow_run", workflow)
+        self.assertIn("  workflow_run:\n", workflow)
+        self.assertIn("    workflows: [Check]\n", workflow)
+        self.assertIn("    types: [completed]\n", workflow)
+        self.assertIn("github.event.workflow_run.event == 'push'", workflow)
+        self.assertIn("github.event.workflow_run.conclusion == 'success'", workflow)
+        self.assertIn("github.event.workflow_run.head_branch == 'main'", workflow)
+        self.assertIn("RELEASE_TRIGGER_SHA", workflow)
+        self.assertIn('test "${commit}" = "${RELEASE_TRIGGER_SHA}"', workflow)
+        self.assertIn("refs/remotes/origin/main", workflow)
+        self.assertIn('select(.name == "Classic validation"', workflow)
         self.assertIn('test "${GITHUB_REF}" = refs/heads/main', workflow)
 
     def test_rehearsal_is_bound_to_current_main(self) -> None:
