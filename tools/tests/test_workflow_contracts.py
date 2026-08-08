@@ -282,6 +282,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("if: needs.changes.outputs.windows == 'true'", build)
         self.assertEqual(build.count(digest), 2)
         self.assertIn("--network none", build)
+        self.assertIn("--env CCACHE_DIR=/tmp/atrinik-libatrinik-ccache", build)
+        self.assertIn(
+            "--env CCACHE_TEMPDIR=/tmp/atrinik-libatrinik-ccache-tmp", build
+        )
+        self.assertIn("--env CCACHE_MAXSIZE=250M", build)
+        self.assertNotIn("--env CCACHE_DIR=/opt/mxe", build)
         self.assertIn("-DBUILD_TESTING=ON", build)
         self.assertIn("--target libatrinik-path libatrinik-rendezvous", build)
         self.assertIn("python3 tools/ci/stage_windows_runtime.py", build)

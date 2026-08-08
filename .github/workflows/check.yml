@@ -155,6 +155,9 @@ jobs:
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             --network none \
+            --env CCACHE_DIR=/tmp/atrinik-libatrinik-ccache \
+            --env CCACHE_TEMPDIR=/tmp/atrinik-libatrinik-ccache-tmp \
+            --env CCACHE_MAXSIZE=250M \
             --env PATH=/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace \
