@@ -2,16 +2,10 @@ name: Semantic Release
 
 on:
   workflow_dispatch:
-  workflow_run:
-    workflows:
-      - Check
-    types:
-      - completed
-    branches:
-      - main
 
 permissions:
   actions: write
+  checks: read
   contents: write
   issues: write
   pull-requests: write
@@ -23,19 +17,16 @@ concurrency:
 jobs:
   release:
     name: Semantic release
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - name: Require the default-branch workflow definition
+        run: test "${GITHUB_REF}" = refs/heads/main
       - name: Check out the validated main commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-          ref: >-
-            ${{ github.event_name == 'workflow_run' &&
-                github.event.workflow_run.head_sha || 'main' }}
+          ref: main
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
@@ -49,7 +40,7 @@ jobs:
           successful=$(gh api \
             -H 'Accept: application/vnd.github+json' \
             "repos/${RELEASE_REPOSITORY}/commits/${commit}/check-runs?per_page=100" \
-            --jq '[.check_runs[] | select(.name == "Classic validation" and .conclusion == "success")] | length')
+            --jq '[.check_runs[] | select(.name == "Classic validation" and .conclusion == "success" and .app.id == 15368)] | length')
           test "${successful}" -ge 1
           python3 tools/verify_import_history.py
       - name: Analyze commits, tag, and publish release notes

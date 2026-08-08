@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - main
+  merge_group:
 
 permissions:
   contents: read
@@ -17,10 +18,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  history:
-    name: History validation
+  changes:
+    name: Change classification
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      client: ${{ steps.classify.outputs.client }}
+      server: ${{ steps.classify.outputs.server }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - id: classify
+        name: Select native validation jobs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 tools/ci/classify_changes.py \
+            --event "${EVENT_NAME}" \
+            --base "${BASE_SHA}" \
+            --head "${HEAD_SHA}" \
+            --github-output "${GITHUB_OUTPUT}" \
+            --codeql-config build/codeql-unused.yml
+
+  core:
+    name: Core validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -28,32 +54,22 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
-      - run: python3 tools/verify_import_history.py
-      - run: python3 -m unittest discover -s tools/tests -p 'test_*.py'
-
-  protocol:
-    name: Protocol validation
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: protocol
-    env:
-      SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.13"
+      - name: Validate imported history and release helpers
+        run: |
+          python3 tools/verify_import_history.py
+          python3 -m unittest discover -s tools/tests -p 'test_*.py'
       - name: Check generated bindings
         run: python3 tools/generate.py --check
+        working-directory: protocol
       - name: Run generator tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
+        working-directory: protocol
       - name: Build and test C package
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel
           ctest --test-dir build --output-on-failure
+        working-directory: protocol
       - name: Build Python wheel
         run: |
           python3 -m pip install build==1.3.0
@@ -65,26 +81,19 @@ jobs:
             --source build/package-source/atrinik-classic-protocol-0.0.0.tar.gz \
             --source-epoch "$(git show -s --format=%ct HEAD)" \
             --output build/wheel
-
-  library:
-    name: Library validation
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: libatrinik
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        working-directory: protocol
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y gcovr libcurl4-openssl-dev libssl-dev zlib1g-dev
       - name: Configure sibling protocol
         run: cmake --preset linux-coverage -DATRINIK_PROTOCOL_SOURCE_DIR="$GITHUB_WORKSPACE/protocol"
+        working-directory: libatrinik
       - name: Build, test, and cover
         run: |
           cmake --build --preset linux-coverage --parallel
           ctest --preset linux-coverage
           gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
             --exclude '.*/build/.*' --print-summary --xml coverage.xml
+        working-directory: libatrinik
       - name: Validate installed consumer
         run: |
           cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release \
@@ -96,6 +105,7 @@ jobs:
             -DCMAKE_PREFIX_PATH="$PWD/build/install"
           cmake --build build/consumer --parallel
           build/consumer/libatrinik-consumer
+        working-directory: libatrinik
       - name: Upload coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
@@ -104,9 +114,15 @@ jobs:
           files: libatrinik/coverage.xml
           flags: libatrinik
           use_oidc: true
+      - name: Validate editor packaging helper
+        run: |
+          bash -n editor/build.sh
+          shellcheck editor/build.sh
 
   server:
     name: Server validation
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -153,6 +169,8 @@ jobs:
 
   client:
     name: Client validation
+    needs: changes
+    if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -194,32 +212,24 @@ jobs:
           flags: client
           use_oidc: true
 
-  editor:
-    name: Editor validation
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - run: bash -n editor/build.sh
-      - run: shellcheck editor/build.sh
-
   classic-validation:
     name: Classic validation
     if: always()
     needs:
-      - history
-      - protocol
-      - library
+      - changes
+      - core
       - server
       - client
-      - editor
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
-      - name: Require every component check
-        env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Require selected component checks
         run: |
-          for result in ${RESULTS}; do
-            test "${result}" = success
-          done
+          python3 tools/ci/require_checks.py classic \
+            --classifier-result '${{ needs.changes.result }}' \
+            --core-result '${{ needs.core.result }}' \
+            --client-required '${{ needs.changes.outputs.client }}' \
+            --client-result '${{ needs.client.result }}' \
+            --server-required '${{ needs.changes.outputs.server }}' \
+            --server-result '${{ needs.server.result }}'

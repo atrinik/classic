@@ -8,8 +8,9 @@
     "commit": "f2cdf68710d157d4fae44a0582972129e6c4db9e"
   },
   "future_tags": {
-    "first_version": "v6.0.0",
-    "minimum_version": "v6.0.0",
+    "first_version": "v5.6.0",
+    "minimum_version": "v5.6.0",
+    "maximum_major": 5,
     "ancestry_floor": "6960d16988e6925d7e421dc549780ac5feb0914d",
     "branch": "main",
     "driver": "semantic-release"

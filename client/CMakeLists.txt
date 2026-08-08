@@ -140,6 +140,31 @@ function(atrinik_fetch_source name expected_repository expected_archive)
         DOWNLOAD_EXTRACT_TIMESTAMP false)
 endfunction()
 
+if (NOT FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL)
+    foreach (candidate
+            "${CMAKE_CURRENT_SOURCE_DIR}/../protocol"
+            "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/protocol")
+        if (EXISTS "${candidate}/CMakeLists.txt")
+            file(REAL_PATH "${candidate}" resolved)
+            set(FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL "${resolved}"
+                CACHE PATH "Atrinik protocol source" FORCE)
+            break()
+        endif ()
+    endforeach ()
+endif ()
+if (NOT FETCHCONTENT_SOURCE_DIR_LIBATRINIK)
+    foreach (candidate
+            "${CMAKE_CURRENT_SOURCE_DIR}/../libatrinik"
+            "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/libatrinik")
+        if (EXISTS "${candidate}/CMakeLists.txt")
+            file(REAL_PATH "${candidate}" resolved)
+            set(FETCHCONTENT_SOURCE_DIR_LIBATRINIK "${resolved}"
+                CACHE PATH "libatrinik source" FORCE)
+            break()
+        endif ()
+    endforeach ()
+endif ()
+
 atrinik_fetch_source(atrinik_protocol "atrinik/protocol" "atrinik-protocol")
 FetchContent_MakeAvailable(atrinik_protocol)
 set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)

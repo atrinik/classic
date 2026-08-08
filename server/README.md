@@ -43,13 +43,15 @@
  FETCHCONTENT_SOURCE_DIR_LIBATRINIK overrides support coordinated local work.
 
  Releases are produced from every squash merge to main. semantic-release
- parses the Conventional Commits pull-request title: a breaking marker or
- BREAKING CHANGE produces a major release, feat produces a minor release, and
- every other conventional type produces at least a patch release. Each unified
- release contains an atrinik-classic-server-VERSION source archive, a portable
- atrinik-classic-server-VERSION-windows-x86_64 ZIP, SHA-256 checksums, and a
- versioned `ghcr.io/atrinik/classic-server` image. The newest release also
- updates the `latest` image alias.
+ parses the Conventional Commits pull-request title. Classic stays on the
+ 5.x.x line: a breaking marker, BREAKING CHANGE, or feat produces a minor
+ release, and every other conventional type produces at least a patch release.
+ Each unified release contains an atrinik-classic-server-VERSION source
+ archive, a portable atrinik-classic-server-VERSION-windows-x86_64 ZIP,
+ SHA-256 checksums, and a versioned `ghcr.io/atrinik/classic-server` image. The
+ newest release also updates the `latest` image alias.
+ The scoped source archive embeds the matching protocol and libatrinik source
+ under dependencies/ and selects it automatically outside the monorepo.
 
 =================================================
 = 2. Running the server                         =
@@ -172,7 +174,7 @@
  version for a persistent deployment, then start it from the repository root:
   $ cp server-custom.cfg.example server-custom.cfg
   $ mkdir -p server-data
-  $ ATRINIK_SERVER_IMAGE=ghcr.io/atrinik/classic-server:6.0.0 \
+  $ ATRINIK_SERVER_IMAGE=ghcr.io/atrinik/classic-server:5.6.0 \
       LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) \
       docker compose -f compose.server.yaml up --no-build -d
 

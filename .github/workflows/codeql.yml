@@ -1,0 +1,107 @@
+name: CodeQL
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  merge_group:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 2"
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+  security-events: write
+
+concurrency:
+  group: classic-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    name: CodeQL classification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.classify.outputs.codeql_matrix }}
+      run: ${{ steps.classify.outputs.codeql_run }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - id: classify
+        name: Select analysis languages and paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 tools/ci/classify_changes.py \
+            --event "${EVENT_NAME}" \
+            --base "${BASE_SHA}" \
+            --head "${HEAD_SHA}" \
+            --github-output "${GITHUB_OUTPUT}" \
+            --codeql-config build/codeql-config.yml
+
+  analyze:
+    name: CodeQL analysis (${{ matrix.display }})
+    needs: classify
+    if: needs.classify.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.classify.outputs.matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - id: classify
+        name: Recreate the trusted path configuration
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 tools/ci/classify_changes.py \
+            --event "${EVENT_NAME}" \
+            --base "${BASE_SHA}" \
+            --head "${HEAD_SHA}" \
+            --github-output "${GITHUB_OUTPUT}" \
+            --codeql-config build/codeql-config.yml \
+            --codeql-scope "${{ matrix.scope }}"
+      - name: Initialize CodeQL
+        if: matrix.run == true
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          build-mode: none
+          config-file: ${{ steps.classify.outputs.codeql_config }}
+          languages: ${{ matrix.language }}
+      - name: Analyze
+        if: matrix.run == true
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          category: ${{ matrix.category }}
+
+  codeql-validation:
+    name: CodeQL validation
+    if: always()
+    needs:
+      - classify
+      - analyze
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Require every selected analysis
+        run: |
+          python3 tools/ci/require_checks.py optional \
+            --label CodeQL \
+            --classifier-result '${{ needs.classify.result }}' \
+            --required '${{ needs.classify.outputs.run }}' \
+            --result '${{ needs.analyze.result }}'

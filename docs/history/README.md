@@ -31,8 +31,8 @@ used to verify the import were retired when classic adopted one release line.
 Historical tags are the exact unprefixed set recorded in `release-tags.json`,
 beginning with `v5.0.19` at
 `f2cdf68710d157d4fae44a0582972129e6c4db9e`. New automatic tags begin at
-`v6.0.0` and must follow that file's post-consolidation ancestry and semantic
-ordering rules. The complete
+`v5.6.0`, remain on the `v5.x.x` line, and must follow that file's
+post-consolidation ancestry and semantic ordering rules. The complete
 `history/*` branch namespace was retired after import and workspace-migration
 verification; `imports.json` preserves the final ref targets as evidence. The
 former repositories remain the authoritative home of original branches and

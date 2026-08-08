@@ -15,6 +15,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "docs" / "history" / "imports.json"
 COMPONENT_RELEASE_MAP = ROOT / "docs" / "history" / "component-release-map.json"
+RELEASE_CONFIG = ROOT / ".releaserc.json"
 SEMVER_RE = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
 LAST_COMPONENT_TAGS = {
     "client": "v5.3.1",
@@ -200,7 +201,7 @@ def verify_component_release_map(manifest: dict[str, Any]) -> None:
     require(
         value.get("unified_release")
         == {
-            "first_tag": "v6.0.0",
+            "first_tag": "v5.6.0",
             "ancestry_floor": "6960d16988e6925d7e421dc549780ac5feb0914d",
             "repository": "atrinik/classic",
             "version_source": "semantic-release",
@@ -270,8 +271,9 @@ def verify_release_tags(manifest: dict[str, Any]) -> None:
     require(
         future_policy
         == {
-            "first_version": "v6.0.0",
-            "minimum_version": "v6.0.0",
+            "first_version": "v5.6.0",
+            "minimum_version": "v5.6.0",
+            "maximum_major": 5,
             "ancestry_floor": "6960d16988e6925d7e421dc549780ac5feb0914d",
             "branch": "main",
             "driver": "semantic-release",
@@ -280,9 +282,81 @@ def verify_release_tags(manifest: dict[str, Any]) -> None:
     )
     first_version = semantic_version(future_policy["first_version"])
     minimum_version = semantic_version(future_policy["minimum_version"])
-    require(first_version == minimum_version, "first and minimum future versions differ")
+    maximum_major = future_policy["maximum_major"]
+    require(
+        first_version == minimum_version,
+        "first and minimum future versions differ",
+    )
+    require(
+        first_version[0] == maximum_major,
+        "first version exceeds the major-version cap",
+    )
     floor = future_policy["ancestry_floor"]
     require(is_ancestor(floor, "HEAD"), "future-tag ancestry floor is not in HEAD")
+
+    release_config = json.loads(RELEASE_CONFIG.read_text(encoding="utf-8"))
+    require(
+        release_config.get("branches") == ["main"],
+        "unexpected release branches",
+    )
+    require(release_config.get("tagFormat") == "v${version}", "unexpected tag format")
+    plugins = release_config.get("plugins")
+    require(
+        isinstance(plugins, list) and plugins,
+        "release configuration has no plugins",
+    )
+    analyzer = plugins[0]
+    require(
+        isinstance(analyzer, list)
+        and len(analyzer) == 2
+        and analyzer[0] == "@semantic-release/commit-analyzer"
+        and isinstance(analyzer[1], dict),
+        "unexpected commit analyzer configuration",
+    )
+    release_rules = analyzer[1].get("releaseRules")
+    require(isinstance(release_rules, list), "commit analyzer has no release rules")
+    require(
+        {"breaking": True, "release": "minor"} in release_rules,
+        "breaking commits must remain on the classic major-version line",
+    )
+    require(
+        all(
+            not isinstance(rule, dict) or rule.get("release") != "major"
+            for rule in release_rules
+        ),
+        "classic release rules must not produce a major version",
+    )
+    exec_plugins = [
+        plugin
+        for plugin in plugins
+        if isinstance(plugin, list)
+        and len(plugin) == 2
+        and plugin[0] == "@semantic-release/exec"
+        and isinstance(plugin[1], dict)
+    ]
+    require(len(exec_plugins) == 1, "release configuration has no unique exec plugin")
+    github_plugins = [
+        plugin
+        for plugin in plugins
+        if isinstance(plugin, list)
+        and len(plugin) == 2
+        and plugin[0] == "@semantic-release/github"
+        and plugin[1] == {"draftRelease": True}
+    ]
+    require(
+        len(github_plugins) == 1,
+        "semantic-release must create a draft before artifact publication",
+    )
+    require(
+        exec_plugins[0][1].get("verifyReleaseCmd")
+        == "python3 tools/release/verify_next_version.py ${nextRelease.version}",
+        "release configuration has no immutable pre-tag version guard",
+    )
+    require(
+        exec_plugins[0][1].get("publishCmd")
+        == "tools/release/queue_package_release.sh ${nextRelease.version}",
+        "release configuration does not queue the unified package workflow",
+    )
 
     actual_refs = git(
         "for-each-ref", "--format=%(refname:short)", "refs/tags/"
@@ -298,7 +372,7 @@ def verify_release_tags(manifest: dict[str, Any]) -> None:
     if future_tags:
         require(
             semantic_version(future_tags[0]) == first_version,
-            "the first post-consolidation release must be v6.0.0",
+            "the first post-consolidation release must be v5.6.0",
         )
     first_parent_commits = set(git("rev-list", "--first-parent", "HEAD").splitlines())
     previous_commit = floor
@@ -306,7 +380,11 @@ def verify_release_tags(manifest: dict[str, Any]) -> None:
     for tag in future_tags:
         require(
             semantic_version(tag) >= minimum_version,
-            f"{tag}: future release version predates v6.0.0",
+            f"{tag}: future release version predates v5.6.0",
+        )
+        require(
+            semantic_version(tag)[0] == maximum_major,
+            f"{tag}: classic releases must remain on major version 5",
         )
         commit = git("rev-parse", f"{tag}^{{commit}}")
         require(commit not in targets, f"{tag}: release tag target is not unique")

@@ -34,12 +34,14 @@
  surface; it does not require a hardware renderer.
 
  Releases are produced from every squash merge to main. semantic-release
- parses the Conventional Commits pull-request title: a breaking marker or
- BREAKING CHANGE produces a major release, feat produces a minor release, and
- every other conventional type produces at least a patch release. Each unified
- release contains an atrinik-classic-client-VERSION source archive, a portable
- atrinik-classic-client-VERSION-windows-x86_64 ZIP, and SHA-256 checksums. The
- repository tag is the authoritative build version.
+ parses the Conventional Commits pull-request title. Classic stays on the
+ 5.x.x line: a breaking marker, BREAKING CHANGE, or feat produces a minor
+ release, and every other conventional type produces at least a patch release.
+ Each unified release contains an atrinik-classic-client-VERSION source
+ archive, a portable atrinik-classic-client-VERSION-windows-x86_64 ZIP, and
+ SHA-256 checksums. The repository tag is the authoritative build version.
+ The scoped source archive embeds the matching protocol and libatrinik source
+ under dependencies/ and selects it automatically outside the monorepo.
 
 =================================================
 = 2. Running the client                         =

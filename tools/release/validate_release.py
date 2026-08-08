@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 import subprocess
 
+from github_release import GitHubReleaseError, lookup_release
+
 
 ROOT = Path(__file__).resolve().parents[2]
 POLICY = ROOT / "docs" / "history" / "release-tags.json"
@@ -77,11 +79,20 @@ def main() -> int:
     policy = json.loads(POLICY.read_text(encoding="utf-8"))
     future = policy.get("future_tags", {})
     minimum = future.get("minimum_version")
+    maximum_major = future.get("maximum_major")
     floor = future.get("ancestry_floor")
-    if not isinstance(minimum, str) or not isinstance(floor, str):
+    if (
+        not isinstance(minimum, str)
+        or not isinstance(maximum_major, int)
+        or not isinstance(floor, str)
+    ):
         raise ValidationError("release-tag policy has no future-tag contract")
     if release_version < version(minimum):
         raise ValidationError(f"new unified releases begin at {minimum}")
+    if release_version[0] != maximum_major:
+        raise ValidationError(
+            f"classic releases must remain on major version {maximum_major}"
+        )
 
     commit = git("rev-parse", f"{arguments.tag}^{{commit}}")
     if git("rev-parse", "HEAD") != commit:
@@ -94,20 +105,14 @@ def main() -> int:
     subprocess.run(
         ["python3", "tools/verify_import_history.py"], cwd=ROOT, check=True
     )
-    release = command(
-        "gh",
-        "api",
-        f"repos/{arguments.repository}/releases/tags/{arguments.tag}",
-        json_output=True,
-    )
-    assert isinstance(release, dict)
-    if release.get("draft") or release.get("prerelease"):
-        raise ValidationError("release must be published and non-prerelease")
+    release = lookup_release(arguments.repository, arguments.tag)
+    if not isinstance(release, dict):
+        raise ValidationError("semantic-release draft is missing")
+    if release.get("draft") is not True or release.get("prerelease") is not False:
+        raise ValidationError("release must be draft and non-prerelease")
     assets = release.get("assets")
     if not isinstance(assets, list):
         raise ValidationError("GitHub release returned invalid asset metadata")
-    if assets:
-        raise ValidationError("release already has assets; refusing duplicate publication")
 
     checks = command(
         "gh",
@@ -120,20 +125,20 @@ def main() -> int:
     assert isinstance(checks, dict)
     runs = checks.get("check_runs")
     if not isinstance(runs, list) or not any(
-        run.get("name") == "Classic validation" and run.get("conclusion") == "success"
+        run.get("name") == "Classic validation"
+        and run.get("conclusion") == "success"
+        and isinstance(run.get("app"), dict)
+        and run["app"].get("id") == 15368
         for run in runs
         if isinstance(run, dict)
     ):
         raise ValidationError("release commit has no successful Classic validation check")
 
-    active_tags = [line for line in git("tag", "--list", "v[0-9]*").splitlines() if line]
-    latest = max(active_tags, key=version)
     values = {
         "tag": arguments.tag,
         "version": ".".join(str(part) for part in release_version),
         "commit": commit,
         "source_epoch": git("show", "-s", "--format=%ct", commit),
-        "latest": str(arguments.tag == latest).lower(),
     }
     output = arguments.github_output
     if output is None and os.environ.get("GITHUB_OUTPUT"):
@@ -148,5 +153,5 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except ValidationError as error:
+    except (GitHubReleaseError, ValidationError) as error:
         raise SystemExit(f"release validation: {error}") from error

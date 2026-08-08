@@ -64,6 +64,18 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     if (NOT TARGET Atrinik::Protocol)
         set(ATRINIK_PROTOCOL_SOURCE_DIR "" CACHE PATH
             "Path to an Atrinik protocol source checkout")
+        if (NOT ATRINIK_PROTOCOL_SOURCE_DIR)
+            foreach (candidate
+                    "${CMAKE_CURRENT_SOURCE_DIR}/../protocol"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/protocol")
+                if (EXISTS "${candidate}/CMakeLists.txt")
+                    file(REAL_PATH "${candidate}" resolved)
+                    set(ATRINIK_PROTOCOL_SOURCE_DIR "${resolved}"
+                        CACHE PATH "Path to an Atrinik protocol source checkout" FORCE)
+                    break()
+                endif ()
+            endforeach ()
+        endif ()
         option(LIBATRINIK_USE_INSTALLED_PROTOCOL
             "Use an installed AtrinikProtocol package instead of the locked release"
             OFF)
@@ -71,7 +83,7 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
             add_subdirectory("${ATRINIK_PROTOCOL_SOURCE_DIR}"
                 "${CMAKE_CURRENT_BINARY_DIR}/atrinik-protocol")
         elseif (LIBATRINIK_USE_INSTALLED_PROTOCOL)
-            find_package(AtrinikProtocol 1 CONFIG REQUIRED)
+            find_package(AtrinikProtocol "${PROJECT_VERSION}" EXACT CONFIG REQUIRED)
         else ()
             include(FetchContent)
             file(READ "${CMAKE_CURRENT_SOURCE_DIR}/dependencies.lock.json"
@@ -405,7 +417,7 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     write_basic_package_version_file(
         "${CMAKE_CURRENT_BINARY_DIR}/LibAtrinikConfigVersion.cmake"
         VERSION ${PROJECT_VERSION}
-        COMPATIBILITY SameMajorVersion)
+        COMPATIBILITY SameMinorVersion)
     install(FILES
         "${CMAKE_CURRENT_BINARY_DIR}/LibAtrinikConfig.cmake"
         "${CMAKE_CURRENT_BINARY_DIR}/LibAtrinikConfigVersion.cmake"

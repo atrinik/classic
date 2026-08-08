@@ -46,10 +46,21 @@
   and `release`.
 - Root semantic-release owns one unprefixed version for the complete repository.
   Publication requires the exact successful `Classic validation` commit,
-  deterministic closed-set artifacts, duplicate refusal, checksums, SBOMs, and
-  attestations. Never create, move, delete, or replace a release tag, versioned
-  image, or release asset manually; use the documented rehearsal and recovery
-  procedures in `docs/RELEASING.md`.
+  finalized closed-set artifacts, draft-first digest reconciliation,
+  checksums, SBOMs, locked-input evidence, attestations, and an immutable final
+  release. Never create, move, delete, or replace a release tag, versioned image,
+  or published release asset manually; use the documented rehearsal and
+  recovery procedures in `docs/RELEASING.md`.
+- Treat repository immutable releases as an externally governed and live-audited
+  activation prerequisite. Production packaging must verify immutable published
+  state as a postcondition. Only the globally serialized promoter may mutate the
+  GHCR `latest` alias, and it must recompute GitHub's authoritative latest release.
+- `tools/ci/classify_changes.py` is the single path-selection contract for
+  native Check and CodeQL work. Pull requests are path-aware; protocol,
+  libatrinik, and validation-contract changes select both client and server.
+  Push, merge-group, schedule, and manual runs are full. Keep the stable
+  `Classic validation` aggregate strict: it may accept a skipped component only
+  when the successful classifier explicitly marked that component unnecessary.
 - Run every affected module's tests, `python3 tools/verify_import_history.py`,
   and `git diff --check` before finishing. Keep generated files in ignored build
   directories and preserve unrelated work.

@@ -64,10 +64,12 @@ available as read-only release and closed-issue archives.
 
 ## Releases
 
-One successful `Classic validation` result on `main` drives the complete
-repository through semantic-release. The first unified version is `v6.0.0`;
-later tags are unprefixed semantic versions derived from the squash-merge
-title. Source archives, the protocol wheel, portable Windows packages, SPDX,
-checksums, attestations, and `ghcr.io/atrinik/classic-server` are built from the
-same commit. See [docs/RELEASING.md](docs/RELEASING.md) for the artifact,
+After the documented post-merge rehearsal and activation step, one successful
+`Classic validation` result on `main` drives the complete repository through
+semantic-release. The first unified version is `v5.6.0`; later tags remain on
+the unprefixed `v5.x.x` line and are derived from the squash-merge title.
+Source archives, the protocol wheel, portable Windows packages, SPDX,
+checksums, locked runtime-input evidence, attestations, and
+`ghcr.io/atrinik/classic-server` are built from the same commit. See
+[docs/RELEASING.md](docs/RELEASING.md) for the artifact,
 rehearsal, recovery, and rollback contracts.

@@ -32,8 +32,11 @@ class PackageSourcesTests(unittest.TestCase):
             "LICENSE.md": "license\n",
             "ATTRIBUTIONS.md": "notices\n",
             "docs/history/imports.json": "{}\n",
+            "client/.releaserc.json": "{}\n",
             "client/main.c": "int main(void) { return 0; }\n",
             "server/main.c": "int main(void) { return 0; }\n",
+            "protocol/CMakeLists.txt": "# protocol\n",
+            "libatrinik/CMakeLists.txt": "# library\n",
         }
         for name, value in files.items():
             path = self.root / name
@@ -63,28 +66,47 @@ class PackageSourcesTests(unittest.TestCase):
     def test_scoped_archive_contains_shared_evidence_but_not_other_modules(self) -> None:
         output = self.root / "client.tar.gz"
         package_sources.build_archive(
-            self.source, output, "client", "6.0.0", 1_577_934_245
+            self.source, output, "client", "5.6.0", 1_577_934_245
         )
         with tarfile.open(output, "r:gz") as archive:
             names = set(archive.getnames())
-            version = archive.extractfile("atrinik-classic-client-6.0.0/VERSION")
+            version = archive.extractfile("atrinik-classic-client-5.6.0/VERSION")
             assert version is not None
-            self.assertEqual(version.read(), b"6.0.0\n")
-        self.assertIn("atrinik-classic-client-6.0.0/main.c", names)
-        self.assertIn("atrinik-classic-client-6.0.0/LICENSE.md", names)
+            self.assertEqual(version.read(), b"5.6.0\n")
+            protocol_version = archive.extractfile(
+                "atrinik-classic-client-5.6.0/dependencies/protocol/VERSION"
+            )
+            assert protocol_version is not None
+            self.assertEqual(protocol_version.read(), b"5.6.0\n")
+            libatrinik_version = archive.extractfile(
+                "atrinik-classic-client-5.6.0/dependencies/libatrinik/VERSION"
+            )
+            assert libatrinik_version is not None
+            self.assertEqual(libatrinik_version.read(), b"5.6.0\n")
+        self.assertIn("atrinik-classic-client-5.6.0/main.c", names)
+        self.assertIn("atrinik-classic-client-5.6.0/LICENSE.md", names)
         self.assertIn(
-            "atrinik-classic-client-6.0.0/PROVENANCE/history/imports.json", names
+            "atrinik-classic-client-5.6.0/PROVENANCE/history/imports.json", names
         )
-        self.assertNotIn("atrinik-classic-client-6.0.0/server/main.c", names)
+        self.assertNotIn("atrinik-classic-client-5.6.0/server/main.c", names)
+        self.assertNotIn("atrinik-classic-client-5.6.0/.releaserc.json", names)
+        self.assertIn(
+            "atrinik-classic-client-5.6.0/dependencies/protocol/CMakeLists.txt",
+            names,
+        )
+        self.assertIn(
+            "atrinik-classic-client-5.6.0/dependencies/libatrinik/CMakeLists.txt",
+            names,
+        )
 
     def test_archive_is_reproducible_and_refuses_overwrite(self) -> None:
         first = self.root / "first.tar.gz"
         second = self.root / "second.tar.gz"
-        package_sources.build_archive(self.source, first, "root", "6.0.0", 42)
-        package_sources.build_archive(self.source, second, "root", "6.0.0", 42)
+        package_sources.build_archive(self.source, first, "root", "5.6.0", 42)
+        package_sources.build_archive(self.source, second, "root", "5.6.0", 42)
         self.assertEqual(first.read_bytes(), second.read_bytes())
         with self.assertRaisesRegex(package_sources.PackageError, "refusing to overwrite"):
-            package_sources.build_archive(self.source, first, "root", "6.0.0", 42)
+            package_sources.build_archive(self.source, first, "root", "5.6.0", 42)
 
     def test_unsafe_source_path_is_rejected(self) -> None:
         with self.assertRaisesRegex(package_sources.PackageError, "unsafe archive path"):

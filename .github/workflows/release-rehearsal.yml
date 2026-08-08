@@ -2,40 +2,40 @@ name: Release Rehearsal
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches:
-      - main
-    paths:
-      - .dockerignore
-      - .github/workflows/package-release.yml
-      - .github/workflows/release-rehearsal.yml
-      - .github/workflows/release.yml
-      - .releaserc.json
-      - client/CMakeLists.txt
-      - client/tools/build-windows-package.sh
-      - protocol/pyproject.toml
-      - server/CMakeLists.txt
-      - server/Dockerfile
-      - server/tools/build-windows-package.sh
-      - tools/release/**
 
 permissions:
   actions: read
-  artifact-metadata: write
-  attestations: write
-  contents: write
-  id-token: write
-  packages: write
+  checks: read
+  contents: read
+  packages: read
 
 jobs:
+  preflight:
+    name: Bind rehearsal to current main
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      revision: ${{ steps.revision.outputs.commit }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - id: revision
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          test "${DISPATCH_REF}" = refs/heads/main
+          commit=$(git rev-parse HEAD)
+          test "${commit}" = "${DISPATCH_SHA}"
+          test "${commit}" = "$(git rev-parse refs/remotes/origin/main)"
+          echo "commit=${commit}" >>"${GITHUB_OUTPUT}"
+
   rehearse:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    uses: ./.github/workflows/package-release.yml
+    needs: preflight
+    uses: ./.github/workflows/build-release-candidate.yml
     with:
       rehearsal: true
-      revision: >-
-        ${{ github.event_name == 'pull_request' &&
-            github.event.pull_request.head.sha || github.sha }}
+      revision: ${{ needs.preflight.outputs.revision }}
       version: 0.0.0

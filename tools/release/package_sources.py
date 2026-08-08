@@ -18,6 +18,11 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 MODULES = ("client", "server", "editor", "libatrinik", "protocol")
+PACKAGED_DEPENDENCIES = {
+    "client": ("protocol", "libatrinik"),
+    "server": ("protocol", "libatrinik"),
+    "libatrinik": ("protocol",),
+}
 SHARED_PATHS = ("LICENSE.md", "ATTRIBUTIONS.md")
 PROVENANCE_PREFIX = "docs/history/"
 
@@ -73,7 +78,19 @@ def selected_name(scope: str, source_name: str, package: str) -> str | None:
     if source_name == scope:
         return package
     if source_name.startswith(module_prefix):
-        return f"{package}/{source_name[len(module_prefix):]}"
+        relative = source_name[len(module_prefix) :]
+        if relative == ".releaserc.json" or relative.startswith(".github/"):
+            return None
+        return f"{package}/{relative}"
+    for dependency in PACKAGED_DEPENDENCIES.get(scope, ()):
+        dependency_prefix = f"{dependency}/"
+        if source_name == dependency:
+            return f"{package}/dependencies/{dependency}"
+        if source_name.startswith(dependency_prefix):
+            relative = source_name[len(dependency_prefix) :]
+            if relative == ".releaserc.json" or relative.startswith(".github/"):
+                return None
+            return f"{package}/dependencies/{dependency}/{relative}"
     if source_name in SHARED_PATHS:
         return f"{package}/{source_name}"
     if source_name.startswith(PROVENANCE_PREFIX):
@@ -125,6 +142,21 @@ def build_archive(
                         if version_path in seen:
                             raise PackageError(f"tracked file conflicts with generated {version_path}")
                         add_bytes(target, version_path, f"{version}\n".encode(), timestamp)
+                        for dependency in PACKAGED_DEPENDENCIES.get(scope, ()):
+                            dependency_version_path = (
+                                f"{package}/dependencies/{dependency}/VERSION"
+                            )
+                            if dependency_version_path in seen:
+                                raise PackageError(
+                                    "tracked file conflicts with generated "
+                                    f"{dependency_version_path}"
+                                )
+                            add_bytes(
+                                target,
+                                dependency_version_path,
+                                f"{version}\n".encode(),
+                                timestamp,
+                            )
 
     if not seen:
         raise PackageError(f"scope {scope} selected no tracked files")

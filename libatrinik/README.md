@@ -39,7 +39,9 @@ standalone install or test targets.
 
 Unified releases publish a scoped
 `atrinik-classic-libatrinik-VERSION.tar.gz` development archive under the root
-GPL-2.0-or-later license. The archive version matches the complete monorepo.
+GPL-2.0-or-later license. The archive version matches the complete monorepo and
+includes matching protocol source under `dependencies/protocol`; a standalone
+CMake build selects that source automatically.
 
 ## Pathfinding core
 
@@ -54,7 +56,8 @@ ctest --test-dir build/pathfinding --output-on-failure
 ```
 
 Installing that build provides an independent `AtrinikPathfinding` CMake
-package. Consumers use `find_package(AtrinikPathfinding 1 CONFIG REQUIRED)`,
+package. Release consumers request the exact unified package version with
+`find_package(AtrinikPathfinding 5.6.0 EXACT CONFIG REQUIRED)`,
 link `Atrinik::Pathfinding`, and include `<atrinik/pathfinding.h>`. A normal
 top-level libatrinik installation also installs this package, but it does not
 make the pathfinding target link against `Atrinik::Core` or its dependencies.

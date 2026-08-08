@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "unified_release": {
-    "first_tag": "v6.0.0",
+    "first_tag": "v5.6.0",
     "ancestry_floor": "6960d16988e6925d7e421dc549780ac5feb0914d",
     "repository": "atrinik/classic",
     "version_source": "semantic-release"

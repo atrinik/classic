@@ -7,17 +7,20 @@
       {
         "preset": "conventionalcommits",
         "releaseRules": [
-          {"breaking": true, "release": "major"},
+          {"breaking": true, "release": "minor"},
           {"type": "feat", "release": "minor"},
           {"type": "*", "release": "patch"}
         ]
       }
     ],
     ["@semantic-release/release-notes-generator", {"preset": "conventionalcommits"}],
-    "@semantic-release/github",
+    ["@semantic-release/github", {"draftRelease": true}],
     [
       "@semantic-release/exec",
-      {"publishCmd": "tools/release/queue_package_release.sh ${nextRelease.version}"}
+      {
+        "verifyReleaseCmd": "python3 tools/release/verify_next_version.py ${nextRelease.version}",
+        "publishCmd": "tools/release/queue_package_release.sh ${nextRelease.version}"
+      }
     ]
   ]
 }

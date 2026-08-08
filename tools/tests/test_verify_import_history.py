@@ -14,14 +14,14 @@ SPEC.loader.exec_module(verify_import_history)
 
 class ReleaseTagPolicyTests(unittest.TestCase):
     def test_semantic_versions_sort_numerically(self) -> None:
-        tags = ["v6.10.0", "v6.2.0", "v7.0.0", "v6.0.0"]
+        tags = ["v5.10.0", "v5.6.2", "v5.7.0", "v5.6.0"]
         self.assertEqual(
             sorted(tags, key=verify_import_history.semantic_version),
-            ["v6.0.0", "v6.2.0", "v6.10.0", "v7.0.0"],
+            ["v5.6.0", "v5.6.2", "v5.7.0", "v5.10.0"],
         )
 
     def test_prefixed_or_partial_versions_are_rejected(self) -> None:
-        for tag in ("client-v6.0.0", "6.0.0", "v6.0", "v6.0.0-rc.1"):
+        for tag in ("client-v5.6.0", "5.6.0", "v5.6", "v5.6.0-rc.1"):
             with self.subTest(tag=tag):
                 with self.assertRaisesRegex(RuntimeError, "unprefixed semantic version"):
                     verify_import_history.semantic_version(tag)

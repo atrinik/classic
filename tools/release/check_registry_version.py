@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 import re
 import subprocess
 
 
-TAG_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+TAG_RE = re.compile(r"(?:[0-9]+\.[0-9]+\.[0-9]+|latest)")
+DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 def request(endpoint: str) -> tuple[int, object, str]:
@@ -28,18 +30,47 @@ def request(endpoint: str) -> tuple[int, object, str]:
     return result.returncode, value, result.stderr.strip()
 
 
+def find_version(value: object, tag: str) -> str | None:
+    if not isinstance(value, list):
+        raise RuntimeError("GHCR package API returned a non-list response")
+    matches = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise RuntimeError("GHCR package API returned invalid version metadata")
+        metadata = item.get("metadata", {})
+        container = metadata.get("container", {}) if isinstance(metadata, dict) else {}
+        tags = container.get("tags", []) if isinstance(container, dict) else []
+        if not isinstance(tags, list):
+            raise RuntimeError("GHCR package API returned invalid tag metadata")
+        if tag in tags:
+            digest = item.get("name")
+            if not isinstance(digest, str) or DIGEST_RE.fullmatch(digest) is None:
+                raise RuntimeError("GHCR package version has no immutable digest")
+            matches.append(digest)
+    if len(matches) > 1:
+        raise RuntimeError(f"multiple GHCR versions use tag {tag}")
+    return matches[0] if matches else None
+
+
+def write_output(path: Path, exists: bool, digest: str) -> None:
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(f"exists={str(exists).lower()}\n")
+        stream.write(f"digest={digest}\n")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--organization", required=True)
     parser.add_argument("--package", required=True)
     parser.add_argument("--tag", required=True)
+    parser.add_argument("--github-output", type=Path)
     arguments = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", arguments.organization):
         parser.error("invalid organization")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", arguments.package):
         parser.error("invalid package")
     if not TAG_RE.fullmatch(arguments.tag):
-        parser.error("--tag must be MAJOR.MINOR.PATCH")
+        parser.error("--tag must be MAJOR.MINOR.PATCH or latest")
 
     page = 1
     while True:
@@ -55,26 +86,25 @@ def main() -> int:
                 and str(value.get("status")) == "404"
                 and value.get("message") == "Package not found."
             ):
+                if arguments.github_output is not None:
+                    write_output(arguments.github_output, False, "")
                 print("GHCR package does not exist yet")
                 return 0
             raise RuntimeError(f"cannot audit GHCR package: {detail or value}")
-        if not isinstance(value, list):
-            raise RuntimeError("GHCR package API returned a non-list response")
-        for item in value:
-            if not isinstance(item, dict):
-                raise RuntimeError("GHCR package API returned invalid version metadata")
-            metadata = item.get("metadata", {})
-            container = metadata.get("container", {}) if isinstance(metadata, dict) else {}
-            tags = container.get("tags", []) if isinstance(container, dict) else []
-            if not isinstance(tags, list):
-                raise RuntimeError("GHCR package API returned invalid tag metadata")
-            if arguments.tag in tags:
-                raise RuntimeError(
-                    f"GHCR tag already exists: {arguments.package}:{arguments.tag}"
-                )
+        digest = find_version(value, arguments.tag)
+        if digest is not None:
+            if arguments.github_output is not None:
+                write_output(arguments.github_output, True, digest)
+            print(
+                f"GHCR tag already exists at {digest}: "
+                f"{arguments.package}:{arguments.tag}"
+            )
+            return 0
         if len(value) < 100:
             break
         page += 1
+    if arguments.github_output is not None:
+        write_output(arguments.github_output, False, "")
     print(f"GHCR tag is available: {arguments.package}:{arguments.tag}")
     return 0
 

@@ -1,0 +1,131 @@
+name: Promote Latest Release
+
+on:
+  repository_dispatch:
+    types: [promote-classic-latest]
+  workflow_dispatch:
+
+permissions:
+  attestations: read
+  contents: read
+  packages: write
+
+concurrency:
+  group: classic-promote-latest
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Reconcile the latest server image alias
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Require main for a manual dispatch
+        if: github.event_name == 'workflow_dispatch'
+        run: test "${GITHUB_REF}" = refs/heads/main
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: main
+      - id: latest
+        name: Resolve GitHub's authoritative latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 tools/release/check_latest_release.py \
+            --repository "${RELEASE_REPOSITORY}" \
+            --github-output "${GITHUB_OUTPUT}"
+      - name: Check out the exact immutable release tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.latest.outputs.tag }}
+      - id: revision
+        name: Resolve the tagged revision
+        run: echo "commit=$(git rev-parse HEAD)" >>"${GITHUB_OUTPUT}"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - id: registry
+        name: Resolve the versioned server image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/release/check_registry_version.py \
+            --organization atrinik \
+            --package classic-server \
+            --tag '${{ steps.latest.outputs.version }}' \
+            --github-output "${GITHUB_OUTPUT}"
+          test "$(sed -n 's/^exists=//p' "${GITHUB_OUTPUT}")" = true
+      - name: Verify the exact image, labels, provenance, and SBOM
+        env:
+          IMAGE: ghcr.io/atrinik/classic-server:${{ steps.latest.outputs.version }}
+          IMAGE_DIGEST: ${{ steps.registry.outputs.digest }}
+        run: |
+          docker pull "${IMAGE}@${IMAGE_DIGEST}"
+          python3 tools/release/locked_inputs.py \
+            --version '${{ steps.latest.outputs.version }}' \
+            --component server \
+            --verify-image "${IMAGE}" \
+            --revision '${{ steps.revision.outputs.commit }}' \
+            --digest "${IMAGE_DIGEST}"
+      - name: Verify the GitHub server-image attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.registry.outputs.digest }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: >-
+          gh attestation verify
+          "oci://ghcr.io/atrinik/classic-server@${IMAGE_DIGEST}"
+          --repo "${RELEASE_REPOSITORY}"
+      - id: recheck
+        name: Recheck GitHub latest immediately before promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 tools/release/check_latest_release.py \
+            --repository "${RELEASE_REPOSITORY}" \
+            --github-output "${GITHUB_OUTPUT}"
+          test '${{ steps.latest.outputs.tag }}' = "$(sed -n 's/^tag=//p' "${GITHUB_OUTPUT}")"
+      - name: Reconcile the mutable latest image alias
+        env:
+          IMAGE_DIGEST: ${{ steps.registry.outputs.digest }}
+        run: >-
+          docker buildx imagetools create
+          --tag ghcr.io/atrinik/classic-server:latest
+          "ghcr.io/atrinik/classic-server@${IMAGE_DIGEST}"
+      - name: Confirm the promoted release remains latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          output=$(mktemp)
+          python3 tools/release/check_latest_release.py \
+            --repository "${RELEASE_REPOSITORY}" \
+            --github-output "${output}"
+          test '${{ steps.latest.outputs.tag }}' = "$(sed -n 's/^tag=//p' "${output}")"
+      - name: Confirm latest resolves to the audited image digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.registry.outputs.digest }}
+        run: |
+          output=$(mktemp)
+          for attempt in {1..6}; do
+            : >"${output}"
+            python3 tools/release/check_registry_version.py \
+              --organization atrinik \
+              --package classic-server \
+              --tag latest \
+              --github-output "${output}"
+            actual=$(sed -n 's/^digest=//p' "${output}")
+            if test "${actual}" = "${IMAGE_DIGEST}"; then
+              exit 0
+            fi
+            ((attempt < 6)) || exit 1
+            sleep 10
+          done
