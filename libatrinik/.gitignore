@@ -1,0 +1,8 @@
+build/
+*.log
+*.a
+*.o
+*.so
+__pycache__/
+coverage.*
+*:Zone.Identifier

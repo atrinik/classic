@@ -1,0 +1,59 @@
+name: Check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  library-validation:
+    name: Library validation
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcovr libcurl4-openssl-dev libssl-dev zlib1g-dev
+
+      - name: Configure
+        run: cmake --preset linux-coverage
+
+      - name: Build and test
+        run: |
+          cmake --build --preset linux-coverage --parallel
+          ctest --preset linux-coverage
+          gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
+            --exclude '.*/build/.*' \
+            --print-summary --xml coverage.xml --html-details coverage.html
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        with:
+          disable_search: true
+          fail_ci_if_error: false
+          files: coverage.xml
+          use_oidc: true
+
+      - name: Configure release package
+        run: cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/build/install"
+
+      - name: Build and install package
+        run: |
+          cmake --build build/release --parallel
+          cmake --install build/release
+
+      - name: Validate installed consumer
+        run: |
+          cmake -S tests/consumer -B build/consumer \
+            -DCMAKE_PREFIX_PATH="$PWD/build/install"
+          cmake --build build/consumer --parallel
+          build/consumer/libatrinik-consumer
