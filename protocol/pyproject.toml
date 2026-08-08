@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=77", "setuptools-scm>=8,<11"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atrinik-protocol"
+dynamic = ["version"]
+description = "Canonical generated bindings for Atrinik wire protocols"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{name = "Atrinik Development Team"}]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Topic :: Games/Entertainment :: Role-Playing",
+]
+
+[tool.setuptools]
+package-dir = {"" = "generated/python"}
+
+[tool.setuptools.packages.find]
+where = ["generated/python"]
+
+[tool.setuptools_scm]
+fallback_version = "0.0.0"
+local_scheme = "no-local-version"
