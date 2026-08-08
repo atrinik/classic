@@ -24,12 +24,12 @@ reports follow [SECURITY.md](SECURITY.md). All Atrinik-authored classic source
 remains GPL-2.0-or-later under [LICENSE.md](LICENSE.md); preserve compatible
 third-party licenses, notices, and attributions.
 
-The root workflows own the unified classic release line. After the initial
-manual-only pipeline passes its full post-merge rehearsal and the automatic
-trigger is enabled in a separate pull request, a successful aggregate check for
-the current `main` commit triggers semantic-release and the guarded package
-workflow. Nested component workflows and semantic-release files remain inert
-migration inputs; never enable or update them as independent release trains.
+The root workflows own the unified classic release line. A successful aggregate
+check for the current `main` commit triggers semantic-release and the guarded
+package workflow; pull-request, merge-group, failed, stale, and non-main checks
+cannot publish. Nested component workflows and semantic-release files remain
+inert migration inputs; never enable or update them as independent release
+trains.
 
 ## Module requirements
 
