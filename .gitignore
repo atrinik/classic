@@ -1,0 +1,7 @@
+/build/
+/.cache/
+/.coverage
+/coverage*.xml
+/coverage*.html
+*.pyc
+__pycache__/
