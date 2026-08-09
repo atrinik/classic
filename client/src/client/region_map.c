@@ -95,6 +95,8 @@ void region_map_free(region_map_t *region_map) {
     HARD_ASSERT(region_map->fow != NULL);
 
     region_map_reset(region_map);
+    region_map_def_free(region_map->def);
+    region_map_fow_free(region_map);
     free(region_map->def);
     free(region_map->fow);
     free(region_map);
