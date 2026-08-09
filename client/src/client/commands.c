@@ -33,6 +33,7 @@
 #include <client_socket.h>
 #include <openssl/crypto.h>
 #include <packet_payload.h>
+#include <item_packet.h>
 #include <region_map.h>
 #include <wrapper.h>
 #include <toolkit/map_protocol.h>
@@ -51,7 +52,7 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
     packet_reader_init_cursor(&reader, data, len, &pos);
     uint8_t type;
 
-    while (pos < len) {
+    while (packet_reader_error(&reader) == PACKET_ERROR_NONE && pos < len) {
         type = packet_reader_read_uint8(&reader);
 
         if (type == CMD_SETUP_SOUND) {
@@ -81,7 +82,13 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
                 cpl.state = ST_START;
                 return;
             }
+        } else {
+            packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
         }
+    }
+
+    if (!packet_reader_finish(&reader)) {
+        return;
     }
 
     if (cpl.state != ST_PLAY) {
@@ -222,7 +229,7 @@ void socket_command_stats(uint8_t *data, size_t len, size_t pos) {
     uint8_t type;
     int temp;
 
-    while (pos < len) {
+    while (packet_reader_error(&reader) == PACKET_ERROR_NONE && pos < len) {
         type = packet_reader_read_uint8(&reader);
 
         if (type >= CS_STAT_EQUIP_START && type <= CS_STAT_EQUIP_END) {
@@ -390,9 +397,15 @@ void socket_command_stats(uint8_t *data, size_t len, size_t pos) {
                     cpl.stats.ranged_ws = packet_reader_read_float(&reader);
                     WIDGET_REDRAW_ALL(PDOLL_ID);
                     break;
+
+                default:
+                    packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
+                    break;
             }
         }
     }
+
+    (void)packet_reader_finish(&reader);
 }
 
 /** @copydoc socket_command_struct::handle_func */
@@ -425,137 +438,76 @@ void socket_command_player(uint8_t *data, size_t len, size_t pos) {
     cpl.state = ST_PLAY;
 }
 
-void command_item_update(packet_reader_t *reader, uint32_t flags, object *tmp) {
+static void command_item_apply(const item_packet_update_t *update, uint32_t flags, object *tmp) {
+    object parsed = update->item;
     bool force_anim = false;
 
-    if (flags & UPD_LOCATION) {
-        /* Currently unused. */
-        packet_reader_read_uint32(reader);
-    }
-
-    if (flags & UPD_FLAGS) {
-        tmp->flags = packet_reader_read_uint32(reader);
-    }
-
-    if (flags & UPD_WEIGHT) {
-        tmp->weight = packet_reader_read_uint32(reader) / 1000.0;
-    }
+    /* Parser snapshots intentionally contain no live-list mutations. Preserve
+     * the target's links, including inventory transferred after validation. */
+    parsed.next = tmp->next;
+    parsed.prev = tmp->prev;
+    parsed.env = tmp->env;
+    parsed.inv = tmp->inv;
 
     if (flags & UPD_FACE) {
-        uint16_t raw_face = packet_reader_read_uint16(reader);
+        uint16_t raw_face = parsed.face;
         uint16_t face = raw_face & FACE_ID_MASK;
         if (!image_face_valid(face)) {
             LOG(ERROR,
                 "Object %" PRIu32 " received invalid face ID %u "
                 "(animation: %u, direction: %u)",
-                tmp->tag,
+                parsed.tag,
                 raw_face,
-                tmp->animation_id,
-                tmp->direction);
+                parsed.animation_id,
+                parsed.direction);
             face = 0;
         }
-
-        tmp->face = face;
-        image_request_face(face);
-    }
-
-    if (flags & UPD_DIRECTION) {
-        tmp->direction = packet_reader_read_uint8(reader);
-    }
-
-    if (flags & UPD_TYPE) {
-        tmp->itype = packet_reader_read_uint8(reader);
-        tmp->stype = packet_reader_read_uint8(reader);
-        tmp->item_qua = packet_reader_read_uint8(reader);
-
-        if (tmp->item_qua != 255) {
-            tmp->item_con = packet_reader_read_uint8(reader);
-            tmp->item_level = packet_reader_read_uint8(reader);
-            tmp->item_skill_tag = packet_reader_read_uint32(reader);
-        }
-    }
-
-    if (flags & UPD_NAME) {
-        packet_reader_read_string(reader, tmp->s_name, sizeof(tmp->s_name));
+        parsed.face = face;
     }
 
     if (flags & UPD_ANIM) {
-        uint16_t animation_id = packet_reader_read_uint16(reader);
-
+        uint16_t animation_id = parsed.animation_id;
         if (animation_id >= animations_num) {
             LOG(ERROR,
                 "Object %" PRIu32 " received invalid animation ID %u "
                 "(face: %u, direction: %u)",
-                tmp->tag,
+                parsed.tag,
                 animation_id,
-                tmp->face,
-                tmp->direction);
+                parsed.face,
+                parsed.direction);
             animation_id = 0;
         }
-
-        /* Changing animation ID, force animation. */
         if (tmp->animation_id != animation_id) {
             force_anim = true;
-            tmp->anim_state = 0;
+            parsed.anim_state = 0;
         }
-
-        tmp->animation_id = animation_id;
+        parsed.animation_id = animation_id;
     }
 
     if (flags & UPD_ANIMSPEED) {
-        uint8_t anim_speed;
-
-        anim_speed = packet_reader_read_uint8(reader);
-
-        /* Animation was disabled and we're enabling it, force animation. */
-        if (tmp->anim_speed == 0 && anim_speed != 0) {
+        if (tmp->anim_speed == 0 && parsed.anim_speed != 0) {
             force_anim = true;
         }
-
-        tmp->anim_speed = anim_speed;
     }
 
-    if (flags & UPD_NROF) {
-        tmp->nrof = packet_reader_read_uint32(reader);
-
-        if (tmp->nrof == 0) {
-            tmp->nrof = 1;
-        }
+    *tmp = parsed;
+    if (flags & UPD_FACE) {
+        image_request_face(tmp->face);
     }
 
-    if (flags & UPD_EXTRA) {
-        if (tmp->itype == TYPE_SPELL) {
-            uint16_t spell_cost;
-            uint32_t spell_path, spell_flags;
-            char spell_msg[MAX_BUF];
-
-            spell_cost = packet_reader_read_uint16(reader);
-            spell_path = packet_reader_read_uint32(reader);
-            spell_flags = packet_reader_read_uint32(reader);
-            packet_reader_read_string(reader, spell_msg, sizeof(spell_msg));
-
-            spells_update(tmp, spell_cost, spell_path, spell_flags, spell_msg);
-        } else if (tmp->itype == TYPE_SKILL) {
-            uint8_t skill_level = packet_reader_read_uint8(reader);
-            int64_t skill_exp = packet_reader_read_int64(reader);
-            char skill_msg[MAX_BUF];
-            packet_reader_read_string(reader, VS(skill_msg));
-
-            skills_update(tmp, skill_level, skill_exp, skill_msg);
-        } else if (tmp->itype == TYPE_FORCE || tmp->itype == TYPE_POISONING) {
-            int32_t sec;
-            char msg[HUGE_BUF];
-
-            sec = packet_reader_read_int32(reader);
-            packet_reader_read_string(reader, msg, sizeof(msg));
-
-            widget_active_effects_update(cur_widget[ACTIVE_EFFECTS_ID], tmp, sec, msg);
-        }
-    }
-
-    if (flags & UPD_GLOW) {
-        packet_reader_read_string(reader, VS(tmp->glow));
-        tmp->glow_speed = packet_reader_read_uint8(reader);
+    if (update->extra_type == ITEM_PACKET_EXTRA_SPELL) {
+        spells_update(tmp,
+                      update->spell_cost,
+                      update->spell_path,
+                      update->spell_flags,
+                      update->extra_message);
+    } else if (update->extra_type == ITEM_PACKET_EXTRA_SKILL) {
+        skills_update(tmp, update->skill_level, update->skill_exp, update->extra_message);
+    } else if (update->extra_type == ITEM_PACKET_EXTRA_EFFECT) {
+        widget_active_effects_update(cur_widget[ACTIVE_EFFECTS_ID],
+                                     tmp,
+                                     update->effect_seconds,
+                                     update->extra_message);
     }
 
     if (tmp->itype == TYPE_REGION_MAP) {
@@ -571,8 +523,22 @@ void command_item_update(packet_reader_t *reader, uint32_t flags, object *tmp) {
     object_redraw(tmp);
 }
 
+bool command_item_update(packet_reader_t *reader, uint32_t flags, object *tmp) {
+    item_packet_update_t update;
+    if (!item_packet_parse_update(reader, flags, tmp, &update)) {
+        return false;
+    }
+
+    command_item_apply(&update, flags, tmp);
+    return true;
+}
+
 /** @copydoc socket_command_struct::handle_func */
 void socket_command_item(uint8_t *data, size_t len, size_t pos) {
+    if (!item_packet_validate_command(data, len, pos)) {
+        return;
+    }
+
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     bool delete_env = packet_reader_read_uint8(&reader) == 1;
@@ -603,7 +569,8 @@ void socket_command_item(uint8_t *data, size_t len, size_t pos) {
 
     uint8_t bflag = packet_reader_read_uint8(&reader);
 
-    while (pos < len) {
+    while (packet_reader_error(&reader) == PACKET_ERROR_NONE && pos < len) {
+        size_t iteration_start = pos;
         tag_t tag = packet_reader_read_uint32(&reader);
         uint8_t apply_action = CMD_APPLY_ACTION_NORMAL;
 
@@ -612,6 +579,25 @@ void socket_command_item(uint8_t *data, size_t len, size_t pos) {
             tmp = object_find(tag);
         } else {
             apply_action = packet_reader_read_uint8(&reader);
+        }
+
+        object base = {0};
+        if (tmp != NULL && tmp->env == env && !delete_env) {
+            base = *tmp;
+        } else {
+            base.tag = tag;
+            base.apply_action = apply_action;
+        }
+
+        uint32_t flags = UPD_FLAGS | UPD_WEIGHT | UPD_FACE | UPD_DIRECTION | UPD_NAME | UPD_ANIM |
+                         UPD_ANIMSPEED | UPD_NROF | UPD_GLOW;
+        if (loc > 0) {
+            flags |= UPD_TYPE | UPD_EXTRA;
+        }
+
+        item_packet_update_t update;
+        if (!item_packet_parse_update(&reader, flags, &base, &update)) {
+            return;
         }
 
         if (tmp != NULL && tmp->env != env) {
@@ -634,19 +620,33 @@ void socket_command_item(uint8_t *data, size_t len, size_t pos) {
             }
         }
 
-        uint32_t flags = UPD_FLAGS | UPD_WEIGHT | UPD_FACE | UPD_DIRECTION | UPD_NAME | UPD_ANIM |
-                         UPD_ANIMSPEED | UPD_NROF | UPD_GLOW;
-
-        if (loc > 0) {
-            flags |= UPD_TYPE | UPD_EXTRA;
+        command_item_apply(&update, flags, tmp);
+        if (pos == iteration_start) {
+            packet_reader_set_error(&reader, PACKET_ERROR_INVALID_ENCODING);
+            return;
         }
-
-        command_item_update(&reader, flags, tmp);
     }
+
+    (void)packet_reader_finish(&reader);
 }
 
 /** @copydoc socket_command_struct::handle_func */
 void socket_command_item_update(uint8_t *data, size_t len, size_t pos) {
+    packet_reader_t validate_reader;
+    packet_reader_init_at(&validate_reader, data, len, pos);
+    uint32_t validate_flags = packet_reader_read_uint16(&validate_reader);
+    tag_t validate_tag = packet_reader_read_uint32(&validate_reader);
+    object *validate_tmp = object_find(validate_tag);
+    item_packet_update_t validate_update;
+    if (validate_tmp == NULL ||
+        !item_packet_parse_update(&validate_reader,
+                                  validate_flags,
+                                  validate_tmp,
+                                  &validate_update) ||
+        !packet_reader_finish(&validate_reader)) {
+        return;
+    }
+
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     uint32_t flags, tag;
@@ -662,6 +662,7 @@ void socket_command_item_update(uint8_t *data, size_t len, size_t pos) {
     }
 
     command_item_update(&reader, flags, tmp);
+    (void)packet_reader_finish(&reader);
 }
 
 /** @copydoc socket_command_struct::handle_func */
@@ -670,10 +671,16 @@ void socket_command_item_delete(uint8_t *data, size_t len, size_t pos) {
     packet_reader_init_cursor(&reader, data, len, &pos);
     tag_t tag;
 
-    while (pos < len) {
+    if (packet_reader_remaining(&reader) % sizeof(tag_t) != 0) {
+        packet_reader_set_error(&reader, PACKET_ERROR_TRUNCATED);
+        return;
+    }
+
+    while (packet_reader_error(&reader) == PACKET_ERROR_NONE && pos < len) {
         tag = packet_reader_read_uint32(&reader);
         delete_object(tag);
     }
+    (void)packet_reader_finish(&reader);
 }
 
 /**
@@ -704,7 +711,7 @@ void socket_command_mapstats(uint8_t *data, size_t len, size_t pos) {
     uint8_t type;
     char buf[HUGE_BUF];
 
-    while (pos < len) {
+    while (packet_reader_error(&reader) == PACKET_ERROR_NONE && pos < len) {
         /* Get the type of this command... */
         type = packet_reader_read_uint8(&reader);
 
@@ -729,8 +736,11 @@ void socket_command_mapstats(uint8_t *data, size_t len, size_t pos) {
             uint32_t millis_per_game_minute = packet_reader_read_uint32(&reader);
             telemetry_game_time_sync(game_seconds, millis_per_game_minute);
             WIDGET_REDRAW_ALL(GAME_TIME_ID);
+        } else {
+            packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
         }
     }
+    (void)packet_reader_finish(&reader);
 }
 
 /** @copydoc socket_command_struct::handle_func */

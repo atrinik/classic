@@ -824,7 +824,7 @@ void socket_command_characters(uint8_t *data, size_t len, size_t pos) {
     packet_reader_read_string(&reader, cpl.last_connection_id, sizeof(cpl.last_connection_id));
     cpl.last_time = datetime_utctolocal(packet_reader_read_uint64(&reader));
 
-    while (pos < len) {
+    while (packet_reader_error(&reader) == PACKET_ERROR_NONE && pos < len) {
         packet_reader_read_string(&reader, archname, sizeof(archname));
         packet_reader_read_string(&reader, name, sizeof(name));
         packet_reader_read_string(&reader, region_name, sizeof(region_name));
@@ -872,6 +872,8 @@ void socket_command_characters(uint8_t *data, size_t len, size_t pos) {
                  region_name);
         list_add(list_characters, list_characters->rows - 1, 1, buf);
     }
+
+    (void)packet_reader_finish(&reader);
 
     /* No characters yet, so switch to the character creation tab. */
     if (list_characters->rows == 0) {
