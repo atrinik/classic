@@ -90,6 +90,9 @@ struct curl_request {
     /** Maximum accepted aggregate response-header size. */
     size_t max_header_size;
 
+    /** Total request timeout in milliseconds, or zero for no deadline. */
+    long timeout_ms;
+
     /** HTTP headers. */
     char *header;
 
@@ -735,6 +738,17 @@ void curl_request_set_max_header(curl_request_t *request, size_t maximum) {
 
     pthread_mutex_lock(&request->mutex);
     request->max_header_size = maximum;
+    pthread_mutex_unlock(&request->mutex);
+}
+
+/** Set the total request deadline in milliseconds. */
+void curl_request_set_timeout(curl_request_t *request, long timeout_ms) {
+    HARD_ASSERT(request != NULL);
+    HARD_ASSERT(timeout_ms > 0);
+    TOOLKIT_PROTECT();
+
+    pthread_mutex_lock(&request->mutex);
+    request->timeout_ms = timeout_ms;
     pthread_mutex_unlock(&request->mutex);
 }
 
@@ -1404,6 +1418,10 @@ static curl_state_t curl_request_setup(curl_request_t *request) {
     /* Set connection timeout. */
     CURL_SETOPT(request->handle, CURLOPT_CONNECTTIMEOUT, CURL_TIMEOUT);
 
+    if (request->timeout_ms > 0) {
+        CURL_SETOPT(request->handle, CURLOPT_TIMEOUT_MS, request->timeout_ms);
+    }
+
     /* Disable signals since we are in a thread. See
      * http://curl.haxx.se/libcurl/c/curl_easy_setopt.html#CURLOPTNOSIGNAL
      * for details. */
@@ -1467,22 +1485,28 @@ static curl_state_t curl_request_complete(curl_request_t *request) {
         process_cb(CURL_REQUEST_PROCESS_TX, request_size);
     }
 
+    long http_code = 0;
+    CURLcode info_res = curl_easy_getinfo(request->handle, CURLINFO_RESPONSE_CODE, &http_code);
+    if (info_res == CURLE_OK && http_code != 0) {
+        pthread_mutex_lock(&request->mutex);
+        request->http_code = (int)http_code;
+        pthread_mutex_unlock(&request->mutex);
+    }
+
     if (res != CURLE_OK) {
         LOG(ERROR, "curl_easy_perform() got error %d (%s).", res, curl_easy_strerror(res));
         return CURL_STATE_ERROR;
     }
 
-    long http_code;
-    curl_easy_getinfo(request->handle, CURLINFO_HTTP_CODE, &http_code);
-    pthread_mutex_lock(&request->mutex);
+    if (info_res != CURLE_OK || http_code == 0) {
+        LOG(ERROR, "Failed to acquire HTTP response code: %s", curl_easy_strerror(info_res));
+        return CURL_STATE_ERROR;
+    }
 
     if (request->untrusted) {
         LOG(SYSTEM, "!!! CONNECTED TO UNTRUSTED HOST !!! ");
         LOG(SYSTEM, "Request URL: %s", request->url);
     }
-
-    request->http_code = http_code;
-    pthread_mutex_unlock(&request->mutex);
 
     if (http_code != 200 && http_code != 304) {
         return CURL_STATE_ERROR;

@@ -503,9 +503,7 @@ static void do_specials(void) {
         flush_old_maps();
     }
 
-    if (!(pticks % 2521)) {
-        metaserver_info_update();
-    }
+    metaserver_service();
 }
 
 void shutdown_timer_start(long secs) {

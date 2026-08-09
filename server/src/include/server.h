@@ -210,6 +210,8 @@ extern void socket_send_packet(socket_struct *ns, struct packet_struct *packet);
 
 extern void metaserver_info_update(void);
 
+extern void metaserver_service(void);
+
 extern void metaserver_init(void);
 
 extern void metaserver_deinit(void);
