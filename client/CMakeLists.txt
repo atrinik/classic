@@ -271,6 +271,22 @@ if (BUILD_TESTING AND NOT MINGW)
     target_link_libraries(client-packet-payload-tests PRIVATE Atrinik::Core)
     add_test(NAME client-packet-payload COMMAND client-packet-payload-tests)
 
+    add_executable(client-keybind-input-tests
+        src/tests/keybind_input.c
+        src/client/keybind_input.c
+        src/client/keybind_storage.c)
+    atrinik_configure_target(client-keybind-input-tests)
+    target_compile_definitions(client-keybind-input-tests PRIVATE
+        ATRINIK_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-keybind-input-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-keybind-input-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-keybind-input COMMAND client-keybind-input-tests)
+
     add_executable(client-surface-primitives-tests
         src/tests/surface_primitives.c
         src/gui/toolkit/surface_primitives.c)

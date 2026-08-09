@@ -1,54 +1,55 @@
+keycode_format SDL3
 bind
 	# [9]
-	key 265
+	key 1073741921
 	repeat 1
 	command ?MOVE_N
 end
 bind
 	# [6]
-	key 262
+	key 1073741918
 	repeat 1
 	command ?MOVE_NE
 end
 bind
 	# [3]
-	key 259
+	key 1073741915
 	repeat 1
 	command ?MOVE_E
 end
 bind
 	# [2]
-	key 258
+	key 1073741914
 	repeat 1
 	command ?MOVE_SE
 end
 bind
 	# [1]
-	key 257
+	key 1073741913
 	repeat 1
 	command ?MOVE_S
 end
 bind
 	# [4]
-	key 260
+	key 1073741916
 	repeat 1
 	command ?MOVE_SW
 end
 bind
 	# [7]
-	key 263
+	key 1073741919
 	repeat 1
 	command ?MOVE_W
 end
 bind
 	# [8]
-	key 264
+	key 1073741920
 	repeat 1
 	command ?MOVE_NW
 end
 bind
 	# [5]
-	key 261
+	key 1073741917
 	repeat 1
 	command ?MOVE_STAY
 end
@@ -77,7 +78,7 @@ bind
 end
 bind
 	# enter
-	key 271
+	key 1073741912
 	command ?CONSOLE
 end
 bind
@@ -119,45 +120,45 @@ bind
 end
 bind
 	# f9
-	key 290
+	key 1073741890
 	command ?SPELL_LIST
 end
 bind
 	# f10
-	key 291
+	key 1073741891
 	command ?SKILL_LIST
 end
 bind
 	# f11
-	key 292
+	key 1073741892
 	command ?PARTY_LIST
 end
 bind
 	# f12
-	key 293
+	key 1073741893
 	command ?HELP
 end
 bind
 	# up
-	key 273
+	key 1073741906
 	repeat 1
 	command ?UP
 end
 bind
 	# down
-	key 274
+	key 1073741905
 	repeat 1
 	command ?DOWN
 end
 bind
 	# left
-	key 276
+	key 1073741904
 	repeat 1
 	command ?LEFT
 end
 bind
 	# right
-	key 275
+	key 1073741903
 	repeat 1
 	command ?RIGHT
 end
@@ -209,22 +210,22 @@ bind
 end
 bind
 	# left alt
-	key 308
+	key 1073742050
 	command ?RUNON
 end
 bind
 	# right alt
-	key 307
+	key 1073742054
 	command ?RUNON
 end
 bind
 	# right ctrl
-	key 305
+	key 1073742052
 	command ?FIREON
 end
 bind
 	# left ctrl
-	key 306
+	key 1073742048
 	command ?FIREON
 end
 bind
@@ -325,17 +326,17 @@ bind
 end
 bind
 	# end
-	key 279
+	key 1073741901
 	command ?QUICKSLOT_GROUP_NEXT
 end
 bind
 	# home
-	key 278
+	key 1073741898
 	command ?QUICKSLOT_GROUP_PREV
 end
 bind
 	# left shift
-	key 304
+	key 1073742049
 	command ?QUICKSLOT_SET_KEY
 end
 bind
