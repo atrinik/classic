@@ -122,6 +122,42 @@ static bool metaserver_publisher_base64(const char *value, size_t maximum) {
     return true;
 }
 
+static bool metaserver_publisher_base64_encode(const unsigned char *value,
+                                               size_t value_size,
+                                               char *encoded,
+                                               size_t encoded_size,
+                                               size_t *written) {
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    if (value == NULL || value_size == 0 || encoded == NULL || encoded_size == 0 ||
+        written == NULL || value_size > SIZE_MAX - 2U) {
+        return false;
+    }
+    size_t blocks = (value_size + 2U) / 3U;
+    if (blocks > (encoded_size - 1U) / 4U) {
+        return false;
+    }
+
+    size_t used = 0;
+    for (size_t offset = 0; offset < value_size; offset += 3U) {
+        size_t remaining = value_size - offset;
+        uint32_t block = (uint32_t)value[offset] << 16U;
+        if (remaining > 1U) {
+            block |= (uint32_t)value[offset + 1U] << 8U;
+        }
+        if (remaining > 2U) {
+            block |= value[offset + 2U];
+        }
+        encoded[used++] = alphabet[(block >> 18U) & 0x3fU];
+        encoded[used++] = alphabet[(block >> 12U) & 0x3fU];
+        encoded[used++] = remaining > 1U ? alphabet[(block >> 6U) & 0x3fU] : '=';
+        encoded[used++] = remaining > 2U ? alphabet[block & 0x3fU] : '=';
+    }
+    encoded[used] = '\0';
+    *written = used;
+    return true;
+}
+
 static bool
 metaserver_publisher_json_string(const char *value, char *escaped, size_t escaped_size) {
     size_t used = 0;
@@ -305,8 +341,13 @@ bool metaserver_publisher_build(metaserver_publisher_profile_t profile,
     fprintf(stderr, "publisher build trace: digest hashed=%d\n", digest_ok);
     fflush(stderr);
 #endif
-    bool base64_ok =
-        digest_ok && EVP_EncodeBlock((unsigned char *)digest_base64, digest, sizeof(digest)) == 44;
+    size_t digest_base64_size = 0;
+    bool base64_ok = digest_ok &&
+                     metaserver_publisher_base64_encode(digest,
+                                                        sizeof(digest),
+                                                        VS(digest_base64),
+                                                        &digest_base64_size) &&
+                     digest_base64_size == 44U;
 #ifdef WIN32
     fprintf(stderr, "publisher build trace: digest base64=%d\n", base64_ok);
     fflush(stderr);
@@ -390,8 +431,11 @@ metaserver_publisher_identity_create(X509 *certificate, EVP_PKEY *key, const cha
         identity = calloc(1, sizeof(*identity));
     }
     if (identity != NULL) {
-        int encoded = EVP_EncodeBlock((unsigned char *)identity->certificate_base64, der, der_size);
-        if (encoded <= 0 || (size_t)encoded >= sizeof(identity->certificate_base64)) {
+        size_t encoded = 0;
+        if (!metaserver_publisher_base64_encode(der,
+                                                (size_t)der_size,
+                                                VS(identity->certificate_base64),
+                                                &encoded)) {
             free(identity);
             identity = NULL;
         }
@@ -460,7 +504,9 @@ bool metaserver_publisher_identity_sign(
     }
     char encoded[96];
     if (valid) {
-        valid = EVP_EncodeBlock((unsigned char *)encoded, raw, sizeof(raw)) == 88;
+        size_t encoded_size = 0;
+        valid = metaserver_publisher_base64_encode(raw, sizeof(raw), VS(encoded), &encoded_size) &&
+                encoded_size == 88U;
     }
     if (valid) {
         int length = snprintf(signature_header,
