@@ -53,6 +53,7 @@
 #include <toolkit/clioptions.h>
 #include <toolkit/curl.h>
 #include <server.h>
+#include <metaserver_internal.h>
 #include <toolkit/path.h>
 #include <resources.h>
 #include <content_benchmark.h>
@@ -422,6 +423,31 @@ static const char *clioptions_option_metaserver_url_desc =
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_metaserver_url(const char *arg, char **errmsg) {
     snprintf(VS(settings.metaserver_url), "%s", arg);
+    return true;
+}
+
+/**
+ * Description of the --metaserver_heartbeat command.
+ */
+static const char *clioptions_option_metaserver_heartbeat_desc =
+    "Base metaserver liveness heartbeat in seconds. The server adds bounded jitter and applies "
+    "a separate hard publication-rate budget.";
+/** @copydoc clioptions_handler_func */
+static bool clioptions_option_metaserver_heartbeat(const char *arg, char **errmsg) {
+    uint64_t value;
+    if (!string_parse_uint64(arg,
+                             10,
+                             METASERVER_PUBLISH_HEARTBEAT_MIN_SECONDS,
+                             METASERVER_PUBLISH_HEARTBEAT_MAX_SECONDS,
+                             &value)) {
+        string_fmt(*errmsg,
+                   "%s is an invalid heartbeat, must be %u-%u seconds",
+                   arg,
+                   METASERVER_PUBLISH_HEARTBEAT_MIN_SECONDS,
+                   METASERVER_PUBLISH_HEARTBEAT_MAX_SECONDS);
+        return false;
+    }
+    settings.metaserver_heartbeat = (uint32_t)value;
     return true;
 }
 
@@ -944,10 +970,12 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, httppath, "HTTP asset staging location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, resourcespath, "Resource files location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, metaserver_url, "URL of the metaserver");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, metaserver_heartbeat, "Metaserver heartbeat interval");
     CLIOPTIONS_CREATE_ARGUMENT(cli, http_url, "Operator-managed HTTP asset origin");
     CLIOPTIONS_CREATE_ARGUMENT(cli, stun_server, "STUN discovery endpoint");
     CLIOPTIONS_CREATE_ARGUMENT(cli, port_mapping, "Router port mapping policy");
     CLIOPTIONS_CREATE_ARGUMENT(cli, join_password, "Private server password");
+    clioptions_enable_sensitive(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, join_password_file, "Private server password file");
     CLIOPTIONS_CREATE_ARGUMENT(cli,
                                rendezvous_invite_file,

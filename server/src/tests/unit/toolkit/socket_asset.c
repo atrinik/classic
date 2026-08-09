@@ -94,8 +94,9 @@ START_TEST(test_metaserver_rendezvous_retry_policy) {
     ck_assert_uint_eq(metaserver_rendezvous_retry_delay_ms(0, 0, 0), 3750);
     ck_assert_uint_eq(metaserver_rendezvous_retry_delay_ms(0, 0, 2500), 6250);
     ck_assert_uint_eq(metaserver_rendezvous_retry_delay_ms(1, 0, 0), 7500);
-    ck_assert_uint_eq(metaserver_rendezvous_retry_delay_ms(UINT32_MAX, 0, UINT32_MAX),
-                      METASERVER_RENDEZVOUS_RETRY_MAX_MS);
+    uint32_t capped_rendezvous = metaserver_rendezvous_retry_delay_ms(UINT32_MAX, 0, UINT32_MAX);
+    ck_assert_uint_ge(capped_rendezvous, METASERVER_RENDEZVOUS_RETRY_MAX_MS * 3U / 4U);
+    ck_assert_uint_le(capped_rendezvous, METASERVER_RENDEZVOUS_RETRY_MAX_MS);
     ck_assert_uint_eq(metaserver_rendezvous_retry_delay_ms(0, 60, 0), 60000);
     ck_assert_uint_eq(metaserver_rendezvous_retry_delay_ms(0, UINT32_MAX, 0),
                       METASERVER_RENDEZVOUS_RETRY_AFTER_MAX_SECONDS * 1000U);
@@ -144,6 +145,238 @@ START_TEST(test_metaserver_rendezvous_retry_policy) {
     metaserver_rendezvous_header(bounded_retry, 1, strlen(bounded_retry), &headers);
     ck_assert(headers.has_retry_after);
     ck_assert_uint_eq(headers.retry_after_seconds, METASERVER_RENDEZVOUS_RETRY_AFTER_MAX_SECONDS);
+}
+END_TEST
+
+START_TEST(test_metaserver_publish_cadence) {
+    server_monotonic_t now = {UINT64_C(1000000)};
+    metaserver_publish_cadence_t cadence;
+    metaserver_publish_cadence_init(&cadence, now);
+    ck_assert(metaserver_publish_cadence_needs_snapshot(&cadence, now));
+    ck_assert(metaserver_publish_cadence_due(&cadence, now, true));
+    ck_assert_uint_eq(cadence.rate_budget.tokens, 2);
+
+    metaserver_publish_cadence_attempted(&cadence, now);
+    ck_assert_uint_eq(cadence.rate_budget.tokens, 1);
+    metaserver_publish_cadence_succeeded(&cadence,
+                                         now,
+                                         true,
+                                         METASERVER_PUBLISH_HEARTBEAT_DEFAULT_SECONDS,
+                                         0);
+    ck_assert_uint_eq(cadence.heartbeat_deadline.microseconds,
+                      now.microseconds + UINT64_C(8100) * UINT64_C(1000000));
+    ck_assert(!metaserver_publish_cadence_due(&cadence, now, false));
+
+    server_monotonic_t changed = {now.microseconds + UINT64_C(1000000)};
+    metaserver_publish_cadence_changed(&cadence, changed, true);
+    ck_assert(!metaserver_publish_cadence_needs_snapshot(&cadence, changed));
+    ck_assert(!metaserver_publish_cadence_due(&cadence, changed, true));
+    server_monotonic_t debounce = {changed.microseconds +
+                                   METASERVER_PUBLISH_DEBOUNCE_SECONDS * UINT64_C(1000000)};
+    ck_assert(metaserver_publish_cadence_due(&cadence, debounce, true));
+    metaserver_publish_cadence_attempted(&cadence, debounce);
+    ck_assert_uint_eq(cadence.rate_budget.tokens, 0);
+
+    metaserver_publish_cadence_changed(&cadence, debounce, true);
+    server_monotonic_t refill = {now.microseconds +
+                                 METASERVER_ATTEMPT_RATE_REFILL_SECONDS * UINT64_C(1000000)};
+    ck_assert(!metaserver_publish_cadence_due(&cadence,
+                                              (server_monotonic_t){refill.microseconds - 1U},
+                                              true));
+    ck_assert(metaserver_publish_cadence_due(&cadence, refill, true));
+    ck_assert_uint_eq(cadence.rate_budget.tokens, 1);
+
+    metaserver_publish_cadence_suspend(&cadence);
+    cadence.dirty = false;
+    ck_assert(!metaserver_publish_cadence_needs_snapshot(&cadence, refill));
+    ck_assert(!metaserver_publish_cadence_due(&cadence, refill, true));
+    metaserver_publish_cadence_changed(&cadence, refill, false);
+    ck_assert(metaserver_publish_cadence_needs_snapshot(&cadence, refill));
+    ck_assert(cadence.suspended);
+    metaserver_publish_cadence_changed(&cadence, refill, true);
+    ck_assert(!cadence.suspended);
+    ck_assert(!metaserver_publish_cadence_due(&cadence, refill, true));
+    ck_assert(metaserver_publish_cadence_due(
+        &cadence,
+        (server_monotonic_t){refill.microseconds +
+                             METASERVER_PUBLISH_DEBOUNCE_SECONDS * UINT64_C(1000000)},
+        true));
+
+    ck_assert(metaserver_publish_cadence_recover_replay(&cadence));
+    ck_assert(!metaserver_publish_cadence_recover_replay(&cadence));
+
+    metaserver_publish_cadence_init(&cadence, now);
+    metaserver_publish_cadence_attempted(&cadence, now);
+    metaserver_publish_cadence_changed(&cadence, changed, false);
+    metaserver_publish_cadence_suspend(&cadence);
+    ck_assert(cadence.suspended);
+    ck_assert(cadence.dirty);
+    ck_assert(metaserver_publish_cadence_needs_snapshot(&cadence, changed));
+
+    metaserver_publish_cadence_init(&cadence, changed);
+    ck_assert(!cadence.suspended);
+    ck_assert_uint_eq(cadence.rate_budget.tokens, METASERVER_ATTEMPT_RATE_CAPACITY);
+    ck_assert(metaserver_publish_cadence_due(&cadence, changed, true));
+}
+END_TEST
+
+START_TEST(test_metaserver_publish_retry_and_daily_budget) {
+    ck_assert_uint_eq(metaserver_publish_retry_delay_ms(0, 0, 0), 45000);
+    ck_assert_uint_eq(metaserver_publish_retry_delay_ms(1, 0, 0), 90000);
+    uint32_t capped_publish = metaserver_publish_retry_delay_ms(UINT32_MAX, 0, UINT32_MAX);
+    ck_assert_uint_ge(capped_publish, METASERVER_PUBLISH_RETRY_MAX_MS * 3U / 4U);
+    ck_assert_uint_le(capped_publish, METASERVER_PUBLISH_RETRY_MAX_MS);
+    ck_assert_uint_eq(metaserver_publish_retry_delay_ms(0, 120, 0), 120000);
+    ck_assert_uint_eq(metaserver_publish_retry_delay_ms(0, UINT32_MAX, 0),
+                      METASERVER_PUBLISH_RETRY_AFTER_MAX_SECONDS * 1000U);
+    ck_assert_uint_eq(metaserver_publish_heartbeat_delay_seconds(9000, 0), 8100);
+    ck_assert_uint_eq(metaserver_publish_heartbeat_delay_seconds(9000, 1800), 9900);
+
+    char headers[] = "HTTP/1.1 100 Continue\r\nRetry-After: 1\r\n\r\n"
+                     "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\n\r\n";
+    uint32_t retry_after = 0;
+    ck_assert(metaserver_publish_retry_after(headers, strlen(headers), &retry_after));
+    ck_assert_uint_eq(retry_after, 120);
+    char invalid[] = "HTTP/1.1 503 Service Unavailable\r\nRetry-After: tomorrow\r\n\r\n";
+    ck_assert(!metaserver_publish_retry_after(invalid, strlen(invalid), &retry_after));
+    ck_assert_uint_eq(retry_after, 0);
+    ck_assert(metaserver_publish_response_retryable(CURL_STATE_ERROR, -1));
+    ck_assert(metaserver_publish_response_retryable(CURL_STATE_OK, 408));
+    ck_assert(metaserver_publish_response_retryable(CURL_STATE_OK, 429));
+    ck_assert(metaserver_publish_response_retryable(CURL_STATE_ERROR, 503));
+    ck_assert(metaserver_publish_response_retryable(CURL_STATE_ERROR, 200));
+    ck_assert(!metaserver_publish_response_retryable(CURL_STATE_OK, 200));
+    ck_assert(!metaserver_publish_response_retryable(CURL_STATE_OK, 400));
+    ck_assert(!metaserver_publish_response_retryable(CURL_STATE_ERROR, 401));
+    ck_assert(!metaserver_publish_response_retryable(CURL_STATE_OK, 403));
+    ck_assert(!metaserver_publish_response_retryable(CURL_STATE_OK, 404));
+    ck_assert(!metaserver_publish_response_retryable(CURL_STATE_OK, 409));
+    ck_assert_int_eq(metaserver_publish_failure_action(CURL_STATE_ERROR, 409),
+                     METASERVER_PUBLISH_FAILURE_REPLAY);
+    ck_assert_int_eq(metaserver_publish_failure_action(CURL_STATE_ERROR, 503),
+                     METASERVER_PUBLISH_FAILURE_RETRY);
+    ck_assert_int_eq(metaserver_publish_failure_action(CURL_STATE_ERROR, 401),
+                     METASERVER_PUBLISH_FAILURE_SUSPEND);
+
+    metaserver_publish_cadence_t private_cadence;
+    metaserver_publish_cadence_init(&private_cadence, (server_monotonic_t){UINT64_C(1000000)});
+    metaserver_publish_cadence_attempted(&private_cadence, (server_monotonic_t){UINT64_C(1000000)});
+    metaserver_publish_cadence_succeeded(&private_cadence,
+                                         (server_monotonic_t){UINT64_C(1000000)},
+                                         false,
+                                         METASERVER_PUBLISH_HEARTBEAT_DEFAULT_SECONDS,
+                                         0);
+    ck_assert(private_cadence.published);
+    ck_assert(!server_monotonic_is_set(private_cadence.heartbeat_deadline));
+    ck_assert(!metaserver_publish_cadence_needs_snapshot(
+        &private_cadence,
+        (server_monotonic_t){UINT64_C(86401) * UINT64_C(1000000)}));
+    ck_assert(
+        !metaserver_publish_cadence_due(&private_cadence,
+                                        (server_monotonic_t){UINT64_C(86401) * UINT64_C(1000000)},
+                                        true));
+
+    metaserver_publish_cadence_t cadence;
+    server_monotonic_t now = {UINT64_C(1000000)};
+    metaserver_publish_cadence_init(&cadence, now);
+    unsigned int attempts = 0;
+    while (now.microseconds <= UINT64_C(86401) * UINT64_C(1000000)) {
+        if (metaserver_publish_cadence_due(&cadence, now, true)) {
+            metaserver_publish_cadence_attempted(&cadence, now);
+            attempts++;
+            metaserver_publish_cadence_changed(&cadence, now, true);
+        }
+        now.microseconds += UINT64_C(1000000);
+    }
+    ck_assert_uint_eq(attempts, 47);
+
+    metaserver_publish_cadence_init(&cadence, (server_monotonic_t){UINT64_C(1000000)});
+    metaserver_publish_cadence_attempted(&cadence, (server_monotonic_t){UINT64_C(1000000)});
+    metaserver_publish_cadence_failed(&cadence, (server_monotonic_t){UINT64_C(1000000)}, 120, 0);
+    ck_assert(
+        !metaserver_publish_cadence_due(&cadence, (server_monotonic_t){UINT64_C(120999999)}, true));
+    ck_assert(
+        metaserver_publish_cadence_due(&cadence, (server_monotonic_t){UINT64_C(121000000)}, true));
+
+    ck_assert(metaserver_rendezvous_upgrade_retryable(CURLE_COULDNT_CONNECT, 0, false));
+    ck_assert(metaserver_rendezvous_upgrade_retryable(CURLE_HTTP_RETURNED_ERROR, 408, false));
+    ck_assert(metaserver_rendezvous_upgrade_retryable(CURLE_HTTP_RETURNED_ERROR, 429, false));
+    ck_assert(metaserver_rendezvous_upgrade_retryable(CURLE_HTTP_RETURNED_ERROR, 503, false));
+    ck_assert(metaserver_rendezvous_upgrade_retryable(CURLE_OK, 429, false));
+    ck_assert(metaserver_rendezvous_upgrade_retryable(CURLE_OK, 503, false));
+    ck_assert(!metaserver_rendezvous_upgrade_retryable(CURLE_HTTP_RETURNED_ERROR, 401, false));
+    ck_assert(!metaserver_rendezvous_upgrade_retryable(CURLE_HTTP_RETURNED_ERROR, 403, false));
+    ck_assert(!metaserver_rendezvous_upgrade_retryable(CURLE_HTTP_RETURNED_ERROR, 404, false));
+    ck_assert(!metaserver_rendezvous_upgrade_retryable(CURLE_HTTP_RETURNED_ERROR, 409, false));
+    ck_assert(!metaserver_rendezvous_upgrade_retryable(CURLE_WRITE_ERROR, 401, false));
+    ck_assert(!metaserver_rendezvous_upgrade_retryable(CURLE_OK, 401, false));
+    ck_assert(!metaserver_rendezvous_upgrade_retryable(CURLE_OK, 409, false));
+    ck_assert(!metaserver_rendezvous_upgrade_retryable(CURLE_OK, 101, false));
+
+    metaserver_attempt_budget_t budget;
+    server_monotonic_t budget_now = {UINT64_C(1000000)};
+    uint32_t wait_ms = UINT32_MAX;
+    metaserver_attempt_budget_init(&budget, budget_now);
+    ck_assert(metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+    ck_assert_uint_eq(wait_ms, 0);
+    ck_assert(metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+    ck_assert(!metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+    ck_assert_uint_eq(wait_ms, METASERVER_ATTEMPT_RATE_REFILL_SECONDS * 1000U);
+    server_monotonic_t budget_refill = {budget_now.microseconds +
+                                        METASERVER_ATTEMPT_RATE_REFILL_SECONDS * UINT64_C(1000000)};
+    ck_assert(metaserver_attempt_budget_consume(&budget, budget_refill, &wait_ms));
+
+    metaserver_attempt_budget_init(&budget, budget_now);
+    unsigned int rendezvous_attempts = 0;
+    server_monotonic_t rendezvous_now = budget_now;
+    while (rendezvous_now.microseconds <=
+           budget_now.microseconds + UINT64_C(86400) * UINT64_C(1000000)) {
+        if (metaserver_attempt_budget_consume(&budget, rendezvous_now, &wait_ms)) {
+            rendezvous_attempts++;
+        }
+        rendezvous_now.microseconds += UINT64_C(1000000);
+    }
+    ck_assert_uint_eq(rendezvous_attempts, 47);
+    ck_assert(!metaserver_attempt_budget_consume(&budget, rendezvous_now, &wait_ms));
+
+    uint64_t attempt_times[128];
+    size_t attempt_times_count = 0;
+    metaserver_attempt_budget_init(&budget, budget_now);
+    for (uint64_t second = 0; second <= UINT64_C(172800); second++) {
+        server_monotonic_t sample = {
+            budget_now.microseconds + second * UINT64_C(1000000),
+        };
+        if (metaserver_attempt_budget_consume(&budget, sample, &wait_ms)) {
+            ck_assert_uint_lt(attempt_times_count, arraysize(attempt_times));
+            attempt_times[attempt_times_count++] = sample.microseconds;
+        }
+    }
+    static const uint64_t window_offsets[] = {0, 1, 1919, 1920, 1921, 3839, 3840, 86399};
+    for (size_t i = 0; i < arraysize(window_offsets); i++) {
+        uint64_t window_start = budget_now.microseconds + window_offsets[i] * UINT64_C(1000000);
+        uint64_t window_end = window_start + UINT64_C(86400) * UINT64_C(1000000);
+        unsigned int window_attempts = 0;
+        for (size_t j = 0; j < attempt_times_count; j++) {
+            if (attempt_times[j] >= window_start && attempt_times[j] <= window_end) {
+                window_attempts++;
+            }
+        }
+        ck_assert_uint_le(window_attempts, 47);
+        if (window_offsets[i] == 0) {
+            ck_assert_uint_eq(window_attempts, 47);
+        }
+    }
+
+    metaserver_attempt_budget_init(&budget, budget_now);
+    ck_assert(metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+    ck_assert(metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+    uint64_t rendezvous_generation = 1;
+    rendezvous_generation++;
+    ck_assert(metaserver_rendezvous_generation_allows(rendezvous_generation,
+                                                      rendezvous_generation,
+                                                      false));
+    ck_assert(!metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+    ck_assert(metaserver_attempt_budget_consume(&budget, budget_refill, &wait_ms));
 }
 END_TEST
 
@@ -613,6 +846,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_socket_rendezvous_messages);
     tcase_add_test(tc_core, test_metaserver_rendezvous_token_bounds);
     tcase_add_test(tc_core, test_metaserver_rendezvous_retry_policy);
+    tcase_add_test(tc_core, test_metaserver_publish_cadence);
+    tcase_add_test(tc_core, test_metaserver_publish_retry_and_daily_budget);
     tcase_add_test(tc_core, test_metaserver_rendezvous_ticket_isolation);
     tcase_add_test(tc_core, test_metaserver_generation_cancellation);
     tcase_add_test(tc_core, test_metaserver_raw_endpoint_not_published);

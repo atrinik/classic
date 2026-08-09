@@ -351,6 +351,9 @@ typedef struct settings_struct {
      */
     char metaserver_url[MAX_BUF];
 
+    /** Jittered metaserver liveness-heartbeat base interval, in seconds. */
+    uint32_t metaserver_heartbeat;
+
     /**
      * STUN endpoint used to discover this server's public UDP candidate.
      */

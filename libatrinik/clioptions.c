@@ -33,6 +33,8 @@
 #include "clioptions.h"
 #include "path.h"
 
+#include <openssl/crypto.h>
+
 /**
  * Iterate over all the CLI options.
  *
@@ -82,6 +84,9 @@ struct clioption {
      */
     bool changeable : 1;
 
+    /** Whether the retained value must be redacted and securely cleared. */
+    bool sensitive : 1;
+
     /**
      * Brief description.
      */
@@ -112,6 +117,16 @@ static size_t clioptions_num;
 static bool clioptions_runtime;
 
 TOOLKIT_API(DEPENDS(logger), IMPORTS(string), IMPORTS(stringbuffer));
+
+static void clioptions_value_free(clioption_t *cli) {
+    HARD_ASSERT(cli != NULL);
+
+    if (cli->value != NULL && cli->sensitive) {
+        OPENSSL_cleanse(cli->value, strlen(cli->value) + 1U);
+    }
+    free(cli->value);
+    cli->value = NULL;
+}
 
 /**
  * Description of the --config command.
@@ -277,7 +292,7 @@ TOOLKIT_INIT_FUNC_FINISH
 
 TOOLKIT_DEINIT_FUNC(clioptions) {
     FOR_CLIOPTIONS_BEGIN(cli) {
-        free(cli->value);
+        clioptions_value_free(cli);
     }
     FOR_CLIOPTIONS_END();
     free(clioptions);
@@ -314,7 +329,7 @@ const char *clioptions_get(const char *name) {
 
     FOR_CLIOPTIONS_BEGIN(cli) {
         if (strcmp(cli->name, name) == 0) {
-            return cli->value;
+            return cli->value != NULL && cli->sensitive ? "<redacted>" : cli->value;
         }
     }
     FOR_CLIOPTIONS_END();
@@ -363,6 +378,14 @@ void clioptions_enable_changeable(clioption_t *cli) {
     HARD_ASSERT(cli != NULL);
     HARD_ASSERT(!cli->changeable);
     cli->changeable = true;
+}
+
+void clioptions_enable_sensitive(clioption_t *cli) {
+    TOOLKIT_PROTECT();
+
+    HARD_ASSERT(cli != NULL);
+    HARD_ASSERT(!cli->sensitive);
+    cli->sensitive = true;
 }
 
 /**
@@ -457,14 +480,23 @@ static bool clioptions_call_handler(clioption_t *cli, const char *cli_arg, char 
     }
 
     if (!cli->handler_func(cli_arg, errmsg)) {
+        if (contents != NULL) {
+            OPENSSL_cleanse(contents, strlen(contents) + 1U);
+        }
         free(contents);
 
         return false;
     }
 
-    free(cli->value);
+    clioptions_value_free(cli);
 
-    if (contents != NULL) {
+    if (cli->sensitive) {
+        if (contents != NULL) {
+            OPENSSL_cleanse(contents, strlen(contents) + 1U);
+            free(contents);
+        }
+        cli->value = xstrdup("");
+    } else if (contents != NULL) {
         cli->value = contents;
     } else if (cli_arg != NULL) {
         cli->value = xstrdup(cli_arg);
@@ -494,11 +526,18 @@ void clioptions_parse(int argc, char *argv[]) {
             char *errmsg = NULL;
 
             if (!clioptions_call_handler(cli, cli_arg, &errmsg)) {
-                LOG(ERROR,
-                    "%s: %s %s",
-                    errmsg != NULL ? errmsg : "Failed to parse option",
-                    argv[old_i],
-                    i != old_i ? argv[i] : "");
+                if (cli->sensitive) {
+                    LOG(ERROR, "Failed to parse sensitive option --%s", cli->name);
+                    if (errmsg != NULL) {
+                        OPENSSL_cleanse(errmsg, strlen(errmsg) + 1U);
+                    }
+                } else {
+                    LOG(ERROR,
+                        "%s: %s %s",
+                        errmsg != NULL ? errmsg : "Failed to parse option",
+                        argv[old_i],
+                        i != old_i ? argv[i] : "");
+                }
 
                 free(errmsg);
             }
@@ -531,6 +570,7 @@ bool clioptions_load(const char *path, const char *category) {
 
         /* Comment or blank line, skip. */
         if (*cp == '#' || *cp == '\0') {
+            OPENSSL_cleanse(buf, sizeof(buf));
             continue;
         }
 
@@ -540,15 +580,17 @@ bool clioptions_load(const char *path, const char *category) {
             char *errmsg = NULL;
             if (!clioptions_load_str(cp, &errmsg)) {
                 LOG(ERROR,
-                    "%s, file %s: %s",
+                    "%s in configuration file %s",
                     errmsg != NULL ? errmsg : "Failed to load option",
-                    path,
-                    cp);
+                    path);
 
                 free(errmsg);
             }
         }
+        OPENSSL_cleanse(buf, sizeof(buf));
     }
+
+    OPENSSL_cleanse(buf, sizeof(buf));
 
     fclose(fp);
 
@@ -559,9 +601,12 @@ bool clioptions_load_str(const char *str, char **errmsg) {
     HARD_ASSERT(str != NULL);
     HARD_ASSERT(errmsg != NULL);
 
+    size_t str_size = strlen(str);
     char *cp = xstrdup(str);
     char **argv = NULL;
+    clioption_t *cli = NULL;
     bool ret = false;
+    char buf[HUGE_BUF] = {0};
     *errmsg = NULL;
 
     char *cps[2];
@@ -574,7 +619,6 @@ bool clioptions_load_str(const char *str, char **errmsg) {
     string_whitespace_trim(cps[1]);
     string_newline_to_literal(cps[1]);
 
-    char buf[HUGE_BUF];
     snprintf(buf, sizeof(buf), "--%s=%s", cps[0], cps[1]);
 
     argv = xmallocarray(2, sizeof(*argv));
@@ -582,7 +626,7 @@ bool clioptions_load_str(const char *str, char **errmsg) {
 
     const char *cli_arg;
     int idx = 1;
-    clioption_t *cli = clioptions_parse_find(2, argv, &idx, &cli_arg);
+    cli = clioptions_parse_find(2, argv, &idx, &cli_arg);
     if (cli == NULL) {
         *errmsg = xstrdup("No such option");
         goto out;
@@ -606,9 +650,19 @@ bool clioptions_load_str(const char *str, char **errmsg) {
     ret = clioptions_call_handler(cli, cli_arg, errmsg);
 
 out:
+    if (!ret && cli != NULL && cli->sensitive) {
+        if (*errmsg != NULL) {
+            OPENSSL_cleanse(*errmsg, strlen(*errmsg) + 1U);
+            free(*errmsg);
+        }
+        *errmsg = xstrdup("Failed to parse sensitive option");
+    }
+    OPENSSL_cleanse(cp, str_size + 1U);
     free(cp);
+    OPENSSL_cleanse(buf, sizeof(buf));
 
     if (argv != NULL) {
+        OPENSSL_cleanse(argv[1], strlen(argv[1]) + 1U);
         free(argv[1]);
         free(argv);
     }

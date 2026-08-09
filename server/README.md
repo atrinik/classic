@@ -493,6 +493,28 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  identity private and include it with server-state backups; replacing it
  intentionally creates a different server identity.
 
+ Publication is event-driven. The server publishes once at startup, coalesces
+ visible player-count changes for ten seconds, and otherwise sends only a
+ jittered liveness heartbeat. `metaserver_heartbeat` configures the heartbeat
+ base in seconds; the default 9000 seconds is jittered to 8100-9900 seconds,
+ safely below the directory's four-hour expiry. Separate publisher and
+ rendezvous two-token buckets, each refilling once every 1920 seconds, cap one
+ continuously running process at 47 attempts per route in any 24-hour interval
+ while still allowing startup and one prompt coalesced change. Transient
+ failures use exponential backoff with jitter up to one hour,
+ and `Retry-After` can extend that delay. Permanent publisher or rendezvous
+ rejections stop retrying until public state changes, a later successful
+ publish supplies a replacement token, or the operator restarts the server.
+ A crashed listing disappears no later than four hours after its last accepted
+ publication.
+
+ The local buckets are defense in depth: the metaserver remains authoritative
+ across process restarts and duplicate processes. Listing visibility, name,
+ description, and join-password mode are startup settings; changing them
+ requires a server restart, whose startup publication sends the new state.
+ Private servers publish one removal/tombstone at startup and retry it until
+ accepted, then send no heartbeats or player-count changes.
+
  The server reserves a fresh unsigned 64-bit publish sequence before every
  network attempt. Its crash-safe high-water mark is kept in two owner-only
  `data/metaserver-publish-sequence-<server-id>.*` files. Back up the pair with
@@ -510,8 +532,8 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
 
  Apart from the obvious identifying information exposed by any IP connection
  (such as the server IP address), the following information is exposed to the
- metaserver, and flooded in periodic intervals, if reporting to the metaserver
- has been enabled (as per section 3.):
+ metaserver when public state changes and at the bounded liveness heartbeat, if
+ reporting to the metaserver has been enabled (as per section 3.):
   - Configured server name and description
   - QUIC certificate fingerprint and server identity; no raw address
   - Server version

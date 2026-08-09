@@ -124,6 +124,8 @@ void curl_request_set_path(curl_request_t *request, const char *path);
 void curl_request_set_max_body(curl_request_t *request, size_t maximum);
 /** Set the maximum aggregate HTTP response-header bytes. */
 void curl_request_set_max_header(curl_request_t *request, size_t maximum);
+/** Set a positive total request deadline in milliseconds. */
+void curl_request_set_timeout(curl_request_t *request, long timeout_ms);
 void curl_request_set_cb(curl_request_t *request, curl_request_cb cb, void *user_data);
 void curl_request_set_delay(curl_request_t *request, uint32_t delay);
 curl_state_t curl_request_get_state(curl_request_t *request);
