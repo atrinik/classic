@@ -451,9 +451,46 @@ SDL_Surface *rotozoomSurface(SDL_Surface *surface, double angle, double zoom, in
     return rotozoomSurfaceXY(surface, angle, zoom, zoom, smooth);
 }
 
+/** Return whether an indexed surface uses palette alpha instead of a color key. */
+static bool surface_has_palette_alpha(SDL_Surface *surface) {
+    SDL_Palette *palette = SDL_GetSurfacePalette(surface);
+    if (palette == NULL) {
+        return false;
+    }
+
+    Uint32 color_key;
+    if (SDL_GetSurfaceColorKey(surface, &color_key)) {
+        return false;
+    }
+
+    for (int i = 0; i < palette->ncolors; i++) {
+        if (palette->colors[i].a != SDL_ALPHA_OPAQUE) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 SDL_Surface *
 rotozoomSurfaceXY(SDL_Surface *surface, double angle, double zoom_x, double zoom_y, int smooth) {
-    SDL_Surface *scaled = zoomSurface(surface, zoom_x, zoom_y, smooth);
+    if (surface == NULL) {
+        SDL_SetError("Invalid surface");
+        return NULL;
+    }
+
+    SDL_Surface *source = surface;
+    if (angle != 0.0 && surface_has_palette_alpha(surface)) {
+        source = surface_to_display_alpha(surface);
+        if (source == NULL) {
+            return NULL;
+        }
+    }
+
+    SDL_Surface *scaled = zoomSurface(source, zoom_x, zoom_y, smooth);
+    if (source != surface) {
+        SDL_DestroySurface(source);
+    }
     if (scaled == NULL) {
         return NULL;
     }

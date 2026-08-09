@@ -13,11 +13,12 @@
 
 SDL_Surface *ScreenSurface = NULL;
 
-#define TEST_CHECK(condition) \
-    do {                      \
-        if (!(condition)) {   \
-            abort();          \
-        }                     \
+#define TEST_CHECK(condition)                                                              \
+    do {                                                                                   \
+        if (!(condition)) {                                                                \
+            fprintf(stderr, "Test failed at %s:%d: %s\n", __FILE__, __LINE__, #condition); \
+            abort();                                                                       \
+        }                                                                                  \
     } while (0)
 
 static void test_packed_indexed_conversion(void) {
@@ -104,6 +105,84 @@ static void test_legacy_texture_transparency(void) {
     SDL_DestroySurface(converted);
     SDL_DestroySurface(surface);
 }
+
+static SDL_Surface *create_indexed_alpha_surface(void) {
+    SDL_Surface *surface = SDL_CreateSurface(5, 5, SDL_PIXELFORMAT_INDEX8);
+    TEST_CHECK(surface != NULL);
+
+    SDL_Color colors[256] = {{0}};
+    colors[0] = (SDL_Color){20, 80, 180, SDL_ALPHA_TRANSPARENT};
+    colors[1] = (SDL_Color){30, 120, 230, SDL_ALPHA_OPAQUE};
+    colors[2] = (SDL_Color){245, 245, 230, SDL_ALPHA_OPAQUE};
+    SDL_Palette *palette = SDL_CreatePalette(arraysize(colors));
+    TEST_CHECK(palette != NULL);
+    TEST_CHECK(SDL_SetPaletteColors(palette, colors, 0, arraysize(colors)));
+    TEST_CHECK(SDL_SetSurfacePalette(surface, palette));
+    SDL_DestroyPalette(palette);
+
+    TEST_CHECK(SDL_FillSurfaceRect(surface, NULL, 0));
+    SDL_Rect opaque = {1, 1, 3, 3};
+    TEST_CHECK(SDL_FillSurfaceRect(surface, &opaque, 1));
+    return surface;
+}
+
+static void assert_rotation_transparency(SDL_Surface *source, int smooth) {
+    SDL_Surface *rotated = rotozoomSurface(source, -135.0, 1.0, smooth);
+    TEST_CHECK(rotated != NULL);
+    TEST_CHECK(rotated->w > source->w || rotated->h > source->h);
+
+    SDL_Surface *destination = SDL_CreateSurface(rotated->w, rotated->h, SDL_PIXELFORMAT_XRGB8888);
+    TEST_CHECK(destination != NULL);
+    TEST_CHECK(SDL_FillSurfaceRect(destination, NULL, surface_map_rgb(destination, 1, 2, 3)));
+    TEST_CHECK(SDL_BlitSurface(rotated, NULL, destination, NULL));
+
+    Uint8 red, green, blue, alpha;
+    TEST_CHECK(SDL_ReadSurfacePixel(destination, 0, 0, &red, &green, &blue, &alpha));
+    TEST_CHECK(red == 1 && green == 2 && blue == 3);
+    TEST_CHECK(SDL_ReadSurfacePixel(destination,
+                                    destination->w / 2,
+                                    destination->h / 2,
+                                    &red,
+                                    &green,
+                                    &blue,
+                                    &alpha));
+    TEST_CHECK(red == 30 && green == 120 && blue == 230);
+
+    SDL_DestroySurface(destination);
+    SDL_DestroySurface(rotated);
+}
+
+static void test_indexed_alpha_rotation(int smooth) {
+    SDL_Surface *source = create_indexed_alpha_surface();
+    assert_rotation_transparency(source, smooth);
+    TEST_CHECK(source->format == SDL_PIXELFORMAT_INDEX8);
+    SDL_DestroySurface(source);
+}
+
+static void test_color_key_rotation(void) {
+    SDL_Surface *source = create_indexed_alpha_surface();
+    SDL_Palette *palette = SDL_GetSurfacePalette(source);
+    TEST_CHECK(palette != NULL);
+    SDL_Color transparent = palette->colors[0];
+    transparent.a = SDL_ALPHA_OPAQUE;
+    TEST_CHECK(SDL_SetPaletteColors(palette, &transparent, 0, 1));
+    TEST_CHECK(SDL_SetSurfaceColorKey(source, true, 0));
+
+    assert_rotation_transparency(source, 1);
+    SDL_DestroySurface(source);
+}
+
+static void test_true_color_alpha_rotation(void) {
+    SDL_Surface *source = SDL_CreateSurface(5, 5, SDL_PIXELFORMAT_RGBA32);
+    TEST_CHECK(source != NULL);
+    TEST_CHECK(SDL_FillSurfaceRect(source, NULL, surface_map_rgba(source, 20, 80, 180, 0)));
+    SDL_Rect opaque = {1, 1, 3, 3};
+    TEST_CHECK(SDL_FillSurfaceRect(source, &opaque, surface_map_rgba(source, 30, 120, 230, 255)));
+
+    assert_rotation_transparency(source, 1);
+    SDL_DestroySurface(source);
+}
+
 static void test_darken_preserves_alpha(void) {
     SDL_Surface *surface = SDL_CreateSurface(2, 1, SDL_PIXELFORMAT_RGBA32);
     TEST_CHECK(surface != NULL);
@@ -124,6 +203,10 @@ static void test_darken_preserves_alpha(void) {
 int main(void) {
     test_packed_indexed_conversion();
     test_legacy_texture_transparency();
+    test_indexed_alpha_rotation(0);
+    test_indexed_alpha_rotation(1);
+    test_color_key_rotation();
+    test_true_color_alpha_rotation();
     test_darken_preserves_alpha();
     return 0;
 }
