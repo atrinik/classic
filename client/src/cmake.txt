@@ -9,6 +9,7 @@ set(SOURCES
 	src/client/connection_preferences.c
 	src/client/image.c
 	src/client/item.c
+	src/client/item_packet.c
 	src/client/join_credentials.c
 	src/client/keybind.c
 	src/client/keybind_input.c
@@ -52,6 +53,7 @@ set(SOURCES
 	src/gui/popups/credits.c
 	src/gui/popups/help.c
 	src/gui/popups/interface.c
+	src/gui/popups/interface_packet.c
 	src/gui/popups/join_password.c
 	src/gui/popups/login.c
 	src/gui/popups/painting.c
