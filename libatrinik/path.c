@@ -504,59 +504,6 @@ static wchar_t *path_secret_wide(const char *path) {
     return wide;
 }
 
-static wchar_t *path_secret_windows_parent(const wchar_t *path, const wchar_t **basename) {
-    const wchar_t *separator = wcsrchr(path, L'\\');
-    if (separator == NULL) {
-        if (wcschr(path, L':') != NULL) {
-            return NULL;
-        }
-        *basename = path;
-        wchar_t *parent = calloc(2, sizeof(*parent));
-        if (parent != NULL) {
-            parent[0] = L'.';
-        }
-        return parent;
-    }
-
-    *basename = separator + 1;
-    size_t parent_length = (size_t)(separator - path);
-    if (parent_length == 0 || (parent_length == 2 && path[1] == L':' && path[2] == L'\\')) {
-        parent_length++;
-    }
-    wchar_t *parent = calloc(parent_length + 1U, sizeof(*parent));
-    if (parent != NULL) {
-        memcpy(parent, path, parent_length * sizeof(*parent));
-    }
-    return parent;
-}
-
-static HANDLE path_secret_windows_directory(const wchar_t *path) {
-    HANDLE directory = CreateFileW(path,
-                                   FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-                                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                   NULL,
-                                   OPEN_EXISTING,
-                                   FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-                                   NULL);
-    if (directory == INVALID_HANDLE_VALUE) {
-        return INVALID_HANDLE_VALUE;
-    }
-
-    FILE_ATTRIBUTE_TAG_INFO attributes;
-    FILE_STANDARD_INFO standard;
-    if (!GetFileInformationByHandleEx(directory,
-                                      FileAttributeTagInfo,
-                                      &attributes,
-                                      sizeof(attributes)) ||
-        !GetFileInformationByHandleEx(directory, FileStandardInfo, &standard, sizeof(standard)) ||
-        (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 || !standard.Directory ||
-        GetFileType(directory) != FILE_TYPE_DISK) {
-        CloseHandle(directory);
-        return INVALID_HANDLE_VALUE;
-    }
-    return directory;
-}
-
 static TOKEN_USER *path_secret_token_user(HANDLE *token) {
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, token)) {
         return NULL;
@@ -660,17 +607,6 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
     }
     wchar_t *destination_wide = path_secret_wide(path);
     wchar_t *temporary_wide = path_secret_wide(temporary);
-    const wchar_t *destination_basename = NULL;
-    wchar_t *destination_parent =
-        destination_wide != NULL
-            ? path_secret_windows_parent(destination_wide, &destination_basename)
-            : NULL;
-    bool basename_ok = destination_basename != NULL && destination_basename[0] != L'\0' &&
-                       wcscmp(destination_basename, L".") != 0 &&
-                       wcscmp(destination_basename, L"..") != 0;
-    HANDLE directory = destination_parent != NULL && basename_ok
-                           ? path_secret_windows_directory(destination_parent)
-                           : INVALID_HANDLE_VALUE;
     HANDLE token = NULL;
     TOKEN_USER *user = path_secret_token_user(&token);
     DWORD sid_size = user != NULL ? GetLengthSid(user->User.Sid) : 0;
@@ -690,7 +626,7 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
         .bInheritHandle = FALSE,
     };
     HANDLE file = INVALID_HANDLE_VALUE;
-    if (directory != INVALID_HANDLE_VALUE && temporary_wide != NULL && security_ok) {
+    if (destination_wide != NULL && temporary_wide != NULL && security_ok) {
         file = CreateFileW(temporary_wide,
                            GENERIC_WRITE | DELETE,
                            0,
@@ -715,25 +651,13 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
     if (ok) {
         ok = FlushFileBuffers(file) != 0;
     }
-    size_t destination_length =
-        basename_ok ? wcslen(destination_basename) * sizeof(*destination_basename) : 0;
-    size_t rename_size = offsetof(FILE_RENAME_INFO, FileName) + destination_length;
-    FILE_RENAME_INFO *rename = ok && destination_length != 0 && destination_length <= UINT32_MAX &&
-                                       rename_size <= UINT32_MAX
-                                   ? calloc(1, rename_size)
-                                   : NULL;
-    if (rename != NULL) {
-        rename->ReplaceIfExists = FALSE;
-        rename->RootDirectory = directory;
-        rename->FileNameLength = (DWORD)destination_length;
-        memcpy(rename->FileName, destination_basename, destination_length);
+    bool closed = file == INVALID_HANDLE_VALUE || CloseHandle(file) != 0;
+    if (ok && closed) {
         fprintf(stderr,
-                "secret path trace: before Windows publication bytes=%lu buffer=%lu relative=1\n",
-                (unsigned long)destination_length,
-                (unsigned long)rename_size);
+                "secret path trace: before Windows publication chars=%lu method=move\n",
+                (unsigned long)wcslen(destination_wide));
         fflush(stderr);
-        published =
-            SetFileInformationByHandle(file, FileRenameInfo, rename, (DWORD)rename_size) != 0;
+        published = MoveFileExW(temporary_wide, destination_wide, MOVEFILE_WRITE_THROUGH) != 0;
         if (!published) {
             publish_error = GetLastError();
         }
@@ -743,10 +667,7 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
                 (unsigned long)publish_error);
         fflush(stderr);
     }
-    free(rename);
-    bool closed = file == INVALID_HANDLE_VALUE || CloseHandle(file) != 0;
-    bool directory_closed = directory == INVALID_HANDLE_VALUE || CloseHandle(directory) != 0;
-    if (published && closed && directory_closed) {
+    if (published) {
         result = PATH_SECRET_CREATE_OK;
     } else if (!published &&
                (publish_error == ERROR_FILE_EXISTS || publish_error == ERROR_ALREADY_EXISTS)) {
@@ -761,7 +682,6 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
         CloseHandle(token);
     }
     free(temporary_wide);
-    free(destination_parent);
     free(destination_wide);
     OPENSSL_cleanse(temporary, sizeof(temporary));
     OPENSSL_cleanse(suffix, sizeof(suffix));
