@@ -465,8 +465,8 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  traffic and the client pins this identity's certificate fingerprint.
 
  In order to advertise the server to the public, you will need to configure
- metaserver options. This will enable periodic flooding of your server details
- to the Atrinik metaserver (found at: https://meta.atrinik.org). See section
+ metaserver options. This enables bounded publication of your server details
+ to the Atrinik metaserver. See section
  3.1. for details about the sort of information this exposes. The necessary
  options are:
   server_public = true
@@ -487,10 +487,22 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  it should connect to the metaserver and update it with your server
  information, allowing players with a compatible client to connect.
 
- Be aware that the first time the server uploads the information to the
- metaserver, a secret key is generated. If you LOSE this key, you will be
- LOCKED out of updating the metaserver ever again (for the particular
- identity). It is stored in data/metaserver_key.
+ Every publish is one HTTPS POST to `publish.meta.atrinik.org`, signed by the
+ persistent P-256 private key in `data/quic-identity.pem`. There is no
+ separate metaserver registration key or OTP/challenge request. Keep the QUIC
+ identity private and include it with server-state backups; replacing it
+ intentionally creates a different server identity.
+
+ The server reserves a fresh unsigned 64-bit publish sequence before every
+ network attempt. Its crash-safe high-water mark is kept in two owner-only
+ `data/metaserver-publish-sequence-<server-id>.*` files. Back up the pair with
+ the matching QUIC identity. Gaps are expected after cancellation, timeout,
+ or crash and are never reused. Restoring an older backup may produce one
+ authenticated replay response; the server advances the same protected state
+ from its non-secret `minimumNextSequence` value and uses a fresh nonce and
+ higher sequence on the next scheduled attempt. Never edit, merge, or copy
+ sequence files between identities. Exhausting the full 64-bit range requires
+ rotating the QUIC identity, which selects a separate sequence pair.
 
 =================================================
 = 3.1. Metaserver-exposed information           =
@@ -504,15 +516,20 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
   - QUIC certificate fingerprint and server identity; no raw address
   - Server version
   - Atrinik HTTP client version and platform (Windows/Linux/other)
-  - One-time authentication proofs derived from the generated metaserver key;
-    the key itself is never uploaded
+  - The public QUIC certificate and a one-request HTTP message signature; the
+    private key is never uploaded
+  - A fresh random nonce and monotonic publish sequence used only for replay
+    defense
   - Number of players online
   - Whether a join password is required (never the password itself)
 
- The above information is sent to https://meta.atrinik.org/ (unless otherwise
- specified), again, only if enabled as per section 3. Application-based HPKP is
- used to pin the signature of the outermost leaf certificate for security
- reasons. The ultimate-trust keys can be found in data/keys.
+ The above information is sent over HTTPS to
+ `https://publish.meta.atrinik.org/v1/classic/servers/<server-id>/publish`,
+ again only if enabled as per section 3. System Web PKI validation authenticates
+ the metaserver endpoint; the signed request independently authenticates this
+ game server. Signed publishes never follow redirects because the exact
+ authority and path are covered by the signature. Signatures, nonces,
+ sequences, private material, and returned rendezvous tokens are not logged.
 
 =================================================
 = 3.2. Ports used by Atrinik                    =

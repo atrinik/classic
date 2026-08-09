@@ -303,6 +303,8 @@ set(TOOLKIT_SOURCES
     datetime.c
     logger.c
     map_protocol.c
+    metaserver_publisher.c
+    metaserver_publisher_sequence.c
     math.c
     memory.c
     mempool.c
@@ -446,5 +448,13 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_test(NAME libatrinik-rendezvous COMMAND libatrinik-rendezvous
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/rendezvous-invite-v1.json"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/rendezvous-invite-v1-negative.json")
+
+        add_executable(libatrinik-metaserver-publisher
+            tests/metaserver_publisher.c)
+        atrinik_configure_target(libatrinik-metaserver-publisher)
+        target_link_libraries(libatrinik-metaserver-publisher PRIVATE Atrinik::Core)
+        add_test(NAME libatrinik-metaserver-publisher
+            COMMAND libatrinik-metaserver-publisher
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/metaserver-publisher-v1.json")
     endif ()
 endif ()

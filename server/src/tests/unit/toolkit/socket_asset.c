@@ -20,7 +20,6 @@
 #include <toolkit/packet.h>
 #include <toolkit/path.h>
 #include <openssl/crypto.h>
-#include <openssl/sha.h>
 
 START_TEST(test_socket_asset_request_round_trip) {
     uint8_t digest[ASSET_DIGEST_SIZE];
@@ -69,7 +68,7 @@ END_TEST
 START_TEST(test_metaserver_rendezvous_token_bounds) {
     static const char token[] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     char response[128];
-    int length = snprintf(VS(response), "{\"rendezvousToken\":\"%s\"}", token);
+    int length = snprintf(VS(response), "{\"status\":\"ok\",\"rendezvousToken\":\"%s\"}", token);
     ck_assert_int_gt(length, 0);
     ck_assert_int_lt(length, (int)sizeof(response));
 
@@ -81,7 +80,7 @@ START_TEST(test_metaserver_rendezvous_token_bounds) {
         ck_assert(!metaserver_rendezvous_token_parse(response, truncated, parsed));
     }
 
-    response[sizeof("{\"rendezvousToken\":\"") - 1] = 'A';
+    response[sizeof("{\"status\":\"ok\",\"rendezvousToken\":\"") - 1] = 'A';
     ck_assert(!metaserver_rendezvous_token_parse(response, (size_t)length, parsed));
     static const char cleared[sizeof(parsed)];
     ck_assert_mem_eq(parsed, cleared, sizeof(parsed));
@@ -237,34 +236,6 @@ START_TEST(test_metaserver_generation_cancellation) {
         ck_assert(!metaserver_rendezvous_generation_allows(8, 7, false));
         ck_assert(!metaserver_rendezvous_generation_allows(7, 7, true));
     }
-}
-END_TEST
-
-START_TEST(test_metaserver_registration_key_retention) {
-    ck_assert_int_eq(metaserver_registration_key_action(CURL_STATE_OK, 401, true),
-                     METASERVER_REGISTRATION_KEY_DELETE);
-    ck_assert_int_eq(metaserver_registration_key_action(CURL_STATE_OK, 500, true),
-                     METASERVER_REGISTRATION_KEY_RETRY_ESTABLISHED);
-    ck_assert_int_eq(metaserver_registration_key_action(CURL_STATE_ERROR, 0, true),
-                     METASERVER_REGISTRATION_KEY_RETRY_ESTABLISHED);
-    ck_assert_int_eq(metaserver_registration_key_action(CURL_STATE_OK, 400, true),
-                     METASERVER_REGISTRATION_KEY_KEEP);
-    ck_assert_int_eq(metaserver_registration_key_action(CURL_STATE_OK, 403, true),
-                     METASERVER_REGISTRATION_KEY_KEEP);
-    ck_assert_int_eq(metaserver_registration_key_action(CURL_STATE_OK, 429, true),
-                     METASERVER_REGISTRATION_KEY_KEEP);
-
-    unsigned char retained_key[SHA512_DIGEST_LENGTH];
-    memset(retained_key, 0xa5, sizeof(retained_key));
-    unsigned char original_key[sizeof(retained_key)];
-    memcpy(original_key, retained_key, sizeof(original_key));
-    ck_assert_int_eq(metaserver_registration_key_action(CURL_STATE_OK, 409, false),
-                     METASERVER_REGISTRATION_KEY_RETRY_REGISTRATION);
-    ck_assert_mem_eq(retained_key, original_key, sizeof(retained_key));
-    ck_assert_int_eq(metaserver_registration_key_action(CURL_STATE_OK, 401, false),
-                     METASERVER_REGISTRATION_KEY_KEEP);
-    OPENSSL_cleanse(retained_key, sizeof(retained_key));
-    OPENSSL_cleanse(original_key, sizeof(original_key));
 }
 END_TEST
 
@@ -644,7 +615,6 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_metaserver_rendezvous_retry_policy);
     tcase_add_test(tc_core, test_metaserver_rendezvous_ticket_isolation);
     tcase_add_test(tc_core, test_metaserver_generation_cancellation);
-    tcase_add_test(tc_core, test_metaserver_registration_key_retention);
     tcase_add_test(tc_core, test_metaserver_raw_endpoint_not_published);
     tcase_add_test(tc_core, test_path_write_atomic_replaces_complete_file);
     tcase_add_test(tc_core, test_path_secret_create_atomic_no_replace);

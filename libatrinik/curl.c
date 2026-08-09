@@ -69,6 +69,11 @@ typedef struct curl_form_field {
     char *value;
 } curl_form_field_t;
 
+typedef struct curl_request_header {
+    struct curl_request_header *next;
+    char *line;
+} curl_request_header_t;
+
 /**
  * cURL request structure.
  */
@@ -81,6 +86,9 @@ struct curl_request {
 
     /** Maximum accepted response-body size. */
     size_t max_body_size;
+
+    /** Maximum accepted aggregate response-header size. */
+    size_t max_header_size;
 
     /** HTTP headers. */
     char *header;
@@ -130,6 +138,15 @@ struct curl_request {
      */
     curl_form_field_t *form_fields;
 
+    /** Exact request body used by raw POST requests. */
+    unsigned char *post_body;
+
+    /** Size of the exact request body. */
+    size_t post_body_size;
+
+    /** Additional HTTP request headers. */
+    curl_request_header_t *request_headers;
+
     /**
      * Used to keep track of which certificate is being processed.
      */
@@ -174,6 +191,9 @@ struct curl_request {
      * Whether the peer certificate is untrusted.
      */
     bool untrusted : 1;
+
+    /** Whether HTTP redirects are permitted. */
+    bool follow_redirects : 1;
 };
 
 /**
@@ -596,6 +616,8 @@ curl_request_t *curl_request_create(const char *url, curl_pkey_trust_t trust) {
     request->state = CURL_STATE_INPROGRESS;
     request->trust = trust;
     request->max_body_size = SIZE_MAX;
+    request->max_header_size = SIZE_MAX;
+    request->follow_redirects = true;
 
     /* Create a mutex to protect the structure. */
     pthread_mutex_init(&request->mutex, NULL);
@@ -618,11 +640,62 @@ void curl_request_form_add(curl_request_t *request, const char *key, const char 
     HARD_ASSERT(key != NULL);
     HARD_ASSERT(value != NULL);
     TOOLKIT_PROTECT();
+    HARD_ASSERT(request->post_body == NULL);
 
     curl_form_field_t *field = xcalloc(1, sizeof(*field));
     field->key = xstrdup(key);
     field->value = xstrdup(value);
     LL_APPEND(request->form_fields, field);
+}
+
+/** Add one validated HTTP request header. */
+bool curl_request_header_add(curl_request_t *request, const char *name, const char *value) {
+    HARD_ASSERT(request != NULL);
+    HARD_ASSERT(name != NULL);
+    HARD_ASSERT(value != NULL);
+    TOOLKIT_PROTECT();
+
+    size_t name_size = strlen(name), value_size = strlen(value);
+    if (name_size == 0 || name_size > 128 || value_size > 4096 || strpbrk(value, "\r\n") != NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < name_size; i++) {
+        unsigned char cp = (unsigned char)name[i];
+        if (!((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || (cp >= '0' && cp <= '9')) &&
+            cp != '!' && cp != '#' && cp != '$' && cp != '%' && cp != '&' && cp != '\'' &&
+            cp != '*' && cp != '+' && cp != '-' && cp != '.' && cp != '^' && cp != '_' &&
+            cp != '`' && cp != '|' && cp != '~') {
+            return false;
+        }
+    }
+
+    curl_request_header_t *header = xcalloc(1, sizeof(*header));
+    header->line = xmalloc(name_size + value_size + 3U);
+    snprintf(header->line, name_size + value_size + 3U, "%s: %s", name, value);
+    LL_APPEND(request->request_headers, header);
+    return true;
+}
+
+/** Install an exact raw POST body. */
+bool curl_request_set_post_body(curl_request_t *request, const void *body, size_t body_size) {
+    HARD_ASSERT(request != NULL);
+    HARD_ASSERT(body != NULL);
+    TOOLKIT_PROTECT();
+
+    if (body_size == 0 || request->form_fields != NULL || request->post_body != NULL) {
+        return false;
+    }
+    request->post_body = xmalloc(body_size);
+    memcpy(request->post_body, body, body_size);
+    request->post_body_size = body_size;
+    return true;
+}
+
+/** Configure whether this request may follow redirects. */
+void curl_request_set_follow_redirects(curl_request_t *request, bool enabled) {
+    HARD_ASSERT(request != NULL);
+    TOOLKIT_PROTECT();
+    request->follow_redirects = enabled;
 }
 
 /**
@@ -651,6 +724,17 @@ void curl_request_set_max_body(curl_request_t *request, size_t maximum) {
 
     pthread_mutex_lock(&request->mutex);
     request->max_body_size = maximum;
+    pthread_mutex_unlock(&request->mutex);
+}
+
+/** Set the largest aggregate response header this request may retain. */
+void curl_request_set_max_header(curl_request_t *request, size_t maximum) {
+    HARD_ASSERT(request != NULL);
+    HARD_ASSERT(maximum > 0);
+    TOOLKIT_PROTECT();
+
+    pthread_mutex_lock(&request->mutex);
+    request->max_header_size = maximum;
     pthread_mutex_unlock(&request->mutex);
 }
 
@@ -752,6 +836,27 @@ char *curl_request_get_header(curl_request_t *request, size_t *header_size) {
     }
 
     return request->header;
+}
+
+/** Cleanse and release a completed response body and headers. */
+void curl_request_clear_response(curl_request_t *request) {
+    HARD_ASSERT(request != NULL);
+    TOOLKIT_PROTECT();
+
+    pthread_mutex_lock(&request->mutex);
+    if (request->body != NULL) {
+        OPENSSL_cleanse(request->body, request->body_size + 1U);
+        free(request->body);
+        request->body = NULL;
+        request->body_size = 0;
+    }
+    if (request->header != NULL) {
+        OPENSSL_cleanse(request->header, request->header_size + 1U);
+        free(request->header);
+        request->header = NULL;
+        request->header_size = 0;
+    }
+    pthread_mutex_unlock(&request->mutex);
 }
 
 /**
@@ -896,9 +1001,15 @@ void curl_request_free(curl_request_t *request) {
         pthread_join(request->thread_id, NULL);
     }
 
-    free(request->body);
+    if (request->body != NULL) {
+        OPENSSL_cleanse(request->body, request->body_size + 1U);
+        free(request->body);
+    }
 
-    free(request->header);
+    if (request->header != NULL) {
+        OPENSSL_cleanse(request->header, request->header_size + 1U);
+        free(request->header);
+    }
 
     free(request->path);
 
@@ -908,10 +1019,21 @@ void curl_request_free(curl_request_t *request) {
 
     curl_form_field_t *field, *tmp;
     LL_FOREACH_SAFE(request->form_fields, field, tmp) {
+        OPENSSL_cleanse(field->key, strlen(field->key));
+        OPENSSL_cleanse(field->value, strlen(field->value));
         free(field->key);
         free(field->value);
         free(field);
     }
+
+    curl_request_header_t *request_header, *request_header_tmp;
+    LL_FOREACH_SAFE(request->request_headers, request_header, request_header_tmp) {
+        OPENSSL_cleanse(request_header->line, strlen(request_header->line));
+        free(request_header->line);
+        free(request_header);
+    }
+
+    OPENSSL_clear_free(request->post_body, request->post_body_size);
 
     free(request->url);
     free(request);
@@ -1206,9 +1328,11 @@ static size_t curl_header_callback(char *buffer, size_t size, size_t nitems, voi
 
     size_t realsize = size * nitems;
 
-    if ((size != 0 && realsize / size != nitems) || request->header_size == SIZE_MAX ||
-        realsize > SIZE_MAX - request->header_size - 1) {
-        LOG(ERROR, "HTTP response headers exceed addressable memory");
+    if ((size != 0 && realsize / size != nitems) ||
+        request->header_size > request->max_header_size ||
+        realsize > request->max_header_size - request->header_size ||
+        request->header_size == SIZE_MAX || realsize > SIZE_MAX - request->header_size - 1) {
+        LOG(ERROR, "HTTP response exceeds configured header limit");
         pthread_mutex_unlock(&request->mutex);
         return 0;
     }
@@ -1284,7 +1408,7 @@ static curl_state_t curl_request_setup(curl_request_t *request) {
      * http://curl.haxx.se/libcurl/c/curl_easy_setopt.html#CURLOPTNOSIGNAL
      * for details. */
     CURL_SETOPT(request->handle, CURLOPT_NOSIGNAL, 1L);
-    CURL_SETOPT(request->handle, CURLOPT_FOLLOWLOCATION, 1L);
+    CURL_SETOPT(request->handle, CURLOPT_FOLLOWLOCATION, request->follow_redirects ? 1L : 0L);
 
     if (request->max_body_size != SIZE_MAX) {
         CURL_SETOPT(request->handle, CURLOPT_MAXFILESIZE_LARGE, (curl_off_t)request->max_body_size);
@@ -1500,6 +1624,30 @@ static bool curl_request_build_form(curl_request_t *request, curl_mime **mime_ou
     return true;
 }
 
+/** Build the configured request-header list. */
+static bool curl_request_build_headers(curl_request_t *request, struct curl_slist **headers_out) {
+    struct curl_slist *headers = NULL;
+    curl_request_header_t *header;
+    LL_FOREACH(request->request_headers, header) {
+        struct curl_slist *next = curl_slist_append(headers, header->line);
+        if (next == NULL) {
+            curl_slist_free_all(headers);
+            return false;
+        }
+        headers = next;
+    }
+    if (headers != NULL) {
+        CURLcode result = curl_easy_setopt(request->handle, CURLOPT_HTTPHEADER, headers);
+        if (result != CURLE_OK) {
+            LOG(ERROR, "Failed to attach cURL request headers: %s", curl_easy_strerror(result));
+            curl_slist_free_all(headers);
+            return false;
+        }
+    }
+    *headers_out = headers;
+    return true;
+}
+
 /**
  * Use cURL to send a POST request to the URL specified in ::curl_request_t
  * structure (user_data).
@@ -1518,6 +1666,7 @@ void *curl_request_do_post(void *user_data) {
 
     curl_state_t state;
     curl_mime *mime = NULL;
+    struct curl_slist *headers = NULL;
 
     /* Init "easy" cURL */
     request->handle = curl_easy_init();
@@ -1531,7 +1680,24 @@ void *curl_request_do_post(void *user_data) {
         goto done;
     }
 
-    if (!curl_request_build_form(request, &mime)) {
+    if (!curl_request_build_headers(request, &headers)) {
+        state = CURL_STATE_ERROR;
+        goto done;
+    }
+
+    if (request->post_body != NULL) {
+        CURLcode result = curl_easy_setopt(request->handle, CURLOPT_POSTFIELDS, request->post_body);
+        if (result == CURLE_OK) {
+            result = curl_easy_setopt(request->handle,
+                                      CURLOPT_POSTFIELDSIZE_LARGE,
+                                      (curl_off_t)request->post_body_size);
+        }
+        if (result != CURLE_OK) {
+            LOG(ERROR, "Failed to attach cURL POST body: %s", curl_easy_strerror(result));
+            state = CURL_STATE_ERROR;
+            goto done;
+        }
+    } else if (!curl_request_build_form(request, &mime)) {
         state = CURL_STATE_ERROR;
         goto done;
     }
@@ -1547,6 +1713,7 @@ done:
         curl_mime_free(mime);
         curl_easy_cleanup(request->handle);
     }
+    curl_slist_free_all(headers);
 
     if (request->cb != NULL && !request->finished) {
         request->cb(request, request->cb_user_data);
@@ -1571,6 +1738,8 @@ void curl_request_start_post(curl_request_t *request) {
         /* coverity[missing_lock] */
         LOG(ERROR, "Failed to create thread: %s (%d)", strerror(rc), rc);
         request->state = CURL_STATE_ERROR;
+    } else {
+        request->threaded = true;
     }
 }
 
