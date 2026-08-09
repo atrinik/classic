@@ -300,10 +300,25 @@ bool metaserver_publisher_build(metaserver_publisher_profile_t profile,
     unsigned char digest[SHA256_DIGEST_LENGTH];
     char digest_base64[64];
     char nonce_hex[METASERVER_PUBLISH_NONCE_SIZE * 2U + 1U];
-    if (SHA256(body, body_size, digest) == NULL ||
-        EVP_EncodeBlock((unsigned char *)digest_base64, digest, sizeof(digest)) != 44 ||
-        string_tohex(nonce, METASERVER_PUBLISH_NONCE_SIZE, VS(nonce_hex), false) !=
-            METASERVER_PUBLISH_NONCE_SIZE * 2U) {
+    bool digest_ok = SHA256(body, body_size, digest) != NULL;
+#ifdef WIN32
+    fprintf(stderr, "publisher build trace: digest hashed=%d\n", digest_ok);
+    fflush(stderr);
+#endif
+    bool base64_ok =
+        digest_ok && EVP_EncodeBlock((unsigned char *)digest_base64, digest, sizeof(digest)) == 44;
+#ifdef WIN32
+    fprintf(stderr, "publisher build trace: digest base64=%d\n", base64_ok);
+    fflush(stderr);
+#endif
+    bool nonce_ok =
+        base64_ok && string_tohex(nonce, METASERVER_PUBLISH_NONCE_SIZE, VS(nonce_hex), false) ==
+                         METASERVER_PUBLISH_NONCE_SIZE * 2U;
+#ifdef WIN32
+    fprintf(stderr, "publisher build trace: nonce hex=%d\n", nonce_ok);
+    fflush(stderr);
+#endif
+    if (!nonce_ok) {
         OPENSSL_cleanse(digest, sizeof(digest));
         return false;
     }
