@@ -11,7 +11,7 @@
 
 /**
  * @file
- * Sprite pixel visibility and visible-bounds calculations.
+ * Sprite pixel access, visibility, and visible-bounds calculations.
  */
 
 #include <global.h>
