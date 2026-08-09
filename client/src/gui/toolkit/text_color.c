@@ -22,7 +22,7 @@
  * 1 if the notation was parsed successfully, 0 otherwise.
  */
 int text_color_parse(const char *color_notation, SDL_Color *color) {
-    uint32_t r, g, b;
+    unsigned int r, g, b;
 
     if (*color_notation == '#') {
         color_notation++;
