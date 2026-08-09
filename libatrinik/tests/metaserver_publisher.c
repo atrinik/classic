@@ -473,10 +473,14 @@ static void identity_signing_test(void) {
 
 int main(int argc, char **argv) {
     require(argc == 2);
+    progress("main start");
     toolkit_import(path);
+    progress("path imported");
 
     char *fixture_json = fixture_read(argv[1]);
+    progress("fixture read");
     publisher_fixture_t fixture = fixture_parse(fixture_json);
+    progress("fixture parsed");
     uint64_t sequence;
     require(string_parse_uint64(fixture.sequence, 10, 1, UINT64_MAX, &sequence));
     unsigned char nonce[METASERVER_PUBLISH_NONCE_SIZE];
@@ -484,6 +488,7 @@ int main(int argc, char **argv) {
                                     METASERVER_PUBLISH_NONCE_SIZE * 2U,
                                     true,
                                     VS(nonce)));
+    progress("fixture scalars decoded");
 
     char body[METASERVER_PUBLISH_BODY_MAX + 1U];
     size_t body_size;
@@ -511,6 +516,7 @@ int main(int argc, char **argv) {
     payload.certificate = "AB==";
     require(!metaserver_publisher_classic_body(&payload, body, &body_size));
     payload.certificate = fixture.certificate;
+    progress("body vectors complete");
 
     metaserver_publisher_components_t classic;
     require(metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V1,
@@ -526,6 +532,7 @@ int main(int argc, char **argv) {
     require(strcmp(classic.content_digest, fixture.content_digest) == 0);
     require(strcmp(classic.signature_input, fixture.signature_input) == 0);
     require(strcmp(classic.signature_base, fixture.signature_base) == 0);
+    progress("classic components complete");
 
     unsigned char certificate[2048], signature[64];
     size_t certificate_size = decode_base64(fixture.certificate, certificate, sizeof(certificate));
@@ -537,6 +544,7 @@ int main(int argc, char **argv) {
                                         fixture.server_id,
                                         classic.signature_base,
                                         signature));
+    progress("classic signature verified");
     static const char *const vectors[] = {"heartbeat",
                                           "changed",
                                           "reused_nonce",
@@ -545,6 +553,7 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < arraysize(vectors); i++) {
         fixture_vector_verify(fixture_json, vectors[i], &fixture, certificate, certificate_size);
     }
+    progress("additional vectors complete");
 
     metaserver_publisher_components_t game;
     require(metaserver_publisher_build(METASERVER_PUBLISHER_GAME_V1,
@@ -564,6 +573,7 @@ int main(int argc, char **argv) {
                                          fixture.server_id,
                                          game.signature_base,
                                          signature));
+    progress("game components complete");
 
     char mutated[METASERVER_PUBLISH_SIGNATURE_BASE_MAX];
     snprintf(VS(mutated), "%s", classic.signature_base);
@@ -607,7 +617,9 @@ int main(int argc, char **argv) {
                                         fixture.body,
                                         strlen(fixture.body),
                                         &classic));
+    progress("negative vectors complete");
 
+    progress("before sequence test");
     sequence_persistence_test(fixture.server_id);
     identity_signing_test();
 
