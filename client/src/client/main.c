@@ -694,6 +694,7 @@ int main(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, connect, "Connect to the specified server");
     CLIOPTIONS_CREATE_ARGUMENT(cli, game_news_url, "Set game news URL");
     CLIOPTIONS_CREATE_ARGUMENT(cli, join_password, "Private server password");
+    clioptions_enable_sensitive(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, join_password_file, "Private server password file");
     CLIOPTIONS_CREATE_ARGUMENT(cli,
                                rendezvous_invite_file,

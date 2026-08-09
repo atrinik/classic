@@ -432,6 +432,11 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         target_link_libraries(libatrinik-smoke PRIVATE Atrinik::Core)
         add_test(NAME libatrinik-smoke COMMAND libatrinik-smoke)
 
+        add_executable(libatrinik-clioptions tests/clioptions.c)
+        atrinik_configure_target(libatrinik-clioptions)
+        target_link_libraries(libatrinik-clioptions PRIVATE Atrinik::Core)
+        add_test(NAME libatrinik-clioptions COMMAND libatrinik-clioptions)
+
         add_executable(libatrinik-bresenham tests/bresenham.c)
         atrinik_configure_target(libatrinik-bresenham)
         target_link_libraries(libatrinik-bresenham PRIVATE Atrinik::Core)
@@ -456,5 +461,12 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_test(NAME libatrinik-metaserver-publisher
             COMMAND libatrinik-metaserver-publisher
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/metaserver-publisher-v1.json")
+
+        if (NOT WIN32)
+            add_executable(libatrinik-curl tests/curl.c)
+            atrinik_configure_target(libatrinik-curl)
+            target_link_libraries(libatrinik-curl PRIVATE Atrinik::Core Threads::Threads)
+            add_test(NAME libatrinik-curl COMMAND libatrinik-curl)
+        endif ()
     endif ()
 endif ()
