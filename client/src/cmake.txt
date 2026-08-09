@@ -33,6 +33,7 @@ set(SOURCES
 	src/client/socket.c
 	src/client/sound.c
 	src/client/sprite.c
+	src/client/sprite_pixels.c
 	src/client/texture.c
 	src/client/tilestretcher.c
 	src/client/updates.c
