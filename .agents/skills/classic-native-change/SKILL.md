@@ -1,6 +1,6 @@
 ---
 name: classic-native-change
-description: Implement and validate C17, CMake, headers, native tests, and cross-module APIs in Atrinik's classic monorepo. Use when client/, server/, or libatrinik/ native code is primary, including coordinated changes that consume protocol/ or affect more than one classic module.
+description: Implement and validate classic C17/CMake code, tests, headers, and cross-module APIs in one monorepo worktree.
 ---
 
 # Classic native change

@@ -1,6 +1,6 @@
 # Atrinik classic editor packaging module guide
 
-- This repository is a thin packaging utility for an external Gridarta
+- This module is a thin packaging utility for an external Gridarta
   checkout. Gridarta source and generated JARs do not belong here.
 - Keep `build.sh` strict, portable Bash. Resolve the supplied checkout and
   output directory safely, quote paths, propagate Gradle failures, and verify
