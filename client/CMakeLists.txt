@@ -273,9 +273,12 @@ if (BUILD_TESTING AND NOT MINGW)
 
     add_executable(client-keybind-input-tests
         src/tests/keybind_input.c
-        src/client/keybind_input.c)
+        src/client/keybind_input.c
+        src/client/keybind_storage.c)
     atrinik_configure_target(client-keybind-input-tests)
-    target_compile_definitions(client-keybind-input-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_compile_definitions(client-keybind-input-tests PRIVATE
+        ATRINIK_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        SDL_DISABLE_OLD_NAMES)
     target_include_directories(client-keybind-input-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include

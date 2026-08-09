@@ -142,18 +142,18 @@ SDL_Keycode keybind_keycode_from_legacy(uint32_t key) {
     }
 }
 
-/** Parse a persisted decimal keycode. */
-bool keybind_keycode_parse(const char *text, bool legacy, SDL_Keycode *key) {
+/** Parse a bounded persisted unsigned decimal value. */
+bool keybind_uint32_parse(const char *text, uint32_t maximum, uint32_t *value_out) {
     char *end;
     unsigned long long value;
 
-    if (text == NULL || key == NULL || *text == '\0' || *text == '-') {
+    if (text == NULL || value_out == NULL || *text == '\0' || *text == '-') {
         return false;
     }
 
     errno = 0;
     value = strtoull(text, &end, 10);
-    if (errno == ERANGE || value > UINT32_MAX || end == text) {
+    if (errno == ERANGE || value > maximum || end == text) {
         return false;
     }
     while (isspace((unsigned char)*end)) {
@@ -163,7 +163,19 @@ bool keybind_keycode_parse(const char *text, bool legacy, SDL_Keycode *key) {
         return false;
     }
 
-    *key = legacy ? keybind_keycode_from_legacy((uint32_t)value) : (SDL_Keycode)value;
+    *value_out = (uint32_t)value;
+    return true;
+}
+
+/** Parse a persisted decimal keycode. */
+bool keybind_keycode_parse(const char *text, bool legacy, SDL_Keycode *key) {
+    uint32_t value;
+
+    if (key == NULL || !keybind_uint32_parse(text, UINT32_MAX, &value)) {
+        return false;
+    }
+
+    *key = legacy ? keybind_keycode_from_legacy(value) : (SDL_Keycode)value;
     return true;
 }
 
@@ -193,27 +205,39 @@ bool keybind_matches_event(const keybind_struct *keybind, const SDL_KeyboardEven
            (!keybind->mod || keybind->mod == keybind_adjust_kmod(event->mod));
 }
 
+/** Append text to a fixed-size shortcut buffer. */
+static void keybind_shortcut_append(char *buf, size_t len, size_t *used, const char *text) {
+    size_t available = len - *used - 1;
+    size_t amount = MIN(strlen(text), available);
+
+    memcpy(buf + *used, text, amount);
+    *used += amount;
+    buf[*used] = '\0';
+}
+
 /** Construct a display string for a keybinding shortcut. */
 char *keybind_get_key_shortcut(SDL_Keycode key, SDL_Keymod mod, char *buf, size_t len) {
+    size_t used = 0;
+
     if (len == 0) {
         return buf;
     }
     buf[0] = '\0';
 
     if (mod & SDL_KMOD_SHIFT) {
-        strncat(buf, "shift + ", len - strlen(buf) - 1);
+        keybind_shortcut_append(buf, len, &used, "shift + ");
     }
     if (mod & SDL_KMOD_CTRL) {
-        strncat(buf, "ctrl + ", len - strlen(buf) - 1);
+        keybind_shortcut_append(buf, len, &used, "ctrl + ");
     }
     if (mod & SDL_KMOD_ALT) {
-        strncat(buf, "alt + ", len - strlen(buf) - 1);
+        keybind_shortcut_append(buf, len, &used, "alt + ");
     }
     if (mod & SDL_KMOD_GUI) {
-        strncat(buf, "super + ", len - strlen(buf) - 1);
+        keybind_shortcut_append(buf, len, &used, "super + ");
     }
     if (key != SDLK_UNKNOWN) {
-        strncat(buf, SDL_GetKeyName(key), len - strlen(buf) - 1);
+        keybind_shortcut_append(buf, len, &used, SDL_GetKeyName(key));
     }
 
     return buf;

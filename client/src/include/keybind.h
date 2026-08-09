@@ -34,7 +34,7 @@
 #define FILE_KEYBIND "settings/keys.dat"
 
 /** Current on-disk keycode format. */
-#define KEYBIND_KEYCODE_FORMAT 3
+#define KEYBIND_KEYCODE_FORMAT "SDL3"
 
 /**
  * One keybind.
@@ -53,7 +53,7 @@ typedef struct keybind_struct {
     uint8_t repeat;
 } keybind_struct;
 
-/** Public API implemented in src/client/keybind.c. */
+/** State and persistence API implemented in src/client/keybind_storage.c. */
 
 extern keybind_struct **keybindings;
 
@@ -67,6 +67,8 @@ extern void keybind_free(keybind_struct *keybind);
 
 extern void keybind_deinit(void);
 
+/** Mutation and command API implemented in src/client/keybind.c. */
+
 extern keybind_struct *keybind_add(SDL_Keycode key, SDL_Keymod mod, const char *command);
 
 extern void keybind_edit(size_t i, SDL_Keycode key, SDL_Keymod mod, const char *command);
@@ -75,7 +77,11 @@ extern void keybind_remove(size_t i);
 
 extern void keybind_repeat_toggle(size_t i);
 
+/** Input compatibility API implemented in src/client/keybind_input.c. */
+
 extern SDL_Keycode keybind_keycode_from_legacy(uint32_t key);
+
+extern bool keybind_uint32_parse(const char *text, uint32_t maximum, uint32_t *value);
 
 extern bool keybind_keycode_parse(const char *text, bool legacy, SDL_Keycode *key);
 

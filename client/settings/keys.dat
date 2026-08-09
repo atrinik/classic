@@ -1,4 +1,4 @@
-keycode_format 3
+keycode_format SDL3
 bind
 	# [9]
 	key 1073741921
