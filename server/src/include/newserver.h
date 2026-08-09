@@ -34,8 +34,11 @@
 #include "map.h"
 #include "server_clock.h"
 
-/** Maximum time a connection may remain in the pre-login state. */
-#define SOCKET_PRELOGIN_TIMEOUT 30
+/** Maximum time a connection may remain in the handshake/setup phase. */
+#define SOCKET_SETUP_TIMEOUT 30
+
+/** Maximum inactivity while entering credentials or selecting a character. */
+#define SOCKET_LOGIN_IDLE_TIMEOUT (10 * 60)
 
 /** Maximum buffered player-command bytes retained by one connection. */
 #define SOCKET_COMMAND_QUEUE_MAX (1024U * 1024U)
@@ -148,8 +151,8 @@ typedef struct socket_struct {
      */
     int login_count;
 
-    /** Monotonic pre-login deadline. Never persisted or sent to clients. */
-    server_monotonic_t prelogin_deadline;
+    /** Monotonic deadline for the current login phase. Never persisted or sent. */
+    server_monotonic_t login_deadline;
 
     /** X size of the map the client wants. */
     int mapx;
@@ -251,7 +254,7 @@ typedef struct socket_struct {
  * How many seconds must pass since the last keep alive command for the
  * socket to be disconnected.
  */
-#define SOCKET_KEEPALIVE_TIMEOUT (uint32_t)((60 * 10) * MAX_TICKS_MULTIPLIER)
+#define SOCKET_KEEPALIVE_TIMEOUT (uint32_t)(SOCKET_LOGIN_IDLE_TIMEOUT * MAX_TICKS_MULTIPLIER)
 
 /** Holds some system related information. */
 typedef struct Socket_Info_struct {

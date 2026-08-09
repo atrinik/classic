@@ -546,6 +546,8 @@ bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, 
             "Rejected malformed %s command: %s",
             socket_commands[type].name,
             packet_error_string(error));
+    } else if (cs->state == ST_LOGIN && cs->setup_completed) {
+        socket_login_deadline_refresh(cs);
     }
 
     return true;
@@ -815,9 +817,9 @@ void socket_server_process(void) {
 
     csocket_entry_t *entry, *entry_tmp;
     DL_FOREACH_SAFE(client_sockets, entry, entry_tmp) {
-        if (socket_prelogin_expired(entry->cs)) {
+        if (socket_login_expired(entry->cs)) {
             LOG(SYSTEM,
-                "Connection %s exceeded the pre-login deadline",
+                "Connection %s exceeded the login-phase deadline",
                 socket_get_id(entry->cs->sc));
             entry->cs->state = ST_DEAD;
         }

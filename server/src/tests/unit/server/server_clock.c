@@ -73,15 +73,38 @@ START_TEST(test_wall_clock_jumps_do_not_change_deadlines) {
 }
 END_TEST
 
-START_TEST(test_prelogin_deadline_ignores_wall_clock_jumps) {
+START_TEST(test_setup_deadline_ignores_wall_clock_jumps) {
     socket_struct socket = {0};
-    socket.prelogin_deadline =
-        server_monotonic_deadline_after(server_duration_from_seconds(SOCKET_PRELOGIN_TIMEOUT));
+    socket_login_deadline_refresh(&socket);
 
     server_clock_fake_set_wall((server_wall_utc_t){INT64_MAX});
-    ck_assert(!socket_prelogin_expired(&socket));
-    server_clock_fake_advance_monotonic(server_duration_from_seconds(SOCKET_PRELOGIN_TIMEOUT));
-    ck_assert(socket_prelogin_expired(&socket));
+    ck_assert(!socket_login_expired(&socket));
+    server_clock_fake_advance_monotonic(server_duration_from_seconds(SOCKET_SETUP_TIMEOUT));
+    ck_assert(socket_login_expired(&socket));
+}
+END_TEST
+
+START_TEST(test_completed_setup_uses_login_idle_deadline) {
+    socket_struct socket = {.setup_completed = true};
+    socket_login_deadline_refresh(&socket);
+
+    server_clock_fake_advance_monotonic(server_duration_from_seconds(SOCKET_SETUP_TIMEOUT));
+    ck_assert(!socket_login_expired(&socket));
+    server_clock_fake_advance_monotonic(
+        server_duration_from_seconds(SOCKET_LOGIN_IDLE_TIMEOUT - SOCKET_SETUP_TIMEOUT));
+    ck_assert(socket_login_expired(&socket));
+}
+END_TEST
+
+START_TEST(test_login_activity_refreshes_character_selection_deadline) {
+    socket_struct socket = {.setup_completed = true, .account = "account"};
+    socket_login_deadline_refresh(&socket);
+
+    server_clock_fake_advance_monotonic(
+        server_duration_from_seconds(SOCKET_LOGIN_IDLE_TIMEOUT - 1));
+    socket_login_deadline_refresh(&socket);
+    server_clock_fake_advance_monotonic(server_duration_from_seconds(1));
+    ck_assert(!socket_login_expired(&socket));
 }
 END_TEST
 
@@ -175,7 +198,9 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_domains_advance_independently);
     tcase_add_test(tc_core, test_deadlines_expire_at_exact_boundary);
     tcase_add_test(tc_core, test_wall_clock_jumps_do_not_change_deadlines);
-    tcase_add_test(tc_core, test_prelogin_deadline_ignores_wall_clock_jumps);
+    tcase_add_test(tc_core, test_setup_deadline_ignores_wall_clock_jumps);
+    tcase_add_test(tc_core, test_completed_setup_uses_login_idle_deadline);
+    tcase_add_test(tc_core, test_login_activity_refreshes_character_selection_deadline);
     tcase_add_test(tc_core, test_persisted_wall_deadlines_are_validated_and_clamped);
     tcase_add_test(tc_core, test_arithmetic_saturates_and_elapsed_clamps);
     tcase_add_test(tc_core, test_tick_duration_conversions_are_checked);

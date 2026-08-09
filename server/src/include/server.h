@@ -144,7 +144,9 @@ extern socket_struct *init_sockets;
 
 extern bool init_connection(socket_struct *ns);
 
-extern bool socket_prelogin_expired(const socket_struct *ns);
+extern void socket_login_deadline_refresh(socket_struct *ns);
+
+extern bool socket_login_expired(const socket_struct *ns);
 
 extern void free_all_newserver(void);
 
