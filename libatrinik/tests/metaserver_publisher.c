@@ -446,6 +446,8 @@ static void identity_signing_test(void) {
 
 int main(int argc, char **argv) {
     require(argc == 2);
+    toolkit_import(path);
+
     char *fixture_json = fixture_read(argv[1]);
     publisher_fixture_t fixture = fixture_parse(fixture_json);
     uint64_t sequence;
@@ -587,5 +589,6 @@ int main(int argc, char **argv) {
     OPENSSL_cleanse(nonce, sizeof(nonce));
     OPENSSL_cleanse(fixture_json, strlen(fixture_json));
     free(fixture_json);
+    toolkit_deinit();
     return 0;
 }
