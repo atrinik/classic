@@ -383,6 +383,14 @@ bool socket_server_quic_identity(char certificate_sha256[65]) {
     return true;
 }
 
+struct metaserver_publisher_identity *socket_server_quic_publisher_identity(void) {
+    socket_t *identity_socket =
+        quic_server_sockets[0] != NULL ? quic_server_sockets[0] : quic_server_sockets[1];
+    return identity_socket != NULL
+               ? socket_quic_publisher_identity(identity_socket, quic_certificate_sha256)
+               : NULL;
+}
+
 bool socket_server_quic_info(char *host,
                              size_t host_size,
                              uint16_t *port,

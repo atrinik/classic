@@ -33,14 +33,13 @@
 #include <toolkit/string.h>
 #include <toolkit/curl.h>
 #include <toolkit/datetime.h>
+#include <toolkit/metaserver_publisher.h>
 #include <toolkit/path.h>
 #include <toolkit/rendezvous.h>
 #include <player.h>
 #include <server.h>
 #include <metaserver_internal.h>
 #include <openssl/rand.h>
-#include <openssl/sha.h>
-#include <openssl/err.h>
 #include <curl/curl.h>
 #include <ctype.h>
 
@@ -60,11 +59,6 @@ static struct {
 } stats;
 
 /**
- * Where the metaserver key file is located.
- */
-#define METASERVER_KEY_FILE "metaserver_key"
-
-/**
  * Mutex for the metaserver stats.
  */
 static pthread_mutex_t stats_lock;
@@ -77,14 +71,6 @@ static curl_request_t *current_request = NULL;
  * Mutex for the current request pointer.
  */
 static pthread_mutex_t request_lock;
-/**
- * Number of players.
- */
-static uint32_t request_num_players = 0;
-/**
- * Keeps track of whether the generate metaserver key is new or not.
- */
-static bool key_is_new = false;
 static rendezvous_invite_t metaserver_invite;
 static bool metaserver_invite_active;
 static unsigned char metaserver_synthetic_invite_secret[RENDEZVOUS_SECRET_SIZE];
@@ -198,37 +184,25 @@ static bool metaserver_identity(char *identity, size_t identity_size) {
     return socket_server_quic_identity(identity);
 }
 
-static void metaserver_key_path(char *path, size_t path_size) {
-    snprintf(path, path_size, "%s/%s", settings.datapath, METASERVER_KEY_FILE);
-}
-
 bool metaserver_rendezvous_token_parse(const char *body, size_t body_size, char token[65]) {
     HARD_ASSERT(token != NULL);
 
     OPENSSL_cleanse(token, 65);
-    static const char prefix[] = "\"rendezvousToken\":\"";
-    const size_t required = sizeof(prefix) - 1 + 65;
-    if (body == NULL || body_size < required) {
+    static const char prefix[] = "{\"status\":\"ok\",\"rendezvousToken\":\"";
+    static const char suffix[] = "\"}";
+    const size_t required = sizeof(prefix) - 1U + 64U + sizeof(suffix) - 1U;
+    if (body == NULL || body_size != required || memcmp(body, prefix, sizeof(prefix) - 1U) != 0 ||
+        memcmp(body + required - (sizeof(suffix) - 1U), suffix, sizeof(suffix) - 1U) != 0) {
         return false;
     }
-
-    for (size_t offset = 0; offset <= body_size - required; offset++) {
-        if (memcmp(body + offset, prefix, sizeof(prefix) - 1) != 0) {
-            continue;
-        }
-        const char *value = body + offset + sizeof(prefix) - 1;
-        if (value[64] != '\"') {
-            continue;
-        }
-        memcpy(token, value, 64);
-        token[64] = '\0';
-        if (string_is_hex_fixed(token, 64, true)) {
-            return true;
-        }
+    const char *value = body + sizeof(prefix) - 1U;
+    memcpy(token, value, 64);
+    token[64] = '\0';
+    if (!string_is_hex_fixed(token, 64, true)) {
         OPENSSL_cleanse(token, 65);
+        return false;
     }
-
-    return false;
+    return true;
 }
 
 #if LIBCURL_VERSION_NUM >= 0x075600
@@ -847,15 +821,16 @@ static void metaserver_rendezvous_start(const char *token) {
     pthread_mutex_unlock(&rendezvous_lock);
 }
 
-static void metaserver_rendezvous_response(curl_request_t *request) {
+static bool metaserver_rendezvous_response(curl_request_t *request) {
     size_t body_size = 0;
     char *body = curl_request_get_body(request, &body_size);
     char value[65];
     if (!metaserver_rendezvous_token_parse(body, body_size, value)) {
-        return;
+        return false;
     }
     metaserver_rendezvous_start(value);
     OPENSSL_cleanse(value, sizeof(value));
+    return true;
 }
 #endif
 
@@ -915,27 +890,14 @@ void metaserver_deinit(void) {
     }
 
     pthread_mutex_lock(&request_lock);
-    if (current_request != NULL) {
-        pthread_mutex_unlock(&request_lock);
-        curl_state_t state;
-        do {
-            pthread_mutex_lock(&request_lock);
-            if (current_request == NULL) {
-                pthread_mutex_unlock(&request_lock);
-                break;
-            }
-            state = curl_request_get_state(current_request);
-            pthread_mutex_unlock(&request_lock);
-            sleep(1);
-        } while (state == CURL_STATE_INPROGRESS);
-
-        /* No other thread is working with the current request at this
-         * point. */
-        if (current_request != NULL) {
-            curl_request_free(current_request);
+    curl_request_t *request = current_request;
+    pthread_mutex_unlock(&request_lock);
+    if (request != NULL) {
+        curl_request_free(request);
+        pthread_mutex_lock(&request_lock);
+        if (current_request == request) {
             current_request = NULL;
         }
-    } else {
         pthread_mutex_unlock(&request_lock);
     }
 
@@ -985,12 +947,7 @@ static bool metaserver_request_process_error(curl_request_t *request) {
         return false;
     }
 
-    char *body = curl_request_get_body(request, NULL);
-    LOG(SYSTEM,
-        "Failed to update metaserver information "
-        "(HTTP code: %d), response: %s",
-        http_code,
-        body != NULL ? body : "<empty>");
+    LOG(SYSTEM, "Failed to update metaserver information (HTTP code: %d)", http_code);
 
     pthread_mutex_lock(&stats_lock);
     stats.last_failed = time(NULL);
@@ -1009,362 +966,159 @@ static bool metaserver_request_process_error(curl_request_t *request) {
  */
 static void metaserver_update_request(curl_request_t *request, void *user_data) {
     pthread_mutex_lock(&request_lock);
-    current_request = NULL;
+    HARD_ASSERT(current_request == request);
 
     if (metaserver_request_process_error(request)) {
-        curl_state_t state = curl_request_get_state(request);
         int http_code = curl_request_get_http_code(request);
-        metaserver_registration_key_action_t key_action =
-            metaserver_registration_key_action(state, http_code, key_is_new);
-        if (key_action == METASERVER_REGISTRATION_KEY_RETRY_ESTABLISHED) {
-            /* An ambiguous failure may have happened after ownership committed.
-             * Probe with the derived established-owner key before attempting
-             * the same retained registration key again. */
-            key_is_new = false;
-        } else if (key_action == METASERVER_REGISTRATION_KEY_RETRY_REGISTRATION) {
-            /* A 409 for registration=0 definitively means this identity has no
-             * owner. Retry the exact retained key as a first claim. */
-            key_is_new = true;
-        } else if (key_action == METASERVER_REGISTRATION_KEY_DELETE) {
-            char path[HUGE_BUF];
-            metaserver_key_path(VS(path));
-
-            if (unlink(path) == 0 || errno == ENOENT) {
-                key_is_new = false;
+        if (http_code == 409) {
+            size_t body_size = 0;
+            char *body = curl_request_get_body(request, &body_size);
+            uint64_t minimum;
+            if (!metaserver_publish_replay_parse(body, body_size, &minimum)) {
+                LOG(ERROR, "Metaserver returned a malformed replay-recovery response");
             } else {
-                LOG(ERROR, "Failed to unlink %s: %s (%d)", path, strerror(errno), errno);
+                char server_id[65] = {0};
+                metaserver_publish_sequence_result_t recovered =
+                    metaserver_identity(VS(server_id))
+                        ? metaserver_publish_sequence_recover(settings.datapath, server_id, minimum)
+                        : METASERVER_PUBLISH_SEQUENCE_ERROR;
+                OPENSSL_cleanse(server_id, sizeof(server_id));
+                if (recovered == METASERVER_PUBLISH_SEQUENCE_EXHAUSTED) {
+                    LOG(ERROR,
+                        "Metaserver publish sequence space is exhausted; rotate the QUIC "
+                        "identity to create a new server ID");
+                } else if (recovered != METASERVER_PUBLISH_SEQUENCE_OK) {
+                    LOG(ERROR, "Failed to persist metaserver replay-recovery state");
+                }
             }
         }
-
         goto out;
     }
 
-    key_is_new = false;
 #if LIBCURL_VERSION_NUM >= 0x075600
-    metaserver_rendezvous_response(request);
+    if (!metaserver_rendezvous_response(request)) {
+        LOG(ERROR, "Metaserver returned a malformed successful publish response");
+        pthread_mutex_lock(&stats_lock);
+        stats.last_failed = time(NULL);
+        stats.num_failed++;
+        pthread_mutex_unlock(&stats_lock);
+    } else
 #endif
-
-    pthread_mutex_lock(&stats_lock);
-    stats.last = time(NULL);
-    stats.num++;
-    pthread_mutex_unlock(&stats_lock);
+    {
+        pthread_mutex_lock(&stats_lock);
+        stats.last = time(NULL);
+        stats.num++;
+        pthread_mutex_unlock(&stats_lock);
+    }
 
 out:
-    curl_request_free(request);
+    curl_request_clear_response(request);
     pthread_mutex_unlock(&request_lock);
 }
 
-/**
- * Computes SHA-512 over up to three data segments.
- */
-static bool metaserver_sha512(unsigned char digest[SHA512_DIGEST_LENGTH],
-                              const void *data1,
-                              size_t size1,
-                              const void *data2,
-                              size_t size2,
-                              const void *data3,
-                              size_t size3) {
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (ctx == NULL) {
-        return false;
+static curl_request_t *metaserver_publish_request_create(uint32_t players_count) {
+    char server_id[65] = {0};
+    char body[METASERVER_PUBLISH_BODY_MAX + 1U] = {0};
+    char sequence_header[21] = {0};
+    char signature_header[METASERVER_PUBLISH_SIGNATURE_HEADER_MAX] = {0};
+    char url[HUGE_BUF] = {0};
+    unsigned char nonce[METASERVER_PUBLISH_NONCE_SIZE] = {0};
+    metaserver_publisher_components_t components = {0};
+    metaserver_publisher_identity_t *identity = NULL;
+    curl_request_t *request = NULL;
+    uint64_t sequence = 0;
+    size_t body_size = 0;
+
+    if (!metaserver_identity(VS(server_id))) {
+        LOG(ERROR, "Cannot access the active QUIC identity for metaserver publication");
+        goto out;
     }
-
-    bool success = EVP_DigestInit_ex(ctx, EVP_sha512(), NULL) == 1 &&
-                   EVP_DigestUpdate(ctx, data1, size1) == 1 &&
-                   EVP_DigestUpdate(ctx, data2, size2) == 1 &&
-                   (data3 == NULL || EVP_DigestUpdate(ctx, data3, size3) == 1);
-    unsigned int digest_len = 0;
-    success = success && EVP_DigestFinal_ex(ctx, digest, &digest_len) == 1 &&
-              digest_len == SHA512_DIGEST_LENGTH;
-    EVP_MD_CTX_free(ctx);
-    return success;
-}
-
-/**
- * Acquires the key to use for metaserver authentication.
- *
- * @param[out] key
- * Will contain the key on success.
- * @param key_size
- * Size of the 'key' buffer.
- * @param otp
- * OTP from the metaserver.
- * @param cotp
- * Generated COTP.
- * @return
- * True on success, false on failure.
- */
-static bool metaserver_get_key(char *key, size_t key_size, const char *otp, const char *cotp) {
-    HARD_ASSERT(key != NULL);
-    HARD_ASSERT(key_size == SHA512_DIGEST_LENGTH * 2 + 1);
-
-    unsigned char tmp_key[SHA512_DIGEST_LENGTH];
-    char path[HUGE_BUF];
-    metaserver_key_path(VS(path));
-    FILE *fp = fopen(path, "rb");
-    if (fp == NULL && errno == ENOENT) {
-        int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
-        if (fd == -1) {
-            LOG(ERROR, "Failed to create %s: %s (%d)", path, strerror(errno), errno);
-            return false;
-        }
-
-        fp = fdopen(fd, "wb");
-        if (fp == NULL) {
-            int saved_errno = errno;
-            close(fd);
-            if (unlink(path) != 0) {
-                LOG(ERROR, "Failed to unlink %s: %s (%d)", path, strerror(errno), errno);
-            }
-            LOG(ERROR,
-                "Failed to open %s for writing: %s (%d)",
-                path,
-                strerror(saved_errno),
-                saved_errno);
-            return false;
-        }
-
-        unsigned char bytes[64];
-
-        if (RAND_bytes(VS(bytes)) != 1) {
-            LOG(ERROR, "RAND_bytes() failed: %s", ERR_error_string(ERR_get_error(), NULL));
-            goto error_creating;
-        }
-
-        if (SHA512(VS(bytes), tmp_key) == NULL) {
-            LOG(ERROR, "SHA512() failed: %s", ERR_error_string(ERR_get_error(), NULL));
-            goto error_creating;
-        }
-
-        OPENSSL_cleanse(bytes, sizeof(bytes));
-        key[SHA512_DIGEST_LENGTH] = '\0';
-
-        if (fwrite(VS(tmp_key), 1, fp) != 1) {
-            LOG(ERROR, "Failed to write to %s: %s (%d)", path, strerror(errno), errno);
-            goto error_creating;
-        }
-
-        int close_result = fclose(fp);
-        fp = NULL;
-        if (close_result != 0) {
-            LOG(ERROR, "Failed to close %s: %s (%d)", path, strerror(errno), errno);
-            goto error_creating;
-        }
-
-        SOFT_ASSERT_LABEL(string_tohex(VS(tmp_key), key, key_size, false) == key_size - 1,
-                          error_creating,
-                          "string_tohex failed");
-        string_tolower(key);
-        key_is_new = true;
-
-        OPENSSL_cleanse(tmp_key, sizeof(tmp_key));
-        return true;
-
-    error_creating:
-        if (fp != NULL) {
-            fclose(fp);
-            fp = NULL;
-        }
-        if (unlink(path) != 0 && errno != ENOENT) {
-            LOG(ERROR, "Failed to unlink %s: %s (%d)", path, strerror(errno), errno);
-        }
-
-        OPENSSL_cleanse(bytes, sizeof(bytes));
-        OPENSSL_cleanse(tmp_key, sizeof(tmp_key));
-        OPENSSL_cleanse(key, key_size);
-        return false;
-    } else if (fp == NULL) {
-        LOG(ERROR, "Failed to open %s for reading: %s (%d)", path, strerror(errno), errno);
-        return false;
+    identity = socket_server_quic_publisher_identity();
+    if (identity == NULL) {
+        LOG(ERROR, "The active QUIC listener is not a valid P-256 publisher identity");
+        goto out;
     }
-
-    if (fread(VS(tmp_key), 1, fp) != 1) {
-        LOG(ERROR, "Failed to read from %s: %s (%d)", path, strerror(errno), errno);
-        goto error_reading;
-    }
-
-    SOFT_ASSERT_LABEL(string_tohex(VS(tmp_key), key, key_size, false) == key_size - 1,
-                      error_reading,
-                      "string_tohex failed");
-    string_tolower(key);
-
-    if (key_is_new) {
-        int close_result = fclose(fp);
-        fp = NULL;
-        if (close_result != 0) {
-            LOG(ERROR, "Failed to close %s: %s (%d)", path, strerror(errno), errno);
-            goto error_reading;
-        }
-        OPENSSL_cleanse(tmp_key, sizeof(tmp_key));
-        return true;
-    }
-
-    char identity[65];
-    if (!metaserver_identity(VS(identity)) ||
-        !metaserver_sha512(tmp_key, key, key_size - 1, identity, strlen(identity), NULL, 0)) {
-        LOG(ERROR, "SHA-512 digest failed: %s", ERR_error_string(ERR_get_error(), NULL));
-        OPENSSL_cleanse(identity, sizeof(identity));
-        goto error_reading;
-    }
-    OPENSSL_cleanse(identity, sizeof(identity));
-
-    SOFT_ASSERT_LABEL(string_tohex(VS(tmp_key), key, key_size, false) == key_size - 1,
-                      error_reading,
-                      "string_tohex failed");
-    string_tolower(key);
-
-    int close_result = fclose(fp);
-    fp = NULL;
-    if (close_result != 0) {
-        LOG(ERROR, "Failed to close %s: %s (%d)", path, strerror(errno), errno);
-        goto error_reading;
-    }
-
-    if (!metaserver_sha512(tmp_key, otp, strlen(otp), key, key_size - 1, cotp, strlen(cotp))) {
-        LOG(ERROR, "SHA-512 digest failed: %s", ERR_error_string(ERR_get_error(), NULL));
-        goto error_reading;
-    }
-
-    SOFT_ASSERT_LABEL(string_tohex(VS(tmp_key), key, key_size, false) == key_size - 1,
-                      error_reading,
-                      "string_tohex failed");
-    string_tolower(key);
-
-    OPENSSL_cleanse(tmp_key, sizeof(tmp_key));
-    return true;
-
-error_reading:
-    if (fp != NULL) {
-        fclose(fp);
-    }
-    OPENSSL_cleanse(key, key_size);
-    OPENSSL_cleanse(tmp_key, sizeof(tmp_key));
-    return false;
-}
-
-/**
- * Process the OTP GET request reply.
- *
- * @param request
- * cURL request.
- * @param user_data
- * NULL.
- */
-static void metaserver_otp_request(curl_request_t *request, void *user_data) {
-    unsigned char cotp[32] = {0};
-    unsigned char cotp_digest[SHA512_DIGEST_LENGTH] = {0};
-    char cotp_hash[SHA512_DIGEST_LENGTH * 2 + 1] = {0};
-    char key[SHA512_DIGEST_LENGTH * 2 + 1] = {0};
-    char *body = NULL, *otp = NULL;
-    size_t body_size = 0, otp_length = 0;
-
-    pthread_mutex_lock(&request_lock);
-    current_request = NULL;
-
-    if (metaserver_request_process_error(request)) {
+    metaserver_publisher_classic_payload_t payload = {
+        .server_id = server_id,
+        .certificate = metaserver_publisher_identity_certificate(identity),
+        .name = settings.server_name,
+        .players_count = players_count,
+        .version = PACKAGE_VERSION,
+        .text_comment = settings.server_desc,
+        .is_public = settings.server_public,
+        .password_required = *settings.join_password != '\0',
+    };
+    if (!metaserver_publisher_classic_body(&payload, body, &body_size)) {
+        LOG(ERROR, "Server metadata cannot be represented by the signed publisher contract");
         goto out;
     }
 
-    body = curl_request_get_body(request, &body_size);
-    if (body == NULL) {
-        LOG(ERROR, "Failed to receive an OTP from metaserver");
+    metaserver_publish_sequence_result_t reserved =
+        metaserver_publish_sequence_reserve(settings.datapath, server_id, 1, &sequence);
+    if (reserved == METASERVER_PUBLISH_SEQUENCE_EXHAUSTED) {
+        LOG(ERROR,
+            "Metaserver publish sequence space is exhausted; rotate the QUIC identity to "
+            "create a new server ID");
+        goto out;
+    }
+    if (reserved != METASERVER_PUBLISH_SEQUENCE_OK) {
+        LOG(ERROR, "Cannot securely persist the next metaserver publish sequence");
+        goto out;
+    }
+    if (RAND_bytes(nonce, sizeof(nonce)) != 1) {
+        LOG(ERROR, "Cannot generate a metaserver publish nonce");
+        goto out;
+    }
+    time_t now = time(NULL);
+    if (now < 0 ||
+        !metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V1,
+                                    METASERVER_PUBLISH_AUTHORITY,
+                                    server_id,
+                                    sequence,
+                                    nonce,
+                                    (uint64_t)now,
+                                    body,
+                                    body_size,
+                                    &components) ||
+        !metaserver_publisher_identity_sign(identity,
+                                            components.signature_base,
+                                            signature_header) ||
+        snprintf(VS(sequence_header), "%" PRIu64, sequence) >= (int)sizeof(sequence_header) ||
+        snprintf(VS(url), "https://%s%s", METASERVER_PUBLISH_AUTHORITY, components.path) >=
+            (int)sizeof(url)) {
+        LOG(ERROR, "Cannot construct a signed metaserver publication");
         goto out;
     }
 
-    const char *otp_identifier = "\"otp\": \"";
-    const char *otp_pos = strstr(body, otp_identifier);
-    if (otp_pos == NULL) {
-        LOG(ERROR, "Malformed OTP response");
+    request = curl_request_create(url, CURL_PKEY_TRUST_SYSTEM);
+    if (!curl_request_set_post_body(request, body, body_size) ||
+        !curl_request_header_add(request, "Content-Type", METASERVER_PUBLISH_CONTENT_TYPE) ||
+        !curl_request_header_add(request, "Content-Digest", components.content_digest) ||
+        !curl_request_header_add(request, "Atrinik-Server-ID", server_id) ||
+        !curl_request_header_add(request, "Atrinik-Publish-Sequence", sequence_header) ||
+        !curl_request_header_add(request, "Signature-Input", components.signature_input) ||
+        !curl_request_header_add(request, "Signature", signature_header)) {
+        LOG(ERROR, "Cannot configure the signed metaserver publication request");
+        curl_request_free(request);
+        request = NULL;
         goto out;
     }
-
-    /* Jump over the OTP identifier */
-    otp_pos += strlen(otp_identifier);
-
-    const char *otp_end_pos = strstr(otp_pos, "\"");
-    if (otp_end_pos == NULL) {
-        LOG(ERROR, "Malformed OTP response");
-        goto out;
-    }
-
-    otp_length = (size_t)(otp_end_pos - otp_pos);
-    if (otp_length == 0) {
-        LOG(ERROR, "Malformed OTP response");
-        goto out;
-    }
-
-    if (RAND_bytes(VS(cotp)) != 1) {
-        LOG(ERROR, "RAND_bytes() failed: %s", ERR_error_string(ERR_get_error(), NULL));
-        goto out;
-    }
-
-    if (SHA512(VS(cotp), cotp_digest) == NULL) {
-        LOG(ERROR, "SHA512() failed: %s", ERR_error_string(ERR_get_error(), NULL));
-        goto out;
-    }
-
-    SOFT_ASSERT_LABEL(string_tohex(VS(cotp_digest), VS(cotp_hash), false) == sizeof(cotp_hash) - 1,
-                      out,
-                      "string_tohex failed");
-    string_tolower(cotp_hash);
-
-    otp = xstrndup(body + (otp_pos - body), otp_length);
-
-    if (!metaserver_get_key(VS(key), otp, cotp_hash)) {
-        goto out;
-    }
-
-    char url[HUGE_BUF];
-    snprintf(VS(url), "%s/update", settings.metaserver_url);
-    current_request = curl_request_create(url, CURL_PKEY_TRUST_SYSTEM);
-    curl_request_set_cb(current_request, metaserver_update_request, NULL);
-
-    curl_request_form_add(current_request, "version", PACKAGE_VERSION);
-    curl_request_form_add(current_request, "text_comment", settings.server_desc);
-    curl_request_form_add(current_request, "name", settings.server_name);
-    curl_request_form_add(current_request, "otp", otp);
-    curl_request_form_add(current_request, "cotp", cotp_hash);
-    curl_request_form_add(current_request, "key", key);
-    curl_request_form_add(current_request, "registration", key_is_new ? "1" : "0");
-    char buf[32];
-    snprintf(VS(buf), "%" PRIu32, request_num_players);
-    curl_request_form_add(current_request, "num_players", buf);
-    curl_request_form_add(current_request, "public", settings.server_public ? "1" : "0");
-    curl_request_form_add(current_request,
-                          "password_required",
-                          *settings.join_password != '\0' ? "1" : "0");
-
-    char quic_fingerprint[65], quic_host[MAX_BUF];
-    uint16_t quic_port;
-    if (socket_server_quic_info(VS(quic_host), &quic_port, quic_fingerprint)) {
-        curl_request_form_add(current_request, "server_id", quic_fingerprint);
-        curl_request_form_add(current_request, "quic_cert_sha256", quic_fingerprint);
-        if (*quic_host != '\0') {
-            curl_request_form_add(current_request, "quic_host", quic_host);
-        }
-        snprintf(VS(buf), "%" PRIu16, quic_port);
-        curl_request_form_add(current_request, "quic_port", buf);
-    }
-
-    /* Send off the POST request */
-    curl_request_start_post(current_request);
+    curl_request_set_follow_redirects(request, false);
+    curl_request_set_max_body(request, 1024);
+    curl_request_set_max_header(request, 16384);
+    curl_request_set_cb(request, metaserver_update_request, NULL);
 
 out:
-    if (otp != NULL) {
-        OPENSSL_cleanse(otp, otp_length);
-        free(otp);
-    }
-    if (body != NULL) {
-        OPENSSL_cleanse(body, body_size);
-    }
-    OPENSSL_cleanse(cotp, sizeof(cotp));
-    OPENSSL_cleanse(cotp_digest, sizeof(cotp_digest));
-    OPENSSL_cleanse(cotp_hash, sizeof(cotp_hash));
-    OPENSSL_cleanse(key, sizeof(key));
-    curl_request_free(request);
-    pthread_mutex_unlock(&request_lock);
+    metaserver_publisher_identity_free(identity);
+    OPENSSL_cleanse(server_id, sizeof(server_id));
+    OPENSSL_cleanse(body, sizeof(body));
+    OPENSSL_cleanse(sequence_header, sizeof(sequence_header));
+    OPENSSL_cleanse(signature_header, sizeof(signature_header));
+    OPENSSL_cleanse(url, sizeof(url));
+    OPENSSL_cleanse(nonce, sizeof(nonce));
+    OPENSSL_cleanse(&components, sizeof(components));
+    return request;
 }
-
 /**
  * Updates the metaserver information.
  */
@@ -1382,24 +1136,31 @@ void metaserver_info_update(void) {
             return;
         }
 
-        curl_request_free(current_request);
+        curl_request_t *completed = current_request;
+        pthread_mutex_unlock(&request_lock);
+        curl_request_free(completed);
+        pthread_mutex_lock(&request_lock);
+        if (current_request == completed) {
+            current_request = NULL;
+        }
     }
 
-    pthread_mutex_unlock(&request_lock);
-
-    request_num_players = 0;
+    uint32_t players_count = 0;
     for (player *pl = first_player; pl != NULL; pl = pl->next) {
-        request_num_players++;
+        players_count++;
     }
 
-    char url[HUGE_BUF];
-    snprintf(VS(url), "%s/otp", settings.metaserver_url);
-    /* If we're at this point, no other thread is currently working with
-     * the current request and thus a lock is not necessary. */
-    /* coverity[missing_lock] */
-    current_request = curl_request_create(url, CURL_PKEY_TRUST_SYSTEM);
-    curl_request_set_cb(current_request, metaserver_otp_request, NULL);
-    curl_request_start_get(current_request);
+    current_request = metaserver_publish_request_create(players_count);
+    if (current_request == NULL) {
+        pthread_mutex_lock(&stats_lock);
+        stats.last_failed = time(NULL);
+        stats.num_failed++;
+        pthread_mutex_unlock(&stats_lock);
+        pthread_mutex_unlock(&request_lock);
+        return;
+    }
+    curl_request_start_post(current_request);
+    pthread_mutex_unlock(&request_lock);
 }
 
 /**

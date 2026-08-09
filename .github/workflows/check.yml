@@ -172,7 +172,7 @@ jobs:
                 -DCMAKE_BUILD_TYPE=Release \
                 -DATRINIK_PROTOCOL_SOURCE_DIR=/workspace/protocol
               cmake --build libatrinik/build/windows-tests \
-                --target libatrinik-path libatrinik-rendezvous \
+                --target libatrinik-path libatrinik-rendezvous libatrinik-metaserver-publisher \
                 --parallel "$(nproc)"
               stage=libatrinik/build/windows-test-bundle
               cmake -E remove_directory "${stage}"
@@ -181,7 +181,8 @@ jobs:
                 --runtime-dir "${MXE_RUNTIME_DIR}" \
                 --output-dir "${stage}" \
                 libatrinik/build/windows-tests/libatrinik-path.exe \
-                libatrinik/build/windows-tests/libatrinik-rendezvous.exe
+                libatrinik/build/windows-tests/libatrinik-rendezvous.exe \
+                libatrinik/build/windows-tests/libatrinik-metaserver-publisher.exe
               cmake -E copy_directory libatrinik/tests/fixtures "${stage}/fixtures"
             '
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -206,7 +207,7 @@ jobs:
         with:
           name: native-windows-tests
           path: build/native-windows-tests
-      - name: Execute path and rendezvous tests on Windows
+      - name: Execute private-state and protocol tests on Windows
         shell: pwsh
         run: |
           $bundle = (Resolve-Path "build/native-windows-tests").Path
@@ -222,6 +223,12 @@ jobs:
           & (Join-Path $bundle "libatrinik-rendezvous.exe") $positive $negative
           if ($LASTEXITCODE -ne 0) {
             throw "libatrinik-rendezvous.exe failed with exit code ${LASTEXITCODE}"
+          }
+
+          $publisher = Join-Path $bundle "fixtures/metaserver-publisher-v1.json"
+          & (Join-Path $bundle "libatrinik-metaserver-publisher.exe") $publisher
+          if ($LASTEXITCODE -ne 0) {
+            throw "libatrinik-metaserver-publisher.exe failed with exit code ${LASTEXITCODE}"
           }
 
   server:
