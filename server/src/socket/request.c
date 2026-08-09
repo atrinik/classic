@@ -242,6 +242,7 @@ void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t l
     }
 
     ns->setup_completed = true;
+    socket_login_deadline_refresh(ns);
     socket_send_packet(ns, packet);
 }
 
