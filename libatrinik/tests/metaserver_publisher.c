@@ -298,10 +298,10 @@ static void sequence_persistence_test(const char *server_id) {
         path_secret_create_atomic(probe, probe_value, sizeof(probe_value) - 1U);
     DWORD probe_error = GetLastError();
     fprintf(stderr,
-            "publisher sequence path probe: result=%d system_error=%lu path_length=%zu\n",
+            "publisher sequence path probe: result=%d system_error=%lu path_length=%u\n",
             probe_result,
             (unsigned long)probe_error,
-            strlen(probe));
+            (unsigned int)strlen(probe));
     require(probe_result == PATH_SECRET_CREATE_OK);
     require(unlink(probe) == 0);
 #endif
