@@ -225,6 +225,14 @@ extern bool metaserver_rendezvous_token_parse(const char *body, size_t body_size
 /** Public API implemented in src/socket/assets.c. */
 
 extern void socket_assets_init(void);
+/**
+ * Borrow immutable startup-loaded face bytes and their digest.
+ *
+ * Returned pointers remain server-owned and valid until free_socket_images().
+ * The function is main/network-thread safe because the snapshot never mutates.
+ */
+extern bool
+face_get_asset(uint16_t face, const uint8_t **data, uint32_t *size, const uint8_t **digest);
 
 extern void socket_assets_deinit(void);
 

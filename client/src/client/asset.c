@@ -38,6 +38,7 @@ struct asset_request {
     char *cache_path;
     uint8_t *data;
     size_t size;
+    size_t max_size;
     size_t received;
     size_t references;
     uint8_t cached_digest[ASSET_DIGEST_SIZE];
@@ -169,15 +170,17 @@ static size_t asset_pending_count(void) {
     return count;
 }
 
-static asset_request_t *
-asset_request_start_internal(const char *path, const char *cache_path, bool metadata_only) {
+static asset_request_t *asset_request_start_internal(const char *path,
+                                                     const char *cache_path,
+                                                     bool metadata_only,
+                                                     size_t max_size) {
     if (!cpl.asset_transport || csocket.sc == NULL || !socket_is_quic(csocket.sc) || path == NULL ||
-        *path == '\0' || strlen(path) >= MAX_BUF) {
+        *path == '\0' || strlen(path) >= MAX_BUF || max_size == 0 || max_size > ASSET_MAX_SIZE) {
         return NULL;
     }
 
-    char key[MAX_BUF + 3];
-    snprintf(VS(key), "%c:%s", metadata_only ? 'M' : 'D', path);
+    char key[MAX_BUF + 32];
+    snprintf(VS(key), "%c:%" PRIu64 ":%s", metadata_only ? 'M' : 'D', (uint64_t)max_size, path);
     if (!asset_lock()) {
         return NULL;
     }
@@ -204,6 +207,7 @@ asset_request_start_internal(const char *path, const char *cache_path, bool meta
     request->path = xstrdup(path);
     request->cache_path = cache_path != NULL ? xstrdup(cache_path) : NULL;
     request->references = 1;
+    request->max_size = max_size;
     request->metadata_only = metadata_only;
     request->state = ASSET_REQUEST_PENDING;
     request->transport_state = ASSET_TRANSPORT_QUEUED;
@@ -249,15 +253,19 @@ asset_request_start_internal(const char *path, const char *cache_path, bool meta
 }
 
 asset_request_t *asset_request_start(const char *path) {
-    return asset_request_start_internal(path, NULL, false);
+    return asset_request_start_internal(path, NULL, false, ASSET_MAX_SIZE);
+}
+
+asset_request_t *asset_request_start_bounded(const char *path, size_t max_size) {
+    return asset_request_start_internal(path, NULL, false, max_size);
 }
 
 asset_request_t *asset_request_start_cached(const char *path, const char *cache_path) {
-    return asset_request_start_internal(path, cache_path, false);
+    return asset_request_start_internal(path, cache_path, false, ASSET_MAX_SIZE);
 }
 
 asset_request_t *asset_request_start_metadata(const char *path) {
-    return asset_request_start_internal(path, NULL, true);
+    return asset_request_start_internal(path, NULL, true, ASSET_MAX_SIZE);
 }
 
 asset_request_state_t asset_request_get_state(asset_request_t *request) {
@@ -350,6 +358,11 @@ static bool asset_request_header(asset_request_t *request) {
         return false;
     }
     memcpy(request->expected_digest, request->response.digest, ASSET_DIGEST_SIZE);
+
+    if (request->response.total_size > request->max_size) {
+        asset_request_fail(request, "declared size exceeds the request-specific limit");
+        return false;
+    }
 
     if (request->response.status == ASSET_STATUS_OK && !request->metadata_only) {
         request->size = request->response.total_size;

@@ -840,6 +840,7 @@ int main(int argc, char *argv[]) {
             }
 
             DoClient();
+            image_face_requests_service();
         }
 
         /* If not connected, walk through connection chain and/or wait for

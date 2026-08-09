@@ -80,6 +80,8 @@ void image_bmaps_init(void);
 void image_bmaps_deinit(void);
 void finish_face_cmd(int facenum, uint32_t checksum, const char *face);
 void image_request_face(int pnum);
+/** Install at most one completed face asset during this render frame. */
+void image_face_requests_service(void);
 int image_get_id(const char *name);
 bool image_face_valid(int face);
 struct sprite_struct *image_get_sprite(int face);

@@ -52,6 +52,8 @@ struct asset_stream_state {
     struct asset_stream_state *prev;
     socket_stream_t *stream;
     asset_cache_entry_t *entry;
+    const uint8_t *body;
+    uint32_t body_size;
     asset_server_stream_state_t state;
     uint64_t started_us;
     uint8_t request[ASSET_REQUEST_WIRE_MAX];
@@ -329,24 +331,39 @@ static bool asset_stream_prepare(socket_struct *ns, asset_stream_state_t *state)
 
     char resolved[HUGE_BUF];
     asset_cache_entry_t *entry = NULL;
-    if (asset_resolve_path(request.path, VS(resolved))) {
+    const uint8_t *body = NULL;
+    const uint8_t *digest = NULL;
+    uint32_t body_size = 0;
+    uint16_t face = 0;
+    if (socket_asset_face_path_parse(request.path, &face)) {
+        face_get_asset(face, &body, &body_size, &digest);
+    } else if (asset_resolve_path(request.path, VS(resolved))) {
         entry = asset_cache_find(request.path);
+        if (entry != NULL) {
+            body = entry->data;
+            body_size = entry->size;
+            digest = entry->digest;
+        }
     }
-    if (entry == NULL) {
+    if (body == NULL || body_size == 0 || digest == NULL) {
         asset_stream_header(state,
                             request.flags & ASSET_REQUEST_METADATA ? ASSET_STATUS_METADATA_NOT_FOUND
                                                                    : ASSET_STATUS_NOT_FOUND,
                             0,
                             NULL);
     } else if (request.flags & ASSET_REQUEST_METADATA) {
-        asset_stream_header(state, ASSET_STATUS_METADATA, entry->size, entry->digest);
-    } else if (request.cached_size == entry->size &&
-               memcmp(request.cached_digest, entry->digest, ASSET_DIGEST_SIZE) == 0) {
-        asset_stream_header(state, ASSET_STATUS_NOT_MODIFIED, entry->size, entry->digest);
+        asset_stream_header(state, ASSET_STATUS_METADATA, body_size, digest);
+    } else if (request.cached_size == body_size &&
+               memcmp(request.cached_digest, digest, ASSET_DIGEST_SIZE) == 0) {
+        asset_stream_header(state, ASSET_STATUS_NOT_MODIFIED, body_size, digest);
     } else {
         state->entry = entry;
-        entry->references++;
-        asset_stream_header(state, ASSET_STATUS_OK, entry->size, entry->digest);
+        if (entry != NULL) {
+            entry->references++;
+        }
+        state->body = body;
+        state->body_size = body_size;
+        asset_stream_header(state, ASSET_STATUS_OK, body_size, digest);
     }
     LOG(DEBUG,
         "Connection %s opened QUIC asset stream for %s",
@@ -385,9 +402,9 @@ static bool asset_stream_write(socket_struct *ns, asset_stream_state_t *state) {
         data = state->header->data + state->header_pos;
         remaining = state->header->len - state->header_pos;
     } else {
-        HARD_ASSERT(state->entry != NULL);
-        data = state->entry->data + state->body_pos;
-        remaining = state->entry->size - state->body_pos;
+        HARD_ASSERT(state->body != NULL);
+        data = state->body + state->body_pos;
+        remaining = state->body_size - state->body_pos;
         size_t tokens = asset_tokens_available(ns);
         if (tokens == 0) {
             server_metrics_asset_paced();
@@ -418,7 +435,7 @@ static bool asset_stream_write(socket_struct *ns, asset_stream_state_t *state) {
         ns->asset_tokens -= amount;
         state->body_pos += amount;
         server_metrics_asset_stream(0, amount, false);
-        if (state->body_pos == state->entry->size) {
+        if (state->body_pos == state->body_size) {
             state->concluded = socket_stream_conclude(state->stream);
             return false;
         }

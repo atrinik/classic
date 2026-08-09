@@ -323,6 +323,15 @@ if (BUILD_TESTING AND NOT MINGW)
         SDL3_ttf::SDL3_ttf)
     add_test(NAME client-compound-packet COMMAND client-compound-packet-tests)
 
+    add_executable(client-face-asset-tests
+        src/tests/face_asset.c
+        src/client/face_asset.c)
+    atrinik_configure_target(client-face-asset-tests)
+    target_include_directories(client-face-asset-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-face-asset-tests PRIVATE Atrinik::Core)
+    add_test(NAME client-face-asset COMMAND client-face-asset-tests)
+
     add_executable(client-surface-primitives-tests
         src/tests/surface_primitives.c
         src/client/sprite_pixels.c

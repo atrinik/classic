@@ -20,6 +20,7 @@
 #include <toolkit/packet.h>
 #include <toolkit/path.h>
 #include <openssl/crypto.h>
+#include <openssl/evp.h>
 
 START_TEST(test_socket_asset_request_round_trip) {
     uint8_t digest[ASSET_DIGEST_SIZE];
@@ -34,6 +35,61 @@ START_TEST(test_socket_asset_request_round_trip) {
     ck_assert_uint_eq(request.flags, 0);
     ck_assert_mem_eq(request.cached_digest, digest, sizeof(digest));
     packet_free(packet);
+}
+END_TEST
+
+START_TEST(test_socket_asset_face_path_round_trip_and_malformed) {
+    char path[32];
+    ck_assert(socket_asset_face_path_format(VS(path), 1));
+    ck_assert_str_eq(path, "faces/1.png");
+
+    uint16_t face = 99;
+    ck_assert(socket_asset_face_path_parse(path, &face));
+    ck_assert_uint_eq(face, 1);
+    ck_assert(socket_asset_face_path_format(VS(path), UINT16_MAX));
+    ck_assert(socket_asset_face_path_parse(path, &face));
+    ck_assert_uint_eq(face, UINT16_MAX);
+
+    static const char *invalid[] = {
+        "",
+        "faces/",
+        "faces/0.png",
+        "faces/01.png",
+        "faces/01.png.extra",
+        "faces/-1.png",
+        "faces/65536.png",
+        "faces/1",
+        "faces/1.PNG",
+        "other/1.png",
+    };
+    for (size_t i = 0; i < arraysize(invalid); i++) {
+        face = 99;
+        ck_assert(!socket_asset_face_path_parse(invalid[i], &face));
+        ck_assert_uint_eq(face, 99);
+    }
+    ck_assert(!socket_asset_face_path_format(NULL, sizeof(path), 1));
+    ck_assert(!socket_asset_face_path_format(VS(path), 0));
+    ck_assert(!socket_asset_face_path_format(path, 4, 1));
+}
+END_TEST
+
+START_TEST(test_socket_face_asset_snapshot_is_bounded_and_authenticated) {
+    const uint8_t *data = NULL;
+    const uint8_t *digest = NULL;
+    uint32_t size = 0;
+    ck_assert(face_get_asset(1, &data, &size, &digest));
+    ck_assert_ptr_nonnull(data);
+    ck_assert_ptr_nonnull(digest);
+    ck_assert_uint_gt(size, 0);
+    ck_assert_uint_le(size, ASSET_FACE_MAX_SIZE);
+
+    uint8_t calculated[ASSET_DIGEST_SIZE];
+    unsigned int calculated_size = 0;
+    ck_assert_int_eq(EVP_Digest(data, size, calculated, &calculated_size, EVP_sha256(), NULL), 1);
+    ck_assert_uint_eq(calculated_size, ASSET_DIGEST_SIZE);
+    ck_assert_mem_eq(calculated, digest, sizeof(calculated));
+    ck_assert(!face_get_asset(0, NULL, NULL, NULL));
+    ck_assert(!face_get_asset(UINT16_MAX, NULL, NULL, NULL));
 }
 END_TEST
 
@@ -861,6 +917,8 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_socket_asset_request_round_trip);
+    tcase_add_test(tc_core, test_socket_asset_face_path_round_trip_and_malformed);
+    tcase_add_test(tc_core, test_socket_face_asset_snapshot_is_bounded_and_authenticated);
     tcase_add_test(tc_core, test_socket_stream_preface_round_trip_and_malformed);
     tcase_add_test(tc_core, test_socket_asset_request_rejects_malformed);
     tcase_add_test(tc_core, test_socket_asset_response_round_trip);

@@ -35,6 +35,7 @@
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 #include "zlib.h"
+#include <openssl/evp.h>
 
 /** Maximum different face sets. */
 #define MAX_FACE_SETS 1
@@ -49,6 +50,9 @@ typedef struct FaceInfo {
 
     /** Checksum of face data */
     uint32_t checksum;
+
+    /** SHA-256 digest authenticating typed-stream transfers. */
+    uint8_t digest[ASSET_DIGEST_SIZE];
 } FaceInfo;
 
 /** Face sets structure. */
@@ -113,7 +117,7 @@ void free_socket_images(void) {
 }
 
 /** Maximum possible size of a single image in bytes. */
-#define MAX_IMAGE_SIZE 50000
+#define MAX_IMAGE_SIZE ASSET_FACE_MAX_SIZE
 
 /**
  * Loads up all the image types into memory.
@@ -209,7 +213,7 @@ void read_client_images(void) {
 
             len = atoi(cp);
 
-            if (len == 0 || len > MAX_IMAGE_SIZE) {
+            if (len <= 0 || (uint32_t)len > MAX_IMAGE_SIZE) {
                 LOG(ERROR, "Length not valid: %d > %d: %s", len, MAX_IMAGE_SIZE, buf);
                 exit(1);
             }
@@ -230,6 +234,17 @@ void read_client_images(void) {
 
             facesets[file_num].faces[num].checksum =
                 (uint32_t)crc32(1L, facesets[file_num].faces[num].data, len);
+            unsigned int digest_size = 0;
+            if (EVP_Digest(facesets[file_num].faces[num].data,
+                           (size_t)len,
+                           facesets[file_num].faces[num].digest,
+                           &digest_size,
+                           EVP_sha256(),
+                           NULL) != 1 ||
+                digest_size != ASSET_DIGEST_SIZE) {
+                LOG(ERROR, "Could not hash face %d", num);
+                exit(1);
+            }
             snprintf(buf,
                      sizeof(buf),
                      "%x %x %s\n",
@@ -248,24 +263,33 @@ void socket_command_ask_face(socket_struct *ns, player *pl, uint8_t *data, size_
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     uint16_t facenum;
-    packet_struct *packet;
-
     facenum = packet_reader_read_uint16(&reader);
 
-    if (facenum == 0 || facenum >= nrofpixmaps || facesets[0].faces[facenum].data == NULL) {
-        return;
+    /* Retain the command slot so an older peer cannot desynchronize command
+     * parsing, but never put an image body on the ordered gameplay stream.
+     * Current clients request faces through bounded typed asset streams. */
+    LOG(DEBUG,
+        "Connection %s requested retired gameplay-stream face %u",
+        socket_get_id(ns->sc),
+        facenum);
+}
+
+bool face_get_asset(uint16_t face, const uint8_t **data, uint32_t *size, const uint8_t **digest) {
+    if (face == 0 || face >= nrofpixmaps || facesets[0].faces == NULL ||
+        facesets[0].faces[face].data == NULL) {
+        return false;
     }
 
-    packet = packet_new(CLIENT_CMD_IMAGE, 16, 0);
-    packet_debug_data(packet, 0, "Face ID");
-    packet_writer_write_uint32(packet, facenum);
-    packet_debug_data(packet, 0, "Face size");
-    packet_writer_write_uint32(packet, facesets[0].faces[facenum].datalen);
-    packet_debug_data(packet, 0, "Face data");
-    packet_writer_write_bytes(packet,
-                              facesets[0].faces[facenum].data,
-                              facesets[0].faces[facenum].datalen);
-    socket_send_packet(ns, packet);
+    if (data != NULL) {
+        *data = facesets[0].faces[face].data;
+    }
+    if (size != NULL) {
+        *size = facesets[0].faces[face].datalen;
+    }
+    if (digest != NULL) {
+        *digest = facesets[0].faces[face].digest;
+    }
+    return true;
 }
 
 /**

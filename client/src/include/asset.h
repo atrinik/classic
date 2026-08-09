@@ -27,6 +27,9 @@ typedef enum asset_request_state {
 
 asset_request_t *asset_request_start(const char *path);
 
+/** Start a body request whose declared response may not exceed max_size. */
+asset_request_t *asset_request_start_bounded(const char *path, size_t max_size);
+
 asset_request_t *asset_request_start_cached(const char *path, const char *cache_path);
 
 asset_request_t *asset_request_start_metadata(const char *path);
