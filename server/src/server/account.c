@@ -779,7 +779,6 @@ void account_login(socket_struct *ns, char *name, char *password) {
     }
 
     ns->account = xstrdup(name);
-    socket_login_deadline_refresh(ns);
     account_send_characters(ns, &account);
     account_free(&account);
     free(path);
@@ -882,7 +881,6 @@ void account_register(socket_struct *ns, char *name, char *password, char *passw
     }
 
     ns->account = xstrdup(name);
-    socket_login_deadline_refresh(ns);
     account_send_characters(ns, &account);
     account_free(&account);
     free(path);

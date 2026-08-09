@@ -364,6 +364,33 @@ START_TEST(test_out_of_order_player_command_is_not_queued) {
 }
 END_TEST
 
+START_TEST(test_only_valid_post_setup_activity_refreshes_login_deadline) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    socket_struct *cs = CONTR(pl)->cs;
+    settings.join_password[0] = '\0';
+    uint8_t keepalive[] = {SERVER_CMD_KEEPALIVE};
+
+    cs->state = ST_LOGIN;
+    cs->socket_version = SOCKET_VERSION;
+    cs->setup_completed = true;
+    cs->login_deadline = (server_monotonic_t){1};
+    ck_assert(socket_server_handle_command(cs, NULL, keepalive, sizeof(keepalive)));
+    ck_assert_uint_gt(cs->login_deadline.microseconds, 1);
+
+    cs->setup_completed = false;
+    cs->login_deadline = (server_monotonic_t){1};
+    ck_assert(socket_server_handle_command(cs, NULL, keepalive, sizeof(keepalive)));
+    ck_assert_uint_eq(cs->login_deadline.microseconds, 1);
+
+    uint8_t player_command[] = {SERVER_CMD_MOVE};
+    ck_assert(socket_server_handle_command(cs, NULL, player_command, sizeof(player_command)));
+    ck_assert_uint_eq(cs->login_deadline.microseconds, 1);
+}
+END_TEST
+
 START_TEST(test_version_requires_exact_match) {
     mapstruct *map;
     object *pl;
@@ -418,6 +445,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_initial_setup_requires_valid_join_password);
     tcase_add_test(tc_core, test_command_policy_covers_every_connection_phase);
     tcase_add_test(tc_core, test_out_of_order_player_command_is_not_queued);
+    tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
     tcase_add_test(tc_core, test_version_requires_exact_match);
     return s;
 }

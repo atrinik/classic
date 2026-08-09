@@ -546,6 +546,8 @@ bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, 
             "Rejected malformed %s command: %s",
             socket_commands[type].name,
             packet_error_string(error));
+    } else if (cs->state == ST_LOGIN && cs->setup_completed) {
+        socket_login_deadline_refresh(cs);
     }
 
     return true;
