@@ -29,8 +29,8 @@ external inputs.
 Root formatting, ignore, contribution, GitHub, dependency-update, validation,
 and release metadata are authoritative for the whole monorepo. The root release
 pipeline builds every module from one commit and one unprefixed version. Nested
-component workflows and semantic-release configurations remain inert migration
-evidence through the first complete root rehearsal; they are never alternate
-release trains. Module-specific build presets, fallback locks, documentation,
-agent guidance, packaging tools, provenance, and attribution remain with their
-owning modules.
+component workflow/release copies were retired after the root rehearsal and
+first unified releases proved equivalence; Git history preserves the migration
+evidence. Module-specific build presets, fallback locks, documentation, agent
+guidance, packaging tools, provenance, and attribution remain with their owning
+modules.

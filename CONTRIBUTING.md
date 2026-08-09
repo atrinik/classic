@@ -27,9 +27,9 @@ third-party licenses, notices, and attributions.
 The root workflows own the unified classic release line. A successful aggregate
 check for the current `main` commit triggers semantic-release and the guarded
 package workflow; pull-request, merge-group, failed, stale, and non-main checks
-cannot publish. Nested component workflows and semantic-release files remain
-inert migration inputs; never enable or update them as independent release
-trains.
+cannot publish. The retired nested component workflow and semantic-release
+files remain available in Git history; never restore them as independent
+release trains.
 
 ## Module requirements
 
