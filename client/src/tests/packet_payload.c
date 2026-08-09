@@ -21,28 +21,6 @@
         }                     \
     } while (0)
 
-static void test_image(void) {
-    packet_struct *packet = packet_new(0, 16, 16);
-    const uint8_t bytes[] = {1, 2, 3};
-    packet_writer_write_uint32(packet, 42);
-    packet_writer_write_uint32(packet, sizeof(bytes));
-    packet_writer_write_bytes(packet, bytes, sizeof(bytes));
-
-    uint32_t face_id = 0;
-    packet_view_t image = {0};
-    TEST_CHECK(client_packet_parse_image(packet->data, packet->len, 0, &face_id, &image));
-    TEST_CHECK(face_id == 42);
-    TEST_CHECK(image.len == sizeof(bytes));
-    TEST_CHECK(memcmp(image.data, bytes, sizeof(bytes)) == 0);
-
-    packet_writer_write_uint8(packet, 0xff);
-    TEST_CHECK(!client_packet_parse_image(packet->data, packet->len, 0, &face_id, &image));
-    packet_free(packet);
-
-    const uint8_t truncated[] = {0, 0, 0, 42, 0, 0, 0, 4, 1, 2, 3};
-    TEST_CHECK(!client_packet_parse_image(truncated, sizeof(truncated), 0, &face_id, &image));
-}
-
 static void test_file_update(void) {
     packet_struct *packet = packet_new(0, 32, 16);
     const uint8_t bytes[] = {4, 5, 6};
@@ -118,7 +96,6 @@ static void test_resource(void) {
 
 int main(void) {
     toolkit_import(packet);
-    test_image();
     test_file_update();
     test_resource();
     toolkit_deinit();

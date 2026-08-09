@@ -41,6 +41,7 @@ struct asset_request {
     size_t max_size;
     size_t received;
     size_t references;
+    uint64_t sequence;
     uint8_t cached_digest[ASSET_DIGEST_SIZE];
     uint8_t expected_digest[ASSET_DIGEST_SIZE];
     bool cache_loaded;
@@ -60,6 +61,7 @@ struct asset_request {
 
 static asset_request_t *asset_requests;
 static SDL_Mutex *asset_mutex;
+static uint64_t asset_request_sequence;
 
 static bool asset_lock(void) {
     if (asset_mutex == NULL) {
@@ -246,6 +248,7 @@ static asset_request_t *asset_request_start_internal(const char *path,
         asset_request_destroy(request);
         return NULL;
     }
+    request->sequence = asset_request_sequence++;
     HASH_ADD_KEYPTR(hh, asset_requests, request->key, strlen(request->key), request);
     LOG(DEBUG, "Queued QUIC asset %s%s", request->path, metadata_only ? " (metadata)" : "");
     SDL_UnlockMutex(asset_mutex);
@@ -521,19 +524,23 @@ bool asset_requests_service(socket_t *sc, bool *write_pending) {
             active++;
         }
     }
-    HASH_ITER(hh, asset_requests, request, next) {
-        if (active >= ASSET_STREAM_ACTIVE_MAX) {
+    while (active < ASSET_STREAM_ACTIVE_MAX) {
+        asset_request_t *oldest = NULL;
+        HASH_ITER(hh, asset_requests, request, next) {
+            if (request->state == ASSET_REQUEST_PENDING && !request->cancelled &&
+                request->transport_state == ASSET_TRANSPORT_QUEUED &&
+                (oldest == NULL || request->sequence < oldest->sequence)) {
+                oldest = request;
+            }
+        }
+        if (oldest == NULL) {
             break;
         }
-        if (request->state != ASSET_REQUEST_PENDING || request->cancelled ||
-            request->transport_state != ASSET_TRANSPORT_QUEUED) {
-            continue;
-        }
-        request->stream = socket_stream_open(sc, SOCKET_STREAM_ASSET);
-        if (request->stream == NULL) {
+        oldest->stream = socket_stream_open(sc, SOCKET_STREAM_ASSET);
+        if (oldest->stream == NULL) {
             break;
         }
-        request->transport_state = ASSET_TRANSPORT_SEND_REQUEST;
+        oldest->transport_state = ASSET_TRANSPORT_SEND_REQUEST;
         active++;
     }
 

@@ -264,6 +264,8 @@ typedef struct socket_stream socket_stream_t;
 #define ASSET_DIGEST_SIZE 32
 /** Fixed response header: status, total size, and SHA-256 digest. */
 #define SOCKET_ASSET_RESPONSE_HEADER_SIZE (1U + 4U + ASSET_DIGEST_SIZE)
+/** Maximum encoded request: bounded path, cached size/digest, and flags. */
+#define SOCKET_ASSET_REQUEST_MAX_SIZE (MAX_BUF + 4U + ASSET_DIGEST_SIZE + 1U)
 
 /** Decoded client-to-server asset request. */
 typedef struct socket_asset_request {

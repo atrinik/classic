@@ -332,6 +332,22 @@ if (BUILD_TESTING AND NOT MINGW)
     target_link_libraries(client-face-asset-tests PRIVATE Atrinik::Core)
     add_test(NAME client-face-asset COMMAND client-face-asset-tests)
 
+    add_executable(client-face-stream-tests
+        src/tests/face_stream.c
+        src/client/asset.c)
+    atrinik_configure_target(client-face-stream-tests)
+    target_compile_definitions(client-face-stream-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-face-stream-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-face-stream-tests PRIVATE
+        Atrinik::Core
+        SDL3::SDL3)
+    add_test(NAME client-face-stream COMMAND client-face-stream-tests)
+    set_tests_properties(client-face-stream PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 20)
+
     add_executable(client-surface-primitives-tests
         src/tests/surface_primitives.c
         src/client/sprite_pixels.c

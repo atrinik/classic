@@ -262,16 +262,13 @@ void read_client_images(void) {
 void socket_command_ask_face(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
-    uint16_t facenum;
-    facenum = packet_reader_read_uint16(&reader);
+    (void)packet_reader_read_uint16(&reader);
 
     /* Retain the command slot so an older peer cannot desynchronize command
      * parsing, but never put an image body on the ordered gameplay stream.
      * Current clients request faces through bounded typed asset streams. */
-    LOG(DEBUG,
-        "Connection %s requested retired gameplay-stream face %u",
-        socket_get_id(ns->sc),
-        facenum);
+    (void)ns;
+    (void)pl;
 }
 
 bool face_get_asset(uint16_t face, const uint8_t **data, uint32_t *size, const uint8_t **digest) {

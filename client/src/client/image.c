@@ -77,10 +77,12 @@ static size_t face_asset_request_count;
 static face_cache_write_t *face_cache_writes;
 static face_cache_write_t *face_cache_writes_tail;
 static size_t face_cache_write_count;
+static size_t face_cache_write_failures;
 static SDL_Mutex *face_cache_mutex;
 static SDL_Condition *face_cache_condition;
 static SDL_Thread *face_cache_thread;
 static bool face_cache_stopping;
+static char *face_cache_directory;
 
 static void face_asset_request_remove(face_asset_request_t **cursor) {
     face_asset_request_t *request = *cursor;
@@ -114,7 +116,7 @@ static int SDLCALL face_cache_worker(void *unused) {
         while (face_cache_writes == NULL && !face_cache_stopping) {
             SDL_WaitCondition(face_cache_condition, face_cache_mutex);
         }
-        if (face_cache_writes == NULL) {
+        if (face_cache_stopping) {
             SDL_UnlockMutex(face_cache_mutex);
             break;
         }
@@ -127,18 +129,10 @@ static int SDLCALL face_cache_worker(void *unused) {
         face_cache_write_count--;
         SDL_UnlockMutex(face_cache_mutex);
 
-        uint64_t started = datetime_monotonic_us();
-        char *resolved = file_path(write->path, "wb");
-        bool saved = path_write_atomic(resolved, write->data, write->size, 0600);
-        free(resolved);
-        double elapsed_ms = (double)(datetime_monotonic_us() - started) / 1000.0;
-        if (saved) {
-            LOG(DEBUG, "Wrote face cache file '%s' in %.3f ms", write->path, elapsed_ms);
-        } else {
-            LOG(ERROR,
-                "Could not atomically write face cache file '%s' in %.3f ms",
-                write->path,
-                elapsed_ms);
+        if (!path_write_atomic_existing(write->path, write->data, write->size, 0600)) {
+            SDL_LockMutex(face_cache_mutex);
+            face_cache_write_failures++;
+            SDL_UnlockMutex(face_cache_mutex);
         }
         free(write->data);
         free(write->path);
@@ -160,12 +154,17 @@ static bool face_cache_start(void) {
     if (face_cache_mutex == NULL || face_cache_condition == NULL) {
         return false;
     }
+    if (face_cache_directory == NULL) {
+        char *marker = file_path(DIRECTORY_CACHE "/.face-cache-root", "wb");
+        face_cache_directory = path_dirname(marker);
+        free(marker);
+    }
     face_cache_stopping = false;
     face_cache_thread = SDL_CreateThread(face_cache_worker, "face-cache", NULL);
     return face_cache_thread != NULL;
 }
 
-static void face_cache_enqueue(const char *path, const uint8_t *data, size_t size) {
+static void face_cache_enqueue(const char *name, const uint8_t *data, size_t size) {
     if (!face_cache_start()) {
         LOG(ERROR, "Could not start the face cache writer");
         return;
@@ -178,7 +177,7 @@ static void face_cache_enqueue(const char *path, const uint8_t *data, size_t siz
         return;
     }
     face_cache_write_t *write = xcalloc(1, sizeof(*write));
-    write->path = xstrdup(path);
+    write->path = path_join(face_cache_directory, name);
     write->data = xmalloc(size);
     memcpy(write->data, data, size);
     write->size = size;
@@ -193,6 +192,22 @@ static void face_cache_enqueue(const char *path, const uint8_t *data, size_t siz
     SDL_UnlockMutex(face_cache_mutex);
 }
 
+static void face_cache_report_failures(void) {
+    if (face_cache_mutex == NULL) {
+        return;
+    }
+    SDL_LockMutex(face_cache_mutex);
+    size_t failures = face_cache_write_failures;
+    face_cache_write_failures = 0;
+    SDL_UnlockMutex(face_cache_mutex);
+    if (failures != 0) {
+        LOG(ERROR,
+            "Could not write %" PRIu64 " face cache file%s",
+            (uint64_t)failures,
+            failures == 1 ? "" : "s");
+    }
+}
+
 static void face_cache_stop(void) {
     if (face_cache_thread != NULL) {
         SDL_LockMutex(face_cache_mutex);
@@ -202,6 +217,16 @@ static void face_cache_stop(void) {
         SDL_WaitThread(face_cache_thread, NULL);
         face_cache_thread = NULL;
     }
+    while (face_cache_writes != NULL) {
+        face_cache_write_t *write = face_cache_writes;
+        face_cache_writes = write->next;
+        free(write->data);
+        free(write->path);
+        free(write);
+    }
+    face_cache_writes_tail = NULL;
+    face_cache_write_count = 0;
+    face_cache_report_failures();
     if (face_cache_condition != NULL) {
         SDL_DestroyCondition(face_cache_condition);
     }
@@ -211,6 +236,8 @@ static void face_cache_stop(void) {
     face_cache_condition = NULL;
     face_cache_mutex = NULL;
     face_cache_stopping = false;
+    free(face_cache_directory);
+    face_cache_directory = NULL;
 }
 
 void image_missing_faces_reset(void) {
@@ -365,6 +392,9 @@ void image_bmaps_init(void) {
     }
 
     fclose(fp);
+    if (!face_cache_start()) {
+        LOG(ERROR, "Could not start the face cache writer");
+    }
 }
 
 /**
@@ -540,9 +570,7 @@ static bool face_asset_request_install(face_asset_request_t *request) {
         return false;
     }
 
-    char cache_path[HUGE_BUF];
-    snprintf(VS(cache_path), DIRECTORY_CACHE "/%s", FaceList[request->face].name);
-    face_cache_enqueue(cache_path, data, size);
+    face_cache_enqueue(FaceList[request->face].name, data, size);
 
     sprite_free_sprite(FaceList[request->face].sprite);
     FaceList[request->face].sprite = sprite;
@@ -555,6 +583,7 @@ static bool face_asset_request_install(face_asset_request_t *request) {
 }
 
 void image_face_requests_service(void) {
+    face_cache_report_failures();
     uint64_t started = datetime_monotonic_us();
     uint64_t now_ms = SDL_GetTicks();
     face_asset_request_t **cursor = &face_asset_requests;

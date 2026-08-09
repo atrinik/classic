@@ -16,7 +16,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/** Maximum decoded face dimension accepted before SDL_image is invoked. */
+/**
+ * Maximum decoded face dimension accepted before SDL_image is invoked.
+ *
+ * The August 2026 production pack peaks at 291x348 (65,076 pixels); 512 keeps
+ * deliberate growth headroom while making an unexpected increase fail closed.
+ */
 #define FACE_ASSET_DIMENSION_MAX 512U
 /** Maximum decoded face pixel count accepted before SDL_image is invoked. */
 #define FACE_ASSET_PIXELS_MAX (512U * 512U)

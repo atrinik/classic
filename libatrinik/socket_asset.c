@@ -22,7 +22,7 @@ bool socket_asset_face_path_format(char *path, size_t size, uint16_t face) {
         return false;
     }
 
-    int length = snprintf(path, size, ASSET_FACE_PATH_PREFIX "%u.png", face);
+    int length = snprintf(path, size, ASSET_FACE_PATH_PREFIX "%u.png", (unsigned int)face);
     return length > 0 && (size_t)length < size;
 }
 

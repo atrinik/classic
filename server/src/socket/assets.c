@@ -29,7 +29,6 @@
 #define ASSET_RATE_BYTES_PER_SECOND (8U * 1024U * 1024U)
 #define ASSET_RATE_REQUESTS_PER_SECOND 256U
 #define ASSET_TOKEN_BUCKET_CAPACITY ASSET_RATE_BYTES_PER_SECOND
-#define ASSET_REQUEST_WIRE_MAX (MAX_BUF + 4U + ASSET_DIGEST_SIZE + 1U)
 #define ASSET_STREAM_ACCEPT_QUANTUM 16U
 
 typedef struct asset_cache_entry {
@@ -56,7 +55,7 @@ struct asset_stream_state {
     uint32_t body_size;
     asset_server_stream_state_t state;
     uint64_t started_us;
-    uint8_t request[ASSET_REQUEST_WIRE_MAX];
+    uint8_t request[SOCKET_ASSET_REQUEST_MAX_SIZE];
     size_t request_size;
     packet_struct *header;
     size_t header_pos;
