@@ -242,6 +242,7 @@ void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t l
     }
 
     ns->setup_completed = true;
+    socket_login_deadline_refresh(ns);
     socket_send_packet(ns, packet);
 }
 
@@ -2433,6 +2434,9 @@ void socket_command_keepalive(socket_struct *ns,
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     ns->keepalive = 0;
+    if (ns->state == ST_LOGIN && ns->setup_completed) {
+        socket_login_deadline_refresh(ns);
+    }
 
     if (len == pos) {
         return;
