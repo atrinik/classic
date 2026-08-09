@@ -396,9 +396,13 @@ void widget_quickslots_init(widgetdata *widget) {
 void socket_command_quickslots(uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
+    if (packet_reader_remaining(&reader) % (sizeof(uint8_t) + sizeof(tag_t)) != 0) {
+        packet_reader_set_error(&reader, PACKET_ERROR_TRUNCATED);
+        return;
+    }
     quickslots_init();
 
-    while (pos < len) {
+    while (packet_reader_error(&reader) == PACKET_ERROR_NONE && pos < len) {
         uint8_t slot = packet_reader_read_uint8(&reader);
         tag_t tag = packet_reader_read_uint32(&reader);
         char buf[MAX_BUF];
@@ -410,4 +414,5 @@ void socket_command_quickslots(uint8_t *data, size_t len, size_t pos) {
             list_add(tmp->list, slot / MAX_QUICK_SLOTS, slot % tmp->list->cols, buf);
         }
     }
+    (void)packet_reader_finish(&reader);
 }
