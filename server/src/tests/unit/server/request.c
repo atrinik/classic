@@ -11,6 +11,7 @@
 #include <toolkit/packet.h>
 #include <arch.h>
 #include <initialization.h>
+#include <los.h>
 #include <object.h>
 #include <player.h>
 
@@ -34,6 +35,50 @@ static packet_struct *queued_command_find(socket_struct *cs, uint8_t type) {
     }
 
     return NULL;
+}
+
+static packet_struct *queued_command_payload_find(socket_struct *cs, uint8_t type) {
+    for (packet_struct *packet = cs->packets; packet != NULL && packet->next != NULL;
+         packet = packet->next) {
+        if (packet->type == 0 && packet->len >= 3 && packet->data[packet->len - 1] == type) {
+            return packet->next;
+        }
+    }
+
+    return NULL;
+}
+
+static bool map_packet_level_size(const packet_struct *packet, int expected_depth, uint32_t *size) {
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+
+    if (packet_reader_read_uint8(&reader) != MAP_UPDATE_CMD_SAME) {
+        return false;
+    }
+
+    (void)packet_reader_read_uint8(&reader);
+    (void)packet_reader_read_uint8(&reader);
+    (void)packet_reader_read_uint8(&reader);
+    uint8_t level_count = packet_reader_read_uint8(&reader);
+
+    for (uint8_t level = 0; level < level_count; level++) {
+        int depth = packet_reader_read_int8(&reader);
+        uint32_t level_size = packet_reader_read_uint32(&reader);
+        if (level_size > packet_reader_remaining(&reader)) {
+            return false;
+        }
+
+        if (depth == expected_depth) {
+            *size = level_size;
+            return true;
+        }
+
+        if (!packet_reader_skip(&reader, level_size)) {
+            return false;
+        }
+    }
+
+    return false;
 }
 
 static void request_version(socket_struct *cs, player *pl, uint32_t version) {
@@ -430,6 +475,55 @@ START_TEST(test_version_requires_exact_match) {
 }
 END_TEST
 
+START_TEST(test_incuna_unchanged_roof_level_remains_present) {
+    mapstruct *map = ready_map_name("/shattered_islands/world_4_85", NULL, 0);
+    ck_assert_ptr_nonnull(map);
+
+    mapstruct *roof_map = get_map_from_tiled(map, TILED_UP);
+    ck_assert_ptr_nonnull(roof_map);
+    ck_assert_str_eq(roof_map->path, "/shattered_islands/world_4_85_1");
+
+    object *pl = player_get_dummy(NULL, NULL);
+    ck_assert_ptr_nonnull(pl);
+    object_remove(pl, 0);
+    pl->x = 7;
+    pl->y = 6;
+    pl = object_insert_map(pl, map, NULL, 0);
+    ck_assert_ptr_nonnull(pl);
+
+    socket_struct *cs = CONTR(pl)->cs;
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    update_los(pl);
+    socket_buffer_clear(cs);
+
+    draw_client_map2(pl);
+
+    packet_struct *packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    uint32_t roof_delta_size = 0;
+    ck_assert(map_packet_level_size(packet, 1, &roof_delta_size));
+    ck_assert_uint_gt(roof_delta_size, 0);
+
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+
+    packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    roof_delta_size = 0;
+    ck_assert(map_packet_level_size(packet, 1, &roof_delta_size));
+    ck_assert_uint_gt(roof_delta_size, 0);
+
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+
+    packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    roof_delta_size = UINT32_MAX;
+    ck_assert(map_packet_level_size(packet, 1, &roof_delta_size));
+    ck_assert_uint_eq(roof_delta_size, 0);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("request");
     TCase *tc_core = tcase_create("Core");
@@ -447,6 +541,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_out_of_order_player_command_is_not_queued);
     tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
     tcase_add_test(tc_core, test_version_requires_exact_match);
+    tcase_add_test(tc_core, test_incuna_unchanged_roof_level_remains_present);
     return s;
 }
 
