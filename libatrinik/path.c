@@ -496,6 +496,11 @@ static wchar_t *path_secret_wide(const char *path) {
         free(wide);
         return NULL;
     }
+    for (wchar_t *cp = wide; *cp != L'\0'; cp++) {
+        if (*cp == L'/') {
+            *cp = L'\\';
+        }
+    }
     return wide;
 }
 

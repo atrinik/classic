@@ -38,14 +38,6 @@ static void require_at(bool condition, int line) {
 
 #define require(condition) require_at((condition), __LINE__)
 
-static void progress(const char *stage) {
-#ifdef WIN32
-    fprintf(stderr, "publisher fixture stage: %s\n", stage);
-#else
-    (void)stage;
-#endif
-}
-
 static char *fixture_read(const char *path) {
     FILE *fp = fopen(path, "rb");
     require(fp != NULL);
@@ -288,24 +280,6 @@ static void sequence_persistence_test(const char *server_id) {
     require(mkdtemp(directory) != NULL);
 #endif
 
-#ifdef WIN32
-    char probe[HUGE_BUF];
-    require(snprintf(VS(probe), "%s/metaserver-publish-sequence-%s.0", directory, server_id) <
-            (int)sizeof(probe));
-    static const char probe_value[] = "1\n";
-    SetLastError(ERROR_SUCCESS);
-    path_secret_create_result_t probe_result =
-        path_secret_create_atomic(probe, probe_value, sizeof(probe_value) - 1U);
-    DWORD probe_error = GetLastError();
-    fprintf(stderr,
-            "publisher sequence path probe: result=%d system_error=%lu path_length=%u\n",
-            probe_result,
-            (unsigned long)probe_error,
-            (unsigned int)strlen(probe));
-    require(probe_result == PATH_SECRET_CREATE_OK);
-    require(unlink(probe) == 0);
-#endif
-
     uint64_t sequence = 0;
     metaserver_publish_sequence_result_t initial =
         metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence);
@@ -334,14 +308,11 @@ static void sequence_persistence_test(const char *server_id) {
     }
     require(initial == METASERVER_PUBLISH_SEQUENCE_OK);
     require(sequence == 1);
-    progress("sequence first reservation");
     require(metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence) ==
             METASERVER_PUBLISH_SEQUENCE_OK);
     require(sequence == 2);
-    progress("sequence second reservation");
     require(metaserver_publish_sequence_recover(directory, server_id, 100) ==
             METASERVER_PUBLISH_SEQUENCE_OK);
-    progress("sequence recovery");
     require(metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence) ==
             METASERVER_PUBLISH_SEQUENCE_OK);
     require(sequence == 100);
@@ -350,7 +321,6 @@ static void sequence_persistence_test(const char *server_id) {
     require(metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence) ==
             METASERVER_PUBLISH_SEQUENCE_OK);
     require(sequence == 101);
-    progress("sequence monotonic recovery");
 
     char alternate_id[65];
     snprintf(VS(alternate_id), "%s", server_id);
@@ -358,7 +328,6 @@ static void sequence_persistence_test(const char *server_id) {
     require(metaserver_publish_sequence_reserve(directory, alternate_id, 1, &sequence) ==
             METASERVER_PUBLISH_SEQUENCE_OK);
     require(sequence == 1);
-    progress("sequence identity isolation");
 
     char slot0[HUGE_BUF], slot1[HUGE_BUF], alternate_slot0[HUGE_BUF];
     require(snprintf(VS(slot0), "%s/metaserver-publish-sequence-%s.0", directory, server_id) <
@@ -376,7 +345,6 @@ static void sequence_persistence_test(const char *server_id) {
             PATH_SECRET_CREATE_OK);
     require(metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence) ==
             METASERVER_PUBLISH_SEQUENCE_EXHAUSTED);
-    progress("sequence exhaustion");
 
     require(unlink(slot0) == 0);
     static const char corrupt[] = "01\n";
@@ -384,7 +352,6 @@ static void sequence_persistence_test(const char *server_id) {
             PATH_SECRET_CREATE_OK);
     require(metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence) ==
             METASERVER_PUBLISH_SEQUENCE_ERROR);
-    progress("sequence corrupt state");
     require(unlink(slot1) == 0);
     require(unlink(alternate_slot0) == 0);
 #ifdef WIN32
@@ -405,16 +372,13 @@ static void sequence_persistence_test(const char *server_id) {
         "{\"error\":{\"code\":\"other\",\"minimumNextSequence\":\"2\"}}";
     require(!metaserver_publish_replay_parse(wrong_code, sizeof(wrong_code) - 1U, &minimum));
     require(!metaserver_publish_replay_parse(valid_replay, sizeof(valid_replay) - 2U, &minimum));
-    progress("sequence and replay complete");
 }
 
 static void identity_signing_test(void) {
-    progress("identity start");
     EVP_PKEY *key = EVP_PKEY_Q_keygen(NULL, NULL, "EC", "prime256v1");
     X509 *certificate = X509_new();
     X509_NAME *name = X509_NAME_new();
     require(key != NULL && certificate != NULL && name != NULL);
-    progress("identity objects created");
     require(X509_set_version(certificate, 2) == 1);
     require(ASN1_INTEGER_set(X509_get_serialNumber(certificate), 1) == 1);
     require(X509_gmtime_adj(X509_getm_notBefore(certificate), 0) != NULL);
@@ -430,7 +394,6 @@ static void identity_signing_test(void) {
     require(X509_set_subject_name(certificate, name) == 1);
     require(X509_set_issuer_name(certificate, name) == 1);
     require(X509_sign(certificate, key, EVP_sha256()) > 0);
-    progress("identity certificate signed");
 
     unsigned char digest[SHA256_DIGEST_LENGTH];
     unsigned int digest_size = 0;
@@ -447,7 +410,6 @@ static void identity_signing_test(void) {
     static const char signature_base[] = "publisher identity signing test";
     char signature_header[METASERVER_PUBLISH_SIGNATURE_HEADER_MAX];
     require(metaserver_publisher_identity_sign(identity, signature_base, signature_header));
-    progress("identity message signed");
     static const char prefix[] = "atrinik=:";
     size_t header_size = strlen(signature_header);
     require(header_size > sizeof(prefix) &&
@@ -470,7 +432,6 @@ static void identity_signing_test(void) {
                                         server_id,
                                         signature_base,
                                         signature));
-    progress("identity signature verified");
 
     OPENSSL_clear_free(certificate_der, (size_t)certificate_size);
     OPENSSL_cleanse(signature, sizeof(signature));
@@ -481,7 +442,6 @@ static void identity_signing_test(void) {
     X509_NAME_free(name);
     X509_free(certificate);
     EVP_PKEY_free(key);
-    progress("identity complete");
 }
 
 int main(int argc, char **argv) {
