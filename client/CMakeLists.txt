@@ -287,8 +287,27 @@ if (BUILD_TESTING AND NOT MINGW)
     target_link_libraries(client-keybind-input-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-keybind-input COMMAND client-keybind-input-tests)
 
+    add_executable(client-compound-packet-tests
+        src/tests/compound_packet.c
+        src/client/item_packet.c
+        src/gui/popups/interface_packet.c)
+    atrinik_configure_target(client-compound-packet-tests)
+    target_compile_definitions(client-compound-packet-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-compound-packet-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-compound-packet-tests PRIVATE
+        Atrinik::Core
+        SDL3::SDL3
+        SDL3_image::SDL3_image
+        SDL3_ttf::SDL3_ttf)
+    add_test(NAME client-compound-packet COMMAND client-compound-packet-tests)
+
     add_executable(client-surface-primitives-tests
         src/tests/surface_primitives.c
+        src/client/sprite_pixels.c
         src/gui/toolkit/surface_primitives.c)
     atrinik_configure_target(client-surface-primitives-tests)
     target_compile_definitions(client-surface-primitives-tests PRIVATE

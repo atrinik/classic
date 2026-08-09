@@ -55,49 +55,6 @@ static int dark_alpha[DARK_LEVELS] = {0, 44, 80, 117, 153, 190, 226};
  */
 static sprite_cache_t *sprites_cache = NULL;
 
-/** Calculate the transparent padding around a sprite's visible pixels. */
-static bool sprite_borders_get(SDL_Surface *surface, sprite_struct *sprite) {
-    int minimum_x = surface->w;
-    int minimum_y = surface->h;
-    int maximum_x = -1;
-    int maximum_y = -1;
-    bool locked = false;
-
-    if (SDL_MUSTLOCK(surface)) {
-        if (!SDL_LockSurface(surface)) {
-            return false;
-        }
-        locked = true;
-    }
-
-    for (int y = 0; y < surface->h; y++) {
-        for (int x = 0; x < surface->w; x++) {
-            if (!surface_pixel_visible(surface, x, y)) {
-                continue;
-            }
-
-            minimum_x = MIN(minimum_x, x);
-            minimum_y = MIN(minimum_y, y);
-            maximum_x = MAX(maximum_x, x);
-            maximum_y = MAX(maximum_y, y);
-        }
-    }
-
-    if (locked) {
-        SDL_UnlockSurface(surface);
-    }
-
-    if (maximum_x < 0) {
-        return false;
-    }
-
-    sprite->border_up = minimum_y;
-    sprite->border_down = surface->h - maximum_y - 1;
-    sprite->border_left = minimum_x;
-    sprite->border_right = surface->w - maximum_x - 1;
-    return true;
-}
-
 /**
  * Initialize the sprite system.
  */
@@ -417,28 +374,6 @@ static SDL_Surface *sprite_effect_fow(SDL_Surface *surface) {
     SDL_Surface *ret = surface_to_display_alpha(tmp);
     SDL_DestroySurface(tmp);
     return ret;
-}
-
-/** Return whether a source pixel contributes to a sprite's visible silhouette. */
-bool surface_pixel_visible(SDL_Surface *surface, int x, int y) {
-    if (x < 0 || x >= surface->w || y < 0 || y >= surface->h) {
-        return false;
-    }
-
-    Uint32 pixel = getpixel(surface, x, y);
-    Uint32 color_key;
-    if (SDL_GetSurfaceColorKey(surface, &color_key) && pixel == color_key) {
-        return false;
-    }
-
-    const SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(surface->format);
-    if (details != NULL && details->Amask != 0) {
-        Uint8 red, green, blue, alpha;
-        surface_get_rgba(surface, pixel, &red, &green, &blue, &alpha);
-        return alpha >= 64;
-    }
-
-    return true;
 }
 
 /** Create an outline-only version of a sprite without exposing pixels behind it. */
@@ -1001,46 +936,6 @@ void surface_show_effects(SDL_Surface *surface,
     } else {
         surface_show(surface, x, y, srcrect, src);
     }
-}
-
-/**
- * Get pixel value from an SDL surface at the specified X/Y position.
- *
- * @param surface
- * SDL surface to get the pixel from.
- * @param x
- * X position.
- * @param y
- * Y position.
- * @return
- * The pixel.
- */
-Uint32 getpixel(SDL_Surface *surface, int x, int y) {
-    const SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(surface->format);
-    HARD_ASSERT(details != NULL);
-    int bpp = details->bytes_per_pixel;
-    /* The address to the pixel we want to retrieve. */
-    Uint8 *p = (Uint8 *)surface->pixels + y * surface->pitch + x * bpp;
-
-    switch (bpp) {
-        case 1:
-            return *p;
-
-        case 2:
-            return *(Uint16 *)p;
-
-        case 3:
-            if (SDL_BYTEORDER == SDL_BIG_ENDIAN) {
-                return p[0] << 16 | p[1] << 8 | p[2];
-            } else {
-                return p[0] | p[1] << 8 | p[2] << 16;
-            }
-
-        case 4:
-            return *(Uint32 *)p;
-    }
-
-    return 0;
 }
 
 /**

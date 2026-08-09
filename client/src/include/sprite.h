@@ -85,6 +85,9 @@ typedef struct sprite_effects {
 #define SPRITE_FLAG_SMOOTH_DARK_SURFACE 6
 /*@}*/
 
+/** Minimum intrinsic alpha included in a sprite's visible silhouette. */
+#define SPRITE_ALPHA_VISIBLE_MIN 64
+
 /** Sprite structure. */
 typedef struct sprite_struct {
     /** Rows of blank pixels before first color information. */
@@ -109,6 +112,9 @@ typedef struct sprite_struct {
  * The caller must lock the surface first when SDL_MUSTLOCK() is true.
  */
 bool surface_pixel_visible(SDL_Surface *surface, int x, int y);
+
+/** Calculate the transparent padding around a sprite's visible pixels. */
+bool sprite_borders_get(SDL_Surface *surface, sprite_struct *sprite);
 
 #define BORDER_CREATE_TOP(_surface, _x, _y, _w, _h, _color, _thickness) \
     border_create_line((_surface), (_x), (_y), (_w), (_thickness), (_color))
