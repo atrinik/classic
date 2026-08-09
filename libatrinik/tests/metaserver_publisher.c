@@ -288,6 +288,24 @@ static void sequence_persistence_test(const char *server_id) {
     require(mkdtemp(directory) != NULL);
 #endif
 
+#ifdef WIN32
+    char probe[HUGE_BUF];
+    require(snprintf(VS(probe), "%s/metaserver-publish-sequence-%s.0", directory, server_id) <
+            (int)sizeof(probe));
+    static const char probe_value[] = "1\n";
+    SetLastError(ERROR_SUCCESS);
+    path_secret_create_result_t probe_result =
+        path_secret_create_atomic(probe, probe_value, sizeof(probe_value) - 1U);
+    DWORD probe_error = GetLastError();
+    fprintf(stderr,
+            "publisher sequence path probe: result=%d system_error=%lu path_length=%zu\n",
+            probe_result,
+            (unsigned long)probe_error,
+            strlen(probe));
+    require(probe_result == PATH_SECRET_CREATE_OK);
+    require(unlink(probe) == 0);
+#endif
+
     uint64_t sequence = 0;
     metaserver_publish_sequence_result_t initial =
         metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence);
