@@ -599,36 +599,6 @@ static int text_adjust_coords(SDL_Surface *surface, int *mx, int *my) {
 }
 
 /**
- * Parse the given string as a HTML notation color, and store the RGB
- * values in 'color'.
- * @param color_notation
- * The HTML notation to parse.
- * @param color
- * Where the RGB values will be stored.
- * @return
- * 1 if the notation was parsed successfully, 0 otherwise.
- */
-int text_color_parse(const char *color_notation, SDL_Color *color) {
-    uint32_t r, g, b;
-
-    if (*color_notation == '#') {
-        color_notation++;
-    }
-
-    if (sscanf(color_notation, "%2X%2X%2X", &r, &g, &b) == 3) {
-        if (color) {
-            color->r = r;
-            color->g = g;
-            color->b = b;
-        }
-
-        return 1;
-    }
-
-    return 0;
-}
-
-/**
  * Execute anchor.
  * @param info
  * Text info, should contain the anchor action and tag

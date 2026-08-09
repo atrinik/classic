@@ -1,0 +1,55 @@
+/*************************************************************************
+ *           Atrinik, a Multiplayer Online Role Playing Game             *
+ *                                                                       *
+ *   Copyright (C) 2026 Atrinik Development Team                         *
+ *                                                                       *
+ * This program is free software; you can redistribute it and/or modify  *
+ * it under the terms of the GNU General Public License as published by  *
+ * the Free Software Foundation; either version 2 of the License, or     *
+ * (at your option) any later version.                                   *
+ ************************************************************************/
+
+#include <global.h>
+
+#define TEST_CHECK(condition) \
+    do {                      \
+        if (!(condition)) {   \
+            abort();          \
+        }                     \
+    } while (0)
+
+static void test_parsed_color_renders_opaque_glyph(void) {
+    SDL_Color color = {0, 0, 0, SDL_ALPHA_TRANSPARENT};
+    TEST_CHECK(text_color_parse(COLOR_HGOLD, &color));
+    TEST_CHECK(color.r == 0xd4 && color.g == 0xd5 && color.b == 0x53);
+    TEST_CHECK(color.a == SDL_ALPHA_OPAQUE);
+
+    char path[1024];
+    int length = snprintf(path, sizeof(path), "%s/fonts/arial.ttf", ATRINIK_TEST_SOURCE_DIR);
+    TEST_CHECK(length > 0 && (size_t)length < sizeof(path));
+
+    TEST_CHECK(TTF_Init());
+    TTF_Font *font = TTF_OpenFont(path, 24.0f);
+    TEST_CHECK(font != NULL);
+    SDL_Surface *glyph = TTF_RenderText_Blended(font, "M", 0, color);
+    TEST_CHECK(glyph != NULL);
+
+    Uint8 max_alpha = SDL_ALPHA_TRANSPARENT;
+    for (int y = 0; y < glyph->h; y++) {
+        for (int x = 0; x < glyph->w; x++) {
+            Uint8 red, green, blue, alpha;
+            TEST_CHECK(SDL_ReadSurfacePixel(glyph, x, y, &red, &green, &blue, &alpha));
+            max_alpha = MAX(max_alpha, alpha);
+        }
+    }
+    TEST_CHECK(max_alpha == SDL_ALPHA_OPAQUE);
+
+    SDL_DestroySurface(glyph);
+    TTF_CloseFont(font);
+    TTF_Quit();
+}
+
+int main(void) {
+    test_parsed_color_renders_opaque_glyph();
+    return 0;
+}
