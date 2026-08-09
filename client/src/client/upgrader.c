@@ -77,6 +77,12 @@ static void upgrade_20_to_25(const char *from, const char *to) {
                        keyname,
                        command) == 4) {
                 keybind_struct *keybind;
+                SDL_Keycode migrated_keycode;
+
+                if (keycode < 0) {
+                    continue;
+                }
+                migrated_keycode = keybind_keycode_from_legacy((uint32_t)keycode);
 
                 /* Is it a command? */
                 if (*command == '/') {
@@ -84,9 +90,9 @@ static void upgrade_20_to_25(const char *from, const char *to) {
 
                     /* Does not exist yet, add it. */
                     if (!keybind) {
-                        keybind = keybind_add(keycode, 0, command);
+                        keybind = keybind_add(migrated_keycode, 0, command);
                     } else {
-                        keybind->key = keycode;
+                        keybind->key = migrated_keycode;
                     }
 
                     keybind->repeat = repeat;
@@ -96,11 +102,11 @@ static void upgrade_20_to_25(const char *from, const char *to) {
                     snprintf(mcon_buf, sizeof(mcon_buf), "?MCON %s", command + 7);
 
                     if (!keybind_find_by_command(mcon_buf)) {
-                        keybind = keybind_add(keycode, 0, mcon_buf);
+                        keybind = keybind_add(migrated_keycode, 0, mcon_buf);
                         keybind->repeat = repeat;
                     }
                 } else if (*command == '?') {
-                    const char *new_cmd = command;
+                    const char *new_cmd;
 
                     if (!strcmp(command, "?M_NORTH")) {
                         new_cmd = "?MOVE_N";
@@ -153,7 +159,7 @@ static void upgrade_20_to_25(const char *from, const char *to) {
                     keybind = keybind_find_by_command(new_cmd);
 
                     if (keybind) {
-                        keybind->key = keycode;
+                        keybind->key = migrated_keycode;
                     }
                 }
             }
