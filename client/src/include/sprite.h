@@ -110,6 +110,9 @@ typedef struct sprite_struct {
  */
 bool surface_pixel_visible(SDL_Surface *surface, int x, int y);
 
+/** Calculate the transparent padding around a sprite's visible pixels. */
+bool sprite_borders_get(SDL_Surface *surface, sprite_struct *sprite);
+
 #define BORDER_CREATE_TOP(_surface, _x, _y, _w, _h, _color, _thickness) \
     border_create_line((_surface), (_x), (_y), (_w), (_thickness), (_color))
 #define BORDER_CREATE_BOTTOM(_surface, _x, _y, _w, _h, _color, _thickness) \

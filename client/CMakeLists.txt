@@ -273,6 +273,7 @@ if (BUILD_TESTING AND NOT MINGW)
 
     add_executable(client-surface-primitives-tests
         src/tests/surface_primitives.c
+        src/client/sprite_bounds.c
         src/gui/toolkit/surface_primitives.c)
     atrinik_configure_target(client-surface-primitives-tests)
     target_compile_definitions(client-surface-primitives-tests PRIVATE

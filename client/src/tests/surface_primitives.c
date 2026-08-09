@@ -58,6 +58,58 @@ static void test_packed_indexed_conversion(void) {
     SDL_DestroySurface(surface);
 }
 
+static void test_index8_visible_bounds(void) {
+    SDL_Surface *surface = SDL_CreateSurface(5, 4, SDL_PIXELFORMAT_INDEX8);
+    TEST_CHECK(surface != NULL);
+
+    SDL_Color colors[256] = {{0}};
+    colors[0] = (SDL_Color){255, 0, 255, SDL_ALPHA_TRANSPARENT};
+    colors[1] = (SDL_Color){240, 10, 20, SDL_ALPHA_OPAQUE};
+    SDL_Palette *palette = SDL_CreatePalette(arraysize(colors));
+    TEST_CHECK(palette != NULL);
+    TEST_CHECK(SDL_SetPaletteColors(palette, colors, 0, arraysize(colors)));
+    TEST_CHECK(SDL_SetSurfacePalette(surface, palette));
+    SDL_DestroyPalette(palette);
+
+    TEST_CHECK(SDL_FillSurfaceRect(surface, NULL, 0));
+    SDL_Rect visible = {1, 1, 3, 2};
+    TEST_CHECK(SDL_FillSurfaceRect(surface, &visible, 1));
+
+    TEST_CHECK(surface_ensure_blittable(&surface));
+    TEST_CHECK(surface->format == SDL_PIXELFORMAT_INDEX8);
+    TEST_CHECK(!surface_pixel_visible(surface, 0, 0));
+    TEST_CHECK(surface_pixel_visible(surface, 1, 1));
+    TEST_CHECK(!surface_pixel_visible(surface, -1, 0));
+    TEST_CHECK(!surface_pixel_visible(surface, surface->w, 0));
+
+    sprite_struct sprite = {0};
+    TEST_CHECK(sprite_borders_get(surface, &sprite));
+    TEST_CHECK(sprite.border_up == 1);
+    TEST_CHECK(sprite.border_down == 1);
+    TEST_CHECK(sprite.border_left == 1);
+    TEST_CHECK(sprite.border_right == 1);
+
+    SDL_DestroySurface(surface);
+
+    surface = SDL_CreateSurface(2, 1, SDL_PIXELFORMAT_RGBA32);
+    TEST_CHECK(surface != NULL);
+    TEST_CHECK(SDL_WriteSurfacePixel(surface, 0, 0, 10, 20, 30, 63));
+    TEST_CHECK(SDL_WriteSurfacePixel(surface, 1, 0, 10, 20, 30, 64));
+    TEST_CHECK(!surface_pixel_visible(surface, 0, 0));
+    TEST_CHECK(surface_pixel_visible(surface, 1, 0));
+    SDL_DestroySurface(surface);
+
+    surface = SDL_CreateSurface(2, 1, SDL_PIXELFORMAT_XRGB8888);
+    TEST_CHECK(surface != NULL);
+    Uint32 color_key = surface_map_rgb(surface, 10, 20, 30);
+    TEST_CHECK(SDL_FillSurfaceRect(surface, NULL, color_key));
+    TEST_CHECK(SDL_SetSurfaceColorKey(surface, true, color_key));
+    TEST_CHECK(!surface_pixel_visible(surface, 0, 0));
+    TEST_CHECK(SDL_WriteSurfacePixel(surface, 1, 0, 40, 50, 60, SDL_ALPHA_OPAQUE));
+    TEST_CHECK(surface_pixel_visible(surface, 1, 0));
+    SDL_DestroySurface(surface);
+}
+
 static void test_legacy_texture_transparency(void) {
     char path[1024];
     int length = snprintf(path, sizeof(path), "%s/textures/invslot.png", ATRINIK_TEST_SOURCE_DIR);
@@ -123,6 +175,7 @@ static void test_darken_preserves_alpha(void) {
 
 int main(void) {
     test_packed_indexed_conversion();
+    test_index8_visible_bounds();
     test_legacy_texture_transparency();
     test_darken_preserves_alpha();
     return 0;
