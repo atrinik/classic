@@ -62,8 +62,6 @@ bool init_connection(socket_struct *ns) {
     }
 
     ns->login_count = 0;
-    ns->prelogin_deadline =
-        server_monotonic_deadline_after(server_duration_from_seconds(SOCKET_PRELOGIN_TIMEOUT));
     ns->keepalive = 0;
     ns->addme = 0;
     ns->faceset = 0;
@@ -80,6 +78,7 @@ bool init_connection(socket_struct *ns) {
     ns->socket_version = 0;
     ns->join_authenticated = false;
     ns->setup_completed = false;
+    socket_login_deadline_refresh(ns);
 
     ns->packet_recv = packet_new(0, 1024 * 3, 0);
     ns->packet_recv_cmd = packet_new(0, 1024 * 64, 0);
@@ -91,10 +90,16 @@ bool init_connection(socket_struct *ns) {
     return true;
 }
 
-bool socket_prelogin_expired(const socket_struct *ns) {
+void socket_login_deadline_refresh(socket_struct *ns) {
     HARD_ASSERT(ns != NULL);
-    return server_monotonic_is_set(ns->prelogin_deadline) &&
-           server_monotonic_expired(ns->prelogin_deadline);
+    uint64_t timeout = ns->setup_completed ? SOCKET_LOGIN_IDLE_TIMEOUT : SOCKET_SETUP_TIMEOUT;
+    ns->login_deadline = server_monotonic_deadline_after(server_duration_from_seconds(timeout));
+}
+
+bool socket_login_expired(const socket_struct *ns) {
+    HARD_ASSERT(ns != NULL);
+    return server_monotonic_is_set(ns->login_deadline) &&
+           server_monotonic_expired(ns->login_deadline);
 }
 
 /**
