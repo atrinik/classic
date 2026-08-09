@@ -65,8 +65,8 @@ static void test_index8_visible_bounds(void) {
     SDL_Color colors[256] = {{0}};
     colors[0] = (SDL_Color){255, 0, 255, SDL_ALPHA_TRANSPARENT};
     colors[1] = (SDL_Color){240, 10, 20, SDL_ALPHA_OPAQUE};
-    colors[2] = (SDL_Color){10, 20, 30, 63};
-    colors[3] = (SDL_Color){40, 50, 60, 64};
+    colors[2] = (SDL_Color){10, 20, 30, SPRITE_ALPHA_VISIBLE_MIN - 1};
+    colors[3] = (SDL_Color){40, 50, 60, SPRITE_ALPHA_VISIBLE_MIN};
     SDL_Palette *palette = SDL_CreatePalette(arraysize(colors));
     TEST_CHECK(palette != NULL);
     TEST_CHECK(SDL_SetPaletteColors(palette, colors, 0, arraysize(colors)));
@@ -99,7 +99,12 @@ static void test_index8_visible_bounds(void) {
     TEST_CHECK(surface_pixel_visible(surface, pixel.x, pixel.y));
 
     TEST_CHECK(SDL_FillSurfaceRect(surface, NULL, 0));
-    sprite = (sprite_struct){7, 7, 7, 7, NULL};
+    sprite = (sprite_struct){
+        .border_up = 7,
+        .border_down = 7,
+        .border_left = 7,
+        .border_right = 7,
+    };
     TEST_CHECK(!sprite_borders_get(surface, &sprite));
     TEST_CHECK(sprite.border_up == 7);
     TEST_CHECK(sprite.border_down == 7);
@@ -112,8 +117,8 @@ static void test_index8_visible_bounds(void) {
 static void test_truecolor_pixel_visibility(void) {
     SDL_Surface *surface = SDL_CreateSurface(2, 1, SDL_PIXELFORMAT_RGBA32);
     TEST_CHECK(surface != NULL);
-    TEST_CHECK(SDL_WriteSurfacePixel(surface, 0, 0, 10, 20, 30, 63));
-    TEST_CHECK(SDL_WriteSurfacePixel(surface, 1, 0, 10, 20, 30, 64));
+    TEST_CHECK(SDL_WriteSurfacePixel(surface, 0, 0, 10, 20, 30, SPRITE_ALPHA_VISIBLE_MIN - 1));
+    TEST_CHECK(SDL_WriteSurfacePixel(surface, 1, 0, 10, 20, 30, SPRITE_ALPHA_VISIBLE_MIN));
     TEST_CHECK(!surface_pixel_visible(surface, 0, 0));
     TEST_CHECK(surface_pixel_visible(surface, 1, 0));
     SDL_DestroySurface(surface);

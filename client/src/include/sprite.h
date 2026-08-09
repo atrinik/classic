@@ -85,6 +85,9 @@ typedef struct sprite_effects {
 #define SPRITE_FLAG_SMOOTH_DARK_SURFACE 6
 /*@}*/
 
+/** Minimum intrinsic alpha included in a sprite's visible silhouette. */
+#define SPRITE_ALPHA_VISIBLE_MIN 64
+
 /** Sprite structure. */
 typedef struct sprite_struct {
     /** Rows of blank pixels before first color information. */

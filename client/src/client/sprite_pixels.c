@@ -73,7 +73,8 @@ bool surface_pixel_visible(SDL_Surface *surface, int x, int y) {
 
     SDL_Palette *palette = SDL_GetSurfacePalette(surface);
     if (palette != NULL) {
-        return pixel < (Uint32)palette->ncolors && palette->colors[pixel].a >= 64;
+        return pixel < (Uint32)palette->ncolors &&
+               palette->colors[pixel].a >= SPRITE_ALPHA_VISIBLE_MIN;
     }
 
     const SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(surface->format);
@@ -84,7 +85,7 @@ bool surface_pixel_visible(SDL_Surface *surface, int x, int y) {
     if (details->Amask != 0) {
         Uint8 red, green, blue, alpha;
         SDL_GetRGBA(pixel, details, NULL, &red, &green, &blue, &alpha);
-        return alpha >= 64;
+        return alpha >= SPRITE_ALPHA_VISIBLE_MIN;
     }
 
     return true;
