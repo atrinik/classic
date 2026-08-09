@@ -128,12 +128,15 @@ void socket_command_party(uint8_t *data, size_t len, size_t pos) {
     if (type == CMD_PARTY_LIST || type == CMD_PARTY_WHO) {
         list_clear(list_party);
 
-        while (pos < len) {
+        while (packet_reader_error(&reader) == PACKET_ERROR_NONE && pos < len) {
             if (type == CMD_PARTY_LIST) {
                 char party_name[MAX_BUF], party_leader[MAX_BUF];
 
                 packet_reader_read_string(&reader, party_name, sizeof(party_name));
                 packet_reader_read_string(&reader, party_leader, sizeof(party_leader));
+                if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
+                    break;
+                }
                 list_add(list_party, list_party->rows, 0, party_name);
                 list_add(list_party, list_party->rows - 1, 1, party_leader);
             } else if (type == CMD_PARTY_WHO) {
@@ -143,10 +146,17 @@ void socket_command_party(uint8_t *data, size_t len, size_t pos) {
                 packet_reader_read_string(&reader, name, sizeof(name));
                 hp = packet_reader_read_uint8(&reader);
                 sp = packet_reader_read_uint8(&reader);
+                if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
+                    break;
+                }
                 list_add(list_party, list_party->rows, 0, name);
                 PARTY_STAT_BAR();
                 list_add(list_party, list_party->rows - 1, 1, bars);
             }
+        }
+
+        if (!packet_reader_finish(&reader)) {
+            return;
         }
 
         /* Sort the list of party members alphabetically. */
