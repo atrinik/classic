@@ -35,6 +35,8 @@
 #include "rendezvous.h"
 #include <atrinik/protocol/game_commands.h>
 
+struct metaserver_publisher_identity;
+
 /**
  * Possible socket roles.
  */
@@ -1112,6 +1114,9 @@ bool socket_is_quic(socket_t *sc);
 socket_connection_mode_t socket_connection_mode_get(socket_t *sc);
 const char *socket_connection_mode_name(socket_connection_mode_t mode);
 bool socket_certificate_sha256(socket_t *sc, char fingerprint[65]);
+/** Retain the exact immutable P-256 identity installed on a QUIC listener. */
+struct metaserver_publisher_identity *socket_quic_publisher_identity(socket_t *sc,
+                                                                     const char *server_id);
 bool socket_stun_discover(socket_t *sc,
                           const char *endpoint,
                           char *host,

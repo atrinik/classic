@@ -46,13 +46,6 @@ typedef enum metaserver_rendezvous_auth_claim {
     METASERVER_RENDEZVOUS_AUTH_CLAIM_FULL
 } metaserver_rendezvous_auth_claim_t;
 
-typedef enum metaserver_registration_key_action {
-    METASERVER_REGISTRATION_KEY_KEEP,
-    METASERVER_REGISTRATION_KEY_RETRY_ESTABLISHED,
-    METASERVER_REGISTRATION_KEY_RETRY_REGISTRATION,
-    METASERVER_REGISTRATION_KEY_DELETE
-} metaserver_registration_key_action_t;
-
 size_t metaserver_rendezvous_header(char *data, size_t size, size_t count, void *user_data);
 bool metaserver_rendezvous_protocol_allows(const metaserver_rendezvous_headers_t *headers,
                                            bool authorization_required);
@@ -80,8 +73,6 @@ metaserver_rendezvous_auth_find(metaserver_rendezvous_auth_job_t *jobs,
                                 const char *ticket,
                                 rendezvous_server_auth_state_t state);
 
-metaserver_registration_key_action_t
-metaserver_registration_key_action(curl_state_t state, int http_code, bool registration);
 /* Clears the published endpoint. The legacy configuration accepts raw IPs,
  * which are intentionally not a directory-publication opt-in. */
 bool metaserver_public_endpoint_from_config(const char *configured_host,

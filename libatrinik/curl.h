@@ -101,13 +101,37 @@ bool curl_set_trust_application(const char *pubkey);
 void curl_set_data_dir(const char *dir);
 curl_request_t *curl_request_create(const char *url, curl_pkey_trust_t trust);
 void curl_request_form_add(curl_request_t *request, const char *key, const char *value);
+/**
+ * Copy one request header into a not-yet-started request.
+ *
+ * The request owns and securely clears the copy. Names must use HTTP token
+ * characters and values must not contain CR/LF. Returns false on invalid
+ * input. This API is not thread-safe with a running request.
+ */
+bool curl_request_header_add(curl_request_t *request, const char *name, const char *value);
+/**
+ * Copy the exact bytes for a raw POST request.
+ *
+ * Raw bodies and MIME form fields are mutually exclusive. The request owns
+ * and securely clears the copy. Returns false for empty, repeated, or mixed
+ * configuration. This API is not thread-safe with a running request.
+ */
+bool curl_request_set_post_body(curl_request_t *request, const void *body, size_t body_size);
+/** Set redirect policy before starting a request; disabled signed requests
+ * retain their original authenticated authority and path. */
+void curl_request_set_follow_redirects(curl_request_t *request, bool enabled);
 void curl_request_set_path(curl_request_t *request, const char *path);
 void curl_request_set_max_body(curl_request_t *request, size_t maximum);
+/** Set the maximum aggregate HTTP response-header bytes. */
+void curl_request_set_max_header(curl_request_t *request, size_t maximum);
 void curl_request_set_cb(curl_request_t *request, curl_request_cb cb, void *user_data);
 void curl_request_set_delay(curl_request_t *request, uint32_t delay);
 curl_state_t curl_request_get_state(curl_request_t *request);
 char *curl_request_get_body(curl_request_t *request, size_t *body_size);
 char *curl_request_get_header(curl_request_t *request, size_t *header_size);
+/** Securely clear a completed response body and headers without freeing the
+ * request. The request remains caller-owned and must still be freed. */
+void curl_request_clear_response(curl_request_t *request);
 int curl_request_get_http_code(curl_request_t *request);
 const char *curl_request_get_url(curl_request_t *request);
 int64_t curl_request_sizeinfo(curl_request_t *request, curl_info_t info);

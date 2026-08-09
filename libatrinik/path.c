@@ -496,6 +496,11 @@ static wchar_t *path_secret_wide(const char *path) {
         free(wide);
         return NULL;
     }
+    for (wchar_t *cp = wide; *cp != L'\0'; cp++) {
+        if (*cp == L'/') {
+            *cp = L'\\';
+        }
+    }
     return wide;
 }
 
@@ -646,25 +651,14 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
     if (ok) {
         ok = FlushFileBuffers(file) != 0;
     }
-    size_t destination_length =
-        destination_wide != NULL ? wcslen(destination_wide) * sizeof(*destination_wide) : 0;
-    size_t rename_size = offsetof(FILE_RENAME_INFO, FileName) + destination_length;
-    FILE_RENAME_INFO *rename =
-        ok && destination_length <= UINT32_MAX ? calloc(1, rename_size) : NULL;
-    if (rename != NULL) {
-        rename->ReplaceIfExists = FALSE;
-        rename->RootDirectory = NULL;
-        rename->FileNameLength = (DWORD)destination_length;
-        memcpy(rename->FileName, destination_wide, destination_length);
-        published =
-            SetFileInformationByHandle(file, FileRenameInfo, rename, (DWORD)rename_size) != 0;
+    bool closed = file == INVALID_HANDLE_VALUE || CloseHandle(file) != 0;
+    if (ok && closed) {
+        published = MoveFileExW(temporary_wide, destination_wide, MOVEFILE_WRITE_THROUGH) != 0;
         if (!published) {
             publish_error = GetLastError();
         }
     }
-    free(rename);
-    bool closed = file == INVALID_HANDLE_VALUE || CloseHandle(file) != 0;
-    if (published && closed) {
+    if (published) {
         result = PATH_SECRET_CREATE_OK;
     } else if (!published &&
                (publish_error == ERROR_FILE_EXISTS || publish_error == ERROR_ALREADY_EXISTS)) {

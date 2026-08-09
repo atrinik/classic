@@ -72,6 +72,25 @@ returns a distinct collision result so concurrent creators can securely reread
 the winner. Input and output buffers remain caller-owned; callers must cleanse
 their own secret material after use.
 
+## Metaserver publisher API
+
+`metaserver_publisher_classic_body` and `metaserver_publisher_build` construct
+the exact bounded JSON, RFC 9530 digest, and RFC 9421 signature input owned by
+the shared metaserver-publisher fixture. Publisher identities are immutable,
+caller-owned P-256 certificate/private-key pairs; signing borrows them and
+returns only the public request signature. The matching verifier checks the
+certificate's exact DER fingerprint and raw P1363 signature without retaining
+input.
+
+`metaserver_publish_sequence_reserve` persists a crash-safe uint64 high-water
+mark before a caller attempts network I/O. Its two owner-only files are named
+for the exact certificate-derived server ID, tolerate a crash between
+publication and cleanup, allow gaps, never move backwards, and fail closed on
+ambiguous or corrupt state. Recovery consumes the Worker's non-secret minimum
+without weakening monotonic ordering. The shared publisher test exercises the
+protocol-owned positive/negative vectors and sequence-file lifecycle on both
+Linux and the native Windows CI runner.
+
 ## Pathfinding core
 
 `Atrinik::Pathfinding` is a separate dependency-free C17 target for reusable
