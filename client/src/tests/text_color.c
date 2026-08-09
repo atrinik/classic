@@ -39,6 +39,19 @@ static void test_colors_parse_opaque(void) {
     }
 }
 
+static void test_color_parser_boundaries(void) {
+    SDL_Color actual = {1, 2, 3, 4};
+    TEST_CHECK(text_color_parse("#d4d553", &actual));
+    TEST_CHECK(actual.r == 0xd4 && actual.g == 0xd5 && actual.b == 0x53);
+    TEST_CHECK(actual.a == SDL_ALPHA_OPAQUE);
+
+    TEST_CHECK(text_color_parse(COLOR_WHITE, NULL));
+
+    actual = (SDL_Color){1, 2, 3, 4};
+    TEST_CHECK(!text_color_parse("not-a-color", &actual));
+    TEST_CHECK(actual.r == 1 && actual.g == 2 && actual.b == 3 && actual.a == 4);
+}
+
 static void test_parsed_color_renders_opaque_glyph(void) {
     SDL_Color color = {0, 0, 0, SDL_ALPHA_TRANSPARENT};
     TEST_CHECK(text_color_parse(COLOR_HGOLD, &color));
@@ -70,6 +83,7 @@ static void test_parsed_color_renders_opaque_glyph(void) {
 
 int main(void) {
     test_colors_parse_opaque();
+    test_color_parser_boundaries();
     test_parsed_color_renders_opaque_glyph();
     return 0;
 }
