@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <interface_packet.h>
 #include <client_socket.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
@@ -418,6 +419,10 @@ void socket_command_interface(uint8_t *data, size_t len, size_t pos) {
         return;
     }
 
+    if (!interface_packet_validate(data, len, pos)) {
+        return;
+    }
+
     if (!interface_popup) {
         interface_popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "interface"));
         interface_popup->draw_func = popup_draw_func;
@@ -457,7 +462,8 @@ void socket_command_interface(uint8_t *data, size_t len, size_t pos) {
     utarray_new(interface_data->links, &ut_str_icd);
 
     /* Parse the data. */
-    while (pos < len) {
+    while (packet_reader_error(&reader) == PACKET_ERROR_NONE && pos < len) {
+        size_t iteration_start = pos;
         type = packet_reader_read_uint8(&reader);
 
         switch (type) {
@@ -483,6 +489,7 @@ void socket_command_interface(uint8_t *data, size_t len, size_t pos) {
                 char icon[MAX_BUF];
 
                 packet_reader_read_string(&reader, icon, sizeof(icon));
+                free(interface_data->icon);
                 interface_data->icon = xstrdup(icon);
                 break;
             }
@@ -491,6 +498,7 @@ void socket_command_interface(uint8_t *data, size_t len, size_t pos) {
                 char title[HUGE_BUF];
 
                 packet_reader_read_string(&reader, title, sizeof(title));
+                free(interface_data->title);
                 interface_data->title = xstrdup(title);
                 break;
             }
@@ -550,22 +558,19 @@ void socket_command_interface(uint8_t *data, size_t len, size_t pos) {
 
                 break;
 
-            case CMD_INTERFACE_APPEND_TEXT:
-
+            case CMD_INTERFACE_APPEND_TEXT: {
+                StringBuffer *sb = stringbuffer_new();
                 if (interface_data->message) {
-                    StringBuffer *sb;
-
-                    sb = stringbuffer_new();
                     stringbuffer_append_string(sb, interface_data->message);
-                    packet_reader_read_stringbuffer(&reader, sb);
-
                     free(interface_data->message);
-                    interface_data->message = stringbuffer_finish(sb);
                 }
-
+                packet_reader_read_stringbuffer(&reader, sb);
+                interface_data->message = stringbuffer_finish(sb);
                 break;
+            }
 
             case CMD_INTERFACE_ANIM: {
+                object_remove(interface_data->anim);
                 interface_data->anim = object_create(NULL, 0, 0);
                 interface_data->anim->animation_id = packet_reader_read_uint16(&reader);
                 interface_data->anim->anim_speed = packet_reader_read_uint8(&reader);
@@ -578,10 +583,17 @@ void socket_command_interface(uint8_t *data, size_t len, size_t pos) {
                 uint16_t flags = packet_reader_read_uint16(&reader);
                 tag_t tag = packet_reader_read_uint32(&reader);
                 object *old_obj = object_find(tag);
+                bool conflicts_with_world =
+                    old_obj != NULL && old_obj->env != cpl.interface_objects;
+                object *duplicate = object_find_object(interface_data->objects->inv, tag);
+                object_remove(duplicate);
                 object *obj = object_create(interface_data->objects, tag, 0);
-                command_item_update(&reader, flags, obj);
+                if (!command_item_update(&reader, flags, obj)) {
+                    object_remove(obj);
+                    break;
+                }
 
-                if (old_obj != NULL && old_obj->env != cpl.interface_objects) {
+                if (conflicts_with_world) {
                     object_remove(obj);
                 }
 
@@ -589,8 +601,24 @@ void socket_command_interface(uint8_t *data, size_t len, size_t pos) {
             }
 
             default:
+                packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
                 break;
         }
+
+        if (pos == iteration_start && packet_reader_error(&reader) == PACKET_ERROR_NONE) {
+            packet_reader_set_error(&reader, PACKET_ERROR_INVALID_ENCODING);
+        }
+    }
+
+    if (!packet_reader_finish(&reader)) {
+        if (interface_data != old_interface_data) {
+            interface_destroy(interface_data);
+        }
+        if (sb_message != NULL) {
+            stringbuffer_free(sb_message);
+        }
+        interface_data = old_interface_data;
+        return;
     }
 
     if (sb_message) {

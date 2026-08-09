@@ -1023,11 +1023,14 @@ void socket_command_sound_ambient(uint8_t *data, size_t len, size_t pos) {
     sound_ambient_struct *sound_ambient;
 
     /* Loop through the data, as there may be multiple sound effects. */
-    while (pos < len) {
+    while (packet_reader_error(&reader) == PACKET_ERROR_NONE && pos < len) {
         x = packet_reader_read_uint8(&reader);
         y = packet_reader_read_uint8(&reader);
         tag_old = packet_reader_read_uint32(&reader);
         tag = packet_reader_read_uint32(&reader);
+        if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
+            break;
+        }
 
         /* If there is an old tag, the server is telling us to stop
          * playing a sound effect. */
@@ -1047,9 +1050,14 @@ void socket_command_sound_ambient(uint8_t *data, size_t len, size_t pos) {
             int channel;
 
             /* Get the sound effect filename, volume, etc. */
-            packet_reader_read_string(&reader, filename, sizeof(filename));
+            if (!packet_reader_read_string(&reader, filename, sizeof(filename))) {
+                break;
+            }
             volume = packet_reader_read_uint8(&reader);
             max_range = packet_reader_read_uint8(&reader);
+            if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
+                break;
+            }
 
             /* Try to start playing the sound effect. */
             channel = sound_play_effect_loop(filename, volume, -1);
@@ -1068,6 +1076,7 @@ void socket_command_sound_ambient(uint8_t *data, size_t len, size_t pos) {
             }
         }
     }
+    (void)packet_reader_finish(&reader);
 }
 
 /**

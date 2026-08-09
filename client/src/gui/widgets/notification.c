@@ -121,31 +121,34 @@ void socket_command_notification(uint8_t *data, size_t len, size_t pos) {
     sb = stringbuffer_new();
 
     /* Parse the data. */
-    while (pos < len) {
+    while (packet_reader_error(&reader) == PACKET_ERROR_NONE && pos < len) {
         type = packet_reader_read_uint8(&reader);
 
         switch (type) {
             case CMD_NOTIFICATION_TEXT: {
                 char message[HUGE_BUF];
 
-                packet_reader_read_string(&reader, message, sizeof(message));
-                stringbuffer_append_string(sb, message);
+                if (packet_reader_read_string(&reader, message, sizeof(message))) {
+                    stringbuffer_append_string(sb, message);
+                }
                 break;
             }
 
             case CMD_NOTIFICATION_ACTION: {
                 char action[HUGE_BUF];
 
-                packet_reader_read_string(&reader, action, sizeof(action));
-                notification->action = xstrdup(action);
+                if (packet_reader_read_string(&reader, action, sizeof(action))) {
+                    notification->action = xstrdup(action);
+                }
                 break;
             }
 
             case CMD_NOTIFICATION_SHORTCUT: {
                 char shortcut[HUGE_BUF];
 
-                packet_reader_read_string(&reader, shortcut, sizeof(shortcut));
-                notification->shortcut = xstrdup(shortcut);
+                if (packet_reader_read_string(&reader, shortcut, sizeof(shortcut))) {
+                    notification->shortcut = xstrdup(shortcut);
+                }
                 break;
             }
 
@@ -155,9 +158,12 @@ void socket_command_notification(uint8_t *data, size_t len, size_t pos) {
                 break;
 
             default:
+                packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
                 break;
         }
     }
+
+    (void)packet_reader_finish(&reader);
 
     /* Shortcut specified, add the shortcut name to the notification
      * message. */
