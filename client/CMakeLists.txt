@@ -289,6 +289,24 @@ if (BUILD_TESTING AND NOT MINGW)
         SDL3_image::SDL3_image)
     add_test(NAME client-surface-primitives COMMAND client-surface-primitives-tests)
 
+    add_executable(client-text-color-tests
+        src/tests/text_color.c
+        src/gui/toolkit/text_color.c)
+    atrinik_configure_target(client-text-color-tests)
+    target_compile_definitions(client-text-color-tests PRIVATE
+        ATRINIK_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-text-color-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-text-color-tests PRIVATE
+        Atrinik::Core
+        SDL3::SDL3
+        SDL3_ttf::SDL3_ttf)
+    add_test(NAME client-text-color COMMAND client-text-color-tests)
+
     add_executable(client-textwin-event-tests
         src/tests/textwin_event.c
         src/gui/widgets/textwin_event.c)
