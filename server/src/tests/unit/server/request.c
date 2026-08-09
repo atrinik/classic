@@ -8,6 +8,7 @@
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
+#include <toolkit/map_protocol.h>
 #include <toolkit/packet.h>
 #include <arch.h>
 #include <initialization.h>
@@ -79,6 +80,42 @@ static bool map_packet_level_size(const packet_struct *packet, int expected_dept
     }
 
     return false;
+}
+
+static bool map_cache_cell_has_roof(socket_struct *cs, int depth, int x, int y) {
+    MapCell *cell = map_client_cache_cell(&cs->lastmap, depth, x, y, false);
+    if (cell == NULL || cell->cleared) {
+        return false;
+    }
+
+    for (size_t layer = 0; layer < NUM_REAL_LAYERS; layer++) {
+        if (cell->roof[layer]) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool map_cache_has_roof(socket_struct *cs, int depth) {
+    for (int x = 0; x < cs->mapx; x++) {
+        for (int y = 0; y < cs->mapy; y++) {
+            if (map_cache_cell_has_roof(cs, depth, x, y)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+static void request_move_player(object **pl, mapstruct *map, int x, int y) {
+    object_remove(*pl, 0);
+    (*pl)->x = x;
+    (*pl)->y = y;
+    *pl = object_insert_map(*pl, map, NULL, 0);
+    ck_assert_ptr_nonnull(*pl);
+    CONTR(*pl)->update_los = 1;
 }
 
 static void request_version(socket_struct *cs, player *pl, uint32_t version) {
@@ -500,27 +537,57 @@ START_TEST(test_incuna_unchanged_roof_level_remains_present) {
 
     packet_struct *packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
     ck_assert_ptr_nonnull(packet);
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, cs->mapx, cs->mapy));
     uint32_t roof_delta_size = 0;
     ck_assert(map_packet_level_size(packet, 1, &roof_delta_size));
     ck_assert_uint_gt(roof_delta_size, 0);
 
+    bool stable_roof_level_found = false;
+    for (size_t update = 0; update < 8; update++) {
+        socket_buffer_clear(cs);
+        draw_client_map2(pl);
+
+        packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+        ck_assert_ptr_nonnull(packet);
+        ck_assert(map_protocol_validate(packet->data, packet->len, 0, cs->mapx, cs->mapy));
+        roof_delta_size = UINT32_MAX;
+        ck_assert(map_packet_level_size(packet, 1, &roof_delta_size));
+        if (roof_delta_size == 0) {
+            stable_roof_level_found = true;
+            break;
+        }
+    }
+
+    ck_assert_msg(stable_roof_level_found, "Incuna roof level did not reach a stable empty delta");
+    ck_assert(map_cache_cell_has_roof(cs, 1, cs->mapx_2, cs->mapy_2 - 3));
+
+    CONTR(pl)->last_update = map;
+    CONTR(pl)->map_tile_x = pl->x;
+    CONTR(pl)->map_tile_y = pl->y;
+    request_move_player(&pl, map, 8, 6);
+    socket_buffer_clear(cs);
+    draw_client_map(pl);
+    ck_assert(map_cache_cell_has_roof(cs, 1, cs->mapx_2 - 1, cs->mapy_2 - 3));
+
+    request_move_player(&pl, map, 7, 3);
+    socket_buffer_clear(cs);
+    draw_client_map(pl);
+
+    MapCell *interior_roof = map_client_cache_cell(&cs->lastmap, 1, cs->mapx_2, cs->mapy_2, false);
+    ck_assert_ptr_nonnull(interior_roof);
+    ck_assert_uint_eq(interior_roof->cleared, 1);
+    ck_assert(map_cache_has_roof(cs, 1));
+
+    request_move_player(&pl, map, 7, 6);
+    socket_buffer_clear(cs);
+    draw_client_map(pl);
+    ck_assert(map_cache_cell_has_roof(cs, 1, cs->mapx_2, cs->mapy_2 - 3));
+
+    map_client_cache_clear(&cs->lastmap);
+    cs->lastmap_player_level_known = false;
     socket_buffer_clear(cs);
     draw_client_map2(pl);
-
-    packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
-    ck_assert_ptr_nonnull(packet);
-    roof_delta_size = 0;
-    ck_assert(map_packet_level_size(packet, 1, &roof_delta_size));
-    ck_assert_uint_gt(roof_delta_size, 0);
-
-    socket_buffer_clear(cs);
-    draw_client_map2(pl);
-
-    packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
-    ck_assert_ptr_nonnull(packet);
-    roof_delta_size = UINT32_MAX;
-    ck_assert(map_packet_level_size(packet, 1, &roof_delta_size));
-    ck_assert_uint_eq(roof_delta_size, 0);
+    ck_assert(map_cache_cell_has_roof(cs, 1, cs->mapx_2, cs->mapy_2 - 3));
 }
 END_TEST
 
