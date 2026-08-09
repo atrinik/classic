@@ -5,6 +5,7 @@
  */
 
 #include "socket_private.h"
+#include "metaserver_publisher.h"
 #include "path.h"
 #include "string.h"
 #include "datetime.h"
@@ -376,6 +377,21 @@ socket_t *socket_quic_server_create(const char *host,
     }
 
     return sc;
+}
+
+metaserver_publisher_identity_t *socket_quic_publisher_identity(socket_t *sc,
+                                                                const char *server_id) {
+    HARD_ASSERT(sc != NULL);
+    HARD_ASSERT(server_id != NULL);
+    if (sc->transport != SOCKET_TRANSPORT_QUIC_LISTENER || sc->quic_ctx == NULL) {
+        return NULL;
+    }
+    X509 *certificate = SSL_CTX_get0_certificate(sc->quic_ctx);
+    EVP_PKEY *key = SSL_CTX_get0_privatekey(sc->quic_ctx);
+    if (certificate == NULL || key == NULL) {
+        return NULL;
+    }
+    return metaserver_publisher_identity_create(certificate, key, server_id);
 }
 
 static socket_t *socket_quic_client_socket_resolved(const char *host,
@@ -1206,6 +1222,13 @@ socket_t *socket_quic_client_create(const char *host,
 
 bool socket_certificate_sha256(socket_t *sc, char fingerprint[65]) {
     return false;
+}
+
+metaserver_publisher_identity_t *socket_quic_publisher_identity(socket_t *sc,
+                                                                const char *server_id) {
+    (void)sc;
+    (void)server_id;
+    return NULL;
 }
 
 bool socket_quic_service(socket_t *sc, bool network_ready, bool app_write_pending) {

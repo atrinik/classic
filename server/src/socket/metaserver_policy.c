@@ -200,20 +200,6 @@ metaserver_rendezvous_auth_find(metaserver_rendezvous_auth_job_t *jobs,
     return NULL;
 }
 
-metaserver_registration_key_action_t
-metaserver_registration_key_action(curl_state_t state, int http_code, bool registration) {
-    if (registration && state == CURL_STATE_OK && http_code == 401) {
-        return METASERVER_REGISTRATION_KEY_DELETE;
-    }
-    if (registration && (state != CURL_STATE_OK || http_code >= 500)) {
-        return METASERVER_REGISTRATION_KEY_RETRY_ESTABLISHED;
-    }
-    if (!registration && state == CURL_STATE_OK && http_code == 409) {
-        return METASERVER_REGISTRATION_KEY_RETRY_REGISTRATION;
-    }
-    return METASERVER_REGISTRATION_KEY_KEEP;
-}
-
 bool metaserver_public_endpoint_from_config(const char *configured_host,
                                             uint16_t configured_port,
                                             char *published_host,
