@@ -1,8 +1,6 @@
 #include <global.h>
 #include <item_packet.h>
 
-#include <string.h>
-
 #define ITEM_UPDATE_FLAGS                                                                     \
     (UPD_LOCATION | UPD_FLAGS | UPD_WEIGHT | UPD_FACE | UPD_NAME | UPD_ANIM | UPD_ANIMSPEED | \
      UPD_NROF | UPD_DIRECTION | UPD_TYPE | UPD_EXTRA | UPD_GLOW)

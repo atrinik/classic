@@ -542,16 +542,17 @@ void socket_command_item(uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     bool delete_env = packet_reader_read_uint8(&reader) == 1;
+    object *delete_target = NULL;
     if (delete_env) {
         tag_t loc_delete = packet_reader_read_uint32(&reader);
-        object *env = object_find(loc_delete);
-        if (env == NULL) {
+        delete_target = object_find(loc_delete);
+        if (delete_target == NULL) {
+            packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
             return;
         }
 
-        object_remove_inventory(env);
-
         if (pos == len) {
+            object_remove_inventory(delete_target);
             return;
         }
     }
@@ -560,14 +561,18 @@ void socket_command_item(uint8_t *data, size_t len, size_t pos) {
     object *env = object_find(loc);
     if (env == NULL) {
         LOG(ERROR, "Server sent invalid location: %" PRIu32, loc);
+        packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
         return;
     }
 
+    uint8_t bflag = packet_reader_read_uint8(&reader);
+
+    if (delete_target != NULL) {
+        object_remove_inventory(delete_target);
+    }
     if (env != cpl.below && env != cpl.ob) {
         cpl.sack = env;
     }
-
-    uint8_t bflag = packet_reader_read_uint8(&reader);
 
     while (packet_reader_error(&reader) == PACKET_ERROR_NONE && pos < len) {
         size_t iteration_start = pos;
@@ -638,8 +643,11 @@ void socket_command_item_update(uint8_t *data, size_t len, size_t pos) {
     tag_t validate_tag = packet_reader_read_uint32(&validate_reader);
     object *validate_tmp = object_find(validate_tag);
     item_packet_update_t validate_update;
-    if (validate_tmp == NULL ||
-        !item_packet_parse_update(&validate_reader,
+    if (validate_tmp == NULL) {
+        packet_reader_set_error(&validate_reader, PACKET_ERROR_UNSUPPORTED);
+        return;
+    }
+    if (!item_packet_parse_update(&validate_reader,
                                   validate_flags,
                                   validate_tmp,
                                   &validate_update) ||

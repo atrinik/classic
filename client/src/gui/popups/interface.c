@@ -489,6 +489,7 @@ void socket_command_interface(uint8_t *data, size_t len, size_t pos) {
                 char icon[MAX_BUF];
 
                 packet_reader_read_string(&reader, icon, sizeof(icon));
+                free(interface_data->icon);
                 interface_data->icon = xstrdup(icon);
                 break;
             }
@@ -497,6 +498,7 @@ void socket_command_interface(uint8_t *data, size_t len, size_t pos) {
                 char title[HUGE_BUF];
 
                 packet_reader_read_string(&reader, title, sizeof(title));
+                free(interface_data->title);
                 interface_data->title = xstrdup(title);
                 break;
             }
@@ -568,6 +570,7 @@ void socket_command_interface(uint8_t *data, size_t len, size_t pos) {
             }
 
             case CMD_INTERFACE_ANIM: {
+                object_remove(interface_data->anim);
                 interface_data->anim = object_create(NULL, 0, 0);
                 interface_data->anim->animation_id = packet_reader_read_uint16(&reader);
                 interface_data->anim->anim_speed = packet_reader_read_uint8(&reader);
@@ -580,13 +583,17 @@ void socket_command_interface(uint8_t *data, size_t len, size_t pos) {
                 uint16_t flags = packet_reader_read_uint16(&reader);
                 tag_t tag = packet_reader_read_uint32(&reader);
                 object *old_obj = object_find(tag);
+                bool conflicts_with_world =
+                    old_obj != NULL && old_obj->env != cpl.interface_objects;
+                object *duplicate = object_find_object(interface_data->objects->inv, tag);
+                object_remove(duplicate);
                 object *obj = object_create(interface_data->objects, tag, 0);
                 if (!command_item_update(&reader, flags, obj)) {
                     object_remove(obj);
                     break;
                 }
 
-                if (old_obj != NULL && old_obj->env != cpl.interface_objects) {
+                if (conflicts_with_world) {
                     object_remove(obj);
                 }
 
@@ -604,7 +611,12 @@ void socket_command_interface(uint8_t *data, size_t len, size_t pos) {
     }
 
     if (!packet_reader_finish(&reader)) {
-        interface_destroy(interface_data);
+        if (interface_data != old_interface_data) {
+            interface_destroy(interface_data);
+        }
+        if (sb_message != NULL) {
+            stringbuffer_free(sb_message);
+        }
         interface_data = old_interface_data;
         return;
     }

@@ -9,6 +9,7 @@ static void interface_packet_read_string(packet_reader_t *reader, size_t maximum
 bool interface_packet_validate(const uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
     packet_reader_init_at(&reader, data, len, pos);
+    bool restore_seen = false;
 
     while (packet_reader_error(&reader) == PACKET_ERROR_NONE && reader.pos < reader.len) {
         size_t iteration_start = reader.pos;
@@ -49,7 +50,13 @@ bool interface_packet_validate(const uint8_t *data, size_t len, size_t pos) {
             case CMD_INTERFACE_INPUT_CLEANUP_DISABLE:
             case CMD_INTERFACE_INPUT_ALLOW_EMPTY:
             case CMD_INTERFACE_SCROLL_BOTTOM:
+                break;
+
             case CMD_INTERFACE_RESTORE:
+                if (restore_seen) {
+                    packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
+                }
+                restore_seen = true;
                 break;
 
             default:

@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <SDL3/SDL_surface.h>
 #include <item.h>
 #include <toolkit/packet.h>
 
