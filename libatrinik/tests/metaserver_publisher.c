@@ -41,6 +41,7 @@ static void require_at(bool condition, int line) {
 static void progress(const char *stage) {
 #ifdef WIN32
     fprintf(stderr, "publisher fixture stage: %s\n", stage);
+    fflush(stderr);
 #else
     (void)stage;
 #endif
@@ -288,6 +289,7 @@ static void sequence_persistence_test(const char *server_id) {
     require(mkdtemp(directory) != NULL);
 #endif
 
+    progress("sequence start");
     uint64_t sequence = 0;
     metaserver_publish_sequence_result_t initial =
         metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence);

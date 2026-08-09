@@ -661,11 +661,21 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
         rename->RootDirectory = NULL;
         rename->FileNameLength = (DWORD)destination_length;
         memcpy(rename->FileName, destination_wide, destination_length);
+        fprintf(stderr,
+                "secret path trace: before Windows publication bytes=%lu buffer=%lu\n",
+                (unsigned long)destination_length,
+                (unsigned long)rename_size);
+        fflush(stderr);
         published =
             SetFileInformationByHandle(file, FileRenameInfo, rename, (DWORD)rename_size) != 0;
         if (!published) {
             publish_error = GetLastError();
         }
+        fprintf(stderr,
+                "secret path trace: after Windows publication published=%d error=%lu\n",
+                published,
+                (unsigned long)publish_error);
+        fflush(stderr);
     }
     free(rename);
     bool closed = file == INVALID_HANDLE_VALUE || CloseHandle(file) != 0;
