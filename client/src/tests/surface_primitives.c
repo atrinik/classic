@@ -109,7 +109,10 @@ static SDL_Surface *create_indexed_alpha_surface(void) {
     SDL_Surface *surface = SDL_CreateSurface(5, 5, SDL_PIXELFORMAT_INDEX8);
     TEST_CHECK(surface != NULL);
 
-    SDL_Color colors[256] = {{0}};
+    SDL_Color colors[256];
+    for (size_t i = 0; i < arraysize(colors); i++) {
+        colors[i] = (SDL_Color){0, 0, 0, SDL_ALPHA_OPAQUE};
+    }
     colors[0] = (SDL_Color){20, 80, 180, SDL_ALPHA_TRANSPARENT};
     colors[1] = (SDL_Color){30, 120, 230, SDL_ALPHA_OPAQUE};
     colors[2] = (SDL_Color){245, 245, 230, SDL_ALPHA_OPAQUE};
@@ -171,6 +174,46 @@ static void test_color_key_rotation(void) {
     SDL_DestroySurface(source);
 }
 
+static void test_opaque_indexed_rotation(void) {
+    SDL_Surface *source = create_indexed_alpha_surface();
+    SDL_Palette *palette = SDL_GetSurfacePalette(source);
+    TEST_CHECK(palette != NULL);
+    SDL_Color transparent = palette->colors[0];
+    transparent.a = SDL_ALPHA_OPAQUE;
+    TEST_CHECK(SDL_SetPaletteColors(palette, &transparent, 0, 1));
+
+    SDL_Surface *rotated = rotozoomSurface(source, -135.0, 1.0, 1);
+    TEST_CHECK(rotated != NULL);
+    Uint8 red, green, blue, alpha;
+    TEST_CHECK(
+        SDL_ReadSurfacePixel(rotated, rotated->w / 2, rotated->h / 2, &red, &green, &blue, &alpha));
+    TEST_CHECK(red == 30 && green == 120 && blue == 230 && alpha == SDL_ALPHA_OPAQUE);
+    SDL_DestroySurface(rotated);
+    SDL_DestroySurface(source);
+}
+
+static void test_indexed_alpha_without_rotation(void) {
+    SDL_Surface *source = create_indexed_alpha_surface();
+    SDL_Surface *scaled = rotozoomSurface(source, 0.0, 1.0, 1);
+    TEST_CHECK(scaled != NULL);
+    TEST_CHECK(scaled->format == SDL_PIXELFORMAT_INDEX8);
+
+    Uint8 red, green, blue, alpha;
+    TEST_CHECK(SDL_ReadSurfacePixel(scaled, 0, 0, &red, &green, &blue, &alpha));
+    TEST_CHECK(alpha == SDL_ALPHA_TRANSPARENT);
+
+    SDL_DestroySurface(scaled);
+    SDL_DestroySurface(source);
+}
+
+static void test_transform_invalid_input(void) {
+    TEST_CHECK(rotozoomSurface(NULL, -135.0, 1.0, 1) == NULL);
+
+    SDL_Surface *source = create_indexed_alpha_surface();
+    TEST_CHECK(rotozoomSurface(source, -135.0, 0.0, 1) == NULL);
+    SDL_DestroySurface(source);
+}
+
 static void test_true_color_alpha_rotation(void) {
     SDL_Surface *source = SDL_CreateSurface(5, 5, SDL_PIXELFORMAT_RGBA32);
     TEST_CHECK(source != NULL);
@@ -205,6 +248,9 @@ int main(void) {
     test_indexed_alpha_rotation(0);
     test_indexed_alpha_rotation(1);
     test_color_key_rotation();
+    test_opaque_indexed_rotation();
+    test_indexed_alpha_without_rotation();
+    test_transform_invalid_input();
     test_true_color_alpha_rotation();
     test_darken_preserves_alpha();
     return 0;
