@@ -38,15 +38,6 @@ static void require_at(bool condition, int line) {
 
 #define require(condition) require_at((condition), __LINE__)
 
-static void progress(const char *stage) {
-#ifdef WIN32
-    fprintf(stderr, "publisher fixture stage: %s\n", stage);
-    fflush(stderr);
-#else
-    (void)stage;
-#endif
-}
-
 static char *fixture_read(const char *path) {
     FILE *fp = fopen(path, "rb");
     require(fp != NULL);
@@ -289,7 +280,6 @@ static void sequence_persistence_test(const char *server_id) {
     require(mkdtemp(directory) != NULL);
 #endif
 
-    progress("sequence start");
     uint64_t sequence = 0;
     metaserver_publish_sequence_result_t initial =
         metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence);
@@ -318,14 +308,11 @@ static void sequence_persistence_test(const char *server_id) {
     }
     require(initial == METASERVER_PUBLISH_SEQUENCE_OK);
     require(sequence == 1);
-    progress("sequence first reservation");
     require(metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence) ==
             METASERVER_PUBLISH_SEQUENCE_OK);
     require(sequence == 2);
-    progress("sequence second reservation");
     require(metaserver_publish_sequence_recover(directory, server_id, 100) ==
             METASERVER_PUBLISH_SEQUENCE_OK);
-    progress("sequence recovery");
     require(metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence) ==
             METASERVER_PUBLISH_SEQUENCE_OK);
     require(sequence == 100);
@@ -334,7 +321,6 @@ static void sequence_persistence_test(const char *server_id) {
     require(metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence) ==
             METASERVER_PUBLISH_SEQUENCE_OK);
     require(sequence == 101);
-    progress("sequence monotonic recovery");
 
     char alternate_id[65];
     snprintf(VS(alternate_id), "%s", server_id);
@@ -342,7 +328,6 @@ static void sequence_persistence_test(const char *server_id) {
     require(metaserver_publish_sequence_reserve(directory, alternate_id, 1, &sequence) ==
             METASERVER_PUBLISH_SEQUENCE_OK);
     require(sequence == 1);
-    progress("sequence identity isolation");
 
     char slot0[HUGE_BUF], slot1[HUGE_BUF], alternate_slot0[HUGE_BUF];
     require(snprintf(VS(slot0), "%s/metaserver-publish-sequence-%s.0", directory, server_id) <
@@ -360,7 +345,6 @@ static void sequence_persistence_test(const char *server_id) {
             PATH_SECRET_CREATE_OK);
     require(metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence) ==
             METASERVER_PUBLISH_SEQUENCE_EXHAUSTED);
-    progress("sequence exhaustion");
 
     require(unlink(slot0) == 0);
     static const char corrupt[] = "01\n";
@@ -368,7 +352,6 @@ static void sequence_persistence_test(const char *server_id) {
             PATH_SECRET_CREATE_OK);
     require(metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence) ==
             METASERVER_PUBLISH_SEQUENCE_ERROR);
-    progress("sequence corrupt state");
     require(unlink(slot1) == 0);
     require(unlink(alternate_slot0) == 0);
 #ifdef WIN32
@@ -389,16 +372,13 @@ static void sequence_persistence_test(const char *server_id) {
         "{\"error\":{\"code\":\"other\",\"minimumNextSequence\":\"2\"}}";
     require(!metaserver_publish_replay_parse(wrong_code, sizeof(wrong_code) - 1U, &minimum));
     require(!metaserver_publish_replay_parse(valid_replay, sizeof(valid_replay) - 2U, &minimum));
-    progress("sequence and replay complete");
 }
 
 static void identity_signing_test(void) {
-    progress("identity start");
     EVP_PKEY *key = EVP_PKEY_Q_keygen(NULL, NULL, "EC", "prime256v1");
     X509 *certificate = X509_new();
     X509_NAME *name = X509_NAME_new();
     require(key != NULL && certificate != NULL && name != NULL);
-    progress("identity objects created");
     require(X509_set_version(certificate, 2) == 1);
     require(ASN1_INTEGER_set(X509_get_serialNumber(certificate), 1) == 1);
     require(X509_gmtime_adj(X509_getm_notBefore(certificate), 0) != NULL);
@@ -414,7 +394,6 @@ static void identity_signing_test(void) {
     require(X509_set_subject_name(certificate, name) == 1);
     require(X509_set_issuer_name(certificate, name) == 1);
     require(X509_sign(certificate, key, EVP_sha256()) > 0);
-    progress("identity certificate signed");
 
     unsigned char digest[SHA256_DIGEST_LENGTH];
     unsigned int digest_size = 0;
@@ -427,12 +406,10 @@ static void identity_signing_test(void) {
     metaserver_publisher_identity_t *identity =
         metaserver_publisher_identity_create(certificate, key, server_id);
     require(identity != NULL);
-    progress("publisher identity created");
     require(metaserver_publisher_identity_create(certificate, key, "0") == NULL);
     static const char signature_base[] = "publisher identity signing test";
     char signature_header[METASERVER_PUBLISH_SIGNATURE_HEADER_MAX];
     require(metaserver_publisher_identity_sign(identity, signature_base, signature_header));
-    progress("identity message signed");
     static const char prefix[] = "atrinik=:";
     size_t header_size = strlen(signature_header);
     require(header_size > sizeof(prefix) &&
@@ -442,7 +419,6 @@ static void identity_signing_test(void) {
     unsigned char signature[64];
     require(decode_base64(signature_header + sizeof(prefix) - 1U, signature, sizeof(signature)) ==
             sizeof(signature));
-    progress("identity signature decoded");
 
     int certificate_size = i2d_X509(certificate, NULL);
     require(certificate_size > 0 &&
@@ -451,13 +427,11 @@ static void identity_signing_test(void) {
     require(certificate_der != NULL);
     unsigned char *cursor = certificate_der;
     require(i2d_X509(certificate, &cursor) == certificate_size);
-    progress("identity certificate encoded");
     require(metaserver_publisher_verify(certificate_der,
                                         (size_t)certificate_size,
                                         server_id,
                                         signature_base,
                                         signature));
-    progress("identity signature verified");
 
     OPENSSL_clear_free(certificate_der, (size_t)certificate_size);
     OPENSSL_cleanse(signature, sizeof(signature));
@@ -468,19 +442,14 @@ static void identity_signing_test(void) {
     X509_NAME_free(name);
     X509_free(certificate);
     EVP_PKEY_free(key);
-    progress("identity complete");
 }
 
 int main(int argc, char **argv) {
     require(argc == 2);
-    progress("main start");
     toolkit_import(path);
-    progress("path imported");
 
     char *fixture_json = fixture_read(argv[1]);
-    progress("fixture read");
     publisher_fixture_t fixture = fixture_parse(fixture_json);
-    progress("fixture parsed");
     uint64_t sequence;
     require(string_parse_uint64(fixture.sequence, 10, 1, UINT64_MAX, &sequence));
     unsigned char nonce[METASERVER_PUBLISH_NONCE_SIZE];
@@ -488,7 +457,6 @@ int main(int argc, char **argv) {
                                     METASERVER_PUBLISH_NONCE_SIZE * 2U,
                                     true,
                                     VS(nonce)));
-    progress("fixture scalars decoded");
 
     char body[METASERVER_PUBLISH_BODY_MAX + 1U];
     size_t body_size;
@@ -516,7 +484,6 @@ int main(int argc, char **argv) {
     payload.certificate = "AB==";
     require(!metaserver_publisher_classic_body(&payload, body, &body_size));
     payload.certificate = fixture.certificate;
-    progress("body vectors complete");
 
     metaserver_publisher_components_t classic;
     require(metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V1,
@@ -532,7 +499,6 @@ int main(int argc, char **argv) {
     require(strcmp(classic.content_digest, fixture.content_digest) == 0);
     require(strcmp(classic.signature_input, fixture.signature_input) == 0);
     require(strcmp(classic.signature_base, fixture.signature_base) == 0);
-    progress("classic components complete");
 
     unsigned char certificate[2048], signature[64];
     size_t certificate_size = decode_base64(fixture.certificate, certificate, sizeof(certificate));
@@ -544,7 +510,6 @@ int main(int argc, char **argv) {
                                         fixture.server_id,
                                         classic.signature_base,
                                         signature));
-    progress("classic signature verified");
     static const char *const vectors[] = {"heartbeat",
                                           "changed",
                                           "reused_nonce",
@@ -553,7 +518,6 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < arraysize(vectors); i++) {
         fixture_vector_verify(fixture_json, vectors[i], &fixture, certificate, certificate_size);
     }
-    progress("additional vectors complete");
 
     metaserver_publisher_components_t game;
     require(metaserver_publisher_build(METASERVER_PUBLISHER_GAME_V1,
@@ -573,7 +537,6 @@ int main(int argc, char **argv) {
                                          fixture.server_id,
                                          game.signature_base,
                                          signature));
-    progress("game components complete");
 
     char mutated[METASERVER_PUBLISH_SIGNATURE_BASE_MAX];
     snprintf(VS(mutated), "%s", classic.signature_base);
@@ -617,9 +580,7 @@ int main(int argc, char **argv) {
                                         fixture.body,
                                         strlen(fixture.body),
                                         &classic));
-    progress("negative vectors complete");
 
-    progress("before sequence test");
     sequence_persistence_test(fixture.server_id);
     identity_signing_test();
 

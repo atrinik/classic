@@ -653,19 +653,10 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
     }
     bool closed = file == INVALID_HANDLE_VALUE || CloseHandle(file) != 0;
     if (ok && closed) {
-        fprintf(stderr,
-                "secret path trace: before Windows publication chars=%lu method=move\n",
-                (unsigned long)wcslen(destination_wide));
-        fflush(stderr);
         published = MoveFileExW(temporary_wide, destination_wide, MOVEFILE_WRITE_THROUGH) != 0;
         if (!published) {
             publish_error = GetLastError();
         }
-        fprintf(stderr,
-                "secret path trace: after Windows publication published=%d error=%lu\n",
-                published,
-                (unsigned long)publish_error);
-        fflush(stderr);
     }
     if (published) {
         result = PATH_SECRET_CREATE_OK;
