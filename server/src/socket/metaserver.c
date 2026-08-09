@@ -53,6 +53,16 @@ static struct {
 
     uint64_t rendezvous_reconnects; ///< Rendezvous reconnect attempts.
 
+    uint64_t rendezvous_attempts; ///< Server-role rendezvous upgrade attempts.
+
+    uint64_t rendezvous_rejections; ///< Permanent rendezvous upgrade rejections.
+
+    uint64_t publish_attempts; ///< Publication attempts, including local construction failures.
+
+    uint64_t publish_retries; ///< Transient publisher failures scheduled for retry.
+
+    uint64_t publish_rejections; ///< Permanent publisher rejections.
+
     time_t last; ///< Last successful update.
 
     time_t last_failed; ///< Last failed update.
@@ -71,6 +81,23 @@ static curl_request_t *current_request = NULL;
  * Mutex for the current request pointer.
  */
 static pthread_mutex_t request_lock;
+static bool metaserver_initialized;
+static bool current_request_handled;
+static metaserver_publish_cadence_t publish_cadence;
+
+typedef struct metaserver_public_snapshot {
+    char name[MAX_BUF];
+    char description[MAX_BUF];
+    uint32_t players_count;
+    bool is_public;
+    bool password_required;
+} metaserver_public_snapshot_t;
+
+static metaserver_public_snapshot_t published_snapshot;
+static metaserver_public_snapshot_t attempted_snapshot;
+static metaserver_public_snapshot_t blocked_snapshot;
+static bool published_snapshot_valid;
+static bool blocked_snapshot_valid;
 static rendezvous_invite_t metaserver_invite;
 static bool metaserver_invite_active;
 static unsigned char metaserver_synthetic_invite_secret[RENDEZVOUS_SECRET_SIZE];
@@ -222,6 +249,8 @@ typedef enum rendezvous_thread_state {
 static rendezvous_thread_state_t rendezvous_thread_state;
 static bool rendezvous_shutdown;
 static uint64_t rendezvous_generation;
+static metaserver_attempt_budget_t rendezvous_attempt_budget;
+static void metaserver_rendezvous_stop(void);
 
 typedef struct rendezvous_args {
     char url[HUGE_BUF];
@@ -497,9 +526,6 @@ static bool metaserver_rendezvous_retry(const rendezvous_args_t *args,
         return false;
     }
 
-    pthread_mutex_lock(&stats_lock);
-    stats.rendezvous_reconnects++;
-    pthread_mutex_unlock(&stats_lock);
     return true;
 }
 
@@ -513,9 +539,34 @@ static bool metaserver_rendezvous_message_type(const char *message, const char *
 static void *metaserver_rendezvous_thread(void *data) {
     rendezvous_args_t *args = data;
     uint32_t failures = 0;
+    bool attempted = false;
     while (metaserver_rendezvous_current(args->generation)) {
+        pthread_mutex_lock(&rendezvous_lock);
+        uint32_t budget_wait_ms;
+        bool budget_available = metaserver_attempt_budget_consume(&rendezvous_attempt_budget,
+                                                                  server_monotonic_now(),
+                                                                  &budget_wait_ms);
+        pthread_mutex_unlock(&rendezvous_lock);
+        if (!budget_available) {
+            LOG(INFO,
+                "Rendezvous control attempt budget refills in %" PRIu32 " ms",
+                budget_wait_ms);
+            if (!metaserver_rendezvous_wait(args->generation, budget_wait_ms)) {
+                break;
+            }
+            continue;
+        }
+        pthread_mutex_lock(&stats_lock);
+        stats.rendezvous_attempts++;
+        if (attempted) {
+            stats.rendezvous_reconnects++;
+        }
+        pthread_mutex_unlock(&stats_lock);
+        attempted = true;
+
         uint32_t retry_after_seconds = 0;
         uint64_t connected_ms = 0;
+        bool retryable = true;
         CURL *curl = curl_easy_init();
         struct curl_slist *headers = NULL;
         char authorization[sizeof("Authorization: Bearer ") + 64] = {0};
@@ -566,10 +617,13 @@ static void *metaserver_rendezvous_thread(void *data) {
             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
             retry_after_seconds =
                 response_headers.has_retry_after ? response_headers.retry_after_seconds : 0;
-            bool connected = result == CURLE_OK && http_code == 101 &&
-                             metaserver_rendezvous_protocol_allows(&response_headers,
-                                                                   args->authorization_required);
+            bool protocol_valid =
+                metaserver_rendezvous_protocol_allows(&response_headers,
+                                                      args->authorization_required);
+            bool connected = result == CURLE_OK && http_code == 101 && protocol_valid;
             if (!connected) {
+                retryable =
+                    metaserver_rendezvous_upgrade_retryable(result, http_code, protocol_valid);
                 if (result != CURLE_OK) {
                     LOG(ERROR,
                         "Rendezvous connection failed (HTTP %ld): %s",
@@ -748,6 +802,15 @@ static void *metaserver_rendezvous_thread(void *data) {
         if (!metaserver_rendezvous_current(args->generation)) {
             break;
         }
+        if (!retryable) {
+            LOG(ERROR,
+                "Rendezvous control was permanently rejected; waiting for a successful "
+                "metaserver publish before reconnecting");
+            pthread_mutex_lock(&stats_lock);
+            stats.rendezvous_rejections++;
+            pthread_mutex_unlock(&stats_lock);
+            break;
+        }
         failures = metaserver_rendezvous_retry_failures(failures, connected_ms);
         if (!metaserver_rendezvous_retry(args, &failures, retry_after_seconds)) {
             break;
@@ -828,7 +891,11 @@ static bool metaserver_rendezvous_response(curl_request_t *request) {
     if (!metaserver_rendezvous_token_parse(body, body_size, value)) {
         return false;
     }
-    metaserver_rendezvous_start(value);
+    if (settings.server_public) {
+        metaserver_rendezvous_start(value);
+    } else {
+        metaserver_rendezvous_stop();
+    }
     OPENSSL_cleanse(value, sizeof(value));
     return true;
 }
@@ -857,6 +924,57 @@ static bool metaserver_enabled(void) {
     return true;
 }
 
+static uint32_t metaserver_publish_random(void) {
+    uint32_t value;
+    if (RAND_bytes((unsigned char *)&value, sizeof(value)) != 1) {
+        server_monotonic_t now = server_monotonic_now();
+        value = (uint32_t)(now.microseconds ^ (now.microseconds >> 32U));
+    }
+    return value;
+}
+
+static void metaserver_public_snapshot(metaserver_public_snapshot_t *snapshot) {
+    HARD_ASSERT(snapshot != NULL);
+
+    memset(snapshot, 0, sizeof(*snapshot));
+    snprintf(VS(snapshot->name), "%s", settings.server_name);
+    snprintf(VS(snapshot->description), "%s", settings.server_desc);
+    snapshot->is_public = settings.server_public;
+    snapshot->password_required = *settings.join_password != '\0';
+    for (player *pl = first_player; pl != NULL; pl = pl->next) {
+        snapshot->players_count++;
+    }
+}
+
+static bool metaserver_public_snapshot_equal(const metaserver_public_snapshot_t *lhs,
+                                             const metaserver_public_snapshot_t *rhs) {
+    HARD_ASSERT(lhs != NULL);
+    HARD_ASSERT(rhs != NULL);
+
+    return lhs->players_count == rhs->players_count && lhs->is_public == rhs->is_public &&
+           lhs->password_required == rhs->password_required && strcmp(lhs->name, rhs->name) == 0 &&
+           strcmp(lhs->description, rhs->description) == 0;
+}
+
+#if LIBCURL_VERSION_NUM >= 0x075600
+static void metaserver_rendezvous_stop(void) {
+    pthread_mutex_lock(&rendezvous_disclosure_lock);
+    pthread_mutex_lock(&rendezvous_lock);
+    rendezvous_generation++;
+    pthread_cond_broadcast(&rendezvous_condition);
+    bool join_rendezvous = rendezvous_thread_state != RENDEZVOUS_THREAD_STOPPED;
+    pthread_t thread = rendezvous_thread;
+    pthread_mutex_unlock(&rendezvous_lock);
+    pthread_mutex_unlock(&rendezvous_disclosure_lock);
+    if (join_rendezvous) {
+        pthread_join(thread, NULL);
+    }
+    pthread_mutex_lock(&rendezvous_lock);
+    rendezvous_thread_state = RENDEZVOUS_THREAD_STOPPED;
+    pthread_mutex_unlock(&rendezvous_lock);
+}
+#endif
+
 /**
  * Initialize the metaserver.
  */
@@ -867,6 +985,19 @@ void metaserver_init(void) {
 
     pthread_mutex_init(&stats_lock, NULL);
     pthread_mutex_init(&request_lock, NULL);
+    memset(&stats, 0, sizeof(stats));
+    memset(&published_snapshot, 0, sizeof(published_snapshot));
+    memset(&attempted_snapshot, 0, sizeof(attempted_snapshot));
+    memset(&blocked_snapshot, 0, sizeof(blocked_snapshot));
+    published_snapshot_valid = false;
+    blocked_snapshot_valid = false;
+    current_request = NULL;
+    current_request_handled = false;
+    if (settings.metaserver_heartbeat == 0) {
+        settings.metaserver_heartbeat = METASERVER_PUBLISH_HEARTBEAT_DEFAULT_SECONDS;
+    }
+    metaserver_publish_cadence_init(&publish_cadence, server_monotonic_now());
+    metaserver_initialized = true;
 #if LIBCURL_VERSION_NUM >= 0x075600
     pthread_mutex_init(&rendezvous_lock, NULL);
     pthread_mutex_init(&rendezvous_disclosure_lock, NULL);
@@ -874,11 +1005,12 @@ void metaserver_init(void) {
     rendezvous_thread_state = RENDEZVOUS_THREAD_STOPPED;
     rendezvous_shutdown = false;
     rendezvous_generation = 0;
+    metaserver_attempt_budget_init(&rendezvous_attempt_budget, server_monotonic_now());
 #endif
     if (!metaserver_invite_init()) {
         LOG(ERROR, "Protected rendezvous is disabled until the invite capability problem is fixed");
     }
-    metaserver_info_update();
+    metaserver_service();
 }
 
 /**
@@ -926,34 +1058,122 @@ void metaserver_deinit(void) {
     metaserver_invite_active = false;
     OPENSSL_cleanse(metaserver_synthetic_invite_secret, sizeof(metaserver_synthetic_invite_secret));
 
+    pthread_mutex_lock(&request_lock);
+    metaserver_initialized = false;
+    pthread_mutex_unlock(&request_lock);
     pthread_mutex_destroy(&stats_lock);
     pthread_mutex_destroy(&request_lock);
 }
 
-/**
- * Check if the specified cURL request resulted in an error.
- *
- * @param request
- * Request to check.
- * @return
- * True if an error was processed, false otherwise.
- */
-static bool metaserver_request_process_error(curl_request_t *request) {
-    HARD_ASSERT(request != NULL);
-
-    curl_state_t state = curl_request_get_state(request);
-    int http_code = curl_request_get_http_code(request);
-    if (state == CURL_STATE_OK && http_code == 200) {
-        return false;
-    }
-
-    LOG(SYSTEM, "Failed to update metaserver information (HTTP code: %d)", http_code);
-
+static void metaserver_publish_failed_stat(void) {
     pthread_mutex_lock(&stats_lock);
     stats.last_failed = time(NULL);
     stats.num_failed++;
     pthread_mutex_unlock(&stats_lock);
-    return true;
+}
+
+static void metaserver_publish_retry_locked(uint32_t retry_after_seconds) {
+    metaserver_publish_cadence_failed(&publish_cadence,
+                                      server_monotonic_now(),
+                                      retry_after_seconds,
+                                      metaserver_publish_random());
+    pthread_mutex_lock(&stats_lock);
+    stats.publish_retries++;
+    pthread_mutex_unlock(&stats_lock);
+}
+
+static void metaserver_publish_suspend_locked(int http_code) {
+    blocked_snapshot = attempted_snapshot;
+    blocked_snapshot_valid = true;
+    metaserver_publish_cadence_suspend(&publish_cadence);
+    pthread_mutex_lock(&stats_lock);
+    stats.publish_rejections++;
+    pthread_mutex_unlock(&stats_lock);
+    LOG(ERROR,
+        "Metaserver publication was permanently rejected (HTTP %d); publishing and "
+        "rendezvous reconnects are suspended until public state changes or the server restarts",
+        http_code);
+#if LIBCURL_VERSION_NUM >= 0x075600
+    metaserver_rendezvous_stop();
+#endif
+}
+
+static bool metaserver_publish_replay_recover_locked(curl_request_t *request) {
+    size_t body_size = 0;
+    char *body = curl_request_get_body(request, &body_size);
+    uint64_t minimum;
+    if (!metaserver_publish_replay_parse(body, body_size, &minimum) ||
+        !metaserver_publish_cadence_recover_replay(&publish_cadence)) {
+        return false;
+    }
+
+    char server_id[65] = {0};
+    metaserver_publish_sequence_result_t recovered =
+        metaserver_identity(VS(server_id))
+            ? metaserver_publish_sequence_recover(settings.datapath, server_id, minimum)
+            : METASERVER_PUBLISH_SEQUENCE_ERROR;
+    OPENSSL_cleanse(server_id, sizeof(server_id));
+    if (recovered == METASERVER_PUBLISH_SEQUENCE_EXHAUSTED) {
+        LOG(ERROR,
+            "Metaserver publish sequence space is exhausted; rotate the QUIC identity to "
+            "create a new server ID");
+    } else if (recovered != METASERVER_PUBLISH_SEQUENCE_OK) {
+        LOG(ERROR, "Failed to persist metaserver replay-recovery state");
+    }
+    return recovered == METASERVER_PUBLISH_SEQUENCE_OK;
+}
+
+static void metaserver_update_request_locked(curl_request_t *request) {
+    HARD_ASSERT(request != NULL);
+    HARD_ASSERT(current_request == request);
+
+    if (current_request_handled) {
+        return;
+    }
+    current_request_handled = true;
+
+    curl_state_t state = curl_request_get_state(request);
+    int http_code = curl_request_get_http_code(request);
+    size_t headers_size = 0;
+    char *headers = curl_request_get_header(request, &headers_size);
+    uint32_t retry_after_seconds = 0;
+    metaserver_publish_retry_after(headers, headers_size, &retry_after_seconds);
+
+    bool success = state == CURL_STATE_OK && http_code == 200;
+#if LIBCURL_VERSION_NUM >= 0x075600
+    if (success && !metaserver_rendezvous_response(request)) {
+        LOG(ERROR, "Metaserver returned a malformed successful publish response");
+        success = false;
+        http_code = 200;
+    }
+#endif
+    if (success) {
+        published_snapshot = attempted_snapshot;
+        published_snapshot_valid = true;
+        blocked_snapshot_valid = false;
+        metaserver_publish_cadence_succeeded(&publish_cadence,
+                                             server_monotonic_now(),
+                                             attempted_snapshot.is_public,
+                                             settings.metaserver_heartbeat,
+                                             metaserver_publish_random());
+        pthread_mutex_lock(&stats_lock);
+        stats.last = time(NULL);
+        stats.num++;
+        pthread_mutex_unlock(&stats_lock);
+    } else {
+        metaserver_publish_failed_stat();
+        LOG(SYSTEM, "Failed to update metaserver information (HTTP code: %d)", http_code);
+        metaserver_publish_failure_action_t action =
+            metaserver_publish_failure_action(state, http_code);
+        bool replay_recovered = action == METASERVER_PUBLISH_FAILURE_REPLAY &&
+                                metaserver_publish_replay_recover_locked(request);
+        if (replay_recovered || action == METASERVER_PUBLISH_FAILURE_RETRY) {
+            metaserver_publish_retry_locked(retry_after_seconds);
+        } else {
+            metaserver_publish_suspend_locked(http_code);
+        }
+    }
+    curl_request_clear_response(request);
 }
 
 /**
@@ -965,54 +1185,10 @@ static bool metaserver_request_process_error(curl_request_t *request) {
  * NULL.
  */
 static void metaserver_update_request(curl_request_t *request, void *user_data) {
+    (void)user_data;
     pthread_mutex_lock(&request_lock);
     HARD_ASSERT(current_request == request);
-
-    if (metaserver_request_process_error(request)) {
-        int http_code = curl_request_get_http_code(request);
-        if (http_code == 409) {
-            size_t body_size = 0;
-            char *body = curl_request_get_body(request, &body_size);
-            uint64_t minimum;
-            if (!metaserver_publish_replay_parse(body, body_size, &minimum)) {
-                LOG(ERROR, "Metaserver returned a malformed replay-recovery response");
-            } else {
-                char server_id[65] = {0};
-                metaserver_publish_sequence_result_t recovered =
-                    metaserver_identity(VS(server_id))
-                        ? metaserver_publish_sequence_recover(settings.datapath, server_id, minimum)
-                        : METASERVER_PUBLISH_SEQUENCE_ERROR;
-                OPENSSL_cleanse(server_id, sizeof(server_id));
-                if (recovered == METASERVER_PUBLISH_SEQUENCE_EXHAUSTED) {
-                    LOG(ERROR,
-                        "Metaserver publish sequence space is exhausted; rotate the QUIC "
-                        "identity to create a new server ID");
-                } else if (recovered != METASERVER_PUBLISH_SEQUENCE_OK) {
-                    LOG(ERROR, "Failed to persist metaserver replay-recovery state");
-                }
-            }
-        }
-        goto out;
-    }
-
-#if LIBCURL_VERSION_NUM >= 0x075600
-    if (!metaserver_rendezvous_response(request)) {
-        LOG(ERROR, "Metaserver returned a malformed successful publish response");
-        pthread_mutex_lock(&stats_lock);
-        stats.last_failed = time(NULL);
-        stats.num_failed++;
-        pthread_mutex_unlock(&stats_lock);
-    } else
-#endif
-    {
-        pthread_mutex_lock(&stats_lock);
-        stats.last = time(NULL);
-        stats.num++;
-        pthread_mutex_unlock(&stats_lock);
-    }
-
-out:
-    curl_request_clear_response(request);
+    metaserver_update_request_locked(request);
     pthread_mutex_unlock(&request_lock);
 }
 
@@ -1106,6 +1282,7 @@ static curl_request_t *metaserver_publish_request_create(uint32_t players_count)
     curl_request_set_follow_redirects(request, false);
     curl_request_set_max_body(request, 1024);
     curl_request_set_max_header(request, 16384);
+    curl_request_set_timeout(request, METASERVER_PUBLISH_TIMEOUT_MS);
     curl_request_set_cb(request, metaserver_update_request, NULL);
 
 out:
@@ -1119,13 +1296,24 @@ out:
     OPENSSL_cleanse(&components, sizeof(components));
     return request;
 }
-/**
- * Updates the metaserver information.
- */
+/** Mark public metaserver state dirty and debounce a new observation. */
 void metaserver_info_update(void) {
-    if (!metaserver_enabled()) {
+    if (!metaserver_initialized || !settings.server_public) {
         return;
     }
+
+    pthread_mutex_lock(&request_lock);
+    metaserver_publish_cadence_changed(&publish_cadence, server_monotonic_now(), false);
+    pthread_mutex_unlock(&request_lock);
+}
+
+/** Service completed requests and start a due, rate-bounded publication. */
+void metaserver_service(void) {
+    if (!metaserver_initialized) {
+        return;
+    }
+
+    server_monotonic_t now = server_monotonic_now();
 
     pthread_mutex_lock(&request_lock);
 
@@ -1136,6 +1324,8 @@ void metaserver_info_update(void) {
             return;
         }
 
+        metaserver_update_request_locked(current_request);
+
         curl_request_t *completed = current_request;
         pthread_mutex_unlock(&request_lock);
         curl_request_free(completed);
@@ -1145,20 +1335,43 @@ void metaserver_info_update(void) {
         }
     }
 
-    uint32_t players_count = 0;
-    for (player *pl = first_player; pl != NULL; pl = pl->next) {
-        players_count++;
-    }
-
-    current_request = metaserver_publish_request_create(players_count);
-    if (current_request == NULL) {
-        pthread_mutex_lock(&stats_lock);
-        stats.last_failed = time(NULL);
-        stats.num_failed++;
-        pthread_mutex_unlock(&stats_lock);
+    if (!metaserver_publish_cadence_needs_snapshot(&publish_cadence, now)) {
         pthread_mutex_unlock(&request_lock);
         return;
     }
+
+    metaserver_public_snapshot_t snapshot;
+    metaserver_public_snapshot(&snapshot);
+
+    bool snapshot_changed = !published_snapshot_valid ||
+                            !metaserver_public_snapshot_equal(&snapshot, &published_snapshot);
+    if (publish_cadence.suspended && blocked_snapshot_valid) {
+        bool changed_from_rejection =
+            !metaserver_public_snapshot_equal(&snapshot, &blocked_snapshot);
+        if (changed_from_rejection) {
+            metaserver_publish_cadence_changed(&publish_cadence, now, true);
+        } else {
+            publish_cadence.dirty = false;
+        }
+    }
+    if (!metaserver_publish_cadence_due(&publish_cadence, now, snapshot_changed)) {
+        pthread_mutex_unlock(&request_lock);
+        return;
+    }
+
+    attempted_snapshot = snapshot;
+    metaserver_publish_cadence_attempted(&publish_cadence, now);
+    pthread_mutex_lock(&stats_lock);
+    stats.publish_attempts++;
+    pthread_mutex_unlock(&stats_lock);
+    current_request = metaserver_publish_request_create(snapshot.players_count);
+    if (current_request == NULL) {
+        metaserver_publish_failed_stat();
+        metaserver_publish_retry_locked(0);
+        pthread_mutex_unlock(&request_lock);
+        return;
+    }
+    current_request_handled = false;
     curl_request_start_post(current_request);
     pthread_mutex_unlock(&request_lock);
 }
@@ -1176,7 +1389,12 @@ void metaserver_stats(char *buf, size_t size) {
     snprintfcat(buf, size, "\n=== METASERVER ===\n");
     snprintfcat(buf, size, "\nUpdates: %" PRIu64, stats.num);
     snprintfcat(buf, size, "\nFailed: %" PRIu64, stats.num_failed);
+    snprintfcat(buf, size, "\nPublish attempts: %" PRIu64, stats.publish_attempts);
+    snprintfcat(buf, size, "\nPublish retries: %" PRIu64, stats.publish_retries);
+    snprintfcat(buf, size, "\nPublish rejections: %" PRIu64, stats.publish_rejections);
+    snprintfcat(buf, size, "\nRendezvous attempts: %" PRIu64, stats.rendezvous_attempts);
     snprintfcat(buf, size, "\nRendezvous reconnects: %" PRIu64, stats.rendezvous_reconnects);
+    snprintfcat(buf, size, "\nRendezvous rejections: %" PRIu64, stats.rendezvous_rejections);
 
     if (stats.last != 0) {
         snprintfcat(buf, size, "\nLast update: %.19s", ctime(&stats.last));

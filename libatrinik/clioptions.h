@@ -117,7 +117,7 @@ extern clioption_t *clioptions_create(const char *name, clioptions_handler_func 
  * @param name
  * CLI option name.
  * @return
- * Value of the option.
+ * Value of the option, or a fixed redaction for sensitive options.
  */
 extern const char *clioptions_get(const char *name);
 
@@ -160,6 +160,17 @@ extern void clioptions_enable_argument(clioption_t *cli);
  * CLI.
  */
 extern void clioptions_enable_changeable(clioption_t *cli);
+
+/**
+ * Marks the CLI value as sensitive.
+ *
+ * Retained values are securely cleared when replaced or released, and
+ * clioptions_get() returns a fixed redaction instead of the value.
+ *
+ * @param cli
+ * CLI.
+ */
+extern void clioptions_enable_sensitive(clioption_t *cli);
 
 /**
  * Parse CLI options from argv array.
