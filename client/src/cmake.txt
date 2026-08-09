@@ -66,6 +66,7 @@ set(SOURCES
 	src/gui/toolkit/range_buttons.c
 	src/gui/toolkit/scrollbar.c
 	src/gui/toolkit/text.c
+	src/gui/toolkit/text_color.c
 	src/gui/toolkit/text_input.c
 	src/gui/toolkit/tooltip.c
 	src/gui/toolkit/widget.c
