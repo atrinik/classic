@@ -18,11 +18,30 @@
         }                     \
     } while (0)
 
+static void test_colors_parse_opaque(void) {
+    static const struct {
+        const char *notation;
+        SDL_Color expected;
+    } cases[] = {
+        {COLOR_HGOLD, {0xd4, 0xd5, 0x53, SDL_ALPHA_OPAQUE}},
+        {COLOR_RED, {0xff, 0x30, 0x30, SDL_ALPHA_OPAQUE}},
+        {COLOR_GREEN, {0x00, 0xff, 0x00, SDL_ALPHA_OPAQUE}},
+        {COLOR_WHITE, {0xff, 0xff, 0xff, SDL_ALPHA_OPAQUE}},
+    };
+
+    for (size_t i = 0; i < arraysize(cases); i++) {
+        SDL_Color actual = {0, 0, 0, SDL_ALPHA_TRANSPARENT};
+        TEST_CHECK(text_color_parse(cases[i].notation, &actual));
+        TEST_CHECK(actual.r == cases[i].expected.r);
+        TEST_CHECK(actual.g == cases[i].expected.g);
+        TEST_CHECK(actual.b == cases[i].expected.b);
+        TEST_CHECK(actual.a == cases[i].expected.a);
+    }
+}
+
 static void test_parsed_color_renders_opaque_glyph(void) {
     SDL_Color color = {0, 0, 0, SDL_ALPHA_TRANSPARENT};
     TEST_CHECK(text_color_parse(COLOR_HGOLD, &color));
-    TEST_CHECK(color.r == 0xd4 && color.g == 0xd5 && color.b == 0x53);
-    TEST_CHECK(color.a == SDL_ALPHA_OPAQUE);
 
     char path[1024];
     int length = snprintf(path, sizeof(path), "%s/fonts/arial.ttf", ATRINIK_TEST_SOURCE_DIR);
@@ -50,6 +69,7 @@ static void test_parsed_color_renders_opaque_glyph(void) {
 }
 
 int main(void) {
+    test_colors_parse_opaque();
     test_parsed_color_renders_opaque_glyph();
     return 0;
 }
