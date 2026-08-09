@@ -2,6 +2,7 @@ set(SOURCES
 	src/client/asset.c
 	src/client/asset_source.c
 	src/client/face_asset.c
+	src/client/face_cache.c
 	src/client/animations.c
 	src/client/client.c
 	src/client/cmd_aliases.c
