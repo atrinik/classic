@@ -63,6 +63,7 @@ void keybind_load(void) {
     FILE *fp;
     char buf[HUGE_BUF], *cp;
     keybind_struct *keybind = NULL;
+    bool legacy_keycodes = true;
 
     fp = path_fopen(FILE_KEYBIND, "r");
 
@@ -92,8 +93,10 @@ void keybind_load(void) {
             continue;
         }
 
-        /* End of a single keybinding definition, add it to the list. */
-        if (!strcmp(cp, "end")) {
+        if (!strncmp(cp, "keycode_format ", 15)) {
+            legacy_keycodes = atoi(cp + 15) < KEYBIND_KEYCODE_FORMAT;
+            /* End of a single keybinding definition, add it to the list. */
+        } else if (!strcmp(cp, "end")) {
             keybindings = xreallocarray(keybindings, (keybindings_num + 1), sizeof(*keybindings));
             keybindings[keybindings_num] = keybind;
             keybindings_num++;
@@ -102,7 +105,9 @@ void keybind_load(void) {
             if (!strncmp(cp, "command ", 8)) {
                 keybind->command = xstrdup(cp + 8);
             } else if (!strncmp(cp, "key ", 4)) {
-                keybind->key = atoi(cp + 4);
+                if (!keybind_keycode_parse(cp + 4, legacy_keycodes, &keybind->key)) {
+                    keybind->key = SDLK_UNKNOWN;
+                }
             } else if (!strncmp(cp, "mod ", 4)) {
                 keybind->mod = atoi(cp + 4);
             } else if (!strncmp(cp, "repeat ", 7)) {
@@ -127,9 +132,14 @@ void keybind_save(void) {
         return;
     }
 
+    fprintf(fp, "keycode_format %d\n", KEYBIND_KEYCODE_FORMAT);
+
     for (size_t i = 0; i < keybindings_num; i++) {
         fprintf(fp, "bind\n");
-        fprintf(fp, "\t# %s\n\tkey %d\n", SDL_GetKeyName(keybindings[i]->key), keybindings[i]->key);
+        fprintf(fp,
+                "\t# %s\n\tkey %" PRIu32 "\n",
+                SDL_GetKeyName(keybindings[i]->key),
+                keybindings[i]->key);
 
         if (keybindings[i]->mod != 0) {
             fprintf(fp, "\tmod %d\n", keybindings[i]->mod);
@@ -176,43 +186,6 @@ void keybind_deinit(void) {
     keybindings = NULL;
 
     keybindings_num = 0;
-}
-
-/**
- * Adjust SDL_Keymod state value. This is done because the state may have
- * other flags we do not care about, and we do not want to save those
- * to file. It also simplifies keyboard modifier state checks.
- * @param mod
- * State to adjust.
- * @return
- * Adjusted state.
- */
-static SDL_Keymod keybind_adjust_kmod(SDL_Keymod mod) {
-    /* We only care about left/right shift, ctrl, alt, and super
-     * modifiers, so remove any others. */
-    mod &= SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI;
-
-    /* The following code deals with making sure that if the modifier
-     * contains only for example left shift modifier, right shift is also
-     * added to the modifier, in order to simplify saving and state
-     * checks. */
-    if (mod & SDL_KMOD_SHIFT) {
-        mod |= SDL_KMOD_SHIFT;
-    }
-
-    if (mod & SDL_KMOD_CTRL) {
-        mod |= SDL_KMOD_CTRL;
-    }
-
-    if (mod & SDL_KMOD_ALT) {
-        mod |= SDL_KMOD_ALT;
-    }
-
-    if (mod & SDL_KMOD_GUI) {
-        mod |= SDL_KMOD_GUI;
-    }
-
-    return mod;
 }
 
 /**
@@ -310,46 +283,6 @@ void keybind_repeat_toggle(size_t i) {
 }
 
 /**
- * Construct a text representation of a keybinding shortcut.
- * @param key
- * Key of the shortcut.
- * @param mod
- * Keyboard modifier.
- * @param buf
- * Where to store the result.
- * @param len
- * Size of 'buf'.
- * @return
- * 'buf'.
- */
-char *keybind_get_key_shortcut(SDL_Keycode key, SDL_Keymod mod, char *buf, size_t len) {
-    buf[0] = '\0';
-
-    /* Prefix with the keyboard modifier. */
-    if (mod & SDL_KMOD_SHIFT) {
-        strncat(buf, "shift + ", len - strlen(buf) - 1);
-    }
-
-    if (mod & SDL_KMOD_CTRL) {
-        strncat(buf, "ctrl + ", len - strlen(buf) - 1);
-    }
-
-    if (mod & SDL_KMOD_ALT) {
-        strncat(buf, "alt + ", len - strlen(buf) - 1);
-    }
-
-    if (mod & SDL_KMOD_GUI) {
-        strncat(buf, "super + ", len - strlen(buf) - 1);
-    }
-
-    if (key != SDLK_UNKNOWN) {
-        strncat(buf, SDL_GetKeyName(key), len - strlen(buf) - 1);
-    }
-
-    return buf;
-}
-
-/**
  * Finds keybinding structure by command name.
  * @param cmd
  * The command to find.
@@ -382,8 +315,7 @@ int keybind_command_matches_event(const char *cmd, SDL_KeyboardEvent *event) {
         return 0;
     }
 
-    if (event->key == keybind->key &&
-        (!keybind->mod || keybind->mod == keybind_adjust_kmod(event->mod))) {
+    if (keybind_matches_event(keybind, event)) {
         return 1;
     }
 

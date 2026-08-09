@@ -11,6 +11,7 @@ set(SOURCES
 	src/client/item.c
 	src/client/join_credentials.c
 	src/client/keybind.c
+	src/client/keybind_input.c
 	src/client/lighting.c
 	src/client/main.c
 	src/client/menu.c

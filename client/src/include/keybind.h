@@ -33,6 +33,9 @@
 /** Where keybindings are saved. */
 #define FILE_KEYBIND "settings/keys.dat"
 
+/** Current on-disk keycode format. */
+#define KEYBIND_KEYCODE_FORMAT 3
+
 /**
  * One keybind.
  */
@@ -71,6 +74,14 @@ extern void keybind_edit(size_t i, SDL_Keycode key, SDL_Keymod mod, const char *
 extern void keybind_remove(size_t i);
 
 extern void keybind_repeat_toggle(size_t i);
+
+extern SDL_Keycode keybind_keycode_from_legacy(uint32_t key);
+
+extern bool keybind_keycode_parse(const char *text, bool legacy, SDL_Keycode *key);
+
+extern SDL_Keymod keybind_adjust_kmod(SDL_Keymod mod);
+
+extern bool keybind_matches_event(const keybind_struct *keybind, const SDL_KeyboardEvent *event);
 
 extern char *keybind_get_key_shortcut(SDL_Keycode key, SDL_Keymod mod, char *buf, size_t len);
 
