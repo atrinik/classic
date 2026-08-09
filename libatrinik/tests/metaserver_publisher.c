@@ -281,8 +281,32 @@ static void sequence_persistence_test(const char *server_id) {
 #endif
 
     uint64_t sequence = 0;
-    require(metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence) ==
-            METASERVER_PUBLISH_SEQUENCE_OK);
+    metaserver_publish_sequence_result_t initial =
+        metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence);
+    if (initial != METASERVER_PUBLISH_SEQUENCE_OK) {
+        fprintf(stderr,
+                "initial sequence reservation failed: result=%d directory=%s\n",
+                initial,
+                directory);
+        for (unsigned int i = 0; i < 2; i++) {
+            char slot[HUGE_BUF], value[22];
+            bool permissive = false;
+            require(snprintf(VS(slot),
+                             "%s/metaserver-publish-sequence-%s.%u",
+                             directory,
+                             server_id,
+                             i) < (int)sizeof(slot));
+            path_secret_error_t error = path_read_secret(slot, VS(value), &permissive);
+            fprintf(stderr,
+                    "sequence slot %u after failure: error=%d (%s) permissive=%d value=%s\n",
+                    i,
+                    error,
+                    path_secret_error_string(error),
+                    permissive,
+                    error == PATH_SECRET_OK ? value : "<unavailable>");
+        }
+    }
+    require(initial == METASERVER_PUBLISH_SEQUENCE_OK);
     require(sequence == 1);
     require(metaserver_publish_sequence_reserve(directory, server_id, 1, &sequence) ==
             METASERVER_PUBLISH_SEQUENCE_OK);
