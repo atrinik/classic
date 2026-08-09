@@ -190,6 +190,7 @@ static player *get_player(player *p) {
             p->prev = last_player;
             last_player = p;
         }
+        metaserver_info_update();
     } else {
         /* Clears basically the entire player structure except
          * for next and socket. */
@@ -268,6 +269,7 @@ void free_player(player *pl) {
     } else {
         last_player = pl->prev;
     }
+    metaserver_info_update();
 
     if (pl->ob) {
         SET_FLAG(pl->ob, FLAG_NO_FIX_PLAYER);
