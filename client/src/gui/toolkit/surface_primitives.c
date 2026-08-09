@@ -458,8 +458,7 @@ static bool surface_has_palette_alpha(SDL_Surface *surface) {
         return false;
     }
 
-    Uint32 color_key;
-    if (SDL_GetSurfaceColorKey(surface, &color_key)) {
+    if (SDL_SurfaceHasColorKey(surface)) {
         return false;
     }
 

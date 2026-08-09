@@ -13,12 +13,11 @@
 
 SDL_Surface *ScreenSurface = NULL;
 
-#define TEST_CHECK(condition)                                                              \
-    do {                                                                                   \
-        if (!(condition)) {                                                                \
-            fprintf(stderr, "Test failed at %s:%d: %s\n", __FILE__, __LINE__, #condition); \
-            abort();                                                                       \
-        }                                                                                  \
+#define TEST_CHECK(condition) \
+    do {                      \
+        if (!(condition)) {   \
+            abort();          \
+        }                     \
     } while (0)
 
 static void test_packed_indexed_conversion(void) {
