@@ -11,6 +11,19 @@ class WorkflowContractTests(unittest.TestCase):
     def text(self, name: str) -> str:
         return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
+    def test_nested_component_automation_remains_retired(self) -> None:
+        for module in ("client", "editor", "libatrinik", "protocol", "server"):
+            with self.subTest(module=module):
+                github = ROOT / module / ".github"
+                if github.exists():
+                    self.assertFalse(
+                        any(
+                            path.is_file() or path.is_symlink()
+                            for path in github.rglob("*")
+                        )
+                    )
+                self.assertFalse((ROOT / module / ".releaserc.json").exists())
+
     def test_semantic_release_follows_successful_current_main_check(self) -> None:
         workflow = self.text("release.yml")
         self.assertIn("  workflow_dispatch:\n", workflow)

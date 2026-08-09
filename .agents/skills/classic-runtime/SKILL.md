@@ -1,52 +1,43 @@
 ---
 name: classic-runtime
-description: Prepare, run, diagnose, and validate the Atrinik classic client/server stack through the atrinik/atrinik workspace wrapper. Use for runtime smoke tests, deterministic scenarios, collected content or resources, mutable server state, topology supervision, client launches, or failures that only appear with the classic stack running.
+description: Run or diagnose the classic client/server stack through wrapper profiles, scenarios, isolated state, and supervised topologies.
 ---
 
 # Classic runtime
 
-## Use the workspace boundary
+Run from the `atrinik/atrinik` wrapper root. The wrapper owns builds,
+collection, state locks, ports, PIDs, logs, supervision, and client config; do
+not reconstruct or edit its generated paths.
 
-Runtime composition is owned by `atrinik/atrinik`, not this repository. Work
-from that wrapper root and use a profile based on `classic`, which combines this
-monorepo with `content@1.x`, resources, and sound. Do not reconstruct build,
-collection, state, port, PID, log, or client-configuration paths manually.
-
-Use a distinct profile/worktree when testing source changes. Use a distinct
-topology name and state for every concurrent run. Never reuse another running
-topology's mutable state or client configuration directory.
-
-## Deterministic workflow
+Use a classic-derived profile selecting the full classic worktree. Give every
+concurrent topology a distinct name and state. For a deterministic account and
+character, let the scenario own its dedicated `scenario-NAME` state:
 
 ```sh
-./atrinik topology show PROFILE --state STATE
-./atrinik state add STATE
-./atrinik scenario create SCENARIO --profile PROFILE --state STATE
-./atrinik up --name TOPOLOGY --profile PROFILE --state STATE
-./atrinik ps TOPOLOGY
-./atrinik logs --tail 200 TOPOLOGY server
-./atrinik logs --tail 200 TOPOLOGY client
+./atrinik profile show PROFILE
+./atrinik scenario create NAME --profile PROFILE --preset basic-player
+./atrinik scenario show NAME --json
+./atrinik scenario credentials NAME
+./atrinik topology show PROFILE --state scenario-NAME --json
+./atrinik up --name NAME --profile PROFILE --state scenario-NAME
+./atrinik ps NAME --json
+./atrinik logs NAME server --tail 200
+./atrinik logs NAME client --tail 200
 ```
 
-Perform the feature-specific action with the provisioned account and record the
-expected observable result. When a graphical client is needed, state the X11 or
-Wayland and audio prerequisites. Diagnose through wrapper status and logs before
-inspecting generated paths.
+State display/audio prerequisites and perform the feature-specific login/actions
+with an exact expected result. Diagnose wrapper status/logs before generated
+paths. Never expose credentials or handcraft accounts, players, keys, or
+identities.
 
-Always clean up the supervised processes:
+Always stop the topology. Reset only scenario-owned state when a clean repeat
+is needed; there is no generic state-removal command:
 
 ```sh
-./atrinik down TOPOLOGY
+./atrinik down NAME
+./atrinik scenario reset NAME
 ```
 
-Retain a state only when the user needs it for follow-up debugging; otherwise
-use the wrapper's explicit state cleanup command after the topology is down.
-Never delete or rewrite accounts, players, keys, identities, or state directories
-directly.
-
-## Handoff
-
-Report the exact profile, classic worktree, topology, state, scenario, assigned
-endpoint, automated tests, log observations, manual actions, expected result,
-display prerequisites, and cleanup commands. A successful process start alone
-is not feature verification.
+Report the profile, classic worktree, topology/scenario/state, automated tests,
+log observations, actions/results, prerequisites, and cleanup. Process startup
+alone is not feature verification.

@@ -9,11 +9,9 @@
   invariants while using monorepo ownership and release terminology.
 - Content is not vendored here. Classic runtime content comes from
   `atrinik/content@1.x`; sound and resources remain separate repositories.
-- Root `.github/` is the only active GitHub configuration. Nested component
-  `.github/` directories and `.releaserc.json` files are inert migration inputs
-  that record capabilities the unified release pipeline must preserve. Do not
-  enable, update, or remove them independently; retire them atomically only
-  after root automation has proven equivalent behavior.
+- Root `.github/` and `.releaserc.cjs` are the only active GitHub/release
+  configuration. Retired nested component copies remain recoverable from Git
+  history; do not reintroduce an independent module release train.
 - Use `.agents/skills/classic-native-change` for C17/CMake work,
   `.agents/skills/classic-protocol-change` for wire contracts, and
   `.agents/skills/classic-runtime` for integrated execution. Cross-repository
@@ -44,21 +42,9 @@
 - Commits and pull-request titles use Conventional Commits. Preferred scopes are
   `client`, `server`, `editor`, `libatrinik`, `protocol`, `build`, `ci`, `docs`,
   and `release`.
-- Root semantic-release owns one unprefixed version for the complete repository.
-  Analyze and describe only commits on `main`'s first-parent line; imported
-  component parents are provenance, not new unified release changes. Missing-release
-  recovery must use the same repository-owned first-parent selector and official
-  pinned notes generator as automatic publication.
-  Publication requires the exact successful `Classic validation` commit,
-  finalized closed-set artifacts, draft-first digest reconciliation,
-  checksums, SBOMs, locked-input evidence, attestations, and an immutable final
-  release. Never create, move, delete, or replace a release tag, versioned image,
-  or published release asset manually; use the documented rehearsal and
-  recovery procedures in `docs/RELEASING.md`.
-- Treat repository immutable releases as an externally governed and live-audited
-  activation prerequisite. Production packaging must verify immutable published
-  state as a postcondition. Only the globally serialized promoter may mutate the
-  GHCR `latest` alias, and it must recompute GitHub's authoritative latest release.
+- Root semantic-release owns one unprefixed repository version and first-parent
+  release history. Never hand-edit tags, images, drafts, or release assets; use
+  the checked publication/recovery procedures in `docs/RELEASING.md`.
 - `tools/ci/classify_changes.py` is the single path-selection contract for
   native Check and CodeQL work. Pull requests are path-aware; protocol,
   libatrinik, and validation-contract changes select both client and server.
