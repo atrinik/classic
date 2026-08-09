@@ -256,8 +256,16 @@ bool metaserver_publisher_build(metaserver_publisher_profile_t profile,
                                 const void *body,
                                 size_t body_size,
                                 metaserver_publisher_components_t *components) {
+#ifdef WIN32
+    fprintf(stderr, "publisher build trace: enter\n");
+    fflush(stderr);
+#endif
     HARD_ASSERT(components != NULL);
     memset(components, 0, sizeof(*components));
+#ifdef WIN32
+    fprintf(stderr, "publisher build trace: output cleared\n");
+    fflush(stderr);
+#endif
 
     const char *prefix = NULL;
     const char *tag = NULL;
@@ -270,6 +278,10 @@ bool metaserver_publisher_build(metaserver_publisher_profile_t profile,
     } else {
         return false;
     }
+#ifdef WIN32
+    fprintf(stderr, "publisher build trace: profile selected\n");
+    fflush(stderr);
+#endif
     unsigned char nonce_or = 0;
     for (size_t i = 0; nonce != NULL && i < METASERVER_PUBLISH_NONCE_SIZE; i++) {
         nonce_or |= nonce[i];
@@ -280,6 +292,10 @@ bool metaserver_publisher_build(metaserver_publisher_profile_t profile,
         body == NULL || body_size == 0 || body_size > METASERVER_PUBLISH_BODY_MAX) {
         return false;
     }
+#ifdef WIN32
+    fprintf(stderr, "publisher build trace: input validated\n");
+    fflush(stderr);
+#endif
 
     unsigned char digest[SHA256_DIGEST_LENGTH];
     char digest_base64[64];
@@ -291,6 +307,10 @@ bool metaserver_publisher_build(metaserver_publisher_profile_t profile,
         OPENSSL_cleanse(digest, sizeof(digest));
         return false;
     }
+#ifdef WIN32
+    fprintf(stderr, "publisher build trace: digest rendered\n");
+    fflush(stderr);
+#endif
     metaserver_publisher_hex_lower(nonce_hex);
 
     int path_length = snprintf(VS(components->path), "%s/%s/publish", prefix, server_id);
@@ -320,6 +340,10 @@ bool metaserver_publisher_build(metaserver_publisher_profile_t profile,
                                server_id,
                                sequence,
                                components->signature_input + strlen("atrinik="));
+#ifdef WIN32
+    fprintf(stderr, "publisher build trace: components rendered\n");
+    fflush(stderr);
+#endif
     OPENSSL_cleanse(digest, sizeof(digest));
     return path_length > 0 && (size_t)path_length < sizeof(components->path) && digest_length > 0 &&
            (size_t)digest_length < sizeof(components->content_digest) && input_length > 0 &&
