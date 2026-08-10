@@ -33,6 +33,16 @@ void client_metaserver_options_add(client_metaserver_options_t *options,
                                    const char *directory_url,
                                    const char *rendezvous_origin);
 
+/**
+ * Validate and append one `DIRECTORY RENDEZVOUS` option value.
+ *
+ * Validation completes before the list is mutated. On failure, `errmsg` owns
+ * an allocated, non-sensitive diagnostic when it is non-NULL.
+ */
+bool client_metaserver_options_parse(client_metaserver_options_t *options,
+                                     const char *value,
+                                     char **errmsg);
+
 /** Disable metaserver access and discard every previously configured pair. */
 void client_metaserver_options_disable(client_metaserver_options_t *options);
 

@@ -465,44 +465,9 @@ static const char *const clioptions_option_metaserver_desc =
     " --metaserver=\"https://classic.meta.example/index.xml "
     "https://rendezvous.meta.example/v1/classic\"";
 
-static bool clioptions_metaserver_word(const char **cursor, char *word, size_t word_size) {
-    const char *start = *cursor;
-    while (*start == ' ') {
-        start++;
-    }
-    const char *end = strchr(start, ' ');
-    size_t size = end != NULL ? (size_t)(end - start) : strlen(start);
-    if (size == 0 || size >= word_size) {
-        return false;
-    }
-    memcpy(word, start, size);
-    word[size] = '\0';
-    *cursor = end != NULL ? end : start + size;
-    return true;
-}
-
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_metaserver(const char *arg, char **errmsg) {
-    char directory_url[MAX_BUF];
-    char rendezvous_origin[MAX_BUF];
-    char rendered[MAX_BUF];
-    const char *cursor = arg;
-    static const char identity[] =
-        "0000000000000000000000000000000000000000000000000000000000000000";
-    if (!clioptions_metaserver_word(&cursor, VS(directory_url)) ||
-        !clioptions_metaserver_word(&cursor, VS(rendezvous_origin)) || *cursor != '\0' ||
-        !metaserver_url_directory_valid(directory_url) ||
-        !metaserver_url_rendezvous(rendezvous_origin, identity, "client", VS(rendered))) {
-        string_fmt(*errmsg,
-                   "%s",
-                   "metaserver requires one canonical directory URL and one canonical "
-                   "rendezvous origin");
-        return false;
-    }
-    client_metaserver_options_add(&clioption_settings.metaservers,
-                                  directory_url,
-                                  rendezvous_origin);
-    return true;
+    return client_metaserver_options_parse(&clioption_settings.metaservers, arg, errmsg);
 }
 
 /**
