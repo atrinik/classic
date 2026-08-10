@@ -1156,6 +1156,9 @@ void player_path_handle(player *pl) {
             if (map == tmp->map && x == tmp->x && y == tmp->y) {
                 pl->move_path = tmp->next;
                 free(tmp);
+                if (pl->move_path == NULL) {
+                    pl->move_path_end = NULL;
+                }
             } else if (rv.distance <= 1 && dir != 0) {
                 /* Clear all paths if we above check failed: this can happen
                  * if we got teleported somewhere else by a teleporter or a

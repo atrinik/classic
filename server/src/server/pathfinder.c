@@ -391,7 +391,18 @@ int path_tile_blocked(object *op, mapstruct *map, int x, int y) {
         block = object_blocked(op, map, x, y);
     }
 
-    return block;
+    if (block != 0) {
+        return block;
+    }
+
+    if ((GET_MAP_FLAGS(map, x, y) & P_DOOR_CLOSED) == 0 &&
+        (op->type != PLAYER || !CONTR(op)->tcl) && (op->behavior & BEHAVIOR_SECRET_PASSAGES) == 0 &&
+        (op->type == PLAYER || !OBJECT_VALID(op->enemy, op->enemy_count)) &&
+        blocks_view(map, x, y)) {
+        return P_BLOCKSVIEW;
+    }
+
+    return 0;
 }
 
 /**
@@ -998,15 +1009,6 @@ static bool path_core_neighbors(void *context,
         if (map == NULL || path_tile_blocked(adapter->op, map, x, y) != 0) {
             continue;
         }
-        if ((GET_MAP_FLAGS(map, x, y) & P_DOOR_CLOSED) == 0 &&
-            (adapter->op->type != PLAYER || !CONTR(adapter->op)->tcl) &&
-            (adapter->op->behavior & BEHAVIOR_SECRET_PASSAGES) == 0 &&
-            (adapter->op->type == PLAYER ||
-             !OBJECT_VALID(adapter->op->enemy, adapter->op->enemy_count)) &&
-            blocks_view(map, x, y)) {
-            continue;
-        }
-
         bool created;
         path_state_t *neighbor = path_state_get(adapter, map, x, y, true, &created);
         if (neighbor == NULL) {
