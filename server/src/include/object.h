@@ -607,7 +607,7 @@ struct oblnk {
  */
 #define REMOVE_NO_WEIGHT 1
 /**
- * Do not perform walk off check.
+ * Do not perform walk-off or fly-off checks.
  */
 #define REMOVE_NO_WALK_OFF 2
 /*@}*/
