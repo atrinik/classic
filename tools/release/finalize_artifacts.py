@@ -237,6 +237,7 @@ def validate_zip(
                 raise RuntimeError(f"{path.name} is missing packaged {pattern}")
             if not any(size > 0 for size in matches):
                 raise RuntimeError(f"{path.name} has only empty packaged {pattern}")
+        unique_matches = set()
         for directory, pattern in unique_files:
             matches = [
                 name
@@ -248,6 +249,11 @@ def validate_zip(
                 raise RuntimeError(
                     f"{path.name} must contain exactly one packaged {directory}/{pattern}"
                 )
+            if matches[0] in unique_matches:
+                raise RuntimeError(
+                    f"{path.name} uses one packaged file for multiple unique roles: {matches[0]}"
+                )
+            unique_matches.add(matches[0])
         for pattern in forbidden_patterns:
             if any(
                 fnmatch.fnmatchcase(name.casefold(), pattern.casefold())

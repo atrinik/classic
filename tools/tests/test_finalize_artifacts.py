@@ -301,6 +301,20 @@ class FinalizeArtifactsTests(unittest.TestCase):
                 finalize_artifacts.SERVER_WINDOWS_UNIQUE_FILES,
             )
 
+        overlapping_plugin = self.root / "overlapping-plugin.zip"
+        with zipfile.ZipFile(overlapping_plugin, "w") as archive:
+            archive.writestr(
+                f"{package}/server/plugin_arena_plugin_python.dll", b"both"
+            )
+        with self.assertRaisesRegex(RuntimeError, "multiple unique roles"):
+            finalize_artifacts.validate_zip(
+                overlapping_plugin,
+                package,
+                (),
+                (),
+                finalize_artifacts.SERVER_WINDOWS_UNIQUE_FILES,
+            )
+
         nested_plugins = self.root / "nested-plugins.zip"
         with zipfile.ZipFile(nested_plugins, "w") as archive:
             archive.writestr(f"{package}/server/nested/plugin_arena.dll", b"arena")

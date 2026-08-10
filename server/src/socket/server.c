@@ -341,7 +341,6 @@ TOOLKIT_INIT_FUNC(socket_server) {
         snprintf(VS(identity_path), "%s/quic-identity.pem", settings.datapath);
         bool dual = BIT_QUERY(stack_setting.type, STACK_DUAL);
         bool bind_v4 = dual || BIT_QUERY(stack_setting.type, STACK_IPV4);
-        bool bind_v6 = dual || BIT_QUERY(stack_setting.type, STACK_IPV6);
         if (bind_v4) {
             quic_server_sockets[0] = socket_quic_server_create(stack_setting.v4_host,
                                                                settings.port_quic,
@@ -349,7 +348,7 @@ TOOLKIT_INIT_FUNC(socket_server) {
                                                                identity_path);
         }
 #ifdef HAVE_IPV6
-        if (bind_v6) {
+        if (dual || BIT_QUERY(stack_setting.type, STACK_IPV6)) {
             quic_server_sockets[1] = socket_quic_server_create(stack_setting.v6_host,
                                                                settings.port_quic,
                                                                false,
