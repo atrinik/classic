@@ -58,7 +58,8 @@ cmake -S . -B "${region_build}" -G Ninja \
 cmake --build "${region_build}" \
   --target atrinik-server plugin_arena plugin_python --parallel "$(nproc)"
 
-cmake -E make_directory "${region_runtime}" "${region_data}/http" \
+region_assets=${package_root}/region-assets
+cmake -E make_directory "${region_runtime}" "${region_assets}" \
   "${region_data}/tmp"
 cmake -E copy "${region_build}/atrinik-server" \
   "${region_build}/libplugin_arena.so" \
@@ -73,14 +74,15 @@ repository_root=$(pwd)
     --libpath="${repository_root}/${package_root}/lib" \
     --mapspath="${repository_root}/${package_root}/maps" \
     --datapath="${repository_root}/${region_data}" \
-    --httppath="${repository_root}/${region_data}/http" \
+    --assetspath="${repository_root}/${region_assets}" \
     --resourcespath="${repository_root}/resources"
 )
-test -d "${region_data}/http/client-maps"
-cmake -E copy_directory "${region_data}/http/client-maps" \
+test -d "${region_assets}/client-maps"
+cmake -E copy_directory "${region_assets}/client-maps" \
   "${package_root}/client-maps"
 cmake -E remove_directory "${region_runtime}"
 cmake -E remove_directory "${region_data}"
+cmake -E remove_directory "${region_assets}"
 
 "${mxe_cmake}" -S . -B build/windows-release -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
