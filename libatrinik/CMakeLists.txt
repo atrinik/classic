@@ -190,6 +190,8 @@ else ()
 endif ()
 
 find_package(OpenSSL REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(IDN2 REQUIRED IMPORTED_TARGET libidn2)
 
 # This is very ugly. There is essentially a namespace clash between newer
 # MinGW and the Windows port of pthreads, and they both define a timespec
@@ -303,6 +305,7 @@ set(TOOLKIT_SOURCES
     datetime.c
     logger.c
     map_protocol.c
+    metaserver_url.c
     metaserver_publisher.c
     metaserver_publisher_sequence.c
     math.c
@@ -364,6 +367,7 @@ if (TARGET CURL::libcurl)
 else ()
     target_link_libraries(${ATRINIK_TOOLKIT} PRIVATE ${CURL_LIBRARIES})
 endif ()
+target_link_libraries(${ATRINIK_TOOLKIT} PRIVATE PkgConfig::IDN2)
 target_link_libraries(${ATRINIK_TOOLKIT} PRIVATE Threads::Threads)
 
 if (MINGW)
@@ -461,6 +465,11 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_test(NAME libatrinik-metaserver-publisher
             COMMAND libatrinik-metaserver-publisher
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/metaserver-publisher-v1.json")
+
+        add_executable(libatrinik-metaserver-url tests/metaserver_url.c)
+        atrinik_configure_target(libatrinik-metaserver-url)
+        target_link_libraries(libatrinik-metaserver-url PRIVATE Atrinik::Core)
+        add_test(NAME libatrinik-metaserver-url COMMAND libatrinik-metaserver-url)
 
         if (NOT WIN32)
             add_executable(libatrinik-curl tests/curl.c)

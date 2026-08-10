@@ -251,6 +251,24 @@ if (MINGW)
 endif ()
 
 if (BUILD_TESTING AND NOT MINGW)
+    add_executable(client-metaserver-directory-tests
+        src/tests/metaserver_directory.c
+        src/client/metaserver_directory.c)
+    atrinik_configure_target(client-metaserver-directory-tests)
+    target_include_directories(client-metaserver-directory-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-metaserver-directory-tests PRIVATE Atrinik::Core)
+    if (TARGET LibXml2::LibXml2)
+        target_link_libraries(client-metaserver-directory-tests PRIVATE LibXml2::LibXml2)
+    else ()
+        target_include_directories(client-metaserver-directory-tests PRIVATE ${LIBXML2_INCLUDE_DIR})
+        target_link_libraries(client-metaserver-directory-tests PRIVATE ${LIBXML2_LIBRARIES})
+    endif ()
+    add_test(NAME client-metaserver-directory
+        COMMAND client-metaserver-directory-tests
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/classic-directory-v4.xml")
+
     add_executable(client-connection-failure-tests
         src/tests/connection_failure.c
         src/client/connection_failure.c

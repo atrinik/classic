@@ -18,6 +18,7 @@ set(SOURCES
 	src/client/main.c
 	src/client/menu.c
 	src/client/metaserver.c
+	src/client/metaserver_directory.c
 	src/client/metaserver_direct.c
 	src/client/metaserver_identity.c
 	src/client/misc.c

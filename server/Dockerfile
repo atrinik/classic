@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        build-essential ca-certificates cmake flex git libcurl4-openssl-dev \
+        build-essential ca-certificates cmake flex git libcurl4-openssl-dev libidn2-dev \
         libgd-dev libminiupnpc-dev libreadline-dev libssl-dev ninja-build \
         pkgconf python3-dev zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -51,7 +51,7 @@ FROM ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7
 ENV DEBIAN_FRONTEND=noninteractive ATRINIK_HTTP_URL=off
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates libcrypt1 libcurl4t64 libgd3 libminiupnpc21 \
+        ca-certificates libcrypt1 libcurl4t64 libgd3 libidn2-0 libminiupnpc21 \
         libpython3.14 libreadline8t64 libssl3t64 python3 zlib1g \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 atrinik

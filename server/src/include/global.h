@@ -346,10 +346,11 @@ typedef struct settings_struct {
      */
     char resourcespath[MAX_BUF];
 
-    /**
-     * HTTP URL of the metaserver.
-     */
-    char metaserver_url[MAX_BUF];
+    /** Canonical origin for signed metadata publication. */
+    char metaserver_publish_origin[MAX_BUF];
+
+    /** Canonical origin and profile prefix for rendezvous signaling. */
+    char metaserver_rendezvous_origin[MAX_BUF];
 
     /** Jittered metaserver liveness-heartbeat base interval, in seconds. */
     uint32_t metaserver_heartbeat;
