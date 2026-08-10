@@ -143,6 +143,15 @@ jobs:
       packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Stage deterministic client package inputs
+        working-directory: client
+        run: |
+          python3 tools/dependencies.py sync
+          umask 077
+          mkdir -p ../build
+          printf '%s\n' '111111111111111111' > data/discord-application-id
+          printf '%s\n' '123456789012345678' > \
+            ../build/discord-test-application-id
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
@@ -158,6 +167,8 @@ jobs:
             --env CCACHE_DIR=/tmp/atrinik-libatrinik-ccache \
             --env CCACHE_TEMPDIR=/tmp/atrinik-libatrinik-ccache-tmp \
             --env CCACHE_MAXSIZE=250M \
+            --env ATRINIK_PACKAGE_VERSION=0.0.0 \
+            --env ATRINIK_DISCORD_APPLICATION_ID_FILE=/workspace/build/discord-test-application-id \
             --env PATH=/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace \
@@ -175,6 +186,24 @@ jobs:
                 --target libatrinik-path libatrinik-rendezvous libatrinik-metaserver-publisher \
                   libatrinik-metaserver-url libatrinik-stun \
                 --parallel "$(nproc)"
+              cd client
+              bash tools/build-windows-package.sh build/windows-pr-package
+              package=$(find build/windows-pr-package -maxdepth 1 -type f \
+                -name "atrinik-classic-client-*-windows-x86_64.zip" -print)
+              test -n "${package}"
+              test "$(printf "%s\n" ${package} | wc -l)" -eq 1
+              python3 -c "
+          import sys, zipfile
+          application_id = b\"123456789012345678\\n\"
+          with zipfile.ZipFile(sys.argv[1]) as archive:
+              names = archive.namelist()
+              executable = next(name for name in names if name.endswith(\"/atrinik.exe\"))
+              config = next(name for name in names if name.endswith(\"/data/discord-application-id\"))
+              assert archive.read(config) == application_id
+              assert b\"111111111111111111\" not in archive.read(config)
+              assert application_id.strip() not in archive.read(executable)
+          " "${package}"
+              cd ..
               stage=libatrinik/build/windows-test-bundle
               cmake -E remove_directory "${stage}"
               python3 tools/ci/stage_windows_runtime.py \
@@ -185,7 +214,8 @@ jobs:
                 libatrinik/build/windows-tests/libatrinik-rendezvous.exe \
                 libatrinik/build/windows-tests/libatrinik-metaserver-publisher.exe \
                 libatrinik/build/windows-tests/libatrinik-metaserver-url.exe \
-                libatrinik/build/windows-tests/libatrinik-stun.exe
+                libatrinik/build/windows-tests/libatrinik-stun.exe \
+                client/build/windows-release/client-rich-presence-tests.exe
               cmake -E copy_directory libatrinik/tests/fixtures "${stage}/fixtures"
             '
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -242,6 +272,11 @@ jobs:
           & (Join-Path $bundle "libatrinik-stun.exe")
           if ($LASTEXITCODE -ne 0) {
             throw "libatrinik-stun.exe failed with exit code ${LASTEXITCODE}"
+          }
+
+          & (Join-Path $bundle "client-rich-presence-tests.exe")
+          if ($LASTEXITCODE -ne 0) {
+            throw "client-rich-presence-tests.exe failed with exit code ${LASTEXITCODE}"
           }
 
   server:

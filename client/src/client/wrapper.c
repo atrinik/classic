@@ -58,6 +58,7 @@ void system_start(void) {
  * End the system.
  */
 void system_end(void) {
+    rich_presence_deinit();
     tooltip_dismiss();
     object_deinit();
     notification_destroy();

@@ -33,6 +33,7 @@ NATIVE_SHARED_TOOL_PREFIXES = (
 )
 WINDOWS_TEST_PREFIXES = (
     ".github/workflows/",
+    "client/",
     "libatrinik/",
     "protocol/",
     "tools/ci/",
