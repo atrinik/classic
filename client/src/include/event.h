@@ -138,6 +138,8 @@ extern void client_send_fire(int num, tag_t tag);
 
 extern void move_keys(int num);
 
+extern void move_keys_clear(void);
+
 extern int dir_from_tile_coords(int tx, int ty);
 
 #endif

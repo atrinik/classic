@@ -53,6 +53,9 @@
 /** Active physical keys contributing to the logical gameplay movement stream. */
 static keybind_movement_state movement_state;
 
+/** Whether releasing the run modifier still needs an end-of-poll stop. */
+static bool movement_run_stop_pending;
+
 /**
  * Add a keybinding to the ::keybindings array.
  * @param key
@@ -307,7 +310,7 @@ int keybind_process_command_up(const char *cmd) {
 
         if (!strcmp(cmd, "RUNON")) {
             cpl.run_on = 0;
-            move_keys(0);
+            movement_run_stop_pending = true;
         } else if (!strcmp(cmd, "FIREON")) {
             cpl.fire_on = 0;
         } else if (!strncmp(cmd, "MOVE_", 5)) {
@@ -342,10 +345,7 @@ void keybind_state_ensure(void) {
     }
 
     if (cpl.run_on && !keybind_command_matches_state("?RUNON")) {
-        cpl.run_on = 0;
-        if (!movement_state.pending_stop) {
-            move_keys(0);
-        }
+        keybind_process_command_up("?RUNON");
     }
 
     if (cpl.fire_on && !keybind_command_matches_state("?FIREON")) {
@@ -358,8 +358,17 @@ void keybind_movement_flush(void) {
     uint8_t direction;
     keybind_movement_action action = keybind_movement_state_flush(&movement_state, &direction);
 
-    if (action != KEYBIND_MOVEMENT_ACTION_NONE) {
+    if (action == KEYBIND_MOVEMENT_ACTION_MOVE) {
         move_keys(direction);
+        movement_run_stop_pending = false;
+    } else if (action == KEYBIND_MOVEMENT_ACTION_STOP) {
+        move_keys_clear();
+        movement_run_stop_pending = false;
+    } else if (movement_run_stop_pending) {
+        if (!cpl.fire_on) {
+            move_keys(0);
+        }
+        movement_run_stop_pending = false;
     }
 }
 

@@ -54,6 +54,13 @@ void client_send_fire(int num, tag_t tag) {
     socket_send_packet(packet);
 }
 
+/** Stop a repeated/running movement stream without applying fire modifiers. */
+void move_keys_clear(void) {
+    packet_struct *packet = packet_new(SERVER_CMD_CLEAR, 0, 0);
+
+    socket_send_packet(packet);
+}
+
 void move_keys(int num) {
     if (cpl.fire_on) {
         client_send_fire(num, 0);
@@ -61,8 +68,7 @@ void move_keys(int num) {
         packet_struct *packet;
 
         if (num == 5) {
-            packet = packet_new(SERVER_CMD_CLEAR, 0, 0);
-            socket_send_packet(packet);
+            move_keys_clear();
         } else {
             packet = packet_new(SERVER_CMD_MOVE, 8, 0);
             packet_writer_write_uint8(packet, num ? directions_fire[num - 1] : 0);
