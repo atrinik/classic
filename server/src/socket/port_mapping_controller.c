@@ -10,6 +10,7 @@ bool socket_port_mapping_controller_open(socket_port_mapping_controller_t *contr
                                          const socket_port_mapping_backend_t *backends,
                                          size_t backend_count,
                                          uint16_t port,
+                                         const char *local_host,
                                          char *host,
                                          size_t host_size,
                                          uint16_t *external_port) {
@@ -24,7 +25,7 @@ bool socket_port_mapping_controller_open(socket_port_mapping_controller_t *contr
         HARD_ASSERT(backend->name != NULL);
         HARD_ASSERT(backend->open != NULL);
 
-        if (backend->open(backend->data, port, host, host_size, external_port)) {
+        if (backend->open(backend->data, port, local_host, host, host_size, external_port)) {
             controller->active = backend;
             return true;
         }

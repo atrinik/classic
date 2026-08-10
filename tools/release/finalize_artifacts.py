@@ -88,13 +88,19 @@ def validate_member(name: str) -> None:
 def validate_windows_member(name: str) -> None:
     validate_member(name)
     components = name.removesuffix("/").split("/")
+    try:
+        oversized_component = any(
+            len(component.encode("utf-16-le")) // 2 > 255 for component in components
+        )
+    except UnicodeEncodeError as error:
+        raise RuntimeError(f"unsafe packaged path: {name}") from error
     if any(
         component.startswith(" ")
         or component.endswith((".", " "))
         or any(ord(char) < 32 or char in '<>:"|?*' for char in component)
         or component.split(".", 1)[0].casefold() in WINDOWS_RESERVED_NAMES
         for component in components
-    ):
+    ) or oversized_component:
         raise RuntimeError(f"unsafe packaged path: {name}")
 
 
@@ -251,6 +257,10 @@ def validate_zip(
             if len(matches) != 1:
                 raise RuntimeError(
                     f"{path.name} must contain exactly one packaged {directory}/{pattern}"
+                )
+            if files[matches[0]] == 0:
+                raise RuntimeError(
+                    f"{path.name} has an empty packaged {directory}/{pattern}"
                 )
             if matches[0] in unique_matches:
                 raise RuntimeError(

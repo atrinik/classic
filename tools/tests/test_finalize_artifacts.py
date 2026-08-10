@@ -231,6 +231,12 @@ class FinalizeArtifactsTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "unsafe packaged path"):
                     finalize_artifacts.validate_zip(windows_alias, "expected", ())
 
+        finalize_artifacts.validate_windows_member("a" * 255)
+        with self.assertRaisesRegex(RuntimeError, "unsafe packaged path"):
+            finalize_artifacts.validate_windows_member("a" * 256)
+        with self.assertRaisesRegex(RuntimeError, "unsafe packaged path"):
+            finalize_artifacts.validate_windows_member("\U0001f600" * 128)
+
         collisions = (
             ("expected/server", "expected/server/maps/regions.reg"),
             ("expected/server/maps/regions.reg", "expected/server"),
@@ -325,6 +331,22 @@ class FinalizeArtifactsTests(unittest.TestCase):
                 nested_plugins,
                 package,
                 (),
+                (),
+                finalize_artifacts.SERVER_WINDOWS_UNIQUE_FILES,
+            )
+
+        empty_root_plugin = self.root / "empty-root-plugin.zip"
+        with zipfile.ZipFile(empty_root_plugin, "w") as archive:
+            archive.writestr(f"{package}/server/plugin_arena.dll", b"")
+            archive.writestr(
+                f"{package}/server/nested/plugin_arena_payload.dll", b"nested"
+            )
+            archive.writestr(f"{package}/server/plugin_python.dll", b"python")
+        with self.assertRaisesRegex(RuntimeError, "empty packaged"):
+            finalize_artifacts.validate_zip(
+                empty_root_plugin,
+                package,
+                ("server/*plugin_arena*.dll", "server/*plugin_python*.dll"),
                 (),
                 finalize_artifacts.SERVER_WINDOWS_UNIQUE_FILES,
             )

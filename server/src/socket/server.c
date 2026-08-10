@@ -397,8 +397,12 @@ TOOLKIT_INIT_FUNC(socket_server) {
         }
         char mapped_host[65];
         uint16_t mapped_port;
-        if (listen_v4 && !restrict_v4 &&
-            socket_port_mapping_init(settings.port_quic, VS(mapped_host), &mapped_port)) {
+        const char *mapping_local_host = restrict_v4 ? stack_setting.v4_host : NULL;
+        if (listen_v4 && !v4_loopback &&
+            socket_port_mapping_init(settings.port_quic,
+                                     mapping_local_host,
+                                     VS(mapped_host),
+                                     &mapped_port)) {
             if (!socket_host_is_global(mapped_host)) {
                 LOG(INFO,
                     "Router mapping is not globally routable; retaining it as an intermediate "
