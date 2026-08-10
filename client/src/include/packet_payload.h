@@ -14,11 +14,6 @@
 
 #include <toolkit/packet.h>
 
-bool client_packet_parse_image(const uint8_t *data,
-                               size_t len,
-                               size_t pos,
-                               uint32_t *face_id,
-                               packet_view_t *image);
 bool client_packet_parse_file_update(const uint8_t *data,
                                      size_t len,
                                      size_t pos,

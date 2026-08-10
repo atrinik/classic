@@ -48,6 +48,12 @@ extern void socket_thread_stop(void);
 
 extern int handle_socket_shutdown(void);
 
+/** Whether a live client connection is present. */
+extern bool client_socket_active(void);
+
+/** Snapshot the live QUIC connection mode while holding its lifetime lock. */
+extern bool client_socket_connection_mode(socket_connection_mode_t *mode);
+
 extern void client_socket_close(client_socket_t *csock);
 
 extern void client_socket_deinitialize(void);

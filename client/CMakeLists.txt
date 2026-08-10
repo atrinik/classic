@@ -182,6 +182,11 @@ set(HAVE_SDL true)
 # SDL_image is also required, otherwise no bitmaps or map images could be
 # displayed.
 find_package(SDL3_image 3.2 CONFIG REQUIRED)
+if (SDLIMAGE_BACKEND_WIC)
+    message(FATAL_ERROR
+        "The asynchronous face loader requires a thread-safe SDL_image backend; WIC uses "
+        "process-global COM state and is not supported")
+endif ()
 set(HAVE_SDL_IMAGE true)
 
 # SDL_ttf is used for all text drawing, so it's required.
@@ -251,6 +256,8 @@ if (MINGW)
 endif ()
 
 if (BUILD_TESTING AND NOT MINGW)
+    target_compile_definitions(${EXECUTABLE} PRIVATE ATRINIK_WIDGET_TESTS)
+
     add_executable(client-stun-config-tests
         src/tests/stun_config.c
         src/client/stun_config.c)
@@ -332,6 +339,104 @@ if (BUILD_TESTING AND NOT MINGW)
         SDL3_ttf::SDL3_ttf)
     add_test(NAME client-compound-packet COMMAND client-compound-packet-tests)
 
+    add_executable(client-face-asset-tests
+        src/tests/face_asset.c
+        src/client/face_asset.c)
+    atrinik_configure_target(client-face-asset-tests)
+    target_include_directories(client-face-asset-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-face-asset-tests PRIVATE Atrinik::Core)
+    add_test(NAME client-face-asset COMMAND client-face-asset-tests)
+
+    add_executable(client-face-cache-tests
+        src/tests/face_cache.c
+        src/client/face_cache.c)
+    atrinik_configure_target(client-face-cache-tests)
+    target_compile_definitions(client-face-cache-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-face-cache-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-face-cache-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-face-cache COMMAND client-face-cache-tests)
+
+    add_executable(client-face-request-tests
+        src/tests/face_request.c
+        src/client/image.c
+        src/client/face_asset.c
+        src/client/face_loader.c
+        src/client/image_codec.c)
+    atrinik_configure_target(client-face-request-tests)
+    target_compile_definitions(client-face-request-tests PRIVATE
+        ATRINIK_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        ATRINIK_FACE_REQUEST_TESTING
+        ATRINIK_IMAGE_CODEC_TESTING
+        FACE_URGENT_MAX_AGE_MS=5
+        FACE_TRANSFER_RETRY_BASE_MS=1
+        SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-face-request-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-face-request-tests PRIVATE
+        Atrinik::Core
+        SDL3::SDL3
+        SDL3_image::SDL3_image)
+    add_test(NAME client-face-request COMMAND client-face-request-tests)
+
+    add_executable(client-image-codec-tests
+        src/tests/image_codec.c
+        src/client/image_codec.c)
+    atrinik_configure_target(client-image-codec-tests)
+    target_compile_definitions(client-image-codec-tests PRIVATE
+        ATRINIK_IMAGE_CODEC_TESTING
+        SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-image-codec-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-image-codec-tests PRIVATE
+        Atrinik::Core
+        SDL3::SDL3
+        SDL3_image::SDL3_image)
+    add_test(NAME client-image-codec COMMAND client-image-codec-tests)
+    set_tests_properties(client-image-codec PROPERTIES TIMEOUT 10)
+
+    add_executable(client-face-stream-tests
+        src/tests/face_stream.c
+        src/client/asset.c)
+    atrinik_configure_target(client-face-stream-tests)
+    target_compile_definitions(client-face-stream-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-face-stream-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-face-stream-tests PRIVATE
+        Atrinik::Core
+        SDL3::SDL3)
+    add_test(NAME client-face-stream COMMAND client-face-stream-tests)
+    set_tests_properties(client-face-stream PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 20)
+
+    add_executable(client-asset-batch-tests
+        src/tests/asset_batch.c
+        src/client/asset.c)
+    atrinik_configure_target(client-asset-batch-tests)
+    target_compile_definitions(client-asset-batch-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-asset-batch-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-asset-batch-tests PRIVATE
+        Atrinik::Core
+        SDL3::SDL3)
+    add_test(NAME client-asset-batch COMMAND client-asset-batch-tests)
+    set_tests_properties(client-asset-batch PROPERTIES TIMEOUT 10)
+
     add_executable(client-surface-primitives-tests
         src/tests/surface_primitives.c
         src/client/sprite_pixels.c
@@ -381,6 +486,26 @@ if (BUILD_TESTING AND NOT MINGW)
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(client-textwin-event-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-textwin-event COMMAND client-textwin-event-tests)
+
+    add_executable(client-widget-priority-tests
+        src/tests/widget_priority.c
+        src/gui/toolkit/widget_priority.c)
+    atrinik_configure_target(client-widget-priority-tests)
+    target_compile_definitions(client-widget-priority-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-widget-priority-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-widget-priority-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-widget-priority COMMAND client-widget-priority-tests)
+
+    add_test(NAME client-widget-priority-integration
+        COMMAND atrinik --widget-priority-test
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/widget-priority-interface.cfg"
+            "${CMAKE_CURRENT_BINARY_DIR}/widget-priority-interface-saved.cfg")
+    set_tests_properties(client-widget-priority-integration PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
     set(player_view_fixtures
         "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/player_view")

@@ -133,6 +133,9 @@ extern void sprite_init_system(void);
 
 extern sprite_struct *sprite_load_file(char *fname, uint32_t flags);
 
+/** Wrap and normalize a decoded surface, taking ownership on every path. */
+extern sprite_struct *sprite_from_surface(SDL_Surface *surface, uint32_t flags, bool enable_rle);
+
 extern sprite_struct *sprite_tryload_file(char *fname, uint32_t flag, SDL_IOStream *rwop);
 
 extern void sprite_free_sprite(sprite_struct *sprite);

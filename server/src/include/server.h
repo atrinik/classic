@@ -225,12 +225,43 @@ extern bool metaserver_rendezvous_token_parse(const char *body, size_t body_size
 /** Public API implemented in src/socket/assets.c. */
 
 extern void socket_assets_init(void);
+/**
+ * Borrow immutable startup-loaded face bytes and their digest.
+ *
+ * Returned pointers remain server-owned and valid until free_socket_images().
+ * The function is main/network-thread safe because the snapshot never mutates.
+ */
+extern bool
+face_get_asset(uint16_t face, const uint8_t **data, uint32_t *size, const uint8_t **digest);
 
 extern bool socket_assets_contains(const char *name);
 
 extern void socket_assets_deinit(void);
 
-extern bool socket_assets_service(socket_struct *ns);
+/** Register a live connection with the fair server-wide asset scheduler. */
+extern void socket_assets_connection_register(socket_struct *ns);
+
+/** Service registered connections once within the global tick budgets. */
+extern void socket_assets_service(void);
+
+/** Maximum logical asset requests admitted per connection and second. */
+#define SOCKET_ASSET_REQUEST_RATE_MAX 256U
+
+/** Calculate the aggregate byte allowance for one processing iteration. */
+extern size_t socket_assets_tick_byte_budget(void);
+
+/** Bound one connection's share in one fair scheduler pass. */
+extern size_t socket_assets_connection_pass_byte_budget(size_t remaining);
+
+/** Calculate service rounds for one validated face batch (including request FIN). */
+extern size_t socket_assets_face_batch_service_rounds(const uint32_t *body_sizes, size_t count);
+
+/**
+ * Atomically charge logical asset requests to a connection's abuse window.
+ * A rejected charge marks the connection for closure without partially
+ * consuming the requested amount.
+ */
+extern bool socket_assets_request_rate_allow(socket_struct *ns, unsigned int requests);
 
 extern bool socket_assets_pending(const socket_struct *ns);
 
