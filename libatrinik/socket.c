@@ -367,10 +367,15 @@ bool socket_connection_id_export(socket_t *sc) {
 }
 #endif
 
+static bool socket_stream_kind_valid(unsigned int kind) {
+    return kind == SOCKET_STREAM_GAME || kind == SOCKET_STREAM_ASSET ||
+           kind == SOCKET_STREAM_FACE_BATCH;
+}
+
 void socket_stream_preface_encode(uint8_t preface[SOCKET_STREAM_PREFACE_SIZE],
                                   socket_stream_kind_t kind) {
     HARD_ASSERT(preface != NULL);
-    HARD_ASSERT(kind == SOCKET_STREAM_GAME || kind == SOCKET_STREAM_ASSET);
+    HARD_ASSERT(socket_stream_kind_valid(kind));
     memcpy(preface, socket_stream_magic, sizeof(socket_stream_magic));
     preface[4] = (uint8_t)kind;
     preface[5] = 0;
@@ -384,8 +389,7 @@ bool socket_stream_preface_decode(const uint8_t *preface, size_t size, socket_st
     }
     uint16_t version = (uint16_t)((uint16_t)preface[6] << 8) | preface[7];
     if (memcmp(preface, socket_stream_magic, sizeof(socket_stream_magic)) != 0 || preface[5] != 0 ||
-        version != SOCKET_STREAM_PROTOCOL_VERSION ||
-        (preface[4] != SOCKET_STREAM_GAME && preface[4] != SOCKET_STREAM_ASSET)) {
+        version != SOCKET_STREAM_PROTOCOL_VERSION || !socket_stream_kind_valid(preface[4])) {
         return false;
     }
     *kind = (socket_stream_kind_t)preface[4];
@@ -568,7 +572,7 @@ socket_stream_t *socket_stream_open(socket_t *sc, socket_stream_kind_t kind) {
     HARD_ASSERT(sc != NULL);
 #if OPENSSL_VERSION_NUMBER >= 0x30500000L
     if (sc->transport != SOCKET_TRANSPORT_QUIC_CONNECTION || !sc->connection_id_final ||
-        (kind != SOCKET_STREAM_GAME && kind != SOCKET_STREAM_ASSET)) {
+        !socket_stream_kind_valid(kind)) {
         return NULL;
     }
     SSL *ssl = SSL_new_stream(sc->quic, SSL_STREAM_FLAG_NO_BLOCK);
@@ -579,13 +583,32 @@ socket_stream_t *socket_stream_open(socket_t *sc, socket_stream_kind_t kind) {
 #endif
 }
 
+size_t socket_stream_poll_pending(socket_t *sc) {
+    HARD_ASSERT(sc != NULL);
+#if OPENSSL_VERSION_NUMBER >= 0x30500000L
+    if (sc->transport == SOCKET_TRANSPORT_QUIC_CONNECTION && sc->connection_id_final) {
+        socket_stream_poll_incoming(sc);
+        size_t classified = 0;
+        socket_stream_t *stream = sc->pending_streams;
+        while (stream != NULL) {
+            classified += stream->kind != SOCKET_STREAM_UNKNOWN &&
+                          stream->preface_pos == sizeof(stream->preface);
+            stream = stream->next;
+        }
+        return classified;
+    }
+#endif
+    return 0;
+}
+
 socket_stream_t *socket_stream_accept(socket_t *sc, socket_stream_kind_t kind) {
     HARD_ASSERT(sc != NULL);
 #if OPENSSL_VERSION_NUMBER >= 0x30500000L
-    if (sc->transport != SOCKET_TRANSPORT_QUIC_CONNECTION || !sc->connection_id_final) {
+    if (sc->transport != SOCKET_TRANSPORT_QUIC_CONNECTION || !sc->connection_id_final ||
+        !socket_stream_kind_valid(kind)) {
         return NULL;
     }
-    socket_stream_poll_incoming(sc);
+    socket_stream_poll_pending(sc);
     socket_stream_t **link = &sc->pending_streams;
     while (*link != NULL) {
         socket_stream_t *stream = *link;

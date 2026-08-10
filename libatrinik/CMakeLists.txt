@@ -476,6 +476,11 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         target_link_libraries(libatrinik-metaserver-url PRIVATE Atrinik::Core)
         add_test(NAME libatrinik-metaserver-url COMMAND libatrinik-metaserver-url)
 
+        add_executable(libatrinik-socket-asset tests/socket_asset.c)
+        atrinik_configure_target(libatrinik-socket-asset)
+        target_link_libraries(libatrinik-socket-asset PRIVATE Atrinik::Core)
+        add_test(NAME libatrinik-socket-asset COMMAND libatrinik-socket-asset)
+
         if (NOT WIN32)
             add_executable(libatrinik-curl tests/curl.c)
             atrinik_configure_target(libatrinik-curl)

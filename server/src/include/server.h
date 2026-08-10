@@ -242,8 +242,24 @@ extern void socket_assets_connection_register(socket_struct *ns);
 /** Service registered connections once within the global tick budgets. */
 extern void socket_assets_service(void);
 
+/** Maximum logical asset requests admitted per connection and second. */
+#define SOCKET_ASSET_REQUEST_RATE_MAX 256U
+
 /** Calculate the aggregate byte allowance for one processing iteration. */
 extern size_t socket_assets_tick_byte_budget(void);
+
+/** Bound one connection's share in one fair scheduler pass. */
+extern size_t socket_assets_connection_pass_byte_budget(size_t remaining);
+
+/** Calculate service rounds for one validated face batch (including request FIN). */
+extern size_t socket_assets_face_batch_service_rounds(const uint32_t *body_sizes, size_t count);
+
+/**
+ * Atomically charge logical asset requests to a connection's abuse window.
+ * A rejected charge marks the connection for closure without partially
+ * consuming the requested amount.
+ */
+extern bool socket_assets_request_rate_allow(socket_struct *ns, unsigned int requests);
 
 extern bool socket_assets_pending(const socket_struct *ns);
 
