@@ -13,7 +13,12 @@
 typedef struct socket_port_mapping_backend {
     const char *name;
     void *data;
-    bool (*open)(void *data, uint16_t port, char *host, size_t host_size, uint16_t *external_port);
+    bool (*open)(void *data,
+                 uint16_t port,
+                 const char *local_host,
+                 char *host,
+                 size_t host_size,
+                 uint16_t *external_port);
     void (*process)(void *data);
     void (*close)(void *data);
 } socket_port_mapping_backend_t;
@@ -32,6 +37,7 @@ bool socket_port_mapping_controller_open(socket_port_mapping_controller_t *contr
                                          const socket_port_mapping_backend_t *backends,
                                          size_t backend_count,
                                          uint16_t port,
+                                         const char *local_host,
                                          char *host,
                                          size_t host_size,
                                          uint16_t *external_port);

@@ -31,6 +31,7 @@ static socket_port_mapping_controller_t mapping_controller;
 
 static bool socket_port_mapping_pcp(void *data,
                                     uint16_t port,
+                                    const char *local_host,
                                     char *host,
                                     size_t host_size,
                                     uint16_t *external_port) {
@@ -38,6 +39,9 @@ static bool socket_port_mapping_pcp(void *data,
     memset(&source, 0, sizeof(source));
     source.sin_family = AF_INET;
     source.sin_port = htons(port);
+    if (local_host != NULL && inet_pton(AF_INET, local_host, &source.sin_addr) != 1) {
+        return false;
+    }
 
     mapping_pcp_context = pcp_init(ENABLE_AUTODISCOVERY, NULL);
     if (mapping_pcp_context == NULL) {
@@ -117,11 +121,13 @@ static void socket_port_mapping_pcp_close(void *data) {
 
 static bool socket_port_mapping_upnp(void *data,
                                      uint16_t port,
+                                     const char *local_host,
                                      char *host,
                                      size_t host_size,
                                      uint16_t *external_port) {
     int error = 0;
-    struct UPNPDev *devices = upnpDiscover(2000, NULL, NULL, UPNP_LOCAL_PORT_ANY, 0, 2, &error);
+    struct UPNPDev *devices =
+        upnpDiscover(2000, local_host, NULL, UPNP_LOCAL_PORT_ANY, 0, 2, &error);
     if (devices == NULL) {
         return false;
     }
@@ -138,7 +144,11 @@ static bool socket_port_mapping_upnp(void *data,
     int status = UPNP_GetValidIGD(devices, &mapping_upnp_urls, &mapping_upnp_data, VS(lan_address));
 #endif
     freeUPNPDevlist(devices);
-    if (status == 0) {
+    if (status == 0 || (local_host != NULL && strcmp(local_host, lan_address) != 0)) {
+        if (status != 0) {
+            FreeUPNPUrls(&mapping_upnp_urls);
+            memset(&mapping_upnp_urls, 0, sizeof(mapping_upnp_urls));
+        }
         return false;
     }
 
@@ -212,6 +222,7 @@ static void socket_port_mapping_upnp_close(void *data) {
 }
 
 bool socket_port_mapping_init(uint16_t port,
+                              const char *local_host,
                               char *host,
                               size_t host_size,
                               uint16_t *external_port) {
@@ -237,6 +248,7 @@ bool socket_port_mapping_init(uint16_t port,
                                             backends,
                                             arraysize(backends),
                                             port,
+                                            local_host,
                                             host,
                                             host_size,
                                             external_port)) {
