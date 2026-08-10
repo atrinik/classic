@@ -142,6 +142,12 @@ class FinalizeArtifactsTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "unexpected root"):
             finalize_artifacts.validate_zip(wrong_root, "expected", ("atrinik.exe",))
 
+        root_file = self.root / "root-file.zip"
+        with zipfile.ZipFile(root_file, "w") as archive:
+            archive.writestr("expected", b"fixture")
+        with self.assertRaisesRegex(RuntimeError, "unexpected root"):
+            finalize_artifacts.validate_zip(root_file, "expected", ())
+
         empty = self.root / "empty.zip"
         with zipfile.ZipFile(empty, "w") as archive:
             archive.writestr("expected/atrinik.exe", b"")
@@ -176,6 +182,56 @@ class FinalizeArtifactsTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "duplicate member"):
             finalize_artifacts.validate_zip(duplicate, "expected", ("payload",))
 
+        case_collision = self.root / "case-collision.zip"
+        with zipfile.ZipFile(case_collision, "w") as archive:
+            archive.writestr("expected/server/server.cfg", b"first")
+            archive.writestr("expected/server/SERVER.CFG", b"second")
+        with self.assertRaisesRegex(RuntimeError, "duplicate packaged output"):
+            finalize_artifacts.validate_zip(case_collision, "expected", ())
+
+        for index, alias in enumerate(
+            ("expected/server//server.cfg", "expected/server/./server.cfg")
+        ):
+            with self.subTest(alias=alias):
+                unsafe_alias = self.root / f"unsafe-alias-{index}.zip"
+                with zipfile.ZipFile(unsafe_alias, "w") as archive:
+                    archive.writestr(alias, b"fixture")
+                with self.assertRaisesRegex(RuntimeError, "unsafe packaged path"):
+                    finalize_artifacts.validate_zip(unsafe_alias, "expected", ())
+
+        for index, alias in enumerate(
+            (
+                "expected/maps./regions.reg",
+                "expected/server/server.cfg.",
+                "expected/server/server.cfg ",
+                "expected/server/CON.txt",
+                "expected/server/COM¹.txt",
+                "expected/server/LPT²",
+                "expected/server/bad:name",
+                "expected/server/control\x1f.txt",
+            )
+        ):
+            with self.subTest(alias=alias):
+                windows_alias = self.root / f"windows-alias-{index}.zip"
+                with zipfile.ZipFile(windows_alias, "w") as archive:
+                    archive.writestr(alias, b"fixture")
+                with self.assertRaisesRegex(RuntimeError, "unsafe packaged path"):
+                    finalize_artifacts.validate_zip(windows_alias, "expected", ())
+
+        collisions = (
+            ("expected/server", "expected/server/maps/regions.reg"),
+            ("expected/server/maps/regions.reg", "expected/server"),
+            ("expected/SERVER", "expected/server/maps/regions.reg"),
+        )
+        for index, members in enumerate(collisions):
+            with self.subTest(members=members):
+                collision = self.root / f"file-descendant-{index}.zip"
+                with zipfile.ZipFile(collision, "w") as archive:
+                    for member in members:
+                        archive.writestr(member, b"fixture")
+                with self.assertRaisesRegex(RuntimeError, "file/descendant collision"):
+                    finalize_artifacts.validate_zip(collision, "expected", ())
+
     def test_windows_server_zip_requires_runtime_payload(self) -> None:
         path = self.root / "server.zip"
         package = "atrinik-classic-server-5.6.0-windows-x86_64"
@@ -186,13 +242,14 @@ class FinalizeArtifactsTests(unittest.TestCase):
             "server/server.cfg",
             "server/permissions.cfg",
             "server/ca-bundle.crt",
+            "server/server.bat",
             "server/LICENSE.txt",
             "server/plugin_arena.dll",
             "server/plugin_python.dll",
             "server/python3.dll",
             "server/python313.dll",
             "server/_socket.pyd",
-            "maps/world.map",
+            "server/maps/regions.reg",
             "server/lib/helper.dll",
             "server/resources/archetypes",
             "server/install_data/accounts",
@@ -213,8 +270,24 @@ class FinalizeArtifactsTests(unittest.TestCase):
             path,
             package,
             finalize_artifacts.SERVER_WINDOWS_REQUIRED_PATTERNS,
+            finalize_artifacts.SERVER_WINDOWS_FORBIDDEN_PATTERNS,
         )
         finalize_artifacts.validate_embedded_python_runtime(path, package)
+
+    def test_windows_server_zip_rejects_split_maps_layout(self) -> None:
+        package = "atrinik-classic-server-5.6.0-windows-x86_64"
+        for name in ("maps", "maps/", "maps/regions.reg", "Maps/", "MAPS/regions.reg"):
+            with self.subTest(name=name):
+                path = self.root / f"server-{name.replace('/', '-')}.zip"
+                with zipfile.ZipFile(path, "w") as archive:
+                    archive.writestr(f"{package}/{name}", b"fixture")
+                with self.assertRaisesRegex(RuntimeError, "forbidden packaged maps"):
+                    finalize_artifacts.validate_zip(
+                        path,
+                        package,
+                        (),
+                        finalize_artifacts.SERVER_WINDOWS_FORBIDDEN_PATTERNS,
+                    )
 
     def test_embedded_python_requires_nonempty_standard_library_zip(self) -> None:
         path = self.root / "server.zip"

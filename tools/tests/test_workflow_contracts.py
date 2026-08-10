@@ -397,8 +397,8 @@ class WorkflowContractTests(unittest.TestCase):
         image = f"ghcr.io/atrinik/windows-build:1.2.1@sha256:{digest}"
 
         self.assertIn("if: needs.changes.outputs.windows == 'true'", build)
-        self.assertEqual(build.count(image), 3)
-        self.assertEqual(build.count(digest), 3)
+        self.assertEqual(build.count(image), 4)
+        self.assertEqual(build.count(digest), 4)
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", build)
         self.assertEqual(build.count("--network none"), 2)
         self.assertIn("persist-credentials: false", build)
@@ -463,6 +463,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("client-rich-presence-tests.exe", build)
         self.assertIn("python3 tools/ci/stage_windows_runtime.py", build)
         self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", build)
+        self.assertIn("Build portable Windows server package", build)
+        self.assertIn("bash tools/build-windows-package.sh build/windows-pr-package", build)
+        self.assertIn("smoke_windows_server_package.ps1", build)
+        self.assertIn("server/build/windows-pr-package/*.zip", build)
 
         self.assertIn("runs-on: windows-2025", run)
         self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", run)
@@ -474,6 +478,26 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"libatrinik-metaserver-url.exe"', run)
         self.assertIn('"libatrinik-stun.exe"', run)
         self.assertIn('"client-rich-presence-tests.exe"', run)
+        self.assertIn('"atrinik-classic-server-*-windows-x86_64.zip"', run)
+        self.assertIn('"smoke_windows_server_package.ps1"', run)
+        smoke = (ROOT / "tools" / "ci" / "smoke_windows_server_package.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"maps/regions.reg"', smoke)
+        self.assertIn('"--port_mapping=off"', smoke)
+        self.assertIn('"--stun_server=off"', smoke)
+        self.assertIn('$process.StandardInput.WriteLine("shutdown")', smoke)
+        self.assertLess(
+            smoke.index('"Server ready\\. Waiting for connections"'),
+            smoke.index('$process.StandardInput.WriteLine("shutdown")'),
+        )
+        self.assertIn("AddSeconds(60)", smoke)
+        self.assertIn("WaitForExit(30000)", smoke)
+        self.assertIn("$remainderTask.Wait(10000)", smoke)
+        self.assertIn("WaitForExit(10000)", smoke)
+        self.assertIn("$process.Kill($true)", smoke)
+        self.assertIn("$process.Dispose()", smoke)
+        self.assertIn('"Server ready\\. Waiting for connections"', smoke)
         self.assertIn('"fixtures/metaserver-publisher-v1.json"', run)
 
         self.assertIn("- windows-test", aggregate)
