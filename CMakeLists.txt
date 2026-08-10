@@ -80,6 +80,10 @@ function(atrinik_configure_target target)
 endfunction()
 
 if (MINGW)
+    add_compile_definitions(
+        HAVE_STRUCT_TIMESPEC
+        NOCRYPT
+        __USE_MINGW_ANSI_STDIO=0)
     set(PLUGIN_SUFFIX ".dll")
 else ()
     set(LINUX true)

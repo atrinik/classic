@@ -233,6 +233,22 @@ jobs:
               assert application_id.strip() not in archive.read(executable)
           " "${package}"
               cd ..
+              cmake \
+                -DPATCH_EXECUTABLE="$(command -v patch)" \
+                -DSOURCE_DIR=/workspace/build/libpcpnatpmp-source \
+                -DPATCH_FILE=/workspace/server/cmake/patches/libpcpnatpmp-mingw.patch \
+                -P /workspace/server/cmake/apply_patch_idempotent.cmake
+              x86_64-w64-mingw32.shared-cmake \
+                -S . \
+                -B build/windows-integrated \
+                -G Ninja \
+                -DBUILD_TESTING=OFF \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DENABLE_PYTHON_PLUGIN=OFF \
+                -DPACKAGE_TYPE=none \
+                -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-source
+              cmake --build build/windows-integrated \
+                --target atrinik atrinik-server --parallel "$(nproc)"
               stage=libatrinik/build/windows-test-bundle
               cmake -E remove_directory "${stage}"
               python3 tools/ci/stage_windows_runtime.py \
