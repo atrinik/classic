@@ -243,6 +243,31 @@ char *keybind_get_key_shortcut(SDL_Keycode key, SDL_Keymod mod, char *buf, size_
     return buf;
 }
 
+/** Check whether a semicolon-separated binding contains an exact command. */
+bool keybind_command_contains(const char *commands, const char *command) {
+    if (commands == NULL || command == NULL || *command == '\0') {
+        return false;
+    }
+
+    size_t command_len = strlen(command);
+    const char *segment = commands;
+    while (*segment != '\0') {
+        while (*segment == ' ') {
+            segment++;
+        }
+        const char *end = strchr(segment, ';');
+        size_t segment_len = end == NULL ? strlen(segment) : (size_t)(end - segment);
+        if (segment_len == command_len && !strncmp(segment, command, command_len)) {
+            return true;
+        }
+        if (end == NULL) {
+            break;
+        }
+        segment = end + 1;
+    }
+    return false;
+}
+
 /** Resolve a gameplay movement command to its keypad-style direction. */
 bool keybind_movement_command_direction(const char *cmd, uint8_t *direction) {
     static const struct {
@@ -277,43 +302,34 @@ void keybind_movement_state_init(keybind_movement_state *state) {
     state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
 }
 
-/** Find the oldest active repeat-enabled physical key. */
-static SDL_Scancode keybind_movement_repeat_scancode(const keybind_movement_state *state) {
-    SDL_Scancode found = SDL_SCANCODE_UNKNOWN;
-    uint64_t oldest = UINT64_MAX;
-
-    for (SDL_Scancode i = 0; i < SDL_SCANCODE_COUNT; i++) {
-        if (state->keys[i].direction != 0 && state->keys[i].repeat &&
-            state->keys[i].order < oldest) {
-            found = i;
-            oldest = state->keys[i].order;
-        }
-    }
-    return found;
-}
-
 static uint8_t keybind_movement_direction(const keybind_movement_state *state);
 
 /** Record one physical movement key-down in the logical stream. */
-void keybind_movement_state_press(keybind_movement_state *state,
+bool keybind_movement_state_press(keybind_movement_state *state,
                                   SDL_Scancode scancode,
                                   uint8_t direction,
                                   bool repeated,
                                   bool repeat) {
     if (state == NULL || scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_SCANCODE_COUNT ||
         direction < 1 || direction > 9 || direction == 5) {
-        return;
+        return false;
     }
 
     keybind_movement_key *key = &state->keys[scancode];
     if (repeated) {
-        if (key->direction == 0 || !key->repeat || scancode != state->repeat_scancode) {
-            return;
+        if (key->direction == 0 || !key->repeat) {
+            return false;
+        }
+        if (state->repeat_scancode == SDL_SCANCODE_UNKNOWN) {
+            state->repeat_scancode = scancode;
+        } else if (scancode != state->repeat_scancode) {
+            return false;
         }
         state->repeated = true;
         state->pending_move = true;
+        state->pending_direction = keybind_movement_direction(state);
         state->pending_stop = false;
-        return;
+        return true;
     }
 
     if (key->direction == 0) {
@@ -321,13 +337,10 @@ void keybind_movement_state_press(keybind_movement_state *state,
     }
     key->direction = direction;
     key->repeat = repeat;
-    if (state->repeat_scancode == SDL_SCANCODE_UNKNOWN ||
-        !state->keys[state->repeat_scancode].repeat) {
-        state->repeat_scancode = keybind_movement_repeat_scancode(state);
-    }
     state->pending_move = true;
     state->pending_direction = keybind_movement_direction(state);
     state->pending_stop = false;
+    return true;
 }
 
 /** Return whether the movement stream still has an active physical key. */
@@ -352,7 +365,7 @@ void keybind_movement_state_release(keybind_movement_state *state,
 
     memset(&state->keys[scancode], 0, sizeof(state->keys[scancode]));
     if (scancode == state->repeat_scancode) {
-        state->repeat_scancode = keybind_movement_repeat_scancode(state);
+        state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
     }
 
     if (keybind_movement_active(state)) {
@@ -372,11 +385,12 @@ void keybind_movement_state_release(keybind_movement_state *state,
 
 /** Release every physical movement key as one logical transition. */
 void keybind_movement_state_clear(keybind_movement_state *state, bool running, bool firing) {
-    if (state == NULL || !keybind_movement_active(state)) {
+    if (state == NULL) {
         return;
     }
 
-    bool stop = (state->repeated || running) && !firing;
+    bool stop = state->pending_stop ||
+                (keybind_movement_active(state) && (state->repeated || running) && !firing);
     uint64_t next_order = state->next_order;
     keybind_movement_state_init(state);
     state->next_order = next_order;

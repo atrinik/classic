@@ -78,6 +78,17 @@ typedef struct keybind_movement_state {
     bool pending_stop;
 } keybind_movement_state;
 
+/** Callbacks used by the testable physical keybinding dispatcher. */
+typedef struct keybind_event_handler {
+    keybind_movement_state *movement;
+    void *user_data;
+    bool (*running)(void *user_data);
+    bool (*firing)(void *user_data);
+    void (*flush)(void *user_data);
+    void (*command_down)(const char *command, void *user_data);
+    void (*command_up)(const char *command, void *user_data);
+} keybind_event_handler;
+
 /** State and persistence API implemented in src/client/keybind_storage.c. */
 
 extern keybind_struct **keybindings;
@@ -116,11 +127,22 @@ extern bool keybind_matches_event(const keybind_struct *keybind, const SDL_Keybo
 
 extern char *keybind_get_key_shortcut(SDL_Keycode key, SDL_Keymod mod, char *buf, size_t len);
 
+extern bool keybind_command_contains(const char *commands, const char *command);
+
+extern bool keybind_event_process(keybind_struct *const *bindings,
+                                  size_t bindings_num,
+                                  const SDL_KeyboardEvent *event,
+                                  const keybind_event_handler *handler);
+
+extern void keybind_event_process_binding(const keybind_struct *keybind,
+                                          const SDL_KeyboardEvent *event,
+                                          const keybind_event_handler *handler);
+
 extern bool keybind_movement_command_direction(const char *cmd, uint8_t *direction);
 
 extern void keybind_movement_state_init(keybind_movement_state *state);
 
-extern void keybind_movement_state_press(keybind_movement_state *state,
+extern bool keybind_movement_state_press(keybind_movement_state *state,
                                          SDL_Scancode scancode,
                                          uint8_t direction,
                                          bool repeated,
@@ -151,6 +173,10 @@ extern int keybind_process_command_up(const char *cmd);
 extern void keybind_state_ensure(void);
 
 extern void keybind_movement_flush(void);
+
+extern void keybind_movement_key_released(SDL_Scancode scancode);
+
+extern void keybind_movement_focus_lost(void);
 
 extern int keybind_process_command(const char *cmd);
 

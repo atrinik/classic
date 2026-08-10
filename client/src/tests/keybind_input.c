@@ -267,6 +267,12 @@ static void test_movement_commands(void) {
     TEST_CHECK(!keybind_movement_command_direction("?MOVE_N;?HELP", &direction));
     TEST_CHECK(!keybind_movement_command_direction(NULL, &direction));
     TEST_CHECK(!keybind_movement_command_direction("?MOVE_N", NULL));
+
+    TEST_CHECK(keybind_command_contains("?RUNON; ?MOVE_NW", "?RUNON"));
+    TEST_CHECK(keybind_command_contains("?RUNON; ?MOVE_NW", "?MOVE_NW"));
+    TEST_CHECK(!keybind_command_contains("?RUNON_TOGGLE; ?MOVE_NW", "?RUNON"));
+    TEST_CHECK(!keybind_command_contains("?MOVE_NORTH", "?MOVE_N"));
+    TEST_CHECK(!keybind_command_contains(NULL, "?MOVE_N"));
 }
 
 static void test_movement_chords(void) {
@@ -310,21 +316,31 @@ static void test_movement_repeat_and_release(void) {
     keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, false, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
 
-    /* Only the oldest repeat-enabled key drives the logical stream. */
-    keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, true, true);
-    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
-    keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true);
-    keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, true, true);
+    /* The first constituent that actually repeats drives the logical stream. */
+    TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, true, true));
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
+    TEST_CHECK(!keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
     /* Releasing the repeat owner continues immediately with the remaining key. */
-    keybind_movement_state_release(&state, SDL_SCANCODE_A, false, false);
-    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 9);
-    keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, true, true);
-    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 9);
     keybind_movement_state_release(&state, SDL_SCANCODE_B, false, false);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    keybind_movement_state_release(&state, SDL_SCANCODE_A, false, false);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_STOP, 5);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
+
+    /* Either constituent may be the platform's sole repeat source. */
+    keybind_movement_state_init(&state);
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
+    keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
+    for (size_t i = 0; i < 3; i++) {
+        TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
+        expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
+    }
+    TEST_CHECK(!keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, true, true));
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 }
 
@@ -354,6 +370,18 @@ static void test_movement_boundaries_and_modifiers(void) {
     /* A repeat whose initial down was owned by a focused widget is ignored. */
     keybind_movement_state_init(&state);
     keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
+
+    /* A consumed release prevents a later focused repeat from reclaiming the key. */
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    keybind_movement_state_release(&state, SDL_SCANCODE_A, false, false);
+    TEST_CHECK(!keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
+
+    /* Focus loss discards movement that has not yet been emitted. */
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
+    keybind_movement_state_clear(&state, false, false);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
     /* A quick key-down/key-up received in one poll still moves once. */
@@ -391,6 +419,170 @@ static void test_movement_boundaries_and_modifiers(void) {
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 }
 
+typedef struct movement_sink {
+    keybind_movement_state state;
+    keybind_movement_action actions[32];
+    uint8_t directions[32];
+    bool running_at_emit[32];
+    bool firing_at_emit[32];
+    size_t actions_num;
+    bool running;
+    bool firing;
+} movement_sink;
+
+static bool movement_sink_running(void *user_data) {
+    return ((movement_sink *)user_data)->running;
+}
+
+static bool movement_sink_firing(void *user_data) {
+    return ((movement_sink *)user_data)->firing;
+}
+
+static void movement_sink_flush(void *user_data) {
+    movement_sink *sink = user_data;
+    keybind_movement_action action;
+    uint8_t direction;
+
+    while ((action = keybind_movement_state_flush(&sink->state, &direction)) !=
+           KEYBIND_MOVEMENT_ACTION_NONE) {
+        TEST_CHECK(sink->actions_num < arraysize(sink->actions));
+        size_t i = sink->actions_num++;
+        sink->actions[i] = action;
+        sink->directions[i] = direction;
+        sink->running_at_emit[i] = sink->running;
+        sink->firing_at_emit[i] = sink->firing;
+    }
+}
+
+static void movement_sink_command_down(const char *command, void *user_data) {
+    movement_sink *sink = user_data;
+
+    if (!strcmp(command, "?RUNON")) {
+        sink->running = true;
+    } else if (!strcmp(command, "?FIREON")) {
+        sink->firing = true;
+    }
+}
+
+static void movement_sink_command_up(const char *command, void *user_data) {
+    movement_sink *sink = user_data;
+
+    if (!strcmp(command, "?RUNON")) {
+        sink->running = false;
+    } else if (!strcmp(command, "?FIREON")) {
+        sink->firing = false;
+    }
+}
+
+static keybind_event_handler movement_sink_handler(movement_sink *sink) {
+    return (keybind_event_handler){
+        .movement = &sink->state,
+        .user_data = sink,
+        .running = movement_sink_running,
+        .firing = movement_sink_firing,
+        .flush = movement_sink_flush,
+        .command_down = movement_sink_command_down,
+        .command_up = movement_sink_command_up,
+    };
+}
+
+static void movement_sink_reset(movement_sink *sink) {
+    memset(sink, 0, sizeof(*sink));
+    keybind_movement_state_init(&sink->state);
+}
+
+static void test_keybind_event_integration(void) {
+    keybind_struct northwest = {
+        .command = "?MOVE_NW",
+        .key = SDLK_A,
+        .repeat = true,
+    };
+    keybind_struct northeast = {
+        .command = "?MOVE_NE",
+        .key = SDLK_B,
+        .repeat = true,
+    };
+    keybind_struct shifted = {
+        .command = "?MOVE_NE",
+        .key = SDLK_A,
+        .mod = SDL_KMOD_SHIFT,
+        .repeat = true,
+    };
+    keybind_struct move_then_fire = {
+        .command = "?MOVE_N;?FIREON",
+        .key = SDLK_C,
+        .repeat = true,
+    };
+    keybind_struct fire_then_move = {
+        .command = "?FIREON;?MOVE_N",
+        .key = SDLK_D,
+        .repeat = true,
+    };
+    keybind_struct *bindings[] = {&northwest,
+                                  &shifted,
+                                  &northeast,
+                                  &move_then_fire,
+                                  &fire_then_move};
+    movement_sink sink;
+    SDL_KeyboardEvent event = {.type = SDL_EVENT_KEY_DOWN};
+
+    movement_sink_reset(&sink);
+    keybind_event_handler handler = movement_sink_handler(&sink);
+
+    /* Exact modifier bindings retain precedence over an unmodified binding. */
+    event.key = SDLK_A;
+    event.scancode = SDL_SCANCODE_A;
+    event.mod = SDL_KMOD_LSHIFT;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 9);
+
+    /* Custom physical keys coalesce into one composite at end of poll. */
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.mod = SDL_KMOD_NONE;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    event.key = SDLK_B;
+    event.scancode = SDL_SCANCODE_B;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 8);
+
+    /* Each accepted owner repeat is emitted; the other stream is ignored. */
+    event.repeat = true;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    event.key = SDLK_A;
+    event.scancode = SDL_SCANCODE_A;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    event.key = SDLK_B;
+    event.scancode = SDL_SCANCODE_B;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(sink.actions_num == 4);
+    for (size_t i = 0; i < sink.actions_num; i++) {
+        TEST_CHECK(sink.actions[i] == KEYBIND_MOVEMENT_ACTION_MOVE);
+        TEST_CHECK(sink.directions[i] == 8);
+    }
+
+    /* Semicolon ordering snapshots movement before or after fire transitions. */
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.repeat = false;
+    event.key = SDLK_C;
+    event.scancode = SDL_SCANCODE_C;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 8 && !sink.firing_at_emit[0]);
+    TEST_CHECK(sink.firing);
+
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.key = SDLK_D;
+    event.scancode = SDL_SCANCODE_D;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 8 && sink.firing_at_emit[0]);
+}
+
 int main(void) {
     test_legacy_keycode_migration();
     test_shortcut_names();
@@ -402,5 +594,6 @@ int main(void) {
     test_movement_repeat_and_release();
     test_movement_duplicates_and_repeat_selection();
     test_movement_boundaries_and_modifiers();
+    test_keybind_event_integration();
     return 0;
 }

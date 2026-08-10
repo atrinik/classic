@@ -1,0 +1,109 @@
+/*************************************************************************
+ *           Atrinik, a Multiplayer Online Role Playing Game             *
+ *                                                                       *
+ *   Copyright (C) 2026 Atrinik Development Team                         *
+ *                                                                       *
+ * This program is free software; you can redistribute it and/or modify  *
+ * it under the terms of the GNU General Public License as published by  *
+ * the Free Software Foundation; either version 2 of the License, or     *
+ * (at your option) any later version.                                   *
+ ************************************************************************/
+
+/**
+ * @file
+ * Testable physical keybinding dispatch and movement-stream integration.
+ */
+
+#include <global.h>
+
+static bool keybind_event_running(const keybind_event_handler *handler) {
+    return handler->running != NULL && handler->running(handler->user_data);
+}
+
+static bool keybind_event_firing(const keybind_event_handler *handler) {
+    return handler->firing != NULL && handler->firing(handler->user_data);
+}
+
+static void keybind_event_flush(const keybind_event_handler *handler) {
+    if (handler->flush != NULL) {
+        handler->flush(handler->user_data);
+    }
+}
+
+/** Process one already-selected physical keybinding. */
+void keybind_event_process_binding(const keybind_struct *keybind,
+                                   const SDL_KeyboardEvent *event,
+                                   const keybind_event_handler *handler) {
+    char command[MAX_BUF], *cp;
+
+    if (keybind == NULL || event == NULL || handler == NULL || handler->movement == NULL ||
+        (!keybind->repeat && event->repeat)) {
+        return;
+    }
+
+    strncpy(command, keybind->command, sizeof(command) - 1);
+    command[sizeof(command) - 1] = '\0';
+
+    cp = strtok(command, ";");
+    while (cp != NULL) {
+        while (*cp == ' ') {
+            cp++;
+        }
+
+        uint8_t direction;
+        if (keybind_movement_command_direction(cp, &direction)) {
+            if (event->type == SDL_EVENT_KEY_DOWN) {
+                bool accepted = keybind_movement_state_press(handler->movement,
+                                                             event->scancode,
+                                                             direction,
+                                                             event->repeat,
+                                                             keybind->repeat);
+                if (accepted && event->repeat) {
+                    keybind_event_flush(handler);
+                }
+            } else {
+                keybind_movement_state_release(handler->movement,
+                                               event->scancode,
+                                               keybind_event_running(handler),
+                                               keybind_event_firing(handler));
+            }
+        } else {
+            keybind_event_flush(handler);
+            if (event->type == SDL_EVENT_KEY_DOWN) {
+                if (handler->command_down != NULL) {
+                    handler->command_down(cp, handler->user_data);
+                }
+            } else if (handler->command_up != NULL) {
+                handler->command_up(cp, handler->user_data);
+            }
+        }
+
+        cp = strtok(NULL, ";");
+    }
+}
+
+/** Match and process one physical keyboard event with normal modifier precedence. */
+bool keybind_event_process(keybind_struct *const *bindings,
+                           size_t bindings_num,
+                           const SDL_KeyboardEvent *event,
+                           const keybind_event_handler *handler) {
+    if (bindings == NULL || event == NULL || handler == NULL) {
+        return false;
+    }
+
+    for (size_t i = 0; i < bindings_num; i++) {
+        if (event->key == bindings[i]->key && bindings[i]->mod == keybind_adjust_kmod(event->mod)) {
+            keybind_event_process_binding(bindings[i], event, handler);
+            return true;
+        }
+    }
+
+    for (size_t i = 0; i < bindings_num; i++) {
+        if (event->key == bindings[i]->key && !bindings[i]->mod) {
+            keybind_event_process_binding(bindings[i], event, handler);
+            return true;
+        }
+    }
+
+    return false;
+}
