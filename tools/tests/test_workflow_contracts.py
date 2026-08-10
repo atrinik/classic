@@ -306,6 +306,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("echo", config)
         self.assertIn("retention-days: 1", config)
         self.assertIn("ATRINIK_DISCORD_APPLICATION_ID_FILE", client)
+        self.assertIn("/workspace/build/discord-config/discord-application-id", client)
         self.assertIn('PATTERN "discord-application-id" EXCLUDE', cmake)
         self.assertIn("18446744073709551615", cmake)
         self.assertIn("if: inputs.rehearsal != true", client)
@@ -362,6 +363,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn(
             "libatrinik/build/windows-tests/libatrinik-stun.exe", build
         )
+        self.assertIn("client-rich-presence-tests.exe", build)
         self.assertIn("python3 tools/ci/stage_windows_runtime.py", build)
         self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", build)
 
@@ -372,6 +374,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"libatrinik-metaserver-publisher.exe"', run)
         self.assertIn('"libatrinik-metaserver-url.exe"', run)
         self.assertIn('"libatrinik-stun.exe"', run)
+        self.assertIn('"client-rich-presence-tests.exe"', run)
         self.assertIn('"fixtures/metaserver-publisher-v1.json"', run)
 
         self.assertIn("- windows-test", aggregate)

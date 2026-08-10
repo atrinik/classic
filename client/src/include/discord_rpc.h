@@ -9,6 +9,16 @@
 
 typedef struct discord_rpc discord_rpc_t;
 
+typedef enum discord_rpc_failure {
+    DISCORD_RPC_FAILURE_NONE,
+    DISCORD_RPC_FAILURE_CONNECT,
+    DISCORD_RPC_FAILURE_IO,
+    DISCORD_RPC_FAILURE_TIMEOUT,
+    DISCORD_RPC_FAILURE_PROTOCOL,
+    DISCORD_RPC_FAILURE_REMOTE_CLOSE,
+    DISCORD_RPC_FAILURE_REMOTE_ERROR
+} discord_rpc_failure_t;
+
 typedef struct discord_rpc_activity {
     char details[DISCORD_RPC_TEXT_BYTES];
     char state[DISCORD_RPC_TEXT_BYTES];
@@ -31,5 +41,9 @@ void discord_rpc_pump(discord_rpc_t *rpc, uint64_t now_ms);
 void discord_rpc_set_activity(discord_rpc_t *rpc, const discord_rpc_activity_t *activity);
 void discord_rpc_clear_activity(discord_rpc_t *rpc);
 bool discord_rpc_ready(const discord_rpc_t *rpc);
+discord_rpc_failure_t discord_rpc_failure(const discord_rpc_t *rpc);
+#if defined(WIN32) && defined(DISCORD_RPC_TESTING)
+bool discord_rpc_test_pipe_same_user(void *pipe);
+#endif
 
 #endif

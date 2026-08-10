@@ -244,7 +244,7 @@ jobs:
       - name: Build portable package from monorepo siblings
         env:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
-          DISCORD_CONFIG_FILE: ${{ inputs.rehearsal != true && format('{0}/build/discord-config/discord-application-id', github.workspace) || '' }}
+          DISCORD_CONFIG_FILE: ${{ inputs.rehearsal != true && '/workspace/build/discord-config/discord-application-id' || '' }}
         run: |
           docker run --rm \
             --user "$(id -u):$(id -g)" \

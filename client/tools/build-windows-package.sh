@@ -44,7 +44,7 @@ fi
 "${mxe_cmake}" -S . -B build/windows-release -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE="${MXE_TOOLCHAIN_FILE}" \
-  -DBUILD_TESTING=OFF \
+  -DBUILD_TESTING=ON \
   -DPACKAGE_TYPE=zip \
   -DPACKAGE_VERSION="${version}" \
   -DATRINIK_WINDOWS_RUNTIME_DIR="${MXE_RUNTIME_DIR}" \

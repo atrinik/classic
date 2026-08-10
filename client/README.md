@@ -87,8 +87,11 @@
 
  Discord must be running locally. If it is absent, starts later, restarts,
  refuses data, or returns malformed data, the game continues normally and the
- bounded nonblocking backend retries. Activity updates are deduplicated,
- coalesced, and kept below Discord's rate limit. The elapsed timestamp begins
+ bounded nonblocking backend retries and logs each failure-state transition
+ once without payload data. Linux socket peers and Windows named-pipe servers
+ must belong to the current user. Activity updates, including reconnect
+ replays and clears, are deduplicated, coalesced, and kept below Discord's
+ rate limit. The elapsed timestamp begins
  once per transition into play and remains stable across map changes.
 
  Source builds have no Application ID by default and therefore perform no

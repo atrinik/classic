@@ -8,6 +8,7 @@ static rich_presence_controller_t presence_controller;
 static bool presence_initialized;
 static bool presence_zone_fresh;
 static char presence_application_id[21];
+static discord_rpc_failure_t presence_failure;
 
 static void backend_publish(void *context, const discord_rpc_activity_t *activity) {
     discord_rpc_set_activity(context, activity);
@@ -25,8 +26,43 @@ static rich_presence_backend_t backend(void) {
     };
 }
 
+static void log_transport_failure(void) {
+    discord_rpc_failure_t failure = discord_rpc_failure(presence_rpc);
+    if (failure == presence_failure) {
+        return;
+    }
+    presence_failure = failure;
+    const char *reason = NULL;
+    switch (failure) {
+        case DISCORD_RPC_FAILURE_CONNECT:
+            reason = "Discord desktop IPC is unavailable";
+            break;
+        case DISCORD_RPC_FAILURE_IO:
+            reason = "Discord desktop IPC closed during I/O";
+            break;
+        case DISCORD_RPC_FAILURE_TIMEOUT:
+            reason = "Discord desktop IPC timed out";
+            break;
+        case DISCORD_RPC_FAILURE_PROTOCOL:
+            reason = "Discord desktop IPC returned malformed data";
+            break;
+        case DISCORD_RPC_FAILURE_REMOTE_CLOSE:
+            reason = "Discord desktop IPC requested closure";
+            break;
+        case DISCORD_RPC_FAILURE_REMOTE_ERROR:
+            reason = "Discord desktop IPC returned an error";
+            break;
+        case DISCORD_RPC_FAILURE_NONE:
+            break;
+    }
+    if (reason != NULL) {
+        LOG(INFO, "Discord Rich Presence: %s; retrying in the background", reason);
+    }
+}
+
 static bool read_application_id(char output[21]) {
     const char *environment = getenv("ATRINIK_DISCORD_APPLICATION_ID");
+    bool configured = environment != NULL && environment[0] != '\0';
     if (rich_presence_application_id_valid(environment)) {
         snprintf(output, 21, "%s", environment);
         return true;
@@ -34,6 +70,9 @@ static bool read_application_id(char output[21]) {
 
     FILE *file = client_fopen_wrapper("data/discord-application-id", "r");
     if (file == NULL) {
+        if (configured) {
+            LOG(INFO, "Discord Rich Presence: configured Application ID is invalid; disabled");
+        }
         return false;
     }
     char line[64];
@@ -52,6 +91,9 @@ static bool read_application_id(char output[21]) {
     if (valid) {
         size_t length = strlen(line);
         memcpy(output, line, length + 1U);
+    }
+    if (!valid) {
+        LOG(INFO, "Discord Rich Presence: configured Application ID file is invalid; disabled");
     }
     return valid;
 }
@@ -93,9 +135,6 @@ void rich_presence_tick(void) {
             /* Lifecycle tracking below remains active without a transport. */
         }
     }
-    if (presence_rpc != NULL) {
-        discord_rpc_pump(presence_rpc, now_ms);
-    }
     char server[DISCORD_RPC_TEXT_BYTES];
     normalized_markup(selected_server != NULL ? selected_server->name : NULL, server);
     char zone[DISCORD_RPC_TEXT_BYTES];
@@ -121,10 +160,12 @@ void rich_presence_tick(void) {
                                   presence_rpc != NULL ? &operations : NULL);
     if (presence_rpc != NULL) {
         discord_rpc_pump(presence_rpc, now_ms);
+        log_transport_failure();
     }
     if (privacy == RICH_PRESENCE_OFF && presence_rpc != NULL) {
         discord_rpc_destroy(presence_rpc, now_ms);
         presence_rpc = NULL;
+        presence_failure = DISCORD_RPC_FAILURE_NONE;
     }
 }
 
@@ -155,5 +196,6 @@ void rich_presence_deinit(void) {
     }
     memset(presence_application_id, 0, sizeof(presence_application_id));
     presence_zone_fresh = false;
+    presence_failure = DISCORD_RPC_FAILURE_NONE;
     presence_initialized = false;
 }

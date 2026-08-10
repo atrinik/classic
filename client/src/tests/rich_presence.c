@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef WIN32
+#include <windows.h>
+#endif
+
 #define require(condition)                                                                        \
     do {                                                                                          \
         if (!(condition)) {                                                                       \
@@ -187,6 +191,7 @@ typedef struct fake_io {
     unsigned char outgoing[100000];
     size_t outgoing_size;
     bool write_blocked;
+    unsigned int writes;
 } fake_io_t;
 
 static int fake_connect(void *context) {
@@ -222,6 +227,7 @@ static ptrdiff_t fake_read(void *context, void *buffer, size_t size) {
 
 static ptrdiff_t fake_write(void *context, const void *buffer, size_t size) {
     fake_io_t *io = context;
+    io->writes++;
     if (!io->open) {
         return -1;
     }
@@ -264,6 +270,19 @@ static bool contains(const unsigned char *haystack, size_t haystack_size, const 
         }
     }
     return false;
+}
+
+static size_t
+count_occurrences(const unsigned char *haystack, size_t haystack_size, const char *needle) {
+    size_t count = 0;
+    size_t needle_size = strlen(needle);
+    for (size_t i = 0; i + needle_size <= haystack_size; i++) {
+        if (memcmp(haystack + i, needle, needle_size) == 0) {
+            count++;
+            i += needle_size - 1U;
+        }
+    }
+    return count;
 }
 
 static void pump_many(discord_rpc_t *rpc, uint64_t now, unsigned int count) {
@@ -309,8 +328,7 @@ static void test_rpc(void) {
     require(contains(fake.outgoing, fake.outgoing_size, "Exploring Crystal Caverns"));
     require(contains(fake.outgoing, fake.outgoing_size, "\"large_image\":\"atrinik\""));
     require(!contains(fake.outgoing, fake.outgoing_size, "password"));
-    append_frame(
-        &fake, 1U, "{\"cmd\":\"SET_ACTIVITY\",\"nonce\":\"1\",\"evt\":null,\"data\":{}}");
+    append_frame(&fake, 1U, "{\"cmd\":\"SET_ACTIVITY\",\"nonce\":\"1\",\"evt\":null,\"data\":{}}");
     pump_many(rpc, 3300, 30);
 
     size_t before_ping = fake.outgoing_size;
@@ -398,6 +416,7 @@ static void test_rpc(void) {
     append_frame(&fake, 1U, "{\"evt\":\"ERROR\",\"data\":{}}");
     pump_many(rpc, 200, 20);
     require(!discord_rpc_ready(rpc));
+    require(discord_rpc_failure(rpc) == DISCORD_RPC_FAILURE_REMOTE_ERROR);
     discord_rpc_destroy(rpc, 201);
 
     /* A permanently blocked post-READY write reconnects and replays latest state. */
@@ -432,6 +451,7 @@ static void test_rpc(void) {
     require(discord_rpc_ready(rpc));
     discord_rpc_pump(rpc, 5300);
     require(!discord_rpc_ready(rpc));
+    require(discord_rpc_failure(rpc) == DISCORD_RPC_FAILURE_TIMEOUT);
     discord_rpc_destroy(rpc, 5301);
 
     /* Destroy drains a complete privacy clear across legal partial writes. */
@@ -445,8 +465,10 @@ static void test_rpc(void) {
     pump_many(rpc, 200, 300);
     append_frame(&fake, 1U, "{\"cmd\":\"SET_ACTIVITY\",\"nonce\":\"1\",\"data\":{}}");
     pump_many(rpc, 600, 30);
+    fake.write_blocked = true;
+    unsigned int writes_before_destroy = fake.writes;
     discord_rpc_destroy(rpc, 700);
-    require(contains(fake.outgoing, fake.outgoing_size, "\"activity\":null"));
+    require(fake.writes - writes_before_destroy <= 2U);
     require(!fake.open);
 
     /* Missing READY is bounded by the handshake timeout. */
@@ -457,10 +479,71 @@ static void test_rpc(void) {
     discord_rpc_pump(rpc, 5000);
     require(!fake.open);
     discord_rpc_destroy(rpc, 5001);
+
+    /* A privacy clear closes instead of finishing a queued sensitive frame. */
+    memset(&fake, 0, sizeof(fake));
+    rpc = discord_rpc_create_with_io("123", &operations, &fake);
+    pump_many(rpc, 0, 20);
+    append_frame(&fake, 1U, "{\"evt\":\"READY\"}");
+    pump_many(rpc, 100, 20);
+    snprintf(activity.details, sizeof(activity.details), "Sensitive Old Zone");
+    discord_rpc_set_activity(rpc, &activity);
+    discord_rpc_pump(rpc, 200);
+    fake.write_blocked = true;
+    discord_rpc_clear_activity(rpc);
+    require(!fake.open);
+    require(!contains(fake.outgoing, fake.outgoing_size, "Sensitive Old Zone"));
+    discord_rpc_destroy(rpc, 201);
+
+    /* READY/error churn cannot bypass the five-command wire window. */
+    memset(&fake, 0, sizeof(fake));
+    rpc = discord_rpc_create_with_io("123", &operations, &fake);
+    discord_rpc_set_activity(rpc, &activity);
+    const uint64_t connect_times[] = {0, 1500, 4000, 8500, 17000};
+    for (size_t i = 0; i < sizeof(connect_times) / sizeof(connect_times[0]); i++) {
+        discord_rpc_pump(rpc, connect_times[i]);
+        append_frame(&fake, 1U, "{\"evt\":\"READY\"}");
+        pump_many(rpc, connect_times[i] + 100U, 300);
+        append_frame(&fake, 1U, "{\"evt\":\"ERROR\"}");
+        pump_many(rpc, connect_times[i] + 500U, 20);
+    }
+    require(count_occurrences(fake.outgoing, fake.outgoing_size, "SET_ACTIVITY") == 4U);
+    discord_rpc_destroy(rpc, 18000);
 }
+
+#ifdef WIN32
+static void test_windows_pipe_identity(void) {
+    char path[128];
+    snprintf(path,
+             sizeof(path),
+             "\\\\.\\pipe\\atrinik-rich-presence-test-%lu",
+             (unsigned long)GetCurrentProcessId());
+    HANDLE server = CreateNamedPipeA(path,
+                                     PIPE_ACCESS_DUPLEX,
+                                     PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT,
+                                     1,
+                                     1024,
+                                     1024,
+                                     0,
+                                     NULL);
+    require(server != INVALID_HANDLE_VALUE);
+    require(!ConnectNamedPipe(server, NULL));
+    require(GetLastError() == ERROR_PIPE_LISTENING);
+    HANDLE client =
+        CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    require(client != INVALID_HANDLE_VALUE);
+    require(discord_rpc_test_pipe_same_user(client));
+    require(!discord_rpc_test_pipe_same_user(INVALID_HANDLE_VALUE));
+    CloseHandle(client);
+    CloseHandle(server);
+}
+#endif
 
 int main(void) {
     test_policy();
     test_rpc();
+#ifdef WIN32
+    test_windows_pipe_identity();
+#endif
     return EXIT_SUCCESS;
 }

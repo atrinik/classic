@@ -272,6 +272,9 @@ endif ()
 # Sound effects and music are required on every supported platform.
 target_compile_definitions(${EXECUTABLE} PRIVATE HAVE_SDL_MIXER)
 target_link_libraries(${EXECUTABLE} PRIVATE SDL3_mixer::SDL3_mixer)
+if (MINGW)
+    target_link_libraries(${EXECUTABLE} PRIVATE advapi32)
+endif ()
 
 if (MINGW)
     if (NOT CMAKE_OBJDUMP)
@@ -288,9 +291,7 @@ if (MINGW)
         VERBATIM)
 endif ()
 
-if (BUILD_TESTING AND NOT MINGW)
-    target_compile_definitions(${EXECUTABLE} PRIVATE ATRINIK_WIDGET_TESTS)
-
+if (BUILD_TESTING)
     add_executable(client-rich-presence-tests
         src/tests/rich_presence.c
         src/client/discord_rpc.c
@@ -298,8 +299,15 @@ if (BUILD_TESTING AND NOT MINGW)
     atrinik_configure_target(client-rich-presence-tests)
     target_include_directories(client-rich-presence-tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    if (MINGW)
+        target_compile_definitions(client-rich-presence-tests PRIVATE DISCORD_RPC_TESTING)
+        target_link_libraries(client-rich-presence-tests PRIVATE advapi32)
+    endif ()
     add_test(NAME client-rich-presence COMMAND client-rich-presence-tests)
     set_tests_properties(client-rich-presence PROPERTIES TIMEOUT 10)
+
+    if (NOT MINGW)
+        target_compile_definitions(${EXECUTABLE} PRIVATE ATRINIK_WIDGET_TESTS)
 
     add_executable(client-stun-config-tests
         src/tests/stun_config.c
@@ -578,6 +586,7 @@ if (BUILD_TESTING AND NOT MINGW)
         client-player-view-missing-face
         client-player-view-unknown-field
         PROPERTIES WILL_FAIL TRUE)
+    endif ()
 endif ()
 
 # Installer.

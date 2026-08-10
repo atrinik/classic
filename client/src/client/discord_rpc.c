@@ -12,6 +12,9 @@
 #include <string.h>
 
 #ifdef WIN32
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
 #include <windows.h>
 #else
 #include <fcntl.h>
@@ -29,6 +32,8 @@
 #define DISCORD_RPC_BACKOFF_INITIAL_MS 1000U
 #define DISCORD_RPC_BACKOFF_MAX_MS 60000U
 #define DISCORD_RPC_FRAMES_PER_TICK 8U
+#define DISCORD_RPC_COMMAND_WINDOW_MS 20000U
+#define DISCORD_RPC_COMMAND_CAPACITY 5U
 
 enum {
     DISCORD_RPC_OPCODE_HANDSHAKE,
@@ -66,6 +71,7 @@ struct discord_rpc {
     bool desired_known;
     bool desired_dirty;
     uint64_t connected_at;
+    uint64_t ready_at;
     uint64_t input_progress_at;
     uint64_t output_progress_at;
     uint64_t ack_started_at;
@@ -74,6 +80,7 @@ struct discord_rpc {
     uint64_t nonce;
     uint64_t pending_nonce;
     bool pending_ack;
+    discord_rpc_failure_t failure;
     uint64_t now_ms;
     discord_rpc_activity_t desired;
     unsigned char input[DISCORD_RPC_INPUT_MAX];
@@ -82,6 +89,9 @@ struct discord_rpc {
     size_t output_head;
     size_t output_count;
     size_t queued_activities;
+    uint64_t command_times[DISCORD_RPC_COMMAND_CAPACITY];
+    size_t command_start;
+    size_t command_count;
 };
 
 static uint32_t read_le32(const unsigned char *value) {
@@ -97,6 +107,60 @@ static void write_le32(unsigned char *value, uint32_t number) {
 }
 
 #ifdef WIN32
+static bool platform_pipe_same_user(HANDLE pipe) {
+    ULONG process_id;
+    if (!GetNamedPipeServerProcessId(pipe, &process_id)) {
+        return false;
+    }
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
+    if (process == NULL) {
+        return false;
+    }
+    HANDLE process_token = NULL;
+    HANDLE current_token = NULL;
+    bool same = false;
+    if (!OpenProcessToken(process, TOKEN_QUERY, &process_token) ||
+        !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &current_token)) {
+        goto cleanup;
+    }
+    DWORD process_size = 0;
+    DWORD current_size = 0;
+    GetTokenInformation(process_token, TokenUser, NULL, 0, &process_size);
+    GetTokenInformation(current_token, TokenUser, NULL, 0, &current_size);
+    if (process_size == 0U || current_size == 0U || process_size > 4096U || current_size > 4096U) {
+        goto cleanup;
+    }
+    TOKEN_USER *process_user = malloc(process_size);
+    TOKEN_USER *current_user = malloc(current_size);
+    if (process_user == NULL || current_user == NULL) {
+        free(process_user);
+        free(current_user);
+        goto cleanup;
+    }
+    if (GetTokenInformation(process_token, TokenUser, process_user, process_size, &process_size) &&
+        GetTokenInformation(current_token, TokenUser, current_user, current_size, &current_size)) {
+        same = EqualSid(process_user->User.Sid, current_user->User.Sid) != FALSE;
+    }
+    free(process_user);
+    free(current_user);
+
+cleanup:
+    if (process_token != NULL) {
+        CloseHandle(process_token);
+    }
+    if (current_token != NULL) {
+        CloseHandle(current_token);
+    }
+    CloseHandle(process);
+    return same;
+}
+
+#ifdef DISCORD_RPC_TESTING
+bool discord_rpc_test_pipe_same_user(void *pipe) {
+    return platform_pipe_same_user((HANDLE)pipe);
+}
+#endif
+
 static int platform_connect(void *context) {
     discord_rpc_platform_t *platform = context;
     if (platform->pipe != INVALID_HANDLE_VALUE) {
@@ -111,6 +175,10 @@ static int platform_connect(void *context) {
         HANDLE pipe =
             CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
         if (pipe == INVALID_HANDLE_VALUE) {
+            continue;
+        }
+        if (!platform_pipe_same_user(pipe)) {
+            CloseHandle(pipe);
             continue;
         }
         DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
@@ -652,6 +720,27 @@ static bool json_append(char *buffer, size_t capacity, size_t *position, const c
     return true;
 }
 
+static void command_purge(discord_rpc_t *rpc) {
+    while (rpc->command_count != 0U &&
+           rpc->now_ms - rpc->command_times[rpc->command_start] >= DISCORD_RPC_COMMAND_WINDOW_MS) {
+        rpc->command_start = (rpc->command_start + 1U) % DISCORD_RPC_COMMAND_CAPACITY;
+        rpc->command_count--;
+    }
+}
+
+static bool command_allowed(discord_rpc_t *rpc) {
+    command_purge(rpc);
+    size_t limit =
+        rpc->desired_set ? DISCORD_RPC_COMMAND_CAPACITY - 1U : DISCORD_RPC_COMMAND_CAPACITY;
+    return rpc->command_count < limit;
+}
+
+static void command_record(discord_rpc_t *rpc) {
+    size_t position = (rpc->command_start + rpc->command_count) % DISCORD_RPC_COMMAND_CAPACITY;
+    rpc->command_times[position] = rpc->now_ms;
+    rpc->command_count++;
+}
+
 static bool queue_activity(discord_rpc_t *rpc) {
     char payload[4096];
     int prefix;
@@ -722,6 +811,7 @@ static bool queue_activity(discord_rpc_t *rpc) {
     rpc->output[index].tracks_ack = true;
     rpc->output[index].nonce = rpc->nonce;
     rpc->queued_activities++;
+    command_record(rpc);
     return true;
 }
 
@@ -734,7 +824,7 @@ static void disconnect_rpc(discord_rpc_t *rpc, uint64_t now_ms) {
     rpc->output_count = 0;
     rpc->queued_activities = 0;
     rpc->pending_ack = false;
-    rpc->desired_dirty = rpc->desired_known;
+    rpc->desired_dirty = rpc->desired_known && rpc->desired_set;
     rpc->reconnect_at = now_ms + rpc->backoff_ms;
     rpc->backoff_ms = rpc->backoff_ms < DISCORD_RPC_BACKOFF_MAX_MS / 2U
                           ? rpc->backoff_ms * 2U
@@ -746,29 +836,42 @@ static bool handle_frame(discord_rpc_t *rpc,
                          const unsigned char *payload,
                          size_t payload_size) {
     if (opcode == DISCORD_RPC_OPCODE_PING) {
-        return queue_frame(rpc, DISCORD_RPC_OPCODE_PONG, payload, payload_size);
+        if (!queue_frame(rpc, DISCORD_RPC_OPCODE_PONG, payload, payload_size)) {
+            rpc->failure = DISCORD_RPC_FAILURE_IO;
+            return false;
+        }
+        return true;
     }
     if (opcode == DISCORD_RPC_OPCODE_PONG) {
         return true;
     }
     if (opcode == DISCORD_RPC_OPCODE_CLOSE) {
+        rpc->failure = DISCORD_RPC_FAILURE_REMOTE_CLOSE;
         return false;
     }
     if (opcode != DISCORD_RPC_OPCODE_FRAME) {
+        rpc->failure = DISCORD_RPC_FAILURE_PROTOCOL;
         return false;
     }
     json_message_t message;
-    if (!json_message_parse(payload, payload_size, &message) || message.error) {
+    if (!json_message_parse(payload, payload_size, &message)) {
+        rpc->failure = DISCORD_RPC_FAILURE_PROTOCOL;
+        return false;
+    }
+    if (message.error) {
+        rpc->failure = DISCORD_RPC_FAILURE_REMOTE_ERROR;
         return false;
     }
     if (message.ready) {
         rpc->ready = true;
-        rpc->backoff_ms = DISCORD_RPC_BACKOFF_INITIAL_MS;
-        rpc->desired_dirty = rpc->desired_known;
+        rpc->ready_at = rpc->now_ms;
+        rpc->failure = DISCORD_RPC_FAILURE_NONE;
+        rpc->desired_dirty = rpc->desired_known && rpc->desired_set;
     }
     if (message.set_activity && message.has_nonce && rpc->pending_ack &&
         message.nonce == rpc->pending_nonce) {
         rpc->pending_ack = false;
+        rpc->backoff_ms = DISCORD_RPC_BACKOFF_INITIAL_MS;
     }
     return true;
 }
@@ -779,6 +882,7 @@ static bool read_frames(discord_rpc_t *rpc) {
                                         rpc->input + rpc->input_size,
                                         sizeof(rpc->input) - rpc->input_size);
         if (amount == 0 || amount == -1) {
+            rpc->failure = DISCORD_RPC_FAILURE_IO;
             return false;
         }
         if (amount > 0) {
@@ -794,6 +898,7 @@ static bool read_frames(discord_rpc_t *rpc) {
         uint32_t opcode = read_le32(rpc->input);
         uint32_t payload_size = read_le32(rpc->input + 4U);
         if (payload_size > DISCORD_RPC_FRAME_MAX) {
+            rpc->failure = DISCORD_RPC_FAILURE_PROTOCOL;
             return false;
         }
         size_t frame_size = (size_t)payload_size + 8U;
@@ -806,7 +911,11 @@ static bool read_frames(discord_rpc_t *rpc) {
         memmove(rpc->input, rpc->input + frame_size, rpc->input_size - frame_size);
         rpc->input_size -= frame_size;
     }
-    return rpc->input_size != sizeof(rpc->input);
+    if (rpc->input_size == sizeof(rpc->input)) {
+        rpc->failure = DISCORD_RPC_FAILURE_PROTOCOL;
+        return false;
+    }
+    return true;
 }
 
 static bool write_frames(discord_rpc_t *rpc) {
@@ -818,6 +927,7 @@ static bool write_frames(discord_rpc_t *rpc) {
                                      output->data + output->position,
                                      output->size - output->position);
     if (amount == -1 || amount == 0) {
+        rpc->failure = DISCORD_RPC_FAILURE_IO;
         return false;
     }
     if (amount > 0) {
@@ -887,6 +997,7 @@ void discord_rpc_pump(discord_rpc_t *rpc, uint64_t now_ms) {
             return;
         }
         if (rpc->io.connect(rpc->io_context) != 1) {
+            rpc->failure = DISCORD_RPC_FAILURE_CONNECT;
             disconnect_rpc(rpc, now_ms);
             return;
         }
@@ -901,22 +1012,31 @@ void discord_rpc_pump(discord_rpc_t *rpc, uint64_t now_ms) {
                               rpc->application_id);
         if (length <= 0 || (size_t)length >= sizeof(handshake) ||
             !queue_frame(rpc, DISCORD_RPC_OPCODE_HANDSHAKE, handshake, (size_t)length)) {
+            rpc->failure = DISCORD_RPC_FAILURE_IO;
             disconnect_rpc(rpc, now_ms);
             return;
         }
     }
 
-    if ((!write_frames(rpc) || !read_frames(rpc)) ||
-        (!rpc->ready && now_ms - rpc->connected_at >= DISCORD_RPC_HANDSHAKE_TIMEOUT_MS) ||
+    if (!write_frames(rpc) || !read_frames(rpc)) {
+        disconnect_rpc(rpc, now_ms);
+        return;
+    }
+    if ((!rpc->ready && now_ms - rpc->connected_at >= DISCORD_RPC_HANDSHAKE_TIMEOUT_MS) ||
         (rpc->input_size != 0U && now_ms - rpc->input_progress_at >= DISCORD_RPC_IO_TIMEOUT_MS) ||
         (rpc->output_count != 0U &&
          now_ms - rpc->output_progress_at >= DISCORD_RPC_IO_TIMEOUT_MS) ||
         (rpc->pending_ack && now_ms - rpc->ack_started_at >= DISCORD_RPC_ACK_TIMEOUT_MS)) {
+        rpc->failure = DISCORD_RPC_FAILURE_TIMEOUT;
         disconnect_rpc(rpc, now_ms);
         return;
     }
+    if (rpc->ready && now_ms - rpc->ready_at >= DISCORD_RPC_HANDSHAKE_TIMEOUT_MS) {
+        rpc->backoff_ms = DISCORD_RPC_BACKOFF_INITIAL_MS;
+    }
     if (rpc->ready && !rpc->pending_ack && rpc->queued_activities == 0U && rpc->desired_dirty &&
-        rpc->output_count < DISCORD_RPC_OUTPUT_SLOTS && queue_activity(rpc)) {
+        rpc->output_count < DISCORD_RPC_OUTPUT_SLOTS && command_allowed(rpc) &&
+        queue_activity(rpc)) {
         rpc->desired_dirty = false;
         if (!write_frames(rpc)) {
             disconnect_rpc(rpc, now_ms);
@@ -942,6 +1062,11 @@ void discord_rpc_clear_activity(discord_rpc_t *rpc) {
     rpc->desired_set = false;
     rpc->desired_known = true;
     rpc->desired_dirty = true;
+    if (rpc->connected && rpc->queued_activities != 0U) {
+        /* Never finish a superseded sensitive frame after a privacy change. */
+        disconnect_rpc(rpc, rpc->now_ms);
+        return;
+    }
     /* A privacy clear supersedes any acknowledgement for older activity. */
     rpc->pending_ack = false;
     rpc->queued_activities = 0U;
@@ -955,6 +1080,10 @@ bool discord_rpc_ready(const discord_rpc_t *rpc) {
     return rpc != NULL && rpc->ready;
 }
 
+discord_rpc_failure_t discord_rpc_failure(const discord_rpc_t *rpc) {
+    return rpc != NULL ? rpc->failure : DISCORD_RPC_FAILURE_NONE;
+}
+
 void discord_rpc_destroy(discord_rpc_t *rpc, uint64_t now_ms) {
     if (rpc == NULL) {
         return;
@@ -963,10 +1092,24 @@ void discord_rpc_destroy(discord_rpc_t *rpc, uint64_t now_ms) {
         if (rpc->desired_set) {
             discord_rpc_clear_activity(rpc);
         }
+        size_t previous_pending = 0U;
+        for (size_t i = 0; i < rpc->output_count; i++) {
+            size_t index = (rpc->output_head + i) % DISCORD_RPC_OUTPUT_SLOTS;
+            previous_pending += rpc->output[index].size - rpc->output[index].position;
+        }
         for (unsigned int i = 0;
-             i < 2048U && rpc->connected && (rpc->desired_dirty || rpc->output_count != 0U);
+             i < 32U && rpc->connected && (rpc->desired_dirty || rpc->output_count != 0U);
              i++) {
             discord_rpc_pump(rpc, now_ms);
+            size_t pending = 0U;
+            for (size_t j = 0; j < rpc->output_count; j++) {
+                size_t index = (rpc->output_head + j) % DISCORD_RPC_OUTPUT_SLOTS;
+                pending += rpc->output[index].size - rpc->output[index].position;
+            }
+            if (pending == previous_pending) {
+                break;
+            }
+            previous_pending = pending;
         }
         rpc->io.close(rpc->io_context);
     }
