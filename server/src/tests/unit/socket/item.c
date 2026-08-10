@@ -25,7 +25,7 @@ START_TEST(test_update_map_item_name_and_count_marks_look_stale) {
     stack->nrof = 2;
     esrv_update_item(UPD_NAME | UPD_NROF, stack);
 
-    ck_assert_uint_ne(GET_MAP_UPDATE_COUNTER(map, stack->x, stack->y), old_update);
+    ck_assert_uint_eq(GET_MAP_UPDATE_COUNTER(map, stack->x, stack->y), (uint8_t)(old_update + 1));
 
     object_destroy(pl);
 }

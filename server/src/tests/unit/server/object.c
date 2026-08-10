@@ -94,6 +94,53 @@ START_TEST(test_object_can_merge) {
 }
 END_TEST
 
+START_TEST(test_map_stack_operations_increment_update_once) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    object *first = arch_get("bolt");
+    first->x = pl->x;
+    first->y = pl->y;
+    first->nrof = 1;
+    first = object_insert_map(first, map, NULL, INS_NO_MERGE);
+
+    object *second = arch_get("bolt");
+    second->x = pl->x;
+    second->y = pl->y;
+    second->nrof = 1;
+    second = object_insert_map(second, map, NULL, INS_NO_MERGE);
+
+    object *removed = arch_get("bolt");
+    removed->x = pl->x;
+    removed->y = pl->y;
+    removed = object_insert_map(removed, map, NULL, INS_NO_MERGE);
+    uint8_t old_update = GET_MAP_UPDATE_COUNTER(map, first->x, first->y);
+    object_remove(removed, REMOVE_NO_WEIGHT);
+    object_destroy(removed);
+    uint8_t remove_updates =
+        (uint8_t)(GET_MAP_UPDATE_COUNTER(map, first->x, first->y) - old_update);
+
+    old_update = GET_MAP_UPDATE_COUNTER(map, first->x, first->y);
+    ck_assert_ptr_eq(object_merge(second), first);
+    ck_assert_uint_eq(GET_MAP_UPDATE_COUNTER(map, first->x, first->y),
+                      (uint8_t)(old_update + remove_updates + 1));
+
+    old_update = GET_MAP_UPDATE_COUNTER(map, first->x, first->y);
+    object *split = object_stack_get(first, 1);
+    ck_assert_ptr_ne(split, first);
+    ck_assert_uint_eq(GET_MAP_UPDATE_COUNTER(map, first->x, first->y), (uint8_t)(old_update + 1));
+    object_destroy(split);
+
+    first->nrof = 2;
+    old_update = GET_MAP_UPDATE_COUNTER(map, first->x, first->y);
+    ck_assert_ptr_eq(object_decrease(first, 1), first);
+    ck_assert_uint_eq(GET_MAP_UPDATE_COUNTER(map, first->x, first->y), (uint8_t)(old_update + 1));
+
+    object_destroy(pl);
+}
+END_TEST
+
 START_TEST(test_object_plural_name_contract) {
     object *ob = object_load_str("arch sack\nname torch\nname_pl torches\nend\n");
     ck_assert_ptr_nonnull(ob);
@@ -918,6 +965,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_object_can_merge);
     tcase_add_test(tc_core, test_object_plural_name_contract);
     tcase_add_test(tc_core, test_object_merge_updates_name_and_count);
+    tcase_add_test(tc_core, test_map_stack_operations_increment_update_once);
     tcase_add_test(tc_core, test_object_weight_sum);
     tcase_add_test(tc_core, test_object_weight_add);
     tcase_add_test(tc_core, test_object_weight_sub);

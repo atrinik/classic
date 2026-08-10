@@ -735,7 +735,6 @@ object *object_merge(object *op) {
     for (; tmp != NULL; tmp = tmp->below) {
         if (tmp != op && object_can_merge(op, tmp)) {
             tmp->nrof += op->nrof;
-            object_update(tmp, UP_OBJ_FACE);
             esrv_update_item(UPD_NAME | UPD_NROF, tmp);
 
             object_remove(op, REMOVE_NO_WEIGHT);
@@ -2194,7 +2193,6 @@ object *object_stack_get(object *op, uint32_t nrof) {
     }
 
     op->nrof -= nrof;
-    object_update(op, UP_OBJ_FACE);
     esrv_update_item(UPD_NAME | UPD_NROF, op);
 
     if (op->env != NULL && !QUERY_FLAG(op, FLAG_SYS_OBJECT)) {
@@ -2300,7 +2298,6 @@ object *object_decrease(object *op, uint32_t nrof) {
     }
 
     if (op->nrof != 0) {
-        object_update(op, UP_OBJ_FACE);
         esrv_update_item(UPD_NAME | UPD_NROF, op);
         return op;
     }
