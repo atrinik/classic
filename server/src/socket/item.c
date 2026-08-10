@@ -749,8 +749,14 @@ static void esrv_send_item_send(object *pl, object *op) {
 void esrv_send_item(object *op) {
     object *tmp;
 
-    /* No object or object is not in inventory, nothing to do here. */
-    if (!op || !op->env) {
+    if (!op) {
+        return;
+    }
+
+    /* Map objects are refreshed through the look inventory. This also makes
+     * generic plugin field setters visible when they change a floor stack. */
+    if (!op->env) {
+        object_update(op, UP_OBJ_FACE);
         return;
     }
 
