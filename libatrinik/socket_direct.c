@@ -30,6 +30,7 @@
 #define SOCKET_RENDEZVOUS_RESERVED_BUDGET_MS 5000U
 #define SOCKET_STUN_RESOLVER_WORKERS_MAX 4U
 #define SOCKET_STUN_LATE_DRAIN_MAX 4U
+#define SOCKET_PUNCH_UNRELATED_DRAIN_MAX 4U
 
 typedef enum socket_rendezvous_attempt_state {
     SOCKET_RENDEZVOUS_ATTEMPT_READY,
@@ -1088,6 +1089,7 @@ bool socket_stun_discover_until(socket_t *sc,
     struct sockaddr_storage response_source;
     socklen_t response_source_length;
     ssize_t length;
+    bool unrelated_logged = false;
     for (;;) {
         uint64_t now_ms = socket_stun_clock_get();
         if (now_ms >= deadline_ms) {
@@ -1118,7 +1120,10 @@ bool socket_stun_discover_until(socket_t *sc,
                                                              response_source_length)) {
             break;
         }
-        LOG(ERROR, "Ignoring an unrelated STUN response");
+        if (!unrelated_logged) {
+            LOG(ERROR, "Ignoring unrelated traffic while awaiting a STUN response");
+            unrelated_logged = true;
+        }
     }
     if (length < 20 || socket_stun_u16(response) != 0x0101 ||
         socket_stun_u32(response + 4) != SOCKET_STUN_MAGIC ||
@@ -1257,7 +1262,11 @@ static bool socket_stun_response_attributable(const socket_t *sc,
            memcmp(datagram + 8, sc->late_stun_transaction, 12) == 0;
 }
 
-bool socket_udp_punch_receive(socket_t *sc, char *host, size_t host_size, uint16_t *port) {
+static bool socket_udp_punch_receive_internal(socket_t *sc,
+                                              char *host,
+                                              size_t host_size,
+                                              uint16_t *port,
+                                              bool drain_unrelated) {
     HARD_ASSERT(sc != NULL);
     HARD_ASSERT(host != NULL);
     HARD_ASSERT(port != NULL);
@@ -1266,7 +1275,9 @@ bool socket_udp_punch_receive(socket_t *sc, char *host, size_t host_size, uint16
     struct sockaddr_storage source;
     socklen_t source_length = sizeof(source);
     ssize_t length;
-    for (unsigned int drained = 0;; drained++) {
+    unsigned int late_drained = 0;
+    unsigned int unrelated_drained = 0;
+    for (;;) {
         source_length = sizeof(source);
         length = recvfrom(sc->handle,
                           datagram,
@@ -1274,14 +1285,22 @@ bool socket_udp_punch_receive(socket_t *sc, char *host, size_t host_size, uint16
                           MSG_PEEK,
                           (struct sockaddr *)&source,
                           &source_length);
-        if (length < 0 || !socket_stun_response_attributable(sc,
-                                                             (const unsigned char *)datagram,
-                                                             (size_t)length,
-                                                             &source,
-                                                             source_length)) {
+        if (length < 0) {
+            return false;
+        }
+        bool is_punch = (size_t)length == sizeof(SOCKET_PUNCH_PROBE) - 1 &&
+                        memcmp(datagram, SOCKET_PUNCH_PROBE, sizeof(SOCKET_PUNCH_PROBE) - 1) == 0;
+        if (is_punch) {
             break;
         }
-        if (drained >= SOCKET_STUN_LATE_DRAIN_MAX) {
+        bool is_late_stun = socket_stun_response_attributable(sc,
+                                                              (const unsigned char *)datagram,
+                                                              (size_t)length,
+                                                              &source,
+                                                              source_length);
+        if ((!is_late_stun && !drain_unrelated) ||
+            (is_late_stun && late_drained >= SOCKET_STUN_LATE_DRAIN_MAX) ||
+            (!is_late_stun && unrelated_drained >= SOCKET_PUNCH_UNRELATED_DRAIN_MAX)) {
             return false;
         }
         source_length = sizeof(source);
@@ -1293,10 +1312,11 @@ bool socket_udp_punch_receive(socket_t *sc, char *host, size_t host_size, uint16
                      &source_length) != length) {
             return false;
         }
-    }
-    if ((size_t)length != sizeof(SOCKET_PUNCH_PROBE) - 1 ||
-        memcmp(datagram, SOCKET_PUNCH_PROBE, sizeof(SOCKET_PUNCH_PROBE) - 1) != 0) {
-        return false;
+        if (is_late_stun) {
+            late_drained++;
+        } else {
+            unrelated_drained++;
+        }
     }
 
     char probe[sizeof(SOCKET_PUNCH_PROBE)];
@@ -1322,6 +1342,14 @@ bool socket_udp_punch_receive(socket_t *sc, char *host, size_t host_size, uint16
     }
     *port = (uint16_t)value;
     return true;
+}
+
+bool socket_udp_punch_receive(socket_t *sc, char *host, size_t host_size, uint16_t *port) {
+    return socket_udp_punch_receive_internal(sc, host, host_size, port, false);
+}
+
+bool socket_udp_punch_receive_pre_quic(socket_t *sc, char *host, size_t host_size, uint16_t *port) {
+    return socket_udp_punch_receive_internal(sc, host, host_size, port, true);
 }
 
 void socket_punch_pacer_start(socket_punch_pacer_t *pacer, uint64_t now_ms, unsigned int grace_ms) {
@@ -1519,7 +1547,7 @@ static size_t socket_udp_punch_collect(socket_t *sc,
     while (received < SOCKET_PUNCH_DRAIN_MAX) {
         char host[65];
         uint16_t port;
-        if (!socket_udp_punch_receive(sc, VS(host), &port)) {
+        if (!socket_udp_punch_receive_pre_quic(sc, VS(host), &port)) {
             return received;
         }
         received++;

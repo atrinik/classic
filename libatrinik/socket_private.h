@@ -107,6 +107,7 @@ void socket_stun_after_send_set_for_test(socket_stun_after_send_t after_send);
 void socket_stun_resolver_wait_for_test(void);
 void socket_rendezvous_fallback_set_for_test(socket_rendezvous_fallback_t fallback);
 uint64_t socket_rendezvous_stun_deadline(uint64_t now_ms, uint64_t attempt_deadline_ms);
+bool socket_udp_punch_receive_pre_quic(socket_t *sc, char *host, size_t host_size, uint16_t *port);
 
 size_t socket_rendezvous_client(socket_t *sc,
                                 const char *url,

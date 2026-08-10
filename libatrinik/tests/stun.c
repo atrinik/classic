@@ -167,6 +167,12 @@ static void *fake_stun_run(void *data) {
             pthread_cond_wait(&server->condition, &server->mutex);
         }
         pthread_mutex_unlock(&server->mutex);
+        TEST_CHECK(sendto(server->intruder_handle,
+                          response,
+                          response_size,
+                          0,
+                          (const struct sockaddr *)&client,
+                          client_length) == (ssize_t)response_size);
     }
     TEST_CHECK(sendto(server->handle,
                       response,
@@ -445,7 +451,8 @@ static void test_late_stun_response_before_punch(void) {
         pthread_cond_wait(&server.condition, &server.mutex);
     }
     pthread_mutex_unlock(&server.mutex);
-    TEST_CHECK(socket_udp_punch_receive(&client, VS(host), &port));
+    TEST_CHECK(!socket_udp_punch_receive(&client, VS(host), &port));
+    TEST_CHECK(socket_udp_punch_receive_pre_quic(&client, VS(host), &port));
     TEST_CHECK(strcmp(host, "127.0.0.1") == 0);
     TEST_CHECK(port == ntohs(server_address.sin_port));
 
