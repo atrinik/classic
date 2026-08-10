@@ -41,11 +41,14 @@ request and merge-group entries never share a write key with `main`; only the
 ccache directory is persisted, never a CMake build tree.
 
 To update the image, first publish and validate an immutable devcontainer
-candidate. Replace both the image and digest constants together, update the GCC
-identity if needed, and increment `CLASSIC_LINUX_CCACHE_EPOCH` for any cache
-contract change not represented by the hashed configuration inputs. Run the
-cache-key unit tests, then use cold and repeated Check runs to inspect the raw
-ccache artifacts and image timing summary before accepting the pin.
+candidate. Use that candidate digest only for pre-merge consumer evidence. Once
+the devcontainer change is released, verify the release image's embedded
+inventory and source coordinates, then replace both image and digest constants
+with its versioned digest before making the Classic pull request ready. Update
+the GCC identity if needed, and increment `CLASSIC_LINUX_CCACHE_EPOCH` for any
+cache contract change not represented by the hashed configuration inputs. Run
+the cache-key unit tests, then use cold and repeated Check runs to inspect the
+raw ccache artifacts and image timing summary before accepting the pin.
 
 ## Module requirements
 

@@ -543,7 +543,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(workflow.count(f"sha256:{digest}"), 2)
         self.assertEqual(workflow.count(cache_action), 3)
         self.assertEqual(workflow.count("tools/ci/linux_cache_key.py"), 3)
-        self.assertEqual(workflow.count("tools/ci/run_linux_check.sh"), 3)
+        self.assertEqual(workflow.count("tools/ci/run_linux_check.sh"), 6)
         self.assertEqual(workflow.count("--env CCACHE_DIR=/cache/ccache"), 3)
         self.assertEqual(workflow.count("chmod 1777"), 3)
         self.assertIn("tools/ci/measure_linux_image.sh", workflow)
@@ -568,6 +568,9 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertIn("id-token: write", job)
                 self.assertIn(f"--component {component}", job)
                 self.assertIn(f"classic-ccache/{component}", job)
+                self.assertEqual(
+                    job.count("--material tools/ci/run_linux_check.sh"), 1
+                )
                 self.assertIn("restore-keys:", job)
                 self.assertNotIn("apt-get", job)
                 self.assertNotIn("ubuntu@sha256:", job)

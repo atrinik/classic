@@ -119,6 +119,7 @@ jobs:
             --compiler "${CLASSIC_LINUX_CCACHE_COMPILER}" \
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/check.yml \
+            --material tools/ci/run_linux_check.sh \
             --material protocol/CMakeLists.txt \
             --material libatrinik/CMakeLists.txt \
             --material libatrinik/CMakePresets.json \
@@ -423,6 +424,7 @@ jobs:
             --compiler "${CLASSIC_LINUX_CCACHE_COMPILER}" \
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/check.yml \
+            --material tools/ci/run_linux_check.sh \
             --material server/CMakeLists.txt \
             --material server/CMakePresets.json \
             --github-output "${GITHUB_OUTPUT}"
@@ -496,6 +498,7 @@ jobs:
             --compiler "${CLASSIC_LINUX_CCACHE_COMPILER}" \
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/check.yml \
+            --material tools/ci/run_linux_check.sh \
             --material client/CMakeLists.txt \
             --material client/CMakePresets.json \
             --github-output "${GITHUB_OUTPUT}"
