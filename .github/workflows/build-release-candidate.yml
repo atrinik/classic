@@ -177,15 +177,49 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  discord-config:
+    name: Stage Discord application configuration
+    if: inputs.rehearsal != true
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    environment: discord-release
+    steps:
+      - name: Validate the release-only public Application ID
+        env:
+          DISCORD_APPLICATION_ID: ${{ secrets.DISCORD_APPLICATION_ID }}
+        run: |
+          [[ ${DISCORD_APPLICATION_ID} =~ ^[1-9][0-9]{0,19}$ ]]
+          umask 077
+          mkdir -p build/discord-config
+          printf '%s\n' "${DISCORD_APPLICATION_ID}" > \
+            build/discord-config/discord-application-id
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: discord-application-id-${{ needs.metadata.outputs.tag }}
+          path: build/discord-config/discord-application-id
+          if-no-files-found: error
+          retention-days: 1
+
   client-windows:
     name: Build Windows client package
-    needs: metadata
+    if: >-
+      always() &&
+      needs.metadata.result == 'success' &&
+      (inputs.rehearsal == true || needs.discord-config.result == 'success')
+    needs: [metadata, discord-config]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.metadata.outputs.commit }}
+      - name: Retrieve release-only Discord configuration
+        if: inputs.rehearsal != true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: discord-application-id-${{ needs.metadata.outputs.tag }}
+          path: build/discord-config
       - name: Restore Windows client compiler cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -209,10 +243,12 @@ jobs:
       - name: Build portable package from monorepo siblings
         env:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+          DISCORD_CONFIG_FILE: ${{ inputs.rehearsal != true && format('{0}/build/discord-config/discord-application-id', github.workspace) || '' }}
         run: |
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             --env ATRINIK_PACKAGE_VERSION="${RELEASE_VERSION}" \
+            --env ATRINIK_DISCORD_APPLICATION_ID_FILE="${DISCORD_CONFIG_FILE}" \
             --env CCACHE_DIR=/workspace/client/build/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env CCACHE_TEMPDIR=/tmp/atrinik-client-ccache \

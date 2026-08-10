@@ -54,6 +54,32 @@ option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
 option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
 option(ENABLE_COVERAGE "Enable GCC coverage instrumentation" OFF)
 set(PACKAGE_TYPE "none" CACHE STRING "Package type (none, deb, rpm, nsis, or zip)")
+set(ATRINIK_DISCORD_APPLICATION_ID_FILE "" CACHE FILEPATH
+    "Optional file containing the public Discord Application ID")
+
+if (ATRINIK_DISCORD_APPLICATION_ID_FILE)
+    if (NOT EXISTS "${ATRINIK_DISCORD_APPLICATION_ID_FILE}")
+        message(FATAL_ERROR "ATRINIK_DISCORD_APPLICATION_ID_FILE does not exist")
+    endif ()
+    file(STRINGS "${ATRINIK_DISCORD_APPLICATION_ID_FILE}"
+        ATRINIK_DISCORD_APPLICATION_ID_LINES LIMIT_COUNT 2)
+    list(LENGTH ATRINIK_DISCORD_APPLICATION_ID_LINES
+        ATRINIK_DISCORD_APPLICATION_ID_LINE_COUNT)
+    if (NOT ATRINIK_DISCORD_APPLICATION_ID_LINE_COUNT EQUAL 1)
+        message(FATAL_ERROR "Discord Application ID file must contain exactly one line")
+    endif ()
+    list(GET ATRINIK_DISCORD_APPLICATION_ID_LINES 0
+        ATRINIK_DISCORD_APPLICATION_ID_VALUE)
+    string(LENGTH "${ATRINIK_DISCORD_APPLICATION_ID_VALUE}"
+        ATRINIK_DISCORD_APPLICATION_ID_LENGTH)
+    if (ATRINIK_DISCORD_APPLICATION_ID_LENGTH LESS 1 OR
+            ATRINIK_DISCORD_APPLICATION_ID_LENGTH GREATER 20 OR
+            NOT ATRINIK_DISCORD_APPLICATION_ID_VALUE MATCHES "^[1-9][0-9]*$")
+        message(FATAL_ERROR "Discord Application ID file is invalid")
+    endif ()
+    unset(ATRINIK_DISCORD_APPLICATION_ID_VALUE)
+    unset(ATRINIK_DISCORD_APPLICATION_ID_LINES)
+endif ()
 
 set(PACKAGE_VERSION "${PROJECT_VERSION}" CACHE STRING
     "Semantic version shown by the client and used for packages")
@@ -257,6 +283,16 @@ endif ()
 
 if (BUILD_TESTING AND NOT MINGW)
     target_compile_definitions(${EXECUTABLE} PRIVATE ATRINIK_WIDGET_TESTS)
+
+    add_executable(client-rich-presence-tests
+        src/tests/rich_presence.c
+        src/client/discord_rpc.c
+        src/client/rich_presence_policy.c)
+    atrinik_configure_target(client-rich-presence-tests)
+    target_include_directories(client-rich-presence-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    add_test(NAME client-rich-presence COMMAND client-rich-presence-tests)
+    set_tests_properties(client-rich-presence PROPERTIES TIMEOUT 10)
 
     add_executable(client-stun-config-tests
         src/tests/stun_config.c
@@ -598,6 +634,11 @@ install(DIRECTORY
         textures cache data fonts gfx_user settings sound srv_files
         DESTINATION ${INSTALL_SUBDIR_SHARE}
         PATTERN ".git" EXCLUDE)
+if (ATRINIK_DISCORD_APPLICATION_ID_FILE)
+    install(FILES "${ATRINIK_DISCORD_APPLICATION_ID_FILE}"
+        DESTINATION "${INSTALL_SUBDIR_SHARE}/data"
+        RENAME discord-application-id)
+endif ()
 
 include(InstallRequiredSystemLibraries)
 

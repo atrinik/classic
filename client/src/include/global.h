@@ -121,5 +121,6 @@ struct packet_reader;
 #include <settings.h>
 #include <keybind.h>
 #include <progress.h>
+#include <rich_presence.h>
 
 #endif
