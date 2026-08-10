@@ -537,11 +537,11 @@ class WorkflowContractTests(unittest.TestCase):
 
         self.assertEqual(workflow.count(image), 1)
         self.assertEqual(workflow.count(f"sha256:{digest}"), 2)
-        self.assertEqual(workflow.count(cache_action), 3)
-        self.assertEqual(workflow.count("tools/ci/linux_cache_key.py"), 3)
-        self.assertEqual(workflow.count("tools/ci/run_linux_check.sh"), 6)
-        self.assertEqual(workflow.count("--env CCACHE_DIR=/cache/ccache"), 3)
-        self.assertEqual(workflow.count("chmod 1777"), 3)
+        self.assertEqual(workflow.count(cache_action), 4)
+        self.assertEqual(workflow.count("tools/ci/linux_cache_key.py"), 4)
+        self.assertEqual(workflow.count("tools/ci/run_linux_check.sh"), 8)
+        self.assertEqual(workflow.count("--env CCACHE_DIR=/cache/ccache"), 4)
+        self.assertEqual(workflow.count("chmod 1777"), 4)
         self.assertIn("tools/ci/measure_linux_image.sh", workflow)
         self.assertNotIn("classic-client-sdl-mixer-ubuntu", workflow)
         self.assertNotIn("packages: read", workflow)
@@ -558,6 +558,11 @@ class WorkflowContractTests(unittest.TestCase):
         ]
         client = workflow[
             workflow.index("  client:\n    name: Client validation") : workflow.index(
+                "  integrated:\n    name: Integrated client/server graph"
+            )
+        ]
+        integrated = workflow[
+            workflow.index("  integrated:\n    name: Integrated client/server graph") : workflow.index(
                 "  classic-validation:\n    name: Classic validation"
             )
         ]
@@ -581,10 +586,27 @@ class WorkflowContractTests(unittest.TestCase):
                 "client/CMakeLists.txt",
                 "client/CMakePresets.json",
             },
+            "integrated": {
+                ".github/workflows/check.yml",
+                "tools/ci/run_linux_check.sh",
+                "CMakeLists.txt",
+                "CMakePresets.json",
+                "protocol/CMakeLists.txt",
+                "libatrinik/CMakeLists.txt",
+                "client/CMakeLists.txt",
+                "server/CMakeLists.txt",
+            },
         }
-        for job, component in ((core, "core"), (server, "server"), (client, "client")):
+        jobs = (
+            (core, "core", True),
+            (server, "server", True),
+            (client, "client", True),
+            (integrated, "integrated", False),
+        )
+        for job, component, uploads_coverage in jobs:
             with self.subTest(component=component):
-                self.assertIn("id-token: write", job)
+                if uploads_coverage:
+                    self.assertIn("id-token: write", job)
                 self.assertIn("persist-credentials: false", job)
                 self.assertIn(f"--component {component}", job)
                 self.assertIn(f"classic-ccache/{component}", job)

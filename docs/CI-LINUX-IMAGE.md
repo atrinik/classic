@@ -131,9 +131,10 @@ that this pull request did not write the trusted-main namespace.
 - `tools/tests/test_linux_cache_key.py` changes every hashed material, compiler
   identity, image digest, component, and manual epoch and requires a different
   restore prefix.
-- `tools/tests/test_workflow_contracts.py` requires all three jobs to hash the
-  shared validation driver and their component CMake configuration, mount only
-  the component ccache directory, and activate both C and C++ launchers.
+- `tools/tests/test_workflow_contracts.py` requires the core, client, server,
+  and integrated-graph jobs to hash the shared validation driver and their
+  component CMake configuration, mount only the component ccache directory,
+  and activate both C and C++ launchers.
 - Pull request, merge-group, and trusted-main scopes have distinct keys; unsafe
   material paths, missing files, symlinks, invalid digests, and unsupported
   events fail closed.

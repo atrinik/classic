@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 DIGEST_RE = re.compile(r"sha256:([0-9a-f]{64})")
 TOKEN_RE = re.compile(r"[A-Za-z0-9._-]+")
-COMPONENTS = {"client", "core", "server"}
+COMPONENTS = {"client", "core", "integrated", "server"}
 
 
 class CacheKeyError(RuntimeError):

@@ -535,31 +535,64 @@ jobs:
       needs.changes.outputs.server == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: linux-cache
+        name: Resolve isolated integrated compiler cache key
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 tools/ci/linux_cache_key.py \
+            --component integrated \
+            --event "${GITHUB_EVENT_NAME}" \
+            --ref "${GITHUB_REF}" \
+            --pr-number "${PR_NUMBER}" \
+            --commit "${GITHUB_SHA}" \
+            --image-digest "${CLASSIC_LINUX_IMAGE_DIGEST}" \
+            --compiler "${CLASSIC_LINUX_CCACHE_COMPILER}" \
+            --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
+            --material .github/workflows/check.yml \
+            --material tools/ci/run_linux_check.sh \
+            --material CMakeLists.txt \
+            --material CMakePresets.json \
+            --material protocol/CMakeLists.txt \
+            --material libatrinik/CMakeLists.txt \
+            --material client/CMakeLists.txt \
+            --material server/CMakeLists.txt \
+            --github-output "${GITHUB_OUTPUT}"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: client/build/ci-prefix
-          key: classic-integrated-sdl-mixer-ubuntu-26.04-x64-3.2.4-v1
-      - name: Pull pinned build environment
-        run: docker pull ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
+          path: ${{ runner.temp }}/classic-ccache/integrated
+          key: ${{ steps.linux-cache.outputs.key }}
+          restore-keys: ${{ steps.linux-cache.outputs.restore_prefix }}
+      - name: Pull pinned Classic Linux environment
+        run: docker pull "${CLASSIC_LINUX_IMAGE}"
+      - name: Prepare stable integrated compiler cache mount
+        run: |
+          mkdir -p "${RUNNER_TEMP}/classic-ccache/integrated"
+          chmod 1777 "${RUNNER_TEMP}/classic-ccache/integrated"
       - name: Build shared Release graph
         run: |
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env CCACHE_DIR=/cache/ccache \
+            --env CCACHE_MAXSIZE=500M \
+            --env HOME=/tmp/classic-home \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --volume "${RUNNER_TEMP}/classic-ccache/integrated:/cache/ccache" \
             --workdir /workspace \
-            ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03 \
-            bash -euo pipefail -c '
-              client/tools/install-linux-ci-dependencies.sh client/build/ci-prefix
-              env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-                check flex libgd-dev libminiupnpc-dev libreadline-dev \
-                libsubunit-dev python3-dev
-              export CMAKE_PREFIX_PATH=/workspace/client/build/ci-prefix
-              export LD_LIBRARY_PATH=/workspace/client/build/ci-prefix/lib
-              export PKG_CONFIG_PATH=/workspace/client/build/ci-prefix/lib/pkgconfig
-              cmake --preset linux-release -DBUILD_TESTING=OFF
-              cmake --build --preset linux-release --parallel
-            '
+            "${CLASSIC_LINUX_IMAGE}" \
+            tools/ci/run_linux_check.sh integrated /workspace
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-integrated-ccache-${{ github.run_attempt }}
+          path: build/ci-evidence/ccache-integrated.tsv
+          if-no-files-found: error
+          retention-days: 14
 
   classic-validation:
     name: Classic validation

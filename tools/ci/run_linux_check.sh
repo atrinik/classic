@@ -12,7 +12,7 @@ source_root=$(realpath "$2")
 jobs=$(nproc)
 
 case "${component}" in
-  client | core | server) ;;
+  client | core | integrated | server) ;;
   *)
     echo "unsupported Linux Check component: ${component}" >&2
     exit 2
@@ -112,6 +112,14 @@ case "${component}" in
     cmake --build --preset linux-sanitizers --parallel "${jobs}"
     env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
       ctest --preset linux-sanitizers
+    popd >/dev/null
+    ;;
+  integrated)
+    pushd "${source_root}" >/dev/null
+    cmake --preset linux-release \
+      -DBUILD_TESTING=OFF \
+      "${launcher[@]}"
+    cmake --build --preset linux-release --parallel "${jobs}"
     popd >/dev/null
     ;;
 esac
