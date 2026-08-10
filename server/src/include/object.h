@@ -358,6 +358,9 @@ struct obj {
     /** Object is a light source */
     int8_t glow_radius;
 
+    /** World-light tint as an authored 0xRRGGBB sRGB value. */
+    uint32_t light_color;
+
     /** Any magical bonuses to this item */
     int8_t magic;
 

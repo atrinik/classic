@@ -30,6 +30,8 @@
 #ifndef MAP_H
 #define MAP_H
 
+#include <toolkit/map_protocol.h>
+
 /** Map tile position Y offset */
 #define MAP_TILE_POS_YOFF 23
 
@@ -159,6 +161,9 @@ typedef struct _mapdata {
     /** Position Y. */
     int posy;
 
+    /** Bounded sequencing state for the last full MAP2 update. */
+    map_protocol_continuation_state_t continuation;
+
     /**
      * If set, height difference will be taken into account when rendering
      * tiles (even if they are not FoW tiles).
@@ -201,6 +206,12 @@ typedef struct MapCell {
 
     /** Whether each light level has been received from the server. */
     uint8_t light_known[NUM_SUB_LAYERS];
+
+    /** Resolved RGB illumination for each sub-layer. */
+    uint8_t light_rgb[NUM_SUB_LAYERS][3];
+
+    /** Bitmap of sub-layers whose RGB state is explicitly colored. */
+    uint8_t light_rgb_explicit;
 
     /** Object flags. */
     uint8_t flags[NUM_REAL_LAYERS];
@@ -291,6 +302,14 @@ typedef struct MapCell {
     uint8_t glow_speed[NUM_REAL_LAYERS];
     uint8_t glow_state[NUM_REAL_LAYERS];
 } MapCell;
+
+/** Discard presentation light knowledge while retaining the scalar cache value. */
+static inline void map_cell_clear_light_state(MapCell *cell) {
+    HARD_ASSERT(cell != NULL);
+    memset(cell->light_known, 0, sizeof(cell->light_known));
+    memset(cell->light_rgb, 0, sizeof(cell->light_rgb));
+    cell->light_rgb_explicit = 0;
+}
 
 #define MAP_STARTX map_width *(MAP_FOW_SIZE / 2)
 #define MAP_STARTY map_height *(MAP_FOW_SIZE / 2)
@@ -452,6 +471,7 @@ extern void map_set_fow(int x, int y, bool fow);
 extern bool map_get_fow(int x, int y);
 
 extern void map_set_light_level(int x, int y, int sub_layer, uint8_t light_level);
+extern void map_set_light_rgb(int x, int y, uint8_t bitmap, const uint8_t rgb[NUM_SUB_LAYERS][3]);
 
 extern void map_animate(void);
 

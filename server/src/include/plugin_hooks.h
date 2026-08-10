@@ -56,6 +56,7 @@
 #include <gods.h>
 #include <initialization.h>
 #include <living.h>
+#include <light.h>
 #include <loader.h>
 #include <monster.h>
 #include <movement.h>
@@ -124,7 +125,14 @@ struct plugin_hooklist
             PLUGIN_HOOK_FUNCTION(void, object_destroy, object *) PLUGIN_HOOK_FUNCTION(
                 int,
                 living_update,
-                object *) PLUGIN_HOOK_FUNCTION(object *,
+                object *) PLUGIN_HOOK_FUNCTION(void,
+                                               adjust_light_source_color,
+                                               mapstruct *,
+                                               int,
+                                               int,
+                                               int,
+                                               uint32_t,
+                                               int) PLUGIN_HOOK_FUNCTION(object *,
                                                object_insert_into,
                                                object *,
                                                object *,
