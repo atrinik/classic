@@ -402,6 +402,7 @@ void socket_command_player(uint8_t *data, size_t len, size_t pos) {
         send_command("/party list");
     }
 
+    rich_presence_session_start();
     cpl.state = ST_PLAY;
 }
 

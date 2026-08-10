@@ -290,6 +290,38 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(candidate.count("--env CCACHE_MAXSIZE=500M"), 2)
         self.assertEqual(candidate.count("--env PATH=/opt/mxe/.ccache/bin:"), 2)
 
+    def test_discord_application_id_is_release_only_package_data(self) -> None:
+        candidate = self.text("build-release-candidate.yml")
+        config = candidate[
+            candidate.index("  discord-config:") : candidate.index("  client-windows:")
+        ]
+        client = candidate[
+            candidate.index("  client-windows:") : candidate.index("  server-windows:")
+        ]
+        cmake = (ROOT / "client" / "CMakeLists.txt").read_text(encoding="utf-8")
+        package_script = (ROOT / "client" / "tools" / "build-windows-package.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("if: inputs.rehearsal != true", config)
+        self.assertIn("environment: discord-release", config)
+        self.assertIn("secrets.DISCORD_APPLICATION_ID", config)
+        self.assertIn("umask 077", config)
+        self.assertNotIn("echo", config)
+        self.assertIn("retention-days: 1", config)
+        self.assertIn("ATRINIK_DISCORD_APPLICATION_ID_FILE", client)
+        self.assertIn("/workspace/build/discord-config/discord-application-id", client)
+        self.assertIn('PATTERN "discord-application-id" EXCLUDE', cmake)
+        self.assertIn("18446744073709551615", cmake)
+        self.assertIn("if: inputs.rehearsal != true", client)
+        self.assertIn(
+            'discord_config_file=${ATRINIK_DISCORD_APPLICATION_ID_FILE:-}',
+            package_script,
+        )
+        self.assertIn(
+            '"-DATRINIK_DISCORD_APPLICATION_ID_FILE=${discord_config_file}"',
+            package_script,
+        )
+
     def test_only_release_metadata_checkouts_require_full_history(self) -> None:
         candidate = self.text("build-release-candidate.yml")
         metadata_job = candidate[
@@ -327,6 +359,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("--env CCACHE_MAXSIZE=250M", build)
         self.assertNotIn("--env CCACHE_DIR=/opt/mxe", build)
         self.assertIn("-DBUILD_TESTING=ON", build)
+        self.assertIn("working-directory: client", build)
+        self.assertIn("python3 tools/dependencies.py sync", build)
+        self.assertIn("bash tools/build-windows-package.sh", build)
+        self.assertIn("ATRINIK_DISCORD_APPLICATION_ID_FILE", build)
+        self.assertIn("/data/discord-application-id", build)
+        self.assertIn("not in archive.read(executable)", build)
         self.assertIn(
             "--target libatrinik-path libatrinik-rendezvous "
             "libatrinik-metaserver-publisher \\",
@@ -336,6 +374,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn(
             "libatrinik/build/windows-tests/libatrinik-stun.exe", build
         )
+        self.assertIn("client-rich-presence-tests.exe", build)
         self.assertIn("python3 tools/ci/stage_windows_runtime.py", build)
         self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", build)
 
@@ -346,6 +385,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"libatrinik-metaserver-publisher.exe"', run)
         self.assertIn('"libatrinik-metaserver-url.exe"', run)
         self.assertIn('"libatrinik-stun.exe"', run)
+        self.assertIn('"client-rich-presence-tests.exe"', run)
         self.assertIn('"fixtures/metaserver-publisher-v1.json"', run)
 
         self.assertIn("- windows-test", aggregate)
