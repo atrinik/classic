@@ -29,7 +29,7 @@
 #include "metaserver_private.h"
 
 /** Are we connecting to the metaserver? */
-static int metaserver_connecting = 1;
+static int metaserver_connecting;
 /** Mutex to protect ::metaserver_connecting. */
 static SDL_Mutex *metaserver_connecting_mutex;
 /** The list of the servers. */
@@ -41,7 +41,7 @@ static SDL_Mutex *server_head_mutex;
 /** Joinable directory worker, retained until completion is observed. */
 static SDL_Thread *metaserver_worker;
 /** Is metaserver enabled? */
-static uint8_t enabled = 1;
+static bool enabled;
 
 static bool metaserver_etag_valid(const char *value) {
     size_t size = strlen(value);
@@ -130,6 +130,8 @@ static bool metaserver_cached_snapshot(const char *body,
 void metaserver_init(void) {
     server_head = NULL;
     server_count = 0;
+    enabled = client_metaserver_options_enabled(&clioption_settings.metaservers);
+    metaserver_connecting = enabled ? 1 : 0;
     metaserver_connecting_mutex = SDL_CreateMutex();
     server_head_mutex = SDL_CreateMutex();
     metaserver_worker = NULL;
@@ -137,13 +139,6 @@ void metaserver_init(void) {
         LOG(ERROR, "Could not create metaserver mutexes: %s", SDL_GetError());
         exit(EXIT_FAILURE);
     }
-}
-
-void metaserver_disable(void) {
-    enabled = 0;
-    SDL_LockMutex(metaserver_connecting_mutex);
-    metaserver_connecting = 0;
-    SDL_UnlockMutex(metaserver_connecting_mutex);
 }
 
 void metaserver_server_free(server_struct *server) {
@@ -260,8 +255,9 @@ server_struct *metaserver_add(const char *hostname,
 int metaserver_thread(void *dummy) {
     (void)dummy;
 
-    for (size_t i = clioption_settings.metaservers_num; i > 0; i--) {
-        const client_metaserver_endpoint_t *endpoint = &clioption_settings.metaservers[i - 1];
+    for (size_t i = clioption_settings.metaservers.count; i > 0; i--) {
+        const client_metaserver_endpoint_t *endpoint =
+            &clioption_settings.metaservers.endpoints[i - 1];
         time_t current_time = time(NULL);
         if (current_time < 0) {
             continue;
