@@ -1265,13 +1265,10 @@ void object_update_speed(object *op) {
         return;
     }
 
-    /* These are special case objects - they have speed set, but should not be
-     * put on the active list. */
-    if (op->type == SPAWN_POINT_MOB) {
-        return;
-    }
-
-    if (FABS(op->speed) > MIN_ACTIVE_SPEED) {
+    /* Spawn point templates can have speed, but must never be added to the
+     * active list. Still let the removal path below unlink a template that
+     * was already active before its type changed. */
+    if (op->type != SPAWN_POINT_MOB && FABS(op->speed) > MIN_ACTIVE_SPEED) {
         /* If already on active list, don't do anything */
         if (op->active_next || op->active_prev || op == active_objects) {
             return;

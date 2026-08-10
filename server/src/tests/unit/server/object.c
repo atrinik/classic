@@ -577,6 +577,63 @@ START_TEST(test_OBJECT_DESTROYED) {
 }
 END_TEST
 
+START_TEST(test_object_map_reload_preserves_active_list) {
+    ck_assert_ptr_eq(active_objects, NULL);
+
+    object *player = arch_get("sack");
+    player->speed = 1.0f;
+    object_update_speed(player);
+    ck_assert_ptr_eq(active_objects, player);
+
+    for (int cycle = 0; cycle < 3; cycle++) {
+        mapstruct *map = get_empty_map(1, 1);
+        ck_assert_ptr_ne(map, NULL);
+
+        object *spawn = object_load_str("arch spawn_point\n"
+                                        "arch lom_lobon\n"
+                                        "type 83\n"
+                                        "arch ability_firestorm\n"
+                                        "end\n"
+                                        "arch ability_firestorm\n"
+                                        "end\n"
+                                        "end\n"
+                                        "end\n");
+        ck_assert_ptr_ne(spawn, NULL);
+        ck_assert_ptr_ne(spawn->inv, NULL);
+        ck_assert_int_eq(spawn->inv->type, SPAWN_POINT_MOB);
+        ck_assert_ptr_ne(spawn->inv->inv, NULL);
+        ck_assert_ptr_ne(spawn->inv->inv->below, NULL);
+
+        spawn->x = 0;
+        spawn->y = 0;
+        ck_assert_ptr_eq(object_insert_map(spawn, map, NULL, 0), spawn);
+
+        object *template = spawn->inv;
+        template->type = MONSTER;
+        object_update_speed(template);
+        ck_assert_ptr_eq(active_objects, template);
+        ck_assert_ptr_eq(template->active_next, spawn);
+
+        /* Reproduce a template whose type changed after it became active.
+         * Map destruction must unlink it despite its non-zero speed. */
+        template->type = SPAWN_POINT_MOB;
+        delete_map(map);
+
+        ck_assert_ptr_eq(active_objects, player);
+        ck_assert_ptr_eq(player->active_prev, NULL);
+
+        object *reused = object_get();
+        ck_assert_ptr_eq(active_objects, player);
+        ck_assert_ptr_eq(reused->active_next, NULL);
+        ck_assert_ptr_eq(reused->active_prev, NULL);
+        object_destroy(reused);
+    }
+
+    object_destroy(player);
+    ck_assert_ptr_eq(active_objects, NULL);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("object");
     TCase *tc_core = tcase_create("Core");
@@ -606,6 +663,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_object_create_singularity);
     tcase_add_test(tc_core, test_invalid_object_type_uses_base_method_fallback);
     tcase_add_test(tc_core, test_OBJECT_DESTROYED);
+    tcase_add_test(tc_core, test_object_map_reload_preserves_active_list);
 
     return s;
 }
