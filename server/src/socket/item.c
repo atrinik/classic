@@ -202,7 +202,10 @@ void add_object_to_packet(struct packet_struct *packet,
         packet_debug_data(packet, level, "Name");
 
         StringBuffer *sb = object_get_display_name(op, pl, NULL);
-        packet_writer_write_cstring_n(packet, stringbuffer_data(sb), stringbuffer_length(sb));
+        packet_writer_write_cstring_n(
+            packet,
+            stringbuffer_data(sb),
+            MIN(stringbuffer_length(sb), ATRINIK_PROTOCOL_ITEM_NAME_SIZE - 1U));
         stringbuffer_free(sb);
     }
 

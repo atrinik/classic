@@ -34,7 +34,7 @@
 #define NROF_ITEMS 50
 
 /** Maximum length of a name. */
-#define NAME_LEN 128
+#define NAME_LEN ATRINIK_PROTOCOL_ITEM_NAME_SIZE
 
 /**
  * Item structure keeps all information what player (= client) knows

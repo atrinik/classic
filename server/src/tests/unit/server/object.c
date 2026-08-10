@@ -188,6 +188,46 @@ START_TEST(test_object_merge_updates_name_and_count) {
     ck_assert_uint_eq(packet_reader_read_uint32(&reader), 2);
     ck_assert(packet_reader_finish(&reader));
 
+    ck_assert_ptr_eq(object_decrease(first, 1), first);
+    ck_assert_uint_eq(first->nrof, 1);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_ITEM_UPDATE);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint16(&reader), UPD_NAME | UPD_NROF);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), first->count);
+    ck_assert(packet_reader_read_string(&reader, VS(display_name)));
+    ck_assert_str_eq(display_name, "torch");
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), 1);
+    ck_assert(packet_reader_finish(&reader));
+
+    char boundary_name[ATRINIK_PROTOCOL_ITEM_NAME_SIZE];
+    memset(boundary_name, 'a', sizeof(boundary_name) - 1);
+    boundary_name[sizeof(boundary_name) - 1] = '\0';
+    FREE_AND_COPY_HASH(first->name, boundary_name);
+    packet = packet_new(0, 128, 64);
+    add_object_to_packet(packet, first, pl, CMD_APPLY_ACTION_NORMAL, UPD_NAME | UPD_NROF, 0);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), first->count);
+    ck_assert(packet_reader_read_string(&reader, VS(display_name)));
+    ck_assert_str_eq(display_name, boundary_name);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), 1);
+    ck_assert(packet_reader_finish(&reader));
+    packet_free(packet);
+
+    char oversized_name[ATRINIK_PROTOCOL_ITEM_NAME_SIZE + 1U];
+    memset(oversized_name, 'b', sizeof(oversized_name) - 1);
+    oversized_name[sizeof(oversized_name) - 1] = '\0';
+    FREE_AND_COPY_HASH(first->name, oversized_name);
+    packet = packet_new(0, 128, 64);
+    add_object_to_packet(packet, first, pl, CMD_APPLY_ACTION_NORMAL, UPD_NAME | UPD_NROF, 0);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), first->count);
+    ck_assert(packet_reader_read_string(&reader, VS(display_name)));
+    ck_assert_uint_eq(strlen(display_name), ATRINIK_PROTOCOL_ITEM_NAME_SIZE - 1U);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), 1);
+    ck_assert(packet_reader_finish(&reader));
+    packet_free(packet);
+
     object_destroy(pl);
 }
 END_TEST

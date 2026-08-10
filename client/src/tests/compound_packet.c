@@ -104,6 +104,14 @@ static packet_struct *make_name_count_update(const char *name, uint32_t nrof) {
 
 static void test_name_count_update(void) {
     object base = {.nrof = 1};
+    object next = {0};
+    object prev = {0};
+    object env = {0};
+    object inv = {0};
+    base.next = &next;
+    base.prev = &prev;
+    base.env = &env;
+    base.inv = &inv;
     snprintf(VS(base.s_name), "torch");
 
     packet_struct *packet = make_name_count_update("torches", 2);
@@ -116,11 +124,29 @@ static void test_name_count_update(void) {
     TEST_CHECK(update.item.nrof == 2);
     TEST_CHECK(strcmp(base.s_name, "torch") == 0);
     TEST_CHECK(base.nrof == 1);
+    item_packet_apply_update(&update, &base);
+    TEST_CHECK(strcmp(base.s_name, "torches") == 0);
+    TEST_CHECK(base.nrof == 2);
+    TEST_CHECK(base.next == &next);
+    TEST_CHECK(base.prev == &prev);
+    TEST_CHECK(base.env == &env);
+    TEST_CHECK(base.inv == &inv);
 
     for (size_t len = 0; len < packet->len; len++) {
         packet_reader_init(&reader, packet->data, len);
+        object before = base;
         TEST_CHECK(!item_packet_parse_update(&reader, UPD_NAME | UPD_NROF, &base, &update));
+        TEST_CHECK(memcmp(&base, &before, sizeof(base)) == 0);
     }
+    packet_free(packet);
+
+    packet = make_name_count_update("torch", 1);
+    packet_reader_init(&reader, packet->data, packet->len);
+    TEST_CHECK(item_packet_parse_update(&reader, UPD_NAME | UPD_NROF, &base, &update));
+    TEST_CHECK(packet_reader_finish(&reader));
+    item_packet_apply_update(&update, &base);
+    TEST_CHECK(strcmp(base.s_name, "torch") == 0);
+    TEST_CHECK(base.nrof == 1);
     packet_free(packet);
 
     char oversized[NAME_LEN + 1];
