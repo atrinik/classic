@@ -40,26 +40,28 @@ static bool valid_label(const char *label, size_t length) {
     static const char profile_separator[] = " - profile ";
     static const char direct_prefix[] = "profile ";
     static const char direct_suffix[] = " (direct run)";
+    const size_t topology_prefix_length = strlen(topology_prefix);
+    const size_t profile_separator_length = strlen(profile_separator);
+    const size_t direct_prefix_length = strlen(direct_prefix);
+    const size_t direct_suffix_length = strlen(direct_suffix);
 
-    if (length > sizeof(topology_prefix) - 1 &&
-        memcmp(label, topology_prefix, sizeof(topology_prefix) - 1) == 0) {
-        const char *topology = label + sizeof(topology_prefix) - 1;
+    if (length > topology_prefix_length &&
+        memcmp(label, topology_prefix, topology_prefix_length) == 0) {
+        const char *topology = label + topology_prefix_length;
         const char *separator = strstr(topology, profile_separator);
         if (separator == NULL) {
             return false;
         }
-        const char *profile = separator + sizeof(profile_separator) - 1;
+        const char *profile = separator + profile_separator_length;
         return valid_name(topology, (size_t)(separator - topology)) &&
                valid_name(profile, length - (size_t)(profile - label));
     }
 
-    if (length > sizeof(direct_prefix) + sizeof(direct_suffix) - 2 &&
-        memcmp(label, direct_prefix, sizeof(direct_prefix) - 1) == 0 &&
-        memcmp(label + length - (sizeof(direct_suffix) - 1),
-               direct_suffix,
-               sizeof(direct_suffix) - 1) == 0) {
-        const char *profile = label + sizeof(direct_prefix) - 1;
-        size_t profile_length = length - (sizeof(direct_prefix) - 1) - (sizeof(direct_suffix) - 1);
+    if (length > direct_prefix_length + direct_suffix_length &&
+        memcmp(label, direct_prefix, direct_prefix_length) == 0 &&
+        memcmp(label + length - direct_suffix_length, direct_suffix, direct_suffix_length) == 0) {
+        const char *profile = label + direct_prefix_length;
+        size_t profile_length = length - direct_prefix_length - direct_suffix_length;
         return valid_name(profile, profile_length);
     }
     return false;
