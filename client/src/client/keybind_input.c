@@ -428,14 +428,17 @@ void keybind_movement_state_cancel_deferred_move(keybind_movement_state *state) 
 /** Record a momentary RUN/FIRE owner accepted by gameplay dispatch. */
 void keybind_movement_state_mode_pressed(keybind_movement_state *state,
                                          SDL_Scancode scancode,
+                                         SDL_Keymod mod,
                                          bool run) {
     if (state == NULL || scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_SCANCODE_COUNT) {
         return;
     }
     if (run) {
         state->keys[scancode].run_owned = true;
+        state->keys[scancode].run_mod = keybind_adjust_kmod(mod);
     } else {
         state->keys[scancode].fire_owned = true;
+        state->keys[scancode].fire_mod = keybind_adjust_kmod(mod);
     }
 }
 
@@ -449,6 +452,11 @@ bool keybind_movement_state_mode_released(keybind_movement_state *state,
     bool *owned = run ? &state->keys[scancode].run_owned : &state->keys[scancode].fire_owned;
     bool released = *owned;
     *owned = false;
+    if (run) {
+        state->keys[scancode].run_mod = SDL_KMOD_NONE;
+    } else {
+        state->keys[scancode].fire_mod = SDL_KMOD_NONE;
+    }
     return released;
 }
 
@@ -463,6 +471,33 @@ bool keybind_movement_state_mode_owned(const keybind_movement_state *state, bool
         }
     }
     return false;
+}
+
+/** Release mode owners whose selected modifier binding is no longer valid. */
+void keybind_movement_state_release_invalid_mode_modifiers(keybind_movement_state *state,
+                                                           SDL_Keymod mod,
+                                                           bool *run_released,
+                                                           bool *fire_released) {
+    if (state == NULL || run_released == NULL || fire_released == NULL) {
+        return;
+    }
+    *run_released = false;
+    *fire_released = false;
+    SDL_Keymod adjusted_mod = keybind_adjust_kmod(mod);
+    for (SDL_Scancode scancode = 1; scancode < SDL_SCANCODE_COUNT; scancode++) {
+        if (state->keys[scancode].run_owned && state->keys[scancode].run_mod != SDL_KMOD_NONE &&
+            state->keys[scancode].run_mod != adjusted_mod) {
+            state->keys[scancode].run_owned = false;
+            state->keys[scancode].run_mod = SDL_KMOD_NONE;
+            *run_released = true;
+        }
+        if (state->keys[scancode].fire_owned && state->keys[scancode].fire_mod != SDL_KMOD_NONE &&
+            state->keys[scancode].fire_mod != adjusted_mod) {
+            state->keys[scancode].fire_owned = false;
+            state->keys[scancode].fire_mod = SDL_KMOD_NONE;
+            *fire_released = true;
+        }
+    }
 }
 
 /** Atomically rebind or release movement entries invalidated by a modifier change. */

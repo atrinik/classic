@@ -82,9 +82,13 @@ static void keybind_event_movement_intercept(const char *command, void *user_dat
     (void)notification_keybind_check(command);
 }
 
-static void keybind_event_command_down(const char *command, void *user_data) {
+static bool keybind_event_command_down(const char *command, void *user_data) {
     (void)user_data;
-    keybind_process_command(command);
+    if (notification_keybind_matches(command)) {
+        (void)notification_keybind_check(command);
+        return false;
+    }
+    return keybind_process_command(command) != 0;
 }
 
 static void keybind_event_command_up(const char *command, void *user_data) {

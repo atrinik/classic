@@ -71,6 +71,8 @@ typedef struct keybind_movement_key {
     bool preseeded;
     bool run_owned;
     bool fire_owned;
+    SDL_Keymod run_mod;
+    SDL_Keymod fire_mod;
 } keybind_movement_key;
 
 /** Replacement binding for a held movement key after modifiers change. */
@@ -105,7 +107,7 @@ typedef struct keybind_event_handler {
     void (*flush)(void *user_data);
     bool (*movement_intercept_matches)(const char *command, void *user_data);
     void (*movement_intercept)(const char *command, void *user_data);
-    void (*command_down)(const char *command, void *user_data);
+    bool (*command_down)(const char *command, void *user_data);
     void (*command_up)(const char *command, void *user_data);
 } keybind_event_handler;
 
@@ -187,14 +189,21 @@ extern void keybind_movement_state_defer_move(keybind_movement_state *state);
 
 extern void keybind_movement_state_cancel_deferred_move(keybind_movement_state *state);
 
-extern void
-keybind_movement_state_mode_pressed(keybind_movement_state *state, SDL_Scancode scancode, bool run);
+extern void keybind_movement_state_mode_pressed(keybind_movement_state *state,
+                                                SDL_Scancode scancode,
+                                                SDL_Keymod mod,
+                                                bool run);
 
 extern bool keybind_movement_state_mode_released(keybind_movement_state *state,
                                                  SDL_Scancode scancode,
                                                  bool run);
 
 extern bool keybind_movement_state_mode_owned(const keybind_movement_state *state, bool run);
+
+extern void keybind_movement_state_release_invalid_mode_modifiers(keybind_movement_state *state,
+                                                                  SDL_Keymod mod,
+                                                                  bool *run_released,
+                                                                  bool *fire_released);
 
 extern void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
                                                        SDL_Keymod mod,

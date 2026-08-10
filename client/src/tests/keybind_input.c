@@ -588,7 +588,9 @@ typedef struct movement_sink {
     bool running;
     bool firing;
     bool intercept_movement;
+    bool intercept_modes;
     size_t intercepted_num;
+    size_t command_ups;
 } movement_sink;
 
 static bool movement_sink_running(void *user_data) {
@@ -615,14 +617,18 @@ static void movement_sink_flush(void *user_data) {
     }
 }
 
-static void movement_sink_command_down(const char *command, void *user_data) {
+static bool movement_sink_command_down(const char *command, void *user_data) {
     movement_sink *sink = user_data;
 
+    if (sink->intercept_modes && (!strcmp(command, "?RUNON") || !strcmp(command, "?FIREON"))) {
+        return false;
+    }
     if (!strcmp(command, "?RUNON")) {
         sink->running = true;
     } else if (!strcmp(command, "?FIREON")) {
         sink->firing = true;
     }
+    return true;
 }
 
 static bool movement_sink_intercept_matches(const char *command, void *user_data) {
@@ -641,6 +647,7 @@ static void movement_sink_intercept(const char *command, void *user_data) {
 static void movement_sink_command_up(const char *command, void *user_data) {
     movement_sink *sink = user_data;
 
+    sink->command_ups++;
     if (!strcmp(command, "?RUNON")) {
         sink->running = false;
     } else if (!strcmp(command, "?FIREON")) {
@@ -1298,6 +1305,47 @@ static void test_keybind_event_integration(void) {
                                     &handler);
     movement_sink_flush(&sink);
     TEST_CHECK(sink.actions_num == 2 && !sink.running_at_emit[1]);
+
+    /* Modifier-qualified mode-only owners release with their modifier. */
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.key = SDLK_H;
+    event.scancode = SDL_SCANCODE_H;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(sink.running && sink.firing);
+    key_states[SDL_SCANCODE_H].pressed = true;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    TEST_CHECK(!sink.running && !sink.firing && sink.command_ups == 2);
+
+    /* Consumed mode downs never become owners or disable latched modes on key-up. */
+    movement_sink_reset(&sink);
+    sink.intercept_modes = true;
+    sink.firing = true;
+    handler = movement_sink_handler(&sink);
+    event.mod = SDL_KMOD_NONE;
+    event.key = SDLK_O;
+    event.scancode = SDL_SCANCODE_O;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(!keybind_movement_state_mode_owned(&sink.state, false));
+    SDL_KeyboardEvent owner_up = event;
+    owner_up.type = SDL_EVENT_KEY_UP;
+    keybind_event_reconcile_release(bindings, arraysize(bindings), &owner_up, key_states, &handler);
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &owner_up, &handler));
+    TEST_CHECK(sink.firing && sink.command_ups == 0);
+
+    /* A normally accepted last owner invokes command-up exactly once. */
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.type = SDL_EVENT_KEY_DOWN;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(sink.firing);
+    keybind_event_reconcile_release(bindings, arraysize(bindings), &owner_up, key_states, &handler);
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &owner_up, &handler));
+    TEST_CHECK(!sink.firing && sink.command_ups == 1);
 }
 
 int main(void) {
