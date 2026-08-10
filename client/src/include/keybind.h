@@ -154,6 +154,8 @@ extern void keybind_event_reconcile_release(keybind_struct *const *bindings,
                                             const SDL_KeyboardEvent *event,
                                             const keybind_event_handler *handler);
 
+extern bool keybind_event_is_modifier(const SDL_KeyboardEvent *event);
+
 extern bool keybind_movement_command_direction(const char *cmd, uint8_t *direction);
 
 extern void keybind_movement_state_init(keybind_movement_state *state);

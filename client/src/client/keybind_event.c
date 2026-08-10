@@ -114,6 +114,25 @@ static const keybind_struct *keybind_event_find(keybind_struct *const *bindings,
     return NULL;
 }
 
+/** Return whether a physical keyboard event belongs to a binding modifier key. */
+bool keybind_event_is_modifier(const SDL_KeyboardEvent *event) {
+    switch (event->scancode) {
+        case SDL_SCANCODE_LSHIFT:
+        case SDL_SCANCODE_RSHIFT:
+        case SDL_SCANCODE_LCTRL:
+        case SDL_SCANCODE_RCTRL:
+        case SDL_SCANCODE_LALT:
+        case SDL_SCANCODE_RALT:
+        case SDL_SCANCODE_LGUI:
+        case SDL_SCANCODE_RGUI:
+        case SDL_SCANCODE_MODE:
+            return true;
+
+        default:
+            return false;
+    }
+}
+
 /** Reconcile a key-up, flushing only movement-relevant ordering boundaries. */
 void keybind_event_reconcile_release(keybind_struct *const *bindings,
                                      size_t bindings_num,
@@ -125,6 +144,7 @@ void keybind_event_reconcile_release(keybind_struct *const *bindings,
 
     const keybind_struct *keybind = keybind_event_find(bindings, bindings_num, event);
     if (keybind_movement_state_has_scancode(handler->movement, event->scancode) ||
+        keybind_event_is_modifier(event) ||
         (keybind != NULL && (keybind_command_contains(keybind->command, "?RUNON") ||
                              keybind_command_contains(keybind->command, "?FIREON")))) {
         keybind_event_flush(handler);

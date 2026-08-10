@@ -804,6 +804,37 @@ static void test_keybind_event_integration(void) {
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     movement_sink_flush(&sink);
     TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 8);
+
+    /* Modifier release flushes movement before modified mode reconciliation. */
+    movement_sink_reset(&sink);
+    sink.firing = true;
+    handler = movement_sink_handler(&sink);
+    event.key = SDLK_A;
+    event.scancode = SDL_SCANCODE_A;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    SDL_KeyboardEvent modifier_up = {
+        .type = SDL_EVENT_KEY_UP,
+        .key = SDLK_LSHIFT,
+        .scancode = SDL_SCANCODE_LSHIFT,
+    };
+    keybind_event_reconcile_release(bindings, arraysize(bindings), &modifier_up, &handler);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 7 && sink.firing_at_emit[0]);
+    sink.firing = false;
+    event.repeat = true;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(sink.actions_num == 2 && sink.directions[1] == 7 && !sink.firing_at_emit[1]);
+
+    movement_sink_reset(&sink);
+    sink.running = true;
+    handler = movement_sink_handler(&sink);
+    event.repeat = false;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    keybind_event_reconcile_release(bindings, arraysize(bindings), &modifier_up, &handler);
+    TEST_CHECK(sink.actions_num == 1 && sink.running_at_emit[0]);
+    sink.running = false;
+    event.repeat = true;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(sink.actions_num == 2 && !sink.running_at_emit[1]);
 }
 
 int main(void) {

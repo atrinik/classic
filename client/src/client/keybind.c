@@ -353,6 +353,9 @@ void keybind_movement_key_released(const SDL_KeyboardEvent *event) {
     keybind_event_handler handler = keybind_event_handler_create();
 
     keybind_event_reconcile_release(keybindings, keybindings_num, event, &handler);
+    if (keybind_event_is_modifier(event)) {
+        keybind_state_ensure();
+    }
 }
 
 /** Cancel un-emitted movement and stop an established stream on focus loss. */
