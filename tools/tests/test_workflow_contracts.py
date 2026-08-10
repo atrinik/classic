@@ -153,9 +153,11 @@ class WorkflowContractTests(unittest.TestCase):
     def test_release_mutations_share_one_concurrency_namespace(self) -> None:
         release = self.text("release.yml")
         package = self.text("package-release.yml")
+        recovery = self.text("recover-release.yml")
         candidate = self.text("build-release-candidate.yml")
         self.assertIn("group: classic-release-publication", release)
         self.assertIn("group: classic-release-publication", package)
+        self.assertIn("group: classic-release-publication", recovery)
         self.assertIn("classic-release-candidate-", candidate)
 
     def test_latest_alias_has_one_globally_serialized_owner(self) -> None:
