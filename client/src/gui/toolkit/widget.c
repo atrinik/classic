@@ -120,6 +120,10 @@ static widgetresize widget_event_resize = {0, NULL, 0, 0};
  */
 static int IsMouseExclusive = 0;
 
+#ifdef ATRINIK_WIDGET_TESTS
+static bool widget_priority_test_mode;
+#endif
+
 /**
  * Whether widget rendering debugging is turned on or off.
  */
@@ -297,12 +301,26 @@ void toolkit_widget_init(void) {
     widget_initializers[TEXTURE_ID] = widget_texture_init;
     widget_initializers[CHATWIN_ID] = widget_textwin_init;
 
+#ifdef ATRINIK_WIDGET_TESTS
+    if (widget_priority_test_mode) {
+        memset(widget_initializers, 0, sizeof(widget_initializers));
+        widget_initializers[CONTAINER_ID] = widget_container_init;
+        widget_initializers[MAP_ID] = widget_map_init;
+    }
+#endif
+
     if (!widget_load("data/interface.cfg", 1, widgets)) {
         LOG(ERROR, "Could not load widget defaults from data/interface.cfg.");
         exit(1);
     }
 
     widget_load_layout("settings/interface.cfg", widgets);
+
+#ifdef ATRINIK_WIDGET_TESTS
+    if (widget_priority_test_mode) {
+        return;
+    }
+#endif
 
     /* Older saved layouts predate these singleton widgets. Create missing
      * entries from their defaults without requiring an interface reset. */
@@ -1244,25 +1262,27 @@ static bool widget_test_map_path_is_backmost(widgetdata *map) {
     return outermost == widget_list_foot;
 }
 
-static int widget_test_load_layout(const char *path) {
-    widgetdata *widgets[100] = {0};
+static const char *widget_test_layout_input;
+static const char *widget_test_layout_output;
 
-    WIDGET_TEST_CHECK(widget_load_layout(path, widgets));
-    WIDGET_TEST_CHECK(cur_widget[MAP_ID] != NULL);
-    WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(cur_widget[MAP_ID]));
-    return 0;
+static FILE *widget_test_fopen(const char *path, const char *modes) {
+    if (strcmp(path, "settings/interface.cfg") == 0) {
+        path = strchr(modes, 'w') != NULL ? widget_test_layout_output : widget_test_layout_input;
+    }
+
+    return fopen(path, modes);
 }
 
 int widget_priority_integration_test(const char *fixture, const char *saved) {
-    widgetdata *widgets[100] = {0};
-    widget_initializers[CONTAINER_ID] = widget_container_init;
-    widget_initializers[MAP_ID] = widget_map_init;
-
-    path_fopen = fopen;
-    WIDGET_TEST_CHECK(widget_load("data/interface.cfg", 1, widgets));
-    WIDGET_TEST_CHECK(widget_test_load_layout(fixture) == 0);
+    widget_test_layout_input = fixture;
+    widget_test_layout_output = saved;
+    widget_priority_test_mode = true;
+    path_fopen = widget_test_fopen;
+    toolkit_widget_init();
 
     widgetdata *map = cur_widget[MAP_ID];
+    WIDGET_TEST_CHECK(map != NULL);
+    WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
     widgetdata *inner = map->env;
     widgetdata *outer = inner != NULL ? inner->env : NULL;
     WIDGET_TEST_CHECK(inner != NULL && inner->type == CONTAINER_ID);
@@ -1275,11 +1295,12 @@ int widget_priority_integration_test(const char *fixture, const char *saved) {
     int inner_y = inner->y;
     int outer_x = outer->x;
     int outer_y = outer->y;
-    WIDGET_TEST_CHECK(widget_save_to(saved));
-
-    kill_widgets();
-    WIDGET_TEST_CHECK(widget_test_load_layout(saved) == 0);
+    toolkit_widget_deinit();
+    widget_test_layout_input = saved;
+    toolkit_widget_init();
     map = cur_widget[MAP_ID];
+    WIDGET_TEST_CHECK(map != NULL);
+    WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
     inner = map->env;
     outer = inner != NULL ? inner->env : NULL;
     WIDGET_TEST_CHECK(inner != NULL && outer != NULL);
@@ -1333,10 +1354,11 @@ int widget_priority_integration_test(const char *fixture, const char *saved) {
     WIDGET_TEST_CHECK(stats == widget_list_head);
     WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
 
-    WIDGET_TEST_CHECK(widget_save_to(saved));
-    kill_widgets();
-    WIDGET_TEST_CHECK(widget_test_load_layout(saved) == 0);
+    toolkit_widget_deinit();
+    toolkit_widget_init();
     map = cur_widget[MAP_ID];
+    WIDGET_TEST_CHECK(map != NULL);
+    WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
     WIDGET_TEST_CHECK(map->env != NULL && map->env->env != NULL);
     WIDGET_TEST_CHECK(map->x == map_x + 17 && map->y == map_y - 9);
     WIDGET_TEST_CHECK(map->w == map_w && map->h == map_h);
