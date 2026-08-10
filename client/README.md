@@ -129,9 +129,16 @@
  servers remain joinable through authenticated rendezvous candidates, so
  launching a private friend server does not require publishing its raw IP.
 
- The client has no built-in public STUN provider. Configure one explicitly with
- `--stun_server=HOST:PORT`, or use `--stun_server=off` to disable discovery.
- LAN, global IPv6, mapped, and directory routes remain available without STUN.
+ Direct rendezvous uses `stun.cloudflare.com:3478` over UDP by default to
+ discover the public address of the same socket later used for UDP punching
+ and QUIC candidate checks. This sends a DNS query and a STUN request to
+ Cloudflare during an Internet connection attempt. Override the endpoint with
+ `--stun_server=HOST:PORT` or the equivalent `stun_server = HOST:PORT`
+ configuration entry. Use `--stun_server=off` or `stun_server = off` to make
+ no STUN DNS or UDP request. STUN only discovers an address; it is not TURN or
+ a gameplay relay and cannot guarantee traversal through every NAT, CGNAT, VPN,
+ or firewall. LAN, global IPv6, mapped, and directory routes remain available
+ when STUN is disabled or discovery fails.
 
  Region maps are stored beneath a directory scoped by the stable server ID or
  authenticated certificate fingerprint, so a reused hostname and port cannot
