@@ -398,7 +398,9 @@ if (BUILD_TESTING AND NOT MINGW)
             ${CMAKE_SOURCE_DIR}/permissions.cfg
             ${CMAKE_SOURCE_DIR}/server.cfg
             ${CMAKE_SOURCE_DIR}/dependencies.lock.json
-            ${CMAKE_SOURCE_DIR}/src/tests/data/content_benchmark)
+            ${CMAKE_SOURCE_DIR}/src/tests/data/content_benchmark
+            ${CMAKE_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_fail.py
+            ${CMAKE_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_pass.py)
 
         add_custom_command(
             OUTPUT "${ATRINIK_SERVER_TEST_RUNTIME_STAMP}"
@@ -452,6 +454,25 @@ if (BUILD_TESTING AND NOT MINGW)
                 RESOURCE_LOCK server-test-runtime
                 TIMEOUT 300
                 WORKING_DIRECTORY "${ATRINIK_SERVER_TEST_RUNTIME}/server")
+
+            add_test(NAME server-plugin-python-fixture-pass
+                COMMAND ${EXECUTABLE} --plugin_unit --port_mapping=off)
+            set_tests_properties(server-plugin-python-fixture-pass PROPERTIES
+                LABELS "server;plugin;runtime"
+                RESOURCE_LOCK server-test-runtime
+                TIMEOUT 300
+                WORKING_DIRECTORY
+                    "${ATRINIK_SERVER_TEST_RUNTIME}/plugin-fixtures/pass/server")
+
+            add_test(NAME server-plugin-python-fixture-fail
+                COMMAND ${EXECUTABLE} --plugin_unit --port_mapping=off)
+            set_tests_properties(server-plugin-python-fixture-fail PROPERTIES
+                LABELS "server;plugin;runtime"
+                RESOURCE_LOCK server-test-runtime
+                TIMEOUT 300
+                WILL_FAIL true
+                WORKING_DIRECTORY
+                    "${ATRINIK_SERVER_TEST_RUNTIME}/plugin-fixtures/fail/server")
         endif ()
 
         add_test(NAME server-content-benchmark

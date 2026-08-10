@@ -51,4 +51,15 @@ file(COPY "${ATRINIK_SOURCE_DIR}/runtime/content/lib/"
 file(COPY "${ATRINIK_SOURCE_DIR}/resources"
     DESTINATION "${runtime_server}")
 
+foreach (fixture IN ITEMS pass fail)
+    set(fixture_server
+        "${ATRINIK_RUNTIME_DIR}/plugin-fixtures/${fixture}/server")
+    file(MAKE_DIRECTORY "${fixture_server}")
+    file(COPY "${runtime_server}/" DESTINATION "${fixture_server}")
+    configure_file(
+        "${ATRINIK_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_${fixture}.py"
+        "${fixture_server}/maps/python/events/python_unit.py"
+        COPYONLY)
+endforeach ()
+
 file(TOUCH "${ATRINIK_RUNTIME_DIR}/.prepared")
