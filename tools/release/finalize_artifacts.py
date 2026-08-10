@@ -89,7 +89,8 @@ def validate_windows_member(name: str) -> None:
     validate_member(name)
     components = name.removesuffix("/").split("/")
     if any(
-        component.endswith((".", " "))
+        component.startswith(" ")
+        or component.endswith((".", " "))
         or any(ord(char) < 32 or char in '<>:"|?*' for char in component)
         or component.split(".", 1)[0].casefold() in WINDOWS_RESERVED_NAMES
         for component in components

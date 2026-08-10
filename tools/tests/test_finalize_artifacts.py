@@ -216,6 +216,7 @@ class FinalizeArtifactsTests(unittest.TestCase):
                 "expected/maps./regions.reg",
                 "expected/server/server.cfg.",
                 "expected/server/server.cfg ",
+                "expected/server/ server.cfg",
                 "expected/server/CON.txt",
                 "expected/server/COM¹.txt",
                 "expected/server/LPT²",
