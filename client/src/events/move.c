@@ -44,17 +44,18 @@ static bool run_stream_active;
  */
 static const int directions_fire[DIRECTIONS_NUM] = {6, 5, 4, 7, 0, 3, 8, 1, 2};
 
-void client_send_fire(int num, tag_t tag) {
+static void client_send_fire_stream(int num, tag_t tag, uint32_t epoch) {
     packet_struct *packet;
 
     packet = packet_new(SERVER_CMD_FIRE, 64, 64);
     packet_writer_write_uint8(packet, directions_fire[num - 1]);
-
-    if (tag) {
-        packet_writer_write_uint32(packet, tag);
-    }
-
+    packet_writer_write_uint32(packet, tag);
+    packet_writer_write_uint32(packet, epoch);
     socket_send_packet(packet);
+}
+
+void client_send_fire(int num, tag_t tag) {
+    client_send_fire_stream(num, tag, 0);
 }
 
 /** Stop a repeated/running movement stream without applying fire modifiers. */
@@ -66,14 +67,24 @@ void move_keys_clear(void) {
 }
 
 /** Remove queued commands for one movement stream without clearing other input. */
-static void move_keys_clear_stream(uint8_t command) {
-    packet_struct *packet = packet_new(SERVER_CMD_CLEAR, 1, 1);
+static void move_keys_clear_stream(uint8_t command, uint32_t epoch) {
+    packet_struct *packet = packet_new(SERVER_CMD_CLEAR, 5, 5);
 
     packet_writer_write_uint8(packet, command);
+    packet_writer_write_uint32(packet, epoch);
     socket_send_packet(packet);
     if (command == SERVER_CMD_MOVE) {
         run_stream_active = false;
     }
+}
+
+static void move_keys_send_move(int num, bool run_on, uint32_t epoch) {
+    packet_struct *packet = packet_new(SERVER_CMD_MOVE, 10, 0);
+
+    packet_writer_write_uint8(packet, num == 0 ? 0 : directions_fire[num - 1]);
+    packet_writer_write_uint8(packet, run_on);
+    packet_writer_write_uint32(packet, epoch);
+    socket_send_packet(packet);
 }
 
 /** Return whether a running movement producer still needs a stop. */
@@ -83,31 +94,43 @@ bool move_keys_run_stream_active(void) {
 
 /** Stop a running movement stream without applying fire modifiers. */
 void move_keys_run_stop(void) {
-    move_keys_clear_stream(SERVER_CMD_MOVE);
+    move_keys_send_move(0, false, 0);
+    run_stream_active = false;
 }
 
 /** Replace the queued direction in the active movement or directional-fire stream. */
-void move_keys_replace(int num) {
-    move_keys_clear_stream(cpl.fire_on ? SERVER_CMD_FIRE : SERVER_CMD_MOVE);
-    move_keys(num);
+void move_keys_replace(int num, uint32_t epoch) {
+    move_keys_clear_stream(cpl.fire_on ? SERVER_CMD_FIRE : SERVER_CMD_MOVE, epoch);
+    move_keys_stream(num, epoch);
+}
+
+/** Stop one keyboard movement epoch without clearing unrelated queued input. */
+void move_keys_stream_stop(uint32_t epoch) {
+    move_keys_clear_stream(SERVER_CMD_MOVE, epoch);
+    move_keys_run_stop();
+}
+
+/** Emit a direction associated with one replaceable keyboard movement epoch. */
+void move_keys_stream(int num, uint32_t epoch) {
+    if (cpl.fire_on) {
+        client_send_fire_stream(num, 0, epoch);
+    } else {
+        run_stream_active = cpl.run_on;
+        move_keys_send_move(num, cpl.run_on, epoch);
+    }
 }
 
 void move_keys(int num) {
     if (cpl.fire_on) {
         client_send_fire(num, 0);
     } else {
-        packet_struct *packet;
-
         if (num == 5) {
             move_keys_clear();
         } else if (num == 0) {
             move_keys_run_stop();
         } else {
             run_stream_active = cpl.run_on;
-            packet = packet_new(SERVER_CMD_MOVE, 8, 0);
-            packet_writer_write_uint8(packet, directions_fire[num - 1]);
-            packet_writer_write_uint8(packet, cpl.run_on);
-            socket_send_packet(packet);
+            move_keys_send_move(num, cpl.run_on, 0);
         }
     }
 }

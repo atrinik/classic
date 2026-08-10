@@ -140,7 +140,11 @@ extern void move_keys(int num);
 
 extern void move_keys_clear(void);
 
-extern void move_keys_replace(int num);
+extern void move_keys_stream(int num, uint32_t epoch);
+
+extern void move_keys_replace(int num, uint32_t epoch);
+
+extern void move_keys_stream_stop(uint32_t epoch);
 
 extern bool move_keys_run_stream_active(void);
 

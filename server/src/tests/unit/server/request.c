@@ -51,7 +51,7 @@ static packet_struct *queued_command_payload_find(socket_struct *cs, uint8_t typ
     return NULL;
 }
 
-static void command_queue_append(packet_struct *queue,
+static void command_frame_append(packet_struct *queue,
                                  uint8_t command,
                                  const uint8_t *payload,
                                  size_t payload_len) {
@@ -59,6 +59,17 @@ static void command_queue_append(packet_struct *queue,
     packet_writer_write_uint8(queue, command);
     packet_writer_write_bytes(queue, payload, payload_len);
     ck_assert(packet_writer_finish(queue));
+}
+
+static void command_queue_append(socket_struct *cs,
+                                 uint8_t command,
+                                 const uint8_t *payload,
+                                 size_t payload_len) {
+    uint8_t data[32];
+    ck_assert_uint_lt(payload_len, sizeof(data));
+    data[0] = command;
+    memcpy(data + 1, payload, payload_len);
+    ck_assert(socket_server_command_queue_append(cs, data, payload_len + 1));
 }
 
 static size_t validate_queued_map_payloads(socket_struct *cs) {
@@ -744,10 +755,10 @@ START_TEST(test_clear_immediately_discards_queued_commands_and_stops_run) {
     socket_struct *cs = pl->cs;
     pl->run_on = 1;
 
-    const uint8_t move[] = {6, 1};
+    const uint8_t move[] = {6, 1, 0, 0, 0, 1};
     const uint8_t apply[] = {0xaa, 0xbb};
-    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_MOVE, move, sizeof(move));
-    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_ITEM_APPLY, apply, sizeof(apply));
+    command_queue_append(cs, SERVER_CMD_MOVE, move, sizeof(move));
+    command_queue_append(cs, SERVER_CMD_ITEM_APPLY, apply, sizeof(apply));
     ck_assert_uint_gt(cs->packet_recv_cmd->len, 0);
 
     uint8_t request[] = {SERVER_CMD_CLEAR};
@@ -764,24 +775,32 @@ START_TEST(test_scoped_clear_replaces_only_queued_movement_stream) {
     check_setup_env_pl(&map, &op);
     player *pl = CONTR(op);
     socket_struct *cs = pl->cs;
-    const uint8_t move_west[] = {4, 1};
-    const uint8_t move_south[] = {2, 1};
+    const uint8_t direct_move[] = {6, 0, 0, 0, 0, 0};
+    const uint8_t ordered_move[] = {8, 0, 0, 0, 0, 1};
+    const uint8_t move_west[] = {4, 1, 0, 0, 0, 2};
+    const uint8_t move_south[] = {2, 1, 0, 0, 0, 2};
     const uint8_t apply[] = {0xaa, 0xbb};
-    const uint8_t fire[] = {8};
+    const uint8_t fire[] = {8, 0, 0, 0, 0, 0, 0, 0, 2};
     const uint8_t combat[] = {1};
-    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_MOVE, move_west, sizeof(move_west));
-    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_ITEM_APPLY, apply, sizeof(apply));
-    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_FIRE, fire, sizeof(fire));
-    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_MOVE, move_south, sizeof(move_south));
-    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_COMBAT, combat, sizeof(combat));
+    command_queue_append(cs, SERVER_CMD_MOVE, direct_move, sizeof(direct_move));
+    command_queue_append(cs, SERVER_CMD_MOVE, ordered_move, sizeof(ordered_move));
+    command_queue_append(cs, SERVER_CMD_MOVE, move_west, sizeof(move_west));
+    command_queue_append(cs, SERVER_CMD_ITEM_APPLY, apply, sizeof(apply));
+    command_queue_append(cs, SERVER_CMD_FIRE, fire, sizeof(fire));
+    command_queue_append(cs, SERVER_CMD_MOVE, move_south, sizeof(move_south));
+    command_queue_append(cs, SERVER_CMD_COMBAT, combat, sizeof(combat));
 
-    packet_struct *expected = packet_new(0, 32, 32);
-    command_queue_append(expected, SERVER_CMD_ITEM_APPLY, apply, sizeof(apply));
-    command_queue_append(expected, SERVER_CMD_FIRE, fire, sizeof(fire));
-    command_queue_append(expected, SERVER_CMD_COMBAT, combat, sizeof(combat));
+    packet_struct *expected = packet_new(0, 64, 64);
+    command_frame_append(expected, SERVER_CMD_MOVE, direct_move, sizeof(direct_move));
+    command_frame_append(expected, SERVER_CMD_MOVE, ordered_move, sizeof(ordered_move));
+    command_frame_append(expected, UINT8_MAX, move_west, sizeof(move_west));
+    command_frame_append(expected, SERVER_CMD_ITEM_APPLY, apply, sizeof(apply));
+    command_frame_append(expected, SERVER_CMD_FIRE, fire, sizeof(fire));
+    command_frame_append(expected, UINT8_MAX, move_south, sizeof(move_south));
+    command_frame_append(expected, SERVER_CMD_COMBAT, combat, sizeof(combat));
 
     pl->run_on = 1;
-    uint8_t request[] = {SERVER_CMD_CLEAR, SERVER_CMD_MOVE};
+    uint8_t request[] = {SERVER_CMD_CLEAR, SERVER_CMD_MOVE, 0, 0, 0, 2};
     ck_assert(socket_server_handle_command(cs, NULL, request, sizeof(request)));
     ck_assert_uint_eq(cs->packet_recv_cmd->len, expected->len);
     ck_assert_mem_eq(cs->packet_recv_cmd->data, expected->data, expected->len);
@@ -797,22 +816,29 @@ START_TEST(test_scoped_clear_replaces_only_untagged_directional_fire) {
     check_setup_env_pl(&map, &op);
     player *pl = CONTR(op);
     socket_struct *cs = pl->cs;
-    const uint8_t short_fire[] = {8};
-    const uint8_t tagged_fire[] = {5, 0, 0, 0, 42};
-    const uint8_t move[] = {6, 1};
+    const uint8_t direct_fire[] = {8, 0, 0, 0, 0, 0, 0, 0, 0};
+    const uint8_t older_fire[] = {7, 0, 0, 0, 0, 0, 0, 0, 2};
+    const uint8_t current_fire[] = {6, 0, 0, 0, 0, 0, 0, 0, 3};
+    const uint8_t tagged_fire[] = {5, 0, 0, 0, 42, 0, 0, 0, 0};
+    const uint8_t move[] = {6, 1, 0, 0, 0, 3};
     const uint8_t apply[] = {0xaa};
-    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_FIRE, short_fire, sizeof(short_fire));
-    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_MOVE, move, sizeof(move));
-    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_FIRE, tagged_fire, sizeof(tagged_fire));
-    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_ITEM_APPLY, apply, sizeof(apply));
+    command_queue_append(cs, SERVER_CMD_FIRE, direct_fire, sizeof(direct_fire));
+    command_queue_append(cs, SERVER_CMD_FIRE, older_fire, sizeof(older_fire));
+    command_queue_append(cs, SERVER_CMD_FIRE, current_fire, sizeof(current_fire));
+    command_queue_append(cs, SERVER_CMD_MOVE, move, sizeof(move));
+    command_queue_append(cs, SERVER_CMD_FIRE, tagged_fire, sizeof(tagged_fire));
+    command_queue_append(cs, SERVER_CMD_ITEM_APPLY, apply, sizeof(apply));
 
-    packet_struct *expected = packet_new(0, 32, 32);
-    command_queue_append(expected, SERVER_CMD_MOVE, move, sizeof(move));
-    command_queue_append(expected, SERVER_CMD_FIRE, tagged_fire, sizeof(tagged_fire));
-    command_queue_append(expected, SERVER_CMD_ITEM_APPLY, apply, sizeof(apply));
+    packet_struct *expected = packet_new(0, 64, 64);
+    command_frame_append(expected, SERVER_CMD_FIRE, direct_fire, sizeof(direct_fire));
+    command_frame_append(expected, SERVER_CMD_FIRE, older_fire, sizeof(older_fire));
+    command_frame_append(expected, UINT8_MAX, current_fire, sizeof(current_fire));
+    command_frame_append(expected, SERVER_CMD_MOVE, move, sizeof(move));
+    command_frame_append(expected, SERVER_CMD_FIRE, tagged_fire, sizeof(tagged_fire));
+    command_frame_append(expected, SERVER_CMD_ITEM_APPLY, apply, sizeof(apply));
 
     pl->run_on = 1;
-    uint8_t request[] = {SERVER_CMD_CLEAR, SERVER_CMD_FIRE};
+    uint8_t request[] = {SERVER_CMD_CLEAR, SERVER_CMD_FIRE, 0, 0, 0, 3};
     ck_assert(socket_server_handle_command(cs, NULL, request, sizeof(request)));
     ck_assert_uint_eq(cs->packet_recv_cmd->len, expected->len);
     ck_assert_mem_eq(cs->packet_recv_cmd->data, expected->data, expected->len);
@@ -827,20 +853,73 @@ START_TEST(test_invalid_scoped_clear_preserves_queued_commands) {
 
     check_setup_env_pl(&map, &op);
     socket_struct *cs = CONTR(op)->cs;
-    const uint8_t move[] = {6, 1};
-    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_MOVE, move, sizeof(move));
+    const uint8_t move[] = {6, 1, 0, 0, 0, 2};
+    command_queue_append(cs, SERVER_CMD_MOVE, move, sizeof(move));
     packet_struct *expected = packet_dup(cs->packet_recv_cmd);
 
-    uint8_t unsupported[] = {SERVER_CMD_CLEAR, SERVER_CMD_ITEM_APPLY};
+    uint8_t unsupported[] = {SERVER_CMD_CLEAR, SERVER_CMD_ITEM_APPLY, 0, 0, 0, 2};
     ck_assert(socket_server_handle_command(cs, NULL, unsupported, sizeof(unsupported)));
     ck_assert_uint_eq(cs->packet_recv_cmd->len, expected->len);
     ck_assert_mem_eq(cs->packet_recv_cmd->data, expected->data, expected->len);
 
-    uint8_t trailing[] = {SERVER_CMD_CLEAR, SERVER_CMD_MOVE, 0};
+    uint8_t trailing[] = {SERVER_CMD_CLEAR, SERVER_CMD_MOVE, 0, 0, 0, 2, 0};
     ck_assert(socket_server_handle_command(cs, NULL, trailing, sizeof(trailing)));
     ck_assert_uint_eq(cs->packet_recv_cmd->len, expected->len);
     ck_assert_mem_eq(cs->packet_recv_cmd->data, expected->data, expected->len);
+
+    ck_assert_uint_eq(cs->movement_stream_entries_num, 1);
+    cs->movement_stream_entries[0].offset += cs->packet_recv_cmd->len;
+    ck_assert(!socket_server_command_queue_clear_stream(cs, SERVER_CMD_MOVE, 2));
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, expected->len);
+    ck_assert_mem_eq(cs->packet_recv_cmd->data, expected->data, expected->len);
     packet_free(expected);
+}
+END_TEST
+
+START_TEST(test_direction_zero_move_clears_deferred_path) {
+    mapstruct *map;
+    object *op;
+
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    player_path_add(pl, op->map, op->x, op->y);
+    ck_assert_ptr_nonnull(pl->move_path);
+    pl->run_on = 1;
+
+    uint8_t request[] = {SERVER_CMD_MOVE, 0, 0, 0, 0, 0, 0};
+    ck_assert(socket_server_handle_command(pl->cs, pl, request, sizeof(request)));
+    ck_assert_ptr_null(pl->move_path);
+    ck_assert_uint_eq(pl->run_on, 0);
+}
+END_TEST
+
+START_TEST(test_replacement_tombstones_do_not_delay_latest_direction) {
+    mapstruct *map;
+    object *op;
+
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    const uint8_t old_move[] = {4, 0, 0, 0, 0, 7};
+    const uint8_t new_move[] = {3, 0, 0, 0, 0, 7};
+    /* More tombstones than one tick's normal player-command budget. */
+    for (size_t i = 0; i < 32; i++) {
+        command_queue_append(cs, SERVER_CMD_MOVE, old_move, sizeof(old_move));
+    }
+    uint8_t clear[] = {SERVER_CMD_CLEAR, SERVER_CMD_MOVE, 0, 0, 0, 7};
+    ck_assert(socket_server_handle_command(cs, NULL, clear, sizeof(clear)));
+    command_queue_append(cs, SERVER_CMD_MOVE, new_move, sizeof(new_move));
+
+    int old_x = op->x;
+    pl->ob->speed_left = -1.0f;
+    socket_server_handle_client(pl);
+    ck_assert_int_eq(op->x, old_x);
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, sizeof(new_move) + 3);
+
+    pl->ob->speed_left = 100.0f;
+    socket_server_handle_client(pl);
+    ck_assert_int_eq(op->x, old_x + 1);
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, 0);
 }
 END_TEST
 
@@ -1151,6 +1230,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_scoped_clear_replaces_only_queued_movement_stream);
     tcase_add_test(tc_core, test_scoped_clear_replaces_only_untagged_directional_fire);
     tcase_add_test(tc_core, test_invalid_scoped_clear_preserves_queued_commands);
+    tcase_add_test(tc_core, test_direction_zero_move_clears_deferred_path);
+    tcase_add_test(tc_core, test_replacement_tombstones_do_not_delay_latest_direction);
     tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
     tcase_add_test(tc_core, test_version_requires_exact_match);
     tcase_add_test(tc_core, test_move_path_walkable_target_reaches_exact_coordinate);

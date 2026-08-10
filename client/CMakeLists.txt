@@ -200,6 +200,12 @@ endif ()
 
 atrinik_fetch_source(atrinik_protocol "atrinik/protocol" "atrinik-protocol")
 FetchContent_MakeAvailable(atrinik_protocol)
+file(STRINGS
+    "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
+    ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
+if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1076U$")
+    message(FATAL_ERROR "Client requires classic game protocol v1076")
+endif ()
 set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
 atrinik_fetch_source(libatrinik "atrinik/libatrinik" "libatrinik")
 FetchContent_MakeAvailable(libatrinik)

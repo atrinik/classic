@@ -369,6 +369,13 @@ extern bool socket_server_command_phase_allowed(const socket_struct *cs, uint8_t
  */
 extern bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_t len);
 
+extern bool socket_server_command_queue_append(socket_struct *cs, const uint8_t *data, size_t len);
+
+extern bool
+socket_server_command_queue_clear_stream(socket_struct *cs, uint8_t command, uint32_t epoch);
+
+extern void socket_server_command_queue_reset(socket_struct *cs);
+
 extern void generate_quick_name(player *pl);
 
 extern void

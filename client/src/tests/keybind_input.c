@@ -237,7 +237,8 @@ static void expect_movement(keybind_movement_state *state,
                             keybind_movement_action expected_action,
                             uint8_t expected_direction) {
     uint8_t direction = UINT8_MAX;
-    keybind_movement_action action = keybind_movement_state_flush(state, &direction);
+    uint32_t epoch = 0;
+    keybind_movement_action action = keybind_movement_state_flush(state, &direction, &epoch);
 
     if (action != expected_action) {
         fprintf(stderr,
@@ -634,6 +635,7 @@ typedef struct movement_sink {
     keybind_movement_state state;
     keybind_movement_action actions[32];
     uint8_t directions[32];
+    uint32_t epochs[32];
     bool running_at_emit[32];
     bool firing_at_emit[32];
     size_t actions_num;
@@ -657,13 +659,15 @@ static void movement_sink_flush(void *user_data) {
     movement_sink *sink = user_data;
     keybind_movement_action action;
     uint8_t direction;
+    uint32_t epoch;
 
-    while ((action = keybind_movement_state_flush(&sink->state, &direction)) !=
+    while ((action = keybind_movement_state_flush(&sink->state, &direction, &epoch)) !=
            KEYBIND_MOVEMENT_ACTION_NONE) {
         TEST_CHECK(sink->actions_num < arraysize(sink->actions));
         size_t i = sink->actions_num++;
         sink->actions[i] = action;
         sink->directions[i] = direction;
+        sink->epochs[i] = epoch;
         sink->running_at_emit[i] = sink->running;
         sink->firing_at_emit[i] = sink->firing;
     }
@@ -1158,11 +1162,31 @@ static void test_keybind_event_integration(void) {
     TEST_CHECK(sink.actions_num == 2 && sink.directions[0] == 7 && sink.directions[1] == 9);
     TEST_CHECK(sink.actions[0] == KEYBIND_MOVEMENT_ACTION_MOVE &&
                sink.actions[1] == KEYBIND_MOVEMENT_ACTION_MOVE);
+    TEST_CHECK(sink.epochs[0] != 0 && sink.epochs[1] != 0 && sink.epochs[0] != sink.epochs[1]);
     event.repeat = true;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     TEST_CHECK(sink.actions_num == 4 && sink.directions[2] == 7 && sink.directions[3] == 9);
     TEST_CHECK(sink.actions[2] == KEYBIND_MOVEMENT_ACTION_MOVE &&
                sink.actions[3] == KEYBIND_MOVEMENT_ACTION_MOVE);
+    TEST_CHECK(sink.epochs[2] != sink.epochs[3]);
+
+    /* A multi-movement macro first replaces an existing held stream. */
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.repeat = false;
+    event.key = SDLK_B;
+    event.scancode = SDL_SCANCODE_B;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    event.key = SDLK_E;
+    event.scancode = SDL_SCANCODE_E;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 3);
+    TEST_CHECK(sink.actions[0] == KEYBIND_MOVEMENT_ACTION_MOVE && sink.directions[0] == 9);
+    TEST_CHECK(sink.actions[1] == KEYBIND_MOVEMENT_ACTION_REPLACE && sink.directions[1] == 8);
+    TEST_CHECK(sink.actions[2] == KEYBIND_MOVEMENT_ACTION_MOVE && sink.directions[2] == 9);
+    TEST_CHECK(sink.epochs[0] == sink.epochs[1] && sink.epochs[1] != sink.epochs[2]);
 
     /* An unrelated key-up does not split same-poll chord composition. */
     movement_sink_reset(&sink);

@@ -358,16 +358,17 @@ void keybind_state_ensure(void) {
 /** Emit the next pending logical movement update. */
 void keybind_movement_flush(void) {
     uint8_t direction;
+    uint32_t epoch;
     keybind_movement_action action;
 
-    while ((action = keybind_movement_state_flush(&movement_state, &direction)) !=
+    while ((action = keybind_movement_state_flush(&movement_state, &direction, &epoch)) !=
            KEYBIND_MOVEMENT_ACTION_NONE) {
         if (action == KEYBIND_MOVEMENT_ACTION_MOVE) {
-            move_keys(direction);
+            move_keys_stream(direction, epoch);
         } else if (action == KEYBIND_MOVEMENT_ACTION_REPLACE) {
-            move_keys_replace(direction);
+            move_keys_replace(direction, epoch);
         } else if (action == KEYBIND_MOVEMENT_ACTION_STOP) {
-            move_keys_run_stop();
+            move_keys_stream_stop(epoch);
         } else if (action == KEYBIND_MOVEMENT_ACTION_RUN_STOP) {
             move_keys_run_stop();
         }

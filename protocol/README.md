@@ -9,11 +9,14 @@ The game and metaserver protocols are separate contract families. This package
 currently publishes only the classic game command registry. Add another family
 only with its own namespace, specification, version, fixtures, and validation.
 
-Protocol v1076 extends the client-to-server `CLEAR` payload. An empty payload
-retains the historical broad queue/path clear used by Stay. A one-byte `MOVE`
-or `FIRE` command ID selectively removes queued movement-stream commands of
-that type; `FIRE` selects only the untagged directional form. This lets a held
-direction change replace stale movement without discarding unrelated actions.
+Protocol v1076 adds a 32-bit keyboard movement epoch to `MOVE` and, after its
+always-present 32-bit tag, `FIRE`. An empty client-to-server `CLEAR` payload
+retains the historical broad queue/path clear used by Stay. A scoped payload
+contains a `MOVE` or `FIRE` command ID followed by an epoch and cancels only
+queued commands of that type and epoch. Epoch zero identifies ordinary direct
+movement and is never replaceable. This lets a held direction change replace
+stale movement without discarding standalone steps, ordered macros, mouse
+actions, or unrelated commands.
 
 Regenerate bindings after editing the schema:
 

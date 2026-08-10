@@ -88,6 +88,8 @@ typedef struct keybind_movement_rebind {
 typedef struct keybind_movement_state {
     keybind_movement_key keys[SDL_SCANCODE_COUNT];
     uint64_t next_order;
+    uint32_t next_epoch;
+    uint32_t epoch;
     SDL_Scancode repeat_scancode;
     uint8_t emitted_direction;
     uint8_t pending_direction;
@@ -257,8 +259,8 @@ extern void keybind_movement_state_clear(keybind_movement_state *state, bool run
 extern void keybind_movement_state_run_released(keybind_movement_state *state,
                                                 bool run_stream_active);
 
-extern keybind_movement_action keybind_movement_state_flush(keybind_movement_state *state,
-                                                            uint8_t *direction);
+extern keybind_movement_action
+keybind_movement_state_flush(keybind_movement_state *state, uint8_t *direction, uint32_t *epoch);
 
 extern keybind_struct *keybind_find_by_command(const char *cmd);
 

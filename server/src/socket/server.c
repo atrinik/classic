@@ -641,6 +641,123 @@ static bool socket_server_quic_network_ready(socket_t *sc) {
     return false;
 }
 
+#define SOCKET_COMMAND_QUEUE_TOMBSTONE UINT8_MAX
+
+static uint32_t socket_server_command_epoch(const uint8_t *data, size_t len) {
+    size_t epoch_pos;
+
+    if (len == 7 && data[0] == SERVER_CMD_MOVE) {
+        epoch_pos = 3;
+    } else if (len == 10 && data[0] == SERVER_CMD_FIRE && data[2] == 0 && data[3] == 0 &&
+               data[4] == 0 && data[5] == 0) {
+        epoch_pos = 6;
+    } else {
+        return 0;
+    }
+    return ((uint32_t)data[epoch_pos] << 24) | ((uint32_t)data[epoch_pos + 1] << 16) |
+           ((uint32_t)data[epoch_pos + 2] << 8) | data[epoch_pos + 3];
+}
+
+static void socket_server_command_queue_prune(socket_struct *cs) {
+    while (cs->movement_stream_entries_start < cs->movement_stream_entries_num &&
+           cs->movement_stream_entries[cs->movement_stream_entries_start].offset <
+               cs->packet_recv_cmd_base) {
+        cs->movement_stream_entries_start++;
+    }
+    if (cs->movement_stream_entries_start == cs->movement_stream_entries_num) {
+        cs->movement_stream_entries_start = 0;
+        cs->movement_stream_entries_num = 0;
+    }
+}
+
+/** Append one framed player command and index its replaceable movement epoch. */
+bool socket_server_command_queue_append(socket_struct *cs, const uint8_t *data, size_t len) {
+    if (cs->packet_recv_cmd->len == 0) {
+        socket_server_command_queue_reset(cs);
+    }
+    size_t type_offset = cs->packet_recv_cmd->len + 2;
+    packet_writer_write_uint16(cs->packet_recv_cmd, len);
+    packet_writer_write_bytes(cs->packet_recv_cmd, data, len);
+    if (!packet_writer_finish(cs->packet_recv_cmd)) {
+        return false;
+    }
+
+    uint32_t epoch = socket_server_command_epoch(data, len);
+    if (epoch == 0) {
+        return true;
+    }
+    if (epoch != cs->movement_stream_epoch) {
+        cs->movement_stream_epoch = epoch;
+        cs->movement_stream_entries_start = 0;
+        cs->movement_stream_entries_num = 0;
+    } else {
+        socket_server_command_queue_prune(cs);
+    }
+    if (cs->movement_stream_entries_num == cs->movement_stream_entries_size) {
+        if (cs->movement_stream_entries_start != 0) {
+            size_t live = cs->movement_stream_entries_num - cs->movement_stream_entries_start;
+            memmove(cs->movement_stream_entries,
+                    cs->movement_stream_entries + cs->movement_stream_entries_start,
+                    live * sizeof(*cs->movement_stream_entries));
+            cs->movement_stream_entries_start = 0;
+            cs->movement_stream_entries_num = live;
+        } else {
+            size_t new_size =
+                cs->movement_stream_entries_size == 0 ? 8 : cs->movement_stream_entries_size * 2;
+            cs->movement_stream_entries = xrealloc(cs->movement_stream_entries,
+                                                   new_size * sizeof(*cs->movement_stream_entries));
+            cs->movement_stream_entries_size = new_size;
+        }
+    }
+    socket_movement_queue_entry *entry =
+        &cs->movement_stream_entries[cs->movement_stream_entries_num++];
+    entry->offset = cs->packet_recv_cmd_base + type_offset;
+    entry->command = data[0];
+    return true;
+}
+
+/** Tombstone queued records from the current keyboard movement epoch in bounded work. */
+bool socket_server_command_queue_clear_stream(socket_struct *cs, uint8_t command, uint32_t epoch) {
+    if (epoch == 0 || epoch != cs->movement_stream_epoch) {
+        return true;
+    }
+    socket_server_command_queue_prune(cs);
+    for (size_t i = cs->movement_stream_entries_start; i < cs->movement_stream_entries_num; i++) {
+        socket_movement_queue_entry *entry = &cs->movement_stream_entries[i];
+        if (entry->command != command) {
+            continue;
+        }
+        uint64_t relative = entry->offset - cs->packet_recv_cmd_base;
+        if (relative >= cs->packet_recv_cmd->len ||
+            cs->packet_recv_cmd->data[relative] != command) {
+            return false;
+        }
+    }
+
+    size_t write = 0;
+    for (size_t i = cs->movement_stream_entries_start; i < cs->movement_stream_entries_num; i++) {
+        socket_movement_queue_entry entry = cs->movement_stream_entries[i];
+        if (entry.command == command) {
+            size_t relative = (size_t)(entry.offset - cs->packet_recv_cmd_base);
+            cs->packet_recv_cmd->data[relative] = SOCKET_COMMAND_QUEUE_TOMBSTONE;
+        } else {
+            cs->movement_stream_entries[write++] = entry;
+        }
+    }
+    cs->movement_stream_entries_start = 0;
+    cs->movement_stream_entries_num = write;
+    return true;
+}
+
+/** Discard the buffered command queue and all of its movement-stream metadata. */
+void socket_server_command_queue_reset(socket_struct *cs) {
+    cs->packet_recv_cmd->len = 0;
+    cs->packet_recv_cmd_base = 0;
+    cs->movement_stream_epoch = 0;
+    cs->movement_stream_entries_start = 0;
+    cs->movement_stream_entries_num = 0;
+}
+
 /**
  * Handle client commands.
  *
@@ -658,14 +775,23 @@ void socket_server_handle_client(player *pl) {
             break;
         }
 
+        size_t len = 2 + (pl->cs->packet_recv_cmd->data[0] << 8) + pl->cs->packet_recv_cmd->data[1];
+
+        if (pl->cs->packet_recv_cmd->data[2] == SOCKET_COMMAND_QUEUE_TOMBSTONE) {
+            packet_delete(pl->cs->packet_recv_cmd, 0, len);
+            pl->cs->packet_recv_cmd_base += len;
+            socket_server_command_queue_prune(pl->cs);
+            num_cmds--;
+            continue;
+        }
+
         /* Ensure the player is in a state capable of issue commands, and
-         * has enough speed left to do so. */
+         * has enough speed left to do so. Tombstones above never execute
+         * gameplay and must not leave a canceled direction at queue head. */
         if (pl->cs->state == ST_ZOMBIE || pl->cs->state == ST_DEAD ||
             (pl->cs->state == ST_PLAYING && pl->ob != NULL && pl->ob->speed_left < 0)) {
             break;
         }
-
-        size_t len = 2 + (pl->cs->packet_recv_cmd->data[0] << 8) + pl->cs->packet_recv_cmd->data[1];
 
         /* Reset idle counter. */
         if (pl->cs->state == ST_PLAYING) {
@@ -675,6 +801,8 @@ void socket_server_handle_client(player *pl) {
 
         socket_server_handle_command(pl->cs, pl, pl->cs->packet_recv_cmd->data + 2, len - 2);
         packet_delete(pl->cs->packet_recv_cmd, 0, len);
+        pl->cs->packet_recv_cmd_base += len;
+        socket_server_command_queue_prune(pl->cs);
     }
 }
 
@@ -771,9 +899,7 @@ static inline void socket_server_csocket_read(socket_struct *cs) {
         if (!socket_server_handle_command(cs, NULL, decrypted_data, decrypted_len)) {
             /* Couldn't handle it immediately, add it to the commands
              * packet. */
-            packet_writer_write_uint16(cs->packet_recv_cmd, decrypted_len);
-            packet_writer_write_bytes(cs->packet_recv_cmd, decrypted_data, decrypted_len);
-            if (!packet_writer_finish(cs->packet_recv_cmd)) {
+            if (!socket_server_command_queue_append(cs, decrypted_data, decrypted_len)) {
                 LOG(ERROR,
                     "Connection %s exceeded the buffered command limit: %s",
                     socket_get_id(cs->sc),

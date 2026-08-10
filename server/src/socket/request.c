@@ -2458,47 +2458,10 @@ void socket_command_quest_list(socket_struct *ns,
     free(cp);
 }
 
-/** Remove queued commands belonging to one replaceable directional stream. */
-static bool socket_command_queue_clear_stream(packet_struct *queue, uint8_t command) {
-    size_t read_pos = 0;
-
-    /* Validate the complete framed queue before changing it. */
-    while (read_pos < queue->len) {
-        if (queue->len - read_pos < 2) {
-            return false;
-        }
-        size_t command_len = ((size_t)queue->data[read_pos] << 8) | queue->data[read_pos + 1];
-        if (command_len == 0 || command_len > queue->len - read_pos - 2) {
-            return false;
-        }
-        read_pos += command_len + 2;
-    }
-
-    read_pos = 0;
-    size_t write_pos = 0;
-    while (read_pos < queue->len) {
-        size_t command_len = ((size_t)queue->data[read_pos] << 8) | queue->data[read_pos + 1];
-        size_t frame_len = command_len + 2;
-        uint8_t queued_command = queue->data[read_pos + 2];
-        bool remove =
-            (command == SERVER_CMD_MOVE && queued_command == SERVER_CMD_MOVE && command_len == 3) ||
-            (command == SERVER_CMD_FIRE && queued_command == SERVER_CMD_FIRE && command_len == 2);
-        if (!remove) {
-            if (write_pos != read_pos) {
-                memmove(queue->data + write_pos, queue->data + read_pos, frame_len);
-            }
-            write_pos += frame_len;
-        }
-        read_pos += frame_len;
-    }
-    queue->len = write_pos;
-    return true;
-}
-
 void socket_command_clear(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos) {
     if (pos == len) {
         /* Empty CLEAR retains Stay's historical broad queue/path reset. */
-        ns->packet_recv_cmd->len = 0;
+        socket_server_command_queue_reset(ns);
         if (pl != NULL) {
             player_path_clear(pl);
             pl->run_on = 0;
@@ -2509,6 +2472,7 @@ void socket_command_clear(socket_struct *ns, player *pl, uint8_t *data, size_t l
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     uint8_t command = packet_reader_read_uint8(&reader);
+    uint32_t epoch = packet_reader_read_uint32(&reader);
     if ((command != SERVER_CMD_MOVE && command != SERVER_CMD_FIRE) ||
         !packet_reader_finish(&reader)) {
         if (packet_reader_error(&reader) == PACKET_ERROR_NONE) {
@@ -2516,8 +2480,8 @@ void socket_command_clear(socket_struct *ns, player *pl, uint8_t *data, size_t l
         }
         return;
     }
-    if (!socket_command_queue_clear_stream(ns->packet_recv_cmd, command)) {
-        LOG(DEVEL, "Refused to filter malformed player command queue");
+    if (!socket_server_command_queue_clear_stream(ns, command, epoch)) {
+        LOG(DEVEL, "Refused to clear inconsistent movement-stream queue metadata");
         return;
     }
     if (command == SERVER_CMD_MOVE && pl != NULL) {
@@ -2608,12 +2572,18 @@ void socket_command_fire(socket_struct *ns, player *pl, uint8_t *data, size_t le
     packet_reader_init_cursor(&reader, data, len, &pos);
     int dir;
     tag_t tag;
+    uint32_t epoch;
     object *tmp;
     double skill_time, delay;
 
     dir = packet_reader_read_uint8(&reader);
     dir = MAX(0, MIN(dir, 8));
     tag = packet_reader_read_uint32(&reader);
+    epoch = packet_reader_read_uint32(&reader);
+    (void)epoch;
+    if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
+        return;
+    }
 
     if (tag) {
         if (pl->equipment[PLAYER_EQUIP_WEAPON_RANGED] &&
@@ -2692,9 +2662,15 @@ void socket_command_move(socket_struct *ns, player *pl, uint8_t *data, size_t le
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     uint8_t dir, run_on;
+    uint32_t epoch;
 
     dir = packet_reader_read_uint8(&reader);
     run_on = packet_reader_read_uint8(&reader);
+    epoch = packet_reader_read_uint32(&reader);
+    (void)epoch;
+    if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
+        return;
+    }
 
     if (dir > 8) {
         LOG(PACKET, "%s: Invalid dir: %d", socket_get_id(ns->sc), dir);
@@ -2717,6 +2693,8 @@ void socket_command_move(socket_struct *ns, player *pl, uint8_t *data, size_t le
         pl->run_on_dir = dir - 1;
         pl->ob->speed_left -= 1.0;
         move_object(pl->ob, dir);
+    } else {
+        player_path_clear(pl);
     }
 }
 

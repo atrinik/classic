@@ -429,6 +429,7 @@ void keybind_movement_state_cancel_deferred_move(keybind_movement_state *state) 
 void keybind_movement_state_ordered_boundary(keybind_movement_state *state) {
     if (state != NULL) {
         state->emitted_direction = 0;
+        state->epoch = 0;
     }
 }
 
@@ -672,6 +673,7 @@ void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
         state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
         if (!state->pending_stop && !state->pending_run_stop) {
             state->emitted_direction = 0;
+            state->epoch = 0;
         }
     }
 }
@@ -725,6 +727,7 @@ void keybind_movement_state_release(keybind_movement_state *state,
         state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
         if (!state->pending_stop && !state->pending_run_stop) {
             state->emitted_direction = 0;
+            state->epoch = 0;
         }
     }
 }
@@ -738,8 +741,12 @@ void keybind_movement_state_clear(keybind_movement_state *state, bool running, b
     bool stop = state->pending_stop || state->pending_run_stop ||
                 (keybind_movement_active(state) && (state->repeated || running) && !firing);
     uint64_t next_order = state->next_order;
+    uint32_t next_epoch = state->next_epoch;
+    uint32_t epoch = state->epoch;
     keybind_movement_state_init(state);
     state->next_order = next_order;
+    state->next_epoch = next_epoch;
+    state->epoch = stop ? epoch : 0;
     state->pending_stop = stop;
 }
 
@@ -804,16 +811,18 @@ static uint8_t keybind_movement_direction(const keybind_movement_state *state) {
 }
 
 /** Consume one pending logical movement-stream update. */
-keybind_movement_action keybind_movement_state_flush(keybind_movement_state *state,
-                                                     uint8_t *direction) {
-    if (state == NULL || direction == NULL) {
+keybind_movement_action
+keybind_movement_state_flush(keybind_movement_state *state, uint8_t *direction, uint32_t *epoch) {
+    if (state == NULL || direction == NULL || epoch == NULL) {
         return KEYBIND_MOVEMENT_ACTION_NONE;
     }
+    *epoch = state->epoch;
     if (state->pending_run_stop) {
         state->pending_run_stop = false;
         state->repeated = state->pending_move && state->pending_move_repeated;
         state->emitted_direction = 0;
         *direction = 0;
+        *epoch = 0;
         return KEYBIND_MOVEMENT_ACTION_RUN_STOP;
     }
     if (state->pending_move) {
@@ -822,7 +831,15 @@ keybind_movement_action keybind_movement_state_flush(keybind_movement_state *sta
         *direction = state->pending_direction;
         if (*direction != 0) {
             bool replace = state->emitted_direction != 0 && state->emitted_direction != *direction;
+            if (state->emitted_direction == 0) {
+                state->next_epoch++;
+                if (state->next_epoch == 0) {
+                    state->next_epoch++;
+                }
+                state->epoch = state->next_epoch;
+            }
             state->emitted_direction = *direction;
+            *epoch = state->epoch;
             return replace ? KEYBIND_MOVEMENT_ACTION_REPLACE : KEYBIND_MOVEMENT_ACTION_MOVE;
         }
     }
@@ -831,6 +848,8 @@ keybind_movement_action keybind_movement_state_flush(keybind_movement_state *sta
         state->pending_run_stop = false;
         state->emitted_direction = 0;
         *direction = 5;
+        *epoch = state->epoch;
+        state->epoch = 0;
         return KEYBIND_MOVEMENT_ACTION_STOP;
     }
     return KEYBIND_MOVEMENT_ACTION_NONE;

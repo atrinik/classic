@@ -96,7 +96,7 @@ void keybind_event_process_binding(const keybind_struct *keybind,
                                                              event->repeat,
                                                              keybind->repeat);
                 if (accepted) {
-                    if (ordered_movement) {
+                    if (ordered_movement && (movement_accepted || event->repeat)) {
                         keybind_movement_state_ordered_boundary(handler->movement);
                     }
                     movement_accepted = true;
