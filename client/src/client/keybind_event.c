@@ -91,11 +91,11 @@ void keybind_event_process_binding(const keybind_struct *keybind,
         } else {
             bool run = !strcmp(cp, "?RUNON");
             bool fire = !strcmp(cp, "?FIREON");
-            bool mode_up_unchanged = event->type == SDL_EVENT_KEY_UP && (run || fire) &&
-                                     !keybind_movement_state_mode_release_changes(handler->movement,
-                                                                                  event->scancode,
-                                                                                  run);
-            if (!mode_up_unchanged) {
+            bool mode_up_changes = event->type == SDL_EVENT_KEY_UP && (run || fire) &&
+                                   keybind_movement_state_mode_release_changes(handler->movement,
+                                                                               event->scancode,
+                                                                               run);
+            if (event->type == SDL_EVENT_KEY_DOWN || mode_up_changes) {
                 keybind_event_flush(handler);
             }
             if (event->type == SDL_EVENT_KEY_DOWN) {
@@ -336,6 +336,39 @@ static bool keybind_event_invalid_mode_rebinds_movement(keybind_struct *const *b
     return false;
 }
 
+static void keybind_event_preserve_fallback_modes(keybind_struct *const *bindings,
+                                                  size_t bindings_num,
+                                                  const key_struct *key_states,
+                                                  const SDL_KeyboardEvent *event,
+                                                  const keybind_event_handler *handler,
+                                                  const bool *invalid_mode_scancodes) {
+    if (key_states == NULL) {
+        return;
+    }
+    for (SDL_Scancode scancode = 1; scancode < SDL_SCANCODE_COUNT; scancode++) {
+        if (!invalid_mode_scancodes[scancode] || !key_states[scancode].pressed) {
+            continue;
+        }
+        const keybind_struct *keybind =
+            keybind_event_find_scancode(bindings, bindings_num, scancode, event->mod);
+        if (keybind == NULL) {
+            continue;
+        }
+        bool run = handler->movement->keys[scancode].run_owned &&
+                   keybind_command_contains(keybind->command, "?RUNON");
+        bool fire = handler->movement->keys[scancode].fire_owned &&
+                    keybind_command_contains(keybind->command, "?FIREON");
+        if (run && (handler->movement_intercept_matches == NULL ||
+                    !handler->movement_intercept_matches("?RUNON", handler->user_data))) {
+            keybind_movement_state_mode_rebind(handler->movement, scancode, keybind->mod, true);
+        }
+        if (fire && (handler->movement_intercept_matches == NULL ||
+                     !handler->movement_intercept_matches("?FIREON", handler->user_data))) {
+            keybind_movement_state_mode_rebind(handler->movement, scancode, keybind->mod, false);
+        }
+    }
+}
+
 /** Return whether a physical keyboard event belongs to a binding modifier key. */
 bool keybind_event_is_modifier(const SDL_KeyboardEvent *event) {
     switch (event->scancode) {
@@ -406,6 +439,12 @@ void keybind_event_reconcile_release(keybind_struct *const *bindings,
                                                                           scancode,
                                                                           event->mod);
         }
+        keybind_event_preserve_fallback_modes(bindings,
+                                              bindings_num,
+                                              key_states,
+                                              event,
+                                              handler,
+                                              invalid_mode_scancodes);
     }
     bool modifier_invalidates_movement =
         keybind_event_is_modifier(event) &&

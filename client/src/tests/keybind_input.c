@@ -634,7 +634,8 @@ static bool movement_sink_command_down(const char *command, void *user_data) {
 static bool movement_sink_intercept_matches(const char *command, void *user_data) {
     movement_sink *sink = user_data;
 
-    return sink->intercept_movement && !strcmp(command, "?MOVE_NW");
+    return (sink->intercept_movement && !strcmp(command, "?MOVE_NW")) ||
+           (sink->intercept_modes && (!strcmp(command, "?RUNON") || !strcmp(command, "?FIREON")));
 }
 
 static void movement_sink_intercept(const char *command, void *user_data) {
@@ -851,6 +852,38 @@ static void test_keybind_event_integration(void) {
         .key = SDLK_V,
         .mod = SDL_KMOD_SHIFT,
     };
+    keybind_struct help = {
+        .command = "?HELP",
+        .key = SDLK_W,
+    };
+    keybind_struct run_same_fallback = {
+        .command = "?RUNON",
+        .key = SDLK_X,
+    };
+    keybind_struct shifted_run_same = {
+        .command = "?RUNON",
+        .key = SDLK_X,
+        .mod = SDL_KMOD_SHIFT,
+    };
+    keybind_struct fire_same_fallback = {
+        .command = "?FIREON",
+        .key = SDLK_Y,
+    };
+    keybind_struct shifted_fire_same = {
+        .command = "?FIREON",
+        .key = SDLK_Y,
+        .mod = SDL_KMOD_SHIFT,
+    };
+    keybind_struct run_movement_fallback = {
+        .command = "?RUNON;?MOVE_N",
+        .key = SDLK_Z,
+        .repeat = true,
+    };
+    keybind_struct shifted_run_same_compound = {
+        .command = "?RUNON",
+        .key = SDLK_Z,
+        .mod = SDL_KMOD_SHIFT,
+    };
     keybind_struct *bindings[] = {&northwest,
                                   &shifted,
                                   &shifted_b,
@@ -882,7 +915,14 @@ static void test_keybind_event_integration(void) {
                                   &mode_movement_fallback,
                                   &shifted_mode_only,
                                   &second_run_owner,
-                                  &shifted_run_only};
+                                  &shifted_run_only,
+                                  &help,
+                                  &run_same_fallback,
+                                  &shifted_run_same,
+                                  &fire_same_fallback,
+                                  &shifted_fire_same,
+                                  &run_movement_fallback,
+                                  &shifted_run_same_compound};
     movement_sink sink;
     key_struct key_states[SDL_SCANCODE_COUNT] = {0};
     SDL_KeyboardEvent event = {.type = SDL_EVENT_KEY_DOWN};
@@ -977,14 +1017,15 @@ static void test_keybind_event_integration(void) {
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     SDL_KeyboardEvent unrelated = {
         .type = SDL_EVENT_KEY_UP,
-        .key = SDLK_F,
-        .scancode = SDL_SCANCODE_F,
+        .key = SDLK_W,
+        .scancode = SDL_SCANCODE_W,
     };
     keybind_event_reconcile_release(bindings,
                                     arraysize(bindings),
                                     &unrelated,
                                     key_states,
                                     &handler);
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &unrelated, &handler));
     TEST_CHECK(sink.actions_num == 0);
     event.key = SDLK_B;
     event.scancode = SDL_SCANCODE_B;
@@ -1233,7 +1274,7 @@ static void test_keybind_event_integration(void) {
     TEST_CHECK(sink.actions_num == 2 && sink.directions[0] == 9 && sink.directions[1] == 8);
     TEST_CHECK(sink.firing_at_emit[1]);
 
-    /* Invalid old modes are reconciled before the same mode is replayed later. */
+    /* A compound fallback preserves an identical mode without an off/on cycle. */
     movement_sink_reset(&sink);
     handler = movement_sink_handler(&sink);
     event.key = SDLK_I;
@@ -1249,7 +1290,7 @@ static void test_keybind_event_integration(void) {
                                     &handler);
     movement_sink_flush(&sink);
     TEST_CHECK(sink.actions_num == 2 && sink.directions[1] == 7);
-    TEST_CHECK(!sink.firing_at_emit[1] && sink.firing);
+    TEST_CHECK(sink.firing_at_emit[1] && sink.firing);
 
     /* Two compound fallbacks emit their pre-seeded composite only once. */
     movement_sink_reset(&sink);
@@ -1534,6 +1575,84 @@ static void test_keybind_event_integration(void) {
     movement_sink_flush(&sink);
     TEST_CHECK(sink.actions_num == 1);
     TEST_CHECK(sink.actions[0] == KEYBIND_MOVEMENT_ACTION_RUN_STOP);
+
+    /* Identical unmodified mode fallbacks transfer accepted ownership. */
+    memset(key_states, 0, sizeof(key_states));
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    handler.reconcile_modes = NULL;
+    event.type = SDL_EVENT_KEY_DOWN;
+    event.repeat = false;
+    event.mod = SDL_KMOD_LSHIFT;
+    event.key = SDLK_X;
+    event.scancode = SDL_SCANCODE_X;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    key_states[SDL_SCANCODE_X].pressed = true;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.running && sink.command_ups == 0 && sink.actions_num == 0);
+    TEST_CHECK(keybind_movement_state_mode_owned(&sink.state, true));
+
+    memset(key_states, 0, sizeof(key_states));
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    handler.reconcile_modes = NULL;
+    event.key = SDLK_X;
+    event.scancode = SDL_SCANCODE_X;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    key_states[SDL_SCANCODE_X].pressed = true;
+    event.mod = SDL_KMOD_NONE;
+    event.key = SDLK_A;
+    event.scancode = SDL_SCANCODE_A;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    event.key = SDLK_B;
+    event.scancode = SDL_SCANCODE_B;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 8);
+
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    handler.reconcile_modes = NULL;
+    event.key = SDLK_Y;
+    event.scancode = SDL_SCANCODE_Y;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    key_states[SDL_SCANCODE_Y].pressed = true;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.firing && sink.command_ups == 0 && sink.actions_num == 0);
+    TEST_CHECK(keybind_movement_state_mode_owned(&sink.state, false));
+
+    /* A same-mode compound fallback never queues a transient run stop. */
+    memset(key_states, 0, sizeof(key_states));
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    handler.reconcile_modes = NULL;
+    event.key = SDLK_Z;
+    event.scancode = SDL_SCANCODE_Z;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    key_states[SDL_SCANCODE_Z].pressed = true;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.running && sink.command_ups == 0 && sink.actions_num == 1);
+    TEST_CHECK(sink.actions[0] == KEYBIND_MOVEMENT_ACTION_MOVE && sink.directions[0] == 8);
 }
 
 int main(void) {
