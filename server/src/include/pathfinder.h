@@ -163,6 +163,21 @@ extern void path_visualize(path_visualization_t **visualization, path_visualizer
 
 extern void path_search_options_init(path_search_options_t *options);
 
+/**
+ * Check a tile using the same collision policy as path-search neighbors.
+ *
+ * @return 0 when the object can occupy the tile, non-zero otherwise.
+ */
+extern int path_tile_blocked(object *op, mapstruct *map, int x, int y);
+
+/**
+ * Search for a route that reaches a tile adjacent to the requested goal.
+ *
+ * A successful search normally excludes the requested coordinates. Callers
+ * must explicitly decide whether the object can occupy and should enter the
+ * exact goal tile. Partial results are returned only when requested in
+ * @p options.
+ */
 extern path_result_t path_search(object *op,
                                  mapstruct *map1,
                                  int x,
