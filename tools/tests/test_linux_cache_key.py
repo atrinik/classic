@@ -76,6 +76,23 @@ class LinuxCacheKeyTests(unittest.TestCase):
             with self.assertRaises(linux_cache_key.CacheKeyError):
                 linux_cache_key.material_digest(["missing"], root)
 
+    def test_material_symlinks_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            root = temporary / "root"
+            outside = temporary / "outside"
+            root.mkdir()
+            outside.mkdir()
+            material = outside / "material.txt"
+            material.write_text("flags=-O2\n", encoding="utf-8")
+
+            (root / "final-link").symlink_to(material)
+            (root / "ancestor-link").symlink_to(outside, target_is_directory=True)
+            for value in ("final-link", "ancestor-link/material.txt"):
+                with self.subTest(value=value):
+                    with self.assertRaises(linux_cache_key.CacheKeyError):
+                        linux_cache_key.material_digest([value], root)
+
 
 if __name__ == "__main__":
     unittest.main()

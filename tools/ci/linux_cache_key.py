@@ -40,8 +40,12 @@ def safe_material(value: str, root: Path = ROOT) -> Path:
     relative = PurePosixPath(value)
     if not value or relative.is_absolute() or ".." in relative.parts:
         raise CacheKeyError(f"unsafe material path: {value!r}")
-    path = root.joinpath(*relative.parts)
-    if not path.is_file() or path.is_symlink():
+    path = root.resolve(strict=True)
+    for part in relative.parts:
+        path = path / part
+        if path.is_symlink():
+            raise CacheKeyError(f"material path contains a symlink: {value}")
+    if not path.is_file():
         raise CacheKeyError(f"material is not a regular file: {value}")
     return path
 

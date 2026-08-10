@@ -566,6 +566,7 @@ class WorkflowContractTests(unittest.TestCase):
             with self.subTest(component=component):
                 self.assertIn("packages: read", job)
                 self.assertIn("id-token: write", job)
+                self.assertIn("persist-credentials: false", job)
                 self.assertIn(f"--component {component}", job)
                 self.assertIn(f"classic-ccache/{component}", job)
                 self.assertEqual(
