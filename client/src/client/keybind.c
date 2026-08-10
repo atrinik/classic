@@ -349,9 +349,10 @@ void keybind_movement_flush(void) {
 }
 
 /** Reconcile a physical key-up even when a focused UI element consumes it. */
-void keybind_movement_key_released(SDL_Scancode scancode) {
-    keybind_movement_flush();
-    keybind_movement_state_release(&movement_state, scancode, cpl.run_on, cpl.fire_on);
+void keybind_movement_key_released(const SDL_KeyboardEvent *event) {
+    keybind_event_handler handler = keybind_event_handler_create();
+
+    keybind_event_reconcile_release(keybindings, keybindings_num, event, &handler);
 }
 
 /** Cancel un-emitted movement and stop an established stream on focus loss. */

@@ -543,6 +543,29 @@ static void test_movement_boundaries_and_modifiers(void) {
     keybind_movement_state_release(&state, SDL_SCANCODE_A, false, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
+    /* A newer non-fire repeat epoch still clears on its later release. */
+    keybind_movement_state_init(&state);
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    keybind_movement_state_run_released(&state, true);
+    TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_STOP, 0);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    keybind_movement_state_release(&state, SDL_SCANCODE_A, false, false);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_STOP, 5);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
+
+    /* Focus loss plus Run reconciliation coalesces to one movement stop. */
+    keybind_movement_state_init(&state);
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    keybind_movement_state_clear(&state, true, false);
+    keybind_movement_state_run_released(&state, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_STOP, 5);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
+
     /* Same-poll chord releases retain the initial composite and each transition. */
     keybind_movement_state_init(&state);
     keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
@@ -760,6 +783,27 @@ static void test_keybind_event_integration(void) {
     event.repeat = true;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     TEST_CHECK(sink.actions_num == 4 && sink.directions[2] == 7 && sink.directions[3] == 9);
+
+    /* An unrelated key-up does not split same-poll chord composition. */
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.repeat = false;
+    event.type = SDL_EVENT_KEY_DOWN;
+    event.key = SDLK_A;
+    event.scancode = SDL_SCANCODE_A;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    SDL_KeyboardEvent unrelated = {
+        .type = SDL_EVENT_KEY_UP,
+        .key = SDLK_F,
+        .scancode = SDL_SCANCODE_F,
+    };
+    keybind_event_reconcile_release(bindings, arraysize(bindings), &unrelated, &handler);
+    TEST_CHECK(sink.actions_num == 0);
+    event.key = SDLK_B;
+    event.scancode = SDL_SCANCODE_B;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 8);
 }
 
 int main(void) {

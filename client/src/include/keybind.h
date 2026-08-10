@@ -76,6 +76,7 @@ typedef struct keybind_movement_state {
     uint8_t pending_direction;
     bool repeated;
     bool pending_move;
+    bool pending_move_repeated;
     bool pending_stop;
     bool pending_run_stop;
 } keybind_movement_state;
@@ -148,9 +149,17 @@ extern void keybind_event_process_binding(const keybind_struct *keybind,
                                           const SDL_KeyboardEvent *event,
                                           const keybind_event_handler *handler);
 
+extern void keybind_event_reconcile_release(keybind_struct *const *bindings,
+                                            size_t bindings_num,
+                                            const SDL_KeyboardEvent *event,
+                                            const keybind_event_handler *handler);
+
 extern bool keybind_movement_command_direction(const char *cmd, uint8_t *direction);
 
 extern void keybind_movement_state_init(keybind_movement_state *state);
+
+extern bool keybind_movement_state_has_scancode(const keybind_movement_state *state,
+                                                SDL_Scancode scancode);
 
 extern bool keybind_movement_state_press(keybind_movement_state *state,
                                          SDL_Scancode scancode,
@@ -187,7 +196,7 @@ extern void keybind_state_ensure(void);
 
 extern void keybind_movement_flush(void);
 
-extern void keybind_movement_key_released(SDL_Scancode scancode);
+extern void keybind_movement_key_released(const SDL_KeyboardEvent *event);
 
 extern void keybind_movement_focus_lost(void);
 

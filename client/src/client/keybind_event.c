@@ -96,6 +96,45 @@ void keybind_event_process_binding(const keybind_struct *keybind,
     }
 }
 
+static const keybind_struct *keybind_event_find(keybind_struct *const *bindings,
+                                                size_t bindings_num,
+                                                const SDL_KeyboardEvent *event) {
+    for (size_t i = 0; i < bindings_num; i++) {
+        if (event->key == bindings[i]->key && bindings[i]->mod == keybind_adjust_kmod(event->mod)) {
+            return bindings[i];
+        }
+    }
+
+    for (size_t i = 0; i < bindings_num; i++) {
+        if (event->key == bindings[i]->key && !bindings[i]->mod) {
+            return bindings[i];
+        }
+    }
+
+    return NULL;
+}
+
+/** Reconcile a key-up, flushing only movement-relevant ordering boundaries. */
+void keybind_event_reconcile_release(keybind_struct *const *bindings,
+                                     size_t bindings_num,
+                                     const SDL_KeyboardEvent *event,
+                                     const keybind_event_handler *handler) {
+    if (bindings == NULL || event == NULL || handler == NULL || handler->movement == NULL) {
+        return;
+    }
+
+    const keybind_struct *keybind = keybind_event_find(bindings, bindings_num, event);
+    if (keybind_movement_state_has_scancode(handler->movement, event->scancode) ||
+        (keybind != NULL && (keybind_command_contains(keybind->command, "?RUNON") ||
+                             keybind_command_contains(keybind->command, "?FIREON")))) {
+        keybind_event_flush(handler);
+    }
+    keybind_movement_state_release(handler->movement,
+                                   event->scancode,
+                                   keybind_event_running(handler),
+                                   keybind_event_firing(handler));
+}
+
 /** Match and process one physical keyboard event with normal modifier precedence. */
 bool keybind_event_process(keybind_struct *const *bindings,
                            size_t bindings_num,
@@ -105,18 +144,10 @@ bool keybind_event_process(keybind_struct *const *bindings,
         return false;
     }
 
-    for (size_t i = 0; i < bindings_num; i++) {
-        if (event->key == bindings[i]->key && bindings[i]->mod == keybind_adjust_kmod(event->mod)) {
-            keybind_event_process_binding(bindings[i], event, handler);
-            return true;
-        }
-    }
-
-    for (size_t i = 0; i < bindings_num; i++) {
-        if (event->key == bindings[i]->key && !bindings[i]->mod) {
-            keybind_event_process_binding(bindings[i], event, handler);
-            return true;
-        }
+    const keybind_struct *keybind = keybind_event_find(bindings, bindings_num, event);
+    if (keybind != NULL) {
+        keybind_event_process_binding(keybind, event, handler);
+        return true;
     }
 
     return false;
