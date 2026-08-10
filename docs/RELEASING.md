@@ -48,19 +48,30 @@ an older pending tag is checked against the complete current release history
 rather than running validation code and history policy frozen at that tag.
 Multiple drafts fail closed for manual investigation.
 
-The immutable `v5.8.1` tag is the single recorded exception to that retry
-rule. Both Package Release attempts failed in the Release-only server build
-before finalizing a candidate, publishing an image, or uploading a draft
-asset. `docs/history/release-tags.json` records the exact tag commit, empty
-draft ID, failed run IDs, and `delete-empty-draft` disposition. On current
-validated `main`, Semantic Release rechecks those immutable coordinates and
-the failed job conclusions, then deletes only that exact zero-asset draft and
-continues version analysis. Any changed draft ID or tag target, uploaded asset,
-successful candidate/publication job, unrecognized run, or additional draft
-fails closed. The tag and commit remain immutable historical evidence;
-`v5.8.1` is never published, downloadable, eligible for Latest, or used as an
-image alias. The next semantic version contains the server correction and all
-first-parent fixes after `v5.8.1`.
+The immutable `v5.8.1` and `v5.10.0` tags are the recorded exceptions to that
+retry rule. Both `v5.8.1` Package Release attempts failed in the Release-only
+server build before finalizing a candidate, publishing an image, or uploading
+a draft asset. `docs/history/release-tags.json` records each exact tag commit,
+empty draft ID, failed run IDs, expected server-image job conclusion, and
+`delete-empty-draft` disposition. On current validated `main`, Semantic Release
+rechecks those immutable coordinates and the failed job conclusions, then
+deletes only that exact zero-asset draft and continues version analysis. Any
+changed draft ID or tag target, uploaded asset, successful
+candidate/publication job, unrecognized run, or additional draft fails closed.
+The tag and commit remain immutable historical evidence; `v5.8.1` is never
+published, downloadable, eligible for Latest, or used as an image alias. The
+next semantic version contains the server correction and all first-parent
+fixes after `v5.8.1`.
+
+The `v5.10.0` Package Release failed while cross-compiling the Windows server:
+the tagged source called POSIX-only `lstat` and `S_ISLNK` from a shared server
+source file. Its server image build succeeded, but its Windows server build
+failed before candidate finalization, publication, or any draft asset upload.
+The policy records exact draft ID `368181077`, tag commit
+`ebfe6588cf64f42c44715bcf45ec50cc056a91a5`, and failed run `31429488922`.
+The tag remains immutable unpublished historical evidence and is never used as
+an image alias. The next semantic version includes the portable staging-path
+correction.
 
 If the failed run reached complete-candidate validation but a defect in its
 tag-bound publication code makes a job rerun impossible, dispatch Package
@@ -247,8 +258,8 @@ draft with no packaging run may start Package Release from its exact tag ref;
 after that, recovery stays with the original run or its retained-candidate
 continuation. Never edit an already published
 immutable release for recovery; publish a correction as the next semantic
-version. The recorded pre-candidate `v5.8.1` exception above may delete only
-its exact empty draft so Semantic Release can advance; it does not generalize
+version. The recorded pre-candidate exceptions above may each delete only
+their exact empty draft so Semantic Release can advance; they do not generalize
 to another tag or any draft containing an asset. The mutable `latest` alias is
 convenience only. Its globally serialized
 promoter recomputes GitHub's latest complete immutable release on every run, and

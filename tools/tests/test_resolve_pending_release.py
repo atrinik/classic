@@ -40,6 +40,7 @@ def policy() -> dict[str, object]:
             "disposition": "delete-empty-draft",
             "empty_draft_id": RELEASE_ID,
             "failed_package_run_ids": RUN_IDS,
+            "server_image_conclusion": "failure",
         }
     }
 
@@ -47,7 +48,9 @@ def policy() -> dict[str, object]:
 class ResolvePendingReleaseTests(unittest.TestCase):
     def test_no_draft_allows_semantic_release(self) -> None:
         self.assertEqual(
-            resolve_pending_release.resolve([], policy(), lambda tag: COMMIT, lambda run: None),
+            resolve_pending_release.resolve(
+                [], policy(), lambda tag: COMMIT, lambda run, image: None
+            ),
             {"action": "none", "tag": "", "release_id": ""},
         )
 
@@ -55,16 +58,19 @@ class ResolvePendingReleaseTests(unittest.TestCase):
         release = draft(id=10, tag_name="v5.8.0")
         self.assertEqual(
             resolve_pending_release.resolve(
-                [release], policy(), lambda tag: "0" * 40, lambda run: None
+                [release], policy(), lambda tag: "0" * 40, lambda run, image: None
             ),
             {"action": "resume", "tag": "v5.8.0", "release_id": "10"},
         )
 
     def test_recorded_empty_failed_draft_is_deleted(self) -> None:
-        validated: list[int] = []
+        validated: list[tuple[int, str]] = []
         self.assertEqual(
             resolve_pending_release.resolve(
-                [draft()], policy(), lambda tag: COMMIT, validated.append
+                [draft()],
+                policy(),
+                lambda tag: COMMIT,
+                lambda run, image: validated.append((run, image)),
             ),
             {
                 "action": "delete-empty-draft",
@@ -72,7 +78,7 @@ class ResolvePendingReleaseTests(unittest.TestCase):
                 "release_id": str(RELEASE_ID),
             },
         )
-        self.assertEqual(validated, RUN_IDS)
+        self.assertEqual(validated, [(run, "failure") for run in RUN_IDS])
 
     def test_failed_draft_must_remain_exact_and_empty(self) -> None:
         cases = (
@@ -87,7 +93,10 @@ class ResolvePendingReleaseTests(unittest.TestCase):
                     "no longer matches policy",
                 ):
                     resolve_pending_release.resolve(
-                        [release], failed_policy, lambda tag: commit, lambda run: None
+                        [release],
+                        failed_policy,
+                        lambda tag: commit,
+                        lambda run, image: None,
                     )
 
     def test_non_draft_release_cannot_be_deleted(self) -> None:
@@ -96,7 +105,10 @@ class ResolvePendingReleaseTests(unittest.TestCase):
             "metadata is invalid",
         ):
             resolve_pending_release.resolve(
-                [draft(draft=False)], policy(), lambda tag: COMMIT, lambda run: None
+                [draft(draft=False)],
+                policy(),
+                lambda tag: COMMIT,
+                lambda run, image: None,
             )
 
     def test_partial_ordinary_draft_requires_retained_candidate(self) -> None:
@@ -108,7 +120,7 @@ class ResolvePendingReleaseTests(unittest.TestCase):
                 [draft(id=10, tag_name="v5.8.0", assets=[{"name": "partial.zip"}])],
                 policy(),
                 lambda tag: "0" * 40,
-                lambda run: None,
+                lambda run, image: None,
             )
 
     def test_multiple_drafts_fail_closed(self) -> None:
@@ -120,7 +132,7 @@ class ResolvePendingReleaseTests(unittest.TestCase):
                 [draft(), draft(id=RELEASE_ID + 1)],
                 policy(),
                 lambda tag: COMMIT,
-                lambda run: None,
+                lambda run, image: None,
             )
 
     def test_failed_runs_must_prove_no_candidate_or_publication(self) -> None:
@@ -155,7 +167,7 @@ class ResolvePendingReleaseTests(unittest.TestCase):
             return jobs if "/jobs?" in path else run
 
         resolve_pending_release.validate_failed_run(
-            "atrinik/classic", RUN_IDS[0], request
+            "atrinik/classic", RUN_IDS[0], "failure", request
         )
         jobs["jobs"][-1]["conclusion"] = "success"
         with self.assertRaisesRegex(
@@ -163,7 +175,7 @@ class ResolvePendingReleaseTests(unittest.TestCase):
             "failed-candidate evidence",
         ):
             resolve_pending_release.validate_failed_run(
-                "atrinik/classic", RUN_IDS[0], request
+                "atrinik/classic", RUN_IDS[0], "failure", request
             )
 
     def test_duplicate_failed_run_jobs_are_ambiguous(self) -> None:
@@ -196,8 +208,43 @@ class ResolvePendingReleaseTests(unittest.TestCase):
             "failed-candidate evidence",
         ):
             resolve_pending_release.validate_failed_run(
-                "atrinik/classic", RUN_IDS[0], request
+                "atrinik/classic", RUN_IDS[0], "failure", request
             )
+
+    def test_failed_run_accepts_policy_listed_successful_server_image(self) -> None:
+        run = {
+            "name": "Package Release",
+            "path": ".github/workflows/package-release.yml",
+            "event": "workflow_dispatch",
+            "conclusion": "failure",
+            "head_repository": {"full_name": "atrinik/classic"},
+        }
+        jobs = {
+            "jobs": [
+                {
+                    "name": "Build and validate immutable candidate / Build Windows server package",
+                    "conclusion": "failure",
+                },
+                {
+                    "name": "Build and validate immutable candidate / "
+                    "Build classic server image without publishing",
+                    "conclusion": "success",
+                },
+                {
+                    "name": "Build and validate immutable candidate / "
+                    "Validate complete release candidate",
+                    "conclusion": "skipped",
+                },
+                {"name": "Publish unified release", "conclusion": "skipped"},
+            ]
+        }
+
+        def request(path: str) -> object:
+            return jobs if "/jobs?" in path else run
+
+        resolve_pending_release.validate_failed_run(
+            "atrinik/classic", 31429488922, "success", request
+        )
 
 
 if __name__ == "__main__":

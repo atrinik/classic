@@ -58,6 +58,7 @@ def list_drafts(repository: str) -> list[dict[str, object]]:
 def validate_failed_run(
     repository: str,
     run_id: int,
+    server_image_conclusion: str,
     request: Callable[[str], object],
 ) -> None:
     run = request(f"repos/{repository}/actions/runs/{run_id}")
@@ -86,7 +87,7 @@ def validate_failed_run(
         (
             "Build and validate immutable candidate / "
             "Build classic server image without publishing",
-            "failure",
+            server_image_conclusion,
         ),
         (
             "Build and validate immutable candidate / Validate complete release candidate",
@@ -110,7 +111,7 @@ def resolve(
     drafts: list[dict[str, object]],
     failed_releases: object,
     tag_commit: Callable[[str], str],
-    validate_run: Callable[[int], None],
+    validate_run: Callable[[int, str], None],
 ) -> dict[str, str]:
     if len(drafts) > 1:
         raise PendingReleaseError("multiple draft releases require manual investigation")
@@ -147,6 +148,7 @@ def resolve(
     commit = disposition.get("commit")
     expected_id = disposition.get("empty_draft_id")
     run_ids = disposition.get("failed_package_run_ids")
+    server_image_conclusion = disposition.get("server_image_conclusion")
     if (
         disposition.get("disposition") != "delete-empty-draft"
         or not isinstance(commit, str)
@@ -155,12 +157,13 @@ def resolve(
         or not isinstance(run_ids, list)
         or not run_ids
         or not all(isinstance(run_id, int) and run_id > 0 for run_id in run_ids)
+        or server_image_conclusion not in {"success", "failure"}
     ):
         raise PendingReleaseError(f"{tag}: failed-release disposition is invalid")
     if release_id != expected_id or assets or tag_commit(tag) != commit:
         raise PendingReleaseError(f"{tag}: empty failed draft no longer matches policy")
     for run_id in run_ids:
-        validate_run(run_id)
+        validate_run(run_id, server_image_conclusion)
     return {"action": "delete-empty-draft", "tag": tag, "release_id": str(release_id)}
 
 
@@ -191,7 +194,9 @@ def main() -> int:
         list_drafts(arguments.repository),
         policy.get("failed_releases"),
         lambda tag: command("git", "rev-parse", f"refs/tags/{tag}^{{commit}}"),
-        lambda run_id: validate_failed_run(arguments.repository, run_id, api),
+        lambda run_id, image_conclusion: validate_failed_run(
+            arguments.repository, run_id, image_conclusion, api
+        ),
     )
     if values["tag"] and not is_ancestor(f"refs/tags/{values['tag']}^{{commit}}", "HEAD"):
         raise PendingReleaseError(f"{values['tag']}: tag is not an ancestor of current main")
