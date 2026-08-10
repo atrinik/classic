@@ -103,6 +103,9 @@ typedef struct keybind_movement_state {
     bool deferred_move;
 } keybind_movement_state;
 
+/** Drain a logical movement state through the production packet adapter. */
+extern void keybind_movement_state_emit(keybind_movement_state *state);
+
 /** Callbacks used by the testable physical keybinding dispatcher. */
 typedef struct keybind_event_handler {
     keybind_movement_state *movement;

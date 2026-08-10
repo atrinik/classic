@@ -936,6 +936,12 @@ START_TEST(test_quick_running_tap_executes_before_ordered_stop) {
     command_queue_append(cs, SERVER_CMD_MOVE, stop, sizeof(stop));
 
     int old_x = op->x;
+    op->speed_left = 0.0f;
+    socket_server_handle_client(pl);
+    ck_assert_int_eq(op->x, old_x + 1);
+    ck_assert_uint_eq(pl->run_on, 1);
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, sizeof(stop) + 3);
+
     op->speed_left = 100.0f;
     socket_server_handle_client(pl);
     ck_assert_int_eq(op->x, old_x + 1);

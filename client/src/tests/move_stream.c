@@ -133,11 +133,54 @@ static void test_direct_actions_use_unreplaceable_epoch(void) {
                captured[0].data[8] == 0);
 }
 
+static uint32_t captured_move_epoch(size_t index) {
+    TEST_CHECK(index < captured_num);
+    TEST_CHECK(captured[index].type == SERVER_CMD_MOVE && captured[index].len == 6);
+    return ((uint32_t)captured[index].data[2] << 24) | ((uint32_t)captured[index].data[3] << 16) |
+           ((uint32_t)captured[index].data[4] << 8) | captured[index].data[5];
+}
+
+static void test_logical_movement_action_packets(void) {
+    keybind_movement_state state;
+
+    /* A quick running tap keeps its one step ahead of an ordered zero stop. */
+    capture_reset();
+    cpl.fire_on = 0;
+    cpl.run_on = 1;
+    keybind_movement_state_init(&state);
+    TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 3, false, true));
+    keybind_movement_state_release(&state, SDL_SCANCODE_A, true, false);
+    keybind_movement_state_emit(&state);
+    TEST_CHECK(captured_num == 2);
+    TEST_CHECK(captured[0].type == SERVER_CMD_MOVE && captured[0].len == 6);
+    TEST_CHECK(captured[0].data[0] == 4 && captured[0].data[1] == 1);
+    TEST_CHECK(captured_move_epoch(0) != 0);
+    TEST_CHECK(captured[1].type == SERVER_CMD_MOVE && captured[1].len == 6);
+    TEST_CHECK(captured[1].data[0] == 0 && captured[1].data[1] == 0);
+    TEST_CHECK(captured_move_epoch(1) == 0);
+
+    /* A repeated stream retains scoped cancellation of its queued epoch. */
+    capture_reset();
+    keybind_movement_state_init(&state);
+    TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 3, false, true));
+    keybind_movement_state_emit(&state);
+    uint32_t epoch = captured_move_epoch(0);
+    TEST_CHECK(epoch != 0);
+    TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 3, true, true));
+    keybind_movement_state_emit(&state);
+    TEST_CHECK(captured_move_epoch(1) == epoch);
+    keybind_movement_state_release(&state, SDL_SCANCODE_A, true, false);
+    keybind_movement_state_emit(&state);
+    TEST_CHECK(captured_num == 3);
+    expect_clear(2, true, SERVER_CMD_MOVE, epoch);
+}
+
 int main(void) {
     toolkit_import(packet);
     test_movement_replacement_packets();
     test_stop_and_stay_packets();
     test_direct_actions_use_unreplaceable_epoch();
+    test_logical_movement_action_packets();
     toolkit_deinit();
     return 0;
 }

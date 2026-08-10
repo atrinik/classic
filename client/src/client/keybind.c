@@ -357,28 +357,7 @@ void keybind_state_ensure(void) {
 
 /** Emit the next pending logical movement update. */
 void keybind_movement_flush(void) {
-    uint8_t direction;
-    uint32_t epoch;
-    keybind_movement_action action;
-
-    while ((action = keybind_movement_state_flush(&movement_state, &direction, &epoch)) !=
-           KEYBIND_MOVEMENT_ACTION_NONE) {
-        if (action == KEYBIND_MOVEMENT_ACTION_MOVE) {
-            move_keys_stream(direction, epoch);
-        } else if (action == KEYBIND_MOVEMENT_ACTION_REPLACE) {
-            move_keys_replace(direction, epoch);
-        } else if (action == KEYBIND_MOVEMENT_ACTION_STOP) {
-            move_keys_stream_stop(epoch);
-        } else if (action == KEYBIND_MOVEMENT_ACTION_RUN_STOP) {
-            if (epoch != 0) {
-                move_keys_stream_stop(epoch);
-            } else {
-                move_keys_run_stop();
-            }
-        } else if (action == KEYBIND_MOVEMENT_ACTION_RUN_TAP_STOP) {
-            move_keys_run_stop();
-        }
-    }
+    keybind_movement_state_emit(&movement_state);
 }
 
 /** Reconcile a physical key-up even when a focused UI element consumes it. */

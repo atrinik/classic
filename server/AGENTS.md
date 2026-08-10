@@ -30,9 +30,11 @@
 
 ## Dependencies, protocols, and generated files
 
-- Integrated builds use sibling `protocol/` and `libatrinik/`; immutable
-  checksum-pinned locks remain release/standalone fallbacks. Content/resources
-  also come from pinned releases; add no submodules.
+- Integrated builds use sibling `protocol/` and `libatrinik/`. Classic protocol
+  must come from that sibling, the release's embedded `dependencies/protocol`
+  tree, or an explicit source override so its wire revision cannot drift;
+  libatrinik remains an immutable checksum-pinned release fallback.
+  Content/resources also come from pinned releases; add no submodules.
 - Packet-layout changes are coordinated protocol work. Generated IDs originate
   at `protocol/schema/game-commands.json`; never copy or renumber them locally.
 - Edit Flex/CMake definition inputs rather than generated lexer/configured

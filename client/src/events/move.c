@@ -119,6 +119,32 @@ void move_keys_stream(int num, uint32_t epoch) {
     }
 }
 
+/** Drain a logical movement state through the production packet adapter. */
+void keybind_movement_state_emit(keybind_movement_state *state) {
+    uint8_t direction;
+    uint32_t epoch;
+    keybind_movement_action action;
+
+    while ((action = keybind_movement_state_flush(state, &direction, &epoch)) !=
+           KEYBIND_MOVEMENT_ACTION_NONE) {
+        if (action == KEYBIND_MOVEMENT_ACTION_MOVE) {
+            move_keys_stream(direction, epoch);
+        } else if (action == KEYBIND_MOVEMENT_ACTION_REPLACE) {
+            move_keys_replace(direction, epoch);
+        } else if (action == KEYBIND_MOVEMENT_ACTION_STOP) {
+            move_keys_stream_stop(epoch);
+        } else if (action == KEYBIND_MOVEMENT_ACTION_RUN_STOP) {
+            if (epoch != 0) {
+                move_keys_stream_stop(epoch);
+            } else {
+                move_keys_run_stop();
+            }
+        } else if (action == KEYBIND_MOVEMENT_ACTION_RUN_TAP_STOP) {
+            move_keys_run_stop();
+        }
+    }
+}
+
 void move_keys(int num) {
     if (cpl.fire_on) {
         client_send_fire(num, 0);

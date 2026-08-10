@@ -6,10 +6,12 @@
 - Read the root `CONTRIBUTING.md`, `INSTALL`, the affected subsystem, and its
   tests before editing. Use precise component and protocol names; do not
   reference confidential or unreleased work.
-- Integrated builds use sibling `protocol/` and `libatrinik/` sources. Release
-  locks remain immutable checksum-pinned fallbacks; update lock files and
-  dependency tests together. Do not add Git submodules or copied protocol
-  constants.
+- Integrated builds use sibling `protocol/` and `libatrinik/` sources. Classic
+  protocol must come from that sibling, the release's embedded
+  `dependencies/protocol` tree, or an explicit source override so its wire
+  revision cannot drift; libatrinik retains an immutable checksum-pinned
+  release fallback. Update lock files and dependency tests together. Do not add
+  Git submodules or copied protocol constants.
 - The scoped client source release embeds matching protocol and libatrinik
   trees under `dependencies/`; standalone CMake configuration must select them
   without network access when ordinary monorepo siblings are absent.

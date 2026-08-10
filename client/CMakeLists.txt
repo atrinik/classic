@@ -185,6 +185,12 @@ if (NOT FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL)
         endif ()
     endforeach ()
 endif ()
+if (NOT FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL)
+    message(FATAL_ERROR
+        "Classic protocol source is required: use the sibling protocol/ tree, "
+        "the packaged dependencies/protocol tree, or "
+        "FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL")
+endif ()
 if (NOT FETCHCONTENT_SOURCE_DIR_LIBATRINIK)
     foreach (candidate
             "${CMAKE_CURRENT_SOURCE_DIR}/../libatrinik"
@@ -198,7 +204,8 @@ if (NOT FETCHCONTENT_SOURCE_DIR_LIBATRINIK)
     endforeach ()
 endif ()
 
-atrinik_fetch_source(atrinik_protocol "atrinik/protocol" "atrinik-protocol")
+FetchContent_Declare(atrinik_protocol
+    SOURCE_DIR "${FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL}")
 FetchContent_MakeAvailable(atrinik_protocol)
 file(STRINGS
     "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
@@ -381,6 +388,7 @@ if (BUILD_TESTING)
 
     add_executable(client-move-stream-tests
         src/tests/move_stream.c
+        src/client/keybind_input.c
         src/events/move.c)
     atrinik_configure_target(client-move-stream-tests)
     target_compile_definitions(client-move-stream-tests PRIVATE SDL_DISABLE_OLD_NAMES)
