@@ -136,6 +136,7 @@ def validate_zip(
             raise RuntimeError(f"empty ZIP artifact: {path.name}")
         files: dict[str, int] = {}
         member_names = set()
+        relative_names = set()
         for member in archive.infolist():
             validate_member(member.filename)
             if member.filename in member_names:
@@ -143,13 +144,18 @@ def validate_zip(
                     f"{path.name} contains duplicate member: {member.filename}"
                 )
             member_names.add(member.filename)
-            if not member.is_dir():
-                prefix = f"{package_root}/"
-                if not member.filename.startswith(prefix):
-                    raise RuntimeError(
-                        f"{path.name} contains an unexpected root: {member.filename}"
-                    )
+            prefix = f"{package_root}/"
+            if member.filename == package_root:
+                relative = ""
+            elif member.filename.startswith(prefix):
                 relative = member.filename.removeprefix(prefix)
+            else:
+                raise RuntimeError(
+                    f"{path.name} contains an unexpected root: {member.filename}"
+                )
+            if relative:
+                relative_names.add(relative)
+            if not member.is_dir():
                 files[relative] = member.file_size
         corrupt_member = archive.testzip()
         if corrupt_member is not None:
@@ -167,7 +173,7 @@ def validate_zip(
             if not any(size > 0 for size in matches):
                 raise RuntimeError(f"{path.name} has only empty packaged {pattern}")
         for pattern in forbidden_patterns:
-            if any(fnmatch.fnmatchcase(name, pattern) for name in files):
+            if any(fnmatch.fnmatchcase(name, pattern) for name in relative_names):
                 raise RuntimeError(f"{path.name} contains forbidden packaged {pattern}")
 
 

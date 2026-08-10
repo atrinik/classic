@@ -8,6 +8,7 @@ $packagePath = (Resolve-Path -LiteralPath $Package).Path
 $smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
     "atrinik-server-package-smoke-{0}" -f [System.Guid]::NewGuid()
 )
+$process = $null
 
 try {
     Expand-Archive -LiteralPath $packagePath -DestinationPath $smokeRoot
@@ -71,10 +72,6 @@ try {
     }
 
     if (-not $ready) {
-        if (-not $process.HasExited) {
-            $process.Kill($true)
-            $process.WaitForExit()
-        }
         $output = $lines -join "`n"
         throw "Packaged server did not reach the ready state within 60 seconds:`n$output"
     }
@@ -84,9 +81,7 @@ try {
     $process.StandardInput.Close()
     $remainderTask = $process.StandardOutput.ReadToEndAsync()
     if (-not $process.WaitForExit(30000)) {
-        $process.Kill($true)
-        $process.WaitForExit()
-        $output = (($lines -join "`n") + "`n" + $remainderTask.Result).Trim()
+        $output = $lines -join "`n"
         throw "Packaged server did not shut down within 30 seconds:`n$output"
     }
 
@@ -102,8 +97,26 @@ try {
     if ($output -match "Can't open regions file") {
         throw "Packaged server failed to load regions.reg:`n$output"
     }
-    $process.Dispose()
 } finally {
+    if ($null -ne $process) {
+        try {
+            $process.StandardInput.Close()
+        } catch {
+            Write-Warning "Could not close packaged server input: $_"
+        }
+        try {
+            if (-not $process.HasExited) {
+                $process.Kill($true)
+            }
+            if (-not $process.WaitForExit(10000)) {
+                Write-Warning "Packaged server process tree did not exit during cleanup"
+            }
+        } catch {
+            Write-Warning "Could not stop packaged server process tree: $_"
+        } finally {
+            $process.Dispose()
+        }
+    }
     if (Test-Path -LiteralPath $smokeRoot) {
         for ($attempt = 1; $attempt -le 5; $attempt++) {
             try {

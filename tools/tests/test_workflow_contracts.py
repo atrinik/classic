@@ -493,7 +493,9 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("AddSeconds(60)", smoke)
         self.assertIn("WaitForExit(30000)", smoke)
+        self.assertIn("WaitForExit(10000)", smoke)
         self.assertIn("$process.Kill($true)", smoke)
+        self.assertIn("$process.Dispose()", smoke)
         self.assertIn('"Server ready\\. Waiting for connections"', smoke)
         self.assertIn('"fixtures/metaserver-publisher-v1.json"', run)
 
