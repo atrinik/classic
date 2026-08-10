@@ -51,15 +51,37 @@ file(COPY "${ATRINIK_SOURCE_DIR}/runtime/content/lib/"
 file(COPY "${ATRINIK_SOURCE_DIR}/resources"
     DESTINATION "${runtime_server}")
 
-foreach (fixture IN ITEMS pass fail)
-    set(fixture_server
-        "${ATRINIK_RUNTIME_DIR}/plugin-fixtures/${fixture}/server")
-    file(MAKE_DIRECTORY "${fixture_server}")
-    file(COPY "${runtime_server}/" DESTINATION "${fixture_server}")
+if (DEFINED ATRINIK_ITEM_MARK_COMMAND)
+    # The pinned content runtime predates the generated command-ID change. Keep
+    # its integration test authoritative without changing the immutable input.
+    set(player_tests
+        "${runtime_server}/maps/python/tests/Atrinik_tests/Player.py")
+    file(READ "${player_tests}" player_tests_content)
+    string(REGEX MATCHALL
+        "data = struct.pack\\(\"!HBI\", 5, [0-9]+, obj.count\\)"
+        item_mark_packets "${player_tests_content}")
+    list(LENGTH item_mark_packets item_mark_packet_count)
+    if (NOT item_mark_packet_count EQUAL 1)
+        message(FATAL_ERROR
+            "Expected exactly one item-mark packet in ${player_tests}")
+    endif ()
+    string(REGEX REPLACE
+        "data = struct.pack\\(\"!HBI\", 5, [0-9]+, obj.count\\)"
+        "data = struct.pack(\"!HBI\", 5, ${ATRINIK_ITEM_MARK_COMMAND}, obj.count)"
+        normalized_player_tests "${player_tests_content}")
+    file(WRITE "${player_tests}" "${normalized_player_tests}")
+
+    set(python_events "${runtime_server}/maps/python/events")
     configure_file(
-        "${ATRINIK_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_${fixture}.py"
-        "${fixture_server}/maps/python/events/python_unit.py"
+        "${python_events}/python_unit.py"
+        "${python_events}/python_unit_content.py"
         COPYONLY)
-endforeach ()
+    foreach (fixture IN ITEMS pass fail)
+        configure_file(
+            "${ATRINIK_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_${fixture}.py"
+            "${python_events}/python_unit_${fixture}.py"
+            COPYONLY)
+    endforeach ()
+endif ()
 
 file(TOUCH "${ATRINIK_RUNTIME_DIR}/.prepared")

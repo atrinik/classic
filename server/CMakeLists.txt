@@ -386,6 +386,19 @@ if (BUILD_TESTING AND NOT MINGW)
             list(APPEND ATRINIK_SERVER_TEST_RUNTIME_ARGS
                 -DATRINIK_PYTHON_PLUGIN=$<TARGET_FILE:plugin_python>)
             list(APPEND ATRINIK_SERVER_TEST_RUNTIME_DEPENDS plugin_python)
+
+            set(ATRINIK_GAME_COMMANDS_HEADER
+                "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h")
+            file(STRINGS "${ATRINIK_GAME_COMMANDS_HEADER}"
+                ATRINIK_ITEM_MARK_DEFINITION
+                REGEX "^[ ]*SERVER_CMD_ITEM_MARK = [0-9]+,$")
+            if (NOT ATRINIK_ITEM_MARK_DEFINITION MATCHES
+                    "^[ ]*SERVER_CMD_ITEM_MARK = ([0-9]+),$")
+                message(FATAL_ERROR "Could not resolve SERVER_CMD_ITEM_MARK")
+            endif ()
+            set(ATRINIK_ITEM_MARK_COMMAND "${CMAKE_MATCH_1}")
+            list(APPEND ATRINIK_SERVER_TEST_RUNTIME_ARGS
+                -DATRINIK_ITEM_MARK_COMMAND=${ATRINIK_ITEM_MARK_COMMAND})
         endif ()
 
         file(GLOB_RECURSE ATRINIK_SERVER_TEST_RESOURCE_INPUTS
@@ -401,6 +414,10 @@ if (BUILD_TESTING AND NOT MINGW)
             ${CMAKE_SOURCE_DIR}/src/tests/data/content_benchmark
             ${CMAKE_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_fail.py
             ${CMAKE_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_pass.py)
+        if (TARGET plugin_python)
+            list(APPEND ATRINIK_SERVER_TEST_RESOURCE_INPUTS
+                ${ATRINIK_GAME_COMMANDS_HEADER})
+        endif ()
 
         add_custom_command(
             OUTPUT "${ATRINIK_SERVER_TEST_RUNTIME_STAMP}"
@@ -448,7 +465,12 @@ if (BUILD_TESTING AND NOT MINGW)
 
         if (TARGET plugin_python)
             add_test(NAME server-plugin-python
-                COMMAND ${EXECUTABLE} --plugin_unit --port_mapping=off)
+                COMMAND ${CMAKE_COMMAND}
+                    -DATRINIK_SERVER=$<TARGET_FILE:${EXECUTABLE}>
+                    -DATRINIK_RUNTIME_DIR=${ATRINIK_SERVER_TEST_RUNTIME}/server
+                    -DATRINIK_UNIT_SCRIPT=python_unit_content.py
+                    -DATRINIK_EXPECT_FAILURE=false
+                    -P ${CMAKE_SOURCE_DIR}/cmake/run_plugin_unit_test.cmake)
             set_tests_properties(server-plugin-python PROPERTIES
                 LABELS "server;plugin;runtime"
                 RESOURCE_LOCK server-test-runtime
@@ -456,23 +478,30 @@ if (BUILD_TESTING AND NOT MINGW)
                 WORKING_DIRECTORY "${ATRINIK_SERVER_TEST_RUNTIME}/server")
 
             add_test(NAME server-plugin-python-fixture-pass
-                COMMAND ${EXECUTABLE} --plugin_unit --port_mapping=off)
+                COMMAND ${CMAKE_COMMAND}
+                    -DATRINIK_SERVER=$<TARGET_FILE:${EXECUTABLE}>
+                    -DATRINIK_RUNTIME_DIR=${ATRINIK_SERVER_TEST_RUNTIME}/server
+                    -DATRINIK_UNIT_SCRIPT=python_unit_pass.py
+                    -DATRINIK_EXPECT_FAILURE=false
+                    -P ${CMAKE_SOURCE_DIR}/cmake/run_plugin_unit_test.cmake)
             set_tests_properties(server-plugin-python-fixture-pass PROPERTIES
                 LABELS "server;plugin;runtime"
                 RESOURCE_LOCK server-test-runtime
                 TIMEOUT 300
-                WORKING_DIRECTORY
-                    "${ATRINIK_SERVER_TEST_RUNTIME}/plugin-fixtures/pass/server")
+                WORKING_DIRECTORY "${ATRINIK_SERVER_TEST_RUNTIME}/server")
 
             add_test(NAME server-plugin-python-fixture-fail
-                COMMAND ${EXECUTABLE} --plugin_unit --port_mapping=off)
+                COMMAND ${CMAKE_COMMAND}
+                    -DATRINIK_SERVER=$<TARGET_FILE:${EXECUTABLE}>
+                    -DATRINIK_RUNTIME_DIR=${ATRINIK_SERVER_TEST_RUNTIME}/server
+                    -DATRINIK_UNIT_SCRIPT=python_unit_fail.py
+                    -DATRINIK_EXPECT_FAILURE=true
+                    -P ${CMAKE_SOURCE_DIR}/cmake/run_plugin_unit_test.cmake)
             set_tests_properties(server-plugin-python-fixture-fail PROPERTIES
                 LABELS "server;plugin;runtime"
                 RESOURCE_LOCK server-test-runtime
                 TIMEOUT 300
-                WILL_FAIL true
-                WORKING_DIRECTORY
-                    "${ATRINIK_SERVER_TEST_RUNTIME}/plugin-fixtures/fail/server")
+                WORKING_DIRECTORY "${ATRINIK_SERVER_TEST_RUNTIME}/server")
         endif ()
 
         add_test(NAME server-content-benchmark
