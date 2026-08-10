@@ -1,7 +1,6 @@
 # Dependency model
 
-The server has a revision-coupled protocol source plus two independently
-synchronized dependency sets.
+The server has four dependency classes:
 
 - The Classic protocol comes from the sibling `protocol/` tree, the scoped
   release's embedded `dependencies/protocol` tree, or an explicit
@@ -13,6 +12,10 @@ synchronized dependency sets.
 - `dependencies.lock.json` records install-time content and runtime resources.
   `tools/dependencies.py` validates, downloads, safely extracts, and verifies
   those archives below ignored runtime paths.
+- `cmake/pcpnatpmp.cmake` pins the third-party libpcpnatpmp source URL and
+  SHA-256 digest directly at its single build integration point. Use
+  `FETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP` to provide an existing local source
+  tree when network fetching is unavailable.
 
 Every lock entry records an immutable semantic-version tag, the exact
 40-character commit ID behind that tag, a canonical release URL, and the
