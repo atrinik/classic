@@ -50,6 +50,9 @@
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 
+/** Active physical keys contributing to the logical gameplay movement stream. */
+static keybind_movement_state movement_state;
+
 /**
  * Add a keybinding to the ::keybindings array.
  * @param key
@@ -223,7 +226,7 @@ int keybind_process_event(SDL_KeyboardEvent *event) {
     for (i = 0; i < keybindings_num; i++) {
         if (event->key == keybindings[i]->key &&
             keybindings[i]->mod == keybind_adjust_kmod(event->mod)) {
-            keybind_process(keybindings[i], event->type, event->repeat);
+            keybind_process(keybindings[i], event);
             return 1;
         }
     }
@@ -232,7 +235,7 @@ int keybind_process_event(SDL_KeyboardEvent *event) {
      * current keyboard modifier combination is. */
     for (i = 0; i < keybindings_num; i++) {
         if (event->key == keybindings[i]->key && !keybindings[i]->mod) {
-            keybind_process(keybindings[i], event->type, event->repeat);
+            keybind_process(keybindings[i], event);
             return 1;
         }
     }
@@ -247,11 +250,11 @@ int keybind_process_event(SDL_KeyboardEvent *event) {
  * @param type
  * Either SDL_EVENT_KEY_DOWN or SDL_EVENT_KEY_UP.
  */
-void keybind_process(keybind_struct *keybind, SDL_EventType type, bool repeated) {
+void keybind_process(keybind_struct *keybind, const SDL_KeyboardEvent *event) {
     char command[MAX_BUF], *cp;
 
     /* Do not repeat keys that should not be repeated. */
-    if (!keybind->repeat && repeated) {
+    if (!keybind->repeat && event->repeat) {
         return;
     }
 
@@ -265,7 +268,21 @@ void keybind_process(keybind_struct *keybind, SDL_EventType type, bool repeated)
             cp++;
         }
 
-        if (type == SDL_EVENT_KEY_DOWN) {
+        uint8_t direction;
+        if (keybind_movement_command_direction(cp, &direction)) {
+            if (event->type == SDL_EVENT_KEY_DOWN) {
+                keybind_movement_state_press(&movement_state,
+                                             event->scancode,
+                                             direction,
+                                             event->repeat,
+                                             keybind->repeat);
+            } else {
+                keybind_movement_state_release(&movement_state,
+                                               event->scancode,
+                                               cpl.run_on,
+                                               cpl.fire_on);
+            }
+        } else if (event->type == SDL_EVENT_KEY_DOWN) {
             keybind_process_command(cp);
         } else {
             keybind_process_command_up(cp);
@@ -318,12 +335,31 @@ int keybind_process_command_up(const char *cmd) {
  * done so, even if the 'key up' event was handled by something else.
  */
 void keybind_state_ensure(void) {
+    for (SDL_Scancode i = 0; i < SDL_SCANCODE_COUNT; i++) {
+        if (!keys[i].pressed) {
+            keybind_movement_state_release(&movement_state, i, cpl.run_on, cpl.fire_on);
+        }
+    }
+
     if (cpl.run_on && !keybind_command_matches_state("?RUNON")) {
-        keybind_process_command_up("?RUNON");
+        cpl.run_on = 0;
+        if (!movement_state.pending_stop) {
+            move_keys(0);
+        }
     }
 
     if (cpl.fire_on && !keybind_command_matches_state("?FIREON")) {
         keybind_process_command_up("?FIREON");
+    }
+}
+
+/** Emit at most one logical movement update for the current SDL poll cycle. */
+void keybind_movement_flush(void) {
+    uint8_t direction;
+    keybind_movement_action action = keybind_movement_state_flush(&movement_state, &direction);
+
+    if (action != KEYBIND_MOVEMENT_ACTION_NONE) {
+        move_keys(direction);
     }
 }
 

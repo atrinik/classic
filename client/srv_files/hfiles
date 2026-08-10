@@ -1433,6 +1433,8 @@ Move the mouse over the map area, and you'll see the square below your mouse hig
 [b]Keyboard:[/b]
 You can use the keyboard numpad to move around, for example, [b]3[/b] on the numpad would move your character one step east. You can hold down the numpad key to run in this manner in the direction specified by the numpad key you are holding down. If you want to stop running, simply release the key.
 
+Two held diagonal movement bindings can be combined into a cardinal direction: northwest + northeast moves north, northeast + southeast moves east, southeast + southwest moves south, and southwest + northwest moves west. These combinations use movement commands, so they also work if you customize the bound keys.
+
 [title]Obstacles[/title]
 There are many obstacles to walk around in the world, ranging from trees to rocks, walls, deep water, doors, gates and the like.
 
