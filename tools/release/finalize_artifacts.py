@@ -52,8 +52,11 @@ WINDOWS_RESERVED_NAMES = {
     "conout$",
     "nul",
     "prn",
-    *(f"com{number}" for number in range(1, 10)),
-    *(f"lpt{number}" for number in range(1, 10)),
+    *(
+        f"{prefix}{number}"
+        for prefix in ("com", "lpt")
+        for number in (*range(1, 10), "¹", "²", "³")
+    ),
 }
 
 
@@ -160,6 +163,8 @@ def validate_zip(
         files: dict[str, int] = {}
         member_names = set()
         output_names = set()
+        output_ancestors = set()
+        output_files = set()
         relative_names = set()
         for member in archive.infolist():
             validate_windows_member(member.filename)
@@ -181,7 +186,20 @@ def validate_zip(
                     raise RuntimeError(
                         f"{path.name} contains duplicate packaged output: {relative}"
                     )
+                parts = output_name.split("/")
+                ancestors = {
+                    "/".join(parts[:index]) for index in range(1, len(parts))
+                }
+                if ancestors & output_files or (
+                    not member.is_dir() and output_name in output_ancestors
+                ):
+                    raise RuntimeError(
+                        f"{path.name} contains a file/descendant collision: {relative}"
+                    )
                 output_names.add(output_name)
+                output_ancestors.update(ancestors)
+                if not member.is_dir():
+                    output_files.add(output_name)
                 relative_names.add(relative)
             if not member.is_dir():
                 files[relative] = member.file_size

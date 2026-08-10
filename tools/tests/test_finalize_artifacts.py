@@ -205,6 +205,8 @@ class FinalizeArtifactsTests(unittest.TestCase):
                 "expected/server/server.cfg.",
                 "expected/server/server.cfg ",
                 "expected/server/CON.txt",
+                "expected/server/COM¹.txt",
+                "expected/server/LPT²",
                 "expected/server/bad:name",
                 "expected/server/control\x1f.txt",
             )
@@ -215,6 +217,20 @@ class FinalizeArtifactsTests(unittest.TestCase):
                     archive.writestr(alias, b"fixture")
                 with self.assertRaisesRegex(RuntimeError, "unsafe packaged path"):
                     finalize_artifacts.validate_zip(windows_alias, "expected", ())
+
+        collisions = (
+            ("expected/server", "expected/server/maps/regions.reg"),
+            ("expected/server/maps/regions.reg", "expected/server"),
+            ("expected/SERVER", "expected/server/maps/regions.reg"),
+        )
+        for index, members in enumerate(collisions):
+            with self.subTest(members=members):
+                collision = self.root / f"file-descendant-{index}.zip"
+                with zipfile.ZipFile(collision, "w") as archive:
+                    for member in members:
+                        archive.writestr(member, b"fixture")
+                with self.assertRaisesRegex(RuntimeError, "file/descendant collision"):
+                    finalize_artifacts.validate_zip(collision, "expected", ())
 
     def test_windows_server_zip_requires_runtime_payload(self) -> None:
         path = self.root / "server.zip"
