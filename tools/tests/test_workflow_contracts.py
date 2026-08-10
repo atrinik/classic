@@ -117,7 +117,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn(
             "steps.pending-release.outputs.action == 'delete-empty-draft'", workflow
         )
-        self.assertIn('"repos/${RELEASE_REPOSITORY}/releases/${RELEASE_ID}"', workflow)
+        self.assertEqual(workflow.count("tools/release/resolve_pending_release.py"), 2)
+        delete_step = workflow[deletion:recovery]
+        self.assertIn('RELEASE_TAG: ${{ steps.pending-release.outputs.tag }}', delete_step)
+        self.assertIn("--delete-policy-listed-empty-draft", delete_step)
+        self.assertIn('--expected-tag "${RELEASE_TAG}"', delete_step)
+        self.assertIn('--expected-release-id "${RELEASE_ID}"', delete_step)
+        self.assertNotIn("gh api --method DELETE", delete_step)
         self.assertIn("--ref main", workflow)
         self.assertIn("if: steps.pending-release.outputs.action != 'resume'", workflow)
 
@@ -142,10 +148,14 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertNotIn("--clobber", workflow)
 
-    def test_candidate_and_package_use_distinct_concurrency_namespaces(self) -> None:
+    def test_release_mutations_share_one_concurrency_namespace(self) -> None:
+        release = self.text("release.yml")
         package = self.text("package-release.yml")
+        recovery = self.text("recover-release.yml")
         candidate = self.text("build-release-candidate.yml")
-        self.assertIn("group: classic-package-release-", package)
+        self.assertIn("group: classic-release-publication", release)
+        self.assertIn("group: classic-release-publication", package)
+        self.assertIn("group: classic-release-publication", recovery)
         self.assertIn("classic-release-candidate-", candidate)
 
     def test_latest_alias_has_one_globally_serialized_owner(self) -> None:
@@ -347,6 +357,26 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(metadata_job.count("fetch-depth: 0"), 2)
         self.assertNotIn("fetch-depth: 0", remaining_jobs)
 
+    def test_core_uploads_exercised_python_release_tool_coverage(self) -> None:
+        workflow = self.text("check.yml")
+        core = workflow[workflow.index("  core:") : workflow.index("  windows-test-build:")]
+        self.assertIn("python3 -m pip install coverage==7.15.3", core)
+        self.assertIn("python3 -m coverage run --branch --source=tools", core)
+        self.assertIn("python3 -m coverage run --append --branch --source=tools", core)
+        self.assertIn("python3 -m coverage xml --omit='tools/tests/*'", core)
+        tools_upload = core[
+            core.index("- name: Upload release-tool coverage") : core.index(
+                "- name: Upload libatrinik coverage"
+            )
+        ]
+        libatrinik_upload = core[core.index("- name: Upload libatrinik coverage") :]
+        self.assertIn("files: tools/coverage.xml", tools_upload)
+        self.assertIn("flags: release-tools", tools_upload)
+        self.assertNotIn("libatrinik/coverage.xml", tools_upload)
+        self.assertIn("files: libatrinik/coverage.xml", libatrinik_upload)
+        self.assertIn("flags: libatrinik", libatrinik_upload)
+        self.assertNotIn("tools/coverage.xml", libatrinik_upload)
+
     def test_native_worldmaker_build_uses_the_server_compiler_cache(self) -> None:
         script = (ROOT / "server" / "tools" / "build-windows-package.sh").read_text(
             encoding="utf-8"
@@ -359,6 +389,7 @@ class WorkflowContractTests(unittest.TestCase):
         build = workflow[
             workflow.index("  windows-test-build:") : workflow.index("  windows-test:")
         ]
+        server_build = build[build.index("      - name: Cross-build Windows server") :]
         run_start = workflow.index("  windows-test:")
         run = workflow[run_start : workflow.index("  server:", run_start)]
         aggregate = workflow[workflow.index("  classic-validation:") :]
@@ -366,11 +397,48 @@ class WorkflowContractTests(unittest.TestCase):
         image = f"ghcr.io/atrinik/windows-build:1.2.1@sha256:{digest}"
 
         self.assertIn("if: needs.changes.outputs.windows == 'true'", build)
-        self.assertEqual(build.count(image), 2)
-        self.assertEqual(build.count(digest), 2)
+        self.assertEqual(build.count(image), 3)
+        self.assertEqual(build.count(digest), 3)
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", build)
-        self.assertIn("--network none", build)
+        self.assertEqual(build.count("--network none"), 2)
+        self.assertIn("persist-credentials: false", build)
+        self.assertIn("Stage pinned Windows server dependency", build)
+        self.assertIn(
+            "65ab99547ecc8277434527607d24f8a1b02a2344ed4cea475bed751606e60202",
+            build,
+        )
         self.assertIn("--env CCACHE_DIR=/tmp/atrinik-libatrinik-ccache", build)
+        self.assertIn("-S server", build)
+        self.assertIn("-B server/build/windows-pr-server", build)
+        self.assertIn("-DENABLE_PYTHON_PLUGIN=OFF", build)
+        self.assertIn("--target atrinik-server", build)
+        self.assertIn("--network none", server_build)
+        self.assertIn("--env GH_TOKEN=", server_build)
+        self.assertIn("--env GITHUB_TOKEN=", server_build)
+        self.assertIn("-DPATCH_EXECUTABLE=", server_build)
+        self.assertIn(
+            "-DSOURCE_DIR=/workspace/build/libpcpnatpmp-source", server_build
+        )
+        self.assertIn(
+            "-DPATCH_FILE=/workspace/server/cmake/patches/libpcpnatpmp-mingw.patch",
+            server_build,
+        )
+        self.assertIn(
+            "-P /workspace/server/cmake/apply_patch_idempotent.cmake",
+            server_build,
+        )
+        self.assertIn(
+            "-DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-source",
+            server_build,
+        )
+        self.assertLess(
+            server_build.index("-P /workspace/server/cmake/apply_patch_idempotent.cmake"),
+            server_build.index("x86_64-w64-mingw32.shared-cmake"),
+        )
+        self.assertLess(
+            server_build.index("x86_64-w64-mingw32.shared-cmake"),
+            server_build.index("cmake --build server/build/windows-pr-server"),
+        )
         self.assertIn(
             "--env CCACHE_TEMPDIR=/tmp/atrinik-libatrinik-ccache-tmp", build
         )
@@ -399,6 +467,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("runs-on: windows-2025", run)
         self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", run)
         self.assertIn('"libatrinik-path.exe"', run)
+        self.assertIn("New-Item -ItemType Junction", run)
+        self.assertIn('"libatrinik-path.exe") $junction', run)
         self.assertIn('"libatrinik-rendezvous.exe"', run)
         self.assertIn('"libatrinik-metaserver-publisher.exe"', run)
         self.assertIn('"libatrinik-metaserver-url.exe"', run)
