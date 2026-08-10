@@ -33,6 +33,7 @@ typedef enum fake_stun_mode {
     FAKE_STUN_DECLARED_OVERRUN,
     FAKE_STUN_BAD_FAMILY,
     FAKE_STUN_TRUNCATED_IPV6,
+    FAKE_STUN_LATE_THEN_PUNCH,
     FAKE_STUN_TIMEOUT,
 } fake_stun_mode_t;
 
@@ -42,6 +43,10 @@ typedef struct fake_stun_server {
     uint16_t request_port;
     uint16_t punch_port;
     bool expect_punch;
+    pthread_mutex_t mutex;
+    pthread_cond_t condition;
+    bool released;
+    bool sent;
 } fake_stun_server_t;
 
 static char captured_log[512];
@@ -141,12 +146,32 @@ static void *fake_stun_run(void *data) {
         }
         response_size = sizeof(response);
     }
+    if (server->mode == FAKE_STUN_LATE_THEN_PUNCH) {
+        pthread_mutex_lock(&server->mutex);
+        while (!server->released) {
+            pthread_cond_wait(&server->condition, &server->mutex);
+        }
+        pthread_mutex_unlock(&server->mutex);
+    }
     TEST_CHECK(sendto(server->handle,
                       response,
                       response_size,
                       0,
                       (const struct sockaddr *)&client,
                       client_length) == (ssize_t)response_size);
+    if (server->mode == FAKE_STUN_LATE_THEN_PUNCH) {
+        static const char punch[] = "ATRINIK-PUNCH-1";
+        TEST_CHECK(sendto(server->handle,
+                          punch,
+                          sizeof(punch) - 1U,
+                          0,
+                          (const struct sockaddr *)&client,
+                          client_length) == (ssize_t)(sizeof(punch) - 1U));
+        pthread_mutex_lock(&server->mutex);
+        server->sent = true;
+        pthread_cond_broadcast(&server->condition);
+        pthread_mutex_unlock(&server->mutex);
+    }
     if (server->expect_punch) {
         received = recvfrom(server->handle,
                             request,
@@ -346,6 +371,61 @@ static void test_request_deadline_diagnostic(void) {
     socket_stun_resolver_set_for_test(NULL);
 }
 
+static void test_late_stun_response_before_punch(void) {
+    int server_handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    int client_handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    TEST_CHECK(server_handle >= 0 && client_handle >= 0);
+    struct sockaddr_in server_address = {
+        .sin_family = AF_INET,
+        .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+    };
+    TEST_CHECK(
+        bind(server_handle, (const struct sockaddr *)&server_address, sizeof(server_address)) == 0);
+    socklen_t server_length = sizeof(server_address);
+    TEST_CHECK(getsockname(server_handle, (struct sockaddr *)&server_address, &server_length) == 0);
+
+    fake_stun_server_t server = {
+        .handle = server_handle,
+        .mode = FAKE_STUN_LATE_THEN_PUNCH,
+    };
+    TEST_CHECK(pthread_mutex_init(&server.mutex, NULL) == 0);
+    TEST_CHECK(pthread_cond_init(&server.condition, NULL) == 0);
+    pthread_t thread;
+    TEST_CHECK(pthread_create(&thread, NULL, fake_stun_run, &server) == 0);
+
+    socket_t client = {.handle = client_handle};
+    ((struct sockaddr_in *)&client.addr)->sin_family = AF_INET;
+    char endpoint[32];
+    snprintf(endpoint, sizeof(endpoint), "127.0.0.1:%u", ntohs(server_address.sin_port));
+    socket_stun_clock_set_for_test(fake_clock);
+    socket_stun_after_send_set_for_test(expire_after_send);
+    atomic_store_explicit(&fake_clock_ms, 1U, memory_order_relaxed);
+    captured_log[0] = '\0';
+    char host[65];
+    uint16_t port;
+    TEST_CHECK(!socket_stun_discover_until(&client, endpoint, VS(host), &port, 2U));
+    TEST_CHECK(strstr(captured_log, "STUN request timed out") != NULL);
+
+    pthread_mutex_lock(&server.mutex);
+    server.released = true;
+    pthread_cond_broadcast(&server.condition);
+    while (!server.sent) {
+        pthread_cond_wait(&server.condition, &server.mutex);
+    }
+    pthread_mutex_unlock(&server.mutex);
+    TEST_CHECK(socket_udp_punch_receive(&client, VS(host), &port));
+    TEST_CHECK(strcmp(host, "127.0.0.1") == 0);
+    TEST_CHECK(port == ntohs(server_address.sin_port));
+
+    TEST_CHECK(pthread_join(thread, NULL) == 0);
+    TEST_CHECK(pthread_cond_destroy(&server.condition) == 0);
+    TEST_CHECK(pthread_mutex_destroy(&server.mutex) == 0);
+    socket_stun_after_send_set_for_test(NULL);
+    socket_stun_clock_set_for_test(NULL);
+    test_close_socket(client_handle);
+    test_close_socket(server_handle);
+}
+
 static void *rendezvous_call_run(void *data) {
     rendezvous_call_t *call = data;
     socket_direct_candidate_t candidates[SOCKET_DIRECT_MAX_CANDIDATES + 1U];
@@ -507,6 +587,7 @@ int main(void) {
     test_mode(FAKE_STUN_TIMEOUT, false, "timed out");
     test_resolver_deadline_and_privacy();
     test_request_deadline_diagnostic();
+    test_late_stun_response_before_punch();
     test_rendezvous_reserves_fallback_budget();
 
     char host[65];

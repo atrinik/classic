@@ -29,6 +29,7 @@
 #define SOCKET_STUN_ATTEMPT_BUDGET_MS 3000U
 #define SOCKET_RENDEZVOUS_RESERVED_BUDGET_MS 5000U
 #define SOCKET_STUN_RESOLVER_WORKERS_MAX 4U
+#define SOCKET_STUN_LATE_DRAIN_MAX 1U
 
 typedef enum socket_rendezvous_attempt_state {
     SOCKET_RENDEZVOUS_ATTEMPT_READY,
@@ -1055,6 +1056,10 @@ bool socket_stun_discover_until(socket_t *sc,
                    ai->ai_addr,
                    ai->ai_addrlen) == (ssize_t)sizeof(request)) {
             sent = true;
+            memcpy(&sc->late_stun_source, ai->ai_addr, ai->ai_addrlen);
+            sc->late_stun_source_length = (socklen_t)ai->ai_addrlen;
+            memcpy(sc->late_stun_transaction, request + 8, sizeof(sc->late_stun_transaction));
+            sc->late_stun_pending = true;
             break;
         }
     }
@@ -1091,6 +1096,7 @@ bool socket_stun_discover_until(socket_t *sc,
 
     unsigned char response[1024];
     ssize_t length = recvfrom(sc->handle, (char *)response, sizeof(response), 0, NULL, NULL);
+    sc->late_stun_pending = false;
     if (length < 20 || socket_stun_u16(response) != 0x0101 ||
         socket_stun_u32(response + 4) != SOCKET_STUN_MAGIC ||
         memcmp(response + 8, request + 8, 12) != 0) {
@@ -1187,6 +1193,49 @@ bool socket_udp_punch(socket_t *sc, const char *host, uint16_t port) {
     return ok;
 }
 
+static bool socket_address_equal(const struct sockaddr_storage *left,
+                                 socklen_t left_length,
+                                 const struct sockaddr_storage *right,
+                                 socklen_t right_length) {
+    if (left_length != right_length || left->ss_family != right->ss_family) {
+        return false;
+    }
+    if (left->ss_family == AF_INET) {
+        const struct sockaddr_in *left_v4 = (const struct sockaddr_in *)left;
+        const struct sockaddr_in *right_v4 = (const struct sockaddr_in *)right;
+        return left_v4->sin_port == right_v4->sin_port &&
+               left_v4->sin_addr.s_addr == right_v4->sin_addr.s_addr;
+    }
+    if (left->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *left_v6 = (const struct sockaddr_in6 *)left;
+        const struct sockaddr_in6 *right_v6 = (const struct sockaddr_in6 *)right;
+        return left_v6->sin6_port == right_v6->sin6_port &&
+               left_v6->sin6_scope_id == right_v6->sin6_scope_id &&
+               memcmp(&left_v6->sin6_addr, &right_v6->sin6_addr, sizeof(left_v6->sin6_addr)) == 0;
+    }
+    return false;
+}
+
+static bool socket_stun_late_response(const socket_t *sc,
+                                      const unsigned char *datagram,
+                                      size_t length,
+                                      const struct sockaddr_storage *source,
+                                      socklen_t source_length) {
+    if (!sc->late_stun_pending || length < 20 ||
+        !socket_address_equal(&sc->late_stun_source,
+                              sc->late_stun_source_length,
+                              source,
+                              source_length)) {
+        return false;
+    }
+    uint16_t message_type = socket_stun_u16(datagram);
+    size_t message_length = socket_stun_u16(datagram + 2);
+    return (message_type == 0x0101 || message_type == 0x0111) &&
+           socket_stun_u32(datagram + 4) == SOCKET_STUN_MAGIC &&
+           memcmp(datagram + 8, sc->late_stun_transaction, 12) == 0 && (message_length & 3U) == 0 &&
+           message_length == length - 20;
+}
+
 bool socket_udp_punch_receive(socket_t *sc, char *host, size_t host_size, uint16_t *port) {
     HARD_ASSERT(sc != NULL);
     HARD_ASSERT(host != NULL);
@@ -1195,12 +1244,36 @@ bool socket_udp_punch_receive(socket_t *sc, char *host, size_t host_size, uint16
     char datagram[UINT16_MAX];
     struct sockaddr_storage source;
     socklen_t source_length = sizeof(source);
-    ssize_t length = recvfrom(sc->handle,
-                              datagram,
-                              sizeof(datagram),
-                              MSG_PEEK,
-                              (struct sockaddr *)&source,
-                              &source_length);
+    ssize_t length;
+    for (unsigned int drained = 0;; drained++) {
+        source_length = sizeof(source);
+        length = recvfrom(sc->handle,
+                          datagram,
+                          sizeof(datagram),
+                          MSG_PEEK,
+                          (struct sockaddr *)&source,
+                          &source_length);
+        if (length < 0 || !socket_stun_late_response(sc,
+                                                     (const unsigned char *)datagram,
+                                                     (size_t)length,
+                                                     &source,
+                                                     source_length)) {
+            break;
+        }
+        if (drained >= SOCKET_STUN_LATE_DRAIN_MAX) {
+            return false;
+        }
+        source_length = sizeof(source);
+        if (recvfrom(sc->handle,
+                     datagram,
+                     sizeof(datagram),
+                     0,
+                     (struct sockaddr *)&source,
+                     &source_length) != length) {
+            return false;
+        }
+        sc->late_stun_pending = false;
+    }
     if ((size_t)length != sizeof(SOCKET_PUNCH_PROBE) - 1 ||
         memcmp(datagram, SOCKET_PUNCH_PROBE, sizeof(SOCKET_PUNCH_PROBE) - 1) != 0) {
         return false;

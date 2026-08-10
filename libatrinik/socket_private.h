@@ -69,12 +69,18 @@ struct sock_struct {
     uint64_t quic_event_deadline_ms;
 #endif
 
+    struct sockaddr_storage late_stun_source;
+    socklen_t late_stun_source_length;
+    unsigned char late_stun_transaction[12];
+
     /** Whether this object owns and must close handle. */
     bool owns_handle : 1;
     /** Whether connection_id is the final shared QUIC diagnostic ID. */
     bool connection_id_final : 1;
     /** Whether a QUIC CONNECTION_CLOSE has already been requested. */
     bool quic_shutdown_sent : 1;
+    /** Whether a timed-out STUN response may still arrive on handle. */
+    bool late_stun_pending : 1;
 };
 
 typedef int (*socket_stun_resolver_t)(const char *host,
