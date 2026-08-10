@@ -256,6 +256,8 @@ if (MINGW)
 endif ()
 
 if (BUILD_TESTING AND NOT MINGW)
+    target_compile_definitions(${EXECUTABLE} PRIVATE ATRINIK_WIDGET_TESTS)
+
     add_executable(client-stun-config-tests
         src/tests/stun_config.c
         src/client/stun_config.c)
@@ -468,6 +470,26 @@ if (BUILD_TESTING AND NOT MINGW)
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(client-textwin-event-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-textwin-event COMMAND client-textwin-event-tests)
+
+    add_executable(client-widget-priority-tests
+        src/tests/widget_priority.c
+        src/gui/toolkit/widget_priority.c)
+    atrinik_configure_target(client-widget-priority-tests)
+    target_compile_definitions(client-widget-priority-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-widget-priority-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-widget-priority-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-widget-priority COMMAND client-widget-priority-tests)
+
+    add_test(NAME client-widget-priority-integration
+        COMMAND atrinik --widget-priority-test
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/widget-priority-interface.cfg"
+            "${CMAKE_CURRENT_BINARY_DIR}/widget-priority-interface-saved.cfg")
+    set_tests_properties(client-widget-priority-integration PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
     set(player_view_fixtures
         "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/player_view")

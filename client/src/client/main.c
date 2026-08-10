@@ -701,6 +701,12 @@ int main(int argc, char *argv[]) {
         return player_view_main(argc - 1, &argv[1]);
     }
 
+#ifdef ATRINIK_WIDGET_TESTS
+    if (argc == 4 && strcmp(argv[1], "--widget-priority-test") == 0) {
+        return widget_priority_integration_test(argv[2], argv[3]);
+    }
+#endif
+
     char version[MAX_BUF];
     package_get_version_full(VS(version));
 
