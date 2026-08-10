@@ -38,6 +38,7 @@
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 #include <toolkit/clioptions.h>
+#include <window_title.h>
 #include <toolkit/path.h>
 #include <resources.h>
 #include <player_view.h>
@@ -717,6 +718,8 @@ int main(int argc, char *argv[]) {
     free(path);
 
     clioptions_parse(argc, argv);
+
+    client_window_title_init(getenv(CLIENT_LAUNCH_LABEL_ENV));
 
     logger_open_log(LOG_FILE);
     LOG(INFO,
