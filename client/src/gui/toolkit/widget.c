@@ -1262,6 +1262,22 @@ static bool widget_test_map_path_is_backmost(widgetdata *map) {
     return outermost == widget_list_foot;
 }
 
+typedef struct widget_test_geometry {
+    int x;
+    int y;
+    int w;
+    int h;
+} widget_test_geometry;
+
+static widget_test_geometry widget_test_geometry_get(const widgetdata *widget) {
+    return (widget_test_geometry){widget->x, widget->y, widget->w, widget->h};
+}
+
+static bool widget_test_geometry_equal(const widgetdata *widget, widget_test_geometry geometry) {
+    return widget->x == geometry.x && widget->y == geometry.y && widget->w == geometry.w &&
+           widget->h == geometry.h;
+}
+
 static const char *widget_test_layout_input;
 static const char *widget_test_layout_output;
 
@@ -1313,8 +1329,6 @@ int widget_priority_integration_test(const char *fixture, const char *saved) {
     stats->x = map->x + 10;
     stats->y = map->y + 10;
     stats->show = 1;
-    int stats_x = stats->x;
-    int stats_y = stats->y;
     WIDGET_TEST_CHECK(get_widget_owner(stats->x + 1, stats->y + 1, NULL, NULL) == stats);
     stats->show = 0;
     WIDGET_TEST_CHECK(get_widget_owner(stats->x + 1, stats->y + 1, NULL, NULL) == map);
@@ -1373,6 +1387,14 @@ int widget_priority_integration_test(const char *fixture, const char *saved) {
     WIDGET_TEST_CHECK(stats == widget_list_head);
     WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
 
+    widget_test_geometry attached_geometry = widget_test_geometry_get(attached);
+    widget_test_geometry drop_target_geometry = widget_test_geometry_get(drop_target);
+    widget_test_geometry nested_geometry = widget_test_geometry_get(nested);
+    widget_test_geometry stats_geometry = widget_test_geometry_get(stats);
+    widgetdata *textwin = cur_widget[CHATWIN_ID];
+    WIDGET_TEST_CHECK(textwin != NULL);
+    widget_test_geometry textwin_geometry = widget_test_geometry_get(textwin);
+
     toolkit_widget_deinit();
     toolkit_widget_init();
     map = cur_widget[MAP_ID];
@@ -1385,15 +1407,18 @@ int widget_priority_integration_test(const char *fixture, const char *saved) {
     WIDGET_TEST_CHECK(drop_target != NULL && drop_target->type == CONTAINER_ID);
     WIDGET_TEST_CHECK(nested != NULL && nested->type == CONTAINER_ID);
     WIDGET_TEST_CHECK(nested->env == NULL);
+    WIDGET_TEST_CHECK(widget_test_geometry_equal(attached, attached_geometry));
+    WIDGET_TEST_CHECK(widget_test_geometry_equal(drop_target, drop_target_geometry));
+    WIDGET_TEST_CHECK(widget_test_geometry_equal(nested, nested_geometry));
     WIDGET_TEST_CHECK(map->x == map_x + 17 && map->y == map_y - 9);
     WIDGET_TEST_CHECK(map->w == map_w && map->h == map_h);
     WIDGET_TEST_CHECK(map->event_func != NULL);
     stats = cur_widget[STAT_ID];
     WIDGET_TEST_CHECK(stats != NULL);
-    WIDGET_TEST_CHECK(stats->x == stats_x && stats->y == stats_y && stats->show);
-    widgetdata *textwin = cur_widget[CHATWIN_ID];
+    WIDGET_TEST_CHECK(widget_test_geometry_equal(stats, stats_geometry) && stats->show);
+    textwin = cur_widget[CHATWIN_ID];
     WIDGET_TEST_CHECK(textwin != NULL);
-    WIDGET_TEST_CHECK(textwin->x == 120 && textwin->y == 500 && textwin->show);
+    WIDGET_TEST_CHECK(widget_test_geometry_equal(textwin, textwin_geometry) && textwin->show);
 
     kill_widgets();
     return 0;
