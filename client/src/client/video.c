@@ -16,6 +16,7 @@
 
 #include <global.h>
 #include <video.h>
+#include <window_title.h>
 
 void video_init(void) {
     list_vid_modes();
@@ -51,7 +52,7 @@ int video_set_size(void) {
     int height = setting_get_int(OPT_CAT_CLIENT, OPT_RESOLUTION_Y);
 
     if (ScreenWindow == NULL) {
-        ScreenWindow = SDL_CreateWindow(PACKAGE_NAME, width, height, get_video_flags());
+        ScreenWindow = SDL_CreateWindow(client_window_title(), width, height, get_video_flags());
         if (ScreenWindow == NULL) {
             return 0;
         }

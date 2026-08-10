@@ -39,6 +39,7 @@
 #include <toolkit/string.h>
 #include <toolkit/path.h>
 #include <resources.h>
+#include <window_title.h>
 #include <asset.h>
 #include <openssl/evp.h>
 
@@ -51,7 +52,7 @@ void system_start(void) {
         video_set_icon(icon);
     }
 
-    SDL_SetWindowTitle(ScreenWindow, PACKAGE_NAME);
+    SDL_SetWindowTitle(ScreenWindow, client_window_title());
 }
 
 /**

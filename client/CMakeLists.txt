@@ -327,6 +327,15 @@ if (BUILD_TESTING)
     target_link_libraries(client-metaserver-options-tests PRIVATE Atrinik::Core)
     add_test(NAME client-metaserver-options COMMAND client-metaserver-options-tests)
 
+    add_executable(client-window-title-tests
+        src/tests/window_title.c
+        src/client/window_title.c)
+    atrinik_configure_target(client-window-title-tests)
+    target_include_directories(client-window-title-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    add_test(NAME client-window-title COMMAND client-window-title-tests)
+
     add_executable(client-metaserver-directory-tests
         src/tests/metaserver_directory.c
         src/client/metaserver_directory.c)

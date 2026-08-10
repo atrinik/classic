@@ -49,6 +49,7 @@ set(SOURCES
 	src/client/updates.c
 	src/client/upgrader.c
 	src/client/video.c
+	src/client/window_title.c
 	src/client/wrapper.c
 	src/events/event.c
 	src/events/keys.c
