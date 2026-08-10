@@ -383,22 +383,12 @@ if (BUILD_TESTING AND NOT MINGW)
             -DATRINIK_ARENA_PLUGIN=$<TARGET_FILE:plugin_arena>)
         set(ATRINIK_SERVER_TEST_RUNTIME_DEPENDS plugin_arena)
         if (TARGET plugin_python)
-            list(APPEND ATRINIK_SERVER_TEST_RUNTIME_ARGS
-                -DATRINIK_PYTHON_PLUGIN=$<TARGET_FILE:plugin_python>)
-            list(APPEND ATRINIK_SERVER_TEST_RUNTIME_DEPENDS plugin_python)
-
             set(ATRINIK_GAME_COMMANDS_HEADER
                 "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h")
-            file(STRINGS "${ATRINIK_GAME_COMMANDS_HEADER}"
-                ATRINIK_ITEM_MARK_DEFINITION
-                REGEX "^[ ]*SERVER_CMD_ITEM_MARK = [0-9]+,$")
-            if (NOT ATRINIK_ITEM_MARK_DEFINITION MATCHES
-                    "^[ ]*SERVER_CMD_ITEM_MARK = ([0-9]+),$")
-                message(FATAL_ERROR "Could not resolve SERVER_CMD_ITEM_MARK")
-            endif ()
-            set(ATRINIK_ITEM_MARK_COMMAND "${CMAKE_MATCH_1}")
             list(APPEND ATRINIK_SERVER_TEST_RUNTIME_ARGS
-                -DATRINIK_ITEM_MARK_COMMAND=${ATRINIK_ITEM_MARK_COMMAND})
+                -DATRINIK_PYTHON_PLUGIN=$<TARGET_FILE:plugin_python>
+                -DATRINIK_GAME_COMMANDS_HEADER=${ATRINIK_GAME_COMMANDS_HEADER})
+            list(APPEND ATRINIK_SERVER_TEST_RUNTIME_DEPENDS plugin_python)
         endif ()
 
         file(GLOB_RECURSE ATRINIK_SERVER_TEST_RESOURCE_INPUTS
@@ -427,6 +417,7 @@ if (BUILD_TESTING AND NOT MINGW)
             DEPENDS
                 ${ATRINIK_SERVER_TEST_RUNTIME_DEPENDS}
                 ${ATRINIK_SERVER_TEST_RESOURCE_INPUTS}
+                ${CMAKE_SOURCE_DIR}/cmake/prepare_locked_content_python_unit.cmake
                 ${CMAKE_SOURCE_DIR}/cmake/prepare_server_test_runtime.cmake
             COMMENT "Preparing isolated server test runtime..."
             VERBATIM)

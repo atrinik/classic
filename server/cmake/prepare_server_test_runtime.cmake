@@ -51,25 +51,8 @@ file(COPY "${ATRINIK_SOURCE_DIR}/runtime/content/lib/"
 file(COPY "${ATRINIK_SOURCE_DIR}/resources"
     DESTINATION "${runtime_server}")
 
-if (DEFINED ATRINIK_ITEM_MARK_COMMAND)
-    # The pinned content runtime predates the generated command-ID change. Keep
-    # its integration test authoritative without changing the immutable input.
-    set(player_tests
-        "${runtime_server}/maps/python/tests/Atrinik_tests/Player.py")
-    file(READ "${player_tests}" player_tests_content)
-    string(REGEX MATCHALL
-        "data = struct.pack\\(\"!HBI\", 5, [0-9]+, obj.count\\)"
-        item_mark_packets "${player_tests_content}")
-    list(LENGTH item_mark_packets item_mark_packet_count)
-    if (NOT item_mark_packet_count EQUAL 1)
-        message(FATAL_ERROR
-            "Expected exactly one item-mark packet in ${player_tests}")
-    endif ()
-    string(REGEX REPLACE
-        "data = struct.pack\\(\"!HBI\", 5, [0-9]+, obj.count\\)"
-        "data = struct.pack(\"!HBI\", 5, ${ATRINIK_ITEM_MARK_COMMAND}, obj.count)"
-        normalized_player_tests "${player_tests_content}")
-    file(WRITE "${player_tests}" "${normalized_player_tests}")
+if (DEFINED ATRINIK_PYTHON_PLUGIN)
+    include("${ATRINIK_SOURCE_DIR}/cmake/prepare_locked_content_python_unit.cmake")
 
     set(python_events "${runtime_server}/maps/python/events")
     configure_file(
