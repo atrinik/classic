@@ -53,9 +53,6 @@
 /** Active physical keys contributing to the logical gameplay movement stream. */
 static keybind_movement_state movement_state;
 
-/** Whether releasing the run modifier still needs an end-of-poll stop. */
-static bool movement_run_stop_pending;
-
 static bool keybind_event_running(void *user_data) {
     (void)user_data;
     return cpl.run_on;
@@ -69,6 +66,16 @@ static bool keybind_event_firing(void *user_data) {
 static void keybind_event_flush(void *user_data) {
     (void)user_data;
     keybind_movement_flush();
+}
+
+static bool keybind_event_movement_intercept_matches(const char *command, void *user_data) {
+    (void)user_data;
+    return notification_keybind_matches(command);
+}
+
+static void keybind_event_movement_intercept(const char *command, void *user_data) {
+    (void)user_data;
+    (void)notification_keybind_check(command);
 }
 
 static void keybind_event_command_down(const char *command, void *user_data) {
@@ -87,6 +94,8 @@ static keybind_event_handler keybind_event_handler_create(void) {
         .running = keybind_event_running,
         .firing = keybind_event_firing,
         .flush = keybind_event_flush,
+        .movement_intercept_matches = keybind_event_movement_intercept_matches,
+        .movement_intercept = keybind_event_movement_intercept,
         .command_down = keybind_event_command_down,
         .command_up = keybind_event_command_up,
     };
@@ -197,7 +206,7 @@ keybind_struct *keybind_find_by_command(const char *cmd) {
     size_t i;
 
     for (i = 0; i < keybindings_num; i++) {
-        if (keybind_command_contains(keybindings[i]->command, cmd)) {
+        if (!strcmp(cmd, keybindings[i]->command)) {
             return keybindings[i];
         }
     }
@@ -235,20 +244,7 @@ int keybind_command_matches_event(const char *cmd, SDL_KeyboardEvent *event) {
  * 1 if it matches, 0 otherwise.
  */
 int keybind_command_matches_state(const char *cmd) {
-    size_t i;
-
-    for (i = 0; i < keybindings_num; i++) {
-        if (!strcmp(cmd, keybindings[i]->command)) {
-            SDL_Scancode scancode = SDL_GetScancodeFromKey(keybindings[i]->key, NULL);
-            if (scancode != SDL_SCANCODE_UNKNOWN && keys[scancode].pressed &&
-                (!keybindings[i]->mod ||
-                 keybindings[i]->mod == keybind_adjust_kmod(SDL_GetModState()))) {
-                return 1;
-            }
-        }
-    }
-
-    return 0;
+    return keybind_command_matches_held(keybindings, keybindings_num, cmd, keys, SDL_GetModState());
 }
 
 /**
@@ -268,8 +264,8 @@ int keybind_process_event(SDL_KeyboardEvent *event) {
  * Process a keybinding.
  * @param keybind
  * The keybinding to process.
- * @param type
- * Either SDL_EVENT_KEY_DOWN or SDL_EVENT_KEY_UP.
+ * @param event
+ * Physical keyboard event to process.
  */
 void keybind_process(keybind_struct *keybind, const SDL_KeyboardEvent *event) {
     keybind_event_handler handler = keybind_event_handler_create();
@@ -292,7 +288,7 @@ int keybind_process_command_up(const char *cmd) {
 
         if (!strcmp(cmd, "RUNON")) {
             cpl.run_on = 0;
-            movement_run_stop_pending = true;
+            keybind_movement_state_run_released(&movement_state, cpl.fire_on);
         } else if (!strcmp(cmd, "FIREON")) {
             cpl.fire_on = 0;
         } else if (!strncmp(cmd, "MOVE_", 5)) {
@@ -335,22 +331,17 @@ void keybind_state_ensure(void) {
     }
 }
 
-/** Emit at most one logical movement update for the current SDL poll cycle. */
+/** Emit the next pending logical movement update. */
 void keybind_movement_flush(void) {
     uint8_t direction;
     keybind_movement_action action = keybind_movement_state_flush(&movement_state, &direction);
 
     if (action == KEYBIND_MOVEMENT_ACTION_MOVE) {
         move_keys(direction);
-        movement_run_stop_pending = false;
     } else if (action == KEYBIND_MOVEMENT_ACTION_STOP) {
         move_keys_clear();
-        movement_run_stop_pending = false;
-    } else if (movement_run_stop_pending) {
-        if (!cpl.fire_on) {
-            move_keys(0);
-        }
-        movement_run_stop_pending = false;
+    } else if (action == KEYBIND_MOVEMENT_ACTION_RUN_STOP) {
+        move_keys(0);
     }
 }
 

@@ -268,6 +268,30 @@ bool keybind_command_contains(const char *commands, const char *command) {
     return false;
 }
 
+/** Check whether any physical binding containing a command is currently held. */
+bool keybind_command_matches_held(keybind_struct *const *bindings,
+                                  size_t bindings_num,
+                                  const char *command,
+                                  const key_struct *key_states,
+                                  SDL_Keymod mod) {
+    if (bindings == NULL || command == NULL || key_states == NULL) {
+        return false;
+    }
+
+    SDL_Keymod adjusted_mod = keybind_adjust_kmod(mod);
+    for (size_t i = 0; i < bindings_num; i++) {
+        if (!keybind_command_contains(bindings[i]->command, command)) {
+            continue;
+        }
+        SDL_Scancode scancode = SDL_GetScancodeFromKey(bindings[i]->key, NULL);
+        if (scancode != SDL_SCANCODE_UNKNOWN && key_states[scancode].pressed &&
+            (!bindings[i]->mod || bindings[i]->mod == adjusted_mod)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /** Resolve a gameplay movement command to its keypad-style direction. */
 bool keybind_movement_command_direction(const char *cmd, uint8_t *direction) {
     static const struct {
@@ -300,6 +324,7 @@ bool keybind_movement_command_direction(const char *cmd, uint8_t *direction) {
 void keybind_movement_state_init(keybind_movement_state *state) {
     memset(state, 0, sizeof(*state));
     state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
+    state->stream_stopped = true;
 }
 
 static uint8_t keybind_movement_direction(const keybind_movement_state *state);
@@ -329,6 +354,7 @@ bool keybind_movement_state_press(keybind_movement_state *state,
         state->pending_move = true;
         state->pending_direction = keybind_movement_direction(state);
         state->pending_stop = false;
+        state->pending_run_stop = false;
         return true;
     }
 
@@ -337,9 +363,13 @@ bool keybind_movement_state_press(keybind_movement_state *state,
     }
     key->direction = direction;
     key->repeat = repeat;
+    if (repeat) {
+        state->repeat_scancode = scancode;
+    }
     state->pending_move = true;
     state->pending_direction = keybind_movement_direction(state);
     state->pending_stop = false;
+    state->pending_run_stop = false;
     return true;
 }
 
@@ -389,12 +419,19 @@ void keybind_movement_state_clear(keybind_movement_state *state, bool running, b
         return;
     }
 
-    bool stop = state->pending_stop ||
+    bool stop = state->pending_stop || state->pending_run_stop ||
                 (keybind_movement_active(state) && (state->repeated || running) && !firing);
     uint64_t next_order = state->next_order;
     keybind_movement_state_init(state);
     state->next_order = next_order;
     state->pending_stop = stop;
+}
+
+/** Schedule a run-stream stop unless movement already stopped it. */
+void keybind_movement_state_run_released(keybind_movement_state *state, bool firing) {
+    if (state != NULL && !state->stream_stopped && !firing) {
+        state->pending_run_stop = true;
+    }
 }
 
 /** Resolve the active directions, composing only the four supported diagonal pairs. */
@@ -439,13 +476,25 @@ keybind_movement_action keybind_movement_state_flush(keybind_movement_state *sta
         state->pending_move = false;
         *direction = state->pending_direction;
         if (*direction != 0) {
+            state->pending_run_stop = false;
+            state->stream_stopped = false;
             return KEYBIND_MOVEMENT_ACTION_MOVE;
         }
     }
     if (state->pending_stop) {
         state->pending_stop = false;
+        state->pending_run_stop = false;
+        state->stream_stopped = true;
         *direction = 5;
         return KEYBIND_MOVEMENT_ACTION_STOP;
+    }
+    if (state->pending_run_stop) {
+        state->pending_run_stop = false;
+        if (!state->stream_stopped) {
+            state->stream_stopped = true;
+            *direction = 0;
+            return KEYBIND_MOVEMENT_ACTION_RUN_STOP;
+        }
     }
     return KEYBIND_MOVEMENT_ACTION_NONE;
 }

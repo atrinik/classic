@@ -53,6 +53,15 @@ void keybind_event_process_binding(const keybind_struct *keybind,
         uint8_t direction;
         if (keybind_movement_command_direction(cp, &direction)) {
             if (event->type == SDL_EVENT_KEY_DOWN) {
+                if (handler->movement_intercept_matches != NULL &&
+                    handler->movement_intercept_matches(cp, handler->user_data)) {
+                    keybind_event_flush(handler);
+                    if (handler->movement_intercept != NULL) {
+                        handler->movement_intercept(cp, handler->user_data);
+                    }
+                    cp = strtok(NULL, ";");
+                    continue;
+                }
                 bool accepted = keybind_movement_state_press(handler->movement,
                                                              event->scancode,
                                                              direction,

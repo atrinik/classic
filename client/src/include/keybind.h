@@ -57,7 +57,8 @@ typedef struct keybind_struct {
 typedef enum keybind_movement_action {
     KEYBIND_MOVEMENT_ACTION_NONE,
     KEYBIND_MOVEMENT_ACTION_MOVE,
-    KEYBIND_MOVEMENT_ACTION_STOP
+    KEYBIND_MOVEMENT_ACTION_STOP,
+    KEYBIND_MOVEMENT_ACTION_RUN_STOP
 } keybind_movement_action;
 
 /** One physical key participating in the gameplay movement stream. */
@@ -76,6 +77,8 @@ typedef struct keybind_movement_state {
     bool repeated;
     bool pending_move;
     bool pending_stop;
+    bool pending_run_stop;
+    bool stream_stopped;
 } keybind_movement_state;
 
 /** Callbacks used by the testable physical keybinding dispatcher. */
@@ -85,6 +88,8 @@ typedef struct keybind_event_handler {
     bool (*running)(void *user_data);
     bool (*firing)(void *user_data);
     void (*flush)(void *user_data);
+    bool (*movement_intercept_matches)(const char *command, void *user_data);
+    void (*movement_intercept)(const char *command, void *user_data);
     void (*command_down)(const char *command, void *user_data);
     void (*command_up)(const char *command, void *user_data);
 } keybind_event_handler;
@@ -129,6 +134,12 @@ extern char *keybind_get_key_shortcut(SDL_Keycode key, SDL_Keymod mod, char *buf
 
 extern bool keybind_command_contains(const char *commands, const char *command);
 
+extern bool keybind_command_matches_held(keybind_struct *const *bindings,
+                                         size_t bindings_num,
+                                         const char *command,
+                                         const key_struct *key_states,
+                                         SDL_Keymod mod);
+
 extern bool keybind_event_process(keybind_struct *const *bindings,
                                   size_t bindings_num,
                                   const SDL_KeyboardEvent *event,
@@ -154,6 +165,8 @@ extern void keybind_movement_state_release(keybind_movement_state *state,
                                            bool firing);
 
 extern void keybind_movement_state_clear(keybind_movement_state *state, bool running, bool firing);
+
+extern void keybind_movement_state_run_released(keybind_movement_state *state, bool firing);
 
 extern keybind_movement_action keybind_movement_state_flush(keybind_movement_state *state,
                                                             uint8_t *direction);

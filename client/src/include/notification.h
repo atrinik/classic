@@ -90,6 +90,8 @@ extern void notification_destroy(void);
 
 extern int notification_keybind_check(const char *cmd);
 
+extern bool notification_keybind_matches(const char *cmd);
+
 extern void socket_command_notification(uint8_t *data, size_t len, size_t pos);
 
 extern void widget_notification_init(widgetdata *widget);
