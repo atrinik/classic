@@ -1431,6 +1431,12 @@ void draw_client_map2(object *pl) {
                     continue;
                 }
 
+                /* The client treats the packet's depth list as the
+                 * authoritative set of physical levels to retain. Preserve a
+                 * visible level even when its delta payload is empty; omitting
+                 * an unchanged upper level would discard its cached roofs. */
+                level_present = true;
+
                 m = level_map;
                 msp = GET_MAP_SPACE_PTR(m, nx, ny);
                 bool visible_roof_above =
