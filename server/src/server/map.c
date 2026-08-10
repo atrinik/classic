@@ -1522,8 +1522,8 @@ static void free_all_objects(mapstruct *m) {
         for (y = 0; y < MAP_HEIGHT(m); y++) {
             while ((ob = GET_MAP_OB(m, x, y)) != NULL) {
                 head = HEAD(ob);
-
-                object_remove(head, 0);
+                /* Map teardown must not trigger gameplay callbacks. */
+                object_remove(head, REMOVE_NO_WALK_OFF);
                 object_destroy(head);
             }
         }
@@ -1551,6 +1551,7 @@ void free_map(mapstruct *m, int flag) {
     if (m->buttons) {
         free_objectlinkpt(m->buttons);
     }
+    m->buttons = NULL;
 
     if (flag && m->spaces) {
         free_all_objects(m);
@@ -1561,7 +1562,6 @@ void free_map(mapstruct *m, int flag) {
     FREE_AND_CLEAR_HASH(m->weather);
     FREE_AND_NULL_PTR(m->spaces);
     FREE_AND_NULL_PTR(m->msg);
-    m->buttons = NULL;
     m->first_light = NULL;
 
     for (i = 0; i < TILED_NUM; i++) {
