@@ -36,7 +36,16 @@
 
 extern uint8_t light_level_from_raw(int raw_light);
 
+/** Neutral authored light tint. */
+#define LIGHT_COLOR_WHITE UINT32_C(0xffffff)
+
+extern bool light_color_parse(const char *value, uint32_t *color);
+extern void light_levels_from_raw(const MapSpace *space, int raw_light, uint8_t levels[3]);
+
 extern void adjust_light_source(mapstruct *map, int x, int y, int light);
+
+extern void
+adjust_light_source_color(mapstruct *map, int x, int y, int radius, uint32_t color, int direction);
 
 extern void check_light_source_list(mapstruct *map);
 

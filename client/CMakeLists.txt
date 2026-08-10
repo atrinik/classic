@@ -500,6 +500,17 @@ if (BUILD_TESTING AND NOT MINGW)
     target_link_libraries(client-widget-priority-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-widget-priority COMMAND client-widget-priority-tests)
 
+    add_executable(client-map-light-state-tests src/tests/map_light_state.c)
+    atrinik_configure_target(client-map-light-state-tests)
+    target_compile_definitions(client-map-light-state-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-map-light-state-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-map-light-state-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-map-light-state COMMAND client-map-light-state-tests)
+
     add_test(NAME client-widget-priority-integration
         COMMAND atrinik --widget-priority-test
             "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/widget-priority-interface.cfg"
@@ -516,6 +527,10 @@ if (BUILD_TESTING AND NOT MINGW)
             "${player_view_fixtures}/smooth-player-sublayer-1.xml" -)
     add_test(NAME client-player-view-discrete
         COMMAND atrinik --player-view "${player_view_fixtures}/discrete.xml" -)
+    add_test(NAME client-player-view-colored-smooth
+        COMMAND atrinik --player-view "${player_view_fixtures}/colored-smooth.xml" -)
+    add_test(NAME client-player-view-colored-discrete
+        COMMAND atrinik --player-view "${player_view_fixtures}/colored-discrete.xml" -)
     add_test(NAME client-player-view-output
         COMMAND ${CMAKE_COMMAND}
             "-DATRINIK_CLIENT=$<TARGET_FILE:atrinik>"

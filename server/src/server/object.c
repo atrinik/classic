@@ -595,6 +595,10 @@ bool object_can_merge(object *ob1, object *ob2) {
         return false;
     }
 
+    if (ob1->light_color != ob2->light_color) {
+        return false;
+    }
+
     /* Do not merge arrows with different owners. */
     if (ob1->type == ARROW && ob2->type == ARROW && ob1->attacked_by_count != 0 &&
         ob2->attacked_by_count != 0 && ob1->attacked_by_count != ob2->attacked_by_count) {
@@ -1209,6 +1213,7 @@ object *object_get(void) {
 
     object *new_obj = mempool_get(pool_object);
     SET_FLAG(new_obj, FLAG_REMOVED);
+    new_obj->light_color = LIGHT_COLOR_WHITE;
 
     static New_Face *blank_face = NULL;
     if (blank_face == NULL) {
@@ -1342,7 +1347,7 @@ void object_update(object *op, int action) {
         msp->update_tile++;
 
         if (op->glow_radius != 0) {
-            adjust_light_source(op->map, op->x, op->y, op->glow_radius);
+            adjust_light_source_color(op->map, op->x, op->y, op->glow_radius, op->light_color, 1);
         }
 
         if (QUERY_FLAG(op, FLAG_NO_PASS) || QUERY_FLAG(op, FLAG_PASS_THRU) ||
@@ -1417,7 +1422,7 @@ void object_update(object *op, int action) {
         msp->update_tile++;
 
         if (op->glow_radius != 0) {
-            adjust_light_source(op->map, op->x, op->y, -op->glow_radius);
+            adjust_light_source_color(op->map, op->x, op->y, op->glow_radius, op->light_color, -1);
         }
 
         /* We must rebuild the flags when one of these flags is touched from our
