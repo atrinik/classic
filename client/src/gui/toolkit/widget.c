@@ -1304,6 +1304,7 @@ int widget_priority_integration_test(const char *fixture, const char *saved) {
     WIDGET_TEST_CHECK(inner != NULL && inner->type == CONTAINER_ID);
     WIDGET_TEST_CHECK(outer != NULL && outer->type == CONTAINER_ID);
     WIDGET_TEST_CHECK(map->event_func != NULL);
+    WIDGET_TEST_CHECK(widget_map_interaction_test(map));
     WIDGET_TEST_CHECK(map->x == 47 && map->y == 83);
     WIDGET_TEST_CHECK(inner->x == 47 && inner->y == 83);
     WIDGET_TEST_CHECK(outer->x == 45 && outer->y == 81);

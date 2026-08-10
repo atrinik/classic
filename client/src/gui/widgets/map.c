@@ -184,6 +184,13 @@ static int right_click_ticks = -1;
  */
 static bool tiles_debug = false;
 
+#ifdef ATRINIK_WIDGET_TESTS
+static bool map_interaction_test_active;
+static int map_interaction_test_moves;
+static int map_interaction_test_targets;
+static int map_interaction_test_talks;
+#endif
+
 static int get_top_floor_height(struct MapCell *cell, int sub_layer);
 
 /**
@@ -2934,6 +2941,12 @@ static void send_move_path(int tx, int ty) {
         return;
     }
 
+#ifdef ATRINIK_WIDGET_TESTS
+    if (map_interaction_test_active) {
+        map_interaction_test_moves++;
+    }
+#endif
+
     packet = packet_new(SERVER_CMD_MOVE_PATH, 8, 0);
     packet_writer_write_uint8(packet, tx);
     packet_writer_write_uint8(packet, ty);
@@ -2955,6 +2968,12 @@ static void send_target(int x, int y, uint32_t count) {
     if ((x < 0 || y < 0 || x >= map_width || y >= map_height) && !(x == -1 && y == -1)) {
         return;
     }
+
+#ifdef ATRINIK_WIDGET_TESTS
+    if (map_interaction_test_active) {
+        map_interaction_test_targets++;
+    }
+#endif
 
     packet = packet_new(SERVER_CMD_TARGET, 16, 0);
 
@@ -3092,6 +3111,18 @@ void map_target_handle(uint8_t is_friend) {
  * True on success, false on failure.
  */
 bool mouse_to_tile_coords(int mx, int my, int *tx, int *ty) {
+#ifdef ATRINIK_WIDGET_TESTS
+    if (map_interaction_test_active) {
+        if (tx != NULL) {
+            *tx = map_width * (MAP_FOW_SIZE / 2) + 2;
+        }
+        if (ty != NULL) {
+            *ty = map_height * (MAP_FOW_SIZE / 2) + 3;
+        }
+        return true;
+    }
+#endif
+
     map_render_data_t data = {.world_surface = true};
     int x, y, w, h;
     map_setup_render_data(cur_widget[MAP_ID]->surface, &data, &x, &y, &w, &h);
@@ -3221,9 +3252,24 @@ static void menu_map_talk_to(widgetdata *widget, widgetdata *menuitem, SDL_Event
         int rx = tx - map_width * (MAP_FOW_SIZE / 2);
         int ry = ty - map_height * (MAP_FOW_SIZE / 2);
         send_target(rx, ry, 0);
+#ifdef ATRINIK_WIDGET_TESTS
+        if (map_interaction_test_active) {
+            map_interaction_test_talks++;
+        }
+#endif
         keybind_process_command("?HELLO");
     }
 }
+
+typedef struct map_menu_action {
+    const char *name;
+    void (*handler)(widgetdata *, widgetdata *, SDL_Event *);
+} map_menu_action;
+
+static const map_menu_action map_menu_actions[] = {
+    {"Walk Here", menu_map_walk_here},
+    {"Talk To NPC", menu_map_talk_to},
+};
 
 /** @copydoc widgetdata::draw_func */
 static void widget_draw(widgetdata *widget) {
@@ -3376,8 +3422,13 @@ static void widget_draw(widgetdata *widget) {
         widgetdata *menu;
 
         menu = create_menu(mx, my, widget);
-        add_menuitem(menu, "Walk Here", &menu_map_walk_here, MENU_NORMAL, 0);
-        add_menuitem(menu, "Talk To NPC", &menu_map_talk_to, MENU_NORMAL, 0);
+        for (size_t i = 0; i < arraysize(map_menu_actions); i++) {
+            add_menuitem(menu,
+                         map_menu_actions[i].name,
+                         map_menu_actions[i].handler,
+                         MENU_NORMAL,
+                         0);
+        }
         widget_menu_standard_items(widget, menu);
         menu_finalize(menu);
         right_click_ticks = -1;
@@ -3434,6 +3485,46 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
 
     return 0;
 }
+
+#ifdef ATRINIK_WIDGET_TESTS
+
+bool widget_map_interaction_test(widgetdata *widget) {
+    int old_map_width = map_width;
+    int old_map_height = map_height;
+    widgetdata *old_menu = cur_widget[MENU_ID];
+    widgetdata menu = {0};
+    SDL_Event event = {0};
+
+    map_width = 10;
+    map_height = 10;
+    map_interaction_test_moves = 0;
+    map_interaction_test_targets = 0;
+    map_interaction_test_talks = 0;
+    map_interaction_test_active = true;
+    cur_widget[MENU_ID] = &menu;
+
+    event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+    event.button.button = SDL_BUTTON_RIGHT;
+    bool success = widget->event_func(widget, &event) == 1;
+    event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+    success = success && widget->event_func(widget, &event) == 1;
+    success = success && arraysize(map_menu_actions) == 2;
+    success = success && strcmp(map_menu_actions[0].name, "Walk Here") == 0;
+    success = success && strcmp(map_menu_actions[1].name, "Talk To NPC") == 0;
+    map_menu_actions[0].handler(widget, NULL, &event);
+    map_menu_actions[1].handler(widget, NULL, &event);
+    success = success && map_interaction_test_moves == 1;
+    success = success && map_interaction_test_targets == 2;
+    success = success && map_interaction_test_talks == 1;
+
+    cur_widget[MENU_ID] = old_menu;
+    map_interaction_test_active = false;
+    map_width = old_map_width;
+    map_height = old_map_height;
+    return success;
+}
+
+#endif
 
 /** @copydoc widgetdata::background_func */
 static void widget_background(widgetdata *widget, int draw) {

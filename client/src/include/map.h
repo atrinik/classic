@@ -467,6 +467,10 @@ extern bool map_mouse_fire(void);
 
 extern void widget_map_init(widgetdata *widget);
 
+#ifdef ATRINIK_WIDGET_TESTS
+extern bool widget_map_interaction_test(widgetdata *widget);
+#endif
+
 /** Public API implemented in src/gui/widgets/minimap.c. */
 
 extern bool minimap_redraw_due(void);
