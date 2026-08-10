@@ -46,6 +46,28 @@ static int check_container(object *pl, object *con);
 #define MAXITEMLEN 300
 
 /**
+ * Return a wire-safe UTF-8 prefix that fits in the item-name field.
+ *
+ * Legacy authored or custom names can exceed the current field capacity.
+ * They are truncated only for presentation, at a code-point boundary, so the
+ * accompanying fields in the item update remain decodable.
+ */
+static size_t item_name_wire_length(const char *name, size_t length) {
+    HARD_ASSERT(name != NULL);
+
+    size_t maximum = ITEM_NAME_SIZE - 1U;
+    if (length <= maximum) {
+        return length;
+    }
+
+    while (maximum > 0 && ((unsigned char)name[maximum] & 0xc0U) == 0x80U) {
+        maximum--;
+    }
+
+    return maximum;
+}
+
+/**
  * This is a similar to query_name, but returns flags to be sent to
  * client.
  * @param op
@@ -205,7 +227,7 @@ void add_object_to_packet(struct packet_struct *packet,
         packet_writer_write_cstring_n(
             packet,
             stringbuffer_data(sb),
-            MIN(stringbuffer_length(sb), ATRINIK_PROTOCOL_ITEM_NAME_SIZE - 1U));
+            item_name_wire_length(stringbuffer_data(sb), stringbuffer_length(sb)));
         stringbuffer_free(sb);
     }
 

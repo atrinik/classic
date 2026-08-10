@@ -25,6 +25,13 @@
 #ifndef SERVER_ITEM_H
 #define SERVER_ITEM_H
 
+#ifdef ATRINIK_PROTOCOL_ITEM_NAME_SIZE
+#define ITEM_NAME_SIZE ATRINIK_PROTOCOL_ITEM_NAME_SIZE
+#else
+/* Compatibility with the protocol v1.0.1 standalone dependency lock. */
+#define ITEM_NAME_SIZE 128U
+#endif
+
 #include <decls.h>
 
 /**

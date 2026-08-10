@@ -200,7 +200,7 @@ START_TEST(test_object_merge_updates_name_and_count) {
     ck_assert_uint_eq(packet_reader_read_uint32(&reader), 1);
     ck_assert(packet_reader_finish(&reader));
 
-    char boundary_name[ATRINIK_PROTOCOL_ITEM_NAME_SIZE];
+    char boundary_name[ITEM_NAME_SIZE];
     memset(boundary_name, 'a', sizeof(boundary_name) - 1);
     boundary_name[sizeof(boundary_name) - 1] = '\0';
     FREE_AND_COPY_HASH(first->name, boundary_name);
@@ -214,7 +214,7 @@ START_TEST(test_object_merge_updates_name_and_count) {
     ck_assert(packet_reader_finish(&reader));
     packet_free(packet);
 
-    char oversized_name[ATRINIK_PROTOCOL_ITEM_NAME_SIZE + 1U];
+    char oversized_name[ITEM_NAME_SIZE + 1U];
     memset(oversized_name, 'b', sizeof(oversized_name) - 1);
     oversized_name[sizeof(oversized_name) - 1] = '\0';
     FREE_AND_COPY_HASH(first->name, oversized_name);
@@ -223,7 +223,22 @@ START_TEST(test_object_merge_updates_name_and_count) {
     packet_reader_init(&reader, packet->data, packet->len);
     ck_assert_uint_eq(packet_reader_read_uint32(&reader), first->count);
     ck_assert(packet_reader_read_string(&reader, VS(display_name)));
-    ck_assert_uint_eq(strlen(display_name), ATRINIK_PROTOCOL_ITEM_NAME_SIZE - 1U);
+    ck_assert_uint_eq(strlen(display_name), ITEM_NAME_SIZE - 1U);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), 1);
+    ck_assert(packet_reader_finish(&reader));
+    packet_free(packet);
+
+    char utf8_name[ITEM_NAME_SIZE + 2U];
+    memset(utf8_name, 'c', ITEM_NAME_SIZE - 2U);
+    memcpy(utf8_name + ITEM_NAME_SIZE - 2U, "\xe2\x82\xac", 3);
+    utf8_name[ITEM_NAME_SIZE + 1U] = '\0';
+    FREE_AND_COPY_HASH(first->custom_name, utf8_name);
+    packet = packet_new(0, 128, 64);
+    add_object_to_packet(packet, first, pl, CMD_APPLY_ACTION_NORMAL, UPD_NAME | UPD_NROF, 0);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), first->count);
+    ck_assert(packet_reader_read_string(&reader, VS(display_name)));
+    ck_assert_uint_eq(strlen(display_name), ITEM_NAME_SIZE - 2U);
     ck_assert_uint_eq(packet_reader_read_uint32(&reader), 1);
     ck_assert(packet_reader_finish(&reader));
     packet_free(packet);

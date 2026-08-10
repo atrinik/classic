@@ -70,11 +70,11 @@ void command_rename(object *op, const char *command, char *params) {
             return;
         }
 
-        if (strlen(params) >= ATRINIK_PROTOCOL_ITEM_NAME_SIZE) {
+        if (strlen(params) >= ITEM_NAME_SIZE) {
             draw_info_format(COLOR_WHITE,
                              op,
                              "New name is too long, maximum is %u characters.",
-                             ATRINIK_PROTOCOL_ITEM_NAME_SIZE - 1U);
+                             ITEM_NAME_SIZE - 1U);
             return;
         }
 

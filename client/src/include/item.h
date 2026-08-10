@@ -34,7 +34,12 @@
 #define NROF_ITEMS 50
 
 /** Maximum length of a name. */
+#ifdef ATRINIK_PROTOCOL_ITEM_NAME_SIZE
 #define NAME_LEN ATRINIK_PROTOCOL_ITEM_NAME_SIZE
+#else
+/* Compatibility with the protocol v1.0.1 standalone dependency lock. */
+#define NAME_LEN 128U
+#endif
 
 /**
  * Item structure keeps all information what player (= client) knows
