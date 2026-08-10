@@ -30,6 +30,14 @@ This design contract applies when changing classic server lighting,
   achromatic even if an object carries a non-white authored color.
 - Map loading defers local source masks until floors/blockers load, then restores
   sources from loaded neighboring levels. Keep load/unload symmetric.
+- A player's emitter is derived atomically from one source. Eligible inventory
+  emitters are compared by `glow_radius`; the strongest wins, ties use the
+  first object in canonical inventory order, and an inventory object wins a
+  tie with the player archetype. Applyable lights are eligible only while
+  applied. The selected object's radius and color are always copied together.
+  Player saves omit this derived pair and reconstruct it from the archetype and
+  saved inventory before map insertion, so reconnects and transfers cannot
+  persist or briefly display a stale tint.
 - Test buildings from outside and inside. Upper floors may own lights, while an
   exterior facade still receives nearby base-map lighting through unobstructed
   3D rays when viewed outdoors.

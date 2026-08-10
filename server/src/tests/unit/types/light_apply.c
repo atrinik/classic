@@ -33,6 +33,23 @@
 #include <player.h>
 #include <object.h>
 #include <light.h>
+#include <object_methods.h>
+#include <toolkit/string.h>
+
+static object *insert_applied_light(object *pl, int radius, uint32_t color) {
+    object *light = arch_get("torch");
+    light->glow_radius = radius;
+    light->last_sp = radius;
+    light->light_color = color;
+    light = object_insert_into(light, pl, INS_NO_MERGE);
+    SET_FLAG(light, FLAG_APPLIED);
+    return light;
+}
+
+static void assert_player_light(const object *pl, int radius, uint32_t color) {
+    ck_assert_int_eq(pl->glow_radius, radius);
+    ck_assert_uint_eq(pl->light_color, color);
+}
 
 /*
  * Player applies a torch on the ground. Ensure the torch is lit and not
@@ -208,6 +225,182 @@ START_TEST(test_applied_light_propagates_color_and_restores_field) {
 }
 END_TEST
 
+START_TEST(test_equal_radius_lights_use_stable_inventory_priority) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    object *red = insert_applied_light(pl, 4, UINT32_C(0xff0000));
+    object *blue = insert_applied_light(pl, 4, UINT32_C(0x0000ff));
+    living_update(pl);
+
+    assert_player_light(pl, 4, UINT32_C(0x0000ff));
+    ck_assert_ptr_eq(CONTR(pl)->equipment[PLAYER_EQUIP_LIGHT], blue);
+
+    CLEAR_FLAG(blue, FLAG_APPLIED);
+    living_update(pl);
+    assert_player_light(pl, 4, UINT32_C(0xff0000));
+    ck_assert_ptr_eq(CONTR(pl)->equipment[PLAYER_EQUIP_LIGHT], red);
+
+    SET_FLAG(blue, FLAG_APPLIED);
+    living_update(pl);
+    assert_player_light(pl, 4, UINT32_C(0x0000ff));
+
+    object_remove(blue, 0);
+    object_destroy(blue);
+    assert_player_light(pl, 4, UINT32_C(0xff0000));
+    ck_assert_ptr_eq(CONTR(pl)->equipment[PLAYER_EQUIP_LIGHT], red);
+}
+END_TEST
+
+START_TEST(test_same_radius_hue_change_is_idempotent) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    object *torch = insert_applied_light(pl, 4, UINT32_C(0xff0000));
+    living_update(pl);
+    MapSpace *space = GET_MAP_SPACE_PTR(map, pl->x, pl->y);
+    int32_t red_scalar = space->light_source_value;
+    int64_t red_field[3];
+    memcpy(red_field, space->light_source_color, sizeof(red_field));
+
+    torch->light_color = UINT32_C(0x0000ff);
+    living_update(pl);
+    assert_player_light(pl, 4, UINT32_C(0x0000ff));
+    ck_assert_int_eq(space->light_source_value, red_scalar);
+    ck_assert(memcmp(space->light_source_color, red_field, sizeof(red_field)) != 0);
+
+    int32_t blue_scalar = space->light_source_value;
+    int64_t blue_field[3];
+    memcpy(blue_field, space->light_source_color, sizeof(blue_field));
+    living_update(pl);
+    ck_assert_int_eq(space->light_source_value, blue_scalar);
+    ck_assert_mem_eq(space->light_source_color, blue_field, sizeof(blue_field));
+}
+END_TEST
+
+START_TEST(test_extinguish_relight_and_burnout_select_fallback) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    object *red = insert_applied_light(pl, 3, UINT32_C(0xff0000));
+    object *blue = insert_applied_light(pl, 5, UINT32_C(0x0000ff));
+    living_update(pl);
+    assert_player_light(pl, 5, UINT32_C(0x0000ff));
+
+    blue->glow_radius = 0;
+    living_update(pl);
+    assert_player_light(pl, 3, UINT32_C(0xff0000));
+
+    blue->glow_radius = 5;
+    living_update(pl);
+    assert_player_light(pl, 5, UINT32_C(0x0000ff));
+
+    tag_t blue_tag = blue->count;
+    blue->stats.food = 0;
+    blue->state = 0;
+    SET_FLAG(blue, FLAG_CHANGING);
+    ck_assert_int_eq(common_object_process_pre(blue), 1);
+    ck_assert(OBJECT_DESTROYED(blue, blue_tag));
+    assert_player_light(pl, 3, UINT32_C(0xff0000));
+    ck_assert_ptr_eq(CONTR(pl)->equipment[PLAYER_EQUIP_LIGHT], red);
+}
+END_TEST
+
+START_TEST(test_removed_player_recomputes_before_reinsertion) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    MapSpace *old_space = GET_MAP_SPACE_PTR(old_map, pl->x, pl->y);
+    int32_t initial_scalar = old_space->light_source_value;
+    int64_t initial_color[3];
+    memcpy(initial_color, old_space->light_source_color, sizeof(initial_color));
+
+    object *torch = insert_applied_light(pl, 4, UINT32_C(0x00ff00));
+    living_update(pl);
+    object_remove(pl, 0);
+    ck_assert_int_eq(old_space->light_source_value, initial_scalar);
+    ck_assert_mem_eq(old_space->light_source_color, initial_color, sizeof(initial_color));
+
+    torch->light_color = UINT32_C(0x0000ff);
+    living_update(pl);
+    assert_player_light(pl, 4, UINT32_C(0x0000ff));
+    ck_assert_int_eq(old_space->light_source_value, initial_scalar);
+    ck_assert_mem_eq(old_space->light_source_color, initial_color, sizeof(initial_color));
+
+    mapstruct *new_map = get_empty_map(24, 24);
+    pl = object_insert_map(pl, new_map, NULL, 0);
+    MapSpace *new_space = GET_MAP_SPACE_PTR(new_map, pl->x, pl->y);
+    ck_assert_int_gt(new_space->light_source_color[2], new_space->light_source_color[0]);
+    assert_player_light(pl, 4, UINT32_C(0x0000ff));
+}
+END_TEST
+
+START_TEST(test_serialized_inventory_reconstructs_derived_light) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    insert_applied_light(pl, 4, UINT32_C(0xff0000));
+    insert_applied_light(pl, 4, UINT32_C(0x0000ff));
+    living_update(pl);
+    assert_player_light(pl, 4, UINT32_C(0x0000ff));
+
+    StringBuffer *sb = stringbuffer_new();
+    object_dump_rec(pl, sb);
+    char *dump = stringbuffer_finish(sb);
+    char *nested = strstr(dump + 1, "\narch ");
+    ck_assert_ptr_ne(nested, NULL);
+    char saved = *nested;
+    *nested = '\0';
+    ck_assert_ptr_eq(strstr(dump, "glow_radius "), NULL);
+    ck_assert_ptr_eq(strstr(dump, "light_color "), NULL);
+    *nested = saved;
+
+    object *loaded = object_load_str(dump);
+    free(dump);
+    ck_assert_ptr_ne(loaded, NULL);
+    /* player_load() restores the saved canonical inventory order after the
+     * generic nested-object loader prepends each object. */
+    object_reverse_inventory(loaded);
+    ck_assert_int_eq(loaded->glow_radius, loaded->arch->clone.glow_radius);
+    ck_assert_uint_eq(loaded->light_color, loaded->arch->clone.light_color);
+
+    object *lights[2] = {NULL, NULL};
+    size_t num_lights = 0;
+    for (object *tmp = loaded->inv; tmp != NULL; tmp = tmp->below) {
+        if (tmp->type == LIGHT_APPLY && QUERY_FLAG(tmp, FLAG_APPLIED) && num_lights < 2) {
+            lights[num_lights++] = tmp;
+        }
+    }
+    ck_assert_uint_eq(num_lights, 2);
+    ck_assert_uint_eq(lights[0]->light_color, UINT32_C(0x0000ff));
+    ck_assert_uint_eq(lights[1]->light_color, UINT32_C(0xff0000));
+
+    mapstruct *restored_map;
+    object *restored;
+    check_setup_env_pl(&restored_map, &restored);
+    object_remove(restored, 0);
+    SET_FLAG(restored, FLAG_NO_FIX_PLAYER);
+    for (size_t i = num_lights; i > 0; i--) {
+        object_remove(lights[i - 1], 0);
+        object_insert_into(lights[i - 1], restored, INS_NO_MERGE);
+    }
+    CLEAR_FLAG(restored, FLAG_NO_FIX_PLAYER);
+
+    living_update(restored);
+    assert_player_light(restored, 4, UINT32_C(0x0000ff));
+    restored = object_insert_map(restored, restored_map, NULL, 0);
+    assert_player_light(restored, 4, UINT32_C(0x0000ff));
+    MapSpace *space = GET_MAP_SPACE_PTR(restored_map, restored->x, restored->y);
+    ck_assert_int_gt(space->light_source_color[2], space->light_source_color[0]);
+
+    object_destroy(loaded);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("light_apply");
     TCase *tc_core = tcase_create("Core");
@@ -223,6 +416,11 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_light_apply_apply_5);
     tcase_add_test(tc_core, test_light_apply_apply_6);
     tcase_add_test(tc_core, test_applied_light_propagates_color_and_restores_field);
+    tcase_add_test(tc_core, test_equal_radius_lights_use_stable_inventory_priority);
+    tcase_add_test(tc_core, test_same_radius_hue_change_is_idempotent);
+    tcase_add_test(tc_core, test_extinguish_relight_and_burnout_select_fallback);
+    tcase_add_test(tc_core, test_removed_player_recomputes_before_reinsertion);
+    tcase_add_test(tc_core, test_serialized_inventory_reconstructs_derived_light);
 
     return s;
 }
