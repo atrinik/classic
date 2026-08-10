@@ -307,6 +307,15 @@ stable_identity_state *identity = &identities[*depth];
         FREE_AND_COPY_HASH(op->name, yv);
     }
 }
+^name_pl{S}          {
+    const char *yv = yval();
+
+    if (*yv == '\0') {
+        LOG(ERROR, "Plural name without val");
+    } else {
+        FREE_AND_COPY_HASH(op->name_pl, yv);
+    }
+}
 ^custom_name{S}      {
     const char *yv = yval();
 
@@ -1273,6 +1282,10 @@ get_ob_diff (StringBuffer *sb, const object *op, const object *op2)
 
     if (op->name && op->name != op2->name) {
         SAVE_STRING(sb, "name", op->name);
+    }
+
+    if (op->name_pl && op->name_pl != op2->name_pl) {
+        SAVE_STRING(sb, "name_pl", op->name_pl);
     }
 
     if (op->custom_name && op->custom_name != op2->custom_name) {

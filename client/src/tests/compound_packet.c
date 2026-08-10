@@ -95,6 +95,78 @@ static void test_item_command(void) {
     TEST_CHECK(packet_reader_error(&reader) == PACKET_ERROR_UNSUPPORTED);
 }
 
+static packet_struct *make_name_count_update(const char *name, uint32_t nrof) {
+    packet_struct *packet = packet_new(0, 32, 32);
+    packet_writer_write_cstring(packet, name);
+    packet_writer_write_uint32(packet, nrof);
+    return packet;
+}
+
+static void test_name_count_update(void) {
+    object base = {.nrof = 1};
+    object next = {0};
+    object prev = {0};
+    object env = {0};
+    object inv = {0};
+    base.next = &next;
+    base.prev = &prev;
+    base.env = &env;
+    base.inv = &inv;
+    snprintf(VS(base.s_name), "torch");
+
+    packet_struct *packet = make_name_count_update("torches", 2);
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    item_packet_update_t update;
+    TEST_CHECK(item_packet_parse_update(&reader, UPD_NAME | UPD_NROF, &base, &update));
+    TEST_CHECK(packet_reader_finish(&reader));
+    TEST_CHECK(strcmp(update.item.s_name, "torches") == 0);
+    TEST_CHECK(update.item.nrof == 2);
+    TEST_CHECK(strcmp(base.s_name, "torch") == 0);
+    TEST_CHECK(base.nrof == 1);
+    item_packet_apply_update(&update, &base);
+    TEST_CHECK(strcmp(base.s_name, "torches") == 0);
+    TEST_CHECK(base.nrof == 2);
+    TEST_CHECK(base.next == &next);
+    TEST_CHECK(base.prev == &prev);
+    TEST_CHECK(base.env == &env);
+    TEST_CHECK(base.inv == &inv);
+
+    for (size_t len = 0; len < packet->len; len++) {
+        packet_reader_init(&reader, packet->data, len);
+        object before = base;
+        TEST_CHECK(!item_packet_parse_update(&reader, UPD_NAME | UPD_NROF, &base, &update));
+        TEST_CHECK(memcmp(&base, &before, sizeof(base)) == 0);
+    }
+    packet_free(packet);
+
+    packet = make_name_count_update("torch", 1);
+    packet_reader_init(&reader, packet->data, packet->len);
+    TEST_CHECK(item_packet_parse_update(&reader, UPD_NAME | UPD_NROF, &base, &update));
+    TEST_CHECK(packet_reader_finish(&reader));
+    item_packet_apply_update(&update, &base);
+    TEST_CHECK(strcmp(base.s_name, "torch") == 0);
+    TEST_CHECK(base.nrof == 1);
+    packet_free(packet);
+
+    char oversized[NAME_LEN + 1];
+    memset(oversized, 'x', sizeof(oversized) - 1);
+    oversized[sizeof(oversized) - 1] = '\0';
+    packet = make_name_count_update(oversized, 2);
+    packet_reader_init(&reader, packet->data, packet->len);
+    TEST_CHECK(!item_packet_parse_update(&reader, UPD_NAME | UPD_NROF, &base, &update));
+    TEST_CHECK(packet_reader_error(&reader) == PACKET_ERROR_LIMIT_EXCEEDED);
+    packet_free(packet);
+
+    packet = packet_new(0, 16, 16);
+    packet_writer_write_uint32(packet, 2);
+    packet_writer_write_cstring(packet, "torches");
+    packet_reader_init(&reader, packet->data, packet->len);
+    TEST_CHECK(!item_packet_parse_update(&reader, UPD_NAME | UPD_NROF, &base, &update) ||
+               !packet_reader_finish(&reader));
+    packet_free(packet);
+}
+
 static void test_glow_limit_and_error_scope(void) {
     packet_struct *packet = make_item_command("#dbce3b");
     packet_reader_scope_t scope;
@@ -205,6 +277,7 @@ static void test_bounded_fuzz_regression(void) {
 int main(void) {
     toolkit_import(packet);
     test_item_command();
+    test_name_count_update();
     test_glow_limit_and_error_scope();
     test_interface_command();
     test_interface_fields();

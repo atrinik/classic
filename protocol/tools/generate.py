@@ -32,7 +32,7 @@ def load_schema(path: Path) -> dict[str, object]:
 
     if not isinstance(data, dict):
         raise ValueError("schema root must be an object")
-    if set(data) != {"schema_version", "protocol_version", *DIRECTIONS}:
+    if set(data) != {"schema_version", "protocol_version", "item_name_size", *DIRECTIONS}:
         raise ValueError("schema root has missing or unsupported keys")
     if data["schema_version"] != 1:
         raise ValueError("unsupported schema_version")
@@ -41,6 +41,11 @@ def load_schema(path: Path) -> dict[str, object]:
         raise ValueError("protocol_version must be an integer")
     if protocol_version <= 0 or protocol_version > 0xFFFFFFFF:
         raise ValueError("protocol_version is outside uint32 range")
+    item_name_size = data["item_name_size"]
+    if isinstance(item_name_size, bool) or not isinstance(item_name_size, int):
+        raise ValueError("item_name_size must be an integer")
+    if item_name_size <= 1 or item_name_size > 0xFFFFFFFF:
+        raise ValueError("item_name_size is outside the supported range")
 
     for direction in DIRECTIONS:
         commands = data[direction]
@@ -90,7 +95,8 @@ def render_header(schema: dict[str, object]) -> str:
         "#ifndef ATRINIK_PROTOCOL_GAME_COMMANDS_H\n",
         "#define ATRINIK_PROTOCOL_GAME_COMMANDS_H\n\n",
         f"#define ATRINIK_PROTOCOL_VERSION {schema['protocol_version']}U\n",
-        "#define SOCKET_VERSION ATRINIK_PROTOCOL_VERSION\n\n",
+        "#define SOCKET_VERSION ATRINIK_PROTOCOL_VERSION\n",
+        f"#define ATRINIK_PROTOCOL_ITEM_NAME_SIZE {schema['item_name_size']}U\n\n",
         "typedef enum atrinik_client_to_server_command {\n",
     ]
     for command in schema["client_to_server"]:
@@ -174,6 +180,7 @@ def render_python(schema: dict[str, object]) -> str:
         generated_banner("#"),
         "from enum import IntEnum\n\n",
         f"PROTOCOL_VERSION = {schema['protocol_version']}\n\n\n",
+        f"ITEM_NAME_SIZE = {schema['item_name_size']}\n\n\n",
         "class ClientToServerCommand(IntEnum):\n",
     ]
     for command in schema["client_to_server"]:
