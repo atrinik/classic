@@ -199,8 +199,12 @@ TOOLKIT_INIT_FUNC(socket_server) {
         /* IP addresses to bind to in non-dual-stack configurations. */
         struct sockaddr_storage v4;
         struct sockaddr_storage v6;
+        char v4_host[INET_ADDRSTRLEN];
+        char v6_host[INET6_ADDRSTRLEN];
     } stack_setting;
     memset(&stack_setting, 0, sizeof(stack_setting));
+    snprintf(VS(stack_setting.v4_host), "%s", "0.0.0.0");
+    snprintf(VS(stack_setting.v6_host), "%s", "::");
 
     char word[MAX_BUF];
     size_t pos = 0;
@@ -243,6 +247,12 @@ TOOLKIT_INIT_FUNC(socket_server) {
             LOG(ERROR, "Invalid IP address in network stack configuration: %s", cps[1]);
             exit(1);
         }
+        if (cps[1] != NULL) {
+            char *host = addr == &stack_setting.v4 ? stack_setting.v4_host : stack_setting.v6_host;
+            size_t host_size = addr == &stack_setting.v4 ? sizeof(stack_setting.v4_host)
+                                                         : sizeof(stack_setting.v6_host);
+            snprintf(host, host_size, "%s", cps[1]);
+        }
     }
 
     if (stack_setting.type == 0) {
@@ -259,13 +269,17 @@ TOOLKIT_INIT_FUNC(socket_server) {
         snprintf(VS(identity_path), "%s/quic-identity.pem", settings.datapath);
         bool dual = BIT_QUERY(stack_setting.type, STACK_DUAL);
         if (dual || BIT_QUERY(stack_setting.type, STACK_IPV4)) {
-            quic_server_sockets[0] =
-                socket_quic_server_create("0.0.0.0", settings.port_quic, false, identity_path);
+            quic_server_sockets[0] = socket_quic_server_create(stack_setting.v4_host,
+                                                               settings.port_quic,
+                                                               false,
+                                                               identity_path);
         }
 #ifdef HAVE_IPV6
         if (dual || BIT_QUERY(stack_setting.type, STACK_IPV6)) {
-            quic_server_sockets[1] =
-                socket_quic_server_create("::", settings.port_quic, false, identity_path);
+            quic_server_sockets[1] = socket_quic_server_create(stack_setting.v6_host,
+                                                               settings.port_quic,
+                                                               false,
+                                                               identity_path);
         }
 #endif
         socket_t *identity_socket =

@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import zipfile
 import sys
+import stat
 import warnings
 
 
@@ -182,6 +183,17 @@ class FinalizeArtifactsTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "duplicate member"):
             finalize_artifacts.validate_zip(duplicate, "expected", ("payload",))
 
+        symlink = self.root / "symlink.zip"
+        with zipfile.ZipFile(symlink, "w") as archive:
+            member = zipfile.ZipInfo("expected/server/maps/regions.reg")
+            member.create_system = 3
+            member.external_attr = (stat.S_IFLNK | 0o777) << 16
+            archive.writestr(member, b"../../outside")
+        with self.assertRaisesRegex(RuntimeError, "unsupported ZIP member type"):
+            finalize_artifacts.validate_zip(
+                symlink, "expected", ("server/maps/regions.reg",)
+            )
+
         case_collision = self.root / "case-collision.zip"
         with zipfile.ZipFile(case_collision, "w") as archive:
             archive.writestr("expected/server/server.cfg", b"first")
@@ -271,8 +283,22 @@ class FinalizeArtifactsTests(unittest.TestCase):
             package,
             finalize_artifacts.SERVER_WINDOWS_REQUIRED_PATTERNS,
             finalize_artifacts.SERVER_WINDOWS_FORBIDDEN_PATTERNS,
+            finalize_artifacts.SERVER_WINDOWS_UNIQUE_PATTERNS,
         )
         finalize_artifacts.validate_embedded_python_runtime(path, package)
+
+        duplicate_plugins = self.root / "duplicate-plugins.zip"
+        with zipfile.ZipFile(duplicate_plugins, "w") as archive:
+            archive.writestr(f"{package}/server/plugin_arena.dll", b"first")
+            archive.writestr(f"{package}/server/other_plugin_arena.dll", b"second")
+            archive.writestr(f"{package}/server/plugin_python.dll", b"python")
+        with self.assertRaisesRegex(RuntimeError, "exactly one packaged"):
+            finalize_artifacts.validate_zip(
+                duplicate_plugins,
+                package,
+                finalize_artifacts.SERVER_WINDOWS_UNIQUE_PATTERNS,
+                unique_patterns=finalize_artifacts.SERVER_WINDOWS_UNIQUE_PATTERNS,
+            )
 
     def test_windows_server_zip_rejects_split_maps_layout(self) -> None:
         package = "atrinik-classic-server-5.6.0-windows-x86_64"

@@ -44,6 +44,7 @@ try {
         "/c",
         "server.bat",
         "--port_quic=$serverPort",
+        "--network_stack=ipv4=127.0.0.1",
         "--port_mapping=off",
         "--stun_server=off",
         "--metaserver_publish_origin=http://127.0.0.1:9",
@@ -83,6 +84,15 @@ try {
     if (-not $ready) {
         $output = $lines -join "`n"
         throw "Packaged server did not reach the ready state within 60 seconds:`n$output"
+    }
+
+    $listenerEndpoints = @(Get-NetUDPEndpoint -LocalPort $serverPort)
+    if (
+        $listenerEndpoints.Count -ne 1 -or
+        $listenerEndpoints[0].LocalAddress -ne "127.0.0.1"
+    ) {
+        $boundAddresses = ($listenerEndpoints | ForEach-Object { $_.LocalAddress }) -join ", "
+        throw "Packaged server listener is not isolated to IPv4 loopback: $boundAddresses"
     }
 
     $process.StandardInput.WriteLine("shutdown")

@@ -11,6 +11,7 @@ import io
 import json
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import tarfile
 import zipfile
 
@@ -45,6 +46,10 @@ SERVER_WINDOWS_REQUIRED_PATTERNS = (
     "server/assets/client-maps/*",
 )
 SERVER_WINDOWS_FORBIDDEN_PATTERNS = ("maps", "maps/*")
+SERVER_WINDOWS_UNIQUE_PATTERNS = (
+    "server/*plugin_arena*.dll",
+    "server/*plugin_python*.dll",
+)
 WINDOWS_RESERVED_NAMES = {
     "aux",
     "con",
@@ -90,6 +95,18 @@ def validate_windows_member(name: str) -> None:
         for component in components
     ):
         raise RuntimeError(f"unsafe packaged path: {name}")
+
+
+def validate_zip_member_type(member: zipfile.ZipInfo) -> None:
+    if member.flag_bits & 0x1:
+        raise RuntimeError(f"encrypted ZIP member is not supported: {member.filename}")
+    if member.create_system != 3:
+        return
+    file_type = stat.S_IFMT(member.external_attr >> 16)
+    if file_type not in {0, stat.S_IFREG, stat.S_IFDIR} or (
+        member.is_dir() and file_type == stat.S_IFREG
+    ) or (not member.is_dir() and file_type == stat.S_IFDIR):
+        raise RuntimeError(f"unsupported ZIP member type: {member.filename}")
 
 
 def validate_source_archive(path: Path, package: str, version: str) -> None:
@@ -156,6 +173,7 @@ def validate_zip(
     package_root: str,
     required_patterns: tuple[str, ...],
     forbidden_patterns: tuple[str, ...] = (),
+    unique_patterns: tuple[str, ...] = (),
 ) -> None:
     with zipfile.ZipFile(path) as archive:
         if not archive.infolist():
@@ -168,6 +186,7 @@ def validate_zip(
         relative_names = set()
         for member in archive.infolist():
             validate_windows_member(member.filename)
+            validate_zip_member_type(member)
             if member.filename in member_names:
                 raise RuntimeError(
                     f"{path.name} contains duplicate member: {member.filename}"
@@ -218,6 +237,12 @@ def validate_zip(
                 raise RuntimeError(f"{path.name} is missing packaged {pattern}")
             if not any(size > 0 for size in matches):
                 raise RuntimeError(f"{path.name} has only empty packaged {pattern}")
+        for pattern in unique_patterns:
+            matches = [name for name in files if fnmatch.fnmatchcase(name, pattern)]
+            if len(matches) != 1:
+                raise RuntimeError(
+                    f"{path.name} must contain exactly one packaged {pattern}"
+                )
         for pattern in forbidden_patterns:
             if any(
                 fnmatch.fnmatchcase(name.casefold(), pattern.casefold())
@@ -546,6 +571,7 @@ def main() -> int:
         f"atrinik-classic-server-{arguments.version}-windows-x86_64",
         SERVER_WINDOWS_REQUIRED_PATTERNS,
         SERVER_WINDOWS_FORBIDDEN_PATTERNS,
+        SERVER_WINDOWS_UNIQUE_PATTERNS,
     )
     validate_embedded_python_runtime(
         directory / f"atrinik-classic-server-{arguments.version}-windows-x86_64.zip",
