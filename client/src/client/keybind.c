@@ -53,6 +53,10 @@
 /** Active physical keys contributing to the logical gameplay movement stream. */
 static keybind_movement_state movement_state;
 
+/** Whether run/fire mode is owned by a momentary held command rather than a toggle. */
+static bool movement_run_held;
+static bool movement_fire_held;
+
 static bool keybind_event_running(void *user_data) {
     (void)user_data;
     return cpl.run_on;
@@ -287,9 +291,11 @@ int keybind_process_command_up(const char *cmd) {
         cmd++;
 
         if (!strcmp(cmd, "RUNON")) {
+            movement_run_held = false;
             cpl.run_on = 0;
             keybind_movement_state_run_released(&movement_state, move_keys_run_stream_active());
         } else if (!strcmp(cmd, "FIREON")) {
+            movement_fire_held = false;
             cpl.fire_on = 0;
         } else if (!strncmp(cmd, "MOVE_", 5)) {
             keybind_struct *keybind;
@@ -322,12 +328,20 @@ void keybind_state_ensure(void) {
         }
     }
 
-    if (cpl.run_on && !keybind_command_matches_state("?RUNON")) {
-        keybind_process_command_up("?RUNON");
+    if (movement_run_held && !keybind_command_matches_state("?RUNON")) {
+        if (cpl.run_on) {
+            keybind_process_command_up("?RUNON");
+        } else {
+            movement_run_held = false;
+        }
     }
 
-    if (cpl.fire_on && !keybind_command_matches_state("?FIREON")) {
-        keybind_process_command_up("?FIREON");
+    if (movement_fire_held && !keybind_command_matches_state("?FIREON")) {
+        if (cpl.fire_on) {
+            keybind_process_command_up("?FIREON");
+        } else {
+            movement_fire_held = false;
+        }
     }
 }
 
@@ -352,7 +366,7 @@ void keybind_movement_flush(void) {
 void keybind_movement_key_released(const SDL_KeyboardEvent *event) {
     keybind_event_handler handler = keybind_event_handler_create();
 
-    keybind_event_reconcile_release(keybindings, keybindings_num, event, &handler);
+    keybind_event_reconcile_release(keybindings, keybindings_num, event, keys, &handler);
     if (keybind_event_is_modifier(event)) {
         keybind_state_ensure();
     }
@@ -443,18 +457,22 @@ int keybind_process_command(const char *cmd) {
             widget_inventory_handle_arrow_key(cpl.inventory_focus, SDLK_RIGHT);
         } else if (!strncmp(cmd, "RUNON", 5)) {
             if (!strcmp(cmd + 5, "_TOGGLE")) {
+                movement_run_held = false;
                 if (cpl.run_on) {
                     move_keys(5);
                 }
 
                 cpl.run_on = !cpl.run_on;
             } else {
+                movement_run_held = true;
                 cpl.run_on = 1;
             }
         } else if (!strncmp(cmd, "FIREON", 6)) {
             if (!strcmp(cmd + 6, "_TOGGLE")) {
+                movement_fire_held = false;
                 cpl.fire_on = !cpl.fire_on;
             } else {
+                movement_fire_held = true;
                 cpl.fire_on = 1;
             }
         } else if (!strncmp(cmd, "QUICKSLOT_", 10)) {

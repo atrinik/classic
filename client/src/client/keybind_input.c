@@ -416,6 +416,23 @@ void keybind_movement_state_release_invalid_modifiers(keybind_movement_state *st
     }
 }
 
+/** Return whether modifier state invalidates an active movement binding. */
+bool keybind_movement_state_has_invalid_modifier(const keybind_movement_state *state,
+                                                 SDL_Keymod mod) {
+    if (state == NULL) {
+        return false;
+    }
+
+    SDL_Keymod adjusted_mod = keybind_adjust_kmod(mod);
+    for (SDL_Scancode scancode = 0; scancode < SDL_SCANCODE_COUNT; scancode++) {
+        if (state->keys[scancode].direction != 0 && state->keys[scancode].mod != SDL_KMOD_NONE &&
+            state->keys[scancode].mod != adjusted_mod) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /** Release one physical movement key and schedule the resulting stream update. */
 void keybind_movement_state_release(keybind_movement_state *state,
                                     SDL_Scancode scancode,

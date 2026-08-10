@@ -138,18 +138,47 @@ bool keybind_event_is_modifier(const SDL_KeyboardEvent *event) {
     }
 }
 
+static bool keybind_event_modifier_invalidates_mode(keybind_struct *const *bindings,
+                                                    size_t bindings_num,
+                                                    const SDL_KeyboardEvent *event,
+                                                    const key_struct *key_states) {
+    if (!keybind_event_is_modifier(event) || key_states == NULL) {
+        return false;
+    }
+
+    SDL_Keymod adjusted_mod = keybind_adjust_kmod(event->mod);
+    for (size_t i = 0; i < bindings_num; i++) {
+        if (bindings[i]->mod == SDL_KMOD_NONE || bindings[i]->mod == adjusted_mod ||
+            (!keybind_command_contains(bindings[i]->command, "?RUNON") &&
+             !keybind_command_contains(bindings[i]->command, "?FIREON"))) {
+            continue;
+        }
+        SDL_Scancode scancode = SDL_GetScancodeFromKey(bindings[i]->key, NULL);
+        if (scancode != SDL_SCANCODE_UNKNOWN && key_states[scancode].pressed) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /** Reconcile a key-up, flushing only movement-relevant ordering boundaries. */
 void keybind_event_reconcile_release(keybind_struct *const *bindings,
                                      size_t bindings_num,
                                      const SDL_KeyboardEvent *event,
+                                     const key_struct *key_states,
                                      const keybind_event_handler *handler) {
     if (bindings == NULL || event == NULL || handler == NULL || handler->movement == NULL) {
         return;
     }
 
     const keybind_struct *keybind = keybind_event_find(bindings, bindings_num, event);
+    bool modifier_invalidates_movement =
+        keybind_event_is_modifier(event) &&
+        keybind_movement_state_has_invalid_modifier(handler->movement, event->mod);
+    bool modifier_invalidates_mode =
+        keybind_event_modifier_invalidates_mode(bindings, bindings_num, event, key_states);
     if (keybind_movement_state_has_scancode(handler->movement, event->scancode) ||
-        keybind_event_is_modifier(event) ||
+        modifier_invalidates_movement || modifier_invalidates_mode ||
         (keybind != NULL && (keybind_command_contains(keybind->command, "?RUNON") ||
                              keybind_command_contains(keybind->command, "?FIREON")))) {
         keybind_event_flush(handler);

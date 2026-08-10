@@ -704,14 +704,21 @@ static void test_keybind_event_integration(void) {
         .key = SDLK_G,
         .repeat = true,
     };
+    keybind_struct shifted_modes = {
+        .command = "?RUNON;?FIREON",
+        .key = SDLK_H,
+        .mod = SDL_KMOD_SHIFT,
+    };
     keybind_struct *bindings[] = {&northwest,
                                   &shifted,
                                   &northeast,
                                   &move_then_fire,
                                   &fire_then_move,
                                   &movement_sequence,
-                                  &southeast};
+                                  &southeast,
+                                  &shifted_modes};
     movement_sink sink;
+    key_struct key_states[SDL_SCANCODE_COUNT] = {0};
     SDL_KeyboardEvent event = {.type = SDL_EVENT_KEY_DOWN};
 
     movement_sink_reset(&sink);
@@ -807,7 +814,34 @@ static void test_keybind_event_integration(void) {
         .key = SDLK_F,
         .scancode = SDL_SCANCODE_F,
     };
-    keybind_event_reconcile_release(bindings, arraysize(bindings), &unrelated, &handler);
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &unrelated,
+                                    key_states,
+                                    &handler);
+    TEST_CHECK(sink.actions_num == 0);
+    event.key = SDLK_B;
+    event.scancode = SDL_SCANCODE_B;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 8);
+
+    /* An unrelated modifier key-up also leaves chord coalescing intact. */
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.key = SDLK_A;
+    event.scancode = SDL_SCANCODE_A;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    SDL_KeyboardEvent modifier_up = {
+        .type = SDL_EVENT_KEY_UP,
+        .key = SDLK_LSHIFT,
+        .scancode = SDL_SCANCODE_LSHIFT,
+    };
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
     TEST_CHECK(sink.actions_num == 0);
     event.key = SDLK_B;
     event.scancode = SDL_SCANCODE_B;
@@ -822,12 +856,12 @@ static void test_keybind_event_integration(void) {
     event.key = SDLK_A;
     event.scancode = SDL_SCANCODE_A;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
-    SDL_KeyboardEvent modifier_up = {
-        .type = SDL_EVENT_KEY_UP,
-        .key = SDLK_LSHIFT,
-        .scancode = SDL_SCANCODE_LSHIFT,
-    };
-    keybind_event_reconcile_release(bindings, arraysize(bindings), &modifier_up, &handler);
+    key_states[SDL_SCANCODE_H].pressed = true;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
     TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 7 && sink.firing_at_emit[0]);
     sink.firing = false;
     event.repeat = true;
@@ -839,7 +873,11 @@ static void test_keybind_event_integration(void) {
     handler = movement_sink_handler(&sink);
     event.repeat = false;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
-    keybind_event_reconcile_release(bindings, arraysize(bindings), &modifier_up, &handler);
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
     TEST_CHECK(sink.actions_num == 1 && sink.running_at_emit[0]);
     sink.running = false;
     event.repeat = true;
@@ -847,6 +885,7 @@ static void test_keybind_event_integration(void) {
     TEST_CHECK(sink.actions_num == 2 && !sink.running_at_emit[1]);
 
     /* Modifier-qualified movement cannot remain stale after modifier release. */
+    key_states[SDL_SCANCODE_H].pressed = false;
     movement_sink_reset(&sink);
     handler = movement_sink_handler(&sink);
     event.repeat = false;
@@ -855,7 +894,11 @@ static void test_keybind_event_integration(void) {
     event.scancode = SDL_SCANCODE_A;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     modifier_up.mod = SDL_KMOD_NONE;
-    keybind_event_reconcile_release(bindings, arraysize(bindings), &modifier_up, &handler);
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
     TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 9);
     event.mod = SDL_KMOD_NONE;
     event.key = SDLK_G;

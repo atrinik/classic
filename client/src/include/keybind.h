@@ -153,6 +153,7 @@ extern void keybind_event_process_binding(const keybind_struct *keybind,
 extern void keybind_event_reconcile_release(keybind_struct *const *bindings,
                                             size_t bindings_num,
                                             const SDL_KeyboardEvent *event,
+                                            const key_struct *key_states,
                                             const keybind_event_handler *handler);
 
 extern bool keybind_event_is_modifier(const SDL_KeyboardEvent *event);
@@ -172,6 +173,9 @@ extern void keybind_movement_state_release_invalid_modifiers(keybind_movement_st
                                                              SDL_Keymod mod,
                                                              bool running,
                                                              bool firing);
+
+extern bool keybind_movement_state_has_invalid_modifier(const keybind_movement_state *state,
+                                                        SDL_Keymod mod);
 
 extern bool keybind_movement_state_press(keybind_movement_state *state,
                                          SDL_Scancode scancode,
