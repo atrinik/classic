@@ -118,6 +118,150 @@ static void request_move_player(object **pl, mapstruct *map, int x, int y) {
     CONTR(*pl)->update_los = 1;
 }
 
+static void request_move_path(player *pl, int x, int y) {
+    uint8_t request[] = {
+        (uint8_t)(pl->cs->mapx_2 + x - pl->ob->x),
+        (uint8_t)(pl->cs->mapy_2 + y - pl->ob->y),
+    };
+    socket_command_move_path(pl->cs, pl, request, sizeof(request), 0);
+}
+
+static player_path *request_path_last(player *pl) {
+    player_path *path = pl->move_path;
+    while (path != NULL && path->next != NULL) {
+        path = path->next;
+    }
+    return path;
+}
+
+static void request_run_path(player *pl) {
+    pl->ob->speed_left = 100.0f;
+    player_path_handle(pl);
+}
+
+START_TEST(test_move_path_walkable_target_reaches_exact_coordinate) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    request_move_player(&pl, map, 4, 4);
+
+    request_move_path(CONTR(pl), 8, 4);
+
+    player_path *last = request_path_last(CONTR(pl));
+    ck_assert_ptr_nonnull(last);
+    ck_assert_ptr_eq(last->map, map);
+    ck_assert_int_eq(last->x, 8);
+    ck_assert_int_eq(last->y, 4);
+    request_run_path(CONTR(pl));
+    ck_assert_ptr_null(CONTR(pl)->move_path);
+    ck_assert_int_eq(pl->x, 8);
+    ck_assert_int_eq(pl->y, 4);
+}
+END_TEST
+
+START_TEST(test_move_path_blocked_target_stops_at_deterministic_adjacent_tile) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    request_move_player(&pl, map, 4, 4);
+    SET_MAP_FLAGS(map, 8, 4, P_NO_PASS);
+
+    request_move_path(CONTR(pl), 8, 4);
+
+    player_path *last = request_path_last(CONTR(pl));
+    ck_assert_ptr_nonnull(last);
+    ck_assert(!(last->map == map && last->x == 8 && last->y == 4));
+    int16_t expected_x = last->x;
+    int16_t expected_y = last->y;
+    request_run_path(CONTR(pl));
+    ck_assert_ptr_null(CONTR(pl)->move_path);
+    ck_assert_int_eq(pl->x, expected_x);
+    ck_assert_int_eq(pl->y, expected_y);
+
+    request_move_player(&pl, map, 4, 4);
+    request_move_path(CONTR(pl), 8, 4);
+    last = request_path_last(CONTR(pl));
+    ck_assert_ptr_nonnull(last);
+    ck_assert_int_eq(last->x, expected_x);
+    ck_assert_int_eq(last->y, expected_y);
+}
+END_TEST
+
+START_TEST(test_move_path_occupied_target_stops_at_adjacent_tile) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    request_move_player(&pl, map, 4, 4);
+    object *npc = arch_get("kobold");
+    npc->x = 8;
+    npc->y = 4;
+    npc = object_insert_map(npc, map, NULL, 0);
+    ck_assert_ptr_nonnull(npc);
+
+    request_move_path(CONTR(pl), 8, 4);
+
+    player_path *last = request_path_last(CONTR(pl));
+    ck_assert_ptr_nonnull(last);
+    ck_assert(!(last->map == map && last->x == 8 && last->y == 4));
+    request_run_path(CONTR(pl));
+    ck_assert_ptr_null(CONTR(pl)->move_path);
+    ck_assert(!(pl->x == 8 && pl->y == 4));
+}
+END_TEST
+
+START_TEST(test_move_path_unreachable_request_clears_existing_queue) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    request_move_player(&pl, map, 12, 12);
+    player_path_add(CONTR(pl), map, 13, 12);
+    for (int direction = 1; direction <= SIZEOFFREE1; direction++) {
+        SET_MAP_FLAGS(map, pl->x + freearr_x[direction], pl->y + freearr_y[direction], P_NO_PASS);
+    }
+
+    request_move_path(CONTR(pl), 18, 18);
+
+    ck_assert_ptr_null(CONTR(pl)->move_path);
+    ck_assert_ptr_null(CONTR(pl)->move_path_end);
+}
+END_TEST
+
+START_TEST(test_move_path_invalid_request_preserves_existing_queue) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    request_move_player(&pl, map, 12, 12);
+    player_path_add(CONTR(pl), map, 13, 12);
+    player_path *queued = CONTR(pl)->move_path;
+    uint8_t truncated[] = {CONTR(pl)->cs->mapx_2};
+
+    socket_command_move_path(CONTR(pl)->cs, CONTR(pl), truncated, sizeof(truncated), 0);
+    ck_assert_ptr_eq(CONTR(pl)->move_path, queued);
+
+    uint8_t out_of_range[] = {CONTR(pl)->cs->mapx, CONTR(pl)->cs->mapy};
+    socket_command_move_path(CONTR(pl)->cs, CONTR(pl), out_of_range, sizeof(out_of_range), 0);
+    ck_assert_ptr_eq(CONTR(pl)->move_path, queued);
+}
+END_TEST
+
+START_TEST(test_move_path_new_blockage_stops_without_displacement) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    request_move_player(&pl, map, 4, 4);
+    request_move_path(CONTR(pl), 8, 4);
+    ck_assert_ptr_nonnull(CONTR(pl)->move_path);
+    SET_MAP_FLAGS(map, 5, 4, P_NO_PASS);
+
+    request_run_path(CONTR(pl));
+
+    ck_assert_ptr_null(CONTR(pl)->move_path);
+    ck_assert_ptr_null(CONTR(pl)->move_path_end);
+    ck_assert_int_eq(pl->x, 4);
+    ck_assert_int_eq(pl->y, 4);
+}
+END_TEST
+
 static void request_version(socket_struct *cs, player *pl, uint32_t version) {
     packet_struct *request = packet_new(0, 4, 0);
     packet_writer_write_uint32(request, version);
@@ -646,6 +790,12 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_out_of_order_player_command_is_not_queued);
     tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
     tcase_add_test(tc_core, test_version_requires_exact_match);
+    tcase_add_test(tc_core, test_move_path_walkable_target_reaches_exact_coordinate);
+    tcase_add_test(tc_core, test_move_path_blocked_target_stops_at_deterministic_adjacent_tile);
+    tcase_add_test(tc_core, test_move_path_occupied_target_stops_at_adjacent_tile);
+    tcase_add_test(tc_core, test_move_path_unreachable_request_clears_existing_queue);
+    tcase_add_test(tc_core, test_move_path_invalid_request_preserves_existing_queue);
+    tcase_add_test(tc_core, test_move_path_new_blockage_stops_without_displacement);
     tcase_add_test(tc_core, test_incuna_unchanged_roof_level_remains_present);
     return s;
 }

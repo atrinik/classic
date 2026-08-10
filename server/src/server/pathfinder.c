@@ -383,7 +383,7 @@ static void path_node_remove(path_node_t *node, path_node_t **list) {
  * @return
  * 0 if the tile is not blocked, non-zero otherwise.
  */
-static int tile_is_blocked(object *op, mapstruct *map, int x, int y) {
+int path_tile_blocked(object *op, mapstruct *map, int x, int y) {
     int block;
     if (op->type == PLAYER && CONTR(op)->tcl) {
         block = 0;
@@ -995,7 +995,7 @@ static bool path_core_neighbors(void *context,
         int y = origin_y + freearr_y[direction];
         bool diagonal = x != origin_x && y != origin_y;
         mapstruct *map = get_map_from_coord(origin_map, &x, &y);
-        if (map == NULL || tile_is_blocked(adapter->op, map, x, y) != 0) {
+        if (map == NULL || path_tile_blocked(adapter->op, map, x, y) != 0) {
             continue;
         }
         if ((GET_MAP_FLAGS(map, x, y) & P_DOOR_CLOSED) == 0 &&

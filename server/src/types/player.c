@@ -1063,7 +1063,6 @@ void player_path_add(player *pl, mapstruct *map, int16_t x, int16_t y) {
     path->x = x;
     path->y = y;
     path->next = NULL;
-    path->fails = 0;
 
     if (!pl->move_path) {
         pl->move_path = pl->move_path_end = path;
@@ -1136,23 +1135,11 @@ void player_path_handle(player *pl) {
                 dir = move_object(pl->ob, dir);
 
                 if (dir == 0) {
-                    int diff;
-
-                    /* Try to move around corners otherwise. */
-                    for (diff = 1; diff <= 2; diff++) {
-                        /* Try left or right first? */
-                        int m = 1 - rndm_chance(2) ? 2 : 0;
-
-                        dir = move_object(pl->ob, absdir(dir + diff * m));
-
-                        if (dir == 0) {
-                            dir = move_object(pl->ob, absdir(dir - diff * m));
-                        }
-
-                        if (dir != 0) {
-                            break;
-                        }
-                    }
+                    /* The route is no longer valid. Stop instead of leaving
+                     * it in a random direction. Door interactions return -1
+                     * and retain their existing retry behavior below. */
+                    player_path_clear(pl);
+                    return;
                 }
             }
 
@@ -1169,17 +1156,13 @@ void player_path_handle(player *pl) {
             if (map == tmp->map && x == tmp->x && y == tmp->y) {
                 pl->move_path = tmp->next;
                 free(tmp);
-            } else if ((rv.distance <= 1 && dir != 0) || tmp->fails > PLAYER_PATH_MAX_FAILS) {
+            } else if (rv.distance <= 1 && dir != 0) {
                 /* Clear all paths if we above check failed: this can happen
                  * if we got teleported somewhere else by a teleporter or a
                  * shop mat, in which case the player most likely doesn't want
-                 * to move to the original destination. Also see if we failed
-                 * to move to destination too many times already. */
+                 * to move to the original destination. */
                 player_path_clear(pl);
                 return;
-            } else {
-                /* Not any of the above; we failed to move where we wanted. */
-                tmp->fails++;
             }
 
             pl->ob->speed_left--;
