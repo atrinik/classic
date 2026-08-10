@@ -59,6 +59,7 @@ typedef enum keybind_movement_action {
     KEYBIND_MOVEMENT_ACTION_MOVE,
     KEYBIND_MOVEMENT_ACTION_STOP,
     KEYBIND_MOVEMENT_ACTION_RUN_STOP,
+    KEYBIND_MOVEMENT_ACTION_RUN_TAP_STOP,
     KEYBIND_MOVEMENT_ACTION_REPLACE
 } keybind_movement_action;
 
@@ -97,6 +98,7 @@ typedef struct keybind_movement_state {
     bool pending_move;
     bool pending_move_repeated;
     bool pending_stop;
+    bool pending_stop_ordered;
     bool pending_run_stop;
     bool deferred_move;
 } keybind_movement_state;

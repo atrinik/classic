@@ -375,6 +375,8 @@ void keybind_movement_flush(void) {
             } else {
                 move_keys_run_stop();
             }
+        } else if (action == KEYBIND_MOVEMENT_ACTION_RUN_TAP_STOP) {
+            move_keys_run_stop();
         }
     }
 }

@@ -360,7 +360,9 @@ bool keybind_movement_state_press(keybind_movement_state *state,
         state->pending_move = true;
         state->pending_move_repeated = true;
         state->pending_direction = keybind_movement_direction(state);
-        state->pending_stop = false;
+        if (!state->pending_stop_ordered) {
+            state->pending_stop = false;
+        }
         state->deferred_move = false;
         return true;
     }
@@ -380,7 +382,9 @@ bool keybind_movement_state_press(keybind_movement_state *state,
         state->pending_move_repeated = false;
         state->pending_direction = keybind_movement_direction(state);
     }
-    state->pending_stop = false;
+    if (!state->pending_stop_ordered) {
+        state->pending_stop = false;
+    }
     state->deferred_move = false;
     return true;
 }
@@ -393,6 +397,35 @@ static bool keybind_movement_active(const keybind_movement_state *state) {
         }
     }
     return false;
+}
+
+/** Finish a released physical stream without canceling its first running step. */
+static void keybind_movement_finish(keybind_movement_state *state, bool running, bool firing) {
+    bool prior_stop = state->pending_stop;
+    bool stop = prior_stop || ((state->repeated || running) && !firing);
+    bool ordered_stop =
+        prior_stop ? state->pending_stop_ordered : stop && running && !state->repeated;
+    if (state->pending_run_stop) {
+        stop = false;
+        ordered_stop = false;
+        state->pending_move = false;
+        state->pending_move_repeated = false;
+    } else if (ordered_stop && state->emitted_direction != 0) {
+        state->pending_move = false;
+        state->pending_move_repeated = false;
+    }
+    if (stop && !ordered_stop) {
+        state->pending_move = false;
+        state->pending_move_repeated = false;
+    }
+    state->pending_stop = stop;
+    state->pending_stop_ordered = ordered_stop;
+    state->repeated = false;
+    state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
+    if (!state->pending_stop && !state->pending_run_stop) {
+        state->emitted_direction = 0;
+        state->epoch = 0;
+    }
 }
 
 /** Return whether a physical scancode participates in the movement stream. */
@@ -663,18 +696,12 @@ void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
         state->deferred_move = defer_move;
         state->pending_move_repeated = false;
         state->pending_direction = direction;
-        state->pending_stop = false;
-    } else {
-        state->pending_move = false;
-        state->pending_move_repeated = false;
-        state->pending_stop = !state->pending_run_stop && (state->repeated || running) && !firing;
-        state->deferred_move = false;
-        state->repeated = false;
-        state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
-        if (!state->pending_stop && !state->pending_run_stop) {
-            state->emitted_direction = 0;
-            state->epoch = 0;
+        if (!state->pending_stop_ordered) {
+            state->pending_stop = false;
         }
+    } else {
+        keybind_movement_finish(state, running, firing);
+        state->deferred_move = false;
     }
 }
 
@@ -716,19 +743,11 @@ void keybind_movement_state_release(keybind_movement_state *state,
         state->pending_move = true;
         state->pending_move_repeated = false;
         state->pending_direction = keybind_movement_direction(state);
-        state->pending_stop = false;
+        if (!state->pending_stop_ordered) {
+            state->pending_stop = false;
+        }
     } else {
-        bool stop = (state->repeated || running) && !firing;
-        if (stop) {
-            state->pending_move = false;
-        }
-        state->pending_stop = stop;
-        state->repeated = false;
-        state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
-        if (!state->pending_stop && !state->pending_run_stop) {
-            state->emitted_direction = 0;
-            state->epoch = 0;
-        }
+        keybind_movement_finish(state, running, firing);
     }
 }
 
@@ -748,12 +767,18 @@ void keybind_movement_state_clear(keybind_movement_state *state, bool running, b
     state->next_epoch = next_epoch;
     state->epoch = stop ? epoch : 0;
     state->pending_stop = stop;
+    state->pending_stop_ordered = false;
 }
 
 /** Schedule a run-stream stop unless movement already stopped it. */
 void keybind_movement_state_run_released(keybind_movement_state *state, bool run_stream_active) {
     if (state != NULL && run_stream_active && !state->pending_stop) {
-        state->pending_run_stop = true;
+        if (state->emitted_direction != 0 && !state->repeated) {
+            state->pending_stop = true;
+            state->pending_stop_ordered = true;
+        } else {
+            state->pending_run_stop = true;
+        }
     }
 }
 
@@ -810,6 +835,21 @@ static uint8_t keybind_movement_direction(const keybind_movement_state *state) {
     return newest_direction;
 }
 
+/** Consume a pending final movement stop. */
+static keybind_movement_action keybind_movement_state_flush_stop(keybind_movement_state *state,
+                                                                 uint8_t *direction,
+                                                                 uint32_t *epoch) {
+    bool ordered = state->pending_stop_ordered;
+    state->pending_stop = false;
+    state->pending_stop_ordered = false;
+    state->pending_run_stop = false;
+    state->emitted_direction = 0;
+    *direction = ordered ? 0 : 5;
+    *epoch = state->epoch;
+    state->epoch = 0;
+    return ordered ? KEYBIND_MOVEMENT_ACTION_RUN_TAP_STOP : KEYBIND_MOVEMENT_ACTION_STOP;
+}
+
 /** Consume one pending logical movement-stream update. */
 keybind_movement_action
 keybind_movement_state_flush(keybind_movement_state *state, uint8_t *direction, uint32_t *epoch) {
@@ -823,6 +863,9 @@ keybind_movement_state_flush(keybind_movement_state *state, uint8_t *direction, 
         state->emitted_direction = 0;
         *direction = 0;
         return KEYBIND_MOVEMENT_ACTION_RUN_STOP;
+    }
+    if (state->pending_stop && state->pending_stop_ordered && state->emitted_direction != 0) {
+        return keybind_movement_state_flush_stop(state, direction, epoch);
     }
     if (state->pending_move) {
         state->pending_move = false;
@@ -843,13 +886,7 @@ keybind_movement_state_flush(keybind_movement_state *state, uint8_t *direction, 
         }
     }
     if (state->pending_stop) {
-        state->pending_stop = false;
-        state->pending_run_stop = false;
-        state->emitted_direction = 0;
-        *direction = 5;
-        *epoch = state->epoch;
-        state->epoch = 0;
-        return KEYBIND_MOVEMENT_ACTION_STOP;
+        return keybind_movement_state_flush_stop(state, direction, epoch);
     }
     return KEYBIND_MOVEMENT_ACTION_NONE;
 }

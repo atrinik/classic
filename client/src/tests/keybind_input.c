@@ -233,16 +233,18 @@ static void test_event_matching(void) {
     TEST_CHECK(keybind_matches_event(&keybind, &event));
 }
 
-static uint32_t expect_movement(keybind_movement_state *state,
-                                keybind_movement_action expected_action,
-                                uint8_t expected_direction) {
+static uint32_t expect_movement_at(keybind_movement_state *state,
+                                   keybind_movement_action expected_action,
+                                   uint8_t expected_direction,
+                                   int line) {
     uint8_t direction = UINT8_MAX;
     uint32_t epoch = 0;
     keybind_movement_action action = keybind_movement_state_flush(state, &direction, &epoch);
 
     if (action != expected_action) {
         fprintf(stderr,
-                "movement action %d, expected %d (direction %u)\n",
+                "line %d: movement action %d, expected %d (direction %u)\n",
+                line,
                 action,
                 expected_action,
                 direction);
@@ -253,6 +255,9 @@ static uint32_t expect_movement(keybind_movement_state *state,
     }
     return epoch;
 }
+
+#define expect_movement(state, action, direction) \
+    expect_movement_at((state), (action), (direction), __LINE__)
 
 static void test_movement_commands(void) {
     static const struct {
@@ -516,18 +521,37 @@ static void test_movement_boundaries_and_modifiers(void) {
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
+    /* A quick running tap moves once before its ordered direction-zero stop. */
+    keybind_movement_state_init(&state);
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
+    keybind_movement_state_release(&state, SDL_SCANCODE_A, true, false);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_TAP_STOP, 0);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
+
+    /* Once repeat starts, final release cancels the replaceable backlog. */
+    keybind_movement_state_init(&state);
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    keybind_movement_state_release(&state, SDL_SCANCODE_A, true, false);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_STOP, 5);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
+
     /* Non-perpendicular and three-direction chords use the newest active key. */
     keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
     keybind_movement_state_press(&state, SDL_SCANCODE_B, 8, false, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_REPLACE, 8);
     keybind_movement_state_press(&state, SDL_SCANCODE_C, 9, false, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_REPLACE, 9);
 
-    /* Running stops once on final release even before SDL repeat begins. */
+    /* A quick running chord preserves its first step, then stops in order. */
     keybind_movement_state_release(&state, SDL_SCANCODE_A, true, false);
     keybind_movement_state_release(&state, SDL_SCANCODE_B, true, false);
     keybind_movement_state_release(&state, SDL_SCANCODE_C, true, false);
-    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_STOP, 5);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_TAP_STOP, 0);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
     /* Fire streams never emit the movement clear command on release/focus loss. */
@@ -548,7 +572,7 @@ static void test_movement_boundaries_and_modifiers(void) {
     keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
     keybind_movement_state_release(&state, SDL_SCANCODE_A, true, false);
-    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_STOP, 5);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_TAP_STOP, 0);
     keybind_movement_state_run_released(&state, false);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
@@ -556,7 +580,7 @@ static void test_movement_boundaries_and_modifiers(void) {
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
     keybind_movement_state_run_released(&state, true);
     keybind_movement_state_release(&state, SDL_SCANCODE_A, false, false);
-    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_STOP, 0);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_TAP_STOP, 0);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
     /* A run stop closes the repeat epoch before a later key release. */
@@ -570,12 +594,12 @@ static void test_movement_boundaries_and_modifiers(void) {
     keybind_movement_state_release(&state, SDL_SCANCODE_A, false, false);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
-    /* A queued ordinary move follows the prior run-stream stop. */
+    /* A queued ordinary move follows the prior ordered quick-run stop. */
     keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
     keybind_movement_state_run_released(&state, true);
     keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, false, true);
-    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_STOP, 0);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_TAP_STOP, 0);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
@@ -640,7 +664,7 @@ static void test_movement_boundaries_and_modifiers(void) {
     keybind_movement_state_release(&state, SDL_SCANCODE_A, true, false);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_REPLACE, 9);
     keybind_movement_state_release(&state, SDL_SCANCODE_B, true, false);
-    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_STOP, 5);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_TAP_STOP, 0);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 }
 

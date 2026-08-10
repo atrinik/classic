@@ -923,6 +923,27 @@ START_TEST(test_replacement_tombstones_do_not_delay_latest_direction) {
 }
 END_TEST
 
+START_TEST(test_quick_running_tap_executes_before_ordered_stop) {
+    mapstruct *map;
+    object *op;
+
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    const uint8_t move[] = {3, 1, 0, 0, 0, 12};
+    const uint8_t stop[] = {0, 0, 0, 0, 0, 0};
+    command_queue_append(cs, SERVER_CMD_MOVE, move, sizeof(move));
+    command_queue_append(cs, SERVER_CMD_MOVE, stop, sizeof(stop));
+
+    int old_x = op->x;
+    op->speed_left = 100.0f;
+    socket_server_handle_client(pl);
+    ck_assert_int_eq(op->x, old_x + 1);
+    ck_assert_uint_eq(pl->run_on, 0);
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, 0);
+}
+END_TEST
+
 START_TEST(test_canceled_movement_bytes_do_not_exhaust_live_queue_limit) {
     mapstruct *map;
     object *op;
@@ -1374,6 +1395,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_invalid_scoped_clear_preserves_queued_commands);
     tcase_add_test(tc_core, test_direction_zero_move_clears_deferred_path);
     tcase_add_test(tc_core, test_replacement_tombstones_do_not_delay_latest_direction);
+    tcase_add_test(tc_core, test_quick_running_tap_executes_before_ordered_stop);
     tcase_add_test(tc_core, test_canceled_movement_bytes_do_not_exhaust_live_queue_limit);
     tcase_add_test(tc_core, test_opposite_scoped_clear_does_not_scan_near_limit_fire_index);
     tcase_add_test(tc_core, test_move_and_fire_require_exact_v1076_payloads);
