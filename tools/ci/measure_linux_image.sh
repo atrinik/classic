@@ -15,6 +15,10 @@ if [[ ! ${image} =~ ^ghcr\.io/atrinik/classic-build@sha256:[0-9a-f]{64}$ ]]; the
 fi
 
 mkdir -p "${output_dir}"
+cpu_count=$(nproc)
+docker_client_version=$(docker version --format '{{.Client.Version}}')
+docker_server_version=$(docker version --format '{{.Server.Version}}')
+kernel=$(uname -srmo)
 cold_pull_ms=0
 warm_pull_ms=0
 cold_start_ms=0
@@ -51,6 +55,13 @@ done
 
 evidence="${output_dir}/linux-image.tsv"
 {
+  printf 'runner_image_os\t%s\n' "${ImageOS:-unknown}"
+  printf 'runner_image_version\t%s\n' "${ImageVersion:-unknown}"
+  printf 'runner_arch\t%s\n' "${RUNNER_ARCH:-unknown}"
+  printf 'kernel\t%s\n' "${kernel}"
+  printf 'cpu_count\t%s\n' "${cpu_count}"
+  printf 'docker_client_version\t%s\n' "${docker_client_version}"
+  printf 'docker_server_version\t%s\n' "${docker_server_version}"
   printf 'image\t%s\n' "${image}"
   printf 'platform_manifest\t%s\n' "${platform_digest}"
   printf 'compressed_bytes\t%s\n' "${compressed_bytes}"
@@ -69,6 +80,12 @@ if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
     echo
     echo '| Measurement | Value |'
     echo '| --- | ---: |'
+    printf '| Runner image | %s %s |\n' \
+      "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+    printf '| Runner architecture / CPUs | %s / %s |\n' \
+      "${RUNNER_ARCH:-unknown}" "${cpu_count}"
+    printf '| Docker client / server | %s / %s |\n' \
+      "${docker_client_version}" "${docker_server_version}"
     printf '| Compressed amd64 layers | %s B |\n' "${compressed_bytes}"
     printf '| Docker content | %s B |\n' "${content_bytes}"
     printf '| Cold pull | %s ms |\n' "${cold_pull_ms}"

@@ -587,6 +587,25 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("ccache --show-config", runner)
         self.assertIn("ccache --show-stats", runner)
 
+        measurement = (ROOT / "tools" / "ci" / "measure_linux_image.sh").read_text(
+            encoding="utf-8"
+        )
+        for field in (
+            "runner_image_os",
+            "runner_image_version",
+            "runner_arch",
+            "kernel",
+            "cpu_count",
+            "docker_client_version",
+            "docker_server_version",
+            "cold_pull_ms",
+            "warm_pull_ms",
+            "cold_start_ms",
+            "warm_start_ms",
+        ):
+            with self.subTest(measurement_field=field):
+                self.assertIn(f"printf '{field}\\t", measurement)
+
 
 if __name__ == "__main__":
     unittest.main()
