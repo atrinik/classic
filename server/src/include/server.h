@@ -226,6 +226,8 @@ extern bool metaserver_rendezvous_token_parse(const char *body, size_t body_size
 
 extern void socket_assets_init(void);
 
+extern bool socket_assets_contains(const char *name);
+
 extern void socket_assets_deinit(void);
 
 extern bool socket_assets_service(socket_struct *ns);

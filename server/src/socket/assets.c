@@ -246,6 +246,10 @@ static asset_cache_entry_t *asset_cache_find(const char *name) {
     return entry;
 }
 
+bool socket_assets_contains(const char *name) {
+    return name != NULL && asset_cache_find(name) != NULL;
+}
+
 static bool asset_request_rate_allow(socket_struct *ns) {
     uint64_t now = datetime_monotonic_ms();
     if (ns->asset_request_window_ms == 0 || now - ns->asset_request_window_ms >= 1000) {
