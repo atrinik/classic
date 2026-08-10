@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import unittest
 
 
@@ -258,7 +259,27 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertLess(coverage, release)
         self.assertLess(release, sanitizers)
         self.assertIn("cmake --build --preset linux-release --parallel", server)
-        self.assertIn("ctest --preset linux-release", server)
+        for preset in ("linux-coverage", "linux-release", "linux-sanitizers"):
+            self.assertIn(f"ctest --preset {preset} --parallel 4", server)
+
+        presets = json.loads((ROOT / "server/CMakePresets.json").read_text())
+        self.assertEqual(
+            {
+                preset["name"]: preset["execution"]["jobs"]
+                for preset in presets["testPresets"]
+            },
+            {
+                "linux-debug": 4,
+                "linux-sanitizers": 4,
+                "linux-coverage": 4,
+                "linux-release": 4,
+            },
+        )
+
+        cmake = (ROOT / "server/CMakeLists.txt").read_text()
+        self.assertNotIn("RESOURCE_LOCK server-test-runtime", cmake)
+        self.assertIn("tools/run_isolated_test.py", cmake)
+        self.assertIn("-fprofile-update=atomic", cmake)
 
     def test_windows_packages_persist_toolchain_bound_compiler_caches(self) -> None:
         candidate = self.text("build-release-candidate.yml")

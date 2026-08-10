@@ -27,6 +27,11 @@
   $ ctest --test-dir build/linux-debug --output-on-failure \
       -R '^server-unit-toolkit.packet$'
 
+ Test presets run at most four entries concurrently. Each entry receives fresh
+ private writable state and retains its named runtime under
+ `build/PRESET/server-test-runtimes/` for failure diagnosis. The complete
+ resource and cleanup contract is documented in `doc/TESTING.md`.
+
  To collect line, function, and branch coverage from the native tests:
   $ cmake --preset linux-coverage
   $ cmake --build --preset linux-coverage

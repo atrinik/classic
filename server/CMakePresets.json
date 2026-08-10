@@ -52,22 +52,26 @@
     {
       "name": "linux-debug",
       "configurePreset": "linux-debug",
-      "output": {"outputOnFailure": true}
+      "output": {"outputOnFailure": true},
+      "execution": {"jobs": 4}
     },
     {
       "name": "linux-sanitizers",
       "configurePreset": "linux-sanitizers",
-      "output": {"outputOnFailure": true}
+      "output": {"outputOnFailure": true},
+      "execution": {"jobs": 4}
     },
     {
       "name": "linux-coverage",
       "configurePreset": "linux-coverage",
-      "output": {"outputOnFailure": true}
+      "output": {"outputOnFailure": true},
+      "execution": {"jobs": 4}
     },
     {
       "name": "linux-release",
       "configurePreset": "linux-release",
-      "output": {"outputOnFailure": true}
+      "output": {"outputOnFailure": true},
+      "execution": {"jobs": 4}
     }
   ]
 }
