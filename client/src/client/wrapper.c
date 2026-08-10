@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <image_codec.h>
 #include <wrapper.h>
 #include <video.h>
 #include <metaserver.h>
@@ -529,7 +530,7 @@ SDL_Surface *IMG_Load_wrapper(const char *file) {
     SDL_Surface *surface;
 
     path = file_path(file, "r");
-    surface = IMG_Load(path);
+    surface = image_codec_load(path);
     free(path);
 
     return surface;

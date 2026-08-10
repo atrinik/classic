@@ -182,6 +182,11 @@ set(HAVE_SDL true)
 # SDL_image is also required, otherwise no bitmaps or map images could be
 # displayed.
 find_package(SDL3_image 3.2 CONFIG REQUIRED)
+if (SDLIMAGE_BACKEND_WIC)
+    message(FATAL_ERROR
+        "The asynchronous face loader requires a thread-safe SDL_image backend; WIC uses "
+        "process-global COM state and is not supported")
+endif ()
 set(HAVE_SDL_IMAGE true)
 
 # SDL_ttf is used for all text drawing, so it's required.
@@ -348,12 +353,15 @@ if (BUILD_TESTING AND NOT MINGW)
     add_executable(client-face-request-tests
         src/tests/face_request.c
         src/client/image.c
-        src/client/face_asset.c)
+        src/client/face_asset.c
+        src/client/face_loader.c
+        src/client/image_codec.c)
     atrinik_configure_target(client-face-request-tests)
     target_compile_definitions(client-face-request-tests PRIVATE
         ATRINIK_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
-        FACE_ADMISSION_RETRY_MS=1
-        FACE_COMPLETION_BUDGET_US=60000000
+        ATRINIK_FACE_REQUEST_TESTING
+        ATRINIK_IMAGE_CODEC_TESTING
+        FACE_URGENT_MAX_AGE_MS=5
         FACE_TRANSFER_RETRY_BASE_MS=1
         SDL_DISABLE_OLD_NAMES)
     target_include_directories(client-face-request-tests BEFORE PRIVATE
@@ -366,6 +374,25 @@ if (BUILD_TESTING AND NOT MINGW)
         SDL3::SDL3
         SDL3_image::SDL3_image)
     add_test(NAME client-face-request COMMAND client-face-request-tests)
+
+    add_executable(client-image-codec-tests
+        src/tests/image_codec.c
+        src/client/image_codec.c)
+    atrinik_configure_target(client-image-codec-tests)
+    target_compile_definitions(client-image-codec-tests PRIVATE
+        ATRINIK_IMAGE_CODEC_TESTING
+        SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-image-codec-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-image-codec-tests PRIVATE
+        Atrinik::Core
+        SDL3::SDL3
+        SDL3_image::SDL3_image)
+    add_test(NAME client-image-codec COMMAND client-image-codec-tests)
+    set_tests_properties(client-image-codec PROPERTIES TIMEOUT 10)
 
     add_executable(client-face-stream-tests
         src/tests/face_stream.c

@@ -12,6 +12,7 @@
 /** @file Deterministic, bounded replay through the live map decoder/renderer. */
 
 #include <global.h>
+#include <image_codec.h>
 #include <player_view.h>
 #include <animations.h>
 #include <commands.h>
@@ -855,7 +856,7 @@ static bool player_view_output_write(SDL_Surface *surface,
         fprintf(stderr, "player-view: cannot create output encoder: %s\n", SDL_GetError());
         return false;
     }
-    if (!IMG_SavePNG_IO(surface, encoded, false)) {
+    if (!image_codec_save_png_io(surface, encoded, false)) {
         fprintf(stderr, "player-view: cannot encode output: %s\n", SDL_GetError());
         SDL_CloseIO(encoded);
         return false;
@@ -871,7 +872,7 @@ static bool player_view_output_write(SDL_Surface *surface,
     }
 
     SDL_IOStream *reader = SDL_IOFromConstMem(encoded_data, (size_t)encoded_size);
-    SDL_Surface *saved = reader != NULL ? IMG_LoadPNG_IO(reader) : NULL;
+    SDL_Surface *saved = reader != NULL ? image_codec_load_png_io(reader) : NULL;
     if (reader != NULL) {
         SDL_CloseIO(reader);
     }

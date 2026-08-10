@@ -86,6 +86,12 @@ void image_prefetch_face(int pnum);
 void image_face_requests_clear(void);
 /** Install completed face assets within the bounded render-frame budget. */
 void image_face_requests_service(void);
+#ifdef ATRINIK_FACE_REQUEST_TESTING
+/** Replace the monotonic clock used by the production frame-budget guard. */
+void image_face_requests_test_clock_set(uint64_t (*clock_func)(void));
+/** Observe local-source progress without exposing scheduler internals in production. */
+size_t image_face_requests_test_unprepared_count(void);
+#endif
 int image_get_id(const char *name);
 bool image_face_valid(int face);
 struct sprite_struct *image_get_sprite(int face);

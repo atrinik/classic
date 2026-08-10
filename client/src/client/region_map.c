@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <image_codec.h>
 #include <wrapper.h>
 #include <video.h>
 #include <surface_primitives.h>
@@ -262,7 +263,7 @@ bool region_map_ready(region_map_t *region_map) {
 
     uint64_t decode_started = SDL_GetTicksNS();
     SDL_IOStream *rw = SDL_IOFromConstMem(body_png, (int)body_png_size);
-    img = rw != NULL ? IMG_Load_IO(rw, 1) : NULL;
+    img = rw != NULL ? image_codec_load_io(rw, true) : NULL;
     if (img == NULL) {
         snprintf(VS(region_map->error),
                  "Could not decode region map '%s': %s",
