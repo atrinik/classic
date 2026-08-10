@@ -500,6 +500,7 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("Get-NetUDPEndpoint -LocalPort $serverPort", smoke)
         self.assertIn('$listenerEndpoints[0].LocalAddress -ne "127.0.0.1"', smoke)
+        self.assertIn('if ($output -match "Discovered a direct")', smoke)
         self.assertIn("$bodySucceeded -and $cleanupFailures.Count -ne 0", smoke)
         self.assertIn('$process.StandardInput.WriteLine("shutdown")', smoke)
         self.assertLess(

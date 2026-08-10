@@ -125,6 +125,9 @@ try {
     if ($output -match "Can't open regions file") {
         throw "Packaged server failed to load regions.reg:`n$output"
     }
+    if ($output -match "Discovered a direct") {
+        throw "Loopback-only packaged server advertised a direct candidate:`n$output"
+    }
     $bodySucceeded = $true
 } finally {
     $cleanupFailures = [System.Collections.Generic.List[string]]::new()

@@ -121,6 +121,20 @@ static uint64_t quic_punches_echoed;
 static csocket_entry_t *client_sockets;
 static size_t client_sockets_count;
 
+static bool socket_server_address_loopback(const struct sockaddr_storage *address) {
+    if (address->ss_family == AF_INET) {
+        const struct sockaddr_in *address4 = (const struct sockaddr_in *)address;
+        return (ntohl(address4->sin_addr.s_addr) & 0xff000000U) == 0x7f000000U;
+    }
+#ifdef HAVE_IPV6
+    if (address->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *address6 = (const struct sockaddr_in6 *)address;
+        return IN6_IS_ADDR_LOOPBACK(&address6->sin6_addr);
+    }
+#endif
+    return false;
+}
+
 #define SOCKET_PENDING_CONNECTIONS_MAX 128U
 
 /**
@@ -200,7 +214,9 @@ TOOLKIT_INIT_FUNC(socket_server) {
         struct sockaddr_storage v4;
         struct sockaddr_storage v6;
         char v4_host[INET_ADDRSTRLEN];
-        char v6_host[INET6_ADDRSTRLEN];
+        char v6_host[65];
+        bool v4_explicit;
+        bool v6_explicit;
     } stack_setting;
     memset(&stack_setting, 0, sizeof(stack_setting));
     snprintf(VS(stack_setting.v4_host), "%s", "0.0.0.0");
@@ -261,12 +277,22 @@ TOOLKIT_INIT_FUNC(socket_server) {
             char *host = addr == &stack_setting.v4 ? stack_setting.v4_host : stack_setting.v6_host;
             size_t host_size = addr == &stack_setting.v4 ? sizeof(stack_setting.v4_host)
                                                          : sizeof(stack_setting.v6_host);
-            const void *address = family == AF_INET
-                                      ? (const void *)&((struct sockaddr_in *)addr)->sin_addr
-                                      : (const void *)&((struct sockaddr_in6 *)addr)->sin6_addr;
-            if (inet_ntop(family, address, host, host_size) == NULL) {
+            socklen_t addr_size =
+                family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
+            if (getnameinfo((const struct sockaddr *)addr,
+                            addr_size,
+                            host,
+                            (socklen_t)host_size,
+                            NULL,
+                            0,
+                            NI_NUMERICHOST) != 0) {
                 LOG(ERROR, "Failed to format network stack address: %s", cps[1]);
                 exit(1);
+            }
+            if (family == AF_INET) {
+                stack_setting.v4_explicit = true;
+            } else {
+                stack_setting.v6_explicit = true;
             }
         }
     }
@@ -284,14 +310,16 @@ TOOLKIT_INIT_FUNC(socket_server) {
         char identity_path[HUGE_BUF];
         snprintf(VS(identity_path), "%s/quic-identity.pem", settings.datapath);
         bool dual = BIT_QUERY(stack_setting.type, STACK_DUAL);
-        if (dual || BIT_QUERY(stack_setting.type, STACK_IPV4)) {
+        bool bind_v4 = dual || BIT_QUERY(stack_setting.type, STACK_IPV4);
+        bool bind_v6 = dual || BIT_QUERY(stack_setting.type, STACK_IPV6);
+        if (bind_v4) {
             quic_server_sockets[0] = socket_quic_server_create(stack_setting.v4_host,
                                                                settings.port_quic,
                                                                false,
                                                                identity_path);
         }
 #ifdef HAVE_IPV6
-        if (dual || BIT_QUERY(stack_setting.type, STACK_IPV6)) {
+        if (bind_v6) {
             quic_server_sockets[1] = socket_quic_server_create(stack_setting.v6_host,
                                                                settings.port_quic,
                                                                false,
@@ -307,6 +335,13 @@ TOOLKIT_INIT_FUNC(socket_server) {
         }
         LOG(SYSTEM, "QUIC certificate SHA-256: %s", quic_certificate_sha256);
 
+        bool loopback_only =
+            !dual &&
+            (!bind_v4 ||
+             (stack_setting.v4_explicit && socket_server_address_loopback(&stack_setting.v4))) &&
+            (!bind_v6 ||
+             (stack_setting.v6_explicit && socket_server_address_loopback(&stack_setting.v6)));
+
         quic_candidate_count = 0;
         metaserver_public_endpoint_from_config(settings.server_host,
                                                settings.port_quic,
@@ -319,7 +354,8 @@ TOOLKIT_INIT_FUNC(socket_server) {
         }
         char mapped_host[65];
         uint16_t mapped_port;
-        if (socket_port_mapping_init(settings.port_quic, VS(mapped_host), &mapped_port)) {
+        if (!loopback_only &&
+            socket_port_mapping_init(settings.port_quic, VS(mapped_host), &mapped_port)) {
             if (!socket_host_is_global(mapped_host)) {
                 LOG(INFO,
                     "Router mapping is not globally routable; retaining it as an intermediate "
@@ -333,12 +369,14 @@ TOOLKIT_INIT_FUNC(socket_server) {
 
         char stun_host[65];
         uint16_t stun_port = settings.port_quic;
-        if (*settings.stun_server != '\0' && strcmp(settings.stun_server, "off") != 0 &&
-            quic_server_sockets[0] != NULL &&
-            socket_stun_discover(quic_server_sockets[0],
-                                 settings.stun_server,
-                                 VS(stun_host),
-                                 &stun_port)) {
+        if (loopback_only) {
+            LOG(INFO, "Direct candidate discovery is disabled for loopback-only listeners");
+        } else if (*settings.stun_server != '\0' && strcmp(settings.stun_server, "off") != 0 &&
+                   quic_server_sockets[0] != NULL &&
+                   socket_stun_discover(quic_server_sockets[0],
+                                        settings.stun_server,
+                                        VS(stun_host),
+                                        &stun_port)) {
             bool duplicate = quic_candidate_count != 0 && quic_candidates[0].port == stun_port &&
                              strcmp(quic_candidates[0].host, stun_host) == 0;
             if (!duplicate && quic_candidate_count < arraysize(quic_candidates)) {
@@ -347,8 +385,8 @@ TOOLKIT_INIT_FUNC(socket_server) {
                 quic_candidates[quic_candidate_count].kind = SOCKET_CANDIDATE_SRFLX;
                 quic_candidate_count++;
             }
-        } else if (quic_server_sockets[1] != NULL && *settings.stun_server != '\0' &&
-                   strcmp(settings.stun_server, "off") != 0 &&
+        } else if (!loopback_only && quic_server_sockets[1] != NULL &&
+                   *settings.stun_server != '\0' && strcmp(settings.stun_server, "off") != 0 &&
                    socket_stun_discover(quic_server_sockets[1],
                                         settings.stun_server,
                                         VS(stun_host),
@@ -370,10 +408,29 @@ TOOLKIT_INIT_FUNC(socket_server) {
             }
         }
 
-        quic_candidate_count +=
-            socket_local_candidates(settings.port_quic,
-                                    quic_candidates + quic_candidate_count,
-                                    arraysize(quic_candidates) - quic_candidate_count);
+        socket_direct_candidate_t local_candidates[SOCKET_DIRECT_MAX_CANDIDATES];
+        size_t local_count = loopback_only ? 0
+                                           : socket_local_candidates(settings.port_quic,
+                                                                     local_candidates,
+                                                                     arraysize(local_candidates));
+        for (size_t i = 0; i < local_count && quic_candidate_count < arraysize(quic_candidates);
+             i++) {
+            struct sockaddr_storage address;
+            if (!socket_host2addr(local_candidates[i].host, &address)) {
+                continue;
+            }
+            bool allowed = address.ss_family == AF_INET && bind_v4 &&
+                           (!stack_setting.v4_explicit ||
+                            strcmp(local_candidates[i].host, stack_setting.v4_host) == 0);
+#ifdef HAVE_IPV6
+            allowed = allowed || (address.ss_family == AF_INET6 && bind_v6 &&
+                                  (!stack_setting.v6_explicit ||
+                                   strcmp(local_candidates[i].host, stack_setting.v6_host) == 0));
+#endif
+            if (allowed) {
+                quic_candidates[quic_candidate_count++] = local_candidates[i];
+            }
+        }
         for (size_t i = 0; i < quic_candidate_count; i++) {
             LOG(INFO,
                 "Discovered a direct %s QUIC candidate",
