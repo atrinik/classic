@@ -48,6 +48,20 @@ an older pending tag is checked against the complete current release history
 rather than running validation code and history policy frozen at that tag.
 Multiple drafts fail closed for manual investigation.
 
+The immutable `v5.8.1` tag is the single recorded exception to that retry
+rule. Both Package Release attempts failed in the Release-only server build
+before finalizing a candidate, publishing an image, or uploading a draft
+asset. `docs/history/release-tags.json` records the exact tag commit, empty
+draft ID, failed run IDs, and `delete-empty-draft` disposition. On current
+validated `main`, Semantic Release rechecks those immutable coordinates and
+the failed job conclusions, then deletes only that exact zero-asset draft and
+continues version analysis. Any changed draft ID or tag target, uploaded asset,
+successful candidate/publication job, unrecognized run, or additional draft
+fails closed. The tag and commit remain immutable historical evidence;
+`v5.8.1` is never published, downloadable, eligible for Latest, or used as an
+image alias. The next semantic version contains the server correction and all
+first-parent fixes after `v5.8.1`.
+
 If the failed run reached complete-candidate validation but a defect in its
 tag-bound publication code makes a job rerun impossible, dispatch Package
 Release from current `main` with both the release tag and the numeric failed
@@ -227,7 +241,10 @@ draft with no packaging run may start Package Release from its exact tag ref;
 after that, recovery stays with the original run or its retained-candidate
 continuation. Never edit an already published
 immutable release for recovery; publish a correction as the next semantic
-version. The mutable `latest` alias is convenience only. Its globally serialized
+version. The recorded pre-candidate `v5.8.1` exception above may delete only
+its exact empty draft so Semantic Release can advance; it does not generalize
+to another tag or any draft containing an asset. The mutable `latest` alias is
+convenience only. Its globally serialized
 promoter recomputes GitHub's latest complete immutable release on every run, and
 the alias is never a rollback source.
 
