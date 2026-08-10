@@ -25,7 +25,9 @@
  *
  * Invalid or absent labels select the ordinary package title.
  * @param label
- * Printable ASCII launch label, or NULL for an unmanaged launch.
+ * One of "topology NAME - profile NAME" or "profile NAME (direct run)",
+ * where each NAME starts with a lowercase letter or digit and continues with
+ * lowercase letters, digits, '.', '_' or '-', or NULL for an unmanaged launch.
  * @return true when label was accepted, false when the package-title fallback
  * was selected.
  */

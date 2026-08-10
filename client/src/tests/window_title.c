@@ -36,6 +36,11 @@ int main(void) {
     SDL_SetWindowFullscreen(window, false);
     TEST_CHECK(strcmp(SDL_GetWindowTitle(window), client_window_title()) == 0);
 
+    TEST_CHECK(client_window_title_init("profile classic (direct run)"));
+    TEST_CHECK(strcmp(client_window_title(), PACKAGE_NAME " — profile classic (direct run)") == 0);
+    client_window_title_apply(window);
+    TEST_CHECK(strcmp(SDL_GetWindowTitle(window), client_window_title()) == 0);
+
     TEST_CHECK(!client_window_title_init(""));
     TEST_CHECK(strcmp(client_window_title(), PACKAGE_NAME) == 0);
     TEST_CHECK(!client_window_title_init("profile classic\nspoofed"));
