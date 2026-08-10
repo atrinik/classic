@@ -535,8 +535,8 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_linux_checks_pin_image_and_isolate_compiler_caches(self) -> None:
         workflow = self.text("check.yml")
-        digest = "e117b858d5aecdb8eb39dc56451378b6e6bd72dd5e042ab96fee5b6154000043"
-        image = f"ghcr.io/atrinik/classic-build@sha256:{digest}"
+        digest = "d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f"
+        image = f"ghcr.io/atrinik/classic-build:1.2.3@sha256:{digest}"
         cache_action = "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
 
         self.assertEqual(workflow.count(image), 1)
@@ -548,6 +548,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(workflow.count("chmod 1777"), 3)
         self.assertIn("tools/ci/measure_linux_image.sh", workflow)
         self.assertNotIn("classic-client-sdl-mixer-ubuntu", workflow)
+        self.assertNotIn("packages: read", workflow)
+        self.assertNotIn("docker/login-action", workflow)
+        self.assertNotIn("packages: read", self.text("codeql.yml"))
 
         core = workflow[
             workflow.index("  core:") : workflow.index("  windows-test-build:")
@@ -585,7 +588,6 @@ class WorkflowContractTests(unittest.TestCase):
         }
         for job, component in ((core, "core"), (server, "server"), (client, "client")):
             with self.subTest(component=component):
-                self.assertIn("packages: read", job)
                 self.assertIn("id-token: write", job)
                 self.assertIn("persist-credentials: false", job)
                 self.assertIn(f"--component {component}", job)

@@ -1,15 +1,31 @@
 # Classic Linux Check image and compiler-cache evidence
 
-This ledger records the pre-merge evidence for consuming the task-focused
-Classic Linux image from `atrinik/devcontainer#24`. The candidate digest is a
-review coordinate only. After the devcontainer pull request is released,
-Classic must verify and pin the versioned release digest before this pull
-request becomes ready.
+This ledger records the candidate and released-image evidence for consuming the
+task-focused Classic Linux image from `atrinik/devcontainer#24`. Candidate
+coordinates below remain historical review evidence; Check consumes only the
+verified semantic-release image.
 
 ## Immutable coordinates
 
 - Classic pull request: [#98](https://github.com/atrinik/classic/pull/98)
-- Classic source head: `934af663a1f0d5892026a366f12b907459f3cd50`
+- Released image tag: `1.2.3`
+- Released index digest:
+  `sha256:d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f`
+- Released amd64 manifest:
+  `sha256:3c6fb2cefc907776cc4ea2f544d2d0756321b2b83bd44da3fe25b29cec837f0e`
+- Devcontainer release:
+  [`v1.2.3`](https://github.com/atrinik/devcontainer/releases/tag/v1.2.3)
+- Publisher release commit: `cfd1afd4088f76f6cd327159b0d58b20a6a6b0dd`
+- Release publication:
+  [run 31440069022](https://github.com/atrinik/devcontainer/actions/runs/31440069022)
+- OCI source label: `https://github.com/atrinik/devcontainer`
+- OCI revision label: `cfd1afd4088f76f6cd327159b0d58b20a6a6b0dd`
+- Embedded inventory SHA-256:
+  `cbeb59d410f138631e1b997d68df98c24c881d13f2a99fea3cd64711185b82c0`
+- Embedded consumer validation: `atrinik/classic` at
+  `2d3ecad2117733b1262f5195c0dd414fef4b45f3`
+- Candidate consumer source head:
+  `934af663a1f0d5892026a366f12b907459f3cd50`
 - Pull-request merge ref commit used by Check:
   `2f90965bc25d41edc3ad46561836042185b43a5c`
 - Publisher pull request:
@@ -35,9 +51,12 @@ request becomes ready.
   [run 31430896836](https://github.com/atrinik/classic/actions/runs/31430896836),
   attempts 3 and 4
 
-The package remains private and linked to `atrinik/devcontainer`. Its manual
-Actions-access contract grants `atrinik/classic` read only and is inventoried
-by [`atrinik/github-settings#59`](https://github.com/atrinik/github-settings/pull/59).
+The package is public and remains linked to `atrinik/devcontainer`. Anonymous
+manifest inspection resolved the released tag to the index digest above. The
+obsolete private Actions grants were removed by
+[`atrinik/github-settings#62`](https://github.com/atrinik/github-settings/pull/62),
+so pull-request workflows neither request package permission nor authenticate
+to GHCR to consume `classic-build` or `windows-build`.
 
 ## Registry image measurements
 
@@ -124,8 +143,8 @@ that this pull request did not write the trusted-main namespace.
 
 ## Reproduction
 
-Use `gh` outside a sandbox with read access to the private package and
-repository:
+Use `gh` outside a sandbox with read access to the repository. The image itself
+is public and can be inspected with an empty Docker credential directory:
 
 ```sh
 gh run view 31430896836 --repo atrinik/classic
@@ -135,6 +154,8 @@ gh cache list --repo atrinik/classic --ref refs/pull/98/merge \
   --json id,key,ref,sizeInBytes,createdAt,lastAccessedAt,version
 gh cache list --repo atrinik/classic \
   --key classic-Linux-X64-linux-trusted-main
+DOCKER_CONFIG="$(mktemp -d)" docker buildx imagetools inspect \
+  ghcr.io/atrinik/classic-build:1.2.3
 ```
 
 Artifact names contain the run attempt. Attempt 3 provides

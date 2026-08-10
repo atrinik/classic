@@ -9,8 +9,8 @@ fi
 
 image=$1
 output_dir=$2
-if [[ ! ${image} =~ ^ghcr\.io/atrinik/classic-build@sha256:[0-9a-f]{64}$ ]]; then
-  echo "image must be the immutable Atrinik Classic build digest" >&2
+if [[ ! ${image} =~ ^ghcr\.io/atrinik/classic-build:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$ ]]; then
+  echo "image must be an immutable versioned Atrinik Classic build digest" >&2
   exit 2
 fi
 

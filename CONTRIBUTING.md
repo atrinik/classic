@@ -49,6 +49,9 @@ the GCC identity if needed, and increment `CLASSIC_LINUX_CCACHE_EPOCH` for any
 cache contract change not represented by the hashed configuration inputs. Run
 the cache-key unit tests, then use cold and repeated Check runs to inspect the
 raw ccache artifacts and image timing summary before accepting the pin.
+Reusable `classic-build` and `windows-build` images are public: pull them
+anonymously in pull-request validation and do not grant `packages: read` or log
+in to GHCR merely to consume either image.
 
 ## Module requirements
 
