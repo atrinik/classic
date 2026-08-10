@@ -11,7 +11,7 @@
 #include <object.h>
 #include <server.h>
 
-START_TEST(test_send_map_item_marks_look_stale) {
+START_TEST(test_update_map_item_name_and_count_marks_look_stale) {
     mapstruct *map;
     object *pl;
     check_setup_env_pl(&map, &pl);
@@ -23,7 +23,7 @@ START_TEST(test_send_map_item_marks_look_stale) {
 
     uint8_t old_update = GET_MAP_UPDATE_COUNTER(map, stack->x, stack->y);
     stack->nrof = 2;
-    esrv_send_item(stack);
+    esrv_update_item(UPD_NAME | UPD_NROF, stack);
 
     ck_assert_uint_ne(GET_MAP_UPDATE_COUNTER(map, stack->x, stack->y), old_update);
 
@@ -38,7 +38,7 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
-    tcase_add_test(tc_core, test_send_map_item_marks_look_stale);
+    tcase_add_test(tc_core, test_update_map_item_name_and_count_marks_look_stale);
 
     return s;
 }

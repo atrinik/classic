@@ -682,6 +682,10 @@ static void esrv_update_item_send(int flags, object *pl, object *op) {
  * The object to update.
  */
 void esrv_update_item(int flags, object *op) {
+    if (op->map != NULL && (flags & (UPD_NAME | UPD_NROF)) != 0) {
+        object_update(op, UP_OBJ_FACE);
+    }
+
     if (op->type == PLAYER) {
         esrv_update_item_send(flags, op, op);
     } else if (op->env) {
@@ -749,14 +753,8 @@ static void esrv_send_item_send(object *pl, object *op) {
 void esrv_send_item(object *op) {
     object *tmp;
 
-    if (!op) {
-        return;
-    }
-
-    /* Map objects are refreshed through the look inventory. This also makes
-     * generic plugin field setters visible when they change a floor stack. */
-    if (!op->env) {
-        object_update(op, UP_OBJ_FACE);
+    /* No object or object is not in inventory, nothing to do here. */
+    if (!op || !op->env) {
         return;
     }
 
