@@ -46,6 +46,28 @@ static int check_container(object *pl, object *con);
 #define MAXITEMLEN 300
 
 /**
+ * Return a wire-safe UTF-8 prefix that fits in the item-name field.
+ *
+ * Legacy authored or custom names can exceed the current field capacity.
+ * They are truncated only for presentation, at a code-point boundary, so the
+ * accompanying fields in the item update remain decodable.
+ */
+static size_t item_name_wire_length(const char *name, size_t length) {
+    HARD_ASSERT(name != NULL);
+
+    size_t maximum = ITEM_NAME_SIZE - 1U;
+    if (length <= maximum) {
+        return length;
+    }
+
+    while (maximum > 0 && ((unsigned char)name[maximum] & 0xc0U) == 0x80U) {
+        maximum--;
+    }
+
+    return maximum;
+}
+
+/**
  * This is a similar to query_name, but returns flags to be sent to
  * client.
  * @param op
@@ -201,13 +223,12 @@ void add_object_to_packet(struct packet_struct *packet,
     if (flags & UPD_NAME) {
         packet_debug_data(packet, level, "Name");
 
-        if (op->custom_name != NULL) {
-            packet_writer_write_cstring(packet, op->custom_name);
-        } else {
-            StringBuffer *sb = object_get_base_name(op, pl, NULL);
-            packet_writer_write_cstring_n(packet, stringbuffer_data(sb), stringbuffer_length(sb));
-            stringbuffer_free(sb);
-        }
+        StringBuffer *sb = object_get_display_name(op, pl, NULL);
+        packet_writer_write_cstring_n(
+            packet,
+            stringbuffer_data(sb),
+            item_name_wire_length(stringbuffer_data(sb), stringbuffer_length(sb)));
+        stringbuffer_free(sb);
     }
 
     if (flags & UPD_ANIM) {
@@ -661,6 +682,10 @@ static void esrv_update_item_send(int flags, object *pl, object *op) {
  * The object to update.
  */
 void esrv_update_item(int flags, object *op) {
+    if (op->map != NULL && (flags & (UPD_NAME | UPD_NROF)) != 0) {
+        object_update(op, UP_OBJ_FACE);
+    }
+
     if (op->type == PLAYER) {
         esrv_update_item_send(flags, op, op);
     } else if (op->env) {

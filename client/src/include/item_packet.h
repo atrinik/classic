@@ -33,6 +33,8 @@ bool item_packet_parse_update(packet_reader_t *reader,
                               const object *base,
                               item_packet_update_t *update);
 
+void item_packet_apply_update(const item_packet_update_t *update, object *target);
+
 bool item_packet_validate_command(const uint8_t *data, size_t len, size_t pos);
 
 #endif

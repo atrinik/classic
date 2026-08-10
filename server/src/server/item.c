@@ -501,6 +501,38 @@ char *object_get_base_name_s(const object *op, const object *caller) {
 }
 
 /**
+ * Builds the count-appropriate name sent to clients for item presentation.
+ * Player-controlled custom names are preserved verbatim. Authored plural
+ * metadata affects only stacks and falls back to the existing singular name.
+ *
+ * @param op
+ * Object to get the display name of.
+ * @param caller
+ * Object calling this. Can be NULL.
+ * @param sb
+ * StringBuffer instance to append to. If NULL, a new instance is created.
+ * @return
+ * StringBuffer instance containing the display name.
+ */
+StringBuffer *object_get_display_name(const object *op, const object *caller, StringBuffer *sb) {
+    HARD_ASSERT(op != NULL);
+
+    if (sb == NULL) {
+        sb = stringbuffer_new();
+    }
+
+    if (op->custom_name != NULL) {
+        stringbuffer_append_string(sb, op->custom_name);
+        return sb;
+    }
+
+    sb = object_get_material(op, caller, sb);
+    stringbuffer_append_string(sb, op->nrof > 1 && op->name_pl != NULL ? op->name_pl : op->name);
+    sb = object_get_title(op, caller, sb);
+    return sb;
+}
+
+/**
  * Builds a description of the object's terrain flags.
  * @param op
  * Object's terrain to describe.

@@ -85,6 +85,21 @@ bool item_packet_parse_update(packet_reader_t *reader,
     return packet_reader_error(reader) == PACKET_ERROR_NONE;
 }
 
+void item_packet_apply_update(const item_packet_update_t *update, object *target) {
+    HARD_ASSERT(update != NULL);
+    HARD_ASSERT(target != NULL);
+
+    object *next = target->next;
+    object *prev = target->prev;
+    object *env = target->env;
+    object *inv = target->inv;
+    *target = update->item;
+    target->next = next;
+    target->prev = prev;
+    target->env = env;
+    target->inv = inv;
+}
+
 bool item_packet_validate_command(const uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
     packet_reader_init_at(&reader, data, len, pos);

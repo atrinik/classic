@@ -2710,11 +2710,13 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
     int ret;
     int old_glow_radius;
     uint32_t old_light_color;
+    uint32_t old_nrof;
 
     OBJEXISTCHECK_INT(obj);
 
     old_glow_radius = obj->obj->glow_radius;
     old_light_color = obj->obj->light_color;
+    old_nrof = obj->obj->nrof;
 
     if ((field->flags & FIELDFLAG_PLAYER_READONLY) && obj->obj->type == PLAYER) {
         INTRAISE("Trying to modify a field that is read-only for player "
@@ -2784,6 +2786,11 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
         if (env != obj->obj && IS_LIVE(env) && env->map != NULL) {
             hooks->living_update(env);
         }
+    }
+
+    if (obj->obj->map != NULL && field->offset == offsetof(object, nrof) &&
+        old_nrof != obj->obj->nrof) {
+        hooks->esrv_update_item(UPD_NAME | UPD_NROF, obj->obj);
     }
 
     if (field->offset == offsetof(object, type) && obj->obj->type == PLAYER) {

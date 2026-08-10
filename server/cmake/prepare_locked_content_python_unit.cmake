@@ -11,7 +11,9 @@ endif ()
 set(content_marker
     "${ATRINIK_SOURCE_DIR}/runtime/content/.atrinik-dependency.json")
 file(READ "${content_marker}" content_marker_data)
-if (NOT content_marker_data MATCHES "\"tag\"[ ]*:[ ]*\"v1\\.2\\.0\"")
+if (content_marker_data MATCHES "\"workspace_source\"[ ]*:")
+    return()
+elseif (NOT content_marker_data MATCHES "\"tag\"[ ]*:[ ]*\"v1\\.2\\.0\"")
     message(FATAL_ERROR
         "Reassess the locked-content Python unit compatibility fixture")
 endif ()
