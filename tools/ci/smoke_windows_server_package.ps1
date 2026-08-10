@@ -9,6 +9,12 @@ $smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
     "atrinik-server-package-smoke-{0}" -f [System.Guid]::NewGuid()
 )
 $process = $null
+$portProbe = [System.Net.Sockets.UdpClient]::new(0)
+try {
+    $serverPort = ([System.Net.IPEndPoint]$portProbe.Client.LocalEndPoint).Port
+} finally {
+    $portProbe.Dispose()
+}
 
 try {
     Expand-Archive -LiteralPath $packagePath -DestinationPath $smokeRoot
@@ -37,8 +43,11 @@ try {
         "/d",
         "/c",
         "server.bat",
+        "--port_quic=$serverPort",
         "--port_mapping=off",
         "--stun_server=off",
+        "--metaserver_publish_origin=http://127.0.0.1:9",
+        "--metaserver_rendezvous_origin=http://127.0.0.1:9/v1/classic",
         "2>&1"
     )) {
         $startInfo.ArgumentList.Add($argument)

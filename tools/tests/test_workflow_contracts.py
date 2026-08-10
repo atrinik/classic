@@ -486,6 +486,15 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"maps/regions.reg"', smoke)
         self.assertIn('"--port_mapping=off"', smoke)
         self.assertIn('"--stun_server=off"', smoke)
+        self.assertIn('[System.Net.Sockets.UdpClient]::new(0)', smoke)
+        self.assertIn('"--port_quic=$serverPort"', smoke)
+        self.assertIn(
+            '"--metaserver_publish_origin=http://127.0.0.1:9"', smoke
+        )
+        self.assertIn(
+            '"--metaserver_rendezvous_origin=http://127.0.0.1:9/v1/classic"',
+            smoke,
+        )
         self.assertIn('$process.StandardInput.WriteLine("shutdown")', smoke)
         self.assertLess(
             smoke.index('"Server ready\\. Waiting for connections"'),
