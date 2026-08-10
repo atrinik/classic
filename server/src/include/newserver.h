@@ -197,12 +197,18 @@ typedef struct socket_struct {
     /** Active explicit asset streams, serviced round-robin after gameplay. */
     asset_stream_state_t *asset_streams;
     size_t asset_stream_count;
+    /** Asset transport capabilities advertised during client setup. */
+    uint8_t asset_transport_capabilities;
+    /** Next typed asset stream kind preferred by the fair accept loop. */
+    bool asset_accept_batch_next;
 
     /** Intrusive links for the server-wide fair asset scheduler. */
     struct socket_struct *asset_service_next;
     struct socket_struct *asset_service_prev;
     bool asset_service_registered;
     uint64_t asset_service_generation;
+    /** Productive fair-quantum visits in the current scheduler tick. */
+    unsigned int asset_service_productive_passes;
 
     /** Transport route selected for this connection. */
     socket_connection_mode_t connection_mode;

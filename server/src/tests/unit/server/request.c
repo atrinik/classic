@@ -526,10 +526,14 @@ START_TEST(test_setup_round_trip_uses_current_option_ids) {
     ck_assert_uint_eq(CMD_SETUP_JOIN_PASSWORD, 3);
     ck_assert_uint_eq(CMD_SETUP_ASSET_TRANSPORT, 4);
     ck_assert_uint_eq(CMD_SETUP_CONNECTION_MODE, 5);
+    ck_assert_uint_ge(SOCKET_VERSION, ASSET_TRANSPORT_FACE_BATCH_VERSION);
+    ck_assert_uint_eq(ASSET_TRANSPORT_CAP_ALL,
+                      ASSET_TRANSPORT_CAP_GENERIC | ASSET_TRANSPORT_CAP_FACE_BATCH);
 
     check_setup_env_pl(&map, &pl);
     socket_struct *cs = CONTR(pl)->cs;
-    uint8_t request[] = {CMD_SETUP_SOUND, 1, CMD_SETUP_MAPSIZE, 13, 15};
+    cs->asset_transport_capabilities = ASSET_TRANSPORT_CAP_ALL;
+    uint8_t request[] = {CMD_SETUP_SOUND, 1, CMD_SETUP_MAPSIZE, 13, 15, CMD_SETUP_ASSET_TRANSPORT};
     socket_buffer_clear(cs);
 
     socket_command_setup(cs, CONTR(pl), request, sizeof(request), 0);
@@ -544,6 +548,8 @@ START_TEST(test_setup_round_trip_uses_current_option_ids) {
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), CMD_SETUP_MAPSIZE);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), 13);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), 15);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), CMD_SETUP_ASSET_TRANSPORT);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), ASSET_TRANSPORT_CAP_ALL);
     ck_assert(packet_reader_finish(&reader));
     ck_assert_uint_eq(cs->sound, 1);
     ck_assert_int_eq(cs->mapx, 13);
