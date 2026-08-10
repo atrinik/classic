@@ -385,8 +385,8 @@ static void test_partial_and_total_cancellation(socket_t *socket) {
 static void test_fallback(socket_t *socket) {
     test_begin(socket, ASSET_TRANSPORT_CAP_GENERIC, TEST_RESPONSE_OK);
     asset_request_t *requests[4];
-    for (uint16_t face = 1; face <= arraysize(requests); face++) {
-        requests[face - 1U] = test_face_start(face);
+    for (size_t face = 0; face < arraysize(requests); face++) {
+        requests[face] = test_face_start((uint16_t) (face + 1U));
     }
     test_service_until(socket, requests, arraysize(requests));
     TEST_CHECK(test_open_count == arraysize(requests));
