@@ -58,10 +58,16 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
+      - name: Install Python test coverage tooling
+        run: python3 -m pip install coverage==7.15.3
       - name: Validate imported history and release helpers
         run: |
-          python3 tools/verify_import_history.py
-          python3 -m unittest discover -s tools/tests -p 'test_*.py'
+          python3 -m coverage run --branch --source=tools \
+            tools/verify_import_history.py
+          python3 -m coverage run --append --branch --source=tools \
+            -m unittest discover -s tools/tests -p 'test_*.py'
+          python3 -m coverage xml --omit='tools/tests/*' \
+            -o tools/coverage.xml
       - name: Validate first-parent release analysis
         run: >-
           npx --yes
@@ -119,7 +125,15 @@ jobs:
           cmake --build build/consumer --parallel
           build/consumer/libatrinik-consumer
         working-directory: libatrinik
-      - name: Upload coverage
+      - name: Upload release-tool coverage
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        with:
+          disable_search: true
+          fail_ci_if_error: false
+          files: tools/coverage.xml
+          flags: release-tools
+          use_oidc: true
+      - name: Upload libatrinik coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
           disable_search: true
@@ -143,6 +157,8 @@ jobs:
       packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Stage deterministic client package inputs
         working-directory: client
         run: |
@@ -152,6 +168,19 @@ jobs:
           printf '%s\n' '111111111111111111' > data/discord-application-id
           printf '%s\n' '123456789012345678' > \
             ../build/discord-test-application-id
+      - name: Stage pinned Windows server dependency
+        run: |
+          archive=build/libpcpnatpmp.tar.gz
+          source=build/libpcpnatpmp-source
+          mkdir -p "${source}"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "${archive}" \
+            https://github.com/libpcpnatpmp/libpcpnatpmp/archive/866d283da99f5e98eecff702a8df63e2ae57ffca.tar.gz
+          printf '%s  %s\n' \
+            65ab99547ecc8277434527607d24f8a1b02a2344ed4cea475bed751606e60202 \
+            "${archive}" | sha256sum --check --strict
+          tar --extract --gzip --file "${archive}" \
+            --directory "${source}" --strip-components=1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
@@ -218,6 +247,42 @@ jobs:
                 client/build/windows-release/client-rich-presence-tests.exe
               cmake -E copy_directory libatrinik/tests/fixtures "${stage}/fixtures"
             '
+      - name: Cross-build Windows server
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --network none \
+            --env CCACHE_DIR=/tmp/atrinik-server-ccache \
+            --env CCACHE_TEMPDIR=/tmp/atrinik-server-ccache-tmp \
+            --env CCACHE_MAXSIZE=250M \
+            --env GH_TOKEN= \
+            --env GITHUB_TOKEN= \
+            --env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --workdir /workspace \
+            ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb \
+            bash -c '
+              set -euo pipefail
+              cmake \
+                -DPATCH_EXECUTABLE="$(command -v patch)" \
+                -DSOURCE_DIR=/workspace/build/libpcpnatpmp-source \
+                -DPATCH_FILE=/workspace/server/cmake/patches/libpcpnatpmp-mingw.patch \
+                -P /workspace/server/cmake/apply_patch_idempotent.cmake
+              x86_64-w64-mingw32.shared-cmake \
+                -S server \
+                -B server/build/windows-pr-server \
+                -G Ninja \
+                -DBUILD_TESTING=OFF \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DENABLE_PYTHON_PLUGIN=OFF \
+                -DPACKAGE_TYPE=none \
+                -DPACKAGE_VERSION=0.0.0 \
+                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
+                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik \
+                -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-source
+              cmake --build server/build/windows-pr-server \
+                --target atrinik-server --parallel "$(nproc)"
+            '
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: native-windows-tests
@@ -246,7 +311,11 @@ jobs:
           $bundle = (Resolve-Path "build/native-windows-tests").Path
           $env:PATH = "${bundle};${env:PATH}"
 
-          & (Join-Path $bundle "libatrinik-path.exe")
+          $junctionTarget = Join-Path $bundle "junction-target"
+          $junction = Join-Path $bundle "junction"
+          New-Item -ItemType Directory -Path $junctionTarget | Out-Null
+          New-Item -ItemType Junction -Path $junction -Target $junctionTarget | Out-Null
+          & (Join-Path $bundle "libatrinik-path.exe") $junction
           if ($LASTEXITCODE -ne 0) {
             throw "libatrinik-path.exe failed with exit code ${LASTEXITCODE}"
           }

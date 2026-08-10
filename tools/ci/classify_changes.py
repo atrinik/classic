@@ -36,6 +36,7 @@ WINDOWS_TEST_PREFIXES = (
     "client/",
     "libatrinik/",
     "protocol/",
+    "server/",
     "tools/ci/",
 )
 

@@ -19,7 +19,7 @@ permissions:
   packages: read
 
 concurrency:
-  group: classic-package-release-${{ inputs.tag }}
+  group: classic-release-publication
   cancel-in-progress: false
 
 jobs:
