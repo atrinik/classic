@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <image_codec.h>
 #include <wrapper.h>
 #include <video.h>
 #include <surface_primitives.h>
@@ -95,6 +96,8 @@ void region_map_free(region_map_t *region_map) {
     HARD_ASSERT(region_map->fow != NULL);
 
     region_map_reset(region_map);
+    region_map_def_free(region_map->def);
+    region_map_fow_free(region_map);
     free(region_map->def);
     free(region_map->fow);
     free(region_map);
@@ -260,7 +263,7 @@ bool region_map_ready(region_map_t *region_map) {
 
     uint64_t decode_started = SDL_GetTicksNS();
     SDL_IOStream *rw = SDL_IOFromConstMem(body_png, (int)body_png_size);
-    img = rw != NULL ? IMG_Load_IO(rw, 1) : NULL;
+    img = rw != NULL ? image_codec_load_io(rw, true) : NULL;
     if (img == NULL) {
         snprintf(VS(region_map->error),
                  "Could not decode region map '%s': %s",
@@ -834,7 +837,9 @@ static bool region_map_fow_update_regions(region_map_t *region_map, const uint32
         utarray_push_back(regions, &cp);
     }
 
-    utarray_sort(regions, ut_str_sort);
+    if (utarray_len(regions) > 1) {
+        utarray_sort(regions, ut_str_sort);
+    }
 
     def_map_regions = NULL;
 

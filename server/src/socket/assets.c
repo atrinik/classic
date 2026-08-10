@@ -29,8 +29,20 @@
 #define ASSET_RATE_BYTES_PER_SECOND (8U * 1024U * 1024U)
 #define ASSET_RATE_REQUESTS_PER_SECOND 256U
 #define ASSET_TOKEN_BUCKET_CAPACITY ASSET_RATE_BYTES_PER_SECOND
-#define ASSET_REQUEST_WIRE_MAX (MAX_BUF + 4U + ASSET_DIGEST_SIZE + 1U)
 #define ASSET_STREAM_ACCEPT_QUANTUM 16U
+/* Bound all connections together to the configured byte rate and a fixed
+ * number of accept/read/write operations per game-loop iteration. */
+#define ASSET_GLOBAL_WORK_PER_TICK 512U
+/* A server loop normally runs every 125 ms. Progress several fair rounds per
+ * invocation so an accepted face is not stretched across one tick per header
+ * or 16 KiB body fragment. The fixed round count keeps per-connection work
+ * bounded while the per-connection and server-wide byte budgets enforce
+ * pacing. */
+#define ASSET_STREAM_SERVICE_ROUNDS 12U
+#define ASSET_FACE_SERVICE_ROUNDS_REQUIRED \
+    (3U + (ASSET_FACE_MAX_SIZE + ASSET_STREAM_QUANTUM - 1U) / ASSET_STREAM_QUANTUM)
+
+CASSERT(ASSET_STREAM_SERVICE_ROUNDS >= ASSET_FACE_SERVICE_ROUNDS_REQUIRED);
 
 typedef struct asset_cache_entry {
     UT_hash_handle hh;
@@ -52,9 +64,11 @@ struct asset_stream_state {
     struct asset_stream_state *prev;
     socket_stream_t *stream;
     asset_cache_entry_t *entry;
+    const uint8_t *body;
+    uint32_t body_size;
     asset_server_stream_state_t state;
     uint64_t started_us;
-    uint8_t request[ASSET_REQUEST_WIRE_MAX];
+    uint8_t request[SOCKET_ASSET_REQUEST_MAX_SIZE];
     size_t request_size;
     packet_struct *header;
     size_t header_pos;
@@ -62,9 +76,26 @@ struct asset_stream_state {
     bool concluded;
 };
 
+typedef struct asset_service_budget {
+    size_t bytes;
+    size_t work;
+} asset_service_budget_t;
+
 static asset_cache_entry_t *asset_cache;
 static uint64_t asset_cache_size;
 static size_t asset_cache_rss;
+static socket_struct *asset_connections;
+static socket_struct *asset_connections_tail;
+static socket_struct *asset_service_cursor;
+static size_t asset_connection_count;
+static uint64_t asset_service_generation;
+
+size_t socket_assets_tick_byte_budget(void) {
+    long multiplier = MAX((long)max_time_multiplier, 1L);
+    uint64_t duration_us = MIN((uint64_t)MAX(max_time / multiplier, 1L), UINT64_C(1000000));
+    uint64_t bytes = (uint64_t)ASSET_RATE_BYTES_PER_SECOND * duration_us / UINT64_C(1000000);
+    return (size_t)MAX(bytes, UINT64_C(1));
+}
 
 static bool asset_simple_name(const char *name) {
     return name != NULL && *name != '\0' && strchr(name, '/') == NULL &&
@@ -226,6 +257,10 @@ void socket_assets_init(void) {
 }
 
 void socket_assets_deinit(void) {
+    while (asset_connections != NULL) {
+        socket_assets_connection_clear(asset_connections);
+    }
+
     asset_cache_entry_t *entry, *next;
     HASH_ITER(hh, asset_cache, entry, next) {
         HARD_ASSERT(entry->references == 0);
@@ -236,7 +271,28 @@ void socket_assets_deinit(void) {
     }
     asset_cache_size = 0;
     asset_cache_rss = 0;
+    asset_service_generation = 0;
     server_metrics_asset_cache(0);
+}
+
+void socket_assets_connection_register(socket_struct *ns) {
+    HARD_ASSERT(ns != NULL);
+    HARD_ASSERT(!ns->asset_service_registered);
+    HARD_ASSERT(ns->asset_service_next == NULL);
+    HARD_ASSERT(ns->asset_service_prev == NULL);
+
+    ns->asset_service_prev = asset_connections_tail;
+    if (asset_connections_tail != NULL) {
+        asset_connections_tail->asset_service_next = ns;
+    } else {
+        asset_connections = ns;
+    }
+    asset_connections_tail = ns;
+    ns->asset_service_registered = true;
+    asset_connection_count++;
+    if (asset_service_cursor == NULL) {
+        asset_service_cursor = ns;
+    }
 }
 
 static asset_cache_entry_t *asset_cache_find(const char *name) {
@@ -329,24 +385,39 @@ static bool asset_stream_prepare(socket_struct *ns, asset_stream_state_t *state)
 
     char resolved[HUGE_BUF];
     asset_cache_entry_t *entry = NULL;
-    if (asset_resolve_path(request.path, VS(resolved))) {
+    const uint8_t *body = NULL;
+    const uint8_t *digest = NULL;
+    uint32_t body_size = 0;
+    uint16_t face = 0;
+    if (socket_asset_face_path_parse(request.path, &face)) {
+        face_get_asset(face, &body, &body_size, &digest);
+    } else if (asset_resolve_path(request.path, VS(resolved))) {
         entry = asset_cache_find(request.path);
+        if (entry != NULL) {
+            body = entry->data;
+            body_size = entry->size;
+            digest = entry->digest;
+        }
     }
-    if (entry == NULL) {
+    if (body == NULL || body_size == 0 || digest == NULL) {
         asset_stream_header(state,
                             request.flags & ASSET_REQUEST_METADATA ? ASSET_STATUS_METADATA_NOT_FOUND
                                                                    : ASSET_STATUS_NOT_FOUND,
                             0,
                             NULL);
     } else if (request.flags & ASSET_REQUEST_METADATA) {
-        asset_stream_header(state, ASSET_STATUS_METADATA, entry->size, entry->digest);
-    } else if (request.cached_size == entry->size &&
-               memcmp(request.cached_digest, entry->digest, ASSET_DIGEST_SIZE) == 0) {
-        asset_stream_header(state, ASSET_STATUS_NOT_MODIFIED, entry->size, entry->digest);
+        asset_stream_header(state, ASSET_STATUS_METADATA, body_size, digest);
+    } else if (request.cached_size == body_size &&
+               memcmp(request.cached_digest, digest, ASSET_DIGEST_SIZE) == 0) {
+        asset_stream_header(state, ASSET_STATUS_NOT_MODIFIED, body_size, digest);
     } else {
         state->entry = entry;
-        entry->references++;
-        asset_stream_header(state, ASSET_STATUS_OK, entry->size, entry->digest);
+        if (entry != NULL) {
+            entry->references++;
+        }
+        state->body = body;
+        state->body_size = body_size;
+        asset_stream_header(state, ASSET_STATUS_OK, body_size, digest);
     }
     LOG(DEBUG,
         "Connection %s opened QUIC asset stream for %s",
@@ -355,7 +426,10 @@ static bool asset_stream_prepare(socket_struct *ns, asset_stream_state_t *state)
     return true;
 }
 
-static bool asset_stream_read_request(socket_struct *ns, asset_stream_state_t *state) {
+static bool
+asset_stream_read_request(socket_struct *ns, asset_stream_state_t *state, bool *progressed) {
+    HARD_ASSERT(progressed != NULL);
+
     uint8_t surplus;
     void *buffer = &surplus;
     size_t capacity = 1;
@@ -369,25 +443,33 @@ static bool asset_stream_read_request(socket_struct *ns, asset_stream_state_t *s
         return false;
     }
     if (result == SOCKET_STREAM_RESULT_FINISHED) {
+        *progressed = true;
         return asset_stream_prepare(ns, state);
     }
     if (state->request_size == sizeof(state->request) && amount != 0) {
         return false;
     }
     state->request_size += amount;
+    *progressed = amount != 0;
     return true;
 }
 
-static bool asset_stream_write(socket_struct *ns, asset_stream_state_t *state) {
+static bool asset_stream_write(socket_struct *ns,
+                               asset_stream_state_t *state,
+                               asset_service_budget_t *budget,
+                               bool *progressed) {
+    HARD_ASSERT(progressed != NULL);
+    HARD_ASSERT(budget != NULL);
+
     const uint8_t *data;
     size_t remaining;
     if (state->state == ASSET_SERVER_SEND_HEADER) {
         data = state->header->data + state->header_pos;
         remaining = state->header->len - state->header_pos;
     } else {
-        HARD_ASSERT(state->entry != NULL);
-        data = state->entry->data + state->body_pos;
-        remaining = state->entry->size - state->body_pos;
+        HARD_ASSERT(state->body != NULL);
+        data = state->body + state->body_pos;
+        remaining = state->body_size - state->body_pos;
         size_t tokens = asset_tokens_available(ns);
         if (tokens == 0) {
             server_metrics_asset_paced();
@@ -395,19 +477,26 @@ static bool asset_stream_write(socket_struct *ns, asset_stream_state_t *state) {
         }
         remaining = MIN(remaining, MIN((size_t)ASSET_STREAM_QUANTUM, tokens));
     }
+    remaining = MIN(remaining, budget->bytes);
+    if (remaining == 0) {
+        return true;
+    }
 
     size_t amount = 0;
     socket_stream_result_t result = socket_stream_write(state->stream, data, remaining, &amount);
     if (result == SOCKET_STREAM_RESULT_ERROR || result == SOCKET_STREAM_RESULT_FINISHED) {
         return false;
     }
+    *progressed = amount != 0;
+    HARD_ASSERT(budget->bytes >= amount);
+    budget->bytes -= amount;
     if (state->state == ASSET_SERVER_SEND_HEADER) {
         state->header_pos += amount;
         if (state->header_pos == state->header->len) {
             server_metrics_asset_response(datetime_monotonic_us() - state->started_us);
             packet_free(state->header);
             state->header = NULL;
-            if (state->entry == NULL || state->entry->size == 0) {
+            if (state->body == NULL || state->body_size == 0) {
                 state->concluded = socket_stream_conclude(state->stream);
                 return false;
             }
@@ -418,7 +507,7 @@ static bool asset_stream_write(socket_struct *ns, asset_stream_state_t *state) {
         ns->asset_tokens -= amount;
         state->body_pos += amount;
         server_metrics_asset_stream(0, amount, false);
-        if (state->body_pos == state->entry->size) {
+        if (state->body_pos == state->body_size) {
             state->concluded = socket_stream_conclude(state->stream);
             return false;
         }
@@ -426,8 +515,12 @@ static bool asset_stream_write(socket_struct *ns, asset_stream_state_t *state) {
     return true;
 }
 
-static void asset_stream_accept(socket_struct *ns) {
-    for (size_t accepted = 0; accepted < ASSET_STREAM_ACCEPT_QUANTUM; accepted++) {
+static void asset_stream_accept(socket_struct *ns, asset_service_budget_t *budget) {
+    HARD_ASSERT(budget != NULL);
+
+    for (size_t accepted = 0; accepted < ASSET_STREAM_ACCEPT_QUANTUM && budget->work != 0;
+         accepted++) {
+        budget->work--;
         socket_stream_t *stream = socket_stream_accept(ns->sc, SOCKET_STREAM_ASSET);
         if (stream == NULL) {
             break;
@@ -450,27 +543,77 @@ static void asset_stream_accept(socket_struct *ns) {
     }
 }
 
-bool socket_assets_service(socket_struct *ns) {
+static bool asset_connection_service(socket_struct *ns, asset_service_budget_t *budget) {
     HARD_ASSERT(ns != NULL);
+    HARD_ASSERT(budget != NULL);
     if (!socket_is_quic(ns->sc)) {
         return true;
     }
-    asset_stream_accept(ns);
+    asset_stream_accept(ns, budget);
 
-    asset_stream_state_t *state, *next;
-    DL_FOREACH_SAFE(ns->asset_streams, state, next) {
-        bool keep = state->state == ASSET_SERVER_READ_REQUEST ? asset_stream_read_request(ns, state)
-                                                              : asset_stream_write(ns, state);
-        if (!keep) {
-            asset_stream_free(ns, state, !state->concluded, !state->concluded);
+    for (size_t round = 0;
+         round < ASSET_STREAM_SERVICE_ROUNDS && budget->bytes != 0 && budget->work != 0;
+         round++) {
+        bool progressed = false;
+        asset_stream_state_t *state, *next;
+        DL_FOREACH_SAFE(ns->asset_streams, state, next) {
+            if (budget->work == 0) {
+                break;
+            }
+            budget->work--;
+            bool stream_progressed = false;
+            bool keep = state->state == ASSET_SERVER_READ_REQUEST
+                            ? asset_stream_read_request(ns, state, &stream_progressed)
+                            : asset_stream_write(ns, state, budget, &stream_progressed);
+            progressed |= stream_progressed;
+            if (!keep) {
+                asset_stream_free(ns, state, !state->concluded, !state->concluded);
+            }
+        }
+        if (!progressed || ns->asset_streams == NULL) {
+            break;
+        }
+        if (ns->asset_streams->next != NULL) {
+            asset_stream_state_t *first = ns->asset_streams;
+            DL_DELETE(ns->asset_streams, first);
+            DL_APPEND(ns->asset_streams, first);
         }
     }
-    if (ns->asset_streams != NULL && ns->asset_streams->next != NULL) {
-        asset_stream_state_t *first = ns->asset_streams;
-        DL_DELETE(ns->asset_streams, first);
-        DL_APPEND(ns->asset_streams, first);
-    }
     return ns->state != ST_DEAD && ns->state != ST_ZOMBIE;
+}
+
+void socket_assets_service(void) {
+    if (asset_connection_count == 0) {
+        return;
+    }
+
+    asset_service_budget_t budget = {
+        .bytes = socket_assets_tick_byte_budget(),
+        .work = ASSET_GLOBAL_WORK_PER_TICK,
+    };
+    if (++asset_service_generation == 0) {
+        asset_service_generation++;
+    }
+    socket_struct *start = asset_service_cursor != NULL ? asset_service_cursor : asset_connections;
+    socket_struct *next_start =
+        start->asset_service_next != NULL ? start->asset_service_next : asset_connections;
+    socket_struct *ns = start;
+    size_t visited = 0;
+
+    while (visited < asset_connection_count && budget.bytes != 0 && budget.work != 0) {
+        socket_struct *next =
+            ns->asset_service_next != NULL ? ns->asset_service_next : asset_connections;
+        budget.work--;
+        ns->asset_service_generation = asset_service_generation;
+        if (ns->state != ST_DEAD && ns->state != ST_ZOMBIE &&
+            !asset_connection_service(ns, &budget)) {
+            ns->state = ST_ZOMBIE;
+        }
+        visited++;
+        ns = next;
+    }
+
+    asset_service_cursor = visited == asset_connection_count ? next_start : ns;
 }
 
 bool socket_assets_pending(const socket_struct *ns) {
@@ -485,8 +628,37 @@ bool socket_assets_pending(const socket_struct *ns) {
 }
 
 void socket_assets_connection_clear(socket_struct *ns) {
+    HARD_ASSERT(ns != NULL);
+
     asset_stream_state_t *state, *next;
     DL_FOREACH_SAFE(ns->asset_streams, state, next) {
         asset_stream_free(ns, state, true, false);
     }
+
+    if (!ns->asset_service_registered) {
+        return;
+    }
+
+    socket_struct *cursor_next =
+        ns->asset_service_next != NULL ? ns->asset_service_next : asset_connections;
+    if (ns->asset_service_prev != NULL) {
+        ns->asset_service_prev->asset_service_next = ns->asset_service_next;
+    } else {
+        asset_connections = ns->asset_service_next;
+    }
+    if (ns->asset_service_next != NULL) {
+        ns->asset_service_next->asset_service_prev = ns->asset_service_prev;
+    } else {
+        asset_connections_tail = ns->asset_service_prev;
+    }
+    HARD_ASSERT(asset_connection_count != 0);
+    asset_connection_count--;
+    if (asset_connection_count == 0) {
+        asset_service_cursor = NULL;
+    } else if (asset_service_cursor == ns) {
+        asset_service_cursor = cursor_next;
+    }
+    ns->asset_service_next = NULL;
+    ns->asset_service_prev = NULL;
+    ns->asset_service_registered = false;
 }

@@ -31,14 +31,11 @@
 #include <global.h>
 #include <video.h>
 #include <client_socket.h>
-#include <openssl/crypto.h>
 #include <packet_payload.h>
 #include <item_packet.h>
 #include <region_map.h>
-#include <wrapper.h>
 #include <toolkit/map_protocol.h>
 #include <toolkit/packet.h>
-#include <toolkit/path.h>
 #include <toolkit/string.h>
 
 /** @copydoc socket_command_struct::handle_func */
@@ -144,47 +141,10 @@ void socket_command_anim(uint8_t *data, size_t len, size_t pos) {
         }
 
         animation->faces[i] = face;
-        image_request_face(face);
+        image_prefetch_face(face);
     }
 
     animation->loaded = 1;
-}
-
-/** @copydoc socket_command_struct::handle_func */
-void socket_command_image(uint8_t *data, size_t len, size_t pos) {
-    uint32_t facenum;
-    packet_view_t image;
-    char buf[HUGE_BUF];
-
-    if (!client_packet_parse_image(data, len, pos, &facenum, &image)) {
-        return;
-    }
-    if (!image_face_valid(facenum) || image_get_face_name(facenum) == NULL) {
-        LOG(ERROR, "Ignoring image packet with invalid face ID %" PRIu32, facenum);
-        return;
-    }
-
-    /* Save picture to cache and load it to FaceList. */
-    snprintf(buf, sizeof(buf), DIRECTORY_CACHE "/%s", image_get_face_name(facenum));
-    char *path = file_path(buf, "wb");
-    bool saved = path_write_atomic(path, image.data, image.len, 0600);
-    free(path);
-    if (!saved) {
-        LOG(ERROR, "Could not atomically write image cache file '%s'.", buf);
-        return;
-    }
-
-    FaceList[facenum].sprite = sprite_tryload_file(buf, 0, NULL);
-    map_redraw_flag = minimap_redraw_flag = 1;
-
-    book_redraw();
-    interface_redraw();
-
-    /* TODO: this could be a bit more intelligent to detect whether any of
-     * these widgets actually contain an object with the updated face. */
-    WIDGET_REDRAW_ALL(PDOLL_ID);
-    WIDGET_REDRAW_ALL(QUICKSLOT_ID);
-    WIDGET_REDRAW_ALL(INVENTORY_ID);
 }
 
 /** @copydoc socket_command_struct::handle_func */

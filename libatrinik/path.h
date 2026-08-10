@@ -83,6 +83,8 @@ size_t path_size(const char *path);
 char *path_file_contents(const char *path);
 int path_rename(const char *old, const char *new);
 bool path_write_atomic(const char *path, const void *data, size_t size, unsigned int mode);
+/** Atomically replace a file whose parent directories are already present. */
+bool path_write_atomic_existing(const char *path, const void *data, size_t size, unsigned int mode);
 /**
  * Atomically publish a new owner-only secret without replacing an existing path.
  *

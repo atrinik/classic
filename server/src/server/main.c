@@ -663,6 +663,7 @@ int server_run(int argc, char **argv) {
         }
 
         socket_server_post_process();
+        socket_assets_service();
         server_metrics_game_loop(datetime_monotonic_us() - loop_started_us);
 
         /* Sleep proper amount of time before next tick */
