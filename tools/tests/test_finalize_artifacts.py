@@ -182,6 +182,23 @@ class FinalizeArtifactsTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "duplicate member"):
             finalize_artifacts.validate_zip(duplicate, "expected", ("payload",))
 
+        case_collision = self.root / "case-collision.zip"
+        with zipfile.ZipFile(case_collision, "w") as archive:
+            archive.writestr("expected/server/server.cfg", b"first")
+            archive.writestr("expected/server/SERVER.CFG", b"second")
+        with self.assertRaisesRegex(RuntimeError, "duplicate packaged output"):
+            finalize_artifacts.validate_zip(case_collision, "expected", ())
+
+        for index, alias in enumerate(
+            ("expected/server//server.cfg", "expected/server/./server.cfg")
+        ):
+            with self.subTest(alias=alias):
+                unsafe_alias = self.root / f"unsafe-alias-{index}.zip"
+                with zipfile.ZipFile(unsafe_alias, "w") as archive:
+                    archive.writestr(alias, b"fixture")
+                with self.assertRaisesRegex(RuntimeError, "unsafe packaged path"):
+                    finalize_artifacts.validate_zip(unsafe_alias, "expected", ())
+
     def test_windows_server_zip_requires_runtime_payload(self) -> None:
         path = self.root / "server.zip"
         package = "atrinik-classic-server-5.6.0-windows-x86_64"

@@ -57,9 +57,11 @@ def sha256(path: Path) -> str:
 
 def validate_member(name: str) -> None:
     path = PurePosixPath(name)
+    components = name.removesuffix("/").split("/")
     if (
-        path.is_absolute()
-        or ".." in path.parts
+        not name
+        or path.is_absolute()
+        or any(component in {"", ".", ".."} for component in components)
         or "\\" in name
         or re.match(r"^[A-Za-z]:", name)
     ):
@@ -136,6 +138,7 @@ def validate_zip(
             raise RuntimeError(f"empty ZIP artifact: {path.name}")
         files: dict[str, int] = {}
         member_names = set()
+        output_names = set()
         relative_names = set()
         for member in archive.infolist():
             validate_member(member.filename)
@@ -152,6 +155,12 @@ def validate_zip(
                     f"{path.name} contains an unexpected root: {member.filename}"
                 )
             if relative:
+                output_name = relative.removesuffix("/").casefold()
+                if output_name in output_names:
+                    raise RuntimeError(
+                        f"{path.name} contains duplicate packaged output: {relative}"
+                    )
+                output_names.add(output_name)
                 relative_names.add(relative)
             if not member.is_dir():
                 files[relative] = member.file_size
