@@ -424,10 +424,8 @@ void keybind_movement_state_clear(keybind_movement_state *state, bool running, b
 }
 
 /** Schedule a run-stream stop unless movement already stopped it. */
-void keybind_movement_state_run_released(keybind_movement_state *state,
-                                         bool firing,
-                                         bool run_stream_active) {
-    if (state != NULL && run_stream_active && !firing) {
+void keybind_movement_state_run_released(keybind_movement_state *state, bool run_stream_active) {
+    if (state != NULL && run_stream_active) {
         state->pending_run_stop = true;
     }
 }
@@ -486,6 +484,7 @@ keybind_movement_action keybind_movement_state_flush(keybind_movement_state *sta
     }
     if (state->pending_run_stop) {
         state->pending_run_stop = false;
+        state->repeated = false;
         *direction = 0;
         return KEYBIND_MOVEMENT_ACTION_RUN_STOP;
     }

@@ -495,27 +495,38 @@ static void test_movement_boundaries_and_modifiers(void) {
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
     keybind_movement_state_release(&state, SDL_SCANCODE_A, true, false);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_STOP, 5);
-    keybind_movement_state_run_released(&state, false, false);
+    keybind_movement_state_run_released(&state, false);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
     keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
-    keybind_movement_state_run_released(&state, false, true);
+    keybind_movement_state_run_released(&state, true);
     keybind_movement_state_release(&state, SDL_SCANCODE_A, false, false);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_STOP, 0);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
+
+    /* A run stop closes the repeat epoch before a later key release. */
+    keybind_movement_state_init(&state);
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    keybind_movement_state_run_released(&state, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_STOP, 0);
+    keybind_movement_state_release(&state, SDL_SCANCODE_A, false, false);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
     /* A queued ordinary move supersedes a pending run-stream stop. */
     keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
-    keybind_movement_state_run_released(&state, false, true);
+    keybind_movement_state_run_released(&state, true);
     keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, false, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
     /* An external running producer still receives the legacy run stop. */
     keybind_movement_state_init(&state);
-    keybind_movement_state_run_released(&state, false, true);
+    keybind_movement_state_run_released(&state, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_STOP, 0);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 }

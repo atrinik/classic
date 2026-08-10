@@ -166,7 +166,6 @@ extern void keybind_movement_state_release(keybind_movement_state *state,
 extern void keybind_movement_state_clear(keybind_movement_state *state, bool running, bool firing);
 
 extern void keybind_movement_state_run_released(keybind_movement_state *state,
-                                                bool firing,
                                                 bool run_stream_active);
 
 extern keybind_movement_action keybind_movement_state_flush(keybind_movement_state *state,

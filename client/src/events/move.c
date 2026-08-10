@@ -70,6 +70,16 @@ bool move_keys_run_stream_active(void) {
     return run_stream_active;
 }
 
+/** Stop a running movement stream without applying fire modifiers. */
+void move_keys_run_stop(void) {
+    packet_struct *packet = packet_new(SERVER_CMD_MOVE, 8, 0);
+
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint8(packet, 0);
+    socket_send_packet(packet);
+    run_stream_active = false;
+}
+
 void move_keys(int num) {
     if (cpl.fire_on) {
         client_send_fire(num, 0);
@@ -78,10 +88,12 @@ void move_keys(int num) {
 
         if (num == 5) {
             move_keys_clear();
+        } else if (num == 0) {
+            move_keys_run_stop();
         } else {
-            run_stream_active = cpl.run_on && num != 0;
+            run_stream_active = cpl.run_on;
             packet = packet_new(SERVER_CMD_MOVE, 8, 0);
-            packet_writer_write_uint8(packet, num ? directions_fire[num - 1] : 0);
+            packet_writer_write_uint8(packet, directions_fire[num - 1]);
             packet_writer_write_uint8(packet, cpl.run_on);
             socket_send_packet(packet);
         }

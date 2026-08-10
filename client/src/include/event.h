@@ -142,6 +142,8 @@ extern void move_keys_clear(void);
 
 extern bool move_keys_run_stream_active(void);
 
+extern void move_keys_run_stop(void);
+
 extern int dir_from_tile_coords(int tx, int ty);
 
 #endif

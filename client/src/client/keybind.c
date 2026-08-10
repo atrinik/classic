@@ -288,9 +288,7 @@ int keybind_process_command_up(const char *cmd) {
 
         if (!strcmp(cmd, "RUNON")) {
             cpl.run_on = 0;
-            keybind_movement_state_run_released(&movement_state,
-                                                cpl.fire_on,
-                                                move_keys_run_stream_active());
+            keybind_movement_state_run_released(&movement_state, move_keys_run_stream_active());
         } else if (!strcmp(cmd, "FIREON")) {
             cpl.fire_on = 0;
         } else if (!strncmp(cmd, "MOVE_", 5)) {
@@ -343,7 +341,7 @@ void keybind_movement_flush(void) {
     } else if (action == KEYBIND_MOVEMENT_ACTION_STOP) {
         move_keys_clear();
     } else if (action == KEYBIND_MOVEMENT_ACTION_RUN_STOP) {
-        move_keys(0);
+        move_keys_run_stop();
     }
 }
 
