@@ -724,9 +724,9 @@ static bool socket_server_command_queue_compact(socket_struct *cs) {
     size_t write_offset = 0;
     for (size_t read_offset = 0; read_offset < cs->packet_recv_cmd->len;) {
         size_t frame_len;
-        bool valid =
-            socket_server_command_queue_frame(cs->packet_recv_cmd, read_offset, &frame_len);
-        HARD_ASSERT(valid);
+        if (!socket_server_command_queue_frame(cs->packet_recv_cmd, read_offset, &frame_len)) {
+            return false;
+        }
         uint64_t old_type_offset = cs->packet_recv_cmd_base + read_offset + 2;
         if (cs->packet_recv_cmd->data[read_offset + 2] != SOCKET_COMMAND_QUEUE_TOMBSTONE) {
             if (entry_index < cs->movement_stream_entries_num &&
@@ -852,9 +852,9 @@ bool socket_server_command_queue_clear_stream(socket_struct *cs, uint8_t command
             size_t relative = (size_t)(entry.offset - cs->packet_recv_cmd_base);
             size_t frame_offset = relative - 2;
             size_t frame_len;
-            bool valid =
-                socket_server_command_queue_frame(cs->packet_recv_cmd, frame_offset, &frame_len);
-            HARD_ASSERT(valid);
+            if (!socket_server_command_queue_frame(cs->packet_recv_cmd, frame_offset, &frame_len)) {
+                return false;
+            }
             cs->packet_recv_cmd->data[relative] = SOCKET_COMMAND_QUEUE_TOMBSTONE;
             cs->movement_stream_tombstone_bytes += frame_len;
         } else {

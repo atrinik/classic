@@ -931,27 +931,34 @@ START_TEST(test_canceled_movement_bytes_do_not_exhaust_live_queue_limit) {
     socket_struct *cs = CONTR(op)->cs;
     const uint8_t old_move[] = {4, 0, 0, 0, 0, 9};
     const uint8_t new_move[] = {3, 0, 0, 0, 0, 9};
-    uint8_t item[1001] = {SERVER_CMD_ITEM_APPLY};
+    uint8_t *item = xcalloc(UINT16_MAX, sizeof(*item));
+    item[0] = SERVER_CMD_ITEM_APPLY;
 
-    for (size_t i = 0; i < 8192; i++) {
+    for (size_t i = 0; i < 32; i++) {
         command_queue_append(cs, SERVER_CMD_MOVE, old_move, sizeof(old_move));
-        if (i % 10 == 0) {
-            ck_assert(socket_server_command_queue_append(cs, item, sizeof(item)));
-        }
     }
-    size_t physical_len = cs->packet_recv_cmd->len;
-    ck_assert_uint_lt(physical_len, SOCKET_COMMAND_QUEUE_MAX);
-
     uint8_t clear[] = {SERVER_CMD_CLEAR, SERVER_CMD_MOVE, 0, 0, 0, 9};
     ck_assert(socket_server_handle_command(cs, NULL, clear, sizeof(clear)));
-    ck_assert_uint_eq(cs->movement_stream_tombstone_bytes, 8192 * (sizeof(old_move) + 3));
-    ck_assert_uint_ge(cs->movement_stream_tombstone_bytes, SOCKET_COMMAND_QUEUE_COMPACT_MIN);
+    size_t tombstone_bytes = 32 * (sizeof(old_move) + 3);
+    ck_assert_uint_eq(cs->movement_stream_tombstone_bytes, tombstone_bytes);
+
+    size_t live_target = SOCKET_COMMAND_QUEUE_MAX - sizeof(new_move) - 3;
+    size_t max_frame = UINT16_MAX + 2U;
+    size_t full_frames = live_target / max_frame;
+    for (size_t i = 0; i < full_frames; i++) {
+        ck_assert(socket_server_command_queue_append(cs, item, UINT16_MAX));
+    }
+    size_t remainder = live_target - full_frames * max_frame;
+    ck_assert_uint_ge(remainder, 3);
+    ck_assert(socket_server_command_queue_append(cs, item, remainder - 2));
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, live_target + tombstone_bytes);
+    ck_assert_uint_gt(cs->packet_recv_cmd->len, SOCKET_COMMAND_QUEUE_MAX);
 
     command_queue_append(cs, SERVER_CMD_MOVE, new_move, sizeof(new_move));
-    ck_assert_uint_eq(cs->movement_stream_tombstone_bytes, 0);
-    ck_assert_uint_eq(cs->packet_recv_cmd->len,
-                      physical_len - 8192 * (sizeof(old_move) + 3) + sizeof(new_move) + 3);
+    ck_assert_uint_eq(cs->movement_stream_tombstone_bytes, tombstone_bytes);
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, SOCKET_COMMAND_QUEUE_MAX + tombstone_bytes);
     ck_assert_uint_eq(cs->movement_stream_entries_num, 1);
+    free(item);
 }
 END_TEST
 
