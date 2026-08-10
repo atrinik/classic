@@ -1,4 +1,5 @@
 #include <toolkit/curl.h>
+#include <toolkit/path.h>
 
 #include <arpa/inet.h>
 #include <pthread.h>
@@ -150,10 +151,88 @@ static int test_total_timeout(void) {
     return !fixture.accepted || state != CURL_STATE_ERROR || elapsed_ms < 25U || elapsed_ms > 1000U;
 }
 
+static int test_validated_cache_commit(void) {
+    char directory[] = "/tmp/atrinik-curl-cache-XXXXXX";
+    if (mkdtemp(directory) == NULL) {
+        return 1;
+    }
+    char path[256];
+    snprintf(path, sizeof(path), "%s/directory.xml", directory);
+    static const char response[] = "HTTP/1.1 200 OK\r\n"
+                                   "Content-Type: application/xml; charset=utf-8\r\n"
+                                   "ETag: \"directory-1\"\r\n"
+                                   "Content-Length: 9\r\n"
+                                   "Connection: close\r\n"
+                                   "\r\n"
+                                   "validated";
+    http_fixture_t fixture = {.listener = -1, .response = response};
+    char url[128];
+    if (http_fixture_start(&fixture, url, sizeof(url)) != 0) {
+        rmdir(directory);
+        return 1;
+    }
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, http_fixture_run, &fixture) != 0) {
+        close(fixture.listener);
+        rmdir(directory);
+        return 1;
+    }
+    curl_request_t *request = curl_request_create(url, CURL_PKEY_TRUST_SYSTEM);
+    curl_request_set_path(request, path);
+    curl_request_do_get(request);
+    bool absent_before_commit = access(path, F_OK) != 0;
+    bool committed = curl_request_cache_commit(request);
+    curl_request_free(request);
+    pthread_join(thread, NULL);
+    close(fixture.listener);
+
+    char *body = NULL;
+    size_t body_size = 0;
+    bool loaded = curl_cache_read(path, 32, &body, &body_size);
+    bool body_valid = loaded && body_size == 9 && memcmp(body, "validated", 9) == 0;
+    free(body);
+
+    static const char not_modified[] = "HTTP/1.1 304 Not Modified\r\n"
+                                       "ETag: \"directory-1\"\r\n"
+                                       "Connection: close\r\n"
+                                       "\r\n";
+    http_fixture_t cached_fixture = {.listener = -1, .response = not_modified};
+    bool not_modified_valid = http_fixture_start(&cached_fixture, url, sizeof(url)) == 0;
+    pthread_t cached_thread;
+    if (not_modified_valid) {
+        not_modified_valid =
+            pthread_create(&cached_thread, NULL, http_fixture_run, &cached_fixture) == 0;
+    }
+    if (not_modified_valid) {
+        request = curl_request_create(url, CURL_PKEY_TRUST_SYSTEM);
+        curl_request_set_path(request, path);
+        curl_request_do_get(request);
+        body = curl_request_get_body(request, &body_size);
+        not_modified_valid = curl_request_get_state(request) == CURL_STATE_OK &&
+                             curl_request_get_http_code(request) == 304 && body != NULL &&
+                             body_size == 9 && memcmp(body, "validated", 9) == 0;
+        curl_request_free(request);
+        pthread_join(cached_thread, NULL);
+        close(cached_fixture.listener);
+    } else if (cached_fixture.listener >= 0) {
+        close(cached_fixture.listener);
+    }
+
+    char etag_path[272];
+    snprintf(etag_path, sizeof(etag_path), "%s.etag", path);
+    unlink(etag_path);
+    unlink(path);
+    rmdir(directory);
+    return !fixture.accepted || !absent_before_commit || !committed || !body_valid ||
+           !cached_fixture.accepted || !not_modified_valid;
+}
+
 int main(void) {
+    toolkit_import(path);
     toolkit_import(curl);
     int failed = test_response_code_survives_body_limit() ||
-                 test_response_code_survives_partial_body() || test_total_timeout();
+                 test_response_code_survives_partial_body() || test_total_timeout() ||
+                 test_validated_cache_commit();
     toolkit_deinit();
     return failed;
 }

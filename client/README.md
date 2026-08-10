@@ -83,6 +83,30 @@
  that public endpoint with only the existing post-QUIC in-game join password.
  The capability is never written to client configuration, URLs, logs, or metrics.
 
+ The packaged directory configuration is an explicit trusted pair:
+
+     metaserver = https://classic.meta.atrinik.org/index.xml https://rendezvous.meta.atrinik.org/v1/classic
+
+ The first value is the complete static protocol-4 XML URL. The second is the
+ dynamic signaling origin and classic path prefix. Additional metaserver lines
+ are tried last-to-first as complete pairs; a directory is never combined with
+ another line's rendezvous origin. Userinfo, inherited query/fragment, encoded
+ or traversal paths, and unsupported schemes fail closed. The client never
+ derives either endpoint from meta.atrinik.org or another pseudo-base.
+
+ Protocol 4 requires one bounded, fresh, transactionally valid snapshot with at
+ most 512 certificate-pinned servers. Address and Port are either both omitted
+ for rendezvous-only bootstrap or both present as an explicit canonical DNS
+ endpoint. HTTP 200 bodies are committed to the local cache only after complete
+ XML, content-type, strong-ETag, freshness, ordering, and generation validation.
+ A 304 reuses that exact cached body only before its embedded expiry. A network
+ or malformed-response failure may use the same unexpired last-known-good body;
+ an expired body remains only a generation high-water mark and is never shown.
+ Equal generations must be byte-identical and older generations never replace
+ newer ones. The cache contains only the public directory projection: tickets,
+ candidates, invite capabilities, authorization transcripts, and join
+ passwords remain one-attempt memory and are never cached.
+
  The same prompt accepts the separate human server join password, which is
  checked only after certificate-pinned QUIC connects. The password is kept
  only in memory for that attempt and is not written to the connection-

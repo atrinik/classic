@@ -34,6 +34,7 @@
 #include <toolkit/curl.h>
 #include <toolkit/datetime.h>
 #include <toolkit/metaserver_publisher.h>
+#include <toolkit/metaserver_url.h>
 #include <toolkit/path.h>
 #include <toolkit/rendezvous.h>
 #include <player.h>
@@ -832,11 +833,11 @@ static bool metaserver_rendezvous_url(char *url, size_t url_size) {
         return false;
     }
 
-    return socket_rendezvous_url(settings.metaserver_url,
-                                 quic_fingerprint,
-                                 "server",
-                                 url,
-                                 url_size);
+    return metaserver_url_rendezvous(settings.metaserver_rendezvous_origin,
+                                     quic_fingerprint,
+                                     "server",
+                                     url,
+                                     url_size);
 }
 
 static void metaserver_rendezvous_start(const char *token) {
@@ -1198,6 +1199,7 @@ static curl_request_t *metaserver_publish_request_create(uint32_t players_count)
     char sequence_header[21] = {0};
     char signature_header[METASERVER_PUBLISH_SIGNATURE_HEADER_MAX] = {0};
     char url[HUGE_BUF] = {0};
+    char authority[MAX_BUF] = {0};
     unsigned char nonce[METASERVER_PUBLISH_NONCE_SIZE] = {0};
     metaserver_publisher_components_t components = {0};
     metaserver_publisher_identity_t *identity = NULL;
@@ -1247,8 +1249,9 @@ static curl_request_t *metaserver_publish_request_create(uint32_t players_count)
     }
     time_t now = time(NULL);
     if (now < 0 ||
+        !metaserver_url_publish(settings.metaserver_publish_origin, "/", VS(url), VS(authority)) ||
         !metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V1,
-                                    METASERVER_PUBLISH_AUTHORITY,
+                                    authority,
                                     server_id,
                                     sequence,
                                     nonce,
@@ -1260,8 +1263,10 @@ static curl_request_t *metaserver_publish_request_create(uint32_t players_count)
                                             components.signature_base,
                                             signature_header) ||
         snprintf(VS(sequence_header), "%" PRIu64, sequence) >= (int)sizeof(sequence_header) ||
-        snprintf(VS(url), "https://%s%s", METASERVER_PUBLISH_AUTHORITY, components.path) >=
-            (int)sizeof(url)) {
+        !metaserver_url_publish(settings.metaserver_publish_origin,
+                                components.path,
+                                VS(url),
+                                VS(authority))) {
         LOG(ERROR, "Cannot construct a signed metaserver publication");
         goto out;
     }
@@ -1292,6 +1297,7 @@ out:
     OPENSSL_cleanse(sequence_header, sizeof(sequence_header));
     OPENSSL_cleanse(signature_header, sizeof(signature_header));
     OPENSSL_cleanse(url, sizeof(url));
+    OPENSSL_cleanse(authority, sizeof(authority));
     OPENSSL_cleanse(nonce, sizeof(nonce));
     OPENSSL_cleanse(&components, sizeof(components));
     return request;

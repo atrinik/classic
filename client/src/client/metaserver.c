@@ -18,8 +18,14 @@
 
 #include <global.h>
 #include <metaserver.h>
+#include <wrapper.h>
 #include <openssl/crypto.h>
+#include <openssl/evp.h>
 #include <toolkit/curl.h>
+#include <toolkit/datetime.h>
+#include <toolkit/string.h>
+#include <toolkit/metaserver_url.h>
+#include "metaserver_directory.h"
 #include "metaserver_private.h"
 
 /** Are we connecting to the metaserver? */
@@ -36,6 +42,90 @@ static SDL_Mutex *server_head_mutex;
 static SDL_Thread *metaserver_worker;
 /** Is metaserver enabled? */
 static uint8_t enabled = 1;
+
+static bool metaserver_etag_valid(const char *value) {
+    size_t size = strlen(value);
+    if (size < 2 || size > 255 || value[0] != '"' || value[size - 1] != '"') {
+        return false;
+    }
+    for (size_t i = 1; i + 1 < size; i++) {
+        unsigned char cp = (unsigned char)value[i];
+        if (cp <= 0x20U || cp >= 0x7fU || cp == '"' || cp == '\\') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool metaserver_response_headers_valid(curl_request_t *request) {
+    size_t headers_size;
+    const char *headers = curl_request_get_header(request, &headers_size);
+    if (headers == NULL || headers_size == 0 || headers[headers_size] != '\0') {
+        return false;
+    }
+    size_t pos = 0;
+    char line[HUGE_BUF];
+    size_t content_types = 0;
+    size_t etags = 0;
+    while (string_get_word(headers, &pos, '\n', VS(line), 0)) {
+        char *cps[2];
+        if (string_split(line, cps, arraysize(cps), ':') != arraysize(cps)) {
+            continue;
+        }
+        string_whitespace_trim(cps[0]);
+        string_whitespace_trim(cps[1]);
+        if (strcasecmp(cps[0], "Content-Type") == 0) {
+            content_types++;
+            if (strcasecmp(cps[1], "application/xml; charset=utf-8") != 0) {
+                return false;
+            }
+        } else if (strcasecmp(cps[0], "ETag") == 0) {
+            etags++;
+            if (!metaserver_etag_valid(cps[1])) {
+                return false;
+            }
+        }
+    }
+    return content_types == 1 && etags == 1;
+}
+
+static char *metaserver_cache_path(const client_metaserver_endpoint_t *endpoint) {
+    EVP_MD_CTX *context = EVP_MD_CTX_new();
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int digest_size = 0;
+    char scope[65];
+    bool ok =
+        context != NULL && EVP_DigestInit_ex(context, EVP_sha256(), NULL) == 1 &&
+        EVP_DigestUpdate(context, endpoint->directory_url, strlen(endpoint->directory_url) + 1) ==
+            1 &&
+        EVP_DigestUpdate(context,
+                         endpoint->rendezvous_origin,
+                         strlen(endpoint->rendezvous_origin) + 1) == 1 &&
+        EVP_DigestFinal_ex(context, digest, &digest_size) == 1 && digest_size == 32 &&
+        string_tohex(digest, digest_size, VS(scope), false) == 64;
+    EVP_MD_CTX_free(context);
+    if (!ok) {
+        return NULL;
+    }
+    char relative[HUGE_BUF];
+    if (snprintf(VS(relative), DIRECTORY_CACHE "/metaserver-v4-%s.xml", scope) >=
+        (int)sizeof(relative)) {
+        return NULL;
+    }
+    return file_path(relative, "wb");
+}
+
+static bool metaserver_cached_snapshot(const char *body,
+                                       size_t body_size,
+                                       metaserver_directory_snapshot_t **snapshot,
+                                       bool *current,
+                                       uint64_t now) {
+    if (!metaserver_directory_parse(body, body_size, snapshot)) {
+        return false;
+    }
+    *current = metaserver_directory_current(*snapshot, now);
+    return true;
+}
 
 void metaserver_init(void) {
     server_head = NULL;
@@ -83,11 +173,11 @@ bool metaserver_rendezvous_url(const server_struct *server, char *url, size_t ur
     if (server == NULL || server->server_id == NULL || server->rendezvous_origin == NULL) {
         return false;
     }
-    return socket_rendezvous_url(server->rendezvous_origin,
-                                 server->server_id,
-                                 "client",
-                                 url,
-                                 url_size);
+    return metaserver_url_rendezvous(server->rendezvous_origin,
+                                     server->server_id,
+                                     "client",
+                                     url,
+                                     url_size);
 }
 
 server_struct *server_get_id(size_t num) {
@@ -157,7 +247,6 @@ server_struct *metaserver_add(const char *hostname,
                               const char *version,
                               const char *desc) {
     server_struct *node = xcalloc(1, sizeof(*node));
-    node->player = -1;
     node->port = port;
     node->hostname = xstrdup(hostname);
     node->name = xstrdup(name);
@@ -172,20 +261,86 @@ int metaserver_thread(void *dummy) {
     (void)dummy;
 
     for (size_t i = clioption_settings.metaservers_num; i > 0; i--) {
-        char direct_url[MAX_BUF];
-        metaserver_direct_url(clioption_settings.metaservers[i - 1], VS(direct_url));
-        if (*direct_url == '\0') {
+        const client_metaserver_endpoint_t *endpoint = &clioption_settings.metaservers[i - 1];
+        time_t current_time = time(NULL);
+        if (current_time < 0) {
             continue;
         }
+        uint64_t now = (uint64_t)current_time;
+        char *cache_path = metaserver_cache_path(endpoint);
+        char *cached_body = NULL;
+        size_t cached_body_size = 0;
+        metaserver_directory_snapshot_t *cached_snapshot = NULL;
+        bool cache_current = false;
+        bool cache_valid = cache_path != NULL &&
+                           curl_cache_read(cache_path,
+                                           METASERVER_DIRECTORY_BODY_MAX,
+                                           &cached_body,
+                                           &cached_body_size) &&
+                           metaserver_cached_snapshot(cached_body,
+                                                      cached_body_size,
+                                                      &cached_snapshot,
+                                                      &cache_current,
+                                                      now);
 
-        curl_request_t *request = curl_request_create(direct_url, CURL_PKEY_TRUST_SYSTEM);
+        curl_request_t *request =
+            curl_request_create(endpoint->directory_url, CURL_PKEY_TRUST_SYSTEM);
+        curl_request_set_follow_redirects(request, false);
+        curl_request_set_max_body(request, METASERVER_DIRECTORY_BODY_MAX);
+        curl_request_set_max_header(request, 16384);
+        curl_request_set_timeout(request, 15000);
+        if (cache_valid) {
+            curl_request_set_path(request, cache_path);
+        }
         curl_request_do_get(request);
         size_t body_size;
         char *body = curl_request_get_body(request, &body_size);
-        bool parsed =
-            curl_request_get_http_code(request) == 200 && body != NULL &&
-            metaserver_direct_parse(body, body_size, clioption_settings.metaservers[i - 1]);
+        int http_code = curl_request_get_http_code(request);
+        bool parsed = false;
+        if (curl_request_get_state(request) == CURL_STATE_OK && body != NULL &&
+            (http_code == 200 || http_code == 304)) {
+            metaserver_directory_snapshot_t *received_snapshot = NULL;
+            bool received_current = false;
+            bool received_valid = metaserver_cached_snapshot(body,
+                                                             body_size,
+                                                             &received_snapshot,
+                                                             &received_current,
+                                                             now);
+            bool response_valid =
+                http_code == 304 || (metaserver_response_headers_valid(request) &&
+                                     metaserver_directory_replacement_valid(received_snapshot,
+                                                                            body,
+                                                                            body_size,
+                                                                            cached_snapshot,
+                                                                            cached_body,
+                                                                            cached_body_size));
+            if (received_valid && received_current && response_valid) {
+                uint64_t accepted_generation;
+                parsed = metaserver_direct_parse(body,
+                                                 body_size,
+                                                 endpoint->rendezvous_origin,
+                                                 now,
+                                                 cache_valid ? cached_snapshot->generation : 0,
+                                                 &accepted_generation);
+                if (parsed && http_code == 200 && !curl_request_cache_commit(request)) {
+                    LOG(ERROR, "Could not persist the validated metaserver directory cache");
+                }
+            }
+            metaserver_directory_free(received_snapshot);
+        }
         curl_request_free(request);
+        if (!parsed && cache_valid && cache_current) {
+            uint64_t accepted_generation;
+            parsed = metaserver_direct_parse(cached_body,
+                                             cached_body_size,
+                                             endpoint->rendezvous_origin,
+                                             now,
+                                             cached_snapshot->generation,
+                                             &accepted_generation);
+        }
+        metaserver_directory_free(cached_snapshot);
+        free(cached_body);
+        free(cache_path);
         if (parsed) {
             break;
         }

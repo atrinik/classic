@@ -264,8 +264,8 @@ void intro_show(void) {
             }
             list_add(list_servers, i, 1, buf);
 
-            if (node->player >= 0) {
-                snprintf(buf, sizeof(buf), "%d", node->player);
+            if (node->player_known) {
+                snprintf(buf, sizeof(buf), "%" PRIu32, node->player);
             } else {
                 strcpy(buf, "-");
             }

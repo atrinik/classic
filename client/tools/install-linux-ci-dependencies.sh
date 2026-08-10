@@ -15,7 +15,7 @@ fi
 "${apt_prefix[@]}" apt-get update -qq
 "${apt_prefix[@]}" env DEBIAN_FRONTEND=noninteractive \
   apt-get install -y -qq --no-install-recommends \
-  build-essential ca-certificates cmake curl gcovr libcurl4-openssl-dev libsdl3-dev \
+  build-essential ca-certificates cmake curl gcovr libcurl4-openssl-dev libidn2-dev libsdl3-dev \
   libsdl3-image-dev libsdl3-ttf-dev libssl-dev libxml2-dev ninja-build \
   pkgconf python3 zlib1g-dev
 
