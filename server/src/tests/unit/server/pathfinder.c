@@ -7,8 +7,11 @@
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
+#include <toolkit/clioptions.h>
+#include <arch.h>
 #include <object.h>
 #include <pathfinder.h>
+#include <waypoint.h>
 
 static path_node_t *path_last(path_node_t *path) {
     while (path != NULL && path->next != NULL) {
@@ -40,6 +43,35 @@ START_TEST(test_exact_search_returns_owned_route_and_metrics) {
 
     path_result_free(&result);
     ck_assert_ptr_null(result.path);
+}
+END_TEST
+
+START_TEST(test_waypoint_retains_explicit_partial_path) {
+    mapstruct *map;
+    object *npc;
+    check_setup_env_pl(&map, &npc);
+    FREE_AND_COPY_HASH(map->path, "/unit/pathfinder");
+    object *waypoint = arch_get("waypoint");
+    ck_assert_ptr_nonnull(waypoint);
+    waypoint = object_insert_into(waypoint, npc, 0);
+    ck_assert_ptr_nonnull(waypoint);
+    waypoint->stats.hp = 20;
+    waypoint->stats.sp = 20;
+    char *errmsg = NULL;
+    ck_assert_msg(clioptions_load_str("pathfinder_max_nodes = 8", &errmsg),
+                  "%s",
+                  errmsg != NULL ? errmsg : "");
+    free(errmsg);
+
+    waypoint_compute_path(waypoint);
+
+    ck_assert_ptr_nonnull(waypoint->msg);
+    ck_assert_uint_gt(strlen(waypoint->msg), 0);
+    errmsg = NULL;
+    ck_assert_msg(clioptions_load_str("pathfinder_max_nodes = 10000", &errmsg),
+                  "%s",
+                  errmsg != NULL ? errmsg : "");
+    free(errmsg);
 }
 END_TEST
 
@@ -188,6 +220,7 @@ static Suite *suite(void) {
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_exact_search_returns_owned_route_and_metrics);
     tcase_add_test(tc_core, test_budget_partial_is_explicit_and_exact_search_stays_empty);
+    tcase_add_test(tc_core, test_waypoint_retains_explicit_partial_path);
     tcase_add_test(tc_core, test_no_path_is_distinct_from_budget_exhaustion);
     tcase_add_test(tc_core, test_tiled_border_uses_alternate_open_crossing);
     tcase_add_test(tc_core, test_results_remain_isolated_across_searches);

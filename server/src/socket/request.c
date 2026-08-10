@@ -2312,12 +2312,19 @@ void socket_command_move_path(socket_struct *ns,
 
     x = packet_reader_read_uint8(&reader);
     y = packet_reader_read_uint8(&reader);
+    if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
+        return;
+    }
 
     /* Validate the passed x/y. */
     if (x >= pl->cs->mapx || y >= pl->cs->mapy) {
         LOG(PACKET, "X/Y not in range: %d, %d", x, y);
         return;
     }
+
+    /* A valid request always replaces the previous click-to-move queue, even
+     * when it cannot produce a new route. */
+    player_path_clear(pl);
 
     /* If this is the middle of the screen where the player is already,
      * there isn't much to do. */
@@ -2352,9 +2359,6 @@ void socket_command_move_path(socket_struct *ns,
         return;
     }
 
-    /* Clear any previously queued paths. */
-    player_path_clear(pl);
-
     /* 'node' now actually points to where the player is standing, so
      * skip that. */
     if (node->next) {
@@ -2363,9 +2367,11 @@ void socket_command_move_path(socket_struct *ns,
         }
     }
 
-    /* The last x,y where we wanted to move is not included in the
-     * above paths finding, so we have to add it manually. */
-    player_path_add(pl, m, xt, yt);
+    /* Successful searches use proximity-goal semantics. Add the exact goal
+     * only when it is occupiable under the pathfinder's collision policy. */
+    if (path_tile_blocked(pl->ob, m, xt, yt) == 0) {
+        player_path_add(pl, m, xt, yt);
+    }
     path_result_free(&result);
 }
 

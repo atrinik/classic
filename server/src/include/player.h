@@ -89,9 +89,6 @@ enum {
 /** Maximum quickslots allowed. */
 #define MAX_QUICKSLOT 32
 
-/** Maximum failures allowed when trying to reach destination path. */
-#define PLAYER_PATH_MAX_FAILS 15
-
 #define PLAYER_TESTING_NAME1 "Tester"
 #define PLAYER_TESTING_NAME2 "Tester Testington"
 
@@ -116,13 +113,6 @@ typedef struct player_path {
 
     /** Destination Y. */
     int16_t y;
-
-    /**
-     * How many times we failed trying to reach this destination. If more
-     * than @ref PLAYER_PATH_MAX_FAILS, will abort trying to reach the
-     * destination.
-     */
-    uint8_t fails;
 } player_path;
 
 #define SKILL_LEVEL(_pl, _skill) \
