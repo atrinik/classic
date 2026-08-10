@@ -142,6 +142,12 @@ class FinalizeArtifactsTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "unexpected root"):
             finalize_artifacts.validate_zip(wrong_root, "expected", ("atrinik.exe",))
 
+        root_file = self.root / "root-file.zip"
+        with zipfile.ZipFile(root_file, "w") as archive:
+            archive.writestr("expected", b"fixture")
+        with self.assertRaisesRegex(RuntimeError, "unexpected root"):
+            finalize_artifacts.validate_zip(root_file, "expected", ())
+
         empty = self.root / "empty.zip"
         with zipfile.ZipFile(empty, "w") as archive:
             archive.writestr("expected/atrinik.exe", b"")
@@ -220,12 +226,12 @@ class FinalizeArtifactsTests(unittest.TestCase):
 
     def test_windows_server_zip_rejects_split_maps_layout(self) -> None:
         package = "atrinik-classic-server-5.6.0-windows-x86_64"
-        for name in ("maps/", "maps/regions.reg"):
+        for name in ("maps", "maps/", "maps/regions.reg", "Maps/", "MAPS/regions.reg"):
             with self.subTest(name=name):
                 path = self.root / f"server-{name.replace('/', '-')}.zip"
                 with zipfile.ZipFile(path, "w") as archive:
                     archive.writestr(f"{package}/{name}", b"fixture")
-                with self.assertRaisesRegex(RuntimeError, "forbidden packaged maps/\\*"):
+                with self.assertRaisesRegex(RuntimeError, "forbidden packaged maps"):
                     finalize_artifacts.validate_zip(
                         path,
                         package,

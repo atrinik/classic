@@ -44,7 +44,7 @@ SERVER_WINDOWS_REQUIRED_PATTERNS = (
     "server/install_data/*",
     "server/assets/client-maps/*",
 )
-SERVER_WINDOWS_FORBIDDEN_PATTERNS = ("maps/*",)
+SERVER_WINDOWS_FORBIDDEN_PATTERNS = ("maps", "maps/*")
 
 
 def sha256(path: Path) -> str:
@@ -145,9 +145,7 @@ def validate_zip(
                 )
             member_names.add(member.filename)
             prefix = f"{package_root}/"
-            if member.filename == package_root:
-                relative = ""
-            elif member.filename.startswith(prefix):
+            if member.filename.startswith(prefix):
                 relative = member.filename.removeprefix(prefix)
             else:
                 raise RuntimeError(
@@ -173,7 +171,10 @@ def validate_zip(
             if not any(size > 0 for size in matches):
                 raise RuntimeError(f"{path.name} has only empty packaged {pattern}")
         for pattern in forbidden_patterns:
-            if any(fnmatch.fnmatchcase(name, pattern) for name in relative_names):
+            if any(
+                fnmatch.fnmatchcase(name.casefold(), pattern.casefold())
+                for name in relative_names
+            ):
                 raise RuntimeError(f"{path.name} contains forbidden packaged {pattern}")
 
 
