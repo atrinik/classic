@@ -22,6 +22,6 @@ python3 "${ROOT_DIR}/tools/dependencies.py" sync
     ./atrinik-server --worldmaker
 )
 
-map_count=$(find "${ROOT_DIR}/data/http/client-maps" \
+map_count=$(find "${ROOT_DIR}/assets/client-maps" \
     -maxdepth 1 -type f -name '*.png' | wc -l)
-echo "Generated ${map_count} region maps in data/http/client-maps."
+echo "Generated ${map_count} region maps in assets/client-maps."

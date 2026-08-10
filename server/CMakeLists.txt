@@ -465,6 +465,16 @@ if (BUILD_TESTING AND NOT MINGW)
             TIMEOUT 300
             WORKING_DIRECTORY "${ATRINIK_SERVER_TEST_RUNTIME}/server")
 
+        add_test(NAME server-assetspath-migration
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/src/tests/assetspath_migration.py
+                $<TARGET_FILE:${EXECUTABLE}>)
+        set_tests_properties(server-assetspath-migration PROPERTIES
+            LABELS "server;runtime"
+            RESOURCE_LOCK server-test-runtime
+            TIMEOUT 300
+            WORKING_DIRECTORY "${ATRINIK_SERVER_TEST_RUNTIME}/server")
+
         add_custom_target(check
             COMMAND ${CMAKE_CTEST_COMMAND}
                 --test-dir ${CMAKE_BINARY_DIR}
@@ -535,7 +545,7 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
     install(DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/lib/"
         DESTINATION server/lib)
     install(DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/client-maps"
-        DESTINATION server/install_data/http)
+        DESTINATION server/assets)
     install(DIRECTORY install_data resources tools
         DESTINATION server
         PATTERN ".git" EXCLUDE)

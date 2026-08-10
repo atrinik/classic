@@ -196,7 +196,7 @@ class FinalizeArtifactsTests(unittest.TestCase):
             "server/lib/helper.dll",
             "server/resources/archetypes",
             "server/install_data/accounts",
-            "server/install_data/http/client-maps/map.json",
+            "server/assets/client-maps/map.json",
         )
         with zipfile.ZipFile(path, "w") as archive:
             for name in files:

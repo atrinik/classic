@@ -41,7 +41,7 @@ SERVER_WINDOWS_REQUIRED_PATTERNS = (
     "server/lib/*",
     "server/resources/*",
     "server/install_data/*",
-    "server/install_data/http/client-maps/*",
+    "server/assets/client-maps/*",
 )
 
 
