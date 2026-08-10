@@ -816,19 +816,50 @@ static void test_keybind_event_integration(void) {
         .command = "?RUNON",
         .key = SDLK_Q,
     };
-    keybind_struct *bindings[] = {&northwest,         &shifted,
-                                  &shifted_b,         &northeast,
-                                  &move_then_fire,    &fire_then_move,
-                                  &shifted_d,         &movement_sequence,
-                                  &shifted_e,         &padded_northwest,
-                                  &shifted_f,         &southeast,
-                                  &shifted_modes,     &move_then_fire_again,
-                                  &shifted_fire_move, &compound_k,
-                                  &shifted_k,         &compound_l,
-                                  &shifted_l,         &intercepted_compound,
-                                  &shifted_m,         &fire_owner,
-                                  &run_fallback,      &shifted_run_move,
-                                  &run_owner};
+    keybind_struct same_direction = {
+        .command = "?MOVE_NW",
+        .key = SDLK_R,
+        .repeat = true,
+    };
+    keybind_struct shifted_same_direction = {
+        .command = "?MOVE_NW",
+        .key = SDLK_R,
+        .mod = SDL_KMOD_SHIFT,
+        .repeat = true,
+    };
+    keybind_struct shifted_consumed_run = {
+        .command = "?RUNON",
+        .key = SDLK_S,
+        .mod = SDL_KMOD_SHIFT,
+    };
+    keybind_struct *bindings[] = {&northwest,
+                                  &shifted,
+                                  &shifted_b,
+                                  &northeast,
+                                  &move_then_fire,
+                                  &fire_then_move,
+                                  &shifted_d,
+                                  &movement_sequence,
+                                  &shifted_e,
+                                  &padded_northwest,
+                                  &shifted_f,
+                                  &southeast,
+                                  &shifted_modes,
+                                  &move_then_fire_again,
+                                  &shifted_fire_move,
+                                  &compound_k,
+                                  &shifted_k,
+                                  &compound_l,
+                                  &shifted_l,
+                                  &intercepted_compound,
+                                  &shifted_m,
+                                  &fire_owner,
+                                  &run_fallback,
+                                  &shifted_run_move,
+                                  &run_owner,
+                                  &same_direction,
+                                  &shifted_same_direction,
+                                  &shifted_consumed_run};
     movement_sink sink;
     key_struct key_states[SDL_SCANCODE_COUNT] = {0};
     SDL_KeyboardEvent event = {.type = SDL_EVENT_KEY_DOWN};
@@ -963,8 +994,12 @@ static void test_keybind_event_integration(void) {
 
     /* Modifier release flushes movement before modified mode reconciliation. */
     movement_sink_reset(&sink);
-    sink.firing = true;
     handler = movement_sink_handler(&sink);
+    event.mod = SDL_KMOD_LSHIFT;
+    event.key = SDLK_H;
+    event.scancode = SDL_SCANCODE_H;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    event.mod = SDL_KMOD_NONE;
     event.key = SDLK_A;
     event.scancode = SDL_SCANCODE_A;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
@@ -981,9 +1016,15 @@ static void test_keybind_event_integration(void) {
     TEST_CHECK(sink.actions_num == 2 && sink.directions[1] == 7 && !sink.firing_at_emit[1]);
 
     movement_sink_reset(&sink);
-    sink.running = true;
     handler = movement_sink_handler(&sink);
     event.repeat = false;
+    event.mod = SDL_KMOD_LSHIFT;
+    event.key = SDLK_H;
+    event.scancode = SDL_SCANCODE_H;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    event.mod = SDL_KMOD_NONE;
+    event.key = SDLK_A;
+    event.scancode = SDL_SCANCODE_A;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     keybind_event_reconcile_release(bindings,
                                     arraysize(bindings),
@@ -1346,6 +1387,29 @@ static void test_keybind_event_integration(void) {
     keybind_event_reconcile_release(bindings, arraysize(bindings), &owner_up, key_states, &handler);
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &owner_up, &handler));
     TEST_CHECK(!sink.firing && sink.command_ups == 1);
+
+    /* A widget-consumed modified mode key cannot force movement reconciliation. */
+    movement_sink_reset(&sink);
+    sink.running = true;
+    handler = movement_sink_handler(&sink);
+    event.type = SDL_EVENT_KEY_DOWN;
+    event.repeat = false;
+    event.mod = SDL_KMOD_LSHIFT;
+    event.key = SDLK_R;
+    event.scancode = SDL_SCANCODE_R;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 7);
+    key_states[SDL_SCANCODE_R].pressed = true;
+    key_states[SDL_SCANCODE_S].pressed = true;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 1);
+    TEST_CHECK(sink.running && sink.command_ups == 0);
 }
 
 int main(void) {

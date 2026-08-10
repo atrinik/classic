@@ -473,6 +473,24 @@ bool keybind_movement_state_mode_owned(const keybind_movement_state *state, bool
     return false;
 }
 
+/** Return whether an accepted mode owner is invalid under a new modifier. */
+bool keybind_movement_state_has_invalid_mode_modifier(const keybind_movement_state *state,
+                                                      SDL_Keymod mod) {
+    if (state == NULL) {
+        return false;
+    }
+    SDL_Keymod adjusted_mod = keybind_adjust_kmod(mod);
+    for (SDL_Scancode scancode = 1; scancode < SDL_SCANCODE_COUNT; scancode++) {
+        if ((state->keys[scancode].run_owned && state->keys[scancode].run_mod != SDL_KMOD_NONE &&
+             state->keys[scancode].run_mod != adjusted_mod) ||
+            (state->keys[scancode].fire_owned && state->keys[scancode].fire_mod != SDL_KMOD_NONE &&
+             state->keys[scancode].fire_mod != adjusted_mod)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /** Release mode owners whose selected modifier binding is no longer valid. */
 void keybind_movement_state_release_invalid_mode_modifiers(keybind_movement_state *state,
                                                            SDL_Keymod mod,
