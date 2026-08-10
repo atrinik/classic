@@ -30,6 +30,15 @@
 #define ASSET_RATE_REQUESTS_PER_SECOND 256U
 #define ASSET_TOKEN_BUCKET_CAPACITY ASSET_RATE_BYTES_PER_SECOND
 #define ASSET_STREAM_ACCEPT_QUANTUM 16U
+/* A server loop normally runs every 125 ms. Progress several fair rounds per
+ * invocation so an accepted face is not stretched across one tick per header
+ * or 16 KiB body fragment. The fixed round count keeps per-connection work
+ * bounded while the byte token bucket remains the aggregate rate limit. */
+#define ASSET_STREAM_SERVICE_ROUNDS 12U
+#define ASSET_FACE_SERVICE_ROUNDS_REQUIRED \
+    (3U + (ASSET_FACE_MAX_SIZE + ASSET_STREAM_QUANTUM - 1U) / ASSET_STREAM_QUANTUM)
+
+CASSERT(ASSET_STREAM_SERVICE_ROUNDS >= ASSET_FACE_SERVICE_ROUNDS_REQUIRED);
 
 typedef struct asset_cache_entry {
     UT_hash_handle hh;
@@ -371,7 +380,10 @@ static bool asset_stream_prepare(socket_struct *ns, asset_stream_state_t *state)
     return true;
 }
 
-static bool asset_stream_read_request(socket_struct *ns, asset_stream_state_t *state) {
+static bool
+asset_stream_read_request(socket_struct *ns, asset_stream_state_t *state, bool *progressed) {
+    HARD_ASSERT(progressed != NULL);
+
     uint8_t surplus;
     void *buffer = &surplus;
     size_t capacity = 1;
@@ -385,16 +397,20 @@ static bool asset_stream_read_request(socket_struct *ns, asset_stream_state_t *s
         return false;
     }
     if (result == SOCKET_STREAM_RESULT_FINISHED) {
+        *progressed = true;
         return asset_stream_prepare(ns, state);
     }
     if (state->request_size == sizeof(state->request) && amount != 0) {
         return false;
     }
     state->request_size += amount;
+    *progressed = amount != 0;
     return true;
 }
 
-static bool asset_stream_write(socket_struct *ns, asset_stream_state_t *state) {
+static bool asset_stream_write(socket_struct *ns, asset_stream_state_t *state, bool *progressed) {
+    HARD_ASSERT(progressed != NULL);
+
     const uint8_t *data;
     size_t remaining;
     if (state->state == ASSET_SERVER_SEND_HEADER) {
@@ -417,13 +433,14 @@ static bool asset_stream_write(socket_struct *ns, asset_stream_state_t *state) {
     if (result == SOCKET_STREAM_RESULT_ERROR || result == SOCKET_STREAM_RESULT_FINISHED) {
         return false;
     }
+    *progressed = amount != 0;
     if (state->state == ASSET_SERVER_SEND_HEADER) {
         state->header_pos += amount;
         if (state->header_pos == state->header->len) {
             server_metrics_asset_response(datetime_monotonic_us() - state->started_us);
             packet_free(state->header);
             state->header = NULL;
-            if (state->entry == NULL || state->entry->size == 0) {
+            if (state->body == NULL || state->body_size == 0) {
                 state->concluded = socket_stream_conclude(state->stream);
                 return false;
             }
@@ -473,18 +490,27 @@ bool socket_assets_service(socket_struct *ns) {
     }
     asset_stream_accept(ns);
 
-    asset_stream_state_t *state, *next;
-    DL_FOREACH_SAFE(ns->asset_streams, state, next) {
-        bool keep = state->state == ASSET_SERVER_READ_REQUEST ? asset_stream_read_request(ns, state)
-                                                              : asset_stream_write(ns, state);
-        if (!keep) {
-            asset_stream_free(ns, state, !state->concluded, !state->concluded);
+    for (size_t round = 0; round < ASSET_STREAM_SERVICE_ROUNDS; round++) {
+        bool progressed = false;
+        asset_stream_state_t *state, *next;
+        DL_FOREACH_SAFE(ns->asset_streams, state, next) {
+            bool stream_progressed = false;
+            bool keep = state->state == ASSET_SERVER_READ_REQUEST
+                            ? asset_stream_read_request(ns, state, &stream_progressed)
+                            : asset_stream_write(ns, state, &stream_progressed);
+            progressed |= stream_progressed;
+            if (!keep) {
+                asset_stream_free(ns, state, !state->concluded, !state->concluded);
+            }
         }
-    }
-    if (ns->asset_streams != NULL && ns->asset_streams->next != NULL) {
-        asset_stream_state_t *first = ns->asset_streams;
-        DL_DELETE(ns->asset_streams, first);
-        DL_APPEND(ns->asset_streams, first);
+        if (!progressed || ns->asset_streams == NULL) {
+            break;
+        }
+        if (ns->asset_streams->next != NULL) {
+            asset_stream_state_t *first = ns->asset_streams;
+            DL_DELETE(ns->asset_streams, first);
+            DL_APPEND(ns->asset_streams, first);
+        }
     }
     return ns->state != ST_DEAD && ns->state != ST_ZOMBIE;
 }
