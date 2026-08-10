@@ -223,6 +223,19 @@ START_TEST(test_loaded_map_light_check_is_idempotent) {
 }
 END_TEST
 
+START_TEST(test_remove_light_source_list_accepts_swapped_map) {
+    mapstruct swapped = {
+        .width = 1,
+        .height = 1,
+        .in_memory = MAP_SWAPPED,
+        .spaces = NULL,
+    };
+
+    remove_light_source_list(&swapped);
+    ck_assert_ptr_null(swapped.first_light);
+}
+END_TEST
+
 START_TEST(test_light_level_interpolation) {
     ck_assert_uint_eq(light_level_from_raw(10), 23);
     ck_assert_uint_eq(light_level_from_raw(30), 63);
@@ -256,6 +269,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_light_mask_lights_exposed_upper_wall_face);
     tcase_add_test(tc_core, test_light_mask_recalculates_around_opaque_cells);
     tcase_add_test(tc_core, test_loaded_map_light_check_is_idempotent);
+    tcase_add_test(tc_core, test_remove_light_source_list_accepts_swapped_map);
 
     return s;
 }

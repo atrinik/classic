@@ -712,27 +712,30 @@ void remove_light_source_list(mapstruct *map) {
                           0);
     }
 
-    for (int y = 0; y < MAP_HEIGHT(map); y++) {
-        for (int x = 0; x < MAP_WIDTH(map); x++) {
-            for (object *source = GET_MAP_OB(map, x, y); source != NULL; source = source->above) {
-                if (source->glow_radius == 0) {
-                    continue;
-                }
+    if (map->spaces != NULL) {
+        for (int y = 0; y < MAP_HEIGHT(map); y++) {
+            for (int x = 0; x < MAP_WIDTH(map); x++) {
+                for (object *source = GET_MAP_OB(map, x, y); source != NULL;
+                     source = source->above) {
+                    if (source->glow_radius == 0) {
+                        continue;
+                    }
 
-                if (source->glow_radius < 0) {
-                    continue;
+                    if (source->glow_radius < 0) {
+                        continue;
+                    }
+                    uint32_t color = source->light_color;
+                    light_mask_adjust(map,
+                                      x,
+                                      y,
+                                      get_real_light_source_value(source->glow_radius),
+                                      -1,
+                                      NULL,
+                                      NULL,
+                                      true,
+                                      true,
+                                      color);
                 }
-                uint32_t color = source->light_color;
-                light_mask_adjust(map,
-                                  x,
-                                  y,
-                                  get_real_light_source_value(source->glow_radius),
-                                  -1,
-                                  NULL,
-                                  NULL,
-                                  true,
-                                  true,
-                                  color);
             }
         }
     }
