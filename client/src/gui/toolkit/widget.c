@@ -1313,6 +1313,8 @@ int widget_priority_integration_test(const char *fixture, const char *saved) {
     stats->x = map->x + 10;
     stats->y = map->y + 10;
     stats->show = 1;
+    int stats_x = stats->x;
+    int stats_y = stats->y;
     WIDGET_TEST_CHECK(get_widget_owner(stats->x + 1, stats->y + 1, NULL, NULL) == stats);
     stats->show = 0;
     WIDGET_TEST_CHECK(get_widget_owner(stats->x + 1, stats->y + 1, NULL, NULL) == map);
@@ -1376,10 +1378,22 @@ int widget_priority_integration_test(const char *fixture, const char *saved) {
     map = cur_widget[MAP_ID];
     WIDGET_TEST_CHECK(map != NULL);
     WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
-    WIDGET_TEST_CHECK(map->env != NULL && map->env->env != NULL);
+    attached = map->env;
+    drop_target = attached != NULL ? attached->env : NULL;
+    nested = drop_target != NULL ? drop_target->env : NULL;
+    WIDGET_TEST_CHECK(attached != NULL && attached->type == CONTAINER_ID);
+    WIDGET_TEST_CHECK(drop_target != NULL && drop_target->type == CONTAINER_ID);
+    WIDGET_TEST_CHECK(nested != NULL && nested->type == CONTAINER_ID);
+    WIDGET_TEST_CHECK(nested->env == NULL);
     WIDGET_TEST_CHECK(map->x == map_x + 17 && map->y == map_y - 9);
     WIDGET_TEST_CHECK(map->w == map_w && map->h == map_h);
     WIDGET_TEST_CHECK(map->event_func != NULL);
+    stats = cur_widget[STAT_ID];
+    WIDGET_TEST_CHECK(stats != NULL);
+    WIDGET_TEST_CHECK(stats->x == stats_x && stats->y == stats_y && stats->show);
+    widgetdata *textwin = cur_widget[CHATWIN_ID];
+    WIDGET_TEST_CHECK(textwin != NULL);
+    WIDGET_TEST_CHECK(textwin->x == 120 && textwin->y == 500 && textwin->show);
 
     kill_widgets();
     return 0;
