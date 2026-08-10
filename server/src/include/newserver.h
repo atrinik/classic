@@ -198,6 +198,12 @@ typedef struct socket_struct {
     asset_stream_state_t *asset_streams;
     size_t asset_stream_count;
 
+    /** Intrusive links for the server-wide fair asset scheduler. */
+    struct socket_struct *asset_service_next;
+    struct socket_struct *asset_service_prev;
+    bool asset_service_registered;
+    uint64_t asset_service_generation;
+
     /** Transport route selected for this connection. */
     socket_connection_mode_t connection_mode;
 

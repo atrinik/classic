@@ -236,7 +236,14 @@ face_get_asset(uint16_t face, const uint8_t **data, uint32_t *size, const uint8_
 
 extern void socket_assets_deinit(void);
 
-extern bool socket_assets_service(socket_struct *ns);
+/** Register a live connection with the fair server-wide asset scheduler. */
+extern void socket_assets_connection_register(socket_struct *ns);
+
+/** Service registered connections once within the global tick budgets. */
+extern void socket_assets_service(void);
+
+/** Calculate the aggregate byte allowance for one processing iteration. */
+extern size_t socket_assets_tick_byte_budget(void);
 
 extern bool socket_assets_pending(const socket_struct *ns);
 

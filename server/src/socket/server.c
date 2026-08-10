@@ -923,9 +923,6 @@ void socket_server_process(void) {
             continue;
         }
         socket_buffer_write(entry->cs);
-        if (!socket_assets_service(entry->cs)) {
-            entry->cs->state = ST_ZOMBIE;
-        }
     }
 
     DL_FOREACH_SAFE(first_player, pl, pl_tmp) {
@@ -950,9 +947,6 @@ void socket_server_process(void) {
             continue;
         }
         socket_buffer_write(cs);
-        if (!socket_assets_service(cs)) {
-            cs->state = ST_ZOMBIE;
-        }
     }
 }
 
@@ -992,8 +986,5 @@ void socket_server_post_process(void) {
         }
 
         socket_buffer_write(pl->cs);
-        if (!socket_assets_service(pl->cs)) {
-            pl->cs->state = ST_ZOMBIE;
-        }
     }
 }

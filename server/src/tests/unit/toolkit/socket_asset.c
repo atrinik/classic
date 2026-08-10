@@ -61,6 +61,7 @@ static void *asset_loopback_server_main(void *data) {
         .setup_completed = true,
         .state = ST_LOGIN,
     };
+    socket_assets_connection_register(&ns);
     uint64_t next_asset_service_ms = datetime_monotonic_ms();
     unsigned int asset_service_calls = 0;
     unsigned int request_service_call = 0;
@@ -76,7 +77,8 @@ static void *asset_loopback_server_main(void *data) {
         uint64_t now = datetime_monotonic_ms();
         if (now >= next_asset_service_ms) {
             asset_service_calls++;
-            if (!socket_assets_service(&ns)) {
+            socket_assets_service();
+            if (ns.state == ST_DEAD || ns.state == ST_ZOMBIE) {
                 server->failed = true;
                 break;
             }
@@ -269,6 +271,57 @@ START_TEST(test_socket_face_asset_snapshot_is_bounded_and_authenticated) {
     ck_assert_mem_eq(calculated, digest, sizeof(calculated));
     ck_assert(!face_get_asset(0, NULL, NULL, NULL));
     ck_assert(!face_get_asset(UINT16_MAX, NULL, NULL, NULL));
+}
+END_TEST
+
+START_TEST(test_socket_asset_global_work_budget_rotates) {
+    enum {
+        CONNECTION_COUNT = 600
+    };
+    socket_struct *connections = xcalloc(CONNECTION_COUNT, sizeof(*connections));
+    for (size_t i = 0; i < CONNECTION_COUNT; i++) {
+        connections[i].state = ST_DEAD;
+        socket_assets_connection_register(&connections[i]);
+    }
+
+    socket_assets_service();
+    size_t first_tick_serviced = 0;
+    for (size_t i = 0; i < CONNECTION_COUNT; i++) {
+        first_tick_serviced += connections[i].asset_service_generation != 0;
+    }
+    ck_assert_uint_eq(first_tick_serviced, 512U);
+
+    socket_assets_service();
+    for (size_t i = 0; i < CONNECTION_COUNT; i++) {
+        ck_assert_uint_ne(connections[i].asset_service_generation, 0);
+    }
+
+    for (size_t i = 0; i < CONNECTION_COUNT; i++) {
+        socket_assets_connection_clear(&connections[i]);
+    }
+    free(connections);
+}
+END_TEST
+
+START_TEST(test_socket_asset_byte_budget_tracks_processing_rate) {
+    long saved_max_time = max_time;
+    int saved_multiplier = max_time_multiplier;
+
+    max_time = 125000;
+    max_time_multiplier = 1;
+    ck_assert_uint_eq(socket_assets_tick_byte_budget(), 1024U * 1024U);
+    max_time_multiplier = 2;
+    ck_assert_uint_eq(socket_assets_tick_byte_budget(), 512U * 1024U);
+    max_time = 250000;
+    ck_assert_uint_eq(socket_assets_tick_byte_budget(), 1024U * 1024U);
+    max_time = 2000000;
+    max_time_multiplier = 1;
+    ck_assert_uint_eq(socket_assets_tick_byte_budget(), 8U * 1024U * 1024U);
+    max_time = LONG_MAX;
+    ck_assert_uint_eq(socket_assets_tick_byte_budget(), 8U * 1024U * 1024U);
+
+    max_time = saved_max_time;
+    max_time_multiplier = saved_multiplier;
 }
 END_TEST
 
@@ -1166,6 +1219,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_socket_asset_request_round_trip);
     tcase_add_test(tc_core, test_socket_asset_face_path_round_trip_and_malformed);
     tcase_add_test(tc_core, test_socket_face_asset_snapshot_is_bounded_and_authenticated);
+    tcase_add_test(tc_core, test_socket_asset_global_work_budget_rotates);
+    tcase_add_test(tc_core, test_socket_asset_byte_budget_tracks_processing_rate);
     tcase_add_test(tc_core, test_socket_stream_preface_round_trip_and_malformed);
     tcase_add_test(tc_core, test_socket_asset_request_rejects_malformed);
     tcase_add_test(tc_core, test_socket_asset_response_round_trip);
