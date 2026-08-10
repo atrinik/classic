@@ -345,6 +345,7 @@ bool keybind_movement_state_press(keybind_movement_state *state,
             return false;
         }
         key->repeat = repeat;
+        key->preseeded = false;
         if (key->direction == 0) {
             key->order = ++state->next_order;
             key->direction = direction;
@@ -360,9 +361,11 @@ bool keybind_movement_state_press(keybind_movement_state *state,
         state->pending_move_repeated = true;
         state->pending_direction = keybind_movement_direction(state);
         state->pending_stop = false;
+        state->deferred_move = false;
         return true;
     }
 
+    bool preseeded = key->preseeded && key->direction == direction;
     if (key->direction == 0) {
         key->order = ++state->next_order;
     }
@@ -370,11 +373,15 @@ bool keybind_movement_state_press(keybind_movement_state *state,
     key->mod = SDL_KMOD_NONE;
     key->repeat = repeat;
     key->owned = true;
+    key->preseeded = false;
     state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
-    state->pending_move = true;
-    state->pending_move_repeated = false;
-    state->pending_direction = keybind_movement_direction(state);
+    if (!preseeded || state->deferred_move) {
+        state->pending_move = true;
+        state->pending_move_repeated = false;
+        state->pending_direction = keybind_movement_direction(state);
+    }
     state->pending_stop = false;
+    state->deferred_move = false;
     return true;
 }
 
@@ -401,6 +408,13 @@ void keybind_movement_state_set_modifier(keybind_movement_state *state,
                                          SDL_Keymod mod) {
     if (keybind_movement_state_has_scancode(state, scancode)) {
         state->keys[scancode].mod = keybind_adjust_kmod(mod);
+    }
+}
+
+/** Require the next accepted movement segment to emit the current batch. */
+void keybind_movement_state_defer_move(keybind_movement_state *state) {
+    if (state != NULL) {
+        state->deferred_move = true;
     }
 }
 
@@ -435,6 +449,7 @@ void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
                 state->keys[scancode].direction = rebind->direction;
                 state->keys[scancode].mod = keybind_adjust_kmod(rebind->mod);
                 state->keys[scancode].repeat = rebind->repeat;
+                state->keys[scancode].preseeded = true;
             } else {
                 state->keys[scancode].direction = 0;
                 state->keys[scancode].order = 0;
@@ -450,13 +465,15 @@ void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
     if (keybind_movement_active(state)) {
         uint8_t direction = keybind_movement_direction(state);
         state->pending_move = !defer_move && (force_move || direction != old_direction);
+        state->deferred_move = defer_move;
         state->pending_move_repeated = false;
         state->pending_direction = direction;
         state->pending_stop = false;
     } else {
         state->pending_move = false;
         state->pending_move_repeated = false;
-        state->pending_stop = (state->repeated || running) && !firing;
+        state->pending_stop = !state->pending_run_stop && (state->repeated || running) && !firing;
+        state->deferred_move = false;
         state->repeated = false;
         state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
     }

@@ -68,6 +68,7 @@ typedef struct keybind_movement_key {
     uint8_t direction;
     bool repeat;
     bool owned;
+    bool preseeded;
 } keybind_movement_key;
 
 /** Replacement binding for a held movement key after modifiers change. */
@@ -89,6 +90,7 @@ typedef struct keybind_movement_state {
     bool pending_move_repeated;
     bool pending_stop;
     bool pending_run_stop;
+    bool deferred_move;
 } keybind_movement_state;
 
 /** Callbacks used by the testable physical keybinding dispatcher. */
@@ -178,6 +180,8 @@ extern bool keybind_movement_state_has_scancode(const keybind_movement_state *st
 extern void keybind_movement_state_set_modifier(keybind_movement_state *state,
                                                 SDL_Scancode scancode,
                                                 SDL_Keymod mod);
+
+extern void keybind_movement_state_defer_move(keybind_movement_state *state);
 
 extern void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
                                                        SDL_Keymod mod,
