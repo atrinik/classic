@@ -700,9 +700,21 @@ static void test_keybind_event_integration(void) {
         .key = SDLK_D,
         .repeat = true,
     };
+    keybind_struct shifted_d = {
+        .command = "?MOVE_NE",
+        .key = SDLK_D,
+        .mod = SDL_KMOD_SHIFT,
+        .repeat = true,
+    };
     keybind_struct movement_sequence = {
         .command = "?MOVE_NW;?MOVE_NE",
         .key = SDLK_E,
+        .repeat = true,
+    };
+    keybind_struct shifted_e = {
+        .command = "?MOVE_NE",
+        .key = SDLK_E,
+        .mod = SDL_KMOD_SHIFT,
         .repeat = true,
     };
     keybind_struct southeast = {
@@ -721,7 +733,9 @@ static void test_keybind_event_integration(void) {
                                   &northeast,
                                   &move_then_fire,
                                   &fire_then_move,
+                                  &shifted_d,
                                   &movement_sequence,
+                                  &shifted_e,
                                   &southeast,
                                   &shifted_modes};
     movement_sink sink;
@@ -974,6 +988,58 @@ static void test_keybind_event_integration(void) {
     event.scancode = SDL_SCANCODE_B;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     TEST_CHECK(sink.actions_num == actions_before_repeat + 1);
+
+    /* Compound fallback bindings retain command and movement segment ordering. */
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.mod = SDL_KMOD_LSHIFT;
+    event.repeat = false;
+    event.key = SDLK_D;
+    event.scancode = SDL_SCANCODE_D;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    key_states[SDL_SCANCODE_D].pressed = true;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 2 && sink.directions[0] == 9 && sink.directions[1] == 8);
+    TEST_CHECK(sink.firing && sink.firing_at_emit[1]);
+
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.key = SDLK_E;
+    event.scancode = SDL_SCANCODE_E;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    key_states[SDL_SCANCODE_E].pressed = true;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 3 && sink.directions[0] == 9 && sink.directions[1] == 7 &&
+               sink.directions[2] == 9);
+
+    /* Notification-owned fallback movement never enters gameplay state. */
+    movement_sink_reset(&sink);
+    sink.intercept_movement = true;
+    handler = movement_sink_handler(&sink);
+    event.key = SDLK_A;
+    event.scancode = SDL_SCANCODE_A;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    key_states[SDL_SCANCODE_A].pressed = true;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 9);
+    TEST_CHECK(sink.intercepted_num == 1);
+    TEST_CHECK(!keybind_movement_state_has_scancode(&sink.state, SDL_SCANCODE_A));
 }
 
 int main(void) {

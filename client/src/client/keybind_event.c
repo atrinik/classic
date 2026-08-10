@@ -140,9 +140,11 @@ static const keybind_struct *keybind_event_find_scancode(keybind_struct *const *
     return NULL;
 }
 
-static bool keybind_event_movement_direction(const keybind_struct *keybind, uint8_t *direction) {
+static bool keybind_event_simple_movement(const keybind_struct *keybind,
+                                          uint8_t *direction,
+                                          bool *has_movement) {
     char command[MAX_BUF], *cp;
-    bool found = false;
+    bool found = false, simple = true;
 
     strncpy(command, keybind->command, sizeof(command) - 1);
     command[sizeof(command) - 1] = '\0';
@@ -153,39 +155,74 @@ static bool keybind_event_movement_direction(const keybind_struct *keybind, uint
         }
         uint8_t candidate;
         if (keybind_movement_command_direction(cp, &candidate)) {
-            *direction = candidate;
-            found = true;
+            if (found) {
+                simple = false;
+            } else {
+                *direction = candidate;
+                found = true;
+            }
+        } else if (*cp != '\0') {
+            simple = false;
         }
         cp = strtok(NULL, ";");
     }
 
-    return found;
+    *has_movement = found;
+    return found && simple;
 }
 
 static size_t keybind_event_modifier_rebinds(keybind_struct *const *bindings,
                                              size_t bindings_num,
                                              const key_struct *key_states,
-                                             SDL_Keymod mod,
+                                             const SDL_KeyboardEvent *event,
+                                             const keybind_event_handler *handler,
                                              keybind_movement_rebind *rebinds) {
     if (key_states == NULL) {
         return 0;
     }
 
     size_t rebinds_num = 0;
+    SDL_Keymod adjusted_mod = keybind_adjust_kmod(event->mod);
     for (SDL_Scancode scancode = 1; scancode < SDL_SCANCODE_COUNT; scancode++) {
-        if (!key_states[scancode].pressed) {
+        const keybind_movement_key *movement_key = &handler->movement->keys[scancode];
+        if (!key_states[scancode].pressed || movement_key->direction == 0 ||
+            movement_key->mod == SDL_KMOD_NONE || movement_key->mod == adjusted_mod) {
             continue;
         }
         const keybind_struct *keybind =
-            keybind_event_find_scancode(bindings, bindings_num, scancode, mod);
+            keybind_event_find_scancode(bindings, bindings_num, scancode, event->mod);
+        if (keybind == NULL) {
+            continue;
+        }
         uint8_t direction;
-        if (keybind != NULL && keybind_event_movement_direction(keybind, &direction)) {
+        bool has_movement;
+        bool simple = keybind_event_simple_movement(keybind, &direction, &has_movement);
+        if (!has_movement) {
+            continue;
+        }
+        if (simple) {
+            if (handler->movement_intercept_matches != NULL &&
+                handler->movement_intercept_matches(keybind->command, handler->user_data)) {
+                keybind_event_flush(handler);
+                if (handler->movement_intercept != NULL) {
+                    handler->movement_intercept(keybind->command, handler->user_data);
+                }
+                continue;
+            }
             rebinds[rebinds_num++] = (keybind_movement_rebind){
                 .scancode = scancode,
                 .mod = keybind->mod,
                 .direction = direction,
                 .repeat = keybind->repeat,
             };
+        } else {
+            SDL_KeyboardEvent fallback = {
+                .type = SDL_EVENT_KEY_DOWN,
+                .key = keybind->key,
+                .scancode = scancode,
+                .mod = event->mod,
+            };
+            keybind_event_process_binding(keybind, &fallback, handler);
         }
     }
 
@@ -262,8 +299,12 @@ void keybind_event_reconcile_release(keybind_struct *const *bindings,
                                    keybind_event_firing(handler));
     if (keybind_event_is_modifier(event)) {
         keybind_movement_rebind rebinds[SDL_SCANCODE_COUNT];
-        size_t rebinds_num =
-            keybind_event_modifier_rebinds(bindings, bindings_num, key_states, event->mod, rebinds);
+        size_t rebinds_num = keybind_event_modifier_rebinds(bindings,
+                                                            bindings_num,
+                                                            key_states,
+                                                            event,
+                                                            handler,
+                                                            rebinds);
         keybind_movement_state_reconcile_modifiers(handler->movement,
                                                    event->mod,
                                                    rebinds,
