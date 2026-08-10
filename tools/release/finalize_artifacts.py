@@ -11,6 +11,7 @@ import io
 import json
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import tarfile
 import zipfile
 
@@ -33,16 +34,35 @@ SERVER_WINDOWS_REQUIRED_PATTERNS = (
     "server/server.cfg",
     "server/permissions.cfg",
     "server/ca-bundle.crt",
+    "server/server.bat",
     "server/LICENSE.txt",
     "server/*plugin_arena*.dll",
     "server/*plugin_python*.dll",
     "server/python3.dll",
-    "maps/*",
+    "server/maps/regions.reg",
     "server/lib/*",
     "server/resources/*",
     "server/install_data/*",
     "server/assets/client-maps/*",
 )
+SERVER_WINDOWS_FORBIDDEN_PATTERNS = ("maps", "maps/*")
+SERVER_WINDOWS_UNIQUE_FILES = (
+    ("server", "*plugin_arena*.dll"),
+    ("server", "*plugin_python*.dll"),
+)
+WINDOWS_RESERVED_NAMES = {
+    "aux",
+    "con",
+    "conin$",
+    "conout$",
+    "nul",
+    "prn",
+    *(
+        f"{prefix}{number}"
+        for prefix in ("com", "lpt")
+        for number in (*range(1, 10), "¹", "²", "³")
+    ),
+}
 
 
 def sha256(path: Path) -> str:
@@ -55,13 +75,38 @@ def sha256(path: Path) -> str:
 
 def validate_member(name: str) -> None:
     path = PurePosixPath(name)
+    components = name.removesuffix("/").split("/")
     if (
-        path.is_absolute()
-        or ".." in path.parts
+        not name
+        or path.is_absolute()
+        or any(component in {"", ".", ".."} for component in components)
         or "\\" in name
-        or re.match(r"^[A-Za-z]:", name)
     ):
         raise RuntimeError(f"unsafe packaged path: {name}")
+
+
+def validate_windows_member(name: str) -> None:
+    validate_member(name)
+    components = name.removesuffix("/").split("/")
+    if any(
+        component.endswith((".", " "))
+        or any(ord(char) < 32 or char in '<>:"|?*' for char in component)
+        or component.split(".", 1)[0].casefold() in WINDOWS_RESERVED_NAMES
+        for component in components
+    ):
+        raise RuntimeError(f"unsafe packaged path: {name}")
+
+
+def validate_zip_member_type(member: zipfile.ZipInfo) -> None:
+    if member.flag_bits & 0x1:
+        raise RuntimeError(f"encrypted ZIP member is not supported: {member.filename}")
+    if member.create_system != 3:
+        return
+    file_type = stat.S_IFMT(member.external_attr >> 16)
+    if file_type not in {0, stat.S_IFREG, stat.S_IFDIR} or (
+        member.is_dir() and file_type == stat.S_IFREG
+    ) or (not member.is_dir() and file_type == stat.S_IFDIR):
+        raise RuntimeError(f"unsupported ZIP member type: {member.filename}")
 
 
 def validate_source_archive(path: Path, package: str, version: str) -> None:
@@ -127,26 +172,55 @@ def validate_zip(
     path: Path,
     package_root: str,
     required_patterns: tuple[str, ...],
+    forbidden_patterns: tuple[str, ...] = (),
+    unique_files: tuple[tuple[str, str], ...] = (),
 ) -> None:
     with zipfile.ZipFile(path) as archive:
         if not archive.infolist():
             raise RuntimeError(f"empty ZIP artifact: {path.name}")
         files: dict[str, int] = {}
         member_names = set()
+        output_names = set()
+        output_ancestors = set()
+        output_files = set()
+        relative_names = set()
         for member in archive.infolist():
-            validate_member(member.filename)
+            validate_windows_member(member.filename)
+            validate_zip_member_type(member)
             if member.filename in member_names:
                 raise RuntimeError(
                     f"{path.name} contains duplicate member: {member.filename}"
                 )
             member_names.add(member.filename)
-            if not member.is_dir():
-                prefix = f"{package_root}/"
-                if not member.filename.startswith(prefix):
-                    raise RuntimeError(
-                        f"{path.name} contains an unexpected root: {member.filename}"
-                    )
+            prefix = f"{package_root}/"
+            if member.filename.startswith(prefix):
                 relative = member.filename.removeprefix(prefix)
+            else:
+                raise RuntimeError(
+                    f"{path.name} contains an unexpected root: {member.filename}"
+                )
+            if relative:
+                output_name = relative.removesuffix("/").casefold()
+                if output_name in output_names:
+                    raise RuntimeError(
+                        f"{path.name} contains duplicate packaged output: {relative}"
+                    )
+                parts = output_name.split("/")
+                ancestors = {
+                    "/".join(parts[:index]) for index in range(1, len(parts))
+                }
+                if ancestors & output_files or (
+                    not member.is_dir() and output_name in output_ancestors
+                ):
+                    raise RuntimeError(
+                        f"{path.name} contains a file/descendant collision: {relative}"
+                    )
+                output_names.add(output_name)
+                output_ancestors.update(ancestors)
+                if not member.is_dir():
+                    output_files.add(output_name)
+                relative_names.add(relative)
+            if not member.is_dir():
                 files[relative] = member.file_size
         corrupt_member = archive.testzip()
         if corrupt_member is not None:
@@ -163,6 +237,29 @@ def validate_zip(
                 raise RuntimeError(f"{path.name} is missing packaged {pattern}")
             if not any(size > 0 for size in matches):
                 raise RuntimeError(f"{path.name} has only empty packaged {pattern}")
+        unique_matches = set()
+        for directory, pattern in unique_files:
+            matches = [
+                name
+                for name in files
+                if str(PurePosixPath(name).parent) == directory
+                and fnmatch.fnmatchcase(PurePosixPath(name).name, pattern)
+            ]
+            if len(matches) != 1:
+                raise RuntimeError(
+                    f"{path.name} must contain exactly one packaged {directory}/{pattern}"
+                )
+            if matches[0] in unique_matches:
+                raise RuntimeError(
+                    f"{path.name} uses one packaged file for multiple unique roles: {matches[0]}"
+                )
+            unique_matches.add(matches[0])
+        for pattern in forbidden_patterns:
+            if any(
+                fnmatch.fnmatchcase(name.casefold(), pattern.casefold())
+                for name in relative_names
+            ):
+                raise RuntimeError(f"{path.name} contains forbidden packaged {pattern}")
 
 
 def validate_embedded_python_runtime(path: Path, package_root: str) -> None:
@@ -484,6 +581,8 @@ def main() -> int:
         directory / f"atrinik-classic-server-{arguments.version}-windows-x86_64.zip",
         f"atrinik-classic-server-{arguments.version}-windows-x86_64",
         SERVER_WINDOWS_REQUIRED_PATTERNS,
+        SERVER_WINDOWS_FORBIDDEN_PATTERNS,
+        SERVER_WINDOWS_UNIQUE_FILES,
     )
     validate_embedded_python_runtime(
         directory / f"atrinik-classic-server-{arguments.version}-windows-x86_64.zip",

@@ -246,6 +246,7 @@ jobs:
                 libatrinik/build/windows-tests/libatrinik-stun.exe \
                 client/build/windows-release/client-rich-presence-tests.exe
               cmake -E copy_directory libatrinik/tests/fixtures "${stage}/fixtures"
+              cmake -E copy tools/ci/smoke_windows_server_package.ps1 "${stage}"
             '
       - name: Cross-build Windows server
         run: |
@@ -283,6 +284,21 @@ jobs:
               cmake --build server/build/windows-pr-server \
                 --target atrinik-server --parallel "$(nproc)"
             '
+      - name: Build portable Windows server package
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env ATRINIK_PACKAGE_VERSION=0.0.0 \
+            --env CCACHE_DIR=/workspace/server/build/ccache \
+            --env CCACHE_MAXSIZE=500M \
+            --env CCACHE_TEMPDIR=/tmp/atrinik-server-package-ccache \
+            --env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --workdir /workspace/server \
+            ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb \
+            bash tools/build-windows-package.sh build/windows-pr-package
+          cp server/build/windows-pr-package/*.zip \
+            libatrinik/build/windows-test-bundle/
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: native-windows-tests
@@ -347,6 +363,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "client-rich-presence-tests.exe failed with exit code ${LASTEXITCODE}"
           }
+
+          $packages = @(Get-ChildItem -LiteralPath $bundle -File `
+            -Filter "atrinik-classic-server-*-windows-x86_64.zip")
+          if ($packages.Count -ne 1) {
+            throw "Expected exactly one Windows server package, found $($packages.Count)"
+          }
+          & (Join-Path $bundle "smoke_windows_server_package.ps1") `
+            -Package $packages[0].FullName
 
   server:
     name: Server validation
