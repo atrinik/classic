@@ -347,9 +347,31 @@ static void test_movement_chords(void) {
             keybind_movement_state_press(&state, SDL_SCANCODE_A, first, false, true);
             expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, first);
             keybind_movement_state_press(&state, SDL_SCANCODE_B, second, false, true);
-            expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, cases[i].result);
+            expect_movement(&state, KEYBIND_MOVEMENT_ACTION_REPLACE, cases[i].result);
         }
     }
+}
+
+static void test_movement_queue_replacement(void) {
+    keybind_movement_state state;
+
+    keybind_movement_state_init(&state);
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 2, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 2);
+    for (size_t i = 0; i < 4; i++) {
+        TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 2, true, true));
+        expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 2);
+    }
+
+    keybind_movement_state_press(&state, SDL_SCANCODE_B, 6, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_REPLACE, 3);
+    TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_B, 6, true, true));
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 3);
+
+    keybind_movement_state_release(&state, SDL_SCANCODE_B, false, false);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_REPLACE, 2);
+    keybind_movement_state_release(&state, SDL_SCANCODE_A, false, false);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_STOP, 5);
 }
 
 static void test_movement_repeat_and_release(void) {
@@ -377,7 +399,7 @@ static void test_movement_repeat_and_release(void) {
 
     /* Releasing the repeat owner continues immediately with the remaining key. */
     keybind_movement_state_release(&state, SDL_SCANCODE_B, false, false);
-    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_REPLACE, 7);
     TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
     keybind_movement_state_release(&state, SDL_SCANCODE_A, false, false);
@@ -398,7 +420,7 @@ static void test_movement_repeat_and_release(void) {
             keybind_movement_state_press(&state, first_scancode, first_direction, true, true));
         expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, first_direction);
         keybind_movement_state_press(&state, second_scancode, second_direction, false, true);
-        expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
+        expect_movement(&state, KEYBIND_MOVEMENT_ACTION_REPLACE, 8);
         TEST_CHECK(
             keybind_movement_state_press(&state, second_scancode, second_direction, true, true));
         expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
@@ -413,7 +435,7 @@ static void test_movement_repeat_and_release(void) {
     TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
     keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, false, true);
-    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_REPLACE, 8);
     TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
     TEST_CHECK(!keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, true, true));
@@ -469,9 +491,9 @@ static void test_movement_boundaries_and_modifiers(void) {
     /* Non-perpendicular and three-direction chords use the newest active key. */
     keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
     keybind_movement_state_press(&state, SDL_SCANCODE_B, 8, false, true);
-    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_REPLACE, 8);
     keybind_movement_state_press(&state, SDL_SCANCODE_C, 9, false, true);
-    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 9);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_REPLACE, 9);
 
     /* Running stops once on final release even before SDL repeat begins. */
     keybind_movement_state_release(&state, SDL_SCANCODE_A, true, false);
@@ -576,7 +598,7 @@ static void test_movement_boundaries_and_modifiers(void) {
     keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, false, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
     keybind_movement_state_release(&state, SDL_SCANCODE_A, true, false);
-    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 9);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_REPLACE, 9);
     keybind_movement_state_release(&state, SDL_SCANCODE_B, true, false);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_STOP, 5);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
@@ -762,11 +784,19 @@ static void test_keybind_event_direction_transitions(void) {
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     movement_sink_flush(&sink);
 
-    static const uint8_t expected[] = {6, 9, 6, 3, 2, 1};
-    TEST_CHECK(sink.actions_num == arraysize(expected));
-    for (size_t i = 0; i < arraysize(expected); i++) {
-        TEST_CHECK(sink.actions[i] == KEYBIND_MOVEMENT_ACTION_MOVE);
-        TEST_CHECK(sink.directions[i] == expected[i]);
+    static const uint8_t expected_directions[] = {6, 9, 6, 3, 2, 1};
+    static const keybind_movement_action expected_actions[] = {
+        KEYBIND_MOVEMENT_ACTION_MOVE,
+        KEYBIND_MOVEMENT_ACTION_REPLACE,
+        KEYBIND_MOVEMENT_ACTION_REPLACE,
+        KEYBIND_MOVEMENT_ACTION_REPLACE,
+        KEYBIND_MOVEMENT_ACTION_REPLACE,
+        KEYBIND_MOVEMENT_ACTION_REPLACE,
+    };
+    TEST_CHECK(sink.actions_num == arraysize(expected_directions));
+    for (size_t i = 0; i < arraysize(expected_directions); i++) {
+        TEST_CHECK(sink.actions[i] == expected_actions[i]);
+        TEST_CHECK(sink.directions[i] == expected_directions[i]);
     }
 }
 
@@ -1844,6 +1874,7 @@ int main(void) {
     test_event_matching();
     test_movement_commands();
     test_movement_chords();
+    test_movement_queue_replacement();
     test_movement_repeat_and_release();
     test_movement_duplicates_and_repeat_selection();
     test_movement_boundaries_and_modifiers();

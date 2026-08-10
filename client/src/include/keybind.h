@@ -58,7 +58,8 @@ typedef enum keybind_movement_action {
     KEYBIND_MOVEMENT_ACTION_NONE,
     KEYBIND_MOVEMENT_ACTION_MOVE,
     KEYBIND_MOVEMENT_ACTION_STOP,
-    KEYBIND_MOVEMENT_ACTION_RUN_STOP
+    KEYBIND_MOVEMENT_ACTION_RUN_STOP,
+    KEYBIND_MOVEMENT_ACTION_REPLACE
 } keybind_movement_action;
 
 /** One physical key participating in the gameplay movement stream. */
@@ -88,6 +89,7 @@ typedef struct keybind_movement_state {
     keybind_movement_key keys[SDL_SCANCODE_COUNT];
     uint64_t next_order;
     SDL_Scancode repeat_scancode;
+    uint8_t emitted_direction;
     uint8_t pending_direction;
     bool repeated;
     bool pending_move;

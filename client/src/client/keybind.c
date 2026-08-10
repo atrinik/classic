@@ -364,6 +364,11 @@ void keybind_movement_flush(void) {
            KEYBIND_MOVEMENT_ACTION_NONE) {
         if (action == KEYBIND_MOVEMENT_ACTION_MOVE) {
             move_keys(direction);
+        } else if (action == KEYBIND_MOVEMENT_ACTION_REPLACE) {
+            if (!cpl.fire_on) {
+                move_keys_clear();
+            }
+            move_keys(direction);
         } else if (action == KEYBIND_MOVEMENT_ACTION_STOP) {
             move_keys_clear();
         } else if (action == KEYBIND_MOVEMENT_ACTION_RUN_STOP) {

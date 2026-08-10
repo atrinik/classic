@@ -799,6 +799,7 @@ keybind_movement_action keybind_movement_state_flush(keybind_movement_state *sta
     if (state->pending_run_stop) {
         state->pending_run_stop = false;
         state->repeated = state->pending_move && state->pending_move_repeated;
+        state->emitted_direction = 0;
         *direction = 0;
         return KEYBIND_MOVEMENT_ACTION_RUN_STOP;
     }
@@ -807,12 +808,15 @@ keybind_movement_action keybind_movement_state_flush(keybind_movement_state *sta
         state->pending_move_repeated = false;
         *direction = state->pending_direction;
         if (*direction != 0) {
-            return KEYBIND_MOVEMENT_ACTION_MOVE;
+            bool replace = state->emitted_direction != 0 && state->emitted_direction != *direction;
+            state->emitted_direction = *direction;
+            return replace ? KEYBIND_MOVEMENT_ACTION_REPLACE : KEYBIND_MOVEMENT_ACTION_MOVE;
         }
     }
     if (state->pending_stop) {
         state->pending_stop = false;
         state->pending_run_stop = false;
+        state->emitted_direction = 0;
         *direction = 5;
         return KEYBIND_MOVEMENT_ACTION_STOP;
     }

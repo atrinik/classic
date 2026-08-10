@@ -115,6 +115,7 @@ static uint16_t quic_public_port;
 static char quic_certificate_sha256[65];
 static uint64_t quic_punches_received;
 static uint64_t quic_punches_echoed;
+static player *socket_server_player_find(socket_struct *cs);
 /**
  * List of client sockets that are not yet playing.
  */
@@ -534,6 +535,10 @@ bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, 
      * the associated player. The phase check above drops them before login. */
     if (socket_commands[type].flags & SOCKET_COMMAND_PLAYER_ONLY && pl == NULL) {
         return false;
+    }
+
+    if (pl == NULL && socket_commands[type].policy == SOCKET_COMMAND_POLICY_PLAYING) {
+        pl = socket_server_player_find(cs);
     }
 
     packet_reader_scope_t scope;

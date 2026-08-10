@@ -72,12 +72,7 @@ bool move_keys_run_stream_active(void) {
 
 /** Stop a running movement stream without applying fire modifiers. */
 void move_keys_run_stop(void) {
-    packet_struct *packet = packet_new(SERVER_CMD_MOVE, 8, 0);
-
-    packet_writer_write_uint8(packet, 0);
-    packet_writer_write_uint8(packet, 0);
-    socket_send_packet(packet);
-    run_stream_active = false;
+    move_keys_clear();
 }
 
 void move_keys(int num) {

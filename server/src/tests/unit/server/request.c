@@ -702,6 +702,27 @@ START_TEST(test_out_of_order_player_command_is_not_queued) {
 }
 END_TEST
 
+START_TEST(test_clear_immediately_discards_queued_commands_and_stops_run) {
+    mapstruct *map;
+    object *op;
+
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    pl->run_on = 1;
+
+    packet_writer_write_uint16(cs->packet_recv_cmd, 1);
+    packet_writer_write_uint8(cs->packet_recv_cmd, SERVER_CMD_MOVE);
+    ck_assert(packet_writer_finish(cs->packet_recv_cmd));
+    ck_assert_uint_gt(cs->packet_recv_cmd->len, 0);
+
+    uint8_t request[] = {SERVER_CMD_CLEAR};
+    ck_assert(socket_server_handle_command(cs, NULL, request, sizeof(request)));
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, 0);
+    ck_assert_uint_eq(pl->run_on, 0);
+}
+END_TEST
+
 START_TEST(test_only_valid_post_setup_activity_refreshes_login_deadline) {
     mapstruct *map;
     object *pl;
@@ -900,6 +921,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_initial_setup_requires_valid_join_password);
     tcase_add_test(tc_core, test_command_policy_covers_every_connection_phase);
     tcase_add_test(tc_core, test_out_of_order_player_command_is_not_queued);
+    tcase_add_test(tc_core, test_clear_immediately_discards_queued_commands_and_stops_run);
     tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
     tcase_add_test(tc_core, test_version_requires_exact_match);
     tcase_add_test(tc_core, test_move_path_walkable_target_reaches_exact_coordinate);
