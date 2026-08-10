@@ -179,6 +179,31 @@ static void test_policy(void) {
     rich_presence_controller_tick(&controller, &input, &backend);
     require(captured.activity.started_at == 5000U);
     require(strcmp(captured.activity.details, "Exploring") == 0);
+
+    /* Server-only publishes the public server without a zone, and an active
+     * transition to Off clears exactly once without later republishing. */
+    memset(&captured, 0, sizeof(captured));
+    rich_presence_controller_init(&controller);
+    input.playing = true;
+    input.privacy = RICH_PRESENCE_SERVER;
+    input.public_server = true;
+    input.server = "Public Realm";
+    input.zone = "Crystal Caverns";
+    input.now_ms = 60000;
+    input.now_unix = 6000;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    require(captured.publishes == 1U);
+    require(strcmp(captured.activity.details, "Playing Atrinik Classic") == 0);
+    require(strcmp(captured.activity.state, "On Public Realm") == 0);
+    input.privacy = RICH_PRESENCE_OFF;
+    input.now_ms = 60100;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    require(captured.clears == 1U);
+    require(captured.publishes == 1U);
+    input.now_ms = 70000;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    require(captured.clears == 1U);
+    require(captured.publishes == 1U);
 }
 
 typedef struct fake_io {
