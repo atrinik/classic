@@ -53,6 +53,8 @@ atrinik_find_root_document(ATRINIK_ATTRIBUTIONS_FILE ATTRIBUTIONS.md)
 option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
 option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
 option(ENABLE_COVERAGE "Enable GCC coverage instrumentation" OFF)
+option(ENABLE_PRECOMPILED_HEADERS
+    "Precompile the client global header for the main executable" ON)
 set(PACKAGE_TYPE "none" CACHE STRING "Package type (none, deb, rpm, nsis, or zip)")
 set(ATRINIK_DISCORD_APPLICATION_ID_FILE "" CACHE FILEPATH
     "Optional file containing the public Discord Application ID")
@@ -248,6 +250,9 @@ endif ()
 # Compile the sources into an executable.
 add_executable(${EXECUTABLE} WIN32 ${SOURCES})
 atrinik_configure_target(${EXECUTABLE})
+if (ENABLE_PRECOMPILED_HEADERS)
+    target_precompile_headers(${EXECUTABLE} PRIVATE src/include/global.h)
+endif ()
 target_compile_definitions(${EXECUTABLE} PRIVATE SDL_DISABLE_OLD_NAMES)
 target_include_directories(${EXECUTABLE} BEFORE PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/src/include

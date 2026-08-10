@@ -18,3 +18,7 @@ archives recorded in `dependencies.lock.json`.
 CMake's `FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL` and
 `FETCHCONTENT_SOURCE_DIR_LIBATRINIK` overrides support coordinated local work.
 
+The server core object library precompiles `src/include/global.h` by default.
+Pass `-DENABLE_PRECOMPILED_HEADERS=OFF` for a conventional build. See
+`../docs/BUILD_ACCELERATION.md` for the benchmark procedure, measurements, and
+invalidation tradeoffs.
