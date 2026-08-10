@@ -436,6 +436,11 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         target_link_libraries(libatrinik-smoke PRIVATE Atrinik::Core)
         add_test(NAME libatrinik-smoke COMMAND libatrinik-smoke)
 
+        add_executable(libatrinik-signals tests/signals.c)
+        atrinik_configure_target(libatrinik-signals)
+        target_link_libraries(libatrinik-signals PRIVATE Atrinik::Core)
+        add_test(NAME libatrinik-signals COMMAND libatrinik-signals)
+
         add_executable(libatrinik-clioptions tests/clioptions.c)
         atrinik_configure_target(libatrinik-clioptions)
         target_link_libraries(libatrinik-clioptions PRIVATE Atrinik::Core)

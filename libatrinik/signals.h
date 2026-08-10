@@ -46,4 +46,20 @@ TOOLKIT_FUNCS_DECLARE(signals);
  */
 extern void signals_set_traceback_prefix(const char *prefix);
 
+/**
+ * Request that SIGTERM be handled as a graceful shutdown request.
+ *
+ * Once enabled, callers must poll signals_termination_requested() and exit
+ * from their normal execution context.
+ */
+extern void signals_enable_graceful_termination(void);
+
+/**
+ * Check whether graceful termination was requested.
+ *
+ * @return
+ * True if SIGTERM has been received after graceful termination was enabled.
+ */
+extern bool signals_termination_requested(void);
+
 #endif

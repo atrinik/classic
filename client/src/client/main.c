@@ -685,6 +685,7 @@ int main(int argc, char *argv[]) {
     int fps_limits[] = {30, 60, 120, 0};
 
     toolkit_import(signals);
+    signals_enable_graceful_termination();
     signals_set_traceback_prefix(EXECUTABLE);
 
     toolkit_import(binreloc);
@@ -806,7 +807,7 @@ int main(int argc, char *argv[]) {
     LastTick = anim_tick = last_frame_ticks = SDL_GetTicks();
     frames = 0;
 
-    while (!done) {
+    while (!done && !signals_termination_requested()) {
         uint64_t profile_frame_started = render_profiler_begin();
         frame_start_time = SDL_GetTicks();
 
@@ -971,7 +972,8 @@ int main(int argc, char *argv[]) {
                 if (elapsed_time < 1000 / fps_limit) {
                     SDL_Delay(MAX(1, 1000 / fps_limit - elapsed_time));
 
-                    if (!window_is_active() && SDL_GetTicks() - frame_start_time < 1000) {
+                    if (!window_is_active() && !signals_termination_requested() &&
+                        SDL_GetTicks() - frame_start_time < 1000) {
                         SDL_PumpEvents();
                         continue;
                     }
