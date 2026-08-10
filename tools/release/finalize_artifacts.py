@@ -242,8 +242,10 @@ def validate_zip(
             matches = [
                 name
                 for name in files
-                if str(PurePosixPath(name).parent) == directory
-                and fnmatch.fnmatchcase(PurePosixPath(name).name, pattern)
+                if str(PurePosixPath(name).parent).casefold() == directory.casefold()
+                and fnmatch.fnmatchcase(
+                    PurePosixPath(name).name.casefold(), pattern.casefold()
+                )
             ]
             if len(matches) != 1:
                 raise RuntimeError(

@@ -290,7 +290,7 @@ class FinalizeArtifactsTests(unittest.TestCase):
         duplicate_plugins = self.root / "duplicate-plugins.zip"
         with zipfile.ZipFile(duplicate_plugins, "w") as archive:
             archive.writestr(f"{package}/server/plugin_arena.dll", b"first")
-            archive.writestr(f"{package}/server/other_plugin_arena.dll", b"second")
+            archive.writestr(f"{package}/server/OTHER_PLUGIN_ARENA.DLL", b"second")
             archive.writestr(f"{package}/server/plugin_python.dll", b"python")
         with self.assertRaisesRegex(RuntimeError, "exactly one packaged"):
             finalize_artifacts.validate_zip(
