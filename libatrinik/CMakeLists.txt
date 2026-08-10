@@ -270,7 +270,81 @@ elseif (LINUX)
     check_function_exists(getaddrinfo HAVE_GETADDRINFO)
 endif ()
 
-try_compile(HAVE_IPV6 ${CMAKE_CURRENT_BINARY_DIR}/compile_tests ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ipv6test.c)
+set(ATRINIK_IPV6_PROBE_INPUTS
+    "${CMAKE_C_COMPILER}|${CMAKE_C_COMPILER_ID}|${CMAKE_C_COMPILER_VERSION}"
+    "${CMAKE_C_COMPILER_TARGET}|${CMAKE_SYSROOT}"
+    "${CMAKE_SYSTEM_NAME}|${CMAKE_SYSTEM_VERSION}|${CMAKE_SYSTEM_PROCESSOR}"
+    "${CMAKE_GENERATOR}|${CMAKE_CROSSCOMPILING}|${CMAKE_TRY_COMPILE_CONFIGURATION}"
+    "${CMAKE_C_FLAGS}|${CMAKE_C_FLAGS_DEBUG}|${CMAKE_C_FLAGS_RELEASE}"
+    "${CMAKE_C_FLAGS_RELWITHDEBINFO}|${CMAKE_C_FLAGS_MINSIZEREL}"
+    "${CMAKE_EXE_LINKER_FLAGS}")
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ipv6test.c"
+    ATRINIK_IPV6_PROBE_SOURCE_SHA256)
+list(APPEND ATRINIK_IPV6_PROBE_INPUTS "${ATRINIK_IPV6_PROBE_SOURCE_SHA256}")
+if (CMAKE_TOOLCHAIN_FILE AND EXISTS "${CMAKE_TOOLCHAIN_FILE}")
+    file(SHA256 "${CMAKE_TOOLCHAIN_FILE}" ATRINIK_IPV6_TOOLCHAIN_SHA256)
+    list(APPEND ATRINIK_IPV6_PROBE_INPUTS
+        "${CMAKE_TOOLCHAIN_FILE}|${ATRINIK_IPV6_TOOLCHAIN_SHA256}")
+endif ()
+string(JOIN "\n" ATRINIK_IPV6_PROBE_INPUT ${ATRINIK_IPV6_PROBE_INPUTS})
+string(SHA256 ATRINIK_IPV6_PROBE_SIGNATURE "${ATRINIK_IPV6_PROBE_INPUT}")
+if (NOT DEFINED ATRINIK_IPV6_PROBE_CACHED_SIGNATURE OR
+        NOT ATRINIK_IPV6_PROBE_CACHED_SIGNATURE STREQUAL
+            ATRINIK_IPV6_PROBE_SIGNATURE)
+    unset(HAVE_IPV6 CACHE)
+    unset(HAVE_IPV6)
+endif ()
+if (NOT DEFINED HAVE_IPV6)
+    try_compile(HAVE_IPV6
+        "${CMAKE_CURRENT_BINARY_DIR}/compile_tests"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ipv6test.c")
+    set(ATRINIK_IPV6_PROBE_CACHED_SIGNATURE
+        "${ATRINIK_IPV6_PROBE_SIGNATURE}" CACHE INTERNAL
+        "Toolchain signature for the cached IPv6 compile probe" FORCE)
+endif ()
+
+set(LIBATRINIK_PUBLIC_HEADER_NAMES
+    binreloc.h
+    bresenham.h
+    clioptions.h
+    colorspace.h
+    common.h
+    console.h
+    curl.h
+    datetime.h
+    logger.h
+    map_protocol.h
+    math.h
+    memory.h
+    mempool.h
+    metaserver_publisher.h
+    metaserver_url.h
+    packet.h
+    packet_dec.h
+    password.h
+    path.h
+    porting.h
+    process.h
+    rendezvous.h
+    shstr.h
+    signals.h
+    socket.h
+    socket_dec.h
+    string.h
+    stringbuffer.h
+    stringbuffer_dec.h
+    toolkit.h
+    utarray.h
+    uthash.h
+    utlist.h)
+set(LIBATRINIK_PRIVATE_HEADER_NAMES socket_private.h)
+set(LIBATRINIK_BUILD_HEADERS ${LIBATRINIK_PUBLIC_HEADER_NAMES})
+list(APPEND LIBATRINIK_BUILD_HEADERS ${LIBATRINIK_PRIVATE_HEADER_NAMES})
+list(TRANSFORM LIBATRINIK_BUILD_HEADERS
+    PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
+set(ATRINIK_PUBLIC_HEADERS ${LIBATRINIK_PUBLIC_HEADER_NAMES})
+list(TRANSFORM ATRINIK_PUBLIC_HEADERS
+    PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 
 # Generate the CMake configuration header and a namespaced build include tree.
 if (LIBATRINIK_PACKAGE_LAYOUT)
@@ -279,8 +353,6 @@ if (LIBATRINIK_PACKAGE_LAYOUT)
     set(LIBATRINIK_GENERATED_INCLUDE_DIR
         "${LIBATRINIK_BUILD_INCLUDE_ROOT}/toolkit")
     file(MAKE_DIRECTORY "${LIBATRINIK_GENERATED_INCLUDE_DIR}")
-    file(GLOB LIBATRINIK_BUILD_HEADERS CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
     foreach (header IN LISTS LIBATRINIK_BUILD_HEADERS)
         cmake_path(GET header FILENAME header_name)
         configure_file("${header}"
@@ -406,9 +478,6 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     install(TARGETS ${ATRINIK_TOOLKIT}
         EXPORT LibAtrinikTargets
         ARCHIVE DESTINATION lib)
-    file(GLOB ATRINIK_PUBLIC_HEADERS CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
-    list(FILTER ATRINIK_PUBLIC_HEADERS EXCLUDE REGEX "_private\\.h$")
     install(FILES ${ATRINIK_PUBLIC_HEADERS} DESTINATION include/toolkit)
     install(FILES "${LIBATRINIK_GENERATED_INCLUDE_DIR}/toolkit_cmake.h"
         DESTINATION include/toolkit)
