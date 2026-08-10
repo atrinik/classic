@@ -167,12 +167,14 @@ static void *fake_stun_run(void *data) {
             pthread_cond_wait(&server->condition, &server->mutex);
         }
         pthread_mutex_unlock(&server->mutex);
-        TEST_CHECK(sendto(server->intruder_handle,
-                          response,
-                          response_size,
-                          0,
-                          (const struct sockaddr *)&client,
-                          client_length) == (ssize_t)response_size);
+        for (size_t i = 0; i < 5; i++) {
+            TEST_CHECK(sendto(server->intruder_handle,
+                              response,
+                              response_size,
+                              0,
+                              (const struct sockaddr *)&client,
+                              client_length) == (ssize_t)response_size);
+        }
     }
     TEST_CHECK(sendto(server->handle,
                       response,
@@ -452,6 +454,31 @@ static void test_late_stun_response_before_punch(void) {
     }
     pthread_mutex_unlock(&server.mutex);
     TEST_CHECK(!socket_udp_punch_receive(&client, VS(host), &port));
+
+    struct sockaddr_in intruder_address;
+    socklen_t intruder_length = sizeof(intruder_address);
+    TEST_CHECK(
+        getsockname(intruder_handle, (struct sockaddr *)&intruder_address, &intruder_length) == 0);
+    unsigned char queued[64];
+    struct sockaddr_in queued_source;
+    socklen_t queued_source_length = sizeof(queued_source);
+    TEST_CHECK(recvfrom(client_handle,
+                        (char *)queued,
+                        sizeof(queued),
+                        MSG_PEEK,
+                        (struct sockaddr *)&queued_source,
+                        &queued_source_length) == 32);
+    TEST_CHECK(queued_source.sin_port == intruder_address.sin_port);
+
+    TEST_CHECK(!socket_udp_punch_receive_pre_quic(&client, VS(host), &port));
+    queued_source_length = sizeof(queued_source);
+    TEST_CHECK(recvfrom(client_handle,
+                        (char *)queued,
+                        sizeof(queued),
+                        MSG_PEEK,
+                        (struct sockaddr *)&queued_source,
+                        &queued_source_length) == 32);
+    TEST_CHECK(queued_source.sin_port == intruder_address.sin_port);
     TEST_CHECK(socket_udp_punch_receive_pre_quic(&client, VS(host), &port));
     TEST_CHECK(strcmp(host, "127.0.0.1") == 0);
     TEST_CHECK(port == ntohs(server_address.sin_port));

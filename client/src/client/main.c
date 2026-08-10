@@ -599,8 +599,8 @@ static bool clioptions_option_rendezvous_invite_file(const char *arg, char **err
 }
 
 static const char *const clioptions_option_stun_server_desc =
-    "STUN endpoint used for direct rendezvous, or 'off' (default: "
-    CLIENT_STUN_DEFAULT_ENDPOINT ").";
+    "STUN endpoint used for direct rendezvous, or 'off' (default: " CLIENT_STUN_DEFAULT_ENDPOINT
+    ").";
 
 static bool clioptions_option_stun_server(const char *arg, char **errmsg) {
     return client_stun_config_set(&clioption_settings.stun, arg, errmsg);
