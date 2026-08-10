@@ -1,6 +1,9 @@
 set(SOURCES
 	src/client/asset.c
 	src/client/asset_source.c
+	src/client/face_asset.c
+	src/client/face_cache.c
+	src/client/face_loader.c
 	src/client/animations.c
 	src/client/client.c
 	src/client/cmd_aliases.c
@@ -8,6 +11,7 @@ set(SOURCES
 	src/client/connection_failure.c
 	src/client/connection_preferences.c
 	src/client/image.c
+	src/client/image_codec.c
 	src/client/item.c
 	src/client/item_packet.c
 	src/client/join_credentials.c

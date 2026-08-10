@@ -217,6 +217,21 @@ int main(void) {
     require(path_read_secret(trailing, VS(secret), NULL) == PATH_SECRET_TRAILING_DATA);
     require(CRYPTO_memcmp(secret, cleared, sizeof(secret)) == 0);
 
+    char atomic[HUGE_BUF];
+    require(snprintf(VS(atomic), "%s/atomic", directory) < (int)sizeof(atomic));
+    static const char atomic_data[] = "atomic-data";
+    require(path_write_atomic_existing(atomic, atomic_data, sizeof(atomic_data) - 1U, 0600));
+    char *atomic_contents = path_file_contents(atomic);
+    require(atomic_contents != NULL && strcmp(atomic_contents, atomic_data) == 0);
+    free(atomic_contents);
+
+    char missing_parent[HUGE_BUF];
+    require(snprintf(VS(missing_parent), "%s/missing/atomic", directory) <
+            (int)sizeof(missing_parent));
+    require(
+        !path_write_atomic_existing(missing_parent, atomic_data, sizeof(atomic_data) - 1U, 0600));
+    require(path_exists(missing_parent) == 0);
+
 #ifndef WIN32
     require(chmod(path, 0640) == 0);
     permissive = false;
@@ -258,6 +273,7 @@ int main(void) {
     unlink(fifo_path);
     unlink(link_path);
 #endif
+    unlink(atomic);
     unlink(trailing);
     unlink(too_long);
     unlink(path);

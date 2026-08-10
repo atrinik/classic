@@ -69,6 +69,12 @@ static const int register_signals[] = {
  */
 static char traceback_prefix[64] = {"atrinik"};
 
+/** Whether SIGTERM should request an orderly shutdown. */
+static volatile sig_atomic_t graceful_termination_enabled;
+
+/** Whether an orderly shutdown was requested by SIGTERM. */
+static volatile sig_atomic_t termination_requested;
+
 #ifdef HAVE_SIGACTION
 /** Alternate stack used by POSIX signal handlers. */
 static void *alternate_signal_stack;
@@ -87,6 +93,11 @@ TOOLKIT_API();
  * ID of the signal being intercepted.
  */
 static void simple_signal_handler(int signum) {
+    if (signum == SIGTERM && graceful_termination_enabled != 0) {
+        termination_requested = 1;
+        return;
+    }
+
     if (signum == SIGABRT) {
 #ifdef WIN32
         RaiseException(STATUS_ACCESS_VIOLATION, 0, 0, 0);
@@ -114,6 +125,13 @@ static void signal_handler(int sig, siginfo_t *siginfo, void *context)
     static time_t t = 0;
     char path[HUGE_BUF], date[MAX_BUF], *homedir;
     FILE *fp;
+
+#ifndef WIN32
+    if (sig == SIGTERM && graceful_termination_enabled != 0) {
+        termination_requested = 1;
+        return;
+    }
+#endif
 
 #ifndef WIN32
     homedir = getenv("HOME");
@@ -369,6 +387,9 @@ static void signal_handler(int sig, siginfo_t *siginfo, void *context)
 
 TOOLKIT_INIT_FUNC(signals) {
     size_t i;
+
+    graceful_termination_enabled = 0;
+    termination_requested = 0;
 #ifdef HAVE_SIGACTION
     stack_t ss;
 
@@ -448,4 +469,12 @@ TOOLKIT_DEINIT_FUNC_FINISH
 
 void signals_set_traceback_prefix(const char *prefix) {
     snprintf(VS(traceback_prefix), "%s", prefix);
+}
+
+void signals_enable_graceful_termination(void) {
+    graceful_termination_enabled = 1;
+}
+
+bool signals_termination_requested(void) {
+    return termination_requested != 0;
 }

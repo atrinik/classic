@@ -443,6 +443,16 @@ bool path_write_atomic(const char *path, const void *data, size_t size, unsigned
     HARD_ASSERT(data != NULL || size == 0);
 
     path_ensure_directories(path);
+    return path_write_atomic_existing(path, data, size, mode);
+}
+
+bool path_write_atomic_existing(const char *path,
+                                const void *data,
+                                size_t size,
+                                unsigned int mode) {
+    HARD_ASSERT(path != NULL);
+    HARD_ASSERT(data != NULL || size == 0);
+
     char temporary[HUGE_BUF];
     if (snprintf(VS(temporary), "%s.tmp.XXXXXX", path) >= (int)sizeof(temporary)) {
         return false;
