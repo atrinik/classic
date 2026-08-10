@@ -327,7 +327,7 @@ static void test_batch_order_fairness_and_dedup(socket_t *socket) {
     asset_request_free(duplicate);
     asset_request_t *generic = asset_request_start("news/test.txt");
     TEST_CHECK(generic != NULL);
-    for (uint16_t face = 3; face <= arraysize(requests); face++) {
+    for (size_t face = 3; face <= arraysize(requests); face++) {
         requests[face - 1U] = test_face_start(face);
     }
 
