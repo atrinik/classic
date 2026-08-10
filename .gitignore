@@ -19,6 +19,7 @@ __pycache__/
 # Client-generated dependencies and output
 /client/build/
 /client/sound/
+/client/data/discord-application-id
 /client/**/coverage.*
 
 # Server runtime, collected inputs, binaries, and output

@@ -61,6 +61,64 @@
  accordingly. Extracted portable Windows packages contain atrinik.exe and all
  required runtime assets and DLLs; run atrinik.exe from inside that package.
 
+=================================================
+= 2.0. Discord Rich Presence                    =
+=================================================
+
+ Discord Rich Presence is optional, Linux- and Windows-only, and defaults to
+ `Game only`. Choose a privacy tier under Client settings:
+
+ - `Off` opens no Discord IPC connection and clears activity published by this
+   client run.
+ - `Game only` shares only `Playing Atrinik Classic` and elapsed play time.
+ - `Server` additionally shares `On <friendly server>`.
+ - `Server and zone` additionally shares `Exploring <friendly zone>`.
+
+ Activity exists only while a character is in the playing state. It is cleared
+ on logout, disconnect, opt-out/privacy reduction, and clean shutdown. Direct,
+ manual, and command-line servers are always shown as `Private server`; only a
+ public-directory display name may be shared. Zone text uses the friendly map
+ display name and then friendly region name. Markup, controls, invalid UTF-8,
+ whitespace, and length are normalized before any update. Account and character
+ names, host/IP, port, server ID, certificate fingerprint, internal map path,
+ coordinates, connection data, invites, passwords, party data, OAuth material,
+ and Discord secrets are never included. This feature has no join, spectate,
+ deep-link, account-linking, or Discord authentication capability.
+
+ Discord must be running locally. If it is absent, starts later, restarts,
+ refuses data, or returns malformed data, the game continues normally and the
+ bounded nonblocking backend retries and logs each failure-state transition
+ once without payload data. Linux socket peers and Windows named-pipe servers
+ must belong to the current user. Activity updates, including reconnect
+ replays and clears, are deduplicated, coalesced, and kept below Discord's
+ rate limit. The elapsed timestamp begins
+ once per transition into play and remains stable across map changes.
+
+ Source builds have no Application ID by default and therefore perform no
+ Discord IPC. For local testing, set the public, non-secret
+ `ATRINIK_DISCORD_APPLICATION_ID` environment variable, create the ignored
+ one-line `data/discord-application-id`, or configure an installed build with
+ `-DATRINIK_DISCORD_APPLICATION_ID_FILE=/absolute/path/to/file`. The ID is
+ validated as a numeric Discord snowflake. It is observable in every configured
+ package and the opening IPC handshake and grants no authenticated access.
+
+ Official Windows packages obtain that file only in the `discord-release`
+ GitHub Actions environment from `DISCORD_APPLICATION_ID`. The production
+ value is staged with restrictive permissions, retained for one day, installed
+ as package data, never compiled into the executable, and never printed. Release
+ rehearsal and normal CI use no production ID. The Discord application uses the
+ project-owned blue-crystal icon and matching nocturnal-crystal cover selected
+ for this feature; its Rich Presence large-image asset key is `atrinik` with
+ hover text `Atrinik Classic`.
+
+ An opt-in live smoke test requires a developer-owned application with an
+ `atrinik` Rich Presence art asset and a running Discord desktop client. Start
+ Atrinik with its Application ID, enter a character, confirm the selected tier,
+ change zones, select `Off`, re-enable it, restart Discord, and confirm update,
+ clear, and reconnect behavior. This smoke is deliberately outside CTest and
+ must never use OAuth or any secret; deterministic CTest coverage uses a fake
+ partial-I/O peer instead.
+
  The main server screen has a Route button for choosing a preferred direct
  route per server. The client races all candidates concurrently and selects a
  successful route in the order LAN, global IPv6, peer-reflexive, mapped, STUN,
