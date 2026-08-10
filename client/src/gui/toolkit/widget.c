@@ -1327,10 +1327,27 @@ int widget_priority_integration_test(const char *fixture, const char *saved) {
     WIDGET_TEST_CHECK(attached != NULL && attached->type == CONTAINER_ID);
     WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
 
+    move_widget(attached, -attached->x, -attached->y);
+    attached->moveable = 1;
+    widgetdata *drop_target = create_widget_object(CONTAINER_ID);
+    WIDGET_TEST_CHECK(drop_target != NULL);
+    drop_target->x = attached->w + 20;
+    drop_target->y = 0;
+    drop_target->w = 100;
+    drop_target->h = 100;
+    drop_target->show = 1;
+    WIDGET_TEST_CHECK(widget_event_respond(map->x + 1, map->y + 1));
+    WIDGET_TEST_CHECK(widget_mouse_event.owner == map);
+    menu_container_move(map, NULL, NULL);
+    move_widget(attached, drop_target->x - attached->x, drop_target->y - attached->y);
+    WIDGET_TEST_CHECK(widget_event_move_stop(drop_target->x + 1, drop_target->y + 1));
+    WIDGET_TEST_CHECK(attached->env == drop_target);
+    WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
+
     widgetdata *nested = create_widget_object(CONTAINER_ID);
     WIDGET_TEST_CHECK(nested != NULL);
-    insert_widget_in_container(nested, attached, 1);
-    WIDGET_TEST_CHECK(attached->env == nested);
+    insert_widget_in_container(nested, drop_target, 1);
+    WIDGET_TEST_CHECK(drop_target->env == nested);
     WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
 
     int map_x = map->x;
