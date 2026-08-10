@@ -50,6 +50,10 @@ verified semantic-release image.
 - Candidate cold and warm evidence:
   [run 31430896836](https://github.com/atrinik/classic/actions/runs/31430896836),
   attempts 3 and 4
+- Released-image cold and restored-cache evidence:
+  [run 31443750204](https://github.com/atrinik/classic/actions/runs/31443750204),
+  attempts 1 and 2 at Classic head
+  `1d0e802e2d154052f08ed758b69633c3e9262706`
 
 The package is public and remains linked to `atrinik/devcontainer`. Anonymous
 manifest inspection resolved the released tag to the index digest above. The
@@ -57,6 +61,34 @@ obsolete private Actions grants were removed by
 [`atrinik/github-settings#62`](https://github.com/atrinik/github-settings/pull/62),
 so pull-request workflows neither request package permission nor authenticate
 to GHCR to consume `classic-build` or `windows-build`.
+
+## Released-image hosted validation
+
+The implementation-head Check run above passed core, client, server,
+integrated-graph, native Windows, security, coverage, and the stable
+`Classic validation`
+aggregate on both attempts. Attempt 1 populated the four isolated compiler
+caches; attempt 2 ran on fresh hosted runners and restored every cacheable
+compilation with zero misses:
+
+| Component | Direct hits | Misses | Uncacheable PCH calls |
+| --- | ---: | ---: | ---: |
+| Core | 87 | 0 | 0 |
+| Client | 352 | 0 | 238 |
+| Server | 504 | 0 | 494 |
+| Integrated graph | 50 | 0 | 366 |
+
+The raw attempt-2 TSV artifacts are named
+`linux-{core,client,server,integrated}-*-2`. Precompiled-header calls are
+reported separately rather than counted as cache failures. Hosted job times
+were 93/96 seconds for core, 94/61 for client, 190/182 for server, and 56/51
+for the integrated graph across attempts 1/2. These are individual samples;
+the raw zero-miss results, not elapsed-time variation, prove restoration.
+
+The released-image measurement artifact recorded 401,281,809 compressed bytes,
+1,136,279,102 Docker content bytes, a 19,208 ms first pull, a 178 ms immediate
+repeat pull, a 265 ms cold start, and warm starts of 191, 203, 254, 199, and
+206 ms on the same hosted runner image described above.
 
 ## Registry image measurements
 
@@ -151,6 +183,8 @@ is public and can be inspected with an empty Docker credential directory:
 gh run view 31430896836 --repo atrinik/classic
 gh run view 31430896836 --repo atrinik/classic --json jobs
 gh run download 31430896836 --repo atrinik/classic --dir RUN_ARTIFACTS
+gh run view 31443750204 --repo atrinik/classic
+gh run download 31443750204 --repo atrinik/classic --dir RELEASED_RUN_ARTIFACTS
 gh cache list --repo atrinik/classic --ref refs/pull/98/merge \
   --json id,key,ref,sizeInBytes,createdAt,lastAccessedAt,version
 gh cache list --repo atrinik/classic \
