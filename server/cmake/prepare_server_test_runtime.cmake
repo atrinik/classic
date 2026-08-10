@@ -51,4 +51,20 @@ file(COPY "${ATRINIK_SOURCE_DIR}/runtime/content/lib/"
 file(COPY "${ATRINIK_SOURCE_DIR}/resources"
     DESTINATION "${runtime_server}")
 
+if (DEFINED ATRINIK_PYTHON_PLUGIN)
+    include("${ATRINIK_SOURCE_DIR}/cmake/prepare_locked_content_python_unit.cmake")
+
+    set(python_events "${runtime_server}/maps/python/events")
+    configure_file(
+        "${python_events}/python_unit.py"
+        "${python_events}/python_unit_content.py"
+        COPYONLY)
+    foreach (fixture IN ITEMS pass fail)
+        configure_file(
+            "${ATRINIK_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_${fixture}.py"
+            "${python_events}/python_unit_${fixture}.py"
+            COPYONLY)
+    endforeach ()
+endif ()
+
 file(TOUCH "${ATRINIK_RUNTIME_DIR}/.prepared")

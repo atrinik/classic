@@ -718,10 +718,26 @@ static PyCodeObject *compilePython(char *filename) {
     return cache->code;
 }
 
-static int do_script(PythonContext *context, const char *filename) {
+/**
+ * Executes a Python script in an event context.
+ * @param context
+ * Context to expose to the script.
+ * @param filename
+ * Script path.
+ * @param execution_failed
+ * Optional output set when Python evaluation raises an exception. The context
+ * is still pushed in that case and must be popped by the caller.
+ * @return
+ * 1 if evaluation was attempted, 0 if the script could not be prepared.
+ */
+static int do_script(PythonContext *context, const char *filename, bool *execution_failed) {
     PyCodeObject *pycode;
     PyObject *dict, *ret;
     PyGILState_STATE gilstate;
+
+    if (execution_failed != NULL) {
+        *execution_failed = false;
+    }
 
     if (filename == NULL) {
         return 0;
@@ -840,7 +856,11 @@ static int do_script(PythonContext *context, const char *filename) {
         ret = PyEval_EvalCode(pycode, dict, NULL);
 #endif
 
-        if (PyErr_Occurred()) {
+        if (ret == NULL) {
+            if (execution_failed != NULL) {
+                *execution_failed = true;
+            }
+
             PyErr_LOG();
         }
 
@@ -878,7 +898,7 @@ static void command_custom_python(object *op, const char *command, char *params)
 
     char path[MAX_BUF];
     snprintf(VS(path), "/python/commands/%s.py", command);
-    if (!do_script(context, path)) {
+    if (!do_script(context, path, NULL)) {
         freeContext(context);
         return;
     }
@@ -2033,7 +2053,7 @@ static int handle_event(va_list args) {
     context->options = va_arg(args, char *);
     context->returnvalue = 0;
 
-    if (!do_script(context, script)) {
+    if (!do_script(context, script, NULL)) {
         freeContext(context);
         return 0;
     }
@@ -2067,7 +2087,7 @@ static int handle_map_event(va_list args) {
     context->text = va_arg(args, char *);
     context->parms[0] = va_arg(args, int);
 
-    if (!do_script(context, script)) {
+    if (!do_script(context, script, NULL)) {
         freeContext(context);
         return 0;
     }
@@ -2199,7 +2219,7 @@ static int handle_global_event(int event_type, va_list args) {
             break;
     }
 
-    if (!do_script(context, "/python/events/python_event.py")) {
+    if (!do_script(context, "/python/events/python_event.py", NULL)) {
         freeContext(context);
         return 0;
     }
@@ -2235,9 +2255,11 @@ static int handle_unit_event(va_list args) {
     context->options = NULL;
     context->returnvalue = 0;
 
+    bool execution_failed;
     int failed = 0;
-    if (do_script(context, "/python/events/python_unit.py")) {
+    if (do_script(context, "/python/events/python_unit.py", &execution_failed)) {
         context = popContext();
+        failed = execution_failed;
     } else {
         failed = 1;
     }
