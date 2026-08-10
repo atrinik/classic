@@ -191,7 +191,7 @@ void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t l
                 packet_writer_write_cstring(packet, settings.http_url);
             }
         } else if (type == CMD_SETUP_ASSET_TRANSPORT) {
-            packet_writer_write_uint8(packet, socket_is_quic(ns->sc) ? 1 : 0);
+            packet_writer_write_uint8(packet, ns->asset_transport_capabilities);
         } else if (type == CMD_SETUP_CONNECTION_MODE) {
             socket_connection_mode_t mode = packet_reader_read_uint8(&reader);
             if (socket_is_quic(ns->sc) && mode >= SOCKET_CONNECTION_MODE_QUIC_LAN &&

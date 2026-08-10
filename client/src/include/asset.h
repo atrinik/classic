@@ -23,9 +23,32 @@ typedef enum asset_request_state {
     ASSET_REQUEST_PENDING,
     ASSET_REQUEST_COMPLETE,
     ASSET_REQUEST_ERROR,
+    /** Locally displaced for visible work; retry without charging an attempt. */
+    ASSET_REQUEST_PREEMPTED,
 } asset_request_state_t;
 
+/** Attach the scheduler to a live connection owned by the I/O thread. */
+void asset_requests_connect(socket_t *sc);
+
+/** Publish the setup-negotiated transport capability bitmask. */
+void asset_requests_set_capabilities(uint8_t capabilities);
+
+/** Whether the negotiated in-band transport is currently available. */
+bool asset_requests_available(void);
+
+/** Whether negotiated face batching is live on the current connection. */
+bool asset_face_batch_available(void);
+
 asset_request_t *asset_request_start(const char *path);
+
+/** Start a body request whose declared response may not exceed max_size. */
+asset_request_t *asset_request_start_bounded(const char *path, size_t max_size);
+
+/** Queue a valid, max-sized visible face ahead of speculative asset work. */
+asset_request_t *asset_request_start_bounded_priority(const char *path, size_t max_size);
+
+/** Advisory physical-capacity check; asset_request_preempt resolves its races. */
+bool asset_request_preemption_needed(const asset_request_t *replacement);
 
 asset_request_t *asset_request_start_cached(const char *path, const char *cache_path);
 
@@ -40,6 +63,20 @@ bool asset_request_get_metadata(const asset_request_t *request,
                                 uint8_t digest[ASSET_DIGEST_SIZE]);
 
 void asset_request_free(asset_request_t *request);
+
+/**
+ * Prioritize `replacement` and publish an I/O-thread handoff intent for
+ * `victim`'s physical stream. A speculative batched victim preempts every
+ * unfinished, non-cancelled member in that batch; callers observe them as
+ * ASSET_REQUEST_PREEMPTED. Priority batches reject preemption. Both handles
+ * stay caller-owned. This is reserved for visible face admission, not
+ * cancellation. On success, `displace_victim` tells the caller whether the
+ * victim must be released; it stays false when the replacement won the stream
+ * race and only a logical full-cap handoff may still require that release.
+ */
+bool asset_request_preempt(asset_request_t *victim,
+                           asset_request_t *replacement,
+                           bool *displace_victim);
 
 bool asset_requests_service(socket_t *sc, bool *write_pending);
 

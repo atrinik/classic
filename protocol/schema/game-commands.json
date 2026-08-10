@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "protocol_version": 1072,
+  "protocol_version": 1074,
   "client_to_server": [
     {"id": 0, "symbol": "CONTROL", "wire_name": "control"},
     {"id": 1, "symbol": "ASK_FACE", "wire_name": "ask_face"},
