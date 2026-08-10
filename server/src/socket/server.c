@@ -311,8 +311,12 @@ TOOLKIT_INIT_FUNC(socket_server) {
             char *host = addr == &stack_setting.v4 ? stack_setting.v4_host : stack_setting.v6_host;
             size_t host_size = addr == &stack_setting.v4 ? sizeof(stack_setting.v4_host)
                                                          : sizeof(stack_setting.v6_host);
-            socklen_t addr_size =
-                family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
+            socklen_t addr_size = sizeof(struct sockaddr_in);
+#ifdef HAVE_IPV6
+            if (family == AF_INET6) {
+                addr_size = sizeof(struct sockaddr_in6);
+            }
+#endif
             if (getnameinfo((const struct sockaddr *)addr,
                             addr_size,
                             host,
