@@ -17,9 +17,191 @@
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
+#include <toolkit/datetime.h>
 #include <toolkit/packet.h>
 #include <toolkit/path.h>
 #include <openssl/crypto.h>
+#include <openssl/evp.h>
+#include <stdatomic.h>
+
+#if OPENSSL_VERSION_NUMBER >= 0x30500000L
+#define ASSET_LOOPBACK_TIMEOUT_MS UINT64_C(5000)
+#define ASSET_LOOPBACK_SERVICE_INTERVAL_MS (MAX_TIME / 1000U)
+#define ASSET_LOOPBACK_COMPLETION_CALL_MAX 2U
+
+typedef struct asset_loopback_server {
+    socket_t *listener;
+    atomic_bool stop;
+    atomic_bool accepted;
+    bool failed;
+    bool served;
+    unsigned int completion_service_calls;
+} asset_loopback_server_t;
+
+static void *asset_loopback_server_main(void *data) {
+    asset_loopback_server_t *server = data;
+    uint64_t deadline = datetime_monotonic_ms() + ASSET_LOOPBACK_TIMEOUT_MS;
+    socket_t *connection = NULL;
+    while (!atomic_load(&server->stop) && datetime_monotonic_ms() < deadline &&
+           connection == NULL) {
+        socket_wait(server->listener, true, false, 10);
+        connection = socket_accept(server->listener);
+    }
+    if (connection == NULL) {
+        server->failed = !atomic_load(&server->stop);
+        return NULL;
+    }
+    atomic_store(&server->accepted, true);
+    deadline = datetime_monotonic_ms() + ASSET_LOOPBACK_TIMEOUT_MS;
+
+    socket_struct ns = {
+        .sc = connection,
+        .socket_version = SOCKET_VERSION,
+        .join_authenticated = true,
+        .setup_completed = true,
+        .state = ST_LOGIN,
+    };
+    socket_assets_connection_register(&ns);
+    uint64_t next_asset_service_ms = datetime_monotonic_ms();
+    unsigned int asset_service_calls = 0;
+    unsigned int request_service_call = 0;
+    while (!atomic_load(&server->stop) && datetime_monotonic_ms() < deadline) {
+        bool ready = socket_wait(connection, true, true, 2);
+        socket_quic_service(connection, ready, true);
+        uint8_t gameplay[16];
+        size_t gameplay_size = 0;
+        if (!socket_read(connection, gameplay, sizeof(gameplay), &gameplay_size)) {
+            server->failed = true;
+            break;
+        }
+        uint64_t now = datetime_monotonic_ms();
+        if (now >= next_asset_service_ms) {
+            asset_service_calls++;
+            socket_assets_service();
+            if (ns.state == ST_DEAD || ns.state == ST_ZOMBIE) {
+                server->failed = true;
+                break;
+            }
+            if (request_service_call == 0 && ns.asset_window_requests != 0) {
+                request_service_call = asset_service_calls;
+            }
+            if (!server->served && request_service_call != 0 && ns.asset_stream_count == 0) {
+                server->served = true;
+                server->completion_service_calls = asset_service_calls - request_service_call + 1U;
+            }
+            next_asset_service_ms = now + ASSET_LOOPBACK_SERVICE_INTERVAL_MS;
+        }
+    }
+    if (!atomic_load(&server->stop)) {
+        server->failed = true;
+    }
+
+    socket_assets_connection_clear(&ns);
+    socket_destroy(connection);
+    return NULL;
+}
+
+static bool asset_loopback_progress(socket_t *connection, bool write_pending, uint64_t deadline) {
+    if (datetime_monotonic_ms() >= deadline) {
+        return false;
+    }
+    bool ready = socket_wait(connection, true, write_pending, 2);
+    socket_quic_service(connection, ready, write_pending);
+    return true;
+}
+
+static bool asset_loopback_receive_face(socket_t *connection,
+                                        uint16_t face,
+                                        const uint8_t *expected,
+                                        uint32_t expected_size,
+                                        const uint8_t expected_digest[ASSET_DIGEST_SIZE]) {
+    char path[32];
+    if (!socket_asset_face_path_format(VS(path), face)) {
+        return false;
+    }
+    packet_struct *request = packet_new(0, 128, 0);
+    static const uint8_t empty_digest[ASSET_DIGEST_SIZE];
+    socket_asset_request_append(request, path, 0, empty_digest, 0);
+    bool success = packet_writer_finish(request);
+    socket_stream_t *stream = success ? socket_stream_open(connection, SOCKET_STREAM_ASSET) : NULL;
+    success = stream != NULL;
+
+    uint64_t deadline = datetime_monotonic_ms() + ASSET_LOOPBACK_TIMEOUT_MS;
+    size_t request_pos = 0;
+    while (success && request_pos < request->len) {
+        size_t amount = 0;
+        socket_stream_result_t result = socket_stream_write(stream,
+                                                            request->data + request_pos,
+                                                            request->len - request_pos,
+                                                            &amount);
+        success = result != SOCKET_STREAM_RESULT_ERROR && result != SOCKET_STREAM_RESULT_FINISHED;
+        request_pos += amount;
+        if (success && amount == 0) {
+            success = asset_loopback_progress(connection, true, deadline);
+        }
+    }
+    if (success) {
+        success = socket_stream_conclude(stream);
+    }
+    packet_free(request);
+
+    uint8_t response_header[SOCKET_ASSET_RESPONSE_HEADER_SIZE];
+    size_t header_pos = 0;
+    while (success && header_pos < sizeof(response_header)) {
+        size_t amount = 0;
+        socket_stream_result_t result = socket_stream_read(stream,
+                                                           response_header + header_pos,
+                                                           sizeof(response_header) - header_pos,
+                                                           &amount);
+        success = result != SOCKET_STREAM_RESULT_ERROR && result != SOCKET_STREAM_RESULT_FINISHED;
+        header_pos += amount;
+        if (success && amount == 0) {
+            success = asset_loopback_progress(connection, false, deadline);
+        }
+    }
+
+    socket_asset_response_t response;
+    success = success &&
+              socket_asset_response_parse(response_header, sizeof(response_header), 0, &response) &&
+              response.status == ASSET_STATUS_OK && response.total_size == expected_size &&
+              memcmp(response.digest, expected_digest, ASSET_DIGEST_SIZE) == 0;
+    uint8_t *body = success ? xmalloc(expected_size) : NULL;
+    size_t body_pos = 0;
+    while (success && body_pos < expected_size) {
+        size_t amount = 0;
+        socket_stream_result_t result =
+            socket_stream_read(stream, body + body_pos, expected_size - body_pos, &amount);
+        success = result != SOCKET_STREAM_RESULT_ERROR && result != SOCKET_STREAM_RESULT_FINISHED;
+        body_pos += amount;
+        if (success && amount == 0) {
+            success = asset_loopback_progress(connection, false, deadline);
+        }
+    }
+    success = success && memcmp(body, expected, expected_size) == 0;
+
+    bool finished = false;
+    while (success && !finished) {
+        uint8_t surplus;
+        size_t amount = 0;
+        socket_stream_result_t result =
+            socket_stream_read(stream, &surplus, sizeof(surplus), &amount);
+        success = result != SOCKET_STREAM_RESULT_ERROR && amount == 0;
+        finished = result == SOCKET_STREAM_RESULT_FINISHED;
+        if (success && !finished) {
+            success = asset_loopback_progress(connection, false, deadline);
+        }
+    }
+
+    free(body);
+    if (stream != NULL) {
+        if (!finished) {
+            socket_stream_reset(stream, SOCKET_STREAM_ERROR_CANCELLED);
+        }
+        socket_stream_destroy(stream);
+    }
+    return success && finished;
+}
+#endif
 
 START_TEST(test_socket_asset_request_round_trip) {
     uint8_t digest[ASSET_DIGEST_SIZE];
@@ -36,6 +218,180 @@ START_TEST(test_socket_asset_request_round_trip) {
     packet_free(packet);
 }
 END_TEST
+
+START_TEST(test_socket_asset_face_path_round_trip_and_malformed) {
+    char path[32];
+    ck_assert(socket_asset_face_path_format(VS(path), 1));
+    ck_assert_str_eq(path, "faces/1.png");
+
+    uint16_t face = 99;
+    ck_assert(socket_asset_face_path_parse(path, &face));
+    ck_assert_uint_eq(face, 1);
+    ck_assert(socket_asset_face_path_format(VS(path), UINT16_MAX));
+    ck_assert(socket_asset_face_path_parse(path, &face));
+    ck_assert_uint_eq(face, UINT16_MAX);
+
+    static const char *invalid[] = {
+        "",
+        "faces/",
+        "faces/0.png",
+        "faces/01.png",
+        "faces/01.png.extra",
+        "faces/-1.png",
+        "faces/65536.png",
+        "faces/1",
+        "faces/1.PNG",
+        "other/1.png",
+    };
+    for (size_t i = 0; i < arraysize(invalid); i++) {
+        face = 99;
+        ck_assert(!socket_asset_face_path_parse(invalid[i], &face));
+        ck_assert_uint_eq(face, 99);
+    }
+    ck_assert(!socket_asset_face_path_format(NULL, sizeof(path), 1));
+    ck_assert(!socket_asset_face_path_format(VS(path), 0));
+    ck_assert(!socket_asset_face_path_format(path, 4, 1));
+}
+END_TEST
+
+START_TEST(test_socket_face_asset_snapshot_is_bounded_and_authenticated) {
+    const uint8_t *data = NULL;
+    const uint8_t *digest = NULL;
+    uint32_t size = 0;
+    ck_assert(face_get_asset(1, &data, &size, &digest));
+    ck_assert_ptr_nonnull(data);
+    ck_assert_ptr_nonnull(digest);
+    ck_assert_uint_gt(size, 0);
+    ck_assert_uint_le(size, ASSET_FACE_MAX_SIZE);
+
+    uint8_t calculated[ASSET_DIGEST_SIZE];
+    unsigned int calculated_size = 0;
+    ck_assert_int_eq(EVP_Digest(data, size, calculated, &calculated_size, EVP_sha256(), NULL), 1);
+    ck_assert_uint_eq(calculated_size, ASSET_DIGEST_SIZE);
+    ck_assert_mem_eq(calculated, digest, sizeof(calculated));
+    ck_assert(!face_get_asset(0, NULL, NULL, NULL));
+    ck_assert(!face_get_asset(UINT16_MAX, NULL, NULL, NULL));
+}
+END_TEST
+
+START_TEST(test_socket_asset_global_work_budget_rotates) {
+    enum {
+        CONNECTION_COUNT = 600
+    };
+    socket_struct *connections = xcalloc(CONNECTION_COUNT, sizeof(*connections));
+    for (size_t i = 0; i < CONNECTION_COUNT; i++) {
+        connections[i].state = ST_DEAD;
+        socket_assets_connection_register(&connections[i]);
+    }
+
+    socket_assets_service();
+    size_t first_tick_serviced = 0;
+    for (size_t i = 0; i < CONNECTION_COUNT; i++) {
+        first_tick_serviced += connections[i].asset_service_generation != 0;
+    }
+    ck_assert_uint_eq(first_tick_serviced, 512U);
+
+    socket_assets_service();
+    for (size_t i = 0; i < CONNECTION_COUNT; i++) {
+        ck_assert_uint_ne(connections[i].asset_service_generation, 0);
+    }
+
+    for (size_t i = 0; i < CONNECTION_COUNT; i++) {
+        socket_assets_connection_clear(&connections[i]);
+    }
+    free(connections);
+}
+END_TEST
+
+START_TEST(test_socket_asset_byte_budget_tracks_processing_rate) {
+    long saved_max_time = max_time;
+    int saved_multiplier = max_time_multiplier;
+
+    max_time = 125000;
+    max_time_multiplier = 1;
+    ck_assert_uint_eq(socket_assets_tick_byte_budget(), 1024U * 1024U);
+    max_time_multiplier = 2;
+    ck_assert_uint_eq(socket_assets_tick_byte_budget(), 512U * 1024U);
+    max_time = 250000;
+    ck_assert_uint_eq(socket_assets_tick_byte_budget(), 1024U * 1024U);
+    max_time = 2000000;
+    max_time_multiplier = 1;
+    ck_assert_uint_eq(socket_assets_tick_byte_budget(), 8U * 1024U * 1024U);
+    max_time = LONG_MAX;
+    ck_assert_uint_eq(socket_assets_tick_byte_budget(), 8U * 1024U * 1024U);
+
+    max_time = saved_max_time;
+    max_time_multiplier = saved_multiplier;
+}
+END_TEST
+
+#if OPENSSL_VERSION_NUMBER >= 0x30500000L
+START_TEST(test_socket_face_asset_borrowed_body_loopback) {
+    const uint8_t *expected = NULL;
+    const uint8_t *expected_digest = NULL;
+    uint32_t expected_size = 0;
+    ck_assert(face_get_asset(1, &expected, &expected_size, &expected_digest));
+
+    char directory[] = "/tmp/atrinik-server-face-stream-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(directory));
+    char identity[HUGE_BUF];
+    ck_assert_int_gt(snprintf(VS(identity), "%s/identity.pem", directory), 0);
+
+    asset_loopback_server_t server = {0};
+    atomic_init(&server.stop, false);
+    atomic_init(&server.accepted, false);
+    server.listener = socket_quic_server_create("127.0.0.1", 0, false, identity);
+    uint16_t port = 0;
+    char fingerprint[65];
+    ck_assert_ptr_nonnull(server.listener);
+    ck_assert(socket_local_port(server.listener, &port));
+    ck_assert_uint_ne(port, 0);
+    ck_assert(socket_certificate_sha256(server.listener, fingerprint));
+
+    pthread_t thread;
+    ck_assert_int_eq(pthread_create(&thread, NULL, asset_loopback_server_main, &server), 0);
+
+    socket_connect_failure_t failure = {0};
+    socket_t *client = socket_quic_client_create("127.0.0.1",
+                                                 port,
+                                                 fingerprint,
+                                                 NULL,
+                                                 NULL,
+                                                 NULL,
+                                                 SOCKET_CONNECTION_PREFERENCE_DIRECTORY,
+                                                 &failure);
+    uint64_t accept_deadline = datetime_monotonic_ms() + ASSET_LOOPBACK_TIMEOUT_MS;
+    uint8_t gameplay = 0;
+    size_t gameplay_written = 0;
+    while (client != NULL && gameplay_written == 0 && datetime_monotonic_ms() < accept_deadline) {
+        if (!socket_write(client, &gameplay, sizeof(gameplay), &gameplay_written)) {
+            break;
+        }
+        asset_loopback_progress(client, gameplay_written == 0, accept_deadline);
+    }
+    while (client != NULL && !atomic_load(&server.accepted) &&
+           datetime_monotonic_ms() < accept_deadline) {
+        asset_loopback_progress(client, false, accept_deadline);
+    }
+    bool success = client != NULL && gameplay_written == sizeof(gameplay) &&
+                   asset_loopback_receive_face(client, 1, expected, expected_size, expected_digest);
+    atomic_store(&server.stop, true);
+    ck_assert_int_eq(pthread_join(thread, NULL), 0);
+
+    if (client != NULL) {
+        socket_destroy(client);
+    }
+    socket_destroy(server.listener);
+    ck_assert_int_eq(unlink(identity), 0);
+    ck_assert_int_eq(rmdir(directory), 0);
+    ck_assert(!server.failed);
+    ck_assert(success);
+    ck_assert(server.served);
+    ck_assert_uint_gt(server.completion_service_calls, 0);
+    ck_assert_uint_le(server.completion_service_calls, ASSET_LOOPBACK_COMPLETION_CALL_MAX);
+}
+END_TEST
+#endif
 
 START_TEST(test_socket_stream_preface_round_trip_and_malformed) {
     uint8_t preface[SOCKET_STREAM_PREFACE_SIZE];
@@ -861,6 +1217,10 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_socket_asset_request_round_trip);
+    tcase_add_test(tc_core, test_socket_asset_face_path_round_trip_and_malformed);
+    tcase_add_test(tc_core, test_socket_face_asset_snapshot_is_bounded_and_authenticated);
+    tcase_add_test(tc_core, test_socket_asset_global_work_budget_rotates);
+    tcase_add_test(tc_core, test_socket_asset_byte_budget_tracks_processing_rate);
     tcase_add_test(tc_core, test_socket_stream_preface_round_trip_and_malformed);
     tcase_add_test(tc_core, test_socket_asset_request_rejects_malformed);
     tcase_add_test(tc_core, test_socket_asset_response_round_trip);
@@ -878,6 +1238,15 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_path_secret_create_atomic_no_replace);
     tcase_add_test(tc_core, test_path_secret_reader);
     tcase_add_test(tc_core, test_path_safe_relative);
+
+#if OPENSSL_VERSION_NUMBER >= 0x30500000L
+    TCase *tc_loopback = tcase_create("Loopback");
+    tcase_add_unchecked_fixture(tc_loopback, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_loopback, check_test_setup, check_test_teardown);
+    tcase_set_timeout(tc_loopback, 20.0);
+    tcase_add_test(tc_loopback, test_socket_face_asset_borrowed_body_loopback);
+    suite_add_tcase(s, tc_loopback);
+#endif
 
     return s;
 }

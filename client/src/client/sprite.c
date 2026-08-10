@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <image_codec.h>
 #include <wrapper.h>
 #include <surface_primitives.h>
 #include <toolkit/string.h>
@@ -104,14 +105,23 @@ sprite_struct *sprite_tryload_file(char *fname, uint32_t flag, SDL_IOStream *rwo
             return NULL;
         }
     } else {
-        bitmap = IMG_LoadPNG_IO(rwop);
+        bitmap = image_codec_load_png_io(rwop);
     }
+    if (bitmap == NULL) {
+        return NULL;
+    }
+
+    return sprite_from_surface(bitmap, flag, true);
+}
+
+sprite_struct *sprite_from_surface(SDL_Surface *bitmap, uint32_t flag, bool enable_rle) {
     if (bitmap == NULL) {
         return NULL;
     }
 
     sprite_struct *sprite = xcalloc(1, sizeof(*sprite));
     if (sprite == NULL) {
+        SDL_DestroySurface(bitmap);
         return NULL;
     }
 
@@ -129,7 +139,9 @@ sprite_struct *sprite_tryload_file(char *fname, uint32_t flag, SDL_IOStream *rwo
     }
 
     sprite_borders_get(bitmap, sprite);
-    SDL_SetSurfaceRLE(bitmap, true);
+    if (enable_rle) {
+        SDL_SetSurfaceRLE(bitmap, true);
+    }
     sprite->bitmap = bitmap;
 
     if (flag & (SURFACE_FLAG_DISPLAYFORMATALPHA | SURFACE_FLAG_DISPLAYFORMAT)) {

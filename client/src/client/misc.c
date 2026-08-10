@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <image_codec.h>
 #include <wrapper.h>
 
 /**
@@ -137,7 +138,7 @@ void screenshot_create(SDL_Surface *surface) {
              timebuf);
     mkdir_ensure(path);
 
-    if (IMG_SavePNG(surface, path)) {
+    if (image_codec_save_png(surface, path)) {
         draw_info_format(COLOR_GREEN, "Saved screenshot as %s successfully.", path);
     } else {
         draw_info_format(COLOR_RED, "Failed to write screenshot data (path: %s).", path);
