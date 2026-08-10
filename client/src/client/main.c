@@ -423,12 +423,7 @@ void clioption_settings_deinit(void) {
 
     free(clioption_settings.servers);
 
-    for (i = 0; i < clioption_settings.metaservers_num; i++) {
-        free(clioption_settings.metaservers[i].directory_url);
-        free(clioption_settings.metaservers[i].rendezvous_origin);
-    }
-
-    free(clioption_settings.metaservers);
+    client_metaserver_options_deinit(&clioption_settings.metaservers);
 
     for (i = 0; i < arraysize(clioption_settings.connect); i++) {
         free(clioption_settings.connect[i]);
@@ -504,14 +499,9 @@ static bool clioptions_option_metaserver(const char *arg, char **errmsg) {
                    "rendezvous origin");
         return false;
     }
-    clioption_settings.metaservers = xreallocarray(clioption_settings.metaservers,
-                                                   clioption_settings.metaservers_num + 1,
-                                                   sizeof(*clioption_settings.metaservers));
-    client_metaserver_endpoint_t *endpoint =
-        &clioption_settings.metaservers[clioption_settings.metaservers_num];
-    endpoint->directory_url = xstrdup(directory_url);
-    endpoint->rendezvous_origin = xstrdup(rendezvous_origin);
-    clioption_settings.metaservers_num++;
+    client_metaserver_options_add(&clioption_settings.metaservers,
+                                  directory_url,
+                                  rendezvous_origin);
     return true;
 }
 
@@ -611,10 +601,11 @@ static bool clioptions_option_stun_server(const char *arg, char **errmsg) {
 /**
  * Description of the --nometa command.
  */
-static const char *clioptions_option_nometa_desc = "Do not query the metaserver.";
+static const char *clioptions_option_nometa_desc =
+    "Disable metaserver access and discard previously configured endpoints.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_nometa(const char *arg, char **errmsg) {
-    metaserver_disable();
+    client_metaserver_options_disable(&clioption_settings.metaservers);
     return true;
 }
 

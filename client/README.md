@@ -152,6 +152,12 @@
  or traversal paths, and unsupported schemes fail closed. The client never
  derives either endpoint from meta.atrinik.org or another pseudo-base.
 
+ `--nometa` disables metaserver access and discards every endpoint loaded so
+ far. A later explicit `--metaserver="DIRECTORY RENDEZVOUS"` starts a new list
+ and re-enables access. This ordered form lets supervised or canary launches
+ select only their explicit pair without retaining the packaged production
+ endpoint as a fallback. A later `--nometa` disables the new list again.
+
  Protocol 4 requires one bounded, fresh, transactionally valid snapshot with at
  most 512 certificate-pinned servers. Address and Port are either both omitted
  for rendezvous-only bootstrap or both present as an explicit canonical DNS

@@ -30,6 +30,7 @@
 #ifndef CLIENT_H
 #define CLIENT_H
 
+#include <metaserver_options.h>
 #include <stun_config.h>
 
 /* How many skill types server supports/client will get sent to it.
@@ -107,12 +108,6 @@ typedef struct socket_command_struct {
     const char *name;
 } socket_command_struct;
 
-/** One trusted static-directory and dynamic-rendezvous endpoint pair. */
-typedef struct client_metaserver_endpoint {
-    char *directory_url;
-    char *rendezvous_origin;
-} client_metaserver_endpoint_t;
-
 /**
  * @defgroup SPELL_DESC_xxx Spell flags
  * Spell flags.
@@ -135,9 +130,7 @@ typedef struct clioption_settings_struct {
 
     size_t servers_num;
 
-    client_metaserver_endpoint_t *metaservers;
-
-    size_t metaservers_num;
+    client_metaserver_options_t metaservers;
 
     char *connect[4];
 
