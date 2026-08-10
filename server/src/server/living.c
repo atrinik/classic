@@ -769,6 +769,10 @@ void living_update_player(object *op) {
 
     int8_t old_glow = op->glow_radius;
     int8_t light = op->arch->clone.glow_radius;
+    uint32_t old_light_color = op->light_color;
+    uint32_t light_color = op->arch->clone.light_color;
+    object *light_source = NULL;
+    object *applied_light = NULL;
 
     double attacks[NROFATTACKS] = {0};
     double protect_bonus[NROFATTACKS] = {0};
@@ -811,10 +815,18 @@ void living_update_player(object *op) {
             continue;
         }
 
-        if (tmp->glow_radius > light) {
-            if (tmp->type != LIGHT_APPLY || QUERY_FLAG(tmp, FLAG_APPLIED)) {
-                light = tmp->glow_radius;
-            }
+        bool eligible_light = tmp->type != LIGHT_APPLY || QUERY_FLAG(tmp, FLAG_APPLIED);
+        if (eligible_light &&
+            (tmp->glow_radius > light ||
+             (tmp->glow_radius > 0 && tmp->glow_radius == light && light_source == NULL))) {
+            light = tmp->glow_radius;
+            light_color = tmp->light_color;
+            light_source = tmp;
+        }
+
+        if (tmp->type == LIGHT_APPLY && QUERY_FLAG(tmp, FLAG_APPLIED) &&
+            (applied_light == NULL || tmp->glow_radius > applied_light->glow_radius)) {
+            applied_light = tmp;
         }
 
         if (tmp->type == SKILL) {
@@ -950,7 +962,8 @@ void living_update_player(object *op) {
         } else if (tmp->type == SHIELD) {
             pl->equipment[PLAYER_EQUIP_SHIELD] = tmp;
         } else if (tmp->type == LIGHT_APPLY) {
-            pl->equipment[PLAYER_EQUIP_LIGHT] = tmp;
+            /* Selected after the scan so multiple applied lights use the same
+             * deterministic priority as the derived emitter. */
         } else if (tmp->type == RING && ring_left) {
             pl->equipment[PLAYER_EQUIP_RING_RIGHT] = tmp;
         } else if (tmp->type == SKILL_ITEM) {
@@ -973,6 +986,8 @@ void living_update_player(object *op) {
         }
     }
     FOR_INV_FINISH();
+
+    pl->equipment[PLAYER_EQUIP_LIGHT] = applied_light;
 
     for (int i = 0; i < PLAYER_EQUIP_MAX; i++) {
         if (pl->equipment[i] == NULL) {
@@ -1091,9 +1106,16 @@ void living_update_player(object *op) {
     }
 
     op->glow_radius = light;
+    op->light_color = light_color;
 
-    if (op->map != NULL && old_glow != light) {
-        adjust_light_source(op->map, op->x, op->y, light - old_glow);
+    if (op->map != NULL && !QUERY_FLAG(op, FLAG_REMOVED) &&
+        (old_glow != light || old_light_color != light_color)) {
+        if (old_glow != 0) {
+            adjust_light_source_color(op->map, op->x, op->y, old_glow, old_light_color, -1);
+        }
+        if (light != 0) {
+            adjust_light_source_color(op->map, op->x, op->y, light, light_color, 1);
+        }
     }
 
     op->stats.ac += op->level;

@@ -45,6 +45,7 @@
 #include <initialization.h>
 #include <animation.h>
 #include <account.h>
+#include <toolkit/map_protocol.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 #include <monster_data.h>
@@ -1252,6 +1253,20 @@ static bool map_append_support_height(packet_struct *packet,
     return true;
 }
 
+#define MAP2_LEVEL_CHUNKS_MAX (MAP2_LEVELS * MAP_CLIENT_X * MAP_CLIENT_Y)
+
+/** Frame one bounded same-depth tile stream for MAP2 packet assembly. */
+static packet_struct *map2_frame_level_chunk(int8_t depth, packet_struct *payload) {
+    HARD_ASSERT(payload != NULL);
+    HARD_ASSERT(map_protocol_level_payload_fits(payload->len));
+    packet_struct *framed = packet_new(0, payload->len + 5, 0);
+    packet_writer_write_int8(framed, depth);
+    packet_writer_write_uint32(framed, payload->len);
+    packet_writer_write_packet(framed, payload);
+    HARD_ASSERT(packet_writer_finish(framed));
+    return framed;
+}
+
 /** Draw the client map. */
 void draw_client_map2(object *pl) {
     static uint32_t map2_count = 0;
@@ -1264,11 +1279,16 @@ void draw_client_map2(object *pl) {
     uint16_t mask;
     int layer, raw_light[NUM_SUB_LAYERS], light_set[NUM_SUB_LAYERS];
     uint8_t light_level[NUM_SUB_LAYERS];
+    uint8_t light_rgb[NUM_SUB_LAYERS][3];
     int ext_flags, anim_num;
     int num_layers;
     object *tmp, *tmp2;
     uint8_t have_sound_ambient;
-    packet_struct *packet, *packet_header, *packet_levels, *packet_layer, *packet_sound;
+    packet_struct *packet, *packet_header, *packet_layer, *packet_sound;
+    packet_struct *level_packets[MAP2_LEVEL_CHUNKS_MAX] = {0};
+    int8_t level_depths[MAP2_LEVEL_CHUNKS_MAX] = {0};
+    int8_t present_depths[MAP2_LEVELS] = {0};
+    uint16_t level_packet_count = 0;
     int sub_layer, socket_layer;
     packet_writer_mark_t packet_save_buf;
 
@@ -1385,16 +1405,21 @@ void draw_client_map2(object *pl) {
     packet_writer_write_uint8(packet, pl->y);
     packet_debug_data(packet, 0, "Player's sub-layer");
     packet_writer_write_uint8(packet, pl->sub_layer);
+    packet_debug_data(packet, 0, "Number of continuation packets");
+    size_t continuation_count_pos = packet->len;
+    packet_writer_write_uint16(packet, 0);
 
     packet_header = packet;
-    packet_levels = packet_new(0, 0, 512);
-    uint8_t level_count = 0;
+    uint8_t present_level_count = 0;
     bool level_cutaway[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
     map_build_level_cutaway(pl, level_cutaway);
 
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         bool level_present = false;
         packet = packet_new(0, 0, 512);
+        /* Assembly may temporarily contain one complete tile beyond the wire
+         * chunk boundary before it is moved into the next chunk. */
+        packet_writer_set_limit(packet, MAP2_LEVEL_PAYLOAD_MAX * 2U);
 
         for (ay = CONTR(pl)->cs->mapy - 1, y = (pl->y + (CONTR(pl)->cs->mapy + 1) / 2) - 1;
              y >= pl->y - CONTR(pl)->cs->mapy_2;
@@ -1576,6 +1601,7 @@ void draw_client_map2(object *pl) {
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                     light_set[sub_layer] = 0;
                     light_level[sub_layer] = 0;
+                    memset(light_rgb[sub_layer], 0, sizeof(light_rgb[sub_layer]));
                 }
 
                 /* Initialize default values for some variables. */
@@ -1680,6 +1706,9 @@ void draw_client_map2(object *pl) {
                             }
 
                             light_level[sub_layer] = light_level_from_raw(raw_light[sub_layer]);
+                            light_levels_from_raw(GET_MAP_SPACE_PTR(tmp->map, tmp->x, tmp->y),
+                                                  raw_light[sub_layer],
+                                                  light_rgb[sub_layer]);
                         }
 
                         if (tmp != NULL && raw_light[sub_layer] <= 0) {
@@ -2078,6 +2107,29 @@ void draw_client_map2(object *pl) {
                     }
                 }
 
+                uint8_t light_rgb_bitmap = 0;
+                bool light_rgb_changed = false;
+                for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                    uint8_t resolved_light = light_set[sub_layer] ? light_level[sub_layer] : 0;
+                    uint8_t resolved_rgb[3] = {resolved_light, resolved_light, resolved_light};
+                    if (light_set[sub_layer]) {
+                        memcpy(resolved_rgb, light_rgb[sub_layer], sizeof(resolved_rgb));
+                    }
+
+                    if (resolved_rgb[0] != resolved_light || resolved_rgb[1] != resolved_light ||
+                        resolved_rgb[2] != resolved_light) {
+                        light_rgb_bitmap |= UINT8_C(1) << sub_layer;
+                    }
+
+                    if ((!mp->light_rgb_known[sub_layer] &&
+                         (light_rgb_bitmap & (UINT8_C(1) << sub_layer))) ||
+                        (mp->light_rgb_known[sub_layer] &&
+                         memcmp(mp->light_rgb[sub_layer], resolved_rgb, sizeof(resolved_rgb)) !=
+                             0)) {
+                        light_rgb_changed = true;
+                    }
+                }
+
                 /* Add the mask. Any mask changes should go above this line. */
                 packet_debug_data(packet, 0, "Tile %d,%d data, mask", ax, ay);
                 packet_writer_write_uint16(packet, mask);
@@ -2110,6 +2162,11 @@ void draw_client_map2(object *pl) {
                     mp->light_level[sub_layer] = light_set[sub_layer] ? light_level[sub_layer] : 0;
                     mp->light_known[sub_layer] = 1;
                     packet_writer_write_uint8(packet, mp->light_level[sub_layer]);
+
+                    if (!(light_rgb_bitmap & (UINT8_C(1) << sub_layer))) {
+                        memset(mp->light_rgb[sub_layer], mp->light_level[sub_layer], 3);
+                        mp->light_rgb_known[sub_layer] = 1;
+                    }
                 }
 
                 packet_debug_data(packet, 1, "Number of layers");
@@ -2141,9 +2198,39 @@ void draw_client_map2(object *pl) {
                     mp->anim_num = anim_num;
                 }
 
+                if (light_rgb_changed) {
+                    ext_flags |= MAP2_FLAG_EXT_LIGHT_RGB;
+                }
+
                 /* Add flags for this tile. */
                 packet_debug_data(packet, 1, "Extended tile flags");
                 packet_writer_write_uint8(packet, ext_flags);
+
+                /* RGB complete state precedes animation data. A zero bitmap
+                 * explicitly resets every sub-layer to its scalar level. */
+                if (ext_flags & MAP2_FLAG_EXT_LIGHT_RGB) {
+                    packet_debug_data(packet, 1, "Colored-light sub-layer bitmap");
+                    packet_writer_write_uint8(packet, light_rgb_bitmap);
+                    for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                        uint8_t resolved_light = light_set[sub_layer] ? light_level[sub_layer] : 0;
+                        uint8_t resolved_rgb[3] = {
+                            resolved_light,
+                            resolved_light,
+                            resolved_light,
+                        };
+                        if (light_set[sub_layer]) {
+                            memcpy(resolved_rgb, light_rgb[sub_layer], sizeof(resolved_rgb));
+                        }
+
+                        if (light_rgb_bitmap & (UINT8_C(1) << sub_layer)) {
+                            packet_writer_write_uint8(packet, resolved_rgb[0]);
+                            packet_writer_write_uint8(packet, resolved_rgb[1]);
+                            packet_writer_write_uint8(packet, resolved_rgb[2]);
+                        }
+                        memcpy(mp->light_rgb[sub_layer], resolved_rgb, sizeof(resolved_rgb));
+                        mp->light_rgb_known[sub_layer] = 1;
+                    }
+                }
 
                 /* Animation? Add its type and value. */
                 if (ext_flags & MAP2_FLAG_EXT_ANIM) {
@@ -2169,27 +2256,113 @@ void draw_client_map2(object *pl) {
                 if (!(mask & 0x3f) && !num_layers && !ext_flags) {
                     packet_writer_rollback(packet, &packet_save_buf);
                 }
+
+                if (!map_protocol_level_payload_fits(packet->len)) {
+                    size_t record_size = packet->len - packet_save_buf.pos;
+                    HARD_ASSERT(record_size <= MAP2_LEVEL_PAYLOAD_MAX);
+                    packet_struct *overflow = packet_new(0, record_size, 512);
+                    packet_writer_set_limit(overflow, MAP2_LEVEL_PAYLOAD_MAX * 2U);
+                    packet_writer_write_bytes(overflow,
+                                              packet->data + packet_save_buf.pos,
+                                              record_size);
+                    packet_writer_rollback(packet, &packet_save_buf);
+                    if (packet->len != 0) {
+                        HARD_ASSERT(level_packet_count < MAP2_LEVEL_CHUNKS_MAX);
+                        level_packets[level_packet_count] = map2_frame_level_chunk(depth, packet);
+                        level_depths[level_packet_count++] = depth;
+                    }
+                    packet_free(packet);
+                    packet = overflow;
+                }
             }
         }
 
         if (level_present) {
-            packet_debug_data(packet_levels, 0, "Map level depth");
-            packet_writer_write_int8(packet_levels, depth);
-            packet_debug_data(packet_levels, 0, "Map level payload size");
-            packet_writer_write_uint32(packet_levels, packet->len);
-            packet_writer_write_packet(packet_levels, packet);
-            level_count++;
+            present_depths[present_level_count++] = depth;
+            if (packet->len != 0) {
+                HARD_ASSERT(level_packet_count < MAP2_LEVEL_CHUNKS_MAX);
+                level_packets[level_packet_count] = map2_frame_level_chunk(depth, packet);
+                level_depths[level_packet_count++] = depth;
+            }
         }
 
         packet_free(packet);
     }
 
+    /* The first packet declares the complete level mask. Greedily include
+     * payloads while reserving five bytes for each remaining empty level
+     * descriptor; omitted payloads follow in bounded continuation packets. */
+    bool level_sent[MAP2_LEVEL_CHUNKS_MAX] = {0};
     packet_debug_data(packet_header, 0, "Number of map levels");
-    packet_writer_write_uint8(packet_header, level_count);
-    packet_writer_write_packet(packet_header, packet_levels);
-    packet_free(packet_levels);
+    packet_writer_write_uint8(packet_header, present_level_count);
+    for (uint8_t i = 0; i < present_level_count; i++) {
+        int chunk = -1;
+        for (uint16_t candidate = 0; candidate < level_packet_count; candidate++) {
+            if (!level_sent[candidate] && level_depths[candidate] == present_depths[i]) {
+                chunk = candidate;
+                break;
+            }
+        }
+        size_t reserved_descriptors = (size_t)(present_level_count - i - 1) * 5;
+        if (chunk >= 0 && packet_header->len + level_packets[chunk]->len + reserved_descriptors <=
+                              PACKET_PAYLOAD_MAX) {
+            packet_writer_write_packet(packet_header, level_packets[chunk]);
+            level_sent[chunk] = true;
+        } else {
+            packet_writer_write_int8(packet_header, present_depths[i]);
+            packet_writer_write_uint32(packet_header, 0);
+        }
+    }
+    packet_struct *continuation_packets[MAP2_LEVEL_CHUNKS_MAX] = {0};
+    uint16_t continuation_packet_count = 0;
+    for (;;) {
+        packet_struct *continuation = packet_new(CLIENT_CMD_MAP, 0, 512);
+        packet_enable_ndelay(continuation);
+        packet_writer_write_uint8(continuation, MAP_UPDATE_CMD_PARTIAL);
+        packet_writer_write_uint8(continuation, pl->x);
+        packet_writer_write_uint8(continuation, pl->y);
+        packet_writer_write_uint8(continuation, pl->sub_layer);
+        packet_writer_write_uint16(continuation, continuation_packet_count + 1);
+        size_t count_pos = continuation->len;
+        packet_writer_write_uint8(continuation, 0);
+        uint8_t continuation_count = 0;
+        uint16_t continuation_depths = 0;
+
+        for (uint16_t i = 0; i < level_packet_count; i++) {
+            uint16_t depth_bit = UINT16_C(1) << MAP2_DEPTH_INDEX(level_depths[i]);
+            if (level_sent[i] || (continuation_depths & depth_bit) ||
+                continuation->len + level_packets[i]->len > PACKET_PAYLOAD_MAX) {
+                continue;
+            }
+            packet_writer_write_packet(continuation, level_packets[i]);
+            level_sent[i] = true;
+            continuation_depths |= depth_bit;
+            continuation_count++;
+        }
+
+        if (continuation_count == 0) {
+            packet_free(continuation);
+            break;
+        }
+        continuation->data[count_pos] = continuation_count;
+        HARD_ASSERT(packet_writer_finish(continuation));
+        HARD_ASSERT(continuation_packet_count < MAP2_LEVEL_CHUNKS_MAX);
+        continuation_packets[continuation_packet_count++] = continuation;
+    }
+
+    packet_header->data[continuation_count_pos] = continuation_packet_count >> 8;
+    packet_header->data[continuation_count_pos + 1] = continuation_packet_count & UINT8_MAX;
+    HARD_ASSERT(packet_writer_finish(packet_header));
     bool connected = CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED;
     socket_send_packet(CONTR(pl)->cs, packet_header);
+    for (uint16_t i = 0; i < continuation_packet_count; i++) {
+        socket_send_packet(CONTR(pl)->cs, continuation_packets[i]);
+    }
+
+    for (uint16_t i = 0; i < level_packet_count; i++) {
+        HARD_ASSERT(level_sent[i]);
+        packet_free(level_packets[i]);
+    }
 
     if (connected) {
         send_game_time(CONTR(pl));

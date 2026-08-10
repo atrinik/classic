@@ -13,6 +13,7 @@
 #include <toolkit/packet.h>
 #include <arch.h>
 #include <initialization.h>
+#include <light.h>
 #include <los.h>
 #include <object.h>
 #include <player.h>
@@ -50,6 +51,27 @@ static packet_struct *queued_command_payload_find(socket_struct *cs, uint8_t typ
     return NULL;
 }
 
+static size_t validate_queued_map_payloads(socket_struct *cs) {
+    size_t count = 0;
+    for (packet_struct *packet = cs->packets; packet != NULL && packet->next != NULL;
+         packet = packet->next) {
+        if (packet->type != 0 || packet->len < 3 ||
+            packet->data[packet->len - 1] != CLIENT_CMD_MAP) {
+            continue;
+        }
+        packet_struct *payload = packet->next;
+        ck_assert_uint_le(payload->len, PACKET_PAYLOAD_MAX);
+        ck_assert_msg(map_protocol_validate(payload->data, payload->len, 0, cs->mapx, cs->mapy),
+                      "invalid queued MAP payload %zu: command=%" PRIu8 " length=%zu",
+                      count,
+                      payload->data[0],
+                      payload->len);
+        count++;
+        packet = payload;
+    }
+    return count;
+}
+
 static bool map_packet_level_size(const packet_struct *packet, int expected_depth, uint32_t *size) {
     packet_reader_t reader;
     packet_reader_init(&reader, packet->data, packet->len);
@@ -61,6 +83,7 @@ static bool map_packet_level_size(const packet_struct *packet, int expected_dept
     (void)packet_reader_read_uint8(&reader);
     (void)packet_reader_read_uint8(&reader);
     (void)packet_reader_read_uint8(&reader);
+    (void)packet_reader_read_uint16(&reader);
     uint8_t level_count = packet_reader_read_uint8(&reader);
 
     for (uint8_t level = 0; level < level_count; level++) {
@@ -906,6 +929,111 @@ START_TEST(test_incuna_unchanged_roof_level_remains_present) {
 }
 END_TEST
 
+START_TEST(test_map_rgb_cache_tracks_hue_changes_and_neutral_reset) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    request_move_player(&pl, map, 4, 4);
+    object *source = arch_get("letter");
+    source->x = pl->x;
+    source->y = pl->y;
+    source->glow_radius = 1;
+    source->light_color = UINT32_C(0xff0000);
+    source = object_insert_map(source, map, NULL, 0);
+    ck_assert_ptr_nonnull(source);
+
+    update_los(pl);
+    map_client_cache_clear(&CONTR(pl)->cs->lastmap);
+    socket_buffer_clear(CONTR(pl)->cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    ck_assert_uint_eq(validate_queued_map_payloads(CONTR(pl)->cs), 1);
+    MapCell *cell = map_client_cache_cell(&CONTR(pl)->cs->lastmap,
+                                          0,
+                                          CONTR(pl)->cs->mapx_2,
+                                          CONTR(pl)->cs->mapy_2,
+                                          false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_gt(cell->light_rgb[pl->sub_layer][0], cell->light_rgb[pl->sub_layer][2]);
+
+    adjust_light_source_color(map, source->x, source->y, 1, source->light_color, -1);
+    source->light_color = UINT32_C(0x0000ff);
+    adjust_light_source_color(map, source->x, source->y, 1, source->light_color, 1);
+    socket_buffer_clear(CONTR(pl)->cs);
+    draw_client_map2(pl);
+    ck_assert_uint_eq(validate_queued_map_payloads(CONTR(pl)->cs), 1);
+    ck_assert_uint_gt(cell->light_rgb[pl->sub_layer][2], cell->light_rgb[pl->sub_layer][0]);
+
+    adjust_light_source_color(map, source->x, source->y, 1, source->light_color, -1);
+    source->light_color = LIGHT_COLOR_WHITE;
+    adjust_light_source_color(map, source->x, source->y, 1, source->light_color, 1);
+    socket_buffer_clear(CONTR(pl)->cs);
+    draw_client_map2(pl);
+    ck_assert_uint_eq(validate_queued_map_payloads(CONTR(pl)->cs), 1);
+    ck_assert_uint_eq(cell->light_rgb[pl->sub_layer][0], cell->light_level[pl->sub_layer]);
+    ck_assert_uint_eq(cell->light_rgb[pl->sub_layer][1], cell->light_level[pl->sub_layer]);
+    ck_assert_uint_eq(cell->light_rgb[pl->sub_layer][2], cell->light_level[pl->sub_layer]);
+}
+END_TEST
+
+START_TEST(test_dense_colored_level_splits_at_tile_boundaries) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    mapstruct *map = get_empty_map(MAP_CLIENT_X, MAP_CLIENT_Y);
+    request_move_player(&pl, map, MAP_CLIENT_X / 2, MAP_CLIENT_Y / 2);
+
+    char glow[241];
+    memset(glow, 'a', sizeof(glow) - 1);
+    glow[sizeof(glow) - 1] = '\0';
+    for (int y = 0; y < MAP_CLIENT_Y; y++) {
+        for (int x = 0; x < MAP_CLIENT_X; x++) {
+            object *marker = arch_get("letter");
+            marker->x = x;
+            marker->y = y;
+            FREE_AND_COPY_HASH(marker->glow, glow);
+            marker->glow_speed = 1;
+            ck_assert_ptr_nonnull(object_insert_map(marker, map, NULL, 0));
+            MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
+            space->light_source_value = 40;
+            space->light_source_color[0] = INT64_C(40) * UINT8_MAX;
+            space->light_source_color_weight = INT64_C(40) * UINT8_MAX;
+        }
+    }
+
+    update_los(pl);
+    map_client_cache_clear(&CONTR(pl)->cs->lastmap);
+    socket_buffer_clear(CONTR(pl)->cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(CONTR(pl)->cs), 1);
+
+    packet_struct *first = queued_command_payload_find(CONTR(pl)->cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(first);
+    ck_assert_uint_eq(first->data[0], MAP_UPDATE_CMD_SAME);
+    ck_assert_uint_ge(first->len, 7);
+    uint16_t expected_continuations = ((uint16_t)first->data[4] << 8) | first->data[5];
+    ck_assert_uint_gt(expected_continuations, 0);
+    bool continuation_found = false;
+    uint16_t continuation_sequence = 0;
+    for (packet_struct *packet = CONTR(pl)->cs->packets; packet != NULL && packet->next != NULL;
+         packet = packet->next) {
+        if (packet->type == 0 && packet->len >= 3 &&
+            packet->data[packet->len - 1] == CLIENT_CMD_MAP &&
+            packet->next->data[0] == MAP_UPDATE_CMD_PARTIAL) {
+            continuation_found = true;
+            continuation_sequence++;
+            ck_assert_uint_ge(packet->next->len, 7);
+            ck_assert_uint_eq(((uint16_t)packet->next->data[4] << 8) | packet->next->data[5],
+                              continuation_sequence);
+            packet = packet->next;
+        }
+    }
+    ck_assert(continuation_found);
+    ck_assert_uint_eq(continuation_sequence, expected_continuations);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("request");
     TCase *tc_core = tcase_create("Core");
@@ -936,6 +1064,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_move_path_invalid_request_preserves_existing_queue);
     tcase_add_test(tc_core, test_move_path_new_blockage_stops_without_displacement);
     tcase_add_test(tc_core, test_incuna_unchanged_roof_level_remains_present);
+    tcase_add_test(tc_core, test_map_rgb_cache_tracks_hue_changes_and_neutral_reset);
+    tcase_add_test(tc_core, test_dense_colored_level_splits_at_tile_boundaries);
     return s;
 }
 

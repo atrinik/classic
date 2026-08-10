@@ -402,6 +402,7 @@ void socket_command_player(uint8_t *data, size_t len, size_t pos) {
         send_command("/party list");
     }
 
+    rich_presence_session_start();
     cpl.state = ST_PLAY;
 }
 
@@ -743,7 +744,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
 
     mapstat = packet_reader_read_uint8(&reader);
 
-    if (mapstat != MAP_UPDATE_CMD_SAME) {
+    if (mapstat != MAP_UPDATE_CMD_SAME && mapstat != MAP_UPDATE_CMD_PARTIAL) {
         char mapname[HUGE_BUF], bg_music[HUGE_BUF], weather[MAX_BUF], region_name[MAX_BUF],
             region_longname[MAX_BUF], mappath[HUGE_BUF];
         uint8_t height_diff;
@@ -796,22 +797,19 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         ypos = packet_reader_read_uint8(&reader);
 
         /* Have we moved? */
-        if ((xpos - mx || ypos - my)) {
+        if (mapstat == MAP_UPDATE_CMD_SAME && (xpos - mx || ypos - my)) {
             display_mapscroll(xpos - mx, ypos - my, 0, 0);
             map_play_footstep();
         }
 
-        mx = xpos;
-        my = ypos;
+        if (mapstat == MAP_UPDATE_CMD_SAME) {
+            mx = xpos;
+            my = ypos;
+        }
     }
 
-    MapData.posx = xpos;
-    MapData.posy = ypos;
-    MapData.player_sub_layer = packet_reader_read_uint8(&reader);
-    def_map = region_map_find_map(MapData.region_map, MapData.map_path);
-
-    map_get_real_coords(&rx, &ry);
-    region_map_fow_need_update = false;
+    uint8_t player_sub_layer = packet_reader_read_uint8(&reader);
+    uint16_t continuation_marker = packet_reader_read_uint16(&reader);
 
     if (pos >= len) {
         LOG(PACKET, "Map packet has no level count.");
@@ -823,6 +821,38 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         LOG(PACKET, "Map packet contains too many levels: %" PRIu8 ".", level_count);
         return;
     }
+
+    uint16_t incoming_level_mask = 0;
+    size_t scan_pos = pos;
+    packet_reader_t scan;
+    packet_reader_init_cursor(&scan, data, len, &scan_pos);
+    for (uint8_t level_num = 0; level_num < level_count; level_num++) {
+        int depth = packet_reader_read_int8(&scan);
+        uint32_t level_size = packet_reader_read_uint32(&scan);
+        incoming_level_mask |= UINT16_C(1) << MAP2_DEPTH_INDEX(depth);
+        packet_reader_skip(&scan, level_size);
+    }
+    if (!packet_reader_finish(&scan)) {
+        LOG(PACKET, "Could not inspect validated map level blocks.");
+        return;
+    }
+    if (mapstat == MAP_UPDATE_CMD_PARTIAL &&
+        !map_protocol_continuation_matches(&MapData.continuation,
+                                           continuation_marker,
+                                           xpos,
+                                           ypos,
+                                           player_sub_layer,
+                                           incoming_level_mask)) {
+        LOG(PACKET, "Rejected unsolicited, mismatched, or out-of-sequence map continuation.");
+        return;
+    }
+
+    MapData.posx = xpos;
+    MapData.posy = ypos;
+    MapData.player_sub_layer = player_sub_layer;
+    def_map = region_map_find_map(MapData.region_map, MapData.map_path);
+    map_get_real_coords(&rx, &ry);
+    region_map_fow_need_update = false;
 
     uint16_t level_mask = 0;
     size_t packet_end = len;
@@ -1097,6 +1127,21 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
             /* Get tile flags. */
             ext_flags = packet_reader_read_uint8(&reader);
 
+            if (ext_flags & MAP2_FLAG_EXT_LIGHT_RGB) {
+                uint8_t bitmap = packet_reader_read_uint8(&reader);
+                uint8_t rgb[NUM_SUB_LAYERS][3] = {{0}};
+
+                for (uint8_t sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                    if (!(bitmap & (UINT8_C(1) << sub_layer))) {
+                        continue;
+                    }
+                    for (size_t channel = 0; channel < 3; channel++) {
+                        rgb[sub_layer][channel] = packet_reader_read_uint8(&reader);
+                    }
+                }
+                map_set_light_rgb(x, y, bitmap, rgb);
+            }
+
             /* Animation? */
             if (ext_flags & MAP2_FLAG_EXT_ANIM) {
                 uint8_t anim_num = packet_reader_read_uint8(&reader);
@@ -1138,7 +1183,17 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         return;
     }
 
-    map_set_level_mask(level_mask);
+    if (mapstat == MAP_UPDATE_CMD_PARTIAL) {
+        map_protocol_continuation_advance(&MapData.continuation);
+    } else {
+        map_set_level_mask(level_mask);
+        map_protocol_continuation_begin(&MapData.continuation,
+                                        continuation_marker,
+                                        xpos,
+                                        ypos,
+                                        player_sub_layer,
+                                        level_mask);
+    }
 
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         if ((level_mask & (UINT16_C(1) << MAP2_DEPTH_INDEX(depth))) &&

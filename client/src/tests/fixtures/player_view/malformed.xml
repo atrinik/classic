@@ -3,7 +3,7 @@
              renderer="software"
              input-root="../../../.."
              settings="data/settings.txt"
-             settings-sha256="b9b6f48ed15c7df1e389b6d23cba6595998fb290c8d258d33a9d4eac98f1bb0e"
+             settings-sha256="6ee840ff8e575e938f35d5a25622ee5867b0f45511f9a1734afddce9f3225c42"
              archdef="data/archdef.dat"
              archdef-sha256="977ce63e38f4795545f42bd2f4a9c62bd38fcdb4cfde7cb7fe3c2cd9fe73983e"
              snapshot="src/tests/fixtures/player_view/malformed.map2.hex"

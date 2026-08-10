@@ -22,6 +22,13 @@ python3 tools/dependencies.py verify
 mkdir -p "${output_directory}"
 
 dependency_arguments=()
+discord_config_file=${ATRINIK_DISCORD_APPLICATION_ID_FILE:-}
+if [[ -n ${ATRINIK_DISCORD_APPLICATION_ID_FILE:-} ]]; then
+  if [[ ! -f ${ATRINIK_DISCORD_APPLICATION_ID_FILE} ]]; then
+    echo "ATRINIK_DISCORD_APPLICATION_ID_FILE is not a regular file" >&2
+    exit 1
+  fi
+fi
 repository_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
 if [[ -n ${repository_root} && -f ${repository_root}/protocol/CMakeLists.txt &&
     -f ${repository_root}/libatrinik/CMakeLists.txt ]]; then
@@ -34,11 +41,12 @@ fi
 "${mxe_cmake}" -S . -B build/windows-release -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE="${MXE_TOOLCHAIN_FILE}" \
-  -DBUILD_TESTING=OFF \
+  -DBUILD_TESTING=ON \
   -DPACKAGE_TYPE=zip \
   -DPACKAGE_VERSION="${version}" \
   -DATRINIK_WINDOWS_RUNTIME_DIR="${MXE_RUNTIME_DIR}" \
   -DATRINIK_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+  "-DATRINIK_DISCORD_APPLICATION_ID_FILE=${discord_config_file}" \
   "${dependency_arguments[@]}"
 cmake --build build/windows-release --parallel "$(nproc)"
 cpack --config build/windows-release/CPackConfig.cmake \

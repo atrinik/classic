@@ -595,6 +595,10 @@ bool object_can_merge(object *ob1, object *ob2) {
         return false;
     }
 
+    if (ob1->light_color != ob2->light_color) {
+        return false;
+    }
+
     /* Do not merge arrows with different owners. */
     if (ob1->type == ARROW && ob2->type == ARROW && ob1->attacked_by_count != 0 &&
         ob2->attacked_by_count != 0 && ob1->attacked_by_count != ob2->attacked_by_count) {
@@ -1209,6 +1213,7 @@ object *object_get(void) {
 
     object *new_obj = mempool_get(pool_object);
     SET_FLAG(new_obj, FLAG_REMOVED);
+    new_obj->light_color = LIGHT_COLOR_WHITE;
 
     static New_Face *blank_face = NULL;
     if (blank_face == NULL) {
@@ -1265,13 +1270,10 @@ void object_update_speed(object *op) {
         return;
     }
 
-    /* These are special case objects - they have speed set, but should not be
-     * put on the active list. */
-    if (op->type == SPAWN_POINT_MOB) {
-        return;
-    }
-
-    if (FABS(op->speed) > MIN_ACTIVE_SPEED) {
+    /* Spawn point templates can have speed, but must never be added to the
+     * active list. Still let the removal path below unlink a template that
+     * was already active before its type changed. */
+    if (op->type != SPAWN_POINT_MOB && FABS(op->speed) > MIN_ACTIVE_SPEED) {
         /* If already on active list, don't do anything */
         if (op->active_next || op->active_prev || op == active_objects) {
             return;
@@ -1342,7 +1344,7 @@ void object_update(object *op, int action) {
         msp->update_tile++;
 
         if (op->glow_radius != 0) {
-            adjust_light_source(op->map, op->x, op->y, op->glow_radius);
+            adjust_light_source_color(op->map, op->x, op->y, op->glow_radius, op->light_color, 1);
         }
 
         if (QUERY_FLAG(op, FLAG_NO_PASS) || QUERY_FLAG(op, FLAG_PASS_THRU) ||
@@ -1417,7 +1419,7 @@ void object_update(object *op, int action) {
         msp->update_tile++;
 
         if (op->glow_radius != 0) {
-            adjust_light_source(op->map, op->x, op->y, -op->glow_radius);
+            adjust_light_source_color(op->map, op->x, op->y, op->glow_radius, op->light_color, -1);
         }
 
         /* We must rebuild the flags when one of these flags is touched from our
@@ -1629,6 +1631,8 @@ void object_destroy_inv(object *op) {
 void object_destroy(object *op) {
     HARD_ASSERT(op != NULL);
 
+    bool was_spawn_point_mob = op->type == SPAWN_POINT_MOB;
+
     if (!QUERY_FLAG(op, FLAG_REMOVED)) {
         char buf[HUGE_BUF];
 
@@ -1654,6 +1658,13 @@ void object_destroy(object *op) {
     /* Remove object from the active list. */
     op->speed = 0.0;
     object_update_speed(op);
+
+    /* A spawn-point template linked before its type changed must not reach
+     * the pool with any active-list linkage of its own still intact. */
+    SOFT_ASSERT(!was_spawn_point_mob ||
+                    (op != active_objects && op->active_next == NULL && op->active_prev == NULL),
+                "Destroyed spawn-point template remains linked to the active object list: %s",
+                object_get_str(op));
 
     if (op->head == NULL) {
         object_cb_deinit(op);
@@ -3193,6 +3204,16 @@ bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool
 
     op->x = x;
     op->y = y;
+
+    /* Player state can be changed by login and map-leave plugins while the
+     * player is off-map. Rebuild it at this lifecycle boundary, after those
+     * events and while the removed guard still protects the old map. Routine
+     * one-tile movement uses object_insert_map() directly and avoids this
+     * full reconciliation. */
+    if (op->type == PLAYER) {
+        living_update_player(op);
+    }
+
     op = object_insert_map(op, m, NULL, 0);
     if (op == NULL) {
         return false;

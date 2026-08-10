@@ -15,3 +15,12 @@ archives recorded in `cmake/dependencies.lock.json` and verifies their SHA-256
 digests. Use CMake's `FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL` and
 `FETCHCONTENT_SOURCE_DIR_LIBATRINIK` overrides for coordinated local work.
 
+Discord Rich Presence is optional. A build without an Application ID remains
+fully functional and opens no Discord IPC endpoint. For an installed/package
+build, pass a one-line numeric file with
+`-DATRINIK_DISCORD_APPLICATION_ID_FILE=/absolute/path/to/file`; CMake validates
+and installs it as `data/discord-application-id` without compiling the value
+into `atrinik`. Local source runs may instead set the public, non-secret
+`ATRINIK_DISCORD_APPLICATION_ID` environment variable or create the ignored
+`data/discord-application-id` file. Never supply a Discord Client Secret,
+OAuth token, bot token, authorization code, or user credential.

@@ -98,6 +98,8 @@ enum {
     OPT_TEXT_WINDOW_TRANSPARENCY,
     /** Whether to use the system cursor. */
     OPT_SYSTEM_CURSOR,
+    /** Discord Rich Presence privacy tier. */
+    OPT_DISCORD_PRESENCE,
 
     /** Internal: stores the current resolution width. */
     OPT_RESOLUTION_X,

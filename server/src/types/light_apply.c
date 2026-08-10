@@ -64,7 +64,7 @@ static int apply_func(object *op, object *applier, int aflags) {
         }
 
         if (op->map != NULL) {
-            adjust_light_source(op->map, op->x, op->y, -op->glow_radius);
+            adjust_light_source_color(op->map, op->x, op->y, op->glow_radius, op->light_color, -1);
             object_update(op, UP_OBJ_FACE);
         }
 
@@ -94,7 +94,7 @@ static int apply_func(object *op, object *applier, int aflags) {
         op->glow_radius = op->last_sp;
 
         if (op->map != NULL) {
-            adjust_light_source(op->map, op->x, op->y, op->glow_radius);
+            adjust_light_source_color(op->map, op->x, op->y, op->glow_radius, op->light_color, 1);
             object_update(op, UP_OBJ_FACE);
         }
 

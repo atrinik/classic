@@ -32,7 +32,29 @@
 #include <loader.h>
 #include <object.h>
 #include <object_methods.h>
+#include <swap.h>
 #include <toolkit/path.h>
+
+static bool active_list_contains_at(const object *needle, const char *phase) {
+    size_t visited = 0;
+    const object *previous = NULL;
+
+    for (const object *tmp = active_objects; tmp != NULL; tmp = tmp->active_next) {
+        ck_assert_uint_lt(visited++, 100000);
+        ck_assert_msg(!OBJECT_FREE(tmp), "free active object during %s", phase);
+        ck_assert_msg(tmp->active_prev == previous, "bad active backlink during %s", phase);
+
+        if (tmp == needle) {
+            return true;
+        }
+
+        previous = tmp;
+    }
+
+    return false;
+}
+
+#define active_list_contains(needle) active_list_contains_at((needle), __func__)
 
 START_TEST(test_object_can_merge) {
     object *ob1, *ob2;
@@ -45,6 +67,10 @@ START_TEST(test_object_can_merge) {
     object_destroy(ob2);
     ob2 = arch_get("bolt");
     ob2->type++;
+    ck_assert(!object_can_merge(ob1, ob2));
+    object_destroy(ob2);
+    ob2 = arch_get("bolt");
+    ob2->light_color = UINT32_C(0xff0000);
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob2);
     ob2 = arch_get("bolt");
@@ -364,7 +390,25 @@ START_TEST(test_object_load_str) {
     ob = object_load_str("arch sack\nend\n");
     ck_assert_ptr_ne(ob, NULL);
     ck_assert_str_eq(ob->arch->name, "sack");
+    ck_assert_uint_eq(ob->light_color, UINT32_C(0xffffff));
     object_destroy(ob);
+
+    ob = object_load_str("arch sack\nlight_color 12aBcF\nend\n");
+    ck_assert_ptr_ne(ob, NULL);
+    ck_assert_uint_eq(ob->light_color, UINT32_C(0x12abcf));
+    StringBuffer *sb = stringbuffer_new();
+    object_dump_rec(ob, sb);
+    char *dump = stringbuffer_finish(sb);
+    ck_assert_ptr_ne(strstr(dump, "light_color 12abcf\n"), NULL);
+    free(dump);
+    object *clone = object_clone(ob);
+    ck_assert_uint_eq(clone->light_color, ob->light_color);
+    object_destroy(clone);
+    object_destroy(ob);
+
+    ck_assert_ptr_eq(object_load_str("arch sack\nlight_color fffff\nend\n"), NULL);
+    ck_assert_ptr_eq(object_load_str("arch sack\nlight_color #ffffff\nend\n"), NULL);
+    ck_assert_ptr_eq(object_load_str("arch sack\nlight_color fffffg\nend\n"), NULL);
 
     ob = object_load_str("arch sack\nname magic sack\nweight 129\nend\n");
     ck_assert_ptr_ne(ob, NULL);
@@ -577,6 +621,127 @@ START_TEST(test_OBJECT_DESTROYED) {
 }
 END_TEST
 
+START_TEST(test_object_map_reload_preserves_active_list) {
+    ck_assert_ptr_eq(active_objects, NULL);
+
+    object *player = arch_get("sack");
+    player->speed = 1.0f;
+    object_update_speed(player);
+    ck_assert_ptr_eq(active_objects, player);
+
+    for (int cycle = 0; cycle < 3; cycle++) {
+        mapstruct *map = get_empty_map(1, 1);
+        ck_assert_ptr_ne(map, NULL);
+
+        object *spawn = object_load_str("arch spawn_point\n"
+                                        "arch lom_lobon\n"
+                                        "type 83\n"
+                                        "arch ability_firestorm\n"
+                                        "end\n"
+                                        "arch ability_firestorm\n"
+                                        "end\n"
+                                        "end\n"
+                                        "end\n");
+        ck_assert_ptr_ne(spawn, NULL);
+        ck_assert_ptr_ne(spawn->inv, NULL);
+        ck_assert_int_eq(spawn->inv->type, SPAWN_POINT_MOB);
+        ck_assert_ptr_ne(spawn->inv->inv, NULL);
+        ck_assert_ptr_ne(spawn->inv->inv->below, NULL);
+
+        spawn->x = 0;
+        spawn->y = 0;
+        ck_assert_ptr_eq(object_insert_map(spawn, map, NULL, 0), spawn);
+
+        object *template = spawn->inv;
+        object *template_slot = template;
+        template->type = MONSTER;
+        object_update_speed(template);
+        ck_assert_ptr_eq(active_objects, template);
+        ck_assert_ptr_eq(template->active_next, spawn);
+
+        /* Reproduce a template whose type changed after it became active.
+         * Map destruction must unlink it despite its non-zero speed. */
+        template->type = SPAWN_POINT_MOB;
+        delete_map(map);
+
+        ck_assert_ptr_eq(active_objects, player);
+        ck_assert_ptr_eq(player->active_prev, NULL);
+        ck_assert(!active_list_contains(template_slot));
+
+        object *claimed[8];
+        size_t claimed_count = 0;
+        bool template_reused = false;
+
+        while (claimed_count < arraysize(claimed)) {
+            claimed[claimed_count] = object_get();
+            template_reused = claimed[claimed_count] == template_slot;
+            claimed_count++;
+
+            ck_assert_ptr_eq(active_objects, player);
+            ck_assert(!active_list_contains(template_slot));
+
+            if (template_reused) {
+                break;
+            }
+        }
+
+        ck_assert(template_reused);
+        ck_assert_ptr_eq(claimed[claimed_count - 1]->active_next, NULL);
+        ck_assert_ptr_eq(claimed[claimed_count - 1]->active_prev, NULL);
+
+        while (claimed_count > 0) {
+            object_destroy(claimed[--claimed_count]);
+        }
+    }
+
+    object_destroy(player);
+    ck_assert_ptr_eq(active_objects, NULL);
+}
+END_TEST
+
+START_TEST(test_underground_city_map_reloads_preserve_active_list) {
+    static const char *path =
+        "/shattered_islands/strakewood_island/underground_city/underground_city_5_3_-1";
+
+    ck_assert_ptr_eq(active_objects, NULL);
+
+    object *player = arch_get("sack");
+    player->speed = 1.0f;
+    object_update_speed(player);
+
+    for (int cycle = 0; cycle < 3; cycle++) {
+        mapstruct *map = ready_map_name(path, NULL, cycle == 0 ? MAP_FLUSH : 0);
+        ck_assert_ptr_ne(map, NULL);
+
+        size_t matching_templates = 0;
+        for (int x = 0; x < MAP_WIDTH(map); x++) {
+            for (int y = 0; y < MAP_HEIGHT(map); y++) {
+                for (object *spawn = GET_MAP_OB(map, x, y); spawn != NULL; spawn = spawn->above) {
+                    if (spawn->type != SPAWN_POINT || spawn->inv == NULL ||
+                        spawn->inv->type != SPAWN_POINT_MOB || spawn->inv->inv == NULL ||
+                        spawn->inv->inv->below == NULL) {
+                        continue;
+                    }
+
+                    matching_templates++;
+                    ck_assert(!active_list_contains_at(spawn->inv, "loaded-map template scan"));
+                }
+            }
+        }
+
+        ck_assert_uint_gt(matching_templates, 0);
+        ck_assert(active_list_contains_at(player, "before map swap"));
+
+        swap_map(map, 1);
+
+        ck_assert(active_list_contains_at(player, "after map swap"));
+    }
+
+    object_destroy(player);
+    ck_assert_ptr_eq(active_objects, NULL);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("object");
     TCase *tc_core = tcase_create("Core");
@@ -606,6 +771,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_object_create_singularity);
     tcase_add_test(tc_core, test_invalid_object_type_uses_base_method_fallback);
     tcase_add_test(tc_core, test_OBJECT_DESTROYED);
+    tcase_add_test(tc_core, test_object_map_reload_preserves_active_list);
+    tcase_add_test(tc_core, test_underground_city_map_reloads_preserve_active_list);
 
     return s;
 }

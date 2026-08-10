@@ -14,8 +14,30 @@ This design contract applies when changing classic server lighting,
   use `MapSpace.light_source_value` so masks can rebuild when an opaque object
   or floor changes. Apply lighting through `map_get_darkness()` rather than
   reading either component alone.
+- Positive sources additionally accumulate authored sRGB `RRGGBB` components
+  as signed 64-bit fixed-point values scaled by 255. The component sums define
+  a weighted tint which is applied to the effective positive-source scalar,
+  tracked separately from the legacy net scalar so negative sources subtract
+  equally from every channel. The positive scalar retains the same-cell grouping
+  cap, so co-located high-radius emitters cannot overstate the scalar authority.
+  Integer multiplication/division rounds to nearest without overflow, then
+  `light_level_from_raw()` is applied once.
+  Values below zero and above the brightest anchor saturate there. This makes
+  insertion order irrelevant, keeps capped equal red/blue or red/green sources
+  magenta or yellow, and makes `ffffff` reproduce the scalar sample exactly.
+  Ambient, floors, world light, special vision, and `tli` stay neutral;
+  negative sources affect only the scalar raw light and are therefore
+  achromatic even if an object carries a non-white authored color.
 - Map loading defers local source masks until floors/blockers load, then restores
   sources from loaded neighboring levels. Keep load/unload symmetric.
+- A player's emitter is derived atomically from one source. Eligible inventory
+  emitters are compared by `glow_radius`; the strongest wins, ties use the
+  first object in canonical inventory order, and an inventory object wins a
+  tie with the player archetype. Applyable lights are eligible only while
+  applied. The selected object's radius and color are always copied together.
+  Player saves omit this derived pair and reconstruct it from the archetype and
+  saved inventory before map insertion, so reconnects and transfers cannot
+  persist or briefly display a stale tint.
 - Test buildings from outside and inside. Upper floors may own lights, while an
   exterior facade still receives nearby base-map lighting through unobstructed
   3D rays when viewed outdoors.
@@ -62,6 +84,27 @@ This design contract applies when changing classic server lighting,
   withholding actors, items, effects, and interiors.
 - Connected UP/DOWN transitions include signed depth offsets so client/server
   shift existing caches rather than forcing a full refresh.
+- Protocol v1075 retains scalar light bytes and adds
+  `MAP2_FLAG_EXT_LIGHT_RGB` before the animation tail. It carries a complete
+  seven-bit sub-layer bitmap followed by ascending RGB888 triples. A zero
+  bitmap explicitly resets all sub-layers to their scalar samples. Scalar and
+  RGB caches are independent, so hue-only changes and neutral resets emit.
+- The first update declares the complete depth set. If its framed level blocks
+  would exceed the 65,534-byte game payload, it reserves zero-length blocks for
+  omitted depths and sends their complete payloads in deterministic
+  `MAP_UPDATE_CMD_PARTIAL` continuation packets. Oversized individual depths
+  split only between complete tile records and may repeat their depth in later
+  continuations. After the player sub-layer, the full header carries a
+  big-endian `uint16` continuation count; each partial carries its one-based
+  sequence number in the same position. The client accepts only the exact next
+  sequence with matching player coordinates, sub-layer, and a subset of the
+  full update's declared depths, and clears pending state after the final
+  partial or any cache reset. Continuations never scroll or replace the active
+  depth mask, and every packet is independently preflighted before client state
+  mutation.
+  One 21x21 depth gains at most 9,702 RGB bytes; a dense regression fixture
+  forces a previously valid level across the boundary and verifies that every
+  resulting packet remains within and passes the shared preflight.
 - Do not add authored building/balcony/overlook flags or make serialization
   borrow/zoom magic-mirror targets.
 

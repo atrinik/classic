@@ -325,6 +325,12 @@ static fields_struct fields[] = {
      0,
      0,
      "How much light the object emits.; int"},
+    {"light_color",
+     FIELDTYPE_UINT32,
+     offsetof(object, light_color),
+     0,
+     0,
+     "World-light tint encoded as 0xRRGGBB.; int"},
     {"move_status",
      FIELDTYPE_INT8,
      offsetof(object, move_status),
@@ -2702,8 +2708,13 @@ static PyObject *Object_GetAttribute(Atrinik_Object *obj, void *context) {
 static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *context) {
     fields_struct *field = context;
     int ret;
+    int old_glow_radius;
+    uint32_t old_light_color;
 
     OBJEXISTCHECK_INT(obj);
+
+    old_glow_radius = obj->obj->glow_radius;
+    old_light_color = obj->obj->light_color;
 
     if ((field->flags & FIELDFLAG_PLAYER_READONLY) && obj->obj->type == PLAYER) {
         INTRAISE("Trying to modify a field that is read-only for player "
@@ -2712,6 +2723,18 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
 
     if (field->offset == offsetof(object, type) && obj->obj->custom_attrset != NULL) {
         INTRAISE("Cannot modify type of object that has custom_attrset.");
+    }
+
+    if (field->offset == offsetof(object, light_color)) {
+        if (!PyInt_Check(value)) {
+            INTRAISE("Illegal value for light_color field.");
+        }
+        unsigned long color = PyLong_AsUnsignedLong(value);
+        if (PyErr_Occurred() || color > UINT32_C(0xffffff)) {
+            PyErr_SetString(PyExc_OverflowError,
+                            "light_color must be between 0x000000 and 0xffffff.");
+            return -1;
+        }
     }
 
     if (obj->obj->map != NULL && (field->offset == offsetof(object, layer) ||
@@ -2732,6 +2755,35 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
 
     if (ret == -1) {
         return -1;
+    }
+
+    if (obj->obj->map != NULL &&
+        (field->offset == offsetof(object, glow_radius) ||
+         field->offset == offsetof(object, light_color)) &&
+        (old_glow_radius != obj->obj->glow_radius || old_light_color != obj->obj->light_color)) {
+        if (old_glow_radius != 0) {
+            hooks->adjust_light_source_color(obj->obj->map,
+                                             obj->obj->x,
+                                             obj->obj->y,
+                                             old_glow_radius,
+                                             old_light_color,
+                                             -1);
+        }
+        if (obj->obj->glow_radius != 0) {
+            hooks->adjust_light_source_color(obj->obj->map,
+                                             obj->obj->x,
+                                             obj->obj->y,
+                                             obj->obj->glow_radius,
+                                             obj->obj->light_color,
+                                             1);
+        }
+    }
+    if (obj->obj->env != NULL && (field->offset == offsetof(object, glow_radius) ||
+                                  field->offset == offsetof(object, light_color))) {
+        object *env = hooks->object_get_env(obj->obj);
+        if (env != obj->obj && IS_LIVE(env) && env->map != NULL) {
+            hooks->living_update(env);
+        }
     }
 
     if (field->offset == offsetof(object, type) && obj->obj->type == PLAYER) {
@@ -2758,20 +2810,7 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
          * we must remove it from the active list, as spawn point monsters
          * are not allowed to be on the list. */
         if (obj->obj->type == SPAWN_POINT_MOB) {
-            float old_speed;
-
-            /* Store original speed, as in order to actually remove the object
-             * from the active list, we need to set its speed to 0 and make it
-             * a non-SPAWN_POINT_MOB type. */
-            old_speed = obj->obj->speed;
-            obj->obj->speed = 0.0f;
-            obj->obj->type = MONSTER;
-            /* Remove it from the active list. */
             hooks->object_update_speed(obj->obj);
-
-            /* Restore original speed and type info. */
-            obj->obj->speed = old_speed;
-            obj->obj->type = SPAWN_POINT_MOB;
         }
     } else if (field->offset == offsetof(object, direction)) {
         /* Direction. */

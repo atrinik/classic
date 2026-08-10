@@ -10,6 +10,7 @@ set(SOURCES
 	src/client/commands.c
 	src/client/connection_failure.c
 	src/client/connection_preferences.c
+	src/client/discord_rpc.c
 	src/client/image.c
 	src/client/image_codec.c
 	src/client/item.c
@@ -31,6 +32,8 @@ set(SOURCES
 	src/client/player.c
 	src/client/player_view.c
 	src/client/region_map.c
+	src/client/rich_presence.c
+	src/client/rich_presence_policy.c
 	src/client/resources.c
 	src/client/server_files.c
 	src/client/server_settings.c
