@@ -1270,13 +1270,10 @@ void object_update_speed(object *op) {
         return;
     }
 
-    /* These are special case objects - they have speed set, but should not be
-     * put on the active list. */
-    if (op->type == SPAWN_POINT_MOB) {
-        return;
-    }
-
-    if (FABS(op->speed) > MIN_ACTIVE_SPEED) {
+    /* Spawn point templates can have speed, but must never be added to the
+     * active list. Still let the removal path below unlink a template that
+     * was already active before its type changed. */
+    if (op->type != SPAWN_POINT_MOB && FABS(op->speed) > MIN_ACTIVE_SPEED) {
         /* If already on active list, don't do anything */
         if (op->active_next || op->active_prev || op == active_objects) {
             return;
@@ -1634,6 +1631,8 @@ void object_destroy_inv(object *op) {
 void object_destroy(object *op) {
     HARD_ASSERT(op != NULL);
 
+    bool was_spawn_point_mob = op->type == SPAWN_POINT_MOB;
+
     if (!QUERY_FLAG(op, FLAG_REMOVED)) {
         char buf[HUGE_BUF];
 
@@ -1659,6 +1658,13 @@ void object_destroy(object *op) {
     /* Remove object from the active list. */
     op->speed = 0.0;
     object_update_speed(op);
+
+    /* A spawn-point template linked before its type changed must not reach
+     * the pool with any active-list linkage of its own still intact. */
+    SOFT_ASSERT(!was_spawn_point_mob ||
+                    (op != active_objects && op->active_next == NULL && op->active_prev == NULL),
+                "Destroyed spawn-point template remains linked to the active object list: %s",
+                object_get_str(op));
 
     if (op->head == NULL) {
         object_cb_deinit(op);
