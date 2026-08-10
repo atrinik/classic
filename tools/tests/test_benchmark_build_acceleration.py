@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -76,6 +77,96 @@ class BenchmarkBuildAccelerationTests(unittest.TestCase):
         if not Path("/proc").is_dir():
             self.skipTest("process-group RSS sampling requires procfs")
         self.assertGreater(BENCHMARK.process_group_rss_kib(os.getpgrp()), 0)
+
+    def test_run_measured_records_output_and_changed_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            build_dir = Path(directory)
+            artifact = build_dir / "result.o"
+            result = BENCHMARK.run_measured(
+                [
+                    BENCHMARK.sys.executable,
+                    "-c",
+                    (
+                        "from pathlib import Path; "
+                        f"Path({str(artifact)!r}).write_text('object'); "
+                        "print('built target')"
+                    ),
+                ],
+                build_dir,
+            )
+            self.assertEqual(result["return_code"], 0)
+            self.assertEqual(result["rebuilt_artifacts"], 1)
+            self.assertEqual(result["output_tail"], ["built target"])
+            self.assertGreaterEqual(result["elapsed_seconds"], 0)
+
+    def test_run_measured_reports_failed_command_details(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, '"return_code": 3'):
+                BENCHMARK.run_measured(
+                    [
+                        BENCHMARK.sys.executable,
+                        "-c",
+                        "print('failed target'); raise SystemExit(3)",
+                    ],
+                    Path(directory),
+                )
+
+    def test_measure_runs_each_phase_and_reports_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            build_dir = root / "build"
+            build_dir.mkdir()
+            (build_dir / "CMakeCache.txt").write_text(
+                "CMAKE_C_COMPILER:FILEPATH=/usr/bin/cc\n"
+                "CMAKE_BUILD_TYPE:STRING=Debug\n"
+                "ENABLE_PRECOMPILED_HEADERS:BOOL=ON\n"
+                "ENABLE_COVERAGE:BOOL=OFF\n"
+                "ENABLE_SANITIZERS:BOOL=OFF\n",
+                encoding="utf-8",
+            )
+            source = root / "source.c"
+            header = root / "global.h"
+            source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+            header.write_text("#pragma once\n", encoding="utf-8")
+            args = BENCHMARK.argparse.Namespace(
+                build_dir=build_dir,
+                target="atrinik",
+                source=source,
+                header=header,
+                jobs=4,
+                runs=2,
+                output=None,
+            )
+            phase = {
+                "elapsed_seconds": 0.1,
+                "peak_rss_kib": 1024,
+                "rebuilt_artifacts": 1,
+                "return_code": 0,
+                "output_tail": [],
+            }
+            cmake_version = mock.Mock(stdout="cmake version 4.2.3\n")
+            with (
+                mock.patch.object(
+                    BENCHMARK, "run_measured", side_effect=[phase] * 8
+                ) as measured,
+                mock.patch.object(
+                    BENCHMARK, "compiler_version", return_value="cc version"
+                ),
+                mock.patch.object(
+                    BENCHMARK.subprocess, "run", return_value=cmake_version
+                ) as run,
+            ):
+                report = BENCHMARK.measure(args)
+
+            self.assertEqual(measured.call_count, 8)
+            clean_command = ["cmake", "--build", str(build_dir), "--target", "clean"]
+            self.assertEqual(
+                sum(call.args[0] == clean_command for call in run.call_args_list), 2
+            )
+            self.assertEqual(len(report["runs"]), 2)
+            self.assertEqual(report["environment"]["compiler_version"], "cc version")
+            self.assertEqual(report["configuration"]["precompiled_headers"], "ON")
+            self.assertEqual(report["configuration"]["command"][-2:], ["--parallel", "4"])
 
 
 if __name__ == "__main__":
