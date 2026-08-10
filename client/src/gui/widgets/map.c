@@ -2038,22 +2038,29 @@ static void map_setup_render_data(SDL_Surface *surface,
     }
 }
 
-/** Choose the visible floor whose light sample represents a map cell. */
+/** Choose the visible floor, or canonical no-floor sample, representing a cell. */
 static uint8_t map_lighting_sub_layer(const struct MapCell *cell) {
     uint8_t selected = MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
-    int selected_height = cell->height[GET_MAP_LAYER(LAYER_FLOOR, selected)];
+    uint8_t selected_floor_layer = GET_MAP_LAYER(LAYER_FLOOR, selected);
+    bool selected_has_floor = cell->faces[selected_floor_layer] != 0;
+    int selected_height = cell->height[selected_floor_layer];
 
     for (uint8_t sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
         uint8_t floor_layer = GET_MAP_LAYER(LAYER_FLOOR, sub_layer);
         int height = cell->height[floor_layer];
 
-        if (cell->faces[floor_layer] != 0 && height >= selected_height) {
+        if (cell->faces[floor_layer] != 0 && (!selected_has_floor || height >= selected_height)) {
             selected = sub_layer;
             selected_height = height;
+            selected_has_floor = true;
         }
     }
 
-    return selected;
+    /* Linked roof maps commonly contain only a wall-layer roof object. Their
+     * lighting belongs to the canonical object sub-layer, not necessarily the
+     * player's base-map sub-layer. Falling back to the latter can select an
+     * intentionally empty zero-valued sample and shade the roof fully black. */
+    return selected_has_floor ? selected : 0;
 }
 
 /**

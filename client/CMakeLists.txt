@@ -377,6 +377,9 @@ if (BUILD_TESTING AND NOT MINGW)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/player_view")
     add_test(NAME client-player-view-smooth
         COMMAND atrinik --player-view "${player_view_fixtures}/smooth.xml" -)
+    add_test(NAME client-player-view-smooth-player-sublayer
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/smooth-player-sublayer-1.xml" -)
     add_test(NAME client-player-view-discrete
         COMMAND atrinik --player-view "${player_view_fixtures}/discrete.xml" -)
     add_test(NAME client-player-view-output
