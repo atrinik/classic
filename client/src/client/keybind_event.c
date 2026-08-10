@@ -72,6 +72,11 @@ void keybind_event_process_binding(const keybind_struct *keybind,
                                                              direction,
                                                              event->repeat,
                                                              keybind->repeat);
+                if (accepted) {
+                    keybind_movement_state_set_modifier(handler->movement,
+                                                        event->scancode,
+                                                        keybind->mod);
+                }
                 if (accepted && event->repeat) {
                     keybind_event_flush(handler);
                 }
@@ -153,6 +158,12 @@ void keybind_event_reconcile_release(keybind_struct *const *bindings,
                                    event->scancode,
                                    keybind_event_running(handler),
                                    keybind_event_firing(handler));
+    if (keybind_event_is_modifier(event)) {
+        keybind_movement_state_release_invalid_modifiers(handler->movement,
+                                                         event->mod,
+                                                         keybind_event_running(handler),
+                                                         keybind_event_firing(handler));
+    }
 }
 
 /** Match and process one physical keyboard event with normal modifier precedence. */

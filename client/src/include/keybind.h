@@ -64,6 +64,7 @@ typedef enum keybind_movement_action {
 /** One physical key participating in the gameplay movement stream. */
 typedef struct keybind_movement_key {
     uint64_t order;
+    SDL_Keymod mod;
     uint8_t direction;
     bool repeat;
 } keybind_movement_key;
@@ -162,6 +163,15 @@ extern void keybind_movement_state_init(keybind_movement_state *state);
 
 extern bool keybind_movement_state_has_scancode(const keybind_movement_state *state,
                                                 SDL_Scancode scancode);
+
+extern void keybind_movement_state_set_modifier(keybind_movement_state *state,
+                                                SDL_Scancode scancode,
+                                                SDL_Keymod mod);
+
+extern void keybind_movement_state_release_invalid_modifiers(keybind_movement_state *state,
+                                                             SDL_Keymod mod,
+                                                             bool running,
+                                                             bool firing);
 
 extern bool keybind_movement_state_press(keybind_movement_state *state,
                                          SDL_Scancode scancode,

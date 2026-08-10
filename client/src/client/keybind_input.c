@@ -362,6 +362,7 @@ bool keybind_movement_state_press(keybind_movement_state *state,
         key->order = ++state->next_order;
     }
     key->direction = direction;
+    key->mod = SDL_KMOD_NONE;
     key->repeat = repeat;
     state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
     state->pending_move = true;
@@ -386,6 +387,33 @@ bool keybind_movement_state_has_scancode(const keybind_movement_state *state,
                                          SDL_Scancode scancode) {
     return state != NULL && scancode > SDL_SCANCODE_UNKNOWN && scancode < SDL_SCANCODE_COUNT &&
            state->keys[scancode].direction != 0;
+}
+
+/** Record the modifier requirement of a selected movement binding. */
+void keybind_movement_state_set_modifier(keybind_movement_state *state,
+                                         SDL_Scancode scancode,
+                                         SDL_Keymod mod) {
+    if (keybind_movement_state_has_scancode(state, scancode)) {
+        state->keys[scancode].mod = keybind_adjust_kmod(mod);
+    }
+}
+
+/** Release movement entries whose selected modifier binding is no longer valid. */
+void keybind_movement_state_release_invalid_modifiers(keybind_movement_state *state,
+                                                      SDL_Keymod mod,
+                                                      bool running,
+                                                      bool firing) {
+    if (state == NULL) {
+        return;
+    }
+
+    SDL_Keymod adjusted_mod = keybind_adjust_kmod(mod);
+    for (SDL_Scancode scancode = 0; scancode < SDL_SCANCODE_COUNT; scancode++) {
+        if (state->keys[scancode].direction != 0 && state->keys[scancode].mod != SDL_KMOD_NONE &&
+            state->keys[scancode].mod != adjusted_mod) {
+            keybind_movement_state_release(state, scancode, running, firing);
+        }
+    }
 }
 
 /** Release one physical movement key and schedule the resulting stream update. */

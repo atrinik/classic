@@ -699,8 +699,18 @@ static void test_keybind_event_integration(void) {
         .key = SDLK_E,
         .repeat = true,
     };
-    keybind_struct *bindings[] =
-        {&northwest, &shifted, &northeast, &move_then_fire, &fire_then_move, &movement_sequence};
+    keybind_struct southeast = {
+        .command = "?MOVE_SE",
+        .key = SDLK_G,
+        .repeat = true,
+    };
+    keybind_struct *bindings[] = {&northwest,
+                                  &shifted,
+                                  &northeast,
+                                  &move_then_fire,
+                                  &fire_then_move,
+                                  &movement_sequence,
+                                  &southeast};
     movement_sink sink;
     SDL_KeyboardEvent event = {.type = SDL_EVENT_KEY_DOWN};
 
@@ -835,6 +845,24 @@ static void test_keybind_event_integration(void) {
     event.repeat = true;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     TEST_CHECK(sink.actions_num == 2 && !sink.running_at_emit[1]);
+
+    /* Modifier-qualified movement cannot remain stale after modifier release. */
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.repeat = false;
+    event.mod = SDL_KMOD_LSHIFT;
+    event.key = SDLK_A;
+    event.scancode = SDL_SCANCODE_A;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    modifier_up.mod = SDL_KMOD_NONE;
+    keybind_event_reconcile_release(bindings, arraysize(bindings), &modifier_up, &handler);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 9);
+    event.mod = SDL_KMOD_NONE;
+    event.key = SDLK_G;
+    event.scancode = SDL_SCANCODE_G;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 2 && sink.directions[1] == 3);
 }
 
 int main(void) {
