@@ -315,35 +315,6 @@ int freedir[SIZEOFFREE] = {
 static mempool_struct *pool_object;
 
 /**
- * Check whether an object is reachable from the global active-object list.
- *
- * The allocation count bounds the walk so that a pre-existing cycle cannot
- * make corruption diagnostics hang the server.
- *
- * @param needle
- * Object to look for.
- * @return
- * Whether the object is reachable, or the list exceeded its safe bound.
- */
-static bool object_active_list_contains(const object *needle) {
-    size_t maximum = pool_object->nrof_allocated[0];
-    size_t visited = 0;
-
-    for (const object *tmp = active_objects; tmp != NULL; tmp = tmp->active_next) {
-        if (tmp == needle) {
-            return true;
-        }
-
-        if (++visited > maximum) {
-            LOG(ERROR, "Active object list exceeds the object pool allocation count");
-            return true;
-        }
-    }
-
-    return false;
-}
-
-/**
  * This is a list of pointers that correspond to the FLAG_.. values.
  * This is a simple 1:1 mapping - if FLAG_FRIENDLY is 15, then the 15'th
  * element of this array should match that name.
@@ -1684,9 +1655,10 @@ void object_destroy(object *op) {
     object_update_speed(op);
 
     /* A spawn-point template linked before its type changed must not reach
-     * the pool while any active-list link still refers to its address. */
-    SOFT_ASSERT(!was_spawn_point_mob || !object_active_list_contains(op),
-                "Destroyed spawn-point template remains on the active object list: %s",
+     * the pool with any active-list linkage of its own still intact. */
+    SOFT_ASSERT(!was_spawn_point_mob ||
+                    (op != active_objects && op->active_next == NULL && op->active_prev == NULL),
+                "Destroyed spawn-point template remains linked to the active object list: %s",
                 object_get_str(op));
 
     if (op->head == NULL) {

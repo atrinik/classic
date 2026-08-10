@@ -37,18 +37,18 @@
 
 static bool active_list_contains(const object *needle) {
     size_t visited = 0;
+    const object *previous = NULL;
 
     for (const object *tmp = active_objects; tmp != NULL; tmp = tmp->active_next) {
         ck_assert_uint_lt(visited++, 100000);
         ck_assert(!OBJECT_FREE(tmp));
-
-        if (tmp->active_next != NULL) {
-            ck_assert_ptr_eq(tmp->active_next->active_prev, tmp);
-        }
+        ck_assert_ptr_eq(tmp->active_prev, previous);
 
         if (tmp == needle) {
             return true;
         }
+
+        previous = tmp;
     }
 
     return false;
@@ -654,7 +654,7 @@ START_TEST(test_object_map_reload_preserves_active_list) {
             claimed_count++;
 
             ck_assert_ptr_eq(active_objects, player);
-            ck_assert(!active_list_contains(template_slot) || template_reused);
+            ck_assert(!active_list_contains(template_slot));
 
             if (template_reused) {
                 break;
