@@ -263,6 +263,11 @@ jobs:
               ctest --preset linux-coverage
               gcovr --root . --filter "src/" --exclude "src/tests/" \
                 --print-summary --xml coverage.xml
+              cmake --preset linux-release \
+                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
+                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
+              cmake --build --preset linux-release --parallel
+              ctest --preset linux-release
               cmake --preset linux-sanitizers \
                 -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
                 -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik

@@ -156,7 +156,7 @@ START_TEST(test_metaserver_publish_cadence) {
     ck_assert(metaserver_publish_cadence_due(&cadence, now, true));
     ck_assert_uint_eq(cadence.rate_budget.tokens, 2);
 
-    metaserver_publish_cadence_attempted(&cadence, now);
+    ck_assert(metaserver_publish_cadence_attempted(&cadence, now));
     ck_assert_uint_eq(cadence.rate_budget.tokens, 1);
     metaserver_publish_cadence_succeeded(&cadence,
                                          now,
@@ -174,7 +174,7 @@ START_TEST(test_metaserver_publish_cadence) {
     server_monotonic_t debounce = {changed.microseconds +
                                    METASERVER_PUBLISH_DEBOUNCE_SECONDS * UINT64_C(1000000)};
     ck_assert(metaserver_publish_cadence_due(&cadence, debounce, true));
-    metaserver_publish_cadence_attempted(&cadence, debounce);
+    ck_assert(metaserver_publish_cadence_attempted(&cadence, debounce));
     ck_assert_uint_eq(cadence.rate_budget.tokens, 0);
 
     metaserver_publish_cadence_changed(&cadence, debounce, true);
@@ -206,7 +206,7 @@ START_TEST(test_metaserver_publish_cadence) {
     ck_assert(!metaserver_publish_cadence_recover_replay(&cadence));
 
     metaserver_publish_cadence_init(&cadence, now);
-    metaserver_publish_cadence_attempted(&cadence, now);
+    ck_assert(metaserver_publish_cadence_attempted(&cadence, now));
     metaserver_publish_cadence_changed(&cadence, changed, false);
     metaserver_publish_cadence_suspend(&cadence);
     ck_assert(cadence.suspended);
@@ -217,6 +217,26 @@ START_TEST(test_metaserver_publish_cadence) {
     ck_assert(!cadence.suspended);
     ck_assert_uint_eq(cadence.rate_budget.tokens, METASERVER_ATTEMPT_RATE_CAPACITY);
     ck_assert(metaserver_publish_cadence_due(&cadence, changed, true));
+}
+END_TEST
+
+START_TEST(test_metaserver_publish_cadence_attempt_is_fail_closed) {
+    server_monotonic_t now = {UINT64_C(1000000)};
+    metaserver_publish_cadence_t cadence;
+    metaserver_publish_cadence_init(&cadence, now);
+
+    ck_assert(metaserver_publish_cadence_attempted(&cadence, now));
+    ck_assert_uint_eq(cadence.rate_budget.tokens, 1);
+
+#ifdef NDEBUG
+    cadence.dirty = true;
+    cadence.retry_deadline = now;
+    cadence.rate_budget.tokens = 0;
+    ck_assert(!metaserver_publish_cadence_attempted(&cadence, now));
+    ck_assert_uint_eq(cadence.rate_budget.tokens, 0);
+    ck_assert(cadence.dirty);
+    ck_assert_uint_eq(cadence.retry_deadline.microseconds, now.microseconds);
+#endif
 }
 END_TEST
 
@@ -260,7 +280,8 @@ START_TEST(test_metaserver_publish_retry_and_daily_budget) {
 
     metaserver_publish_cadence_t private_cadence;
     metaserver_publish_cadence_init(&private_cadence, (server_monotonic_t){UINT64_C(1000000)});
-    metaserver_publish_cadence_attempted(&private_cadence, (server_monotonic_t){UINT64_C(1000000)});
+    ck_assert(metaserver_publish_cadence_attempted(
+        &private_cadence, (server_monotonic_t){UINT64_C(1000000)}));
     metaserver_publish_cadence_succeeded(&private_cadence,
                                          (server_monotonic_t){UINT64_C(1000000)},
                                          false,
@@ -282,7 +303,7 @@ START_TEST(test_metaserver_publish_retry_and_daily_budget) {
     unsigned int attempts = 0;
     while (now.microseconds <= UINT64_C(86401) * UINT64_C(1000000)) {
         if (metaserver_publish_cadence_due(&cadence, now, true)) {
-            metaserver_publish_cadence_attempted(&cadence, now);
+            ck_assert(metaserver_publish_cadence_attempted(&cadence, now));
             attempts++;
             metaserver_publish_cadence_changed(&cadence, now, true);
         }
@@ -291,7 +312,8 @@ START_TEST(test_metaserver_publish_retry_and_daily_budget) {
     ck_assert_uint_eq(attempts, 47);
 
     metaserver_publish_cadence_init(&cadence, (server_monotonic_t){UINT64_C(1000000)});
-    metaserver_publish_cadence_attempted(&cadence, (server_monotonic_t){UINT64_C(1000000)});
+    ck_assert(metaserver_publish_cadence_attempted(
+        &cadence, (server_monotonic_t){UINT64_C(1000000)}));
     metaserver_publish_cadence_failed(&cadence, (server_monotonic_t){UINT64_C(1000000)}, 120, 0);
     ck_assert(
         !metaserver_publish_cadence_due(&cadence, (server_monotonic_t){UINT64_C(120999999)}, true));
@@ -847,6 +869,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_metaserver_rendezvous_token_bounds);
     tcase_add_test(tc_core, test_metaserver_rendezvous_retry_policy);
     tcase_add_test(tc_core, test_metaserver_publish_cadence);
+    tcase_add_test(tc_core, test_metaserver_publish_cadence_attempt_is_fail_closed);
     tcase_add_test(tc_core, test_metaserver_publish_retry_and_daily_budget);
     tcase_add_test(tc_core, test_metaserver_rendezvous_ticket_isolation);
     tcase_add_test(tc_core, test_metaserver_generation_cancellation);

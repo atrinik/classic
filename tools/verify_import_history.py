@@ -320,6 +320,26 @@ def verify_release_tags(manifest: dict[str, Any]) -> None:
     floor = future_policy["ancestry_floor"]
     require(is_ancestor(floor, "HEAD"), "future-tag ancestry floor is not in HEAD")
 
+    failed_releases = policy.get("failed_releases")
+    require(
+        failed_releases
+        == {
+            "v5.8.1": {
+                "commit": "4653cb0a5f8bb11f5f3b522008bdd28c39d8c14c",
+                "disposition": "delete-empty-draft",
+                "empty_draft_id": 367395490,
+                "failed_package_run_ids": [31298735525, 31341539056],
+            }
+        },
+        "unexpected failed-release policy",
+    )
+    for tag, record in failed_releases.items():
+        require(
+            git("rev-parse", f"{tag}^{{commit}}") == record["commit"],
+            f"{tag}: failed release target changed",
+        )
+        require(is_ancestor(record["commit"], "HEAD"), f"{tag}: target is not in HEAD")
+
     first_parent_commits = set(git("rev-list", "--first-parent", "HEAD").splitlines())
     release_config = load_release_config()
     require(

@@ -15,6 +15,14 @@
     "branch": "main",
     "driver": "semantic-release"
   },
+  "failed_releases": {
+    "v5.8.1": {
+      "commit": "4653cb0a5f8bb11f5f3b522008bdd28c39d8c14c",
+      "disposition": "delete-empty-draft",
+      "empty_draft_id": 367395490,
+      "failed_package_run_ids": [31298735525, 31341539056]
+    }
+  },
   "tags": {
     "v5.0.19": "f2cdf68710d157d4fae44a0582972129e6c4db9e",
     "v5.1.0": "ea01c95c5bf99e7044ca1082c9f40d8678911fa0",
