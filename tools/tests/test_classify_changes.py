@@ -57,6 +57,7 @@ class ClassifyChangesTests(unittest.TestCase):
 
     def test_libatrinik_and_ci_contract_changes_select_windows_tests(self) -> None:
         for path in (
+            "CMakeLists.txt",
             "client/src/client/main.c",
             "libatrinik/path.c",
             "protocol/generated/c/commands.c",

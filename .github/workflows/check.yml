@@ -233,6 +233,22 @@ jobs:
               assert application_id.strip() not in archive.read(executable)
           " "${package}"
               cd ..
+              cmake \
+                -DPATCH_EXECUTABLE="$(command -v patch)" \
+                -DSOURCE_DIR=/workspace/build/libpcpnatpmp-source \
+                -DPATCH_FILE=/workspace/server/cmake/patches/libpcpnatpmp-mingw.patch \
+                -P /workspace/server/cmake/apply_patch_idempotent.cmake
+              x86_64-w64-mingw32.shared-cmake \
+                -S . \
+                -B build/windows-integrated \
+                -G Ninja \
+                -DBUILD_TESTING=OFF \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DENABLE_PYTHON_PLUGIN=OFF \
+                -DPACKAGE_TYPE=none \
+                -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-source
+              cmake --build build/windows-integrated \
+                --target atrinik atrinik-server --parallel "$(nproc)"
               stage=libatrinik/build/windows-test-bundle
               cmake -E remove_directory "${stage}"
               python3 tools/ci/stage_windows_runtime.py \
@@ -459,6 +475,40 @@ jobs:
           flags: client
           use_oidc: true
 
+  integrated:
+    name: Integrated client/server graph
+    needs: changes
+    if: >-
+      needs.changes.outputs.client == 'true' ||
+      needs.changes.outputs.server == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: client/build/ci-prefix
+          key: classic-integrated-sdl-mixer-ubuntu-26.04-x64-3.2.4-v1
+      - name: Pull pinned build environment
+        run: docker pull ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
+      - name: Build shared Release graph
+        run: |
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --workdir /workspace \
+            ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03 \
+            bash -euo pipefail -c '
+              client/tools/install-linux-ci-dependencies.sh client/build/ci-prefix
+              env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+                check flex libgd-dev libminiupnpc-dev libreadline-dev \
+                libsubunit-dev python3-dev
+              export CMAKE_PREFIX_PATH=/workspace/client/build/ci-prefix
+              export LD_LIBRARY_PATH=/workspace/client/build/ci-prefix/lib
+              export PKG_CONFIG_PATH=/workspace/client/build/ci-prefix/lib/pkgconfig
+              cmake --preset linux-release -DBUILD_TESTING=OFF
+              cmake --build --preset linux-release --parallel
+            '
+
   classic-validation:
     name: Classic validation
     if: always()
@@ -467,6 +517,7 @@ jobs:
       - core
       - server
       - client
+      - integrated
       - windows-test
     runs-on: ubuntu-24.04
     timeout-minutes: 2
@@ -481,5 +532,7 @@ jobs:
             --client-result '${{ needs.client.result }}' \
             --server-required '${{ needs.changes.outputs.server }}' \
             --server-result '${{ needs.server.result }}' \
+            --integrated-required "${{ needs.changes.outputs.client == 'true' || needs.changes.outputs.server == 'true' }}" \
+            --integrated-result '${{ needs.integrated.result }}' \
             --windows-required '${{ needs.changes.outputs.windows }}' \
             --windows-result '${{ needs.windows-test.result }}'
