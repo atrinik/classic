@@ -507,6 +507,22 @@ void keybind_movement_state_mode_rebind(keybind_movement_state *state,
     }
 }
 
+/** Clear momentary owners when a toggle takes ownership of a mode. */
+void keybind_movement_state_mode_clear(keybind_movement_state *state, bool run) {
+    if (state == NULL) {
+        return;
+    }
+    for (SDL_Scancode scancode = 1; scancode < SDL_SCANCODE_COUNT; scancode++) {
+        if (run) {
+            state->keys[scancode].run_owned = false;
+            state->keys[scancode].run_mod = SDL_KMOD_NONE;
+        } else {
+            state->keys[scancode].fire_owned = false;
+            state->keys[scancode].fire_mod = SDL_KMOD_NONE;
+        }
+    }
+}
+
 /** Return whether one accepted mode owner is invalid under a new modifier. */
 bool keybind_movement_state_scancode_has_invalid_mode_modifier(const keybind_movement_state *state,
                                                                SDL_Scancode scancode,

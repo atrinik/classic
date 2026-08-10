@@ -209,6 +209,8 @@ extern void keybind_movement_state_mode_rebind(keybind_movement_state *state,
                                                SDL_Keymod mod,
                                                bool run);
 
+extern void keybind_movement_state_mode_clear(keybind_movement_state *state, bool run);
+
 extern bool
 keybind_movement_state_scancode_has_invalid_mode_modifier(const keybind_movement_state *state,
                                                           SDL_Scancode scancode,

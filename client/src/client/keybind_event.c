@@ -113,6 +113,10 @@ void keybind_event_process_binding(const keybind_struct *keybind,
                                                             event->scancode,
                                                             keybind->mod,
                                                             false);
+                    } else if (accepted && !strcmp(cp, "?RUNON_TOGGLE")) {
+                        keybind_movement_state_mode_clear(handler->movement, true);
+                    } else if (accepted && !strcmp(cp, "?FIREON_TOGGLE")) {
+                        keybind_movement_state_mode_clear(handler->movement, false);
                     }
                     if (running != keybind_event_running(handler) ||
                         firing != keybind_event_firing(handler)) {

@@ -627,6 +627,10 @@ static bool movement_sink_command_down(const char *command, void *user_data) {
         sink->running = true;
     } else if (!strcmp(command, "?FIREON")) {
         sink->firing = true;
+    } else if (!strcmp(command, "?RUNON_TOGGLE")) {
+        sink->running = !sink->running;
+    } else if (!strcmp(command, "?FIREON_TOGGLE")) {
+        sink->firing = !sink->firing;
     }
     return true;
 }
@@ -884,6 +888,14 @@ static void test_keybind_event_integration(void) {
         .key = SDLK_Z,
         .mod = SDL_KMOD_SHIFT,
     };
+    keybind_struct run_toggle = {
+        .command = "?RUNON_TOGGLE",
+        .key = SDLK_1,
+    };
+    keybind_struct fire_toggle = {
+        .command = "?FIREON_TOGGLE",
+        .key = SDLK_2,
+    };
     keybind_struct *bindings[] = {&northwest,
                                   &shifted,
                                   &shifted_b,
@@ -922,7 +934,9 @@ static void test_keybind_event_integration(void) {
                                   &fire_same_fallback,
                                   &shifted_fire_same,
                                   &run_movement_fallback,
-                                  &shifted_run_same_compound};
+                                  &shifted_run_same_compound,
+                                  &run_toggle,
+                                  &fire_toggle};
     movement_sink sink;
     key_struct key_states[SDL_SCANCODE_COUNT] = {0};
     SDL_KeyboardEvent event = {.type = SDL_EVENT_KEY_DOWN};
@@ -1620,9 +1634,11 @@ static void test_keybind_event_integration(void) {
     movement_sink_flush(&sink);
     TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 8);
 
+    memset(key_states, 0, sizeof(key_states));
     movement_sink_reset(&sink);
     handler = movement_sink_handler(&sink);
     handler.reconcile_modes = NULL;
+    event.mod = SDL_KMOD_LSHIFT;
     event.key = SDLK_Y;
     event.scancode = SDL_SCANCODE_Y;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
@@ -1641,6 +1657,7 @@ static void test_keybind_event_integration(void) {
     movement_sink_reset(&sink);
     handler = movement_sink_handler(&sink);
     handler.reconcile_modes = NULL;
+    event.mod = SDL_KMOD_LSHIFT;
     event.key = SDLK_Z;
     event.scancode = SDL_SCANCODE_Z;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
@@ -1653,6 +1670,71 @@ static void test_keybind_event_integration(void) {
     movement_sink_flush(&sink);
     TEST_CHECK(sink.running && sink.command_ups == 0 && sink.actions_num == 1);
     TEST_CHECK(sink.actions[0] == KEYBIND_MOVEMENT_ACTION_MOVE && sink.directions[0] == 8);
+
+    /* Toggle ownership revokes stale momentary owners without unlatching later. */
+    memset(key_states, 0, sizeof(key_states));
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.mod = SDL_KMOD_NONE;
+    event.key = SDLK_Q;
+    event.scancode = SDL_SCANCODE_Q;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    event.key = SDLK_1;
+    event.scancode = SDL_SCANCODE_1;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(sink.running && !keybind_movement_state_mode_owned(&sink.state, true));
+    event.key = SDLK_A;
+    event.scancode = SDL_SCANCODE_A;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    SDL_KeyboardEvent stale_run_up = {
+        .type = SDL_EVENT_KEY_UP,
+        .key = SDLK_Q,
+        .scancode = SDL_SCANCODE_Q,
+    };
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &stale_run_up,
+                                    key_states,
+                                    &handler);
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &stale_run_up, &handler));
+    event.key = SDLK_B;
+    event.scancode = SDL_SCANCODE_B;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.running && sink.command_ups == 0);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 8);
+
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.key = SDLK_O;
+    event.scancode = SDL_SCANCODE_O;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    event.key = SDLK_2;
+    event.scancode = SDL_SCANCODE_2;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(sink.firing && !keybind_movement_state_mode_owned(&sink.state, false));
+    event.key = SDLK_A;
+    event.scancode = SDL_SCANCODE_A;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    SDL_KeyboardEvent stale_fire_up = {
+        .type = SDL_EVENT_KEY_UP,
+        .key = SDLK_O,
+        .scancode = SDL_SCANCODE_O,
+    };
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &stale_fire_up,
+                                    key_states,
+                                    &handler);
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &stale_fire_up, &handler));
+    event.key = SDLK_B;
+    event.scancode = SDL_SCANCODE_B;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.firing && sink.command_ups == 0);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 8 && sink.firing_at_emit[0]);
 }
 
 int main(void) {
