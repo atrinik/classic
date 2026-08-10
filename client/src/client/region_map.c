@@ -836,7 +836,9 @@ static bool region_map_fow_update_regions(region_map_t *region_map, const uint32
         utarray_push_back(regions, &cp);
     }
 
-    utarray_sort(regions, ut_str_sort);
+    if (utarray_len(regions) > 1) {
+        utarray_sort(regions, ut_str_sort);
+    }
 
     def_map_regions = NULL;
 
