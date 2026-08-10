@@ -1171,11 +1171,6 @@ int socket_addr_cmp(const struct sockaddr_storage *a,
                     const struct sockaddr_storage *b,
                     unsigned short plen);
 const char *socket_get_host(socket_t *sc);
-bool socket_rendezvous_url(const char *base_url,
-                           const char *server_id,
-                           const char *role,
-                           char *url,
-                           size_t url_size);
 socket_role_t socket_get_role(socket_t *sc);
 
 #endif

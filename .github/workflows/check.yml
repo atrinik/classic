@@ -96,7 +96,7 @@ jobs:
             --output build/wheel
         working-directory: protocol
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcovr libcurl4-openssl-dev libssl-dev zlib1g-dev
+        run: sudo apt-get update && sudo apt-get install -y gcovr libcurl4-openssl-dev libidn2-dev libssl-dev zlib1g-dev
       - name: Configure sibling protocol
         run: cmake --preset linux-coverage -DATRINIK_PROTOCOL_SOURCE_DIR="$GITHUB_WORKSPACE/protocol"
         working-directory: libatrinik
@@ -173,6 +173,7 @@ jobs:
                 -DATRINIK_PROTOCOL_SOURCE_DIR=/workspace/protocol
               cmake --build libatrinik/build/windows-tests \
                 --target libatrinik-path libatrinik-rendezvous libatrinik-metaserver-publisher \
+                  libatrinik-metaserver-url \
                 --parallel "$(nproc)"
               stage=libatrinik/build/windows-test-bundle
               cmake -E remove_directory "${stage}"
@@ -182,7 +183,8 @@ jobs:
                 --output-dir "${stage}" \
                 libatrinik/build/windows-tests/libatrinik-path.exe \
                 libatrinik/build/windows-tests/libatrinik-rendezvous.exe \
-                libatrinik/build/windows-tests/libatrinik-metaserver-publisher.exe
+                libatrinik/build/windows-tests/libatrinik-metaserver-publisher.exe \
+                libatrinik/build/windows-tests/libatrinik-metaserver-url.exe
               cmake -E copy_directory libatrinik/tests/fixtures "${stage}/fixtures"
             '
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -231,6 +233,11 @@ jobs:
             throw "libatrinik-metaserver-publisher.exe failed with exit code ${LASTEXITCODE}"
           }
 
+          & (Join-Path $bundle "libatrinik-metaserver-url.exe")
+          if ($LASTEXITCODE -ne 0) {
+            throw "libatrinik-metaserver-url.exe failed with exit code ${LASTEXITCODE}"
+          }
+
   server:
     name: Server validation
     needs: changes
@@ -251,7 +258,7 @@ jobs:
               apt-get update -qq
               env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
                 build-essential ca-certificates check cmake flex gcovr \
-                libcurl4-openssl-dev libgd-dev libminiupnpc-dev libreadline-dev \
+                libcurl4-openssl-dev libgd-dev libidn2-dev libminiupnpc-dev libreadline-dev \
                 libssl-dev libsubunit-dev ninja-build pkgconf python3-dev zlib1g-dev
               python3 -m unittest discover -s tools/tests -p "test_*.py"
               python3 tools/dependencies.py sync

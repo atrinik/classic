@@ -23,8 +23,11 @@ void metaserver_server_add(server_struct *server);
 
 void metaserver_server_free(server_struct *server);
 
-bool metaserver_direct_parse(const char *body, size_t body_size, const char *origin);
-
-void metaserver_direct_url(const char *base_url, char *url, size_t url_size);
+bool metaserver_direct_parse(const char *body,
+                             size_t body_size,
+                             const char *rendezvous_origin,
+                             uint64_t now,
+                             uint64_t minimum_generation,
+                             uint64_t *accepted_generation);
 
 #endif

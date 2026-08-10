@@ -1225,44 +1225,6 @@ static size_t socket_udp_punch_collect(socket_t *sc,
     return received;
 }
 
-bool socket_rendezvous_url(const char *base_url,
-                           const char *server_id,
-                           const char *role,
-                           char *url,
-                           size_t url_size) {
-    HARD_ASSERT(base_url != NULL);
-    HARD_ASSERT(server_id != NULL);
-    HARD_ASSERT(role != NULL);
-    HARD_ASSERT(url != NULL);
-
-    CURLU *parsed = curl_url();
-    char *scheme = NULL;
-    char *rendered = NULL;
-    char path[MAX_BUF];
-    char query[64];
-    bool ok = parsed != NULL && curl_url_set(parsed, CURLUPART_URL, base_url, 0) == CURLUE_OK &&
-              curl_url_get(parsed, CURLUPART_SCHEME, &scheme, 0) == CURLUE_OK;
-    if (ok) {
-        const char *websocket_scheme = strcmp(scheme, "https") == 0  ? "wss"
-                                       : strcmp(scheme, "http") == 0 ? "ws"
-                                                                     : NULL;
-        ok = websocket_scheme != NULL &&
-             snprintf(VS(path), "/v2/rendezvous/%s", server_id) < (int)sizeof(path) &&
-             snprintf(VS(query), "role=%s", role) < (int)sizeof(query) &&
-             curl_url_set(parsed, CURLUPART_SCHEME, websocket_scheme, 0) == CURLUE_OK &&
-             curl_url_set(parsed, CURLUPART_PATH, path, 0) == CURLUE_OK &&
-             curl_url_set(parsed, CURLUPART_QUERY, query, 0) == CURLUE_OK &&
-             curl_url_set(parsed, CURLUPART_FRAGMENT, NULL, 0) == CURLUE_OK &&
-             curl_url_get(parsed, CURLUPART_URL, &rendered, 0) == CURLUE_OK &&
-             snprintf(url, url_size, "%s", rendered) < (int)url_size;
-    }
-
-    curl_free(rendered);
-    curl_free(scheme);
-    curl_url_cleanup(parsed);
-    return ok;
-}
-
 #if LIBCURL_VERSION_NUM >= 0x075600
 static bool socket_websocket_send_text(CURL *curl, const char *message) {
     size_t sent = 0;
