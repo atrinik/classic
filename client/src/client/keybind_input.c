@@ -473,18 +473,60 @@ bool keybind_movement_state_mode_owned(const keybind_movement_state *state, bool
     return false;
 }
 
-/** Return whether an accepted mode owner is invalid under a new modifier. */
-bool keybind_movement_state_has_invalid_mode_modifier(const keybind_movement_state *state,
-                                                      SDL_Keymod mod) {
+/** Return whether releasing one key changes a momentary mode. */
+bool keybind_movement_state_mode_release_changes(const keybind_movement_state *state,
+                                                 SDL_Scancode scancode,
+                                                 bool run) {
+    if (state == NULL || scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_SCANCODE_COUNT ||
+        !(run ? state->keys[scancode].run_owned : state->keys[scancode].fire_owned)) {
+        return false;
+    }
+
+    for (SDL_Scancode other = 1; other < SDL_SCANCODE_COUNT; other++) {
+        if (other != scancode &&
+            (run ? state->keys[other].run_owned : state->keys[other].fire_owned)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Return whether one accepted mode owner is invalid under a new modifier. */
+bool keybind_movement_state_scancode_has_invalid_mode_modifier(const keybind_movement_state *state,
+                                                               SDL_Scancode scancode,
+                                                               SDL_Keymod mod) {
+    if (state == NULL || scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_SCANCODE_COUNT) {
+        return false;
+    }
+    SDL_Keymod adjusted_mod = keybind_adjust_kmod(mod);
+    const keybind_movement_key *key = &state->keys[scancode];
+    return (key->run_owned && key->run_mod != SDL_KMOD_NONE && key->run_mod != adjusted_mod) ||
+           (key->fire_owned && key->fire_mod != SDL_KMOD_NONE && key->fire_mod != adjusted_mod);
+}
+
+/** Return whether modifier invalidation changes a momentary mode. */
+bool keybind_movement_state_mode_modifier_changes(const keybind_movement_state *state,
+                                                  SDL_Keymod mod) {
     if (state == NULL) {
         return false;
     }
     SDL_Keymod adjusted_mod = keybind_adjust_kmod(mod);
-    for (SDL_Scancode scancode = 1; scancode < SDL_SCANCODE_COUNT; scancode++) {
-        if ((state->keys[scancode].run_owned && state->keys[scancode].run_mod != SDL_KMOD_NONE &&
-             state->keys[scancode].run_mod != adjusted_mod) ||
-            (state->keys[scancode].fire_owned && state->keys[scancode].fire_mod != SDL_KMOD_NONE &&
-             state->keys[scancode].fire_mod != adjusted_mod)) {
+    for (int mode = 0; mode < 2; mode++) {
+        bool invalid = false, valid = false;
+        for (SDL_Scancode scancode = 1; scancode < SDL_SCANCODE_COUNT; scancode++) {
+            const keybind_movement_key *key = &state->keys[scancode];
+            bool owned = mode == 0 ? key->run_owned : key->fire_owned;
+            SDL_Keymod owner_mod = mode == 0 ? key->run_mod : key->fire_mod;
+            if (!owned) {
+                continue;
+            }
+            if (owner_mod != SDL_KMOD_NONE && owner_mod != adjusted_mod) {
+                invalid = true;
+            } else {
+                valid = true;
+            }
+        }
+        if (invalid && !valid) {
             return true;
         }
     }
@@ -557,6 +599,19 @@ void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
             }
             removed = true;
         }
+    }
+    for (size_t i = 0; i < rebinds_num; i++) {
+        keybind_movement_key *key = &state->keys[rebinds[i].scancode];
+        if (key->direction != 0) {
+            continue;
+        }
+        key->order = ++state->next_order;
+        key->direction = rebinds[i].direction;
+        key->mod = keybind_adjust_kmod(rebinds[i].mod);
+        key->repeat = rebinds[i].repeat;
+        key->owned = true;
+        key->preseeded = true;
+        removed = true;
     }
     if (!removed) {
         return;

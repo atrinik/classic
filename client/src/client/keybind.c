@@ -385,6 +385,7 @@ void keybind_movement_key_released(const SDL_KeyboardEvent *event) {
 /** Cancel un-emitted movement and stop an established stream on focus loss. */
 void keybind_movement_focus_lost(void) {
     keybind_movement_state_clear(&movement_state, cpl.run_on, cpl.fire_on);
+    keybind_movement_state_run_released(&movement_state, move_keys_run_stream_active());
 }
 
 /**

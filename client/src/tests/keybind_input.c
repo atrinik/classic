@@ -832,6 +832,25 @@ static void test_keybind_event_integration(void) {
         .key = SDLK_S,
         .mod = SDL_KMOD_SHIFT,
     };
+    keybind_struct mode_movement_fallback = {
+        .command = "?MOVE_N",
+        .key = SDLK_T,
+        .repeat = true,
+    };
+    keybind_struct shifted_mode_only = {
+        .command = "?RUNON",
+        .key = SDLK_T,
+        .mod = SDL_KMOD_SHIFT,
+    };
+    keybind_struct second_run_owner = {
+        .command = "?RUNON",
+        .key = SDLK_U,
+    };
+    keybind_struct shifted_run_only = {
+        .command = "?RUNON",
+        .key = SDLK_V,
+        .mod = SDL_KMOD_SHIFT,
+    };
     keybind_struct *bindings[] = {&northwest,
                                   &shifted,
                                   &shifted_b,
@@ -859,7 +878,11 @@ static void test_keybind_event_integration(void) {
                                   &run_owner,
                                   &same_direction,
                                   &shifted_same_direction,
-                                  &shifted_consumed_run};
+                                  &shifted_consumed_run,
+                                  &mode_movement_fallback,
+                                  &shifted_mode_only,
+                                  &second_run_owner,
+                                  &shifted_run_only};
     movement_sink sink;
     key_struct key_states[SDL_SCANCODE_COUNT] = {0};
     SDL_KeyboardEvent event = {.type = SDL_EVENT_KEY_DOWN};
@@ -1410,6 +1433,107 @@ static void test_keybind_event_integration(void) {
     movement_sink_flush(&sink);
     TEST_CHECK(sink.actions_num == 1);
     TEST_CHECK(sink.running && sink.command_ups == 0);
+
+    /* A held modified mode-only key enters its unmodified movement fallback. */
+    memset(key_states, 0, sizeof(key_states));
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.mod = SDL_KMOD_LSHIFT;
+    event.key = SDLK_T;
+    event.scancode = SDL_SCANCODE_T;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(sink.running);
+    key_states[SDL_SCANCODE_T].pressed = true;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    movement_sink_flush(&sink);
+    TEST_CHECK(!sink.running && sink.command_ups == 1);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 8);
+    event.mod = SDL_KMOD_NONE;
+    event.repeat = true;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(sink.actions_num == 2 && sink.directions[1] == 8);
+
+    /* Orphan and non-final mode releases do not split chord composition. */
+    memset(key_states, 0, sizeof(key_states));
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.repeat = false;
+    event.key = SDLK_A;
+    event.scancode = SDL_SCANCODE_A;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    SDL_KeyboardEvent run_up = {
+        .type = SDL_EVENT_KEY_UP,
+        .key = SDLK_Q,
+        .scancode = SDL_SCANCODE_Q,
+    };
+    keybind_event_reconcile_release(bindings, arraysize(bindings), &run_up, key_states, &handler);
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &run_up, &handler));
+    event.key = SDLK_B;
+    event.scancode = SDL_SCANCODE_B;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 8 && sink.command_ups == 0);
+
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.key = SDLK_Q;
+    event.scancode = SDL_SCANCODE_Q;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    event.key = SDLK_U;
+    event.scancode = SDL_SCANCODE_U;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    event.key = SDLK_A;
+    event.scancode = SDL_SCANCODE_A;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    keybind_event_reconcile_release(bindings, arraysize(bindings), &run_up, key_states, &handler);
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &run_up, &handler));
+    event.key = SDLK_B;
+    event.scancode = SDL_SCANCODE_B;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 8);
+    TEST_CHECK(sink.running && sink.command_ups == 0);
+
+    /* Invalidating one of two mode owners does not force a movement boundary. */
+    memset(key_states, 0, sizeof(key_states));
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.mod = SDL_KMOD_NONE;
+    event.key = SDLK_Q;
+    event.scancode = SDL_SCANCODE_Q;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    event.mod = SDL_KMOD_LSHIFT;
+    event.key = SDLK_V;
+    event.scancode = SDL_SCANCODE_V;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    key_states[SDL_SCANCODE_V].pressed = true;
+    event.mod = SDL_KMOD_NONE;
+    event.key = SDLK_A;
+    event.scancode = SDL_SCANCODE_A;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    event.key = SDLK_B;
+    event.scancode = SDL_SCANCODE_B;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 8);
+    TEST_CHECK(sink.running && sink.command_ups == 0);
+
+    /* Focus loss schedules one stop for an external-only running stream. */
+    movement_sink_reset(&sink);
+    keybind_movement_state_clear(&sink.state, true, false);
+    keybind_movement_state_run_released(&sink.state, true);
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 1);
+    TEST_CHECK(sink.actions[0] == KEYBIND_MOVEMENT_ACTION_RUN_STOP);
 }
 
 int main(void) {

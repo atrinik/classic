@@ -200,8 +200,17 @@ extern bool keybind_movement_state_mode_released(keybind_movement_state *state,
 
 extern bool keybind_movement_state_mode_owned(const keybind_movement_state *state, bool run);
 
-extern bool keybind_movement_state_has_invalid_mode_modifier(const keybind_movement_state *state,
-                                                             SDL_Keymod mod);
+extern bool keybind_movement_state_mode_release_changes(const keybind_movement_state *state,
+                                                        SDL_Scancode scancode,
+                                                        bool run);
+
+extern bool
+keybind_movement_state_scancode_has_invalid_mode_modifier(const keybind_movement_state *state,
+                                                          SDL_Scancode scancode,
+                                                          SDL_Keymod mod);
+
+extern bool keybind_movement_state_mode_modifier_changes(const keybind_movement_state *state,
+                                                         SDL_Keymod mod);
 
 extern void keybind_movement_state_release_invalid_mode_modifiers(keybind_movement_state *state,
                                                                   SDL_Keymod mod,
