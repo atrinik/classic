@@ -315,6 +315,7 @@ void toolkit_widget_init(void) {
         }
     }
 
+    widget_enforce_map_priority();
     widgets_ensure_onscreen();
 }
 
@@ -328,6 +329,7 @@ static int widget_menu_handle(widgetdata *widget, SDL_Event *event) {
 
 void menu_container_move(widgetdata *widget, widgetdata *menuitem, SDL_Event *event) {
     widget_event_start_move(widget->env ? widget->env : widget);
+    widget_enforce_map_priority();
 }
 
 void menu_container_detach(widgetdata *widget, widgetdata *menuitem, SDL_Event *event) {
@@ -1050,6 +1052,7 @@ void detach_widget(widgetdata *widget) {
     widget_list_head->prev = widget;
     widget->next = widget_list_head;
     widget_list_head = widget;
+    widget_enforce_map_priority();
 }
 
 #ifdef DEBUG_WIDGET
@@ -1804,7 +1807,8 @@ void SetPriorityWidget(widgetdata *node) {
         return;
     }
 
-    if (node->type == MAP_ID) {
+    if (widget_priority_is_ancestor(node, cur_widget[MAP_ID])) {
+        widget_enforce_map_priority();
         return;
     }
 
@@ -1924,37 +1928,11 @@ void SetPriorityWidget(widgetdata *node) {
  * The widget.
  */
 void SetPriorityWidget_reverse(widgetdata *node) {
-    if (!node) {
-        return;
-    }
+    widget_priority_to_back(node, &widget_list_head, &widget_list_foot);
+}
 
-    if (!node->next) {
-        return;
-    }
-
-    if (!node->prev) {
-        if (node->env) {
-            node->env->inv_rev = node->next;
-        } else {
-            widget_list_head = node->next;
-        }
-
-        node->next->prev = NULL;
-    } else {
-        node->next->prev = node->prev;
-        node->prev->next = node->next;
-    }
-
-    if (node->env) {
-        node->prev = node->env->inv;
-        node->env->inv = node;
-    } else {
-        node->prev = widget_list_foot;
-        widget_list_foot = node;
-    }
-
-    node->prev->next = node;
-    node->next = NULL;
+void widget_enforce_map_priority(void) {
+    widget_priority_map_to_back(cur_widget[MAP_ID], &widget_list_head, &widget_list_foot);
 }
 
 void insert_widget_in_container(widgetdata *widget_container, widgetdata *widget, int absolute) {
@@ -2071,6 +2049,7 @@ void insert_widget_in_container(widgetdata *widget_container, widgetdata *widget
      * auto-resize */
     resize_widget(widget, RESIZE_RIGHT, widget->w);
     resize_widget(widget, RESIZE_BOTTOM, widget->h);
+    widget_enforce_map_priority();
 }
 
 /** Get the outermost container the widget is inside. */

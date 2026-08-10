@@ -532,6 +532,16 @@ extern void SetPriorityWidget(widgetdata *node);
 
 extern void SetPriorityWidget_reverse(widgetdata *node);
 
+extern bool widget_priority_is_ancestor(const widgetdata *ancestor, const widgetdata *widget);
+
+extern void
+widget_priority_to_back(widgetdata *node, widgetdata **root_head, widgetdata **root_foot);
+
+extern void
+widget_priority_map_to_back(widgetdata *map, widgetdata **root_head, widgetdata **root_foot);
+
+extern void widget_enforce_map_priority(void);
+
 extern void
 insert_widget_in_container(widgetdata *widget_container, widgetdata *widget, int absolute);
 

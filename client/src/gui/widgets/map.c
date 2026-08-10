@@ -3253,7 +3253,7 @@ static void widget_draw(widgetdata *widget) {
     }
 
     /* Make sure the map widget is always the last to handle events for. */
-    SetPriorityWidget_reverse(widget);
+    widget_enforce_map_priority();
 
     double zoom = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0;
     if (widget_set_zoom(widget, zoom)) {
@@ -3488,7 +3488,7 @@ void widget_map_init(widgetdata *widget) {
     widget->deinit_func = widget_deinit;
     widget->menu_handle_func = NULL;
 
-    SetPriorityWidget_reverse(widget);
+    widget_enforce_map_priority();
 }
 
 /**
