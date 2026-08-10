@@ -34,8 +34,6 @@
 
 extern void metaserver_init(void);
 
-extern void metaserver_disable(void);
-
 extern server_struct *server_get_id(size_t num);
 
 bool metaserver_rendezvous_url(const server_struct *server, char *url, size_t url_size);
