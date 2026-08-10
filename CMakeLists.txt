@@ -79,6 +79,13 @@ function(atrinik_configure_target target)
     endif ()
 endfunction()
 
+if (MINGW)
+    set(PLUGIN_SUFFIX ".dll")
+else ()
+    set(LINUX true)
+    set(PLUGIN_SUFFIX ".so")
+endif ()
+
 set(ATRINIK_INTEGRATED_BUILD ON)
 set(atrinik_protocol_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/protocol")
 set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL
