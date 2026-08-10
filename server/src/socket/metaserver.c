@@ -1359,11 +1359,11 @@ void metaserver_service(void) {
         return;
     }
 
-    attempted_snapshot = snapshot;
     if (!metaserver_publish_cadence_attempted(&publish_cadence, now)) {
         pthread_mutex_unlock(&request_lock);
         return;
     }
+    attempted_snapshot = snapshot;
     pthread_mutex_lock(&stats_lock);
     stats.publish_attempts++;
     pthread_mutex_unlock(&stats_lock);

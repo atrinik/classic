@@ -11,7 +11,7 @@ import re
 import subprocess
 from typing import Callable
 
-from github_release import GitHubReleaseError, invoke, parse_json
+from github_release import GitHubReleaseError, invoke, list_releases, parse_json
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -52,28 +52,7 @@ def is_ancestor(older: str, newer: str) -> bool:
 
 
 def list_drafts(repository: str) -> list[dict[str, object]]:
-    result = invoke(
-        [
-            "gh",
-            "api",
-            "--paginate",
-            f"repos/{repository}/releases?per_page=100",
-            "--jq",
-            ".[] | @json",
-        ]
-    )
-    if result.returncode:
-        raise PendingReleaseError(
-            "cannot inspect GitHub releases: "
-            + (result.stderr.strip() or result.stdout.strip())
-        )
-    try:
-        releases = [json.loads(line) for line in result.stdout.splitlines() if line]
-    except json.JSONDecodeError as error:
-        raise PendingReleaseError("GitHub releases API returned invalid JSON") from error
-    if not all(isinstance(release, dict) for release in releases):
-        raise PendingReleaseError("GitHub releases API returned invalid releases")
-    return [release for release in releases if release.get("draft") is True]
+    return [release for release in list_releases(repository) if release.get("draft") is True]
 
 
 def validate_failed_run(
@@ -99,19 +78,32 @@ def validate_failed_run(
     jobs = request(f"repos/{repository}/actions/runs/{run_id}/jobs?filter=latest&per_page=100")
     if not isinstance(jobs, dict) or not isinstance(jobs.get("jobs"), list):
         raise PendingReleaseError(f"run {run_id} returned invalid jobs")
-    conclusions = {
-        job.get("name"): job.get("conclusion")
-        for job in jobs["jobs"]
-        if isinstance(job, dict)
-    }
-    required = {
-        "Build and validate immutable candidate / Build Windows server package": "failure",
-        "Build and validate immutable candidate / Build classic server image without publishing": "failure",
-        "Build and validate immutable candidate / Validate complete release candidate": "skipped",
-        "Publish unified release": "skipped",
-    }
-    if any(conclusions.get(name) != conclusion for name, conclusion in required.items()):
-        raise PendingReleaseError(f"run {run_id} no longer matches the failed-candidate evidence")
+    required = (
+        (
+            "Build and validate immutable candidate / Build Windows server package",
+            "failure",
+        ),
+        (
+            "Build and validate immutable candidate / "
+            "Build classic server image without publishing",
+            "failure",
+        ),
+        (
+            "Build and validate immutable candidate / Validate complete release candidate",
+            "skipped",
+        ),
+        ("Publish unified release", "skipped"),
+    )
+    for name, conclusion in required:
+        matches = [
+            job
+            for job in jobs["jobs"]
+            if isinstance(job, dict) and job.get("name") == name
+        ]
+        if len(matches) != 1 or matches[0].get("conclusion") != conclusion:
+            raise PendingReleaseError(
+                f"run {run_id} no longer matches the failed-candidate evidence"
+            )
 
 
 def resolve(
@@ -134,6 +126,7 @@ def resolve(
         or TAG_RE.fullmatch(tag) is None
         or not isinstance(release_id, int)
         or release_id <= 0
+        or release.get("draft") is not True
         or release.get("prerelease") is not False
         or not isinstance(assets, list)
     ):

@@ -90,6 +90,15 @@ class ResolvePendingReleaseTests(unittest.TestCase):
                         [release], failed_policy, lambda tag: commit, lambda run: None
                     )
 
+    def test_non_draft_release_cannot_be_deleted(self) -> None:
+        with self.assertRaisesRegex(
+            resolve_pending_release.PendingReleaseError,
+            "metadata is invalid",
+        ):
+            resolve_pending_release.resolve(
+                [draft(draft=False)], policy(), lambda tag: COMMIT, lambda run: None
+            )
+
     def test_partial_ordinary_draft_requires_retained_candidate(self) -> None:
         with self.assertRaisesRegex(
             resolve_pending_release.PendingReleaseError,
@@ -129,11 +138,13 @@ class ResolvePendingReleaseTests(unittest.TestCase):
                     "conclusion": "failure",
                 },
                 {
-                    "name": "Build and validate immutable candidate / Build classic server image without publishing",
+                    "name": "Build and validate immutable candidate / "
+                    "Build classic server image without publishing",
                     "conclusion": "failure",
                 },
                 {
-                    "name": "Build and validate immutable candidate / Validate complete release candidate",
+                    "name": "Build and validate immutable candidate / "
+                    "Validate complete release candidate",
                     "conclusion": "skipped",
                 },
                 {"name": "Publish unified release", "conclusion": "skipped"},
@@ -147,6 +158,39 @@ class ResolvePendingReleaseTests(unittest.TestCase):
             "atrinik/classic", RUN_IDS[0], request
         )
         jobs["jobs"][-1]["conclusion"] = "success"
+        with self.assertRaisesRegex(
+            resolve_pending_release.PendingReleaseError,
+            "failed-candidate evidence",
+        ):
+            resolve_pending_release.validate_failed_run(
+                "atrinik/classic", RUN_IDS[0], request
+            )
+
+    def test_duplicate_failed_run_jobs_are_ambiguous(self) -> None:
+        run = {
+            "name": "Package Release",
+            "path": ".github/workflows/package-release.yml",
+            "event": "workflow_dispatch",
+            "conclusion": "failure",
+            "head_repository": {"full_name": "atrinik/classic"},
+        }
+        names = (
+            "Build and validate immutable candidate / Build Windows server package",
+            "Build and validate immutable candidate / "
+            "Build classic server image without publishing",
+            "Build and validate immutable candidate / Validate complete release candidate",
+            "Publish unified release",
+        )
+        conclusions = ("failure", "failure", "skipped", "skipped")
+        job_list = [
+            {"name": name, "conclusion": conclusion}
+            for name, conclusion in zip(names, conclusions, strict=True)
+        ]
+        job_list.append(dict(job_list[0]))
+
+        def request(path: str) -> object:
+            return {"jobs": job_list} if "/jobs?" in path else run
+
         with self.assertRaisesRegex(
             resolve_pending_release.PendingReleaseError,
             "failed-candidate evidence",

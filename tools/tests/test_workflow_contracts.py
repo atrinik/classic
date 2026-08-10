@@ -235,6 +235,21 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertGreaterEqual(candidate.count("provenance: mode=max"), 1)
         self.assertGreaterEqual(candidate.count("sbom: true"), 1)
 
+    def test_server_validation_exercises_release_ndebug(self) -> None:
+        workflow = self.text("check.yml")
+        server = workflow[
+            workflow.index("  server:\n    name: Server validation") : workflow.index(
+                "  client:\n    name: Client validation"
+            )
+        ]
+        coverage = server.index("cmake --preset linux-coverage")
+        release = server.index("cmake --preset linux-release")
+        sanitizers = server.index("cmake --preset linux-sanitizers")
+        self.assertLess(coverage, release)
+        self.assertLess(release, sanitizers)
+        self.assertIn("cmake --build --preset linux-release --parallel", server)
+        self.assertIn("ctest --preset linux-release", server)
+
     def test_windows_packages_persist_toolchain_bound_compiler_caches(self) -> None:
         candidate = self.text("build-release-candidate.yml")
         cache_action = (
