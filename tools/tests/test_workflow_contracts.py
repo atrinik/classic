@@ -117,6 +117,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn(
             "steps.pending-release.outputs.action == 'delete-empty-draft'", workflow
         )
+        self.assertEqual(workflow.count("tools/release/resolve_pending_release.py"), 2)
+        delete_step = workflow[deletion:recovery]
+        self.assertIn('RELEASE_TAG: ${{ steps.pending-release.outputs.tag }}', delete_step)
+        self.assertIn('test "${verification}" = "${expected}"', delete_step)
+        self.assertLess(
+            delete_step.index('test "${verification}" = "${expected}"'),
+            delete_step.index("gh api --method DELETE"),
+        )
         self.assertIn('"repos/${RELEASE_REPOSITORY}/releases/${RELEASE_ID}"', workflow)
         self.assertIn("--ref main", workflow)
         self.assertIn("if: steps.pending-release.outputs.action != 'resume'", workflow)
@@ -142,10 +150,12 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertNotIn("--clobber", workflow)
 
-    def test_candidate_and_package_use_distinct_concurrency_namespaces(self) -> None:
+    def test_release_mutations_share_one_concurrency_namespace(self) -> None:
+        release = self.text("release.yml")
         package = self.text("package-release.yml")
         candidate = self.text("build-release-candidate.yml")
-        self.assertIn("group: classic-package-release-", package)
+        self.assertIn("group: classic-release-publication", release)
+        self.assertIn("group: classic-release-publication", package)
         self.assertIn("classic-release-candidate-", candidate)
 
     def test_latest_alias_has_one_globally_serialized_owner(self) -> None:

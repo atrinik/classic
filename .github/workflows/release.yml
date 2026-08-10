@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: classic-semantic-release
+  group: classic-release-publication
   cancel-in-progress: false
 
 jobs:
@@ -76,10 +76,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ steps.pending-release.outputs.release_id }}
           RELEASE_REPOSITORY: ${{ github.repository }}
-        run: >-
-          gh api
-          --method DELETE
-          "repos/${RELEASE_REPOSITORY}/releases/${RELEASE_ID}"
+          RELEASE_TAG: ${{ steps.pending-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          verification=$(python3 tools/release/resolve_pending_release.py \
+            --repository "${RELEASE_REPOSITORY}")
+          expected="{\"action\": \"delete-empty-draft\", \"release_id\": \"${RELEASE_ID}\", \"tag\": \"${RELEASE_TAG}\"}"
+          test "${verification}" = "${expected}"
+          gh api --method DELETE \
+            "repos/${RELEASE_REPOSITORY}/releases/${RELEASE_ID}"
       - name: Resume the incomplete package release
         if: steps.pending-release.outputs.action == 'resume'
         env:
