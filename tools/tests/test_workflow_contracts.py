@@ -247,12 +247,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertGreaterEqual(candidate.count("sbom: true"), 1)
 
     def test_server_validation_exercises_release_ndebug(self) -> None:
-        workflow = self.text("check.yml")
-        server = workflow[
-            workflow.index("  server:\n    name: Server validation") : workflow.index(
-                "  client:\n    name: Client validation"
-            )
-        ]
+        server = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
+            encoding="utf-8"
+        )
         coverage = server.index("cmake --preset linux-coverage")
         release = server.index("cmake --preset linux-release")
         sanitizers = server.index("cmake --preset linux-sanitizers")
@@ -535,6 +532,57 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("- windows-test", aggregate)
         self.assertIn("--windows-required", aggregate)
         self.assertIn("--windows-result", aggregate)
+
+    def test_linux_checks_pin_image_and_isolate_compiler_caches(self) -> None:
+        workflow = self.text("check.yml")
+        digest = "e117b858d5aecdb8eb39dc56451378b6e6bd72dd5e042ab96fee5b6154000043"
+        image = f"ghcr.io/atrinik/classic-build@sha256:{digest}"
+        cache_action = "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+
+        self.assertEqual(workflow.count(image), 1)
+        self.assertEqual(workflow.count(f"sha256:{digest}"), 2)
+        self.assertEqual(workflow.count(cache_action), 3)
+        self.assertEqual(workflow.count("tools/ci/linux_cache_key.py"), 3)
+        self.assertEqual(workflow.count("tools/ci/run_linux_check.sh"), 3)
+        self.assertEqual(workflow.count("--env CCACHE_DIR=/cache/ccache"), 3)
+        self.assertEqual(workflow.count("chmod 1777"), 3)
+        self.assertIn("tools/ci/measure_linux_image.sh", workflow)
+        self.assertNotIn("classic-client-sdl-mixer-ubuntu", workflow)
+
+        core = workflow[
+            workflow.index("  core:") : workflow.index("  windows-test-build:")
+        ]
+        server = workflow[
+            workflow.index("  server:\n    name: Server validation") : workflow.index(
+                "  client:\n    name: Client validation"
+            )
+        ]
+        client = workflow[
+            workflow.index("  client:\n    name: Client validation") : workflow.index(
+                "  classic-validation:\n    name: Classic validation"
+            )
+        ]
+        for job, component in ((core, "core"), (server, "server"), (client, "client")):
+            with self.subTest(component=component):
+                self.assertIn("packages: read", job)
+                self.assertIn("id-token: write", job)
+                self.assertIn(f"--component {component}", job)
+                self.assertIn(f"classic-ccache/{component}", job)
+                self.assertIn("restore-keys:", job)
+                self.assertNotIn("apt-get", job)
+                self.assertNotIn("ubuntu@sha256:", job)
+
+        runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("-DCMAKE_C_COMPILER_LAUNCHER=ccache", runner)
+        self.assertIn("-DCMAKE_CXX_COMPILER_LAUNCHER=ccache", runner)
+        self.assertIn("CCACHE_BASEDIR", runner)
+        self.assertIn("CCACHE_NOHASHDIR=true", runner)
+        self.assertIn("ccache --zero-stats", runner)
+        self.assertIn("ccache --print-stats", runner)
+        self.assertIn("ccache --show-config", runner)
+        self.assertIn("ccache --show-stats", runner)
 
 
 if __name__ == "__main__":

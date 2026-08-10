@@ -11,11 +11,16 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: classic-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build@sha256:e117b858d5aecdb8eb39dc56451378b6e6bd72dd5e042ab96fee5b6154000043
+  CLASSIC_LINUX_IMAGE_DIGEST: sha256:e117b858d5aecdb8eb39dc56451378b6e6bd72dd5e042ab96fee5b6154000043
+  CLASSIC_LINUX_CCACHE_COMPILER: gcc-15.2.0
+  CLASSIC_LINUX_CCACHE_EPOCH: "1"
 
 jobs:
   changes:
@@ -48,6 +53,10 @@ jobs:
     name: Core validation
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -83,12 +92,6 @@ jobs:
       - name: Run generator tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
         working-directory: protocol
-      - name: Build and test C package
-        run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --parallel
-          ctest --test-dir build --output-on-failure
-        working-directory: protocol
       - name: Build Python wheel
         run: |
           python3 -m pip install build==1.3.0
@@ -101,30 +104,59 @@ jobs:
             --source-epoch "$(git show -s --format=%ct HEAD)" \
             --output build/wheel
         working-directory: protocol
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcovr libcurl4-openssl-dev libidn2-dev libssl-dev zlib1g-dev
-      - name: Configure sibling protocol
-        run: cmake --preset linux-coverage -DATRINIK_PROTOCOL_SOURCE_DIR="$GITHUB_WORKSPACE/protocol"
-        working-directory: libatrinik
-      - name: Build, test, and cover
+      - id: linux-cache
+        name: Resolve isolated core compiler cache key
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          cmake --build --preset linux-coverage --parallel
-          ctest --preset linux-coverage
-          gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
-            --exclude '.*/build/.*' --print-summary --xml coverage.xml
-        working-directory: libatrinik
-      - name: Validate installed consumer
+          python3 tools/ci/linux_cache_key.py \
+            --component core \
+            --event "${GITHUB_EVENT_NAME}" \
+            --ref "${GITHUB_REF}" \
+            --pr-number "${PR_NUMBER}" \
+            --commit "${GITHUB_SHA}" \
+            --image-digest "${CLASSIC_LINUX_IMAGE_DIGEST}" \
+            --compiler "${CLASSIC_LINUX_CCACHE_COMPILER}" \
+            --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
+            --material .github/workflows/check.yml \
+            --material protocol/CMakeLists.txt \
+            --material libatrinik/CMakeLists.txt \
+            --material libatrinik/CMakePresets.json \
+            --github-output "${GITHUB_OUTPUT}"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/classic-ccache/core
+          key: ${{ steps.linux-cache.outputs.key }}
+          restore-keys: ${{ steps.linux-cache.outputs.restore_prefix }}
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Measure and pull pinned Classic Linux environment
+        run: tools/ci/measure_linux_image.sh "${CLASSIC_LINUX_IMAGE}" build/ci-evidence
+      - name: Prepare stable core compiler cache mount
         run: |
-          cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$PWD/build/install" \
-            -DATRINIK_PROTOCOL_SOURCE_DIR="$GITHUB_WORKSPACE/protocol"
-          cmake --build build/release --parallel
-          cmake --install build/release
-          cmake -S tests/consumer -B build/consumer \
-            -DCMAKE_PREFIX_PATH="$PWD/build/install"
-          cmake --build build/consumer --parallel
-          build/consumer/libatrinik-consumer
-        working-directory: libatrinik
+          mkdir -p "${RUNNER_TEMP}/classic-ccache/core"
+          chmod 1777 "${RUNNER_TEMP}/classic-ccache/core"
+      - name: Build and test core packages in the pinned environment
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env CCACHE_DIR=/cache/ccache \
+            --env CCACHE_MAXSIZE=500M \
+            --env HOME=/tmp/classic-home \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --volume "${RUNNER_TEMP}/classic-ccache/core:/cache/ccache" \
+            --workdir /workspace \
+            "${CLASSIC_LINUX_IMAGE}" \
+            tools/ci/run_linux_check.sh core /workspace
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-core-evidence-${{ github.run_attempt }}
+          path: build/ci-evidence
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload release-tool coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
@@ -370,45 +402,64 @@ jobs:
     if: needs.changes.outputs.server == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Pull pinned build environment
-        run: docker pull ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
+      - id: linux-cache
+        name: Resolve isolated server compiler cache key
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 tools/ci/linux_cache_key.py \
+            --component server \
+            --event "${GITHUB_EVENT_NAME}" \
+            --ref "${GITHUB_REF}" \
+            --pr-number "${PR_NUMBER}" \
+            --commit "${GITHUB_SHA}" \
+            --image-digest "${CLASSIC_LINUX_IMAGE_DIGEST}" \
+            --compiler "${CLASSIC_LINUX_CCACHE_COMPILER}" \
+            --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
+            --material .github/workflows/check.yml \
+            --material server/CMakeLists.txt \
+            --material server/CMakePresets.json \
+            --github-output "${GITHUB_OUTPUT}"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/classic-ccache/server
+          key: ${{ steps.linux-cache.outputs.key }}
+          restore-keys: ${{ steps.linux-cache.outputs.restore_prefix }}
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Pull pinned Classic Linux environment
+        run: docker pull "${CLASSIC_LINUX_IMAGE}"
+      - name: Prepare stable server compiler cache mount
+        run: |
+          mkdir -p "${RUNNER_TEMP}/classic-ccache/server"
+          chmod 1777 "${RUNNER_TEMP}/classic-ccache/server"
       - name: Validate, build, and test
         run: |
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env CCACHE_DIR=/cache/ccache \
+            --env CCACHE_MAXSIZE=500M \
+            --env HOME=/tmp/classic-home \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
-            --workdir /workspace/server \
-            ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03 \
-            bash -euo pipefail -c '
-              apt-get update -qq
-              env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-                build-essential ca-certificates check cmake flex gcovr \
-                libcurl4-openssl-dev libgd-dev libidn2-dev libminiupnpc-dev libreadline-dev \
-                libssl-dev libsubunit-dev ninja-build pkgconf python3-dev zlib1g-dev
-              python3 -m unittest discover -s tools/tests -p "test_*.py"
-              python3 tools/dependencies.py sync
-              python3 tools/dependencies.py verify
-              cmake --preset linux-coverage \
-                -DENABLE_PRECOMPILED_HEADERS=OFF \
-                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
-                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
-              cmake --build --preset linux-coverage --parallel
-              ctest --preset linux-coverage --parallel 4
-              gcovr --root . --filter "src/" --exclude "src/tests/" \
-                --print-summary --xml coverage.xml
-              cmake --preset linux-release \
-                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
-                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
-              cmake --build --preset linux-release --parallel
-              ctest --preset linux-release --parallel 4
-              cmake --preset linux-sanitizers \
-                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
-                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
-              cmake --build --preset linux-sanitizers --parallel
-              env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
-                ctest --preset linux-sanitizers --parallel 4
-            '
+            --volume "${RUNNER_TEMP}/classic-ccache/server:/cache/ccache" \
+            --workdir /workspace \
+            "${CLASSIC_LINUX_IMAGE}" \
+            tools/ci/run_linux_check.sh server /workspace
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-server-ccache-${{ github.run_attempt }}
+          path: build/ci-evidence/ccache-server.tsv
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
@@ -424,48 +475,64 @@ jobs:
     if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: linux-cache
+        name: Resolve isolated client compiler cache key
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 tools/ci/linux_cache_key.py \
+            --component client \
+            --event "${GITHUB_EVENT_NAME}" \
+            --ref "${GITHUB_REF}" \
+            --pr-number "${PR_NUMBER}" \
+            --commit "${GITHUB_SHA}" \
+            --image-digest "${CLASSIC_LINUX_IMAGE_DIGEST}" \
+            --compiler "${CLASSIC_LINUX_CCACHE_COMPILER}" \
+            --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
+            --material .github/workflows/check.yml \
+            --material client/CMakeLists.txt \
+            --material client/CMakePresets.json \
+            --github-output "${GITHUB_OUTPUT}"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: client/build/ci-prefix
-          key: classic-client-sdl-mixer-ubuntu-26.04-x64-3.2.4-v1
-      - name: Pull pinned build environment
-        run: docker pull ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
+          path: ${{ runner.temp }}/classic-ccache/client
+          key: ${{ steps.linux-cache.outputs.key }}
+          restore-keys: ${{ steps.linux-cache.outputs.restore_prefix }}
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Pull pinned Classic Linux environment
+        run: docker pull "${CLASSIC_LINUX_IMAGE}"
+      - name: Prepare stable client compiler cache mount
+        run: |
+          mkdir -p "${RUNNER_TEMP}/classic-ccache/client"
+          chmod 1777 "${RUNNER_TEMP}/classic-ccache/client"
       - name: Validate, build, and test
         run: |
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env CCACHE_DIR=/cache/ccache \
+            --env CCACHE_MAXSIZE=500M \
+            --env HOME=/tmp/classic-home \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
-            --workdir /workspace/client \
-            ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03 \
-            bash -euo pipefail -c '
-              tools/install-linux-ci-dependencies.sh build/ci-prefix
-              export CMAKE_PREFIX_PATH=/workspace/client/build/ci-prefix
-              export LD_LIBRARY_PATH=/workspace/client/build/ci-prefix/lib
-              export PKG_CONFIG_PATH=/workspace/client/build/ci-prefix/lib/pkgconfig
-              python3 -m unittest discover -s tools/tests -p "test_*.py"
-              python3 tools/dependencies.py sync
-              python3 tools/dependencies.py verify
-              cmake --preset linux-coverage \
-                -DENABLE_PRECOMPILED_HEADERS=OFF \
-                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
-                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
-              cmake --build --preset linux-coverage --parallel
-              ctest --preset linux-coverage
-              gcovr --root . --filter "src/" --exclude "src/tests/" \
-                --print-summary --xml coverage.xml
-              cmake --preset linux-release \
-                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
-                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
-              cmake --build --preset linux-release --parallel
-              ctest --preset linux-release
-              cmake --preset linux-sanitizers \
-                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
-                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
-              cmake --build --preset linux-sanitizers --parallel
-              env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
-                ctest --preset linux-sanitizers
-            '
+            --volume "${RUNNER_TEMP}/classic-ccache/client:/cache/ccache" \
+            --workdir /workspace \
+            "${CLASSIC_LINUX_IMAGE}" \
+            tools/ci/run_linux_check.sh client /workspace
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-client-ccache-${{ github.run_attempt }}
+          path: build/ci-evidence/ccache-client.tsv
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
