@@ -13,6 +13,9 @@
 #define WINDOW_TITLE_H
 
 #include <stdbool.h>
+#include <stdint.h>
+
+#include <SDL3/SDL.h>
 
 #define CLIENT_LAUNCH_LABEL_ENV "ATRINIK_LAUNCH_LABEL"
 #define CLIENT_LAUNCH_LABEL_MAX_SIZE 96
@@ -28,7 +31,13 @@
  */
 extern bool client_window_title_init(const char *label);
 
-/** Return the immutable title selected during client initialization. */
+/** Return the title selected during client initialization. */
 extern const char *client_window_title(void);
+
+/** Create the native client window with the selected title. */
+extern SDL_Window *client_window_create(int width, int height, uint32_t flags);
+
+/** Reapply the selected title after client subsystem initialization. */
+extern void client_window_title_apply(SDL_Window *window);
 
 #endif

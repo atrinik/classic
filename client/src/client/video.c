@@ -52,7 +52,7 @@ int video_set_size(void) {
     int height = setting_get_int(OPT_CAT_CLIENT, OPT_RESOLUTION_Y);
 
     if (ScreenWindow == NULL) {
-        ScreenWindow = SDL_CreateWindow(client_window_title(), width, height, get_video_flags());
+        ScreenWindow = client_window_create(width, height, get_video_flags());
         if (ScreenWindow == NULL) {
             return 0;
         }

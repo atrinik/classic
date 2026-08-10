@@ -52,7 +52,7 @@ void system_start(void) {
         video_set_icon(icon);
     }
 
-    SDL_SetWindowTitle(ScreenWindow, client_window_title());
+    client_window_title_apply(ScreenWindow);
 }
 
 /**

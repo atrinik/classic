@@ -334,6 +334,7 @@ if (BUILD_TESTING)
     target_include_directories(client-window-title-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-window-title-tests PRIVATE SDL3::SDL3)
     add_test(NAME client-window-title COMMAND client-window-title-tests)
 
     add_executable(client-metaserver-directory-tests
