@@ -378,15 +378,19 @@ bool metaserver_publish_cadence_due(metaserver_publish_cadence_t *cadence,
     return dirty_due || heartbeat_due;
 }
 
-void metaserver_publish_cadence_attempted(metaserver_publish_cadence_t *cadence,
+bool metaserver_publish_cadence_attempted(metaserver_publish_cadence_t *cadence,
                                           server_monotonic_t now) {
     HARD_ASSERT(cadence != NULL);
 
     uint32_t wait_ms;
-    HARD_ASSERT(metaserver_attempt_budget_consume(&cadence->rate_budget, now, &wait_ms));
-    HARD_ASSERT(wait_ms == 0);
+    bool consumed = metaserver_attempt_budget_consume(&cadence->rate_budget, now, &wait_ms);
+    HARD_ASSERT(consumed && wait_ms == 0);
+    if (!consumed || wait_ms != 0) {
+        return false;
+    }
     cadence->dirty = false;
     cadence->retry_deadline = (server_monotonic_t){0};
+    return true;
 }
 
 void metaserver_publish_cadence_succeeded(metaserver_publish_cadence_t *cadence,

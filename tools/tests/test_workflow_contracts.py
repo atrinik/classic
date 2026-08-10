@@ -102,22 +102,24 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("issues: write", workflow)
         self.assertNotIn("pull-requests: write", workflow)
 
-    def test_semantic_release_resumes_one_pending_draft_before_analysis(self) -> None:
+    def test_semantic_release_resolves_one_pending_draft_before_analysis(self) -> None:
         workflow = self.text("release.yml")
         detection = workflow.index("id: pending-release")
         recovery = workflow.index("Resume the incomplete package release")
+        deletion = workflow.index("Delete the policy-listed empty failed draft")
         analysis = workflow.index("Analyze commits, tag, and publish release notes")
         self.assertLess(detection, recovery)
+        self.assertLess(detection, deletion)
         self.assertLess(recovery, analysis)
-        self.assertIn("if ((${#drafts[@]} > 1))", workflow)
-        self.assertIn("git merge-base --is-ancestor", workflow)
+        self.assertLess(deletion, analysis)
+        self.assertIn("tools/release/resolve_pending_release.py", workflow)
+        self.assertIn("steps.pending-release.outputs.action == 'resume'", workflow)
+        self.assertIn(
+            "steps.pending-release.outputs.action == 'delete-empty-draft'", workflow
+        )
+        self.assertIn('"repos/${RELEASE_REPOSITORY}/releases/${RELEASE_ID}"', workflow)
         self.assertIn("--ref main", workflow)
-        self.assertIn("if: steps.pending-release.outputs.tag == ''", workflow)
-        self.assertIn("gh api --paginate \\\n", workflow)
-        self.assertIn(".[] | select(.draft == true)", workflow)
-        self.assertIn("(.assets | length)", workflow)
-        self.assertIn("retained-candidate recovery is required", workflow)
-        self.assertNotIn("gh api --paginate --slurp", workflow)
+        self.assertIn("if: steps.pending-release.outputs.action != 'resume'", workflow)
 
     def test_retained_candidate_recovery_is_bound_and_does_not_rebuild(self) -> None:
         workflow = self.text("package-release.yml")
