@@ -121,13 +121,17 @@ static uint64_t quic_punches_echoed;
 static csocket_entry_t *client_sockets;
 static size_t client_sockets_count;
 
+static int socket_server_address_family(const struct sockaddr_storage *address) {
+    return ((const struct sockaddr *)address)->sa_family;
+}
+
 static bool socket_server_address_loopback(const struct sockaddr_storage *address) {
-    if (address->ss_family == AF_INET) {
+    if (socket_server_address_family(address) == AF_INET) {
         const struct sockaddr_in *address4 = (const struct sockaddr_in *)address;
         return (ntohl(address4->sin_addr.s_addr) & 0xff000000U) == 0x7f000000U;
     }
 #ifdef HAVE_IPV6
-    if (address->ss_family == AF_INET6) {
+    if (socket_server_address_family(address) == AF_INET6) {
         const struct sockaddr_in6 *address6 = (const struct sockaddr_in6 *)address;
         return IN6_IS_ADDR_LOOPBACK(&address6->sin6_addr);
     }
@@ -136,12 +140,12 @@ static bool socket_server_address_loopback(const struct sockaddr_storage *addres
 }
 
 static bool socket_server_address_unspecified(const struct sockaddr_storage *address) {
-    if (address->ss_family == AF_INET) {
+    if (socket_server_address_family(address) == AF_INET) {
         const struct sockaddr_in *address4 = (const struct sockaddr_in *)address;
         return address4->sin_addr.s_addr == htonl(INADDR_ANY);
     }
 #ifdef HAVE_IPV6
-    if (address->ss_family == AF_INET6) {
+    if (socket_server_address_family(address) == AF_INET6) {
         const struct sockaddr_in6 *address6 = (const struct sockaddr_in6 *)address;
         return IN6_IS_ADDR_UNSPECIFIED(&address6->sin6_addr);
     }
@@ -300,7 +304,7 @@ TOOLKIT_INIT_FUNC(socket_server) {
             exit(1);
         }
         if (cps[1] != NULL) {
-            if (addr->ss_family != family) {
+            if (socket_server_address_family(addr) != family) {
                 LOG(ERROR, "Address family does not match network stack setting: %s", word);
                 exit(1);
             }
@@ -455,12 +459,12 @@ TOOLKIT_INIT_FUNC(socket_server) {
                 continue;
             }
             bool allowed =
-                address.ss_family == AF_INET && listen_v4 &&
+                socket_server_address_family(&address) == AF_INET && listen_v4 &&
                 (!restrict_v4 || strcmp(local_candidates[i].host, stack_setting.v4_host) == 0);
 #ifdef HAVE_IPV6
             allowed =
                 allowed ||
-                (address.ss_family == AF_INET6 && listen_v6 &&
+                (socket_server_address_family(&address) == AF_INET6 && listen_v6 &&
                  (!restrict_v6 || strcmp(local_candidates[i].host, stack_setting.v6_host) == 0));
 #endif
             if (allowed) {
