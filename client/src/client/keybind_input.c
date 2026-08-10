@@ -341,8 +341,12 @@ bool keybind_movement_state_press(keybind_movement_state *state,
 
     keybind_movement_key *key = &state->keys[scancode];
     if (repeated) {
-        if (key->direction == 0 || !key->repeat) {
+        if (!key->owned || !key->repeat) {
             return false;
+        }
+        if (key->direction == 0) {
+            key->order = ++state->next_order;
+            key->direction = direction;
         }
         if (state->repeat_scancode == SDL_SCANCODE_UNKNOWN) {
             state->repeat_scancode = scancode;
@@ -364,6 +368,7 @@ bool keybind_movement_state_press(keybind_movement_state *state,
     key->direction = direction;
     key->mod = SDL_KMOD_NONE;
     key->repeat = repeat;
+    key->owned = true;
     state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
     state->pending_move = true;
     state->pending_move_repeated = false;
@@ -408,11 +413,33 @@ void keybind_movement_state_release_invalid_modifiers(keybind_movement_state *st
     }
 
     SDL_Keymod adjusted_mod = keybind_adjust_kmod(mod);
+    bool removed = false;
     for (SDL_Scancode scancode = 0; scancode < SDL_SCANCODE_COUNT; scancode++) {
         if (state->keys[scancode].direction != 0 && state->keys[scancode].mod != SDL_KMOD_NONE &&
             state->keys[scancode].mod != adjusted_mod) {
-            keybind_movement_state_release(state, scancode, running, firing);
+            state->keys[scancode].direction = 0;
+            state->keys[scancode].order = 0;
+            state->keys[scancode].mod = SDL_KMOD_NONE;
+            if (scancode == state->repeat_scancode) {
+                state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
+            }
+            removed = true;
         }
+    }
+    if (!removed) {
+        return;
+    }
+    if (keybind_movement_active(state)) {
+        state->pending_move = true;
+        state->pending_move_repeated = false;
+        state->pending_direction = keybind_movement_direction(state);
+        state->pending_stop = false;
+    } else {
+        state->pending_move = false;
+        state->pending_move_repeated = false;
+        state->pending_stop = (state->repeated || running) && !firing;
+        state->repeated = false;
+        state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
     }
 }
 
@@ -438,8 +465,12 @@ void keybind_movement_state_release(keybind_movement_state *state,
                                     SDL_Scancode scancode,
                                     bool running,
                                     bool firing) {
-    if (state == NULL || scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_SCANCODE_COUNT ||
-        state->keys[scancode].direction == 0) {
+    if (state == NULL || scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_SCANCODE_COUNT) {
+        return;
+    }
+
+    if (state->keys[scancode].direction == 0) {
+        memset(&state->keys[scancode], 0, sizeof(state->keys[scancode]));
         return;
     }
 

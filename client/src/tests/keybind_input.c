@@ -684,6 +684,12 @@ static void test_keybind_event_integration(void) {
         .mod = SDL_KMOD_SHIFT,
         .repeat = true,
     };
+    keybind_struct shifted_b = {
+        .command = "?MOVE_NW",
+        .key = SDLK_B,
+        .mod = SDL_KMOD_SHIFT,
+        .repeat = true,
+    };
     keybind_struct move_then_fire = {
         .command = "?MOVE_N;?FIREON",
         .key = SDLK_C,
@@ -711,6 +717,7 @@ static void test_keybind_event_integration(void) {
     };
     keybind_struct *bindings[] = {&northwest,
                                   &shifted,
+                                  &shifted_b,
                                   &northeast,
                                   &move_then_fire,
                                   &fire_then_move,
@@ -901,11 +908,33 @@ static void test_keybind_event_integration(void) {
                                     &handler);
     TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 9);
     event.mod = SDL_KMOD_NONE;
+    event.repeat = true;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(sink.actions_num == 2 && sink.directions[1] == 7);
+    event.repeat = false;
     event.key = SDLK_G;
     event.scancode = SDL_SCANCODE_G;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     movement_sink_flush(&sink);
-    TEST_CHECK(sink.actions_num == 2 && sink.directions[1] == 3);
+    TEST_CHECK(sink.actions_num == 3 && sink.directions[2] == 3);
+
+    /* Multiple invalid modified keys are removed as one logical transition. */
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.mod = SDL_KMOD_LSHIFT;
+    event.key = SDLK_A;
+    event.scancode = SDL_SCANCODE_A;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    event.key = SDLK_B;
+    event.scancode = SDL_SCANCODE_B;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 8);
 }
 
 int main(void) {

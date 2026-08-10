@@ -67,6 +67,7 @@ typedef struct keybind_movement_key {
     SDL_Keymod mod;
     uint8_t direction;
     bool repeat;
+    bool owned;
 } keybind_movement_key;
 
 /** Physical-key state used to resolve one logical gameplay movement stream. */
