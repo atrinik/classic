@@ -588,6 +588,44 @@ START_TEST(test_incuna_unchanged_roof_level_remains_present) {
     socket_buffer_clear(cs);
     draw_client_map2(pl);
     ck_assert(map_cache_cell_has_roof(cs, 1, cs->mapx_2, cs->mapy_2 - 3));
+
+    mapstruct *dock_map = ready_map_name("/shattered_islands/world_5_84", NULL, 0);
+    ck_assert_ptr_nonnull(dock_map);
+    object_remove(pl, 0);
+    pl->x = 9;
+    pl->y = 15;
+    pl->sub_layer = 1;
+    pl = object_insert_map(pl, dock_map, NULL, 0);
+    ck_assert_ptr_nonnull(pl);
+    map_client_cache_clear(&cs->lastmap);
+    cs->lastmap_player_level_known = false;
+    CONTR(pl)->last_update = NULL;
+    CONTR(pl)->update_los = 1;
+    socket_buffer_clear(cs);
+    draw_client_map(pl);
+    ck_assert_msg(map_cache_has_roof(cs, 1),
+                  "Incuna dock roofs are absent at the reported position");
+    packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, cs->mapx, cs->mapy));
+
+    bool dock_stable_roof_level_found = false;
+    for (size_t update = 0; update < 8; update++) {
+        socket_buffer_clear(cs);
+        draw_client_map(pl);
+
+        packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+        ck_assert_ptr_nonnull(packet);
+        ck_assert(map_protocol_validate(packet->data, packet->len, 0, cs->mapx, cs->mapy));
+        roof_delta_size = UINT32_MAX;
+        ck_assert_msg(map_packet_level_size(packet, 1, &roof_delta_size),
+                      "Incuna dock roof level was omitted after login");
+        dock_stable_roof_level_found |= roof_delta_size == 0;
+        ck_assert_msg(map_cache_has_roof(cs, 1),
+                      "Incuna dock roofs disappeared after an unchanged update");
+    }
+    ck_assert_msg(dock_stable_roof_level_found,
+                  "Incuna dock roof level did not reach a stable empty delta");
 }
 END_TEST
 
