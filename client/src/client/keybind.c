@@ -469,6 +469,7 @@ int keybind_process_command(const char *cmd) {
         } else if (!strncmp(cmd, "RUNON", 5)) {
             if (!strcmp(cmd + 5, "_TOGGLE")) {
                 movement_run_held = false;
+                keybind_movement_state_mode_clear(&movement_state, true);
                 if (cpl.run_on) {
                     move_keys(5);
                 }
@@ -481,6 +482,7 @@ int keybind_process_command(const char *cmd) {
         } else if (!strncmp(cmd, "FIREON", 6)) {
             if (!strcmp(cmd + 6, "_TOGGLE")) {
                 movement_fire_held = false;
+                keybind_movement_state_mode_clear(&movement_state, false);
                 cpl.fire_on = !cpl.fire_on;
             } else {
                 movement_fire_held = true;

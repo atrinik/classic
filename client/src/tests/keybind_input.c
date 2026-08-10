@@ -652,10 +652,11 @@ static void movement_sink_intercept(const char *command, void *user_data) {
 static void movement_sink_command_up(const char *command, void *user_data) {
     movement_sink *sink = user_data;
 
-    sink->command_ups++;
     if (!strcmp(command, "?RUNON")) {
+        sink->command_ups++;
         sink->running = false;
     } else if (!strcmp(command, "?FIREON")) {
+        sink->command_ups++;
         sink->firing = false;
     }
 }
@@ -1682,6 +1683,14 @@ static void test_keybind_event_integration(void) {
     event.key = SDLK_1;
     event.scancode = SDL_SCANCODE_1;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    SDL_KeyboardEvent toggle_up = event;
+    toggle_up.type = SDL_EVENT_KEY_UP;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &toggle_up,
+                                    key_states,
+                                    &handler);
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &toggle_up, &handler));
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     TEST_CHECK(sink.running && !keybind_movement_state_mode_owned(&sink.state, true));
     event.key = SDLK_A;
@@ -1713,6 +1722,14 @@ static void test_keybind_event_integration(void) {
     event.key = SDLK_2;
     event.scancode = SDL_SCANCODE_2;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    toggle_up = event;
+    toggle_up.type = SDL_EVENT_KEY_UP;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &toggle_up,
+                                    key_states,
+                                    &handler);
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &toggle_up, &handler));
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     TEST_CHECK(sink.firing && !keybind_movement_state_mode_owned(&sink.state, false));
     event.key = SDLK_A;
