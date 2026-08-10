@@ -120,12 +120,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(workflow.count("tools/release/resolve_pending_release.py"), 2)
         delete_step = workflow[deletion:recovery]
         self.assertIn('RELEASE_TAG: ${{ steps.pending-release.outputs.tag }}', delete_step)
-        self.assertIn('test "${verification}" = "${expected}"', delete_step)
-        self.assertLess(
-            delete_step.index('test "${verification}" = "${expected}"'),
-            delete_step.index("gh api --method DELETE"),
-        )
-        self.assertIn('"repos/${RELEASE_REPOSITORY}/releases/${RELEASE_ID}"', workflow)
+        self.assertIn("--delete-policy-listed-empty-draft", delete_step)
+        self.assertIn('--expected-tag "${RELEASE_TAG}"', delete_step)
+        self.assertIn('--expected-release-id "${RELEASE_ID}"', delete_step)
+        self.assertNotIn("gh api --method DELETE", delete_step)
         self.assertIn("--ref main", workflow)
         self.assertIn("if: steps.pending-release.outputs.action != 'resume'", workflow)
 
@@ -358,6 +356,15 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(candidate.count("fetch-depth: 0"), 2)
         self.assertEqual(metadata_job.count("fetch-depth: 0"), 2)
         self.assertNotIn("fetch-depth: 0", remaining_jobs)
+
+    def test_core_uploads_exercised_python_release_tool_coverage(self) -> None:
+        workflow = self.text("check.yml")
+        core = workflow[workflow.index("  core:") : workflow.index("  windows-test-build:")]
+        self.assertIn("python3 -m pip install coverage==7.15.2", core)
+        self.assertIn("python3 -m coverage run --branch --source=tools", core)
+        self.assertIn("python3 -m coverage run --append --branch --source=tools", core)
+        self.assertIn("python3 -m coverage xml -o tools/coverage.xml", core)
+        self.assertIn("files: tools/coverage.xml,libatrinik/coverage.xml", core)
 
     def test_native_worldmaker_build_uses_the_server_compiler_cache(self) -> None:
         script = (ROOT / "server" / "tools" / "build-windows-package.sh").read_text(

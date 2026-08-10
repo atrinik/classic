@@ -58,10 +58,15 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
+      - name: Install Python test coverage tooling
+        run: python3 -m pip install coverage==7.15.2
       - name: Validate imported history and release helpers
         run: |
-          python3 tools/verify_import_history.py
-          python3 -m unittest discover -s tools/tests -p 'test_*.py'
+          python3 -m coverage run --branch --source=tools \
+            tools/verify_import_history.py
+          python3 -m coverage run --append --branch --source=tools \
+            -m unittest discover -s tools/tests -p 'test_*.py'
+          python3 -m coverage xml -o tools/coverage.xml
       - name: Validate first-parent release analysis
         run: >-
           npx --yes
@@ -124,7 +129,7 @@ jobs:
         with:
           disable_search: true
           fail_ci_if_error: false
-          files: libatrinik/coverage.xml
+          files: tools/coverage.xml,libatrinik/coverage.xml
           flags: libatrinik
           use_oidc: true
       - name: Validate editor packaging helper
