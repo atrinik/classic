@@ -27,22 +27,36 @@
 
 #define ASSET_CACHE_MAX_TOTAL (1024ULL * 1024ULL * 1024ULL)
 #define ASSET_RATE_BYTES_PER_SECOND (8U * 1024U * 1024U)
-#define ASSET_RATE_REQUESTS_PER_SECOND 256U
+#define ASSET_RATE_REQUESTS_PER_SECOND SOCKET_ASSET_REQUEST_RATE_MAX
 #define ASSET_TOKEN_BUCKET_CAPACITY ASSET_RATE_BYTES_PER_SECOND
 #define ASSET_STREAM_ACCEPT_QUANTUM 16U
 /* Bound all connections together to the configured byte rate and a fixed
  * number of accept/read/write operations per game-loop iteration. */
 #define ASSET_GLOBAL_WORK_PER_TICK 512U
-/* A server loop normally runs every 125 ms. Progress several fair rounds per
- * invocation so an accepted face is not stretched across one tick per header
- * or 16 KiB body fragment. The fixed round count keeps per-connection work
- * bounded while the per-connection and server-wide byte budgets enforce
- * pacing. */
-#define ASSET_STREAM_SERVICE_ROUNDS 12U
-#define ASSET_FACE_SERVICE_ROUNDS_REQUIRED \
-    (3U + (ASSET_FACE_MAX_SIZE + ASSET_STREAM_QUANTUM - 1U) / ASSET_STREAM_QUANTUM)
+/* A server loop normally runs every 125 ms. Two request-read rounds (payload
+ * and FIN) are followed by one header and up to four 16 KiB body writes per
+ * batch member. Permit an entire maximum batch to progress in one invocation
+ * when QUIC, byte pacing, and the server-wide work budget allow it. Those
+ * existing bounds remain the authoritative caps across connections. */
+#define ASSET_FACE_BODY_SERVICE_ROUNDS \
+    ((ASSET_FACE_MAX_SIZE + ASSET_STREAM_QUANTUM - 1U) / ASSET_STREAM_QUANTUM)
+#define ASSET_FACE_MEMBER_SERVICE_ROUNDS (1U + ASSET_FACE_BODY_SERVICE_ROUNDS)
+#define ASSET_FACE_BATCH_REQUEST_SERVICE_ROUNDS 2U
+#define ASSET_FACE_BATCH_SERVICE_ROUNDS_REQUIRED \
+    (ASSET_FACE_BATCH_REQUEST_SERVICE_ROUNDS +   \
+     ASSET_FACE_BATCH_MAX * ASSET_FACE_MEMBER_SERVICE_ROUNDS)
+#define ASSET_STREAM_SERVICE_ROUNDS ASSET_FACE_BATCH_SERVICE_ROUNDS_REQUIRED
+/* One saturated connection may send a complete maximum batch in a normal
+ * tick, but cannot consume the entire aggregate allowance before peers run. */
+#define ASSET_CONNECTION_BYTES_PER_PASS \
+    (ASSET_FACE_BATCH_MAX_SIZE + ASSET_FACE_BATCH_MAX * SOCKET_FACE_BATCH_RESPONSE_HEADER_SIZE)
+#define ASSET_CONNECTION_WORK_PER_PASS \
+    (1U + ASSET_STREAM_ACCEPT_QUANTUM + ASSET_STREAM_ACTIVE_MAX * ASSET_STREAM_SERVICE_ROUNDS)
 
-CASSERT(ASSET_STREAM_SERVICE_ROUNDS >= ASSET_FACE_SERVICE_ROUNDS_REQUIRED);
+CASSERT(ASSET_FACE_BATCH_MAX_SIZE == ASSET_FACE_BATCH_MAX * ASSET_FACE_MAX_SIZE);
+CASSERT(ASSET_STREAM_SERVICE_ROUNDS >= ASSET_FACE_BATCH_SERVICE_ROUNDS_REQUIRED);
+CASSERT(SOCKET_ASSET_REQUEST_MAX_SIZE >= SOCKET_FACE_BATCH_REQUEST_MAX_SIZE);
+CASSERT(ASSET_GLOBAL_WORK_PER_TICK >= 2U * (ASSET_CONNECTION_WORK_PER_PASS + 1U));
 
 typedef struct asset_cache_entry {
     UT_hash_handle hh;
@@ -63,6 +77,7 @@ struct asset_stream_state {
     struct asset_stream_state *next;
     struct asset_stream_state *prev;
     socket_stream_t *stream;
+    socket_stream_kind_t kind;
     asset_cache_entry_t *entry;
     const uint8_t *body;
     uint32_t body_size;
@@ -73,6 +88,9 @@ struct asset_stream_state {
     packet_struct *header;
     size_t header_pos;
     size_t body_pos;
+    uint16_t batch_faces[ASSET_FACE_BATCH_MAX];
+    uint8_t batch_count;
+    uint8_t batch_pos;
     bool concluded;
 };
 
@@ -95,6 +113,24 @@ size_t socket_assets_tick_byte_budget(void) {
     uint64_t duration_us = MIN((uint64_t)MAX(max_time / multiplier, 1L), UINT64_C(1000000));
     uint64_t bytes = (uint64_t)ASSET_RATE_BYTES_PER_SECOND * duration_us / UINT64_C(1000000);
     return (size_t)MAX(bytes, UINT64_C(1));
+}
+
+size_t socket_assets_connection_pass_byte_budget(size_t remaining) {
+    return MIN(remaining, (size_t)ASSET_CONNECTION_BYTES_PER_PASS);
+}
+
+size_t socket_assets_face_batch_service_rounds(const uint32_t *body_sizes, size_t count) {
+    if (body_sizes == NULL || count == 0 || count > ASSET_FACE_BATCH_MAX) {
+        return 0;
+    }
+    size_t rounds = ASSET_FACE_BATCH_REQUEST_SERVICE_ROUNDS;
+    for (size_t i = 0; i < count; i++) {
+        if (body_sizes[i] > ASSET_FACE_MAX_SIZE) {
+            return 0;
+        }
+        rounds += 1U + (body_sizes[i] + ASSET_STREAM_QUANTUM - 1U) / ASSET_STREAM_QUANTUM;
+    }
+    return rounds;
 }
 
 static bool asset_simple_name(const char *name) {
@@ -281,6 +317,10 @@ void socket_assets_connection_register(socket_struct *ns) {
     HARD_ASSERT(ns->asset_service_next == NULL);
     HARD_ASSERT(ns->asset_service_prev == NULL);
 
+    ns->asset_transport_capabilities =
+        ns->sc != NULL && socket_is_quic(ns->sc) ? ASSET_TRANSPORT_CAP_ALL : 0;
+    ns->asset_accept_batch_next = false;
+
     ns->asset_service_prev = asset_connections_tail;
     if (asset_connections_tail != NULL) {
         asset_connections_tail->asset_service_next = ns;
@@ -301,20 +341,24 @@ static asset_cache_entry_t *asset_cache_find(const char *name) {
     return entry;
 }
 
-static bool asset_request_rate_allow(socket_struct *ns) {
+bool socket_assets_request_rate_allow(socket_struct *ns, unsigned int requests) {
+    HARD_ASSERT(ns != NULL);
+    HARD_ASSERT(requests != 0);
+
     uint64_t now = datetime_monotonic_ms();
     if (ns->asset_request_window_ms == 0 || now - ns->asset_request_window_ms >= 1000) {
         ns->asset_request_window_ms = now;
         ns->asset_window_requests = 0;
     }
-    if (ns->asset_window_requests >= ASSET_RATE_REQUESTS_PER_SECOND) {
+    if (requests > ASSET_RATE_REQUESTS_PER_SECOND ||
+        ns->asset_window_requests > ASSET_RATE_REQUESTS_PER_SECOND - requests) {
         LOG(ERROR,
             "Connection %s exceeded the in-band asset request-rate limit",
-            socket_get_id(ns->sc));
+            ns->sc != NULL ? socket_get_id(ns->sc) : "(unbound)");
         ns->state = ST_ZOMBIE;
         return false;
     }
-    ns->asset_window_requests++;
+    ns->asset_window_requests += requests;
     return true;
 }
 
@@ -359,23 +403,103 @@ asset_stream_free(socket_struct *ns, asset_stream_state_t *state, bool reset, bo
     free(state);
 }
 
-static void asset_stream_header(asset_stream_state_t *state,
+static bool asset_stream_header(asset_stream_state_t *state,
+                                uint16_t face,
                                 uint8_t status,
                                 uint32_t total_size,
                                 const uint8_t digest[ASSET_DIGEST_SIZE]) {
-    state->header = packet_new(0, SOCKET_ASSET_RESPONSE_HEADER_SIZE, 0);
-    socket_asset_response_append_status(state->header, status, total_size, digest);
+    HARD_ASSERT(state->header == NULL);
+    HARD_ASSERT(state->header_pos == 0);
+    HARD_ASSERT(state->body_pos == 0);
+
+    size_t capacity = state->kind == SOCKET_STREAM_FACE_BATCH
+                          ? SOCKET_FACE_BATCH_RESPONSE_HEADER_SIZE
+                          : SOCKET_ASSET_RESPONSE_HEADER_SIZE;
+    state->header = packet_new(0, capacity, 0);
+    bool appended =
+        state->kind == SOCKET_STREAM_FACE_BATCH
+            ? socket_face_batch_response_append(state->header, face, status, total_size, digest)
+            : (socket_asset_response_append_status(state->header, status, total_size, digest),
+               true);
+    if (!appended) {
+        packet_free(state->header);
+        state->header = NULL;
+        return false;
+    }
     HARD_ASSERT(packet_writer_finish(state->header));
     state->state = ASSET_SERVER_SEND_HEADER;
+    return true;
 }
 
-static bool asset_stream_prepare(socket_struct *ns, asset_stream_state_t *state) {
+static bool asset_stream_prepare_batch_member(asset_stream_state_t *state) {
+    HARD_ASSERT(state->kind == SOCKET_STREAM_FACE_BATCH);
+    HARD_ASSERT(state->batch_pos < state->batch_count);
+    HARD_ASSERT(state->header == NULL);
+    HARD_ASSERT(state->body == NULL);
+
+    uint16_t face = state->batch_faces[state->batch_pos];
+    const uint8_t *body = NULL;
+    const uint8_t *digest = NULL;
+    uint32_t body_size = 0;
+    if (!face_get_asset(face, &body, &body_size, &digest) || body == NULL || body_size == 0 ||
+        digest == NULL) {
+        return asset_stream_header(state, face, ASSET_STATUS_NOT_FOUND, 0, NULL);
+    }
+
+    HARD_ASSERT(body_size <= ASSET_FACE_MAX_SIZE);
+    state->body = body;
+    state->body_size = body_size;
+    if (!asset_stream_header(state, face, ASSET_STATUS_OK, body_size, digest)) {
+        state->body = NULL;
+        state->body_size = 0;
+        return false;
+    }
+    return true;
+}
+
+static bool asset_stream_prepare_batch(socket_struct *ns, asset_stream_state_t *state) {
+    socket_face_batch_request_t request;
+    if (!socket_face_batch_request_parse(state->request, state->request_size, 0, &request)) {
+        LOG(ERROR, "Connection %s sent a malformed QUIC face-batch request", socket_get_id(ns->sc));
+        return false;
+    }
+    if (!socket_assets_request_rate_allow(ns, request.count)) {
+        return false;
+    }
+    if (!socket_connection_admitted(ns)) {
+        LOG(ERROR,
+            "Connection %s opened a face-batch stream before admission",
+            socket_get_id(ns->sc));
+        return false;
+    }
+
+    state->batch_count = request.count;
+    memcpy(state->batch_faces, request.faces, request.count * sizeof(*request.faces));
+    uint32_t body_sizes[ASSET_FACE_BATCH_MAX] = {0};
+    for (size_t i = 0; i < request.count; i++) {
+        face_get_asset(request.faces[i], NULL, &body_sizes[i], NULL);
+    }
+    size_t rounds = socket_assets_face_batch_service_rounds(body_sizes, request.count);
+    if (rounds == 0 || rounds > ASSET_STREAM_SERVICE_ROUNDS) {
+        LOG(ERROR,
+            "Connection %s requested a face batch outside the service bound",
+            socket_get_id(ns->sc));
+        return false;
+    }
+    LOG(DEBUG,
+        "Connection %s opened QUIC face-batch stream with %u faces",
+        socket_get_id(ns->sc),
+        request.count);
+    return asset_stream_prepare_batch_member(state);
+}
+
+static bool asset_stream_prepare_generic(socket_struct *ns, asset_stream_state_t *state) {
     socket_asset_request_t request;
     if (!socket_asset_request_parse(state->request, state->request_size, 0, &request)) {
         LOG(ERROR, "Connection %s sent a malformed QUIC asset request", socket_get_id(ns->sc));
         return false;
     }
-    if (!asset_request_rate_allow(ns)) {
+    if (!socket_assets_request_rate_allow(ns, 1)) {
         return false;
     }
     if (!socket_connection_admitted(ns)) {
@@ -400,16 +524,24 @@ static bool asset_stream_prepare(socket_struct *ns, asset_stream_state_t *state)
         }
     }
     if (body == NULL || body_size == 0 || digest == NULL) {
-        asset_stream_header(state,
-                            request.flags & ASSET_REQUEST_METADATA ? ASSET_STATUS_METADATA_NOT_FOUND
-                                                                   : ASSET_STATUS_NOT_FOUND,
-                            0,
-                            NULL);
+        if (!asset_stream_header(state,
+                                 0,
+                                 request.flags & ASSET_REQUEST_METADATA
+                                     ? ASSET_STATUS_METADATA_NOT_FOUND
+                                     : ASSET_STATUS_NOT_FOUND,
+                                 0,
+                                 NULL)) {
+            return false;
+        }
     } else if (request.flags & ASSET_REQUEST_METADATA) {
-        asset_stream_header(state, ASSET_STATUS_METADATA, body_size, digest);
+        if (!asset_stream_header(state, 0, ASSET_STATUS_METADATA, body_size, digest)) {
+            return false;
+        }
     } else if (request.cached_size == body_size &&
                memcmp(request.cached_digest, digest, ASSET_DIGEST_SIZE) == 0) {
-        asset_stream_header(state, ASSET_STATUS_NOT_MODIFIED, body_size, digest);
+        if (!asset_stream_header(state, 0, ASSET_STATUS_NOT_MODIFIED, body_size, digest)) {
+            return false;
+        }
     } else {
         state->entry = entry;
         if (entry != NULL) {
@@ -417,13 +549,27 @@ static bool asset_stream_prepare(socket_struct *ns, asset_stream_state_t *state)
         }
         state->body = body;
         state->body_size = body_size;
-        asset_stream_header(state, ASSET_STATUS_OK, body_size, digest);
+        if (!asset_stream_header(state, 0, ASSET_STATUS_OK, body_size, digest)) {
+            state->body = NULL;
+            state->body_size = 0;
+            if (entry != NULL) {
+                HARD_ASSERT(entry->references != 0);
+                entry->references--;
+                state->entry = NULL;
+            }
+            return false;
+        }
     }
     LOG(DEBUG,
         "Connection %s opened QUIC asset stream for %s",
         socket_get_id(ns->sc),
         request.path);
     return true;
+}
+
+static bool asset_stream_prepare(socket_struct *ns, asset_stream_state_t *state) {
+    return state->kind == SOCKET_STREAM_FACE_BATCH ? asset_stream_prepare_batch(ns, state)
+                                                   : asset_stream_prepare_generic(ns, state);
 }
 
 static bool
@@ -452,6 +598,20 @@ asset_stream_read_request(socket_struct *ns, asset_stream_state_t *state, bool *
     state->request_size += amount;
     *progressed = amount != 0;
     return true;
+}
+
+static bool asset_stream_advance(asset_stream_state_t *state) {
+    HARD_ASSERT(state->header == NULL);
+    HARD_ASSERT(state->body == NULL);
+    HARD_ASSERT(state->body_size == 0);
+    HARD_ASSERT(state->header_pos == 0);
+    HARD_ASSERT(state->body_pos == 0);
+
+    if (state->kind == SOCKET_STREAM_FACE_BATCH && ++state->batch_pos < state->batch_count) {
+        return asset_stream_prepare_batch_member(state);
+    }
+    state->concluded = socket_stream_conclude(state->stream);
+    return false;
 }
 
 static bool asset_stream_write(socket_struct *ns,
@@ -496,9 +656,9 @@ static bool asset_stream_write(socket_struct *ns,
             server_metrics_asset_response(datetime_monotonic_us() - state->started_us);
             packet_free(state->header);
             state->header = NULL;
+            state->header_pos = 0;
             if (state->body == NULL || state->body_size == 0) {
-                state->concluded = socket_stream_conclude(state->stream);
-                return false;
+                return asset_stream_advance(state);
             }
             state->state = ASSET_SERVER_SEND_BODY;
         }
@@ -508,8 +668,10 @@ static bool asset_stream_write(socket_struct *ns,
         state->body_pos += amount;
         server_metrics_asset_stream(0, amount, false);
         if (state->body_pos == state->body_size) {
-            state->concluded = socket_stream_conclude(state->stream);
-            return false;
+            state->body = NULL;
+            state->body_size = 0;
+            state->body_pos = 0;
+            return asset_stream_advance(state);
         }
     }
     return true;
@@ -518,28 +680,65 @@ static bool asset_stream_write(socket_struct *ns,
 static void asset_stream_accept(socket_struct *ns, asset_service_budget_t *budget) {
     HARD_ASSERT(budget != NULL);
 
-    for (size_t accepted = 0; accepted < ASSET_STREAM_ACCEPT_QUANTUM && budget->work != 0;
+    for (size_t accepted = 0; accepted < ASSET_STREAM_ACCEPT_QUANTUM &&
+                              ns->asset_stream_count < ASSET_STREAM_ACTIVE_MAX && budget->work != 0;
          accepted++) {
         budget->work--;
-        socket_stream_t *stream = socket_stream_accept(ns->sc, SOCKET_STREAM_ASSET);
+        socket_stream_kind_t first =
+            ns->asset_accept_batch_next ? SOCKET_STREAM_FACE_BATCH : SOCKET_STREAM_ASSET;
+        socket_stream_kind_t second =
+            first == SOCKET_STREAM_FACE_BATCH ? SOCKET_STREAM_ASSET : SOCKET_STREAM_FACE_BATCH;
+        socket_stream_t *stream = socket_stream_accept(ns->sc, first);
+        socket_stream_kind_t kind = first;
+        if (stream == NULL) {
+            stream = socket_stream_accept(ns->sc, second);
+            kind = second;
+        }
         if (stream == NULL) {
             break;
         }
-        if (ns->asset_stream_count >= ASSET_STREAM_ACTIVE_MAX) {
-            LOG(ERROR,
-                "Connection %s exceeded the active asset-stream limit",
-                socket_get_id(ns->sc));
-            socket_stream_reset(stream, SOCKET_STREAM_ERROR_LIMIT);
-            socket_stream_destroy(stream);
-            server_metrics_asset_stream(0, 0, true);
-            continue;
-        }
+        ns->asset_accept_batch_next = kind != SOCKET_STREAM_FACE_BATCH;
         asset_stream_state_t *state = xcalloc(1, sizeof(*state));
         state->stream = stream;
+        state->kind = kind;
         state->started_us = datetime_monotonic_us();
         DL_APPEND(ns->asset_streams, state);
         ns->asset_stream_count++;
         server_metrics_asset_stream(1, 0, false);
+    }
+}
+
+static bool
+asset_stream_service_round(socket_struct *ns, asset_service_budget_t *budget, bool *progressed) {
+    HARD_ASSERT(ns != NULL);
+    HARD_ASSERT(budget != NULL);
+    HARD_ASSERT(progressed != NULL);
+
+    *progressed = false;
+    asset_stream_state_t *state, *next;
+    DL_FOREACH_SAFE(ns->asset_streams, state, next) {
+        if (budget->work == 0 ||
+            (budget->bytes == 0 && state->state != ASSET_SERVER_READ_REQUEST)) {
+            return false;
+        }
+        budget->work--;
+        bool stream_progressed = false;
+        bool keep = state->state == ASSET_SERVER_READ_REQUEST
+                        ? asset_stream_read_request(ns, state, &stream_progressed)
+                        : asset_stream_write(ns, state, budget, &stream_progressed);
+        *progressed |= stream_progressed;
+        if (!keep) {
+            asset_stream_free(ns, state, !state->concluded, !state->concluded);
+        }
+    }
+    return true;
+}
+
+static void asset_stream_rotate(socket_struct *ns) {
+    if (ns->asset_streams != NULL && ns->asset_streams->next != NULL) {
+        asset_stream_state_t *first = ns->asset_streams;
+        DL_DELETE(ns->asset_streams, first);
+        DL_APPEND(ns->asset_streams, first);
     }
 }
 
@@ -549,35 +748,41 @@ static bool asset_connection_service(socket_struct *ns, asset_service_budget_t *
     if (!socket_is_quic(ns->sc)) {
         return true;
     }
+    if (budget->work == 0) {
+        return true;
+    }
+    budget->work--;
+    socket_stream_poll_pending(ns->sc);
+
+    size_t round = 0;
+    if (ns->asset_streams != NULL) {
+        /* A client may reset a speculative stream and immediately open its
+         * priority replacement. Observe and reap every previously active
+         * stream before applying the shared active-stream limit to newly
+         * typed streams; otherwise the replacement can be rejected against a
+         * stale count of three. This is the first normal service round, so it
+         * consumes the same byte/work budgets and preserves list rotation. */
+        bool progressed = false;
+        bool complete = asset_stream_service_round(ns, budget, &progressed);
+        if (progressed) {
+            asset_stream_rotate(ns);
+        }
+        round++;
+        if (!complete || ns->state == ST_DEAD || ns->state == ST_ZOMBIE) {
+            return ns->state != ST_DEAD && ns->state != ST_ZOMBIE;
+        }
+    }
+
     asset_stream_accept(ns, budget);
 
-    for (size_t round = 0;
-         round < ASSET_STREAM_SERVICE_ROUNDS && budget->bytes != 0 && budget->work != 0;
+    for (; round < ASSET_STREAM_SERVICE_ROUNDS && budget->bytes != 0 && budget->work != 0;
          round++) {
         bool progressed = false;
-        asset_stream_state_t *state, *next;
-        DL_FOREACH_SAFE(ns->asset_streams, state, next) {
-            if (budget->work == 0) {
-                break;
-            }
-            budget->work--;
-            bool stream_progressed = false;
-            bool keep = state->state == ASSET_SERVER_READ_REQUEST
-                            ? asset_stream_read_request(ns, state, &stream_progressed)
-                            : asset_stream_write(ns, state, budget, &stream_progressed);
-            progressed |= stream_progressed;
-            if (!keep) {
-                asset_stream_free(ns, state, !state->concluded, !state->concluded);
-            }
-        }
+        asset_stream_service_round(ns, budget, &progressed);
         if (!progressed || ns->asset_streams == NULL) {
             break;
         }
-        if (ns->asset_streams->next != NULL) {
-            asset_stream_state_t *first = ns->asset_streams;
-            DL_DELETE(ns->asset_streams, first);
-            DL_APPEND(ns->asset_streams, first);
-        }
+        asset_stream_rotate(ns);
     }
     return ns->state != ST_DEAD && ns->state != ST_ZOMBIE;
 }
@@ -594,26 +799,57 @@ void socket_assets_service(void) {
     if (++asset_service_generation == 0) {
         asset_service_generation++;
     }
-    socket_struct *start = asset_service_cursor != NULL ? asset_service_cursor : asset_connections;
-    socket_struct *next_start =
-        start->asset_service_next != NULL ? start->asset_service_next : asset_connections;
-    socket_struct *ns = start;
-    size_t visited = 0;
+    socket_struct *pass_start =
+        asset_service_cursor != NULL ? asset_service_cursor : asset_connections;
+    socket_struct *next_cursor = pass_start;
+    while (budget.bytes != 0 && budget.work != 0) {
+        size_t pass_initial_bytes = budget.bytes;
+        socket_struct *ns = pass_start;
+        size_t visited = 0;
 
-    while (visited < asset_connection_count && budget.bytes != 0 && budget.work != 0) {
-        socket_struct *next =
-            ns->asset_service_next != NULL ? ns->asset_service_next : asset_connections;
-        budget.work--;
-        ns->asset_service_generation = asset_service_generation;
-        if (ns->state != ST_DEAD && ns->state != ST_ZOMBIE &&
-            !asset_connection_service(ns, &budget)) {
-            ns->state = ST_ZOMBIE;
+        while (visited < asset_connection_count && budget.bytes != 0 && budget.work != 0) {
+            socket_struct *next =
+                ns->asset_service_next != NULL ? ns->asset_service_next : asset_connections;
+            budget.work--;
+            if (ns->asset_service_generation != asset_service_generation) {
+                ns->asset_service_productive_passes = 0;
+            }
+            ns->asset_service_generation = asset_service_generation;
+            if (ns->state != ST_DEAD && ns->state != ST_ZOMBIE) {
+                asset_service_budget_t connection_budget = {
+                    .bytes = socket_assets_connection_pass_byte_budget(budget.bytes),
+                    .work = MIN(budget.work, (size_t)ASSET_CONNECTION_WORK_PER_PASS),
+                };
+                size_t initial_bytes = connection_budget.bytes;
+                size_t initial_work = connection_budget.work;
+                if (!asset_connection_service(ns, &connection_budget)) {
+                    ns->state = ST_ZOMBIE;
+                }
+                HARD_ASSERT(connection_budget.bytes <= initial_bytes);
+                HARD_ASSERT(connection_budget.work <= initial_work);
+                if (connection_budget.bytes != initial_bytes) {
+                    ns->asset_service_productive_passes++;
+                }
+                budget.bytes -= initial_bytes - connection_budget.bytes;
+                budget.work -= initial_work - connection_budget.work;
+            }
+            visited++;
+            ns = next;
         }
-        visited++;
-        ns = next;
+
+        if (visited < asset_connection_count) {
+            next_cursor = ns;
+            break;
+        }
+        next_cursor = pass_start->asset_service_next != NULL ? pass_start->asset_service_next
+                                                             : asset_connections;
+        if (budget.bytes == 0 || budget.work == 0 || budget.bytes == pass_initial_bytes) {
+            break;
+        }
+        pass_start = next_cursor;
     }
 
-    asset_service_cursor = visited == asset_connection_count ? next_start : ns;
+    asset_service_cursor = next_cursor;
 }
 
 bool socket_assets_pending(const socket_struct *ns) {
@@ -660,5 +896,8 @@ void socket_assets_connection_clear(socket_struct *ns) {
     }
     ns->asset_service_next = NULL;
     ns->asset_service_prev = NULL;
+    ns->asset_transport_capabilities = 0;
+    ns->asset_accept_batch_next = false;
+    ns->asset_service_productive_passes = 0;
     ns->asset_service_registered = false;
 }

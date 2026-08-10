@@ -44,6 +44,7 @@
 #define TEST_RECENCY_FACE_COUNT 6U
 #define TEST_FACE_LAST (TEST_RECENCY_FACE_FIRST + TEST_RECENCY_FACE_COUNT - 1U)
 #define TEST_ASYNC_TIMEOUT_MS 10000U
+#define TEST_PREEMPTION_REPETITIONS 5U
 
 #define TEST_CHECK(condition)                                                               \
     do {                                                                                    \
@@ -92,12 +93,17 @@ static size_t test_cache_enqueues;
 static size_t test_asset_active;
 static size_t test_asset_start_attempts;
 static size_t test_asset_start_count;
+static size_t test_asset_priority_start_count;
+static size_t test_asset_preempt_count;
 static size_t test_asset_state_polls;
 static uint16_t test_asset_attempt_faces[MAX_FACE_TILES];
 static uint16_t test_asset_start_faces[MAX_FACE_TILES];
 static asset_request_t *test_assets[MAX_FACE_TILES];
 static bool test_asset_admission_blocked;
 static bool test_asset_transport_available = true;
+static bool test_asset_face_batch_available;
+static bool test_asset_preemption_required;
+static bool test_asset_replacement_progressed;
 static size_t test_book_redraws;
 static size_t test_interface_redraws;
 static size_t test_widget_redraws;
@@ -177,7 +183,11 @@ bool asset_requests_available(void) {
     return test_asset_transport_available;
 }
 
-asset_request_t *asset_request_start_bounded(const char *path, size_t max_size) {
+bool asset_face_batch_available(void) {
+    return test_asset_face_batch_available;
+}
+
+static asset_request_t *test_asset_request_start(const char *path, size_t max_size, bool priority) {
     TEST_CHECK(path != NULL);
     TEST_CHECK(max_size == ASSET_FACE_MAX_SIZE);
     TEST_CHECK(test_asset_start_attempts < arraysize(test_asset_attempt_faces));
@@ -187,7 +197,11 @@ asset_request_t *asset_request_start_bounded(const char *path, size_t max_size) 
     if (test_asset_admission_blocked) {
         return NULL;
     }
-    TEST_CHECK(test_asset_active < ASSET_STREAM_ACTIVE_MAX);
+    size_t admission_limit = test_asset_face_batch_available
+                                 ? ASSET_STREAM_ACTIVE_MAX * ASSET_FACE_BATCH_MAX
+                                 : ASSET_STREAM_ACTIVE_MAX;
+    TEST_CHECK(test_asset_active < admission_limit ||
+               (priority && test_asset_active == admission_limit));
     TEST_CHECK(test_asset_start_count < MAX_FACE_TILES);
 
     TEST_CHECK(face >= TEST_FACE_FIRST);
@@ -199,8 +213,66 @@ asset_request_t *asset_request_start_bounded(const char *path, size_t max_size) 
     request->state = ASSET_REQUEST_PENDING;
     test_assets[face] = request;
     test_asset_start_faces[test_asset_start_count++] = face;
+    test_asset_priority_start_count += priority;
     test_asset_active++;
     return request;
+}
+
+asset_request_t *asset_request_start_bounded(const char *path, size_t max_size) {
+    return test_asset_request_start(path, max_size, false);
+}
+
+asset_request_t *asset_request_start_bounded_priority(const char *path, size_t max_size) {
+    return test_asset_request_start(path, max_size, true);
+}
+
+bool asset_request_preemption_needed(const asset_request_t *replacement) {
+    TEST_CHECK(replacement != NULL);
+    return test_asset_preemption_required;
+}
+
+bool asset_request_preempt(asset_request_t *victim,
+                           asset_request_t *replacement,
+                           bool *displace_victim) {
+    TEST_CHECK(victim != NULL);
+    TEST_CHECK(replacement != NULL);
+    TEST_CHECK(displace_victim != NULL);
+    *displace_victim = false;
+    TEST_CHECK(victim != replacement);
+    TEST_CHECK(replacement->state == ASSET_REQUEST_PENDING ||
+               replacement->state == ASSET_REQUEST_COMPLETE);
+    TEST_CHECK(victim->state == ASSET_REQUEST_PENDING || victim->state == ASSET_REQUEST_COMPLETE);
+    test_asset_preempt_count++;
+    if (test_asset_replacement_progressed) {
+        return true;
+    }
+    if (victim->state == ASSET_REQUEST_COMPLETE) {
+        *displace_victim = true;
+        return true;
+    }
+
+    *displace_victim = true;
+    if (!test_asset_face_batch_available) {
+        victim->state = ASSET_REQUEST_PREEMPTED;
+        return true;
+    }
+    size_t victim_index = test_asset_start_count;
+    for (size_t i = 0; i < test_asset_start_count; i++) {
+        if (test_asset_start_faces[i] == victim->face) {
+            victim_index = i;
+            break;
+        }
+    }
+    TEST_CHECK(victim_index < test_asset_start_count);
+    size_t batch_first = victim_index / ASSET_FACE_BATCH_MAX * ASSET_FACE_BATCH_MAX;
+    size_t batch_last = MIN(batch_first + ASSET_FACE_BATCH_MAX, test_asset_start_count);
+    for (size_t i = batch_first; i < batch_last; i++) {
+        asset_request_t *member = test_assets[test_asset_start_faces[i]];
+        if (member != NULL && member != replacement && member->state == ASSET_REQUEST_PENDING) {
+            member->state = ASSET_REQUEST_PREEMPTED;
+        }
+    }
+    return true;
 }
 
 asset_request_state_t asset_request_get_state(asset_request_t *request) {
@@ -772,7 +844,11 @@ static void test_counters_reset(void) {
     test_cache_enqueues = 0;
     test_asset_start_attempts = 0;
     test_asset_start_count = 0;
+    test_asset_priority_start_count = 0;
+    test_asset_preempt_count = 0;
     test_asset_state_polls = 0;
+    test_asset_preemption_required = false;
+    test_asset_replacement_progressed = false;
     test_book_redraws = 0;
     test_interface_redraws = 0;
     test_widget_redraws = 0;
@@ -808,6 +884,8 @@ static void test_foreground_preempts_admitted_prefetches(void) {
     test_wait_for_asset(foreground);
     TEST_CHECK(test_asset_active == ASSET_STREAM_ACTIVE_MAX);
     TEST_CHECK(test_asset_start_faces[test_asset_start_count - 1U] == foreground);
+    TEST_CHECK(test_asset_priority_start_count == 1U);
+    TEST_CHECK(test_asset_preempt_count == 1U);
     size_t retained = 0;
     size_t preempted = 0;
     for (uint16_t face = TEST_FACE_FIRST; face < TEST_FACE_FIRST + ASSET_STREAM_ACTIVE_MAX;
@@ -825,6 +903,33 @@ static void test_foreground_preempts_admitted_prefetches(void) {
     TEST_CHECK(test_asset_active == 0);
 }
 
+static void test_progressed_priority_still_releases_a_full_logical_slot(void) {
+    for (uint16_t face = TEST_FACE_FIRST; face < TEST_FACE_FIRST + 4U; face++) {
+        image_prefetch_face(face);
+    }
+    test_wait_for_active(ASSET_STREAM_ACTIVE_MAX);
+
+    test_asset_replacement_progressed = true;
+    uint16_t foreground = TEST_FACE_FIRST + 3U;
+    image_request_face(foreground);
+    test_wait_for_asset(foreground);
+    TEST_CHECK(test_asset_active == ASSET_STREAM_ACTIVE_MAX);
+    TEST_CHECK(test_asset_start_count == ASSET_STREAM_ACTIVE_MAX + 1U);
+    TEST_CHECK(test_asset_priority_start_count == 1U);
+    TEST_CHECK(test_asset_preempt_count == 1U);
+
+    size_t retained = 0;
+    for (uint16_t face = TEST_FACE_FIRST; face < foreground; face++) {
+        retained += test_assets[face] != NULL;
+    }
+    TEST_CHECK(retained == ASSET_STREAM_ACTIVE_MAX - 1U);
+    TEST_CHECK(test_assets[foreground] != NULL);
+
+    image_face_requests_clear();
+    TEST_CHECK(test_asset_active == 0);
+    test_asset_replacement_progressed = false;
+}
+
 static void test_admitted_polling_is_constant_after_promotions(void) {
     for (uint16_t face = TEST_FACE_FIRST; face < TEST_FACE_FIRST + TEST_FACE_COUNT; face++) {
         image_request_face(face);
@@ -836,6 +941,130 @@ static void test_admitted_polling_is_constant_after_promotions(void) {
 
     image_face_requests_clear();
     TEST_CHECK(test_asset_active == 0);
+}
+
+static void test_batch_admits_bounded_logical_faces(void) {
+    size_t admission_limit = ASSET_STREAM_ACTIVE_MAX * ASSET_FACE_BATCH_MAX;
+    test_asset_face_batch_available = true;
+    for (uint16_t face = TEST_FACE_FIRST; face < TEST_FACE_FIRST + admission_limit; face++) {
+        image_request_face(face);
+    }
+    test_wait_for_active(admission_limit);
+    TEST_CHECK(test_asset_start_count == admission_limit);
+
+    size_t polls_before = test_asset_state_polls;
+    image_face_requests_service();
+    TEST_CHECK(test_asset_state_polls - polls_before == admission_limit);
+
+    image_face_requests_clear();
+    TEST_CHECK(test_asset_active == 0);
+    test_asset_face_batch_available = false;
+}
+
+static void test_batch_preempts_below_logical_limit_when_physical_slots_are_full(void) {
+    const uint16_t visible = TEST_FACE_FIRST + 4U;
+    test_asset_face_batch_available = true;
+    for (uint16_t face = TEST_FACE_FIRST; face < visible; face++) {
+        image_prefetch_face(face);
+    }
+    test_wait_for_active(4U);
+
+    /* Model three undersized/interleaved physical batches even though only
+     * four logical faces are admitted. Visible work must still reclaim an
+     * active speculative stream instead of waiting for the 24-handle cap. */
+    test_asset_preemption_required = true;
+    image_request_face(visible);
+    test_wait_for_asset(visible);
+    TEST_CHECK(test_asset_active == 5U);
+    TEST_CHECK(test_asset_priority_start_count == 1U);
+    TEST_CHECK(test_asset_preempt_count == 1U);
+    TEST_CHECK(test_assets[visible] != NULL);
+    TEST_CHECK(test_asset_start_count == 6U);
+    TEST_CHECK(test_asset_start_faces[4] == visible);
+    TEST_CHECK(test_asset_start_faces[5] != visible);
+
+    image_face_requests_clear();
+    TEST_CHECK(test_asset_active == 0);
+    test_asset_preemption_required = false;
+    test_asset_face_batch_available = false;
+}
+
+static void test_progressed_priority_avoids_below_limit_background_churn(void) {
+    const uint16_t visible = TEST_FACE_FIRST + 4U;
+    test_asset_face_batch_available = true;
+    for (uint16_t face = TEST_FACE_FIRST; face < visible; face++) {
+        image_prefetch_face(face);
+    }
+    test_wait_for_active(4U);
+
+    /* The I/O thread may open the priority replacement between the physical-
+     * capacity query and handoff call. Below the logical cap that success must
+     * retain every speculative handle instead of cancelling one pointlessly. */
+    test_asset_preemption_required = true;
+    test_asset_replacement_progressed = true;
+    image_request_face(visible);
+    test_wait_for_asset(visible);
+    TEST_CHECK(test_asset_active == 5U);
+    TEST_CHECK(test_asset_start_count == 5U);
+    TEST_CHECK(test_asset_priority_start_count == 1U);
+    TEST_CHECK(test_asset_preempt_count == 1U);
+    for (uint16_t face = TEST_FACE_FIRST; face < visible; face++) {
+        TEST_CHECK(test_assets[face] != NULL);
+        TEST_CHECK(test_assets[face]->state == ASSET_REQUEST_PENDING);
+    }
+
+    image_face_requests_clear();
+    TEST_CHECK(test_asset_active == 0);
+    test_asset_replacement_progressed = false;
+    test_asset_preemption_required = false;
+    test_asset_face_batch_available = false;
+}
+
+static void test_batch_preemption_refunds_foreground_collateral(void) {
+    const size_t admission_limit = ASSET_STREAM_ACTIVE_MAX * ASSET_FACE_BATCH_MAX;
+    const uint16_t collateral = TEST_FACE_FIRST + 1U;
+    const uint16_t visible = TEST_FACE_FIRST + (uint16_t)admission_limit;
+    test_asset_face_batch_available = true;
+    for (uint16_t face = TEST_FACE_FIRST; face < TEST_FACE_FIRST + admission_limit; face++) {
+        image_prefetch_face(face);
+    }
+    test_wait_for_active(admission_limit);
+
+    /* Promote a member of the first speculative physical batch, then force a
+     * newer visible face to reclaim that batch. The promoted collateral must
+     * be refunded and retried as priority work. */
+    image_request_face(collateral);
+    image_request_face(visible);
+    test_wait_for_asset(visible);
+    TEST_CHECK(test_asset_active == admission_limit);
+    TEST_CHECK(test_asset_priority_start_count == 1U);
+    TEST_CHECK(test_asset_preempt_count == 1U);
+    TEST_CHECK(test_assets[collateral] != NULL);
+    TEST_CHECK(test_assets[collateral]->state == ASSET_REQUEST_PREEMPTED);
+
+    image_face_requests_service();
+    TEST_CHECK(test_assets[collateral] != NULL);
+    TEST_CHECK(test_assets[collateral]->state == ASSET_REQUEST_PENDING);
+    TEST_CHECK(test_asset_priority_start_count == 2U);
+    TEST_CHECK(FaceList[collateral].name != NULL);
+    TEST_CHECK((FaceList[collateral].flags & FACE_REQUESTED) != 0);
+
+    /* PREEMPTED is a local displacement, not a transfer failure. Repeated
+     * collateral churn beyond the ordinary retry cap must never consume the
+     * foreground face's attempt budget or clear its catalog entry. */
+    for (size_t iteration = 0; iteration < TEST_PREEMPTION_REPETITIONS; iteration++) {
+        test_assets[collateral]->state = ASSET_REQUEST_PREEMPTED;
+        image_face_requests_service();
+        TEST_CHECK(test_assets[collateral] != NULL);
+        TEST_CHECK(test_assets[collateral]->state == ASSET_REQUEST_PENDING);
+        TEST_CHECK(FaceList[collateral].name != NULL);
+        TEST_CHECK((FaceList[collateral].flags & FACE_REQUESTED) != 0);
+    }
+    TEST_CHECK(test_asset_priority_start_count == TEST_PREEMPTION_REPETITIONS + 2U);
+
+    image_face_requests_clear();
+    TEST_CHECK(test_asset_active == 0);
+    test_asset_face_batch_available = false;
 }
 
 static void test_recent_demand_leads_without_starving_old_work(void) {
@@ -1104,7 +1333,32 @@ int main(void) {
 
     test_counters_reset();
     image_bmaps_init();
+    test_progressed_priority_still_releases_a_full_logical_slot();
+    image_bmaps_deinit();
+
+    test_counters_reset();
+    image_bmaps_init();
     test_admitted_polling_is_constant_after_promotions();
+    image_bmaps_deinit();
+
+    test_counters_reset();
+    image_bmaps_init();
+    test_batch_admits_bounded_logical_faces();
+    image_bmaps_deinit();
+
+    test_counters_reset();
+    image_bmaps_init();
+    test_batch_preempts_below_logical_limit_when_physical_slots_are_full();
+    image_bmaps_deinit();
+
+    test_counters_reset();
+    image_bmaps_init();
+    test_progressed_priority_avoids_below_limit_background_churn();
+    image_bmaps_deinit();
+
+    test_counters_reset();
+    image_bmaps_init();
+    test_batch_preemption_refunds_foreground_collateral();
     image_bmaps_deinit();
 
     test_counters_reset();

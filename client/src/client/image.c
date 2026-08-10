@@ -38,7 +38,7 @@
 #include <face_cache.h>
 #include <face_loader.h>
 
-#define FACE_ASSET_ADMISSION_MAX ASSET_STREAM_ACTIVE_MAX
+#define FACE_ASSET_ADMISSION_MAX (ASSET_STREAM_ACTIVE_MAX * ASSET_FACE_BATCH_MAX)
 #define FACE_TRANSFER_RETRY_MAX 3U
 #define FACE_ASSET_SCAN_MAX 64U
 #ifndef FACE_TRANSFER_RETRY_BASE_MS
@@ -136,6 +136,10 @@ static uint64_t face_completion_now_us(void) {
 
 static bool face_completion_budget_remaining(uint64_t started_us) {
     return face_completion_now_us() - started_us < FACE_COMPLETION_BUDGET_US;
+}
+
+static size_t face_asset_admission_limit(void) {
+    return asset_face_batch_available() ? FACE_ASSET_ADMISSION_MAX : ASSET_STREAM_ACTIVE_MAX;
 }
 
 static bool face_asset_request_is_urgent(face_asset_request_t *request, uint64_t now_ms) {
@@ -722,15 +726,20 @@ static void face_asset_request_mark_local_checked(face_asset_request_t *request)
     }
 }
 
-static bool face_asset_request_start(face_asset_request_t *request, uint64_t now_ms) {
+static asset_request_t *face_asset_request_open(face_asset_request_t *request, bool priority) {
     char path[32];
     if (!socket_asset_face_path_format(VS(path), request->face)) {
-        return false;
+        return NULL;
     }
-    request->asset = asset_request_start_bounded(path, ASSET_FACE_MAX_SIZE);
-    if (request->asset == NULL) {
-        return false;
-    }
+    return priority ? asset_request_start_bounded_priority(path, ASSET_FACE_MAX_SIZE)
+                    : asset_request_start_bounded(path, ASSET_FACE_MAX_SIZE);
+}
+
+static void
+face_asset_request_attach(face_asset_request_t *request, asset_request_t *asset, uint64_t now_ms) {
+    HARD_ASSERT(request->asset == NULL);
+    HARD_ASSERT(asset != NULL);
+    request->asset = asset;
     request->transfer_urgent = request->transfer_urgent || request->urgent;
     request->urgent = false;
     request->attempts++;
@@ -744,6 +753,14 @@ static bool face_asset_request_start(face_asset_request_t *request, uint64_t now
     face_asset_admitted[slot] = request;
     face_asset_admitted_count++;
     HARD_ASSERT(face_asset_admitted_count <= FACE_ASSET_ADMISSION_MAX);
+}
+
+static bool face_asset_request_start(face_asset_request_t *request, uint64_t now_ms) {
+    asset_request_t *asset = face_asset_request_open(request, false);
+    if (asset == NULL) {
+        return false;
+    }
+    face_asset_request_attach(request, asset, now_ms);
     return true;
 }
 
@@ -811,7 +828,19 @@ static void face_asset_requests_schedule_local(uint64_t started_us) {
     face_asset_requests_schedule_local_lane(false, started_us);
 }
 
-static bool face_asset_requests_preempt_background(uint64_t now_ms) {
+static bool face_asset_requests_have_background(void) {
+    for (size_t slot = 0; slot < FACE_ASSET_ADMISSION_MAX; slot++) {
+        if (face_asset_admitted[slot] != NULL && !face_asset_admitted[slot]->foreground) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool face_asset_requests_preempt_background(uint64_t now_ms,
+                                                   asset_request_t *replacement,
+                                                   bool logical_slot_required) {
+    HARD_ASSERT(replacement != NULL);
     face_asset_request_t *completed = NULL;
     for (size_t slot = 0; slot < FACE_ASSET_ADMISSION_MAX; slot++) {
         face_asset_request_t *request = face_asset_admitted[slot];
@@ -826,13 +855,26 @@ static bool face_asset_requests_preempt_background(uint64_t now_ms) {
         if (state != ASSET_REQUEST_PENDING) {
             continue;
         }
+        bool displace_victim = false;
+        if (!asset_request_preempt(request->asset, replacement, &displace_victim)) {
+            continue;
+        }
+        if (!displace_victim && !logical_slot_required) {
+            /* The replacement won the I/O race after the capacity query. No
+             * logical slot is needed below the cap, so retain the background. */
+            return true;
+        }
         face_asset_request_release(request);
         HARD_ASSERT(request->attempts != 0);
         request->attempts--;
         request->retry_at_ms = 0;
         return true;
     }
-    if (completed == NULL) {
+    if (!logical_slot_required || completed == NULL) {
+        return false;
+    }
+    bool displace_victim = false;
+    if (!asset_request_preempt(completed->asset, replacement, &displace_victim)) {
         return false;
     }
     /* A completed prefetch may be waiting behind the bounded background
@@ -886,6 +928,7 @@ face_asset_requests_ready_next(face_asset_admission_priority_t priority,
 }
 
 static void face_asset_requests_admit(uint64_t now_ms, uint64_t started_us) {
+    size_t admission_limit = face_asset_admission_limit();
     while (face_completion_budget_remaining(started_us)) {
         face_asset_request_t *request = NULL;
         bool selected_urgent = false;
@@ -907,12 +950,52 @@ static void face_asset_requests_admit(uint64_t now_ms, uint64_t started_us) {
             }
         }
         bool foreground = request != NULL;
-        if (foreground && face_asset_admitted_count == FACE_ASSET_ADMISSION_MAX &&
-            !face_asset_requests_preempt_background(now_ms)) {
-            return;
+        asset_request_t *prestarted = NULL;
+        if (foreground) {
+            bool logical_slot_required = face_asset_admitted_count >= admission_limit;
+            if (logical_slot_required && face_asset_admitted_count != admission_limit) {
+                return;
+            }
+            if (logical_slot_required && !face_asset_requests_have_background()) {
+                request->retry_at_ms = now_ms;
+                if (selected_urgent) {
+                    face_asset_urgent_admission_cursor = request;
+                }
+                face_asset_foreground_admission_cursor = request;
+                return;
+            }
+            /* Queue the visible replacement before releasing physical
+             * capacity. The asset scheduler then performs one locked priority
+             * handoff, so speculative work cannot reclaim the stream in the
+             * gap between cancellation and admission. */
+            prestarted = face_asset_request_open(request, true);
+            if (prestarted == NULL) {
+                request->retry_at_ms = now_ms;
+                if (selected_urgent) {
+                    face_asset_urgent_admission_cursor = request;
+                }
+                face_asset_foreground_admission_cursor = request;
+                return;
+            }
+            bool physical_slot_required = asset_request_preemption_needed(prestarted);
+            bool handoff_ready = false;
+            if (logical_slot_required || physical_slot_required) {
+                handoff_ready = face_asset_requests_preempt_background(now_ms,
+                                                                       prestarted,
+                                                                       logical_slot_required);
+            }
+            if (logical_slot_required && !handoff_ready) {
+                asset_request_free(prestarted);
+                request->retry_at_ms = now_ms;
+                if (selected_urgent) {
+                    face_asset_urgent_admission_cursor = request;
+                }
+                face_asset_foreground_admission_cursor = request;
+                return;
+            }
         }
         if (!foreground) {
-            if (face_asset_admitted_count == FACE_ASSET_ADMISSION_MAX) {
+            if (face_asset_admitted_count >= admission_limit) {
                 return;
             }
             request =
@@ -922,7 +1005,9 @@ static void face_asset_requests_admit(uint64_t now_ms, uint64_t started_us) {
             }
         }
 
-        if (!face_asset_request_start(request, now_ms)) {
+        if (prestarted != NULL) {
+            face_asset_request_attach(request, prestarted, now_ms);
+        } else if (!face_asset_request_start(request, now_ms)) {
             /* Expected shared-scheduler pressure is retried at frame scale. */
             request->retry_at_ms = now_ms;
             if (!foreground) {
@@ -975,6 +1060,15 @@ static void face_asset_requests_complete_transfers(uint64_t now_ms, uint64_t sta
             }
             asset_request_state_t state = asset_request_get_state(request->asset);
             if (state == ASSET_REQUEST_PENDING) {
+                continue;
+            }
+            if (state == ASSET_REQUEST_PREEMPTED) {
+                bool urgent = request->foreground || request->transfer_urgent;
+                face_asset_request_release(request);
+                request->transfer_urgent = false;
+                HARD_ASSERT(request->attempts != 0);
+                request->attempts--;
+                face_asset_request_retry(request, now_ms, urgent);
                 continue;
             }
             if (state == ASSET_REQUEST_ERROR) {
