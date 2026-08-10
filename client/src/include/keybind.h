@@ -97,6 +97,7 @@ typedef struct keybind_event_handler {
     void *user_data;
     bool (*running)(void *user_data);
     bool (*firing)(void *user_data);
+    void (*reconcile_modes)(void *user_data);
     void (*flush)(void *user_data);
     bool (*movement_intercept_matches)(const char *command, void *user_data);
     void (*movement_intercept)(const char *command, void *user_data);
@@ -183,6 +184,7 @@ extern void keybind_movement_state_reconcile_modifiers(keybind_movement_state *s
                                                        const keybind_movement_rebind *rebinds,
                                                        size_t rebinds_num,
                                                        bool force_move,
+                                                       bool defer_move,
                                                        bool running,
                                                        bool firing);
 

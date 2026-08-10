@@ -648,12 +648,20 @@ static void movement_sink_command_up(const char *command, void *user_data) {
     }
 }
 
+static void movement_sink_reconcile_modes(void *user_data) {
+    movement_sink *sink = user_data;
+
+    sink->running = false;
+    sink->firing = false;
+}
+
 static keybind_event_handler movement_sink_handler(movement_sink *sink) {
     return (keybind_event_handler){
         .movement = &sink->state,
         .user_data = sink,
         .running = movement_sink_running,
         .firing = movement_sink_firing,
+        .reconcile_modes = movement_sink_reconcile_modes,
         .flush = movement_sink_flush,
         .movement_intercept_matches = movement_sink_intercept_matches,
         .movement_intercept = movement_sink_intercept,
@@ -717,6 +725,17 @@ static void test_keybind_event_integration(void) {
         .mod = SDL_KMOD_SHIFT,
         .repeat = true,
     };
+    keybind_struct padded_northwest = {
+        .command = " ?MOVE_NW;",
+        .key = SDLK_F,
+        .repeat = true,
+    };
+    keybind_struct shifted_f = {
+        .command = "?MOVE_NE",
+        .key = SDLK_F,
+        .mod = SDL_KMOD_SHIFT,
+        .repeat = true,
+    };
     keybind_struct southeast = {
         .command = "?MOVE_SE",
         .key = SDLK_G,
@@ -727,6 +746,17 @@ static void test_keybind_event_integration(void) {
         .key = SDLK_H,
         .mod = SDL_KMOD_SHIFT,
     };
+    keybind_struct move_then_run = {
+        .command = "?MOVE_NW;?RUNON",
+        .key = SDLK_I,
+        .repeat = true,
+    };
+    keybind_struct shifted_fire_move = {
+        .command = "?FIREON;?MOVE_NE",
+        .key = SDLK_I,
+        .mod = SDL_KMOD_SHIFT,
+        .repeat = true,
+    };
     keybind_struct *bindings[] = {&northwest,
                                   &shifted,
                                   &shifted_b,
@@ -736,8 +766,12 @@ static void test_keybind_event_integration(void) {
                                   &shifted_d,
                                   &movement_sequence,
                                   &shifted_e,
+                                  &padded_northwest,
+                                  &shifted_f,
                                   &southeast,
-                                  &shifted_modes};
+                                  &shifted_modes,
+                                  &move_then_run,
+                                  &shifted_fire_move};
     movement_sink sink;
     key_struct key_states[SDL_SCANCODE_COUNT] = {0};
     SDL_KeyboardEvent event = {.type = SDL_EVENT_KEY_DOWN};
@@ -1040,6 +1074,61 @@ static void test_keybind_event_integration(void) {
     TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 9);
     TEST_CHECK(sink.intercepted_num == 1);
     TEST_CHECK(!keybind_movement_state_has_scancode(&sink.state, SDL_SCANCODE_A));
+
+    /* Interception receives the normalized segment from padded custom macros. */
+    movement_sink_reset(&sink);
+    sink.intercept_movement = true;
+    handler = movement_sink_handler(&sink);
+    event.key = SDLK_F;
+    event.scancode = SDL_SCANCODE_F;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    key_states[SDL_SCANCODE_F].pressed = true;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 1 && sink.intercepted_num == 1);
+
+    /* Simple and compound fallbacks share one pre-transition movement batch. */
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.key = SDLK_A;
+    event.scancode = SDL_SCANCODE_A;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    event.key = SDLK_D;
+    event.scancode = SDL_SCANCODE_D;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    key_states[SDL_SCANCODE_A].pressed = true;
+    key_states[SDL_SCANCODE_D].pressed = true;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 2 && sink.directions[0] == 9 && sink.directions[1] == 8);
+    TEST_CHECK(sink.firing_at_emit[1]);
+
+    /* Invalid old modes are reconciled before movement-first fallback segments. */
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.key = SDLK_I;
+    event.scancode = SDL_SCANCODE_I;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.firing);
+    key_states[SDL_SCANCODE_I].pressed = true;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 2 && sink.directions[1] == 7);
+    TEST_CHECK(!sink.firing_at_emit[1] && !sink.running_at_emit[1] && sink.running);
 }
 
 int main(void) {

@@ -410,6 +410,7 @@ void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
                                                 const keybind_movement_rebind *rebinds,
                                                 size_t rebinds_num,
                                                 bool force_move,
+                                                bool defer_move,
                                                 bool running,
                                                 bool firing) {
     if (state == NULL) {
@@ -448,7 +449,7 @@ void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
     state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
     if (keybind_movement_active(state)) {
         uint8_t direction = keybind_movement_direction(state);
-        state->pending_move = force_move || direction != old_direction;
+        state->pending_move = !defer_move && (force_move || direction != old_direction);
         state->pending_move_repeated = false;
         state->pending_direction = direction;
         state->pending_stop = false;

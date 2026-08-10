@@ -142,7 +142,9 @@ static const keybind_struct *keybind_event_find_scancode(keybind_struct *const *
 
 static bool keybind_event_simple_movement(const keybind_struct *keybind,
                                           uint8_t *direction,
-                                          bool *has_movement) {
+                                          bool *has_movement,
+                                          char *movement_command,
+                                          size_t movement_command_size) {
     char command[MAX_BUF], *cp;
     bool found = false, simple = true;
 
@@ -160,6 +162,8 @@ static bool keybind_event_simple_movement(const keybind_struct *keybind,
             } else {
                 *direction = candidate;
                 found = true;
+                strncpy(movement_command, cp, movement_command_size - 1);
+                movement_command[movement_command_size - 1] = '\0';
             }
         } else if (*cp != '\0') {
             simple = false;
@@ -176,7 +180,10 @@ static size_t keybind_event_modifier_rebinds(keybind_struct *const *bindings,
                                              const key_struct *key_states,
                                              const SDL_KeyboardEvent *event,
                                              const keybind_event_handler *handler,
-                                             keybind_movement_rebind *rebinds) {
+                                             keybind_movement_rebind *rebinds,
+                                             const keybind_struct **compound_bindings,
+                                             SDL_KeyboardEvent *compound_events,
+                                             size_t *compound_num) {
     if (key_states == NULL) {
         return 0;
     }
@@ -196,33 +203,42 @@ static size_t keybind_event_modifier_rebinds(keybind_struct *const *bindings,
         }
         uint8_t direction;
         bool has_movement;
-        bool simple = keybind_event_simple_movement(keybind, &direction, &has_movement);
+        char movement_command[MAX_BUF];
+        bool simple = keybind_event_simple_movement(keybind,
+                                                    &direction,
+                                                    &has_movement,
+                                                    movement_command,
+                                                    sizeof(movement_command));
         if (!has_movement) {
             continue;
         }
-        if (simple) {
-            if (handler->movement_intercept_matches != NULL &&
-                handler->movement_intercept_matches(keybind->command, handler->user_data)) {
-                keybind_event_flush(handler);
-                if (handler->movement_intercept != NULL) {
-                    handler->movement_intercept(keybind->command, handler->user_data);
-                }
-                continue;
+        bool intercepted =
+            handler->movement_intercept_matches != NULL &&
+            handler->movement_intercept_matches(movement_command, handler->user_data);
+        if (simple && intercepted) {
+            keybind_event_flush(handler);
+            if (handler->movement_intercept != NULL) {
+                handler->movement_intercept(movement_command, handler->user_data);
             }
+            continue;
+        }
+        if (!intercepted) {
             rebinds[rebinds_num++] = (keybind_movement_rebind){
                 .scancode = scancode,
                 .mod = keybind->mod,
                 .direction = direction,
                 .repeat = keybind->repeat,
             };
-        } else {
-            SDL_KeyboardEvent fallback = {
+        }
+        if (!simple) {
+            compound_bindings[*compound_num] = keybind;
+            compound_events[*compound_num] = (SDL_KeyboardEvent){
                 .type = SDL_EVENT_KEY_DOWN,
                 .key = keybind->key,
                 .scancode = scancode,
                 .mod = event->mod,
             };
-            keybind_event_process_binding(keybind, &fallback, handler);
+            (*compound_num)++;
         }
     }
 
@@ -299,19 +315,32 @@ void keybind_event_reconcile_release(keybind_struct *const *bindings,
                                    keybind_event_firing(handler));
     if (keybind_event_is_modifier(event)) {
         keybind_movement_rebind rebinds[SDL_SCANCODE_COUNT];
+        const keybind_struct *compound_bindings[SDL_SCANCODE_COUNT];
+        SDL_KeyboardEvent compound_events[SDL_SCANCODE_COUNT];
+        size_t compound_num = 0;
+        if (modifier_invalidates_mode && handler->reconcile_modes != NULL) {
+            handler->reconcile_modes(handler->user_data);
+        }
         size_t rebinds_num = keybind_event_modifier_rebinds(bindings,
                                                             bindings_num,
                                                             key_states,
                                                             event,
                                                             handler,
-                                                            rebinds);
+                                                            rebinds,
+                                                            compound_bindings,
+                                                            compound_events,
+                                                            &compound_num);
         keybind_movement_state_reconcile_modifiers(handler->movement,
                                                    event->mod,
                                                    rebinds,
                                                    rebinds_num,
                                                    modifier_invalidates_mode,
+                                                   compound_num != 0,
                                                    keybind_event_running(handler),
                                                    keybind_event_firing(handler));
+        for (size_t i = 0; i < compound_num; i++) {
+            keybind_event_process_binding(compound_bindings[i], &compound_events[i], handler);
+        }
     }
 }
 

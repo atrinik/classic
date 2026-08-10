@@ -92,11 +92,17 @@ static void keybind_event_command_up(const char *command, void *user_data) {
     keybind_process_command_up(command);
 }
 
+static void keybind_event_reconcile_modes(void *user_data) {
+    (void)user_data;
+    keybind_state_ensure();
+}
+
 static keybind_event_handler keybind_event_handler_create(void) {
     return (keybind_event_handler){
         .movement = &movement_state,
         .running = keybind_event_running,
         .firing = keybind_event_firing,
+        .reconcile_modes = keybind_event_reconcile_modes,
         .flush = keybind_event_flush,
         .movement_intercept_matches = keybind_event_movement_intercept_matches,
         .movement_intercept = keybind_event_movement_intercept,
