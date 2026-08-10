@@ -262,10 +262,13 @@ class WorkflowContractTests(unittest.TestCase):
         server_job = candidate[
             candidate.index("  server-windows:") : candidate.index("  server-image:")
         ]
-        digest = "9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7"
+        digest = "d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb"
+        image = f"ghcr.io/atrinik/windows-build:1.2.1@sha256:{digest}"
         self.assertEqual(
-            candidate.count(f"WINDOWS_BUILD_CACHE_EPOCH: 1.0.5-{digest}"), 1
+            candidate.count(f"WINDOWS_BUILD_CACHE_EPOCH: 1.2.1-{digest}"), 1
         )
+        self.assertEqual(candidate.count(image), 4)
+        self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", candidate)
         for job, component in ((client_job, "client"), (server_job, "server")):
             with self.subTest(component=component):
                 self.assertIn(f"path: {component}/build/ccache", job)
@@ -347,10 +350,13 @@ class WorkflowContractTests(unittest.TestCase):
         run_start = workflow.index("  windows-test:")
         run = workflow[run_start : workflow.index("  server:", run_start)]
         aggregate = workflow[workflow.index("  classic-validation:") :]
-        digest = "9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7"
+        digest = "d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb"
+        image = f"ghcr.io/atrinik/windows-build:1.2.1@sha256:{digest}"
 
         self.assertIn("if: needs.changes.outputs.windows == 'true'", build)
+        self.assertEqual(build.count(image), 2)
         self.assertEqual(build.count(digest), 2)
+        self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", build)
         self.assertIn("--network none", build)
         self.assertIn("--env CCACHE_DIR=/tmp/atrinik-libatrinik-ccache", build)
         self.assertIn(
