@@ -81,6 +81,7 @@ typedef int (*socket_stun_resolver_t)(const char *host,
                                       const char *service,
                                       const struct addrinfo *hints,
                                       struct addrinfo **addresses);
+typedef uint64_t (*socket_stun_clock_t)(void);
 
 bool socket_stun_discover_until(socket_t *sc,
                                 const char *endpoint,
@@ -89,6 +90,8 @@ bool socket_stun_discover_until(socket_t *sc,
                                 uint16_t *port,
                                 uint64_t deadline_ms);
 void socket_stun_resolver_set_for_test(socket_stun_resolver_t resolver);
+void socket_stun_clock_set_for_test(socket_stun_clock_t clock);
+uint64_t socket_rendezvous_stun_deadline(uint64_t now_ms, uint64_t attempt_deadline_ms);
 
 size_t socket_rendezvous_client(socket_t *sc,
                                 const char *url,

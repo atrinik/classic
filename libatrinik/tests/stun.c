@@ -3,15 +3,19 @@
 #include <toolkit/datetime.h>
 #include <toolkit/logger.h>
 
-#include <arpa/inet.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
+#ifndef WIN32
 #include <unistd.h>
+#define test_close_socket close
+#else
+#define test_close_socket closesocket
+#endif
 
 #define TEST_CHECK(condition)                                                               \
     do {                                                                                    \
@@ -38,9 +42,43 @@ typedef struct fake_stun_server {
 } fake_stun_server_t;
 
 static char captured_log[512];
+static pthread_mutex_t captured_log_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+typedef struct blocking_resolver_state {
+    pthread_mutex_t mutex;
+    pthread_cond_t condition;
+    unsigned int entered;
+    unsigned int canceled;
+} blocking_resolver_state_t;
+
+typedef struct discovery_call {
+    socket_t client;
+    const char *endpoint;
+    uint64_t deadline_ms;
+    bool result;
+} discovery_call_t;
+
+typedef struct rendezvous_call {
+    socket_t *client;
+    socket_rendezvous_attempt_t *attempt;
+    socket_connect_failure_t failure;
+    size_t count;
+} rendezvous_call_t;
+
+static blocking_resolver_state_t blocking_resolver = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .condition = PTHREAD_COND_INITIALIZER,
+};
+static atomic_uint_fast64_t fake_clock_ms;
+
+static uint64_t fake_clock(void) {
+    return atomic_load_explicit(&fake_clock_ms, memory_order_relaxed);
+}
 
 static void capture_log(const char *message) {
+    pthread_mutex_lock(&captured_log_mutex);
     snprintf(captured_log, sizeof(captured_log), "%s", message);
+    pthread_mutex_unlock(&captured_log_mutex);
 }
 
 static void write_u16(unsigned char *output, uint16_t value) {
@@ -104,11 +142,25 @@ static void *fake_stun_run(void *data) {
     return NULL;
 }
 
-static int stalled_resolver(const char *host,
-                            const char *service,
-                            const struct addrinfo *hints,
-                            struct addrinfo **addresses) {
-    usleep(200000);
+static void blocking_resolver_canceled(void *data) {
+    blocking_resolver_state_t *state = data;
+    state->canceled++;
+    pthread_cond_broadcast(&state->condition);
+    pthread_mutex_unlock(&state->mutex);
+}
+
+static int blocking_resolver_call(const char *host,
+                                  const char *service,
+                                  const struct addrinfo *hints,
+                                  struct addrinfo **addresses) {
+    pthread_mutex_lock(&blocking_resolver.mutex);
+    pthread_cleanup_push(blocking_resolver_canceled, &blocking_resolver);
+    blocking_resolver.entered++;
+    pthread_cond_broadcast(&blocking_resolver.condition);
+    for (;;) {
+        pthread_cond_wait(&blocking_resolver.condition, &blocking_resolver.mutex);
+    }
+    pthread_cleanup_pop(1);
     *addresses = NULL;
     return EAI_AGAIN;
 }
@@ -121,41 +173,89 @@ static int failing_resolver(const char *host,
     return EAI_NONAME;
 }
 
-static void test_resolver_deadline_and_privacy(void) {
-    socket_t client = {.handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)};
-    TEST_CHECK(client.handle >= 0);
-    ((struct sockaddr_in *)&client.addr)->sin_family = AF_INET;
+static void *discovery_call_run(void *data) {
+    discovery_call_t *call = data;
     char host[65];
     uint16_t port;
+    call->result = socket_stun_discover_until(&call->client,
+                                              call->endpoint,
+                                              VS(host),
+                                              &port,
+                                              call->deadline_ms);
+    return NULL;
+}
 
-    socket_stun_resolver_set_for_test(stalled_resolver);
+static discovery_call_t discovery_call_create(const char *endpoint, uint64_t deadline_ms) {
+    discovery_call_t call = {
+        .client = {.handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)},
+        .endpoint = endpoint,
+        .deadline_ms = deadline_ms,
+    };
+    TEST_CHECK(call.client.handle >= 0);
+    ((struct sockaddr_in *)&call.client.addr)->sin_family = AF_INET;
+    return call;
+}
+
+static void blocking_resolver_reset(void) {
+    pthread_mutex_lock(&blocking_resolver.mutex);
+    blocking_resolver.entered = 0;
+    blocking_resolver.canceled = 0;
+    pthread_mutex_unlock(&blocking_resolver.mutex);
+}
+
+static void blocking_resolver_wait(unsigned int entered, unsigned int canceled) {
+    pthread_mutex_lock(&blocking_resolver.mutex);
+    while (blocking_resolver.entered < entered || blocking_resolver.canceled < canceled) {
+        pthread_cond_wait(&blocking_resolver.condition, &blocking_resolver.mutex);
+    }
+    pthread_mutex_unlock(&blocking_resolver.mutex);
+}
+
+static void test_resolver_deadline_and_privacy(void) {
+    socket_stun_resolver_set_for_test(blocking_resolver_call);
+    socket_stun_clock_set_for_test(fake_clock);
+    atomic_store_explicit(&fake_clock_ms, 1U, memory_order_relaxed);
+    blocking_resolver_reset();
     captured_log[0] = '\0';
-    uint64_t started_ms = datetime_monotonic_ms();
-    TEST_CHECK(!socket_stun_discover_until(&client,
-                                           "private-resolver.example:3478",
-                                           VS(host),
-                                           &port,
-                                           started_ms + 50U));
-    uint64_t elapsed_ms = datetime_monotonic_ms() - started_ms;
-    TEST_CHECK(elapsed_ms < 150U);
+    discovery_call_t call = discovery_call_create("private-resolver.example:3478", 2U);
+    pthread_t thread;
+    TEST_CHECK(pthread_create(&thread, NULL, discovery_call_run, &call) == 0);
+    blocking_resolver_wait(1, 0);
+    atomic_store_explicit(&fake_clock_ms, 2U, memory_order_relaxed);
+    TEST_CHECK(pthread_join(thread, NULL) == 0);
+    blocking_resolver_wait(1, 1);
+    TEST_CHECK(!call.result);
     TEST_CHECK(strstr(captured_log, "resolution timed out") != NULL);
     TEST_CHECK(strstr(captured_log, "private-resolver") == NULL);
+    test_close_socket(call.client.handle);
 
-    captured_log[0] = '\0';
-    started_ms = datetime_monotonic_ms();
-    TEST_CHECK(!socket_stun_discover_until(&client,
-                                           "second-private.example:3478",
-                                           VS(host),
-                                           &port,
-                                           started_ms + 1000U));
-    TEST_CHECK(datetime_monotonic_ms() - started_ms < 100U);
-    TEST_CHECK(strstr(captured_log, "Cannot resolve") != NULL);
-    TEST_CHECK(strstr(captured_log, "second-private") == NULL);
-    usleep(250000);
+    blocking_resolver_reset();
+    atomic_store_explicit(&fake_clock_ms, 1U, memory_order_relaxed);
+    discovery_call_t concurrent[2] = {
+        discovery_call_create("concurrent-one.example:3478", 2U),
+        discovery_call_create("concurrent-two.example:3478", 2U),
+    };
+    pthread_t concurrent_threads[2];
+    for (size_t i = 0; i < 2; i++) {
+        TEST_CHECK(
+            pthread_create(&concurrent_threads[i], NULL, discovery_call_run, &concurrent[i]) == 0);
+    }
+    blocking_resolver_wait(2, 0);
+    atomic_store_explicit(&fake_clock_ms, 2U, memory_order_relaxed);
+    for (size_t i = 0; i < 2; i++) {
+        TEST_CHECK(pthread_join(concurrent_threads[i], NULL) == 0);
+        TEST_CHECK(!concurrent[i].result);
+        test_close_socket(concurrent[i].client.handle);
+    }
+    blocking_resolver_wait(2, 2);
 
     socket_stun_resolver_set_for_test(failing_resolver);
+    socket_stun_clock_set_for_test(NULL);
     captured_log[0] = '\0';
-    TEST_CHECK(!socket_stun_discover_until(&client,
+    call = discovery_call_create("private-override.example:3478", datetime_monotonic_ms() + 1000U);
+    char host[65];
+    uint16_t port;
+    TEST_CHECK(!socket_stun_discover_until(&call.client,
                                            "private-override.example:3478",
                                            VS(host),
                                            &port,
@@ -164,7 +264,69 @@ static void test_resolver_deadline_and_privacy(void) {
     TEST_CHECK(strstr(captured_log, "private-override") == NULL);
 
     socket_stun_resolver_set_for_test(NULL);
-    close(client.handle);
+    test_close_socket(call.client.handle);
+}
+
+static void *rendezvous_call_run(void *data) {
+    rendezvous_call_t *call = data;
+    socket_direct_candidate_t candidates[SOCKET_DIRECT_MAX_CANDIDATES + 1U];
+    call->count = socket_rendezvous_client(call->client,
+                                           "ws://127.0.0.1:1",
+                                           "fallback-test.example:3478",
+                                           call->attempt,
+                                           candidates,
+                                           arraysize(candidates),
+                                           &call->failure);
+    return NULL;
+}
+
+static void test_rendezvous_reserves_fallback_budget(void) {
+    uint64_t now_ms = datetime_monotonic_ms();
+    TEST_CHECK(socket_rendezvous_stun_deadline(now_ms, now_ms + 15000U) == now_ms + 3000U);
+    TEST_CHECK(socket_rendezvous_stun_deadline(now_ms, now_ms + 6000U) == now_ms + 1000U);
+    TEST_CHECK(socket_rendezvous_stun_deadline(now_ms, now_ms + 5000U) == now_ms);
+
+    socket_stun_resolver_set_for_test(blocking_resolver_call);
+    socket_stun_clock_set_for_test(fake_clock);
+    atomic_store_explicit(&fake_clock_ms, 1U, memory_order_relaxed);
+    blocking_resolver_reset();
+    discovery_call_t call = discovery_call_create("unused", now_ms);
+    struct sockaddr_in bound = {
+        .sin_family = AF_INET,
+        .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+    };
+    TEST_CHECK(bind(call.client.handle, (const struct sockaddr *)&bound, sizeof(bound)) == 0);
+    socklen_t bound_length = sizeof(bound);
+    TEST_CHECK(getsockname(call.client.handle, (struct sockaddr *)&bound, &bound_length) == 0);
+    memcpy(&call.client.addr, &bound, sizeof(bound));
+
+    char server_id[RENDEZVOUS_SERVER_ID_HEX_SIZE + 1U];
+    char ticket[RENDEZVOUS_TICKET_HEX_SIZE + 1U];
+    memset(server_id, 'a', sizeof(server_id) - 1U);
+    memset(ticket, 'b', sizeof(ticket) - 1U);
+    server_id[sizeof(server_id) - 1U] = '\0';
+    ticket[sizeof(ticket) - 1U] = '\0';
+    uint64_t deadline_ms = datetime_monotonic_ms() + 15000U;
+    socket_rendezvous_attempt_t *attempt =
+        socket_rendezvous_attempt_create(server_id, ticket, NULL, deadline_ms);
+    TEST_CHECK(attempt != NULL);
+    captured_log[0] = '\0';
+    rendezvous_call_t rendezvous_call = {.client = &call.client, .attempt = attempt};
+    pthread_t rendezvous_thread;
+    TEST_CHECK(pthread_create(&rendezvous_thread, NULL, rendezvous_call_run, &rendezvous_call) ==
+               0);
+    blocking_resolver_wait(1, 0);
+    atomic_store_explicit(&fake_clock_ms, UINT64_MAX, memory_order_relaxed);
+    TEST_CHECK(pthread_join(rendezvous_thread, NULL) == 0);
+    TEST_CHECK(rendezvous_call.count == 0);
+    blocking_resolver_wait(1, 1);
+    TEST_CHECK(rendezvous_call.failure.code != SOCKET_CONNECT_FAILURE_TIMEOUT);
+    TEST_CHECK(strstr(captured_log, "Rendezvous connection failed") != NULL);
+    TEST_CHECK(datetime_monotonic_ms() < deadline_ms);
+    socket_rendezvous_attempt_destroy(attempt);
+    socket_stun_resolver_set_for_test(NULL);
+    socket_stun_clock_set_for_test(NULL);
+    test_close_socket(call.client.handle);
 }
 
 static void test_mode(fake_stun_mode_t mode, bool expected, const char *diagnostic) {
@@ -207,8 +369,8 @@ static void test_mode(fake_stun_mode_t mode, bool expected, const char *diagnost
     if (mode == FAKE_STUN_TIMEOUT) {
         TEST_CHECK(elapsed_ms < 5000U);
     }
-    close(client_handle);
-    close(server_handle);
+    test_close_socket(client_handle);
+    test_close_socket(server_handle);
 }
 
 int main(void) {
@@ -225,6 +387,7 @@ int main(void) {
     test_mode(FAKE_STUN_TRUNCATED_IPV6, false, "Invalid STUN response");
     test_mode(FAKE_STUN_TIMEOUT, false, "timed out");
     test_resolver_deadline_and_privacy();
+    test_rendezvous_reserves_fallback_budget();
 
     char host[65];
     uint16_t port;
@@ -234,7 +397,7 @@ int main(void) {
     captured_log[0] = '\0';
     TEST_CHECK(!socket_stun_discover(&client, "127.0.0.1:no", VS(host), &port));
     TEST_CHECK(strstr(captured_log, "Cannot resolve") != NULL);
-    close(client.handle);
+    test_close_socket(client.handle);
 
     logger_set_print_func(logger_do_print);
     toolkit_deinit();
