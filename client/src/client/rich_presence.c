@@ -6,6 +6,7 @@
 static discord_rpc_t *presence_rpc;
 static rich_presence_controller_t presence_controller;
 static bool presence_initialized;
+static bool presence_zone_fresh;
 static char presence_application_id[21];
 
 static void backend_publish(void *context, const discord_rpc_activity_t *activity) {
@@ -79,23 +80,22 @@ void rich_presence_init(void) {
 }
 
 void rich_presence_tick(void) {
-    if (!presence_initialized || presence_application_id[0] == '\0') {
+    if (!presence_initialized) {
         return;
     }
 
     uint64_t now_ms = SDL_GetTicks();
     int privacy = (int)setting_get_int(OPT_CAT_CLIENT, OPT_DISCORD_PRESENCE);
-    if (privacy != RICH_PRESENCE_OFF && presence_rpc == NULL) {
+    if (presence_application_id[0] != '\0' && privacy != RICH_PRESENCE_OFF &&
+        presence_rpc == NULL) {
         presence_rpc = discord_rpc_create(presence_application_id);
         if (presence_rpc == NULL) {
-            return;
+            /* Lifecycle tracking below remains active without a transport. */
         }
     }
-    if (presence_rpc == NULL) {
-        return;
+    if (presence_rpc != NULL) {
+        discord_rpc_pump(presence_rpc, now_ms);
     }
-    discord_rpc_pump(presence_rpc, now_ms);
-
     char server[DISCORD_RPC_TEXT_BYTES];
     normalized_markup(selected_server != NULL ? selected_server->name : NULL, server);
     char zone[DISCORD_RPC_TEXT_BYTES];
@@ -103,7 +103,7 @@ void rich_presence_tick(void) {
         MapData.name_new[0] != '\0'
             ? MapData.name_new
             : (MapData.name[0] != '\0' ? MapData.name : MapData.region_longname);
-    normalized_markup(zone_source, zone);
+    normalized_markup(presence_zone_fresh ? zone_source : NULL, zone);
 
     time_t wall_time = time(NULL);
     rich_presence_input_t input = {
@@ -116,12 +116,30 @@ void rich_presence_tick(void) {
         .now_unix = wall_time > 0 ? (uint64_t)wall_time : 1U,
     };
     rich_presence_backend_t operations = backend();
-    rich_presence_controller_tick(&presence_controller, &input, &operations);
-    discord_rpc_pump(presence_rpc, now_ms);
-    if (privacy == RICH_PRESENCE_OFF) {
+    rich_presence_controller_tick(&presence_controller,
+                                  &input,
+                                  presence_rpc != NULL ? &operations : NULL);
+    if (presence_rpc != NULL) {
+        discord_rpc_pump(presence_rpc, now_ms);
+    }
+    if (privacy == RICH_PRESENCE_OFF && presence_rpc != NULL) {
         discord_rpc_destroy(presence_rpc, now_ms);
         presence_rpc = NULL;
     }
+}
+
+void rich_presence_session_start(void) {
+    presence_zone_fresh = false;
+    if (presence_initialized) {
+        rich_presence_backend_t operations = backend();
+        rich_presence_controller_begin_session(&presence_controller,
+                                               presence_rpc != NULL ? &operations : NULL,
+                                               SDL_GetTicks());
+    }
+}
+
+void rich_presence_zone_changed(void) {
+    presence_zone_fresh = true;
 }
 
 void rich_presence_deinit(void) {
@@ -130,10 +148,12 @@ void rich_presence_deinit(void) {
     }
     if (presence_rpc != NULL) {
         rich_presence_backend_t operations = backend();
-        rich_presence_controller_stop(&presence_controller, &operations);
-        discord_rpc_destroy(presence_rpc, SDL_GetTicks());
+        uint64_t now_ms = SDL_GetTicks();
+        rich_presence_controller_stop(&presence_controller, &operations, now_ms);
+        discord_rpc_destroy(presence_rpc, now_ms);
         presence_rpc = NULL;
     }
     memset(presence_application_id, 0, sizeof(presence_application_id));
+    presence_zone_fresh = false;
     presence_initialized = false;
 }

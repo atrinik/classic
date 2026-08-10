@@ -1,5 +1,10 @@
+#if !defined(WIN32) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #include <discord_rpc.h>
 
+#include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -19,6 +24,8 @@
 #define DISCORD_RPC_INPUT_MAX (DISCORD_RPC_FRAME_MAX + 8U)
 #define DISCORD_RPC_OUTPUT_SLOTS 2U
 #define DISCORD_RPC_HANDSHAKE_TIMEOUT_MS 5000U
+#define DISCORD_RPC_IO_TIMEOUT_MS 5000U
+#define DISCORD_RPC_ACK_TIMEOUT_MS 5000U
 #define DISCORD_RPC_BACKOFF_INITIAL_MS 1000U
 #define DISCORD_RPC_BACKOFF_MAX_MS 60000U
 #define DISCORD_RPC_FRAMES_PER_TICK 8U
@@ -35,6 +42,8 @@ typedef struct discord_rpc_output {
     unsigned char data[DISCORD_RPC_INPUT_MAX];
     size_t size;
     size_t position;
+    bool tracks_ack;
+    uint64_t nonce;
 } discord_rpc_output_t;
 
 typedef struct discord_rpc_platform {
@@ -54,17 +63,25 @@ struct discord_rpc {
     bool connected;
     bool ready;
     bool desired_set;
+    bool desired_known;
     bool desired_dirty;
     uint64_t connected_at;
+    uint64_t input_progress_at;
+    uint64_t output_progress_at;
+    uint64_t ack_started_at;
     uint64_t reconnect_at;
     uint64_t backoff_ms;
     uint64_t nonce;
+    uint64_t pending_nonce;
+    bool pending_ack;
+    uint64_t now_ms;
     discord_rpc_activity_t desired;
     unsigned char input[DISCORD_RPC_INPUT_MAX];
     size_t input_size;
     discord_rpc_output_t output[DISCORD_RPC_OUTPUT_SLOTS];
     size_t output_head;
     size_t output_count;
+    size_t queued_activities;
 };
 
 static uint32_t read_le32(const unsigned char *value) {
@@ -159,6 +176,15 @@ static int platform_try_path(discord_rpc_platform_t *platform, const char *direc
         return 0;
     }
     if (connect(descriptor, (struct sockaddr *)&address, sizeof(address)) == 0) {
+#ifdef __linux__
+        struct ucred credentials;
+        socklen_t credentials_size = sizeof(credentials);
+        if (getsockopt(descriptor, SOL_SOCKET, SO_PEERCRED, &credentials, &credentials_size) != 0 ||
+            credentials_size != sizeof(credentials) || credentials.uid != geteuid()) {
+            close(descriptor);
+            return 0;
+        }
+#endif
         platform->socket = descriptor;
         return 1;
     }
@@ -228,71 +254,377 @@ queue_frame(discord_rpc_t *rpc, uint32_t opcode, const void *payload, size_t pay
     }
     output->size = payload_size + 8U;
     output->position = 0;
+    output->tracks_ack = false;
+    output->nonce = 0;
+    if (rpc->output_count == 0U) {
+        rpc->output_progress_at = rpc->now_ms;
+    }
     rpc->output_count++;
     return true;
 }
 
-static bool json_valid(const unsigned char *payload, size_t size) {
-    if (size < 2 || payload[0] != '{' || payload[size - 1U] != '}') {
+typedef struct json_parser {
+    const unsigned char *data;
+    size_t size;
+    size_t position;
+} json_parser_t;
+
+typedef struct json_string {
+    const unsigned char *data;
+    size_t size;
+    bool escaped;
+} json_string_t;
+
+typedef struct json_message {
+    bool ready;
+    bool error;
+    bool set_activity;
+    bool has_nonce;
+    uint64_t nonce;
+} json_message_t;
+
+static void json_space(json_parser_t *parser) {
+    while (parser->position < parser->size &&
+           strchr(" \t\r\n", parser->data[parser->position]) != NULL) {
+        parser->position++;
+    }
+}
+
+static bool json_hex4(json_parser_t *parser, uint32_t *value) {
+    if (parser->size - parser->position < 4U) {
         return false;
     }
-    bool string = false;
+    uint32_t result = 0;
+    for (unsigned int i = 0; i < 4U; i++) {
+        unsigned char character = parser->data[parser->position++];
+        unsigned int digit;
+        if (character >= '0' && character <= '9') {
+            digit = character - '0';
+        } else if (character >= 'a' && character <= 'f') {
+            digit = character - 'a' + 10U;
+        } else if (character >= 'A' && character <= 'F') {
+            digit = character - 'A' + 10U;
+        } else {
+            return false;
+        }
+        result = (result << 4U) | digit;
+    }
+    *value = result;
+    return true;
+}
+
+static bool json_utf8(json_parser_t *parser, unsigned char leading) {
+    size_t continuation;
+    uint32_t decoded;
+    if (leading >= 0xc2U && leading <= 0xdfU) {
+        continuation = 1U;
+        decoded = leading & 0x1fU;
+    } else if (leading >= 0xe0U && leading <= 0xefU) {
+        continuation = 2U;
+        decoded = leading & 0x0fU;
+    } else if (leading >= 0xf0U && leading <= 0xf4U) {
+        continuation = 3U;
+        decoded = leading & 0x07U;
+    } else {
+        return false;
+    }
+    if (parser->size - parser->position < continuation) {
+        return false;
+    }
+    for (size_t i = 0; i < continuation; i++) {
+        unsigned char character = parser->data[parser->position++];
+        if ((character & 0xc0U) != 0x80U) {
+            return false;
+        }
+        decoded = (decoded << 6U) | (character & 0x3fU);
+    }
+    return !((leading == 0xe0U && decoded < 0x800U) || (leading == 0xedU && decoded >= 0xd800U) ||
+             (leading == 0xf0U && decoded < 0x10000U) || decoded > 0x10ffffU);
+}
+
+static bool json_string_parse(json_parser_t *parser, json_string_t *string) {
+    if (parser->position == parser->size || parser->data[parser->position++] != '"') {
+        return false;
+    }
+    size_t start = parser->position;
     bool escaped = false;
-    unsigned int depth = 0;
-    for (size_t i = 0; i < size; i++) {
-        unsigned char character = payload[i];
-        if (string) {
-            if (character < 0x20U) {
-                return false;
+    while (parser->position < parser->size) {
+        unsigned char character = parser->data[parser->position++];
+        if (character == '"') {
+            if (string != NULL) {
+                string->data = parser->data + start;
+                string->size = parser->position - start - 1U;
+                string->escaped = escaped;
             }
-            if (escaped) {
-                escaped = false;
-            } else if (character == '\\') {
-                escaped = true;
-            } else if (character == '"') {
-                string = false;
-            }
+            return true;
+        }
+        if (character < 0x20U) {
+            return false;
+        }
+        if (character >= 0x80U && !json_utf8(parser, character)) {
+            return false;
+        }
+        if (character != '\\') {
             continue;
         }
-        if (character == '"') {
-            string = true;
-        } else if (character == '{' || character == '[') {
-            depth++;
-        } else if (character == '}' || character == ']') {
-            if (depth == 0) {
+        escaped = true;
+        if (parser->position == parser->size) {
+            return false;
+        }
+        character = parser->data[parser->position++];
+        if (strchr("\"\\/bfnrt", character) != NULL) {
+            continue;
+        }
+        if (character != 'u') {
+            return false;
+        }
+        uint32_t codepoint;
+        if (!json_hex4(parser, &codepoint) || (codepoint >= 0xdc00U && codepoint <= 0xdfffU)) {
+            return false;
+        }
+        if (codepoint >= 0xd800U && codepoint <= 0xdbffU) {
+            if (parser->size - parser->position < 6U || parser->data[parser->position++] != '\\' ||
+                parser->data[parser->position++] != 'u' || !json_hex4(parser, &codepoint) ||
+                codepoint < 0xdc00U || codepoint > 0xdfffU) {
                 return false;
             }
-            depth--;
-        } else if (character < 0x20U && character != '\t' && character != '\n' &&
-                   character != '\r') {
+        }
+    }
+    return false;
+}
+
+static bool json_value(json_parser_t *parser, unsigned int depth);
+
+static bool
+json_compound(json_parser_t *parser, unsigned char open, unsigned char close, unsigned int depth) {
+    if (depth >= 32U || parser->position == parser->size ||
+        parser->data[parser->position++] != open) {
+        return false;
+    }
+    json_space(parser);
+    if (parser->position < parser->size && parser->data[parser->position] == close) {
+        parser->position++;
+        return true;
+    }
+    for (;;) {
+        if (open == '{' && !json_string_parse(parser, NULL)) {
+            return false;
+        }
+        if (open == '{') {
+            json_space(parser);
+            if (parser->position == parser->size || parser->data[parser->position++] != ':') {
+                return false;
+            }
+            json_space(parser);
+        }
+        if (!json_value(parser, depth + 1U)) {
+            return false;
+        }
+        json_space(parser);
+        if (parser->position == parser->size) {
+            return false;
+        }
+        unsigned char separator = parser->data[parser->position++];
+        if (separator == close) {
+            return true;
+        }
+        if (separator != ',') {
+            return false;
+        }
+        json_space(parser);
+        if (parser->position == parser->size || parser->data[parser->position] == close) {
             return false;
         }
     }
-    return !string && !escaped && depth == 0;
 }
 
-static bool json_event_is(const unsigned char *payload, size_t size, const char *event) {
-    const char key[] = "\"evt\"";
-    for (size_t i = 0; i + sizeof(key) - 1U < size; i++) {
-        if (memcmp(payload + i, key, sizeof(key) - 1U) != 0) {
-            continue;
-        }
-        size_t position = i + sizeof(key) - 1U;
-        while (position < size && strchr(" \t\r\n", payload[position]) != NULL) {
-            position++;
-        }
-        if (position == size || payload[position++] != ':') {
-            continue;
-        }
-        while (position < size && strchr(" \t\r\n", payload[position]) != NULL) {
-            position++;
-        }
-        size_t event_size = strlen(event);
-        return position + event_size + 2U <= size && payload[position] == '"' &&
-               memcmp(payload + position + 1U, event, event_size) == 0 &&
-               payload[position + event_size + 1U] == '"';
+static bool json_number(json_parser_t *parser) {
+    size_t start = parser->position;
+    if (parser->data[parser->position] == '-') {
+        parser->position++;
     }
-    return false;
+    if (parser->position == parser->size) {
+        return false;
+    }
+    if (parser->data[parser->position] == '0') {
+        parser->position++;
+        if (parser->position < parser->size && isdigit(parser->data[parser->position])) {
+            return false;
+        }
+    } else {
+        if (parser->data[parser->position] < '1' || parser->data[parser->position] > '9') {
+            return false;
+        }
+        while (parser->position < parser->size && isdigit(parser->data[parser->position])) {
+            parser->position++;
+        }
+    }
+    if (parser->position < parser->size && parser->data[parser->position] == '.') {
+        parser->position++;
+        size_t digits = parser->position;
+        while (parser->position < parser->size && isdigit(parser->data[parser->position])) {
+            parser->position++;
+        }
+        if (digits == parser->position) {
+            return false;
+        }
+    }
+    if (parser->position < parser->size &&
+        (parser->data[parser->position] == 'e' || parser->data[parser->position] == 'E')) {
+        parser->position++;
+        if (parser->position < parser->size &&
+            (parser->data[parser->position] == '+' || parser->data[parser->position] == '-')) {
+            parser->position++;
+        }
+        size_t digits = parser->position;
+        while (parser->position < parser->size && isdigit(parser->data[parser->position])) {
+            parser->position++;
+        }
+        if (digits == parser->position) {
+            return false;
+        }
+    }
+    return parser->position != start;
+}
+
+static bool json_value(json_parser_t *parser, unsigned int depth) {
+    if (parser->position == parser->size) {
+        return false;
+    }
+    unsigned char character = parser->data[parser->position];
+    if (character == '"') {
+        return json_string_parse(parser, NULL);
+    }
+    if (character == '{') {
+        return json_compound(parser, '{', '}', depth);
+    }
+    if (character == '[') {
+        return json_compound(parser, '[', ']', depth);
+    }
+    static const char *const literals[] = {"true", "false", "null"};
+    for (size_t i = 0; i < sizeof(literals) / sizeof(literals[0]); i++) {
+        size_t length = strlen(literals[i]);
+        if (parser->size - parser->position >= length &&
+            memcmp(parser->data + parser->position, literals[i], length) == 0) {
+            parser->position += length;
+            return true;
+        }
+    }
+    return character == '-' || isdigit(character) ? json_number(parser) : false;
+}
+
+static bool json_string_is(const json_string_t *string, const char *value) {
+    size_t length = strlen(value);
+    return !string->escaped && string->size == length && memcmp(string->data, value, length) == 0;
+}
+
+static bool json_nonce(const json_string_t *string, uint64_t *nonce) {
+    if (string->escaped || string->size == 0U || string->size > 20U) {
+        return false;
+    }
+    uint64_t value = 0;
+    for (size_t i = 0; i < string->size; i++) {
+        if (!isdigit(string->data[i])) {
+            return false;
+        }
+        uint64_t digit = string->data[i] - '0';
+        if (value > (UINT64_MAX - digit) / 10U) {
+            return false;
+        }
+        value = value * 10U + digit;
+    }
+    *nonce = value;
+    return true;
+}
+
+static bool json_message_parse(const unsigned char *payload, size_t size, json_message_t *message) {
+    json_parser_t parser = {.data = payload, .size = size};
+    memset(message, 0, sizeof(*message));
+    json_space(&parser);
+    if (parser.position == parser.size || parser.data[parser.position++] != '{') {
+        return false;
+    }
+    json_space(&parser);
+    bool seen_evt = false;
+    bool seen_cmd = false;
+    bool seen_nonce = false;
+    if (parser.position < parser.size && parser.data[parser.position] == '}') {
+        parser.position++;
+    } else {
+        for (;;) {
+            json_string_t key;
+            if (!json_string_parse(&parser, &key)) {
+                return false;
+            }
+            json_space(&parser);
+            if (parser.position == parser.size || parser.data[parser.position++] != ':') {
+                return false;
+            }
+            json_space(&parser);
+            bool critical = json_string_is(&key, "evt") || json_string_is(&key, "cmd") ||
+                            json_string_is(&key, "nonce");
+            if (critical && parser.position < parser.size && parser.data[parser.position] == '"') {
+                json_string_t value;
+                if (!json_string_parse(&parser, &value)) {
+                    return false;
+                }
+                if (json_string_is(&key, "evt")) {
+                    if (seen_evt) {
+                        return false;
+                    }
+                    seen_evt = true;
+                    message->ready = json_string_is(&value, "READY");
+                    message->error = json_string_is(&value, "ERROR");
+                } else if (json_string_is(&key, "cmd")) {
+                    if (seen_cmd) {
+                        return false;
+                    }
+                    seen_cmd = true;
+                    message->set_activity = json_string_is(&value, "SET_ACTIVITY");
+                } else {
+                    if (seen_nonce || !json_nonce(&value, &message->nonce)) {
+                        return false;
+                    }
+                    seen_nonce = true;
+                    message->has_nonce = true;
+                }
+            } else if ((json_string_is(&key, "nonce") || json_string_is(&key, "evt")) &&
+                       parser.size - parser.position >= 4U &&
+                       memcmp(parser.data + parser.position, "null", 4U) == 0) {
+                if (json_string_is(&key, "nonce")) {
+                    if (seen_nonce) {
+                        return false;
+                    }
+                    seen_nonce = true;
+                } else {
+                    if (seen_evt) {
+                        return false;
+                    }
+                    seen_evt = true;
+                }
+                parser.position += 4U;
+            } else if (critical || !json_value(&parser, 1U)) {
+                return false;
+            }
+            json_space(&parser);
+            if (parser.position == parser.size) {
+                return false;
+            }
+            unsigned char separator = parser.data[parser.position++];
+            if (separator == '}') {
+                break;
+            }
+            if (separator != ',') {
+                return false;
+            }
+            json_space(&parser);
+            if (parser.position == parser.size || parser.data[parser.position] == '}') {
+                return false;
+            }
+        }
+    }
+    json_space(&parser);
+    return parser.position == parser.size;
 }
 
 static bool json_append(char *buffer, size_t capacity, size_t *position, const char *value) {
@@ -383,7 +715,14 @@ static bool queue_activity(discord_rpc_t *rpc) {
             return false;
         }
     }
-    return queue_frame(rpc, DISCORD_RPC_OPCODE_FRAME, payload, strlen(payload));
+    if (!queue_frame(rpc, DISCORD_RPC_OPCODE_FRAME, payload, strlen(payload))) {
+        return false;
+    }
+    size_t index = (rpc->output_head + rpc->output_count - 1U) % DISCORD_RPC_OUTPUT_SLOTS;
+    rpc->output[index].tracks_ack = true;
+    rpc->output[index].nonce = rpc->nonce;
+    rpc->queued_activities++;
+    return true;
 }
 
 static void disconnect_rpc(discord_rpc_t *rpc, uint64_t now_ms) {
@@ -393,7 +732,9 @@ static void disconnect_rpc(discord_rpc_t *rpc, uint64_t now_ms) {
     rpc->input_size = 0;
     rpc->output_head = 0;
     rpc->output_count = 0;
-    rpc->desired_dirty = true;
+    rpc->queued_activities = 0;
+    rpc->pending_ack = false;
+    rpc->desired_dirty = rpc->desired_known;
     rpc->reconnect_at = now_ms + rpc->backoff_ms;
     rpc->backoff_ms = rpc->backoff_ms < DISCORD_RPC_BACKOFF_MAX_MS / 2U
                           ? rpc->backoff_ms * 2U
@@ -413,16 +754,21 @@ static bool handle_frame(discord_rpc_t *rpc,
     if (opcode == DISCORD_RPC_OPCODE_CLOSE) {
         return false;
     }
-    if (opcode != DISCORD_RPC_OPCODE_FRAME || !json_valid(payload, payload_size)) {
+    if (opcode != DISCORD_RPC_OPCODE_FRAME) {
         return false;
     }
-    if (json_event_is(payload, payload_size, "ERROR")) {
+    json_message_t message;
+    if (!json_message_parse(payload, payload_size, &message) || message.error) {
         return false;
     }
-    if (json_event_is(payload, payload_size, "READY")) {
+    if (message.ready) {
         rpc->ready = true;
         rpc->backoff_ms = DISCORD_RPC_BACKOFF_INITIAL_MS;
-        rpc->desired_dirty = true;
+        rpc->desired_dirty = rpc->desired_known;
+    }
+    if (message.set_activity && message.has_nonce && rpc->pending_ack &&
+        message.nonce == rpc->pending_nonce) {
+        rpc->pending_ack = false;
     }
     return true;
 }
@@ -437,6 +783,7 @@ static bool read_frames(discord_rpc_t *rpc) {
         }
         if (amount > 0) {
             rpc->input_size += (size_t)amount;
+            rpc->input_progress_at = rpc->now_ms;
         }
     }
 
@@ -474,8 +821,15 @@ static bool write_frames(discord_rpc_t *rpc) {
         return false;
     }
     if (amount > 0) {
+        rpc->output_progress_at = rpc->now_ms;
         output->position += (size_t)amount;
         if (output->position == output->size) {
+            if (output->tracks_ack) {
+                rpc->queued_activities--;
+                rpc->pending_ack = true;
+                rpc->pending_nonce = output->nonce;
+                rpc->ack_started_at = rpc->now_ms;
+            }
             memset(output, 0, sizeof(*output));
             rpc->output_head = (rpc->output_head + 1U) % DISCORD_RPC_OUTPUT_SLOTS;
             rpc->output_count--;
@@ -527,6 +881,7 @@ void discord_rpc_pump(discord_rpc_t *rpc, uint64_t now_ms) {
     if (rpc == NULL) {
         return;
     }
+    rpc->now_ms = now_ms;
     if (!rpc->connected) {
         if (now_ms < rpc->reconnect_at) {
             return;
@@ -537,6 +892,8 @@ void discord_rpc_pump(discord_rpc_t *rpc, uint64_t now_ms) {
         }
         rpc->connected = true;
         rpc->connected_at = now_ms;
+        rpc->input_progress_at = now_ms;
+        rpc->output_progress_at = now_ms;
         char handshake[64];
         int length = snprintf(handshake,
                               sizeof(handshake),
@@ -550,12 +907,16 @@ void discord_rpc_pump(discord_rpc_t *rpc, uint64_t now_ms) {
     }
 
     if ((!write_frames(rpc) || !read_frames(rpc)) ||
-        (!rpc->ready && now_ms - rpc->connected_at >= DISCORD_RPC_HANDSHAKE_TIMEOUT_MS)) {
+        (!rpc->ready && now_ms - rpc->connected_at >= DISCORD_RPC_HANDSHAKE_TIMEOUT_MS) ||
+        (rpc->input_size != 0U && now_ms - rpc->input_progress_at >= DISCORD_RPC_IO_TIMEOUT_MS) ||
+        (rpc->output_count != 0U &&
+         now_ms - rpc->output_progress_at >= DISCORD_RPC_IO_TIMEOUT_MS) ||
+        (rpc->pending_ack && now_ms - rpc->ack_started_at >= DISCORD_RPC_ACK_TIMEOUT_MS)) {
         disconnect_rpc(rpc, now_ms);
         return;
     }
-    if (rpc->ready && rpc->desired_dirty && rpc->output_count < DISCORD_RPC_OUTPUT_SLOTS &&
-        queue_activity(rpc)) {
+    if (rpc->ready && !rpc->pending_ack && rpc->queued_activities == 0U && rpc->desired_dirty &&
+        rpc->output_count < DISCORD_RPC_OUTPUT_SLOTS && queue_activity(rpc)) {
         rpc->desired_dirty = false;
         if (!write_frames(rpc)) {
             disconnect_rpc(rpc, now_ms);
@@ -569,6 +930,7 @@ void discord_rpc_set_activity(discord_rpc_t *rpc, const discord_rpc_activity_t *
     }
     rpc->desired = *activity;
     rpc->desired_set = true;
+    rpc->desired_known = true;
     rpc->desired_dirty = true;
 }
 
@@ -578,7 +940,15 @@ void discord_rpc_clear_activity(discord_rpc_t *rpc) {
     }
     memset(&rpc->desired, 0, sizeof(rpc->desired));
     rpc->desired_set = false;
+    rpc->desired_known = true;
     rpc->desired_dirty = true;
+    /* A privacy clear supersedes any acknowledgement for older activity. */
+    rpc->pending_ack = false;
+    rpc->queued_activities = 0U;
+    for (size_t i = 0; i < rpc->output_count; i++) {
+        size_t index = (rpc->output_head + i) % DISCORD_RPC_OUTPUT_SLOTS;
+        rpc->output[index].tracks_ack = false;
+    }
 }
 
 bool discord_rpc_ready(const discord_rpc_t *rpc) {
@@ -593,7 +963,9 @@ void discord_rpc_destroy(discord_rpc_t *rpc, uint64_t now_ms) {
         if (rpc->desired_set) {
             discord_rpc_clear_activity(rpc);
         }
-        for (unsigned int i = 0; i < 4U && rpc->connected; i++) {
+        for (unsigned int i = 0;
+             i < 2048U && rpc->connected && (rpc->desired_dirty || rpc->output_count != 0U);
+             i++) {
             discord_rpc_pump(rpc, now_ms);
         }
         rpc->io.close(rpc->io_context);

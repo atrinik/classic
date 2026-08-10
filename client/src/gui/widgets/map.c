@@ -558,6 +558,7 @@ void map_level_scroll(int dz) {
  */
 void update_map_name(const char *name) {
     snprintf(MapData.name_new, sizeof(MapData.name_new), "%s", name);
+    rich_presence_zone_changed();
 }
 
 /**

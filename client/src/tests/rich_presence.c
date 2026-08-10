@@ -43,6 +43,10 @@ static void test_policy(void) {
     require(!rich_presence_normalize("A\xc0\xaf", normalized));
     require(rich_presence_normalize("\xc3\x89toile", normalized));
     require(strcmp(normalized, "\xc3\x89toile") == 0);
+    require(rich_presence_normalize("Hall\xc2\x85of\xe2\x80\xa8Heroes", normalized));
+    require(strcmp(normalized, "Hall of Heroes") == 0);
+    require(rich_presence_normalize("Hall\xc2\xa0of\xe3\x80\x80Heroes", normalized));
+    require(strcmp(normalized, "Hall of Heroes") == 0);
 
     char long_value[300];
     memset(long_value, 'x', sizeof(long_value) - 1U);
@@ -100,24 +104,77 @@ static void test_policy(void) {
     rich_presence_controller_tick(&controller, &input, &backend);
     require(captured.clears == 1U);
     require(captured.publishes == 3U);
-    input.now_ms = 12400;
+    input.now_ms = 20010;
     rich_presence_controller_tick(&controller, &input, &backend);
     require(captured.publishes == 4U);
 
     input.playing = false;
-    input.now_ms = 12500;
+    input.now_ms = 20100;
     rich_presence_controller_tick(&controller, &input, &backend);
     require(captured.clears == 2U);
     rich_presence_controller_tick(&controller, &input, &backend);
     require(captured.clears == 2U);
 
     input.playing = true;
-    input.now_ms = 13000;
+    input.now_ms = 28300;
     input.now_unix = 2000;
     rich_presence_controller_tick(&controller, &input, &backend);
     require(captured.activity.started_at == 2000U);
-    rich_presence_controller_stop(&controller, &backend);
+    rich_presence_controller_stop(&controller, &backend, 28301);
     require(captured.clears == 3U);
+
+    /* Off still observes play transitions, so enabling keeps session elapsed time. */
+    memset(&captured, 0, sizeof(captured));
+    rich_presence_controller_init(&controller);
+    input.playing = true;
+    input.privacy = RICH_PRESENCE_OFF;
+    input.now_ms = 30000;
+    input.now_unix = 3000;
+    rich_presence_controller_tick(&controller, &input, NULL);
+    input.privacy = RICH_PRESENCE_GAME;
+    input.now_ms = 31000;
+    input.now_unix = 4000;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    require(captured.activity.started_at == 3000U);
+
+    /* A queued B update is cancelled when the current state returns to A. */
+    memset(&captured, 0, sizeof(captured));
+    rich_presence_controller_init(&controller);
+    input.privacy = RICH_PRESENCE_SERVER_ZONE;
+    input.zone = "Zone A";
+    input.now_ms = 40000;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    require(captured.publishes == 1U);
+    input.zone = "Zone B";
+    input.now_ms = 40100;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    input.zone = "Zone A";
+    input.now_ms = 40200;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    input.now_ms = 44200;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    require(captured.publishes == 1U);
+
+    /* Missing or invalid zone data uses the exact generic fallback. */
+    input.zone = "";
+    input.now_ms = 45100;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    input.now_ms = 48300;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    require(strcmp(captured.activity.details, "Exploring") == 0);
+    require(controller.command_count <= 5U);
+
+    unsigned int clears_before_session = captured.clears;
+    rich_presence_controller_begin_session(&controller, &backend, 50000);
+    require(captured.clears == clears_before_session + 1U);
+    input.zone = "";
+    input.now_ms = 50000;
+    input.now_unix = 5000;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    input.now_ms = 54100;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    require(captured.activity.started_at == 5000U);
+    require(strcmp(captured.activity.details, "Exploring") == 0);
 }
 
 typedef struct fake_io {
@@ -129,6 +186,7 @@ typedef struct fake_io {
     size_t incoming_position;
     unsigned char outgoing[100000];
     size_t outgoing_size;
+    bool write_blocked;
 } fake_io_t;
 
 static int fake_connect(void *context) {
@@ -166,6 +224,9 @@ static ptrdiff_t fake_write(void *context, const void *buffer, size_t size) {
     fake_io_t *io = context;
     if (!io->open) {
         return -1;
+    }
+    if (io->write_blocked) {
+        return -2;
     }
     size_t amount = size > 5U ? 5U : size;
     require(io->outgoing_size + amount <= sizeof(io->outgoing));
@@ -233,7 +294,7 @@ static void test_rpc(void) {
     require(fake.outgoing[0] == 0U);
     require(contains(fake.outgoing, fake.outgoing_size, "\"client_id\":\"123456789012345678\""));
 
-    append_frame(&fake, 1U, "{ \"evt\" : \"READY\" }");
+    append_frame(&fake, 1U, "{ \"cmd\":\"DISPATCH\",\"evt\" : \"READY\",\"nonce\":null }");
     pump_many(rpc, 3100, 20);
     require(discord_rpc_ready(rpc));
 
@@ -248,12 +309,21 @@ static void test_rpc(void) {
     require(contains(fake.outgoing, fake.outgoing_size, "Exploring Crystal Caverns"));
     require(contains(fake.outgoing, fake.outgoing_size, "\"large_image\":\"atrinik\""));
     require(!contains(fake.outgoing, fake.outgoing_size, "password"));
+    append_frame(
+        &fake, 1U, "{\"cmd\":\"SET_ACTIVITY\",\"nonce\":\"1\",\"evt\":null,\"data\":{}}");
+    pump_many(rpc, 3300, 30);
 
     size_t before_ping = fake.outgoing_size;
     append_frame(&fake, 3U, "ping-body");
     pump_many(rpc, 3400, 30);
     require(fake.outgoing_size >= before_ping + 8U + strlen("ping-body"));
     require(contains(fake.outgoing + before_ping, fake.outgoing_size - before_ping, "ping-body"));
+
+    size_t before_pong = fake.outgoing_size;
+    append_frame(&fake, 4U, "pong-body");
+    pump_many(rpc, 3450, 10);
+    require(discord_rpc_ready(rpc));
+    require(fake.outgoing_size == before_pong);
 
     discord_rpc_clear_activity(rpc);
     pump_many(rpc, 3500, 60);
@@ -287,6 +357,106 @@ static void test_rpc(void) {
     require(!discord_rpc_ready(rpc));
     require(!fake.open);
     discord_rpc_destroy(rpc, 101);
+
+    const char *malformed[] = {
+        "{\"evt\":\"READY\",}",
+        "{\"evt\":\"READY\",\"data\":[}",
+        "{\"evt\":\"REA\\qDY\"}",
+        "{\"evt\":\"READY\",\"data\":\"\\udc00\"}",
+        "{\"evt\":\"READY\",\"data\":\"\\ud800x\"}",
+        "{\"evt\":\"READY\",\"data\":01}",
+        "{\"evt\":\"READY\",\"data\":\"\xc0\xaf\"}",
+    };
+    for (size_t i = 0; i < sizeof(malformed) / sizeof(malformed[0]); i++) {
+        memset(&fake, 0, sizeof(fake));
+        rpc = discord_rpc_create_with_io("123", &operations, &fake);
+        require(rpc != NULL);
+        pump_many(rpc, 0, 20);
+        append_frame(&fake, 1U, malformed[i]);
+        pump_many(rpc, 100, 20);
+        require(!discord_rpc_ready(rpc));
+        require(!fake.open);
+        discord_rpc_destroy(rpc, 101);
+    }
+
+    memset(&fake, 0, sizeof(fake));
+    rpc = discord_rpc_create_with_io("123", &operations, &fake);
+    pump_many(rpc, 0, 20);
+    append_frame(&fake, 1U, "{\"message\":\"fake \\\"evt\\\":\\\"READY\\\"\"}");
+    pump_many(rpc, 100, 20);
+    require(!discord_rpc_ready(rpc));
+    require(fake.open);
+    discord_rpc_destroy(rpc, 101);
+
+    memset(&fake, 0, sizeof(fake));
+    rpc = discord_rpc_create_with_io("123", &operations, &fake);
+    require(rpc != NULL);
+    pump_many(rpc, 0, 20);
+    append_frame(&fake, 1U, "{\"evt\":\"READY\"}");
+    pump_many(rpc, 100, 20);
+    require(discord_rpc_ready(rpc));
+    append_frame(&fake, 1U, "{\"evt\":\"ERROR\",\"data\":{}}");
+    pump_many(rpc, 200, 20);
+    require(!discord_rpc_ready(rpc));
+    discord_rpc_destroy(rpc, 201);
+
+    /* A permanently blocked post-READY write reconnects and replays latest state. */
+    memset(&fake, 0, sizeof(fake));
+    rpc = discord_rpc_create_with_io("123", &operations, &fake);
+    require(rpc != NULL);
+    pump_many(rpc, 0, 20);
+    append_frame(&fake, 1U, "{\"evt\":\"READY\"}");
+    pump_many(rpc, 100, 20);
+    fake.write_blocked = true;
+    snprintf(activity.details, sizeof(activity.details), "Latest Zone");
+    discord_rpc_set_activity(rpc, &activity);
+    discord_rpc_pump(rpc, 200);
+    discord_rpc_pump(rpc, 5200);
+    require(!fake.open);
+    fake.write_blocked = false;
+    discord_rpc_pump(rpc, 6200);
+    append_frame(&fake, 1U, "{\"evt\":\"READY\"}");
+    pump_many(rpc, 6300, 300);
+    require(contains(fake.outgoing, fake.outgoing_size, "Latest Zone"));
+    discord_rpc_destroy(rpc, 6600);
+
+    /* A written activity without its matching response also reconnects. */
+    memset(&fake, 0, sizeof(fake));
+    rpc = discord_rpc_create_with_io("123", &operations, &fake);
+    require(rpc != NULL);
+    pump_many(rpc, 0, 20);
+    append_frame(&fake, 1U, "{\"evt\":\"READY\"}");
+    pump_many(rpc, 100, 20);
+    discord_rpc_set_activity(rpc, &activity);
+    pump_many(rpc, 200, 300);
+    require(discord_rpc_ready(rpc));
+    discord_rpc_pump(rpc, 5300);
+    require(!discord_rpc_ready(rpc));
+    discord_rpc_destroy(rpc, 5301);
+
+    /* Destroy drains a complete privacy clear across legal partial writes. */
+    memset(&fake, 0, sizeof(fake));
+    rpc = discord_rpc_create_with_io("123", &operations, &fake);
+    require(rpc != NULL);
+    pump_many(rpc, 0, 20);
+    append_frame(&fake, 1U, "{\"evt\":\"READY\"}");
+    pump_many(rpc, 100, 20);
+    discord_rpc_set_activity(rpc, &activity);
+    pump_many(rpc, 200, 300);
+    append_frame(&fake, 1U, "{\"cmd\":\"SET_ACTIVITY\",\"nonce\":\"1\",\"data\":{}}");
+    pump_many(rpc, 600, 30);
+    discord_rpc_destroy(rpc, 700);
+    require(contains(fake.outgoing, fake.outgoing_size, "\"activity\":null"));
+    require(!fake.open);
+
+    /* Missing READY is bounded by the handshake timeout. */
+    memset(&fake, 0, sizeof(fake));
+    rpc = discord_rpc_create_with_io("123", &operations, &fake);
+    require(rpc != NULL);
+    pump_many(rpc, 0, 20);
+    discord_rpc_pump(rpc, 5000);
+    require(!fake.open);
+    discord_rpc_destroy(rpc, 5001);
 }
 
 int main(void) {

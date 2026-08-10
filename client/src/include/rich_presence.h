@@ -37,6 +37,9 @@ typedef struct rich_presence_controller {
     int last_privacy;
     uint64_t session_started_at;
     uint64_t next_publish_ms;
+    uint64_t command_times[5];
+    size_t command_start;
+    size_t command_count;
     discord_rpc_activity_t published;
     discord_rpc_activity_t pending_activity;
 } rich_presence_controller_t;
@@ -47,11 +50,17 @@ void rich_presence_controller_init(rich_presence_controller_t *controller);
 void rich_presence_controller_tick(rich_presence_controller_t *controller,
                                    const rich_presence_input_t *input,
                                    const rich_presence_backend_t *backend);
+void rich_presence_controller_begin_session(rich_presence_controller_t *controller,
+                                            const rich_presence_backend_t *backend,
+                                            uint64_t now_ms);
 void rich_presence_controller_stop(rich_presence_controller_t *controller,
-                                   const rich_presence_backend_t *backend);
+                                   const rich_presence_backend_t *backend,
+                                   uint64_t now_ms);
 
 void rich_presence_init(void);
 void rich_presence_tick(void);
 void rich_presence_deinit(void);
+void rich_presence_session_start(void);
+void rich_presence_zone_changed(void);
 
 #endif

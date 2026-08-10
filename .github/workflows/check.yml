@@ -149,6 +149,7 @@ jobs:
           python3 tools/dependencies.py sync
           umask 077
           mkdir -p ../build
+          printf '%s\n' '111111111111111111' > data/discord-application-id
           printf '%s\n' '123456789012345678' > \
             ../build/discord-test-application-id
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
@@ -211,6 +212,7 @@ jobs:
               executable = next(name for name in names if name.endswith(\"/atrinik.exe\"))
               config = next(name for name in names if name.endswith(\"/data/discord-application-id\"))
               assert archive.read(config) == application_id
+              assert b"111111111111111111" not in archive.read(config)
               assert application_id.strip() not in archive.read(executable)
           " "${package}"
             '

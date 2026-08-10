@@ -190,6 +190,7 @@ jobs:
           DISCORD_APPLICATION_ID: ${{ secrets.DISCORD_APPLICATION_ID }}
         run: |
           [[ ${DISCORD_APPLICATION_ID} =~ ^[1-9][0-9]{0,19}$ ]]
+          python3 -c 'import os, sys; value = int(os.environ["DISCORD_APPLICATION_ID"]); sys.exit(0 if value <= 18446744073709551615 else 1)'
           umask 077
           mkdir -p build/discord-config
           printf '%s\n' "${DISCORD_APPLICATION_ID}" > \

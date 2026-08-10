@@ -5,6 +5,8 @@
 #include <string.h>
 
 #define RICH_PRESENCE_UPDATE_INTERVAL_MS 4100U
+#define RICH_PRESENCE_RATE_WINDOW_MS 20000U
+#define RICH_PRESENCE_RATE_CAPACITY 5U
 
 static bool
 utf8_character(const unsigned char *value, size_t remaining, size_t *width, uint32_t *codepoint) {
@@ -94,14 +96,18 @@ bool rich_presence_normalize(const char *value, char output[DISCORD_RPC_TEXT_BYT
             return false;
         }
 
-        if (codepoint < 0x20U || codepoint == 0x7fU) {
-            if (codepoint == '\t' || codepoint == '\n' || codepoint == '\r') {
+        if (codepoint < 0x20U || (codepoint >= 0x7fU && codepoint <= 0x9fU)) {
+            if (codepoint == '\t' || codepoint == '\n' || codepoint == '\r' ||
+                codepoint == 0x85U) {
                 whitespace = output_pos != 0;
             }
             input_pos += width;
             continue;
         }
-        if (codepoint == ' ') {
+        if (codepoint == ' ' || codepoint == 0x00a0U || codepoint == 0x1680U ||
+            (codepoint >= 0x2000U && codepoint <= 0x200aU) || codepoint == 0x2028U ||
+            codepoint == 0x2029U || codepoint == 0x202fU || codepoint == 0x205fU ||
+            codepoint == 0x3000U) {
             whitespace = output_pos != 0;
             input_pos += width;
             continue;
@@ -156,7 +162,12 @@ static void build_activity(const rich_presence_controller_t *controller,
                                input->public_server ? "Atrinik server" : "Private server");
     }
     if (input->privacy >= RICH_PRESENCE_SERVER_ZONE) {
-        normalized_with_prefix(activity->details, "Exploring ", input->zone, "Atrinik");
+        char zone[DISCORD_RPC_TEXT_BYTES];
+        if (rich_presence_normalize(input->zone, zone)) {
+            normalized_with_prefix(activity->details, "Exploring ", zone, "Atrinik");
+        } else {
+            snprintf(activity->details, sizeof(activity->details), "Exploring");
+        }
     }
 }
 
@@ -164,6 +175,33 @@ static bool activity_equal(const discord_rpc_activity_t *left,
                            const discord_rpc_activity_t *right) {
     return left->started_at == right->started_at && strcmp(left->details, right->details) == 0 &&
            strcmp(left->state, right->state) == 0;
+}
+
+static void purge_commands(rich_presence_controller_t *controller, uint64_t now_ms) {
+    while (controller->command_count != 0U &&
+           now_ms - controller->command_times[controller->command_start] >=
+               RICH_PRESENCE_RATE_WINDOW_MS) {
+        controller->command_start = (controller->command_start + 1U) % RICH_PRESENCE_RATE_CAPACITY;
+        controller->command_count--;
+    }
+}
+
+static void record_command(rich_presence_controller_t *controller, uint64_t now_ms) {
+    purge_commands(controller, now_ms);
+    if (controller->command_count == RICH_PRESENCE_RATE_CAPACITY) {
+        controller->command_start = (controller->command_start + 1U) % RICH_PRESENCE_RATE_CAPACITY;
+        controller->command_count--;
+    }
+    size_t position =
+        (controller->command_start + controller->command_count) % RICH_PRESENCE_RATE_CAPACITY;
+    controller->command_times[position] = now_ms;
+    controller->command_count++;
+}
+
+static bool can_publish(rich_presence_controller_t *controller, uint64_t now_ms) {
+    purge_commands(controller, now_ms);
+    /* Keep one slot available for an immediate privacy clear. */
+    return controller->command_count < RICH_PRESENCE_RATE_CAPACITY - 1U;
 }
 
 void rich_presence_controller_init(rich_presence_controller_t *controller) {
@@ -185,10 +223,11 @@ void rich_presence_controller_tick(rich_presence_controller_t *controller,
     }
     controller->was_playing = input->playing;
 
-    bool active = input->playing && privacy != RICH_PRESENCE_OFF;
+    bool active = input->playing && privacy != RICH_PRESENCE_OFF && backend != NULL;
     bool downgrade = active && privacy < controller->last_privacy;
     if ((!active || downgrade) && controller->owns_activity) {
         backend->clear(backend->context);
+        record_command(controller, input->now_ms);
         controller->owns_activity = false;
         memset(&controller->published, 0, sizeof(controller->published));
         controller->next_publish_ms =
@@ -211,10 +250,14 @@ void rich_presence_controller_tick(rich_presence_controller_t *controller,
     if (!controller->owns_activity || !activity_equal(&controller->published, &activity)) {
         controller->pending_activity = activity;
         controller->pending = true;
+    } else {
+        controller->pending = false;
     }
 
-    if (controller->pending && input->now_ms >= controller->next_publish_ms) {
+    if (controller->pending && input->now_ms >= controller->next_publish_ms &&
+        can_publish(controller, input->now_ms)) {
         backend->publish(backend->context, &controller->pending_activity);
+        record_command(controller, input->now_ms);
         controller->published = controller->pending_activity;
         controller->pending = false;
         controller->owns_activity = true;
@@ -222,10 +265,27 @@ void rich_presence_controller_tick(rich_presence_controller_t *controller,
     }
 }
 
+void rich_presence_controller_begin_session(rich_presence_controller_t *controller,
+                                            const rich_presence_backend_t *backend,
+                                            uint64_t now_ms) {
+    if (controller->owns_activity && backend != NULL) {
+        backend->clear(backend->context);
+        record_command(controller, now_ms);
+        controller->next_publish_ms = now_ms + RICH_PRESENCE_UPDATE_INTERVAL_MS;
+    }
+    controller->was_playing = false;
+    controller->owns_activity = false;
+    controller->pending = false;
+    controller->session_started_at = 0;
+    memset(&controller->published, 0, sizeof(controller->published));
+}
+
 void rich_presence_controller_stop(rich_presence_controller_t *controller,
-                                   const rich_presence_backend_t *backend) {
+                                   const rich_presence_backend_t *backend,
+                                   uint64_t now_ms) {
     if (controller->owns_activity) {
         backend->clear(backend->context);
+        record_command(controller, now_ms);
     }
     rich_presence_controller_init(controller);
 }

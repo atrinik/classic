@@ -77,7 +77,14 @@ if (ATRINIK_DISCORD_APPLICATION_ID_FILE)
             NOT ATRINIK_DISCORD_APPLICATION_ID_VALUE MATCHES "^[1-9][0-9]*$")
         message(FATAL_ERROR "Discord Application ID file is invalid")
     endif ()
-    unset(ATRINIK_DISCORD_APPLICATION_ID_VALUE)
+    if (ATRINIK_DISCORD_APPLICATION_ID_LENGTH EQUAL 20 AND
+            ATRINIK_DISCORD_APPLICATION_ID_VALUE STRGREATER "18446744073709551615")
+        message(FATAL_ERROR "Discord Application ID exceeds uint64 range")
+    endif ()
+    set(ATRINIK_DISCORD_APPLICATION_ID_NORMALIZED
+        "${CMAKE_CURRENT_BINARY_DIR}/discord-application-id")
+    file(WRITE "${ATRINIK_DISCORD_APPLICATION_ID_NORMALIZED}"
+        "${ATRINIK_DISCORD_APPLICATION_ID_VALUE}\n")
     unset(ATRINIK_DISCORD_APPLICATION_ID_LINES)
 endif ()
 
@@ -633,9 +640,10 @@ install(FILES
 install(DIRECTORY
         textures cache data fonts gfx_user settings sound srv_files
         DESTINATION ${INSTALL_SUBDIR_SHARE}
-        PATTERN ".git" EXCLUDE)
+        PATTERN ".git" EXCLUDE
+        PATTERN "discord-application-id" EXCLUDE)
 if (ATRINIK_DISCORD_APPLICATION_ID_FILE)
-    install(FILES "${ATRINIK_DISCORD_APPLICATION_ID_FILE}"
+    install(FILES "${ATRINIK_DISCORD_APPLICATION_ID_NORMALIZED}"
         DESTINATION "${INSTALL_SUBDIR_SHARE}/data"
         RENAME discord-application-id)
 endif ()
