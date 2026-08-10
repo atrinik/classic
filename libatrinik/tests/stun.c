@@ -48,7 +48,8 @@ typedef struct blocking_resolver_state {
     pthread_mutex_t mutex;
     pthread_cond_t condition;
     unsigned int entered;
-    unsigned int canceled;
+    unsigned int released;
+    unsigned int exited;
 } blocking_resolver_state_t;
 
 typedef struct discovery_call {
@@ -70,6 +71,7 @@ static blocking_resolver_state_t blocking_resolver = {
     .condition = PTHREAD_COND_INITIALIZER,
 };
 static atomic_uint_fast64_t fake_clock_ms;
+static atomic_uint fallback_calls;
 
 static uint64_t fake_clock(void) {
     return atomic_load_explicit(&fake_clock_ms, memory_order_relaxed);
@@ -142,25 +144,19 @@ static void *fake_stun_run(void *data) {
     return NULL;
 }
 
-static void blocking_resolver_canceled(void *data) {
-    blocking_resolver_state_t *state = data;
-    state->canceled++;
-    pthread_cond_broadcast(&state->condition);
-    pthread_mutex_unlock(&state->mutex);
-}
-
 static int blocking_resolver_call(const char *host,
                                   const char *service,
                                   const struct addrinfo *hints,
                                   struct addrinfo **addresses) {
     pthread_mutex_lock(&blocking_resolver.mutex);
-    pthread_cleanup_push(blocking_resolver_canceled, &blocking_resolver);
-    blocking_resolver.entered++;
+    unsigned int ticket = ++blocking_resolver.entered;
     pthread_cond_broadcast(&blocking_resolver.condition);
-    for (;;) {
+    while (blocking_resolver.released < ticket) {
         pthread_cond_wait(&blocking_resolver.condition, &blocking_resolver.mutex);
     }
-    pthread_cleanup_pop(1);
+    blocking_resolver.exited++;
+    pthread_cond_broadcast(&blocking_resolver.condition);
+    pthread_mutex_unlock(&blocking_resolver.mutex);
     *addresses = NULL;
     return EAI_AGAIN;
 }
@@ -199,15 +195,29 @@ static discovery_call_t discovery_call_create(const char *endpoint, uint64_t dea
 static void blocking_resolver_reset(void) {
     pthread_mutex_lock(&blocking_resolver.mutex);
     blocking_resolver.entered = 0;
-    blocking_resolver.canceled = 0;
+    blocking_resolver.released = 0;
+    blocking_resolver.exited = 0;
     pthread_mutex_unlock(&blocking_resolver.mutex);
 }
 
-static void blocking_resolver_wait(unsigned int entered, unsigned int canceled) {
+static void blocking_resolver_wait(unsigned int entered, unsigned int exited) {
     pthread_mutex_lock(&blocking_resolver.mutex);
-    while (blocking_resolver.entered < entered || blocking_resolver.canceled < canceled) {
+    while (blocking_resolver.entered < entered || blocking_resolver.exited < exited) {
         pthread_cond_wait(&blocking_resolver.condition, &blocking_resolver.mutex);
     }
+    pthread_mutex_unlock(&blocking_resolver.mutex);
+}
+
+static void blocking_resolver_release(unsigned int count) {
+    pthread_mutex_lock(&blocking_resolver.mutex);
+    blocking_resolver.released = count;
+    pthread_cond_broadcast(&blocking_resolver.condition);
+    pthread_mutex_unlock(&blocking_resolver.mutex);
+}
+
+static void blocking_resolver_require_exited(unsigned int count) {
+    pthread_mutex_lock(&blocking_resolver.mutex);
+    TEST_CHECK(blocking_resolver.exited == count);
     pthread_mutex_unlock(&blocking_resolver.mutex);
 }
 
@@ -223,31 +233,11 @@ static void test_resolver_deadline_and_privacy(void) {
     blocking_resolver_wait(1, 0);
     atomic_store_explicit(&fake_clock_ms, 2U, memory_order_relaxed);
     TEST_CHECK(pthread_join(thread, NULL) == 0);
-    blocking_resolver_wait(1, 1);
+    blocking_resolver_require_exited(0);
     TEST_CHECK(!call.result);
     TEST_CHECK(strstr(captured_log, "resolution timed out") != NULL);
     TEST_CHECK(strstr(captured_log, "private-resolver") == NULL);
     test_close_socket(call.client.handle);
-
-    blocking_resolver_reset();
-    atomic_store_explicit(&fake_clock_ms, 1U, memory_order_relaxed);
-    discovery_call_t concurrent[2] = {
-        discovery_call_create("concurrent-one.example:3478", 2U),
-        discovery_call_create("concurrent-two.example:3478", 2U),
-    };
-    pthread_t concurrent_threads[2];
-    for (size_t i = 0; i < 2; i++) {
-        TEST_CHECK(
-            pthread_create(&concurrent_threads[i], NULL, discovery_call_run, &concurrent[i]) == 0);
-    }
-    blocking_resolver_wait(2, 0);
-    atomic_store_explicit(&fake_clock_ms, 2U, memory_order_relaxed);
-    for (size_t i = 0; i < 2; i++) {
-        TEST_CHECK(pthread_join(concurrent_threads[i], NULL) == 0);
-        TEST_CHECK(!concurrent[i].result);
-        test_close_socket(concurrent[i].client.handle);
-    }
-    blocking_resolver_wait(2, 2);
 
     socket_stun_resolver_set_for_test(failing_resolver);
     socket_stun_clock_set_for_test(NULL);
@@ -262,9 +252,44 @@ static void test_resolver_deadline_and_privacy(void) {
                                            datetime_monotonic_ms() + 1000U));
     TEST_CHECK(strstr(captured_log, "Cannot resolve") != NULL);
     TEST_CHECK(strstr(captured_log, "private-override") == NULL);
+    test_close_socket(call.client.handle);
+    blocking_resolver_release(1);
+    blocking_resolver_wait(1, 1);
+    socket_stun_resolver_wait_for_test();
+
+    socket_stun_resolver_set_for_test(blocking_resolver_call);
+    socket_stun_clock_set_for_test(fake_clock);
+    blocking_resolver_reset();
+    atomic_store_explicit(&fake_clock_ms, 1U, memory_order_relaxed);
+    discovery_call_t concurrent[4] = {
+        discovery_call_create("concurrent-one.example:3478", 2U),
+        discovery_call_create("concurrent-two.example:3478", 2U),
+        discovery_call_create("concurrent-three.example:3478", 2U),
+        discovery_call_create("concurrent-four.example:3478", 2U),
+    };
+    pthread_t concurrent_threads[arraysize(concurrent)];
+    for (size_t i = 0; i < arraysize(concurrent); i++) {
+        TEST_CHECK(
+            pthread_create(&concurrent_threads[i], NULL, discovery_call_run, &concurrent[i]) == 0);
+    }
+    blocking_resolver_wait(arraysize(concurrent), 0);
+    discovery_call_t overflow = discovery_call_create("bounded-overflow.example:3478", 2U);
+    discovery_call_run(&overflow);
+    TEST_CHECK(!overflow.result);
+    test_close_socket(overflow.client.handle);
+    atomic_store_explicit(&fake_clock_ms, 2U, memory_order_relaxed);
+    for (size_t i = 0; i < arraysize(concurrent); i++) {
+        TEST_CHECK(pthread_join(concurrent_threads[i], NULL) == 0);
+        TEST_CHECK(!concurrent[i].result);
+        test_close_socket(concurrent[i].client.handle);
+    }
+    blocking_resolver_require_exited(0);
+    blocking_resolver_release(arraysize(concurrent));
+    blocking_resolver_wait(arraysize(concurrent), arraysize(concurrent));
+    socket_stun_resolver_wait_for_test();
 
     socket_stun_resolver_set_for_test(NULL);
-    test_close_socket(call.client.handle);
+    socket_stun_clock_set_for_test(NULL);
 }
 
 static void *rendezvous_call_run(void *data) {
@@ -280,6 +305,15 @@ static void *rendezvous_call_run(void *data) {
     return NULL;
 }
 
+static bool fallback_spy(socket_t *client,
+                         bool directory_probe_allowed,
+                         char *host,
+                         size_t host_size,
+                         uint16_t *port) {
+    atomic_fetch_add_explicit(&fallback_calls, 1U, memory_order_relaxed);
+    return false;
+}
+
 static void test_rendezvous_reserves_fallback_budget(void) {
     uint64_t now_ms = datetime_monotonic_ms();
     TEST_CHECK(socket_rendezvous_stun_deadline(now_ms, now_ms + 15000U) == now_ms + 3000U);
@@ -288,17 +322,11 @@ static void test_rendezvous_reserves_fallback_budget(void) {
 
     socket_stun_resolver_set_for_test(blocking_resolver_call);
     socket_stun_clock_set_for_test(fake_clock);
+    socket_rendezvous_fallback_set_for_test(fallback_spy);
     atomic_store_explicit(&fake_clock_ms, 1U, memory_order_relaxed);
+    atomic_store_explicit(&fallback_calls, 0U, memory_order_relaxed);
     blocking_resolver_reset();
     discovery_call_t call = discovery_call_create("unused", now_ms);
-    struct sockaddr_in bound = {
-        .sin_family = AF_INET,
-        .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
-    };
-    TEST_CHECK(bind(call.client.handle, (const struct sockaddr *)&bound, sizeof(bound)) == 0);
-    socklen_t bound_length = sizeof(bound);
-    TEST_CHECK(getsockname(call.client.handle, (struct sockaddr *)&bound, &bound_length) == 0);
-    memcpy(&call.client.addr, &bound, sizeof(bound));
 
     char server_id[RENDEZVOUS_SERVER_ID_HEX_SIZE + 1U];
     char ticket[RENDEZVOUS_TICKET_HEX_SIZE + 1U];
@@ -319,13 +347,18 @@ static void test_rendezvous_reserves_fallback_budget(void) {
     atomic_store_explicit(&fake_clock_ms, UINT64_MAX, memory_order_relaxed);
     TEST_CHECK(pthread_join(rendezvous_thread, NULL) == 0);
     TEST_CHECK(rendezvous_call.count == 0);
-    blocking_resolver_wait(1, 1);
+    blocking_resolver_require_exited(0);
+    TEST_CHECK(atomic_load_explicit(&fallback_calls, memory_order_relaxed) == 1U);
     TEST_CHECK(rendezvous_call.failure.code != SOCKET_CONNECT_FAILURE_TIMEOUT);
-    TEST_CHECK(strstr(captured_log, "Rendezvous connection failed") != NULL);
+    TEST_CHECK(strstr(captured_log, "Cannot determine a local rendezvous candidate") != NULL);
     TEST_CHECK(datetime_monotonic_ms() < deadline_ms);
+    blocking_resolver_release(1);
+    blocking_resolver_wait(1, 1);
+    socket_stun_resolver_wait_for_test();
     socket_rendezvous_attempt_destroy(attempt);
     socket_stun_resolver_set_for_test(NULL);
     socket_stun_clock_set_for_test(NULL);
+    socket_rendezvous_fallback_set_for_test(NULL);
     test_close_socket(call.client.handle);
 }
 

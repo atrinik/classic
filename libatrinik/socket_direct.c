@@ -11,7 +11,6 @@
 #include <curl/curl.h>
 #include <openssl/crypto.h>
 #include <openssl/rand.h>
-#include <stdatomic.h>
 #ifdef WIN32
 #include <iphlpapi.h>
 #else
@@ -29,6 +28,7 @@
 #define SOCKET_RENDEZVOUS_RETRY_AFTER_MAX (24U * 60U * 60U)
 #define SOCKET_STUN_ATTEMPT_BUDGET_MS 3000U
 #define SOCKET_RENDEZVOUS_RESERVED_BUDGET_MS 5000U
+#define SOCKET_STUN_RESOLVER_WORKERS_MAX 4U
 
 typedef enum socket_rendezvous_attempt_state {
     SOCKET_RENDEZVOUS_ATTEMPT_READY,
@@ -42,18 +42,23 @@ typedef enum socket_rendezvous_attempt_state {
 } socket_rendezvous_attempt_state_t;
 
 typedef struct socket_stun_resolver_context {
+    pthread_mutex_t mutex;
     socket_stun_resolver_t resolver;
     struct addrinfo hints;
     struct addrinfo *addresses;
     char host[MAX_BUF];
     char service[6];
     int result;
-    atomic_bool complete;
+    bool complete;
+    bool abandoned;
 } socket_stun_resolver_context_t;
 
 static socket_stun_resolver_t socket_stun_resolver = getaddrinfo;
 static socket_stun_clock_t socket_stun_clock = datetime_monotonic_ms;
+static socket_rendezvous_fallback_t socket_rendezvous_fallback;
 static pthread_mutex_t socket_stun_resolver_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t socket_stun_resolver_condition = PTHREAD_COND_INITIALIZER;
+static unsigned int socket_stun_resolver_workers;
 
 void socket_stun_resolver_set_for_test(socket_stun_resolver_t resolver) {
     pthread_mutex_lock(&socket_stun_resolver_lock);
@@ -67,11 +72,37 @@ void socket_stun_clock_set_for_test(socket_stun_clock_t clock) {
     pthread_mutex_unlock(&socket_stun_resolver_lock);
 }
 
-static socket_stun_resolver_t socket_stun_resolver_get(void) {
+void socket_rendezvous_fallback_set_for_test(socket_rendezvous_fallback_t fallback) {
     pthread_mutex_lock(&socket_stun_resolver_lock);
-    socket_stun_resolver_t resolver = socket_stun_resolver;
+    socket_rendezvous_fallback = fallback;
     pthread_mutex_unlock(&socket_stun_resolver_lock);
-    return resolver;
+}
+
+void socket_stun_resolver_wait_for_test(void) {
+    pthread_mutex_lock(&socket_stun_resolver_lock);
+    while (socket_stun_resolver_workers != 0) {
+        pthread_cond_wait(&socket_stun_resolver_condition, &socket_stun_resolver_lock);
+    }
+    pthread_mutex_unlock(&socket_stun_resolver_lock);
+}
+
+static bool socket_stun_resolver_claim(socket_stun_resolver_t *resolver) {
+    pthread_mutex_lock(&socket_stun_resolver_lock);
+    bool claimed = socket_stun_resolver_workers < SOCKET_STUN_RESOLVER_WORKERS_MAX;
+    if (claimed) {
+        socket_stun_resolver_workers++;
+        *resolver = socket_stun_resolver;
+    }
+    pthread_mutex_unlock(&socket_stun_resolver_lock);
+    return claimed;
+}
+
+static void socket_stun_resolver_release(void) {
+    pthread_mutex_lock(&socket_stun_resolver_lock);
+    HARD_ASSERT(socket_stun_resolver_workers > 0);
+    socket_stun_resolver_workers--;
+    pthread_cond_broadcast(&socket_stun_resolver_condition);
+    pthread_mutex_unlock(&socket_stun_resolver_lock);
 }
 
 static uint64_t socket_stun_clock_get(void) {
@@ -81,23 +112,30 @@ static uint64_t socket_stun_clock_get(void) {
     return clock();
 }
 
-static void socket_stun_resolver_addresses_destroy(void *data) {
-    struct addrinfo **addresses = data;
-    if (*addresses != NULL) {
-        freeaddrinfo(*addresses);
-    }
+static void socket_stun_resolver_context_destroy(socket_stun_resolver_context_t *context) {
+    pthread_mutex_destroy(&context->mutex);
+    free(context);
 }
 
 static void *socket_stun_resolver_run(void *data) {
     socket_stun_resolver_context_t *context = data;
     struct addrinfo *addresses = NULL;
-    pthread_cleanup_push(socket_stun_resolver_addresses_destroy, &addresses);
     int result = context->resolver(context->host, context->service, &context->hints, &addresses);
+    socket_stun_resolver_release();
+
+    pthread_mutex_lock(&context->mutex);
+    if (context->abandoned) {
+        pthread_mutex_unlock(&context->mutex);
+        if (addresses != NULL) {
+            freeaddrinfo(addresses);
+        }
+        socket_stun_resolver_context_destroy(context);
+        return NULL;
+    }
     context->addresses = addresses;
-    addresses = NULL;
     context->result = result;
-    atomic_store_explicit(&context->complete, true, memory_order_release);
-    pthread_cleanup_pop(0);
+    context->complete = true;
+    pthread_mutex_unlock(&context->mutex);
     return NULL;
 }
 
@@ -116,30 +154,41 @@ static struct addrinfo *socket_stun_resolve_until(const char *host,
     }
 
     socket_stun_resolver_context_t *context = xcalloc(1, sizeof(*context));
-    context->resolver = socket_stun_resolver_get();
+    if (!socket_stun_resolver_claim(&context->resolver)) {
+        free(context);
+        return NULL;
+    }
     context->hints = *hints;
     snprintf(VS(context->host), "%s", host);
     snprintf(VS(context->service), "%s", service);
-    atomic_init(&context->complete, false);
-
-    pthread_t thread;
-    if (pthread_create(&thread, NULL, socket_stun_resolver_run, context) != 0) {
+    if (pthread_mutex_init(&context->mutex, NULL) != 0) {
+        socket_stun_resolver_release();
         free(context);
         return NULL;
     }
 
-    while (!atomic_load_explicit(&context->complete, memory_order_acquire)) {
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, socket_stun_resolver_run, context) != 0) {
+        socket_stun_resolver_release();
+        socket_stun_resolver_context_destroy(context);
+        return NULL;
+    }
+
+    pthread_mutex_lock(&context->mutex);
+    while (!context->complete) {
         now_ms = socket_stun_clock_get();
         if (now_ms >= deadline_ms) {
             break;
         }
         unsigned int wait_us = (unsigned int)(MIN(deadline_ms - now_ms, 10U) * 1000U);
+        pthread_mutex_unlock(&context->mutex);
         usleep(wait_us);
+        pthread_mutex_lock(&context->mutex);
     }
-    if (!atomic_load_explicit(&context->complete, memory_order_acquire)) {
-        (void)pthread_cancel(thread);
-        (void)pthread_join(thread, NULL);
-        free(context);
+    if (!context->complete) {
+        context->abandoned = true;
+        pthread_mutex_unlock(&context->mutex);
+        (void)pthread_detach(thread);
         *timed_out = true;
         return NULL;
     }
@@ -147,8 +196,9 @@ static struct addrinfo *socket_stun_resolve_until(const char *host,
     struct addrinfo *addresses = context->addresses;
     *result = context->result;
     bool complete_in_time = socket_stun_clock_get() < deadline_ms;
+    pthread_mutex_unlock(&context->mutex);
     (void)pthread_join(thread, NULL);
-    free(context);
+    socket_stun_resolver_context_destroy(context);
     if (!complete_in_time) {
         if (addresses != NULL) {
             freeaddrinfo(addresses);
@@ -1497,6 +1547,21 @@ socket_websocket_receive(void *handle, char *buffer, size_t capacity, size_t *us
     return SOCKET_WEBSOCKET_MESSAGE;
 }
 
+static bool socket_rendezvous_fallback_candidate(socket_t *sc,
+                                                 bool directory_probe_allowed,
+                                                 char *host,
+                                                 size_t host_size,
+                                                 uint16_t *port) {
+    pthread_mutex_lock(&socket_stun_resolver_lock);
+    socket_rendezvous_fallback_t fallback = socket_rendezvous_fallback;
+    pthread_mutex_unlock(&socket_stun_resolver_lock);
+    if (fallback != NULL) {
+        return fallback(sc, directory_probe_allowed, host, host_size, port);
+    }
+    return directory_probe_allowed ? socket_local_candidate(sc, host, host_size, port)
+                                   : socket_bound_local_candidate(sc, host, host_size, port);
+}
+
 size_t socket_rendezvous_client(socket_t *sc,
                                 const char *url,
                                 const char *stun_endpoint,
@@ -1521,9 +1586,11 @@ size_t socket_rendezvous_client(socket_t *sc,
         stun_endpoint != NULL && stun_deadline_ms > now_ms &&
         socket_stun_discover_until(sc, stun_endpoint, VS(host), &port, stun_deadline_ms);
     if (!have_candidate) {
-        have_candidate = socket_rendezvous_attempt_directory_probe_allowed(attempt)
-                             ? socket_local_candidate(sc, VS(host), &port)
-                             : socket_bound_local_candidate(sc, VS(host), &port);
+        have_candidate = socket_rendezvous_fallback_candidate(
+            sc,
+            socket_rendezvous_attempt_directory_probe_allowed(attempt),
+            VS(host),
+            &port);
     }
     if (!have_candidate) {
         LOG(ERROR, "Cannot determine a local rendezvous candidate");

@@ -332,7 +332,7 @@ class WorkflowContractTests(unittest.TestCase):
             "libatrinik-metaserver-publisher \\",
             build,
         )
-        self.assertIn("libatrinik-metaserver-url \\", build)
+        self.assertIn("libatrinik-metaserver-url libatrinik-stun \\", build)
         self.assertIn("python3 tools/ci/stage_windows_runtime.py", build)
         self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", build)
 
@@ -342,6 +342,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"libatrinik-rendezvous.exe"', run)
         self.assertIn('"libatrinik-metaserver-publisher.exe"', run)
         self.assertIn('"libatrinik-metaserver-url.exe"', run)
+        self.assertIn('"libatrinik-stun.exe"', run)
         self.assertIn('"fixtures/metaserver-publisher-v1.json"', run)
 
         self.assertIn("- windows-test", aggregate)

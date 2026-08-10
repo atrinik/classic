@@ -82,6 +82,11 @@ typedef int (*socket_stun_resolver_t)(const char *host,
                                       const struct addrinfo *hints,
                                       struct addrinfo **addresses);
 typedef uint64_t (*socket_stun_clock_t)(void);
+typedef bool (*socket_rendezvous_fallback_t)(socket_t *sc,
+                                             bool directory_probe_allowed,
+                                             char *host,
+                                             size_t host_size,
+                                             uint16_t *port);
 
 bool socket_stun_discover_until(socket_t *sc,
                                 const char *endpoint,
@@ -91,6 +96,8 @@ bool socket_stun_discover_until(socket_t *sc,
                                 uint64_t deadline_ms);
 void socket_stun_resolver_set_for_test(socket_stun_resolver_t resolver);
 void socket_stun_clock_set_for_test(socket_stun_clock_t clock);
+void socket_stun_resolver_wait_for_test(void);
+void socket_rendezvous_fallback_set_for_test(socket_rendezvous_fallback_t fallback);
 uint64_t socket_rendezvous_stun_deadline(uint64_t now_ms, uint64_t attempt_deadline_ms);
 
 size_t socket_rendezvous_client(socket_t *sc,
