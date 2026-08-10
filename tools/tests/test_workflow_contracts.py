@@ -294,9 +294,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(candidate.count("--env PATH=/opt/mxe/.ccache/bin:"), 2)
 
     def test_discord_application_id_is_release_only_package_data(self) -> None:
+        package = self.text("package-release.yml")
         candidate = self.text("build-release-candidate.yml")
-        config = candidate[
-            candidate.index("  discord-config:") : candidate.index("  client-windows:")
+        config = package[
+            package.index("  discord-config:") : package.index("  candidate:")
+        ]
+        candidate_job = package[
+            package.index("  candidate:") : package.index("  publish:")
         ]
         client = candidate[
             candidate.index("  client-windows:") : candidate.index("  server-windows:")
@@ -305,12 +309,20 @@ class WorkflowContractTests(unittest.TestCase):
         package_script = (ROOT / "client" / "tools" / "build-windows-package.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn("if: inputs.rehearsal != true", config)
+        self.assertIn("if: inputs.candidate_run_id == ''", config)
+        self.assertIn("needs: preflight", config)
         self.assertIn("environment: discord-release", config)
         self.assertIn("secrets.DISCORD_APPLICATION_ID", config)
         self.assertIn("umask 077", config)
         self.assertNotIn("echo", config)
         self.assertIn("retention-days: 1", config)
+        artifact_name = "name: discord-application-id-${{ inputs.tag }}"
+        self.assertEqual(config.count(artifact_name), 1)
+        self.assertEqual(client.count(artifact_name), 1)
+        self.assertIn("needs: [preflight, discord-config]", candidate_job)
+        self.assertIn("needs.discord-config.result == 'success'", candidate_job)
+        self.assertNotIn("environment: discord-release", candidate)
+        self.assertNotIn("secrets.DISCORD_APPLICATION_ID", candidate)
         self.assertIn("ATRINIK_DISCORD_APPLICATION_ID_FILE", client)
         self.assertIn("/workspace/build/discord-config/discord-application-id", client)
         self.assertIn('PATTERN "discord-application-id" EXCLUDE', cmake)
