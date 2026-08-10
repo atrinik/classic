@@ -36,6 +36,18 @@ def require_staging_rejection(
         raise RuntimeError(f"invalid {surface} staging was not rejected: {output}")
 
 
+def require_staging_error(
+    executable: Path, assetspath: Path, surface: str
+) -> None:
+    result = run_server(executable, assetspath)
+    output = result.stdout + result.stderr
+    if (
+        result.returncode == 0
+        or "Could not inspect or create asset staging directory" not in output
+    ):
+        raise RuntimeError(f"uninspectable {surface} staging was not rejected: {output}")
+
+
 def main() -> int:
     executable = Path(sys.argv[1])
     custom = Path("server-custom.cfg")
@@ -88,6 +100,7 @@ def main() -> int:
         invalid_file = root / "asset-file"
         invalid_file.write_text("invalid\n", encoding="utf-8")
         require_staging_rejection(executable, invalid_file, "file")
+        require_staging_error(executable, invalid_file / "child", "file child")
 
         target = root / "asset-target"
         target.mkdir()
