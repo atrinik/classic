@@ -25,43 +25,97 @@ try {
         throw "Packaged server contains the obsolete root-level maps directory"
     }
 
-    $standardInput = Join-Path $smokeRoot "stdin.txt"
-    $standardOutput = Join-Path $smokeRoot "stdout.txt"
-    $standardError = Join-Path $smokeRoot "stderr.txt"
-    Set-Content -LiteralPath $standardInput -Value "shutdown" -Encoding ascii
-
-    $process = Start-Process -FilePath $env:ComSpec `
-        -ArgumentList @(
-            "/d",
-            "/c",
-            "server.bat",
-            "--port_mapping=off",
-            "--stun_server=off"
-        ) `
-        -WorkingDirectory $serverRoot `
-        -RedirectStandardInput $standardInput `
-        -RedirectStandardOutput $standardOutput `
-        -RedirectStandardError $standardError `
-        -PassThru
-
-    if (-not $process.WaitForExit(60000)) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        throw "Packaged server did not shut down within 60 seconds"
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $env:ComSpec
+    $startInfo.WorkingDirectory = $serverRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    foreach ($argument in @(
+        "/d",
+        "/c",
+        "server.bat",
+        "--port_mapping=off",
+        "--stun_server=off",
+        "2>&1"
+    )) {
+        $startInfo.ArgumentList.Add($argument)
     }
 
-    $output = (Get-Content -LiteralPath $standardOutput -Raw) +
-        (Get-Content -LiteralPath $standardError -Raw)
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw "Could not launch the packaged server"
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $ready = $false
+    $deadline = [System.DateTime]::UtcNow.AddSeconds(60)
+    $lineTask = $process.StandardOutput.ReadLineAsync()
+    while (-not $process.HasExited -and [System.DateTime]::UtcNow -lt $deadline) {
+        if (-not $lineTask.Wait(1000)) {
+            continue
+        }
+        $line = $lineTask.Result
+        if ($null -eq $line) {
+            break
+        }
+        $lines.Add($line)
+        Write-Host $line
+        if ($line -match "Server ready\. Waiting for connections") {
+            $ready = $true
+            break
+        }
+        $lineTask = $process.StandardOutput.ReadLineAsync()
+    }
+
+    if (-not $ready) {
+        if (-not $process.HasExited) {
+            $process.Kill($true)
+            $process.WaitForExit()
+        }
+        $output = $lines -join "`n"
+        throw "Packaged server did not reach the ready state within 60 seconds:`n$output"
+    }
+
+    $process.StandardInput.WriteLine("shutdown")
+    $process.StandardInput.Flush()
+    $process.StandardInput.Close()
+    $remainderTask = $process.StandardOutput.ReadToEndAsync()
+    if (-not $process.WaitForExit(30000)) {
+        $process.Kill($true)
+        $process.WaitForExit()
+        $output = (($lines -join "`n") + "`n" + $remainderTask.Result).Trim()
+        throw "Packaged server did not shut down within 30 seconds:`n$output"
+    }
+
+    $remainder = $remainderTask.Result
+    if ($remainder) {
+        $lines.Add($remainder)
+        Write-Host $remainder
+    }
+    $output = $lines -join "`n"
     if ($process.ExitCode -ne 0) {
         throw "Packaged server exited with code $($process.ExitCode):`n$output"
-    }
-    if ($output -notmatch "Server ready\. Waiting for connections") {
-        throw "Packaged server did not reach the ready state:`n$output"
     }
     if ($output -match "Can't open regions file") {
         throw "Packaged server failed to load regions.reg:`n$output"
     }
+    $process.Dispose()
 } finally {
     if (Test-Path -LiteralPath $smokeRoot) {
-        Remove-Item -LiteralPath $smokeRoot -Recurse -Force
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+                Remove-Item -LiteralPath $smokeRoot -Recurse -Force
+                break
+            } catch {
+                if ($attempt -eq 5) {
+                    Write-Warning "Could not remove smoke directory: $_"
+                } else {
+                    Start-Sleep -Seconds 1
+                }
+            }
+        }
     }
 }

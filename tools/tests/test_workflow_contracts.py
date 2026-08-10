@@ -486,8 +486,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"maps/regions.reg"', smoke)
         self.assertIn('"--port_mapping=off"', smoke)
         self.assertIn('"--stun_server=off"', smoke)
-        self.assertIn('"shutdown"', smoke)
-        self.assertIn("WaitForExit(60000)", smoke)
+        self.assertIn('$process.StandardInput.WriteLine("shutdown")', smoke)
+        self.assertLess(
+            smoke.index('"Server ready\\. Waiting for connections"'),
+            smoke.index('$process.StandardInput.WriteLine("shutdown")'),
+        )
+        self.assertIn("AddSeconds(60)", smoke)
+        self.assertIn("WaitForExit(30000)", smoke)
+        self.assertIn("$process.Kill($true)", smoke)
         self.assertIn('"Server ready\\. Waiting for connections"', smoke)
         self.assertIn('"fixtures/metaserver-publisher-v1.json"', run)
 
