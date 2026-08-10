@@ -329,7 +329,15 @@ def verify_release_tags(manifest: dict[str, Any]) -> None:
                 "disposition": "delete-empty-draft",
                 "empty_draft_id": 367395490,
                 "failed_package_run_ids": [31298735525, 31341539056],
-            }
+                "server_image_conclusion": "failure",
+            },
+            "v5.10.0": {
+                "commit": "ebfe6588cf64f42c44715bcf45ec50cc056a91a5",
+                "disposition": "delete-empty-draft",
+                "empty_draft_id": 368181077,
+                "failed_package_run_ids": [31429488922],
+                "server_image_conclusion": "success",
+            },
         },
         "unexpected failed-release policy",
     )

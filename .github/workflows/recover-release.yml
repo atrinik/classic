@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: classic-release-recovery-${{ inputs.tag }}
+  group: classic-release-publication
   cancel-in-progress: false
 
 jobs:

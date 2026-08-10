@@ -495,7 +495,7 @@ bool path_write_atomic_existing(const char *path,
 }
 
 #ifdef WIN32
-static wchar_t *path_secret_wide(const char *path) {
+static wchar_t *path_windows_wide(const char *path) {
     int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
     if (length <= 0) {
         return NULL;
@@ -512,6 +512,41 @@ static wchar_t *path_secret_wide(const char *path) {
         }
     }
     return wide;
+}
+
+static path_directory_result_t path_directory_inspect_windows(const wchar_t *path, bool *missing) {
+    *missing = false;
+    HANDLE directory = CreateFileW(path,
+                                   FILE_READ_ATTRIBUTES,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                   NULL,
+                                   OPEN_EXISTING,
+                                   FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                                   NULL);
+    if (directory == INVALID_HANDLE_VALUE) {
+        DWORD error = GetLastError();
+        *missing = error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+        return PATH_DIRECTORY_ERROR;
+    }
+
+    FILE_ATTRIBUTE_TAG_INFO attributes;
+    FILE_STANDARD_INFO standard;
+    bool inspected =
+        GetFileInformationByHandleEx(directory,
+                                     FileAttributeTagInfo,
+                                     &attributes,
+                                     sizeof(attributes)) != 0 &&
+        GetFileInformationByHandleEx(directory, FileStandardInfo, &standard, sizeof(standard)) !=
+            0 &&
+        GetFileType(directory) == FILE_TYPE_DISK;
+    bool closed = CloseHandle(directory) != 0;
+    if (!inspected || !closed) {
+        return PATH_DIRECTORY_ERROR;
+    }
+    if (!standard.Directory || (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+        return PATH_DIRECTORY_UNSAFE;
+    }
+    return PATH_DIRECTORY_OK;
 }
 
 static TOKEN_USER *path_secret_token_user(HANDLE *token) {
@@ -595,6 +630,53 @@ static bool path_secret_windows_security(HANDLE file,
 }
 #endif
 
+path_directory_result_t path_ensure_real_directory(const char *path, unsigned int mode) {
+    HARD_ASSERT(path != NULL);
+
+#ifdef WIN32
+    (void)mode;
+    wchar_t *wide = path_windows_wide(path);
+    if (wide == NULL) {
+        return PATH_DIRECTORY_ERROR;
+    }
+
+    bool missing = false;
+    path_directory_result_t result = path_directory_inspect_windows(wide, &missing);
+    if (missing) {
+        if (!CreateDirectoryW(wide, NULL)) {
+            DWORD error = GetLastError();
+            if (error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS) {
+                free(wide);
+                return PATH_DIRECTORY_ERROR;
+            }
+        }
+        result = path_directory_inspect_windows(wide, &missing);
+        if (missing) {
+            result = PATH_DIRECTORY_ERROR;
+        }
+    }
+    free(wide);
+    return result;
+#else
+    struct stat metadata;
+    if (lstat(path, &metadata) == 0) {
+        return S_ISDIR(metadata.st_mode) && !S_ISLNK(metadata.st_mode) ? PATH_DIRECTORY_OK
+                                                                       : PATH_DIRECTORY_UNSAFE;
+    }
+    if (errno != ENOENT) {
+        return PATH_DIRECTORY_ERROR;
+    }
+    if (mkdir(path, (mode_t)mode) != 0 && errno != EEXIST) {
+        return PATH_DIRECTORY_ERROR;
+    }
+    if (lstat(path, &metadata) != 0) {
+        return PATH_DIRECTORY_ERROR;
+    }
+    return S_ISDIR(metadata.st_mode) && !S_ISLNK(metadata.st_mode) ? PATH_DIRECTORY_OK
+                                                                   : PATH_DIRECTORY_UNSAFE;
+#endif
+}
+
 path_secret_create_result_t
 path_secret_create_atomic(const char *path, const void *data, size_t size) {
     HARD_ASSERT(path != NULL);
@@ -615,8 +697,8 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
     if (snprintf(VS(temporary), "%s.tmp.%s", path, suffix) >= (int)sizeof(temporary)) {
         return PATH_SECRET_CREATE_ERROR;
     }
-    wchar_t *destination_wide = path_secret_wide(path);
-    wchar_t *temporary_wide = path_secret_wide(temporary);
+    wchar_t *destination_wide = path_windows_wide(path);
+    wchar_t *temporary_wide = path_windows_wide(temporary);
     HANDLE token = NULL;
     TOKEN_USER *user = path_secret_token_user(&token);
     DWORD sid_size = user != NULL ? GetLengthSid(user->User.Sid) : 0;
@@ -788,7 +870,7 @@ path_read_secret(const char *path, char *secret, size_t secret_size, bool *permi
     size_t length = 0;
 
 #ifdef WIN32
-    wchar_t *wide = path_secret_wide(path);
+    wchar_t *wide = path_windows_wide(path);
     HANDLE file = wide != NULL ? CreateFileW(wide,
                                              GENERIC_READ | READ_CONTROL,
                                              FILE_SHARE_READ,
