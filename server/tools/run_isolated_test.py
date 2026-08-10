@@ -59,7 +59,6 @@ def prepare_runtime(
     runtimes.mkdir(parents=True, exist_ok=True)
     runtimes = runtimes.resolve(strict=True)
     destination = runtimes / name
-    _remove_owned(destination, runtimes)
 
     staging = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=runtimes))
     try:
@@ -81,6 +80,7 @@ def prepare_runtime(
                 shutil.copy2(source, target, follow_symlinks=False)
 
         (staging / "tmp").mkdir()
+        _remove_owned(destination, runtimes)
         staging.rename(destination)
     except BaseException:
         _remove_owned(staging, runtimes)

@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "run_isolated_test.py"
@@ -51,6 +52,23 @@ class IsolatedServerTestRunnerTests(unittest.TestCase):
         self.assertTrue((second / "server/lib").is_symlink())
         self.assertTrue((second / "server/resources").is_symlink())
         self.assertEqual((second / "server/data/seed").read_text(), "clean\n")
+
+    def test_preparation_failure_preserves_prior_runtime(self) -> None:
+        runtime = runner.prepare_runtime(
+            self.seed, self.runtimes, "server.unit", False
+        )
+        artifact = runtime / "server/failure.log"
+        artifact.write_text("prior failure\n", encoding="utf-8")
+
+        with mock.patch.object(
+            runner, "_link_directory", side_effect=RuntimeError("copy failed")
+        ), self.assertRaisesRegex(RuntimeError, "copy failed"):
+            runner.prepare_runtime(
+                self.seed, self.runtimes, "server.unit", False
+            )
+
+        self.assertEqual(artifact.read_text(encoding="utf-8"), "prior failure\n")
+        self.assertEqual(list(self.runtimes.glob(".server.unit-*")), [])
 
     def test_python_map_tree_is_private_while_other_maps_are_shared(self) -> None:
         runtime = runner.prepare_runtime(self.seed, self.runtimes, "plugin", True)
