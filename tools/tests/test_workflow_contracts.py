@@ -347,6 +347,7 @@ class WorkflowContractTests(unittest.TestCase):
         build = workflow[
             workflow.index("  windows-test-build:") : workflow.index("  windows-test:")
         ]
+        server_build = build[build.index("      - name: Cross-build Windows server") :]
         run_start = workflow.index("  windows-test:")
         run = workflow[run_start : workflow.index("  server:", run_start)]
         aggregate = workflow[workflow.index("  classic-validation:") :]
@@ -354,11 +355,48 @@ class WorkflowContractTests(unittest.TestCase):
         image = f"ghcr.io/atrinik/windows-build:1.2.1@sha256:{digest}"
 
         self.assertIn("if: needs.changes.outputs.windows == 'true'", build)
-        self.assertEqual(build.count(image), 2)
-        self.assertEqual(build.count(digest), 2)
+        self.assertEqual(build.count(image), 3)
+        self.assertEqual(build.count(digest), 3)
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", build)
-        self.assertIn("--network none", build)
+        self.assertEqual(build.count("--network none"), 2)
+        self.assertIn("persist-credentials: false", build)
+        self.assertIn("Stage pinned Windows server dependency", build)
+        self.assertIn(
+            "65ab99547ecc8277434527607d24f8a1b02a2344ed4cea475bed751606e60202",
+            build,
+        )
         self.assertIn("--env CCACHE_DIR=/tmp/atrinik-libatrinik-ccache", build)
+        self.assertIn("-S server", build)
+        self.assertIn("-B server/build/windows-pr-server", build)
+        self.assertIn("-DENABLE_PYTHON_PLUGIN=OFF", build)
+        self.assertIn("--target atrinik-server", build)
+        self.assertIn("--network none", server_build)
+        self.assertIn("--env GH_TOKEN=", server_build)
+        self.assertIn("--env GITHUB_TOKEN=", server_build)
+        self.assertIn("-DPATCH_EXECUTABLE=", server_build)
+        self.assertIn(
+            "-DSOURCE_DIR=/workspace/build/libpcpnatpmp-source", server_build
+        )
+        self.assertIn(
+            "-DPATCH_FILE=/workspace/server/cmake/patches/libpcpnatpmp-mingw.patch",
+            server_build,
+        )
+        self.assertIn(
+            "-P /workspace/server/cmake/apply_patch_idempotent.cmake",
+            server_build,
+        )
+        self.assertIn(
+            "-DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-source",
+            server_build,
+        )
+        self.assertLess(
+            server_build.index("-P /workspace/server/cmake/apply_patch_idempotent.cmake"),
+            server_build.index("x86_64-w64-mingw32.shared-cmake"),
+        )
+        self.assertLess(
+            server_build.index("x86_64-w64-mingw32.shared-cmake"),
+            server_build.index("cmake --build server/build/windows-pr-server"),
+        )
         self.assertIn(
             "--env CCACHE_TEMPDIR=/tmp/atrinik-libatrinik-ccache-tmp", build
         )
@@ -387,6 +425,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("runs-on: windows-2025", run)
         self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", run)
         self.assertIn('"libatrinik-path.exe"', run)
+        self.assertIn("New-Item -ItemType Junction", run)
+        self.assertIn('"libatrinik-path.exe") $junction', run)
         self.assertIn('"libatrinik-rendezvous.exe"', run)
         self.assertIn('"libatrinik-metaserver-publisher.exe"', run)
         self.assertIn('"libatrinik-metaserver-url.exe"', run)

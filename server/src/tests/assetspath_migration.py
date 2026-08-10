@@ -79,6 +79,11 @@ def main() -> int:
             raise RuntimeError("fresh asset staging lacks generated core data")
         if not (assets / "client-maps").is_dir():
             raise RuntimeError("fresh asset staging lacks client-maps directory")
+        result = run_server(executable, assets)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"existing asset staging failed: {result.stdout}{result.stderr}"
+            )
 
         invalid_file = root / "asset-file"
         invalid_file.write_text("invalid\n", encoding="utf-8")
@@ -86,9 +91,41 @@ def main() -> int:
 
         target = root / "asset-target"
         target.mkdir()
+        sentinel = target / "sentinel"
+        sentinel.write_text("unchanged\n", encoding="utf-8")
         invalid_link = root / "asset-link"
         invalid_link.symlink_to(target, target_is_directory=True)
         require_staging_rejection(executable, invalid_link, "symlink")
+        if sentinel.read_text(encoding="utf-8") != "unchanged\n":
+            raise RuntimeError("symlink rejection modified its target")
+
+        invalid_data_file = root / "asset-data-file"
+        invalid_data_file.mkdir()
+        (invalid_data_file / "data").write_text("invalid\n", encoding="utf-8")
+        require_staging_rejection(
+            executable, invalid_data_file, "nested data file"
+        )
+
+        invalid_data_link = root / "asset-data-link"
+        invalid_data_link.mkdir()
+        (invalid_data_link / "data").symlink_to(target, target_is_directory=True)
+        require_staging_rejection(
+            executable, invalid_data_link, "nested data symlink"
+        )
+        if sentinel.read_text(encoding="utf-8") != "unchanged\n":
+            raise RuntimeError("nested data symlink rejection modified its target")
+
+        invalid_maps_link = root / "asset-maps-link"
+        invalid_maps_link.mkdir()
+        (invalid_maps_link / "data").mkdir()
+        (invalid_maps_link / "client-maps").symlink_to(
+            target, target_is_directory=True
+        )
+        require_staging_rejection(
+            executable, invalid_maps_link, "nested client-maps symlink"
+        )
+        if sentinel.read_text(encoding="utf-8") != "unchanged\n":
+            raise RuntimeError("client-maps symlink rejection modified its target")
     return 0
 
 
