@@ -303,6 +303,30 @@ int main(int argc, char **argv) {
     require(strcmp(candidate_host, "192.0.2.1") == 0 && candidate_port == 1730 &&
             strcmp(candidate_ticket, vector.ticket) == 0);
 
+    char invalid_candidate[RENDEZVOUS_FRAME_MAX + 1U];
+    snprintf(VS(invalid_candidate),
+             "{\"type\":\"client_candidate\",\"host\":\"0.0.0.0\","
+             "\"port\":1730,\"ticket\":\"%s\"}",
+             vector.ticket);
+    require(!socket_rendezvous_client_candidate_parse(invalid_candidate,
+                                                      vector.ticket,
+                                                      false,
+                                                      RENDEZVOUS_SERVER_AUTH_NEW,
+                                                      VS(candidate_host),
+                                                      &candidate_port,
+                                                      candidate_ticket));
+    snprintf(VS(invalid_candidate),
+             "{\"type\":\"client_candidate\",\"host\":\"::\","
+             "\"port\":1730,\"ticket\":\"%s\"}",
+             vector.ticket);
+    require(!socket_rendezvous_client_candidate_parse(invalid_candidate,
+                                                      vector.ticket,
+                                                      false,
+                                                      RENDEZVOUS_SERVER_AUTH_NEW,
+                                                      VS(candidate_host),
+                                                      &candidate_port,
+                                                      candidate_ticket));
+
     socket_direct_candidate_t server_candidate = {
         .host = "198.51.100.7",
         .port = 1731,

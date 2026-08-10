@@ -109,11 +109,12 @@ static bool socket_rendezvous_ticket_valid(const char *ticket) {
 static bool socket_rendezvous_host_valid(const char *host) {
     struct in_addr address4;
     if (host != NULL && inet_pton(AF_INET, host, &address4) == 1) {
-        return true;
+        return address4.s_addr != htonl(INADDR_ANY);
     }
 #ifdef HAVE_IPV6
     struct in6_addr address6;
-    return host != NULL && inet_pton(AF_INET6, host, &address6) == 1;
+    return host != NULL && inet_pton(AF_INET6, host, &address6) == 1 &&
+           !IN6_IS_ADDR_UNSPECIFIED(&address6);
 #else
     return false;
 #endif
@@ -887,7 +888,8 @@ static bool socket_stun_discover_until(socket_t *sc,
     }
 
     size_t message_length = socket_stun_u16(response + 2);
-    if (message_length > (size_t)length - 20) {
+    if ((message_length & 3U) != 0 || message_length > (size_t)length - 20) {
+        LOG(ERROR, "Invalid STUN response from %s", endpoint);
         return false;
     }
     for (size_t offset = 20; offset + 4 <= 20 + message_length;) {
@@ -895,6 +897,7 @@ static bool socket_stun_discover_until(socket_t *sc,
         size_t value_length = socket_stun_u16(response + offset + 2);
         const unsigned char *value = response + offset + 4;
         if (offset + 4 + value_length > (size_t)length) {
+            LOG(ERROR, "Invalid STUN response from %s", endpoint);
             return false;
         }
         if (type == 0x0020 && value_length >= 8) {
@@ -910,7 +913,13 @@ static bool socket_stun_discover_until(socket_t *sc,
             for (size_t i = 0; i < address_length; i++) {
                 address[i] = value[4 + i] ^ mask[i];
             }
-            return inet_ntop(family == 1 ? AF_INET : AF_INET6, address, host, host_size) != NULL;
+            if (*port == 0 ||
+                inet_ntop(family == 1 ? AF_INET : AF_INET6, address, host, host_size) == NULL ||
+                !socket_rendezvous_host_valid(host)) {
+                LOG(ERROR, "STUN response from %s contained an unusable mapped address", endpoint);
+                return false;
+            }
+            return true;
         }
         offset += 4 + ((value_length + 3) & ~(size_t)3);
     }
@@ -1113,6 +1122,9 @@ static bool socket_local_candidate(socket_t *sc, char *host, size_t host_size, u
     socklen_t local_length = sizeof(local);
     if (getsockname(sc->handle, (struct sockaddr *)&local, &local_length) != 0) {
         return false;
+    }
+    if (!socket_candidate_address_valid((const struct sockaddr *)&local)) {
+        return socket_bound_local_candidate(sc, host, host_size, port);
     }
     char service[6];
     if (getnameinfo((const struct sockaddr *)&local,

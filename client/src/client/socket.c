@@ -509,7 +509,7 @@ bool client_socket_open(client_socket_t *csock,
                                           port,
                                           quic_certificate_sha256,
                                           rendezvous,
-                                          clioption_settings.stun_server,
+                                          clioption_settings.stun.endpoint,
                                           selected_server->rendezvous_invite,
                                           preference,
                                           &csock->failure);

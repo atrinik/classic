@@ -438,7 +438,7 @@ void clioption_settings_deinit(void) {
 
     free(clioption_settings.rendezvous_invite_file);
 
-    free(clioption_settings.stun_server);
+    client_stun_config_deinit(&clioption_settings.stun);
 }
 
 /**
@@ -599,16 +599,11 @@ static bool clioptions_option_rendezvous_invite_file(const char *arg, char **err
 }
 
 static const char *const clioptions_option_stun_server_desc =
-    "Optional STUN endpoint used for direct rendezvous, or 'off'.";
+    "STUN endpoint used for direct rendezvous, or 'off' (default: "
+    CLIENT_STUN_DEFAULT_ENDPOINT ").";
 
 static bool clioptions_option_stun_server(const char *arg, char **errmsg) {
-    if (strlen(arg) >= MAX_BUF) {
-        *errmsg = xstrdup("STUN endpoint is too long");
-        return false;
-    }
-    free(clioption_settings.stun_server);
-    clioption_settings.stun_server = strcmp(arg, "off") == 0 ? NULL : xstrdup(arg);
-    return true;
+    return client_stun_config_set(&clioption_settings.stun, arg, errmsg);
 }
 
 /**
@@ -747,6 +742,7 @@ int main(int argc, char *argv[]) {
     CLIOPTIONS_CREATE(cli, reconnect, "Reconnect automatically");
 
     memset(&clioption_settings, 0, sizeof(clioption_settings));
+    client_stun_config_init(&clioption_settings.stun);
 
     path = file_path("client.cfg", "r");
     clioptions_load(path, NULL);
@@ -758,6 +754,9 @@ int main(int argc, char *argv[]) {
     clioptions_parse(argc, argv);
 
     logger_open_log(LOG_FILE);
+    LOG(INFO,
+        "Direct rendezvous STUN discovery: %s",
+        client_stun_source_name(clioption_settings.stun.source));
 
     upgrader_init();
     settings_init();
