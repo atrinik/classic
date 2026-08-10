@@ -185,6 +185,61 @@ START_TEST(test_neutral_and_darkness_sources_remain_achromatic) {
 }
 END_TEST
 
+START_TEST(test_darkness_subtracts_achromatically_from_colored_light) {
+    mapstruct *map = get_empty_map(9, 9);
+    MapSpace *space = GET_MAP_SPACE_PTR(map, 4, 4);
+    space->light_value = 40;
+    object *red = add_colored_light(map, 4, 4, 1, UINT32_C(0xff0000));
+    object *dark = add_colored_light(map, 4, 4, -1, LIGHT_COLOR_WHITE);
+    ck_assert_int_eq(space->light_source_value, 0);
+    ck_assert_int_eq(space->light_source_positive_value, 40);
+
+    uint8_t levels[3];
+    light_levels_from_raw(space, space->light_value + space->light_source_value, levels);
+    ck_assert_uint_eq(levels[0], light_level_from_raw(40));
+    ck_assert_uint_eq(levels[1], 0);
+    ck_assert_uint_eq(levels[2], 0);
+
+    object_remove(dark, 0);
+    light_levels_from_raw(space, space->light_value + space->light_source_value, levels);
+    ck_assert_uint_eq(levels[0], light_level_from_raw(80));
+    ck_assert_uint_eq(levels[1], light_level_from_raw(40));
+    ck_assert_uint_eq(levels[2], light_level_from_raw(40));
+    object_destroy(dark);
+
+    object_remove(red, 0);
+    light_levels_from_raw(space, space->light_value + space->light_source_value, levels);
+    ck_assert_uint_eq(levels[0], light_level_from_raw(40));
+    ck_assert_uint_eq(levels[0], levels[1]);
+    ck_assert_uint_eq(levels[1], levels[2]);
+    object_destroy(red);
+
+    mapstruct *reverse = get_empty_map(9, 9);
+    add_colored_light(reverse, 4, 4, -1, LIGHT_COLOR_WHITE);
+    add_colored_light(reverse, 4, 4, 1, UINT32_C(0xff0000));
+    MapSpace *reverse_space = GET_MAP_SPACE_PTR(reverse, 4, 4);
+    reverse_space->light_value = 40;
+    uint8_t reverse_levels[3];
+    light_levels_from_raw(reverse_space,
+                          reverse_space->light_value + reverse_space->light_source_value,
+                          reverse_levels);
+    ck_assert_uint_eq(reverse_levels[0], light_level_from_raw(40));
+    ck_assert_uint_eq(reverse_levels[1], 0);
+    ck_assert_uint_eq(reverse_levels[2], 0);
+
+    mapstruct *overlap = get_empty_map(9, 9);
+    add_colored_light(overlap, 3, 4, 1, UINT32_C(0xff0000));
+    add_colored_light(overlap, 5, 4, -1, LIGHT_COLOR_WHITE);
+    MapSpace *overlap_space = GET_MAP_SPACE_PTR(overlap, 4, 4);
+    overlap_space->light_value = 40;
+    light_levels_from_raw(overlap_space,
+                          overlap_space->light_value + overlap_space->light_source_value,
+                          levels);
+    ck_assert_uint_gt(levels[0], levels[1]);
+    ck_assert_uint_eq(levels[1], levels[2]);
+}
+END_TEST
+
 START_TEST(test_colored_light_recalculation_and_linked_depth_are_stable) {
     mapstruct *lower = get_empty_map(9, 9);
     mapstruct *upper = get_empty_map(9, 9);
@@ -323,6 +378,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_colored_lights_add_remove_and_order_are_exact);
     tcase_add_test(tc_core, test_colored_lights_blend_green_yellow_and_capped_same_cell);
     tcase_add_test(tc_core, test_neutral_and_darkness_sources_remain_achromatic);
+    tcase_add_test(tc_core, test_darkness_subtracts_achromatically_from_colored_light);
     tcase_add_test(tc_core, test_colored_light_recalculation_and_linked_depth_are_stable);
     tcase_add_test(tc_core, test_light_mask_propagates_in_three_dimensions);
     tcase_add_test(tc_core, test_light_mask_is_blocked_by_floors_in_both_directions);

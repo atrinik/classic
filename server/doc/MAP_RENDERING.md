@@ -17,9 +17,11 @@ This design contract applies when changing classic server lighting,
 - Positive sources additionally accumulate authored sRGB `RRGGBB` components
   as signed 64-bit fixed-point values scaled by 255. The component sums define
   a weighted tint which is applied to the effective positive-source scalar,
-  capped by the legacy grouped source mask so co-located high-radius emitters
-  cannot overstate the scalar authority. Integer multiplication/division rounds
-  to nearest without overflow, then `light_level_from_raw()` is applied once.
+  tracked separately from the legacy net scalar so negative sources subtract
+  equally from every channel. The positive scalar retains the same-cell grouping
+  cap, so co-located high-radius emitters cannot overstate the scalar authority.
+  Integer multiplication/division rounds to nearest without overflow, then
+  `light_level_from_raw()` is applied once.
   Values below zero and above the brightest anchor saturate there. This makes
   insertion order irrelevant, keeps capped equal red/blue or red/green sources
   magenta or yellow, and makes `ffffff` reproduce the scalar sample exactly.

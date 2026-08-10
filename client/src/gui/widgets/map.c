@@ -2315,7 +2315,7 @@ static void map_draw_level(SDL_Surface *surface,
         data.lightmap_pending = data.smooth_lighting;
 
         /* Positive-depth ground is composited through a color-keyed scratch
-         * surface. Applying the screen-sized alpha lightmap to that surface
+         * surface. Applying the screen-sized RGB modulation map to that surface
          * changes transparent background pixels and makes the
          * higher level erase parts of the levels below it. Keep neutral floor
          * sprites on the legacy discrete path; explicitly colored floors use
