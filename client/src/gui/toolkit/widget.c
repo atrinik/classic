@@ -254,6 +254,13 @@ static int widget_load(const char *path, uint8_t defaults, widgetdata *widgets[]
     return 1;
 }
 
+static int widget_load_layout(const char *path, widgetdata *widgets[]) {
+    int loaded = widget_load(path, 0, widgets);
+
+    widget_enforce_map_priority();
+    return loaded;
+}
+
 /**
  * Try to load the main interface file and initialize the priority list
  * On failure, initialize the widgets with init_widgets_fromDefault()
@@ -295,7 +302,7 @@ void toolkit_widget_init(void) {
         exit(1);
     }
 
-    widget_load("settings/interface.cfg", 0, widgets);
+    widget_load_layout("settings/interface.cfg", widgets);
 
     /* Older saved layouts predate these singleton widgets. Create missing
      * entries from their defaults without requiring an interface reset. */
@@ -1187,23 +1194,159 @@ static void widget_save_rec(FILE *fp, widgetdata *widget, int depth) {
     }
 }
 
-static void widget_save(void) {
+static int widget_save_to(const char *path) {
     FILE *fp;
 
-    fp = path_fopen("settings/interface.cfg", "w");
+    fp = path_fopen(path, "w");
 
     if (!fp) {
-        return;
+        return 0;
     }
 
     widget_save_rec(fp, widget_list_foot, 0);
     fclose(fp);
+    return 1;
+}
+
+static void widget_save(void) {
+    widget_save_to("settings/interface.cfg");
 }
 
 void toolkit_widget_deinit(void) {
     widget_save();
     kill_widgets();
 }
+
+#ifdef ATRINIK_WIDGET_TESTS
+
+#define WIDGET_TEST_CHECK(condition)                                \
+    do {                                                            \
+        if (!(condition)) {                                         \
+            fprintf(stderr,                                         \
+                    "widget-priority: check failed at %s:%d: %s\n", \
+                    __FILE__,                                       \
+                    __LINE__,                                       \
+                    #condition);                                    \
+            kill_widgets();                                         \
+            return 1;                                               \
+        }                                                           \
+    } while (0)
+
+static bool widget_test_map_path_is_backmost(widgetdata *map) {
+    widgetdata *outermost = get_outermost_container(map);
+
+    for (widgetdata *node = map; node != NULL; node = node->env) {
+        if (node->next != NULL) {
+            return false;
+        }
+    }
+
+    return outermost == widget_list_foot;
+}
+
+static int widget_test_load_layout(const char *path) {
+    widgetdata *widgets[100] = {0};
+
+    WIDGET_TEST_CHECK(widget_load_layout(path, widgets));
+    WIDGET_TEST_CHECK(cur_widget[MAP_ID] != NULL);
+    WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(cur_widget[MAP_ID]));
+    return 0;
+}
+
+int widget_priority_integration_test(const char *fixture, const char *saved) {
+    widgetdata *widgets[100] = {0};
+    widget_initializers[CONTAINER_ID] = widget_container_init;
+    widget_initializers[MAP_ID] = widget_map_init;
+
+    path_fopen = fopen;
+    WIDGET_TEST_CHECK(widget_load("data/interface.cfg", 1, widgets));
+    WIDGET_TEST_CHECK(widget_test_load_layout(fixture) == 0);
+
+    widgetdata *map = cur_widget[MAP_ID];
+    widgetdata *inner = map->env;
+    widgetdata *outer = inner != NULL ? inner->env : NULL;
+    WIDGET_TEST_CHECK(inner != NULL && inner->type == CONTAINER_ID);
+    WIDGET_TEST_CHECK(outer != NULL && outer->type == CONTAINER_ID);
+    WIDGET_TEST_CHECK(map->event_func != NULL);
+    WIDGET_TEST_CHECK(map->x == 47 && map->y == 83);
+    WIDGET_TEST_CHECK(inner->x == 47 && inner->y == 83);
+    WIDGET_TEST_CHECK(outer->x == 45 && outer->y == 81);
+    int inner_x = inner->x;
+    int inner_y = inner->y;
+    int outer_x = outer->x;
+    int outer_y = outer->y;
+    WIDGET_TEST_CHECK(widget_save_to(saved));
+
+    kill_widgets();
+    WIDGET_TEST_CHECK(widget_test_load_layout(saved) == 0);
+    map = cur_widget[MAP_ID];
+    inner = map->env;
+    outer = inner != NULL ? inner->env : NULL;
+    WIDGET_TEST_CHECK(inner != NULL && outer != NULL);
+    WIDGET_TEST_CHECK(map->x == 47 && map->y == 83);
+    WIDGET_TEST_CHECK(inner->x == inner_x && inner->y == inner_y);
+    WIDGET_TEST_CHECK(outer->x == outer_x && outer->y == outer_y);
+
+    widgetdata *stats = cur_widget[STAT_ID];
+    WIDGET_TEST_CHECK(stats != NULL && !widget_priority_is_ancestor(stats, map));
+    stats->x = map->x + 10;
+    stats->y = map->y + 10;
+    stats->show = 1;
+    WIDGET_TEST_CHECK(get_widget_owner(stats->x + 1, stats->y + 1, NULL, NULL) == stats);
+    stats->show = 0;
+    WIDGET_TEST_CHECK(get_widget_owner(stats->x + 1, stats->y + 1, NULL, NULL) == map);
+    stats->show = 1;
+
+    menu_container_detach(map, NULL, NULL);
+    WIDGET_TEST_CHECK(map->env == NULL);
+    WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
+
+    menu_container_attach(map, NULL, NULL);
+    widgetdata *attached = map->env;
+    WIDGET_TEST_CHECK(attached != NULL && attached->type == CONTAINER_ID);
+    WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
+
+    widgetdata *nested = create_widget_object(CONTAINER_ID);
+    WIDGET_TEST_CHECK(nested != NULL);
+    insert_widget_in_container(nested, attached, 1);
+    WIDGET_TEST_CHECK(attached->env == nested);
+    WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
+
+    int map_x = map->x;
+    int map_y = map->y;
+    move_widget(map, 17, -9);
+    WIDGET_TEST_CHECK(map->x == map_x + 17 && map->y == map_y - 9);
+    WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
+
+    int map_w = map->w + 11;
+    int map_h = map->h + 7;
+    resize_widget(map, RESIZE_RIGHT, map_w);
+    resize_widget(map, RESIZE_BOTTOM, map_h);
+    WIDGET_TEST_CHECK(map->w == map_w && map->h == map_h);
+    WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
+
+    SetPriorityWidget(nested);
+    WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
+
+    WIDGET_TEST_CHECK(stats != NULL && !widget_priority_is_ancestor(stats, map));
+    SetPriorityWidget(stats);
+    WIDGET_TEST_CHECK(stats == widget_list_head);
+    WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
+
+    WIDGET_TEST_CHECK(widget_save_to(saved));
+    kill_widgets();
+    WIDGET_TEST_CHECK(widget_test_load_layout(saved) == 0);
+    map = cur_widget[MAP_ID];
+    WIDGET_TEST_CHECK(map->env != NULL && map->env->env != NULL);
+    WIDGET_TEST_CHECK(map->x == map_x + 17 && map->y == map_y - 9);
+    WIDGET_TEST_CHECK(map->w == map_w && map->h == map_h);
+    WIDGET_TEST_CHECK(map->event_func != NULL);
+
+    kill_widgets();
+    return 0;
+}
+
+#endif
 
 /**
  * Make widgets try to handle an event.

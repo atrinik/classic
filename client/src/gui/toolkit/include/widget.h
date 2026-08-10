@@ -542,6 +542,10 @@ widget_priority_map_to_back(widgetdata *map, widgetdata **root_head, widgetdata 
 
 extern void widget_enforce_map_priority(void);
 
+#ifdef ATRINIK_WIDGET_TESTS
+extern int widget_priority_integration_test(const char *fixture, const char *saved);
+#endif
+
 extern void
 insert_widget_in_container(widgetdata *widget_container, widgetdata *widget, int absolute);
 
