@@ -66,7 +66,8 @@ jobs:
             tools/verify_import_history.py
           python3 -m coverage run --append --branch --source=tools \
             -m unittest discover -s tools/tests -p 'test_*.py'
-          python3 -m coverage xml -o tools/coverage.xml
+          python3 -m coverage xml --omit='tools/tests/*' \
+            -o tools/coverage.xml
       - name: Validate first-parent release analysis
         run: >-
           npx --yes
@@ -124,12 +125,20 @@ jobs:
           cmake --build build/consumer --parallel
           build/consumer/libatrinik-consumer
         working-directory: libatrinik
-      - name: Upload coverage
+      - name: Upload release-tool coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
           disable_search: true
           fail_ci_if_error: false
-          files: tools/coverage.xml,libatrinik/coverage.xml
+          files: tools/coverage.xml
+          flags: release-tools
+          use_oidc: true
+      - name: Upload libatrinik coverage
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        with:
+          disable_search: true
+          fail_ci_if_error: false
+          files: libatrinik/coverage.xml
           flags: libatrinik
           use_oidc: true
       - name: Validate editor packaging helper

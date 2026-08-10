@@ -363,8 +363,19 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("python3 -m pip install coverage==7.15.3", core)
         self.assertIn("python3 -m coverage run --branch --source=tools", core)
         self.assertIn("python3 -m coverage run --append --branch --source=tools", core)
-        self.assertIn("python3 -m coverage xml -o tools/coverage.xml", core)
-        self.assertIn("files: tools/coverage.xml,libatrinik/coverage.xml", core)
+        self.assertIn("python3 -m coverage xml --omit='tools/tests/*'", core)
+        tools_upload = core[
+            core.index("- name: Upload release-tool coverage") : core.index(
+                "- name: Upload libatrinik coverage"
+            )
+        ]
+        libatrinik_upload = core[core.index("- name: Upload libatrinik coverage") :]
+        self.assertIn("files: tools/coverage.xml", tools_upload)
+        self.assertIn("flags: release-tools", tools_upload)
+        self.assertNotIn("libatrinik/coverage.xml", tools_upload)
+        self.assertIn("files: libatrinik/coverage.xml", libatrinik_upload)
+        self.assertIn("flags: libatrinik", libatrinik_upload)
+        self.assertNotIn("tools/coverage.xml", libatrinik_upload)
 
     def test_native_worldmaker_build_uses_the_server_compiler_cache(self) -> None:
         script = (ROOT / "server" / "tools" / "build-windows-package.sh").read_text(
