@@ -2799,7 +2799,7 @@ out:
  * @return
  * True on success, false if the object data is invalid.
  */
-static bool player_load(player *pl, FILE *fp) {
+bool player_load_stream(player *pl, FILE *fp) {
     HARD_ASSERT(pl != NULL);
     HARD_ASSERT(fp != NULL);
 
@@ -3124,7 +3124,7 @@ void player_login(socket_struct *ns, const char *name, struct archetype *at) {
     /* If the file is empty, it's a new character. */
     if (statbuf.st_size == 0) {
         player_create(pl, at, name);
-    } else if (!player_load(pl, fp)) {
+    } else if (!player_load_stream(pl, fp)) {
         LOG(ERROR, "Player data file %s contains invalid object data.", path);
         draw_info_send(CHAT_TYPE_GAME,
                        NULL,

@@ -536,6 +536,7 @@ void drop(object *op, object *tmp, int no_mevent);
 char *player_make_path(const char *name, const char *ext);
 int player_exists(const char *name);
 void player_save(object *op);
+bool player_load_stream(player *pl, FILE *fp);
 object *player_get_dummy(const char *name, const char *host);
 object *player_find_spell(object *op, spell_struct *spell);
 void player_set_talking_to(player *pl, object *npc);

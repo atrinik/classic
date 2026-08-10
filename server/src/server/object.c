@@ -2041,6 +2041,14 @@ object *object_insert_map(object *op, mapstruct *m, object *originator, int flag
         }
     }
 
+    /* Player light is derived from inventory. Rebuild it at the authoritative
+     * insertion boundary while the removed guard still prevents touching the
+     * old map. This also covers inventory changes made by login plugins while
+     * the player is off-map. */
+    if (op->type == PLAYER && op->head == NULL) {
+        living_update_player(op);
+    }
+
     CLEAR_FLAG(op, FLAG_REMOVED);
 
     int x = op->x;

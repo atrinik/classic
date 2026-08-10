@@ -35,6 +35,7 @@
 #include <light.h>
 #include <object_methods.h>
 #include <toolkit/string.h>
+#include <swap.h>
 
 static object *insert_applied_light(object *pl, int radius, uint32_t color) {
     object *light = arch_get("torch");
@@ -253,6 +254,26 @@ START_TEST(test_equal_radius_lights_use_stable_inventory_priority) {
 }
 END_TEST
 
+START_TEST(test_inventory_light_wins_equal_archetype_radius) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    archetype_t tied_arch = *pl->arch;
+    tied_arch.clone.glow_radius = 4;
+    tied_arch.clone.light_color = UINT32_C(0xffffff);
+    archetype_t *original_arch = pl->arch;
+    pl->arch = &tied_arch;
+
+    object *blue = insert_applied_light(pl, 4, UINT32_C(0x0000ff));
+    living_update(pl);
+    assert_player_light(pl, 4, UINT32_C(0x0000ff));
+    ck_assert_ptr_eq(CONTR(pl)->equipment[PLAYER_EQUIP_LIGHT], blue);
+
+    pl->arch = original_arch;
+}
+END_TEST
+
 START_TEST(test_same_radius_hue_change_is_idempotent) {
     mapstruct *map;
     object *pl;
@@ -330,74 +351,146 @@ START_TEST(test_removed_player_recomputes_before_reinsertion) {
     ck_assert_int_eq(old_space->light_source_value, initial_scalar);
     ck_assert_mem_eq(old_space->light_source_color, initial_color, sizeof(initial_color));
 
+    /* Simulate a login plugin changing the source after the normal off-map
+     * recomputation. Insertion must not trust this now-stale cache. */
+    torch->light_color = UINT32_C(0xff0000);
+
     mapstruct *new_map = get_empty_map(24, 24);
     pl = object_insert_map(pl, new_map, NULL, 0);
     MapSpace *new_space = GET_MAP_SPACE_PTR(new_map, pl->x, pl->y);
-    ck_assert_int_gt(new_space->light_source_color[2], new_space->light_source_color[0]);
-    assert_player_light(pl, 4, UINT32_C(0x0000ff));
+    ck_assert_int_gt(new_space->light_source_color[0], new_space->light_source_color[2]);
+    assert_player_light(pl, 4, UINT32_C(0xff0000));
 }
 END_TEST
 
-START_TEST(test_serialized_inventory_reconstructs_derived_light) {
+START_TEST(test_map_transfer_and_reload_restore_current_light) {
+    mapstruct *source = ready_map_name("/shattered_islands/world_4_85", NULL, MAP_FLUSH);
+    mapstruct *destination = ready_map_name("/shattered_islands/world_5_84", NULL, MAP_FLUSH);
+    ck_assert_ptr_ne(source, NULL);
+    ck_assert_ptr_ne(destination, NULL);
+
+    MapSpace *source_space = GET_MAP_SPACE_PTR(source, 7, 6);
+    MapSpace *destination_space = GET_MAP_SPACE_PTR(destination, 9, 15);
+    int32_t source_scalar = source_space->light_source_value;
+    int32_t destination_scalar = destination_space->light_source_value;
+    int64_t source_color[3];
+    int64_t destination_color[3];
+    memcpy(source_color, source_space->light_source_color, sizeof(source_color));
+    memcpy(destination_color, destination_space->light_source_color, sizeof(destination_color));
+
+    object *pl = player_get_dummy(NULL, NULL);
+    object *torch = insert_applied_light(pl, 4, UINT32_C(0x00ff00));
+    ck_assert(object_enter_map(pl, NULL, source, 7, 6, true));
+    ck_assert_int_gt(source_space->light_source_color[1], source_color[1]);
+
+    torch->light_color = UINT32_C(0x0000ff);
+    ck_assert(object_enter_map(pl, NULL, destination, 9, 15, true));
+    ck_assert_int_eq(source_space->light_source_value, source_scalar);
+    ck_assert_mem_eq(source_space->light_source_color, source_color, sizeof(source_color));
+    ck_assert_int_gt(destination_space->light_source_color[2], destination_color[2]);
+    assert_player_light(pl, 4, UINT32_C(0x0000ff));
+
+    swap_map(source, 1);
+    source = ready_map_name("/shattered_islands/world_4_85", NULL, 0);
+    ck_assert_ptr_ne(source, NULL);
+    source_space = GET_MAP_SPACE_PTR(source, 7, 6);
+    source_scalar = source_space->light_source_value;
+    memcpy(source_color, source_space->light_source_color, sizeof(source_color));
+
+    torch->light_color = UINT32_C(0xff0000);
+    ck_assert(object_enter_map(pl, NULL, source, 7, 6, true));
+    ck_assert_int_eq(destination_space->light_source_value, destination_scalar);
+    ck_assert_mem_eq(destination_space->light_source_color,
+                     destination_color,
+                     sizeof(destination_color));
+    ck_assert_int_gt(source_space->light_source_color[0], source_color[0]);
+    assert_player_light(pl, 4, UINT32_C(0xff0000));
+}
+END_TEST
+
+START_TEST(test_player_save_load_reconstructs_derived_light) {
     mapstruct *map;
     object *pl;
     check_setup_env_pl(&map, &pl);
+
+    FREE_AND_COPY_HASH(pl->name, "Light Roundtrip");
 
     insert_applied_light(pl, 4, UINT32_C(0xff0000));
     insert_applied_light(pl, 4, UINT32_C(0x0000ff));
     living_update(pl);
     assert_player_light(pl, 4, UINT32_C(0x0000ff));
 
-    StringBuffer *sb = stringbuffer_new();
-    object_dump_rec(pl, sb);
-    char *dump = stringbuffer_finish(sb);
-    char *nested = strstr(dump + 1, "\narch ");
-    ck_assert_ptr_ne(nested, NULL);
-    char saved = *nested;
-    *nested = '\0';
-    ck_assert_ptr_eq(strstr(dump, "glow_radius "), NULL);
-    ck_assert_ptr_eq(strstr(dump, "light_color "), NULL);
-    *nested = saved;
+    object_remove(pl, 0);
+    player_save(pl);
+    char *player_path = player_make_path(pl->name, "player.dat");
+    char *metrics_path = player_make_path(pl->name, "metrics.dat");
+    FILE *fp = fopen(player_path, "rb");
+    ck_assert_ptr_ne(fp, NULL);
 
-    object *loaded = object_load_str(dump);
-    free(dump);
-    ck_assert_ptr_ne(loaded, NULL);
-    /* player_load() restores the saved canonical inventory order after the
-     * generic nested-object loader prepends each object. */
-    object_reverse_inventory(loaded);
-    ck_assert_int_eq(loaded->glow_radius, loaded->arch->clone.glow_radius);
-    ck_assert_uint_eq(loaded->light_color, loaded->arch->clone.light_color);
-
-    object *lights[2] = {NULL, NULL};
-    size_t num_lights = 0;
-    for (object *tmp = loaded->inv; tmp != NULL; tmp = tmp->below) {
-        if (tmp->type == LIGHT_APPLY && QUERY_FLAG(tmp, FLAG_APPLIED) && num_lights < 2) {
-            lights[num_lights++] = tmp;
+    bool saw_root_arch = false;
+    char line[HUGE_BUF];
+    while (fgets(VS(line), fp) != NULL) {
+        if (strncmp(line, "arch ", 5) == 0) {
+            if (saw_root_arch) {
+                break;
+            }
+            saw_root_arch = true;
+        }
+        if (saw_root_arch) {
+            ck_assert_ptr_eq(strstr(line, "glow_radius "), NULL);
+            ck_assert_ptr_eq(strstr(line, "light_color "), NULL);
         }
     }
-    ck_assert_uint_eq(num_lights, 2);
-    ck_assert_uint_eq(lights[0]->light_color, UINT32_C(0x0000ff));
-    ck_assert_uint_eq(lights[1]->light_color, UINT32_C(0xff0000));
+    ck_assert(saw_root_arch);
+    rewind(fp);
 
-    mapstruct *restored_map;
-    object *restored;
-    check_setup_env_pl(&restored_map, &restored);
-    object_remove(restored, 0);
-    SET_FLAG(restored, FLAG_NO_FIX_PLAYER);
-    for (size_t i = num_lights; i > 0; i--) {
-        object_remove(lights[i - 1], 0);
-        object_insert_into(lights[i - 1], restored, INS_NO_MERGE);
+    object *placeholder = player_get_dummy("Light Restore", NULL);
+    player *state = CONTR(placeholder);
+    object_remove(placeholder, 0);
+    placeholder->custom_attrset = NULL;
+    object_destroy(placeholder);
+    state->ob = object_get();
+    ck_assert(player_load_stream(state, fp));
+    ck_assert_int_eq(fclose(fp), 0);
+
+    object *restored = state->ob;
+    restored->custom_attrset = state;
+    object_weight_sum(restored);
+    ck_assert_int_eq(restored->glow_radius, restored->arch->clone.glow_radius);
+    ck_assert_uint_eq(restored->light_color, restored->arch->clone.light_color);
+
+    object *first = NULL;
+    object *second = NULL;
+    for (object *tmp = restored->inv; tmp != NULL; tmp = tmp->below) {
+        if (tmp->type == LIGHT_APPLY && QUERY_FLAG(tmp, FLAG_APPLIED)) {
+            if (first == NULL) {
+                first = tmp;
+            } else {
+                second = tmp;
+                break;
+            }
+        }
     }
-    CLEAR_FLAG(restored, FLAG_NO_FIX_PLAYER);
+    ck_assert_ptr_ne(first, NULL);
+    ck_assert_ptr_ne(second, NULL);
+    ck_assert_uint_eq(first->light_color, UINT32_C(0x0000ff));
+    ck_assert_uint_eq(second->light_color, UINT32_C(0xff0000));
 
-    living_update(restored);
+    MapSpace *space = GET_MAP_SPACE_PTR(map, 1, 1);
+    int64_t initial_color[3];
+    memcpy(initial_color, space->light_source_color, sizeof(initial_color));
+    restored->x = 1;
+    restored->y = 1;
+    restored = object_insert_map(restored, map, NULL, 0);
     assert_player_light(restored, 4, UINT32_C(0x0000ff));
-    restored = object_insert_map(restored, restored_map, NULL, 0);
-    assert_player_light(restored, 4, UINT32_C(0x0000ff));
-    MapSpace *space = GET_MAP_SPACE_PTR(restored_map, restored->x, restored->y);
-    ck_assert_int_gt(space->light_source_color[2], space->light_source_color[0]);
+    ck_assert_int_eq(space->light_source_color[0], initial_color[0]);
+    ck_assert_int_eq(space->light_source_color[1], initial_color[1]);
+    ck_assert_int_gt(space->light_source_color[2], initial_color[2]);
 
-    object_destroy(loaded);
+    ck_assert_int_eq(unlink(player_path), 0);
+    ck_assert_int_eq(unlink(metrics_path), 0);
+    free(player_path);
+    free(metrics_path);
 }
 END_TEST
 
@@ -417,10 +510,12 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_light_apply_apply_6);
     tcase_add_test(tc_core, test_applied_light_propagates_color_and_restores_field);
     tcase_add_test(tc_core, test_equal_radius_lights_use_stable_inventory_priority);
+    tcase_add_test(tc_core, test_inventory_light_wins_equal_archetype_radius);
     tcase_add_test(tc_core, test_same_radius_hue_change_is_idempotent);
     tcase_add_test(tc_core, test_extinguish_relight_and_burnout_select_fallback);
     tcase_add_test(tc_core, test_removed_player_recomputes_before_reinsertion);
-    tcase_add_test(tc_core, test_serialized_inventory_reconstructs_derived_light);
+    tcase_add_test(tc_core, test_map_transfer_and_reload_restore_current_light);
+    tcase_add_test(tc_core, test_player_save_load_reconstructs_derived_light);
 
     return s;
 }
