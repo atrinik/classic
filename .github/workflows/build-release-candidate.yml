@@ -44,7 +44,7 @@ permissions:
   packages: read
 
 env:
-  WINDOWS_BUILD_CACHE_EPOCH: 1.0.5-9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7
+  WINDOWS_BUILD_CACHE_EPOCH: 1.2.1-d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb
 
 concurrency:
   group: >-
@@ -240,7 +240,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - run: docker pull ghcr.io/atrinik/windows-build:1.0.5@sha256:9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7
+      - run: docker pull ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb
       - name: Build portable package from monorepo siblings
         env:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
@@ -256,7 +256,7 @@ jobs:
             --env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace/client \
-            ghcr.io/atrinik/windows-build:1.0.5@sha256:9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7 \
+            ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb \
             bash -c \
               'set -euo pipefail
                ccache --zero-stats
@@ -298,7 +298,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - run: docker pull ghcr.io/atrinik/windows-build:1.0.5@sha256:9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7
+      - run: docker pull ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb
       - name: Build portable package from monorepo siblings
         env:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
@@ -312,7 +312,7 @@ jobs:
             --env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace/server \
-            ghcr.io/atrinik/windows-build:1.0.5@sha256:9cc373f620a577328fc0a7a7fa823bddaca6d7dc75ac73bcf21be421c49676f7 \
+            ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb \
             bash -c \
               'set -euo pipefail
                ccache --zero-stats
