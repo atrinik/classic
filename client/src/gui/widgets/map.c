@@ -1149,7 +1149,7 @@ void map_clear_cell(int x, int y, bool hard) {
 
     cell->fow = 1;
     cell->structural_fow = 0;
-    memset(cell->light_known, 0, sizeof(cell->light_known));
+    map_cell_clear_light_state(cell);
 
     for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
         cell->probe[sub_layer] = 0;
@@ -2317,9 +2317,9 @@ static void map_draw_level(SDL_Surface *surface,
         /* Positive-depth ground is composited through a color-keyed scratch
          * surface. Applying the screen-sized alpha lightmap to that surface
          * changes transparent background pixels and makes the
-         * higher level erase parts of the levels below it. Keep those floor
-         * sprites on the discrete path while still building the continuous
-         * field used by their wall faces. */
+         * higher level erase parts of the levels below it. Keep neutral floor
+         * sprites on the legacy discrete path; explicitly colored floors use
+         * the transparency-preserving per-sprite RGB path. */
         if (!primary_level) {
             data.lightmap_pending = false;
         }

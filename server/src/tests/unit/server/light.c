@@ -103,6 +103,65 @@ START_TEST(test_colored_lights_add_remove_and_order_are_exact) {
 }
 END_TEST
 
+START_TEST(test_colored_lights_blend_green_yellow_and_capped_same_cell) {
+    mapstruct *green_map = get_empty_map(9, 9);
+    add_colored_light(green_map, 4, 4, 13, UINT32_C(0x00ff00));
+    uint8_t green[3];
+    MapSpace *space = GET_MAP_SPACE_PTR(green_map, 4, 4);
+    light_levels_from_raw(space, space->light_source_value, green);
+    ck_assert_uint_eq(green[0], 0);
+    ck_assert_uint_gt(green[1], 0);
+    ck_assert_uint_eq(green[2], 0);
+
+    mapstruct *yellow_map = get_empty_map(9, 9);
+    add_colored_light(yellow_map, 4, 4, 13, UINT32_C(0xff0000));
+    add_colored_light(yellow_map, 4, 4, 13, UINT32_C(0x00ff00));
+    uint8_t yellow[3];
+    space = GET_MAP_SPACE_PTR(yellow_map, 4, 4);
+    light_levels_from_raw(space, space->light_source_value, yellow);
+    ck_assert_uint_eq(space->light_source_value, 1280);
+    ck_assert_uint_eq(yellow[0], yellow[1]);
+    ck_assert_uint_gt(yellow[0], 0);
+    ck_assert_uint_eq(yellow[2], 0);
+
+    mapstruct *reverse_map = get_empty_map(9, 9);
+    add_colored_light(reverse_map, 4, 4, 13, UINT32_C(0x00ff00));
+    add_colored_light(reverse_map, 4, 4, 13, UINT32_C(0xff0000));
+    uint8_t reverse[3];
+    space = GET_MAP_SPACE_PTR(reverse_map, 4, 4);
+    light_levels_from_raw(space, space->light_source_value, reverse);
+    ck_assert_mem_eq(yellow, reverse, sizeof(yellow));
+
+    mapstruct *magenta_map = get_empty_map(9, 9);
+    add_colored_light(magenta_map, 4, 4, 13, UINT32_C(0xff0000));
+    add_colored_light(magenta_map, 4, 4, 13, UINT32_C(0x0000ff));
+    uint8_t magenta[3];
+    space = GET_MAP_SPACE_PTR(magenta_map, 4, 4);
+    light_levels_from_raw(space, space->light_source_value, magenta);
+    ck_assert_uint_eq(magenta[0], magenta[2]);
+    ck_assert_uint_gt(magenta[0], 0);
+    ck_assert_uint_eq(magenta[1], 0);
+
+    mapstruct *overlap_map = get_empty_map(9, 9);
+    add_colored_light(overlap_map, 3, 4, 13, UINT32_C(0xff0000));
+    add_colored_light(overlap_map, 5, 4, 13, UINT32_C(0x00ff00));
+    space = GET_MAP_SPACE_PTR(overlap_map, 4, 4);
+    uint8_t overlap[3];
+    light_levels_from_raw(space, space->light_source_value, overlap);
+    ck_assert_uint_eq(overlap[0], overlap[1]);
+    ck_assert_uint_gt(overlap[0], 0);
+    ck_assert_uint_eq(overlap[2], 0);
+
+    mapstruct *reverse_overlap_map = get_empty_map(9, 9);
+    add_colored_light(reverse_overlap_map, 5, 4, 13, UINT32_C(0x00ff00));
+    add_colored_light(reverse_overlap_map, 3, 4, 13, UINT32_C(0xff0000));
+    space = GET_MAP_SPACE_PTR(reverse_overlap_map, 4, 4);
+    uint8_t reverse_overlap[3];
+    light_levels_from_raw(space, space->light_source_value, reverse_overlap);
+    ck_assert_mem_eq(overlap, reverse_overlap, sizeof(overlap));
+}
+END_TEST
+
 START_TEST(test_neutral_and_darkness_sources_remain_achromatic) {
     mapstruct *map = get_empty_map(9, 9);
     object *white = add_colored_light(map, 4, 4, 1, LIGHT_COLOR_WHITE);
@@ -262,6 +321,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_light_level_interpolation);
     tcase_add_test(tc_core, test_light_color_parser_is_exact);
     tcase_add_test(tc_core, test_colored_lights_add_remove_and_order_are_exact);
+    tcase_add_test(tc_core, test_colored_lights_blend_green_yellow_and_capped_same_cell);
     tcase_add_test(tc_core, test_neutral_and_darkness_sources_remain_achromatic);
     tcase_add_test(tc_core, test_colored_light_recalculation_and_linked_depth_are_stable);
     tcase_add_test(tc_core, test_light_mask_propagates_in_three_dimensions);

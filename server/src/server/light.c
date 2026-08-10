@@ -117,22 +117,67 @@ bool light_color_parse(const char *value, uint32_t *color) {
     return true;
 }
 
+/** Return round(numerator * multiplier / denominator) without overflowing. */
+static uint64_t light_muldiv_round(uint64_t numerator, uint64_t multiplier, uint64_t denominator) {
+    HARD_ASSERT(denominator != 0);
+    HARD_ASSERT(numerator <= denominator);
+
+    uint64_t quotient = 0;
+    uint64_t remainder = 0;
+    uint64_t term_quotient = numerator / denominator;
+    uint64_t term_remainder = numerator % denominator;
+
+    while (multiplier != 0) {
+        if (multiplier & 1) {
+            quotient += term_quotient;
+            if (term_remainder != 0 && remainder >= denominator - term_remainder) {
+                remainder -= denominator - term_remainder;
+                quotient++;
+            } else {
+                remainder += term_remainder;
+            }
+        }
+
+        multiplier >>= 1;
+        if (multiplier == 0) {
+            break;
+        }
+
+        term_quotient *= 2;
+        if (term_remainder != 0 && term_remainder >= denominator - term_remainder) {
+            term_remainder -= denominator - term_remainder;
+            term_quotient++;
+        } else {
+            term_remainder *= 2;
+        }
+    }
+
+    if (remainder >= denominator / 2 + denominator % 2) {
+        quotient++;
+    }
+    return quotient;
+}
+
 /** Resolve the authoritative scalar level and presentation-only RGB tint. */
 void light_levels_from_raw(const MapSpace *space, int raw_light, uint8_t levels[3]) {
     HARD_ASSERT(space != NULL);
     HARD_ASSERT(levels != NULL);
 
-    if (space->light_source_color_weight == 0) {
+    if (space->light_source_color_weight <= 0) {
         uint8_t neutral = light_level_from_raw(raw_light);
         levels[0] = levels[1] = levels[2] = neutral;
         return;
     }
 
+    int64_t positive_weight_raw = space->light_source_color_weight / UINT8_MAX;
+    int64_t effective_source_raw = MIN(MAX(space->light_source_value, 0), positive_weight_raw);
     for (size_t channel = 0; channel < 3; channel++) {
-        int64_t tint_delta = space->light_source_color[channel] - space->light_source_color_weight;
-        int64_t resolved = tint_delta >= 0 ? (tint_delta + UINT8_MAX / 2) / UINT8_MAX
-                                           : -((-tint_delta + UINT8_MAX / 2) / UINT8_MAX);
-        int64_t channel_raw = (int64_t)raw_light + resolved;
+        int64_t color_sum = MAX(space->light_source_color[channel], 0);
+        color_sum = MIN(color_sum, space->light_source_color_weight);
+        uint64_t colored_raw = light_muldiv_round((uint64_t)color_sum,
+                                                  (uint64_t)effective_source_raw,
+                                                  (uint64_t)space->light_source_color_weight);
+        int64_t channel_raw = (int64_t)raw_light - effective_source_raw + (int64_t)colored_raw;
         if (channel_raw > INT_MAX) {
             channel_raw = INT_MAX;
         } else if (channel_raw < INT_MIN) {

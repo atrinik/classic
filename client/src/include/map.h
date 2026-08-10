@@ -303,6 +303,14 @@ typedef struct MapCell {
     uint8_t glow_state[NUM_REAL_LAYERS];
 } MapCell;
 
+/** Discard presentation light knowledge while retaining the scalar cache value. */
+static inline void map_cell_clear_light_state(MapCell *cell) {
+    HARD_ASSERT(cell != NULL);
+    memset(cell->light_known, 0, sizeof(cell->light_known));
+    memset(cell->light_rgb, 0, sizeof(cell->light_rgb));
+    cell->light_rgb_explicit = 0;
+}
+
 #define MAP_STARTX map_width *(MAP_FOW_SIZE / 2)
 #define MAP_STARTY map_height *(MAP_FOW_SIZE / 2)
 #define MAP_WIDTH map_width

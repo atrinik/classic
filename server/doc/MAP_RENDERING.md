@@ -15,13 +15,16 @@ This design contract applies when changing classic server lighting,
   or floor changes. Apply lighting through `map_get_darkness()` rather than
   reading either component alone.
 - Positive sources additionally accumulate authored sRGB `RRGGBB` components
-  as signed 64-bit fixed-point values scaled by 255. Each final channel adds
-  `(component_sum - white_reference_sum) / 255` to the unchanged scalar raw
-  light, rounding half away from zero, and then applies `light_level_from_raw()`
-  once. Values below zero and above the brightest anchor saturate there. This
-  makes insertion order irrelevant and makes `ffffff` reproduce the scalar
-  sample exactly. Ambient, floors, world light, special vision, and `tli` stay
-  neutral; negative sources affect only the scalar raw light and are therefore
+  as signed 64-bit fixed-point values scaled by 255. The component sums define
+  a weighted tint which is applied to the effective positive-source scalar,
+  capped by the legacy grouped source mask so co-located high-radius emitters
+  cannot overstate the scalar authority. Integer multiplication/division rounds
+  to nearest without overflow, then `light_level_from_raw()` is applied once.
+  Values below zero and above the brightest anchor saturate there. This makes
+  insertion order irrelevant, keeps capped equal red/blue or red/green sources
+  magenta or yellow, and makes `ffffff` reproduce the scalar sample exactly.
+  Ambient, floors, world light, special vision, and `tli` stay neutral;
+  negative sources affect only the scalar raw light and are therefore
   achromatic even if an object carries a non-white authored color.
 - Map loading defers local source masks until floors/blockers load, then restores
   sources from loaded neighboring levels. Keep load/unload symmetric.
