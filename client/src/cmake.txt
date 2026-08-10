@@ -26,6 +26,7 @@ set(SOURCES
 	src/client/metaserver_directory.c
 	src/client/metaserver_direct.c
 	src/client/metaserver_identity.c
+	src/client/metaserver_options.c
 	src/client/misc.c
 	src/client/packet_payload.c
 	src/client/player.c

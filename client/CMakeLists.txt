@@ -318,6 +318,15 @@ if (BUILD_TESTING)
     target_link_libraries(client-stun-config-tests PRIVATE Atrinik::Core)
     add_test(NAME client-stun-config COMMAND client-stun-config-tests)
 
+    add_executable(client-metaserver-options-tests
+        src/tests/metaserver_options.c
+        src/client/metaserver_options.c)
+    atrinik_configure_target(client-metaserver-options-tests)
+    target_include_directories(client-metaserver-options-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-metaserver-options-tests PRIVATE Atrinik::Core)
+    add_test(NAME client-metaserver-options COMMAND client-metaserver-options-tests)
+
     add_executable(client-metaserver-directory-tests
         src/tests/metaserver_directory.c
         src/client/metaserver_directory.c)
