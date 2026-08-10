@@ -1522,8 +1522,8 @@ static void free_all_objects(mapstruct *m) {
         for (y = 0; y < MAP_HEIGHT(m); y++) {
             while ((ob = GET_MAP_OB(m, x, y)) != NULL) {
                 head = HEAD(ob);
-
-                object_remove(head, 0);
+                /* Map teardown must not trigger gameplay callbacks. */
+                object_remove(head, REMOVE_NO_WALK_OFF);
                 object_destroy(head);
             }
         }

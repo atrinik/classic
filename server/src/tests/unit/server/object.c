@@ -35,14 +35,14 @@
 #include <swap.h>
 #include <toolkit/path.h>
 
-static bool active_list_contains(const object *needle) {
+static bool active_list_contains_at(const object *needle, const char *phase) {
     size_t visited = 0;
     const object *previous = NULL;
 
     for (const object *tmp = active_objects; tmp != NULL; tmp = tmp->active_next) {
         ck_assert_uint_lt(visited++, 100000);
-        ck_assert(!OBJECT_FREE(tmp));
-        ck_assert_ptr_eq(tmp->active_prev, previous);
+        ck_assert_msg(!OBJECT_FREE(tmp), "free active object during %s", phase);
+        ck_assert_msg(tmp->active_prev == previous, "bad active backlink during %s", phase);
 
         if (tmp == needle) {
             return true;
@@ -53,6 +53,8 @@ static bool active_list_contains(const object *needle) {
 
     return false;
 }
+
+#define active_list_contains(needle) active_list_contains_at((needle), __func__)
 
 START_TEST(test_object_can_merge) {
     object *ob1, *ob2;
@@ -677,7 +679,7 @@ END_TEST
 
 START_TEST(test_underground_city_map_reloads_preserve_active_list) {
     static const char *path =
-        "/shattered_islands/strakewood_island/underground_city/underground_city_4_0_-3";
+        "/shattered_islands/strakewood_island/underground_city/underground_city_5_3_-1";
 
     ck_assert_ptr_eq(active_objects, NULL);
 
@@ -700,17 +702,17 @@ START_TEST(test_underground_city_map_reloads_preserve_active_list) {
                     }
 
                     matching_templates++;
-                    ck_assert(!active_list_contains(spawn->inv));
+                    ck_assert(!active_list_contains_at(spawn->inv, "loaded-map template scan"));
                 }
             }
         }
 
         ck_assert_uint_gt(matching_templates, 0);
-        ck_assert(active_list_contains(player));
+        ck_assert(active_list_contains_at(player, "before map swap"));
 
         swap_map(map, 1);
 
-        ck_assert(active_list_contains(player));
+        ck_assert(active_list_contains_at(player, "after map swap"));
     }
 
     object_destroy(player);
