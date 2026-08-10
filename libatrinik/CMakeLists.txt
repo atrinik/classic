@@ -148,7 +148,8 @@ set(ATRINIK_TOOLKIT atrinik-core)
 # can also be built and installed directly from pathfinding/ without them.
 set(ATRINIK_PATHFINDING_PARENT_TESTING false)
 set(ATRINIK_PATHFINDING_PARENT_INSTALL false)
-if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND BUILD_TESTING)
+if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
+        ATRINIK_INTEGRATED_BUILD) AND BUILD_TESTING)
     set(ATRINIK_PATHFINDING_PARENT_TESTING true)
 endif ()
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
@@ -498,69 +499,70 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         "${CMAKE_CURRENT_BINARY_DIR}/LibAtrinikConfig.cmake"
         "${CMAKE_CURRENT_BINARY_DIR}/LibAtrinikConfigVersion.cmake"
         DESTINATION lib/cmake/LibAtrinik)
+endif ()
 
-    if (BUILD_TESTING)
-        add_executable(libatrinik-smoke tests/smoke.c)
-        atrinik_configure_target(libatrinik-smoke)
-        target_link_libraries(libatrinik-smoke PRIVATE Atrinik::Core)
-        add_test(NAME libatrinik-smoke COMMAND libatrinik-smoke)
+if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
+        ATRINIK_INTEGRATED_BUILD) AND BUILD_TESTING)
+    add_executable(libatrinik-smoke tests/smoke.c)
+    atrinik_configure_target(libatrinik-smoke)
+    target_link_libraries(libatrinik-smoke PRIVATE Atrinik::Core)
+    add_test(NAME libatrinik-smoke COMMAND libatrinik-smoke)
 
-        add_executable(libatrinik-signals tests/signals.c)
-        atrinik_configure_target(libatrinik-signals)
-        target_link_libraries(libatrinik-signals PRIVATE Atrinik::Core)
-        add_test(NAME libatrinik-signals COMMAND libatrinik-signals)
+    add_executable(libatrinik-signals tests/signals.c)
+    atrinik_configure_target(libatrinik-signals)
+    target_link_libraries(libatrinik-signals PRIVATE Atrinik::Core)
+    add_test(NAME libatrinik-signals COMMAND libatrinik-signals)
 
-        add_executable(libatrinik-clioptions tests/clioptions.c)
-        atrinik_configure_target(libatrinik-clioptions)
-        target_link_libraries(libatrinik-clioptions PRIVATE Atrinik::Core)
-        add_test(NAME libatrinik-clioptions COMMAND libatrinik-clioptions)
+    add_executable(libatrinik-clioptions tests/clioptions.c)
+    atrinik_configure_target(libatrinik-clioptions)
+    target_link_libraries(libatrinik-clioptions PRIVATE Atrinik::Core)
+    add_test(NAME libatrinik-clioptions COMMAND libatrinik-clioptions)
 
-        add_executable(libatrinik-bresenham tests/bresenham.c)
-        atrinik_configure_target(libatrinik-bresenham)
-        target_link_libraries(libatrinik-bresenham PRIVATE Atrinik::Core)
-        add_test(NAME libatrinik-bresenham COMMAND libatrinik-bresenham)
+    add_executable(libatrinik-bresenham tests/bresenham.c)
+    atrinik_configure_target(libatrinik-bresenham)
+    target_link_libraries(libatrinik-bresenham PRIVATE Atrinik::Core)
+    add_test(NAME libatrinik-bresenham COMMAND libatrinik-bresenham)
 
-        add_executable(libatrinik-path tests/path.c)
-        atrinik_configure_target(libatrinik-path)
-        target_link_libraries(libatrinik-path PRIVATE Atrinik::Core)
-        add_test(NAME libatrinik-path COMMAND libatrinik-path)
+    add_executable(libatrinik-path tests/path.c)
+    atrinik_configure_target(libatrinik-path)
+    target_link_libraries(libatrinik-path PRIVATE Atrinik::Core)
+    add_test(NAME libatrinik-path COMMAND libatrinik-path)
 
-        add_executable(libatrinik-rendezvous tests/rendezvous.c)
-        atrinik_configure_target(libatrinik-rendezvous)
-        target_link_libraries(libatrinik-rendezvous PRIVATE Atrinik::Core)
-        add_test(NAME libatrinik-rendezvous COMMAND libatrinik-rendezvous
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/rendezvous-invite-v1.json"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/rendezvous-invite-v1-negative.json")
+    add_executable(libatrinik-rendezvous tests/rendezvous.c)
+    atrinik_configure_target(libatrinik-rendezvous)
+    target_link_libraries(libatrinik-rendezvous PRIVATE Atrinik::Core)
+    add_test(NAME libatrinik-rendezvous COMMAND libatrinik-rendezvous
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/rendezvous-invite-v1.json"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/rendezvous-invite-v1-negative.json")
 
-        add_executable(libatrinik-metaserver-publisher
-            tests/metaserver_publisher.c)
-        atrinik_configure_target(libatrinik-metaserver-publisher)
-        target_link_libraries(libatrinik-metaserver-publisher PRIVATE Atrinik::Core)
-        add_test(NAME libatrinik-metaserver-publisher
-            COMMAND libatrinik-metaserver-publisher
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/metaserver-publisher-v1.json")
+    add_executable(libatrinik-metaserver-publisher
+        tests/metaserver_publisher.c)
+    atrinik_configure_target(libatrinik-metaserver-publisher)
+    target_link_libraries(libatrinik-metaserver-publisher PRIVATE Atrinik::Core)
+    add_test(NAME libatrinik-metaserver-publisher
+        COMMAND libatrinik-metaserver-publisher
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/metaserver-publisher-v1.json")
 
-        add_executable(libatrinik-metaserver-url tests/metaserver_url.c)
-        atrinik_configure_target(libatrinik-metaserver-url)
-        target_link_libraries(libatrinik-metaserver-url PRIVATE Atrinik::Core)
-        add_test(NAME libatrinik-metaserver-url COMMAND libatrinik-metaserver-url)
+    add_executable(libatrinik-metaserver-url tests/metaserver_url.c)
+    atrinik_configure_target(libatrinik-metaserver-url)
+    target_link_libraries(libatrinik-metaserver-url PRIVATE Atrinik::Core)
+    add_test(NAME libatrinik-metaserver-url COMMAND libatrinik-metaserver-url)
 
-        add_executable(libatrinik-socket-asset tests/socket_asset.c)
-        atrinik_configure_target(libatrinik-socket-asset)
-        target_link_libraries(libatrinik-socket-asset PRIVATE Atrinik::Core)
-        add_test(NAME libatrinik-socket-asset COMMAND libatrinik-socket-asset)
+    add_executable(libatrinik-socket-asset tests/socket_asset.c)
+    atrinik_configure_target(libatrinik-socket-asset)
+    target_link_libraries(libatrinik-socket-asset PRIVATE Atrinik::Core)
+    add_test(NAME libatrinik-socket-asset COMMAND libatrinik-socket-asset)
 
-        if (NOT WIN32)
-            add_executable(libatrinik-curl tests/curl.c)
-            atrinik_configure_target(libatrinik-curl)
-            target_link_libraries(libatrinik-curl PRIVATE Atrinik::Core Threads::Threads)
-            add_test(NAME libatrinik-curl COMMAND libatrinik-curl)
-        endif ()
-
-        add_executable(libatrinik-stun tests/stun.c)
-        atrinik_configure_target(libatrinik-stun)
-        target_link_libraries(libatrinik-stun PRIVATE Atrinik::Core Threads::Threads)
-        add_test(NAME libatrinik-stun COMMAND libatrinik-stun)
-        set_tests_properties(libatrinik-stun PROPERTIES TIMEOUT 15)
+    if (NOT WIN32)
+        add_executable(libatrinik-curl tests/curl.c)
+        atrinik_configure_target(libatrinik-curl)
+        target_link_libraries(libatrinik-curl PRIVATE Atrinik::Core Threads::Threads)
+        add_test(NAME libatrinik-curl COMMAND libatrinik-curl)
     endif ()
+
+    add_executable(libatrinik-stun tests/stun.c)
+    atrinik_configure_target(libatrinik-stun)
+    target_link_libraries(libatrinik-stun PRIVATE Atrinik::Core Threads::Threads)
+    add_test(NAME libatrinik-stun COMMAND libatrinik-stun)
+    set_tests_properties(libatrinik-stun PROPERTIES TIMEOUT 15)
 endif ()

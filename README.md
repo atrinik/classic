@@ -45,6 +45,25 @@ Create a full monorepo worktree for coordinated work:
 ./atrinik build client --profile my-change --test
 ```
 
+`./atrinik build all --profile my-change --test` uses the supported integrated
+CMake graph. That graph configures `protocol/` and `libatrinik/` once, then
+links the client and server to the same `Atrinik::Protocol` and
+`Atrinik::Core` targets. The root presets expose equivalent native builds:
+
+```sh
+cmake --preset linux-debug
+cmake --build --preset linux-debug
+ctest --preset linux-debug
+```
+
+The `linux-release`, `linux-coverage`, and `linux-sanitizers` root presets use
+the same graph. Shared warning, coverage, and sanitizer options apply to the
+single shared library target; coverage and sanitizers are rejected together
+because they would request incompatible instrumentation. Client-only options
+and server-only options such as `ENABLE_PYTHON_PLUGIN` remain scoped to their
+consumer. The component presets in `client/`, `server/`, and `libatrinik/`
+remain the supported standalone, packaging, and installed-consumer paths.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
 and the nearest component `AGENTS.md` before editing.
 

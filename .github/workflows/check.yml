@@ -459,6 +459,35 @@ jobs:
           flags: client
           use_oidc: true
 
+  integrated:
+    name: Integrated client/server graph
+    needs: changes
+    if: >-
+      needs.changes.outputs.client == 'true' ||
+      needs.changes.outputs.server == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: client/build/ci-prefix
+          key: classic-integrated-sdl-mixer-ubuntu-26.04-x64-3.2.4-v1
+      - name: Install native dependencies
+        run: |
+          client/tools/install-linux-ci-dependencies.sh client/build/ci-prefix
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            check flex libgd-dev libminiupnpc-dev libreadline-dev \
+            libsubunit-dev python3-dev
+      - name: Build shared Release graph
+        env:
+          CMAKE_PREFIX_PATH: ${{ github.workspace }}/client/build/ci-prefix
+          LD_LIBRARY_PATH: ${{ github.workspace }}/client/build/ci-prefix/lib
+          PKG_CONFIG_PATH: ${{ github.workspace }}/client/build/ci-prefix/lib/pkgconfig
+        run: |
+          cmake --preset linux-release -DBUILD_TESTING=OFF
+          cmake --build --preset linux-release --parallel
+
   classic-validation:
     name: Classic validation
     if: always()
@@ -467,6 +496,7 @@ jobs:
       - core
       - server
       - client
+      - integrated
       - windows-test
     runs-on: ubuntu-24.04
     timeout-minutes: 2
@@ -481,5 +511,7 @@ jobs:
             --client-result '${{ needs.client.result }}' \
             --server-required '${{ needs.changes.outputs.server }}' \
             --server-result '${{ needs.server.result }}' \
+            --integrated-required "${{ needs.changes.outputs.client == 'true' || needs.changes.outputs.server == 'true' }}" \
+            --integrated-result '${{ needs.integrated.result }}' \
             --windows-required '${{ needs.changes.outputs.windows }}' \
             --windows-result '${{ needs.windows-test.result }}'

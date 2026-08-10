@@ -38,6 +38,8 @@ def main() -> int:
     classic.add_argument("--client-result", required=True)
     classic.add_argument("--server-required", required=True)
     classic.add_argument("--server-result", required=True)
+    classic.add_argument("--integrated-required", required=True)
+    classic.add_argument("--integrated-result", required=True)
     classic.add_argument("--windows-required", required=True)
     classic.add_argument("--windows-result", required=True)
     optional = commands.add_parser("optional")
@@ -56,6 +58,11 @@ def main() -> int:
             )
             require_component(
                 "server", arguments.server_required, arguments.server_result
+            )
+            require_component(
+                "integrated",
+                arguments.integrated_required,
+                arguments.integrated_result,
             )
             require_component(
                 "native Windows",

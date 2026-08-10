@@ -200,11 +200,15 @@ if (NOT FETCHCONTENT_SOURCE_DIR_LIBATRINIK)
     endforeach ()
 endif ()
 
-atrinik_fetch_source(atrinik_protocol "atrinik/protocol" "atrinik-protocol")
-FetchContent_MakeAvailable(atrinik_protocol)
-set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
-atrinik_fetch_source(libatrinik "atrinik/libatrinik" "libatrinik")
-FetchContent_MakeAvailable(libatrinik)
+if (NOT TARGET Atrinik::Protocol)
+    atrinik_fetch_source(atrinik_protocol "atrinik/protocol" "atrinik-protocol")
+    FetchContent_MakeAvailable(atrinik_protocol)
+endif ()
+if (NOT TARGET Atrinik::Core)
+    set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
+    atrinik_fetch_source(libatrinik "atrinik/libatrinik" "libatrinik")
+    FetchContent_MakeAvailable(libatrinik)
+endif ()
 
 set(EXECUTABLE atrinik)
 set(PACKAGE_NAME "Atrinik Client")
@@ -291,7 +295,7 @@ if (MINGW)
         COMMAND ${CMAKE_COMMAND}
             "-DATRINIK_OBJDUMP=${CMAKE_OBJDUMP}"
             "-DATRINIK_CLIENT_EXECUTABLE=$<TARGET_FILE:${EXECUTABLE}>"
-            -P "${CMAKE_SOURCE_DIR}/cmake/verify_windows_client_sound.cmake"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_windows_client_sound.cmake"
         COMMENT "Verifying that the Windows client imports SDL3_mixer"
         VERBATIM)
 endif ()
@@ -679,7 +683,7 @@ if (NOT WIN32 OR UNIX)
     install(TARGETS atrinik DESTINATION ${INSTALL_SUBDIR_BIN})
 endif ()
 install(FILES
-        ${CMAKE_SOURCE_DIR}/INSTALL
+        ${CMAKE_CURRENT_SOURCE_DIR}/INSTALL
         ${CMAKE_CURRENT_SOURCE_DIR}/README.md
         ${ATRINIK_LICENSE_FILE}
         ${ATRINIK_ATTRIBUTIONS_FILE}

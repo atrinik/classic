@@ -23,6 +23,9 @@
 - Prefer sibling `protocol/` and `libatrinik/` sources for integrated builds.
   Component release locks remain integrity fallbacks until deliberately
   migrated; update lock and fallback validation when their contract changes.
+- The root CMake project is the integrated client/server graph and must add
+  protocol and libatrinik exactly once. Keep component CMake entry points,
+  presets, source packaging, and installed consumers independently functional.
 - All Atrinik-authored source in this monorepo, including `protocol/`, is
   GPL-2.0-or-later under the single root `LICENSE.md`. Preserve every compatible
   third-party asset/code notice, attribution, imported commit map, retired-ref
