@@ -5,7 +5,11 @@ client applies `global.h` only to the `atrinik` executable, and the server
 applies it only to the `atrinik-server-core` object library. Standalone tests,
 plugins, libatrinik, protocol consumers, and downstream projects do not inherit
 the precompiled header. Set `-DENABLE_PRECOMPILED_HEADERS=OFF` to retain an
-ordinary compilation path.
+ordinary compilation path. The integrated root graph exposes independent
+`ATRINIK_CLIENT_ENABLE_PRECOMPILED_HEADERS` and
+`ATRINIK_SERVER_ENABLE_PRECOMPILED_HEADERS` options, and its coverage preset
+disables both for the same conventional coverage path as the standalone
+presets.
 
 Unity builds remain unsupported. CMake's explicit `-DCMAKE_UNITY_BUILD=ON`
 experiment exposed existing translation-unit isolation requirements: repeated

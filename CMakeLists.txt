@@ -32,6 +32,10 @@ option(ATRINIK_BUILD_SERVER "Build the classic server" ON)
 option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
 option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
 option(ENABLE_COVERAGE "Enable GCC coverage instrumentation" OFF)
+option(ATRINIK_CLIENT_ENABLE_PRECOMPILED_HEADERS
+    "Precompile the client global header" ON)
+option(ATRINIK_SERVER_ENABLE_PRECOMPILED_HEADERS
+    "Precompile the server global header" ON)
 option(ENABLE_PYTHON_PLUGIN "Build the server Python plugin" ON)
 set(PACKAGE_TYPE "none" CACHE STRING "Package type (none or zip)")
 

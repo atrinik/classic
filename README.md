@@ -57,12 +57,17 @@ ctest --preset linux-debug
 ```
 
 The `linux-release`, `linux-coverage`, and `linux-sanitizers` root presets use
-the same graph. Shared warning, coverage, and sanitizer options apply to the
-single shared library target; coverage and sanitizers are rejected together
-because they would request incompatible instrumentation. Client-only options
-and server-only options such as `ENABLE_PYTHON_PLUGIN` remain scoped to their
-consumer. The component presets in `client/`, `server/`, and `libatrinik/`
-remain the supported standalone, packaging, and installed-consumer paths.
+the same graph. Shared warning, coverage, sanitizer, and precompiled-header
+options are explicit across both consumers. Use
+`ATRINIK_CLIENT_ENABLE_PRECOMPILED_HEADERS` and
+`ATRINIK_SERVER_ENABLE_PRECOMPILED_HEADERS` to control the target-scoped PCH
+policies independently. Coverage and sanitizers are rejected together because
+they would request incompatible instrumentation;
+the coverage preset disables precompiled headers to retain the conventional
+diagnostic path. Consumer-specific behavior such as `ENABLE_PYTHON_PLUGIN`
+remains scoped to its target. The component presets in `client/`, `server/`,
+and `libatrinik/` remain the supported standalone, packaging, and
+installed-consumer paths.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
 and the nearest component `AGENTS.md` before editing.
