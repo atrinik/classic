@@ -337,9 +337,9 @@ typedef struct settings_struct {
     char mapspath[MAX_BUF];
 
     /**
-     * Where generated and staged HTTP asset files reside.
+     * Where generated and staged game asset files reside.
      */
-    char httppath[MAX_BUF];
+    char assetspath[MAX_BUF];
 
     /**
      * Where the resource files are.

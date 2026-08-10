@@ -7,10 +7,10 @@ if [ ! -e data/.atrinik-initialized ]; then
     touch data/.atrinik-initialized
 fi
 
-# Refresh image-owned HTTP assets (including region maps) while preserving
-# player saves and other mutable server data in the mounted folder.
-mkdir -p data/http data/tmp
-cp -R install_data/http/. data/http/
+# Generated data assets are disposable and separate from persistent player
+# state. Classic validates and creates assets/data; packaged region maps already
+# live below assets/client-maps.
+mkdir -p data/tmp
 
 if [ -r "${ATRINIK_JOIN_PASSWORD_FILE:-/run/secrets/atrinik_join_password}" ]; then
     set -- --join_password_file="${ATRINIK_JOIN_PASSWORD_FILE:-/run/secrets/atrinik_join_password}" "$@"

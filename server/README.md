@@ -88,7 +88,7 @@
   $ ./generate-region-maps.sh
 
  The generator does not open game or HTTP listening sockets. Generated PNG and
- definition files are written to data/http/client-maps/.
+ definition files are written to assets/client-maps/.
 
  The region maps are not mandatory to play the game, however, some features may
  not work (specifically, the client will only be able to work with dynamic area
@@ -148,10 +148,10 @@
 
  The external service must map the following URLs to their directory
  counterparts:
-  - https://cdn.example.com/atrinik/          -> data/http/
+  - https://cdn.example.com/atrinik/          -> assets/
   - https://cdn.example.com/atrinik/resources -> resources/
 
- Publish the exact `data/http/` and release-matched `resources/` snapshot before
+ Publish the exact `assets/` and release-matched `resources/` snapshot before
  starting the game server with `http_url`. Update the origin atomically and
  invalidate stale CDN entries before restarting after an asset change;
  otherwise clients will reject stale bodies and transfer them again over QUIC.
@@ -165,6 +165,11 @@
  owns deployment, TLS, access controls, cache policy, monitoring, and
  availability. Non-loopback origins must use HTTPS; plain HTTP remains accepted
  only for loopback development origins.
+
+ `assetspath` selects this transport-neutral staging root. The removed
+ `httppath` option is rejected with an instruction to migrate; there is no
+ mixed-name compatibility mode. `http_url` retains its name because it only
+ describes the optional external HTTP(S) origin, not the default QUIC delivery.
 
 =================================================
 = 2.3. Running with Docker Compose               =

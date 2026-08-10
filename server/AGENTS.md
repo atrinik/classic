@@ -9,8 +9,9 @@
   objects, maps, simulation, and persistence live under neighboring `src/`
   modules. Fixtures/unit tests live under `src/tests/`.
 - `plugin_arena` and required `plugin_python` are loadable modules. The server
-  owns HTTP asset staging and immutable size/digest metadata, but `http_url` is
-  an operator-managed origin; never start/supervise an HTTP listener here.
+  owns transport-neutral asset staging and immutable size/digest metadata;
+  QUIC is the default delivery path. `http_url` is an operator-managed origin;
+  never start or supervise an HTTP listener here.
 
 ## Change and persistence rules
 

@@ -93,6 +93,7 @@ int first_map_y;
 static void init_beforeplay(void);
 static void init_dynamic(void);
 static void init_clocks(void);
+static bool removed_httppath_seen;
 
 /**
  * Initialize the ::shstr_cons structure.
@@ -391,16 +392,26 @@ static bool clioptions_option_mapspath(const char *arg, char **errmsg) {
 }
 
 /**
- * Description of the --httppath command.
+ * Description of the --assetspath command.
  */
-static const char *clioptions_option_httppath_desc =
-    "Where generated and staged HTTP asset files reside.\n\n"
+static const char *clioptions_option_assetspath_desc =
+    "Where generated and staged game asset files reside.\n\n"
     "The server must have read/write access to this directory, as it will create "
     "files inside it.";
 /** @copydoc clioptions_handler_func */
-static bool clioptions_option_httppath(const char *arg, char **errmsg) {
-    snprintf(VS(settings.httppath), "%s", arg);
+static bool clioptions_option_assetspath(const char *arg, char **errmsg) {
+    snprintf(VS(settings.assetspath), "%s", arg);
     return true;
+}
+
+/** Reject the removed transport-specific asset staging option. */
+static const char *clioptions_option_httppath_desc =
+    "Removed; use --assetspath for transport-neutral asset staging.";
+/** @copydoc clioptions_handler_func */
+static bool clioptions_option_httppath(const char *arg, char **errmsg) {
+    removed_httppath_seen = true;
+    *errmsg = xstrdup("httppath was removed; use assetspath");
+    return false;
 }
 
 /**
@@ -856,7 +867,7 @@ static bool clioptions_option_recycle_tmp_maps(const char *arg, char **errmsg) {
  */
 static const char *clioptions_option_http_url_desc =
     "Specifies the operator-managed HTTP asset origin, or 'off' to use in-band "
-    "QUIC asset delivery. The files under the directory specified by --httppath "
+    "QUIC asset delivery. The files under the directory specified by --assetspath "
     "must be published at this URL by a separately deployed service.\n\n"
     "If this URL is incorrect or inaccessible from the public network, clients "
     "will fall back to QUIC when available.";
@@ -988,7 +999,8 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, libpath, "Read-only data files location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, datapath, "Read/write data files location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, mapspath, "Map files location");
-    CLIOPTIONS_CREATE_ARGUMENT(cli, httppath, "HTTP asset staging location");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, assetspath, "Game asset staging location");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, httppath, "Removed asset staging option");
     CLIOPTIONS_CREATE_ARGUMENT(cli, resourcespath, "Resource files location");
     CLIOPTIONS_CREATE_ARGUMENT(cli,
                                metaserver_publish_origin,
@@ -1053,6 +1065,10 @@ static void init_library(int argc, char *argv[]) {
 
     if (argv != NULL) {
         clioptions_parse(argc, argv);
+    }
+    if (removed_httppath_seen) {
+        LOG(ERROR, "httppath was removed; use assetspath");
+        exit(EXIT_FAILURE);
     }
 
     /* Verify the data directory is valid. */

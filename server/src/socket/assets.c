@@ -140,7 +140,8 @@ static bool asset_simple_name(const char *name) {
 
 static bool asset_resolve_path(const char *asset, char *path, size_t path_size) {
     if (strcmp(asset, "data/listing.txt") == 0) {
-        return snprintf(path, path_size, "%s/data/listing.txt", settings.httppath) < (int)path_size;
+        return snprintf(path, path_size, "%s/data/listing.txt", settings.assetspath) <
+               (int)path_size;
     }
 
     if (string_startswith(asset, "data/")) {
@@ -150,7 +151,7 @@ static bool asset_resolve_path(const char *asset, char *path, size_t path_size) 
             strcmp(name + length - (sizeof(".zz") - 1), ".zz") != 0) {
             return false;
         }
-        return snprintf(path, path_size, "%s/data/%s", settings.httppath, name) < (int)path_size;
+        return snprintf(path, path_size, "%s/data/%s", settings.assetspath, name) < (int)path_size;
     }
 
     if (string_startswith(asset, "resources/")) {
@@ -169,7 +170,7 @@ static bool asset_resolve_path(const char *asset, char *path, size_t path_size) 
         if (!asset_simple_name(name) || !extension) {
             return false;
         }
-        return snprintf(path, path_size, "%s/client-maps/%s", settings.httppath, name) <
+        return snprintf(path, path_size, "%s/client-maps/%s", settings.assetspath, name) <
                (int)path_size;
     }
 
@@ -283,10 +284,10 @@ asset_cache_directory(const char *root, const char *relative, const char *prefix
 
 void socket_assets_init(void) {
     char path[HUGE_BUF];
-    snprintf(VS(path), "%s/data", settings.httppath);
+    snprintf(VS(path), "%s/data", settings.assetspath);
     asset_cache_directory(path, "", "data", false);
     asset_cache_directory(settings.resourcespath, "", "resources", true);
-    snprintf(VS(path), "%s/client-maps", settings.httppath);
+    snprintf(VS(path), "%s/client-maps", settings.assetspath);
     asset_cache_directory(path, "", "client-maps", false);
     LOG(INFO, "Cached %" PRIu64 " bytes of game assets in memory", asset_cache_size);
     server_metrics_asset_cache(asset_cache_rss);
@@ -339,6 +340,10 @@ static asset_cache_entry_t *asset_cache_find(const char *name) {
     asset_cache_entry_t *entry;
     HASH_FIND_STR(asset_cache, name, entry);
     return entry;
+}
+
+bool socket_assets_contains(const char *name) {
+    return name != NULL && asset_cache_find(name) != NULL;
 }
 
 bool socket_assets_request_rate_allow(socket_struct *ns, unsigned int requests) {
