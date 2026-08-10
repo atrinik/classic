@@ -35,8 +35,9 @@ class LinuxCacheKeyTests(unittest.TestCase):
     def test_every_material_input_invalidates_the_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            material = root / "contract.txt"
-            material.write_text("flags=-O2\n", encoding="utf-8")
+            materials = [root / "contract.txt", root / "flags.txt"]
+            for material in materials:
+                material.write_text("flags=-O2\n", encoding="utf-8")
             arguments = {
                 "component": "server",
                 "event": "pull_request",
@@ -46,7 +47,7 @@ class LinuxCacheKeyTests(unittest.TestCase):
                 "image_digest": DIGEST,
                 "compiler": "gcc-15.2.0",
                 "epoch": "1",
-                "materials": ["contract.txt"],
+                "materials": [material.name for material in materials],
                 "root": root,
             }
             original = linux_cache_key.build_prefix(**arguments)
@@ -63,10 +64,13 @@ class LinuxCacheKeyTests(unittest.TestCase):
                     self.assertNotEqual(
                         original, linux_cache_key.build_prefix(**changed)
                     )
-            material.write_text("flags=-O3\n", encoding="utf-8")
-            self.assertNotEqual(
-                original, linux_cache_key.build_prefix(**arguments)
-            )
+            for material in materials:
+                with self.subTest(material=material.name):
+                    material.write_text("flags=-O3\n", encoding="utf-8")
+                    self.assertNotEqual(
+                        original, linux_cache_key.build_prefix(**arguments)
+                    )
+                    material.write_text("flags=-O2\n", encoding="utf-8")
 
     def test_unsafe_or_missing_materials_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

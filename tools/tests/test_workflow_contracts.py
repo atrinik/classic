@@ -562,6 +562,27 @@ class WorkflowContractTests(unittest.TestCase):
                 "  classic-validation:\n    name: Classic validation"
             )
         ]
+        expected_materials = {
+            "core": {
+                ".github/workflows/check.yml",
+                "tools/ci/run_linux_check.sh",
+                "protocol/CMakeLists.txt",
+                "libatrinik/CMakeLists.txt",
+                "libatrinik/CMakePresets.json",
+            },
+            "server": {
+                ".github/workflows/check.yml",
+                "tools/ci/run_linux_check.sh",
+                "server/CMakeLists.txt",
+                "server/CMakePresets.json",
+            },
+            "client": {
+                ".github/workflows/check.yml",
+                "tools/ci/run_linux_check.sh",
+                "client/CMakeLists.txt",
+                "client/CMakePresets.json",
+            },
+        }
         for job, component in ((core, "core"), (server, "server"), (client, "client")):
             with self.subTest(component=component):
                 self.assertIn("packages: read", job)
@@ -572,6 +593,8 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertEqual(
                     job.count("--material tools/ci/run_linux_check.sh"), 1
                 )
+                for material in expected_materials[component]:
+                    self.assertEqual(job.count(f"--material {material}"), 1)
                 self.assertIn("restore-keys:", job)
                 self.assertNotIn("apt-get", job)
                 self.assertNotIn("ubuntu@sha256:", job)
