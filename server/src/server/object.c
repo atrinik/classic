@@ -660,9 +660,10 @@ bool object_can_merge(object *ob1, object *ob2) {
     }
 
     /* Check the shared strings of both objects. */
-    if (ob1->name != ob2->name || ob1->title != ob2->title || ob1->race != ob2->race ||
-        ob1->slaying != ob2->slaying || ob1->msg != ob2->msg || ob1->artifact != ob2->artifact ||
-        ob1->custom_name != ob2->custom_name || ob1->glow != ob2->glow) {
+    if (ob1->name != ob2->name || ob1->name_pl != ob2->name_pl || ob1->title != ob2->title ||
+        ob1->race != ob2->race || ob1->slaying != ob2->slaying || ob1->msg != ob2->msg ||
+        ob1->artifact != ob2->artifact || ob1->custom_name != ob2->custom_name ||
+        ob1->glow != ob2->glow) {
         return false;
     }
 
@@ -735,7 +736,7 @@ object *object_merge(object *op) {
         if (tmp != op && object_can_merge(op, tmp)) {
             tmp->nrof += op->nrof;
             object_update(tmp, UP_OBJ_FACE);
-            esrv_update_item(UPD_NROF, tmp);
+            esrv_update_item(UPD_NAME | UPD_NROF, tmp);
 
             object_remove(op, REMOVE_NO_WEIGHT);
             object_destroy(op);
@@ -1116,6 +1117,7 @@ void object_copy(object *op, const object *src, bool no_speed) {
     object_combat_contributions_free(op);
 
     FREE_ONLY_HASH(op->name);
+    FREE_ONLY_HASH(op->name_pl);
     FREE_ONLY_HASH(op->title);
     FREE_ONLY_HASH(op->race);
     FREE_ONLY_HASH(op->slaying);
@@ -1135,6 +1137,7 @@ void object_copy(object *op, const object *src, bool no_speed) {
     }
 
     ADD_REF_NOT_NULL_HASH(op->name);
+    ADD_REF_NOT_NULL_HASH(op->name_pl);
     ADD_REF_NOT_NULL_HASH(op->title);
     ADD_REF_NOT_NULL_HASH(op->race);
     ADD_REF_NOT_NULL_HASH(op->slaying);
@@ -1695,6 +1698,7 @@ void object_destroy(object *op) {
     }
 
     FREE_AND_CLEAR_HASH2(op->name);
+    FREE_AND_CLEAR_HASH2(op->name_pl);
     FREE_AND_CLEAR_HASH2(op->title);
     FREE_AND_CLEAR_HASH2(op->race);
     FREE_AND_CLEAR_HASH2(op->slaying);
@@ -2191,7 +2195,7 @@ object *object_stack_get(object *op, uint32_t nrof) {
 
     op->nrof -= nrof;
     object_update(op, UP_OBJ_FACE);
-    esrv_update_item(UPD_NROF, op);
+    esrv_update_item(UPD_NAME | UPD_NROF, op);
 
     if (op->env != NULL && !QUERY_FLAG(op, FLAG_SYS_OBJECT)) {
         object_weight_sub(op->env, WEIGHT_NROF(op, nrof));
@@ -2297,7 +2301,7 @@ object *object_decrease(object *op, uint32_t nrof) {
 
     if (op->nrof != 0) {
         object_update(op, UP_OBJ_FACE);
-        esrv_update_item(UPD_NROF, op);
+        esrv_update_item(UPD_NAME | UPD_NROF, op);
         return op;
     }
 
@@ -2353,7 +2357,7 @@ object *object_insert_into(object *op, object *where, int flag) {
             for (object *tmp = where->inv; tmp != NULL; tmp = tmp->below) {
                 if (!QUERY_FLAG(tmp, FLAG_SYS_OBJECT) && object_can_merge(tmp, op)) {
                     tmp->nrof += op->nrof;
-                    esrv_update_item(UPD_NROF, tmp);
+                    esrv_update_item(UPD_NAME | UPD_NROF, tmp);
                     object_weight_add(where, op->weight * MAX(1, op->nrof));
 
                     SET_FLAG(op, FLAG_REMOVED);

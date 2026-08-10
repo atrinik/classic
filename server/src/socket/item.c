@@ -201,13 +201,9 @@ void add_object_to_packet(struct packet_struct *packet,
     if (flags & UPD_NAME) {
         packet_debug_data(packet, level, "Name");
 
-        if (op->custom_name != NULL) {
-            packet_writer_write_cstring(packet, op->custom_name);
-        } else {
-            StringBuffer *sb = object_get_base_name(op, pl, NULL);
-            packet_writer_write_cstring_n(packet, stringbuffer_data(sb), stringbuffer_length(sb));
-            stringbuffer_free(sb);
-        }
+        StringBuffer *sb = object_get_display_name(op, pl, NULL);
+        packet_writer_write_cstring_n(packet, stringbuffer_data(sb), stringbuffer_length(sb));
+        stringbuffer_free(sb);
     }
 
     if (flags & UPD_ANIM) {

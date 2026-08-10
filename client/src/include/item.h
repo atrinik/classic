@@ -56,7 +56,7 @@ typedef struct obj {
     /** Item's inventory. */
     struct obj *inv;
 
-    /** Item's singular name as sent to us. */
+    /** Item's count-appropriate display name as selected by the server. */
     char s_name[NAME_LEN];
 
     /** Item identifier (0 = free). */

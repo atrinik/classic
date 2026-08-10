@@ -61,6 +61,9 @@ extern StringBuffer *object_get_base_name(const object *op, const object *caller
 extern char *object_get_base_name_s(const object *op, const object *caller);
 
 extern StringBuffer *
+object_get_display_name(const object *op, const object *caller, StringBuffer *sb);
+
+extern StringBuffer *
 object_get_description_terrain(const object *op, const object *caller, StringBuffer *sb);
 
 extern char *object_get_description_terrain_s(const object *op, const object *caller);

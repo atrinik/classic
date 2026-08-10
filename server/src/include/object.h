@@ -188,6 +188,9 @@ struct obj {
     /** The name of the object, obviously... */
     const char *name;
 
+    /** Optional plural name used when presenting a stack. */
+    const char *name_pl;
+
     /** Of foo, etc */
     const char *title;
 
