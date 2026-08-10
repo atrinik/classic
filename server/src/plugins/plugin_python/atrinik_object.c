@@ -2810,20 +2810,7 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
          * we must remove it from the active list, as spawn point monsters
          * are not allowed to be on the list. */
         if (obj->obj->type == SPAWN_POINT_MOB) {
-            float old_speed;
-
-            /* Store original speed, as in order to actually remove the object
-             * from the active list, we need to set its speed to 0 and make it
-             * a non-SPAWN_POINT_MOB type. */
-            old_speed = obj->obj->speed;
-            obj->obj->speed = 0.0f;
-            obj->obj->type = MONSTER;
-            /* Remove it from the active list. */
             hooks->object_update_speed(obj->obj);
-
-            /* Restore original speed and type info. */
-            obj->obj->speed = old_speed;
-            obj->obj->type = SPAWN_POINT_MOB;
         }
     } else if (field->offset == offsetof(object, direction)) {
         /* Direction. */
