@@ -104,7 +104,7 @@ static void *fake_stun_run(void *data) {
     struct sockaddr_storage client;
     socklen_t client_length = sizeof(client);
     ssize_t received = recvfrom(server->handle,
-                                request,
+                                (char *)request,
                                 sizeof(request),
                                 0,
                                 (struct sockaddr *)&client,
@@ -149,14 +149,14 @@ static void *fake_stun_run(void *data) {
     }
     if (server->mode == FAKE_STUN_LATE_THEN_PUNCH) {
         TEST_CHECK(sendto(server->intruder_handle,
-                          response,
+                          (const char *)response,
                           response_size,
                           0,
                           (const struct sockaddr *)&client,
                           client_length) == (ssize_t)response_size);
         response[8] ^= 0xff;
         TEST_CHECK(sendto(server->handle,
-                          response,
+                          (const char *)response,
                           response_size,
                           0,
                           (const struct sockaddr *)&client,
@@ -169,7 +169,7 @@ static void *fake_stun_run(void *data) {
         pthread_mutex_unlock(&server->mutex);
         for (size_t i = 0; i < 5; i++) {
             TEST_CHECK(sendto(server->intruder_handle,
-                              response,
+                              (const char *)response,
                               response_size,
                               0,
                               (const struct sockaddr *)&client,
@@ -177,7 +177,7 @@ static void *fake_stun_run(void *data) {
         }
     }
     TEST_CHECK(sendto(server->handle,
-                      response,
+                      (const char *)response,
                       response_size,
                       0,
                       (const struct sockaddr *)&client,
@@ -185,14 +185,14 @@ static void *fake_stun_run(void *data) {
     if (server->mode == FAKE_STUN_LATE_THEN_PUNCH) {
         write_u16(response + 2, 4);
         TEST_CHECK(sendto(server->handle,
-                          response,
+                          (const char *)response,
                           response_size,
                           0,
                           (const struct sockaddr *)&client,
                           client_length) == (ssize_t)response_size);
         write_u16(response + 2, 12);
         TEST_CHECK(sendto(server->handle,
-                          response,
+                          (const char *)response,
                           response_size,
                           0,
                           (const struct sockaddr *)&client,
@@ -211,7 +211,7 @@ static void *fake_stun_run(void *data) {
     }
     if (server->expect_punch) {
         received = recvfrom(server->handle,
-                            request,
+                            (char *)request,
                             sizeof(request),
                             0,
                             (struct sockaddr *)&client,
