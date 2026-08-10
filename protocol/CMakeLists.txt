@@ -36,15 +36,31 @@ target_include_directories(atrinik-protocol INTERFACE
     $<INSTALL_INTERFACE:include>)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
-add_custom_target(protocol-generate-check ALL
+set(ATRINIK_PROTOCOL_GENERATED_OUTPUTS
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.def"
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/python/atrinik_protocol/game.py")
+set(ATRINIK_PROTOCOL_GENERATE_STAMP
+    "${CMAKE_CURRENT_BINARY_DIR}/protocol-generate-check.stamp")
+add_custom_command(
+    OUTPUT "${ATRINIK_PROTOCOL_GENERATE_STAMP}"
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate.py" --check
+    COMMAND ${CMAKE_COMMAND} -E touch "${ATRINIK_PROTOCOL_GENERATE_STAMP}"
+    DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/schema/game-commands.json"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate.py"
+        ${ATRINIK_PROTOCOL_GENERATED_OUTPUTS}
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Checking generated classic game protocol bindings"
     VERBATIM)
+add_custom_target(protocol-generate-check ALL
+    DEPENDS "${ATRINIK_PROTOCOL_GENERATE_STAMP}")
 
 if (BUILD_TESTING)
-    add_test(NAME protocol-generate-check
-        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate.py" --check)
+    if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME protocol-generate-check
+            COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate.py" --check)
+    endif ()
     add_test(NAME protocol-python-tests
         COMMAND ${Python3_EXECUTABLE} -m unittest discover
             -s "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p "test_*.py")
