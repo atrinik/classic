@@ -769,6 +769,8 @@ void living_update_player(object *op) {
 
     int8_t old_glow = op->glow_radius;
     int8_t light = op->arch->clone.glow_radius;
+    uint32_t old_light_color = op->light_color;
+    uint32_t light_color = op->arch->clone.light_color;
 
     double attacks[NROFATTACKS] = {0};
     double protect_bonus[NROFATTACKS] = {0};
@@ -814,6 +816,7 @@ void living_update_player(object *op) {
         if (tmp->glow_radius > light) {
             if (tmp->type != LIGHT_APPLY || QUERY_FLAG(tmp, FLAG_APPLIED)) {
                 light = tmp->glow_radius;
+                light_color = tmp->light_color;
             }
         }
 
@@ -1091,9 +1094,15 @@ void living_update_player(object *op) {
     }
 
     op->glow_radius = light;
+    op->light_color = light_color;
 
-    if (op->map != NULL && old_glow != light) {
-        adjust_light_source(op->map, op->x, op->y, light - old_glow);
+    if (op->map != NULL && (old_glow != light || old_light_color != light_color)) {
+        if (old_glow != 0) {
+            adjust_light_source_color(op->map, op->x, op->y, old_glow, old_light_color, -1);
+        }
+        if (light != 0) {
+            adjust_light_source_color(op->map, op->x, op->y, light, light_color, 1);
+        }
     }
 
     op->stats.ac += op->level;

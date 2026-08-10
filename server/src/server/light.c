@@ -89,6 +89,59 @@ uint8_t light_level_from_raw(int raw_light) {
     return UINT8_MAX;
 }
 
+/** Parse the authored six-digit, unprefixed RGB light tint. */
+bool light_color_parse(const char *value, uint32_t *color) {
+    if (value == NULL || color == NULL || strlen(value) != 6) {
+        return false;
+    }
+
+    uint32_t parsed = 0;
+    for (size_t i = 0; i < 6; i++) {
+        unsigned char c = (unsigned char)value[i];
+        uint32_t digit;
+
+        if (c >= '0' && c <= '9') {
+            digit = c - '0';
+        } else if (c >= 'a' && c <= 'f') {
+            digit = c - 'a' + 10;
+        } else if (c >= 'A' && c <= 'F') {
+            digit = c - 'A' + 10;
+        } else {
+            return false;
+        }
+
+        parsed = (parsed << 4) | digit;
+    }
+
+    *color = parsed;
+    return true;
+}
+
+/** Resolve the authoritative scalar level and presentation-only RGB tint. */
+void light_levels_from_raw(const MapSpace *space, int raw_light, uint8_t levels[3]) {
+    HARD_ASSERT(space != NULL);
+    HARD_ASSERT(levels != NULL);
+
+    if (space->light_source_color_weight == 0) {
+        uint8_t neutral = light_level_from_raw(raw_light);
+        levels[0] = levels[1] = levels[2] = neutral;
+        return;
+    }
+
+    for (size_t channel = 0; channel < 3; channel++) {
+        int64_t tint_delta = space->light_source_color[channel] - space->light_source_color_weight;
+        int64_t resolved = tint_delta >= 0 ? (tint_delta + UINT8_MAX / 2) / UINT8_MAX
+                                           : -((-tint_delta + UINT8_MAX / 2) / UINT8_MAX);
+        int64_t channel_raw = (int64_t)raw_light + resolved;
+        if (channel_raw > INT_MAX) {
+            channel_raw = INT_MAX;
+        } else if (channel_raw < INT_MIN) {
+            channel_raw = INT_MIN;
+        }
+        levels[channel] = light_level_from_raw((int)channel_raw);
+    }
+}
+
 static int lmask_x[MAX_MASK_SIZE] = {
     0,  0,  1,  1,  1,  0,  -1, -1, -1, 0,  1,  2,  2,  2,  2,  2,  1,  0,  -1, -2, -2,
     -2, -2, -2, -1, 0,  1,  2,  3,  3,  3,  3,  3,  3,  3,  2,  1,  0,  -1, -2, -3, -3,
@@ -402,7 +455,9 @@ static void light_mask_adjust(mapstruct *map,
                               int mod,
                               mapstruct *only_map,
                               const light_map_set *only_maps,
-                              bool other_only) {
+                              bool other_only,
+                              bool color_only,
+                              uint32_t color) {
     if (intensity < 0) {
         mod = -mod;
     }
@@ -431,8 +486,16 @@ static void light_mask_adjust(mapstruct *map,
                 continue;
             }
 
-            GET_MAP_SPACE_PTR(target, xt, yt)->light_source_value +=
-                light_mask_value(intensity, distance_squared) * mod;
+            int value = light_mask_value(intensity, distance_squared) * mod;
+            MapSpace *space = GET_MAP_SPACE_PTR(target, xt, yt);
+            if (!color_only) {
+                space->light_source_value += value;
+            } else {
+                space->light_source_color[0] += (int64_t)value * ((color >> 16) & UINT8_MAX);
+                space->light_source_color[1] += (int64_t)value * ((color >> 8) & UINT8_MAX);
+                space->light_source_color[2] += (int64_t)value * (color & UINT8_MAX);
+                space->light_source_color_weight += (int64_t)value * UINT8_MAX;
+            }
         }
     }
 }
@@ -469,7 +532,7 @@ void adjust_light_source(mapstruct *map, int x, int y, int light) {
     if (olm) {
         /* Remove the old light mask */
         if (map->in_memory != MAP_LOADING) {
-            light_mask_adjust(map, x, y, olm, -1, NULL, NULL, false);
+            light_mask_adjust(map, x, y, olm, -1, NULL, NULL, false, false, 0);
         }
 
         /* Perhaps we are in this list - perhaps we are not */
@@ -494,7 +557,7 @@ void adjust_light_source(mapstruct *map, int x, int y, int light) {
     if (nlm) {
         /* Map loading defers masks until all floors and blockers exist. */
         if (map->in_memory != MAP_LOADING) {
-            light_mask_adjust(map, x, y, nlm, 1, NULL, NULL, false);
+            light_mask_adjust(map, x, y, nlm, 1, NULL, NULL, false, false, 0);
         }
 
         /* All sources are chained because an upper/lower map can be loaded
@@ -510,6 +573,38 @@ void adjust_light_source(mapstruct *map, int x, int y, int light) {
         }
 
         map->first_light = msp1;
+    }
+}
+
+/** Add or remove one identified source's scalar mask and RGB contribution. */
+void adjust_light_source_color(mapstruct *map,
+                               int x,
+                               int y,
+                               int radius,
+                               uint32_t color,
+                               int direction) {
+    HARD_ASSERT(map != NULL);
+    HARD_ASSERT(direction == -1 || direction == 1);
+
+    if (radius == 0) {
+        return;
+    }
+
+    adjust_light_source(map, x, y, radius * direction);
+    /* Darkness sources remain entirely achromatic: raw_light already carries
+     * their signed scalar effect, while the RGB accumulators describe only
+     * positive presentation tint. */
+    if (radius > 0 && map->in_memory != MAP_LOADING) {
+        light_mask_adjust(map,
+                          x,
+                          y,
+                          get_real_light_source_value(radius),
+                          direction,
+                          NULL,
+                          NULL,
+                          false,
+                          true,
+                          color);
     }
 }
 
@@ -538,6 +633,10 @@ void recalculate_light_sources(mapstruct *map) {
         for (int y = 0; y < MAP_HEIGHT(target); y++) {
             for (int x = 0; x < MAP_WIDTH(target); x++) {
                 GET_MAP_SPACE_PTR(target, x, y)->light_source_value = 0;
+                memset(GET_MAP_SPACE_PTR(target, x, y)->light_source_color,
+                       0,
+                       sizeof(GET_MAP_SPACE_PTR(target, x, y)->light_source_color));
+                GET_MAP_SPACE_PTR(target, x, y)->light_source_color_weight = 0;
             }
         }
     }
@@ -554,7 +653,35 @@ void recalculate_light_sources(mapstruct *map) {
                                   1,
                                   NULL,
                                   &maps,
-                                  false);
+                                  false,
+                                  false,
+                                  0);
+            }
+        }
+
+        for (int y = 0; y < MAP_HEIGHT(source_map); y++) {
+            for (int x = 0; x < MAP_WIDTH(source_map); x++) {
+                for (object *source = GET_MAP_OB(source_map, x, y); source != NULL;
+                     source = source->above) {
+                    if (source->glow_radius == 0) {
+                        continue;
+                    }
+
+                    if (source->glow_radius < 0) {
+                        continue;
+                    }
+                    uint32_t color = source->light_color;
+                    light_mask_adjust(source_map,
+                                      x,
+                                      y,
+                                      get_real_light_source_value(source->glow_radius),
+                                      1,
+                                      NULL,
+                                      &maps,
+                                      false,
+                                      true,
+                                      color);
+                }
             }
         }
     }
@@ -580,7 +707,34 @@ void remove_light_source_list(mapstruct *map) {
                           -1,
                           NULL,
                           NULL,
-                          true);
+                          true,
+                          false,
+                          0);
+    }
+
+    for (int y = 0; y < MAP_HEIGHT(map); y++) {
+        for (int x = 0; x < MAP_WIDTH(map); x++) {
+            for (object *source = GET_MAP_OB(map, x, y); source != NULL; source = source->above) {
+                if (source->glow_radius == 0) {
+                    continue;
+                }
+
+                if (source->glow_radius < 0) {
+                    continue;
+                }
+                uint32_t color = source->light_color;
+                light_mask_adjust(map,
+                                  x,
+                                  y,
+                                  get_real_light_source_value(source->glow_radius),
+                                  -1,
+                                  NULL,
+                                  NULL,
+                                  true,
+                                  true,
+                                  color);
+            }
+        }
     }
 
     map->first_light = NULL;

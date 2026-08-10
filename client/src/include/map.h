@@ -202,6 +202,12 @@ typedef struct MapCell {
     /** Whether each light level has been received from the server. */
     uint8_t light_known[NUM_SUB_LAYERS];
 
+    /** Resolved RGB illumination for each sub-layer. */
+    uint8_t light_rgb[NUM_SUB_LAYERS][3];
+
+    /** Bitmap of sub-layers whose RGB state is explicitly colored. */
+    uint8_t light_rgb_explicit;
+
     /** Object flags. */
     uint8_t flags[NUM_REAL_LAYERS];
 
@@ -452,6 +458,7 @@ extern void map_set_fow(int x, int y, bool fow);
 extern bool map_get_fow(int x, int y);
 
 extern void map_set_light_level(int x, int y, int sub_layer, uint8_t light_level);
+extern void map_set_light_rgb(int x, int y, uint8_t bitmap, const uint8_t rgb[NUM_SUB_LAYERS][3]);
 
 extern void map_animate(void);
 

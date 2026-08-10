@@ -48,6 +48,10 @@ START_TEST(test_object_can_merge) {
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob2);
     ob2 = arch_get("bolt");
+    ob2->light_color = UINT32_C(0xff0000);
+    ck_assert(!object_can_merge(ob1, ob2));
+    object_destroy(ob2);
+    ob2 = arch_get("bolt");
     ob1->nrof = INT32_MAX;
     ob2->nrof = 1;
     ck_assert(!object_can_merge(ob1, ob2));
@@ -364,7 +368,25 @@ START_TEST(test_object_load_str) {
     ob = object_load_str("arch sack\nend\n");
     ck_assert_ptr_ne(ob, NULL);
     ck_assert_str_eq(ob->arch->name, "sack");
+    ck_assert_uint_eq(ob->light_color, UINT32_C(0xffffff));
     object_destroy(ob);
+
+    ob = object_load_str("arch sack\nlight_color 12aBcF\nend\n");
+    ck_assert_ptr_ne(ob, NULL);
+    ck_assert_uint_eq(ob->light_color, UINT32_C(0x12abcf));
+    StringBuffer *sb = stringbuffer_new();
+    object_dump_rec(ob, sb);
+    char *dump = stringbuffer_finish(sb);
+    ck_assert_ptr_ne(strstr(dump, "light_color 12abcf\n"), NULL);
+    free(dump);
+    object *clone = object_clone(ob);
+    ck_assert_uint_eq(clone->light_color, ob->light_color);
+    object_destroy(clone);
+    object_destroy(ob);
+
+    ck_assert_ptr_eq(object_load_str("arch sack\nlight_color fffff\nend\n"), NULL);
+    ck_assert_ptr_eq(object_load_str("arch sack\nlight_color #ffffff\nend\n"), NULL);
+    ck_assert_ptr_eq(object_load_str("arch sack\nlight_color fffffg\nend\n"), NULL);
 
     ob = object_load_str("arch sack\nname magic sack\nweight 129\nend\n");
     ck_assert_ptr_ne(ob, NULL);

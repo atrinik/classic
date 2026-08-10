@@ -516,6 +516,10 @@ if (BUILD_TESTING AND NOT MINGW)
             "${player_view_fixtures}/smooth-player-sublayer-1.xml" -)
     add_test(NAME client-player-view-discrete
         COMMAND atrinik --player-view "${player_view_fixtures}/discrete.xml" -)
+    add_test(NAME client-player-view-colored-smooth
+        COMMAND atrinik --player-view "${player_view_fixtures}/colored-smooth.xml" -)
+    add_test(NAME client-player-view-colored-discrete
+        COMMAND atrinik --player-view "${player_view_fixtures}/colored-discrete.xml" -)
     add_test(NAME client-player-view-output
         COMMAND ${CMAKE_COMMAND}
             "-DATRINIK_CLIENT=$<TARGET_FILE:atrinik>"

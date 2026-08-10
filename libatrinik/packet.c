@@ -270,15 +270,17 @@ static bool packet_ensure(packet_struct *packet, size_t size) {
         return false;
     }
 
-    if (packet->len <= packet->size && size <= packet->size - packet->len) {
+    size_t available = packet->len <= packet->size ? packet->size - packet->len : 0;
+    if (size <= available) {
         return true;
     }
 
-    size_t growth = MAX(packet->expand, size);
+    size_t needed = size - available;
+    size_t growth = MAX(packet->expand, needed);
     if (packet->size > packet->limit || growth > packet->limit - packet->size) {
         growth = packet->limit - MIN(packet->size, packet->limit);
     }
-    if (growth < size || packet->size > SIZE_MAX - growth) {
+    if (growth < needed || packet->size > SIZE_MAX - growth) {
         packet->error = PACKET_ERROR_SIZE_OVERFLOW;
         return false;
     }

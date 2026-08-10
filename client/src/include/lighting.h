@@ -21,7 +21,9 @@ typedef enum lighting_surface_mode {
 typedef struct lighting_vertex {
     int x;
     int y;
-    uint8_t level;
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
 } lighting_vertex_t;
 
 bool lighting_begin(int width, int height, uint64_t cache_key);

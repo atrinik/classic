@@ -32,6 +32,7 @@
 #include <arch.h>
 #include <player.h>
 #include <object.h>
+#include <light.h>
 
 /*
  * Player applies a torch on the ground. Ensure the torch is lit and not
@@ -183,6 +184,30 @@ START_TEST(test_light_apply_apply_6) {
 }
 END_TEST
 
+START_TEST(test_applied_light_propagates_color_and_restores_field) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    MapSpace *space = GET_MAP_SPACE_PTR(map, pl->x, pl->y);
+    int32_t initial_scalar = space->light_source_value;
+    int64_t initial_color[3];
+    memcpy(initial_color, space->light_source_color, sizeof(initial_color));
+
+    object *torch = arch_get("torch");
+    torch->light_color = UINT32_C(0xff0000);
+    torch = object_insert_into(torch, pl, 0);
+    player_apply(pl, torch, 0, 0);
+    ck_assert(QUERY_FLAG(torch, FLAG_APPLIED));
+    ck_assert_uint_eq(pl->light_color, UINT32_C(0xff0000));
+    ck_assert_int_gt(space->light_source_color[0], space->light_source_color[1]);
+
+    player_apply(pl, torch, 0, 0);
+    ck_assert(!QUERY_FLAG(torch, FLAG_APPLIED));
+    ck_assert_int_eq(space->light_source_value, initial_scalar);
+    ck_assert_mem_eq(space->light_source_color, initial_color, sizeof(initial_color));
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("light_apply");
     TCase *tc_core = tcase_create("Core");
@@ -197,6 +222,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_light_apply_apply_4);
     tcase_add_test(tc_core, test_light_apply_apply_5);
     tcase_add_test(tc_core, test_light_apply_apply_6);
+    tcase_add_test(tc_core, test_applied_light_propagates_color_and_restores_field);
 
     return s;
 }

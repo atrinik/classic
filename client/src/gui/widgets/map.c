@@ -1211,6 +1211,36 @@ void map_set_light_level(int x, int y, int sub_layer, uint8_t light_level) {
     bool changed = !cell->light_known[sub_layer] || cell->light_level[sub_layer] != light_level;
     cell->light_level[sub_layer] = light_level;
     cell->light_known[sub_layer] = 1;
+    if (!(cell->light_rgb_explicit & (UINT8_C(1) << sub_layer))) {
+        for (size_t channel = 0; channel < 3; channel++) {
+            cell->light_rgb[sub_layer][channel] = light_level;
+        }
+    }
+    if (changed) {
+        level_lighting_revision[current_level_index]++;
+    }
+}
+
+/** Apply one complete per-tile colored-light state. */
+void map_set_light_rgb(int x, int y, uint8_t bitmap, const uint8_t rgb[NUM_SUB_LAYERS][3]) {
+    struct MapCell *cell = MAP_CELL_GET_MIDDLE(x, y);
+    bool changed = cell->light_rgb_explicit != bitmap;
+
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        uint8_t resolved[3];
+        if (bitmap & (UINT8_C(1) << sub_layer)) {
+            memcpy(resolved, rgb[sub_layer], sizeof(resolved));
+        } else {
+            memset(resolved, cell->light_level[sub_layer], sizeof(resolved));
+        }
+
+        if (memcmp(cell->light_rgb[sub_layer], resolved, sizeof(resolved)) != 0) {
+            memcpy(cell->light_rgb[sub_layer], resolved, sizeof(resolved));
+            changed = true;
+        }
+    }
+
+    cell->light_rgb_explicit = bitmap;
     if (changed) {
         level_lighting_revision[current_level_index]++;
     }
@@ -2078,12 +2108,14 @@ static uint8_t map_lighting_sub_layer(const struct MapCell *cell) {
  * ring. This extends the known field naturally at map and FOW boundaries and
  * prevents temporary dark bands from influencing nearby structures.
  */
-static uint8_t map_lighting_level(int x, int y, const struct MapCell *cell, uint8_t sub_layer) {
+static void
+map_lighting_rgb(int x, int y, const struct MapCell *cell, uint8_t sub_layer, uint8_t rgb[3]) {
     int cache_width = map_width * MAP_FOW_SIZE;
     int cache_height = map_height * MAP_FOW_SIZE;
 
     if (cell->light_known[sub_layer]) {
-        return cell->light_level[sub_layer];
+        memcpy(rgb, cell->light_rgb[sub_layer], 3);
+        return;
     }
 
     /* The rasterizer includes a two-cell border around the drawable map.
@@ -2092,7 +2124,7 @@ static uint8_t map_lighting_level(int x, int y, const struct MapCell *cell, uint
      * an unbounded nearest-neighbour scan while map data is still arriving. */
     const int search_radius = 3;
     for (int radius = 1; radius <= search_radius; radius++) {
-        unsigned int total = 0;
+        unsigned int total[3] = {0};
         unsigned int samples = 0;
 
         for (int offset_x = -radius; offset_x <= radius; offset_x++) {
@@ -2114,17 +2146,22 @@ static uint8_t map_lighting_level(int x, int y, const struct MapCell *cell, uint
                     continue;
                 }
 
-                total += sample_cell->light_level[sample_sub_layer];
+                for (size_t channel = 0; channel < 3; channel++) {
+                    total[channel] += sample_cell->light_rgb[sample_sub_layer][channel];
+                }
                 samples++;
             }
         }
 
         if (samples != 0) {
-            return (uint8_t)((total + samples / 2) / samples);
+            for (size_t channel = 0; channel < 3; channel++) {
+                rgb[channel] = (uint8_t)((total[channel] + samples / 2) / samples);
+            }
+            return;
         }
     }
 
-    return 0;
+    memset(rgb, 0, 3);
 }
 
 /** Project one cell's selected light sample into map-widget coordinates. */
@@ -2139,8 +2176,12 @@ map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, 
         .y = surface->h / 2 + (x - data->midx) * MAP_TILE_XOFF + (y - data->midy) * MAP_TILE_XOFF -
              height + data->player_height_offset - data->depth * MAP_LEVEL_PIXEL_HEIGHT -
              map_level_support_height(x, y, data->depth),
-        .level = map_lighting_level(x, y, cell, sub_layer),
     };
+    uint8_t rgb[3];
+    map_lighting_rgb(x, y, cell, sub_layer, rgb);
+    vertex.red = rgb[0];
+    vertex.green = rgb[1];
+    vertex.blue = rgb[2];
     return vertex;
 }
 

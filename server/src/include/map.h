@@ -354,6 +354,12 @@ typedef struct MapSpace_s {
      * be rebuilt when opaque geometry changes. */
     int32_t light_source_value;
 
+    /** Sum of per-source attenuated sRGB components, scaled by 255. */
+    int64_t light_source_color[3];
+
+    /** Positive-source white-reference sum, scaled by 255. */
+    int64_t light_source_color_weight;
+
     /**
      * Flags about this space
      * @see map_look_flags

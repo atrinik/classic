@@ -39,6 +39,7 @@
 #include <object.h>
 #include <object_methods.h>
 #include <sound_ambient.h>
+#include <light.h>
 
 typedef struct stable_identity_state {
     bool saw_numeric_sp;
@@ -721,6 +722,12 @@ stable_identity_state *identity = &identities[*depth];
 ^has_ready_weapon{S} CHANGE_FLAG(op, FLAG_READY_WEAPON, IVAL);
 ^no_skill_ident{S}   CHANGE_FLAG(op, FLAG_NO_SKILL_IDENT, IVAL);
 ^glow_radius{S}      op->glow_radius = IVAL;
+^light_color{S}      {
+    if (!light_color_parse(yval(), &op->light_color)) {
+        LOG(ERROR, "Invalid light_color; expected exactly six hexadecimal digits.");
+        lex_error = 1;
+    }
+}
 ^is_blind{S}         CHANGE_FLAG(op, FLAG_BLIND, IVAL);
 ^can_see_in_dark{S}  CHANGE_FLAG(op, FLAG_SEE_IN_DARK, IVAL);
 ^is_cauldron{S}      CHANGE_FLAG(op, FLAG_IS_CAULDRON, IVAL);
@@ -1627,6 +1634,10 @@ get_ob_diff (StringBuffer *sb, const object *op, const object *op2)
 
     if (op->glow_radius != op2->glow_radius) {
         SAVE_INT(sb, "glow_radius", op->glow_radius);
+    }
+
+    if (op->light_color != op2->light_color) {
+        stringbuffer_append_printf(sb, "light_color %06" PRIx32 "\n", op->light_color);
     }
 
     if (op->randomitems != op2->randomitems) {

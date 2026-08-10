@@ -743,7 +743,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
 
     mapstat = packet_reader_read_uint8(&reader);
 
-    if (mapstat != MAP_UPDATE_CMD_SAME) {
+    if (mapstat != MAP_UPDATE_CMD_SAME && mapstat != MAP_UPDATE_CMD_PARTIAL) {
         char mapname[HUGE_BUF], bg_music[HUGE_BUF], weather[MAX_BUF], region_name[MAX_BUF],
             region_longname[MAX_BUF], mappath[HUGE_BUF];
         uint8_t height_diff;
@@ -796,13 +796,15 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         ypos = packet_reader_read_uint8(&reader);
 
         /* Have we moved? */
-        if ((xpos - mx || ypos - my)) {
+        if (mapstat == MAP_UPDATE_CMD_SAME && (xpos - mx || ypos - my)) {
             display_mapscroll(xpos - mx, ypos - my, 0, 0);
             map_play_footstep();
         }
 
-        mx = xpos;
-        my = ypos;
+        if (mapstat == MAP_UPDATE_CMD_SAME) {
+            mx = xpos;
+            my = ypos;
+        }
     }
 
     MapData.posx = xpos;
@@ -1097,6 +1099,21 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
             /* Get tile flags. */
             ext_flags = packet_reader_read_uint8(&reader);
 
+            if (ext_flags & MAP2_FLAG_EXT_LIGHT_RGB) {
+                uint8_t bitmap = packet_reader_read_uint8(&reader);
+                uint8_t rgb[NUM_SUB_LAYERS][3] = {{0}};
+
+                for (uint8_t sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                    if (!(bitmap & (UINT8_C(1) << sub_layer))) {
+                        continue;
+                    }
+                    for (size_t channel = 0; channel < 3; channel++) {
+                        rgb[sub_layer][channel] = packet_reader_read_uint8(&reader);
+                    }
+                }
+                map_set_light_rgb(x, y, bitmap, rgb);
+            }
+
             /* Animation? */
             if (ext_flags & MAP2_FLAG_EXT_ANIM) {
                 uint8_t anim_num = packet_reader_read_uint8(&reader);
@@ -1138,7 +1155,9 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         return;
     }
 
-    map_set_level_mask(level_mask);
+    if (mapstat != MAP_UPDATE_CMD_PARTIAL) {
+        map_set_level_mask(level_mask);
+    }
 
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         if ((level_mask & (UINT16_C(1) << MAP2_DEPTH_INDEX(depth))) &&

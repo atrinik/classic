@@ -48,6 +48,8 @@ typedef enum socket_role {
 #define MAP_UPDATE_CMD_SAME 0
 #define MAP_UPDATE_CMD_NEW 1
 #define MAP_UPDATE_CMD_CONNECTED 2
+/** Continuation of the immediately preceding complete map update. */
+#define MAP_UPDATE_CMD_PARTIAL 3
 
 /** First valid tiled-map identifier in a connected MAP update. */
 #define MAP_UPDATE_TILE_MIN 1
@@ -68,6 +70,8 @@ typedef enum socket_role {
  * are TILED_DOWN links, and positive depths are TILED_UP links. Connected
  * updates additionally carry an int8 depth offset so both endpoints can shift
  * their caches when the player changes levels without forcing a full refresh.
+ * A bounded partial continuation carries the same position prefix and a subset
+ * of complete level blocks without replacing the declared level set.
  */
 #define MAP2_MAX_DEPTH 6
 /** Number of independently cached linked-map levels. */
@@ -394,6 +398,8 @@ typedef struct socket_face_batch_response {
  *@{*/
 /** An animation. */
 #define MAP2_FLAG_EXT_ANIM 1
+/** Complete per-tile set of explicitly colored sub-layer samples follows. */
+#define MAP2_FLAG_EXT_LIGHT_RGB 2
 /*@}*/
 
 /**

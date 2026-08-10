@@ -219,6 +219,59 @@ START_TEST(test_map_protocol_validates_tile_record_flags) {
 }
 END_TEST
 
+START_TEST(test_map_protocol_validates_colored_light_extension) {
+    packet_struct *level = packet_new(0, 32, 16);
+    packet_writer_write_uint16(level, MAP2_MASK_LIGHT_LEVEL);
+    packet_writer_write_uint8(level, 80);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_RGB);
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, 80);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, 40);
+    packet_struct *packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+
+    for (size_t len = packet->len - 3; len < packet->len; len++) {
+        ck_assert(!map_protocol_validate(packet->data, len, 0, 21, 21));
+    }
+    packet_free(packet);
+    packet_free(level);
+
+    level = packet_new(0, 16, 16);
+    packet_writer_write_uint16(level, 0);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_RGB);
+    packet_writer_write_uint8(level, 0);
+    packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+
+    level->data[level->len - 1] = UINT8_C(1) << MAP2_PROTOCOL_SUB_LAYERS;
+    packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+    packet_free(level);
+}
+END_TEST
+
+START_TEST(test_map_protocol_accepts_bounded_continuation) {
+    packet_struct *packet = packet_new(0, 16, 16);
+    packet_writer_write_uint8(packet, MAP_UPDATE_CMD_PARTIAL);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint8(packet, 1);
+    map_protocol_test_level(packet, 2, NULL);
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    ck_assert_uint_le(packet->len, PACKET_PAYLOAD_MAX);
+    packet_free(packet);
+}
+END_TEST
+
 START_TEST(test_map_protocol_rejects_unterminated_metadata) {
     packet_struct *packet = packet_new(0, 16, 16);
     packet_writer_write_uint8(packet, MAP_UPDATE_CMD_NEW);
@@ -679,6 +732,20 @@ START_TEST(test_packet_writer_write_packet) {
     packet_verify_data(packet2, "7465737400");
     packet_free(packet);
     packet_free(packet2);
+
+    packet = packet_new(0, 512, 512);
+    packet2 = packet_new(0, PACKET_PAYLOAD_MAX - 5, 0);
+    uint8_t *bytes = xcalloc(PACKET_PAYLOAD_MAX - 5, 1);
+    packet_writer_write_bytes(packet2, bytes, PACKET_PAYLOAD_MAX - 5);
+    free(bytes);
+    for (size_t i = 0; i < 5; i++) {
+        packet_writer_write_uint8(packet, 0);
+    }
+    packet_writer_write_packet(packet, packet2);
+    ck_assert(packet_writer_finish(packet));
+    ck_assert_uint_eq(packet->len, PACKET_PAYLOAD_MAX);
+    packet_free(packet);
+    packet_free(packet2);
 }
 END_TEST
 
@@ -880,6 +947,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_map_protocol_enforces_level_framing);
     tcase_add_test(tc_core, test_map_protocol_rejects_bad_tile_and_layer_indices);
     tcase_add_test(tc_core, test_map_protocol_validates_tile_record_flags);
+    tcase_add_test(tc_core, test_map_protocol_validates_colored_light_extension);
+    tcase_add_test(tc_core, test_map_protocol_accepts_bounded_continuation);
     tcase_add_test(tc_core, test_map_protocol_rejects_unterminated_metadata);
 
     return s;

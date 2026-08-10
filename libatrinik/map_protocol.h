@@ -15,7 +15,7 @@
 #include "toolkit.h"
 
 /**
- * Validate one complete protocol-v1068 CLIENT_CMD_MAP payload.
+ * Validate one complete protocol-v1075 CLIENT_CMD_MAP payload.
  *
  * No endpoint state is changed. The caller supplies the negotiated wire look
  * dimensions used to bound tile coordinates.

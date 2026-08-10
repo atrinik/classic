@@ -14,6 +14,15 @@ This design contract applies when changing classic server lighting,
   use `MapSpace.light_source_value` so masks can rebuild when an opaque object
   or floor changes. Apply lighting through `map_get_darkness()` rather than
   reading either component alone.
+- Positive sources additionally accumulate authored sRGB `RRGGBB` components
+  as signed 64-bit fixed-point values scaled by 255. Each final channel adds
+  `(component_sum - white_reference_sum) / 255` to the unchanged scalar raw
+  light, rounding half away from zero, and then applies `light_level_from_raw()`
+  once. Values below zero and above the brightest anchor saturate there. This
+  makes insertion order irrelevant and makes `ffffff` reproduce the scalar
+  sample exactly. Ambient, floors, world light, special vision, and `tli` stay
+  neutral; negative sources affect only the scalar raw light and are therefore
+  achromatic even if an object carries a non-white authored color.
 - Map loading defers local source masks until floors/blockers load, then restores
   sources from loaded neighboring levels. Keep load/unload symmetric.
 - Test buildings from outside and inside. Upper floors may own lights, while an
@@ -62,6 +71,21 @@ This design contract applies when changing classic server lighting,
   withholding actors, items, effects, and interiors.
 - Connected UP/DOWN transitions include signed depth offsets so client/server
   shift existing caches rather than forcing a full refresh.
+- Protocol v1075 retains scalar light bytes and adds
+  `MAP2_FLAG_EXT_LIGHT_RGB` before the animation tail. It carries a complete
+  seven-bit sub-layer bitmap followed by ascending RGB888 triples. A zero
+  bitmap explicitly resets all sub-layers to their scalar samples. Scalar and
+  RGB caches are independent, so hue-only changes and neutral resets emit.
+- The first update declares the complete depth set. If its framed level blocks
+  would exceed the 65,534-byte game payload, it reserves zero-length blocks for
+  omitted depths and sends their complete payloads in deterministic
+  `MAP_UPDATE_CMD_PARTIAL` continuation packets. Oversized individual depths
+  split only between complete tile records and may repeat their depth in later
+  continuations. Continuations never scroll or replace the active depth mask,
+  and every packet is independently preflighted before client state mutation.
+  One 21x21 depth gains at most 9,702 RGB bytes; a dense regression fixture
+  forces a previously valid level across the boundary and verifies that every
+  resulting packet remains within and passes the shared preflight.
 - Do not add authored building/balcony/overlook flags or make serialization
   borrow/zoom magic-mirror targets.
 
