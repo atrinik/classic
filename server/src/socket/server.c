@@ -135,6 +135,20 @@ static bool socket_server_address_loopback(const struct sockaddr_storage *addres
     return false;
 }
 
+static bool socket_server_address_unspecified(const struct sockaddr_storage *address) {
+    if (address->ss_family == AF_INET) {
+        const struct sockaddr_in *address4 = (const struct sockaddr_in *)address;
+        return address4->sin_addr.s_addr == htonl(INADDR_ANY);
+    }
+#ifdef HAVE_IPV6
+    if (address->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *address6 = (const struct sockaddr_in6 *)address;
+        return IN6_IS_ADDR_UNSPECIFIED(&address6->sin6_addr);
+    }
+#endif
+    return false;
+}
+
 #define SOCKET_PENDING_CONNECTIONS_MAX 128U
 
 /**
@@ -217,6 +231,8 @@ TOOLKIT_INIT_FUNC(socket_server) {
         char v6_host[65];
         bool v4_explicit;
         bool v6_explicit;
+        bool v4_seen;
+        bool v6_seen;
     } stack_setting;
     memset(&stack_setting, 0, sizeof(stack_setting));
     snprintf(VS(stack_setting.v4_host), "%s", "0.0.0.0");
@@ -234,6 +250,10 @@ TOOLKIT_INIT_FUNC(socket_server) {
         }
 
         if (strcasecmp(cps[0], "dual") == 0) {
+            if (strcasecmp(settings.network_stack, "dual") != 0) {
+                LOG(ERROR, "The dual network stack setting cannot be combined with others");
+                exit(1);
+            }
             stack_setting.type = 0;
             BIT_SET(stack_setting.type, STACK_DUAL);
             break;
@@ -244,6 +264,11 @@ TOOLKIT_INIT_FUNC(socket_server) {
         struct sockaddr_storage *addr;
         int family;
         if (strcasecmp(cps[0], "ipv4") == 0 || strcasecmp(cps[0], "v4") == 0) {
+            if (stack_setting.v4_seen) {
+                LOG(ERROR, "Duplicate IPv4 network stack setting");
+                exit(1);
+            }
+            stack_setting.v4_seen = true;
             BIT_SET(stack_setting.type, STACK_IPV4);
             addr = &stack_setting.v4;
             family = AF_INET;
@@ -251,6 +276,11 @@ TOOLKIT_INIT_FUNC(socket_server) {
             saddr->sin_family = AF_INET;
         } else if (strcasecmp(cps[0], "ipv6") == 0 || strcasecmp(cps[0], "v6") == 0) {
 #ifdef HAVE_IPV6
+            if (stack_setting.v6_seen) {
+                LOG(ERROR, "Duplicate IPv6 network stack setting");
+                exit(1);
+            }
+            stack_setting.v6_seen = true;
             BIT_SET(stack_setting.type, STACK_IPV6);
             addr = &stack_setting.v6;
             family = AF_INET6;
@@ -335,12 +365,18 @@ TOOLKIT_INIT_FUNC(socket_server) {
         }
         LOG(SYSTEM, "QUIC certificate SHA-256: %s", quic_certificate_sha256);
 
+        bool listen_v4 = quic_server_sockets[0] != NULL;
+        bool listen_v6 = quic_server_sockets[1] != NULL;
+        bool restrict_v4 =
+            stack_setting.v4_explicit && !socket_server_address_unspecified(&stack_setting.v4);
+        bool restrict_v6 =
+            stack_setting.v6_explicit && !socket_server_address_unspecified(&stack_setting.v6);
+        bool v4_loopback =
+            listen_v4 && restrict_v4 && socket_server_address_loopback(&stack_setting.v4);
+        bool v6_loopback =
+            listen_v6 && restrict_v6 && socket_server_address_loopback(&stack_setting.v6);
         bool loopback_only =
-            !dual &&
-            (!bind_v4 ||
-             (stack_setting.v4_explicit && socket_server_address_loopback(&stack_setting.v4))) &&
-            (!bind_v6 ||
-             (stack_setting.v6_explicit && socket_server_address_loopback(&stack_setting.v6)));
+            (listen_v4 || listen_v6) && (!listen_v4 || v4_loopback) && (!listen_v6 || v6_loopback);
 
         quic_candidate_count = 0;
         metaserver_public_endpoint_from_config(settings.server_host,
@@ -354,7 +390,7 @@ TOOLKIT_INIT_FUNC(socket_server) {
         }
         char mapped_host[65];
         uint16_t mapped_port;
-        if (!loopback_only &&
+        if (listen_v4 && !restrict_v4 &&
             socket_port_mapping_init(settings.port_quic, VS(mapped_host), &mapped_port)) {
             if (!socket_host_is_global(mapped_host)) {
                 LOG(INFO,
@@ -371,8 +407,8 @@ TOOLKIT_INIT_FUNC(socket_server) {
         uint16_t stun_port = settings.port_quic;
         if (loopback_only) {
             LOG(INFO, "Direct candidate discovery is disabled for loopback-only listeners");
-        } else if (*settings.stun_server != '\0' && strcmp(settings.stun_server, "off") != 0 &&
-                   quic_server_sockets[0] != NULL &&
+        } else if (!v4_loopback && listen_v4 && *settings.stun_server != '\0' &&
+                   strcmp(settings.stun_server, "off") != 0 &&
                    socket_stun_discover(quic_server_sockets[0],
                                         settings.stun_server,
                                         VS(stun_host),
@@ -385,8 +421,8 @@ TOOLKIT_INIT_FUNC(socket_server) {
                 quic_candidates[quic_candidate_count].kind = SOCKET_CANDIDATE_SRFLX;
                 quic_candidate_count++;
             }
-        } else if (!loopback_only && quic_server_sockets[1] != NULL &&
-                   *settings.stun_server != '\0' && strcmp(settings.stun_server, "off") != 0 &&
+        } else if (!v6_loopback && listen_v6 && *settings.stun_server != '\0' &&
+                   strcmp(settings.stun_server, "off") != 0 &&
                    socket_stun_discover(quic_server_sockets[1],
                                         settings.stun_server,
                                         VS(stun_host),
@@ -419,13 +455,14 @@ TOOLKIT_INIT_FUNC(socket_server) {
             if (!socket_host2addr(local_candidates[i].host, &address)) {
                 continue;
             }
-            bool allowed = address.ss_family == AF_INET && bind_v4 &&
-                           (!stack_setting.v4_explicit ||
-                            strcmp(local_candidates[i].host, stack_setting.v4_host) == 0);
+            bool allowed =
+                address.ss_family == AF_INET && listen_v4 &&
+                (!restrict_v4 || strcmp(local_candidates[i].host, stack_setting.v4_host) == 0);
 #ifdef HAVE_IPV6
-            allowed = allowed || (address.ss_family == AF_INET6 && bind_v6 &&
-                                  (!stack_setting.v6_explicit ||
-                                   strcmp(local_candidates[i].host, stack_setting.v6_host) == 0));
+            allowed =
+                allowed ||
+                (address.ss_family == AF_INET6 && listen_v6 &&
+                 (!restrict_v6 || strcmp(local_candidates[i].host, stack_setting.v6_host) == 0));
 #endif
             if (allowed) {
                 quic_candidates[quic_candidate_count++] = local_candidates[i];
