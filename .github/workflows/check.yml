@@ -59,7 +59,7 @@ jobs:
         with:
           node-version: "24"
       - name: Install Python test coverage tooling
-        run: python3 -m pip install coverage==7.15.2
+        run: python3 -m pip install coverage==7.15.3
       - name: Validate imported history and release helpers
         run: |
           python3 -m coverage run --branch --source=tools \

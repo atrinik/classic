@@ -360,7 +360,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_core_uploads_exercised_python_release_tool_coverage(self) -> None:
         workflow = self.text("check.yml")
         core = workflow[workflow.index("  core:") : workflow.index("  windows-test-build:")]
-        self.assertIn("python3 -m pip install coverage==7.15.2", core)
+        self.assertIn("python3 -m pip install coverage==7.15.3", core)
         self.assertIn("python3 -m coverage run --branch --source=tools", core)
         self.assertIn("python3 -m coverage run --append --branch --source=tools", core)
         self.assertIn("python3 -m coverage xml -o tools/coverage.xml", core)
