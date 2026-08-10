@@ -30,6 +30,8 @@
 #ifndef MAP_H
 #define MAP_H
 
+#include <toolkit/map_protocol.h>
+
 /** Map tile position Y offset */
 #define MAP_TILE_POS_YOFF 23
 
@@ -158,6 +160,9 @@ typedef struct _mapdata {
 
     /** Position Y. */
     int posy;
+
+    /** Bounded sequencing state for the last full MAP2 update. */
+    map_protocol_continuation_state_t continuation;
 
     /**
      * If set, height difference will be taken into account when rendering

@@ -14,6 +14,32 @@
 
 #include "toolkit.h"
 
+/** Bounded client state for one ordered MAP2 continuation sequence. */
+typedef struct map_protocol_continuation_state {
+    bool pending;
+    uint8_t x;
+    uint8_t y;
+    uint8_t sub_layer;
+    uint16_t depths;
+    uint16_t total;
+    uint16_t next;
+} map_protocol_continuation_state_t;
+
+void map_protocol_continuation_reset(map_protocol_continuation_state_t *state);
+void map_protocol_continuation_begin(map_protocol_continuation_state_t *state,
+                                     uint16_t count,
+                                     uint8_t x,
+                                     uint8_t y,
+                                     uint8_t sub_layer,
+                                     uint16_t depths);
+bool map_protocol_continuation_matches(const map_protocol_continuation_state_t *state,
+                                       uint16_t sequence,
+                                       uint8_t x,
+                                       uint8_t y,
+                                       uint8_t sub_layer,
+                                       uint16_t depths);
+void map_protocol_continuation_advance(map_protocol_continuation_state_t *state);
+
 /**
  * Validate one complete protocol-v1075 CLIENT_CMD_MAP payload.
  *

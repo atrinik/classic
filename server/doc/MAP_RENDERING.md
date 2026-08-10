@@ -81,8 +81,14 @@ This design contract applies when changing classic server lighting,
   omitted depths and sends their complete payloads in deterministic
   `MAP_UPDATE_CMD_PARTIAL` continuation packets. Oversized individual depths
   split only between complete tile records and may repeat their depth in later
-  continuations. Continuations never scroll or replace the active depth mask,
-  and every packet is independently preflighted before client state mutation.
+  continuations. After the player sub-layer, the full header carries a
+  big-endian `uint16` continuation count; each partial carries its one-based
+  sequence number in the same position. The client accepts only the exact next
+  sequence with matching player coordinates, sub-layer, and a subset of the
+  full update's declared depths, and clears pending state after the final
+  partial or any cache reset. Continuations never scroll or replace the active
+  depth mask, and every packet is independently preflighted before client state
+  mutation.
   One 21x21 depth gains at most 9,702 RGB bytes; a dense regression fixture
   forces a previously valid level across the boundary and verifies that every
   resulting packet remains within and passes the shared preflight.

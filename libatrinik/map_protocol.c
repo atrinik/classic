@@ -17,6 +17,50 @@
 
 typedef packet_reader_t map_packet_reader_t;
 
+void map_protocol_continuation_reset(map_protocol_continuation_state_t *state) {
+    HARD_ASSERT(state != NULL);
+    memset(state, 0, sizeof(*state));
+}
+
+void map_protocol_continuation_begin(map_protocol_continuation_state_t *state,
+                                     uint16_t count,
+                                     uint8_t x,
+                                     uint8_t y,
+                                     uint8_t sub_layer,
+                                     uint16_t depths) {
+    map_protocol_continuation_reset(state);
+    if (count == 0) {
+        return;
+    }
+    state->pending = true;
+    state->x = x;
+    state->y = y;
+    state->sub_layer = sub_layer;
+    state->depths = depths;
+    state->total = count;
+    state->next = 1;
+}
+
+bool map_protocol_continuation_matches(const map_protocol_continuation_state_t *state,
+                                       uint16_t sequence,
+                                       uint8_t x,
+                                       uint8_t y,
+                                       uint8_t sub_layer,
+                                       uint16_t depths) {
+    HARD_ASSERT(state != NULL);
+    return state->pending && sequence == state->next && x == state->x && y == state->y &&
+           sub_layer == state->sub_layer && (depths & ~state->depths) == 0;
+}
+
+void map_protocol_continuation_advance(map_protocol_continuation_state_t *state) {
+    HARD_ASSERT(state != NULL);
+    HARD_ASSERT(state->pending);
+    state->next++;
+    if (state->next > state->total) {
+        map_protocol_continuation_reset(state);
+    }
+}
+
 /** Advance a MAP validation cursor without reading beyond its packet. */
 static bool map_packet_skip(map_packet_reader_t *reader, size_t size) {
     return packet_reader_skip(reader, size);
@@ -306,10 +350,13 @@ bool map_protocol_validate(const uint8_t *data,
     }
 
     uint8_t xpos, ypos, player_sub_layer, level_count;
+    uint16_t continuation_marker;
     if (!map_packet_read_uint8(&reader, &xpos) || !map_packet_read_uint8(&reader, &ypos) ||
         !map_packet_read_uint8(&reader, &player_sub_layer) ||
         player_sub_layer >= MAP2_PROTOCOL_SUB_LAYERS ||
         (new_map_width != 0 && (xpos >= new_map_width || ypos >= new_map_height)) ||
+        !map_packet_read_uint16(&reader, &continuation_marker) ||
+        (mapstat == MAP_UPDATE_CMD_PARTIAL && continuation_marker == 0) ||
         !map_packet_read_uint8(&reader, &level_count) || level_count == 0 ||
         level_count > MAP2_LEVELS) {
         return false;

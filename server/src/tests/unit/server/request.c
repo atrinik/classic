@@ -83,6 +83,7 @@ static bool map_packet_level_size(const packet_struct *packet, int expected_dept
     (void)packet_reader_read_uint8(&reader);
     (void)packet_reader_read_uint8(&reader);
     (void)packet_reader_read_uint8(&reader);
+    (void)packet_reader_read_uint16(&reader);
     uint8_t level_count = packet_reader_read_uint8(&reader);
 
     for (uint8_t level = 0; level < level_count; level++) {
@@ -989,17 +990,26 @@ START_TEST(test_dense_colored_level_splits_at_tile_boundaries) {
     packet_struct *first = queued_command_payload_find(CONTR(pl)->cs, CLIENT_CMD_MAP);
     ck_assert_ptr_nonnull(first);
     ck_assert_uint_eq(first->data[0], MAP_UPDATE_CMD_SAME);
+    ck_assert_uint_ge(first->len, 7);
+    uint16_t expected_continuations = ((uint16_t)first->data[4] << 8) | first->data[5];
+    ck_assert_uint_gt(expected_continuations, 0);
     bool continuation_found = false;
+    uint16_t continuation_sequence = 0;
     for (packet_struct *packet = CONTR(pl)->cs->packets; packet != NULL && packet->next != NULL;
          packet = packet->next) {
         if (packet->type == 0 && packet->len >= 3 &&
             packet->data[packet->len - 1] == CLIENT_CMD_MAP &&
             packet->next->data[0] == MAP_UPDATE_CMD_PARTIAL) {
             continuation_found = true;
+            continuation_sequence++;
+            ck_assert_uint_ge(packet->next->len, 7);
+            ck_assert_uint_eq(((uint16_t)packet->next->data[4] << 8) | packet->next->data[5],
+                              continuation_sequence);
             packet = packet->next;
         }
     }
     ck_assert(continuation_found);
+    ck_assert_uint_eq(continuation_sequence, expected_continuations);
 }
 END_TEST
 

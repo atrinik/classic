@@ -340,6 +340,7 @@ void clear_map(bool hard) {
     }
 
     map_level_mask = UINT16_C(1) << MAP2_DEPTH_INDEX(0);
+    map_protocol_continuation_reset(&MapData.continuation);
     map_cache_origin_x = 0;
     map_cache_origin_y = 0;
     map_select_level(0, true);
@@ -1552,7 +1553,9 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
         BIT_SET(effects.flags, SPRITE_FLAG_RED);
     } else if (data->cell->flags[map_layer] & FFLAG_INVISIBLE) {
         BIT_SET(effects.flags, SPRITE_FLAG_GRAY);
-    } else if (data->smooth_lighting && !data->lightmap_pending && data->layer == LAYER_WALL) {
+    } else if (data->world_surface && data->smooth_lighting && !data->lightmap_pending &&
+               (data->layer == LAYER_WALL ||
+                (data->cell->light_rgb_explicit & (UINT8_C(1) << data->sub_layer)))) {
         if (data->cell->roof[map_layer]) {
             BIT_SET(effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
         } else {

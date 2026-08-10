@@ -91,6 +91,7 @@ static packet_struct *map_protocol_test_packet(uint8_t level_count) {
     packet_writer_write_uint8(packet, 0);
     packet_writer_write_uint8(packet, 0);
     packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint16(packet, 0);
     packet_writer_write_uint8(packet, level_count);
     return packet;
 }
@@ -264,11 +265,44 @@ START_TEST(test_map_protocol_accepts_bounded_continuation) {
     packet_writer_write_uint8(packet, 0);
     packet_writer_write_uint8(packet, 0);
     packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint16(packet, 1);
     packet_writer_write_uint8(packet, 1);
     map_protocol_test_level(packet, 2, NULL);
     ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     ck_assert_uint_le(packet->len, PACKET_PAYLOAD_MAX);
+    packet->data[4] = packet->data[5] = 0;
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     packet_free(packet);
+}
+END_TEST
+
+START_TEST(test_map_protocol_continuation_state_is_bounded_and_ordered) {
+    map_protocol_continuation_state_t state = {0};
+    uint16_t declared = (UINT16_C(1) << MAP2_DEPTH_INDEX(0)) | (UINT16_C(1) << MAP2_DEPTH_INDEX(2));
+
+    ck_assert(!map_protocol_continuation_matches(&state, 1, 3, 4, 1, declared));
+    map_protocol_continuation_begin(&state, 2, 3, 4, 1, declared);
+    ck_assert(!map_protocol_continuation_matches(&state, 2, 3, 4, 1, declared));
+    ck_assert(!map_protocol_continuation_matches(&state, 1, 4, 4, 1, declared));
+    ck_assert(!map_protocol_continuation_matches(&state, 1, 3, 5, 1, declared));
+    ck_assert(!map_protocol_continuation_matches(&state, 1, 3, 4, 2, declared));
+    ck_assert(!map_protocol_continuation_matches(&state,
+                                                 1,
+                                                 3,
+                                                 4,
+                                                 1,
+                                                 UINT16_C(1) << MAP2_DEPTH_INDEX(-1)));
+    ck_assert(
+        map_protocol_continuation_matches(&state, 1, 3, 4, 1, UINT16_C(1) << MAP2_DEPTH_INDEX(2)));
+    map_protocol_continuation_advance(&state);
+    ck_assert(!map_protocol_continuation_matches(&state, 1, 3, 4, 1, declared));
+    ck_assert(map_protocol_continuation_matches(&state, 2, 3, 4, 1, declared));
+    map_protocol_continuation_advance(&state);
+    ck_assert(!state.pending);
+
+    map_protocol_continuation_begin(&state, 1, 3, 4, 1, declared);
+    map_protocol_continuation_reset(&state);
+    ck_assert(!map_protocol_continuation_matches(&state, 1, 3, 4, 1, declared));
 }
 END_TEST
 
@@ -949,6 +983,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_map_protocol_validates_tile_record_flags);
     tcase_add_test(tc_core, test_map_protocol_validates_colored_light_extension);
     tcase_add_test(tc_core, test_map_protocol_accepts_bounded_continuation);
+    tcase_add_test(tc_core, test_map_protocol_continuation_state_is_bounded_and_ordered);
     tcase_add_test(tc_core, test_map_protocol_rejects_unterminated_metadata);
 
     return s;

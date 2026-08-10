@@ -2725,6 +2725,18 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
         INTRAISE("Cannot modify type of object that has custom_attrset.");
     }
 
+    if (field->offset == offsetof(object, light_color)) {
+        if (!PyInt_Check(value)) {
+            INTRAISE("Illegal value for light_color field.");
+        }
+        unsigned long color = PyLong_AsUnsignedLong(value);
+        if (PyErr_Occurred() || color > UINT32_C(0xffffff)) {
+            PyErr_SetString(PyExc_OverflowError,
+                            "light_color must be between 0x000000 and 0xffffff.");
+            return -1;
+        }
+    }
+
     if (obj->obj->map != NULL && (field->offset == offsetof(object, layer) ||
                                   field->offset == offsetof(object, sub_layer))) {
         hooks->object_remove(obj->obj, 0);

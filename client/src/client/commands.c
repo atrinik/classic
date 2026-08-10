@@ -807,13 +807,8 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         }
     }
 
-    MapData.posx = xpos;
-    MapData.posy = ypos;
-    MapData.player_sub_layer = packet_reader_read_uint8(&reader);
-    def_map = region_map_find_map(MapData.region_map, MapData.map_path);
-
-    map_get_real_coords(&rx, &ry);
-    region_map_fow_need_update = false;
+    uint8_t player_sub_layer = packet_reader_read_uint8(&reader);
+    uint16_t continuation_marker = packet_reader_read_uint16(&reader);
 
     if (pos >= len) {
         LOG(PACKET, "Map packet has no level count.");
@@ -825,6 +820,38 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         LOG(PACKET, "Map packet contains too many levels: %" PRIu8 ".", level_count);
         return;
     }
+
+    uint16_t incoming_level_mask = 0;
+    size_t scan_pos = pos;
+    packet_reader_t scan;
+    packet_reader_init_cursor(&scan, data, len, &scan_pos);
+    for (uint8_t level_num = 0; level_num < level_count; level_num++) {
+        int depth = packet_reader_read_int8(&scan);
+        uint32_t level_size = packet_reader_read_uint32(&scan);
+        incoming_level_mask |= UINT16_C(1) << MAP2_DEPTH_INDEX(depth);
+        packet_reader_skip(&scan, level_size);
+    }
+    if (!packet_reader_finish(&scan)) {
+        LOG(PACKET, "Could not inspect validated map level blocks.");
+        return;
+    }
+    if (mapstat == MAP_UPDATE_CMD_PARTIAL &&
+        !map_protocol_continuation_matches(&MapData.continuation,
+                                           continuation_marker,
+                                           xpos,
+                                           ypos,
+                                           player_sub_layer,
+                                           incoming_level_mask)) {
+        LOG(PACKET, "Rejected unsolicited, mismatched, or out-of-sequence map continuation.");
+        return;
+    }
+
+    MapData.posx = xpos;
+    MapData.posy = ypos;
+    MapData.player_sub_layer = player_sub_layer;
+    def_map = region_map_find_map(MapData.region_map, MapData.map_path);
+    map_get_real_coords(&rx, &ry);
+    region_map_fow_need_update = false;
 
     uint16_t level_mask = 0;
     size_t packet_end = len;
@@ -1155,8 +1182,16 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         return;
     }
 
-    if (mapstat != MAP_UPDATE_CMD_PARTIAL) {
+    if (mapstat == MAP_UPDATE_CMD_PARTIAL) {
+        map_protocol_continuation_advance(&MapData.continuation);
+    } else {
         map_set_level_mask(level_mask);
+        map_protocol_continuation_begin(&MapData.continuation,
+                                        continuation_marker,
+                                        xpos,
+                                        ypos,
+                                        player_sub_layer,
+                                        level_mask);
     }
 
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {

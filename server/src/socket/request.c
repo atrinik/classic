@@ -1243,7 +1243,7 @@ static bool map_append_support_height(packet_struct *packet,
     packet_debug_data(packet, 1, "Structural support height");
     packet_writer_write_int16(packet, support_height);
     packet_debug_data(packet, 1, "Number of layers");
-    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint16(packet, 0);
     packet_debug_data(packet, 1, "Extended tile flags");
     packet_writer_write_uint8(packet, 0);
 
@@ -1405,6 +1405,9 @@ void draw_client_map2(object *pl) {
     packet_writer_write_uint8(packet, pl->y);
     packet_debug_data(packet, 0, "Player's sub-layer");
     packet_writer_write_uint8(packet, pl->sub_layer);
+    packet_debug_data(packet, 0, "Number of continuation packets");
+    size_t continuation_count_pos = packet->len;
+    packet_writer_write_uint8(packet, 0);
 
     packet_header = packet;
     uint8_t present_level_count = 0;
@@ -2310,10 +2313,8 @@ void draw_client_map2(object *pl) {
             packet_writer_write_uint32(packet_header, 0);
         }
     }
-    HARD_ASSERT(packet_writer_finish(packet_header));
-    bool connected = CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED;
-    socket_send_packet(CONTR(pl)->cs, packet_header);
-
+    packet_struct *continuation_packets[MAP2_LEVEL_CHUNKS_MAX] = {0};
+    uint16_t continuation_packet_count = 0;
     for (;;) {
         packet_struct *continuation = packet_new(CLIENT_CMD_MAP, 0, 512);
         packet_enable_ndelay(continuation);
@@ -2321,6 +2322,7 @@ void draw_client_map2(object *pl) {
         packet_writer_write_uint8(continuation, pl->x);
         packet_writer_write_uint8(continuation, pl->y);
         packet_writer_write_uint8(continuation, pl->sub_layer);
+        packet_writer_write_uint16(continuation, continuation_packet_count + 1);
         size_t count_pos = continuation->len;
         packet_writer_write_uint8(continuation, 0);
         uint8_t continuation_count = 0;
@@ -2344,7 +2346,17 @@ void draw_client_map2(object *pl) {
         }
         continuation->data[count_pos] = continuation_count;
         HARD_ASSERT(packet_writer_finish(continuation));
-        socket_send_packet(CONTR(pl)->cs, continuation);
+        HARD_ASSERT(continuation_packet_count < MAP2_LEVEL_CHUNKS_MAX);
+        continuation_packets[continuation_packet_count++] = continuation;
+    }
+
+    packet_header->data[continuation_count_pos] = continuation_packet_count >> 8;
+    packet_header->data[continuation_count_pos + 1] = continuation_packet_count & UINT8_MAX;
+    HARD_ASSERT(packet_writer_finish(packet_header));
+    bool connected = CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED;
+    socket_send_packet(CONTR(pl)->cs, packet_header);
+    for (uint16_t i = 0; i < continuation_packet_count; i++) {
+        socket_send_packet(CONTR(pl)->cs, continuation_packets[i]);
     }
 
     for (uint16_t i = 0; i < level_packet_count; i++) {

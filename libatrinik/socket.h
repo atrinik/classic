@@ -48,7 +48,14 @@ typedef enum socket_role {
 #define MAP_UPDATE_CMD_SAME 0
 #define MAP_UPDATE_CMD_NEW 1
 #define MAP_UPDATE_CMD_CONNECTED 2
-/** Continuation of the immediately preceding complete map update. */
+/**
+ * Continuation of the immediately preceding complete map update.
+ *
+ * Every full MAP2 header carries a uint16 continuation count after the player
+ * sub-layer. A partial header carries its one-based uint16 sequence number in
+ * the same position. Partials must match the preceding update's position,
+ * sub-layer, declared depth mask, and next sequence number.
+ */
 #define MAP_UPDATE_CMD_PARTIAL 3
 
 /** First valid tiled-map identifier in a connected MAP update. */
