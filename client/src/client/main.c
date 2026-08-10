@@ -780,6 +780,7 @@ int main(int argc, char *argv[]) {
     /* Start the system after starting SDL */
     video_init();
     system_start();
+    rich_presence_init();
     sprite_init_system();
     if (!SDL_StartTextInput(ScreenWindow)) {
         LOG(ERROR, "Could not start text input: %s", SDL_GetError());
@@ -835,6 +836,8 @@ int main(int argc, char *argv[]) {
                 popup_destroy_all();
             }
 
+            rich_presence_tick();
+
             render_profiler_end(RENDER_PROFILE_GAME, profile_game_started);
             render_profiler_end(RENDER_PROFILE_FRAME, profile_frame_started);
             render_profiler_frame_finished(false);
@@ -872,6 +875,7 @@ int main(int argc, char *argv[]) {
 
             play_action_sounds();
         }
+        rich_presence_tick();
         render_profiler_end(RENDER_PROFILE_GAME, profile_game_started);
 
         update = 0;

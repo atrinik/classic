@@ -35,7 +35,7 @@ class ClassifyChangesTests(unittest.TestCase):
         result = classify_changes.classify(["client/src/client/main.c"])
         self.assertTrue(result["client"])
         self.assertFalse(result["server"])
-        self.assertFalse(result["windows"])
+        self.assertTrue(result["windows"])
         self.assertEqual(result["codeql_languages"], "c-cpp")
         self.assertEqual(result["codeql_paths"], ["client"])
 
@@ -57,6 +57,7 @@ class ClassifyChangesTests(unittest.TestCase):
 
     def test_libatrinik_and_ci_contract_changes_select_windows_tests(self) -> None:
         for path in (
+            "client/src/client/main.c",
             "libatrinik/path.c",
             "protocol/generated/c/commands.c",
             "tools/ci/classify_changes.py",
@@ -178,7 +179,9 @@ class ClassifyChangesTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     values["windows"],
-                    "true" if changed.startswith("libatrinik/") else "false",
+                    "true"
+                    if changed.startswith(("client/", "libatrinik/"))
+                    else "false",
                 )
                 matrix = json.loads(values["codeql_matrix"])
                 self.assertEqual(
