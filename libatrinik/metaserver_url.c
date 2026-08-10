@@ -292,11 +292,15 @@ bool metaserver_url_rendezvous(const char *origin,
     ok = ok && snprintf(VS(query), "role=%s", role) < (int)sizeof(query);
     const char *websocket_scheme = strcmp(parsed.scheme, "https") == 0 ? "wss" : "ws";
     char *rendered = NULL;
-    ok = ok && curl_url_set(parsed.handle, CURLUPART_SCHEME, websocket_scheme, 0) == CURLUE_OK &&
-         curl_url_set(parsed.handle, CURLUPART_PATH, path, 0) == CURLUE_OK &&
+    ok = ok && curl_url_set(parsed.handle, CURLUPART_PATH, path, 0) == CURLUE_OK &&
          curl_url_set(parsed.handle, CURLUPART_QUERY, query, 0) == CURLUE_OK &&
-         curl_url_get(parsed.handle, CURLUPART_URL, &rendered, 0) == CURLUE_OK &&
-         snprintf(url, url_size, "%s", rendered) < (int)url_size;
+         curl_url_get(parsed.handle, CURLUPART_URL, &rendered, 0) == CURLUE_OK;
+    if (ok) {
+        const char *scheme_end = strstr(rendered, "://");
+        int rendered_result =
+            scheme_end != NULL ? snprintf(url, url_size, "%s%s", websocket_scheme, scheme_end) : -1;
+        ok = rendered_result > 0 && (size_t)rendered_result < url_size;
+    }
     curl_free(rendered);
     metaserver_parsed_url_free(&parsed);
     if (!ok) {
