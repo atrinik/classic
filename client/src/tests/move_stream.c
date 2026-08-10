@@ -103,9 +103,8 @@ static void test_stop_and_stay_packets(void) {
 
     capture_reset();
     move_keys_stream_stop(UINT32_C(0x090a0b0c));
-    TEST_CHECK(captured_num == 2);
+    TEST_CHECK(captured_num == 1);
     expect_clear(0, true, SERVER_CMD_MOVE, UINT32_C(0x090a0b0c));
-    TEST_CHECK(captured[1].type == SERVER_CMD_MOVE && captured[1].data[0] == 0);
 
     capture_reset();
     cpl.fire_on = 0;

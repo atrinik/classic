@@ -923,6 +923,91 @@ START_TEST(test_replacement_tombstones_do_not_delay_latest_direction) {
 }
 END_TEST
 
+START_TEST(test_canceled_movement_bytes_do_not_exhaust_live_queue_limit) {
+    mapstruct *map;
+    object *op;
+
+    check_setup_env_pl(&map, &op);
+    socket_struct *cs = CONTR(op)->cs;
+    const uint8_t old_move[] = {4, 0, 0, 0, 0, 9};
+    const uint8_t new_move[] = {3, 0, 0, 0, 0, 9};
+    uint8_t item[1001] = {SERVER_CMD_ITEM_APPLY};
+
+    for (size_t i = 0; i < 8192; i++) {
+        command_queue_append(cs, SERVER_CMD_MOVE, old_move, sizeof(old_move));
+        if (i % 10 == 0) {
+            ck_assert(socket_server_command_queue_append(cs, item, sizeof(item)));
+        }
+    }
+    size_t physical_len = cs->packet_recv_cmd->len;
+    ck_assert_uint_lt(physical_len, SOCKET_COMMAND_QUEUE_MAX);
+
+    uint8_t clear[] = {SERVER_CMD_CLEAR, SERVER_CMD_MOVE, 0, 0, 0, 9};
+    ck_assert(socket_server_handle_command(cs, NULL, clear, sizeof(clear)));
+    ck_assert_uint_eq(cs->movement_stream_tombstone_bytes, 8192 * (sizeof(old_move) + 3));
+    ck_assert_uint_ge(cs->movement_stream_tombstone_bytes, SOCKET_COMMAND_QUEUE_COMPACT_MIN);
+
+    command_queue_append(cs, SERVER_CMD_MOVE, new_move, sizeof(new_move));
+    ck_assert_uint_eq(cs->movement_stream_tombstone_bytes, 0);
+    ck_assert_uint_eq(cs->packet_recv_cmd->len,
+                      physical_len - 8192 * (sizeof(old_move) + 3) + sizeof(new_move) + 3);
+    ck_assert_uint_eq(cs->movement_stream_entries_num, 1);
+}
+END_TEST
+
+START_TEST(test_move_and_fire_require_exact_v1076_payloads) {
+    mapstruct *map;
+    object *op;
+
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    pl->run_on = 0;
+    uint32_t action_attack = pl->action_attack;
+
+    uint8_t move_short[] = {SERVER_CMD_MOVE, 6, 1, 0, 0, 0};
+    uint8_t move_trailing[] = {SERVER_CMD_MOVE, 6, 1, 0, 0, 0, 4, 0};
+    uint8_t fire_short[] = {SERVER_CMD_FIRE, 6, 0, 0, 0, 0, 0, 0, 0};
+    uint8_t fire_trailing[] = {SERVER_CMD_FIRE, 6, 0, 0, 0, 0, 0, 0, 0, 4, 0};
+    ck_assert(socket_server_handle_command(cs, pl, move_short, sizeof(move_short)));
+    ck_assert(socket_server_handle_command(cs, pl, move_trailing, sizeof(move_trailing)));
+    ck_assert(socket_server_handle_command(cs, pl, fire_short, sizeof(fire_short)));
+    ck_assert(socket_server_handle_command(cs, pl, fire_trailing, sizeof(fire_trailing)));
+    ck_assert_uint_eq(pl->run_on, 0);
+    ck_assert_uint_eq(pl->action_attack, action_attack);
+
+    ck_assert(socket_server_command_queue_append(cs, move_trailing, sizeof(move_trailing)));
+    ck_assert(socket_server_command_queue_append(cs, fire_trailing, sizeof(fire_trailing)));
+    ck_assert_uint_eq(cs->movement_stream_entries_num, 0);
+    op->speed_left = 100.0f;
+    socket_server_handle_client(pl);
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, 0);
+    ck_assert_uint_eq(pl->run_on, 0);
+    ck_assert_uint_eq(pl->action_attack, action_attack);
+}
+END_TEST
+
+START_TEST(test_malformed_tombstone_queue_is_discarded_safely) {
+    mapstruct *map;
+    object *op;
+
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    const uint8_t move[] = {4, 0, 0, 0, 0, 7};
+    command_queue_append(cs, SERVER_CMD_MOVE, move, sizeof(move));
+    uint8_t clear[] = {SERVER_CMD_CLEAR, SERVER_CMD_MOVE, 0, 0, 0, 7};
+    ck_assert(socket_server_handle_command(cs, NULL, clear, sizeof(clear)));
+    ck_assert_uint_gt(cs->movement_stream_tombstone_bytes, 0);
+
+    cs->packet_recv_cmd->data[0] = 0;
+    cs->packet_recv_cmd->data[1] = 0;
+    socket_server_handle_client(pl);
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, 0);
+    ck_assert_uint_eq(cs->movement_stream_tombstone_bytes, 0);
+}
+END_TEST
+
 START_TEST(test_only_valid_post_setup_activity_refreshes_login_deadline) {
     mapstruct *map;
     object *pl;
@@ -1232,6 +1317,9 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_invalid_scoped_clear_preserves_queued_commands);
     tcase_add_test(tc_core, test_direction_zero_move_clears_deferred_path);
     tcase_add_test(tc_core, test_replacement_tombstones_do_not_delay_latest_direction);
+    tcase_add_test(tc_core, test_canceled_movement_bytes_do_not_exhaust_live_queue_limit);
+    tcase_add_test(tc_core, test_move_and_fire_require_exact_v1076_payloads);
+    tcase_add_test(tc_core, test_malformed_tombstone_queue_is_discarded_safely);
     tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
     tcase_add_test(tc_core, test_version_requires_exact_match);
     tcase_add_test(tc_core, test_move_path_walkable_target_reaches_exact_coordinate);

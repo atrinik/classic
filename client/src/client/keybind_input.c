@@ -822,7 +822,6 @@ keybind_movement_state_flush(keybind_movement_state *state, uint8_t *direction, 
         state->repeated = state->pending_move && state->pending_move_repeated;
         state->emitted_direction = 0;
         *direction = 0;
-        *epoch = 0;
         return KEYBIND_MOVEMENT_ACTION_RUN_STOP;
     }
     if (state->pending_move) {

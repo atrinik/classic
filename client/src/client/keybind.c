@@ -370,7 +370,11 @@ void keybind_movement_flush(void) {
         } else if (action == KEYBIND_MOVEMENT_ACTION_STOP) {
             move_keys_stream_stop(epoch);
         } else if (action == KEYBIND_MOVEMENT_ACTION_RUN_STOP) {
-            move_keys_run_stop();
+            if (epoch != 0) {
+                move_keys_stream_stop(epoch);
+            } else {
+                move_keys_run_stop();
+            }
         }
     }
 }

@@ -2581,7 +2581,7 @@ void socket_command_fire(socket_struct *ns, player *pl, uint8_t *data, size_t le
     tag = packet_reader_read_uint32(&reader);
     epoch = packet_reader_read_uint32(&reader);
     (void)epoch;
-    if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
+    if (!packet_reader_finish(&reader)) {
         return;
     }
 
@@ -2668,7 +2668,7 @@ void socket_command_move(socket_struct *ns, player *pl, uint8_t *data, size_t le
     run_on = packet_reader_read_uint8(&reader);
     epoch = packet_reader_read_uint32(&reader);
     (void)epoch;
-    if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
+    if (!packet_reader_finish(&reader)) {
         return;
     }
 

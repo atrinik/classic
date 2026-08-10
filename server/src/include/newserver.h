@@ -43,6 +43,12 @@
 /** Maximum buffered player-command bytes retained by one connection. */
 #define SOCKET_COMMAND_QUEUE_MAX (1024U * 1024U)
 
+/** Physical queue storage including canceled movement records awaiting compaction. */
+#define SOCKET_COMMAND_QUEUE_STORAGE_MAX (SOCKET_COMMAND_QUEUE_MAX * 2U)
+
+/** Amortize queue compaction against a meaningful amount of canceled input. */
+#define SOCKET_COMMAND_QUEUE_COMPACT_MIN (64U * 1024U)
+
 typedef struct asset_stream_state asset_stream_state_t;
 
 /** How many items to show in the below window. Used in esrv_draw_look(). */
@@ -278,6 +284,7 @@ typedef struct socket_struct {
     size_t movement_stream_entries_start;
     size_t movement_stream_entries_num;
     size_t movement_stream_entries_size;
+    size_t movement_stream_tombstone_bytes;
 } socket_struct;
 
 /**

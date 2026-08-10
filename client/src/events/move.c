@@ -107,7 +107,6 @@ void move_keys_replace(int num, uint32_t epoch) {
 /** Stop one keyboard movement epoch without clearing unrelated queued input. */
 void move_keys_stream_stop(uint32_t epoch) {
     move_keys_clear_stream(SERVER_CMD_MOVE, epoch);
-    move_keys_run_stop();
 }
 
 /** Emit a direction associated with one replaceable keyboard movement epoch. */

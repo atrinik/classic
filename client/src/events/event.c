@@ -161,6 +161,7 @@ int Event_PollInputDevice(void) {
         } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
             memset(keys, 0, sizeof(keys));
             keybind_movement_focus_lost();
+            keybind_movement_flush();
         } else if (event.type == SDL_EVENT_MOUSE_MOTION) {
             tooltip_dismiss();
         }

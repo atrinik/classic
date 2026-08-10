@@ -233,9 +233,9 @@ static void test_event_matching(void) {
     TEST_CHECK(keybind_matches_event(&keybind, &event));
 }
 
-static void expect_movement(keybind_movement_state *state,
-                            keybind_movement_action expected_action,
-                            uint8_t expected_direction) {
+static uint32_t expect_movement(keybind_movement_state *state,
+                                keybind_movement_action expected_action,
+                                uint8_t expected_direction) {
     uint8_t direction = UINT8_MAX;
     uint32_t epoch = 0;
     keybind_movement_action action = keybind_movement_state_flush(state, &direction, &epoch);
@@ -251,6 +251,7 @@ static void expect_movement(keybind_movement_state *state,
     if (expected_action != KEYBIND_MOVEMENT_ACTION_NONE) {
         TEST_CHECK(direction == expected_direction);
     }
+    return epoch;
 }
 
 static void test_movement_commands(void) {
@@ -561,11 +562,11 @@ static void test_movement_boundaries_and_modifiers(void) {
     /* A run stop closes the repeat epoch before a later key release. */
     keybind_movement_state_init(&state);
     keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
-    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    uint32_t running_epoch = expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
     TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
     keybind_movement_state_run_released(&state, true);
-    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_STOP, 0);
+    TEST_CHECK(expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_STOP, 0) == running_epoch);
     keybind_movement_state_release(&state, SDL_SCANCODE_A, false, false);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
@@ -618,6 +619,18 @@ static void test_movement_boundaries_and_modifiers(void) {
     keybind_movement_state_run_released(&state, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_STOP, 5);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
+
+    /* Focus loss is flushed before a same-poll key-down starts a fresh epoch. */
+    keybind_movement_state_init(&state);
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
+    uint32_t focus_epoch = expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    keybind_movement_state_clear(&state, true, false);
+    TEST_CHECK(expect_movement(&state, KEYBIND_MOVEMENT_ACTION_STOP, 5) == focus_epoch);
+    keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, false, true);
+    uint32_t refocused_epoch = expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 9);
+    TEST_CHECK(refocused_epoch != 0 && refocused_epoch != focus_epoch);
 
     /* Same-poll chord releases retain the initial composite and each transition. */
     keybind_movement_state_init(&state);

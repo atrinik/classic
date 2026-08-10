@@ -670,11 +670,118 @@ static void socket_server_command_queue_prune(socket_struct *cs) {
     }
 }
 
+static bool
+socket_server_command_queue_frame(const packet_struct *queue, size_t offset, size_t *frame_len) {
+    if (offset > queue->len || queue->len - offset < 3) {
+        return false;
+    }
+    size_t payload_len = ((size_t)queue->data[offset] << 8) | queue->data[offset + 1];
+    if (payload_len == 0 || payload_len > queue->len - offset - 2) {
+        return false;
+    }
+    *frame_len = payload_len + 2;
+    return true;
+}
+
+/** Compact canceled movement records once while preserving every live frame's order. */
+static bool socket_server_command_queue_compact(socket_struct *cs) {
+    if (cs->movement_stream_tombstone_bytes == 0) {
+        return true;
+    }
+
+    socket_server_command_queue_prune(cs);
+    size_t entry_index = cs->movement_stream_entries_start;
+    size_t tombstone_bytes = 0;
+    for (size_t offset = 0; offset < cs->packet_recv_cmd->len;) {
+        size_t frame_len;
+        if (!socket_server_command_queue_frame(cs->packet_recv_cmd, offset, &frame_len)) {
+            return false;
+        }
+        uint64_t type_offset = cs->packet_recv_cmd_base + offset + 2;
+        if (entry_index < cs->movement_stream_entries_num &&
+            cs->movement_stream_entries[entry_index].offset < type_offset) {
+            return false;
+        }
+        if (entry_index < cs->movement_stream_entries_num &&
+            cs->movement_stream_entries[entry_index].offset == type_offset) {
+            if (cs->packet_recv_cmd->data[offset + 2] !=
+                cs->movement_stream_entries[entry_index].command) {
+                return false;
+            }
+            entry_index++;
+        }
+        if (cs->packet_recv_cmd->data[offset + 2] == SOCKET_COMMAND_QUEUE_TOMBSTONE) {
+            tombstone_bytes += frame_len;
+        }
+        offset += frame_len;
+    }
+    if (entry_index != cs->movement_stream_entries_num ||
+        tombstone_bytes != cs->movement_stream_tombstone_bytes) {
+        return false;
+    }
+
+    entry_index = cs->movement_stream_entries_start;
+    size_t write_offset = 0;
+    for (size_t read_offset = 0; read_offset < cs->packet_recv_cmd->len;) {
+        size_t frame_len;
+        bool valid =
+            socket_server_command_queue_frame(cs->packet_recv_cmd, read_offset, &frame_len);
+        HARD_ASSERT(valid);
+        uint64_t old_type_offset = cs->packet_recv_cmd_base + read_offset + 2;
+        if (cs->packet_recv_cmd->data[read_offset + 2] != SOCKET_COMMAND_QUEUE_TOMBSTONE) {
+            if (entry_index < cs->movement_stream_entries_num &&
+                cs->movement_stream_entries[entry_index].offset == old_type_offset) {
+                cs->movement_stream_entries[entry_index].offset =
+                    cs->packet_recv_cmd_base + write_offset + 2;
+                entry_index++;
+            }
+            if (write_offset != read_offset) {
+                memmove(cs->packet_recv_cmd->data + write_offset,
+                        cs->packet_recv_cmd->data + read_offset,
+                        frame_len);
+            }
+            write_offset += frame_len;
+        }
+        read_offset += frame_len;
+    }
+    cs->packet_recv_cmd->len = write_offset;
+    if (cs->movement_stream_entries_start != 0) {
+        size_t live = cs->movement_stream_entries_num - cs->movement_stream_entries_start;
+        memmove(cs->movement_stream_entries,
+                cs->movement_stream_entries + cs->movement_stream_entries_start,
+                live * sizeof(*cs->movement_stream_entries));
+        cs->movement_stream_entries_num = live;
+        cs->movement_stream_entries_start = 0;
+    }
+    cs->movement_stream_tombstone_bytes = 0;
+    return true;
+}
+
 /** Append one framed player command and index its replaceable movement epoch. */
 bool socket_server_command_queue_append(socket_struct *cs, const uint8_t *data, size_t len) {
     if (cs->packet_recv_cmd->len == 0) {
         socket_server_command_queue_reset(cs);
     }
+    if (len == 0 || len > UINT16_MAX || len > SIZE_MAX - 2) {
+        cs->packet_recv_cmd->error = PACKET_ERROR_SIZE_OVERFLOW;
+        return false;
+    }
+    size_t frame_len = len + 2;
+    if (cs->movement_stream_tombstone_bytes > cs->packet_recv_cmd->len ||
+        frame_len > SOCKET_COMMAND_QUEUE_MAX ||
+        cs->packet_recv_cmd->len - cs->movement_stream_tombstone_bytes >
+            SOCKET_COMMAND_QUEUE_MAX - frame_len) {
+        cs->packet_recv_cmd->error = PACKET_ERROR_LIMIT_EXCEEDED;
+        return false;
+    }
+    if (cs->movement_stream_tombstone_bytes >= SOCKET_COMMAND_QUEUE_COMPACT_MIN ||
+        cs->packet_recv_cmd->len > SOCKET_COMMAND_QUEUE_STORAGE_MAX - frame_len) {
+        if (!socket_server_command_queue_compact(cs)) {
+            cs->packet_recv_cmd->error = PACKET_ERROR_INVALID_ENCODING;
+            return false;
+        }
+    }
+
     size_t type_offset = cs->packet_recv_cmd->len + 2;
     packet_writer_write_uint16(cs->packet_recv_cmd, len);
     packet_writer_write_bytes(cs->packet_recv_cmd, data, len);
@@ -728,8 +835,12 @@ bool socket_server_command_queue_clear_stream(socket_struct *cs, uint8_t command
             continue;
         }
         uint64_t relative = entry->offset - cs->packet_recv_cmd_base;
-        if (relative >= cs->packet_recv_cmd->len ||
-            cs->packet_recv_cmd->data[relative] != command) {
+        size_t frame_len;
+        if (relative < 2 || relative >= cs->packet_recv_cmd->len ||
+            cs->packet_recv_cmd->data[relative] != command ||
+            !socket_server_command_queue_frame(cs->packet_recv_cmd,
+                                               (size_t)relative - 2,
+                                               &frame_len)) {
             return false;
         }
     }
@@ -739,7 +850,13 @@ bool socket_server_command_queue_clear_stream(socket_struct *cs, uint8_t command
         socket_movement_queue_entry entry = cs->movement_stream_entries[i];
         if (entry.command == command) {
             size_t relative = (size_t)(entry.offset - cs->packet_recv_cmd_base);
+            size_t frame_offset = relative - 2;
+            size_t frame_len;
+            bool valid =
+                socket_server_command_queue_frame(cs->packet_recv_cmd, frame_offset, &frame_len);
+            HARD_ASSERT(valid);
             cs->packet_recv_cmd->data[relative] = SOCKET_COMMAND_QUEUE_TOMBSTONE;
+            cs->movement_stream_tombstone_bytes += frame_len;
         } else {
             cs->movement_stream_entries[write++] = entry;
         }
@@ -756,6 +873,7 @@ void socket_server_command_queue_reset(socket_struct *cs) {
     cs->movement_stream_epoch = 0;
     cs->movement_stream_entries_start = 0;
     cs->movement_stream_entries_num = 0;
+    cs->movement_stream_tombstone_bytes = 0;
 }
 
 /**
@@ -770,6 +888,12 @@ void socket_server_command_queue_reset(socket_struct *cs) {
 void socket_server_handle_client(player *pl) {
     HARD_ASSERT(pl != NULL);
 
+    if (!socket_server_command_queue_compact(pl->cs)) {
+        LOG(ERROR, "Discarding an inconsistent buffered player-command queue");
+        socket_server_command_queue_reset(pl->cs);
+        return;
+    }
+
     for (int num_cmds = 0; num_cmds < SOCKET_SERVER_PLAYER_MAX_COMMANDS; num_cmds++) {
         if (pl->cs->packet_recv_cmd->len == 0) {
             break;
@@ -777,17 +901,8 @@ void socket_server_handle_client(player *pl) {
 
         size_t len = 2 + (pl->cs->packet_recv_cmd->data[0] << 8) + pl->cs->packet_recv_cmd->data[1];
 
-        if (pl->cs->packet_recv_cmd->data[2] == SOCKET_COMMAND_QUEUE_TOMBSTONE) {
-            packet_delete(pl->cs->packet_recv_cmd, 0, len);
-            pl->cs->packet_recv_cmd_base += len;
-            socket_server_command_queue_prune(pl->cs);
-            num_cmds--;
-            continue;
-        }
-
         /* Ensure the player is in a state capable of issue commands, and
-         * has enough speed left to do so. Tombstones above never execute
-         * gameplay and must not leave a canceled direction at queue head. */
+         * has enough speed left to do so. */
         if (pl->cs->state == ST_ZOMBIE || pl->cs->state == ST_DEAD ||
             (pl->cs->state == ST_PLAYING && pl->ob != NULL && pl->ob->speed_left < 0)) {
             break;

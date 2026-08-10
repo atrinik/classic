@@ -198,9 +198,9 @@ static fields_struct fields[] = {
     {"s_packet_recv_cmd",
      FIELDTYPE_PACKET,
      offsetof(player, cs),
-     0,
+     FIELDFLAG_READONLY,
      offsetof(socket_struct, packet_recv_cmd),
-     "Commands received from the player's client.; bytes"},
+     "Commands received from the player's client.; bytes (readonly)"},
 };
 
 /** Documentation for Atrinik_Player_GetEquipment(). */
