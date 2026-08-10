@@ -67,32 +67,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
-          mapfile -t drafts < <(
-            gh api --paginate \
-              "repos/${RELEASE_REPOSITORY}/releases?per_page=100" \
-              --jq '.[] | select(.draft == true) | [.tag_name, (.assets | length)] | @tsv'
-          )
-          if ((${#drafts[@]} > 1)); then
-            echo "multiple draft releases require manual investigation" >&2
-            exit 1
-          fi
-          tag=
-          assets=0
-          if ((${#drafts[@]} == 1)); then
-            IFS=$'\t' read -r tag assets <<<"${drafts[0]}"
-          fi
-          if test -n "${tag}"; then
-            [[ ${tag} =~ ^v5\.[0-9]+\.[0-9]+$ ]]
-            if ((assets > 0)); then
-              echo "draft ${tag} has assets; retained-candidate recovery is required" >&2
-              exit 1
-            fi
-            commit=$(git rev-parse "refs/tags/${tag}^{commit}")
-            git merge-base --is-ancestor "${commit}" HEAD
-          fi
-          echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
+          python3 tools/release/resolve_pending_release.py \
+            --repository "${RELEASE_REPOSITORY}" \
+            --github-output "${GITHUB_OUTPUT}"
+      - name: Delete the policy-listed empty failed draft
+        if: steps.pending-release.outputs.action == 'delete-empty-draft'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.pending-release.outputs.release_id }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: >-
+          gh api
+          --method DELETE
+          "repos/${RELEASE_REPOSITORY}/releases/${RELEASE_ID}"
       - name: Resume the incomplete package release
-        if: steps.pending-release.outputs.tag != ''
+        if: steps.pending-release.outputs.action == 'resume'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPOSITORY: ${{ github.repository }}
@@ -103,7 +92,7 @@ jobs:
           --ref main
           --field "tag=${RELEASE_TAG}"
       - name: Analyze commits, tag, and publish release notes
-        if: steps.pending-release.outputs.tag == ''
+        if: steps.pending-release.outputs.action != 'resume'
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-

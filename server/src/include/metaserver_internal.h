@@ -118,7 +118,7 @@ bool metaserver_publish_cadence_needs_snapshot(metaserver_publish_cadence_t *cad
 bool metaserver_publish_cadence_due(metaserver_publish_cadence_t *cadence,
                                     server_monotonic_t now,
                                     bool snapshot_changed);
-void metaserver_publish_cadence_attempted(metaserver_publish_cadence_t *cadence,
+bool metaserver_publish_cadence_attempted(metaserver_publish_cadence_t *cadence,
                                           server_monotonic_t now);
 void metaserver_publish_cadence_succeeded(metaserver_publish_cadence_t *cadence,
                                           server_monotonic_t now,
