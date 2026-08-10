@@ -425,6 +425,46 @@ void keybind_movement_state_cancel_deferred_move(keybind_movement_state *state) 
     }
 }
 
+/** Record a momentary RUN/FIRE owner accepted by gameplay dispatch. */
+void keybind_movement_state_mode_pressed(keybind_movement_state *state,
+                                         SDL_Scancode scancode,
+                                         bool run) {
+    if (state == NULL || scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_SCANCODE_COUNT) {
+        return;
+    }
+    if (run) {
+        state->keys[scancode].run_owned = true;
+    } else {
+        state->keys[scancode].fire_owned = true;
+    }
+}
+
+/** Release one accepted momentary RUN/FIRE owner. */
+bool keybind_movement_state_mode_released(keybind_movement_state *state,
+                                          SDL_Scancode scancode,
+                                          bool run) {
+    if (state == NULL || scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_SCANCODE_COUNT) {
+        return false;
+    }
+    bool *owned = run ? &state->keys[scancode].run_owned : &state->keys[scancode].fire_owned;
+    bool released = *owned;
+    *owned = false;
+    return released;
+}
+
+/** Return whether gameplay dispatch has another momentary RUN/FIRE owner. */
+bool keybind_movement_state_mode_owned(const keybind_movement_state *state, bool run) {
+    if (state == NULL) {
+        return false;
+    }
+    for (SDL_Scancode scancode = 1; scancode < SDL_SCANCODE_COUNT; scancode++) {
+        if (run ? state->keys[scancode].run_owned : state->keys[scancode].fire_owned) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /** Atomically rebind or release movement entries invalidated by a modifier change. */
 void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
                                                 SDL_Keymod mod,

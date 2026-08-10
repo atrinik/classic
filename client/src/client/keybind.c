@@ -334,7 +334,7 @@ void keybind_state_ensure(void) {
         }
     }
 
-    if (movement_run_held && !keybind_command_matches_state("?RUNON")) {
+    if (movement_run_held && !keybind_movement_state_mode_owned(&movement_state, true)) {
         if (cpl.run_on) {
             keybind_process_command_up("?RUNON");
         } else {
@@ -342,7 +342,7 @@ void keybind_state_ensure(void) {
         }
     }
 
-    if (movement_fire_held && !keybind_command_matches_state("?FIREON")) {
+    if (movement_fire_held && !keybind_movement_state_mode_owned(&movement_state, false)) {
         if (cpl.fire_on) {
             keybind_process_command_up("?FIREON");
         } else {

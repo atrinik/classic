@@ -69,6 +69,8 @@ typedef struct keybind_movement_key {
     bool repeat;
     bool owned;
     bool preseeded;
+    bool run_owned;
+    bool fire_owned;
 } keybind_movement_key;
 
 /** Replacement binding for a held movement key after modifiers change. */
@@ -184,6 +186,15 @@ extern void keybind_movement_state_set_modifier(keybind_movement_state *state,
 extern void keybind_movement_state_defer_move(keybind_movement_state *state);
 
 extern void keybind_movement_state_cancel_deferred_move(keybind_movement_state *state);
+
+extern void
+keybind_movement_state_mode_pressed(keybind_movement_state *state, SDL_Scancode scancode, bool run);
+
+extern bool keybind_movement_state_mode_released(keybind_movement_state *state,
+                                                 SDL_Scancode scancode,
+                                                 bool run);
+
+extern bool keybind_movement_state_mode_owned(const keybind_movement_state *state, bool run);
 
 extern void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
                                                        SDL_Keymod mod,

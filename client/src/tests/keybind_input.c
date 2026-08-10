@@ -1244,6 +1244,9 @@ static void test_keybind_event_integration(void) {
     movement_sink_reset(&sink);
     handler = movement_sink_handler(&sink);
     handler.reconcile_modes = NULL;
+    event.key = SDLK_O;
+    event.scancode = SDL_SCANCODE_O;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     event.key = SDLK_I;
     event.scancode = SDL_SCANCODE_I;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
@@ -1261,6 +1264,9 @@ static void test_keybind_event_integration(void) {
     movement_sink_reset(&sink);
     handler = movement_sink_handler(&sink);
     handler.reconcile_modes = NULL;
+    event.key = SDLK_Q;
+    event.scancode = SDL_SCANCODE_Q;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     event.key = SDLK_P;
     event.scancode = SDL_SCANCODE_P;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
@@ -1274,6 +1280,24 @@ static void test_keybind_event_integration(void) {
                                     &handler);
     movement_sink_flush(&sink);
     TEST_CHECK(sink.actions_num == 2 && sink.running_at_emit[1]);
+
+    /* A physically pressed but gameplay-unowned key cannot preserve RUN. */
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    handler.reconcile_modes = NULL;
+    event.key = SDLK_P;
+    event.scancode = SDL_SCANCODE_P;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    key_states[SDL_SCANCODE_P].pressed = true;
+    key_states[SDL_SCANCODE_Q].pressed = true;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 2 && !sink.running_at_emit[1]);
 }
 
 int main(void) {
