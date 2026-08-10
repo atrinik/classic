@@ -192,7 +192,7 @@ static void load_srv_file(char *fname, FILE *listing) {
 
     sb = stringbuffer_new();
     cp = path_basename(fname);
-    stringbuffer_append_printf(sb, "%s/http/data/%s.zz", settings.datapath, cp);
+    stringbuffer_append_printf(sb, "%s/data/%s.zz", settings.assetspath, cp);
     fprintf(listing, "%s:%" PRIx64 ":%" PRIx64 "\n", cp, (uint64_t)crc, (uint64_t)fsize);
 
     free(cp);
@@ -212,6 +212,22 @@ static void load_srv_file(char *fname, FILE *listing) {
     free(cp);
     free(contents);
     free(compressed);
+}
+
+/** Create one owned asset-staging directory without accepting links or files. */
+static void asset_staging_directory_prepare(const char *path) {
+    struct stat statbuf;
+    if (lstat(path, &statbuf) == 0) {
+        if (!S_ISDIR(statbuf.st_mode) || S_ISLNK(statbuf.st_mode)) {
+            LOG(ERROR, "Asset staging path is not a real directory: %s", path);
+            exit(EXIT_FAILURE);
+        }
+        return;
+    }
+    if (errno != ENOENT || mkdir(path, SAVE_MODE_DIR) != 0) {
+        LOG(ERROR, "Could not create asset staging directory %s: %s", path, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
 }
 
 /**
@@ -308,8 +324,13 @@ void init_srv_files(void) {
     char buf[HUGE_BUF];
     FILE *fp;
 
-    snprintf(buf, sizeof(buf), "%s/http/data/listing.txt", settings.datapath);
-    path_ensure_directories(buf);
+    asset_staging_directory_prepare(settings.assetspath);
+    snprintf(buf, sizeof(buf), "%s/data", settings.assetspath);
+    asset_staging_directory_prepare(buf);
+    snprintf(buf, sizeof(buf), "%s/client-maps", settings.assetspath);
+    asset_staging_directory_prepare(buf);
+
+    snprintf(buf, sizeof(buf), "%s/data/listing.txt", settings.assetspath);
     fp = fopen(buf, "w");
 
     if (fp == NULL) {

@@ -30,7 +30,7 @@ RUN python3 tools/dependencies.py sync \
     && cmake --build build/release \
         --target atrinik-server plugin_arena plugin_python --parallel
 
-RUN mkdir -p /tmp/worldmaker /tmp/atrinik-data/http /tmp/atrinik-data/tmp \
+RUN mkdir -p /tmp/worldmaker /tmp/atrinik-assets /tmp/atrinik-data/tmp \
     && cp build/release/atrinik-server \
         build/release/libplugin_arena.so \
         build/release/libplugin_python.so \
@@ -42,9 +42,9 @@ RUN mkdir -p /tmp/worldmaker /tmp/atrinik-data/http /tmp/atrinik-data/tmp \
         --libpath=/src/server/runtime/content/lib \
         --mapspath=/src/server/runtime/content/maps \
         --datapath=/tmp/atrinik-data \
-        --httppath=/tmp/atrinik-data/http \
+        --assetspath=/tmp/atrinik-assets \
         --resourcespath=/src/server/resources \
-    && test -d /tmp/atrinik-data/http/client-maps
+    && test -d /tmp/atrinik-assets/client-maps
 
 FROM ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
 
@@ -62,7 +62,7 @@ RUN rm ./maps/python/events/init/documentation.py
 COPY --from=build /src/server/runtime/content/lib ./server/lib
 COPY --from=build /src/server/resources ./server/resources
 COPY --from=build /src/server/install_data ./server/install_data
-COPY --from=build /tmp/atrinik-data/http/client-maps ./server/install_data/http/client-maps
+COPY --from=build /tmp/atrinik-assets/client-maps ./server/assets/client-maps
 COPY --from=build /src/server/atrinikloop.sh ./server/atrinikloop.sh
 COPY --from=build /src/server/ca-bundle.crt ./server/ca-bundle.crt
 COPY --from=build /src/server/permissions.cfg ./server/permissions.cfg

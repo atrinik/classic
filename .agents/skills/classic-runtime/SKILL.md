@@ -9,6 +9,12 @@ Run from the `atrinik/atrinik` wrapper root. The wrapper owns builds,
 collection, state locks, ports, PIDs, logs, supervision, and client config; do
 not reconstruct or edit its generated paths.
 
+The wrapper supplies a disposable transport-neutral `assets` staging view.
+Generated `data/*`, exact-profile `client-maps/*`, and resources use
+authenticated QUIC delivery by default; `http_url` only advertises an optional
+operator-managed HTTP(S) origin. Never place generated assets in persistent
+state or restore a bundled HTTP listener.
+
 Use a classic-derived profile selecting the full classic worktree. Give every
 concurrent topology a distinct name and state. For a deterministic account and
 character, let the scenario own its dedicated `scenario-NAME` state:

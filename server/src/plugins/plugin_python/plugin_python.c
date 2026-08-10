@@ -1872,7 +1872,7 @@ static PyObject *Atrinik_GetSettings(PyObject *self, PyObject *ignored) {
     PyDict_SetItemString(dict, "libpath", Py_BuildValue("s", hooks->settings->libpath));
     PyDict_SetItemString(dict, "datapath", Py_BuildValue("s", hooks->settings->datapath));
     PyDict_SetItemString(dict, "mapspath", Py_BuildValue("s", hooks->settings->mapspath));
-    PyDict_SetItemString(dict, "httppath", Py_BuildValue("s", hooks->settings->httppath));
+    PyDict_SetItemString(dict, "assetspath", Py_BuildValue("s", hooks->settings->assetspath));
     PyDict_SetItemString(dict,
                          "metaserver_publish_origin",
                          Py_BuildValue("s", hooks->settings->metaserver_publish_origin));
