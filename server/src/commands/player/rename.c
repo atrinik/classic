@@ -70,8 +70,11 @@ void command_rename(object *op, const char *command, char *params) {
             return;
         }
 
-        if (strlen(params) > 127) {
-            draw_info(COLOR_WHITE, op, "New name is too long, maximum is 127 characters.");
+        if (strlen(params) >= ITEM_NAME_SIZE) {
+            draw_info_format(COLOR_WHITE,
+                             op,
+                             "New name is too long, maximum is %u characters.",
+                             ITEM_NAME_SIZE - 1U);
             return;
         }
 

@@ -410,13 +410,6 @@ static void command_item_apply(const item_packet_update_t *update, uint32_t flag
     object parsed = update->item;
     bool force_anim = false;
 
-    /* Parser snapshots intentionally contain no live-list mutations. Preserve
-     * the target's links, including inventory transferred after validation. */
-    parsed.next = tmp->next;
-    parsed.prev = tmp->prev;
-    parsed.env = tmp->env;
-    parsed.inv = tmp->inv;
-
     if (flags & UPD_FACE) {
         uint16_t raw_face = parsed.face;
         uint16_t face = raw_face & FACE_ID_MASK;
@@ -458,7 +451,9 @@ static void command_item_apply(const item_packet_update_t *update, uint32_t flag
         }
     }
 
-    *tmp = parsed;
+    item_packet_update_t applied = *update;
+    applied.item = parsed;
+    item_packet_apply_update(&applied, tmp);
     if (flags & UPD_FACE) {
         image_request_face(tmp->face);
     }

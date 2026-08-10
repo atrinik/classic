@@ -53,7 +53,11 @@ static void duplicator_match_obj(object *op, object *tmp) {
     if (op->level <= 0) {
         object_destruct(tmp);
     } else {
+        uint32_t old_nrof = tmp->nrof;
         tmp->nrof = MIN(UINT32_MAX, (uint64_t)tmp->nrof * op->level);
+        if (tmp->nrof != old_nrof) {
+            object_update(tmp, UP_OBJ_FACE);
+        }
     }
 }
 

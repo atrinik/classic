@@ -144,6 +144,7 @@ static void arch_free(archetype_t *at) {
     FREE_AND_CLEAR_HASH(at->name);
     object_destroy_inv(&at->clone);
     FREE_AND_CLEAR_HASH(at->clone.name);
+    FREE_AND_CLEAR_HASH(at->clone.name_pl);
     FREE_AND_CLEAR_HASH(at->clone.title);
     FREE_AND_CLEAR_HASH(at->clone.race);
     FREE_AND_CLEAR_HASH(at->clone.slaying);
@@ -471,6 +472,7 @@ archetype_t *arch_clone(archetype_t *at) {
     archetype_t *new = xcalloc(1, sizeof(*new));
     memcpy(&new->clone, &at->clone, sizeof(new->clone));
     ADD_REF_NOT_NULL_HASH(new->clone.name);
+    ADD_REF_NOT_NULL_HASH(new->clone.name_pl);
     ADD_REF_NOT_NULL_HASH(new->clone.title);
     ADD_REF_NOT_NULL_HASH(new->clone.race);
     ADD_REF_NOT_NULL_HASH(new->clone.slaying);
