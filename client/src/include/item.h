@@ -34,7 +34,12 @@
 #define NROF_ITEMS 50
 
 /** Maximum length of a name. */
-#define NAME_LEN 128
+#ifdef ATRINIK_PROTOCOL_ITEM_NAME_SIZE
+#define NAME_LEN ATRINIK_PROTOCOL_ITEM_NAME_SIZE
+#else
+/* Compatibility with the protocol v1.0.1 standalone dependency lock. */
+#define NAME_LEN 128U
+#endif
 
 /**
  * Item structure keeps all information what player (= client) knows
@@ -56,7 +61,7 @@ typedef struct obj {
     /** Item's inventory. */
     struct obj *inv;
 
-    /** Item's singular name as sent to us. */
+    /** Item's count-appropriate display name as selected by the server. */
     char s_name[NAME_LEN];
 
     /** Item identifier (0 = free). */

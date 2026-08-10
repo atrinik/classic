@@ -32,7 +32,11 @@
 #include <loader.h>
 #include <object.h>
 #include <object_methods.h>
+#include <player.h>
+#include <server.h>
+#include <server_item.h>
 #include <swap.h>
+#include <toolkit/packet.h>
 #include <toolkit/path.h>
 
 static bool active_list_contains_at(const object *needle, const char *phase) {
@@ -66,6 +70,14 @@ START_TEST(test_object_can_merge) {
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob2);
     ob2 = arch_get("bolt");
+    FREE_AND_COPY_HASH(ob1->name_pl, "bolts");
+    ck_assert(!object_can_merge(ob1, ob2));
+    FREE_AND_COPY_HASH(ob2->name_pl, "bolts");
+    ck_assert(object_can_merge(ob1, ob2));
+    FREE_AND_COPY_HASH(ob2->name_pl, "projectiles");
+    ck_assert(!object_can_merge(ob1, ob2));
+    object_destroy(ob2);
+    ob2 = arch_get("bolt");
     ob2->type++;
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob2);
@@ -79,6 +91,206 @@ START_TEST(test_object_can_merge) {
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob1);
     object_destroy(ob2);
+}
+END_TEST
+
+START_TEST(test_map_stack_operations_increment_update_once) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    object *first = arch_get("bolt");
+    first->x = pl->x;
+    first->y = pl->y;
+    first->nrof = 1;
+    first = object_insert_map(first, map, NULL, INS_NO_MERGE);
+
+    object *second = arch_get("bolt");
+    second->x = pl->x;
+    second->y = pl->y;
+    second->nrof = 1;
+    second = object_insert_map(second, map, NULL, INS_NO_MERGE);
+
+    object *removed = arch_get("bolt");
+    removed->x = pl->x;
+    removed->y = pl->y;
+    removed = object_insert_map(removed, map, NULL, INS_NO_MERGE);
+    uint8_t old_update = GET_MAP_UPDATE_COUNTER(map, first->x, first->y);
+    object_remove(removed, REMOVE_NO_WEIGHT);
+    object_destroy(removed);
+    uint8_t remove_updates =
+        (uint8_t)(GET_MAP_UPDATE_COUNTER(map, first->x, first->y) - old_update);
+
+    old_update = GET_MAP_UPDATE_COUNTER(map, first->x, first->y);
+    ck_assert_ptr_eq(object_merge(second), first);
+    ck_assert_uint_eq(GET_MAP_UPDATE_COUNTER(map, first->x, first->y),
+                      (uint8_t)(old_update + remove_updates + 1));
+
+    old_update = GET_MAP_UPDATE_COUNTER(map, first->x, first->y);
+    object *split = object_stack_get(first, 1);
+    ck_assert_ptr_ne(split, first);
+    ck_assert_uint_eq(GET_MAP_UPDATE_COUNTER(map, first->x, first->y), (uint8_t)(old_update + 1));
+    object_destroy(split);
+
+    first->nrof = 2;
+    old_update = GET_MAP_UPDATE_COUNTER(map, first->x, first->y);
+    ck_assert_ptr_eq(object_decrease(first, 1), first);
+    ck_assert_uint_eq(GET_MAP_UPDATE_COUNTER(map, first->x, first->y), (uint8_t)(old_update + 1));
+
+    object_destroy(pl);
+}
+END_TEST
+
+START_TEST(test_object_plural_name_contract) {
+    object *ob = object_load_str("arch sack\nname torch\nname_pl torches\nend\n");
+    ck_assert_ptr_nonnull(ob);
+    ck_assert_str_eq(ob->name, "torch");
+    ck_assert_str_eq(ob->name_pl, "torches");
+
+    StringBuffer *sb = object_get_display_name(ob, NULL, NULL);
+    char *name = stringbuffer_finish(sb);
+    ck_assert_str_eq(name, "torch");
+    free(name);
+
+    ob->nrof = 2;
+    sb = object_get_display_name(ob, NULL, NULL);
+    name = stringbuffer_finish(sb);
+    ck_assert_str_eq(name, "torches");
+    free(name);
+
+    FREE_AND_COPY_HASH(ob->custom_name, "My Torch");
+    sb = object_get_display_name(ob, NULL, NULL);
+    name = stringbuffer_finish(sb);
+    ck_assert_str_eq(name, "My Torch");
+    free(name);
+
+    object *clone = object_clone(ob);
+    ck_assert_ptr_eq(clone->name_pl, ob->name_pl);
+    ck_assert_ptr_eq(clone->custom_name, ob->custom_name);
+
+    sb = stringbuffer_new();
+    object_dump_rec(ob, sb);
+    char *dump = stringbuffer_finish(sb);
+    ck_assert_ptr_nonnull(strstr(dump, "name_pl torches\n"));
+    object *roundtrip = object_load_str(dump);
+    ck_assert_ptr_nonnull(roundtrip);
+    ck_assert_str_eq(roundtrip->name_pl, "torches");
+    ck_assert_str_eq(roundtrip->custom_name, "My Torch");
+
+    free(dump);
+    object_destroy(roundtrip);
+    object_destroy(clone);
+    object_destroy(ob);
+
+    ob = object_load_str("arch sack\nname torch\nend\n");
+    ck_assert_ptr_nonnull(ob);
+    ob->nrof = 2;
+    sb = object_get_display_name(ob, NULL, NULL);
+    name = stringbuffer_finish(sb);
+    ck_assert_str_eq(name, "torch");
+    free(name);
+    object_destroy(ob);
+}
+END_TEST
+
+static packet_struct *queued_command_find(socket_struct *cs, uint8_t type) {
+    packet_struct *found = NULL;
+
+    for (packet_struct *packet = cs->packets; packet != NULL; packet = packet->next) {
+        if (packet->type == type) {
+            found = packet;
+        }
+    }
+
+    return found;
+}
+
+START_TEST(test_object_merge_updates_name_and_count) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    object *first = arch_get("bolt");
+    FREE_AND_COPY_HASH(first->name, "torch");
+    FREE_AND_COPY_HASH(first->name_pl, "torches");
+    first->nrof = 1;
+    first = object_insert_into(first, pl, 0);
+
+    object *second = arch_get("bolt");
+    FREE_AND_COPY_HASH(second->name, "torch");
+    FREE_AND_COPY_HASH(second->name_pl, "torches");
+    second->nrof = 1;
+    ck_assert_ptr_eq(object_insert_into(second, pl, 0), first);
+    ck_assert_uint_eq(first->nrof, 2);
+
+    packet_struct *packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_ITEM_UPDATE);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint16(&reader), UPD_NAME | UPD_NROF);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), first->count);
+    char display_name[MAX_BUF];
+    ck_assert(packet_reader_read_string(&reader, VS(display_name)));
+    ck_assert_str_eq(display_name, "torches");
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), 2);
+    ck_assert(packet_reader_finish(&reader));
+
+    ck_assert_ptr_eq(object_decrease(first, 1), first);
+    ck_assert_uint_eq(first->nrof, 1);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_ITEM_UPDATE);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint16(&reader), UPD_NAME | UPD_NROF);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), first->count);
+    ck_assert(packet_reader_read_string(&reader, VS(display_name)));
+    ck_assert_str_eq(display_name, "torch");
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), 1);
+    ck_assert(packet_reader_finish(&reader));
+
+    char boundary_name[ITEM_NAME_SIZE];
+    memset(boundary_name, 'a', sizeof(boundary_name) - 1);
+    boundary_name[sizeof(boundary_name) - 1] = '\0';
+    FREE_AND_COPY_HASH(first->name, boundary_name);
+    packet = packet_new(0, 128, 64);
+    add_object_to_packet(packet, first, pl, CMD_APPLY_ACTION_NORMAL, UPD_NAME | UPD_NROF, 0);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), first->count);
+    ck_assert(packet_reader_read_string(&reader, VS(display_name)));
+    ck_assert_str_eq(display_name, boundary_name);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), 1);
+    ck_assert(packet_reader_finish(&reader));
+    packet_free(packet);
+
+    char oversized_name[ITEM_NAME_SIZE + 1U];
+    memset(oversized_name, 'b', sizeof(oversized_name) - 1);
+    oversized_name[sizeof(oversized_name) - 1] = '\0';
+    FREE_AND_COPY_HASH(first->name, oversized_name);
+    packet = packet_new(0, 128, 64);
+    add_object_to_packet(packet, first, pl, CMD_APPLY_ACTION_NORMAL, UPD_NAME | UPD_NROF, 0);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), first->count);
+    ck_assert(packet_reader_read_string(&reader, VS(display_name)));
+    ck_assert_uint_eq(strlen(display_name), ITEM_NAME_SIZE - 1U);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), 1);
+    ck_assert(packet_reader_finish(&reader));
+    packet_free(packet);
+
+    char utf8_name[ITEM_NAME_SIZE + 2U];
+    memset(utf8_name, 'c', ITEM_NAME_SIZE - 2U);
+    memcpy(utf8_name + ITEM_NAME_SIZE - 2U, "\xe2\x82\xac", 3);
+    utf8_name[ITEM_NAME_SIZE + 1U] = '\0';
+    FREE_AND_COPY_HASH(first->custom_name, utf8_name);
+    packet = packet_new(0, 128, 64);
+    add_object_to_packet(packet, first, pl, CMD_APPLY_ACTION_NORMAL, UPD_NAME | UPD_NROF, 0);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), first->count);
+    ck_assert(packet_reader_read_string(&reader, VS(display_name)));
+    ck_assert_uint_eq(strlen(display_name), ITEM_NAME_SIZE - 2U);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), 1);
+    ck_assert(packet_reader_finish(&reader));
+    packet_free(packet);
+
+    object_destroy(pl);
 }
 END_TEST
 
@@ -751,6 +963,9 @@ static Suite *suite(void) {
 
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_object_can_merge);
+    tcase_add_test(tc_core, test_object_plural_name_contract);
+    tcase_add_test(tc_core, test_object_merge_updates_name_and_count);
+    tcase_add_test(tc_core, test_map_stack_operations_increment_update_once);
     tcase_add_test(tc_core, test_object_weight_sum);
     tcase_add_test(tc_core, test_object_weight_add);
     tcase_add_test(tc_core, test_object_weight_sub);

@@ -5,6 +5,7 @@
 
 #define ATRINIK_PROTOCOL_VERSION 1076U
 #define SOCKET_VERSION ATRINIK_PROTOCOL_VERSION
+#define ATRINIK_PROTOCOL_ITEM_NAME_SIZE 128U
 
 typedef enum atrinik_client_to_server_command {
     SERVER_CMD_CONTROL = 0,

@@ -5,6 +5,9 @@ from enum import IntEnum
 PROTOCOL_VERSION = 1076
 
 
+ITEM_NAME_SIZE = 128
+
+
 class ClientToServerCommand(IntEnum):
     CONTROL = 0
     ASK_FACE = 1

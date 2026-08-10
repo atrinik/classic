@@ -18,6 +18,7 @@ class GenerateTests(unittest.TestCase):
     def test_repository_schema_is_valid(self) -> None:
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
         self.assertEqual(schema["protocol_version"], 1076)
+        self.assertEqual(schema["item_name_size"], 128)
         self.assertEqual(len(schema["client_to_server"]), 23)
         self.assertEqual(len(schema["server_to_client"]), 28)
 
@@ -39,6 +40,15 @@ class GenerateTests(unittest.TestCase):
             path = Path(directory) / "schema.json"
             path.write_text(json.dumps(data), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "contiguous value 1"):
+                GENERATE.load_schema(path)
+
+    def test_invalid_item_name_size_is_rejected(self) -> None:
+        data = json.loads((ROOT / "schema/game-commands.json").read_text(encoding="utf-8"))
+        data["item_name_size"] = 1
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "schema.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "item_name_size is outside"):
                 GENERATE.load_schema(path)
 
     def test_duplicate_symbol_is_rejected(self) -> None:

@@ -32,6 +32,7 @@
 #include <global.h>
 #include <shop.h>
 #include <server_main.h>
+#include <server.h>
 #include <initialization.h>
 #include <toolkit/string.h>
 #include <arch.h>
@@ -189,6 +190,7 @@ static int64_t bank_remove_coins(object *op, archetype_t *at, uint32_t nrof) {
                 object_destroy(tmp);
             } else {
                 tmp->nrof -= nrof;
+                esrv_update_item(UPD_NAME | UPD_NROF, tmp);
                 amount += nrof * tmp->value;
                 nrof = 0;
             }
