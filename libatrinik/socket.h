@@ -175,6 +175,14 @@ typedef enum socket_role {
 #define CMD_SETUP_CONNECTION_MODE 5
 /** First socket protocol version supporting in-band asset downloads. */
 #define ASSET_TRANSPORT_SOCKET_VERSION 1067
+/** Generic path-based asset stream support; also the legacy true value. */
+#define ASSET_TRANSPORT_CAP_GENERIC 0x01U
+/** Negotiated ordered face-batch stream support. */
+#define ASSET_TRANSPORT_CAP_FACE_BATCH 0x02U
+/** All currently defined asset-transport capability bits. */
+#define ASSET_TRANSPORT_CAP_ALL (ASSET_TRANSPORT_CAP_GENERIC | ASSET_TRANSPORT_CAP_FACE_BATCH)
+/** First game protocol version supporting face-batch capability negotiation. */
+#define ASSET_TRANSPORT_FACE_BATCH_VERSION 1074
 
 /** Buffer size for a 128-bit hexadecimal connection ID and terminator. */
 #define SOCKET_CONNECTION_ID_SIZE 33
@@ -230,6 +238,7 @@ typedef enum socket_stream_kind {
     SOCKET_STREAM_UNKNOWN = 0,
     SOCKET_STREAM_GAME = 1,
     SOCKET_STREAM_ASSET = 2,
+    SOCKET_STREAM_FACE_BATCH = 3,
 } socket_stream_kind_t;
 
 /** Result of one nonblocking explicit-stream operation. */
@@ -258,6 +267,10 @@ typedef struct socket_stream socket_stream_t;
 #define ASSET_MAX_SIZE (128U * 1024U * 1024U)
 /** Maximum encoded size of an on-demand face graphic. */
 #define ASSET_FACE_MAX_SIZE 50000U
+/** Maximum number of ordered faces carried by one batch stream. */
+#define ASSET_FACE_BATCH_MAX 8U
+/** Maximum aggregate response-body bytes carried by one batch stream. */
+#define ASSET_FACE_BATCH_MAX_SIZE (ASSET_FACE_BATCH_MAX * ASSET_FACE_MAX_SIZE)
 /** Prefix used by immutable on-demand face asset paths. */
 #define ASSET_FACE_PATH_PREFIX "faces/"
 /** SHA-256 digest size used by the asset cache protocol. */
@@ -266,6 +279,10 @@ typedef struct socket_stream socket_stream_t;
 #define SOCKET_ASSET_RESPONSE_HEADER_SIZE (1U + 4U + ASSET_DIGEST_SIZE)
 /** Maximum encoded request: bounded path, cached size/digest, and flags. */
 #define SOCKET_ASSET_REQUEST_MAX_SIZE (MAX_BUF + 4U + ASSET_DIGEST_SIZE + 1U)
+/** Maximum encoded face-batch request: count followed by ordered face IDs. */
+#define SOCKET_FACE_BATCH_REQUEST_MAX_SIZE (1U + 2U * ASSET_FACE_BATCH_MAX)
+/** Fixed face-batch response header before its immediately following body. */
+#define SOCKET_FACE_BATCH_RESPONSE_HEADER_SIZE (2U + 1U + 4U + ASSET_DIGEST_SIZE)
 
 /** Decoded client-to-server asset request. */
 typedef struct socket_asset_request {
@@ -281,6 +298,31 @@ typedef struct socket_asset_response {
     uint32_t total_size;
     uint8_t digest[ASSET_DIGEST_SIZE];
 } socket_asset_response_t;
+
+/**
+ * Decoded exact client-to-server face-batch request.
+ *
+ * Face IDs retain their wire order and are guaranteed to be unique and
+ * nonzero. The structure owns all decoded values and has no external lifetime
+ * or thread-safety requirements.
+ */
+typedef struct socket_face_batch_request {
+    uint8_t count;
+    uint16_t faces[ASSET_FACE_BATCH_MAX];
+} socket_face_batch_request_t;
+
+/**
+ * Decoded exact server-to-client face-batch response header.
+ *
+ * The body is not owned or referenced by this structure. When `status` is
+ * `ASSET_STATUS_OK`, exactly `body_size` bytes immediately follow the header.
+ */
+typedef struct socket_face_batch_response {
+    uint16_t face;
+    uint8_t status;
+    uint32_t body_size;
+    uint8_t digest[ASSET_DIGEST_SIZE];
+} socket_face_batch_response_t;
 /*@}*/
 
 /**
@@ -1014,6 +1056,36 @@ bool socket_asset_response_parse(const uint8_t *data,
                                  size_t len,
                                  size_t pos,
                                  socket_asset_response_t *response);
+/**
+ * Append one exact ordered face-batch request.
+ *
+ * Returns false without appending bytes when the count or face IDs are invalid
+ * or the packet writer has or encounters an error. Packet-writer errors remain
+ * sticky even though a partial frame is rolled back.
+ */
+bool socket_face_batch_request_append(struct packet_struct *packet,
+                                      const uint16_t *faces,
+                                      size_t count);
+/** Decode one exact request, leaving `request` unchanged on failure. */
+bool socket_face_batch_request_parse(const uint8_t *data,
+                                     size_t len,
+                                     size_t pos,
+                                     socket_face_batch_request_t *request);
+/**
+ * Append one fixed response header atomically; the caller immediately appends
+ * `body_size` body bytes for an OK response. Packet-writer errors remain sticky
+ * even though a partial header is rolled back.
+ */
+bool socket_face_batch_response_append(struct packet_struct *packet,
+                                       uint16_t face,
+                                       uint8_t status,
+                                       uint32_t body_size,
+                                       const uint8_t digest[ASSET_DIGEST_SIZE]);
+/** Decode one exact fixed response header, leaving `response` unchanged on failure. */
+bool socket_face_batch_response_parse(const uint8_t *data,
+                                      size_t len,
+                                      size_t pos,
+                                      socket_face_batch_response_t *response);
 
 socket_t *socket_create(const char *host, uint16_t port, socket_role_t role, bool dual_stack);
 socket_t *socket_quic_server_create(const char *host,
@@ -1154,6 +1226,14 @@ void socket_stream_preface_encode(uint8_t preface[SOCKET_STREAM_PREFACE_SIZE],
                                   socket_stream_kind_t kind);
 bool socket_stream_preface_decode(const uint8_t *preface, size_t size, socket_stream_kind_t *kind);
 socket_stream_t *socket_stream_open(socket_t *sc, socket_stream_kind_t kind);
+/**
+ * Poll and classify incoming typed streams without removing them from the
+ * connection's bounded pending queue. The connection retains each successfully
+ * classified stream; callers acquire ownership only through
+ * `socket_stream_accept`. This may mutate the connection and must run on its
+ * I/O thread. Returns the number of fully classified streams currently pending.
+ */
+size_t socket_stream_poll_pending(socket_t *sc);
 socket_stream_t *socket_stream_accept(socket_t *sc, socket_stream_kind_t kind);
 socket_stream_result_t
 socket_stream_read(socket_stream_t *stream, void *buf, size_t len, size_t *amt);
