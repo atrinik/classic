@@ -234,6 +234,8 @@ extern void socket_assets_init(void);
 extern bool
 face_get_asset(uint16_t face, const uint8_t **data, uint32_t *size, const uint8_t **digest);
 
+extern bool socket_assets_contains(const char *name);
+
 extern void socket_assets_deinit(void);
 
 /** Register a live connection with the fair server-wide asset scheduler. */
