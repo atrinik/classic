@@ -256,6 +256,35 @@ START_TEST(test_move_path_unreachable_request_clears_existing_queue) {
 }
 END_TEST
 
+START_TEST(test_move_path_center_request_clears_existing_queue) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    request_move_player(&pl, map, 12, 12);
+    player_path_add(CONTR(pl), map, 13, 12);
+
+    request_move_path(CONTR(pl), pl->x, pl->y);
+
+    ck_assert_ptr_null(CONTR(pl)->move_path);
+    ck_assert_ptr_null(CONTR(pl)->move_path_end);
+}
+END_TEST
+
+START_TEST(test_move_path_unmapped_request_clears_existing_queue) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    request_move_player(&pl, map, 0, 0);
+    player_path_add(CONTR(pl), map, 1, 0);
+    uint8_t request[] = {0, CONTR(pl)->cs->mapy_2};
+
+    socket_command_move_path(CONTR(pl)->cs, CONTR(pl), request, sizeof(request), 0);
+
+    ck_assert_ptr_null(CONTR(pl)->move_path);
+    ck_assert_ptr_null(CONTR(pl)->move_path_end);
+}
+END_TEST
+
 START_TEST(test_move_path_does_not_queue_partial_search_result) {
     mapstruct *map;
     object *pl;
@@ -268,6 +297,38 @@ START_TEST(test_move_path_does_not_queue_partial_search_result) {
     ck_assert_ptr_null(CONTR(pl)->move_path);
     ck_assert_ptr_null(CONTR(pl)->move_path_end);
     request_set_path_node_budget(10000);
+}
+END_TEST
+
+START_TEST(test_move_path_opening_door_retains_queue_for_retry) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    request_move_player(&pl, map, 4, 4);
+    object *door = arch_get("door_wood1");
+    ck_assert_ptr_nonnull(door);
+    door->x = 5;
+    door->y = 4;
+    door = object_insert_map(door, map, NULL, 0);
+    ck_assert_ptr_nonnull(door);
+
+    request_move_path(CONTR(pl), 5, 4);
+    player_path *queued = CONTR(pl)->move_path;
+    ck_assert_ptr_nonnull(queued);
+
+    pl->speed_left = 0.0f;
+    player_path_handle(CONTR(pl));
+
+    ck_assert_ptr_eq(CONTR(pl)->move_path, queued);
+    ck_assert_ptr_eq(CONTR(pl)->move_path_end, queued);
+    ck_assert_int_eq(pl->x, 4);
+    ck_assert_int_eq(pl->y, 4);
+
+    request_run_path(CONTR(pl));
+    ck_assert_ptr_null(CONTR(pl)->move_path);
+    ck_assert_ptr_null(CONTR(pl)->move_path_end);
+    ck_assert_int_eq(pl->x, 5);
+    ck_assert_int_eq(pl->y, 4);
 }
 END_TEST
 
@@ -840,7 +901,10 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_move_path_occupied_target_stops_at_adjacent_tile);
     tcase_add_test(tc_core, test_move_path_blocks_opaque_passable_target);
     tcase_add_test(tc_core, test_move_path_unreachable_request_clears_existing_queue);
+    tcase_add_test(tc_core, test_move_path_center_request_clears_existing_queue);
+    tcase_add_test(tc_core, test_move_path_unmapped_request_clears_existing_queue);
     tcase_add_test(tc_core, test_move_path_does_not_queue_partial_search_result);
+    tcase_add_test(tc_core, test_move_path_opening_door_retains_queue_for_retry);
     tcase_add_test(tc_core, test_move_path_invalid_request_preserves_existing_queue);
     tcase_add_test(tc_core, test_move_path_new_blockage_stops_without_displacement);
     tcase_add_test(tc_core, test_incuna_unchanged_roof_level_remains_present);
