@@ -251,6 +251,15 @@ if (MINGW)
 endif ()
 
 if (BUILD_TESTING AND NOT MINGW)
+    add_executable(client-stun-config-tests
+        src/tests/stun_config.c
+        src/client/stun_config.c)
+    atrinik_configure_target(client-stun-config-tests)
+    target_include_directories(client-stun-config-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-stun-config-tests PRIVATE Atrinik::Core)
+    add_test(NAME client-stun-config COMMAND client-stun-config-tests)
+
     add_executable(client-metaserver-directory-tests
         src/tests/metaserver_directory.c
         src/client/metaserver_directory.c)

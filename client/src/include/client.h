@@ -30,6 +30,8 @@
 #ifndef CLIENT_H
 #define CLIENT_H
 
+#include <stun_config.h>
+
 /* How many skill types server supports/client will get sent to it.
  * If more skills are added to server, this needs to get increased. */
 #define MAX_SKILL 6
@@ -146,8 +148,8 @@ typedef struct clioption_settings_struct {
     /** Path to a protected rendezvous invite file; never the capability. */
     char *rendezvous_invite_file;
 
-    /** Optional STUN endpoint used for direct rendezvous. */
-    char *stun_server;
+    /** Direct-rendezvous STUN endpoint and its configured provenance. */
+    client_stun_config_t stun;
 
     uint8_t reconnect;
 } clioption_settings_struct;

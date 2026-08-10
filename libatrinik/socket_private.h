@@ -69,13 +69,45 @@ struct sock_struct {
     uint64_t quic_event_deadline_ms;
 #endif
 
+    struct sockaddr_storage late_stun_source;
+    socklen_t late_stun_source_length;
+    unsigned char late_stun_transaction[12];
+
     /** Whether this object owns and must close handle. */
     bool owns_handle : 1;
     /** Whether connection_id is the final shared QUIC diagnostic ID. */
     bool connection_id_final : 1;
     /** Whether a QUIC CONNECTION_CLOSE has already been requested. */
     bool quic_shutdown_sent : 1;
+    /** Whether a timed-out STUN response may still arrive on handle. */
+    bool late_stun_pending : 1;
 };
+
+typedef int (*socket_stun_resolver_t)(const char *host,
+                                      const char *service,
+                                      const struct addrinfo *hints,
+                                      struct addrinfo **addresses);
+typedef uint64_t (*socket_stun_clock_t)(void);
+typedef void (*socket_stun_after_send_t)(void);
+typedef bool (*socket_rendezvous_fallback_t)(socket_t *sc,
+                                             bool directory_probe_allowed,
+                                             char *host,
+                                             size_t host_size,
+                                             uint16_t *port);
+
+bool socket_stun_discover_until(socket_t *sc,
+                                const char *endpoint,
+                                char *host,
+                                size_t host_size,
+                                uint16_t *port,
+                                uint64_t deadline_ms);
+void socket_stun_resolver_set_for_test(socket_stun_resolver_t resolver);
+void socket_stun_clock_set_for_test(socket_stun_clock_t clock);
+void socket_stun_after_send_set_for_test(socket_stun_after_send_t after_send);
+void socket_stun_resolver_wait_for_test(void);
+void socket_rendezvous_fallback_set_for_test(socket_rendezvous_fallback_t fallback);
+uint64_t socket_rendezvous_stun_deadline(uint64_t now_ms, uint64_t attempt_deadline_ms);
+bool socket_udp_punch_receive_pre_quic(socket_t *sc, char *host, size_t host_size, uint16_t *port);
 
 size_t socket_rendezvous_client(socket_t *sc,
                                 const char *url,
