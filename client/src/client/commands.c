@@ -48,6 +48,8 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     uint8_t type;
+    uint8_t asset_capabilities = 0;
+    bool asset_capabilities_present = false;
 
     while (packet_reader_error(&reader) == PACKET_ERROR_NONE && pos < len) {
         type = packet_reader_read_uint8(&reader);
@@ -65,7 +67,8 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
         } else if (type == CMD_SETUP_DATA_URL) {
             packet_reader_read_string(&reader, cpl.http_url, sizeof(cpl.http_url));
         } else if (type == CMD_SETUP_ASSET_TRANSPORT) {
-            cpl.asset_transport = packet_reader_read_uint8(&reader) != 0;
+            asset_capabilities = packet_reader_read_uint8(&reader);
+            asset_capabilities_present = true;
         } else if (type == CMD_SETUP_CONNECTION_MODE) {
             packet_reader_read_uint8(&reader);
         } else if (type == CMD_SETUP_JOIN_PASSWORD) {
@@ -86,6 +89,10 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
 
     if (!packet_reader_finish(&reader)) {
         return;
+    }
+    if (asset_capabilities_present) {
+        cpl.asset_transport = (asset_capabilities & ASSET_TRANSPORT_CAP_GENERIC) != 0;
+        asset_requests_set_capabilities(asset_capabilities);
     }
 
     if (cpl.state != ST_PLAY) {
