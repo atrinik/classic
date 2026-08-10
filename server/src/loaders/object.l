@@ -1632,11 +1632,14 @@ get_ob_diff (StringBuffer *sb, const object *op, const object *op2)
         }
     }
 
-    if (op->glow_radius != op2->glow_radius) {
+    /* A player's emitted light is derived from its archetype and inventory.
+     * Persist the authored/default emitter and each inventory source, but not
+     * the transient result cached on the player object. */
+    if (op->type != PLAYER && op->glow_radius != op2->glow_radius) {
         SAVE_INT(sb, "glow_radius", op->glow_radius);
     }
 
-    if (op->light_color != op2->light_color) {
+    if (op->type != PLAYER && op->light_color != op2->light_color) {
         stringbuffer_append_printf(sb, "light_color %06" PRIx32 "\n", op->light_color);
     }
 
