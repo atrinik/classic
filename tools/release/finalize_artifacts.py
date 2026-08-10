@@ -45,6 +45,16 @@ SERVER_WINDOWS_REQUIRED_PATTERNS = (
     "server/assets/client-maps/*",
 )
 SERVER_WINDOWS_FORBIDDEN_PATTERNS = ("maps", "maps/*")
+WINDOWS_RESERVED_NAMES = {
+    "aux",
+    "con",
+    "conin$",
+    "conout$",
+    "nul",
+    "prn",
+    *(f"com{number}" for number in range(1, 10)),
+    *(f"lpt{number}" for number in range(1, 10)),
+}
 
 
 def sha256(path: Path) -> str:
@@ -63,7 +73,18 @@ def validate_member(name: str) -> None:
         or path.is_absolute()
         or any(component in {"", ".", ".."} for component in components)
         or "\\" in name
-        or re.match(r"^[A-Za-z]:", name)
+    ):
+        raise RuntimeError(f"unsafe packaged path: {name}")
+
+
+def validate_windows_member(name: str) -> None:
+    validate_member(name)
+    components = name.removesuffix("/").split("/")
+    if any(
+        component.endswith((".", " "))
+        or any(ord(char) < 32 or char in '<>:"|?*' for char in component)
+        or component.split(".", 1)[0].casefold() in WINDOWS_RESERVED_NAMES
+        for component in components
     ):
         raise RuntimeError(f"unsafe packaged path: {name}")
 
@@ -141,7 +162,7 @@ def validate_zip(
         output_names = set()
         relative_names = set()
         for member in archive.infolist():
-            validate_member(member.filename)
+            validate_windows_member(member.filename)
             if member.filename in member_names:
                 raise RuntimeError(
                     f"{path.name} contains duplicate member: {member.filename}"

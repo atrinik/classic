@@ -199,6 +199,23 @@ class FinalizeArtifactsTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "unsafe packaged path"):
                     finalize_artifacts.validate_zip(unsafe_alias, "expected", ())
 
+        for index, alias in enumerate(
+            (
+                "expected/maps./regions.reg",
+                "expected/server/server.cfg.",
+                "expected/server/server.cfg ",
+                "expected/server/CON.txt",
+                "expected/server/bad:name",
+                "expected/server/control\x1f.txt",
+            )
+        ):
+            with self.subTest(alias=alias):
+                windows_alias = self.root / f"windows-alias-{index}.zip"
+                with zipfile.ZipFile(windows_alias, "w") as archive:
+                    archive.writestr(alias, b"fixture")
+                with self.assertRaisesRegex(RuntimeError, "unsafe packaged path"):
+                    finalize_artifacts.validate_zip(windows_alias, "expected", ())
+
     def test_windows_server_zip_requires_runtime_payload(self) -> None:
         path = self.root / "server.zip"
         package = "atrinik-classic-server-5.6.0-windows-x86_64"

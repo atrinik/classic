@@ -84,6 +84,10 @@ try {
         $output = $lines -join "`n"
         throw "Packaged server did not shut down within 30 seconds:`n$output"
     }
+    if (-not $remainderTask.Wait(10000)) {
+        $output = $lines -join "`n"
+        throw "Packaged server output did not close within 10 seconds:`n$output"
+    }
 
     $remainder = $remainderTask.Result
     if ($remainder) {
