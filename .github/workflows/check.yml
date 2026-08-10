@@ -473,20 +473,25 @@ jobs:
         with:
           path: client/build/ci-prefix
           key: classic-integrated-sdl-mixer-ubuntu-26.04-x64-3.2.4-v1
-      - name: Install native dependencies
-        run: |
-          client/tools/install-linux-ci-dependencies.sh client/build/ci-prefix
-          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            check flex libgd-dev libminiupnpc-dev libreadline-dev \
-            libsubunit-dev python3-dev
+      - name: Pull pinned build environment
+        run: docker pull ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
       - name: Build shared Release graph
-        env:
-          CMAKE_PREFIX_PATH: ${{ github.workspace }}/client/build/ci-prefix
-          LD_LIBRARY_PATH: ${{ github.workspace }}/client/build/ci-prefix/lib
-          PKG_CONFIG_PATH: ${{ github.workspace }}/client/build/ci-prefix/lib/pkgconfig
         run: |
-          cmake --preset linux-release -DBUILD_TESTING=OFF
-          cmake --build --preset linux-release --parallel
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --workdir /workspace \
+            ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03 \
+            bash -euo pipefail -c '
+              client/tools/install-linux-ci-dependencies.sh client/build/ci-prefix
+              env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+                check flex libgd-dev libminiupnpc-dev libreadline-dev \
+                libsubunit-dev python3-dev
+              export CMAKE_PREFIX_PATH=/workspace/client/build/ci-prefix
+              export LD_LIBRARY_PATH=/workspace/client/build/ci-prefix/lib
+              export PKG_CONFIG_PATH=/workspace/client/build/ci-prefix/lib/pkgconfig
+              cmake --preset linux-release -DBUILD_TESTING=OFF
+              cmake --build --preset linux-release --parallel
+            '
 
   classic-validation:
     name: Classic validation
