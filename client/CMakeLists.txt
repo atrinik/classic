@@ -345,6 +345,28 @@ if (BUILD_TESTING AND NOT MINGW)
     target_link_libraries(client-face-cache-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-face-cache COMMAND client-face-cache-tests)
 
+    add_executable(client-face-request-tests
+        src/tests/face_request.c
+        src/client/image.c
+        src/client/face_asset.c)
+    atrinik_configure_target(client-face-request-tests)
+    target_compile_definitions(client-face-request-tests PRIVATE
+        ATRINIK_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        FACE_ADMISSION_RETRY_MS=1
+        FACE_COMPLETION_BUDGET_US=60000000
+        FACE_TRANSFER_RETRY_BASE_MS=1
+        SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-face-request-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-face-request-tests PRIVATE
+        Atrinik::Core
+        SDL3::SDL3
+        SDL3_image::SDL3_image)
+    add_test(NAME client-face-request COMMAND client-face-request-tests)
+
     add_executable(client-face-stream-tests
         src/tests/face_stream.c
         src/client/asset.c)

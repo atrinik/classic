@@ -141,7 +141,7 @@ void socket_command_anim(uint8_t *data, size_t len, size_t pos) {
         }
 
         animation->faces[i] = face;
-        image_request_face(face);
+        image_prefetch_face(face);
     }
 
     animation->loaded = 1;

@@ -80,7 +80,11 @@ void image_bmaps_init(void);
 void image_bmaps_deinit(void);
 void finish_face_cmd(int facenum, uint32_t checksum, const char *face);
 void image_request_face(int pnum);
-/** Install at most one completed face asset during this render frame. */
+/** Queue a background face without allowing it to outrank visible demand. */
+void image_prefetch_face(int pnum);
+/** Cancel all connection-scoped face requests without marking them failed. */
+void image_face_requests_clear(void);
+/** Install completed face assets within the bounded render-frame budget. */
 void image_face_requests_service(void);
 int image_get_id(const char *name);
 bool image_face_valid(int face);

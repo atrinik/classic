@@ -259,7 +259,8 @@ static int game_status_chain(void) {
         metaserver_get_servers();
         cpl.state = ST_START;
     } else if (cpl.state == ST_START) {
-        if (csocket.sc != NULL) {
+        image_face_requests_clear();
+        if (client_socket_active()) {
             client_socket_close(&csocket);
         }
 
@@ -335,9 +336,10 @@ static int game_status_chain(void) {
         if (cpl.server_socket_version >= ASSET_TRANSPORT_SOCKET_VERSION) {
             packet_writer_write_uint8(packet, CMD_SETUP_ASSET_TRANSPORT);
         }
-        if (socket_is_quic(csocket.sc)) {
+        socket_connection_mode_t connection_mode;
+        if (client_socket_connection_mode(&connection_mode)) {
             packet_writer_write_uint8(packet, CMD_SETUP_CONNECTION_MODE);
-            packet_writer_write_uint8(packet, socket_connection_mode_get(csocket.sc));
+            packet_writer_write_uint8(packet, connection_mode);
         }
         socket_send_packet(packet);
 
@@ -816,6 +818,7 @@ int main(int argc, char *argv[]) {
 
         /* Have we been shutdown? */
         if (handle_socket_shutdown()) {
+            image_face_requests_clear();
             client_attempt_secrets_clear(
                 selected_server != NULL ? &selected_server->join_password : NULL,
                 &clioption_settings.join_password,

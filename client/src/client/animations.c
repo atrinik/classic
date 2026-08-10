@@ -191,6 +191,9 @@ bool animation_get_face(uint16_t animation_id, uint8_t direction, size_t state, 
         return false;
     }
 
+    /* Animation catalogs are prefetched in the background. A consumer that
+     * resolves a concrete frame makes that face visible demand. */
+    image_request_face(candidate);
     *face = candidate;
     return true;
 }

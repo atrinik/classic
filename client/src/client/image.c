@@ -37,19 +37,28 @@
 #include <face_asset.h>
 #include <face_cache.h>
 
-#define FACE_REQUEST_MAX 64U
+#define FACE_ASSET_ADMISSION_MAX ASSET_STREAM_ACTIVE_MAX
 #define FACE_TRANSFER_RETRY_MAX 3U
+#ifndef FACE_TRANSFER_RETRY_BASE_MS
 #define FACE_TRANSFER_RETRY_BASE_MS UINT64_C(250)
-#define FACE_ADMISSION_TIMEOUT_MS UINT64_C(10000)
+#endif
+#ifndef FACE_ADMISSION_RETRY_MS
+#define FACE_ADMISSION_RETRY_MS UINT64_C(16)
+#endif
+#ifndef FACE_COMPLETION_BUDGET_US
 #define FACE_COMPLETION_BUDGET_US UINT64_C(2000)
+#endif
 
 typedef struct face_asset_request {
+    struct face_asset_request *prev;
     struct face_asset_request *next;
     uint16_t face;
     unsigned int attempts;
-    uint64_t queued_ms;
     uint64_t retry_at_ms;
     asset_request_t *asset;
+    bool foreground;
+    bool local_checked;
+    uint8_t admitted_slot;
 } face_asset_request_t;
 
 /**
@@ -67,33 +76,152 @@ static size_t image_bmaps_size = 0;
 /** Tracks incomplete immutable/offline map inputs without changing request APIs. */
 static bool image_missing_faces;
 static face_asset_request_t *face_asset_requests;
+static face_asset_request_t *face_asset_foreground_tail;
+static face_asset_request_t *face_asset_requests_tail;
+/** Next queued request whose connection-independent sources need inspection. */
+static face_asset_request_t *face_asset_prepare_cursor;
+static face_asset_request_t *face_asset_request_index[MAX_FACE_TILES];
+static face_asset_request_t *face_asset_admitted[FACE_ASSET_ADMISSION_MAX];
 static size_t face_asset_request_count;
+static size_t face_asset_admitted_count;
+static size_t face_asset_unprepared_count;
 
-static void face_asset_request_remove(face_asset_request_t **cursor) {
-    face_asset_request_t *request = *cursor;
-    *cursor = request->next;
+static void face_asset_request_release(face_asset_request_t *request) {
+    if (request->asset == NULL) {
+        HARD_ASSERT(request->admitted_slot == UINT8_MAX);
+        return;
+    }
+    HARD_ASSERT(request->admitted_slot < FACE_ASSET_ADMISSION_MAX);
+    HARD_ASSERT(face_asset_admitted[request->admitted_slot] == request);
     asset_request_free(request->asset);
+    request->asset = NULL;
+    face_asset_admitted[request->admitted_slot] = NULL;
+    request->admitted_slot = UINT8_MAX;
+    HARD_ASSERT(face_asset_admitted_count != 0);
+    face_asset_admitted_count--;
+}
+
+static void face_asset_request_detach(face_asset_request_t *request) {
+    if (request->prev != NULL) {
+        request->prev->next = request->next;
+    } else {
+        face_asset_requests = request->next;
+    }
+    if (request->next != NULL) {
+        request->next->prev = request->prev;
+    } else {
+        face_asset_requests_tail = request->prev;
+    }
+    if (face_asset_foreground_tail == request) {
+        face_asset_foreground_tail =
+            request->prev != NULL && request->prev->foreground ? request->prev : NULL;
+    }
+    request->prev = NULL;
+    request->next = NULL;
+}
+
+static void face_asset_request_append_background(face_asset_request_t *request) {
+    HARD_ASSERT(!request->local_checked);
+    request->prev = face_asset_requests_tail;
+    if (face_asset_requests_tail != NULL) {
+        face_asset_requests_tail->next = request;
+    } else {
+        face_asset_requests = request;
+    }
+    face_asset_requests_tail = request;
+    face_asset_unprepared_count++;
+    if (face_asset_prepare_cursor == NULL) {
+        face_asset_prepare_cursor = request;
+    }
+}
+
+static void face_asset_request_insert_foreground(face_asset_request_t *request) {
+    request->foreground = true;
+    if (face_asset_foreground_tail != NULL) {
+        request->prev = face_asset_foreground_tail;
+        request->next = face_asset_foreground_tail->next;
+        face_asset_foreground_tail->next = request;
+    } else {
+        request->next = face_asset_requests;
+        face_asset_requests = request;
+    }
+    if (request->next != NULL) {
+        request->next->prev = request;
+    } else {
+        face_asset_requests_tail = request;
+    }
+    face_asset_foreground_tail = request;
+}
+
+static void face_asset_request_remove(face_asset_request_t *request) {
+    HARD_ASSERT(face_asset_request_index[request->face] == request);
+    face_asset_request_index[request->face] = NULL;
+    if (!request->local_checked) {
+        HARD_ASSERT(face_asset_unprepared_count != 0);
+        face_asset_unprepared_count--;
+    }
+    if (face_asset_prepare_cursor == request) {
+        face_asset_prepare_cursor = request->next;
+    }
+    face_asset_request_release(request);
+    face_asset_request_detach(request);
+    if (face_asset_prepare_cursor == NULL && face_asset_unprepared_count != 0) {
+        face_asset_prepare_cursor = face_asset_requests;
+    }
     HARD_ASSERT(face_asset_request_count != 0);
     face_asset_request_count--;
     free(request);
 }
 
-static void face_asset_requests_clear(void) {
+void image_face_requests_clear(void) {
     while (face_asset_requests != NULL) {
-        face_asset_request_remove(&face_asset_requests);
+        uint16_t face = face_asset_requests->face;
+        free(FaceList[face].name);
+        FaceList[face].name = NULL;
+        FaceList[face].checksum = 0;
+        FaceList[face].flags &= ~FACE_REQUESTED;
+        face_asset_request_remove(face_asset_requests);
+    }
+    HARD_ASSERT(face_asset_requests_tail == NULL);
+    HARD_ASSERT(face_asset_foreground_tail == NULL);
+    HARD_ASSERT(face_asset_prepare_cursor == NULL);
+    HARD_ASSERT(face_asset_request_count == 0);
+    HARD_ASSERT(face_asset_admitted_count == 0);
+    HARD_ASSERT(face_asset_unprepared_count == 0);
+}
+
+static void face_asset_request_promote(uint16_t face) {
+    face_asset_request_t *request = face_asset_request_index[face];
+    if (request != NULL && !request->foreground) {
+        face_asset_request_detach(request);
+        request->retry_at_ms = request->attempts == 0 ? 0 : request->retry_at_ms;
+        face_asset_request_insert_foreground(request);
+        if (!request->local_checked &&
+            (face_asset_prepare_cursor == NULL || !face_asset_prepare_cursor->foreground ||
+             face_asset_prepare_cursor->local_checked)) {
+            face_asset_prepare_cursor = request;
+        }
     }
 }
 
 static void face_asset_request_cancel(uint16_t face) {
-    face_asset_request_t **cursor = &face_asset_requests;
-    while (*cursor != NULL) {
-        if ((*cursor)->face == face) {
-            face_asset_request_remove(cursor);
-            return;
-        }
-        cursor = &(*cursor)->next;
+    face_asset_request_t *request = face_asset_request_index[face];
+    if (request != NULL) {
+        face_asset_request_remove(request);
     }
 }
+
+static sprite_struct *face_asset_decode(const uint8_t *data, size_t size) {
+    SDL_IOStream *stream = SDL_IOFromConstMem(data, size);
+    sprite_struct *sprite = stream != NULL ? sprite_tryload_file(NULL, 0, stream) : NULL;
+    if (stream != NULL) {
+        SDL_CloseIO(stream);
+    }
+    return sprite;
+}
+
+static bool load_picture_from_pack(uint16_t num);
+static bool load_gfx_user_face(uint16_t num);
 
 void image_missing_faces_reset(void) {
     image_missing_faces = false;
@@ -256,7 +384,7 @@ void image_bmaps_init(void) {
  * Deinitialize the bmaps.
  */
 void image_bmaps_deinit(void) {
-    face_asset_requests_clear();
+    image_face_requests_clear();
     face_cache_stop();
 
     if (image_bmaps != NULL) {
@@ -334,56 +462,65 @@ void finish_face_cmd(int facenum, uint32_t checksum, const char *face) {
     FaceList[facenum].name = xstrdup(name);
     FaceList[facenum].checksum = checksum;
 
-    /* Check private cache first */
-    char buf[HUGE_BUF];
-    snprintf(VS(buf), DIRECTORY_CACHE "/%s", FaceList[facenum].name);
-
-    char *resolved_cache = file_path(buf, "wb");
-    FILE *fp = fopen(resolved_cache, "rb");
-    if (fp != NULL) {
-        struct stat statbuf;
-        bool valid_file = fstat(fileno(fp), &statbuf) == 0 && S_ISREG(statbuf.st_mode) &&
-                          statbuf.st_size > 0 && (uint64_t)statbuf.st_size <= ASSET_FACE_MAX_SIZE;
-        size_t len = valid_file ? (size_t)statbuf.st_size : 0;
-        unsigned char *data = valid_file ? xmalloc(len) : NULL;
-        if (valid_file && fread(data, 1, len, fp) != len) {
-            len = 0;
-        }
-        if (fclose(fp) != 0) {
-            len = 0;
-        }
-        if (face_asset_validate(data, len, checksum)) {
-            FaceList[facenum].sprite = sprite_tryload_file(resolved_cache, 0, NULL);
-            if (FaceList[facenum].sprite != NULL) {
-                free(data);
-                free(resolved_cache);
-                return;
-            }
-        }
-        free(data);
-        unlink(resolved_cache);
-    }
-    free(resolved_cache);
-
-    if (face_asset_request_count >= FACE_REQUEST_MAX) {
-        LOG(ERROR, "Deferring face %d: pending face request limit reached", facenum);
-        free(FaceList[facenum].name);
-        FaceList[facenum].name = NULL;
-        FaceList[facenum].flags &= ~FACE_REQUESTED;
-        return;
-    }
-
     face_asset_request_t *request = xcalloc(1, sizeof(*request));
     request->face = (uint16_t)facenum;
-    request->queued_ms = SDL_GetTicks();
-    request->next = face_asset_requests;
-    face_asset_requests = request;
+    request->admitted_slot = UINT8_MAX;
+    HARD_ASSERT(face_asset_request_index[request->face] == NULL);
+    face_asset_request_index[request->face] = request;
+    face_asset_request_append_background(request);
+    /* FACE_REQUESTED deduplicates this backlog, so the fixed face table is
+     * also its hard memory bound. */
     face_asset_request_count++;
+    HARD_ASSERT(face_asset_request_count <= MAX_FACE_TILES);
     FaceList[facenum].flags |= FACE_REQUESTED;
 }
 
-static void face_asset_request_fail(face_asset_request_t **cursor, const char *reason) {
-    face_asset_request_t *request = *cursor;
+static bool face_asset_request_prepare(face_asset_request_t *request) {
+    uint16_t face = request->face;
+    if (load_gfx_user_face(face)) {
+        return true;
+    }
+    if (image_bmaps[face].pos != -1 && load_picture_from_pack(face)) {
+        return true;
+    }
+
+    char path[HUGE_BUF];
+    snprintf(VS(path), DIRECTORY_CACHE "/%s", FaceList[face].name);
+    char *resolved_cache = file_path(path, "wb");
+    FILE *fp = fopen(resolved_cache, "rb");
+    if (fp == NULL) {
+        free(resolved_cache);
+        return false;
+    }
+
+    struct stat statbuf;
+    bool valid_file = fstat(fileno(fp), &statbuf) == 0 && S_ISREG(statbuf.st_mode) &&
+                      statbuf.st_size > 0 && (uint64_t)statbuf.st_size <= ASSET_FACE_MAX_SIZE;
+    size_t size = valid_file ? (size_t)statbuf.st_size : 0;
+    uint8_t *data = valid_file ? xmalloc(size) : NULL;
+    if (valid_file && fread(data, 1, size, fp) != size) {
+        size = 0;
+    }
+    if (fclose(fp) != 0) {
+        size = 0;
+    }
+
+    sprite_struct *sprite = NULL;
+    if (face_asset_validate(data, size, FaceList[face].checksum)) {
+        sprite = face_asset_decode(data, size);
+    }
+    free(data);
+    if (sprite == NULL) {
+        unlink(resolved_cache);
+    } else {
+        sprite_free_sprite(FaceList[face].sprite);
+        FaceList[face].sprite = sprite;
+    }
+    free(resolved_cache);
+    return sprite != NULL;
+}
+
+static void face_asset_request_fail(face_asset_request_t *request, const char *reason) {
     LOG(ERROR,
         "Face %u download failed after %u attempt%s: %s",
         request->face,
@@ -391,7 +528,11 @@ static void face_asset_request_fail(face_asset_request_t **cursor, const char *r
         request->attempts == 1 ? "" : "s",
         reason);
     image_missing_faces = true;
-    face_asset_request_remove(cursor);
+    free(FaceList[request->face].name);
+    FaceList[request->face].name = NULL;
+    FaceList[request->face].checksum = 0;
+    FaceList[request->face].flags &= ~FACE_REQUESTED;
+    face_asset_request_remove(request);
 }
 
 static bool face_asset_request_start(face_asset_request_t *request, uint64_t now_ms) {
@@ -405,6 +546,15 @@ static bool face_asset_request_start(face_asset_request_t *request, uint64_t now
     }
     request->attempts++;
     request->retry_at_ms = now_ms;
+    size_t slot = 0;
+    while (slot < FACE_ASSET_ADMISSION_MAX && face_asset_admitted[slot] != NULL) {
+        slot++;
+    }
+    HARD_ASSERT(slot < FACE_ASSET_ADMISSION_MAX);
+    request->admitted_slot = (uint8_t)slot;
+    face_asset_admitted[slot] = request;
+    face_asset_admitted_count++;
+    HARD_ASSERT(face_asset_admitted_count <= FACE_ASSET_ADMISSION_MAX);
     return true;
 }
 
@@ -416,11 +566,7 @@ static bool face_asset_request_install(face_asset_request_t *request) {
     }
 
     uint64_t started = datetime_monotonic_us();
-    SDL_IOStream *stream = SDL_IOFromConstMem(data, size);
-    sprite_struct *sprite = stream != NULL ? sprite_tryload_file(NULL, 0, stream) : NULL;
-    if (stream != NULL) {
-        SDL_CloseIO(stream);
-    }
+    sprite_struct *sprite = face_asset_decode(data, size);
     if (sprite == NULL) {
         return false;
     }
@@ -437,66 +583,163 @@ static bool face_asset_request_install(face_asset_request_t *request) {
     return true;
 }
 
-void image_face_requests_service(void) {
-    face_cache_report_failures();
-    uint64_t started = datetime_monotonic_us();
-    uint64_t now_ms = SDL_GetTicks();
-    face_asset_request_t **cursor = &face_asset_requests;
-    while (*cursor != NULL) {
-        face_asset_request_t *request = *cursor;
+static bool face_asset_request_prepare_local(face_asset_request_t *request, bool *redraw) {
+    bool installed = face_asset_request_prepare(request);
+    request->local_checked = true;
+    HARD_ASSERT(face_asset_unprepared_count != 0);
+    face_asset_unprepared_count--;
+    if (installed) {
+        FaceList[request->face].flags &= ~FACE_REQUESTED;
+        face_asset_request_remove(request);
+        *redraw = true;
+    }
+    return installed;
+}
+
+static void face_asset_requests_prepare_local(uint64_t started_us, bool *redraw) {
+    face_asset_request_t *request = face_asset_prepare_cursor;
+    while (request != NULL && face_asset_unprepared_count != 0 &&
+           datetime_monotonic_us() - started_us < FACE_COMPLETION_BUDGET_US) {
+        face_asset_prepare_cursor = request->next != NULL ? request->next : face_asset_requests;
+
+        if (!request->local_checked) {
+            face_asset_request_prepare_local(request, redraw);
+        }
+        request = face_asset_prepare_cursor;
+    }
+    if (face_asset_unprepared_count == 0) {
+        face_asset_prepare_cursor = NULL;
+    }
+}
+
+static void
+face_asset_requests_prepare_for_admission(uint64_t now_ms, uint64_t started_us, bool *redraw) {
+    size_t slots_needed = FACE_ASSET_ADMISSION_MAX - face_asset_admitted_count;
+    face_asset_request_t *request = face_asset_requests;
+    while (request != NULL && slots_needed != 0 &&
+           datetime_monotonic_us() - started_us < FACE_COMPLETION_BUDGET_US) {
+        face_asset_request_t *next = request->next;
         if (request->asset == NULL) {
-            if (now_ms < request->retry_at_ms) {
-                cursor = &request->next;
+            if (!request->local_checked && face_asset_request_prepare_local(request, redraw)) {
+                request = next;
                 continue;
             }
-            if (!face_asset_request_start(request, now_ms)) {
-                if (now_ms - request->queued_ms >= FACE_ADMISSION_TIMEOUT_MS) {
-                    face_asset_request_fail(cursor, "asset-stream admission timed out");
-                    continue;
-                }
-                cursor = &request->next;
-                continue;
+            if (now_ms >= request->retry_at_ms) {
+                slots_needed--;
+            } else if (request->attempts == 0) {
+                /* An admission retry applies to the shared scheduler, so do
+                 * not perform network-oriented preparation behind it. */
+                return;
             }
         }
+        request = next;
+    }
+}
 
+static void face_asset_requests_admit(uint64_t now_ms, uint64_t started_us) {
+    while (face_asset_admitted_count < FACE_ASSET_ADMISSION_MAX &&
+           datetime_monotonic_us() - started_us < FACE_COMPLETION_BUDGET_US) {
+        face_asset_request_t *request = face_asset_requests;
+        while (request != NULL) {
+            if (datetime_monotonic_us() - started_us >= FACE_COMPLETION_BUDGET_US) {
+                return;
+            }
+            if (request->asset == NULL) {
+                if (!request->local_checked) {
+                    return;
+                }
+                if (now_ms >= request->retry_at_ms) {
+                    break;
+                }
+                if (request->attempts == 0) {
+                    return;
+                }
+            }
+            request = request->next;
+        }
+        if (request == NULL) {
+            return;
+        }
+
+        if (!face_asset_request_start(request, now_ms)) {
+            /* Expected shared-scheduler pressure is retried at frame scale. */
+            request->retry_at_ms = now_ms + FACE_ADMISSION_RETRY_MS;
+            return;
+        }
+    }
+}
+
+static void face_asset_requests_complete(uint64_t now_ms, uint64_t started_us, bool *redraw) {
+    for (size_t slot = 0; slot < FACE_ASSET_ADMISSION_MAX; slot++) {
+        face_asset_request_t *request = face_asset_admitted[slot];
+        if (request == NULL) {
+            continue;
+        }
         asset_request_state_t state = asset_request_get_state(request->asset);
         if (state == ASSET_REQUEST_PENDING) {
-            cursor = &request->next;
             continue;
         }
         if (state == ASSET_REQUEST_ERROR) {
-            asset_request_free(request->asset);
-            request->asset = NULL;
+            face_asset_request_release(request);
             if (request->attempts >= FACE_TRANSFER_RETRY_MAX) {
-                face_asset_request_fail(cursor, "transfer retry limit reached");
+                face_asset_request_fail(request, "transfer retry limit reached");
                 continue;
             }
             request->retry_at_ms = now_ms + FACE_TRANSFER_RETRY_BASE_MS * request->attempts;
-            cursor = &request->next;
             continue;
         }
 
         if (!face_asset_request_install(request)) {
-            asset_request_free(request->asset);
-            request->asset = NULL;
+            face_asset_request_release(request);
             if (request->attempts >= FACE_TRANSFER_RETRY_MAX) {
-                face_asset_request_fail(cursor, "integrity or decode retry limit reached");
+                face_asset_request_fail(request, "integrity or decode retry limit reached");
                 continue;
             }
             request->retry_at_ms = now_ms + FACE_TRANSFER_RETRY_BASE_MS * request->attempts;
-            cursor = &request->next;
             continue;
         }
-        face_asset_request_remove(cursor);
+        FaceList[request->face].flags &= ~FACE_REQUESTED;
+        face_asset_request_remove(request);
+        *redraw = true;
+
+        /* Drain the bounded set of completed streams while there is still
+         * room in this frame's decode/upload budget. */
+        if (datetime_monotonic_us() - started_us >= FACE_COMPLETION_BUDGET_US) {
+            break;
+        }
+    }
+}
+
+void image_face_requests_service(void) {
+    face_cache_report_failures();
+    if (face_asset_requests == NULL) {
+        return;
+    }
+    uint64_t started = datetime_monotonic_us();
+    uint64_t now_ms = SDL_GetTicks();
+    bool redraw = false;
+    bool transport_available = asset_requests_available();
+    if (transport_available) {
+        face_asset_requests_complete(now_ms, started, &redraw);
+        /* Fill free streams from cold requests whose local sources were
+         * already inspected before doing any more synchronous local work. */
+        face_asset_requests_admit(now_ms, started);
+        if (face_asset_admitted_count < FACE_ASSET_ADMISSION_MAX) {
+            face_asset_requests_prepare_for_admission(now_ms, started, &redraw);
+            face_asset_requests_admit(now_ms, started);
+        }
+    }
+    /* Local cache/pack discovery remains useful offline and while every
+     * network stream is occupied. The persistent cursor bounds repeat work. */
+    face_asset_requests_prepare_local(started, &redraw);
+
+    if (redraw) {
         map_redraw_flag = minimap_redraw_flag = 1;
         book_redraw();
         interface_redraw();
         WIDGET_REDRAW_ALL(PDOLL_ID);
         WIDGET_REDRAW_ALL(QUICKSLOT_ID);
         WIDGET_REDRAW_ALL(INVENTORY_ID);
-
-        /* Only one bounded face is decoded/uploaded and cached per frame. */
-        break;
     }
     if (datetime_monotonic_us() - started > FACE_COMPLETION_BUDGET_US) {
         LOG(DEBUG,
@@ -511,17 +754,17 @@ void image_face_requests_service(void) {
  * @param num
  * ID of the picture to load.
  */
-static void load_picture_from_pack(int num) {
+static bool load_picture_from_pack(uint16_t num) {
     FILE *fp = path_fopen(FILE_ATRINIK_P0, "rb");
     if (fp == NULL) {
         LOG(ERROR, "Failed to open %s", FILE_ATRINIK_P0);
-        return;
+        return false;
     }
 
     if (lseek(fileno(fp), image_bmaps[num].pos, SEEK_SET) == -1) {
         LOG(ERROR, "Failed to seek to %ld: %s", image_bmaps[num].pos, strerror(errno));
         fclose(fp);
-        return;
+        return false;
     }
 
     char *buf = xmalloc(image_bmaps[num].len);
@@ -533,20 +776,19 @@ static void load_picture_from_pack(int num) {
             (uint64_t)num_read);
         free(buf);
         fclose(fp);
-        return;
+        return false;
     }
 
     fclose(fp);
 
-    SDL_IOStream *rwop = SDL_IOFromMem(buf, image_bmaps[num].len);
-    if (rwop == NULL) {
-        LOG(ERROR, "Failed to load image from pack using SDL_IOFromMem(): %s", SDL_GetError());
-    } else {
-        FaceList[num].sprite = sprite_tryload_file(NULL, 0, rwop);
-        SDL_CloseIO(rwop);
+    sprite_struct *sprite = face_asset_decode((const uint8_t *)buf, image_bmaps[num].len);
+    if (sprite != NULL) {
+        sprite_free_sprite(FaceList[num].sprite);
+        FaceList[num].sprite = sprite;
     }
 
     free(buf);
+    return sprite != NULL;
 }
 
 /**
@@ -568,38 +810,25 @@ static bool load_gfx_user_face(uint16_t num) {
     }
 
     struct stat statbuf;
-    fstat(fileno(fp), &statbuf);
-    size_t len = statbuf.st_size;
-    unsigned char *data = xmalloc(len);
-    len = fread(data, 1, len, fp);
-
-    bool ret = false;
-    if (len == 0) {
-        goto out;
+    bool valid_file = fstat(fileno(fp), &statbuf) == 0 && S_ISREG(statbuf.st_mode) &&
+                      statbuf.st_size > 0 && (uint64_t)statbuf.st_size <= ASSET_FACE_MAX_SIZE;
+    size_t len = valid_file ? (size_t)statbuf.st_size : 0;
+    uint8_t *data = valid_file ? xmalloc(len) : NULL;
+    if (valid_file && fread(data, 1, len, fp) != len) {
+        len = 0;
     }
-
-    if (FaceList[num].sprite != NULL) {
-        sprite_free_sprite(FaceList[num].sprite);
-    }
-
-    free(FaceList[num].name);
-    FaceList[num].name = NULL;
-
-    /* Try to load it. */
-    FaceList[num].sprite = sprite_tryload_file(buf, 0, NULL);
-    if (FaceList[num].sprite == NULL) {
-        goto out;
-    }
-
-    FaceList[num].name = xstrdup(buf);
-    FaceList[num].checksum = crc32(1L, data, len);
-    ret = true;
-
-out:
-    free(data);
     fclose(fp);
 
-    return ret;
+    sprite_struct *sprite = len != 0 ? face_asset_decode(data, len) : NULL;
+    if (sprite != NULL) {
+        sprite_free_sprite(FaceList[num].sprite);
+        FaceList[num].sprite = sprite;
+        free(FaceList[num].name);
+        FaceList[num].name = xstrdup(buf);
+        FaceList[num].checksum = crc32(1L, data, len);
+    }
+    free(data);
+    return sprite != NULL;
 }
 
 /**
@@ -609,8 +838,7 @@ out:
  * @param pnum
  * Face ID.
  */
-void image_request_face(int pnum) {
-    char buf[MAX_BUF];
+static void image_request_face_internal(int pnum, bool prefetch) {
     uint16_t num = (uint16_t)(pnum & FACE_ID_MASK);
 
     if (!image_face_valid(num)) {
@@ -619,9 +847,17 @@ void image_request_face(int pnum) {
         return;
     }
 
+    /* Face zero is the map protocol's empty-layer sentinel, not an asset. */
+    if (num == 0) {
+        return;
+    }
+
     /* Immutable offline fixtures may preload a verified face without a
      * mutable server bitmap catalog. A loaded face never needs a request. */
     if (FaceList[num].name != NULL) {
+        if (!prefetch && (FaceList[num].flags & FACE_REQUESTED) != 0) {
+            face_asset_request_promote(num);
+        }
         return;
     }
 
@@ -635,28 +871,26 @@ void image_request_face(int pnum) {
         return;
     }
 
-    if (setting_get_int(OPT_CAT_DEVEL, OPT_RELOAD_GFX) && load_gfx_user_face(num)) {
-        return;
-    }
-
     /* Loaded or requested */
     if (FaceList[num].flags & FACE_REQUESTED) {
+        if (!prefetch) {
+            face_asset_request_promote(num);
+        }
         return;
     }
 
-    if (load_gfx_user_face(num)) {
-        return;
+    finish_face_cmd(num, image_bmaps[num].crc32, image_bmaps[num].name);
+    if (!prefetch) {
+        face_asset_request_promote(num);
     }
+}
 
-    if (image_bmaps[num].pos != -1) {
-        snprintf(VS(buf), "%s.png", image_bmaps[num].name);
-        FaceList[num].name = xstrdup(buf);
-        FaceList[num].checksum = image_bmaps[num].crc32;
-        load_picture_from_pack(num);
-    } else {
-        FaceList[num].flags |= FACE_REQUESTED;
-        finish_face_cmd(num, image_bmaps[num].crc32, image_bmaps[num].name);
-    }
+void image_request_face(int pnum) {
+    image_request_face_internal(pnum, false);
+}
+
+void image_prefetch_face(int pnum) {
+    image_request_face_internal(pnum, true);
 }
 
 /**

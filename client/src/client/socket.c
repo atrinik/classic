@@ -348,6 +348,7 @@ void socket_thread_start(void) {
     }
 
     abort_thread = 0;
+    asset_requests_connect(csocket.sc);
     io_thread = SDL_CreateThread(socket_io_thread_loop, "socket-io", NULL);
     if (io_thread == NULL) {
         LOG(ERROR, "Unable to start socket thread: %s", SDL_GetError());
@@ -396,6 +397,31 @@ int handle_socket_shutdown(void) {
     }
 
     return 0;
+}
+
+bool client_socket_active(void) {
+    if (socket_mutex == NULL) {
+        return csocket.sc != NULL;
+    }
+    SDL_LockMutex(socket_mutex);
+    bool active = csocket.sc != NULL;
+    SDL_UnlockMutex(socket_mutex);
+    return active;
+}
+
+bool client_socket_connection_mode(socket_connection_mode_t *mode) {
+    HARD_ASSERT(mode != NULL);
+
+    if (socket_mutex == NULL) {
+        return false;
+    }
+    SDL_LockMutex(socket_mutex);
+    bool available = csocket.sc != NULL && socket_is_quic(csocket.sc);
+    if (available) {
+        *mode = socket_connection_mode_get(csocket.sc);
+    }
+    SDL_UnlockMutex(socket_mutex);
+    return available;
 }
 
 /**

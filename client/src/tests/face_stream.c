@@ -24,6 +24,10 @@
 #define FACE_COUNT 6U
 #define FACE_BODY_SIZE 32768U
 #define FACE_CHUNK_SIZE 256U
+#define GENERIC_ASSET_PATH "tests/generic.bin"
+#define GENERIC_REQUEST_ID UINT16_MAX
+#define INITIAL_FACE_COUNT ASSET_STREAM_ACTIVE_MAX
+#define REQUEST_COUNT (FACE_COUNT + 1U)
 #define TEST_TIMEOUT_MS UINT64_C(15000)
 
 Client_Player cpl;
@@ -47,6 +51,7 @@ typedef struct test_asset_stream {
     packet_struct *header;
     size_t header_pos;
     size_t body_pos;
+    uint16_t request_id;
     bool request_complete;
 } test_asset_stream_t;
 
@@ -55,8 +60,11 @@ typedef struct test_server {
     uint8_t body[FACE_BODY_SIZE];
     uint8_t digest[ASSET_DIGEST_SIZE];
     unsigned int maximum_active;
+    unsigned int requested;
     unsigned int completed;
     unsigned int gameplay_echoes;
+    uint16_t request_order[REQUEST_COUNT];
+    uint16_t completion_order[REQUEST_COUNT];
     bool failed;
 } test_server_t;
 
@@ -70,13 +78,22 @@ static void test_stream_clear(test_asset_stream_t *state) {
     memset(state, 0, sizeof(*state));
 }
 
-static bool test_stream_prepare(test_asset_stream_t *state, const test_server_t *server) {
+static bool test_stream_prepare(test_asset_stream_t *state, test_server_t *server) {
     socket_asset_request_t request;
     uint16_t face = 0;
-    if (!socket_asset_request_parse(state->request, state->request_size, 0, &request) ||
-        !socket_asset_face_path_parse(request.path, &face) || face == 0 || face > FACE_COUNT) {
+    if (!socket_asset_request_parse(state->request, state->request_size, 0, &request)) {
         return false;
     }
+    bool valid_face =
+        socket_asset_face_path_parse(request.path, &face) && face != 0 && face <= FACE_COUNT;
+    if (!valid_face && strcmp(request.path, GENERIC_ASSET_PATH) != 0) {
+        return false;
+    }
+    if (server->requested >= REQUEST_COUNT) {
+        return false;
+    }
+    state->request_id = valid_face ? face : GENERIC_REQUEST_ID;
+    server->request_order[server->requested++] = state->request_id;
     state->header = packet_new(0, SOCKET_ASSET_RESPONSE_HEADER_SIZE, 0);
     socket_asset_response_append_ok(state->header, FACE_BODY_SIZE, server->digest);
     if (!packet_writer_finish(state->header)) {
@@ -86,7 +103,7 @@ static bool test_stream_prepare(test_asset_stream_t *state, const test_server_t 
     return true;
 }
 
-static bool test_stream_service(test_asset_stream_t *state, const test_server_t *server) {
+static bool test_stream_service(test_asset_stream_t *state, test_server_t *server) {
     if (!state->request_complete) {
         size_t amount = 0;
         socket_stream_result_t result =
@@ -156,7 +173,7 @@ static void *test_server_main(void *data) {
         uint8_t gameplay[64];
         size_t gameplay_size = 0;
         if (!socket_read(connection, gameplay, sizeof(gameplay), &gameplay_size)) {
-            server->failed = server->completed != FACE_COUNT;
+            server->failed = server->completed != REQUEST_COUNT;
             break;
         }
         size_t gameplay_pos = 0;
@@ -191,10 +208,15 @@ static void *test_server_main(void *data) {
             }
             if (streams[i].request_complete && streams[i].header == NULL &&
                 streams[i].body_pos == sizeof(server->body)) {
+                if (server->completed >= REQUEST_COUNT) {
+                    server->failed = true;
+                    break;
+                }
+                server->completion_order[server->completed] = streams[i].request_id;
                 test_stream_clear(&streams[i]);
                 server->completed++;
                 active--;
-                if (server->completed == FACE_COUNT) {
+                if (server->completed == REQUEST_COUNT) {
                     completed_at = datetime_monotonic_ms();
                 }
             }
@@ -209,7 +231,7 @@ static void *test_server_main(void *data) {
     for (size_t i = 0; i < arraysize(streams); i++) {
         test_stream_clear(&streams[i]);
     }
-    if (server->completed != FACE_COUNT) {
+    if (server->completed != REQUEST_COUNT) {
         server->failed = true;
     }
     socket_destroy(connection);
@@ -268,9 +290,35 @@ int main(void) {
                                            SOCKET_CONNECTION_PREFERENCE_DIRECTORY,
                                            &failure);
     cpl.asset_transport = true;
-    asset_request_t *requests[FACE_COUNT] = {0};
     bool ok = csocket.sc != NULL;
-    for (uint16_t face = 1; ok && face <= FACE_COUNT; face++) {
+    char unavailable_path[32];
+    if (ok) {
+        ok = !asset_requests_available() &&
+             socket_asset_face_path_format(VS(unavailable_path), FACE_COUNT + 1U) &&
+             asset_request_start_bounded(unavailable_path, ASSET_FACE_MAX_SIZE) == NULL;
+    }
+    if (ok) {
+        asset_requests_connect(csocket.sc);
+        ok = asset_requests_available();
+    }
+    asset_request_t *requests[FACE_COUNT] = {0};
+    for (uint16_t face = 1; ok && face <= INITIAL_FACE_COUNT; face++) {
+        char path[32];
+        ok = socket_asset_face_path_format(VS(path), face);
+        requests[face - 1U] = ok ? asset_request_start_bounded(path, ASSET_FACE_MAX_SIZE) : NULL;
+        ok = requests[face - 1U] != NULL;
+    }
+
+    /* Saturate the three stream slots before interleaving a generic asset and
+     * the remainder of the face burst. This makes the server-observed request
+     * order a direct regression for shared-scheduler FIFO fairness. */
+    if (ok) {
+        bool write_pending = false;
+        asset_requests_service(csocket.sc, &write_pending);
+    }
+    asset_request_t *generic = ok ? asset_request_start(GENERIC_ASSET_PATH) : NULL;
+    ok = ok && generic != NULL;
+    for (uint16_t face = INITIAL_FACE_COUNT + 1U; ok && face <= FACE_COUNT; face++) {
         char path[32];
         ok = socket_asset_face_path_format(VS(path), face);
         requests[face - 1U] = ok ? asset_request_start_bounded(path, ASSET_FACE_MAX_SIZE) : NULL;
@@ -308,6 +356,7 @@ int main(void) {
         for (size_t i = 0; i < arraysize(requests); i++) {
             all_complete &= asset_request_get_state(requests[i]) == ASSET_REQUEST_COMPLETE;
         }
+        all_complete &= asset_request_get_state(generic) == ASSET_REQUEST_COMPLETE;
         gameplay_during_transfer |= amount != 0 && !all_complete;
         bool ready = socket_wait(csocket.sc, true, write_pending, 2);
         socket_quic_service(csocket.sc, ready, write_pending);
@@ -327,11 +376,26 @@ int main(void) {
              size == sizeof(server.body) && body != NULL &&
              memcmp(body, server.body, sizeof(server.body)) == 0;
     }
+    while (ok && asset_request_get_state(generic) == ASSET_REQUEST_PENDING &&
+           datetime_monotonic_ms() < deadline) {
+        bool write_pending = false;
+        asset_requests_service(csocket.sc, &write_pending);
+        bool ready = socket_wait(csocket.sc, true, write_pending, 2);
+        socket_quic_service(csocket.sc, ready, write_pending);
+    }
+    size_t generic_size = 0;
+    const uint8_t *generic_body = asset_request_get_data(generic, &generic_size);
+    ok = ok && asset_request_get_state(generic) == ASSET_REQUEST_COMPLETE &&
+         generic_size == sizeof(server.body) && generic_body != NULL &&
+         memcmp(generic_body, server.body, sizeof(server.body)) == 0;
 
     asset_requests_disconnect();
+    ok = ok && !asset_requests_available() &&
+         asset_request_start_bounded(unavailable_path, ASSET_FACE_MAX_SIZE) == NULL;
     for (size_t i = 0; i < arraysize(requests); i++) {
         asset_request_free(requests[i]);
     }
+    asset_request_free(generic);
     asset_requests_deinit();
     if (csocket.sc != NULL) {
         socket_destroy(csocket.sc);
@@ -343,19 +407,44 @@ int main(void) {
     rmdir(directory);
     toolkit_deinit();
 
+    size_t generic_request = REQUEST_COUNT;
+    size_t final_face_request = REQUEST_COUNT;
+    size_t generic_completion = REQUEST_COUNT;
+    size_t final_face_completion = REQUEST_COUNT;
+    for (size_t i = 0; i < server.requested; i++) {
+        if (server.request_order[i] == GENERIC_REQUEST_ID) {
+            generic_request = i;
+        } else if (server.request_order[i] == FACE_COUNT) {
+            final_face_request = i;
+        }
+    }
+    for (size_t i = 0; i < server.completed; i++) {
+        if (server.completion_order[i] == GENERIC_REQUEST_ID) {
+            generic_completion = i;
+        } else if (server.completion_order[i] == FACE_COUNT) {
+            final_face_completion = i;
+        }
+    }
+    bool ordering = server.requested == REQUEST_COUNT &&
+                    generic_request < INITIAL_FACE_COUNT + ASSET_STREAM_ACTIVE_MAX &&
+                    generic_request < final_face_request &&
+                    generic_completion < INITIAL_FACE_COUNT + ASSET_STREAM_ACTIVE_MAX &&
+                    generic_completion < final_face_completion;
     bool passed = ok && gameplay_during_transfer && gameplay_received >= 32U && !server.failed &&
                   server.maximum_active == ASSET_STREAM_ACTIVE_MAX &&
-                  server.completed == FACE_COUNT;
+                  server.completed == REQUEST_COUNT && ordering;
     if (!passed) {
         fprintf(stderr,
                 "face-stream regression failed: ok=%d concurrent_gameplay=%d gameplay=%u "
-                "server_failed=%d maximum_active=%u completed=%u\n",
+                "server_failed=%d maximum_active=%u requested=%u completed=%u ordering=%d\n",
                 ok,
                 gameplay_during_transfer,
                 gameplay_received,
                 server.failed,
                 server.maximum_active,
-                server.completed);
+                server.requested,
+                server.completed,
+                ordering);
     }
     return passed ? 0 : 1;
 #endif

@@ -101,8 +101,7 @@ asset_source_t *asset_source_start(const char *asset_path, const char *cache_pat
 
     if (*cpl.http_url != '\0') {
         char url[HUGE_BUF];
-        if (asset_source_url(asset_path, VS(url)) && cpl.asset_transport && csocket.sc != NULL &&
-            socket_is_quic(csocket.sc)) {
+        if (asset_source_url(asset_path, VS(url)) && asset_requests_available()) {
             source->http_url = xstrdup(url);
             source->inband = asset_request_start_metadata(asset_path);
             if (source->inband != NULL) {

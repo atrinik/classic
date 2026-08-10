@@ -62,6 +62,7 @@ struct asset_request {
 static asset_request_t *asset_requests;
 static SDL_Mutex *asset_mutex;
 static uint64_t asset_request_sequence;
+static bool asset_transport_connected;
 
 static bool asset_lock(void) {
     if (asset_mutex == NULL) {
@@ -172,18 +173,42 @@ static size_t asset_pending_count(void) {
     return count;
 }
 
+void asset_requests_connect(socket_t *sc) {
+    HARD_ASSERT(sc != NULL);
+
+    bool connected = socket_is_quic(sc);
+    if (!asset_lock()) {
+        return;
+    }
+    asset_transport_connected = connected;
+    SDL_UnlockMutex(asset_mutex);
+}
+
+bool asset_requests_available(void) {
+    if (!cpl.asset_transport || !asset_lock()) {
+        return false;
+    }
+    bool available = asset_transport_connected;
+    SDL_UnlockMutex(asset_mutex);
+    return available;
+}
+
 static asset_request_t *asset_request_start_internal(const char *path,
                                                      const char *cache_path,
                                                      bool metadata_only,
                                                      size_t max_size) {
-    if (!cpl.asset_transport || csocket.sc == NULL || !socket_is_quic(csocket.sc) || path == NULL ||
-        *path == '\0' || strlen(path) >= MAX_BUF || max_size == 0 || max_size > ASSET_MAX_SIZE) {
+    if (!cpl.asset_transport || path == NULL || *path == '\0' || strlen(path) >= MAX_BUF ||
+        max_size == 0 || max_size > ASSET_MAX_SIZE) {
         return NULL;
     }
 
     char key[MAX_BUF + 32];
     snprintf(VS(key), "%c:%" PRIu64 ":%s", metadata_only ? 'M' : 'D', (uint64_t)max_size, path);
     if (!asset_lock()) {
+        return NULL;
+    }
+    if (!asset_transport_connected) {
+        SDL_UnlockMutex(asset_mutex);
         return NULL;
     }
     asset_request_t *request;
@@ -198,7 +223,7 @@ static asset_request_t *asset_request_start_internal(const char *path,
         return request;
     }
     if (asset_pending_count() >= ASSET_REQUEST_PENDING_MAX) {
-        LOG(ERROR, "Refusing QUIC asset %s: pending request limit reached", path);
+        LOG(DEBUG, "Deferring QUIC asset %s: pending request limit reached", path);
         SDL_UnlockMutex(asset_mutex);
         return NULL;
     }
@@ -231,6 +256,11 @@ static asset_request_t *asset_request_start_internal(const char *path,
         asset_request_destroy(request);
         return NULL;
     }
+    if (!asset_transport_connected) {
+        SDL_UnlockMutex(asset_mutex);
+        asset_request_destroy(request);
+        return NULL;
+    }
     asset_request_t *existing;
     HASH_FIND_STR(asset_requests, key, existing);
     if (existing != NULL) {
@@ -243,7 +273,7 @@ static asset_request_t *asset_request_start_internal(const char *path,
         return available ? existing : NULL;
     }
     if (asset_pending_count() >= ASSET_REQUEST_PENDING_MAX) {
-        LOG(ERROR, "Refusing QUIC asset %s: pending request limit reached", path);
+        LOG(DEBUG, "Deferring QUIC asset %s: pending request limit reached", path);
         SDL_UnlockMutex(asset_mutex);
         asset_request_destroy(request);
         return NULL;
@@ -570,6 +600,7 @@ void asset_requests_disconnect(void) {
         return;
     }
     SDL_LockMutex(asset_mutex);
+    asset_transport_connected = false;
     asset_request_t *request, *next;
     HASH_ITER(hh, asset_requests, request, next) {
         if (request->stream != NULL) {
@@ -593,6 +624,7 @@ void asset_requests_deinit(void) {
         return;
     }
     SDL_LockMutex(asset_mutex);
+    asset_transport_connected = false;
     asset_request_t *request, *next;
     HASH_ITER(hh, asset_requests, request, next) {
         HASH_DEL(asset_requests, request);

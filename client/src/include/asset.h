@@ -25,6 +25,12 @@ typedef enum asset_request_state {
     ASSET_REQUEST_ERROR,
 } asset_request_state_t;
 
+/** Attach the scheduler to a live connection owned by the I/O thread. */
+void asset_requests_connect(socket_t *sc);
+
+/** Whether the negotiated in-band transport is currently available. */
+bool asset_requests_available(void);
+
 asset_request_t *asset_request_start(const char *path);
 
 /** Start a body request whose declared response may not exceed max_size. */
