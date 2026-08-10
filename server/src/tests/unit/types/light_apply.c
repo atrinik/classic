@@ -356,7 +356,7 @@ START_TEST(test_removed_player_recomputes_before_reinsertion) {
     torch->light_color = UINT32_C(0xff0000);
 
     mapstruct *new_map = get_empty_map(24, 24);
-    pl = object_insert_map(pl, new_map, NULL, 0);
+    ck_assert(object_enter_map(pl, NULL, new_map, pl->x, pl->y, true));
     MapSpace *new_space = GET_MAP_SPACE_PTR(new_map, pl->x, pl->y);
     ck_assert_int_gt(new_space->light_source_color[0], new_space->light_source_color[2]);
     assert_player_light(pl, 4, UINT32_C(0xff0000));
@@ -479,9 +479,7 @@ START_TEST(test_player_save_load_reconstructs_derived_light) {
     MapSpace *space = GET_MAP_SPACE_PTR(map, 1, 1);
     int64_t initial_color[3];
     memcpy(initial_color, space->light_source_color, sizeof(initial_color));
-    restored->x = 1;
-    restored->y = 1;
-    restored = object_insert_map(restored, map, NULL, 0);
+    ck_assert(object_enter_map(restored, NULL, map, 1, 1, true));
     assert_player_light(restored, 4, UINT32_C(0x0000ff));
     ck_assert_int_eq(space->light_source_color[0], initial_color[0]);
     ck_assert_int_eq(space->light_source_color[1], initial_color[1]);

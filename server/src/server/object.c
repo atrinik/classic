@@ -2041,14 +2041,6 @@ object *object_insert_map(object *op, mapstruct *m, object *originator, int flag
         }
     }
 
-    /* Player light is derived from inventory. Rebuild it at the authoritative
-     * insertion boundary while the removed guard still prevents touching the
-     * old map. This also covers inventory changes made by login plugins while
-     * the player is off-map. */
-    if (op->type == PLAYER && op->head == NULL) {
-        living_update_player(op);
-    }
-
     CLEAR_FLAG(op, FLAG_REMOVED);
 
     int x = op->x;
@@ -3212,6 +3204,16 @@ bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool
 
     op->x = x;
     op->y = y;
+
+    /* Player state can be changed by login and map-leave plugins while the
+     * player is off-map. Rebuild it at this lifecycle boundary, after those
+     * events and while the removed guard still protects the old map. Routine
+     * one-tile movement uses object_insert_map() directly and avoids this
+     * full reconciliation. */
+    if (op->type == PLAYER) {
+        living_update_player(op);
+    }
+
     op = object_insert_map(op, m, NULL, 0);
     if (op == NULL) {
         return false;
