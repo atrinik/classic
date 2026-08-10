@@ -226,17 +226,23 @@ TOOLKIT_INIT_FUNC(socket_server) {
         BIT_CLEAR(stack_setting.type, STACK_DUAL);
 
         struct sockaddr_storage *addr;
+        int family;
         if (strcasecmp(cps[0], "ipv4") == 0 || strcasecmp(cps[0], "v4") == 0) {
             BIT_SET(stack_setting.type, STACK_IPV4);
             addr = &stack_setting.v4;
+            family = AF_INET;
             struct sockaddr_in *saddr = (struct sockaddr_in *)addr;
             saddr->sin_family = AF_INET;
         } else if (strcasecmp(cps[0], "ipv6") == 0 || strcasecmp(cps[0], "v6") == 0) {
 #ifdef HAVE_IPV6
             BIT_SET(stack_setting.type, STACK_IPV6);
             addr = &stack_setting.v6;
-            struct sockaddr_in *saddr = (struct sockaddr_in *)addr;
-            saddr->sin_family = AF_INET6;
+            family = AF_INET6;
+            struct sockaddr_in6 *saddr = (struct sockaddr_in6 *)addr;
+            saddr->sin6_family = AF_INET6;
+#else
+            LOG(ERROR, "IPv6 network stack setting is not supported by this build");
+            exit(1);
 #endif
         } else {
             LOG(ERROR, "Invalid value in network stack setting: %s", cps[0]);
@@ -248,10 +254,20 @@ TOOLKIT_INIT_FUNC(socket_server) {
             exit(1);
         }
         if (cps[1] != NULL) {
+            if (addr->ss_family != family) {
+                LOG(ERROR, "Address family does not match network stack setting: %s", word);
+                exit(1);
+            }
             char *host = addr == &stack_setting.v4 ? stack_setting.v4_host : stack_setting.v6_host;
             size_t host_size = addr == &stack_setting.v4 ? sizeof(stack_setting.v4_host)
                                                          : sizeof(stack_setting.v6_host);
-            snprintf(host, host_size, "%s", cps[1]);
+            const void *address = family == AF_INET
+                                      ? (const void *)&((struct sockaddr_in *)addr)->sin_addr
+                                      : (const void *)&((struct sockaddr_in6 *)addr)->sin6_addr;
+            if (inet_ntop(family, address, host, host_size) == NULL) {
+                LOG(ERROR, "Failed to format network stack address: %s", cps[1]);
+                exit(1);
+            }
         }
     }
 

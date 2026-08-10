@@ -489,6 +489,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('[System.Net.Sockets.UdpClient]::new(0)', smoke)
         self.assertIn('"--port_quic=$serverPort"', smoke)
         self.assertIn('"--network_stack=ipv4=127.0.0.1"', smoke)
+        self.assertIn('[void]$startInfo.Environment.Remove($name)', smoke)
+        self.assertIn('$startInfo.Environment["NO_PROXY"]', smoke)
         self.assertIn(
             '"--metaserver_publish_origin=http://127.0.0.1:9"', smoke
         )
@@ -498,6 +500,7 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("Get-NetUDPEndpoint -LocalPort $serverPort", smoke)
         self.assertIn('$listenerEndpoints[0].LocalAddress -ne "127.0.0.1"', smoke)
+        self.assertIn("$bodySucceeded -and $cleanupFailures.Count -ne 0", smoke)
         self.assertIn('$process.StandardInput.WriteLine("shutdown")', smoke)
         self.assertLess(
             smoke.index('"Server ready\\. Waiting for connections"'),

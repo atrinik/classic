@@ -283,7 +283,7 @@ class FinalizeArtifactsTests(unittest.TestCase):
             package,
             finalize_artifacts.SERVER_WINDOWS_REQUIRED_PATTERNS,
             finalize_artifacts.SERVER_WINDOWS_FORBIDDEN_PATTERNS,
-            finalize_artifacts.SERVER_WINDOWS_UNIQUE_PATTERNS,
+            finalize_artifacts.SERVER_WINDOWS_UNIQUE_FILES,
         )
         finalize_artifacts.validate_embedded_python_runtime(path, package)
 
@@ -296,8 +296,22 @@ class FinalizeArtifactsTests(unittest.TestCase):
             finalize_artifacts.validate_zip(
                 duplicate_plugins,
                 package,
-                finalize_artifacts.SERVER_WINDOWS_UNIQUE_PATTERNS,
-                unique_patterns=finalize_artifacts.SERVER_WINDOWS_UNIQUE_PATTERNS,
+                (),
+                (),
+                finalize_artifacts.SERVER_WINDOWS_UNIQUE_FILES,
+            )
+
+        nested_plugins = self.root / "nested-plugins.zip"
+        with zipfile.ZipFile(nested_plugins, "w") as archive:
+            archive.writestr(f"{package}/server/nested/plugin_arena.dll", b"arena")
+            archive.writestr(f"{package}/server/plugin_python.dll", b"python")
+        with self.assertRaisesRegex(RuntimeError, "exactly one packaged"):
+            finalize_artifacts.validate_zip(
+                nested_plugins,
+                package,
+                (),
+                (),
+                finalize_artifacts.SERVER_WINDOWS_UNIQUE_FILES,
             )
 
     def test_windows_server_zip_rejects_split_maps_layout(self) -> None:

@@ -46,9 +46,9 @@ SERVER_WINDOWS_REQUIRED_PATTERNS = (
     "server/assets/client-maps/*",
 )
 SERVER_WINDOWS_FORBIDDEN_PATTERNS = ("maps", "maps/*")
-SERVER_WINDOWS_UNIQUE_PATTERNS = (
-    "server/*plugin_arena*.dll",
-    "server/*plugin_python*.dll",
+SERVER_WINDOWS_UNIQUE_FILES = (
+    ("server", "*plugin_arena*.dll"),
+    ("server", "*plugin_python*.dll"),
 )
 WINDOWS_RESERVED_NAMES = {
     "aux",
@@ -173,7 +173,7 @@ def validate_zip(
     package_root: str,
     required_patterns: tuple[str, ...],
     forbidden_patterns: tuple[str, ...] = (),
-    unique_patterns: tuple[str, ...] = (),
+    unique_files: tuple[tuple[str, str], ...] = (),
 ) -> None:
     with zipfile.ZipFile(path) as archive:
         if not archive.infolist():
@@ -237,11 +237,16 @@ def validate_zip(
                 raise RuntimeError(f"{path.name} is missing packaged {pattern}")
             if not any(size > 0 for size in matches):
                 raise RuntimeError(f"{path.name} has only empty packaged {pattern}")
-        for pattern in unique_patterns:
-            matches = [name for name in files if fnmatch.fnmatchcase(name, pattern)]
+        for directory, pattern in unique_files:
+            matches = [
+                name
+                for name in files
+                if str(PurePosixPath(name).parent) == directory
+                and fnmatch.fnmatchcase(PurePosixPath(name).name, pattern)
+            ]
             if len(matches) != 1:
                 raise RuntimeError(
-                    f"{path.name} must contain exactly one packaged {pattern}"
+                    f"{path.name} must contain exactly one packaged {directory}/{pattern}"
                 )
         for pattern in forbidden_patterns:
             if any(
@@ -571,7 +576,7 @@ def main() -> int:
         f"atrinik-classic-server-{arguments.version}-windows-x86_64",
         SERVER_WINDOWS_REQUIRED_PATTERNS,
         SERVER_WINDOWS_FORBIDDEN_PATTERNS,
-        SERVER_WINDOWS_UNIQUE_PATTERNS,
+        SERVER_WINDOWS_UNIQUE_FILES,
     )
     validate_embedded_python_runtime(
         directory / f"atrinik-classic-server-{arguments.version}-windows-x86_64.zip",

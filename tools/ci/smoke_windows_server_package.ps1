@@ -9,6 +9,7 @@ $smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
     "atrinik-server-package-smoke-{0}" -f [System.Guid]::NewGuid()
 )
 $process = $null
+$bodySucceeded = $false
 $portProbe = [System.Net.Sockets.UdpClient]::new(0)
 try {
     $serverPort = ([System.Net.IPEndPoint]$portProbe.Client.LocalEndPoint).Port
@@ -39,6 +40,10 @@ try {
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true
+    foreach ($name in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")) {
+        [void]$startInfo.Environment.Remove($name)
+    }
+    $startInfo.Environment["NO_PROXY"] = "127.0.0.1,localhost"
     foreach ($argument in @(
         "/d",
         "/c",
@@ -120,7 +125,9 @@ try {
     if ($output -match "Can't open regions file") {
         throw "Packaged server failed to load regions.reg:`n$output"
     }
+    $bodySucceeded = $true
 } finally {
+    $cleanupFailures = [System.Collections.Generic.List[string]]::new()
     if ($null -ne $process) {
         try {
             $process.StandardInput.Close()
@@ -132,12 +139,18 @@ try {
                 $process.Kill($true)
             }
             if (-not $process.WaitForExit(10000)) {
-                Write-Warning "Packaged server process tree did not exit during cleanup"
+                $cleanupFailures.Add("Packaged server process tree did not exit within 10 seconds")
             }
         } catch {
             Write-Warning "Could not stop packaged server process tree: $_"
+            $cleanupFailures.Add("Could not stop packaged server process tree")
         } finally {
-            $process.Dispose()
+            try {
+                $process.Dispose()
+            } catch {
+                Write-Warning "Could not dispose packaged server process: $_"
+                $cleanupFailures.Add("Could not dispose packaged server process")
+            }
         }
     }
     if (Test-Path -LiteralPath $smokeRoot) {
@@ -153,5 +166,11 @@ try {
                 }
             }
         }
+        if (Test-Path -LiteralPath $smokeRoot) {
+            $cleanupFailures.Add("Could not remove packaged server smoke directory")
+        }
+    }
+    if ($bodySucceeded -and $cleanupFailures.Count -ne 0) {
+        throw ($cleanupFailures -join "; ")
     }
 }
