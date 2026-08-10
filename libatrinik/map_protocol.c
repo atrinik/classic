@@ -55,9 +55,10 @@ bool map_protocol_continuation_matches(const map_protocol_continuation_state_t *
 void map_protocol_continuation_advance(map_protocol_continuation_state_t *state) {
     HARD_ASSERT(state != NULL);
     HARD_ASSERT(state->pending);
-    state->next++;
-    if (state->next > state->total) {
+    if (state->next == state->total) {
         map_protocol_continuation_reset(state);
+    } else {
+        state->next++;
     }
 }
 
@@ -357,6 +358,8 @@ bool map_protocol_validate(const uint8_t *data,
         (new_map_width != 0 && (xpos >= new_map_width || ypos >= new_map_height)) ||
         !map_packet_read_uint16(&reader, &continuation_marker) ||
         (mapstat == MAP_UPDATE_CMD_PARTIAL && continuation_marker == 0) ||
+        continuation_marker >
+            (size_t)MAP2_LEVELS * (size_t)map_width_limit * (size_t)map_height_limit ||
         !map_packet_read_uint8(&reader, &level_count) || level_count == 0 ||
         level_count > MAP2_LEVELS) {
         return false;

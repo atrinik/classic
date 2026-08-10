@@ -260,6 +260,14 @@ START_TEST(test_map_protocol_validates_colored_light_extension) {
 END_TEST
 
 START_TEST(test_map_protocol_accepts_bounded_continuation) {
+    ck_assert_uint_eq(MAP2_PARTIAL_HEADER_SIZE + MAP2_LEVEL_FRAME_SIZE + MAP2_LEVEL_PAYLOAD_MAX,
+                      PACKET_PAYLOAD_MAX);
+    ck_assert_uint_gt(MAP2_PARTIAL_HEADER_SIZE + MAP2_LEVEL_FRAME_SIZE + MAP2_LEVEL_PAYLOAD_MAX + 1,
+                      PACKET_PAYLOAD_MAX);
+    ck_assert(map_protocol_level_payload_fits(MAP2_LEVEL_PAYLOAD_MAX - 1));
+    ck_assert(map_protocol_level_payload_fits(MAP2_LEVEL_PAYLOAD_MAX));
+    ck_assert(!map_protocol_level_payload_fits(MAP2_LEVEL_PAYLOAD_MAX + 1));
+
     packet_struct *packet = packet_new(0, 16, 16);
     packet_writer_write_uint8(packet, MAP_UPDATE_CMD_PARTIAL);
     packet_writer_write_uint8(packet, 0);
@@ -271,6 +279,8 @@ START_TEST(test_map_protocol_accepts_bounded_continuation) {
     ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     ck_assert_uint_le(packet->len, PACKET_PAYLOAD_MAX);
     packet->data[4] = packet->data[5] = 0;
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet->data[4] = packet->data[5] = UINT8_MAX;
     ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     packet_free(packet);
 }
@@ -303,6 +313,12 @@ START_TEST(test_map_protocol_continuation_state_is_bounded_and_ordered) {
     map_protocol_continuation_begin(&state, 1, 3, 4, 1, declared);
     map_protocol_continuation_reset(&state);
     ck_assert(!map_protocol_continuation_matches(&state, 1, 3, 4, 1, declared));
+
+    map_protocol_continuation_begin(&state, UINT16_MAX, 3, 4, 1, declared);
+    state.next = UINT16_MAX;
+    ck_assert(map_protocol_continuation_matches(&state, UINT16_MAX, 3, 4, 1, declared));
+    map_protocol_continuation_advance(&state);
+    ck_assert(!state.pending);
 }
 END_TEST
 

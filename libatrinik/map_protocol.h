@@ -13,6 +13,19 @@
 #define TOOLKIT_MAP_PROTOCOL_H
 
 #include "toolkit.h"
+#include "packet.h"
+
+/** Bytes preceding the first framed level in a partial MAP2 payload. */
+#define MAP2_PARTIAL_HEADER_SIZE 7U
+/** Depth and uint32 payload length preceding one MAP2 level chunk. */
+#define MAP2_LEVEL_FRAME_SIZE 5U
+/** Largest level payload guaranteed to fit in a partial MAP2 envelope. */
+#define MAP2_LEVEL_PAYLOAD_MAX \
+    (PACKET_PAYLOAD_MAX - MAP2_PARTIAL_HEADER_SIZE - MAP2_LEVEL_FRAME_SIZE)
+
+static inline bool map_protocol_level_payload_fits(size_t payload_size) {
+    return payload_size <= MAP2_LEVEL_PAYLOAD_MAX;
+}
 
 /** Bounded client state for one ordered MAP2 continuation sequence. */
 typedef struct map_protocol_continuation_state {

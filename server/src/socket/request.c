@@ -45,6 +45,7 @@
 #include <initialization.h>
 #include <animation.h>
 #include <account.h>
+#include <toolkit/map_protocol.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 #include <monster_data.h>
@@ -1243,7 +1244,7 @@ static bool map_append_support_height(packet_struct *packet,
     packet_debug_data(packet, 1, "Structural support height");
     packet_writer_write_int16(packet, support_height);
     packet_debug_data(packet, 1, "Number of layers");
-    packet_writer_write_uint16(packet, 0);
+    packet_writer_write_uint8(packet, 0);
     packet_debug_data(packet, 1, "Extended tile flags");
     packet_writer_write_uint8(packet, 0);
 
@@ -1252,13 +1253,12 @@ static bool map_append_support_height(packet_struct *packet,
     return true;
 }
 
-#define MAP2_LEVEL_PAYLOAD_MAX (PACKET_PAYLOAD_MAX - 10U)
 #define MAP2_LEVEL_CHUNKS_MAX (MAP2_LEVELS * MAP_CLIENT_X * MAP_CLIENT_Y)
 
 /** Frame one bounded same-depth tile stream for MAP2 packet assembly. */
 static packet_struct *map2_frame_level_chunk(int8_t depth, packet_struct *payload) {
     HARD_ASSERT(payload != NULL);
-    HARD_ASSERT(payload->len <= MAP2_LEVEL_PAYLOAD_MAX);
+    HARD_ASSERT(map_protocol_level_payload_fits(payload->len));
     packet_struct *framed = packet_new(0, payload->len + 5, 0);
     packet_writer_write_int8(framed, depth);
     packet_writer_write_uint32(framed, payload->len);
@@ -1407,7 +1407,7 @@ void draw_client_map2(object *pl) {
     packet_writer_write_uint8(packet, pl->sub_layer);
     packet_debug_data(packet, 0, "Number of continuation packets");
     size_t continuation_count_pos = packet->len;
-    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint16(packet, 0);
 
     packet_header = packet;
     uint8_t present_level_count = 0;
@@ -2257,7 +2257,7 @@ void draw_client_map2(object *pl) {
                     packet_writer_rollback(packet, &packet_save_buf);
                 }
 
-                if (packet->len > MAP2_LEVEL_PAYLOAD_MAX) {
+                if (!map_protocol_level_payload_fits(packet->len)) {
                     size_t record_size = packet->len - packet_save_buf.pos;
                     HARD_ASSERT(record_size <= MAP2_LEVEL_PAYLOAD_MAX);
                     packet_struct *overflow = packet_new(0, record_size, 512);
