@@ -256,10 +256,16 @@ typedef struct socket_stream socket_stream_t;
 #define ASSET_REQUEST_METADATA 0x01
 /** Maximum complete asset size accepted by the client. */
 #define ASSET_MAX_SIZE (128U * 1024U * 1024U)
+/** Maximum encoded size of an on-demand face graphic. */
+#define ASSET_FACE_MAX_SIZE 50000U
+/** Prefix used by immutable on-demand face asset paths. */
+#define ASSET_FACE_PATH_PREFIX "faces/"
 /** SHA-256 digest size used by the asset cache protocol. */
 #define ASSET_DIGEST_SIZE 32
 /** Fixed response header: status, total size, and SHA-256 digest. */
 #define SOCKET_ASSET_RESPONSE_HEADER_SIZE (1U + 4U + ASSET_DIGEST_SIZE)
+/** Maximum encoded request: bounded path, cached size/digest, and flags. */
+#define SOCKET_ASSET_REQUEST_MAX_SIZE (MAX_BUF + 4U + ASSET_DIGEST_SIZE + 1U)
 
 /** Decoded client-to-server asset request. */
 typedef struct socket_asset_request {
@@ -992,6 +998,8 @@ bool socket_asset_request_parse(const uint8_t *data,
                                 size_t len,
                                 size_t pos,
                                 socket_asset_request_t *request);
+bool socket_asset_face_path_format(char *path, size_t size, uint16_t face);
+bool socket_asset_face_path_parse(const char *path, uint16_t *face);
 void socket_asset_response_append_status(struct packet_struct *packet,
                                          uint8_t status,
                                          uint32_t total_size,

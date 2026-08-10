@@ -225,10 +225,25 @@ extern bool metaserver_rendezvous_token_parse(const char *body, size_t body_size
 /** Public API implemented in src/socket/assets.c. */
 
 extern void socket_assets_init(void);
+/**
+ * Borrow immutable startup-loaded face bytes and their digest.
+ *
+ * Returned pointers remain server-owned and valid until free_socket_images().
+ * The function is main/network-thread safe because the snapshot never mutates.
+ */
+extern bool
+face_get_asset(uint16_t face, const uint8_t **data, uint32_t *size, const uint8_t **digest);
 
 extern void socket_assets_deinit(void);
 
-extern bool socket_assets_service(socket_struct *ns);
+/** Register a live connection with the fair server-wide asset scheduler. */
+extern void socket_assets_connection_register(socket_struct *ns);
+
+/** Service registered connections once within the global tick budgets. */
+extern void socket_assets_service(void);
+
+/** Calculate the aggregate byte allowance for one processing iteration. */
+extern size_t socket_assets_tick_byte_budget(void);
 
 extern bool socket_assets_pending(const socket_struct *ns);
 

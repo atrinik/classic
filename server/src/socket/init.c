@@ -79,6 +79,7 @@ bool init_connection(socket_struct *ns) {
     ns->join_authenticated = false;
     ns->setup_completed = false;
     socket_login_deadline_refresh(ns);
+    socket_assets_connection_register(ns);
 
     ns->packet_recv = packet_new(0, 1024 * 3, 0);
     ns->packet_recv_cmd = packet_new(0, 1024 * 64, 0);

@@ -54,8 +54,6 @@ extern void socket_command_setup(uint8_t *data, size_t len, size_t pos);
 
 extern void socket_command_anim(uint8_t *data, size_t len, size_t pos);
 
-extern void socket_command_image(uint8_t *data, size_t len, size_t pos);
-
 extern void socket_command_drawinfo(uint8_t *data, size_t len, size_t pos);
 
 extern void socket_command_target(uint8_t *data, size_t len, size_t pos);

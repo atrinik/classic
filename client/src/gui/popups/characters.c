@@ -807,7 +807,7 @@ void socket_command_characters(uint8_t *data, size_t len, size_t pos) {
     }
 
     if (!characters_packet_valid(data, len, pos)) {
-        LOG(ERROR, "Connection %s sent a malformed CHARACTERS packet", socket_get_id(csocket.sc));
+        LOG(ERROR, "Server sent a malformed CHARACTERS packet");
         cpl.state = ST_START;
         return;
     }

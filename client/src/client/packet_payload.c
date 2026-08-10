@@ -11,26 +11,6 @@
 
 #include <packet_payload.h>
 
-bool client_packet_parse_image(const uint8_t *data,
-                               size_t len,
-                               size_t pos,
-                               uint32_t *face_id,
-                               packet_view_t *image) {
-    packet_reader_t reader;
-    packet_reader_init_at(&reader, data, len, pos);
-
-    uint32_t parsed_face_id = packet_reader_read_uint32(&reader);
-    uint32_t image_size = packet_reader_read_uint32(&reader);
-    packet_view_t parsed_image = packet_reader_read_view(&reader, image_size);
-    if (!packet_reader_finish(&reader)) {
-        return false;
-    }
-
-    *face_id = parsed_face_id;
-    *image = parsed_image;
-    return true;
-}
-
 bool client_packet_parse_file_update(const uint8_t *data,
                                      size_t len,
                                      size_t pos,

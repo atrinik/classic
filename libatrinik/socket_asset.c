@@ -17,6 +17,43 @@
 #include "socket.h"
 #include "packet.h"
 
+bool socket_asset_face_path_format(char *path, size_t size, uint16_t face) {
+    if (path == NULL || size == 0 || face == 0) {
+        return false;
+    }
+
+    int length = snprintf(path, size, ASSET_FACE_PATH_PREFIX "%u.png", (unsigned int)face);
+    return length > 0 && (size_t)length < size;
+}
+
+bool socket_asset_face_path_parse(const char *path, uint16_t *face) {
+    if (path == NULL || face == NULL ||
+        strncmp(path, ASSET_FACE_PATH_PREFIX, sizeof(ASSET_FACE_PATH_PREFIX) - 1U) != 0) {
+        return false;
+    }
+
+    const char *cursor = path + sizeof(ASSET_FACE_PATH_PREFIX) - 1U;
+    if (*cursor == '0') {
+        return false;
+    }
+    uint32_t parsed = 0;
+    size_t digits = 0;
+    while (*cursor >= '0' && *cursor <= '9') {
+        parsed = parsed * 10U + (uint32_t)(*cursor - '0');
+        if (parsed > UINT16_MAX) {
+            return false;
+        }
+        cursor++;
+        digits++;
+    }
+    if (digits == 0 || parsed == 0 || strcmp(cursor, ".png") != 0) {
+        return false;
+    }
+
+    *face = (uint16_t)parsed;
+    return true;
+}
+
 void socket_asset_request_append(packet_struct *packet,
                                  const char *path,
                                  uint32_t cached_size,
