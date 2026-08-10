@@ -38,6 +38,143 @@ typedef enum socket_rendezvous_attempt_state {
     SOCKET_RENDEZVOUS_ATTEMPT_TERMINAL
 } socket_rendezvous_attempt_state_t;
 
+typedef struct socket_stun_resolver_context {
+    pthread_mutex_t mutex;
+    socket_stun_resolver_t resolver;
+    struct addrinfo hints;
+    struct addrinfo *addresses;
+    char host[MAX_BUF];
+    char service[6];
+    int result;
+    bool complete;
+    bool abandoned;
+} socket_stun_resolver_context_t;
+
+static socket_stun_resolver_t socket_stun_resolver = getaddrinfo;
+static pthread_mutex_t socket_stun_resolver_lock = PTHREAD_MUTEX_INITIALIZER;
+static bool socket_stun_resolver_busy;
+
+void socket_stun_resolver_set_for_test(socket_stun_resolver_t resolver) {
+    pthread_mutex_lock(&socket_stun_resolver_lock);
+    HARD_ASSERT(!socket_stun_resolver_busy);
+    socket_stun_resolver = resolver != NULL ? resolver : getaddrinfo;
+    pthread_mutex_unlock(&socket_stun_resolver_lock);
+}
+
+static bool socket_stun_resolver_claim(socket_stun_resolver_t *resolver) {
+    pthread_mutex_lock(&socket_stun_resolver_lock);
+    bool claimed = !socket_stun_resolver_busy;
+    if (claimed) {
+        socket_stun_resolver_busy = true;
+        *resolver = socket_stun_resolver;
+    }
+    pthread_mutex_unlock(&socket_stun_resolver_lock);
+    return claimed;
+}
+
+static void socket_stun_resolver_release(void) {
+    pthread_mutex_lock(&socket_stun_resolver_lock);
+    socket_stun_resolver_busy = false;
+    pthread_mutex_unlock(&socket_stun_resolver_lock);
+}
+
+static void socket_stun_resolver_context_destroy(socket_stun_resolver_context_t *context) {
+    pthread_mutex_destroy(&context->mutex);
+    free(context);
+}
+
+static void *socket_stun_resolver_run(void *data) {
+    socket_stun_resolver_context_t *context = data;
+    struct addrinfo *addresses = NULL;
+    int result = context->resolver(context->host, context->service, &context->hints, &addresses);
+    socket_stun_resolver_release();
+
+    pthread_mutex_lock(&context->mutex);
+    if (context->abandoned) {
+        pthread_mutex_unlock(&context->mutex);
+        if (addresses != NULL) {
+            freeaddrinfo(addresses);
+        }
+        socket_stun_resolver_context_destroy(context);
+        return NULL;
+    }
+    context->addresses = addresses;
+    context->result = result;
+    context->complete = true;
+    pthread_mutex_unlock(&context->mutex);
+    return NULL;
+}
+
+static struct addrinfo *socket_stun_resolve_until(const char *host,
+                                                  const char *service,
+                                                  const struct addrinfo *hints,
+                                                  uint64_t deadline_ms,
+                                                  int *result,
+                                                  bool *timed_out) {
+    *result = EAI_AGAIN;
+    *timed_out = false;
+    uint64_t now_ms = datetime_monotonic_ms();
+    if (now_ms >= deadline_ms) {
+        *timed_out = true;
+        return NULL;
+    }
+
+    socket_stun_resolver_context_t *context = xcalloc(1, sizeof(*context));
+    if (!socket_stun_resolver_claim(&context->resolver)) {
+        free(context);
+        return NULL;
+    }
+    context->hints = *hints;
+    snprintf(VS(context->host), "%s", host);
+    snprintf(VS(context->service), "%s", service);
+    if (pthread_mutex_init(&context->mutex, NULL) != 0) {
+        socket_stun_resolver_release();
+        free(context);
+        return NULL;
+    }
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, socket_stun_resolver_run, context) != 0) {
+        socket_stun_resolver_release();
+        socket_stun_resolver_context_destroy(context);
+        return NULL;
+    }
+
+    pthread_mutex_lock(&context->mutex);
+    while (!context->complete) {
+        now_ms = datetime_monotonic_ms();
+        if (now_ms >= deadline_ms) {
+            break;
+        }
+        unsigned int wait_us = (unsigned int)(MIN(deadline_ms - now_ms, 10U) * 1000U);
+        pthread_mutex_unlock(&context->mutex);
+        usleep(wait_us);
+        pthread_mutex_lock(&context->mutex);
+    }
+    if (!context->complete) {
+        context->abandoned = true;
+        pthread_mutex_unlock(&context->mutex);
+        (void)pthread_detach(thread);
+        *timed_out = true;
+        return NULL;
+    }
+
+    struct addrinfo *addresses = context->addresses;
+    *result = context->result;
+    bool complete_in_time = datetime_monotonic_ms() < deadline_ms;
+    pthread_mutex_unlock(&context->mutex);
+    (void)pthread_join(thread, NULL);
+    socket_stun_resolver_context_destroy(context);
+    if (!complete_in_time) {
+        if (addresses != NULL) {
+            freeaddrinfo(addresses);
+        }
+        *timed_out = true;
+        return NULL;
+    }
+    return addresses;
+}
+
 struct socket_rendezvous_attempt {
     char server_id[RENDEZVOUS_SERVER_ID_HEX_SIZE + 1U];
     char ticket[RENDEZVOUS_TICKET_HEX_SIZE + 1U];
@@ -793,12 +930,12 @@ static uint32_t socket_stun_u32(const unsigned char *b) {
     return ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) | ((uint32_t)b[2] << 8) | b[3];
 }
 
-static bool socket_stun_discover_until(socket_t *sc,
-                                       const char *endpoint,
-                                       char *host,
-                                       size_t host_size,
-                                       uint16_t *port,
-                                       uint64_t deadline_ms) {
+bool socket_stun_discover_until(socket_t *sc,
+                                const char *endpoint,
+                                char *host,
+                                size_t host_size,
+                                uint16_t *port,
+                                uint64_t deadline_ms) {
     HARD_ASSERT(sc != NULL);
     HARD_ASSERT(endpoint != NULL);
     HARD_ASSERT(host != NULL);
@@ -807,7 +944,7 @@ static bool socket_stun_discover_until(socket_t *sc,
     const char *separator = strrchr(endpoint, ':');
     if (separator == NULL || separator == endpoint || separator[1] == '\0' ||
         strlen(separator + 1) >= 6) {
-        LOG(ERROR, "Invalid STUN endpoint: %s", endpoint);
+        LOG(ERROR, "The configured STUN endpoint is invalid");
         return false;
     }
     char stun_host[MAX_BUF], stun_port[6];
@@ -825,12 +962,23 @@ static bool socket_stun_discover_until(socket_t *sc,
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_protocol = IPPROTO_UDP;
     hints.ai_flags = AI_NUMERICSERV;
-    if (datetime_monotonic_ms() >= deadline_ms) {
+    int rc;
+    bool resolution_timed_out;
+    addresses = socket_stun_resolve_until(stun_host,
+                                          stun_port,
+                                          &hints,
+                                          deadline_ms,
+                                          &rc,
+                                          &resolution_timed_out);
+    if (resolution_timed_out) {
+        LOG(ERROR, "STUN endpoint resolution timed out");
         return false;
     }
-    int rc = getaddrinfo(stun_host, stun_port, &hints, &addresses);
     if (rc != 0) {
-        LOG(ERROR, "Cannot resolve STUN endpoint %s: %s", endpoint, gai_strerror(rc));
+        LOG(ERROR, "Cannot resolve the configured STUN endpoint: %s", gai_strerror(rc));
+        if (addresses != NULL) {
+            freeaddrinfo(addresses);
+        }
         return false;
     }
 
@@ -857,9 +1005,11 @@ static bool socket_stun_discover_until(socket_t *sc,
             break;
         }
     }
-    freeaddrinfo(addresses);
+    if (addresses != NULL) {
+        freeaddrinfo(addresses);
+    }
     if (!sent) {
-        LOG(ERROR, "Failed to send STUN request to %s", endpoint);
+        LOG(ERROR, "Failed to send a request to the configured STUN endpoint");
         return false;
     }
 
@@ -874,7 +1024,7 @@ static bool socket_stun_discover_until(socket_t *sc,
     struct timeval timeout = {.tv_sec = (long)(timeout_ms / 1000U),
                               .tv_usec = (long)((timeout_ms % 1000U) * 1000U)};
     if (select(sc->handle + 1, &readfds, NULL, NULL, &timeout) != 1) {
-        LOG(ERROR, "STUN request to %s timed out", endpoint);
+        LOG(ERROR, "STUN request timed out");
         return false;
     }
 
@@ -883,29 +1033,40 @@ static bool socket_stun_discover_until(socket_t *sc,
     if (length < 20 || socket_stun_u16(response) != 0x0101 ||
         socket_stun_u32(response + 4) != SOCKET_STUN_MAGIC ||
         memcmp(response + 8, request + 8, 12) != 0) {
-        LOG(ERROR, "Invalid STUN response from %s", endpoint);
+        LOG(ERROR, "Invalid STUN response");
         return false;
     }
 
     size_t message_length = socket_stun_u16(response + 2);
-    if ((message_length & 3U) != 0 || message_length > (size_t)length - 20) {
-        LOG(ERROR, "Invalid STUN response from %s", endpoint);
+    if ((message_length & 3U) != 0 || message_length != (size_t)length - 20) {
+        LOG(ERROR, "Invalid STUN response");
         return false;
     }
-    for (size_t offset = 20; offset + 4 <= 20 + message_length;) {
+    size_t message_end = 20 + message_length;
+    for (size_t offset = 20; offset < message_end;) {
+        if (message_end - offset < 4) {
+            LOG(ERROR, "Invalid STUN response");
+            return false;
+        }
         uint16_t type = socket_stun_u16(response + offset);
         size_t value_length = socket_stun_u16(response + offset + 2);
         const unsigned char *value = response + offset + 4;
-        if (offset + 4 + value_length > (size_t)length) {
-            LOG(ERROR, "Invalid STUN response from %s", endpoint);
+        size_t padded_length = (value_length + 3U) & ~(size_t)3U;
+        if (value_length > message_end - offset - 4 || padded_length > message_end - offset - 4) {
+            LOG(ERROR, "Invalid STUN response");
             return false;
         }
-        if (type == 0x0020 && value_length >= 8) {
+        if (type == 0x0020) {
+            if (value_length < 4) {
+                LOG(ERROR, "Invalid STUN response");
+                return false;
+            }
             int family = value[1];
             *port = socket_stun_u16(value + 2) ^ (uint16_t)(SOCKET_STUN_MAGIC >> 16);
             unsigned char address[16];
             size_t address_length = family == 1 ? 4 : family == 2 ? 16 : 0;
-            if (address_length == 0 || value_length < 4 + address_length) {
+            if (address_length == 0 || value_length != 4 + address_length) {
+                LOG(ERROR, "Invalid STUN response");
                 return false;
             }
             unsigned char mask[16] = {0x21, 0x12, 0xa4, 0x42};
@@ -916,12 +1077,12 @@ static bool socket_stun_discover_until(socket_t *sc,
             if (*port == 0 ||
                 inet_ntop(family == 1 ? AF_INET : AF_INET6, address, host, host_size) == NULL ||
                 !socket_rendezvous_host_valid(host)) {
-                LOG(ERROR, "STUN response from %s contained an unusable mapped address", endpoint);
+                LOG(ERROR, "STUN response contained an unusable mapped address");
                 return false;
             }
             return true;
         }
-        offset += 4 + ((value_length + 3) & ~(size_t)3);
+        offset += 4 + padded_length;
     }
 
     LOG(ERROR, "STUN response did not contain XOR-MAPPED-ADDRESS");

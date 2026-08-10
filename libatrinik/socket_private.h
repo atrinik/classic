@@ -77,6 +77,19 @@ struct sock_struct {
     bool quic_shutdown_sent : 1;
 };
 
+typedef int (*socket_stun_resolver_t)(const char *host,
+                                      const char *service,
+                                      const struct addrinfo *hints,
+                                      struct addrinfo **addresses);
+
+bool socket_stun_discover_until(socket_t *sc,
+                                const char *endpoint,
+                                char *host,
+                                size_t host_size,
+                                uint16_t *port,
+                                uint64_t deadline_ms);
+void socket_stun_resolver_set_for_test(socket_stun_resolver_t resolver);
+
 size_t socket_rendezvous_client(socket_t *sc,
                                 const char *url,
                                 const char *stun_endpoint,
