@@ -97,17 +97,20 @@ static void unprotect_file_dacl(const char *path) {
 }
 #endif
 
-#ifndef WIN32
 static void setup_file(const char *path, const char *contents) {
     FILE *fp = fopen(path, "wb");
     require(fp != NULL);
     require(fwrite(contents, 1, strlen(contents), fp) == strlen(contents));
     require(fclose(fp) == 0);
 }
-#endif
 
-int main(void) {
+int main(int argc, char **argv) {
     toolkit_import(path);
+
+#ifndef WIN32
+    (void)argc;
+    (void)argv;
+#endif
 
     char directory[HUGE_BUF];
 #ifdef WIN32
@@ -122,6 +125,72 @@ int main(void) {
 #else
     snprintf(VS(directory), "/tmp/atrinik-path-XXXXXX");
     require(mkdtemp(directory) != NULL);
+#endif
+
+    char prepared[HUGE_BUF];
+    require(snprintf(VS(prepared), "%s/prepared", directory) < (int)sizeof(prepared));
+    require(path_ensure_real_directory(prepared, 0700) == PATH_DIRECTORY_OK);
+    require(path_ensure_real_directory(prepared, 0700) == PATH_DIRECTORY_OK);
+    struct stat prepared_metadata;
+    require(stat(prepared, &prepared_metadata) == 0 && S_ISDIR(prepared_metadata.st_mode));
+
+    char not_directory[HUGE_BUF];
+    require(snprintf(VS(not_directory), "%s/not-directory", directory) <
+            (int)sizeof(not_directory));
+    setup_file(not_directory, "not a directory\n");
+    require(path_ensure_real_directory(not_directory, 0700) == PATH_DIRECTORY_UNSAFE);
+
+    char missing_directory_parent[HUGE_BUF];
+    require(snprintf(VS(missing_directory_parent), "%s/missing-parent/child", directory) <
+            (int)sizeof(missing_directory_parent));
+    require(path_ensure_real_directory(missing_directory_parent, 0700) == PATH_DIRECTORY_ERROR);
+
+    char directory_link[HUGE_BUF];
+    require(snprintf(VS(directory_link), "%s/directory-link", directory) <
+            (int)sizeof(directory_link));
+#ifdef WIN32
+    wchar_t *prepared_wide = path_to_wide(prepared);
+    wchar_t *directory_link_wide = path_to_wide(directory_link);
+#ifndef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
+#define SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE 0x2
+#endif
+    bool directory_link_created =
+        CreateSymbolicLinkW(directory_link_wide,
+                            prepared_wide,
+                            SYMBOLIC_LINK_FLAG_DIRECTORY |
+                                SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) != 0;
+    DWORD directory_link_error = directory_link_created ? ERROR_SUCCESS : GetLastError();
+    if (!directory_link_created && directory_link_error == ERROR_INVALID_PARAMETER) {
+        directory_link_created =
+            CreateSymbolicLinkW(directory_link_wide, prepared_wide, SYMBOLIC_LINK_FLAG_DIRECTORY) !=
+            0;
+        directory_link_error = directory_link_created ? ERROR_SUCCESS : GetLastError();
+    }
+    require(directory_link_created || directory_link_error == ERROR_PRIVILEGE_NOT_HELD);
+    if (directory_link_created) {
+        require(path_ensure_real_directory(directory_link, 0700) == PATH_DIRECTORY_UNSAFE);
+        require(RemoveDirectoryW(directory_link_wide));
+    }
+    free(directory_link_wide);
+    free(prepared_wide);
+
+    static const char invalid_utf8[] = {(char)0xc3, (char)0x28, '\0'};
+    require(path_ensure_real_directory(invalid_utf8, 0700) == PATH_DIRECTORY_ERROR);
+    require(argc == 1 || argc == 2);
+    if (argc == 2) {
+        require(path_ensure_real_directory(argv[1], 0700) == PATH_DIRECTORY_UNSAFE);
+    }
+#else
+    require(symlink(prepared, directory_link) == 0);
+    require(path_ensure_real_directory(directory_link, 0700) == PATH_DIRECTORY_UNSAFE);
+    require(unlink(directory_link) == 0);
+
+    char dangling_link[HUGE_BUF];
+    require(snprintf(VS(dangling_link), "%s/dangling-link", directory) <
+            (int)sizeof(dangling_link));
+    require(symlink("missing-target", dangling_link) == 0);
+    require(path_ensure_real_directory(dangling_link, 0700) == PATH_DIRECTORY_UNSAFE);
+    require(unlink(dangling_link) == 0);
 #endif
 
     char path[HUGE_BUF];
@@ -279,8 +348,12 @@ int main(void) {
     unlink(path);
 #ifdef WIN32
     unlink(broad);
+    unlink(not_directory);
+    require(RemoveDirectoryA(prepared));
     require(RemoveDirectoryA(directory));
 #else
+    unlink(not_directory);
+    require(rmdir(prepared) == 0);
     require(rmdir(directory) == 0);
 #endif
     OPENSSL_cleanse(secret, sizeof(secret));
