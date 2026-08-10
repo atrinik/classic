@@ -516,11 +516,12 @@ static void test_movement_boundaries_and_modifiers(void) {
     keybind_movement_state_release(&state, SDL_SCANCODE_A, false, false);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
-    /* A queued ordinary move supersedes a pending run-stream stop. */
+    /* A queued ordinary move follows the prior run-stream stop. */
     keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
     keybind_movement_state_run_released(&state, true);
     keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_STOP, 0);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
@@ -528,6 +529,29 @@ static void test_movement_boundaries_and_modifiers(void) {
     keybind_movement_state_init(&state);
     keybind_movement_state_run_released(&state, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_STOP, 0);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
+
+    /* A fire-routed repeat cannot discard a preceding run stop. */
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    keybind_movement_state_run_released(&state, true);
+    TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_STOP, 0);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    keybind_movement_state_release(&state, SDL_SCANCODE_A, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
+
+    /* Same-poll chord releases retain the initial composite and each transition. */
+    keybind_movement_state_init(&state);
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
+    keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
+    keybind_movement_state_release(&state, SDL_SCANCODE_A, true, false);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 9);
+    keybind_movement_state_release(&state, SDL_SCANCODE_B, true, false);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_STOP, 5);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 }
 

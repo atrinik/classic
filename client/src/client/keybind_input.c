@@ -354,7 +354,6 @@ bool keybind_movement_state_press(keybind_movement_state *state,
         state->pending_move = true;
         state->pending_direction = keybind_movement_direction(state);
         state->pending_stop = false;
-        state->pending_run_stop = false;
         return true;
     }
 
@@ -367,7 +366,6 @@ bool keybind_movement_state_press(keybind_movement_state *state,
     state->pending_move = true;
     state->pending_direction = keybind_movement_direction(state);
     state->pending_stop = false;
-    state->pending_run_stop = false;
     return true;
 }
 
@@ -468,11 +466,16 @@ keybind_movement_action keybind_movement_state_flush(keybind_movement_state *sta
     if (state == NULL || direction == NULL) {
         return KEYBIND_MOVEMENT_ACTION_NONE;
     }
+    if (state->pending_run_stop) {
+        state->pending_run_stop = false;
+        state->repeated = false;
+        *direction = 0;
+        return KEYBIND_MOVEMENT_ACTION_RUN_STOP;
+    }
     if (state->pending_move) {
         state->pending_move = false;
         *direction = state->pending_direction;
         if (*direction != 0) {
-            state->pending_run_stop = false;
             return KEYBIND_MOVEMENT_ACTION_MOVE;
         }
     }
@@ -481,12 +484,6 @@ keybind_movement_action keybind_movement_state_flush(keybind_movement_state *sta
         state->pending_run_stop = false;
         *direction = 5;
         return KEYBIND_MOVEMENT_ACTION_STOP;
-    }
-    if (state->pending_run_stop) {
-        state->pending_run_stop = false;
-        state->repeated = false;
-        *direction = 0;
-        return KEYBIND_MOVEMENT_ACTION_RUN_STOP;
     }
     return KEYBIND_MOVEMENT_ACTION_NONE;
 }

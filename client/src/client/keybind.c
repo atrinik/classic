@@ -334,19 +334,23 @@ void keybind_state_ensure(void) {
 /** Emit the next pending logical movement update. */
 void keybind_movement_flush(void) {
     uint8_t direction;
-    keybind_movement_action action = keybind_movement_state_flush(&movement_state, &direction);
+    keybind_movement_action action;
 
-    if (action == KEYBIND_MOVEMENT_ACTION_MOVE) {
-        move_keys(direction);
-    } else if (action == KEYBIND_MOVEMENT_ACTION_STOP) {
-        move_keys_clear();
-    } else if (action == KEYBIND_MOVEMENT_ACTION_RUN_STOP) {
-        move_keys_run_stop();
+    while ((action = keybind_movement_state_flush(&movement_state, &direction)) !=
+           KEYBIND_MOVEMENT_ACTION_NONE) {
+        if (action == KEYBIND_MOVEMENT_ACTION_MOVE) {
+            move_keys(direction);
+        } else if (action == KEYBIND_MOVEMENT_ACTION_STOP) {
+            move_keys_clear();
+        } else if (action == KEYBIND_MOVEMENT_ACTION_RUN_STOP) {
+            move_keys_run_stop();
+        }
     }
 }
 
 /** Reconcile a physical key-up even when a focused UI element consumes it. */
 void keybind_movement_key_released(SDL_Scancode scancode) {
+    keybind_movement_flush();
     keybind_movement_state_release(&movement_state, scancode, cpl.run_on, cpl.fire_on);
 }
 
