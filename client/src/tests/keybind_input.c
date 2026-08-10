@@ -356,10 +356,19 @@ static void test_movement_repeat_and_release(void) {
     keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, false, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
 
-    /* The newest repeat-capable constituent drives the logical stream. */
+    /* The first repeat after a membership change owns the logical stream. */
     TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, true, true));
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
     TEST_CHECK(!keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
+
+    keybind_movement_state_init(&state);
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
+    keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
+    TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
+    TEST_CHECK(!keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, true, true));
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
     /* Releasing the repeat owner continues immediately with the remaining key. */
@@ -371,7 +380,7 @@ static void test_movement_repeat_and_release(void) {
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_STOP, 5);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
-    /* Adding a chord key after repeats begin transfers repeat ownership. */
+    /* Adding a chord key after repeats begin re-elects either platform source. */
     for (size_t reverse = 0; reverse < 2; reverse++) {
         SDL_Scancode first_scancode = reverse ? SDL_SCANCODE_B : SDL_SCANCODE_A;
         SDL_Scancode second_scancode = reverse ? SDL_SCANCODE_A : SDL_SCANCODE_B;
@@ -393,6 +402,18 @@ static void test_movement_repeat_and_release(void) {
             !keybind_movement_state_press(&state, first_scancode, first_direction, true, true));
         expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
     }
+
+    keybind_movement_state_init(&state);
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
+    keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
+    TEST_CHECK(keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, true, true));
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
+    TEST_CHECK(!keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, true, true));
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 }
 
 static void test_movement_duplicates_and_repeat_selection(void) {
@@ -474,12 +495,12 @@ static void test_movement_boundaries_and_modifiers(void) {
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
     keybind_movement_state_release(&state, SDL_SCANCODE_A, true, false);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_STOP, 5);
-    keybind_movement_state_run_released(&state, false);
+    keybind_movement_state_run_released(&state, false, false);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 
     keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
-    keybind_movement_state_run_released(&state, false);
+    keybind_movement_state_run_released(&state, false, true);
     keybind_movement_state_release(&state, SDL_SCANCODE_A, false, false);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_STOP, 0);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
@@ -487,9 +508,15 @@ static void test_movement_boundaries_and_modifiers(void) {
     /* A queued ordinary move supersedes a pending run-stream stop. */
     keybind_movement_state_press(&state, SDL_SCANCODE_A, 7, false, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 7);
-    keybind_movement_state_run_released(&state, false);
+    keybind_movement_state_run_released(&state, false, true);
     keybind_movement_state_press(&state, SDL_SCANCODE_B, 9, false, true);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
+
+    /* An external running producer still receives the legacy run stop. */
+    keybind_movement_state_init(&state);
+    keybind_movement_state_run_released(&state, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_RUN_STOP, 0);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
 }
 
@@ -609,11 +636,13 @@ static void test_keybind_event_integration(void) {
         .key = SDLK_D,
         .repeat = true,
     };
-    keybind_struct *bindings[] = {&northwest,
-                                  &shifted,
-                                  &northeast,
-                                  &move_then_fire,
-                                  &fire_then_move};
+    keybind_struct movement_sequence = {
+        .command = "?MOVE_NW;?MOVE_NE",
+        .key = SDLK_E,
+        .repeat = true,
+    };
+    keybind_struct *bindings[] =
+        {&northwest, &shifted, &northeast, &move_then_fire, &fire_then_move, &movement_sequence};
     movement_sink sink;
     SDL_KeyboardEvent event = {.type = SDL_EVENT_KEY_DOWN};
 
@@ -683,6 +712,19 @@ static void test_keybind_event_integration(void) {
     movement_sink_flush(&sink);
     TEST_CHECK(sink.actions_num == 0);
     TEST_CHECK(sink.intercepted_num == 1);
+
+    /* Multiple movement tokens retain semicolon order on down and repeat. */
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.key = SDLK_E;
+    event.scancode = SDL_SCANCODE_E;
+    event.repeat = false;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 2 && sink.directions[0] == 7 && sink.directions[1] == 9);
+    event.repeat = true;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(sink.actions_num == 4 && sink.directions[2] == 7 && sink.directions[3] == 9);
 }
 
 int main(void) {

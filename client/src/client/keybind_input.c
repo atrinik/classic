@@ -324,7 +324,6 @@ bool keybind_movement_command_direction(const char *cmd, uint8_t *direction) {
 void keybind_movement_state_init(keybind_movement_state *state) {
     memset(state, 0, sizeof(*state));
     state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
-    state->stream_stopped = true;
 }
 
 static uint8_t keybind_movement_direction(const keybind_movement_state *state);
@@ -350,6 +349,7 @@ bool keybind_movement_state_press(keybind_movement_state *state,
         } else if (scancode != state->repeat_scancode) {
             return false;
         }
+        key->direction = direction;
         state->repeated = true;
         state->pending_move = true;
         state->pending_direction = keybind_movement_direction(state);
@@ -363,9 +363,7 @@ bool keybind_movement_state_press(keybind_movement_state *state,
     }
     key->direction = direction;
     key->repeat = repeat;
-    if (repeat) {
-        state->repeat_scancode = scancode;
-    }
+    state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
     state->pending_move = true;
     state->pending_direction = keybind_movement_direction(state);
     state->pending_stop = false;
@@ -394,9 +392,7 @@ void keybind_movement_state_release(keybind_movement_state *state,
     }
 
     memset(&state->keys[scancode], 0, sizeof(state->keys[scancode]));
-    if (scancode == state->repeat_scancode) {
-        state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
-    }
+    state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
 
     if (keybind_movement_active(state)) {
         state->pending_move = true;
@@ -428,8 +424,10 @@ void keybind_movement_state_clear(keybind_movement_state *state, bool running, b
 }
 
 /** Schedule a run-stream stop unless movement already stopped it. */
-void keybind_movement_state_run_released(keybind_movement_state *state, bool firing) {
-    if (state != NULL && !state->stream_stopped && !firing) {
+void keybind_movement_state_run_released(keybind_movement_state *state,
+                                         bool firing,
+                                         bool run_stream_active) {
+    if (state != NULL && run_stream_active && !firing) {
         state->pending_run_stop = true;
     }
 }
@@ -477,24 +475,19 @@ keybind_movement_action keybind_movement_state_flush(keybind_movement_state *sta
         *direction = state->pending_direction;
         if (*direction != 0) {
             state->pending_run_stop = false;
-            state->stream_stopped = false;
             return KEYBIND_MOVEMENT_ACTION_MOVE;
         }
     }
     if (state->pending_stop) {
         state->pending_stop = false;
         state->pending_run_stop = false;
-        state->stream_stopped = true;
         *direction = 5;
         return KEYBIND_MOVEMENT_ACTION_STOP;
     }
     if (state->pending_run_stop) {
         state->pending_run_stop = false;
-        if (!state->stream_stopped) {
-            state->stream_stopped = true;
-            *direction = 0;
-            return KEYBIND_MOVEMENT_ACTION_RUN_STOP;
-        }
+        *direction = 0;
+        return KEYBIND_MOVEMENT_ACTION_RUN_STOP;
     }
     return KEYBIND_MOVEMENT_ACTION_NONE;
 }

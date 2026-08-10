@@ -288,7 +288,9 @@ int keybind_process_command_up(const char *cmd) {
 
         if (!strcmp(cmd, "RUNON")) {
             cpl.run_on = 0;
-            keybind_movement_state_run_released(&movement_state, cpl.fire_on);
+            keybind_movement_state_run_released(&movement_state,
+                                                cpl.fire_on,
+                                                move_keys_run_stream_active());
         } else if (!strcmp(cmd, "FIREON")) {
             cpl.fire_on = 0;
         } else if (!strncmp(cmd, "MOVE_", 5)) {

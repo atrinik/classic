@@ -28,6 +28,9 @@
  */
 
 #include <global.h>
+
+/** Whether a running movement producer still needs a direction-zero stop. */
+static bool run_stream_active;
 #include <client_socket.h>
 #include <toolkit/packet.h>
 
@@ -59,6 +62,12 @@ void move_keys_clear(void) {
     packet_struct *packet = packet_new(SERVER_CMD_CLEAR, 0, 0);
 
     socket_send_packet(packet);
+    run_stream_active = false;
+}
+
+/** Return whether a running movement producer still needs a stop. */
+bool move_keys_run_stream_active(void) {
+    return run_stream_active;
 }
 
 void move_keys(int num) {
@@ -70,6 +79,7 @@ void move_keys(int num) {
         if (num == 5) {
             move_keys_clear();
         } else {
+            run_stream_active = cpl.run_on && num != 0;
             packet = packet_new(SERVER_CMD_MOVE, 8, 0);
             packet_writer_write_uint8(packet, num ? directions_fire[num - 1] : 0);
             packet_writer_write_uint8(packet, cpl.run_on);

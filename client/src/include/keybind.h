@@ -78,7 +78,6 @@ typedef struct keybind_movement_state {
     bool pending_move;
     bool pending_stop;
     bool pending_run_stop;
-    bool stream_stopped;
 } keybind_movement_state;
 
 /** Callbacks used by the testable physical keybinding dispatcher. */
@@ -166,7 +165,9 @@ extern void keybind_movement_state_release(keybind_movement_state *state,
 
 extern void keybind_movement_state_clear(keybind_movement_state *state, bool running, bool firing);
 
-extern void keybind_movement_state_run_released(keybind_movement_state *state, bool firing);
+extern void keybind_movement_state_run_released(keybind_movement_state *state,
+                                                bool firing,
+                                                bool run_stream_active);
 
 extern keybind_movement_action keybind_movement_state_flush(keybind_movement_state *state,
                                                             uint8_t *direction);

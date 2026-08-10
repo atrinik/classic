@@ -35,6 +35,7 @@ void keybind_event_process_binding(const keybind_struct *keybind,
                                    const SDL_KeyboardEvent *event,
                                    const keybind_event_handler *handler) {
     char command[MAX_BUF], *cp;
+    bool movement_segment_seen = false;
 
     if (keybind == NULL || event == NULL || handler == NULL || handler->movement == NULL ||
         (!keybind->repeat && event->repeat)) {
@@ -52,6 +53,10 @@ void keybind_event_process_binding(const keybind_struct *keybind,
 
         uint8_t direction;
         if (keybind_movement_command_direction(cp, &direction)) {
+            if (movement_segment_seen) {
+                keybind_event_flush(handler);
+            }
+            movement_segment_seen = true;
             if (event->type == SDL_EVENT_KEY_DOWN) {
                 if (handler->movement_intercept_matches != NULL &&
                     handler->movement_intercept_matches(cp, handler->user_data)) {
