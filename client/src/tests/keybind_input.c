@@ -372,6 +372,32 @@ static void test_movement_queue_replacement(void) {
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_REPLACE, 2);
     keybind_movement_state_release(&state, SDL_SCANCODE_A, false, false);
     expect_movement(&state, KEYBIND_MOVEMENT_ACTION_STOP, 5);
+
+    /* Completed standalone taps begin a new queue epoch instead of replacing. */
+    keybind_movement_state_init(&state);
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 6, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 6);
+    keybind_movement_state_release(&state, SDL_SCANCODE_A, false, false);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
+    keybind_movement_state_press(&state, SDL_SCANCODE_B, 8, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 8);
+
+    /* Removing the final modified tap also closes its replacement epoch. */
+    keybind_movement_state_init(&state);
+    keybind_movement_state_press(&state, SDL_SCANCODE_A, 9, false, true);
+    keybind_movement_state_set_modifier(&state, SDL_SCANCODE_A, SDL_KMOD_SHIFT);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 9);
+    keybind_movement_state_reconcile_modifiers(&state,
+                                               SDL_KMOD_NONE,
+                                               NULL,
+                                               0,
+                                               false,
+                                               false,
+                                               false,
+                                               false);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_NONE, 0);
+    keybind_movement_state_press(&state, SDL_SCANCODE_B, 2, false, true);
+    expect_movement(&state, KEYBIND_MOVEMENT_ACTION_MOVE, 2);
 }
 
 static void test_movement_repeat_and_release(void) {
@@ -1130,9 +1156,13 @@ static void test_keybind_event_integration(void) {
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     movement_sink_flush(&sink);
     TEST_CHECK(sink.actions_num == 2 && sink.directions[0] == 7 && sink.directions[1] == 9);
+    TEST_CHECK(sink.actions[0] == KEYBIND_MOVEMENT_ACTION_MOVE &&
+               sink.actions[1] == KEYBIND_MOVEMENT_ACTION_MOVE);
     event.repeat = true;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     TEST_CHECK(sink.actions_num == 4 && sink.directions[2] == 7 && sink.directions[3] == 9);
+    TEST_CHECK(sink.actions[2] == KEYBIND_MOVEMENT_ACTION_MOVE &&
+               sink.actions[3] == KEYBIND_MOVEMENT_ACTION_MOVE);
 
     /* An unrelated key-up does not split same-poll chord composition. */
     movement_sink_reset(&sink);

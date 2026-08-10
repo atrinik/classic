@@ -2458,14 +2458,69 @@ void socket_command_quest_list(socket_struct *ns,
     free(cp);
 }
 
+/** Remove queued commands belonging to one replaceable directional stream. */
+static bool socket_command_queue_clear_stream(packet_struct *queue, uint8_t command) {
+    size_t read_pos = 0;
+
+    /* Validate the complete framed queue before changing it. */
+    while (read_pos < queue->len) {
+        if (queue->len - read_pos < 2) {
+            return false;
+        }
+        size_t command_len = ((size_t)queue->data[read_pos] << 8) | queue->data[read_pos + 1];
+        if (command_len == 0 || command_len > queue->len - read_pos - 2) {
+            return false;
+        }
+        read_pos += command_len + 2;
+    }
+
+    read_pos = 0;
+    size_t write_pos = 0;
+    while (read_pos < queue->len) {
+        size_t command_len = ((size_t)queue->data[read_pos] << 8) | queue->data[read_pos + 1];
+        size_t frame_len = command_len + 2;
+        uint8_t queued_command = queue->data[read_pos + 2];
+        bool remove =
+            (command == SERVER_CMD_MOVE && queued_command == SERVER_CMD_MOVE && command_len == 3) ||
+            (command == SERVER_CMD_FIRE && queued_command == SERVER_CMD_FIRE && command_len == 2);
+        if (!remove) {
+            if (write_pos != read_pos) {
+                memmove(queue->data + write_pos, queue->data + read_pos, frame_len);
+            }
+            write_pos += frame_len;
+        }
+        read_pos += frame_len;
+    }
+    queue->len = write_pos;
+    return true;
+}
+
 void socket_command_clear(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos) {
-    /* The graphical client sends CLEAR for its Stay action. Besides dropping
-     * commands which have not been dispatched yet, cancel movement already
-     * expanded into the player's persistent server-side path queue and stop
-     * directional run mode. This lets combat or other urgent input reliably
-     * interrupt click-to-move. */
-    ns->packet_recv_cmd->len = 0;
-    if (pl != NULL) {
+    if (pos == len) {
+        /* Empty CLEAR retains Stay's historical broad queue/path reset. */
+        ns->packet_recv_cmd->len = 0;
+        if (pl != NULL) {
+            player_path_clear(pl);
+            pl->run_on = 0;
+        }
+        return;
+    }
+
+    packet_reader_t reader;
+    packet_reader_init_cursor(&reader, data, len, &pos);
+    uint8_t command = packet_reader_read_uint8(&reader);
+    if ((command != SERVER_CMD_MOVE && command != SERVER_CMD_FIRE) ||
+        !packet_reader_finish(&reader)) {
+        if (packet_reader_error(&reader) == PACKET_ERROR_NONE) {
+            packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
+        }
+        return;
+    }
+    if (!socket_command_queue_clear_stream(ns->packet_recv_cmd, command)) {
+        LOG(DEVEL, "Refused to filter malformed player command queue");
+        return;
+    }
+    if (command == SERVER_CMD_MOVE && pl != NULL) {
         player_path_clear(pl);
         pl->run_on = 0;
     }

@@ -51,6 +51,16 @@ static packet_struct *queued_command_payload_find(socket_struct *cs, uint8_t typ
     return NULL;
 }
 
+static void command_queue_append(packet_struct *queue,
+                                 uint8_t command,
+                                 const uint8_t *payload,
+                                 size_t payload_len) {
+    packet_writer_write_uint16(queue, payload_len + 1);
+    packet_writer_write_uint8(queue, command);
+    packet_writer_write_bytes(queue, payload, payload_len);
+    ck_assert(packet_writer_finish(queue));
+}
+
 static size_t validate_queued_map_payloads(socket_struct *cs) {
     size_t count = 0;
     for (packet_struct *packet = cs->packets; packet != NULL && packet->next != NULL;
@@ -734,15 +744,103 @@ START_TEST(test_clear_immediately_discards_queued_commands_and_stops_run) {
     socket_struct *cs = pl->cs;
     pl->run_on = 1;
 
-    packet_writer_write_uint16(cs->packet_recv_cmd, 1);
-    packet_writer_write_uint8(cs->packet_recv_cmd, SERVER_CMD_MOVE);
-    ck_assert(packet_writer_finish(cs->packet_recv_cmd));
+    const uint8_t move[] = {6, 1};
+    const uint8_t apply[] = {0xaa, 0xbb};
+    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_MOVE, move, sizeof(move));
+    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_ITEM_APPLY, apply, sizeof(apply));
     ck_assert_uint_gt(cs->packet_recv_cmd->len, 0);
 
     uint8_t request[] = {SERVER_CMD_CLEAR};
     ck_assert(socket_server_handle_command(cs, NULL, request, sizeof(request)));
     ck_assert_uint_eq(cs->packet_recv_cmd->len, 0);
     ck_assert_uint_eq(pl->run_on, 0);
+}
+END_TEST
+
+START_TEST(test_scoped_clear_replaces_only_queued_movement_stream) {
+    mapstruct *map;
+    object *op;
+
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    const uint8_t move_west[] = {4, 1};
+    const uint8_t move_south[] = {2, 1};
+    const uint8_t apply[] = {0xaa, 0xbb};
+    const uint8_t fire[] = {8};
+    const uint8_t combat[] = {1};
+    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_MOVE, move_west, sizeof(move_west));
+    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_ITEM_APPLY, apply, sizeof(apply));
+    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_FIRE, fire, sizeof(fire));
+    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_MOVE, move_south, sizeof(move_south));
+    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_COMBAT, combat, sizeof(combat));
+
+    packet_struct *expected = packet_new(0, 32, 32);
+    command_queue_append(expected, SERVER_CMD_ITEM_APPLY, apply, sizeof(apply));
+    command_queue_append(expected, SERVER_CMD_FIRE, fire, sizeof(fire));
+    command_queue_append(expected, SERVER_CMD_COMBAT, combat, sizeof(combat));
+
+    pl->run_on = 1;
+    uint8_t request[] = {SERVER_CMD_CLEAR, SERVER_CMD_MOVE};
+    ck_assert(socket_server_handle_command(cs, NULL, request, sizeof(request)));
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, expected->len);
+    ck_assert_mem_eq(cs->packet_recv_cmd->data, expected->data, expected->len);
+    ck_assert_uint_eq(pl->run_on, 0);
+    packet_free(expected);
+}
+END_TEST
+
+START_TEST(test_scoped_clear_replaces_only_untagged_directional_fire) {
+    mapstruct *map;
+    object *op;
+
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    const uint8_t short_fire[] = {8};
+    const uint8_t tagged_fire[] = {5, 0, 0, 0, 42};
+    const uint8_t move[] = {6, 1};
+    const uint8_t apply[] = {0xaa};
+    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_FIRE, short_fire, sizeof(short_fire));
+    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_MOVE, move, sizeof(move));
+    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_FIRE, tagged_fire, sizeof(tagged_fire));
+    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_ITEM_APPLY, apply, sizeof(apply));
+
+    packet_struct *expected = packet_new(0, 32, 32);
+    command_queue_append(expected, SERVER_CMD_MOVE, move, sizeof(move));
+    command_queue_append(expected, SERVER_CMD_FIRE, tagged_fire, sizeof(tagged_fire));
+    command_queue_append(expected, SERVER_CMD_ITEM_APPLY, apply, sizeof(apply));
+
+    pl->run_on = 1;
+    uint8_t request[] = {SERVER_CMD_CLEAR, SERVER_CMD_FIRE};
+    ck_assert(socket_server_handle_command(cs, NULL, request, sizeof(request)));
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, expected->len);
+    ck_assert_mem_eq(cs->packet_recv_cmd->data, expected->data, expected->len);
+    ck_assert_uint_eq(pl->run_on, 1);
+    packet_free(expected);
+}
+END_TEST
+
+START_TEST(test_invalid_scoped_clear_preserves_queued_commands) {
+    mapstruct *map;
+    object *op;
+
+    check_setup_env_pl(&map, &op);
+    socket_struct *cs = CONTR(op)->cs;
+    const uint8_t move[] = {6, 1};
+    command_queue_append(cs->packet_recv_cmd, SERVER_CMD_MOVE, move, sizeof(move));
+    packet_struct *expected = packet_dup(cs->packet_recv_cmd);
+
+    uint8_t unsupported[] = {SERVER_CMD_CLEAR, SERVER_CMD_ITEM_APPLY};
+    ck_assert(socket_server_handle_command(cs, NULL, unsupported, sizeof(unsupported)));
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, expected->len);
+    ck_assert_mem_eq(cs->packet_recv_cmd->data, expected->data, expected->len);
+
+    uint8_t trailing[] = {SERVER_CMD_CLEAR, SERVER_CMD_MOVE, 0};
+    ck_assert(socket_server_handle_command(cs, NULL, trailing, sizeof(trailing)));
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, expected->len);
+    ck_assert_mem_eq(cs->packet_recv_cmd->data, expected->data, expected->len);
+    packet_free(expected);
 }
 END_TEST
 
@@ -1050,6 +1148,9 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_command_policy_covers_every_connection_phase);
     tcase_add_test(tc_core, test_out_of_order_player_command_is_not_queued);
     tcase_add_test(tc_core, test_clear_immediately_discards_queued_commands_and_stops_run);
+    tcase_add_test(tc_core, test_scoped_clear_replaces_only_queued_movement_stream);
+    tcase_add_test(tc_core, test_scoped_clear_replaces_only_untagged_directional_fire);
+    tcase_add_test(tc_core, test_invalid_scoped_clear_preserves_queued_commands);
     tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
     tcase_add_test(tc_core, test_version_requires_exact_match);
     tcase_add_test(tc_core, test_move_path_walkable_target_reaches_exact_coordinate);

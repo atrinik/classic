@@ -373,6 +373,19 @@ if (BUILD_TESTING)
     target_link_libraries(client-keybind-input-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-keybind-input COMMAND client-keybind-input-tests)
 
+    add_executable(client-move-stream-tests
+        src/tests/move_stream.c
+        src/events/move.c)
+    atrinik_configure_target(client-move-stream-tests)
+    target_compile_definitions(client-move-stream-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-move-stream-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-move-stream-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-move-stream COMMAND client-move-stream-tests)
+
     add_executable(client-compound-packet-tests
         src/tests/compound_packet.c
         src/client/item_packet.c

@@ -191,6 +191,9 @@ extern void keybind_movement_state_defer_move(keybind_movement_state *state);
 
 extern void keybind_movement_state_cancel_deferred_move(keybind_movement_state *state);
 
+/** Separate explicitly ordered movement commands from held-stream replacement. */
+extern void keybind_movement_state_ordered_boundary(keybind_movement_state *state);
+
 extern void keybind_movement_state_mode_pressed(keybind_movement_state *state,
                                                 SDL_Scancode scancode,
                                                 SDL_Keymod mod,

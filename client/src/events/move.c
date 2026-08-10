@@ -65,6 +65,17 @@ void move_keys_clear(void) {
     run_stream_active = false;
 }
 
+/** Remove queued commands for one movement stream without clearing other input. */
+static void move_keys_clear_stream(uint8_t command) {
+    packet_struct *packet = packet_new(SERVER_CMD_CLEAR, 1, 1);
+
+    packet_writer_write_uint8(packet, command);
+    socket_send_packet(packet);
+    if (command == SERVER_CMD_MOVE) {
+        run_stream_active = false;
+    }
+}
+
 /** Return whether a running movement producer still needs a stop. */
 bool move_keys_run_stream_active(void) {
     return run_stream_active;
@@ -72,7 +83,13 @@ bool move_keys_run_stream_active(void) {
 
 /** Stop a running movement stream without applying fire modifiers. */
 void move_keys_run_stop(void) {
-    move_keys_clear();
+    move_keys_clear_stream(SERVER_CMD_MOVE);
+}
+
+/** Replace the queued direction in the active movement or directional-fire stream. */
+void move_keys_replace(int num) {
+    move_keys_clear_stream(cpl.fire_on ? SERVER_CMD_FIRE : SERVER_CMD_MOVE);
+    move_keys(num);
 }
 
 void move_keys(int num) {

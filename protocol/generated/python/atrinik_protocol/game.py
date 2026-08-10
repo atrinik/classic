@@ -2,7 +2,7 @@
 # Do not edit by hand.
 from enum import IntEnum
 
-PROTOCOL_VERSION = 1075
+PROTOCOL_VERSION = 1076
 
 
 class ClientToServerCommand(IntEnum):

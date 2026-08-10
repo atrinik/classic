@@ -30,6 +30,27 @@ static void keybind_event_flush(const keybind_event_handler *handler) {
     }
 }
 
+/** Count movement segments so explicitly ordered macros retain their cadence. */
+static size_t keybind_event_movement_segments(const char *binding_command) {
+    char command[MAX_BUF], *cp;
+    size_t count = 0;
+
+    strncpy(command, binding_command, sizeof(command) - 1);
+    command[sizeof(command) - 1] = '\0';
+    cp = strtok(command, ";");
+    while (cp != NULL) {
+        while (*cp == ' ') {
+            cp++;
+        }
+        uint8_t direction;
+        if (keybind_movement_command_direction(cp, &direction)) {
+            count++;
+        }
+        cp = strtok(NULL, ";");
+    }
+    return count;
+}
+
 /** Process one already-selected physical keybinding. */
 void keybind_event_process_binding(const keybind_struct *keybind,
                                    const SDL_KeyboardEvent *event,
@@ -45,6 +66,7 @@ void keybind_event_process_binding(const keybind_struct *keybind,
 
     strncpy(command, keybind->command, sizeof(command) - 1);
     command[sizeof(command) - 1] = '\0';
+    bool ordered_movement = keybind_event_movement_segments(keybind->command) > 1;
 
     cp = strtok(command, ";");
     while (cp != NULL) {
@@ -74,6 +96,9 @@ void keybind_event_process_binding(const keybind_struct *keybind,
                                                              event->repeat,
                                                              keybind->repeat);
                 if (accepted) {
+                    if (ordered_movement) {
+                        keybind_movement_state_ordered_boundary(handler->movement);
+                    }
                     movement_accepted = true;
                     keybind_movement_state_set_modifier(handler->movement,
                                                         event->scancode,

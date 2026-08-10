@@ -425,6 +425,13 @@ void keybind_movement_state_cancel_deferred_move(keybind_movement_state *state) 
     }
 }
 
+/** Separate explicitly ordered movement commands from held-stream replacement. */
+void keybind_movement_state_ordered_boundary(keybind_movement_state *state) {
+    if (state != NULL) {
+        state->emitted_direction = 0;
+    }
+}
+
 /** Record a momentary RUN/FIRE owner accepted by gameplay dispatch. */
 void keybind_movement_state_mode_pressed(keybind_movement_state *state,
                                          SDL_Scancode scancode,
@@ -663,6 +670,9 @@ void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
         state->deferred_move = false;
         state->repeated = false;
         state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
+        if (!state->pending_stop && !state->pending_run_stop) {
+            state->emitted_direction = 0;
+        }
     }
 }
 
@@ -713,6 +723,9 @@ void keybind_movement_state_release(keybind_movement_state *state,
         state->pending_stop = stop;
         state->repeated = false;
         state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
+        if (!state->pending_stop && !state->pending_run_stop) {
+            state->emitted_direction = 0;
+        }
     }
 }
 
