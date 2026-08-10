@@ -87,7 +87,13 @@ gh workflow run package-release.yml --repo atrinik/classic --ref main \
 3. Semantic-release analyzes and formats only exact first-parent commits,
    creates the unprefixed tag and draft GitHub release notes, then dispatches
    Package Release from that exact immutable tag ref.
-4. The non-publishing Build Release Candidate workflow revalidates the tag,
+4. Package Release stages the public Discord Application ID from the
+   `discord-release` environment before invoking the reusable candidate
+   workflow. Environment secrets remain scoped to that top-level release job;
+   a one-day artifact carries only the validated public ID into the official
+   Windows client package. The environment deployment policy admits immutable
+   `v*` tag refs and `main` only for checked recovery.
+5. The non-publishing Build Release Candidate workflow revalidates the tag,
    draft, main ancestry, and successful aggregate check. GitHub exposes drafts
    only to tokens with push access, so production grants `contents: write` only
    to its metadata job; that job performs no mutations. Rehearsals remain
@@ -95,16 +101,16 @@ gh workflow run package-release.yml --repo atrinik/classic --ref main \
    Independent jobs build every artifact, install/import the wheel, consume the
    extracted same-version library archive, and build the root-context server
    image without publishing it.
-5. Package Release rechecks all hashes, attests the candidate, and reconciles
+6. Package Release rechecks all hashes, attests the candidate, and reconciles
    the draft assets: a matching partial upload is resumed, while any digest,
    size, state, name, or extra-asset mismatch fails without overwrite. It then
    publishes or verifies the same-version server image, locked-input labels,
    SLSA provenance, SPDX SBOM, and GitHub/Sigstore attestation.
-6. With all twelve assets and the image complete, the workflow publishes the
+7. With all twelve assets and the image complete, the workflow publishes the
    draft as its last release mutation and verifies that GitHub reports an
    immutable, non-prerelease release with the exact asset digests. A retry also
    accepts that exact published state and skips every immutable release write.
-7. A separate job dispatches the globally serialized Promote Latest Release
+8. A separate job dispatches the globally serialized Promote Latest Release
    workflow after successful publication. It selects the highest published
    unified semantic version regardless of publication order, revalidates its
    immutable closed asset set and exact versioned image, and reconciles both
