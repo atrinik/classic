@@ -6,7 +6,7 @@ endif ()
 
 cmake_path(ABSOLUTE_PATH ATRINIK_RUNTIME_DIR NORMALIZE
     OUTPUT_VARIABLE normalized_runtime_dir)
-set(expected_runtime_dir "${ATRINIK_BINARY_DIR}/server-test-runtime")
+set(expected_runtime_dir "${ATRINIK_BINARY_DIR}/server-test-runtime-seed")
 cmake_path(ABSOLUTE_PATH expected_runtime_dir NORMALIZE
     OUTPUT_VARIABLE normalized_expected_runtime_dir)
 if (NOT normalized_runtime_dir STREQUAL normalized_expected_runtime_dir)

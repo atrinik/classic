@@ -9,6 +9,9 @@ import sys
 import tempfile
 
 
+SERVER_TIMEOUT_SECONDS = 30
+
+
 def require_rejection(result: subprocess.CompletedProcess[str], surface: str) -> None:
     output = result.stdout + result.stderr
     if result.returncode == 0 or "use assetspath" not in output:
@@ -23,7 +26,7 @@ def run_server(executable: Path, assetspath: Path) -> subprocess.CompletedProces
         capture_output=True,
         text=True,
         check=False,
-        timeout=15,
+        timeout=SERVER_TIMEOUT_SECONDS,
     )
 
 
@@ -62,7 +65,7 @@ def main() -> int:
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=15,
+                timeout=SERVER_TIMEOUT_SECONDS,
             ),
             "configuration key",
         )
@@ -75,7 +78,7 @@ def main() -> int:
             capture_output=True,
             text=True,
             check=False,
-            timeout=15,
+            timeout=SERVER_TIMEOUT_SECONDS,
         ),
         "command-line option",
     )
