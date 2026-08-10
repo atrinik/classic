@@ -31,6 +31,38 @@ def parse_json(result: subprocess.CompletedProcess[str], context: str) -> object
         raise GitHubReleaseError(f"{context}: invalid JSON response") from error
 
 
+def parse_json_lines(
+    result: subprocess.CompletedProcess[str], context: str
+) -> list[dict[str, object]]:
+    if result.returncode:
+        raise GitHubReleaseError(
+            f"{context}: {result.stderr.strip() or result.stdout.strip()}"
+        )
+    try:
+        values = [json.loads(line) for line in result.stdout.splitlines() if line]
+    except json.JSONDecodeError as error:
+        raise GitHubReleaseError(f"{context}: invalid JSON response") from error
+    if not all(isinstance(value, dict) for value in values):
+        raise GitHubReleaseError(f"{context}: invalid release list")
+    return values
+
+
+def list_releases(repository: str) -> list[dict[str, object]]:
+    return parse_json_lines(
+        invoke(
+            [
+                "gh",
+                "api",
+                "--paginate",
+                f"repos/{repository}/releases?per_page=100",
+                "--jq",
+                ".[] | @json",
+            ]
+        ),
+        "cannot inspect GitHub releases",
+    )
+
+
 def find_unique_release(releases: list[object], tag: str) -> dict[str, object] | None:
     matches = [
         release
@@ -73,20 +105,4 @@ def lookup_release(repository: str, tag: str) -> dict[str, object] | None:
             "cannot determine GitHub release state: "
             + (view.stderr.strip() or view.stdout.strip())
         )
-    pages = parse_json(
-        invoke(
-            [
-                "gh",
-                "api",
-                "--paginate",
-                "--slurp",
-                f"repos/{repository}/releases?per_page=100",
-            ]
-        ),
-        "cannot prove GitHub release absence",
-    )
-    if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
-        raise GitHubReleaseError("GitHub releases API returned invalid pages")
-    return find_unique_release(
-        [release for page in pages for release in page], tag
-    )
+    return find_unique_release(list_releases(repository), tag)
