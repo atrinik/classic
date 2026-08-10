@@ -14,6 +14,14 @@ and logs after success or failure.
 | `server-content-benchmark` | maps, content libraries, resources, plugins | copied `data`, config, assets, temporary files, benchmark output | offline benchmark process group; port mapping is disabled |
 | `server-assetspath-migration` | maps, content libraries, resources, plugins | copied `data`, temporary configuration, per-test asset trees and `TMPDIR` | Python driver and every server child share one owned process group; worldmaker opens no listener; CTest reserves all four slots and each sanitizer-safe child remains bounded to 30 seconds |
 
+The runner inherits CTest's environment, then sets `TMPDIR` to the private
+runtime's `tmp` directory and `ATRINIK_TEST_ARTIFACT_DIR` to that runtime's
+root. Unit entries additionally select only their own `ATRINIK_TEST_SUITE`.
+The leak-smoke entry sets `ASAN_OPTIONS=detect_leaks=1` and `CK_FORK=no`; other
+sanitizer entries inherit CI's bounded `ASAN_OPTIONS` and `UBSAN_OPTIONS`.
+No entry allocates a listener port, and every explicit port-mapping surface is
+disabled.
+
 Every runner has a 270-second internal timeout inside CTest's 300-second outer
 timeout. Pass, failure, interruption, and internal timeout wait for or terminate
 the complete process group, escalating to `SIGKILL` after five seconds when

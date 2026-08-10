@@ -78,7 +78,7 @@ def main() -> int:
             capture_output=True,
             text=True,
             check=False,
-            timeout=15,
+            timeout=SERVER_TIMEOUT_SECONDS,
         ),
         "command-line option",
     )

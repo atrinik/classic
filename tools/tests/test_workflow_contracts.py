@@ -281,6 +281,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("tools/run_isolated_test.py", cmake)
         self.assertIn("-fprofile-update=atomic", cmake)
 
+        migration = (
+            ROOT / "server/src/tests/assetspath_migration.py"
+        ).read_text()
+        self.assertNotIn("timeout=15", migration)
+        self.assertEqual(
+            migration.count("timeout=SERVER_TIMEOUT_SECONDS"), 3
+        )
+
     def test_windows_packages_persist_toolchain_bound_compiler_caches(self) -> None:
         candidate = self.text("build-release-candidate.yml")
         cache_action = (
