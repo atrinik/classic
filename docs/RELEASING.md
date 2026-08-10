@@ -55,9 +55,15 @@ a draft asset. `docs/history/release-tags.json` records each exact tag commit,
 empty draft ID, failed run IDs, expected server-image job conclusion, and
 `delete-empty-draft` disposition. On current validated `main`, Semantic Release
 rechecks those immutable coordinates and the failed job conclusions, then
-deletes only that exact zero-asset draft and continues version analysis. Any
+re-lists the complete draft inventory and every page of failed-run jobs, reads
+the exact release once more, deletes only that exact zero-asset draft, and
+continues version analysis. Semantic Release, Package Release, and manual
+recovery share one non-cancelling publication lock. Any
 changed draft ID or tag target, uploaded asset, successful
 candidate/publication job, unrecognized run, or additional draft fails closed.
+GitHub does not provide a conditional release DELETE, so operators must not
+manually mutate a policy-listed draft while Semantic Release is running; the
+single guarded helper minimizes the remaining read/delete interval.
 The tag and commit remain immutable historical evidence; `v5.8.1` is never
 published, downloadable, eligible for Latest, or used as an image alias. The
 next semantic version contains the server correction and all first-parent

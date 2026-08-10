@@ -144,6 +144,7 @@ class ResolvePendingReleaseTests(unittest.TestCase):
             "head_repository": {"full_name": "atrinik/classic"},
         }
         jobs = {
+            "total_count": 4,
             "jobs": [
                 {
                     "name": "Build and validate immutable candidate / Build Windows server package",
@@ -201,7 +202,11 @@ class ResolvePendingReleaseTests(unittest.TestCase):
         job_list.append(dict(job_list[0]))
 
         def request(path: str) -> object:
-            return {"jobs": job_list} if "/jobs?" in path else run
+            return (
+                {"total_count": len(job_list), "jobs": job_list}
+                if "/jobs?" in path
+                else run
+            )
 
         with self.assertRaisesRegex(
             resolve_pending_release.PendingReleaseError,
@@ -220,6 +225,7 @@ class ResolvePendingReleaseTests(unittest.TestCase):
             "head_repository": {"full_name": "atrinik/classic"},
         }
         jobs = {
+            "total_count": 4,
             "jobs": [
                 {
                     "name": "Build and validate immutable candidate / Build Windows server package",
@@ -245,6 +251,107 @@ class ResolvePendingReleaseTests(unittest.TestCase):
         resolve_pending_release.validate_failed_run(
             "atrinik/classic", 31429488922, "success", request
         )
+
+    def test_failed_run_inspects_every_job_page(self) -> None:
+        run = {
+            "name": "Package Release",
+            "path": ".github/workflows/package-release.yml",
+            "event": "workflow_dispatch",
+            "conclusion": "failure",
+            "head_repository": {"full_name": "atrinik/classic"},
+        }
+        required = [
+            {
+                "name": "Build and validate immutable candidate / "
+                "Build Windows server package",
+                "conclusion": "failure",
+            },
+            {
+                "name": "Build and validate immutable candidate / "
+                "Build classic server image without publishing",
+                "conclusion": "failure",
+            },
+            {
+                "name": "Build and validate immutable candidate / "
+                "Validate complete release candidate",
+                "conclusion": "skipped",
+            },
+            {"name": "Publish unified release", "conclusion": "skipped"},
+        ]
+        first_page = required + [
+            {"name": f"Unrelated job {index}", "conclusion": "success"}
+            for index in range(96)
+        ]
+        second_page = [{"name": "Final unrelated job", "conclusion": "success"}]
+
+        def request(path: str) -> object:
+            if "/jobs?" not in path:
+                return run
+            return {
+                "total_count": 101,
+                "jobs": second_page if path.endswith("page=2") else first_page,
+            }
+
+        resolve_pending_release.validate_failed_run(
+            "atrinik/classic", RUN_IDS[0], "failure", request
+        )
+        second_page[0] = dict(required[0])
+        with self.assertRaisesRegex(
+            resolve_pending_release.PendingReleaseError,
+            "failed-candidate evidence",
+        ):
+            resolve_pending_release.validate_failed_run(
+                "atrinik/classic", RUN_IDS[0], "failure", request
+            )
+
+    def test_guarded_deletion_rechecks_exact_release(self) -> None:
+        expected = {
+            "action": "delete-empty-draft",
+            "tag": TAG,
+            "release_id": str(RELEASE_ID),
+        }
+        deleted: list[int] = []
+        release = draft()
+
+        resolve_pending_release.delete_policy_listed_empty_draft(
+            "atrinik/classic",
+            TAG,
+            RELEASE_ID,
+            lambda: expected,
+            lambda path: release,
+            deleted.append,
+        )
+        self.assertEqual(deleted, [RELEASE_ID])
+
+        deleted.clear()
+        release["assets"] = [{"name": "concurrent.zip"}]
+        with self.assertRaisesRegex(
+            resolve_pending_release.PendingReleaseError,
+            "changed before deletion",
+        ):
+            resolve_pending_release.delete_policy_listed_empty_draft(
+                "atrinik/classic",
+                TAG,
+                RELEASE_ID,
+                lambda: expected,
+                lambda path: release,
+                deleted.append,
+            )
+        self.assertEqual(deleted, [])
+
+        with self.assertRaisesRegex(
+            resolve_pending_release.PendingReleaseError,
+            "changed before deletion",
+        ):
+            resolve_pending_release.delete_policy_listed_empty_draft(
+                "atrinik/classic",
+                TAG,
+                RELEASE_ID,
+                lambda: {"action": "none", "tag": "", "release_id": ""},
+                lambda path: draft(),
+                deleted.append,
+            )
+        self.assertEqual(deleted, [])
 
 
 if __name__ == "__main__":

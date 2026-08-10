@@ -76,9 +76,32 @@ def validate_failed_run(
     if not isinstance(head_repository, dict) or head_repository.get("full_name") != repository:
         raise PendingReleaseError(f"run {run_id} belongs to another repository")
 
-    jobs = request(f"repos/{repository}/actions/runs/{run_id}/jobs?filter=latest&per_page=100")
-    if not isinstance(jobs, dict) or not isinstance(jobs.get("jobs"), list):
-        raise PendingReleaseError(f"run {run_id} returned invalid jobs")
+    jobs: list[object] = []
+    total_count: int | None = None
+    page = 1
+    while total_count is None or len(jobs) < total_count:
+        response = request(
+            f"repos/{repository}/actions/runs/{run_id}/jobs"
+            f"?filter=latest&per_page=100&page={page}"
+        )
+        if (
+            not isinstance(response, dict)
+            or not isinstance(response.get("total_count"), int)
+            or response["total_count"] < 0
+            or not isinstance(response.get("jobs"), list)
+            or len(response["jobs"]) > 100
+        ):
+            raise PendingReleaseError(f"run {run_id} returned invalid jobs")
+        if total_count is None:
+            total_count = response["total_count"]
+        elif response["total_count"] != total_count:
+            raise PendingReleaseError(f"run {run_id} jobs changed during inspection")
+        if not response["jobs"] and len(jobs) < total_count:
+            raise PendingReleaseError(f"run {run_id} returned incomplete jobs")
+        jobs.extend(response["jobs"])
+        if len(jobs) > total_count:
+            raise PendingReleaseError(f"run {run_id} returned invalid jobs")
+        page += 1
     required = (
         (
             "Build and validate immutable candidate / Build Windows server package",
@@ -98,7 +121,7 @@ def validate_failed_run(
     for name, conclusion in required:
         matches = [
             job
-            for job in jobs["jobs"]
+            for job in jobs
             if isinstance(job, dict) and job.get("name") == name
         ]
         if len(matches) != 1 or matches[0].get("conclusion") != conclusion:
@@ -179,27 +202,91 @@ def api(path: str) -> object:
     return parse_json(invoke(["gh", "api", path]), f"cannot inspect {path}")
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--repository", required=True)
-    parser.add_argument("--github-output", type=Path)
-    arguments = parser.parse_args()
+def delete_policy_listed_empty_draft(
+    repository: str,
+    expected_tag: str,
+    expected_release_id: int,
+    resolve_now: Callable[[], dict[str, str]],
+    request: Callable[[str], object],
+    delete: Callable[[int], None],
+) -> None:
+    expected = {
+        "action": "delete-empty-draft",
+        "tag": expected_tag,
+        "release_id": str(expected_release_id),
+    }
+    if resolve_now() != expected:
+        raise PendingReleaseError("failed draft changed before deletion")
 
+    release = request(f"repos/{repository}/releases/{expected_release_id}")
+    if (
+        not isinstance(release, dict)
+        or release.get("id") != expected_release_id
+        or release.get("tag_name") != expected_tag
+        or release.get("draft") is not True
+        or release.get("prerelease") is not False
+        or release.get("assets") != []
+    ):
+        raise PendingReleaseError("failed draft changed before deletion")
+    delete(expected_release_id)
+
+
+def resolve_repository(repository: str) -> dict[str, str]:
     if command("git", "rev-parse", "HEAD") != command(
         "git", "rev-parse", "refs/remotes/origin/main"
     ):
         raise PendingReleaseError("pending-release resolution is not current origin/main")
     policy = json.loads(POLICY.read_text(encoding="utf-8"))
     values = resolve(
-        list_drafts(arguments.repository),
+        list_drafts(repository),
         policy.get("failed_releases"),
         lambda tag: command("git", "rev-parse", f"refs/tags/{tag}^{{commit}}"),
         lambda run_id, image_conclusion: validate_failed_run(
-            arguments.repository, run_id, image_conclusion, api
+            repository, run_id, image_conclusion, api
         ),
     )
     if values["tag"] and not is_ancestor(f"refs/tags/{values['tag']}^{{commit}}", "HEAD"):
         raise PendingReleaseError(f"{values['tag']}: tag is not an ancestor of current main")
+    return values
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--repository", required=True)
+    parser.add_argument("--github-output", type=Path)
+    parser.add_argument("--delete-policy-listed-empty-draft", action="store_true")
+    parser.add_argument("--expected-tag")
+    parser.add_argument("--expected-release-id", type=int)
+    arguments = parser.parse_args()
+
+    if arguments.delete_policy_listed_empty_draft:
+        if (
+            arguments.github_output is not None
+            or arguments.expected_tag is None
+            or TAG_RE.fullmatch(arguments.expected_tag) is None
+            or arguments.expected_release_id is None
+            or arguments.expected_release_id <= 0
+        ):
+            parser.error("guarded deletion requires an exact tag and positive release ID")
+        delete_policy_listed_empty_draft(
+            arguments.repository,
+            arguments.expected_tag,
+            arguments.expected_release_id,
+            lambda: resolve_repository(arguments.repository),
+            api,
+            lambda release_id: command(
+                "gh",
+                "api",
+                "--method",
+                "DELETE",
+                f"repos/{arguments.repository}/releases/{release_id}",
+            ),
+        )
+        return 0
+    if arguments.expected_tag is not None or arguments.expected_release_id is not None:
+        parser.error("expected deletion coordinates require guarded deletion")
+
+    values = resolve_repository(arguments.repository)
 
     output = arguments.github_output
     if output is None and os.environ.get("GITHUB_OUTPUT"):

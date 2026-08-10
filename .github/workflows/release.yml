@@ -79,12 +79,11 @@ jobs:
           RELEASE_TAG: ${{ steps.pending-release.outputs.tag }}
         run: |
           set -euo pipefail
-          verification=$(python3 tools/release/resolve_pending_release.py \
-            --repository "${RELEASE_REPOSITORY}")
-          expected="{\"action\": \"delete-empty-draft\", \"release_id\": \"${RELEASE_ID}\", \"tag\": \"${RELEASE_TAG}\"}"
-          test "${verification}" = "${expected}"
-          gh api --method DELETE \
-            "repos/${RELEASE_REPOSITORY}/releases/${RELEASE_ID}"
+          python3 tools/release/resolve_pending_release.py \
+            --repository "${RELEASE_REPOSITORY}" \
+            --delete-policy-listed-empty-draft \
+            --expected-tag "${RELEASE_TAG}" \
+            --expected-release-id "${RELEASE_ID}"
       - name: Resume the incomplete package release
         if: steps.pending-release.outputs.action == 'resume'
         env:
