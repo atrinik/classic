@@ -1874,8 +1874,11 @@ static PyObject *Atrinik_GetSettings(PyObject *self, PyObject *ignored) {
     PyDict_SetItemString(dict, "mapspath", Py_BuildValue("s", hooks->settings->mapspath));
     PyDict_SetItemString(dict, "httppath", Py_BuildValue("s", hooks->settings->httppath));
     PyDict_SetItemString(dict,
-                         "metaserver_url",
-                         Py_BuildValue("s", hooks->settings->metaserver_url));
+                         "metaserver_publish_origin",
+                         Py_BuildValue("s", hooks->settings->metaserver_publish_origin));
+    PyDict_SetItemString(dict,
+                         "metaserver_rendezvous_origin",
+                         Py_BuildValue("s", hooks->settings->metaserver_rendezvous_origin));
     PyDict_SetItemString(dict, "server_host", Py_BuildValue("s", hooks->settings->server_host));
     PyDict_SetItemString(dict, "server_name", Py_BuildValue("s", hooks->settings->server_name));
     PyDict_SetItemString(dict, "server_desc", Py_BuildValue("s", hooks->settings->server_desc));

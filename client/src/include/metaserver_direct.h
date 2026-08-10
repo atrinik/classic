@@ -9,7 +9,7 @@
 
 #include <stdbool.h>
 
-/** Validate the single certificate-pinned identity used by protocol 3. */
+/** Validate one certificate-pinned direct identity. */
 bool metaserver_direct_identity_valid(const char *server_id, const char *certificate_sha256);
 
 #endif
