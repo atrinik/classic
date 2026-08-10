@@ -247,9 +247,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertGreaterEqual(candidate.count("sbom: true"), 1)
 
     def test_server_validation_exercises_release_ndebug(self) -> None:
-        server = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
+        runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
             encoding="utf-8"
         )
+        server = runner[runner.index("  server)") : runner.index("  client)")]
         coverage = server.index("cmake --preset linux-coverage")
         release = server.index("cmake --preset linux-release")
         sanitizers = server.index("cmake --preset linux-sanitizers")
@@ -287,17 +288,12 @@ class WorkflowContractTests(unittest.TestCase):
         )
 
     def test_component_validation_compares_conventional_and_pch_builds(self) -> None:
-        workflow = self.text("check.yml")
-        server = workflow[
-            workflow.index("  server:\n    name: Server validation") : workflow.index(
-                "  client:\n    name: Client validation"
-            )
-        ]
-        client = workflow[
-            workflow.index("  client:\n    name: Client validation") : workflow.index(
-                "  classic-validation:\n"
-            )
-        ]
+        runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
+            encoding="utf-8"
+        )
+        server = runner[runner.index("  server)") : runner.index("  client)")]
+        client_start = runner.index("  client)")
+        client = runner[client_start : runner.index("esac", client_start)]
         for name, component in (("server", server), ("client", client)):
             with self.subTest(component=name):
                 coverage = component.index("cmake --preset linux-coverage")

@@ -77,7 +77,30 @@ case "${component}" in
     python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/dependencies.py sync
     python3 tools/dependencies.py verify
-    cmake --preset linux-coverage "${launcher[@]}" "${sibling_sources[@]}"
+    cmake --preset linux-coverage \
+      -DENABLE_PRECOMPILED_HEADERS=OFF \
+      "${launcher[@]}" "${sibling_sources[@]}"
+    cmake --build --preset linux-coverage --parallel "${jobs}"
+    ctest --preset linux-coverage --parallel 4
+    gcovr --root . --filter 'src/' --exclude 'src/tests/' \
+      --print-summary --xml coverage.xml
+    cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
+    cmake --build --preset linux-release --parallel "${jobs}"
+    ctest --preset linux-release --parallel 4
+    cmake --preset linux-sanitizers "${launcher[@]}" "${sibling_sources[@]}"
+    cmake --build --preset linux-sanitizers --parallel "${jobs}"
+    env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
+      ctest --preset linux-sanitizers --parallel 4
+    popd >/dev/null
+    ;;
+  client)
+    pushd "${source_root}/client" >/dev/null
+    python3 -m unittest discover -s tools/tests -p 'test_*.py'
+    python3 tools/dependencies.py sync
+    python3 tools/dependencies.py verify
+    cmake --preset linux-coverage \
+      -DENABLE_PRECOMPILED_HEADERS=OFF \
+      "${launcher[@]}" "${sibling_sources[@]}"
     cmake --build --preset linux-coverage --parallel "${jobs}"
     ctest --preset linux-coverage
     gcovr --root . --filter 'src/' --exclude 'src/tests/' \
@@ -89,18 +112,6 @@ case "${component}" in
     cmake --build --preset linux-sanitizers --parallel "${jobs}"
     env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
       ctest --preset linux-sanitizers
-    popd >/dev/null
-    ;;
-  client)
-    pushd "${source_root}/client" >/dev/null
-    python3 -m unittest discover -s tools/tests -p 'test_*.py'
-    python3 tools/dependencies.py sync
-    python3 tools/dependencies.py verify
-    cmake --preset linux-coverage "${launcher[@]}" "${sibling_sources[@]}"
-    cmake --build --preset linux-coverage --parallel "${jobs}"
-    ctest --preset linux-coverage
-    gcovr --root . --filter 'src/' --exclude 'src/tests/' \
-      --print-summary --xml coverage.xml
     popd >/dev/null
     ;;
 esac
