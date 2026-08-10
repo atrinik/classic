@@ -183,6 +183,8 @@ extern void keybind_movement_state_set_modifier(keybind_movement_state *state,
 
 extern void keybind_movement_state_defer_move(keybind_movement_state *state);
 
+extern void keybind_movement_state_cancel_deferred_move(keybind_movement_state *state);
+
 extern void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
                                                        SDL_Keymod mod,
                                                        const keybind_movement_rebind *rebinds,

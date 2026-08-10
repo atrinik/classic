@@ -418,6 +418,13 @@ void keybind_movement_state_defer_move(keybind_movement_state *state) {
     }
 }
 
+/** Drop a mode-induced deferral that had no later segment in its binding. */
+void keybind_movement_state_cancel_deferred_move(keybind_movement_state *state) {
+    if (state != NULL) {
+        state->deferred_move = false;
+    }
+}
+
 /** Atomically rebind or release movement entries invalidated by a modifier change. */
 void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
                                                 SDL_Keymod mod,

@@ -36,6 +36,7 @@ void keybind_event_process_binding(const keybind_struct *keybind,
                                    const keybind_event_handler *handler) {
     char command[MAX_BUF], *cp;
     bool movement_segment_seen = false;
+    bool movement_accepted = false, cancel_mode_deferral = false;
 
     if (keybind == NULL || event == NULL || handler == NULL || handler->movement == NULL ||
         (!keybind->repeat && event->repeat)) {
@@ -73,6 +74,7 @@ void keybind_event_process_binding(const keybind_struct *keybind,
                                                              event->repeat,
                                                              keybind->repeat);
                 if (accepted) {
+                    movement_accepted = true;
                     keybind_movement_state_set_modifier(handler->movement,
                                                         event->scancode,
                                                         keybind->mod);
@@ -96,6 +98,7 @@ void keybind_event_process_binding(const keybind_struct *keybind,
                     if (running != keybind_event_running(handler) ||
                         firing != keybind_event_firing(handler)) {
                         keybind_movement_state_defer_move(handler->movement);
+                        cancel_mode_deferral = movement_accepted;
                     }
                 }
             } else if (handler->command_up != NULL) {
@@ -104,6 +107,9 @@ void keybind_event_process_binding(const keybind_struct *keybind,
         }
 
         cp = strtok(NULL, ";");
+    }
+    if (cancel_mode_deferral && handler->movement->deferred_move) {
+        keybind_movement_state_cancel_deferred_move(handler->movement);
     }
 }
 
@@ -319,8 +325,27 @@ static bool keybind_event_modifier_invalidates_mode(keybind_struct *const *bindi
 static void keybind_event_release_invalid_movement_modes(keybind_struct *const *bindings,
                                                          size_t bindings_num,
                                                          SDL_Keymod mod,
+                                                         const key_struct *key_states,
                                                          const keybind_event_handler *handler) {
     SDL_Keymod adjusted_mod = keybind_adjust_kmod(mod);
+    bool other_run_owner = false, other_fire_owner = false;
+    if (key_states != NULL) {
+        for (SDL_Scancode scancode = 1; scancode < SDL_SCANCODE_COUNT; scancode++) {
+            const keybind_movement_key *movement_key = &handler->movement->keys[scancode];
+            bool invalid_movement = movement_key->direction != 0 &&
+                                    movement_key->mod != SDL_KMOD_NONE &&
+                                    movement_key->mod != adjusted_mod;
+            if (!key_states[scancode].pressed || invalid_movement) {
+                continue;
+            }
+            const keybind_struct *keybind =
+                keybind_event_find_scancode(bindings, bindings_num, scancode, mod);
+            if (keybind != NULL) {
+                other_run_owner |= keybind_command_contains(keybind->command, "?RUNON");
+                other_fire_owner |= keybind_command_contains(keybind->command, "?FIREON");
+            }
+        }
+    }
     for (SDL_Scancode scancode = 1; scancode < SDL_SCANCODE_COUNT; scancode++) {
         const keybind_movement_key *movement_key = &handler->movement->keys[scancode];
         if (movement_key->direction == 0 || movement_key->mod == SDL_KMOD_NONE ||
@@ -332,10 +357,10 @@ static void keybind_event_release_invalid_movement_modes(keybind_struct *const *
         if (keybind == NULL || handler->command_up == NULL) {
             continue;
         }
-        if (keybind_command_contains(keybind->command, "?RUNON")) {
+        if (!other_run_owner && keybind_command_contains(keybind->command, "?RUNON")) {
             handler->command_up("?RUNON", handler->user_data);
         }
-        if (keybind_command_contains(keybind->command, "?FIREON")) {
+        if (!other_fire_owner && keybind_command_contains(keybind->command, "?FIREON")) {
             handler->command_up("?FIREON", handler->user_data);
         }
     }
@@ -372,7 +397,11 @@ void keybind_event_reconcile_release(keybind_struct *const *bindings,
         const keybind_struct *compound_bindings[SDL_SCANCODE_COUNT];
         SDL_KeyboardEvent compound_events[SDL_SCANCODE_COUNT];
         size_t compound_num = 0, compound_moves = 0;
-        keybind_event_release_invalid_movement_modes(bindings, bindings_num, event->mod, handler);
+        keybind_event_release_invalid_movement_modes(bindings,
+                                                     bindings_num,
+                                                     event->mod,
+                                                     key_states,
+                                                     handler);
         if (modifier_invalidates_mode && handler->reconcile_modes != NULL) {
             handler->reconcile_modes(handler->user_data);
         }
