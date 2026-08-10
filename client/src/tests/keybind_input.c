@@ -682,7 +682,7 @@ static void test_keybind_event_integration(void) {
         .command = "?MOVE_NE",
         .key = SDLK_A,
         .mod = SDL_KMOD_SHIFT,
-        .repeat = true,
+        .repeat = false,
     };
     keybind_struct shifted_b = {
         .command = "?MOVE_NW",
@@ -900,6 +900,7 @@ static void test_keybind_event_integration(void) {
     event.key = SDLK_A;
     event.scancode = SDL_SCANCODE_A;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    key_states[SDL_SCANCODE_A].pressed = true;
     modifier_up.mod = SDL_KMOD_NONE;
     keybind_event_reconcile_release(bindings,
                                     arraysize(bindings),
@@ -907,16 +908,18 @@ static void test_keybind_event_integration(void) {
                                     key_states,
                                     &handler);
     TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 9);
+    movement_sink_flush(&sink);
+    TEST_CHECK(sink.actions_num == 2 && sink.directions[1] == 7);
     event.mod = SDL_KMOD_NONE;
     event.repeat = true;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
-    TEST_CHECK(sink.actions_num == 2 && sink.directions[1] == 7);
+    TEST_CHECK(sink.actions_num == 3 && sink.directions[2] == 7);
     event.repeat = false;
     event.key = SDLK_G;
     event.scancode = SDL_SCANCODE_G;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
     movement_sink_flush(&sink);
-    TEST_CHECK(sink.actions_num == 3 && sink.directions[2] == 3);
+    TEST_CHECK(sink.actions_num == 4 && sink.directions[3] == 3);
 
     /* Multiple invalid modified keys are removed as one logical transition. */
     movement_sink_reset(&sink);
@@ -928,6 +931,7 @@ static void test_keybind_event_integration(void) {
     event.key = SDLK_B;
     event.scancode = SDL_SCANCODE_B;
     TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    key_states[SDL_SCANCODE_B].pressed = true;
     keybind_event_reconcile_release(bindings,
                                     arraysize(bindings),
                                     &modifier_up,
@@ -935,6 +939,41 @@ static void test_keybind_event_integration(void) {
                                     &handler);
     movement_sink_flush(&sink);
     TEST_CHECK(sink.actions_num == 1 && sink.directions[0] == 8);
+
+    /* Modifier rebinds reset repeat ownership even when the old owner survives. */
+    movement_sink_reset(&sink);
+    handler = movement_sink_handler(&sink);
+    event.mod = SDL_KMOD_NONE;
+    event.repeat = false;
+    event.key = SDLK_G;
+    event.scancode = SDL_SCANCODE_G;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    movement_sink_flush(&sink);
+    event.repeat = true;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    event.mod = SDL_KMOD_LSHIFT;
+    event.repeat = false;
+    event.key = SDLK_B;
+    event.scancode = SDL_SCANCODE_B;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    event.mod = SDL_KMOD_NONE;
+    event.repeat = true;
+    event.key = SDLK_G;
+    event.scancode = SDL_SCANCODE_G;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    key_states[SDL_SCANCODE_G].pressed = true;
+    key_states[SDL_SCANCODE_B].pressed = true;
+    keybind_event_reconcile_release(bindings,
+                                    arraysize(bindings),
+                                    &modifier_up,
+                                    key_states,
+                                    &handler);
+    movement_sink_flush(&sink);
+    size_t actions_before_repeat = sink.actions_num;
+    event.key = SDLK_B;
+    event.scancode = SDL_SCANCODE_B;
+    TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+    TEST_CHECK(sink.actions_num == actions_before_repeat + 1);
 }
 
 int main(void) {

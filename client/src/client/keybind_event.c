@@ -119,6 +119,79 @@ static const keybind_struct *keybind_event_find(keybind_struct *const *bindings,
     return NULL;
 }
 
+static const keybind_struct *keybind_event_find_scancode(keybind_struct *const *bindings,
+                                                         size_t bindings_num,
+                                                         SDL_Scancode scancode,
+                                                         SDL_Keymod mod) {
+    SDL_Keymod adjusted_mod = keybind_adjust_kmod(mod);
+    for (size_t i = 0; i < bindings_num; i++) {
+        if (SDL_GetScancodeFromKey(bindings[i]->key, NULL) == scancode &&
+            bindings[i]->mod == adjusted_mod) {
+            return bindings[i];
+        }
+    }
+
+    for (size_t i = 0; i < bindings_num; i++) {
+        if (SDL_GetScancodeFromKey(bindings[i]->key, NULL) == scancode && !bindings[i]->mod) {
+            return bindings[i];
+        }
+    }
+
+    return NULL;
+}
+
+static bool keybind_event_movement_direction(const keybind_struct *keybind, uint8_t *direction) {
+    char command[MAX_BUF], *cp;
+    bool found = false;
+
+    strncpy(command, keybind->command, sizeof(command) - 1);
+    command[sizeof(command) - 1] = '\0';
+    cp = strtok(command, ";");
+    while (cp != NULL) {
+        while (*cp == ' ') {
+            cp++;
+        }
+        uint8_t candidate;
+        if (keybind_movement_command_direction(cp, &candidate)) {
+            *direction = candidate;
+            found = true;
+        }
+        cp = strtok(NULL, ";");
+    }
+
+    return found;
+}
+
+static size_t keybind_event_modifier_rebinds(keybind_struct *const *bindings,
+                                             size_t bindings_num,
+                                             const key_struct *key_states,
+                                             SDL_Keymod mod,
+                                             keybind_movement_rebind *rebinds) {
+    if (key_states == NULL) {
+        return 0;
+    }
+
+    size_t rebinds_num = 0;
+    for (SDL_Scancode scancode = 1; scancode < SDL_SCANCODE_COUNT; scancode++) {
+        if (!key_states[scancode].pressed) {
+            continue;
+        }
+        const keybind_struct *keybind =
+            keybind_event_find_scancode(bindings, bindings_num, scancode, mod);
+        uint8_t direction;
+        if (keybind != NULL && keybind_event_movement_direction(keybind, &direction)) {
+            rebinds[rebinds_num++] = (keybind_movement_rebind){
+                .scancode = scancode,
+                .mod = keybind->mod,
+                .direction = direction,
+                .repeat = keybind->repeat,
+            };
+        }
+    }
+
+    return rebinds_num;
+}
+
 /** Return whether a physical keyboard event belongs to a binding modifier key. */
 bool keybind_event_is_modifier(const SDL_KeyboardEvent *event) {
     switch (event->scancode) {
@@ -188,10 +261,16 @@ void keybind_event_reconcile_release(keybind_struct *const *bindings,
                                    keybind_event_running(handler),
                                    keybind_event_firing(handler));
     if (keybind_event_is_modifier(event)) {
-        keybind_movement_state_release_invalid_modifiers(handler->movement,
-                                                         event->mod,
-                                                         keybind_event_running(handler),
-                                                         keybind_event_firing(handler));
+        keybind_movement_rebind rebinds[SDL_SCANCODE_COUNT];
+        size_t rebinds_num =
+            keybind_event_modifier_rebinds(bindings, bindings_num, key_states, event->mod, rebinds);
+        keybind_movement_state_reconcile_modifiers(handler->movement,
+                                                   event->mod,
+                                                   rebinds,
+                                                   rebinds_num,
+                                                   modifier_invalidates_mode,
+                                                   keybind_event_running(handler),
+                                                   keybind_event_firing(handler));
     }
 }
 

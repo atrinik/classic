@@ -341,9 +341,10 @@ bool keybind_movement_state_press(keybind_movement_state *state,
 
     keybind_movement_key *key = &state->keys[scancode];
     if (repeated) {
-        if (!key->owned || !key->repeat) {
+        if (!key->owned || !repeat) {
             return false;
         }
+        key->repeat = repeat;
         if (key->direction == 0) {
             key->order = ++state->next_order;
             key->direction = direction;
@@ -403,25 +404,40 @@ void keybind_movement_state_set_modifier(keybind_movement_state *state,
     }
 }
 
-/** Release movement entries whose selected modifier binding is no longer valid. */
-void keybind_movement_state_release_invalid_modifiers(keybind_movement_state *state,
-                                                      SDL_Keymod mod,
-                                                      bool running,
-                                                      bool firing) {
+/** Atomically rebind or release movement entries invalidated by a modifier change. */
+void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
+                                                SDL_Keymod mod,
+                                                const keybind_movement_rebind *rebinds,
+                                                size_t rebinds_num,
+                                                bool force_move,
+                                                bool running,
+                                                bool firing) {
     if (state == NULL) {
         return;
     }
 
     SDL_Keymod adjusted_mod = keybind_adjust_kmod(mod);
+    uint8_t old_direction = keybind_movement_direction(state);
     bool removed = false;
     for (SDL_Scancode scancode = 0; scancode < SDL_SCANCODE_COUNT; scancode++) {
         if (state->keys[scancode].direction != 0 && state->keys[scancode].mod != SDL_KMOD_NONE &&
             state->keys[scancode].mod != adjusted_mod) {
-            state->keys[scancode].direction = 0;
-            state->keys[scancode].order = 0;
-            state->keys[scancode].mod = SDL_KMOD_NONE;
-            if (scancode == state->repeat_scancode) {
-                state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
+            const keybind_movement_rebind *rebind = NULL;
+            for (size_t i = 0; i < rebinds_num; i++) {
+                if (rebinds[i].scancode == scancode) {
+                    rebind = &rebinds[i];
+                    break;
+                }
+            }
+
+            if (rebind != NULL) {
+                state->keys[scancode].direction = rebind->direction;
+                state->keys[scancode].mod = keybind_adjust_kmod(rebind->mod);
+                state->keys[scancode].repeat = rebind->repeat;
+            } else {
+                state->keys[scancode].direction = 0;
+                state->keys[scancode].order = 0;
+                state->keys[scancode].mod = SDL_KMOD_NONE;
             }
             removed = true;
         }
@@ -429,10 +445,12 @@ void keybind_movement_state_release_invalid_modifiers(keybind_movement_state *st
     if (!removed) {
         return;
     }
+    state->repeat_scancode = SDL_SCANCODE_UNKNOWN;
     if (keybind_movement_active(state)) {
-        state->pending_move = true;
+        uint8_t direction = keybind_movement_direction(state);
+        state->pending_move = force_move || direction != old_direction;
         state->pending_move_repeated = false;
-        state->pending_direction = keybind_movement_direction(state);
+        state->pending_direction = direction;
         state->pending_stop = false;
     } else {
         state->pending_move = false;

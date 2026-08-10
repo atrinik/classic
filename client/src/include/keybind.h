@@ -70,6 +70,14 @@ typedef struct keybind_movement_key {
     bool owned;
 } keybind_movement_key;
 
+/** Replacement binding for a held movement key after modifiers change. */
+typedef struct keybind_movement_rebind {
+    SDL_Scancode scancode;
+    SDL_Keymod mod;
+    uint8_t direction;
+    bool repeat;
+} keybind_movement_rebind;
+
 /** Physical-key state used to resolve one logical gameplay movement stream. */
 typedef struct keybind_movement_state {
     keybind_movement_key keys[SDL_SCANCODE_COUNT];
@@ -170,10 +178,13 @@ extern void keybind_movement_state_set_modifier(keybind_movement_state *state,
                                                 SDL_Scancode scancode,
                                                 SDL_Keymod mod);
 
-extern void keybind_movement_state_release_invalid_modifiers(keybind_movement_state *state,
-                                                             SDL_Keymod mod,
-                                                             bool running,
-                                                             bool firing);
+extern void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
+                                                       SDL_Keymod mod,
+                                                       const keybind_movement_rebind *rebinds,
+                                                       size_t rebinds_num,
+                                                       bool force_move,
+                                                       bool running,
+                                                       bool firing);
 
 extern bool keybind_movement_state_has_invalid_modifier(const keybind_movement_state *state,
                                                         SDL_Keymod mod);
