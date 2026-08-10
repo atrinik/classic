@@ -144,7 +144,8 @@ void free_newsocket(socket_struct *ns) {
     if (ns->packet_recv_cmd != NULL) {
         packet_free(ns->packet_recv_cmd);
     }
-    free(ns->movement_stream_entries);
+    free(ns->movement_stream_move.entries);
+    free(ns->movement_stream_fire.entries);
 
     socket_buffer_clear(ns);
     free(ns);

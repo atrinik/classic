@@ -155,8 +155,15 @@ enum {
 /** One queued command belonging to the client's current keyboard movement epoch. */
 typedef struct socket_movement_queue_entry {
     uint64_t offset;
-    uint8_t command;
 } socket_movement_queue_entry;
+
+/** Queue index for one replaceable movement command type. */
+typedef struct socket_movement_queue_index {
+    socket_movement_queue_entry *entries;
+    size_t entries_start;
+    size_t entries_num;
+    size_t entries_size;
+} socket_movement_queue_index;
 
 /** This contains basic information on the socket structure. */
 typedef struct socket_struct {
@@ -280,10 +287,8 @@ typedef struct socket_struct {
     struct packet_struct *packet_recv_cmd;
     uint64_t packet_recv_cmd_base;
     uint32_t movement_stream_epoch;
-    socket_movement_queue_entry *movement_stream_entries;
-    size_t movement_stream_entries_start;
-    size_t movement_stream_entries_num;
-    size_t movement_stream_entries_size;
+    socket_movement_queue_index movement_stream_move;
+    socket_movement_queue_index movement_stream_fire;
     size_t movement_stream_tombstone_bytes;
 } socket_struct;
 

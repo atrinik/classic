@@ -867,8 +867,8 @@ START_TEST(test_invalid_scoped_clear_preserves_queued_commands) {
     ck_assert_uint_eq(cs->packet_recv_cmd->len, expected->len);
     ck_assert_mem_eq(cs->packet_recv_cmd->data, expected->data, expected->len);
 
-    ck_assert_uint_eq(cs->movement_stream_entries_num, 1);
-    cs->movement_stream_entries[0].offset += cs->packet_recv_cmd->len;
+    ck_assert_uint_eq(cs->movement_stream_move.entries_num, 1);
+    cs->movement_stream_move.entries[0].offset += cs->packet_recv_cmd->len;
     ck_assert(!socket_server_command_queue_clear_stream(cs, SERVER_CMD_MOVE, 2));
     ck_assert_uint_eq(cs->packet_recv_cmd->len, expected->len);
     ck_assert_mem_eq(cs->packet_recv_cmd->data, expected->data, expected->len);
@@ -957,8 +957,57 @@ START_TEST(test_canceled_movement_bytes_do_not_exhaust_live_queue_limit) {
     command_queue_append(cs, SERVER_CMD_MOVE, new_move, sizeof(new_move));
     ck_assert_uint_eq(cs->movement_stream_tombstone_bytes, tombstone_bytes);
     ck_assert_uint_eq(cs->packet_recv_cmd->len, SOCKET_COMMAND_QUEUE_MAX + tombstone_bytes);
-    ck_assert_uint_eq(cs->movement_stream_entries_num, 1);
+    ck_assert_uint_eq(cs->movement_stream_move.entries_num, 1);
+
+    const uint8_t rejected[] = {SERVER_CMD_ITEM_APPLY};
+    ck_assert(!socket_server_command_queue_append(cs, rejected, sizeof(rejected)));
+    ck_assert_int_eq(cs->packet_recv_cmd->error, PACKET_ERROR_LIMIT_EXCEEDED);
+    socket_server_command_queue_reset(cs);
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, 0);
+    ck_assert_int_eq(cs->packet_recv_cmd->error, PACKET_ERROR_NONE);
+    command_queue_append(cs, SERVER_CMD_MOVE, new_move, sizeof(new_move));
+    ck_assert_uint_eq(cs->movement_stream_move.entries_num, 1);
     free(item);
+}
+END_TEST
+
+START_TEST(test_opposite_scoped_clear_does_not_scan_near_limit_fire_index) {
+    mapstruct *map;
+    object *op;
+
+    check_setup_env_pl(&map, &op);
+    socket_struct *cs = CONTR(op)->cs;
+    const uint8_t fire[] = {8, 0, 0, 0, 0, 0, 0, 0, 11};
+    const size_t frame_len = sizeof(fire) + 3;
+    const size_t entries = SOCKET_COMMAND_QUEUE_MAX / frame_len;
+
+    packet_free(cs->packet_recv_cmd);
+    cs->packet_recv_cmd = packet_new(0, entries * frame_len, 0);
+    cs->packet_recv_cmd->len = entries * frame_len;
+    cs->movement_stream_epoch = 11;
+    cs->movement_stream_fire.entries = xcalloc(entries, sizeof(*cs->movement_stream_fire.entries));
+    cs->movement_stream_fire.entries_num = entries;
+    cs->movement_stream_fire.entries_size = entries;
+    for (size_t i = 0; i < entries; i++) {
+        size_t offset = i * frame_len;
+        cs->packet_recv_cmd->data[offset] = 0;
+        cs->packet_recv_cmd->data[offset + 1] = sizeof(fire) + 1;
+        cs->packet_recv_cmd->data[offset + 2] = SERVER_CMD_FIRE;
+        memcpy(cs->packet_recv_cmd->data + offset + 3, fire, sizeof(fire));
+        cs->movement_stream_fire.entries[i].offset = offset + 2;
+    }
+    ck_assert_uint_eq(cs->movement_stream_move.entries_num, 0);
+    ck_assert_uint_eq(cs->movement_stream_fire.entries_num, entries);
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, entries * frame_len);
+
+    uint8_t clear[] = {SERVER_CMD_CLEAR, SERVER_CMD_MOVE, 0, 0, 0, 11};
+    for (size_t i = 0; i < 384; i++) {
+        ck_assert(socket_server_handle_command(cs, NULL, clear, sizeof(clear)));
+    }
+    ck_assert_uint_eq(cs->movement_stream_move.entries_num, 0);
+    ck_assert_uint_eq(cs->movement_stream_fire.entries_num, entries);
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, entries * frame_len);
+    ck_assert_uint_eq(cs->movement_stream_tombstone_bytes, 0);
 }
 END_TEST
 
@@ -985,7 +1034,8 @@ START_TEST(test_move_and_fire_require_exact_v1076_payloads) {
 
     ck_assert(socket_server_command_queue_append(cs, move_trailing, sizeof(move_trailing)));
     ck_assert(socket_server_command_queue_append(cs, fire_trailing, sizeof(fire_trailing)));
-    ck_assert_uint_eq(cs->movement_stream_entries_num, 0);
+    ck_assert_uint_eq(cs->movement_stream_move.entries_num, 0);
+    ck_assert_uint_eq(cs->movement_stream_fire.entries_num, 0);
     op->speed_left = 100.0f;
     socket_server_handle_client(pl);
     ck_assert_uint_eq(cs->packet_recv_cmd->len, 0);
@@ -1325,6 +1375,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_direction_zero_move_clears_deferred_path);
     tcase_add_test(tc_core, test_replacement_tombstones_do_not_delay_latest_direction);
     tcase_add_test(tc_core, test_canceled_movement_bytes_do_not_exhaust_live_queue_limit);
+    tcase_add_test(tc_core, test_opposite_scoped_clear_does_not_scan_near_limit_fire_index);
     tcase_add_test(tc_core, test_move_and_fire_require_exact_v1076_payloads);
     tcase_add_test(tc_core, test_malformed_tombstone_queue_is_discarded_safely);
     tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
