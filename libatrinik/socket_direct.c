@@ -29,7 +29,7 @@
 #define SOCKET_STUN_ATTEMPT_BUDGET_MS 3000U
 #define SOCKET_RENDEZVOUS_RESERVED_BUDGET_MS 5000U
 #define SOCKET_STUN_RESOLVER_WORKERS_MAX 4U
-#define SOCKET_STUN_LATE_DRAIN_MAX 1U
+#define SOCKET_STUN_LATE_DRAIN_MAX 4U
 
 typedef enum socket_rendezvous_attempt_state {
     SOCKET_RENDEZVOUS_ATTEMPT_READY,
@@ -984,6 +984,12 @@ static uint32_t socket_stun_u32(const unsigned char *b) {
     return ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) | ((uint32_t)b[2] << 8) | b[3];
 }
 
+static bool socket_stun_response_attributable(const socket_t *sc,
+                                              const unsigned char *datagram,
+                                              size_t length,
+                                              const struct sockaddr_storage *source,
+                                              socklen_t source_length);
+
 bool socket_stun_discover_until(socket_t *sc,
                                 const char *endpoint,
                                 char *host,
@@ -1078,25 +1084,42 @@ bool socket_stun_discover_until(socket_t *sc,
         after_send();
     }
 
-    uint64_t now_ms = socket_stun_clock_get();
-    if (now_ms >= deadline_ms) {
-        LOG(ERROR, "STUN request timed out");
-        return false;
-    }
-    uint64_t timeout_ms = MIN(deadline_ms - now_ms, 3000U);
-    fd_set readfds;
-    FD_ZERO(&readfds);
-    FD_SET(sc->handle, &readfds);
-    struct timeval timeout = {.tv_sec = (long)(timeout_ms / 1000U),
-                              .tv_usec = (long)((timeout_ms % 1000U) * 1000U)};
-    if (select(sc->handle + 1, &readfds, NULL, NULL, &timeout) != 1) {
-        LOG(ERROR, "STUN request timed out");
-        return false;
-    }
-
     unsigned char response[1024];
-    ssize_t length = recvfrom(sc->handle, (char *)response, sizeof(response), 0, NULL, NULL);
-    sc->late_stun_pending = false;
+    struct sockaddr_storage response_source;
+    socklen_t response_source_length;
+    ssize_t length;
+    for (;;) {
+        uint64_t now_ms = socket_stun_clock_get();
+        if (now_ms >= deadline_ms) {
+            LOG(ERROR, "STUN request timed out");
+            return false;
+        }
+        uint64_t timeout_ms = MIN(deadline_ms - now_ms, 3000U);
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(sc->handle, &readfds);
+        struct timeval timeout = {.tv_sec = (long)(timeout_ms / 1000U),
+                                  .tv_usec = (long)((timeout_ms % 1000U) * 1000U)};
+        if (select(sc->handle + 1, &readfds, NULL, NULL, &timeout) != 1) {
+            LOG(ERROR, "STUN request timed out");
+            return false;
+        }
+        response_source_length = sizeof(response_source);
+        length = recvfrom(sc->handle,
+                          (char *)response,
+                          sizeof(response),
+                          0,
+                          (struct sockaddr *)&response_source,
+                          &response_source_length);
+        if (length >= 0 && socket_stun_response_attributable(sc,
+                                                             response,
+                                                             (size_t)length,
+                                                             &response_source,
+                                                             response_source_length)) {
+            break;
+        }
+        LOG(ERROR, "Ignoring an unrelated STUN response");
+    }
     if (length < 20 || socket_stun_u16(response) != 0x0101 ||
         socket_stun_u32(response + 4) != SOCKET_STUN_MAGIC ||
         memcmp(response + 8, request + 8, 12) != 0) {
@@ -1216,11 +1239,11 @@ static bool socket_address_equal(const struct sockaddr_storage *left,
     return false;
 }
 
-static bool socket_stun_late_response(const socket_t *sc,
-                                      const unsigned char *datagram,
-                                      size_t length,
-                                      const struct sockaddr_storage *source,
-                                      socklen_t source_length) {
+static bool socket_stun_response_attributable(const socket_t *sc,
+                                              const unsigned char *datagram,
+                                              size_t length,
+                                              const struct sockaddr_storage *source,
+                                              socklen_t source_length) {
     if (!sc->late_stun_pending || length < 20 ||
         !socket_address_equal(&sc->late_stun_source,
                               sc->late_stun_source_length,
@@ -1229,11 +1252,9 @@ static bool socket_stun_late_response(const socket_t *sc,
         return false;
     }
     uint16_t message_type = socket_stun_u16(datagram);
-    size_t message_length = socket_stun_u16(datagram + 2);
     return (message_type == 0x0101 || message_type == 0x0111) &&
            socket_stun_u32(datagram + 4) == SOCKET_STUN_MAGIC &&
-           memcmp(datagram + 8, sc->late_stun_transaction, 12) == 0 && (message_length & 3U) == 0 &&
-           message_length == length - 20;
+           memcmp(datagram + 8, sc->late_stun_transaction, 12) == 0;
 }
 
 bool socket_udp_punch_receive(socket_t *sc, char *host, size_t host_size, uint16_t *port) {
@@ -1253,11 +1274,11 @@ bool socket_udp_punch_receive(socket_t *sc, char *host, size_t host_size, uint16
                           MSG_PEEK,
                           (struct sockaddr *)&source,
                           &source_length);
-        if (length < 0 || !socket_stun_late_response(sc,
-                                                     (const unsigned char *)datagram,
-                                                     (size_t)length,
-                                                     &source,
-                                                     source_length)) {
+        if (length < 0 || !socket_stun_response_attributable(sc,
+                                                             (const unsigned char *)datagram,
+                                                             (size_t)length,
+                                                             &source,
+                                                             source_length)) {
             break;
         }
         if (drained >= SOCKET_STUN_LATE_DRAIN_MAX) {
@@ -1272,7 +1293,6 @@ bool socket_udp_punch_receive(socket_t *sc, char *host, size_t host_size, uint16
                      &source_length) != length) {
             return false;
         }
-        sc->late_stun_pending = false;
     }
     if ((size_t)length != sizeof(SOCKET_PUNCH_PROBE) - 1 ||
         memcmp(datagram, SOCKET_PUNCH_PROBE, sizeof(SOCKET_PUNCH_PROBE) - 1) != 0) {

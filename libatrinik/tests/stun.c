@@ -39,6 +39,7 @@ typedef enum fake_stun_mode {
 
 typedef struct fake_stun_server {
     int handle;
+    int intruder_handle;
     fake_stun_mode_t mode;
     uint16_t request_port;
     uint16_t punch_port;
@@ -147,6 +148,20 @@ static void *fake_stun_run(void *data) {
         response_size = sizeof(response);
     }
     if (server->mode == FAKE_STUN_LATE_THEN_PUNCH) {
+        TEST_CHECK(sendto(server->intruder_handle,
+                          response,
+                          response_size,
+                          0,
+                          (const struct sockaddr *)&client,
+                          client_length) == (ssize_t)response_size);
+        response[8] ^= 0xff;
+        TEST_CHECK(sendto(server->handle,
+                          response,
+                          response_size,
+                          0,
+                          (const struct sockaddr *)&client,
+                          client_length) == (ssize_t)response_size);
+        response[8] ^= 0xff;
         pthread_mutex_lock(&server->mutex);
         while (!server->released) {
             pthread_cond_wait(&server->condition, &server->mutex);
@@ -160,6 +175,20 @@ static void *fake_stun_run(void *data) {
                       (const struct sockaddr *)&client,
                       client_length) == (ssize_t)response_size);
     if (server->mode == FAKE_STUN_LATE_THEN_PUNCH) {
+        write_u16(response + 2, 4);
+        TEST_CHECK(sendto(server->handle,
+                          response,
+                          response_size,
+                          0,
+                          (const struct sockaddr *)&client,
+                          client_length) == (ssize_t)response_size);
+        write_u16(response + 2, 12);
+        TEST_CHECK(sendto(server->handle,
+                          response,
+                          response_size,
+                          0,
+                          (const struct sockaddr *)&client,
+                          client_length) == (ssize_t)response_size);
         static const char punch[] = "ATRINIK-PUNCH-1";
         TEST_CHECK(sendto(server->handle,
                           punch,
@@ -374,7 +403,8 @@ static void test_request_deadline_diagnostic(void) {
 static void test_late_stun_response_before_punch(void) {
     int server_handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     int client_handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    TEST_CHECK(server_handle >= 0 && client_handle >= 0);
+    int intruder_handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    TEST_CHECK(server_handle >= 0 && client_handle >= 0 && intruder_handle >= 0);
     struct sockaddr_in server_address = {
         .sin_family = AF_INET,
         .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
@@ -386,6 +416,7 @@ static void test_late_stun_response_before_punch(void) {
 
     fake_stun_server_t server = {
         .handle = server_handle,
+        .intruder_handle = intruder_handle,
         .mode = FAKE_STUN_LATE_THEN_PUNCH,
     };
     TEST_CHECK(pthread_mutex_init(&server.mutex, NULL) == 0);
@@ -397,13 +428,14 @@ static void test_late_stun_response_before_punch(void) {
     ((struct sockaddr_in *)&client.addr)->sin_family = AF_INET;
     char endpoint[32];
     snprintf(endpoint, sizeof(endpoint), "127.0.0.1:%u", ntohs(server_address.sin_port));
-    socket_stun_clock_set_for_test(fake_clock);
-    socket_stun_after_send_set_for_test(expire_after_send);
-    atomic_store_explicit(&fake_clock_ms, 1U, memory_order_relaxed);
     captured_log[0] = '\0';
     char host[65];
     uint16_t port;
-    TEST_CHECK(!socket_stun_discover_until(&client, endpoint, VS(host), &port, 2U));
+    TEST_CHECK(!socket_stun_discover_until(&client,
+                                           endpoint,
+                                           VS(host),
+                                           &port,
+                                           datetime_monotonic_ms() + 1000U));
     TEST_CHECK(strstr(captured_log, "STUN request timed out") != NULL);
 
     pthread_mutex_lock(&server.mutex);
@@ -420,8 +452,7 @@ static void test_late_stun_response_before_punch(void) {
     TEST_CHECK(pthread_join(thread, NULL) == 0);
     TEST_CHECK(pthread_cond_destroy(&server.condition) == 0);
     TEST_CHECK(pthread_mutex_destroy(&server.mutex) == 0);
-    socket_stun_after_send_set_for_test(NULL);
-    socket_stun_clock_set_for_test(NULL);
+    test_close_socket(intruder_handle);
     test_close_socket(client_handle);
     test_close_socket(server_handle);
 }
@@ -578,7 +609,7 @@ int main(void) {
     logger_set_print_func(capture_log);
 
     test_mode(FAKE_STUN_SUCCESS, true, "");
-    test_mode(FAKE_STUN_MALFORMED, false, "Invalid STUN response");
+    test_mode(FAKE_STUN_MALFORMED, false, "timed out");
     test_mode(FAKE_STUN_MISSING_ADDRESS, false, "XOR-MAPPED-ADDRESS");
     test_mode(FAKE_STUN_UNSPECIFIED, false, "unusable mapped address");
     test_mode(FAKE_STUN_DECLARED_OVERRUN, false, "Invalid STUN response");
