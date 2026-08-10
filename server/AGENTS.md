@@ -53,7 +53,10 @@
   gcovr summary; pull-request CI also runs `linux-sanitizers`.
 - Classic has one release line. Preserve source, Windows package, checksum, and
   server-image contracts. Scoped source packages embed matching protocol/
-  libatrinik under `dependencies/` for network-free standalone configuration.
+  libatrinik under `dependencies/` and select those repository-owned inputs
+  without network access. Independently pinned third-party FetchContent sources
+  retain their checksum-verified fallback unless a release contract explicitly
+  bundles them.
 - Commits/PR titles use Conventional Commits. Preserve unrelated work, keep
   generated output under `build/`, and finish with `git diff --check`.
 - Update this guide when ownership, layout, commands, persistence/runtime, or

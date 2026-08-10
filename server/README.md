@@ -6,8 +6,9 @@
 
  Website: https://www.atrinik.org/
 
- Dedicated server for the Atrinik game. Protocol declarations and shared C
- facilities come from checksum-pinned source releases. Game content and
+ Dedicated server for the Atrinik game. Protocol declarations come from the
+ matching Classic repository revision or scoped release, while shared C
+ facilities come from a checksum-pinned source release. Game content and
  runtime resources come from separately versioned, checksum-pinned archives;
  no Git submodules are required.
 
@@ -37,10 +38,12 @@
  world-time domains are documented in doc/SERVER_CLOCKS.md. New deadlines must
  use the typed server clock API described there.
 
- The exact source dependencies are recorded in cmake/dependencies.lock.json.
- The first configure downloads their release archives and verifies their
- SHA-256 digests. CMake's FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL and
- FETCHCONTENT_SOURCE_DIR_LIBATRINIK overrides support coordinated local work.
+ The Classic protocol comes from the sibling protocol/ tree, the scoped
+ release's embedded dependencies/protocol tree, or
+ FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL. CMake verifies its wire version.
+ cmake/dependencies.lock.json pins the exact libatrinik source release; the
+ first configure downloads that archive and verifies its SHA-256 digest.
+ FETCHCONTENT_SOURCE_DIR_LIBATRINIK supports coordinated local work.
 
  Releases are produced from every squash merge to main. semantic-release
  parses the Conventional Commits pull-request title. Classic stays on the
