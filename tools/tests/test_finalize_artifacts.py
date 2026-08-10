@@ -186,13 +186,14 @@ class FinalizeArtifactsTests(unittest.TestCase):
             "server/server.cfg",
             "server/permissions.cfg",
             "server/ca-bundle.crt",
+            "server/server.bat",
             "server/LICENSE.txt",
             "server/plugin_arena.dll",
             "server/plugin_python.dll",
             "server/python3.dll",
             "server/python313.dll",
             "server/_socket.pyd",
-            "maps/world.map",
+            "server/maps/regions.reg",
             "server/lib/helper.dll",
             "server/resources/archetypes",
             "server/install_data/accounts",
@@ -213,8 +214,22 @@ class FinalizeArtifactsTests(unittest.TestCase):
             path,
             package,
             finalize_artifacts.SERVER_WINDOWS_REQUIRED_PATTERNS,
+            finalize_artifacts.SERVER_WINDOWS_FORBIDDEN_PATTERNS,
         )
         finalize_artifacts.validate_embedded_python_runtime(path, package)
+
+    def test_windows_server_zip_rejects_split_maps_layout(self) -> None:
+        path = self.root / "server.zip"
+        package = "atrinik-classic-server-5.6.0-windows-x86_64"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(f"{package}/maps/regions.reg", b"fixture")
+        with self.assertRaisesRegex(RuntimeError, "forbidden packaged maps/\\*"):
+            finalize_artifacts.validate_zip(
+                path,
+                package,
+                (),
+                finalize_artifacts.SERVER_WINDOWS_FORBIDDEN_PATTERNS,
+            )
 
     def test_embedded_python_requires_nonempty_standard_library_zip(self) -> None:
         path = self.root / "server.zip"

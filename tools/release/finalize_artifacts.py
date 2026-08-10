@@ -33,16 +33,18 @@ SERVER_WINDOWS_REQUIRED_PATTERNS = (
     "server/server.cfg",
     "server/permissions.cfg",
     "server/ca-bundle.crt",
+    "server/server.bat",
     "server/LICENSE.txt",
     "server/*plugin_arena*.dll",
     "server/*plugin_python*.dll",
     "server/python3.dll",
-    "maps/*",
+    "server/maps/regions.reg",
     "server/lib/*",
     "server/resources/*",
     "server/install_data/*",
     "server/assets/client-maps/*",
 )
+SERVER_WINDOWS_FORBIDDEN_PATTERNS = ("maps/*",)
 
 
 def sha256(path: Path) -> str:
@@ -127,6 +129,7 @@ def validate_zip(
     path: Path,
     package_root: str,
     required_patterns: tuple[str, ...],
+    forbidden_patterns: tuple[str, ...] = (),
 ) -> None:
     with zipfile.ZipFile(path) as archive:
         if not archive.infolist():
@@ -163,6 +166,9 @@ def validate_zip(
                 raise RuntimeError(f"{path.name} is missing packaged {pattern}")
             if not any(size > 0 for size in matches):
                 raise RuntimeError(f"{path.name} has only empty packaged {pattern}")
+        for pattern in forbidden_patterns:
+            if any(fnmatch.fnmatchcase(name, pattern) for name in files):
+                raise RuntimeError(f"{path.name} contains forbidden packaged {pattern}")
 
 
 def validate_embedded_python_runtime(path: Path, package_root: str) -> None:
@@ -484,6 +490,7 @@ def main() -> int:
         directory / f"atrinik-classic-server-{arguments.version}-windows-x86_64.zip",
         f"atrinik-classic-server-{arguments.version}-windows-x86_64",
         SERVER_WINDOWS_REQUIRED_PATTERNS,
+        SERVER_WINDOWS_FORBIDDEN_PATTERNS,
     )
     validate_embedded_python_runtime(
         directory / f"atrinik-classic-server-{arguments.version}-windows-x86_64.zip",
