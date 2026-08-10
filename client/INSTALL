@@ -15,6 +15,11 @@ archives recorded in `cmake/dependencies.lock.json` and verifies their SHA-256
 digests. Use CMake's `FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL` and
 `FETCHCONTENT_SOURCE_DIR_LIBATRINIK` overrides for coordinated local work.
 
+The main client target precompiles `src/include/global.h` by default. Pass
+`-DENABLE_PRECOMPILED_HEADERS=OFF` for a conventional build. See
+`../docs/BUILD_ACCELERATION.md` for the benchmark procedure, measurements, and
+invalidation tradeoffs.
+
 Discord Rich Presence is optional. A build without an Application ID remains
 fully functional and opens no Discord IPC endpoint. For an installed/package
 build, pass a one-line numeric file with

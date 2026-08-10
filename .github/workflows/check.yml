@@ -374,6 +374,7 @@ jobs:
               python3 tools/dependencies.py sync
               python3 tools/dependencies.py verify
               cmake --preset linux-coverage \
+                -DENABLE_PRECOMPILED_HEADERS=OFF \
                 -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
                 -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
               cmake --build --preset linux-coverage --parallel
@@ -430,12 +431,24 @@ jobs:
               python3 tools/dependencies.py sync
               python3 tools/dependencies.py verify
               cmake --preset linux-coverage \
+                -DENABLE_PRECOMPILED_HEADERS=OFF \
                 -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
                 -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
               cmake --build --preset linux-coverage --parallel
               ctest --preset linux-coverage
               gcovr --root . --filter "src/" --exclude "src/tests/" \
                 --print-summary --xml coverage.xml
+              cmake --preset linux-release \
+                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
+                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
+              cmake --build --preset linux-release --parallel
+              ctest --preset linux-release
+              cmake --preset linux-sanitizers \
+                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
+                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
+              cmake --build --preset linux-sanitizers --parallel
+              env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
+                ctest --preset linux-sanitizers
             '
       - name: Upload coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6

@@ -53,6 +53,8 @@ atrinik_find_root_document(ATRINIK_ATTRIBUTIONS_FILE ATTRIBUTIONS.md)
 option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
 option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
 option(ENABLE_COVERAGE "Enable GCC coverage instrumentation" OFF)
+option(ENABLE_PRECOMPILED_HEADERS
+    "Precompile the server global header for the core object library" ON)
 option(ENABLE_PYTHON_PLUGIN "Build the Python plugin" ON)
 set(PACKAGE_TYPE "none" CACHE STRING "Package type (none or zip)")
 
@@ -224,6 +226,9 @@ add_library(atrinik-server-core OBJECT
     ${SOURCES_WORLD_MAKER}
     ${LEXERS_OUT})
 atrinik_configure_target(atrinik-server-core)
+if (ENABLE_PRECOMPILED_HEADERS)
+    target_precompile_headers(atrinik-server-core PRIVATE src/include/global.h)
+endif ()
 target_include_directories(atrinik-server-core BEFORE PRIVATE
     ${ATRINIK_SERVER_INCLUDE_DIRS})
 target_link_libraries(atrinik-server-core PRIVATE
