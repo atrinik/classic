@@ -39,6 +39,9 @@ typedef enum fake_stun_mode {
 typedef struct fake_stun_server {
     int handle;
     fake_stun_mode_t mode;
+    uint16_t request_port;
+    uint16_t punch_port;
+    bool expect_punch;
 } fake_stun_server_t;
 
 static char captured_log[512];
@@ -72,6 +75,7 @@ static blocking_resolver_state_t blocking_resolver = {
 };
 static atomic_uint_fast64_t fake_clock_ms;
 static atomic_uint fallback_calls;
+static atomic_uint resolver_calls;
 
 static uint64_t fake_clock(void) {
     return atomic_load_explicit(&fake_clock_ms, memory_order_relaxed);
@@ -100,6 +104,8 @@ static void *fake_stun_run(void *data) {
                                 (struct sockaddr *)&client,
                                 &client_length);
     TEST_CHECK(received == 20);
+    TEST_CHECK(client.ss_family == AF_INET);
+    server->request_port = ntohs(((struct sockaddr_in *)&client)->sin_port);
     if (server->mode == FAKE_STUN_TIMEOUT) {
         return NULL;
     }
@@ -141,6 +147,18 @@ static void *fake_stun_run(void *data) {
                       0,
                       (const struct sockaddr *)&client,
                       client_length) == (ssize_t)response_size);
+    if (server->expect_punch) {
+        received = recvfrom(server->handle,
+                            request,
+                            sizeof(request),
+                            0,
+                            (struct sockaddr *)&client,
+                            &client_length);
+        TEST_CHECK(received == (ssize_t)strlen("ATRINIK-PUNCH-1"));
+        TEST_CHECK(memcmp(request, "ATRINIK-PUNCH-1", (size_t)received) == 0);
+        TEST_CHECK(client.ss_family == AF_INET);
+        server->punch_port = ntohs(((struct sockaddr_in *)&client)->sin_port);
+    }
     return NULL;
 }
 
@@ -167,6 +185,18 @@ static int failing_resolver(const char *host,
                             struct addrinfo **addresses) {
     *addresses = NULL;
     return EAI_NONAME;
+}
+
+static int numeric_resolver(const char *host,
+                            const char *service,
+                            const struct addrinfo *hints,
+                            struct addrinfo **addresses) {
+    atomic_fetch_add_explicit(&resolver_calls, 1U, memory_order_relaxed);
+    return getaddrinfo("127.0.0.1", service, hints, addresses);
+}
+
+static void expire_after_send(void) {
+    atomic_store_explicit(&fake_clock_ms, 2U, memory_order_relaxed);
 }
 
 static void *discovery_call_run(void *data) {
@@ -292,6 +322,30 @@ static void test_resolver_deadline_and_privacy(void) {
     socket_stun_clock_set_for_test(NULL);
 }
 
+static void test_request_deadline_diagnostic(void) {
+    socket_stun_resolver_set_for_test(numeric_resolver);
+    socket_stun_clock_set_for_test(fake_clock);
+    socket_stun_after_send_set_for_test(expire_after_send);
+    atomic_store_explicit(&fake_clock_ms, 1U, memory_order_relaxed);
+    atomic_store_explicit(&resolver_calls, 0U, memory_order_relaxed);
+    captured_log[0] = '\0';
+    discovery_call_t call = discovery_call_create("post-send-private.example:9", 2U);
+    char host[65];
+    uint16_t port;
+    TEST_CHECK(!socket_stun_discover_until(&call.client,
+                                           call.endpoint,
+                                           VS(host),
+                                           &port,
+                                           call.deadline_ms));
+    TEST_CHECK(atomic_load_explicit(&resolver_calls, memory_order_relaxed) == 1U);
+    TEST_CHECK(strstr(captured_log, "STUN request timed out") != NULL);
+    TEST_CHECK(strstr(captured_log, "post-send-private") == NULL);
+    test_close_socket(call.client.handle);
+    socket_stun_after_send_set_for_test(NULL);
+    socket_stun_clock_set_for_test(NULL);
+    socket_stun_resolver_set_for_test(NULL);
+}
+
 static void *rendezvous_call_run(void *data) {
     rendezvous_call_t *call = data;
     socket_direct_candidate_t candidates[SOCKET_DIRECT_MAX_CANDIDATES + 1U];
@@ -356,6 +410,28 @@ static void test_rendezvous_reserves_fallback_budget(void) {
     blocking_resolver_wait(1, 1);
     socket_stun_resolver_wait_for_test();
     socket_rendezvous_attempt_destroy(attempt);
+
+    socket_stun_resolver_set_for_test(numeric_resolver);
+    socket_stun_clock_set_for_test(NULL);
+    atomic_store_explicit(&resolver_calls, 0U, memory_order_relaxed);
+    atomic_store_explicit(&fallback_calls, 0U, memory_order_relaxed);
+    attempt =
+        socket_rendezvous_attempt_create(server_id, ticket, NULL, datetime_monotonic_ms() + 15000U);
+    TEST_CHECK(attempt != NULL);
+    socket_direct_candidate_t candidates[SOCKET_DIRECT_MAX_CANDIDATES + 1U];
+    socket_connect_failure_t failure = {0};
+    TEST_CHECK(socket_rendezvous_client(&call.client,
+                                        "ws://unused.invalid",
+                                        NULL,
+                                        attempt,
+                                        candidates,
+                                        arraysize(candidates),
+                                        &failure) == 0);
+    TEST_CHECK(atomic_load_explicit(&resolver_calls, memory_order_relaxed) == 0U);
+    TEST_CHECK(atomic_load_explicit(&fallback_calls, memory_order_relaxed) == 1U);
+    TEST_CHECK(failure.code == SOCKET_CONNECT_FAILURE_UNAVAILABLE);
+    socket_rendezvous_attempt_destroy(attempt);
+
     socket_stun_resolver_set_for_test(NULL);
     socket_stun_clock_set_for_test(NULL);
     socket_rendezvous_fallback_set_for_test(NULL);
@@ -376,7 +452,11 @@ static void test_mode(fake_stun_mode_t mode, bool expected, const char *diagnost
     socklen_t server_length = sizeof(server_address);
     TEST_CHECK(getsockname(server_handle, (struct sockaddr *)&server_address, &server_length) == 0);
 
-    fake_stun_server_t server = {.handle = server_handle, .mode = mode};
+    fake_stun_server_t server = {
+        .handle = server_handle,
+        .mode = mode,
+        .expect_punch = mode == FAKE_STUN_SUCCESS,
+    };
     pthread_t thread;
     TEST_CHECK(pthread_create(&thread, NULL, fake_stun_run, &server) == 0);
 
@@ -391,11 +471,17 @@ static void test_mode(fake_stun_mode_t mode, bool expected, const char *diagnost
     bool discovered = socket_stun_discover(&client, endpoint, VS(host), &port);
     uint64_t elapsed_ms = datetime_monotonic_ms() - started_ms;
 
+    if (discovered && server.expect_punch) {
+        TEST_CHECK(socket_udp_punch(&client, "127.0.0.1", ntohs(server_address.sin_port)));
+    }
+
     TEST_CHECK(pthread_join(thread, NULL) == 0);
     TEST_CHECK(discovered == expected);
     if (expected) {
         TEST_CHECK(strcmp(host, "198.51.100.7") == 0);
         TEST_CHECK(port == 45678);
+        TEST_CHECK(server.request_port != 0);
+        TEST_CHECK(server.punch_port == server.request_port);
     } else {
         TEST_CHECK(strstr(captured_log, diagnostic) != NULL);
     }
@@ -420,6 +506,7 @@ int main(void) {
     test_mode(FAKE_STUN_TRUNCATED_IPV6, false, "Invalid STUN response");
     test_mode(FAKE_STUN_TIMEOUT, false, "timed out");
     test_resolver_deadline_and_privacy();
+    test_request_deadline_diagnostic();
     test_rendezvous_reserves_fallback_budget();
 
     char host[65];

@@ -55,6 +55,7 @@ typedef struct socket_stun_resolver_context {
 
 static socket_stun_resolver_t socket_stun_resolver = getaddrinfo;
 static socket_stun_clock_t socket_stun_clock = datetime_monotonic_ms;
+static socket_stun_after_send_t socket_stun_after_send;
 static socket_rendezvous_fallback_t socket_rendezvous_fallback;
 static pthread_mutex_t socket_stun_resolver_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t socket_stun_resolver_condition = PTHREAD_COND_INITIALIZER;
@@ -69,6 +70,12 @@ void socket_stun_resolver_set_for_test(socket_stun_resolver_t resolver) {
 void socket_stun_clock_set_for_test(socket_stun_clock_t clock) {
     pthread_mutex_lock(&socket_stun_resolver_lock);
     socket_stun_clock = clock != NULL ? clock : datetime_monotonic_ms;
+    pthread_mutex_unlock(&socket_stun_resolver_lock);
+}
+
+void socket_stun_after_send_set_for_test(socket_stun_after_send_t after_send) {
+    pthread_mutex_lock(&socket_stun_resolver_lock);
+    socket_stun_after_send = after_send;
     pthread_mutex_unlock(&socket_stun_resolver_lock);
 }
 
@@ -1059,8 +1066,16 @@ bool socket_stun_discover_until(socket_t *sc,
         return false;
     }
 
-    uint64_t now_ms = datetime_monotonic_ms();
+    pthread_mutex_lock(&socket_stun_resolver_lock);
+    socket_stun_after_send_t after_send = socket_stun_after_send;
+    pthread_mutex_unlock(&socket_stun_resolver_lock);
+    if (after_send != NULL) {
+        after_send();
+    }
+
+    uint64_t now_ms = socket_stun_clock_get();
     if (now_ms >= deadline_ms) {
+        LOG(ERROR, "STUN request timed out");
         return false;
     }
     uint64_t timeout_ms = MIN(deadline_ms - now_ms, 3000U);

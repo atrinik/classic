@@ -333,6 +333,9 @@ class WorkflowContractTests(unittest.TestCase):
             build,
         )
         self.assertIn("libatrinik-metaserver-url libatrinik-stun \\", build)
+        self.assertIn(
+            "libatrinik/build/windows-tests/libatrinik-stun.exe", build
+        )
         self.assertIn("python3 tools/ci/stage_windows_runtime.py", build)
         self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", build)
 
