@@ -58,6 +58,7 @@ typedef struct server_struct {
 
     bool direct : 1;
     bool password_required : 1;
+    bool player_known : 1;
 
     /** Session-only password for joining this server. */
     char *join_password;
@@ -72,7 +73,7 @@ typedef struct server_struct {
     char *desc;
 
     /** Number of players online. */
-    int player;
+    uint32_t player;
 
     /** Server port. */
     int port;

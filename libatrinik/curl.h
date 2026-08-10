@@ -121,6 +121,19 @@ bool curl_request_set_post_body(curl_request_t *request, const void *body, size_
  * retain their original authenticated authority and path. */
 void curl_request_set_follow_redirects(curl_request_t *request, bool enabled);
 void curl_request_set_path(curl_request_t *request, const char *path);
+/**
+ * Read a bounded cache body without issuing a request.
+ *
+ * The caller owns the returned NUL-terminated body.
+ */
+bool curl_cache_read(const char *path, size_t maximum, char **body, size_t *body_size);
+/**
+ * Persist a validated completed HTTP 200 response and its strong ETag.
+ *
+ * Cache replacement is explicit so callers can authenticate or parse a body
+ * before it becomes last-known-good state.
+ */
+bool curl_request_cache_commit(curl_request_t *request);
 void curl_request_set_max_body(curl_request_t *request, size_t maximum);
 /** Set the maximum aggregate HTTP response-header bytes. */
 void curl_request_set_max_header(curl_request_t *request, size_t maximum);

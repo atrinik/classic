@@ -493,6 +493,22 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  identity private and include it with server-state backups; replacing it
  intentionally creates a different server identity.
 
+ The two dynamic services are configured independently:
+
+     metaserver_publish_origin = https://publish.meta.atrinik.org
+     metaserver_rendezvous_origin = https://rendezvous.meta.atrinik.org/v1/classic
+
+ The publisher value is a canonical HTTP(S) origin without a path. The signed
+ profile path and certificate-derived identity are appended exactly once, and
+ the resulting authority is covered by the signature. The rendezvous value is
+ a canonical HTTP(S) origin plus an intentional deployment prefix; the shared
+ library appends /servers/SERVER-ID?role=server and converts only HTTPS to WSS
+ (or HTTP to WS for an explicit local deployment). Userinfo, query, fragment,
+ percent encoding, traversal, ambiguous paths, invalid schemes, and output
+ overflow are rejected before a background request starts. Publish and
+ WebSocket requests do not follow redirects, and the bearer token remains only
+ in the WebSocket Authorization header.
+
  Publication is event-driven. The server publishes once at startup, coalesces
  visible player-count changes for ten seconds, and otherwise sends only a
  jittered liveness heartbeat. `metaserver_heartbeat` configures the heartbeat
@@ -552,6 +568,14 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  game server. Signed publishes never follow redirects because the exact
  authority and path are covered by the signature. Signatures, nonces,
  sequences, private material, and returned rendezvous tokens are not logged.
+
+ Deployment order is forward-only: provision and canary the static directory,
+ signed publisher, and rendezvous hosts first; release the coordinated
+ libatrinik/server/client binaries next; then retire the classic compatibility
+ aliases after the observation window. Only after classic traffic is absent may
+ meta.atrinik.org become the replacement-stack static directory. There is no
+ runtime fallback to the CGI pseudo-base, OTP/update paths, or /v2 routes in
+ these binaries.
 
 =================================================
 = 3.2. Ports used by Atrinik                    =

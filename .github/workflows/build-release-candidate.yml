@@ -151,7 +151,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev libssl-dev zlib1g-dev
+          sudo apt-get install -y libcurl4-openssl-dev libidn2-dev libssl-dev zlib1g-dev
           mkdir -p build/extracted
           tar -xzf \
             "build/release/atrinik-classic-libatrinik-${RELEASE_VERSION}.tar.gz" \

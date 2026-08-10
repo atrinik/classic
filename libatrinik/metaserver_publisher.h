@@ -13,7 +13,6 @@
 #include "toolkit.h"
 #include <openssl/types.h>
 
-#define METASERVER_PUBLISH_AUTHORITY "publish.meta.atrinik.org"
 #define METASERVER_PUBLISH_CONTENT_TYPE "application/json"
 #define METASERVER_PUBLISH_BODY_MAX 4096U
 #define METASERVER_PUBLISH_CERTIFICATE_DER_MAX 2048U

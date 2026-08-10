@@ -463,11 +463,24 @@ static char *curl_load_etag(curl_request_t *request) {
         goto fail;
     }
 
-    etag = xmalloc(sizeof(*etag) * (statbuf.st_size + 1));
+    if (statbuf.st_size < 2 || statbuf.st_size > 255) {
+        goto fail;
+    }
+    etag = xmalloc(sizeof(*etag) * ((size_t)statbuf.st_size + 1));
 
-    if (fgets(etag, statbuf.st_size + 1, fp) == NULL) {
+    if (fread(etag, 1, (size_t)statbuf.st_size, fp) != (size_t)statbuf.st_size) {
         LOG(ERROR, "Could not read %s: %d (%s)", path, errno, strerror(errno));
         goto fail;
+    }
+    etag[statbuf.st_size] = '\0';
+    if (etag[0] != '"' || etag[statbuf.st_size - 1] != '"') {
+        goto fail;
+    }
+    for (off_t i = 1; i < statbuf.st_size - 1; i++) {
+        unsigned char cp = (unsigned char)etag[i];
+        if (cp <= 0x20U || cp >= 0x7fU || cp == '"' || cp == '\\') {
+            goto fail;
+        }
     }
 
     goto done;
@@ -530,6 +543,7 @@ static bool curl_load_cache(curl_request_t *request) {
         goto fail;
     }
 
+    OPENSSL_clear_free(request->body, request->body_size + (request->body != NULL ? 1U : 0U));
     request->body_size = size;
     request->body = buffer;
     request->body[size] = '\0';
@@ -558,13 +572,27 @@ done:
  * @warning
  * This function expects the cURL request mutex to be locked.
  */
-static void curl_write_cache(curl_request_t *request) {
+static bool curl_etag_valid(const char *etag) {
+    size_t size = strlen(etag);
+    if (size < 2 || size > 255 || etag[0] != '"' || etag[size - 1] != '"') {
+        return false;
+    }
+    for (size_t i = 1; i + 1 < size; i++) {
+        unsigned char cp = (unsigned char)etag[i];
+        if (cp <= 0x20U || cp >= 0x7fU || cp == '"' || cp == '\\') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool curl_write_cache(curl_request_t *request) {
     HARD_ASSERT(request != NULL);
 
     /* If we have a cache path, and we managed to retrieve some data, update
      * the cached file. */
     if (request->path == NULL || request->header == NULL || request->body == NULL) {
-        return;
+        return false;
     }
 
     char *etag = NULL;
@@ -577,25 +605,64 @@ static void curl_write_cache(curl_request_t *request) {
             continue;
         }
 
-        if (strcmp(cps[0], "ETag") == 0) {
+        if (strcasecmp(cps[0], "ETag") == 0) {
             string_whitespace_trim(cps[1]);
-            etag = cps[1];
+            if (curl_etag_valid(cps[1])) {
+                etag = cps[1];
+            }
             break;
         }
+    }
+    if (etag == NULL) {
+        return false;
     }
 
     if (!path_write_atomic(request->path, request->body, request->body_size, 0600)) {
         LOG(ERROR, "Failed to open %s for saving: %d (%s)", request->path, errno, strerror(errno));
-        etag = NULL;
+        return false;
     }
 
-    if (etag != NULL) {
-        char path[HUGE_BUF];
-        snprintf(VS(path), "%s.etag", request->path);
-        if (!path_write_atomic(path, etag, strlen(etag), 0600)) {
-            LOG(ERROR, "Failed to open %s for saving: %d (%s)", path, errno, strerror(errno));
-        }
+    char etag_path[HUGE_BUF];
+    snprintf(VS(etag_path), "%s.etag", request->path);
+    if (!path_write_atomic(etag_path, etag, strlen(etag), 0600)) {
+        LOG(ERROR, "Failed to open %s for saving: %d (%s)", etag_path, errno, strerror(errno));
+        (void)unlink(etag_path);
+        return false;
     }
+    return true;
+}
+
+bool curl_cache_read(const char *path, size_t maximum, char **body, size_t *body_size) {
+    HARD_ASSERT(path != NULL);
+    HARD_ASSERT(maximum > 0);
+    HARD_ASSERT(body != NULL);
+    HARD_ASSERT(body_size != NULL);
+    TOOLKIT_PROTECT();
+    *body = NULL;
+    *body_size = 0;
+    if (access(path, F_OK) != 0 && errno == ENOENT) {
+        return false;
+    }
+    curl_request_t request = {
+        .path = (char *)path,
+        .max_body_size = maximum,
+    };
+    if (!curl_load_cache(&request)) {
+        return false;
+    }
+    *body = request.body;
+    *body_size = request.body_size;
+    return true;
+}
+
+bool curl_request_cache_commit(curl_request_t *request) {
+    HARD_ASSERT(request != NULL);
+    TOOLKIT_PROTECT();
+    pthread_mutex_lock(&request->mutex);
+    bool ok =
+        request->state == CURL_STATE_OK && request->http_code == 200 && curl_write_cache(request);
+    pthread_mutex_unlock(&request->mutex);
+    return ok;
 }
 
 /**
@@ -1512,11 +1579,7 @@ static curl_state_t curl_request_complete(curl_request_t *request) {
         return CURL_STATE_ERROR;
     }
 
-    if (http_code == 200) {
-        pthread_mutex_lock(&request->mutex);
-        curl_write_cache(request);
-        pthread_mutex_unlock(&request->mutex);
-    } else if (http_code == 304) {
+    if (http_code == 304) {
         pthread_mutex_lock(&request->mutex);
         bool cache_res = curl_load_cache(request);
         pthread_mutex_unlock(&request->mutex);

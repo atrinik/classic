@@ -52,6 +52,7 @@
 #include <object_methods.h>
 #include <toolkit/clioptions.h>
 #include <toolkit/curl.h>
+#include <toolkit/metaserver_url.h>
 #include <server.h>
 #include <metaserver_internal.h>
 #include <toolkit/path.h>
@@ -414,15 +415,35 @@ static bool clioptions_option_resourcespath(const char *arg, char **errmsg) {
     return true;
 }
 
-/**
- * Description of the --metaserver_url command.
- */
-static const char *clioptions_option_metaserver_url_desc =
-    "URL of the metaserver. The server will send POST requests to this URL to "
-    "update the metaserver data.";
+/** Description of the --metaserver_publish_origin command. */
+static const char *clioptions_option_metaserver_publish_origin_desc =
+    "Canonical HTTP(S) origin for signed metaserver publication. Paths, credentials, query "
+    "parameters, and fragments are forbidden.";
 /** @copydoc clioptions_handler_func */
-static bool clioptions_option_metaserver_url(const char *arg, char **errmsg) {
-    snprintf(VS(settings.metaserver_url), "%s", arg);
+static bool clioptions_option_metaserver_publish_origin(const char *arg, char **errmsg) {
+    char url[MAX_BUF];
+    char authority[MAX_BUF];
+    if (!metaserver_url_publish(arg, "/", VS(url), VS(authority))) {
+        string_fmt(*errmsg, "%s", "metaserver publisher origin is not canonical");
+        return false;
+    }
+    snprintf(VS(settings.metaserver_publish_origin), "%s", arg);
+    return true;
+}
+
+/** Description of the --metaserver_rendezvous_origin command. */
+static const char *clioptions_option_metaserver_rendezvous_origin_desc =
+    "Canonical HTTP(S) origin and profile prefix for ticket-scoped rendezvous signaling.";
+/** @copydoc clioptions_handler_func */
+static bool clioptions_option_metaserver_rendezvous_origin(const char *arg, char **errmsg) {
+    char url[MAX_BUF];
+    static const char identity[] =
+        "0000000000000000000000000000000000000000000000000000000000000000";
+    if (!metaserver_url_rendezvous(arg, identity, "server", VS(url))) {
+        string_fmt(*errmsg, "%s", "metaserver rendezvous origin is not canonical");
+        return false;
+    }
+    snprintf(VS(settings.metaserver_rendezvous_origin), "%s", arg);
     return true;
 }
 
@@ -969,7 +990,10 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, mapspath, "Map files location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, httppath, "HTTP asset staging location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, resourcespath, "Resource files location");
-    CLIOPTIONS_CREATE_ARGUMENT(cli, metaserver_url, "URL of the metaserver");
+    CLIOPTIONS_CREATE_ARGUMENT(cli,
+                               metaserver_publish_origin,
+                               "Signed metaserver publisher origin");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, metaserver_rendezvous_origin, "Rendezvous signaling origin");
     CLIOPTIONS_CREATE_ARGUMENT(cli, metaserver_heartbeat, "Metaserver heartbeat interval");
     CLIOPTIONS_CREATE_ARGUMENT(cli, http_url, "Operator-managed HTTP asset origin");
     CLIOPTIONS_CREATE_ARGUMENT(cli, stun_server, "STUN discovery endpoint");
