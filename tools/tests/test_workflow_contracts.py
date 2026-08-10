@@ -299,6 +299,9 @@ class WorkflowContractTests(unittest.TestCase):
             candidate.index("  client-windows:") : candidate.index("  server-windows:")
         ]
         cmake = (ROOT / "client" / "CMakeLists.txt").read_text(encoding="utf-8")
+        package_script = (ROOT / "client" / "tools" / "build-windows-package.sh").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("if: inputs.rehearsal != true", config)
         self.assertIn("environment: discord-release", config)
         self.assertIn("secrets.DISCORD_APPLICATION_ID", config)
@@ -310,6 +313,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('PATTERN "discord-application-id" EXCLUDE', cmake)
         self.assertIn("18446744073709551615", cmake)
         self.assertIn("if: inputs.rehearsal != true", client)
+        self.assertIn(
+            'discord_config_file=${ATRINIK_DISCORD_APPLICATION_ID_FILE:-}',
+            package_script,
+        )
+        self.assertIn(
+            '"-DATRINIK_DISCORD_APPLICATION_ID_FILE=${discord_config_file}"',
+            package_script,
+        )
 
     def test_only_release_metadata_checkouts_require_full_history(self) -> None:
         candidate = self.text("build-release-candidate.yml")

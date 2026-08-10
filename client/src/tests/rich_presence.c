@@ -524,7 +524,7 @@ static void test_windows_pipe_identity(void) {
                                      1,
                                      1024,
                                      1024,
-                                     0,
+                                     5000,
                                      NULL);
     require(server != INVALID_HANDLE_VALUE);
     require(!ConnectNamedPipe(server, NULL));
@@ -534,6 +534,9 @@ static void test_windows_pipe_identity(void) {
     require(client != INVALID_HANDLE_VALUE);
     require(discord_rpc_test_pipe_same_user(client));
     require(!discord_rpc_test_pipe_same_user(INVALID_HANDLE_VALUE));
+    ULONGLONG started = GetTickCount64();
+    require(!discord_rpc_test_try_pipe(path));
+    require(GetTickCount64() - started < 1000U);
     CloseHandle(client);
     CloseHandle(server);
 }

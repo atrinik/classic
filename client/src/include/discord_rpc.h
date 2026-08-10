@@ -44,6 +44,7 @@ bool discord_rpc_ready(const discord_rpc_t *rpc);
 discord_rpc_failure_t discord_rpc_failure(const discord_rpc_t *rpc);
 #if defined(WIN32) && defined(DISCORD_RPC_TESTING)
 bool discord_rpc_test_pipe_same_user(void *pipe);
+bool discord_rpc_test_try_pipe(const char *path);
 #endif
 
 #endif

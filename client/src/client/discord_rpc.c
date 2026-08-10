@@ -161,6 +161,38 @@ bool discord_rpc_test_pipe_same_user(void *pipe) {
 }
 #endif
 
+static HANDLE platform_open_pipe(const char *path) {
+    /* CreateFile returns immediately with ERROR_PIPE_BUSY when every instance
+     * is occupied. WaitNamedPipe's zero timeout means "use the server
+     * default", so it must not be used on the gameplay thread. */
+    HANDLE pipe =
+        CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    if (pipe == INVALID_HANDLE_VALUE) {
+        return INVALID_HANDLE_VALUE;
+    }
+    if (!platform_pipe_same_user(pipe)) {
+        CloseHandle(pipe);
+        return INVALID_HANDLE_VALUE;
+    }
+    DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+    if (!SetNamedPipeHandleState(pipe, &mode, NULL, NULL)) {
+        CloseHandle(pipe);
+        return INVALID_HANDLE_VALUE;
+    }
+    return pipe;
+}
+
+#ifdef DISCORD_RPC_TESTING
+bool discord_rpc_test_try_pipe(const char *path) {
+    HANDLE pipe = platform_open_pipe(path);
+    if (pipe == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    CloseHandle(pipe);
+    return true;
+}
+#endif
+
 static int platform_connect(void *context) {
     discord_rpc_platform_t *platform = context;
     if (platform->pipe != INVALID_HANDLE_VALUE) {
@@ -169,25 +201,11 @@ static int platform_connect(void *context) {
     for (unsigned int i = 0; i < 10U; i++) {
         char path[64];
         snprintf(path, sizeof(path), "\\\\?\\pipe\\discord-ipc-%u", i);
-        if (!WaitNamedPipeA(path, 0) && GetLastError() != ERROR_SEM_TIMEOUT) {
-            continue;
+        HANDLE pipe = platform_open_pipe(path);
+        if (pipe != INVALID_HANDLE_VALUE) {
+            platform->pipe = pipe;
+            return 1;
         }
-        HANDLE pipe =
-            CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
-        if (pipe == INVALID_HANDLE_VALUE) {
-            continue;
-        }
-        if (!platform_pipe_same_user(pipe)) {
-            CloseHandle(pipe);
-            continue;
-        }
-        DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
-        if (!SetNamedPipeHandleState(pipe, &mode, NULL, NULL)) {
-            CloseHandle(pipe);
-            continue;
-        }
-        platform->pipe = pipe;
-        return 1;
     }
     return 0;
 }
