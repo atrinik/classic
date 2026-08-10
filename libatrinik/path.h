@@ -65,6 +65,13 @@ typedef enum path_secret_create_result {
     PATH_SECRET_CREATE_ERROR
 } path_secret_create_result_t;
 
+/** Result of preparing one final directory path component. */
+typedef enum path_directory_result {
+    PATH_DIRECTORY_OK,
+    PATH_DIRECTORY_UNSAFE,
+    PATH_DIRECTORY_ERROR
+} path_directory_result_t;
+
 /* Prototypes */
 
 extern path_fopen_t path_fopen;
@@ -85,6 +92,15 @@ int path_rename(const char *old, const char *new);
 bool path_write_atomic(const char *path, const void *data, size_t size, unsigned int mode);
 /** Atomically replace a file whose parent directories are already present. */
 bool path_write_atomic_existing(const char *path, const void *data, size_t size, unsigned int mode);
+/**
+ * Ensure the final path component is a direct directory, creating it if absent.
+ *
+ * Existing symbolic links, Windows reparse points, and non-directories are
+ * rejected. This function does not validate ancestor components, ownership, or
+ * permissions and retains no handle after returning. Concurrent calls are
+ * supported; callers must separately control later name-based access.
+ */
+path_directory_result_t path_ensure_real_directory(const char *path, unsigned int mode);
 /**
  * Atomically publish a new owner-only secret without replacing an existing path.
  *
