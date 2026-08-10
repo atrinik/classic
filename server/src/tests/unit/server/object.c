@@ -32,7 +32,27 @@
 #include <loader.h>
 #include <object.h>
 #include <object_methods.h>
+#include <swap.h>
 #include <toolkit/path.h>
+
+static bool active_list_contains(const object *needle) {
+    size_t visited = 0;
+
+    for (const object *tmp = active_objects; tmp != NULL; tmp = tmp->active_next) {
+        ck_assert_uint_lt(visited++, 100000);
+        ck_assert(!OBJECT_FREE(tmp));
+
+        if (tmp->active_next != NULL) {
+            ck_assert_ptr_eq(tmp->active_next->active_prev, tmp);
+        }
+
+        if (tmp == needle) {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 START_TEST(test_object_can_merge) {
     object *ob1, *ob2;
@@ -609,6 +629,7 @@ START_TEST(test_object_map_reload_preserves_active_list) {
         ck_assert_ptr_eq(object_insert_map(spawn, map, NULL, 0), spawn);
 
         object *template = spawn->inv;
+        object *template_slot = template;
         template->type = MONSTER;
         object_update_speed(template);
         ck_assert_ptr_eq(active_objects, template);
@@ -621,12 +642,75 @@ START_TEST(test_object_map_reload_preserves_active_list) {
 
         ck_assert_ptr_eq(active_objects, player);
         ck_assert_ptr_eq(player->active_prev, NULL);
+        ck_assert(!active_list_contains(template_slot));
 
-        object *reused = object_get();
-        ck_assert_ptr_eq(active_objects, player);
-        ck_assert_ptr_eq(reused->active_next, NULL);
-        ck_assert_ptr_eq(reused->active_prev, NULL);
-        object_destroy(reused);
+        object *claimed[8];
+        size_t claimed_count = 0;
+        bool template_reused = false;
+
+        while (claimed_count < arraysize(claimed)) {
+            claimed[claimed_count] = object_get();
+            template_reused = claimed[claimed_count] == template_slot;
+            claimed_count++;
+
+            ck_assert_ptr_eq(active_objects, player);
+            ck_assert(!active_list_contains(template_slot) || template_reused);
+
+            if (template_reused) {
+                break;
+            }
+        }
+
+        ck_assert(template_reused);
+        ck_assert_ptr_eq(claimed[claimed_count - 1]->active_next, NULL);
+        ck_assert_ptr_eq(claimed[claimed_count - 1]->active_prev, NULL);
+
+        while (claimed_count > 0) {
+            object_destroy(claimed[--claimed_count]);
+        }
+    }
+
+    object_destroy(player);
+    ck_assert_ptr_eq(active_objects, NULL);
+}
+END_TEST
+
+START_TEST(test_underground_city_map_reloads_preserve_active_list) {
+    static const char *path =
+        "/shattered_islands/strakewood_island/underground_city/underground_city_4_0_-3";
+
+    ck_assert_ptr_eq(active_objects, NULL);
+
+    object *player = arch_get("sack");
+    player->speed = 1.0f;
+    object_update_speed(player);
+
+    for (int cycle = 0; cycle < 3; cycle++) {
+        mapstruct *map = ready_map_name(path, NULL, cycle == 0 ? MAP_FLUSH : 0);
+        ck_assert_ptr_ne(map, NULL);
+
+        size_t matching_templates = 0;
+        for (int x = 0; x < MAP_WIDTH(map); x++) {
+            for (int y = 0; y < MAP_HEIGHT(map); y++) {
+                for (object *spawn = GET_MAP_OB(map, x, y); spawn != NULL; spawn = spawn->above) {
+                    if (spawn->type != SPAWN_POINT || spawn->inv == NULL ||
+                        spawn->inv->type != SPAWN_POINT_MOB || spawn->inv->inv == NULL ||
+                        spawn->inv->inv->below == NULL) {
+                        continue;
+                    }
+
+                    matching_templates++;
+                    ck_assert(!active_list_contains(spawn->inv));
+                }
+            }
+        }
+
+        ck_assert_uint_gt(matching_templates, 0);
+        ck_assert(active_list_contains(player));
+
+        swap_map(map, 1);
+
+        ck_assert(active_list_contains(player));
     }
 
     object_destroy(player);
@@ -664,6 +748,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_invalid_object_type_uses_base_method_fallback);
     tcase_add_test(tc_core, test_OBJECT_DESTROYED);
     tcase_add_test(tc_core, test_object_map_reload_preserves_active_list);
+    tcase_add_test(tc_core, test_underground_city_map_reloads_preserve_active_list);
 
     return s;
 }
