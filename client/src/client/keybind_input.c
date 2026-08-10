@@ -737,16 +737,23 @@ void keybind_movement_state_run_released(keybind_movement_state *state, bool run
     }
 }
 
-/** Resolve the active directions, composing only the four supported diagonal pairs. */
+/** Resolve two perpendicular active directions as one normalized movement vector. */
 static uint8_t keybind_movement_direction(const keybind_movement_state *state) {
+    static const int8_t direction_x[] = {0, -1, 0, 1, -1, 0, 1, -1, 0, 1};
+    static const int8_t direction_y[] = {0, 1, 1, 1, 0, 0, 0, -1, -1, -1};
     uint16_t directions = 0;
     uint8_t newest_direction = 0;
     uint64_t newest_order = 0;
+    size_t directions_num = 0;
 
     for (SDL_Scancode i = 0; i < SDL_SCANCODE_COUNT; i++) {
         const keybind_movement_key *key = &state->keys[i];
         if (key->direction != 0) {
-            directions |= (uint16_t)(1U << key->direction);
+            uint16_t direction_bit = (uint16_t)(1U << key->direction);
+            if ((directions & direction_bit) == 0) {
+                directions |= direction_bit;
+                directions_num++;
+            }
             if (key->order >= newest_order) {
                 newest_order = key->order;
                 newest_direction = key->direction;
@@ -754,17 +761,31 @@ static uint8_t keybind_movement_direction(const keybind_movement_state *state) {
         }
     }
 
-    if (directions == ((1U << 7) | (1U << 9))) {
-        return 8;
-    }
-    if (directions == ((1U << 9) | (1U << 3))) {
-        return 6;
-    }
-    if (directions == ((1U << 3) | (1U << 1))) {
-        return 2;
-    }
-    if (directions == ((1U << 1) | (1U << 7))) {
-        return 4;
+    if (directions_num == 2) {
+        int x = 0, y = 0;
+        uint8_t first = 0, second = 0;
+        for (uint8_t direction = 1; direction <= 9; direction++) {
+            if ((directions & (1U << direction)) != 0) {
+                if (first == 0) {
+                    first = direction;
+                } else {
+                    second = direction;
+                }
+                x += direction_x[direction];
+                y += direction_y[direction];
+            }
+        }
+        int dot =
+            direction_x[first] * direction_x[second] + direction_y[first] * direction_y[second];
+        if (dot == 0) {
+            if (y > 0) {
+                return x < 0 ? 1 : x > 0 ? 3 : 2;
+            }
+            if (y < 0) {
+                return x < 0 ? 7 : x > 0 ? 9 : 8;
+            }
+            return x < 0 ? 4 : 6;
+        }
     }
     return newest_direction;
 }
