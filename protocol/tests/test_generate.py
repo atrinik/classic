@@ -17,7 +17,7 @@ SPEC.loader.exec_module(GENERATE)
 class GenerateTests(unittest.TestCase):
     def test_repository_schema_is_valid(self) -> None:
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
-        self.assertEqual(schema["protocol_version"], 1074)
+        self.assertEqual(schema["protocol_version"], 1075)
         self.assertEqual(len(schema["client_to_server"]), 23)
         self.assertEqual(len(schema["server_to_client"]), 28)
 

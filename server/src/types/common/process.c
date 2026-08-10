@@ -87,7 +87,12 @@ static void common_object_process_changing(object *op) {
                 /* Object is on map. */
 
                 /* Remove light mask from map. */
-                adjust_light_source(op->map, op->x, op->y, -(op->glow_radius));
+                adjust_light_source_color(op->map,
+                                          op->x,
+                                          op->y,
+                                          op->glow_radius,
+                                          op->light_color,
+                                          -1);
                 object_update(op, UP_OBJ_FACE);
                 op->glow_radius = 0;
             }

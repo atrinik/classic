@@ -344,6 +344,9 @@ typedef struct MapSpace_s {
     /** Light source counter - the higher the brighter light source here */
     int32_t light_source;
 
+    /** Positive source counter before legacy same-cell grouping/capping. */
+    int32_t light_source_positive;
+
     /**
      * How much light is on this tile. 0 = total dark
      * 255+ = full daylight.
@@ -353,6 +356,15 @@ typedef struct MapSpace_s {
     /** Illumination contributed by light sources. Kept separate so masks can
      * be rebuilt when opaque geometry changes. */
     int32_t light_source_value;
+
+    /** Grouped positive-source illumination before achromatic subtraction. */
+    int32_t light_source_positive_value;
+
+    /** Sum of per-source attenuated sRGB components, scaled by 255. */
+    int64_t light_source_color[3];
+
+    /** Positive-source white-reference sum, scaled by 255. */
+    int64_t light_source_color_weight;
 
     /**
      * Flags about this space

@@ -67,6 +67,12 @@ typedef struct MapCell_struct {
     /** Whether each normalized light level has been sent at least once. */
     uint8_t light_known[NUM_SUB_LAYERS];
 
+    /** Last resolved RGB light samples sent to the client. */
+    uint8_t light_rgb[NUM_SUB_LAYERS][3];
+
+    /** Whether each resolved RGB sample is established in the client cache. */
+    uint8_t light_rgb_known[NUM_SUB_LAYERS];
+
     /** Last base-map structural support height sent to the client. */
     int16_t support_height;
 
