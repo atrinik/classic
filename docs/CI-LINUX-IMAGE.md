@@ -23,8 +23,12 @@ request becomes ready.
   `sha256:cdba4bfd40f288e577842b3308e88ccfb7252623ac7b13d08074fc45cc305b8e`
 - Candidate tag:
   `candidate-sha-b9a86c4f52205c927373caa7583d3a43989cfca7`
-- Runner: GitHub-hosted `ubuntu-24.04`, image `20260720.247.2`, runner
-  `2.336.0`
+- Runner: GitHub-hosted `ubuntu24`/X64 with 4 logical CPUs, image
+  `20260720.247.2`, runner `2.336.0`, kernel
+  `Linux 6.17.0-1020-azure x86_64 GNU/Linux`, and Docker client/server
+  `28.0.4`/`28.0.4`. The allocation, kernel, and Docker versions were captured
+  by [final evidence run 31432805795](https://github.com/atrinik/classic/actions/runs/31432805795)
+  on the same runner image.
 - Baseline:
   [successful apt-based run 31405779774](https://github.com/atrinik/classic/actions/runs/31405779774)
 - Candidate cold and warm evidence:
