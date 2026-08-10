@@ -1,7 +1,24 @@
 include_guard(GLOBAL)
 
+function(atrinik_source_tree_sha256 source output)
+    file(GLOB_RECURSE source_files
+        LIST_DIRECTORIES false
+        RELATIVE "${source}"
+        "${source}/*")
+    list(FILTER source_files EXCLUDE REGEX
+        "(^|/)\\.atrinik-(source|mingw-patch)-sha256$")
+    list(SORT source_files)
+    set(manifest "")
+    foreach (relative_path IN LISTS source_files)
+        file(SHA256 "${source}/${relative_path}" file_sha256)
+        string(APPEND manifest "${file_sha256}  ${relative_path}\n")
+    endforeach ()
+    string(SHA256 tree_sha256 "${manifest}")
+    set(${output} "${tree_sha256}" PARENT_SCOPE)
+endfunction()
+
 function(atrinik_extract_immutable_source)
-    set(one_value_args NAME URL SHA256 CACHE_DIR OUTPUT)
+    set(one_value_args NAME URL SHA256 TREE_SHA256 CACHE_DIR OUTPUT)
     cmake_parse_arguments(PARSE_ARGV 0 arg "" "${one_value_args}" "")
     foreach (required IN LISTS one_value_args)
         if (NOT arg_${required})
@@ -18,12 +35,16 @@ function(atrinik_extract_immutable_source)
         message(FATAL_ERROR
             "Invalid immutable source cache SHA-256 for ${arg_NAME}")
     endif ()
+    string(LENGTH "${arg_TREE_SHA256}" tree_sha256_length)
+    if (NOT arg_TREE_SHA256 MATCHES "^[0-9a-f]+$" OR
+            NOT tree_sha256_length EQUAL 64)
+        message(FATAL_ERROR
+            "Invalid immutable source tree SHA-256 for ${arg_NAME}")
+    endif ()
 
-    set(source_root "${arg_CACHE_DIR}/sources/${arg_NAME}-${arg_SHA256}")
+    set(source_root "${arg_CACHE_DIR}/sources-v1/${arg_NAME}-${arg_SHA256}")
     set(marker "${source_root}/.atrinik-source-sha256")
-    set(expected_marker "${arg_SHA256}\n")
-
-    file(MAKE_DIRECTORY "${arg_CACHE_DIR}" "${arg_CACHE_DIR}/sources")
+    file(MAKE_DIRECTORY "${arg_CACHE_DIR}" "${arg_CACHE_DIR}/sources-v1")
     file(LOCK "${arg_CACHE_DIR}/${arg_NAME}.lock"
         GUARD FUNCTION TIMEOUT 300 RESULT_VARIABLE lock_result)
     if (NOT lock_result EQUAL 0)
@@ -38,10 +59,22 @@ function(atrinik_extract_immutable_source)
                 "Incomplete shared ${arg_NAME} source cache: ${source_root}")
         endif ()
         file(READ "${marker}" actual_marker)
-        if (NOT actual_marker STREQUAL expected_marker)
+        if (NOT actual_marker STREQUAL
+                "${arg_SHA256}:${arg_TREE_SHA256}\n")
             message(FATAL_ERROR
                 "Mismatched shared ${arg_NAME} source cache: ${source_root}")
         endif ()
+        atrinik_source_tree_sha256("${source_root}" actual_tree_sha256)
+        if (NOT actual_tree_sha256 STREQUAL arg_TREE_SHA256)
+            message(FATAL_ERROR
+                "Mismatched shared ${arg_NAME} source content: ${source_root}")
+        endif ()
+        file(CHMOD_RECURSE "${source_root}"
+            FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ
+            DIRECTORY_PERMISSIONS
+                OWNER_READ OWNER_EXECUTE
+                GROUP_READ GROUP_EXECUTE
+                WORLD_READ WORLD_EXECUTE)
         set(${arg_OUTPUT} "${source_root}" PARENT_SCOPE)
         return()
     endif ()
@@ -79,8 +112,13 @@ function(atrinik_extract_immutable_source)
         message(FATAL_ERROR
             "Verified ${arg_NAME} archive has no source root")
     endif ()
+    atrinik_source_tree_sha256("${extracted_root}" source_tree_sha256)
+    if (NOT source_tree_sha256 STREQUAL arg_TREE_SHA256)
+        message(FATAL_ERROR
+            "Verified ${arg_NAME} archive has unexpected source content")
+    endif ()
     file(WRITE "${extracted_root}/.atrinik-source-sha256"
-        "${expected_marker}")
+        "${arg_SHA256}:${arg_TREE_SHA256}\n")
     file(RENAME "${extracted_root}" "${source_root}"
         RESULT rename_result)
     if (rename_result)

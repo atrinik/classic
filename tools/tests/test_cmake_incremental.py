@@ -39,6 +39,10 @@ class CMakeIncrementalContractTests(unittest.TestCase):
                 info.size = len(payload)
                 bundle.addfile(info, io.BytesIO(payload))
             digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            file_digest = hashlib.sha256(payload).hexdigest()
+            tree_digest = hashlib.sha256(
+                f"{file_digest}  CMakeLists.txt\n".encode()
+            ).hexdigest()
             source = temporary / "source"
             cache = temporary / "cache"
             source.mkdir()
@@ -51,6 +55,7 @@ class CMakeIncrementalContractTests(unittest.TestCase):
                 "  NAME fixture\n"
                 f'  URL "file://{archive.as_posix()}"\n'
                 f'  SHA256 "{digest}"\n'
+                f'  TREE_SHA256 "{tree_digest}"\n'
                 f'  CACHE_DIR "{cache.as_posix()}"\n'
                 "  OUTPUT fixture_source)\n"
                 "file(WRITE \"${CMAKE_BINARY_DIR}/source.txt\" \"${fixture_source}\")\n",
@@ -71,11 +76,25 @@ class CMakeIncrementalContractTests(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertEqual(Path(first).name, f"fixture-{digest}")
 
+            cached_cmake = Path(first) / "CMakeLists.txt"
+            cached_cmake.chmod(0o600)
+            cached_cmake.write_bytes(payload + b"# changed\n")
+            rejected = subprocess.run(
+                ["cmake", "-S", str(source), "-B", str(temporary / "third")],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+            self.assertIn("Mismatched shared fixture source content", rejected.stdout)
+            cached_cmake.write_bytes(payload)
+
             marker = Path(first) / ".atrinik-source-sha256"
             marker.chmod(0o600)
             marker.write_text("0" * 64 + "\n", encoding="utf-8")
             rejected = subprocess.run(
-                ["cmake", "-S", str(source), "-B", str(temporary / "third")],
+                ["cmake", "-S", str(source), "-B", str(temporary / "fourth")],
                 check=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,

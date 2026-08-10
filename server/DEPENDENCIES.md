@@ -19,9 +19,11 @@ CMake stores the digest-verified, read-only pcpnatpmp extraction in
 `ATRINIK_DEPENDENCY_CACHE_DIR`, which defaults to a cache beside the active
 server build root. Build roots sharing that parent reuse one extraction while
 retaining separate binary directories. The cache is locked during population,
-published only after verification, and fails closed on an incomplete or
-mismatched marker. MinGW builds copy and patch the immutable source inside
-their own binary directory; they never modify the shared extraction.
+published only after verification, and revalidates the complete extracted tree
+against its digest-bound marker on reuse. An incomplete or mismatched cache
+fails closed. MinGW builds copy and patch the immutable source inside their own
+binary directory; they never modify the shared extraction, and a changed local
+copy is recreated from the verified source.
 
 For coordinated local changes, configure CMake with
 `FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL` or
