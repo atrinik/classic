@@ -9,6 +9,8 @@ set(ATRINIK_PCPNATPMP_SHA256
     65ab99547ecc8277434527607d24f8a1b02a2344ed4cea475bed751606e60202)
 set(ATRINIK_PCPNATPMP_TREE_SHA256
     16dbd3e0d59aaa060da9e78b953d3f5e310b5312edc4743218dc8297cbd1292e)
+set(ATRINIK_PCPNATPMP_MINGW_TREE_SHA256
+    0c5d3ed95ee594d4506c9690a22e0a15f7bf4ae23a33b5fa3e3e758617193038)
 set(ATRINIK_PCPNATPMP_URL
     "https://github.com/libpcpnatpmp/libpcpnatpmp/archive/${ATRINIK_PCPNATPMP_COMMIT}.tar.gz")
 set(ATRINIK_DEPENDENCY_CACHE_DIR
@@ -44,21 +46,17 @@ function(atrinik_add_pcpnatpmp)
                 "${pcpnatpmp_source}/.atrinik-mingw-patch-sha256")
             set(expected_patch_prefix
                 "${ATRINIK_PCPNATPMP_SHA256}:${pcpnatpmp_patch_sha256}")
+            set(expected_patch_marker
+                "${expected_patch_prefix}:${ATRINIK_PCPNATPMP_MINGW_TREE_SHA256}\n")
             set(recreate_pcpnatpmp_source true)
             if (EXISTS "${pcpnatpmp_patch_marker}")
                 file(READ "${pcpnatpmp_patch_marker}" actual_patch_marker)
-                if (actual_patch_marker MATCHES
-                        "^${expected_patch_prefix}:([0-9a-f]+)\n$")
-                    set(expected_patched_tree_sha256 "${CMAKE_MATCH_1}")
-                    string(LENGTH "${expected_patched_tree_sha256}"
-                        patched_tree_sha256_length)
-                    if (patched_tree_sha256_length EQUAL 64)
-                        atrinik_source_tree_sha256("${pcpnatpmp_source}"
-                            actual_patched_tree_sha256)
-                        if (actual_patched_tree_sha256 STREQUAL
-                                expected_patched_tree_sha256)
-                            set(recreate_pcpnatpmp_source false)
-                        endif ()
+                if (actual_patch_marker STREQUAL expected_patch_marker)
+                    atrinik_source_tree_sha256("${pcpnatpmp_source}"
+                        actual_patched_tree_sha256)
+                    if (actual_patched_tree_sha256 STREQUAL
+                            ATRINIK_PCPNATPMP_MINGW_TREE_SHA256)
+                        set(recreate_pcpnatpmp_source false)
                     endif ()
                 endif ()
             endif ()
@@ -83,8 +81,13 @@ function(atrinik_add_pcpnatpmp)
                     COMMAND_ERROR_IS_FATAL ANY)
                 atrinik_source_tree_sha256("${pcpnatpmp_source}"
                     patched_tree_sha256)
+                if (NOT patched_tree_sha256 STREQUAL
+                        ATRINIK_PCPNATPMP_MINGW_TREE_SHA256)
+                    message(FATAL_ERROR
+                        "Patched libpcpnatpmp source has unexpected content")
+                endif ()
                 file(WRITE "${pcpnatpmp_patch_marker}"
-                    "${expected_patch_prefix}:${patched_tree_sha256}\n")
+                    "${expected_patch_marker}")
             endif ()
         else ()
             set(pcpnatpmp_source "${pcpnatpmp_shared_source}")
