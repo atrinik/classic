@@ -236,7 +236,8 @@ jobs:
                 -DATRINIK_PROTOCOL_SOURCE_DIR=/workspace/protocol
               cmake --build libatrinik/build/windows-tests \
                 --target libatrinik-path libatrinik-rendezvous libatrinik-metaserver-publisher \
-                  libatrinik-metaserver-url libatrinik-socket-address libatrinik-stun \
+                  libatrinik-metaserver-url libatrinik-socket-address libatrinik-socket-quic \
+                  libatrinik-stun \
                 --parallel "$(nproc)"
               cd client
               bash tools/build-windows-package.sh build/windows-pr-package
@@ -283,6 +284,7 @@ jobs:
                 libatrinik/build/windows-tests/libatrinik-metaserver-publisher.exe \
                 libatrinik/build/windows-tests/libatrinik-metaserver-url.exe \
                 libatrinik/build/windows-tests/libatrinik-socket-address.exe \
+                libatrinik/build/windows-tests/libatrinik-socket-quic.exe \
                 libatrinik/build/windows-tests/libatrinik-stun.exe \
                 client/build/windows-release/client-rich-presence-tests.exe
               cmake -E copy_directory libatrinik/tests/fixtures "${stage}/fixtures"
@@ -397,6 +399,11 @@ jobs:
           & (Join-Path $bundle "libatrinik-socket-address.exe")
           if ($LASTEXITCODE -ne 0) {
             throw "libatrinik-socket-address.exe failed with exit code ${LASTEXITCODE}"
+          }
+
+          & (Join-Path $bundle "libatrinik-socket-quic.exe")
+          if ($LASTEXITCODE -ne 0) {
+            throw "libatrinik-socket-quic.exe failed with exit code ${LASTEXITCODE}"
           }
 
           & (Join-Path $bundle "libatrinik-stun.exe")

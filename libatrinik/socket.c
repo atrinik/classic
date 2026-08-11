@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -942,10 +942,10 @@ socket_t *socket_accept(socket_t *sc) {
             return NULL;
         }
 
-        if (SSL_set_feature_request_uint(connection,
-                                         SSL_VALUE_QUIC_IDLE_TIMEOUT,
-                                         SOCKET_QUIC_IDLE_TIMEOUT_MS) != 1 ||
-            SSL_set_default_stream_mode(connection, SSL_DEFAULT_STREAM_MODE_NONE) != 1 ||
+        /* The client requests the five-second idle timeout before its handshake. An accepted
+         * child may already have generated transport parameters, so requesting that negotiated
+         * feature here can discard an otherwise usable connection. */
+        if (SSL_set_default_stream_mode(connection, SSL_DEFAULT_STREAM_MODE_NONE) != 1 ||
             SSL_set_incoming_stream_policy(connection, SSL_INCOMING_STREAM_POLICY_ACCEPT, 0) != 1) {
             unsigned long code = ERR_peek_error();
             LOG(ERROR,
