@@ -577,6 +577,14 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
         add_test(NAME libatrinik-socket-address COMMAND libatrinik-socket-address)
     endif ()
 
+    if (OPENSSL_VERSION VERSION_GREATER_EQUAL 3.5)
+        add_executable(libatrinik-socket-quic tests/socket_quic.c)
+        atrinik_configure_target(libatrinik-socket-quic)
+        target_link_libraries(libatrinik-socket-quic PRIVATE Atrinik::Core Threads::Threads)
+        add_test(NAME libatrinik-socket-quic COMMAND libatrinik-socket-quic)
+        set_tests_properties(libatrinik-socket-quic PROPERTIES TIMEOUT 30)
+    endif ()
+
     if (NOT WIN32)
         add_executable(libatrinik-curl tests/curl.c)
         atrinik_configure_target(libatrinik-curl)
