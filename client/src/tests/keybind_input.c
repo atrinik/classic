@@ -781,6 +781,125 @@ static void movement_sink_reset(movement_sink *sink) {
     keybind_movement_state_init(&sink->state);
 }
 
+static void test_keybind_event_cardinal_chords(void) {
+    static const struct {
+        char *first_command;
+        char *second_command;
+        uint8_t first_direction;
+        uint8_t second_direction;
+        uint8_t chord_direction;
+    } cases[] = {
+        {"?MOVE_N", "?MOVE_E", 8, 6, 9},
+        {"?MOVE_E", "?MOVE_S", 6, 2, 3},
+        {"?MOVE_S", "?MOVE_W", 2, 4, 1},
+        {"?MOVE_W", "?MOVE_N", 4, 8, 7},
+    };
+
+    for (size_t i = 0; i < arraysize(cases); i++) {
+        for (size_t reverse = 0; reverse < 2; reverse++) {
+            keybind_struct first = {
+                .command = reverse ? cases[i].second_command : cases[i].first_command,
+                .key = SDLK_A,
+                .repeat = true,
+            };
+            keybind_struct second = {
+                .command = reverse ? cases[i].first_command : cases[i].second_command,
+                .key = SDLK_B,
+                .repeat = true,
+            };
+            uint8_t first_direction =
+                reverse ? cases[i].second_direction : cases[i].first_direction;
+            uint8_t second_direction =
+                reverse ? cases[i].first_direction : cases[i].second_direction;
+            keybind_struct *bindings[] = {&first, &second};
+            key_struct key_states[SDL_SCANCODE_COUNT] = {0};
+            movement_sink sink;
+            movement_sink_reset(&sink);
+            keybind_event_handler handler = movement_sink_handler(&sink);
+            SDL_KeyboardEvent event = {
+                .type = SDL_EVENT_KEY_DOWN,
+                .key = SDLK_A,
+                .scancode = SDL_SCANCODE_A,
+            };
+
+            /* Two downs in one poll produce only the composed direction. */
+            key_states[SDL_SCANCODE_A].pressed = true;
+            TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+            event.key = SDLK_B;
+            event.scancode = SDL_SCANCODE_B;
+            key_states[SDL_SCANCODE_B].pressed = true;
+            TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+            movement_sink_flush(&sink);
+            TEST_CHECK(sink.actions_num == 1);
+            TEST_CHECK(sink.actions[0] == KEYBIND_MOVEMENT_ACTION_MOVE);
+            TEST_CHECK(sink.directions[0] == cases[i].chord_direction);
+
+            /* Either physical repeat retains one logical chord stream. */
+            event.repeat = true;
+            TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+            event.key = SDLK_A;
+            event.scancode = SDL_SCANCODE_A;
+            TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+            TEST_CHECK(sink.actions_num == 2);
+            TEST_CHECK(sink.actions[1] == KEYBIND_MOVEMENT_ACTION_MOVE);
+            TEST_CHECK(sink.directions[1] == cases[i].chord_direction);
+
+            /* Partial release resumes the other cardinal; final release stops once. */
+            event.type = SDL_EVENT_KEY_UP;
+            event.repeat = false;
+            key_states[SDL_SCANCODE_A].pressed = false;
+            keybind_event_reconcile_release(bindings,
+                                            arraysize(bindings),
+                                            &event,
+                                            key_states,
+                                            &handler);
+            TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+            movement_sink_flush(&sink);
+            TEST_CHECK(sink.actions_num == 3);
+            TEST_CHECK(sink.actions[2] == KEYBIND_MOVEMENT_ACTION_REPLACE);
+            TEST_CHECK(sink.directions[2] == second_direction);
+
+            event.key = SDLK_B;
+            event.scancode = SDL_SCANCODE_B;
+            key_states[SDL_SCANCODE_B].pressed = false;
+            keybind_event_reconcile_release(bindings,
+                                            arraysize(bindings),
+                                            &event,
+                                            key_states,
+                                            &handler);
+            TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+            movement_sink_flush(&sink);
+            TEST_CHECK(sink.actions_num == 4);
+            TEST_CHECK(sink.actions[3] == KEYBIND_MOVEMENT_ACTION_STOP);
+            TEST_CHECK(sink.directions[3] == 5);
+            movement_sink_flush(&sink);
+            TEST_CHECK(sink.actions_num == 4);
+
+            /* A later second down replaces the already-emitted cardinal. */
+            movement_sink_reset(&sink);
+            handler = movement_sink_handler(&sink);
+            event.type = SDL_EVENT_KEY_DOWN;
+            event.key = SDLK_A;
+            event.scancode = SDL_SCANCODE_A;
+            key_states[SDL_SCANCODE_A].pressed = true;
+            TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+            movement_sink_flush(&sink);
+            TEST_CHECK(sink.actions_num == 1);
+            TEST_CHECK(sink.actions[0] == KEYBIND_MOVEMENT_ACTION_MOVE);
+            TEST_CHECK(sink.directions[0] == first_direction);
+
+            event.key = SDLK_B;
+            event.scancode = SDL_SCANCODE_B;
+            key_states[SDL_SCANCODE_B].pressed = true;
+            TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
+            movement_sink_flush(&sink);
+            TEST_CHECK(sink.actions_num == 2);
+            TEST_CHECK(sink.actions[1] == KEYBIND_MOVEMENT_ACTION_REPLACE);
+            TEST_CHECK(sink.directions[1] == cases[i].chord_direction);
+        }
+    }
+}
+
 static void test_keybind_event_direction_transitions(void) {
     keybind_struct east = {
         .command = "?MOVE_E",
@@ -1969,6 +2088,7 @@ int main(void) {
     test_movement_repeat_and_release();
     test_movement_duplicates_and_repeat_selection();
     test_movement_boundaries_and_modifiers();
+    test_keybind_event_cardinal_chords();
     test_keybind_event_direction_transitions();
     test_keybind_event_integration();
     return 0;

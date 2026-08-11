@@ -1433,7 +1433,7 @@ Move the mouse over the map area, and you'll see the square below your mouse hig
 [b]Keyboard:[/b]
 You can use the keyboard numpad to move around, for example, [b]3[/b] on the numpad would move your character one step east. You can hold down the numpad key to run in this manner in the direction specified by the numpad key you are holding down. If you want to stop running, simply release the key.
 
-Two perpendicular held movement bindings are resolved as one direction. For example, north + east moves northeast, while northwest + northeast moves north. Other combinations use the most recently pressed direction. These combinations use movement commands, so they also work if you customize the bound keys.
+Two perpendicular held movement bindings are resolved as one direction. The supported cardinal chords are north + east for northeast, east + south for southeast, south + west for southwest, and west + north for northwest. Either press order works. Adjacent diagonal bindings also combine into their shared cardinal direction; for example, northwest + northeast moves north. Other combinations use the most recently pressed direction. These combinations use movement commands, so they also work if you customize the bound keys.
 
 [title]Obstacles[/title]
 There are many obstacles to walk around in the world, ranging from trees to rocks, walls, deep water, doors, gates and the like.
