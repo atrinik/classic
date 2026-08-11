@@ -553,6 +553,13 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     target_link_libraries(libatrinik-socket-asset PRIVATE Atrinik::Core)
     add_test(NAME libatrinik-socket-asset COMMAND libatrinik-socket-asset)
 
+    if (HAVE_GETADDRINFO)
+        add_executable(libatrinik-socket-address tests/socket_address.c)
+        atrinik_configure_target(libatrinik-socket-address)
+        target_link_libraries(libatrinik-socket-address PRIVATE Atrinik::Core)
+        add_test(NAME libatrinik-socket-address COMMAND libatrinik-socket-address)
+    endif ()
+
     if (NOT WIN32)
         add_executable(libatrinik-curl tests/curl.c)
         atrinik_configure_target(libatrinik-curl)

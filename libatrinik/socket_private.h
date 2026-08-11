@@ -95,6 +95,10 @@ typedef bool (*socket_rendezvous_fallback_t)(socket_t *sc,
                                              size_t host_size,
                                              uint16_t *port);
 
+#ifdef HAVE_GETADDRINFO
+/** Copy one complete resolved address into zeroed caller-owned storage. */
+bool socket_addrinfo_copy(struct sockaddr_storage *destination, const struct addrinfo *address);
+#endif
 bool socket_stun_discover_until(socket_t *sc,
                                 const char *endpoint,
                                 char *host,

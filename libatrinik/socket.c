@@ -88,6 +88,19 @@ TOOLKIT_INIT_FUNC_FINISH
 TOOLKIT_DEINIT_FUNC(socket) {}
 TOOLKIT_DEINIT_FUNC_FINISH
 
+#ifdef HAVE_GETADDRINFO
+bool socket_addrinfo_copy(struct sockaddr_storage *destination, const struct addrinfo *address) {
+    if (destination == NULL || address == NULL || address->ai_addr == NULL ||
+        address->ai_addrlen == 0 || address->ai_addrlen > sizeof(*destination)) {
+        return false;
+    }
+
+    memset(destination, 0, sizeof(*destination));
+    memcpy(destination, address->ai_addr, address->ai_addrlen);
+    return true;
+}
+#endif
+
 /**
  * Creates a new socket structure, complete with a socket for the specified
  * host/port.
@@ -146,6 +159,10 @@ socket_t *socket_create(const char *host, uint16_t port, socket_role_t role, boo
         }
 #endif
 
+        if (!socket_addrinfo_copy(&sc->addr, ai)) {
+            continue;
+        }
+
         sc->handle = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (sc->handle == -1) {
             continue;
@@ -167,7 +184,6 @@ socket_t *socket_create(const char *host, uint16_t port, socket_role_t role, boo
         }
 #endif
 
-        memcpy(&sc->addr, ai->ai_addr, res->ai_addrlen);
         break;
     }
 
@@ -1428,15 +1444,16 @@ bool socket_host2addr(const char *host, struct sockaddr_storage *addr) {
             continue;
         }
 
-        retval = true;
-        memcpy(addr, ai->ai_addr, sizeof(*addr));
+        retval = socket_addrinfo_copy(addr, ai);
 
 #ifndef WIN32
         close(handle);
 #else
         closesocket(handle);
 #endif
-        break;
+        if (retval) {
+            break;
+        }
     }
 
     freeaddrinfo(res);
