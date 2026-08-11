@@ -9,6 +9,11 @@ The game and metaserver protocols are separate contract families. This package
 currently publishes only the classic game command registry. Add another family
 only with its own namespace, specification, version, fixtures, and validation.
 
+Protocol v1077 adds the server-authoritative `MAP2_FLAG2_EXIT` semantic for
+visible type-66 map objects. Clients use it only for the main-map depth-zero
+post-world cue; it does not disclose boundary-only, hidden, or unexplored
+transitions.
+
 Protocol v1076 adds a 32-bit keyboard movement epoch to `MOVE` and, after its
 always-present 32-bit tag, `FIRE`. An empty client-to-server `CLEAR` payload
 retains the historical broad queue/path clear used by Stay. A scoped payload

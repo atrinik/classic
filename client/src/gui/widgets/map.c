@@ -972,6 +972,7 @@ void map_set_data(int x,
                   uint8_t secondpass,
                   uint8_t roof,
                   uint8_t door,
+                  uint8_t exit,
                   const char *glow,
                   uint8_t glow_speed) {
     struct MapCell *cell;
@@ -1018,6 +1019,7 @@ void map_set_data(int x,
             cell->priority[i] = 0;
             cell->secondpass[i] = 0;
             cell->door[i] = 0;
+            cell->exit[i] = 0;
             cell->probe[i] = 0;
             cell->target_object_count[i] = 0;
             cell->target_is_friend[i] = 0;
@@ -1046,6 +1048,10 @@ void map_set_data(int x,
     cell->door[sub_layer] &= ~object_layer_mask;
     if (door) {
         cell->door[sub_layer] |= object_layer_mask;
+    }
+    cell->exit[sub_layer] &= ~object_layer_mask;
+    if (exit) {
+        cell->exit[sub_layer] |= object_layer_mask;
     }
 
     cell->quick_pos[layer] = quick_pos;
@@ -1398,6 +1404,7 @@ typedef struct map_render_command {
     bool draw_double;
     bool door;
     bool door_hint;
+    bool exit;
     bool transformed;
 } map_render_command_t;
 
@@ -1660,6 +1667,8 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
             .depth = data->depth,
             .draw_double = data->cell->draw_double[map_layer],
             .door = (data->cell->door[data->sub_layer] & (UINT8_C(1) << (data->layer - 1))) != 0,
+            .exit = !data->cell->fow &&
+                    (data->cell->exit[data->sub_layer] & (UINT8_C(1) << (data->layer - 1))) != 0,
             .transformed = transformed,
         };
         context->commands_num++;
@@ -2730,7 +2739,7 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool do
     if (door_hints_enabled) {
         for (size_t i = 0; i < context->commands_num; i++) {
             const map_render_command_t *command = &context->commands[i];
-            if (!command->door_hint) {
+            if (!command->door_hint && !(command->exit && command->depth == 0)) {
                 continue;
             }
 
