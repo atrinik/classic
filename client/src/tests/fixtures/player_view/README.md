@@ -18,6 +18,10 @@ roof-only cell, and physical depths zero, +1, and +2. Separate smooth and
 discrete manifests freeze both rendering paths; discrete intentionally retains
 the authoritative scalar projection while smooth lighting applies RGB.
 
+The radial-light scene fills a 9-by-9 floor with the server's strongest
+default radial profile. Its smooth and discrete manifests freeze the circular,
+monotonic falloff independently in both client lighting paths.
+
 The exit-cue scene marks unobscured and later-occluded base-level objects as
 EXIT-only positive cases; the occluded case also exercises `draw_double`. A
 separate cached base-level exit is under fog of war and must not receive the

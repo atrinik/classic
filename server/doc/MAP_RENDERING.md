@@ -10,6 +10,19 @@ This design contract applies when changing classic server lighting,
   receiving light on their exposed face, and a floor on the upper level blocks
   a ray crossing that vertical boundary. Search depth follows `MAP2_MAX_DEPTH`,
   the maximum depth serialized to the client.
+- `glow_radius` is a bounded strength/profile selector, not a literal map-cell
+  radius. Each profile defines center intensity, support radius, and falloff.
+  The default `light_falloff = radial` profile preserves historical center
+  intensity and uses integer fixed-point Euclidean distance with monotonic
+  linear or squared falloff to zero at the support boundary. Small and medium
+  sources gain one support cell, capped at the historical four-cell maximum,
+  so smooth client interpolation receives enough samples for a centered pool.
+  `light_falloff = legacy` retains the former ring masks for controlled A/B
+  comparison; changing the option requires a server restart. Positive,
+  colored, and negative sources always share the selected geometry.
+  The one-cell expansion adds sampling work for small and medium sources while
+  the previous four-cell maximum remains unchanged. Fixed distance lookup
+  keeps the new hot path deterministic and bounded.
 - Ambient/floor light remains in `MapSpace.light_value`; source contributions
   use `MapSpace.light_source_value` so masks can rebuild when an opaque object
   or floor changes. Apply lighting through `map_get_darkness()` rather than

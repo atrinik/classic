@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <initialization.h>
 #include <server_main.h>
 #include <light.h>
 #include <object.h>
@@ -36,6 +37,7 @@
 #define NR_LIGHT_MASK 10
 #define MAX_LIGHT_SOURCE 13
 #define MAX_LIGHT_RADIUS 4
+#define LIGHT_DISTANCE_SCALE 256
 /** Maximum unique maps visited by light_map_set_collect(). */
 #define LIGHT_COLUMN_MAPS_MAX (1 + 2 * MAP2_MAX_DEPTH * (1 + TILED_NUM_DIR))
 #define LIGHT_MAP_SET_MAX ((1 + TILED_NUM_DIR) * LIGHT_COLUMN_MAPS_MAX)
@@ -188,25 +190,33 @@ void light_levels_from_raw(const MapSpace *space, int raw_light, uint8_t levels[
     }
 }
 
-static int lmask_x[MAX_MASK_SIZE] = {
-    0,  0,  1,  1,  1,  0,  -1, -1, -1, 0,  1,  2,  2,  2,  2,  2,  1,  0,  -1, -2, -2,
-    -2, -2, -2, -1, 0,  1,  2,  3,  3,  3,  3,  3,  3,  3,  2,  1,  0,  -1, -2, -3, -3,
-    -3, -3, -3, -3, -3, -2, -1, 0,  1,  2,  3,  4,  4,  4,  4,  4,  4,  4,  4,  4,  3,
-    2,  1,  0,  -1, -2, -3, -4, -4, -4, -4, -4, -4, -4, -4, -4, -3, -2, -1};
+typedef struct light_profile {
+    int center;
+    int legacy_radius;
+    int radial_radius;
+    int radial_power;
+} light_profile_t;
 
-static int lmask_y[MAX_MASK_SIZE] = {
-    0,  -1, -1, 0,  1,  1,  1,  0,  -1, -2, -2, -2, -1, 0, 1, 2, 2,  2,  2,  2,  1,
-    0,  -1, -2, -2, -3, -3, -3, -3, -2, -1, 0,  1,  2,  3, 3, 3, 3,  3,  3,  3,  2,
-    1,  0,  -1, -2, -3, -3, -3, 4,  4,  4,  4,  4,  3,  2, 1, 0, -1, -2, -3, -4, -4,
-    -4, -4, -4, -4, -4, -4, -4, -3, -2, -1, 0,  1,  2,  3, 4, 4, 4,  4};
+/* Authored glow_radius remains a bounded profile selector. Center intensity is
+ * preserved; radial support gains one cell where the old four-cell cap allows
+ * it, giving interpolation enough samples without increasing worst-case work. */
+static const light_profile_t light_profiles[NR_LIGHT_MASK] = {
+    {0, 0, 0, 1},
+    {40, 1, 2, 1},
+    {80, 2, 3, 2},
+    {160, 2, 3, 2},
+    {160, 3, 4, 2},
+    {320, 3, 4, 2},
+    {320, 3, 4, 2},
+    {320, 4, 4, 2},
+    {640, 4, 4, 2},
+    {1280, 4, 4, 2},
+};
 
-static int light_mask[MAX_LIGHT_SOURCE + 1] = {0, 1, 2, 3, 4, 5, 6, 6, 7, 7, 8, 8, 8, 9};
+static const int light_mask[MAX_LIGHT_SOURCE + 1] = {0, 1, 2, 3, 4, 5, 6, 6, 7, 7, 8, 8, 8, 9};
 
-static int light_mask_width[NR_LIGHT_MASK] = {0, 1, 2, 2, 3, 3, 3, 4, 4, 4};
-
-static int light_mask_size[NR_LIGHT_MASK] = {0, 9, 25, 25, 49, 49, 49, 81, 81, 81};
-
-static int light_masks[NR_LIGHT_MASK][MAX_MASK_SIZE] = {
+/* Kept only for the explicit light_falloff=legacy comparison mode. */
+static const int legacy_light_masks[NR_LIGHT_MASK][MAX_MASK_SIZE] = {
     {
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -483,7 +493,7 @@ static bool light_path_is_clear(mapstruct *map, int x, int y, int dx, int dy, in
     return true;
 }
 
-static int light_mask_value(int intensity, int distance_squared) {
+static int legacy_light_mask_value(int intensity, int distance_squared) {
     static const int ring_index[MAX_LIGHT_RADIUS + 1] = {0, 1, 9, 25, 49};
     int radius = 0;
 
@@ -491,7 +501,42 @@ static int light_mask_value(int intensity, int distance_squared) {
         radius++;
     }
 
-    return light_masks[intensity][ring_index[radius]];
+    return legacy_light_masks[intensity][ring_index[radius]];
+}
+
+/** Calculate the deterministic monotonic radial profile at one distance. */
+static int radial_light_mask_value(int intensity, int distance_squared) {
+    static const uint16_t distances[MAX_LIGHT_RADIUS * MAX_LIGHT_RADIUS + 1] = {
+        0, 256, 362, 443, 512, 572, 627, 677, 724, 768, 809, 849, 886, 923, 957, 991, 1024,
+    };
+    const light_profile_t *profile = &light_profiles[intensity];
+    uint32_t radius = (uint32_t)profile->radial_radius * LIGHT_DISTANCE_SCALE;
+    HARD_ASSERT(distance_squared >= 0 && distance_squared < (int)arraysize(distances));
+    uint32_t distance = distances[distance_squared];
+    if (distance >= radius) {
+        return 0;
+    }
+
+    uint64_t numerator = radius - distance;
+    uint64_t denominator = radius;
+    for (int power = 1; power < profile->radial_power; power++) {
+        numerator *= radius - distance;
+        denominator *= radius;
+    }
+
+    return (int)(((uint64_t)profile->center * numerator + denominator / 2) / denominator);
+}
+
+static bool light_falloff_is_legacy(void) {
+    return strcmp(settings.light_falloff, "legacy") == 0;
+}
+
+static int light_mask_value(int intensity, int distance_squared, bool legacy) {
+    if (legacy) {
+        return legacy_light_mask_value(intensity, distance_squared);
+    }
+
+    return radial_light_mask_value(intensity, distance_squared);
 }
 
 typedef enum light_mask_component {
@@ -515,40 +560,44 @@ static void light_mask_adjust(mapstruct *map,
     }
 
     intensity = abs(intensity);
-    int radius = light_mask_width[intensity];
+    bool legacy = light_falloff_is_legacy();
+    int radius =
+        legacy ? light_profiles[intensity].legacy_radius : light_profiles[intensity].radial_radius;
     int vertical_radius = MIN(radius, MAP2_MAX_DEPTH);
 
-    for (int i = 0; i < light_mask_size[intensity]; i++) {
-        int dx = lmask_x[i];
-        int dy = lmask_y[i];
+    for (int dy = -radius; dy <= radius; dy++) {
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -vertical_radius; dz <= vertical_radius; dz++) {
+                int distance_squared = dx * dx + dy * dy + dz * dz;
 
-        for (int dz = -vertical_radius; dz <= vertical_radius; dz++) {
-            int distance_squared = dx * dx + dy * dy + dz * dz;
+                if (distance_squared > radius * radius) {
+                    continue;
+                }
+                int value = light_mask_value(intensity, distance_squared, legacy) * mod;
+                if (value == 0) {
+                    continue;
+                }
 
-            if (distance_squared > radius * radius) {
-                continue;
-            }
+                int xt, yt;
+                mapstruct *target = light_resolve_space(map, x + dx, y + dy, dz, &xt, &yt);
 
-            int xt, yt;
-            mapstruct *target = light_resolve_space(map, x + dx, y + dy, dz, &xt, &yt);
+                if (target == NULL || (only_map != NULL && target != only_map) ||
+                    (only_maps != NULL && !light_map_set_contains(only_maps, target)) ||
+                    (other_only && target == map) || !light_path_is_clear(map, x, y, dx, dy, dz)) {
+                    continue;
+                }
 
-            if (target == NULL || (only_map != NULL && target != only_map) ||
-                (only_maps != NULL && !light_map_set_contains(only_maps, target)) ||
-                (other_only && target == map) || !light_path_is_clear(map, x, y, dx, dy, dz)) {
-                continue;
-            }
-
-            int value = light_mask_value(intensity, distance_squared) * mod;
-            MapSpace *space = GET_MAP_SPACE_PTR(target, xt, yt);
-            if (component == LIGHT_MASK_SCALAR) {
-                space->light_source_value += value;
-            } else if (component == LIGHT_MASK_POSITIVE) {
-                space->light_source_positive_value += value;
-            } else {
-                space->light_source_color[0] += (int64_t)value * ((color >> 16) & UINT8_MAX);
-                space->light_source_color[1] += (int64_t)value * ((color >> 8) & UINT8_MAX);
-                space->light_source_color[2] += (int64_t)value * (color & UINT8_MAX);
-                space->light_source_color_weight += (int64_t)value * UINT8_MAX;
+                MapSpace *space = GET_MAP_SPACE_PTR(target, xt, yt);
+                if (component == LIGHT_MASK_SCALAR) {
+                    space->light_source_value += value;
+                } else if (component == LIGHT_MASK_POSITIVE) {
+                    space->light_source_positive_value += value;
+                } else {
+                    space->light_source_color[0] += (int64_t)value * ((color >> 16) & UINT8_MAX);
+                    space->light_source_color[1] += (int64_t)value * ((color >> 8) & UINT8_MAX);
+                    space->light_source_color[2] += (int64_t)value * (color & UINT8_MAX);
+                    space->light_source_color_weight += (int64_t)value * UINT8_MAX;
+                }
             }
         }
     }
