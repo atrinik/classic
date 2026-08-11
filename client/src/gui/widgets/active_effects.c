@@ -30,7 +30,7 @@
  */
 
 #include <global.h>
-#include <player_status.h>
+#include <active_effects_model.h>
 #include <video.h>
 #include <toolkit/string.h>
 
@@ -44,7 +44,7 @@ typedef struct widget_active_effects_struct {
 /** @copydoc widgetdata::draw_func */
 static void widget_draw(widgetdata *widget) {
     widget_active_effects_struct *tmp;
-    player_status_t *status;
+    const player_status_t *status;
     SDL_Rect box;
 
     tmp = widget->subwidget;
@@ -57,7 +57,7 @@ static void widget_draw(widgetdata *widget) {
         sec = (SDL_GetTicks() - tmp->update_ticks) / 1000;
         tmp->update_ticks = SDL_GetTicks();
 
-        redraw = player_status_model_tick(&player_status_model, sec);
+        redraw = active_effects_model_tick(sec);
 
         widget->redraw += redraw;
     }
@@ -87,7 +87,7 @@ static void widget_draw(widgetdata *widget) {
 
         SDL_FillSurfaceRect(widget->surface, NULL, 0);
 
-        for (status = player_status_model.head; status != NULL; status = status->next) {
+        for (status = active_effects_model_rows(); status != NULL; status = status->next) {
             sprite = image_get_sprite(status->face);
 
             if (!sprite) {
@@ -146,13 +146,13 @@ static void widget_draw(widgetdata *widget) {
 /** @copydoc widgetdata::event_func */
 static int widget_event(widgetdata *widget, SDL_Event *event) {
     if (event->type == SDL_EVENT_MOUSE_MOTION) {
-        player_status_t *status;
+        const player_status_t *status;
         int x, y;
         sprite_struct *sprite;
 
         x = y = 0;
 
-        for (status = player_status_model.head; status != NULL; status = status->next) {
+        for (status = active_effects_model_rows(); status != NULL; status = status->next) {
             sprite = image_get_sprite(status->face);
 
             if (!sprite) {
@@ -199,4 +199,5 @@ void widget_active_effects_init(widgetdata *widget) {
     widget->draw_func = widget_draw;
     widget->event_func = widget_event;
     widget->subwidget = tmp;
+    widget->unique = 1;
 }

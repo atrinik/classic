@@ -479,7 +479,8 @@ if (BUILD_TESTING)
 
     add_executable(client-player-status-tests
         src/tests/player_status.c
-        src/client/player_status.c)
+        src/client/player_status.c
+        src/gui/widgets/active_effects_model.c)
     atrinik_configure_target(client-player-status-tests)
     target_compile_definitions(client-player-status-tests PRIVATE SDL_DISABLE_OLD_NAMES)
     target_include_directories(client-player-status-tests BEFORE PRIVATE

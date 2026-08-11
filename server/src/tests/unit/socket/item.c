@@ -84,6 +84,48 @@ START_TEST(test_player_status_disease_infection_duplicate_and_cure) {
     ck_assert(!disease_infect(carrier, pl, true));
     ck_assert_ptr_null(queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS));
 
+    object *stronger = arch_get("flu");
+    ck_assert_ptr_nonnull(stronger);
+    stronger->level = carrier->level + 1;
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert(disease_infect(stronger, pl, true));
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
+    assert_status_entry(&reader, "disease:flu", "flu", -1);
+    ck_assert(packet_reader_finish(&reader));
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    player_status_send_snapshot(pl);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_SNAPSHOT);
+    ck_assert_uint_eq(packet_reader_read_uint16(&reader), 1);
+    assert_status_entry(&reader, "disease:flu", "flu", -1);
+    ck_assert(packet_reader_finish(&reader));
+
+    object *removed = NULL;
+    FOR_INV_PREPARE(pl, tmp) {
+        if (tmp->type == DISEASE) {
+            removed = tmp;
+            break;
+        }
+    }
+    FOR_INV_FINISH();
+    ck_assert_ptr_nonnull(removed);
+    socket_buffer_clear(CONTR(pl)->cs);
+    object_remove(removed, 0);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
+    assert_status_entry(&reader, "disease:flu", "flu", -1);
+    ck_assert(packet_reader_finish(&reader));
+    object_destroy(removed);
+
+    socket_buffer_clear(CONTR(pl)->cs);
     ck_assert(disease_cure(pl, NULL));
     packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
     ck_assert_ptr_nonnull(packet);
@@ -95,6 +137,7 @@ START_TEST(test_player_status_disease_infection_duplicate_and_cure) {
     ck_assert(packet_reader_finish(&reader));
 
     object_destroy(carrier);
+    object_destroy(stronger);
     object_destroy(pl);
 }
 END_TEST
@@ -259,6 +302,43 @@ START_TEST(test_player_status_poison_and_timed_force_refresh_and_remove) {
 }
 END_TEST
 
+START_TEST(test_player_status_capacity_resnapshots_membership_changes) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+
+    for (size_t i = 0; i < ATRINIK_PLAYER_STATUS_MAX_STATUSES + 1U; i++) {
+        socket_buffer_clear(CONTR(pl)->cs);
+        object *effect = arch_get("force_effect");
+        ck_assert_ptr_nonnull(effect);
+        SET_FLAG(effect, FLAG_APPLIED);
+        effect = object_insert_into(effect, pl, INS_NO_MERGE);
+        ck_assert_ptr_nonnull(effect);
+    }
+
+    packet_struct *packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_SNAPSHOT);
+    ck_assert_uint_eq(packet_reader_read_uint16(&reader), ATRINIK_PLAYER_STATUS_MAX_STATUSES);
+
+    object *removed = pl->inv;
+    ck_assert_ptr_nonnull(removed);
+    socket_buffer_clear(CONTR(pl)->cs);
+    object_remove(removed, 0);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_SNAPSHOT);
+    ck_assert_uint_eq(packet_reader_read_uint16(&reader), ATRINIK_PLAYER_STATUS_MAX_STATUSES);
+    object_destroy(removed);
+
+    object_destroy(pl);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("item");
     TCase *tc_core = tcase_create("Core");
@@ -271,6 +351,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_player_status_disease_infection_duplicate_and_cure);
     tcase_add_test(tc_core, test_player_status_explicit_force_allowlist);
     tcase_add_test(tc_core, test_player_status_poison_and_timed_force_refresh_and_remove);
+    tcase_add_test(tc_core, test_player_status_capacity_resnapshots_membership_changes);
 
     return s;
 }

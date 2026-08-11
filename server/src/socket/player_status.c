@@ -91,7 +91,10 @@ static int32_t player_status_seconds(const object *op) {
 static void player_status_write_entry(packet_struct *packet, const object *op) {
     char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
     bool have_key = player_status_key(op, key, sizeof(key));
-    HARD_ASSERT(have_key);
+    if (!have_key) {
+        HARD_ASSERT(false);
+        return;
+    }
     packet_writer_write_cstring(packet, key);
     packet_writer_write_uint16(packet, op->face->number);
 
@@ -124,9 +127,64 @@ static bool player_status_socket_ready(const object *pl) {
            CONTR(pl)->cs->state == ST_PLAYING;
 }
 
-static void player_status_send_remove(object *pl, const object *op) {
-    char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
-    if (!player_status_socket_ready(pl) || !player_status_key(op, key, sizeof(key))) {
+static void player_status_send_upsert(object *pl, const object *op) {
+    if (!player_status_socket_ready(pl)) {
+        return;
+    }
+
+    packet_struct *packet = packet_new(CLIENT_CMD_PLAYER_STATUS, 256, 256);
+    packet_enable_ndelay(packet);
+    packet_writer_write_uint8(packet, PLAYER_STATUS_UPSERT);
+    player_status_write_entry(packet, op);
+    socket_send_packet(CONTR(pl)->cs, packet);
+}
+
+static const object *player_status_find_by_key(const object *pl, const char *key) {
+    for (const object *candidate = pl->inv; candidate != NULL; candidate = candidate->below) {
+        char candidate_key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+        if (player_status_should_publish(candidate) &&
+            player_status_key(candidate, candidate_key, sizeof(candidate_key)) &&
+            strcmp(candidate_key, key) == 0) {
+            return candidate;
+        }
+    }
+    return NULL;
+}
+
+static size_t player_status_collect(const object *pl, const object **statuses, size_t limit) {
+    char keys[ATRINIK_PLAYER_STATUS_MAX_STATUSES + 1U][ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+    HARD_ASSERT(limit <= arraysize(keys));
+
+    size_t count = 0;
+    for (const object *op = pl->inv; op != NULL && count < limit; op = op->below) {
+        if (!player_status_should_publish(op) ||
+            !player_status_key(op, keys[count], sizeof(keys[count]))) {
+            continue;
+        }
+        bool duplicate = false;
+        for (size_t i = 0; i < count; i++) {
+            if (strcmp(keys[i], keys[count]) == 0) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) {
+            if (statuses != NULL) {
+                statuses[count] = op;
+            }
+            count++;
+        }
+    }
+    return count;
+}
+
+static bool player_status_requires_snapshot(const object *pl) {
+    return player_status_collect(pl, NULL, ATRINIK_PLAYER_STATUS_MAX_STATUSES + 1U) >=
+           ATRINIK_PLAYER_STATUS_MAX_STATUSES;
+}
+
+static void player_status_send_remove(object *pl, const char *key) {
+    if (!player_status_socket_ready(pl)) {
         return;
     }
 
@@ -144,25 +202,42 @@ void player_status_update(object *op) {
 
     object *pl = op->env;
     if (!player_status_should_publish(op)) {
-        player_status_send_remove(pl, op);
+        if (player_status_requires_snapshot(pl)) {
+            player_status_send_snapshot(pl);
+            return;
+        }
+        char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+        if (player_status_key(op, key, sizeof(key))) {
+            player_status_send_remove(pl, key);
+        }
         return;
     }
-    if (!player_status_socket_ready(pl)) {
+    if (player_status_collect(pl, NULL, ATRINIK_PLAYER_STATUS_MAX_STATUSES + 1U) >
+        ATRINIK_PLAYER_STATUS_MAX_STATUSES) {
+        player_status_send_snapshot(pl);
         return;
     }
-
-    packet_struct *packet = packet_new(CLIENT_CMD_PLAYER_STATUS, 256, 256);
-    packet_enable_ndelay(packet);
-    packet_writer_write_uint8(packet, PLAYER_STATUS_UPSERT);
-    player_status_write_entry(packet, op);
-    socket_send_packet(CONTR(pl)->cs, packet);
+    player_status_send_upsert(pl, op);
 }
 
 void player_status_remove(object *op) {
     if (!player_status_candidate(op) || op->env == NULL || op->env->type != PLAYER) {
         return;
     }
-    player_status_send_remove(op->env, op);
+    char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+    if (!player_status_key(op, key, sizeof(key))) {
+        return;
+    }
+    if (player_status_requires_snapshot(op->env)) {
+        player_status_send_snapshot(op->env);
+        return;
+    }
+    const object *survivor = player_status_find_by_key(op->env, key);
+    if (survivor != NULL) {
+        player_status_send_upsert(op->env, survivor);
+    } else {
+        player_status_send_remove(op->env, key);
+    }
 }
 
 void player_status_send_snapshot(object *pl) {
@@ -170,23 +245,16 @@ void player_status_send_snapshot(object *pl) {
         return;
     }
 
-    uint16_t count = 0;
-    for (object *op = pl->inv; op != NULL && count < ATRINIK_PLAYER_STATUS_MAX_STATUSES;
-         op = op->below) {
-        if (player_status_should_publish(op)) {
-            count++;
-        }
-    }
+    const object *statuses[ATRINIK_PLAYER_STATUS_MAX_STATUSES];
+    uint16_t count =
+        (uint16_t)player_status_collect(pl, statuses, ATRINIK_PLAYER_STATUS_MAX_STATUSES);
 
     packet_struct *packet = packet_new(CLIENT_CMD_PLAYER_STATUS, 512, 512);
     packet_enable_ndelay(packet);
     packet_writer_write_uint8(packet, PLAYER_STATUS_SNAPSHOT);
     packet_writer_write_uint16(packet, count);
-    for (object *op = pl->inv; op != NULL && count > 0; op = op->below) {
-        if (player_status_should_publish(op)) {
-            player_status_write_entry(packet, op);
-            count--;
-        }
+    for (uint16_t i = 0; i < count; i++) {
+        player_status_write_entry(packet, statuses[i]);
     }
     socket_send_packet(CONTR(pl)->cs, packet);
 }

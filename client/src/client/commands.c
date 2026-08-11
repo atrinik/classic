@@ -665,9 +665,7 @@ void socket_command_player_status(uint8_t *data, size_t len, size_t pos) {
          status = status->next) {
         image_request_face(status->face);
     }
-    if (cur_widget[ACTIVE_EFFECTS_ID] != NULL) {
-        WIDGET_REDRAW(cur_widget[ACTIVE_EFFECTS_ID]);
-    }
+    WIDGET_REDRAW_ALL(ACTIVE_EFFECTS_ID);
 }
 
 /**

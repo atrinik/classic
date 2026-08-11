@@ -1,4 +1,5 @@
 #include <global.h>
+#include <active_effects_model.h>
 #include <player_status.h>
 #include <toolkit/packet.h>
 
@@ -34,49 +35,51 @@ static packet_struct *make_upsert(const char *key, int32_t seconds) {
 }
 
 static void test_snapshot_add_update_remove(void) {
-    player_status_model_t model = {0};
+    player_status_model_clear(&player_status_model);
     packet_struct *packet = packet_new(0, 256, 64);
     packet_writer_write_uint8(packet, PLAYER_STATUS_SNAPSHOT);
     packet_writer_write_uint16(packet, 2);
     write_entry(packet, "disease:flu", 1, "flu", "aches", -1);
     write_entry(packet, "effect:7", 2, "strength", "stronger", 30);
-    TEST_CHECK(player_status_parse_command(&model, packet->data, packet->len, 0));
-    TEST_CHECK(model.count == 2);
-    TEST_CHECK(player_status_model_find(&model, "disease:flu")->seconds == -1);
-    TEST_CHECK(player_status_model_find(&model, "effect:7")->seconds == 30);
+    TEST_CHECK(player_status_parse_command(&player_status_model, packet->data, packet->len, 0));
+    TEST_CHECK(active_effects_model_count() == 2);
+    TEST_CHECK(active_effects_model_rows() != NULL);
+    TEST_CHECK(active_effects_model_find("disease:flu")->seconds == -1);
+    TEST_CHECK(active_effects_model_find("effect:7")->seconds == 30);
     packet_free(packet);
 
     packet = make_upsert("effect:7", 60);
-    TEST_CHECK(player_status_parse_command(&model, packet->data, packet->len, 0));
-    TEST_CHECK(model.count == 2);
-    TEST_CHECK(player_status_model_find(&model, "effect:7")->seconds == 60);
+    TEST_CHECK(player_status_parse_command(&player_status_model, packet->data, packet->len, 0));
+    TEST_CHECK(active_effects_model_count() == 2);
+    TEST_CHECK(active_effects_model_find("effect:7")->seconds == 60);
     packet_free(packet);
 
     packet = make_upsert("effect:8", 1);
-    TEST_CHECK(player_status_parse_command(&model, packet->data, packet->len, 0));
-    TEST_CHECK(model.count == 3);
-    TEST_CHECK(player_status_model_tick(&model, 2));
-    TEST_CHECK(player_status_model_find(&model, "effect:8")->seconds == 0);
-    TEST_CHECK(player_status_model_find(&model, "disease:flu")->seconds == -1);
+    TEST_CHECK(player_status_parse_command(&player_status_model, packet->data, packet->len, 0));
+    TEST_CHECK(active_effects_model_count() == 3);
+    TEST_CHECK(active_effects_model_tick(2));
+    TEST_CHECK(active_effects_model_find("effect:8")->seconds == 0);
+    TEST_CHECK(active_effects_model_find("disease:flu")->seconds == -1);
     packet_free(packet);
 
     packet = packet_new(0, 32, 16);
     packet_writer_write_uint8(packet, PLAYER_STATUS_REMOVE);
     packet_writer_write_cstring(packet, "effect:7");
-    TEST_CHECK(player_status_parse_command(&model, packet->data, packet->len, 0));
-    TEST_CHECK(model.count == 2);
-    TEST_CHECK(player_status_model_find(&model, "effect:7") == NULL);
-    TEST_CHECK(player_status_parse_command(&model, packet->data, packet->len, 0));
-    TEST_CHECK(model.count == 2);
+    TEST_CHECK(player_status_parse_command(&player_status_model, packet->data, packet->len, 0));
+    TEST_CHECK(active_effects_model_count() == 2);
+    TEST_CHECK(active_effects_model_find("effect:7") == NULL);
+    TEST_CHECK(player_status_parse_command(&player_status_model, packet->data, packet->len, 0));
+    TEST_CHECK(active_effects_model_count() == 2);
     packet_free(packet);
 
     packet = packet_new(0, 16, 16);
     packet_writer_write_uint8(packet, PLAYER_STATUS_SNAPSHOT);
     packet_writer_write_uint16(packet, 0);
-    TEST_CHECK(player_status_parse_command(&model, packet->data, packet->len, 0));
-    TEST_CHECK(model.count == 0);
+    TEST_CHECK(player_status_parse_command(&player_status_model, packet->data, packet->len, 0));
+    TEST_CHECK(active_effects_model_count() == 0);
+    TEST_CHECK(active_effects_model_rows() == NULL);
     packet_free(packet);
-    player_status_model_clear(&model);
+    player_status_model_clear(&player_status_model);
 }
 
 static void test_malformed_packets_are_transactional(void) {
