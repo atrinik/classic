@@ -30,7 +30,55 @@
 #include <check_utils.h>
 #include <arch.h>
 #include <monster_data.h>
+#include <object_methods.h>
 #include <player.h>
+#include <skills.h>
+#include <toolkit/packet.h>
+
+static object *attack_test_target(mapstruct *map, object *pl) {
+    if (map->path == NULL) {
+        FREE_AND_COPY_HASH(map->path, "/tests/attack");
+    }
+
+    object *target = arch_get("kobold");
+    target->x = pl->x + 1;
+    target->y = pl->y;
+    target = object_insert_map(target, map, NULL, INS_NO_MERGE);
+    monster_data_init(target);
+    target = HEAD(target);
+    set_mobile_speed(target, 0);
+    target->stats.hp = 1000;
+    target->stats.maxhp = 1000;
+    target->block = 0;
+    target->absorb = 0;
+    memset(target->protection, 0, sizeof(target->protection));
+    return target;
+}
+
+static size_t attack_test_messages(object *pl, const char *expected) {
+    size_t count = 0;
+
+    for (packet_struct *packet = CONTR(pl)->cs->packets; packet != NULL; packet = packet->next) {
+        if (packet->type != CLIENT_CMD_DRAWINFO) {
+            continue;
+        }
+
+        packet_reader_t reader;
+        char color[64];
+        char message[HUGE_BUF];
+        packet_reader_init(&reader, packet->data, packet->len);
+        (void)packet_reader_read_uint8(&reader);
+        ck_assert(packet_reader_read_string(&reader, VS(color)));
+        ck_assert(packet_reader_read_string(&reader, VS(message)));
+        ck_assert_int_eq(packet_reader_error(&reader), PACKET_ERROR_NONE);
+
+        if (strcmp(message, expected) == 0) {
+            count++;
+        }
+    }
+
+    return count;
+}
 
 START_TEST(test_attack_is_melee_range) {
     mapstruct *map;
@@ -205,6 +253,128 @@ START_TEST(test_kill_experience_follows_damage_skill_participation) {
 }
 END_TEST
 
+START_TEST(test_targeted_melee_gets_one_unaware_opening_bonus) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+
+    object *target = attack_test_target(map, pl);
+    memset(pl->attack, 0, sizeof(pl->attack));
+    pl->attack[ATNR_IMPACT] = 100;
+    pl->stats.dam = 4;
+    pl->stats.wc_range = 1;
+    pl->weapon_speed = 1.0f;
+    CONTR(pl)->target_object = target;
+    CONTR(pl)->target_object_count = target->count;
+    CONTR(pl)->combat = 1;
+    CONTR(pl)->action_attack = global_round_tag;
+
+    target->last_damage = 0;
+    target->damage_round_tag = global_round_tag;
+    object_process(pl);
+    ck_assert_int_eq(target->last_damage, 5);
+    ck_assert(OBJECT_VALID(target->enemy, target->enemy_count));
+    ck_assert_ptr_eq(target->enemy, pl);
+    ck_assert_uint_eq(
+        attack_test_messages(pl, "Sneak damage bonus: +25% (+1 base damage) — unaware target."),
+        1);
+
+    target->last_damage = 0;
+    target->damage_round_tag = global_round_tag;
+    CONTR(pl)->action_attack = global_round_tag;
+    object_process(pl);
+    ck_assert_int_eq(target->last_damage, 4);
+    ck_assert_uint_eq(
+        attack_test_messages(pl, "Sneak damage bonus: +25% (+1 base damage) — unaware target."),
+        1);
+}
+END_TEST
+
+START_TEST(test_situational_bonus_excludes_living_pets_and_plugin_damage_api) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+    object *skill = arch_get("skill_bow_archery");
+    skill->stats.sp = SK_BOW_ARCHERY;
+    pl->chosen_skill = skill;
+
+    object *target = attack_test_target(map, pl);
+    object *pet = arch_get("goblin");
+    pet->x = pl->x;
+    pet->y = pl->y + 1;
+    pet = object_insert_map(pet, map, NULL, INS_NO_MERGE);
+    monster_data_init(pet);
+    object_owner_set(pet, pl);
+    ck_assert_ptr_eq(pet->chosen_skill, skill);
+    memset(pet->attack, 0, sizeof(pet->attack));
+    pet->attack[ATNR_IMPACT] = 100;
+
+    ck_assert_int_eq(attack_hit_situational(target, pet, 4), 4);
+    ck_assert_uint_eq(
+        attack_test_messages(pl, "Sneak damage bonus: +25% (+1 base damage) — unaware target."),
+        0);
+
+    target = attack_test_target(map, pl);
+    ck_assert_int_eq(attack_hit(target, pl, 4), 4);
+    ck_assert_uint_eq(
+        attack_test_messages(pl, "Sneak damage bonus: +25% (+1 base damage) — unaware target."),
+        0);
+
+    target = attack_test_target(map, pl);
+    object *periodic = arch_get("poisoning");
+    memset(periodic->attack, 0, sizeof(periodic->attack));
+    periodic->attack[ATNR_INTERNAL] = 100;
+    object_owner_set(periodic, pl);
+    ck_assert_ptr_eq(periodic->chosen_skill, skill);
+    periodic = object_insert_into(periodic, target, 0);
+    ck_assert_ptr_nonnull(periodic);
+    ck_assert_int_eq(attack_hit_situational(target, periodic, 4), 4);
+    ck_assert_uint_eq(
+        attack_test_messages(pl, "Sneak damage bonus: +25% (+1 base damage) — unaware target."),
+        0);
+}
+END_TEST
+
+START_TEST(test_unaware_bonus_does_not_increase_status_effect_strength) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+    memset(pl->attack, 0, sizeof(pl->attack));
+    pl->attack[ATNR_IMPACT] = 50;
+    pl->attack[ATNR_BLIND] = 50;
+    attack_status_effect_test_override = 1;
+
+    /* The raw compatibility path retains the legacy minimum strength for
+     * low, split status attacks. */
+    object *raw_target = attack_test_target(map, pl);
+    raw_target->speed = 0.1f;
+    ck_assert_int_eq(attack_hit(raw_target, pl, 1), 1);
+    object *raw_blindness = object_find_arch(raw_target, arch_find("blindness"));
+    ck_assert_ptr_nonnull(raw_blindness);
+    ck_assert_int_eq(raw_blindness->stats.food, 1);
+
+    object *aware_target = attack_test_target(map, pl);
+    aware_target->speed = 0.1f;
+    aware_target->enemy = pl;
+    aware_target->enemy_count = pl->count;
+    ck_assert_int_eq(attack_hit_situational(aware_target, pl, 8), 4);
+    object *aware_blindness = object_find_arch(aware_target, arch_find("blindness"));
+    ck_assert_ptr_nonnull(aware_blindness);
+    ck_assert_int_eq(aware_blindness->stats.food, 4);
+
+    object *unaware_target = attack_test_target(map, pl);
+    unaware_target->speed = 0.1f;
+    ck_assert_int_eq(attack_hit_situational(unaware_target, pl, 8), 5);
+    attack_status_effect_test_override = -1;
+    object *unaware_blindness = object_find_arch(unaware_target, arch_find("blindness"));
+    ck_assert_ptr_nonnull(unaware_blindness);
+    ck_assert_int_eq(unaware_blindness->stats.food, aware_blindness->stats.food);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("attack");
     TCase *tc_core = tcase_create("Core");
@@ -217,6 +387,9 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_attack_roll_adjust_describes_positional_bonuses);
     tcase_add_test(tc_core, test_attack_roll_adjust_describes_moved_target_penalty);
     tcase_add_test(tc_core, test_kill_experience_follows_damage_skill_participation);
+    tcase_add_test(tc_core, test_targeted_melee_gets_one_unaware_opening_bonus);
+    tcase_add_test(tc_core, test_situational_bonus_excludes_living_pets_and_plugin_damage_api);
+    tcase_add_test(tc_core, test_unaware_bonus_does_not_increase_status_effect_strength);
 
     return s;
 }

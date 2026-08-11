@@ -37,7 +37,20 @@ static object *projectile_test_target(mapstruct *map, object *pl) {
 }
 
 static object *projectile_test_skill(object *pl, enum skillnrs skill_id) {
-    const char *arch_name = skill_id == SK_THROWING ? "skill_throwing" : "skill_bow_archery";
+    const char *arch_name;
+    switch (skill_id) {
+        case SK_THROWING:
+            arch_name = "skill_throwing";
+            break;
+
+        case SK_WIZARDRY_SPELLS:
+            arch_name = "skill_wizardry_spells";
+            break;
+
+        default:
+            arch_name = "skill_bow_archery";
+            break;
+    }
     object *skill = arch_get(arch_name);
     skill->stats.sp = skill_id;
     pl->chosen_skill = skill;
@@ -83,7 +96,10 @@ static size_t projectile_test_bonus_messages(object *pl, const char *expected) {
         ck_assert(packet_reader_read_string(&reader, VS(message)));
         ck_assert_int_eq(packet_reader_error(&reader), PACKET_ERROR_NONE);
 
-        if (strncmp(message, "Archery damage bonus:", strlen("Archery damage bonus:")) == 0) {
+        bool bonus_message =
+            strncmp(message, "Archery damage bonus:", strlen("Archery damage bonus:")) == 0 ||
+            strncmp(message, "Sneak damage bonus:", strlen("Sneak damage bonus:")) == 0;
+        if (bonus_message) {
             if (expected == NULL || strcmp(message, expected) == 0) {
                 count++;
             }
@@ -113,8 +129,7 @@ START_TEST(test_archery_impact_bonuses_and_feedback) {
     pl->direction = 7;
     target->direction = 5;
     object *arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
-    object *following_arrow =
-        projectile_test_arrow(map, pl, target, 3, SK_CROSSBOW_ARCHERY);
+    object *following_arrow = projectile_test_arrow(map, pl, target, 3, SK_CROSSBOW_ARCHERY);
     pl->direction = 1;
     target->direction = 3;
     ck_assert_int_eq(projectile_test_hit(arrow, target), 36);
@@ -133,8 +148,8 @@ START_TEST(test_archery_impact_bonuses_and_feedback) {
     ck_assert_int_eq(projectile_test_hit(following_arrow, target), 30);
     ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS), 2);
     ck_assert_uint_eq(
-        projectile_test_bonus_messages(
-            pl, "Archery damage bonus: +25% (+6 base damage) — rear shot."),
+        projectile_test_bonus_messages(pl,
+                                       "Archery damage bonus: +25% (+6 base damage) — rear shot."),
         1);
     ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 2);
 }
@@ -156,10 +171,10 @@ START_TEST(test_archery_unaware_state_is_impact_time_and_validated) {
     target->direction = 1;
     object *arrow = projectile_test_arrow(map, pl, target, 3, SK_SLING_ARCHERY);
     ck_assert_int_eq(projectile_test_hit(arrow, target), 30);
-    ck_assert_uint_eq(
-        projectile_test_bonus_messages(
-            pl, "Archery damage bonus: +25% (+6 base damage) — unaware target."),
-        1);
+    ck_assert_uint_eq(projectile_test_bonus_messages(
+                          pl,
+                          "Archery damage bonus: +25% (+6 base damage) — unaware target."),
+                      1);
 
     /* Engagement with another player makes a fresh target alert. */
     object *other_player = player_get_dummy("Other archer", NULL);
@@ -197,8 +212,8 @@ START_TEST(test_archery_invisibility_and_target_ownership_exclusions) {
     ck_assert_int_eq(projectile_test_hit(arrow, target), 30);
     ck_assert(!OBJECT_VALID(target->enemy, target->enemy_count));
     ck_assert_uint_eq(
-        projectile_test_bonus_messages(
-            pl, "Archery damage bonus: +25% (+6 base damage) — rear shot."),
+        projectile_test_bonus_messages(pl,
+                                       "Archery damage bonus: +25% (+6 base damage) — rear shot."),
         1);
     CLEAR_MULTI_FLAG(pl, FLAG_IS_INVISIBLE);
 
@@ -252,7 +267,7 @@ START_TEST(test_archery_invisibility_and_target_ownership_exclusions) {
 }
 END_TEST
 
-START_TEST(test_projectile_metric_and_non_archery_exclusions) {
+START_TEST(test_projectile_metric_and_non_archery_openers) {
     mapstruct *map;
     object *pl;
     check_setup_env_pl(&map, &pl);
@@ -261,9 +276,13 @@ START_TEST(test_projectile_metric_and_non_archery_exclusions) {
     object *target = projectile_test_target(map, pl);
     target->direction = 3;
     object *arrow = projectile_test_arrow(map, pl, target, 3, SK_THROWING);
-    ck_assert_int_eq(projectile_test_hit(arrow, target), TEST_BASE_DAMAGE);
+    SET_FLAG(arrow, FLAG_IS_THROWN);
+    ck_assert_int_eq(projectile_test_hit(arrow, target), 30);
     ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS), 1);
-    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 0);
+    ck_assert_uint_eq(projectile_test_bonus_messages(
+                          pl,
+                          "Sneak damage bonus: +25% (+6 base damage) — unaware target."),
+                      1);
 
     /* A stopped arrow is neither bonus-eligible nor metric-eligible. */
     target = projectile_test_target(map, pl);
@@ -273,7 +292,7 @@ START_TEST(test_projectile_metric_and_non_archery_exclusions) {
     CLEAR_FLAG(arrow, FLAG_IS_MISSILE);
     ck_assert_int_eq(projectile_test_hit(arrow, target), TEST_BASE_DAMAGE);
     ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS), 1);
-    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 0);
+    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 1);
 }
 END_TEST
 
@@ -326,9 +345,8 @@ START_TEST(test_archery_rounding_and_overflow_boundaries) {
     ck_assert_int_eq(projectile_test_hit(arrow, target), 54);
     ck_assert_int_eq(combat_target->stats.hp, hp_before - 55);
     ck_assert_uint_eq(
-        projectile_test_bonus_messages(
-            pl,
-            "Archery damage bonus: +25% (+6 base damage) — rear shot."),
+        projectile_test_bonus_messages(pl,
+                                       "Archery damage bonus: +25% (+6 base damage) — rear shot."),
         1);
 
     target = projectile_test_target(map, pl);
@@ -404,10 +422,10 @@ START_TEST(test_archery_alert_sources_stealth_and_direction_boundaries) {
     target->direction = 0;
     object *arrow = projectile_test_arrow(map, pl, target, 0, SK_BOW_ARCHERY);
     ck_assert_int_eq(projectile_test_hit(arrow, target), 30);
-    ck_assert_uint_eq(
-        projectile_test_bonus_messages(
-            pl, "Archery damage bonus: +25% (+6 base damage) — unaware target."),
-        1);
+    ck_assert_uint_eq(projectile_test_bonus_messages(
+                          pl,
+                          "Archery damage bonus: +25% (+6 base damage) — unaware target."),
+                      1);
 
     /* Front and side impacts against an engaged target receive no bonus. */
     target = projectile_test_target(map, pl);
@@ -427,7 +445,7 @@ START_TEST(test_archery_alert_sources_stealth_and_direction_boundaries) {
 }
 END_TEST
 
-START_TEST(test_archery_rejects_nonphysical_and_invalid_sources) {
+START_TEST(test_nonarchery_openers_and_invalid_sources) {
     mapstruct *map;
     object *pl;
     check_setup_env_pl(&map, &pl);
@@ -441,12 +459,29 @@ START_TEST(test_archery_rejects_nonphysical_and_invalid_sources) {
 
     target = projectile_test_target(map, pl);
     target->direction = 3;
-    arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
+    arrow = projectile_test_arrow(map, pl, target, 3, SK_WIZARDRY_SPELLS);
     arrow->type = LIGHTNING;
     CLEAR_FLAG(arrow, FLAG_IS_MISSILE);
     SET_FLAG(arrow, FLAG_IS_SPELL);
     ck_assert_int_eq(common_object_projectile_hit(arrow, target), OBJECT_METHOD_OK);
-    ck_assert_int_eq(target->last_damage, TEST_BASE_DAMAGE);
+    ck_assert_int_eq(target->last_damage, 30);
+
+    /* Cascaded nonliving spell effects retain both the original wizardry
+     * skill and direct-player attack provenance. */
+    target = projectile_test_target(map, pl);
+    object *parent_effect = projectile_test_arrow(map, pl, target, 3, SK_WIZARDRY_SPELLS);
+    parent_effect->type = BULLET;
+    CLEAR_FLAG(parent_effect, FLAG_IS_MISSILE);
+    SET_FLAG(parent_effect, FLAG_IS_SPELL);
+    arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
+    arrow->type = LIGHTNING;
+    CLEAR_FLAG(arrow, FLAG_IS_MISSILE);
+    SET_FLAG(arrow, FLAG_IS_SPELL);
+    object_owner_copy(arrow, parent_effect);
+    ck_assert_ptr_eq(arrow->chosen_skill, parent_effect->chosen_skill);
+    ck_assert(arrow->player_attack_source);
+    ck_assert_int_eq(common_object_projectile_hit(arrow, target), OBJECT_METHOD_OK);
+    ck_assert_int_eq(target->last_damage, 30);
 
     target = projectile_test_target(map, pl);
     target->direction = 3;
@@ -454,13 +489,13 @@ START_TEST(test_archery_rejects_nonphysical_and_invalid_sources) {
     CLEAR_FLAG(arrow, FLAG_IS_MISSILE);
     SET_FLAG(arrow, FLAG_IS_SPELL);
     ck_assert_int_eq(common_object_projectile_hit(arrow, target), OBJECT_METHOD_OK);
-    ck_assert_int_eq(target->last_damage, TEST_BASE_DAMAGE);
+    ck_assert_int_eq(target->last_damage, 30);
 
     target = projectile_test_target(map, pl);
     target->direction = 3;
     arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
     SET_FLAG(arrow, FLAG_IS_THROWN);
-    ck_assert_int_eq(projectile_test_hit(arrow, target), TEST_BASE_DAMAGE);
+    ck_assert_int_eq(projectile_test_hit(arrow, target), 30);
 
     target = projectile_test_target(map, pl);
     target->direction = 3;
@@ -469,7 +504,7 @@ START_TEST(test_archery_rejects_nonphysical_and_invalid_sources) {
     CLEAR_FLAG(arrow, FLAG_IS_MISSILE);
     SET_FLAG(arrow, FLAG_IS_SPELL);
     ck_assert_int_eq(common_object_projectile_hit(arrow, target), OBJECT_METHOD_OK);
-    ck_assert_int_eq(target->last_damage, TEST_BASE_DAMAGE);
+    ck_assert_int_eq(target->last_damage, 30);
 
     target = projectile_test_target(map, pl);
     target->direction = 3;
@@ -484,8 +519,37 @@ START_TEST(test_archery_rejects_nonphysical_and_invalid_sources) {
     object_owner_set(arrow, npc);
     ck_assert_int_eq(projectile_test_hit(arrow, target), TEST_BASE_DAMAGE);
 
-    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS), 1);
-    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 0);
+    /* Player ownership may be flattened through a pet, but the live
+     * non-player source cannot propagate the player's skill provenance. */
+    target = projectile_test_target(map, pl);
+    target->direction = 3;
+    object_owner_set(npc, pl);
+    arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
+    object_owner_copy(arrow, npc);
+    ck_assert_ptr_eq(arrow->chosen_skill, npc->chosen_skill);
+    ck_assert_ptr_nonnull(arrow->chosen_skill);
+    ck_assert(!arrow->player_attack_source);
+    ck_assert_int_eq(projectile_test_hit(arrow, target), TEST_BASE_DAMAGE);
+
+    /* Further nonliving effects preserve the pet origin rather than
+     * laundering the flattened player owner into direct-player provenance. */
+    target = projectile_test_target(map, pl);
+    object *pet_descendant = projectile_test_arrow(map, pl, target, 3, SK_WIZARDRY_SPELLS);
+    pet_descendant->type = LIGHTNING;
+    CLEAR_FLAG(pet_descendant, FLAG_IS_MISSILE);
+    SET_FLAG(pet_descendant, FLAG_IS_SPELL);
+    object_owner_copy(pet_descendant, arrow);
+    ck_assert_ptr_eq(pet_descendant->chosen_skill, arrow->chosen_skill);
+    ck_assert(!pet_descendant->player_attack_source);
+    ck_assert_int_eq(common_object_projectile_hit(pet_descendant, target), OBJECT_METHOD_OK);
+    ck_assert_int_eq(target->last_damage, TEST_BASE_DAMAGE);
+
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS), 2);
+    ck_assert_uint_eq(projectile_test_bonus_messages(
+                          pl,
+                          "Sneak damage bonus: +25% (+6 base damage) — unaware target."),
+                      5);
+    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 5);
 }
 END_TEST
 
@@ -516,8 +580,8 @@ START_TEST(test_archery_blocked_and_lethal_impact_ordering) {
     ck_assert_int_eq(projectile_test_hit(arrow, target), 30);
     ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS), 1);
     ck_assert_uint_eq(
-        projectile_test_bonus_messages(
-            pl, "Archery damage bonus: +25% (+6 base damage) — rear shot."),
+        projectile_test_bonus_messages(pl,
+                                       "Archery damage bonus: +25% (+6 base damage) — rear shot."),
         1);
 
     target = projectile_test_target(map, pl);
@@ -538,9 +602,8 @@ START_TEST(test_archery_blocked_and_lethal_impact_ordering) {
     ck_assert(OBJECT_VALID(arrow, arrow_count));
     ck_assert_ptr_nonnull(arrow->env);
     ck_assert_int_gt(skill->stats.exp, experience_before);
-    ck_assert_uint_eq(
-        metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS),
-        metric_before + 1);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS),
+                      metric_before + 1);
     ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), messages_before + 1);
     CONTR(pl)->skill_ptr[SK_BOW_ARCHERY] = saved_skill;
 }
@@ -556,12 +619,12 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_archery_impact_bonuses_and_feedback);
     tcase_add_test(tc_core, test_archery_unaware_state_is_impact_time_and_validated);
     tcase_add_test(tc_core, test_archery_invisibility_and_target_ownership_exclusions);
-    tcase_add_test(tc_core, test_projectile_metric_and_non_archery_exclusions);
+    tcase_add_test(tc_core, test_projectile_metric_and_non_archery_openers);
     tcase_add_test(tc_core, test_archery_slaying_stacks_after_bounded_bonus_without_mutation);
     tcase_add_test(tc_core, test_archery_rounding_and_overflow_boundaries);
     tcase_add_test(tc_core, test_archery_immune_hit_alerts_without_feedback_or_metric);
     tcase_add_test(tc_core, test_archery_alert_sources_stealth_and_direction_boundaries);
-    tcase_add_test(tc_core, test_archery_rejects_nonphysical_and_invalid_sources);
+    tcase_add_test(tc_core, test_nonarchery_openers_and_invalid_sources);
     tcase_add_test(tc_core, test_archery_blocked_and_lethal_impact_ordering);
     return s;
 }

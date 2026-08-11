@@ -3489,17 +3489,25 @@ static void process_func(object *op) {
                 pl->ob->enemy->owner == pl->ob) {
                 pl->ob->enemy = NULL;
             } else if (attack_is_melee_range(pl->ob, pl->ob->enemy)) {
-                if (!OBJECT_VALID(pl->ob->enemy->enemy, pl->ob->enemy->enemy_count)) {
-                    set_npc_enemy(pl->ob->enemy, pl->ob, NULL);
+                object *target = pl->ob->enemy;
+                bool target_unaware = !OBJECT_VALID(target->enemy, target->enemy_count) &&
+                                      !OBJECT_VALID(target->attacked_by, target->attacked_by_count);
+
+                if (!OBJECT_VALID(target->enemy, target->enemy_count)) {
+                    set_npc_enemy(target, pl->ob, NULL);
                 } else {
                     /* Our target already has an enemy - then note we had
                      * attacked */
-                    pl->ob->enemy->attacked_by = pl->ob;
-                    pl->ob->enemy->attacked_by_count = pl->ob->count;
-                    pl->ob->enemy->attacked_by_distance = 1;
+                    target->attacked_by = pl->ob;
+                    target->attacked_by_count = pl->ob->count;
+                    target->attacked_by_distance = 1;
                 }
 
-                skill_attack(pl->ob->enemy, pl->ob, 0, NULL);
+                if (target_unaware) {
+                    skill_attack_unaware(target, pl->ob, 0, NULL);
+                } else {
+                    skill_attack(target, pl->ob, 0, NULL);
+                }
 
                 pl->action_attack = global_round_tag + pl->ob->weapon_speed;
 

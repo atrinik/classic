@@ -65,7 +65,10 @@ static float lev_exp[MAXLEVEL + 1] = {
     580.37f,  599.64f,  619.91f,  640.17f,  662.43f,  685.68f, 709.93f, 773.17f, 852.41f, 932.65f,
     1013.88f, 1104.11f, 1213.35f, 1324.60f, 1431.86f, 1542.13f};
 
-static int do_skill_attack(object *tmp, object *op, char *string);
+static int do_skill_attack(object *tmp, object *op, char *string, bool target_was_unaware);
+
+static int
+skill_attack_internal(object *tmp, object *pl, int dir, char *string, bool target_was_unaware);
 
 /**
  * Main skills use function similar in scope to cast_spell().
@@ -387,7 +390,8 @@ int change_skill(object *who, int sk_index) {
  * @return
  * 1 if the attack damaged the opponent.
  */
-int skill_attack(object *tmp, object *pl, int dir, char *string) {
+static int
+skill_attack_internal(object *tmp, object *pl, int dir, char *string, bool target_was_unaware) {
     int xt, yt;
     mapstruct *m;
 
@@ -419,7 +423,7 @@ int skill_attack(object *tmp, object *pl, int dir, char *string) {
     }
 
     if (tmp != NULL) {
-        return do_skill_attack(tmp, pl, string);
+        return do_skill_attack(tmp, pl, string, target_was_unaware);
     }
 
     if (pl->type == PLAYER) {
@@ -427,6 +431,14 @@ int skill_attack(object *tmp, object *pl, int dir, char *string) {
     }
 
     return 0;
+}
+
+int skill_attack(object *tmp, object *pl, int dir, char *string) {
+    return skill_attack_internal(tmp, pl, dir, string, false);
+}
+
+int skill_attack_unaware(object *tmp, object *pl, int dir, char *string) {
+    return skill_attack_internal(tmp, pl, dir, string, true);
 }
 
 /**
@@ -443,7 +455,7 @@ int skill_attack(object *tmp, object *pl, int dir, char *string) {
  * @return
  * 1 if the attack damaged the opponent.
  */
-static int do_skill_attack(object *tmp, object *op, char *string) {
+static int do_skill_attack(object *tmp, object *op, char *string, bool target_was_unaware) {
     int success;
 
     if (op->type == PLAYER) {
@@ -457,7 +469,7 @@ static int do_skill_attack(object *tmp, object *op, char *string) {
         }
     }
 
-    success = attack_object(tmp, op);
+    success = target_was_unaware ? attack_object_unaware(tmp, op) : attack_object(tmp, op);
 
     /* Print appropriate messages to the player. */
     if (success && string != NULL) {
