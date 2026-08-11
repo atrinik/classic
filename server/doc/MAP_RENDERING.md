@@ -90,7 +90,7 @@ This design contract applies when changing classic server lighting,
   withholding actors, items, effects, and interiors.
 - Connected UP/DOWN transitions include signed depth offsets so client/server
   shift existing caches rather than forcing a full refresh.
-- Protocol v1076 retains scalar light bytes and the v1075
+- Protocol v1077 retains scalar light bytes and the v1075
   `MAP2_FLAG_EXT_LIGHT_RGB` extension before the animation tail. It carries a
   complete
   seven-bit sub-layer bitmap followed by ascending RGB888 triples. A zero

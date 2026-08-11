@@ -84,7 +84,7 @@ START_TEST(test_packet_new) {
 }
 END_TEST
 
-/** Build the invariant prefix of a same-map protocol-v1076 MAP update. */
+/** Build the invariant prefix of a same-map protocol-v1077 MAP update. */
 static packet_struct *map_protocol_test_packet(uint8_t level_count) {
     packet_struct *packet = packet_new(0, 16, 16);
     packet_writer_write_uint8(packet, MAP_UPDATE_CMD_SAME);

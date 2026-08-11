@@ -1091,7 +1091,7 @@ START_TEST(test_opposite_scoped_clear_does_not_scan_near_limit_fire_index) {
 }
 END_TEST
 
-START_TEST(test_move_and_fire_require_exact_v1076_payloads) {
+START_TEST(test_move_and_fire_require_exact_v1077_payloads) {
     mapstruct *map;
     object *op;
 
@@ -1585,7 +1585,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_quick_running_tap_executes_before_ordered_stop);
     tcase_add_test(tc_core, test_canceled_movement_bytes_do_not_exhaust_live_queue_limit);
     tcase_add_test(tc_core, test_opposite_scoped_clear_does_not_scan_near_limit_fire_index);
-    tcase_add_test(tc_core, test_move_and_fire_require_exact_v1076_payloads);
+    tcase_add_test(tc_core, test_move_and_fire_require_exact_v1077_payloads);
     tcase_add_test(tc_core, test_malformed_tombstone_queue_is_discarded_safely);
     tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
     tcase_add_test(tc_core, test_version_requires_exact_match);
