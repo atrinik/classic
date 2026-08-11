@@ -25,8 +25,9 @@ bright cue, while a positive-depth object is also marked as an exit to prove
 that only visible physical depth zero receives the post-world outline. The
 occluded sprite interior remains governed by the normal painter order; only its
 outline is replayed after the world pass. Before the final visible state, the
-snapshot also reuses one tile across a soft-FOW-to-visible transition so stale
-per-layer exit semantics are cleared before the fresh layer is decoded.
+snapshot also caches an exit on a secondary layer, soft-clears that cell, and
+then reuses the tile for fresh non-exit data. This reaches the soft-FOW reset
+that discards stale per-layer exit semantics before the new layer is decoded.
 
 `expected-pixels-sha256` hashes the viewport width and height as big-endian
 32-bit integers followed by canonical RGBA bytes in row-major order. This is
