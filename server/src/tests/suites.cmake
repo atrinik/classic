@@ -15,10 +15,12 @@ set(ATRINIK_SERVER_TEST_SUITES
     "server.light|check_server_light|src/tests/unit/server/light.c"
     "server.object|check_server_object|src/tests/unit/server/object.c"
     "server.pathfinder|check_server_pathfinder|src/tests/unit/server/pathfinder.c"
+    "server.random_map_style|check_server_random_map_style|src/tests/unit/server/random_map_style.c"
     "server.re_cmp|check_server_re_cmp|src/tests/unit/server/re_cmp.c"
     "server.request|check_server_request|src/tests/unit/server/request.c"
     "server.rune|check_server_rune|src/tests/unit/server/rune.c"
     "server.server_clock|check_server_server_clock|src/tests/unit/server/server_clock.c"
+    "server.todclock|check_server_todclock|src/tests/unit/server/todclock.c"
     "server.shop|check_server_shop|src/tests/unit/server/shop.c"
     "socket.item|check_socket_item|src/tests/unit/socket/item.c"
     "toolkit.math|check_server_math|src/tests/unit/toolkit/math.c"
@@ -32,4 +34,5 @@ set(ATRINIK_SERVER_TEST_SUITES
     "types.container|check_types_container|src/tests/unit/types/container.c"
     "types.duplicator|check_types_duplicator|src/tests/unit/types/duplicator.c"
     "types.light_apply|check_types_light_apply|src/tests/unit/types/light_apply.c"
-    "types.sound_ambient|check_types_sound_ambient|src/tests/unit/types/sound_ambient.c")
+    "types.sound_ambient|check_types_sound_ambient|src/tests/unit/types/sound_ambient.c"
+    "types.symptom|check_types_symptom|src/tests/unit/types/symptom.c")

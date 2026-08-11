@@ -42,6 +42,8 @@
 #include <light.h>
 
 typedef struct stable_identity_state {
+    bool saw_name;
+    bool saw_name_pl;
     bool saw_numeric_sp;
     int numeric_sp;
     bool saw_spell_id;
@@ -62,6 +64,7 @@ lex_load (int     *depth,       \
 
 static const char *yval(void);
 static stable_identity_state stable_identity_state_init(void);
+static int finalize_object_record(object *op, const stable_identity_state *identity);
 static int validate_stable_identity(object *op, const stable_identity_state *identity);
 
 /* that's needed to track the used buffers for recursive ccalling */
@@ -304,6 +307,7 @@ stable_identity_state *identity = &identities[*depth];
     if (*yv == '\0') {
         LOG(ERROR, "Name without val");
     } else {
+        identity->saw_name = true;
         FREE_AND_COPY_HASH(op->name, yv);
     }
 }
@@ -313,6 +317,7 @@ stable_identity_state *identity = &identities[*depth];
     if (*yv == '\0') {
         LOG(ERROR, "Plural name without val");
     } else {
+        identity->saw_name_pl = true;
         FREE_AND_COPY_HASH(op->name_pl, yv);
     }
 }
@@ -392,7 +397,7 @@ stable_identity_state *identity = &identities[*depth];
 }
 
 ^end{WS}             {
-    if (lex_error == 0 && validate_stable_identity(op, identity) != 0) {
+    if (lex_error == 0 && finalize_object_record(op, identity) != 0) {
         lex_error = 1;
     }
 
@@ -806,7 +811,7 @@ stable_identity_state *identity = &identities[*depth];
 #.*{NL}              {}
 
 <<EOF>>              {
-    if (!linemode && lex_error == 0 && validate_stable_identity(op, identity) != 0) {
+    if (!linemode && lex_error == 0 && finalize_object_record(op, identity) != 0) {
         lex_error = 1;
     }
 
@@ -832,6 +837,29 @@ stable_identity_state_init (void)
         .spell_index = SP_NO_SPELL,
         .skill_index = -1,
     };
+}
+
+/**
+ * Finalize fields whose meaning depends on the complete object record.
+ *
+ * @param op
+ * Object that was loaded.
+ * @param identity
+ * Per-record parser state.
+ * @return
+ * Zero on success, non-zero if the record is invalid.
+ */
+static int
+finalize_object_record (object *op, const stable_identity_state *identity)
+{
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(identity != NULL);
+
+    if (identity->saw_name && !identity->saw_name_pl) {
+        FREE_AND_CLEAR_HASH(op->name_pl);
+    }
+
+    return validate_stable_identity(op, identity);
 }
 
 /**

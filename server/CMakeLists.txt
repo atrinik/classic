@@ -571,6 +571,18 @@ if (BUILD_TESTING AND NOT MINGW)
             TIMEOUT 300
             WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
+        add_test(NAME server-clockdata-startup
+            COMMAND ${ATRINIK_SERVER_TEST_RUNNER}
+                --name server-clockdata-startup
+                --
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/clockdata_startup.py
+                $<TARGET_FILE:${EXECUTABLE}>)
+        set_tests_properties(server-clockdata-startup PROPERTIES
+            LABELS "server;runtime"
+            TIMEOUT 300
+            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+
         add_custom_target(check
             COMMAND ${CMAKE_CTEST_COMMAND}
                 --test-dir ${CMAKE_CURRENT_BINARY_DIR}
