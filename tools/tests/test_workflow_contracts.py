@@ -247,12 +247,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertGreaterEqual(candidate.count("sbom: true"), 1)
 
     def test_server_validation_exercises_release_ndebug(self) -> None:
-        workflow = self.text("check.yml")
-        server = workflow[
-            workflow.index("  server:\n    name: Server validation") : workflow.index(
-                "  client:\n    name: Client validation"
-            )
-        ]
+        runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
+            encoding="utf-8"
+        )
+        server = runner[runner.index("  server)") : runner.index("  client)")]
         coverage = server.index("cmake --preset linux-coverage")
         release = server.index("cmake --preset linux-release")
         sanitizers = server.index("cmake --preset linux-sanitizers")
@@ -290,17 +288,12 @@ class WorkflowContractTests(unittest.TestCase):
         )
 
     def test_component_validation_compares_conventional_and_pch_builds(self) -> None:
-        workflow = self.text("check.yml")
-        server = workflow[
-            workflow.index("  server:\n    name: Server validation") : workflow.index(
-                "  client:\n    name: Client validation"
-            )
-        ]
-        client = workflow[
-            workflow.index("  client:\n    name: Client validation") : workflow.index(
-                "  classic-validation:\n"
-            )
-        ]
+        runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
+            encoding="utf-8"
+        )
+        server = runner[runner.index("  server)") : runner.index("  client)")]
+        client_start = runner.index("  client)")
+        client = runner[client_start : runner.index("esac", client_start)]
         for name, component in (("server", server), ("client", client)):
             with self.subTest(component=name):
                 coverage = component.index("cmake --preset linux-coverage")
@@ -575,6 +568,127 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("- windows-test", aggregate)
         self.assertIn("--windows-required", aggregate)
         self.assertIn("--windows-result", aggregate)
+
+    def test_linux_checks_pin_image_and_isolate_compiler_caches(self) -> None:
+        workflow = self.text("check.yml")
+        digest = "d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f"
+        image = f"ghcr.io/atrinik/classic-build:1.2.3@sha256:{digest}"
+        cache_action = "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+
+        self.assertEqual(workflow.count(image), 1)
+        self.assertEqual(workflow.count(f"sha256:{digest}"), 2)
+        self.assertEqual(workflow.count(cache_action), 4)
+        self.assertEqual(workflow.count("tools/ci/linux_cache_key.py"), 4)
+        self.assertEqual(workflow.count("tools/ci/run_linux_check.sh"), 8)
+        self.assertEqual(workflow.count("--env CCACHE_DIR=/cache/ccache"), 4)
+        self.assertEqual(workflow.count("chmod 1777"), 4)
+        self.assertIn("tools/ci/measure_linux_image.sh", workflow)
+        self.assertNotIn("classic-client-sdl-mixer-ubuntu", workflow)
+        self.assertNotIn("packages: read", workflow)
+        self.assertNotIn("docker/login-action", workflow)
+        self.assertNotIn("packages: read", self.text("codeql.yml"))
+
+        core = workflow[
+            workflow.index("  core:") : workflow.index("  windows-test-build:")
+        ]
+        server = workflow[
+            workflow.index("  server:\n    name: Server validation") : workflow.index(
+                "  client:\n    name: Client validation"
+            )
+        ]
+        client = workflow[
+            workflow.index("  client:\n    name: Client validation") : workflow.index(
+                "  integrated:\n    name: Integrated client/server graph"
+            )
+        ]
+        integrated = workflow[
+            workflow.index("  integrated:\n    name: Integrated client/server graph") : workflow.index(
+                "  classic-validation:\n    name: Classic validation"
+            )
+        ]
+        expected_materials = {
+            "core": {
+                ".github/workflows/check.yml",
+                "tools/ci/run_linux_check.sh",
+                "protocol/CMakeLists.txt",
+                "libatrinik/CMakeLists.txt",
+                "libatrinik/CMakePresets.json",
+            },
+            "server": {
+                ".github/workflows/check.yml",
+                "tools/ci/run_linux_check.sh",
+                "server/CMakeLists.txt",
+                "server/CMakePresets.json",
+            },
+            "client": {
+                ".github/workflows/check.yml",
+                "tools/ci/run_linux_check.sh",
+                "client/CMakeLists.txt",
+                "client/CMakePresets.json",
+            },
+            "integrated": {
+                ".github/workflows/check.yml",
+                "tools/ci/run_linux_check.sh",
+                "CMakeLists.txt",
+                "CMakePresets.json",
+                "protocol/CMakeLists.txt",
+                "libatrinik/CMakeLists.txt",
+                "client/CMakeLists.txt",
+                "server/CMakeLists.txt",
+            },
+        }
+        jobs = (
+            (core, "core", True),
+            (server, "server", True),
+            (client, "client", True),
+            (integrated, "integrated", False),
+        )
+        for job, component, uploads_coverage in jobs:
+            with self.subTest(component=component):
+                if uploads_coverage:
+                    self.assertIn("id-token: write", job)
+                self.assertIn("persist-credentials: false", job)
+                self.assertIn(f"--component {component}", job)
+                self.assertIn(f"classic-ccache/{component}", job)
+                self.assertEqual(
+                    job.count("--material tools/ci/run_linux_check.sh"), 1
+                )
+                for material in expected_materials[component]:
+                    self.assertEqual(job.count(f"--material {material}"), 1)
+                self.assertIn("restore-keys:", job)
+                self.assertNotIn("apt-get", job)
+                self.assertNotIn("ubuntu@sha256:", job)
+
+        runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("-DCMAKE_C_COMPILER_LAUNCHER=ccache", runner)
+        self.assertIn("-DCMAKE_CXX_COMPILER_LAUNCHER=ccache", runner)
+        self.assertIn("CCACHE_BASEDIR", runner)
+        self.assertIn("CCACHE_NOHASHDIR=true", runner)
+        self.assertIn("ccache --zero-stats", runner)
+        self.assertIn("ccache --print-stats", runner)
+        self.assertIn("ccache --show-config", runner)
+        self.assertIn("ccache --show-stats", runner)
+
+        measurement = (ROOT / "tools" / "ci" / "measure_linux_image.sh").read_text(
+            encoding="utf-8"
+        )
+        for field in (
+            "runner_image_os",
+            "runner_image_version",
+            "runner_arch",
+            "kernel",
+            "cpu_count",
+            "docker_client_version",
+            "docker_server_version",
+            "cold_pull_ms",
+            "warm_pull_ms",
+            "cold_start_ms",
+            "warm_start_ms",
+        ):
+            with self.subTest(measurement_field=field):
+                self.assertIn(f"printf '{field}\\t", measurement)
 
 
 if __name__ == "__main__":
