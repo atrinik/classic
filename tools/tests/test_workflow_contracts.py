@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import unittest
 
 
@@ -117,7 +118,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn(
             "steps.pending-release.outputs.action == 'delete-empty-draft'", workflow
         )
-        self.assertIn('"repos/${RELEASE_REPOSITORY}/releases/${RELEASE_ID}"', workflow)
+        self.assertEqual(workflow.count("tools/release/resolve_pending_release.py"), 2)
+        delete_step = workflow[deletion:recovery]
+        self.assertIn('RELEASE_TAG: ${{ steps.pending-release.outputs.tag }}', delete_step)
+        self.assertIn("--delete-policy-listed-empty-draft", delete_step)
+        self.assertIn('--expected-tag "${RELEASE_TAG}"', delete_step)
+        self.assertIn('--expected-release-id "${RELEASE_ID}"', delete_step)
+        self.assertNotIn("gh api --method DELETE", delete_step)
         self.assertIn("--ref main", workflow)
         self.assertIn("if: steps.pending-release.outputs.action != 'resume'", workflow)
 
@@ -142,10 +149,14 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertNotIn("--clobber", workflow)
 
-    def test_candidate_and_package_use_distinct_concurrency_namespaces(self) -> None:
+    def test_release_mutations_share_one_concurrency_namespace(self) -> None:
+        release = self.text("release.yml")
         package = self.text("package-release.yml")
+        recovery = self.text("recover-release.yml")
         candidate = self.text("build-release-candidate.yml")
-        self.assertIn("group: classic-package-release-", package)
+        self.assertIn("group: classic-release-publication", release)
+        self.assertIn("group: classic-release-publication", package)
+        self.assertIn("group: classic-release-publication", recovery)
         self.assertIn("classic-release-candidate-", candidate)
 
     def test_latest_alias_has_one_globally_serialized_owner(self) -> None:
@@ -236,19 +247,67 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertGreaterEqual(candidate.count("sbom: true"), 1)
 
     def test_server_validation_exercises_release_ndebug(self) -> None:
-        workflow = self.text("check.yml")
-        server = workflow[
-            workflow.index("  server:\n    name: Server validation") : workflow.index(
-                "  client:\n    name: Client validation"
-            )
-        ]
+        runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
+            encoding="utf-8"
+        )
+        server = runner[runner.index("  server)") : runner.index("  client)")]
         coverage = server.index("cmake --preset linux-coverage")
         release = server.index("cmake --preset linux-release")
         sanitizers = server.index("cmake --preset linux-sanitizers")
         self.assertLess(coverage, release)
         self.assertLess(release, sanitizers)
         self.assertIn("cmake --build --preset linux-release --parallel", server)
-        self.assertIn("ctest --preset linux-release", server)
+        for preset in ("linux-coverage", "linux-release", "linux-sanitizers"):
+            self.assertIn(f"ctest --preset {preset} --parallel 4", server)
+
+        presets = json.loads((ROOT / "server/CMakePresets.json").read_text())
+        self.assertEqual(
+            {
+                preset["name"]: preset["execution"]["jobs"]
+                for preset in presets["testPresets"]
+            },
+            {
+                "linux-debug": 4,
+                "linux-sanitizers": 4,
+                "linux-coverage": 4,
+                "linux-release": 4,
+            },
+        )
+
+        cmake = (ROOT / "server/CMakeLists.txt").read_text()
+        self.assertNotIn("RESOURCE_LOCK server-test-runtime", cmake)
+        self.assertIn("tools/run_isolated_test.py", cmake)
+        self.assertIn("-fprofile-update=atomic", cmake)
+
+        migration = (
+            ROOT / "server/src/tests/assetspath_migration.py"
+        ).read_text()
+        self.assertNotIn("timeout=15", migration)
+        self.assertEqual(
+            migration.count("timeout=SERVER_TIMEOUT_SECONDS"), 3
+        )
+
+    def test_component_validation_compares_conventional_and_pch_builds(self) -> None:
+        runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
+            encoding="utf-8"
+        )
+        server = runner[runner.index("  server)") : runner.index("  client)")]
+        client_start = runner.index("  client)")
+        client = runner[client_start : runner.index("esac", client_start)]
+        for name, component in (("server", server), ("client", client)):
+            with self.subTest(component=name):
+                coverage = component.index("cmake --preset linux-coverage")
+                release = component.index("cmake --preset linux-release")
+                sanitizers = component.index("cmake --preset linux-sanitizers")
+                self.assertLess(coverage, release)
+                self.assertLess(release, sanitizers)
+                self.assertIn("-DENABLE_PRECOMPILED_HEADERS=OFF", component)
+                self.assertEqual(
+                    component.count("-DENABLE_PRECOMPILED_HEADERS=OFF"), 1
+                )
+                self.assertIn("ctest --preset linux-coverage", component)
+                self.assertIn("ctest --preset linux-release", component)
+                self.assertIn("ctest --preset linux-sanitizers", component)
 
     def test_windows_packages_persist_toolchain_bound_compiler_caches(self) -> None:
         candidate = self.text("build-release-candidate.yml")
@@ -294,9 +353,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(candidate.count("--env PATH=/opt/mxe/.ccache/bin:"), 2)
 
     def test_discord_application_id_is_release_only_package_data(self) -> None:
+        package = self.text("package-release.yml")
         candidate = self.text("build-release-candidate.yml")
-        config = candidate[
-            candidate.index("  discord-config:") : candidate.index("  client-windows:")
+        config = package[
+            package.index("  discord-config:") : package.index("  candidate:")
+        ]
+        candidate_job = package[
+            package.index("  candidate:") : package.index("  publish:")
         ]
         client = candidate[
             candidate.index("  client-windows:") : candidate.index("  server-windows:")
@@ -305,12 +368,20 @@ class WorkflowContractTests(unittest.TestCase):
         package_script = (ROOT / "client" / "tools" / "build-windows-package.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn("if: inputs.rehearsal != true", config)
+        self.assertIn("if: inputs.candidate_run_id == ''", config)
+        self.assertIn("needs: preflight", config)
         self.assertIn("environment: discord-release", config)
         self.assertIn("secrets.DISCORD_APPLICATION_ID", config)
         self.assertIn("umask 077", config)
         self.assertNotIn("echo", config)
         self.assertIn("retention-days: 1", config)
+        artifact_name = "name: discord-application-id-${{ inputs.tag }}"
+        self.assertEqual(config.count(artifact_name), 1)
+        self.assertEqual(client.count(artifact_name), 1)
+        self.assertIn("needs: [preflight, discord-config]", candidate_job)
+        self.assertIn("needs.discord-config.result == 'success'", candidate_job)
+        self.assertNotIn("environment: discord-release", candidate)
+        self.assertNotIn("secrets.DISCORD_APPLICATION_ID", candidate)
         self.assertIn("ATRINIK_DISCORD_APPLICATION_ID_FILE", client)
         self.assertIn("/workspace/build/discord-config/discord-application-id", client)
         self.assertIn('PATTERN "discord-application-id" EXCLUDE', cmake)
@@ -335,6 +406,26 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(metadata_job.count("fetch-depth: 0"), 2)
         self.assertNotIn("fetch-depth: 0", remaining_jobs)
 
+    def test_core_uploads_exercised_python_release_tool_coverage(self) -> None:
+        workflow = self.text("check.yml")
+        core = workflow[workflow.index("  core:") : workflow.index("  windows-test-build:")]
+        self.assertIn("python3 -m pip install coverage==7.15.3", core)
+        self.assertIn("python3 -m coverage run --branch --source=tools", core)
+        self.assertIn("python3 -m coverage run --append --branch --source=tools", core)
+        self.assertIn("python3 -m coverage xml --omit='tools/tests/*'", core)
+        tools_upload = core[
+            core.index("- name: Upload release-tool coverage") : core.index(
+                "- name: Upload libatrinik coverage"
+            )
+        ]
+        libatrinik_upload = core[core.index("- name: Upload libatrinik coverage") :]
+        self.assertIn("files: tools/coverage.xml", tools_upload)
+        self.assertIn("flags: release-tools", tools_upload)
+        self.assertNotIn("libatrinik/coverage.xml", tools_upload)
+        self.assertIn("files: libatrinik/coverage.xml", libatrinik_upload)
+        self.assertIn("flags: libatrinik", libatrinik_upload)
+        self.assertNotIn("tools/coverage.xml", libatrinik_upload)
+
     def test_native_worldmaker_build_uses_the_server_compiler_cache(self) -> None:
         script = (ROOT / "server" / "tools" / "build-windows-package.sh").read_text(
             encoding="utf-8"
@@ -347,6 +438,7 @@ class WorkflowContractTests(unittest.TestCase):
         build = workflow[
             workflow.index("  windows-test-build:") : workflow.index("  windows-test:")
         ]
+        server_build = build[build.index("      - name: Cross-build Windows server") :]
         run_start = workflow.index("  windows-test:")
         run = workflow[run_start : workflow.index("  server:", run_start)]
         aggregate = workflow[workflow.index("  classic-validation:") :]
@@ -354,11 +446,48 @@ class WorkflowContractTests(unittest.TestCase):
         image = f"ghcr.io/atrinik/windows-build:1.2.1@sha256:{digest}"
 
         self.assertIn("if: needs.changes.outputs.windows == 'true'", build)
-        self.assertEqual(build.count(image), 2)
-        self.assertEqual(build.count(digest), 2)
+        self.assertEqual(build.count(image), 4)
+        self.assertEqual(build.count(digest), 4)
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", build)
-        self.assertIn("--network none", build)
+        self.assertEqual(build.count("--network none"), 2)
+        self.assertIn("persist-credentials: false", build)
+        self.assertIn("Stage pinned Windows server dependency", build)
+        self.assertIn(
+            "65ab99547ecc8277434527607d24f8a1b02a2344ed4cea475bed751606e60202",
+            build,
+        )
         self.assertIn("--env CCACHE_DIR=/tmp/atrinik-libatrinik-ccache", build)
+        self.assertIn("-S server", build)
+        self.assertIn("-B server/build/windows-pr-server", build)
+        self.assertIn("-DENABLE_PYTHON_PLUGIN=OFF", build)
+        self.assertIn("--target atrinik-server", build)
+        self.assertIn("--network none", server_build)
+        self.assertIn("--env GH_TOKEN=", server_build)
+        self.assertIn("--env GITHUB_TOKEN=", server_build)
+        self.assertIn("-DPATCH_EXECUTABLE=", server_build)
+        self.assertIn(
+            "-DSOURCE_DIR=/workspace/build/libpcpnatpmp-source", server_build
+        )
+        self.assertIn(
+            "-DPATCH_FILE=/workspace/server/cmake/patches/libpcpnatpmp-mingw.patch",
+            server_build,
+        )
+        self.assertIn(
+            "-P /workspace/server/cmake/apply_patch_idempotent.cmake",
+            server_build,
+        )
+        self.assertIn(
+            "-DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-source",
+            server_build,
+        )
+        self.assertLess(
+            server_build.index("-P /workspace/server/cmake/apply_patch_idempotent.cmake"),
+            server_build.index("x86_64-w64-mingw32.shared-cmake"),
+        )
+        self.assertLess(
+            server_build.index("x86_64-w64-mingw32.shared-cmake"),
+            server_build.index("cmake --build server/build/windows-pr-server"),
+        )
         self.assertIn(
             "--env CCACHE_TEMPDIR=/tmp/atrinik-libatrinik-ccache-tmp", build
         )
@@ -383,20 +512,183 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("client-rich-presence-tests.exe", build)
         self.assertIn("python3 tools/ci/stage_windows_runtime.py", build)
         self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", build)
+        self.assertIn("Build portable Windows server package", build)
+        self.assertIn("bash tools/build-windows-package.sh build/windows-pr-package", build)
+        self.assertIn("smoke_windows_server_package.ps1", build)
+        self.assertIn("server/build/windows-pr-package/*.zip", build)
 
         self.assertIn("runs-on: windows-2025", run)
         self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", run)
         self.assertIn('"libatrinik-path.exe"', run)
+        self.assertIn("New-Item -ItemType Junction", run)
+        self.assertIn('"libatrinik-path.exe") $junction', run)
         self.assertIn('"libatrinik-rendezvous.exe"', run)
         self.assertIn('"libatrinik-metaserver-publisher.exe"', run)
         self.assertIn('"libatrinik-metaserver-url.exe"', run)
         self.assertIn('"libatrinik-stun.exe"', run)
         self.assertIn('"client-rich-presence-tests.exe"', run)
+        self.assertIn('"atrinik-classic-server-*-windows-x86_64.zip"', run)
+        self.assertIn('"smoke_windows_server_package.ps1"', run)
+        smoke = (ROOT / "tools" / "ci" / "smoke_windows_server_package.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"maps/regions.reg"', smoke)
+        self.assertIn('"--port_mapping=off"', smoke)
+        self.assertIn('"--stun_server=off"', smoke)
+        self.assertIn('[System.Net.Sockets.UdpClient]::new(0)', smoke)
+        self.assertIn('"--port_quic=$serverPort"', smoke)
+        self.assertIn('"--network_stack=ipv4=127.0.0.1"', smoke)
+        self.assertIn('[void]$startInfo.Environment.Remove($name)', smoke)
+        self.assertIn('$startInfo.Environment["NO_PROXY"]', smoke)
+        self.assertIn(
+            '"--metaserver_publish_origin=http://127.0.0.1:9"', smoke
+        )
+        self.assertIn(
+            '"--metaserver_rendezvous_origin=http://127.0.0.1:9/v1/classic"',
+            smoke,
+        )
+        self.assertIn("Get-NetUDPEndpoint -LocalPort $serverPort", smoke)
+        self.assertIn('$listenerEndpoints[0].LocalAddress -ne "127.0.0.1"', smoke)
+        self.assertIn('if ($output -match "Discovered a direct")', smoke)
+        self.assertIn("$bodySucceeded -and $cleanupFailures.Count -ne 0", smoke)
+        self.assertIn('$process.StandardInput.WriteLine("shutdown")', smoke)
+        self.assertLess(
+            smoke.index('"Server ready\\. Waiting for connections"'),
+            smoke.index('$process.StandardInput.WriteLine("shutdown")'),
+        )
+        self.assertIn("AddSeconds(60)", smoke)
+        self.assertIn("WaitForExit(30000)", smoke)
+        self.assertIn("$remainderTask.Wait(10000)", smoke)
+        self.assertIn("WaitForExit(10000)", smoke)
+        self.assertIn("$process.Kill($true)", smoke)
+        self.assertIn("$process.Dispose()", smoke)
+        self.assertIn('"Server ready\\. Waiting for connections"', smoke)
         self.assertIn('"fixtures/metaserver-publisher-v1.json"', run)
 
         self.assertIn("- windows-test", aggregate)
         self.assertIn("--windows-required", aggregate)
         self.assertIn("--windows-result", aggregate)
+
+    def test_linux_checks_pin_image_and_isolate_compiler_caches(self) -> None:
+        workflow = self.text("check.yml")
+        digest = "d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f"
+        image = f"ghcr.io/atrinik/classic-build:1.2.3@sha256:{digest}"
+        cache_action = "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+
+        self.assertEqual(workflow.count(image), 1)
+        self.assertEqual(workflow.count(f"sha256:{digest}"), 2)
+        self.assertEqual(workflow.count(cache_action), 4)
+        self.assertEqual(workflow.count("tools/ci/linux_cache_key.py"), 4)
+        self.assertEqual(workflow.count("tools/ci/run_linux_check.sh"), 8)
+        self.assertEqual(workflow.count("--env CCACHE_DIR=/cache/ccache"), 4)
+        self.assertEqual(workflow.count("chmod 1777"), 4)
+        self.assertIn("tools/ci/measure_linux_image.sh", workflow)
+        self.assertNotIn("classic-client-sdl-mixer-ubuntu", workflow)
+        self.assertNotIn("packages: read", workflow)
+        self.assertNotIn("docker/login-action", workflow)
+        self.assertNotIn("packages: read", self.text("codeql.yml"))
+
+        core = workflow[
+            workflow.index("  core:") : workflow.index("  windows-test-build:")
+        ]
+        server = workflow[
+            workflow.index("  server:\n    name: Server validation") : workflow.index(
+                "  client:\n    name: Client validation"
+            )
+        ]
+        client = workflow[
+            workflow.index("  client:\n    name: Client validation") : workflow.index(
+                "  integrated:\n    name: Integrated client/server graph"
+            )
+        ]
+        integrated = workflow[
+            workflow.index("  integrated:\n    name: Integrated client/server graph") : workflow.index(
+                "  classic-validation:\n    name: Classic validation"
+            )
+        ]
+        expected_materials = {
+            "core": {
+                ".github/workflows/check.yml",
+                "tools/ci/run_linux_check.sh",
+                "protocol/CMakeLists.txt",
+                "libatrinik/CMakeLists.txt",
+                "libatrinik/CMakePresets.json",
+            },
+            "server": {
+                ".github/workflows/check.yml",
+                "tools/ci/run_linux_check.sh",
+                "server/CMakeLists.txt",
+                "server/CMakePresets.json",
+            },
+            "client": {
+                ".github/workflows/check.yml",
+                "tools/ci/run_linux_check.sh",
+                "client/CMakeLists.txt",
+                "client/CMakePresets.json",
+            },
+            "integrated": {
+                ".github/workflows/check.yml",
+                "tools/ci/run_linux_check.sh",
+                "CMakeLists.txt",
+                "CMakePresets.json",
+                "protocol/CMakeLists.txt",
+                "libatrinik/CMakeLists.txt",
+                "client/CMakeLists.txt",
+                "server/CMakeLists.txt",
+            },
+        }
+        jobs = (
+            (core, "core", True),
+            (server, "server", True),
+            (client, "client", True),
+            (integrated, "integrated", False),
+        )
+        for job, component, uploads_coverage in jobs:
+            with self.subTest(component=component):
+                if uploads_coverage:
+                    self.assertIn("id-token: write", job)
+                self.assertIn("persist-credentials: false", job)
+                self.assertIn(f"--component {component}", job)
+                self.assertIn(f"classic-ccache/{component}", job)
+                self.assertEqual(
+                    job.count("--material tools/ci/run_linux_check.sh"), 1
+                )
+                for material in expected_materials[component]:
+                    self.assertEqual(job.count(f"--material {material}"), 1)
+                self.assertIn("restore-keys:", job)
+                self.assertNotIn("apt-get", job)
+                self.assertNotIn("ubuntu@sha256:", job)
+
+        runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("-DCMAKE_C_COMPILER_LAUNCHER=ccache", runner)
+        self.assertIn("-DCMAKE_CXX_COMPILER_LAUNCHER=ccache", runner)
+        self.assertIn("CCACHE_BASEDIR", runner)
+        self.assertIn("CCACHE_NOHASHDIR=true", runner)
+        self.assertIn("ccache --zero-stats", runner)
+        self.assertIn("ccache --print-stats", runner)
+        self.assertIn("ccache --show-config", runner)
+        self.assertIn("ccache --show-stats", runner)
+
+        measurement = (ROOT / "tools" / "ci" / "measure_linux_image.sh").read_text(
+            encoding="utf-8"
+        )
+        for field in (
+            "runner_image_os",
+            "runner_image_version",
+            "runner_arch",
+            "kernel",
+            "cpu_count",
+            "docker_client_version",
+            "docker_server_version",
+            "cold_pull_ms",
+            "warm_pull_ms",
+            "cold_start_ms",
+            "warm_start_ms",
+        ):
+            with self.subTest(measurement_field=field):
+                self.assertIn(f"printf '{field}\\t", measurement)
 
 
 if __name__ == "__main__":

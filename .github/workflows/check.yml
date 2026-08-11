@@ -11,11 +11,16 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: classic-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.2.3@sha256:d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f
+  CLASSIC_LINUX_IMAGE_DIGEST: sha256:d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f
+  CLASSIC_LINUX_CCACHE_COMPILER: gcc-15.2.0
+  CLASSIC_LINUX_CCACHE_EPOCH: "1"
 
 jobs:
   changes:
@@ -30,6 +35,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - id: classify
         name: Select native validation jobs
         env:
@@ -48,20 +54,30 @@ jobs:
     name: Core validation
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
+      - name: Install Python test coverage tooling
+        run: python3 -m pip install coverage==7.15.3
       - name: Validate imported history and release helpers
         run: |
-          python3 tools/verify_import_history.py
-          python3 -m unittest discover -s tools/tests -p 'test_*.py'
+          python3 -m coverage run --branch --source=tools \
+            tools/verify_import_history.py
+          python3 -m coverage run --append --branch --source=tools \
+            -m unittest discover -s tools/tests -p 'test_*.py'
+          python3 -m coverage xml --omit='tools/tests/*' \
+            -o tools/coverage.xml
       - name: Validate first-parent release analysis
         run: >-
           npx --yes
@@ -77,12 +93,6 @@ jobs:
       - name: Run generator tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
         working-directory: protocol
-      - name: Build and test C package
-        run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --parallel
-          ctest --test-dir build --output-on-failure
-        working-directory: protocol
       - name: Build Python wheel
         run: |
           python3 -m pip install build==1.3.0
@@ -95,31 +105,64 @@ jobs:
             --source-epoch "$(git show -s --format=%ct HEAD)" \
             --output build/wheel
         working-directory: protocol
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcovr libcurl4-openssl-dev libidn2-dev libssl-dev zlib1g-dev
-      - name: Configure sibling protocol
-        run: cmake --preset linux-coverage -DATRINIK_PROTOCOL_SOURCE_DIR="$GITHUB_WORKSPACE/protocol"
-        working-directory: libatrinik
-      - name: Build, test, and cover
+      - id: linux-cache
+        name: Resolve isolated core compiler cache key
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          cmake --build --preset linux-coverage --parallel
-          ctest --preset linux-coverage
-          gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
-            --exclude '.*/build/.*' --print-summary --xml coverage.xml
-        working-directory: libatrinik
-      - name: Validate installed consumer
+          python3 tools/ci/linux_cache_key.py \
+            --component core \
+            --event "${GITHUB_EVENT_NAME}" \
+            --ref "${GITHUB_REF}" \
+            --pr-number "${PR_NUMBER}" \
+            --commit "${GITHUB_SHA}" \
+            --image-digest "${CLASSIC_LINUX_IMAGE_DIGEST}" \
+            --compiler "${CLASSIC_LINUX_CCACHE_COMPILER}" \
+            --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
+            --material .github/workflows/check.yml \
+            --material tools/ci/run_linux_check.sh \
+            --material protocol/CMakeLists.txt \
+            --material libatrinik/CMakeLists.txt \
+            --material libatrinik/CMakePresets.json \
+            --github-output "${GITHUB_OUTPUT}"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/classic-ccache/core
+          key: ${{ steps.linux-cache.outputs.key }}
+          restore-keys: ${{ steps.linux-cache.outputs.restore_prefix }}
+      - name: Measure and pull pinned Classic Linux environment
+        run: tools/ci/measure_linux_image.sh "${CLASSIC_LINUX_IMAGE}" build/ci-evidence
+      - name: Prepare stable core compiler cache mount
         run: |
-          cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$PWD/build/install" \
-            -DATRINIK_PROTOCOL_SOURCE_DIR="$GITHUB_WORKSPACE/protocol"
-          cmake --build build/release --parallel
-          cmake --install build/release
-          cmake -S tests/consumer -B build/consumer \
-            -DCMAKE_PREFIX_PATH="$PWD/build/install"
-          cmake --build build/consumer --parallel
-          build/consumer/libatrinik-consumer
-        working-directory: libatrinik
-      - name: Upload coverage
+          mkdir -p "${RUNNER_TEMP}/classic-ccache/core"
+          chmod 1777 "${RUNNER_TEMP}/classic-ccache/core"
+      - name: Build and test core packages in the pinned environment
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env CCACHE_DIR=/cache/ccache \
+            --env CCACHE_MAXSIZE=500M \
+            --env HOME=/tmp/classic-home \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --volume "${RUNNER_TEMP}/classic-ccache/core:/cache/ccache" \
+            --workdir /workspace \
+            "${CLASSIC_LINUX_IMAGE}" \
+            tools/ci/run_linux_check.sh core /workspace
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-core-evidence-${{ github.run_attempt }}
+          path: build/ci-evidence
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload release-tool coverage
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        with:
+          disable_search: true
+          fail_ci_if_error: false
+          files: tools/coverage.xml
+          flags: release-tools
+          use_oidc: true
+      - name: Upload libatrinik coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
           disable_search: true
@@ -140,9 +183,10 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Stage deterministic client package inputs
         working-directory: client
         run: |
@@ -152,11 +196,19 @@ jobs:
           printf '%s\n' '111111111111111111' > data/discord-application-id
           printf '%s\n' '123456789012345678' > \
             ../build/discord-test-application-id
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+      - name: Stage pinned Windows server dependency
+        run: |
+          archive=build/libpcpnatpmp.tar.gz
+          source=build/libpcpnatpmp-source
+          mkdir -p "${source}"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "${archive}" \
+            https://github.com/libpcpnatpmp/libpcpnatpmp/archive/866d283da99f5e98eecff702a8df63e2ae57ffca.tar.gz
+          printf '%s  %s\n' \
+            65ab99547ecc8277434527607d24f8a1b02a2344ed4cea475bed751606e60202 \
+            "${archive}" | sha256sum --check --strict
+          tar --extract --gzip --file "${archive}" \
+            --directory "${source}" --strip-components=1
       - name: Pull pinned Windows build environment
         run: docker pull ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb
       - name: Cross-build and stage standalone tests
@@ -204,6 +256,22 @@ jobs:
               assert application_id.strip() not in archive.read(executable)
           " "${package}"
               cd ..
+              cmake \
+                -DPATCH_EXECUTABLE="$(command -v patch)" \
+                -DSOURCE_DIR=/workspace/build/libpcpnatpmp-source \
+                -DPATCH_FILE=/workspace/server/cmake/patches/libpcpnatpmp-mingw.patch \
+                -P /workspace/server/cmake/apply_patch_idempotent.cmake
+              x86_64-w64-mingw32.shared-cmake \
+                -S . \
+                -B build/windows-integrated \
+                -G Ninja \
+                -DBUILD_TESTING=OFF \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DENABLE_PYTHON_PLUGIN=OFF \
+                -DPACKAGE_TYPE=none \
+                -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-source
+              cmake --build build/windows-integrated \
+                --target atrinik atrinik-server --parallel "$(nproc)"
               stage=libatrinik/build/windows-test-bundle
               cmake -E remove_directory "${stage}"
               python3 tools/ci/stage_windows_runtime.py \
@@ -217,7 +285,59 @@ jobs:
                 libatrinik/build/windows-tests/libatrinik-stun.exe \
                 client/build/windows-release/client-rich-presence-tests.exe
               cmake -E copy_directory libatrinik/tests/fixtures "${stage}/fixtures"
+              cmake -E copy tools/ci/smoke_windows_server_package.ps1 "${stage}"
             '
+      - name: Cross-build Windows server
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --network none \
+            --env CCACHE_DIR=/tmp/atrinik-server-ccache \
+            --env CCACHE_TEMPDIR=/tmp/atrinik-server-ccache-tmp \
+            --env CCACHE_MAXSIZE=250M \
+            --env GH_TOKEN= \
+            --env GITHUB_TOKEN= \
+            --env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --workdir /workspace \
+            ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb \
+            bash -c '
+              set -euo pipefail
+              cmake \
+                -DPATCH_EXECUTABLE="$(command -v patch)" \
+                -DSOURCE_DIR=/workspace/build/libpcpnatpmp-source \
+                -DPATCH_FILE=/workspace/server/cmake/patches/libpcpnatpmp-mingw.patch \
+                -P /workspace/server/cmake/apply_patch_idempotent.cmake
+              x86_64-w64-mingw32.shared-cmake \
+                -S server \
+                -B server/build/windows-pr-server \
+                -G Ninja \
+                -DBUILD_TESTING=OFF \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DENABLE_PYTHON_PLUGIN=OFF \
+                -DPACKAGE_TYPE=none \
+                -DPACKAGE_VERSION=0.0.0 \
+                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
+                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik \
+                -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-source
+              cmake --build server/build/windows-pr-server \
+                --target atrinik-server --parallel "$(nproc)"
+            '
+      - name: Build portable Windows server package
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env ATRINIK_PACKAGE_VERSION=0.0.0 \
+            --env CCACHE_DIR=/workspace/server/build/ccache \
+            --env CCACHE_MAXSIZE=500M \
+            --env CCACHE_TEMPDIR=/tmp/atrinik-server-package-ccache \
+            --env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --workdir /workspace/server \
+            ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb \
+            bash tools/build-windows-package.sh build/windows-pr-package
+          cp server/build/windows-pr-package/*.zip \
+            libatrinik/build/windows-test-bundle/
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: native-windows-tests
@@ -246,7 +366,11 @@ jobs:
           $bundle = (Resolve-Path "build/native-windows-tests").Path
           $env:PATH = "${bundle};${env:PATH}"
 
-          & (Join-Path $bundle "libatrinik-path.exe")
+          $junctionTarget = Join-Path $bundle "junction-target"
+          $junction = Join-Path $bundle "junction"
+          New-Item -ItemType Directory -Path $junctionTarget | Out-Null
+          New-Item -ItemType Junction -Path $junction -Target $junctionTarget | Out-Null
+          & (Join-Path $bundle "libatrinik-path.exe") $junction
           if ($LASTEXITCODE -ne 0) {
             throw "libatrinik-path.exe failed with exit code ${LASTEXITCODE}"
           }
@@ -279,50 +403,75 @@ jobs:
             throw "client-rich-presence-tests.exe failed with exit code ${LASTEXITCODE}"
           }
 
+          $packages = @(Get-ChildItem -LiteralPath $bundle -File `
+            -Filter "atrinik-classic-server-*-windows-x86_64.zip")
+          if ($packages.Count -ne 1) {
+            throw "Expected exactly one Windows server package, found $($packages.Count)"
+          }
+          & (Join-Path $bundle "smoke_windows_server_package.ps1") `
+            -Package $packages[0].FullName
+
   server:
     name: Server validation
     needs: changes
     if: needs.changes.outputs.server == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Pull pinned build environment
-        run: docker pull ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
+        with:
+          persist-credentials: false
+      - id: linux-cache
+        name: Resolve isolated server compiler cache key
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 tools/ci/linux_cache_key.py \
+            --component server \
+            --event "${GITHUB_EVENT_NAME}" \
+            --ref "${GITHUB_REF}" \
+            --pr-number "${PR_NUMBER}" \
+            --commit "${GITHUB_SHA}" \
+            --image-digest "${CLASSIC_LINUX_IMAGE_DIGEST}" \
+            --compiler "${CLASSIC_LINUX_CCACHE_COMPILER}" \
+            --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
+            --material .github/workflows/check.yml \
+            --material tools/ci/run_linux_check.sh \
+            --material server/CMakeLists.txt \
+            --material server/CMakePresets.json \
+            --github-output "${GITHUB_OUTPUT}"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/classic-ccache/server
+          key: ${{ steps.linux-cache.outputs.key }}
+          restore-keys: ${{ steps.linux-cache.outputs.restore_prefix }}
+      - name: Pull pinned Classic Linux environment
+        run: docker pull "${CLASSIC_LINUX_IMAGE}"
+      - name: Prepare stable server compiler cache mount
+        run: |
+          mkdir -p "${RUNNER_TEMP}/classic-ccache/server"
+          chmod 1777 "${RUNNER_TEMP}/classic-ccache/server"
       - name: Validate, build, and test
         run: |
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env CCACHE_DIR=/cache/ccache \
+            --env CCACHE_MAXSIZE=500M \
+            --env HOME=/tmp/classic-home \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
-            --workdir /workspace/server \
-            ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03 \
-            bash -euo pipefail -c '
-              apt-get update -qq
-              env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-                build-essential ca-certificates check cmake flex gcovr \
-                libcurl4-openssl-dev libgd-dev libidn2-dev libminiupnpc-dev libreadline-dev \
-                libssl-dev libsubunit-dev ninja-build pkgconf python3-dev zlib1g-dev
-              python3 -m unittest discover -s tools/tests -p "test_*.py"
-              python3 tools/dependencies.py sync
-              python3 tools/dependencies.py verify
-              cmake --preset linux-coverage \
-                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
-                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
-              cmake --build --preset linux-coverage --parallel
-              ctest --preset linux-coverage
-              gcovr --root . --filter "src/" --exclude "src/tests/" \
-                --print-summary --xml coverage.xml
-              cmake --preset linux-release \
-                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
-                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
-              cmake --build --preset linux-release --parallel
-              ctest --preset linux-release
-              cmake --preset linux-sanitizers \
-                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
-                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
-              cmake --build --preset linux-sanitizers --parallel
-              env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
-                ctest --preset linux-sanitizers
-            '
+            --volume "${RUNNER_TEMP}/classic-ccache/server:/cache/ccache" \
+            --workdir /workspace \
+            "${CLASSIC_LINUX_IMAGE}" \
+            tools/ci/run_linux_check.sh server /workspace
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-server-ccache-${{ github.run_attempt }}
+          path: build/ci-evidence/ccache-server.tsv
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
@@ -338,36 +487,61 @@ jobs:
     if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: linux-cache
+        name: Resolve isolated client compiler cache key
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 tools/ci/linux_cache_key.py \
+            --component client \
+            --event "${GITHUB_EVENT_NAME}" \
+            --ref "${GITHUB_REF}" \
+            --pr-number "${PR_NUMBER}" \
+            --commit "${GITHUB_SHA}" \
+            --image-digest "${CLASSIC_LINUX_IMAGE_DIGEST}" \
+            --compiler "${CLASSIC_LINUX_CCACHE_COMPILER}" \
+            --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
+            --material .github/workflows/check.yml \
+            --material tools/ci/run_linux_check.sh \
+            --material client/CMakeLists.txt \
+            --material client/CMakePresets.json \
+            --github-output "${GITHUB_OUTPUT}"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: client/build/ci-prefix
-          key: classic-client-sdl-mixer-ubuntu-26.04-x64-3.2.4-v1
-      - name: Pull pinned build environment
-        run: docker pull ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
+          path: ${{ runner.temp }}/classic-ccache/client
+          key: ${{ steps.linux-cache.outputs.key }}
+          restore-keys: ${{ steps.linux-cache.outputs.restore_prefix }}
+      - name: Pull pinned Classic Linux environment
+        run: docker pull "${CLASSIC_LINUX_IMAGE}"
+      - name: Prepare stable client compiler cache mount
+        run: |
+          mkdir -p "${RUNNER_TEMP}/classic-ccache/client"
+          chmod 1777 "${RUNNER_TEMP}/classic-ccache/client"
       - name: Validate, build, and test
         run: |
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env CCACHE_DIR=/cache/ccache \
+            --env CCACHE_MAXSIZE=500M \
+            --env HOME=/tmp/classic-home \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
-            --workdir /workspace/client \
-            ubuntu@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03 \
-            bash -euo pipefail -c '
-              tools/install-linux-ci-dependencies.sh build/ci-prefix
-              export CMAKE_PREFIX_PATH=/workspace/client/build/ci-prefix
-              export LD_LIBRARY_PATH=/workspace/client/build/ci-prefix/lib
-              export PKG_CONFIG_PATH=/workspace/client/build/ci-prefix/lib/pkgconfig
-              python3 -m unittest discover -s tools/tests -p "test_*.py"
-              python3 tools/dependencies.py sync
-              python3 tools/dependencies.py verify
-              cmake --preset linux-coverage \
-                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
-                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
-              cmake --build --preset linux-coverage --parallel
-              ctest --preset linux-coverage
-              gcovr --root . --filter "src/" --exclude "src/tests/" \
-                --print-summary --xml coverage.xml
-            '
+            --volume "${RUNNER_TEMP}/classic-ccache/client:/cache/ccache" \
+            --workdir /workspace \
+            "${CLASSIC_LINUX_IMAGE}" \
+            tools/ci/run_linux_check.sh client /workspace
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-client-ccache-${{ github.run_attempt }}
+          path: build/ci-evidence/ccache-client.tsv
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
@@ -377,6 +551,73 @@ jobs:
           flags: client
           use_oidc: true
 
+  integrated:
+    name: Integrated client/server graph
+    needs: changes
+    if: >-
+      needs.changes.outputs.client == 'true' ||
+      needs.changes.outputs.server == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: linux-cache
+        name: Resolve isolated integrated compiler cache key
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 tools/ci/linux_cache_key.py \
+            --component integrated \
+            --event "${GITHUB_EVENT_NAME}" \
+            --ref "${GITHUB_REF}" \
+            --pr-number "${PR_NUMBER}" \
+            --commit "${GITHUB_SHA}" \
+            --image-digest "${CLASSIC_LINUX_IMAGE_DIGEST}" \
+            --compiler "${CLASSIC_LINUX_CCACHE_COMPILER}" \
+            --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
+            --material .github/workflows/check.yml \
+            --material tools/ci/run_linux_check.sh \
+            --material CMakeLists.txt \
+            --material CMakePresets.json \
+            --material protocol/CMakeLists.txt \
+            --material libatrinik/CMakeLists.txt \
+            --material client/CMakeLists.txt \
+            --material server/CMakeLists.txt \
+            --github-output "${GITHUB_OUTPUT}"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/classic-ccache/integrated
+          key: ${{ steps.linux-cache.outputs.key }}
+          restore-keys: ${{ steps.linux-cache.outputs.restore_prefix }}
+      - name: Pull pinned Classic Linux environment
+        run: docker pull "${CLASSIC_LINUX_IMAGE}"
+      - name: Prepare stable integrated compiler cache mount
+        run: |
+          mkdir -p "${RUNNER_TEMP}/classic-ccache/integrated"
+          chmod 1777 "${RUNNER_TEMP}/classic-ccache/integrated"
+      - name: Build shared Release graph
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env CCACHE_DIR=/cache/ccache \
+            --env CCACHE_MAXSIZE=500M \
+            --env HOME=/tmp/classic-home \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --volume "${RUNNER_TEMP}/classic-ccache/integrated:/cache/ccache" \
+            --workdir /workspace \
+            "${CLASSIC_LINUX_IMAGE}" \
+            tools/ci/run_linux_check.sh integrated /workspace
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-integrated-ccache-${{ github.run_attempt }}
+          path: build/ci-evidence/ccache-integrated.tsv
+          if-no-files-found: error
+          retention-days: 14
+
   classic-validation:
     name: Classic validation
     if: always()
@@ -385,6 +626,7 @@ jobs:
       - core
       - server
       - client
+      - integrated
       - windows-test
     runs-on: ubuntu-24.04
     timeout-minutes: 2
@@ -399,5 +641,7 @@ jobs:
             --client-result '${{ needs.client.result }}' \
             --server-required '${{ needs.changes.outputs.server }}' \
             --server-result '${{ needs.server.result }}' \
+            --integrated-required "${{ needs.changes.outputs.client == 'true' || needs.changes.outputs.server == 'true' }}" \
+            --integrated-result '${{ needs.integrated.result }}' \
             --windows-required '${{ needs.changes.outputs.windows }}' \
             --windows-result '${{ needs.windows-test.result }}'

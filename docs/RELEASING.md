@@ -48,19 +48,36 @@ an older pending tag is checked against the complete current release history
 rather than running validation code and history policy frozen at that tag.
 Multiple drafts fail closed for manual investigation.
 
-The immutable `v5.8.1` tag is the single recorded exception to that retry
-rule. Both Package Release attempts failed in the Release-only server build
-before finalizing a candidate, publishing an image, or uploading a draft
-asset. `docs/history/release-tags.json` records the exact tag commit, empty
-draft ID, failed run IDs, and `delete-empty-draft` disposition. On current
-validated `main`, Semantic Release rechecks those immutable coordinates and
-the failed job conclusions, then deletes only that exact zero-asset draft and
-continues version analysis. Any changed draft ID or tag target, uploaded asset,
-successful candidate/publication job, unrecognized run, or additional draft
-fails closed. The tag and commit remain immutable historical evidence;
-`v5.8.1` is never published, downloadable, eligible for Latest, or used as an
-image alias. The next semantic version contains the server correction and all
-first-parent fixes after `v5.8.1`.
+The immutable `v5.8.1` and `v5.10.0` tags are the recorded exceptions to that
+retry rule. Both `v5.8.1` Package Release attempts failed in the Release-only
+server build before finalizing a candidate, publishing an image, or uploading
+a draft asset. `docs/history/release-tags.json` records each exact tag commit,
+empty draft ID, failed run IDs, expected server-image job conclusion, and
+`delete-empty-draft` disposition. On current validated `main`, Semantic Release
+rechecks those immutable coordinates and the failed job conclusions, then
+re-lists the complete draft inventory and every page of failed-run jobs, reads
+the exact release once more, deletes only that exact zero-asset draft, and
+continues version analysis. Semantic Release, Package Release, and manual
+recovery share one non-cancelling publication lock. Any
+changed draft ID or tag target, uploaded asset, successful
+candidate/publication job, unrecognized run, or additional draft fails closed.
+GitHub does not provide a conditional release DELETE, so operators must not
+manually mutate a policy-listed draft while Semantic Release is running; the
+single guarded helper minimizes the remaining read/delete interval.
+The tag and commit remain immutable historical evidence; `v5.8.1` is never
+published, downloadable, eligible for Latest, or used as an image alias. The
+next semantic version contains the server correction and all first-parent
+fixes after `v5.8.1`.
+
+The `v5.10.0` Package Release failed while cross-compiling the Windows server:
+the tagged source called POSIX-only `lstat` and `S_ISLNK` from a shared server
+source file. Its server image build succeeded, but its Windows server build
+failed before candidate finalization, publication, or any draft asset upload.
+The policy records exact draft ID `368181077`, tag commit
+`ebfe6588cf64f42c44715bcf45ec50cc056a91a5`, and failed run `31429488922`.
+The tag remains immutable unpublished historical evidence and is never used as
+an image alias. The next semantic version includes the portable staging-path
+correction.
 
 If the failed run reached complete-candidate validation but a defect in its
 tag-bound publication code makes a job rerun impossible, dispatch Package
@@ -87,7 +104,13 @@ gh workflow run package-release.yml --repo atrinik/classic --ref main \
 3. Semantic-release analyzes and formats only exact first-parent commits,
    creates the unprefixed tag and draft GitHub release notes, then dispatches
    Package Release from that exact immutable tag ref.
-4. The non-publishing Build Release Candidate workflow revalidates the tag,
+4. Package Release stages the public Discord Application ID from the
+   `discord-release` environment before invoking the reusable candidate
+   workflow. Environment secrets remain scoped to that top-level release job;
+   a one-day artifact carries only the validated public ID into the official
+   Windows client package. The environment deployment policy admits immutable
+   `v*` tag refs and `main` only for checked recovery.
+5. The non-publishing Build Release Candidate workflow revalidates the tag,
    draft, main ancestry, and successful aggregate check. GitHub exposes drafts
    only to tokens with push access, so production grants `contents: write` only
    to its metadata job; that job performs no mutations. Rehearsals remain
@@ -95,16 +118,16 @@ gh workflow run package-release.yml --repo atrinik/classic --ref main \
    Independent jobs build every artifact, install/import the wheel, consume the
    extracted same-version library archive, and build the root-context server
    image without publishing it.
-5. Package Release rechecks all hashes, attests the candidate, and reconciles
+6. Package Release rechecks all hashes, attests the candidate, and reconciles
    the draft assets: a matching partial upload is resumed, while any digest,
    size, state, name, or extra-asset mismatch fails without overwrite. It then
    publishes or verifies the same-version server image, locked-input labels,
    SLSA provenance, SPDX SBOM, and GitHub/Sigstore attestation.
-6. With all twelve assets and the image complete, the workflow publishes the
+7. With all twelve assets and the image complete, the workflow publishes the
    draft as its last release mutation and verifies that GitHub reports an
    immutable, non-prerelease release with the exact asset digests. A retry also
    accepts that exact published state and skips every immutable release write.
-7. A separate job dispatches the globally serialized Promote Latest Release
+8. A separate job dispatches the globally serialized Promote Latest Release
    workflow after successful publication. It selects the highest published
    unified semantic version regardless of publication order, revalidates its
    immutable closed asset set and exact versioned image, and reconciles both
@@ -241,8 +264,8 @@ draft with no packaging run may start Package Release from its exact tag ref;
 after that, recovery stays with the original run or its retained-candidate
 continuation. Never edit an already published
 immutable release for recovery; publish a correction as the next semantic
-version. The recorded pre-candidate `v5.8.1` exception above may delete only
-its exact empty draft so Semantic Release can advance; it does not generalize
+version. The recorded pre-candidate exceptions above may each delete only
+their exact empty draft so Semantic Release can advance; they do not generalize
 to another tag or any draft containing an asset. The mutable `latest` alias is
 convenience only. Its globally serialized
 promoter recomputes GitHub's latest complete immutable release on every run, and

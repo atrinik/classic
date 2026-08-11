@@ -217,20 +217,18 @@ static void load_srv_file(char *fname, FILE *listing) {
     free(compressed);
 }
 
-/** Create one owned asset-staging directory without accepting links or files. */
+/** Ensure one final asset-staging path component is a direct directory. */
 static void asset_staging_directory_prepare(const char *path) {
-    struct stat statbuf;
-    if (lstat(path, &statbuf) == 0) {
-        if (!S_ISDIR(statbuf.st_mode) || S_ISLNK(statbuf.st_mode)) {
-            LOG(ERROR, "Asset staging path is not a real directory: %s", path);
-            exit(EXIT_FAILURE);
-        }
+    path_directory_result_t result = path_ensure_real_directory(path, SAVE_MODE_DIR);
+    if (result == PATH_DIRECTORY_OK) {
         return;
     }
-    if (errno != ENOENT || mkdir(path, SAVE_MODE_DIR) != 0) {
-        LOG(ERROR, "Could not create asset staging directory %s: %s", path, strerror(errno));
-        exit(EXIT_FAILURE);
+    if (result == PATH_DIRECTORY_UNSAFE) {
+        LOG(ERROR, "Asset staging path is not a real directory: %s", path);
+    } else {
+        LOG(ERROR, "Could not inspect or create asset staging directory: %s", path);
     }
+    exit(EXIT_FAILURE);
 }
 
 /**

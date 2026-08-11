@@ -27,6 +27,7 @@ set(SOURCES
 	src/client/metaserver_directory.c
 	src/client/metaserver_direct.c
 	src/client/metaserver_identity.c
+	src/client/metaserver_options.c
 	src/client/misc.c
 	src/client/packet_payload.c
 	src/client/player.c
@@ -49,6 +50,7 @@ set(SOURCES
 	src/client/updates.c
 	src/client/upgrader.c
 	src/client/video.c
+	src/client/window_title.c
 	src/client/wrapper.c
 	src/events/event.c
 	src/events/keys.c

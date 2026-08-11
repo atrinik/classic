@@ -53,6 +53,15 @@ atrinik_find_root_document(ATRINIK_ATTRIBUTIONS_FILE ATTRIBUTIONS.md)
 option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
 option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
 option(ENABLE_COVERAGE "Enable GCC coverage instrumentation" OFF)
+if (ATRINIK_INTEGRATED_BUILD)
+    option(ATRINIK_SERVER_ENABLE_PRECOMPILED_HEADERS
+        "Precompile the server global header for the core object library" ON)
+else ()
+    option(ENABLE_PRECOMPILED_HEADERS
+        "Precompile the server global header for the core object library" ON)
+    set(ATRINIK_SERVER_ENABLE_PRECOMPILED_HEADERS
+        "${ENABLE_PRECOMPILED_HEADERS}")
+endif ()
 option(ENABLE_PYTHON_PLUGIN "Build the Python plugin" ON)
 set(PACKAGE_TYPE "none" CACHE STRING "Package type (none or zip)")
 
@@ -97,7 +106,7 @@ function(atrinik_configure_target target)
             message(FATAL_ERROR "ENABLE_COVERAGE requires GCC")
         endif ()
         target_compile_options(${target} PRIVATE
-            --coverage -fprofile-abs-path -O0 -g)
+            --coverage -fprofile-abs-path -fprofile-update=atomic -O0 -g)
         get_target_property(target_type ${target} TYPE)
         if (target_type MATCHES "^(EXECUTABLE|MODULE_LIBRARY|SHARED_LIBRARY)$")
             target_link_options(${target} PRIVATE --coverage)
@@ -172,18 +181,22 @@ if (NOT FETCHCONTENT_SOURCE_DIR_LIBATRINIK)
     endforeach ()
 endif ()
 
-FetchContent_Declare(atrinik_protocol
-    SOURCE_DIR "${FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL}")
-FetchContent_MakeAvailable(atrinik_protocol)
+if (NOT TARGET Atrinik::Protocol)
+    FetchContent_Declare(atrinik_protocol
+        SOURCE_DIR "${FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL}")
+    FetchContent_MakeAvailable(atrinik_protocol)
+endif ()
 file(STRINGS
     "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
     ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
 if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1076U$")
     message(FATAL_ERROR "Server requires classic game protocol v1076")
 endif ()
-set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
-atrinik_fetch_source(libatrinik "atrinik/libatrinik" "libatrinik")
-FetchContent_MakeAvailable(libatrinik)
+if (NOT TARGET Atrinik::Core)
+    set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
+    atrinik_fetch_source(libatrinik "atrinik/libatrinik" "libatrinik")
+    FetchContent_MakeAvailable(libatrinik)
+endif ()
 include(cmake/pcpnatpmp.cmake)
 
 set(EXECUTABLE atrinik-server)
@@ -237,6 +250,9 @@ add_library(atrinik-server-core OBJECT
     ${SOURCES_WORLD_MAKER}
     ${LEXERS_OUT})
 atrinik_configure_target(atrinik-server-core)
+if (ATRINIK_SERVER_ENABLE_PRECOMPILED_HEADERS)
+    target_precompile_headers(atrinik-server-core PRIVATE src/include/global.h)
+endif ()
 target_include_directories(atrinik-server-core BEFORE PRIVATE
     ${ATRINIK_SERVER_INCLUDE_DIRS})
 target_link_libraries(atrinik-server-core PRIVATE
@@ -385,14 +401,16 @@ if (BUILD_TESTING AND NOT MINGW)
             atrinik-server-core
             PkgConfig::CHECK_PKG)
 
-        set(ATRINIK_SERVER_TEST_RUNTIME
-            "${CMAKE_BINARY_DIR}/server-test-runtime")
+        set(ATRINIK_SERVER_TEST_RUNTIME_SEED
+            "${CMAKE_CURRENT_BINARY_DIR}/server-test-runtime-seed")
         set(ATRINIK_SERVER_TEST_RUNTIME_STAMP
-            "${ATRINIK_SERVER_TEST_RUNTIME}/.prepared")
+            "${ATRINIK_SERVER_TEST_RUNTIME_SEED}/.prepared")
+        set(ATRINIK_SERVER_TEST_RUNTIMES
+            "${CMAKE_CURRENT_BINARY_DIR}/server-test-runtimes")
         set(ATRINIK_SERVER_TEST_RUNTIME_ARGS
-            -DATRINIK_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -DATRINIK_BINARY_DIR=${CMAKE_BINARY_DIR}
-            -DATRINIK_RUNTIME_DIR=${ATRINIK_SERVER_TEST_RUNTIME}
+            -DATRINIK_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DATRINIK_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -DATRINIK_RUNTIME_DIR=${ATRINIK_SERVER_TEST_RUNTIME_SEED}
             -DATRINIK_ARENA_PLUGIN=$<TARGET_FILE:plugin_arena>)
         set(ATRINIK_SERVER_TEST_RUNTIME_DEPENDS plugin_arena)
         if (TARGET plugin_python)
@@ -407,16 +425,16 @@ if (BUILD_TESTING AND NOT MINGW)
         file(GLOB_RECURSE ATRINIK_SERVER_TEST_RESOURCE_INPUTS
             CONFIGURE_DEPENDS
             LIST_DIRECTORIES false
-            "${CMAKE_SOURCE_DIR}/runtime/content/*"
-            "${CMAKE_SOURCE_DIR}/install_data/*")
+            "${CMAKE_CURRENT_SOURCE_DIR}/runtime/content/*"
+            "${CMAKE_CURRENT_SOURCE_DIR}/install_data/*")
         list(APPEND ATRINIK_SERVER_TEST_RESOURCE_INPUTS
-            ${CMAKE_SOURCE_DIR}/ca-bundle.crt
-            ${CMAKE_SOURCE_DIR}/permissions.cfg
-            ${CMAKE_SOURCE_DIR}/server.cfg
-            ${CMAKE_SOURCE_DIR}/dependencies.lock.json
-            ${CMAKE_SOURCE_DIR}/src/tests/data/content_benchmark
-            ${CMAKE_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_fail.py
-            ${CMAKE_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_pass.py)
+            ${CMAKE_CURRENT_SOURCE_DIR}/ca-bundle.crt
+            ${CMAKE_CURRENT_SOURCE_DIR}/permissions.cfg
+            ${CMAKE_CURRENT_SOURCE_DIR}/server.cfg
+            ${CMAKE_CURRENT_SOURCE_DIR}/dependencies.lock.json
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/content_benchmark
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_fail.py
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_pass.py)
         if (TARGET plugin_python)
             list(APPEND ATRINIK_SERVER_TEST_RESOURCE_INPUTS
                 ${ATRINIK_GAME_COMMANDS_HEADER})
@@ -426,35 +444,46 @@ if (BUILD_TESTING AND NOT MINGW)
             OUTPUT "${ATRINIK_SERVER_TEST_RUNTIME_STAMP}"
             COMMAND ${CMAKE_COMMAND}
                 ${ATRINIK_SERVER_TEST_RUNTIME_ARGS}
-                -P ${CMAKE_SOURCE_DIR}/cmake/prepare_server_test_runtime.cmake
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/prepare_server_test_runtime.cmake
             DEPENDS
                 ${ATRINIK_SERVER_TEST_RUNTIME_DEPENDS}
                 ${ATRINIK_SERVER_TEST_RESOURCE_INPUTS}
-                ${CMAKE_SOURCE_DIR}/cmake/prepare_locked_content_python_unit.cmake
-                ${CMAKE_SOURCE_DIR}/cmake/prepare_server_test_runtime.cmake
+                ${CMAKE_CURRENT_SOURCE_DIR}/cmake/prepare_locked_content_python_unit.cmake
+                ${CMAKE_CURRENT_SOURCE_DIR}/cmake/prepare_server_test_runtime.cmake
             COMMENT "Preparing isolated server test runtime..."
             VERBATIM)
-        add_custom_target(server-test-runtime
+        add_custom_target(server-test-runtime-seed
             DEPENDS "${ATRINIK_SERVER_TEST_RUNTIME_STAMP}")
-        add_dependencies(atrinik-server-tests server-test-runtime)
+        add_dependencies(atrinik-server-tests server-test-runtime-seed)
+        set(ATRINIK_SERVER_TEST_RUNNER
+            ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/run_isolated_test.py
+            --seed ${ATRINIK_SERVER_TEST_RUNTIME_SEED}
+            --runtimes ${ATRINIK_SERVER_TEST_RUNTIMES}
+            --timeout 270)
 
         foreach (suite IN LISTS ATRINIK_SERVER_UNIT_SUITES)
             add_test(NAME server-unit-${suite}
-                COMMAND atrinik-server-tests
+                COMMAND ${ATRINIK_SERVER_TEST_RUNNER}
+                    --name server-unit-${suite}
+                    --
+                    $<TARGET_FILE:atrinik-server-tests>
                     --unit
                     --logger_filter_stdout=-info,-devel
                     --port_mapping=off)
             set_tests_properties(server-unit-${suite} PROPERTIES
                 ENVIRONMENT "ATRINIK_TEST_SUITE=${suite}"
                 LABELS "server;unit"
-                RESOURCE_LOCK server-test-runtime
                 TIMEOUT 300
-                WORKING_DIRECTORY "${ATRINIK_SERVER_TEST_RUNTIME}/server")
+                WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
         endforeach ()
 
         if (ENABLE_SANITIZERS)
             add_test(NAME server-lsan-smoke
-                COMMAND atrinik-server-tests
+                COMMAND ${ATRINIK_SERVER_TEST_RUNNER}
+                    --name server-lsan-smoke
+                    --
+                    $<TARGET_FILE:atrinik-server-tests>
                     --unit
                     --logger_filter_stdout=-info,-devel
                     --port_mapping=off)
@@ -462,82 +491,96 @@ if (BUILD_TESTING AND NOT MINGW)
                 ENVIRONMENT
                     "ASAN_OPTIONS=detect_leaks=1;ATRINIK_TEST_SUITE=toolkit.string;CK_FORK=no"
                 LABELS "server;unit;sanitizer;lsan"
-                RESOURCE_LOCK server-test-runtime
                 TIMEOUT 300
-                WORKING_DIRECTORY "${ATRINIK_SERVER_TEST_RUNTIME}/server")
+                WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
         endif ()
 
         if (TARGET plugin_python)
             add_test(NAME server-plugin-python
-                COMMAND ${CMAKE_COMMAND}
+                COMMAND ${ATRINIK_SERVER_TEST_RUNNER}
+                    --name server-plugin-python
+                    --copy-python-maps
+                    --
+                    ${CMAKE_COMMAND}
                     -DATRINIK_SERVER=$<TARGET_FILE:${EXECUTABLE}>
-                    -DATRINIK_RUNTIME_DIR=${ATRINIK_SERVER_TEST_RUNTIME}/server
+                    -DATRINIK_RUNTIME_DIR=.
                     -DATRINIK_UNIT_SCRIPT=python_unit_content.py
                     -DATRINIK_EXPECT_FAILURE=false
-                    -P ${CMAKE_SOURCE_DIR}/cmake/run_plugin_unit_test.cmake)
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_plugin_unit_test.cmake)
             set_tests_properties(server-plugin-python PROPERTIES
                 LABELS "server;plugin;runtime"
-                RESOURCE_LOCK server-test-runtime
                 TIMEOUT 300
-                WORKING_DIRECTORY "${ATRINIK_SERVER_TEST_RUNTIME}/server")
+                WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
             add_test(NAME server-plugin-python-fixture-pass
-                COMMAND ${CMAKE_COMMAND}
+                COMMAND ${ATRINIK_SERVER_TEST_RUNNER}
+                    --name server-plugin-python-fixture-pass
+                    --copy-python-maps
+                    --
+                    ${CMAKE_COMMAND}
                     -DATRINIK_SERVER=$<TARGET_FILE:${EXECUTABLE}>
-                    -DATRINIK_RUNTIME_DIR=${ATRINIK_SERVER_TEST_RUNTIME}/server
+                    -DATRINIK_RUNTIME_DIR=.
                     -DATRINIK_UNIT_SCRIPT=python_unit_pass.py
                     -DATRINIK_EXPECT_FAILURE=false
-                    -P ${CMAKE_SOURCE_DIR}/cmake/run_plugin_unit_test.cmake)
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_plugin_unit_test.cmake)
             set_tests_properties(server-plugin-python-fixture-pass PROPERTIES
                 LABELS "server;plugin;runtime"
-                RESOURCE_LOCK server-test-runtime
                 TIMEOUT 300
-                WORKING_DIRECTORY "${ATRINIK_SERVER_TEST_RUNTIME}/server")
+                WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
             add_test(NAME server-plugin-python-fixture-fail
-                COMMAND ${CMAKE_COMMAND}
+                COMMAND ${ATRINIK_SERVER_TEST_RUNNER}
+                    --name server-plugin-python-fixture-fail
+                    --copy-python-maps
+                    --
+                    ${CMAKE_COMMAND}
                     -DATRINIK_SERVER=$<TARGET_FILE:${EXECUTABLE}>
-                    -DATRINIK_RUNTIME_DIR=${ATRINIK_SERVER_TEST_RUNTIME}/server
+                    -DATRINIK_RUNTIME_DIR=.
                     -DATRINIK_UNIT_SCRIPT=python_unit_fail.py
                     -DATRINIK_EXPECT_FAILURE=true
-                    -P ${CMAKE_SOURCE_DIR}/cmake/run_plugin_unit_test.cmake)
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_plugin_unit_test.cmake)
             set_tests_properties(server-plugin-python-fixture-fail PROPERTIES
                 LABELS "server;plugin;runtime"
-                RESOURCE_LOCK server-test-runtime
                 TIMEOUT 300
-                WORKING_DIRECTORY "${ATRINIK_SERVER_TEST_RUNTIME}/server")
+                WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
         endif ()
 
         add_test(NAME server-content-benchmark
-            COMMAND ${EXECUTABLE}
+            COMMAND ${ATRINIK_SERVER_TEST_RUNNER}
+                --name server-content-benchmark
+                --
+                $<TARGET_FILE:${EXECUTABLE}>
                 --content_benchmark=/tests/content_benchmark
                 --content_benchmark_iterations=2
                 --port_mapping=off)
         set_tests_properties(server-content-benchmark PROPERTIES
             LABELS "server;runtime;benchmark"
-            RESOURCE_LOCK server-test-runtime
             TIMEOUT 300
-            WORKING_DIRECTORY "${ATRINIK_SERVER_TEST_RUNTIME}/server")
+            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
         add_test(NAME server-assetspath-migration
-            COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/src/tests/assetspath_migration.py
+            COMMAND ${ATRINIK_SERVER_TEST_RUNNER}
+                --name server-assetspath-migration
+                --
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/assetspath_migration.py
                 $<TARGET_FILE:${EXECUTABLE}>)
         set_tests_properties(server-assetspath-migration PROPERTIES
             LABELS "server;runtime"
-            RESOURCE_LOCK server-test-runtime
+            PROCESSORS 4
             TIMEOUT 300
-            WORKING_DIRECTORY "${ATRINIK_SERVER_TEST_RUNTIME}/server")
+            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
         add_custom_target(check
             COMMAND ${CMAKE_CTEST_COMMAND}
-                --test-dir ${CMAKE_BINARY_DIR}
+                --test-dir ${CMAKE_CURRENT_BINARY_DIR}
                 --output-on-failure
+                --parallel 4
                 -L server
             DEPENDS
                 atrinik-server-tests
                 ${EXECUTABLE}
-                server-test-runtime
+                server-test-runtime-seed
             COMMENT "Executing server tests..."
             VERBATIM)
     else ()
@@ -594,7 +637,7 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
     install(DIRECTORY "${ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR}/"
         DESTINATION server)
     install(DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/maps"
-        DESTINATION .
+        DESTINATION server
         PATTERN ".git" EXCLUDE)
     install(DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/lib/"
         DESTINATION server/lib)
@@ -611,7 +654,7 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
         permissions.cfg
         server.bat
         server.cfg
-        ${CMAKE_SOURCE_DIR}/server-custom.cfg.example
+        ${CMAKE_CURRENT_SOURCE_DIR}/server-custom.cfg.example
         DESTINATION server)
 
     set(CPACK_PACKAGE_DESCRIPTION_SUMMARY

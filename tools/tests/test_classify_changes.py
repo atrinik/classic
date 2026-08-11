@@ -57,9 +57,11 @@ class ClassifyChangesTests(unittest.TestCase):
 
     def test_libatrinik_and_ci_contract_changes_select_windows_tests(self) -> None:
         for path in (
+            "CMakeLists.txt",
             "client/src/client/main.c",
             "libatrinik/path.c",
             "protocol/generated/c/commands.c",
+            "server/src/socket/init.c",
             "tools/ci/classify_changes.py",
             ".github/workflows/check.yml",
         ):
@@ -180,7 +182,7 @@ class ClassifyChangesTests(unittest.TestCase):
                 self.assertEqual(
                     values["windows"],
                     "true"
-                    if changed.startswith(("client/", "libatrinik/"))
+                    if changed.startswith(("client/", "server/", "libatrinik/"))
                     else "false",
                 )
                 matrix = json.loads(values["codeql_matrix"])

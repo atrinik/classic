@@ -21,3 +21,8 @@ and server resources are installed from the release archives recorded in
 coordinated local work. Independently pinned third-party sources such as
 libpcpnatpmp retain their checksum-verified FetchContent fallback; use
 `FETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP` to supply an existing local source tree.
+
+The server core object library precompiles `src/include/global.h` by default.
+Pass `-DENABLE_PRECOMPILED_HEADERS=OFF` for a conventional build. See
+`../docs/BUILD_ACCELERATION.md` for the benchmark procedure, measurements, and
+invalidation tradeoffs.

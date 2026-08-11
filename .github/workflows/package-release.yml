@@ -19,7 +19,7 @@ permissions:
   packages: read
 
 concurrency:
-  group: classic-package-release-${{ inputs.tag }}
+  group: classic-release-publication
   cancel-in-progress: false
 
 jobs:
@@ -111,10 +111,39 @@ jobs:
             --recovery-main \
             --github-output "${GITHUB_OUTPUT}"
 
-  candidate:
-    name: Build and validate immutable candidate
+  discord-config:
+    name: Stage Discord application configuration
     needs: preflight
     if: inputs.candidate_run_id == ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    environment: discord-release
+    steps:
+      - name: Validate the release-only public Application ID
+        env:
+          DISCORD_APPLICATION_ID: ${{ secrets.DISCORD_APPLICATION_ID }}
+        run: |
+          [[ ${DISCORD_APPLICATION_ID} =~ ^[1-9][0-9]{0,19}$ ]]
+          python3 -c 'import os, sys; value = int(os.environ["DISCORD_APPLICATION_ID"]); sys.exit(0 if value <= 18446744073709551615 else 1)'
+          umask 077
+          mkdir -p build/discord-config
+          printf '%s\n' "${DISCORD_APPLICATION_ID}" > \
+            build/discord-config/discord-application-id
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: discord-application-id-${{ inputs.tag }}
+          path: build/discord-config/discord-application-id
+          if-no-files-found: error
+          retention-days: 1
+
+  candidate:
+    name: Build and validate immutable candidate
+    needs: [preflight, discord-config]
+    if: >-
+      always() &&
+      inputs.candidate_run_id == '' &&
+      needs.preflight.result == 'success' &&
+      needs.discord-config.result == 'success'
     permissions:
       actions: read
       checks: read

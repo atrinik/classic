@@ -36,8 +36,10 @@ WINDOWS_TEST_PREFIXES = (
     "client/",
     "libatrinik/",
     "protocol/",
+    "server/",
     "tools/ci/",
 )
+WINDOWS_TEST_PATHS = {"CMakeLists.txt"}
 
 
 class ClassificationError(RuntimeError):
@@ -100,7 +102,10 @@ def classify(
     server = full or any(
         path.startswith("server/") or is_native_shared(path) for path in checked
     )
-    windows = full or any(path.startswith(WINDOWS_TEST_PREFIXES) for path in checked)
+    windows = full or any(
+        path in WINDOWS_TEST_PATHS or path.startswith(WINDOWS_TEST_PREFIXES)
+        for path in checked
+    )
 
     codeql_client = full or any(path.startswith("client/") for path in checked)
     codeql_server = full or any(path.startswith("server/") for path in checked)

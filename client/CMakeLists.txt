@@ -53,6 +53,15 @@ atrinik_find_root_document(ATRINIK_ATTRIBUTIONS_FILE ATTRIBUTIONS.md)
 option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
 option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
 option(ENABLE_COVERAGE "Enable GCC coverage instrumentation" OFF)
+if (ATRINIK_INTEGRATED_BUILD)
+    option(ATRINIK_CLIENT_ENABLE_PRECOMPILED_HEADERS
+        "Precompile the client global header for the main executable" ON)
+else ()
+    option(ENABLE_PRECOMPILED_HEADERS
+        "Precompile the client global header for the main executable" ON)
+    set(ATRINIK_CLIENT_ENABLE_PRECOMPILED_HEADERS
+        "${ENABLE_PRECOMPILED_HEADERS}")
+endif ()
 set(PACKAGE_TYPE "none" CACHE STRING "Package type (none, deb, rpm, nsis, or zip)")
 set(ATRINIK_DISCORD_APPLICATION_ID_FILE "" CACHE FILEPATH
     "Optional file containing the public Discord Application ID")
@@ -204,18 +213,22 @@ if (NOT FETCHCONTENT_SOURCE_DIR_LIBATRINIK)
     endforeach ()
 endif ()
 
-FetchContent_Declare(atrinik_protocol
-    SOURCE_DIR "${FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL}")
-FetchContent_MakeAvailable(atrinik_protocol)
+if (NOT TARGET Atrinik::Protocol)
+    FetchContent_Declare(atrinik_protocol
+        SOURCE_DIR "${FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL}")
+    FetchContent_MakeAvailable(atrinik_protocol)
+endif ()
 file(STRINGS
     "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
     ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
 if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1076U$")
     message(FATAL_ERROR "Client requires classic game protocol v1076")
 endif ()
-set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
-atrinik_fetch_source(libatrinik "atrinik/libatrinik" "libatrinik")
-FetchContent_MakeAvailable(libatrinik)
+if (NOT TARGET Atrinik::Core)
+    set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
+    atrinik_fetch_source(libatrinik "atrinik/libatrinik" "libatrinik")
+    FetchContent_MakeAvailable(libatrinik)
+endif ()
 
 set(EXECUTABLE atrinik)
 set(PACKAGE_NAME "Atrinik Client")
@@ -261,6 +274,9 @@ endif ()
 # Compile the sources into an executable.
 add_executable(${EXECUTABLE} WIN32 ${SOURCES})
 atrinik_configure_target(${EXECUTABLE})
+if (ATRINIK_CLIENT_ENABLE_PRECOMPILED_HEADERS)
+    target_precompile_headers(${EXECUTABLE} PRIVATE src/include/global.h)
+endif ()
 target_compile_definitions(${EXECUTABLE} PRIVATE SDL_DISABLE_OLD_NAMES)
 target_include_directories(${EXECUTABLE} BEFORE PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/src/include
@@ -299,7 +315,7 @@ if (MINGW)
         COMMAND ${CMAKE_COMMAND}
             "-DATRINIK_OBJDUMP=${CMAKE_OBJDUMP}"
             "-DATRINIK_CLIENT_EXECUTABLE=$<TARGET_FILE:${EXECUTABLE}>"
-            -P "${CMAKE_SOURCE_DIR}/cmake/verify_windows_client_sound.cmake"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_windows_client_sound.cmake"
         COMMENT "Verifying that the Windows client imports SDL3_mixer"
         VERBATIM)
 endif ()
@@ -330,6 +346,25 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
     target_link_libraries(client-stun-config-tests PRIVATE Atrinik::Core)
     add_test(NAME client-stun-config COMMAND client-stun-config-tests)
+
+    add_executable(client-metaserver-options-tests
+        src/tests/metaserver_options.c
+        src/client/metaserver_options.c)
+    atrinik_configure_target(client-metaserver-options-tests)
+    target_include_directories(client-metaserver-options-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-metaserver-options-tests PRIVATE Atrinik::Core)
+    add_test(NAME client-metaserver-options COMMAND client-metaserver-options-tests)
+
+    add_executable(client-window-title-tests
+        src/tests/window_title.c
+        src/client/window_title.c)
+    atrinik_configure_target(client-window-title-tests)
+    target_include_directories(client-window-title-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-window-title-tests PRIVATE SDL3::SDL3)
+    add_test(NAME client-window-title COMMAND client-window-title-tests)
 
     add_executable(client-metaserver-directory-tests
         src/tests/metaserver_directory.c
@@ -683,7 +718,7 @@ if (NOT WIN32 OR UNIX)
     install(TARGETS atrinik DESTINATION ${INSTALL_SUBDIR_BIN})
 endif ()
 install(FILES
-        ${CMAKE_SOURCE_DIR}/INSTALL
+        ${CMAKE_CURRENT_SOURCE_DIR}/INSTALL
         ${CMAKE_CURRENT_SOURCE_DIR}/README.md
         ${ATRINIK_LICENSE_FILE}
         ${ATRINIK_ATTRIBUTIONS_FILE}

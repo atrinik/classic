@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import sys
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "ci" / "require_checks.py"
@@ -29,6 +31,39 @@ class RequireChecksTests(unittest.TestCase):
         require_checks.require_component("native Windows", "true", "success")
         with self.assertRaisesRegex(require_checks.CheckResultError, "did not succeed"):
             require_checks.require_component("native Windows", "true", "skipped")
+
+    def test_selected_integrated_check_must_succeed(self) -> None:
+        require_checks.require_component("integrated", "true", "success")
+        with self.assertRaisesRegex(require_checks.CheckResultError, "did not succeed"):
+            require_checks.require_component("integrated", "true", "failure")
+
+    def test_classic_aggregator_accepts_integrated_success(self) -> None:
+        arguments = [
+            "require_checks.py",
+            "classic",
+            "--classifier-result",
+            "success",
+            "--core-result",
+            "success",
+            "--client-required",
+            "true",
+            "--client-result",
+            "success",
+            "--server-required",
+            "true",
+            "--server-result",
+            "success",
+            "--integrated-required",
+            "true",
+            "--integrated-result",
+            "success",
+            "--windows-required",
+            "true",
+            "--windows-result",
+            "success",
+        ]
+        with mock.patch.object(sys, "argv", arguments):
+            self.assertEqual(require_checks.main(), 0)
 
     def test_missing_or_malformed_classifier_output_fails_closed(self) -> None:
         for required in ("", "TRUE", "yes", "0"):

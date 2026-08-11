@@ -38,6 +38,7 @@
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 #include <toolkit/clioptions.h>
+#include <window_title.h>
 #include <toolkit/path.h>
 #include <resources.h>
 #include <player_view.h>
@@ -423,12 +424,7 @@ void clioption_settings_deinit(void) {
 
     free(clioption_settings.servers);
 
-    for (i = 0; i < clioption_settings.metaservers_num; i++) {
-        free(clioption_settings.metaservers[i].directory_url);
-        free(clioption_settings.metaservers[i].rendezvous_origin);
-    }
-
-    free(clioption_settings.metaservers);
+    client_metaserver_options_deinit(&clioption_settings.metaservers);
 
     for (i = 0; i < arraysize(clioption_settings.connect); i++) {
         free(clioption_settings.connect[i]);
@@ -470,49 +466,9 @@ static const char *const clioptions_option_metaserver_desc =
     " --metaserver=\"https://classic.meta.example/index.xml "
     "https://rendezvous.meta.example/v1/classic\"";
 
-static bool clioptions_metaserver_word(const char **cursor, char *word, size_t word_size) {
-    const char *start = *cursor;
-    while (*start == ' ') {
-        start++;
-    }
-    const char *end = strchr(start, ' ');
-    size_t size = end != NULL ? (size_t)(end - start) : strlen(start);
-    if (size == 0 || size >= word_size) {
-        return false;
-    }
-    memcpy(word, start, size);
-    word[size] = '\0';
-    *cursor = end != NULL ? end : start + size;
-    return true;
-}
-
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_metaserver(const char *arg, char **errmsg) {
-    char directory_url[MAX_BUF];
-    char rendezvous_origin[MAX_BUF];
-    char rendered[MAX_BUF];
-    const char *cursor = arg;
-    static const char identity[] =
-        "0000000000000000000000000000000000000000000000000000000000000000";
-    if (!clioptions_metaserver_word(&cursor, VS(directory_url)) ||
-        !clioptions_metaserver_word(&cursor, VS(rendezvous_origin)) || *cursor != '\0' ||
-        !metaserver_url_directory_valid(directory_url) ||
-        !metaserver_url_rendezvous(rendezvous_origin, identity, "client", VS(rendered))) {
-        string_fmt(*errmsg,
-                   "%s",
-                   "metaserver requires one canonical directory URL and one canonical "
-                   "rendezvous origin");
-        return false;
-    }
-    clioption_settings.metaservers = xreallocarray(clioption_settings.metaservers,
-                                                   clioption_settings.metaservers_num + 1,
-                                                   sizeof(*clioption_settings.metaservers));
-    client_metaserver_endpoint_t *endpoint =
-        &clioption_settings.metaservers[clioption_settings.metaservers_num];
-    endpoint->directory_url = xstrdup(directory_url);
-    endpoint->rendezvous_origin = xstrdup(rendezvous_origin);
-    clioption_settings.metaservers_num++;
-    return true;
+    return client_metaserver_options_parse(&clioption_settings.metaservers, arg, errmsg);
 }
 
 /**
@@ -611,10 +567,11 @@ static bool clioptions_option_stun_server(const char *arg, char **errmsg) {
 /**
  * Description of the --nometa command.
  */
-static const char *clioptions_option_nometa_desc = "Do not query the metaserver.";
+static const char *clioptions_option_nometa_desc =
+    "Disable metaserver access and discard previously configured endpoints.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_nometa(const char *arg, char **errmsg) {
-    metaserver_disable();
+    client_metaserver_options_disable(&clioption_settings.metaservers);
     return true;
 }
 
@@ -761,6 +718,8 @@ int main(int argc, char *argv[]) {
     free(path);
 
     clioptions_parse(argc, argv);
+
+    client_window_title_init(getenv(CLIENT_LAUNCH_LABEL_ENV));
 
     logger_open_log(LOG_FILE);
     LOG(INFO,
