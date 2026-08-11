@@ -250,21 +250,30 @@ static void test_legacy_upgrader(void) {
     TEST_CHECK(legacy != NULL);
     TEST_CHECK(fputs("102 1 \"f\" \"?M_FIRE_READY\"\n"
                      "273 0 \"up\" \"?M_HELP\"\n"
-                     "120 1 \"x\" \"/legacy-custom\"\n",
+                     "120 1 \"x\" \"/legacy-custom\"\n"
+                     "121 1 \"y\" \"/existing-legacy\"\n"
+                     "122 1 \"z\" \"?M_MCONfoo\"\n"
+                     "119 0 \"w\" \"?M_MCONfoo\"\n"
+                     "-1 0 \"invalid\" \"/negative-key\"\n"
+                     "malformed\n"
+                     "118 0 \"v\" \"?M_UNKNOWN\"\n"
+                     "117 0 \"u\" \"?M_TARGET_ENEMY\"\n"
+                     "116 0 \"t\" \"plain-command\"\n",
                      legacy) >= 0);
     TEST_CHECK(fclose(legacy) == 0);
 
     keybind_fixture =
         "keycode_format " KEYBIND_KEYCODE_FORMAT "\nbind\nkey 102\ncommand ?FIRE_READY\nend\n"
         "bind\nkey 103\nmod 3\nrepeat 1\ncommand ?FIRE_READY_CUSTOM\nend\n"
-        "bind\nkey 293\nmod 192\nrepeat 1\ncommand ?HELP\nend\n";
+        "bind\nkey 293\nmod 192\nrepeat 1\ncommand ?HELP\nend\n"
+        "bind\nkey 97\ncommand /existing-legacy\nend\n";
     upgrader_init();
     TEST_CHECK(access(upgrader_version_25, R_OK) == 0);
     TEST_CHECK(access(upgrader_version_30, R_OK) == 0);
 
     keybind_fixture = NULL;
     keybind_load();
-    TEST_CHECK(keybindings_num == 3);
+    TEST_CHECK(keybindings_num == 5);
     TEST_CHECK(!strcmp(keybindings[0]->command, "?FIRE_READY_CUSTOM"));
     TEST_CHECK(keybindings[0]->key == SDLK_G);
     TEST_CHECK(keybindings[0]->mod == SDL_KMOD_SHIFT);
@@ -273,24 +282,36 @@ static void test_legacy_upgrader(void) {
     TEST_CHECK(keybindings[1]->key == SDLK_UP);
     TEST_CHECK(keybindings[1]->mod == SDL_KMOD_CTRL);
     TEST_CHECK(keybindings[1]->repeat == 1);
-    TEST_CHECK(!strcmp(keybindings[2]->command, "/legacy-custom"));
-    TEST_CHECK(keybindings[2]->key == SDLK_X);
+    TEST_CHECK(!strcmp(keybindings[2]->command, "/existing-legacy"));
+    TEST_CHECK(keybindings[2]->key == SDLK_Y);
     TEST_CHECK(keybindings[2]->mod == SDL_KMOD_NONE);
     TEST_CHECK(keybindings[2]->repeat == 1);
+    TEST_CHECK(!strcmp(keybindings[3]->command, "/legacy-custom"));
+    TEST_CHECK(keybindings[3]->key == SDLK_X);
+    TEST_CHECK(keybindings[3]->mod == SDL_KMOD_NONE);
+    TEST_CHECK(keybindings[3]->repeat == 1);
+    TEST_CHECK(!strcmp(keybindings[4]->command, "?MCON foo"));
+    TEST_CHECK(keybindings[4]->key == SDLK_Z);
+    TEST_CHECK(keybindings[4]->mod == SDL_KMOD_NONE);
+    TEST_CHECK(keybindings[4]->repeat == 1);
 
     upgrader_init();
     keybind_save();
     keybind_fixture_reset();
     keybind_load();
-    TEST_CHECK(keybindings_num == 3);
+    TEST_CHECK(keybindings_num == 5);
     TEST_CHECK(keybindings[0]->key == SDLK_G);
     TEST_CHECK(keybindings[0]->mod == SDL_KMOD_SHIFT);
     TEST_CHECK(keybindings[0]->repeat == 1);
     TEST_CHECK(keybindings[1]->key == SDLK_UP);
     TEST_CHECK(keybindings[1]->mod == SDL_KMOD_CTRL);
     TEST_CHECK(keybindings[1]->repeat == 1);
-    TEST_CHECK(keybindings[2]->key == SDLK_X);
+    TEST_CHECK(keybindings[2]->key == SDLK_Y);
     TEST_CHECK(keybindings[2]->repeat == 1);
+    TEST_CHECK(keybindings[3]->key == SDLK_X);
+    TEST_CHECK(keybindings[3]->repeat == 1);
+    TEST_CHECK(keybindings[4]->key == SDLK_Z);
+    TEST_CHECK(keybindings[4]->repeat == 1);
     keybind_fixture_reset();
 
     TEST_CHECK(remove(ATRINIK_TEST_BINARY_DIR "/keybind-roundtrip.dat") == 0);
