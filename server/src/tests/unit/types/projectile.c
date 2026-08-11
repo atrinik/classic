@@ -444,6 +444,20 @@ START_TEST(test_archery_rejects_nonphysical_and_invalid_sources) {
     target = projectile_test_target(map, pl);
     target->direction = 3;
     arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
+    CLEAR_FLAG(arrow, FLAG_IS_MISSILE);
+    SET_FLAG(arrow, FLAG_IS_SPELL);
+    ck_assert_int_eq(common_object_projectile_hit(arrow, target), OBJECT_METHOD_OK);
+    ck_assert_int_eq(target->last_damage, TEST_BASE_DAMAGE);
+
+    target = projectile_test_target(map, pl);
+    target->direction = 3;
+    arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
+    SET_FLAG(arrow, FLAG_IS_THROWN);
+    ck_assert_int_eq(projectile_test_hit(arrow, target), TEST_BASE_DAMAGE);
+
+    target = projectile_test_target(map, pl);
+    target->direction = 3;
+    arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
     arrow->type = BULLET;
     CLEAR_FLAG(arrow, FLAG_IS_MISSILE);
     SET_FLAG(arrow, FLAG_IS_SPELL);
@@ -463,7 +477,7 @@ START_TEST(test_archery_rejects_nonphysical_and_invalid_sources) {
     object_owner_set(arrow, npc);
     ck_assert_int_eq(projectile_test_hit(arrow, target), TEST_BASE_DAMAGE);
 
-    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS), 0);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS), 1);
     ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 0);
 }
 END_TEST

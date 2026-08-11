@@ -68,7 +68,9 @@ archery_bonus_calculate(object *projectile, object *victim, object *owner, int b
     archery_bonus_t bonus = {.damage = base_damage};
 
     if (base_damage <= 0 || projectile->type != ARROW ||
-        !OBJECT_IS_PROJECTILE(projectile) || owner == NULL || owner->type != PLAYER ||
+        !OBJECT_IS_PROJECTILE(projectile) || !QUERY_FLAG(projectile, FLAG_IS_MISSILE) ||
+        QUERY_FLAG(projectile, FLAG_IS_SPELL) || QUERY_FLAG(projectile, FLAG_IS_THROWN) ||
+        owner == NULL || owner->type != PLAYER ||
         projectile->chosen_skill == NULL ||
         !SKILL_IS_ARCHERY(projectile->chosen_skill->stats.sp) || victim->type != MONSTER) {
         return bonus;
@@ -453,7 +455,9 @@ int common_object_projectile_hit(object *op, object *victim) {
         int dam;
         tag_t owner_count = owner != NULL ? owner->count : 0;
         bool metrics_projectile =
-            op->type == ARROW && OBJECT_IS_PROJECTILE(op) && owner != NULL && owner->type == PLAYER;
+            op->type == ARROW && OBJECT_IS_PROJECTILE(op) &&
+            QUERY_FLAG(op, FLAG_IS_MISSILE) && !QUERY_FLAG(op, FLAG_IS_SPELL) && owner != NULL &&
+            owner->type == PLAYER;
         archery_bonus_t bonus = archery_bonus_calculate(op, victim, owner, op->stats.dam);
 
         op = projectile_stick(op, victim);
