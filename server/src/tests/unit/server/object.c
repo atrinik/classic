@@ -79,14 +79,17 @@ START_TEST(test_object_can_merge) {
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob2);
     ob2 = arch_get("bolt");
+    FREE_AND_COPY_HASH(ob2->name_pl, "custom bolts one");
     ob2->type++;
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob2);
     ob2 = arch_get("bolt");
+    FREE_AND_COPY_HASH(ob2->name_pl, "custom bolts one");
     ob2->light_color = UINT32_C(0xff0000);
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob2);
     ob2 = arch_get("bolt");
+    FREE_AND_COPY_HASH(ob2->name_pl, "custom bolts one");
     ob1->nrof = INT32_MAX;
     ob2->nrof = 1;
     ck_assert(!object_can_merge(ob1, ob2));
