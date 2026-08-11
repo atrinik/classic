@@ -50,26 +50,39 @@ static void process_func(object *op) {
 
     victim = HEAD(victim);
 
-    OBJECTS_DESTROYED_BEGIN(op, victim) {
-        if (op->stats.dam > 0) {
-            attack_hit(victim, op, op->stats.dam);
-        } else {
-            attack_hit(victim, op, MAX(1.0, -victim->stats.maxhp * op->stats.dam / 100.0));
-        }
+    if (op->stats.dam != 0) {
+        OBJECTS_DESTROYED_BEGIN(op, victim) {
+            int damage = op->stats.dam;
+            if (damage < 0) {
+                damage = 0;
+                if (victim->stats.hp > 1) {
+                    int64_t percentage_damage = -(int64_t)victim->stats.maxhp * op->stats.dam / 100;
+                    damage = MIN(MAX(1, percentage_damage), (int64_t)victim->stats.hp - 1);
+                }
+            }
 
-        if (OBJECTS_DESTROYED_ANY(op, victim)) {
-            return;
+            if (damage > 0) {
+                attack_hit(victim, op, damage);
+            }
+
+            if (OBJECTS_DESTROYED_ANY(op, victim)) {
+                return;
+            }
         }
+        OBJECTS_DESTROYED_END();
     }
-    OBJECTS_DESTROYED_END();
 
-    int sp_reduce;
+    int sp_reduce = 0;
     if (op->stats.maxsp > 0) {
         sp_reduce = op->stats.maxsp;
-    } else {
-        sp_reduce = MAX(1.0, victim->stats.maxsp * op->stats.maxsp / 100.0);
+    } else if (op->stats.maxsp < 0) {
+        int64_t percentage_reduce = -(int64_t)victim->stats.maxsp * op->stats.maxsp / 100;
+        sp_reduce = MAX(1, percentage_reduce);
     }
-    victim->stats.sp = MAX(0, victim->stats.sp - sp_reduce);
+
+    if (sp_reduce > 0) {
+        victim->stats.sp = MAX(0, victim->stats.sp - sp_reduce);
+    }
 
     /* Create the symptom's "other arch" object and drop it here
      * under every part of the monster. */
