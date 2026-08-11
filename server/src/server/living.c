@@ -1063,20 +1063,15 @@ void living_update_player(object *op) {
     /* Calculate real speed */
     op->speed += bonus_speed / 10.0f;
 
-    /* Put a lower limit on speed. Note with this speed, you move once every
-     * 100 ticks or so. This amounts to once every 12 seconds of realtime. */
     op->speed = op->speed * speed_reduce_from_disease;
 
-    /* Don't reduce under this value */
-    if (op->speed < 0.01f) {
-        op->speed = 0.01f;
-    } else if (!pl->tgm) {
+    if (!pl->tgm) {
         /* Max kg we can carry */
         double f = (weight_limit[op->stats.Str] / 100.0f) * ENCUMBRANCE_LIMIT;
 
         if (op->carrying > f) {
             if (op->carrying >= weight_limit[op->stats.Str]) {
-                op->speed = 0.01f;
+                op->speed = 0.0;
             } else {
                 /* Total encumbrance weight part */
                 f = (weight_limit[op->stats.Str] - f);
@@ -1090,12 +1085,15 @@ void living_update_player(object *op) {
                 }
 
                 op->speed *= f;
-
-                if (op->speed < 0.01f) {
-                    op->speed = 0.01f;
-                }
             }
         }
+    }
+
+    /* Apply the ordinary player floor only after every stat-derived modifier,
+     * including disease and encumbrance. Hard controls alter speed_left and
+     * remain independent of this calculation. */
+    if (op->speed < PLAYER_MIN_SPEED) {
+        op->speed = PLAYER_MIN_SPEED;
     }
 
     object_update_speed(op);
