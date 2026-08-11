@@ -89,6 +89,15 @@ TOOLKIT_DEINIT_FUNC(socket) {}
 TOOLKIT_DEINIT_FUNC_FINISH
 
 #ifdef HAVE_GETADDRINFO
+static socket_create_resolver_t socket_create_resolver = getaddrinfo;
+static socket_addrinfo_free_t socket_create_addresses_free = freeaddrinfo;
+
+void socket_create_resolver_set_for_test(socket_create_resolver_t resolver,
+                                         socket_addrinfo_free_t release) {
+    socket_create_resolver = resolver != NULL ? resolver : getaddrinfo;
+    socket_create_addresses_free = release != NULL ? release : freeaddrinfo;
+}
+
 bool socket_addrinfo_copy(struct sockaddr_storage *destination, const struct addrinfo *address) {
     if (destination == NULL || address == NULL || address->ai_addr == NULL ||
         address->ai_addrlen == 0 || address->ai_addrlen > sizeof(*destination)) {
@@ -142,7 +151,7 @@ socket_t *socket_create(const char *host, uint16_t port, socket_role_t role, boo
         hints.ai_flags |= AI_PASSIVE;
     }
 
-    if (getaddrinfo(host, port_str, &hints, &res) != 0) {
+    if (socket_create_resolver(host, port_str, &hints, &res) != 0) {
         LOG(ERROR,
             "Cannot getaddrinfo(), host %s, port %" PRIu16 ": %s (%d)",
             host != NULL ? host : "<none>",
@@ -178,7 +187,7 @@ socket_t *socket_create(const char *host, uint16_t port, socket_role_t role, boo
                            sizeof(flag)) != 0) {
                 LOG(ERROR, "Cannot setsockopt(IPV6_V6ONLY): %s (%d)", s_strerror(s_errno), s_errno);
                 socket_close(sc);
-                freeaddrinfo(res);
+                socket_create_addresses_free(res);
                 goto error;
             }
         }
@@ -187,7 +196,7 @@ socket_t *socket_create(const char *host, uint16_t port, socket_role_t role, boo
         break;
     }
 
-    freeaddrinfo(res);
+    socket_create_addresses_free(res);
 #else
     if (host != NULL) {
         struct hostent *host_entry = gethostbyname(host);

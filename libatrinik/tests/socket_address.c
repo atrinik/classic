@@ -85,6 +85,64 @@ static void test_addrinfo_copy_rejects_invalid_lengths(void) {
     REQUIRE(!socket_addrinfo_copy(&destination, NULL));
 }
 
+static struct sockaddr first_socket_address;
+static struct sockaddr_in selected_socket_address;
+static struct addrinfo selected_socket_result;
+static struct addrinfo first_socket_result;
+static bool fake_socket_addresses_freed;
+
+static int fake_socket_resolver(const char *host,
+                                const char *service,
+                                const struct addrinfo *hints,
+                                struct addrinfo **addresses) {
+    REQUIRE(strcmp(host, "selected.example") == 0);
+    REQUIRE(strcmp(service, "13327") == 0);
+    REQUIRE(hints->ai_family == AF_UNSPEC);
+    REQUIRE(hints->ai_socktype == SOCK_STREAM);
+
+    memset(&first_socket_address, 0, sizeof(first_socket_address));
+    first_socket_result = (struct addrinfo){
+        .ai_family = -1,
+        .ai_socktype = SOCK_STREAM,
+        .ai_addr = &first_socket_address,
+        .ai_addrlen = 1,
+        .ai_next = &selected_socket_result,
+    };
+    selected_socket_address = (struct sockaddr_in){
+        .sin_family = AF_INET,
+        .sin_port = htons(13327),
+    };
+    REQUIRE(inet_pton(AF_INET, "127.0.0.1", &selected_socket_address.sin_addr) == 1);
+    selected_socket_result = (struct addrinfo){
+        .ai_family = AF_INET,
+        .ai_socktype = SOCK_STREAM,
+        .ai_addr = (struct sockaddr *)&selected_socket_address,
+        .ai_addrlen = sizeof(selected_socket_address),
+    };
+    *addresses = &first_socket_result;
+    return 0;
+}
+
+static void fake_socket_addresses_free(struct addrinfo *addresses) {
+    REQUIRE(addresses == &first_socket_result);
+    fake_socket_addresses_freed = true;
+}
+
+static void test_socket_create_copies_selected_result_length(void) {
+    fake_socket_addresses_freed = false;
+    socket_create_resolver_set_for_test(fake_socket_resolver, fake_socket_addresses_free);
+    socket_t *connection = socket_create("selected.example", 13327, SOCKET_ROLE_CLIENT, false);
+    socket_create_resolver_set_for_test(NULL, NULL);
+
+    REQUIRE(connection != NULL);
+    REQUIRE(fake_socket_addresses_freed);
+    REQUIRE(connection->addr.ss_family == AF_INET);
+    REQUIRE(memcmp(&connection->addr, &selected_socket_address, sizeof(selected_socket_address)) ==
+            0);
+    require_zero_tail(&connection->addr, sizeof(selected_socket_address));
+    socket_destroy(connection);
+}
+
 static void test_numeric_address(const char *host, int family) {
     struct sockaddr_storage address;
     memset(&address, 0xa5, sizeof(address));
@@ -124,6 +182,7 @@ int main(void) {
     test_addrinfo_copy_ipv6();
 #endif
     test_addrinfo_copy_rejects_invalid_lengths();
+    test_socket_create_copies_selected_result_length();
     test_numeric_addresses();
     toolkit_deinit();
     return 0;
