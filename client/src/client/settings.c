@@ -32,6 +32,7 @@
 #include <global.h>
 #include <video.h>
 #include <client_socket.h>
+#include <setting_value.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 #include <toolkit/path.h>
@@ -50,52 +51,16 @@ size_t setting_categories_num = 0;
  */
 static uint8_t setting_update_mapsize = 0;
 
-/**
- * Load a setting value from file.
- * @param setting
- * The setting to load the value into.
- * @param str
- * The value to load.
- */
-static void setting_load_value(setting_struct *setting, const char *str) {
-    switch (setting->type) {
-        case OPT_TYPE_BOOL:
-
-            if (KEYWORD_IS_TRUE(str)) {
-                setting->val.i = 1;
-            } else if (KEYWORD_IS_FALSE(str)) {
-                setting->val.i = 0;
-            } else {
-                setting->val.i = atoi(str);
-            }
-
-            break;
-
-        case OPT_TYPE_INPUT_NUM:
-        case OPT_TYPE_RANGE:
-        case OPT_TYPE_INT:
-        case OPT_TYPE_SELECT:
-            setting->val.i = atoi(str);
-            break;
-
-        case OPT_TYPE_INPUT_TEXT:
-        case OPT_TYPE_COLOR:
-
-            free(setting->val.str);
-
-            setting->val.str = xstrdup(str);
-            break;
-    }
-}
-
 /** Parse setting defaults from an already-open stream. */
 static void settings_init_stream(FILE *fp) {
     char buf[HUGE_BUF], *cp;
+    char *default_value;
     setting_category *category;
     setting_struct *setting;
 
     category = NULL;
     setting = NULL;
+    default_value = NULL;
     setting_categories = NULL;
     setting_categories_num = 0;
 
@@ -122,6 +87,13 @@ static void settings_init_stream(FILE *fp) {
 
         if (!strcmp(cp, "end")) {
             if (setting) {
+                if (default_value != NULL && !setting_value_parse(setting, default_value)) {
+                    LOG(ERROR, "Invalid default for setting '%s'.", setting->name);
+                    exit(1);
+                }
+                free(default_value);
+                default_value = NULL;
+
                 category->settings = xreallocarray(category->settings,
                                                    category->settings_num + 1,
                                                    sizeof(*category->settings));
@@ -156,7 +128,8 @@ static void settings_init_stream(FILE *fp) {
                     setting->custom_attrset = xcalloc(1, sizeof(setting_range));
                 }
             } else if (!strncmp(cp, "default ", 8)) {
-                setting_load_value(setting, cp + 8);
+                free(default_value);
+                default_value = xstrdup(cp + 8);
             } else if (!strncmp(cp, "desc ", 5)) {
                 setting->desc = xstrdup(cp + 5);
                 string_newline_to_literal(setting->desc);
@@ -197,6 +170,8 @@ static void settings_init_stream(FILE *fp) {
             category->name = xstrdup(cp + 9);
         }
     }
+
+    free(default_value);
 }
 
 /**
@@ -276,7 +251,12 @@ void settings_load(void) {
                 setting = setting_from_name(cp);
             } else {
                 if (cat != -1 && setting != -1) {
-                    setting_load_value(setting_categories[cat]->settings[setting], cp);
+                    setting_struct *current = setting_categories[cat]->settings[setting];
+                    if (!setting_value_parse(current, cp)) {
+                        LOG(ERROR,
+                            "Ignoring invalid persisted value for setting '%s'.",
+                            current->name);
+                    }
                 }
             }
 
