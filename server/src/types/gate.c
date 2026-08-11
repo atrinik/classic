@@ -80,7 +80,7 @@ static void process_func(object *op) {
                 }
 
                 if (IS_LIVE(tmp)) {
-                    attack_hit(tmp, op, op->stats.dam);
+                    attack_hit_situational(tmp, op, op->stats.dam);
                     draw_info_format(COLOR_WHITE, tmp, "You are crushed by the %s!", op->name);
                 }
 

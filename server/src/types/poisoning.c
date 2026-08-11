@@ -131,7 +131,7 @@ static void process_func(object *op) {
     }
 
     OBJECTS_DESTROYED_BEGIN(op, target) {
-        if (!attack_hit(target, op, op->stats.dam)) {
+        if (!attack_hit_situational(target, op, op->stats.dam)) {
             if (depletion_reconciled && !OBJECTS_DESTROYED(target)) {
                 living_update(target);
             }

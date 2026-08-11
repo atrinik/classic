@@ -42,6 +42,7 @@
 #include <object.h>
 #include <exp.h>
 #include <disease.h>
+#include <skills.h>
 
 /**
  * Names of attack types to use when saving them to file.
@@ -63,6 +64,138 @@ const char *const attack_name[NROFATTACKS] = {
 
 /** Bound participation metadata retained by any one victim. */
 #define MAX_COMBAT_CONTRIBUTIONS 128
+
+/** Damage added for each qualifying attack situation. */
+#define ATTACK_SITUATIONAL_BONUS_PERCENT 25
+
+/** Qualifying reasons for one situational damage bonus. */
+typedef enum attack_bonus_reason {
+    ATTACK_BONUS_NONE = 0,
+    ATTACK_BONUS_REAR_ARCHERY = 1 << 0,
+    ATTACK_BONUS_UNAWARE = 1 << 1
+} attack_bonus_reason_t;
+
+/** One hit's centrally calculated situational damage bonus. */
+typedef struct attack_bonus {
+    int damage;
+    int percent;
+    int added_damage;
+    attack_bonus_reason_t reasons;
+    bool archery;
+} attack_bonus_t;
+
+static int attack_hit_internal(object *op,
+                               object *hitter,
+                               int dam,
+                               bool situational,
+                               bool target_was_unaware,
+                               int min_hp);
+
+/**
+ * Check whether a non-player hitter represents a usable player attack source.
+ *
+ * Player-created effects snapshot the player's chosen skill when ownership is
+ * assigned. Requiring that provenance excludes monster-fired projectiles and
+ * other owner-flattened effects that were not launched directly by a player.
+ */
+static bool attack_bonus_player_source(object *hitter, object *owner) {
+    if (hitter == owner) {
+        return true;
+    }
+
+    if (IS_LIVE(hitter) || hitter->chosen_skill == NULL || !hitter->player_attack_source) {
+        return false;
+    }
+
+    /* Periodic inventory effects are not new opening attacks if combat state
+     * later expires while the effect remains attached. */
+    if (hitter->env != NULL && !(hitter->type == ARROW && OBJECT_IS_PROJECTILE(hitter))) {
+        return false;
+    }
+
+    /* Retained or stopped arrows are not active attack sources. */
+    if (hitter->type == ARROW && !OBJECT_IS_PROJECTILE(hitter)) {
+        return false;
+    }
+
+    return true;
+}
+
+/** Calculate the bounded situational bonus from pre-hit state. */
+static attack_bonus_t attack_bonus_calculate(object *victim,
+                                             object *hitter,
+                                             object *owner,
+                                             int base_damage,
+                                             bool target_was_unaware) {
+    attack_bonus_t bonus = {.damage = base_damage};
+
+    if (base_damage <= 0 || owner->type != PLAYER || victim->type != MONSTER ||
+        !attack_bonus_player_source(hitter, owner)) {
+        return bonus;
+    }
+
+    object *victim_owner = object_owner(victim);
+    if (victim_owner != NULL && victim_owner->type == PLAYER) {
+        return bonus;
+    }
+
+    if ((target_was_unaware || (!OBJECT_VALID(victim->enemy, victim->enemy_count) &&
+                                !OBJECT_VALID(victim->attacked_by, victim->attacked_by_count))) &&
+        !IS_INVISIBLE(owner, victim)) {
+        bonus.reasons |= ATTACK_BONUS_UNAWARE;
+    }
+
+    bonus.archery = hitter->type == ARROW && OBJECT_IS_PROJECTILE(hitter) &&
+                    QUERY_FLAG(hitter, FLAG_IS_MISSILE) && !QUERY_FLAG(hitter, FLAG_IS_SPELL) &&
+                    !QUERY_FLAG(hitter, FLAG_IS_THROWN) && hitter->chosen_skill != NULL &&
+                    SKILL_IS_ARCHERY(hitter->chosen_skill->stats.sp);
+    if (bonus.archery && hitter->direction != 0 && hitter->direction == victim->direction) {
+        bonus.reasons |= ATTACK_BONUS_REAR_ARCHERY;
+    }
+
+    if (bonus.reasons == ATTACK_BONUS_NONE) {
+        return bonus;
+    }
+
+    int reason_count = (bonus.reasons & ATTACK_BONUS_REAR_ARCHERY ? 1 : 0) +
+                       (bonus.reasons & ATTACK_BONUS_UNAWARE ? 1 : 0);
+    bonus.percent = ATTACK_SITUATIONAL_BONUS_PERCENT * reason_count;
+
+    int64_t added = (int64_t)base_damage * bonus.percent / 100;
+    bonus.added_damage = (int)MIN(added, INT_MAX - base_damage);
+    bonus.damage = base_damage + bonus.added_damage;
+    return bonus;
+}
+
+/** Send one feedback message after a situational hit deals effective damage. */
+static void attack_bonus_send(object *owner, const attack_bonus_t *bonus) {
+    HARD_ASSERT(owner != NULL);
+    HARD_ASSERT(bonus != NULL);
+
+    if (bonus->archery) {
+        const char *reasons;
+        if (bonus->reasons == (ATTACK_BONUS_REAR_ARCHERY | ATTACK_BONUS_UNAWARE)) {
+            reasons = "rear shot, unaware target";
+        } else if (bonus->reasons == ATTACK_BONUS_REAR_ARCHERY) {
+            reasons = "rear shot";
+        } else {
+            reasons = "unaware target";
+        }
+        draw_info_format(COLOR_ORANGE,
+                         owner,
+                         "Archery damage bonus: +%d%% (+%d base damage) — %s.",
+                         bonus->percent,
+                         bonus->added_damage,
+                         reasons);
+        return;
+    }
+
+    draw_info_format(COLOR_ORANGE,
+                     owner,
+                     "Sneak damage bonus: +%d%% (+%d base damage) — unaware target.",
+                     bonus->percent,
+                     bonus->added_damage);
+}
 
 /** Select the authoritative hurt vocal for a player. */
 static const char *attack_player_hurt_sound(const object *player) {
@@ -374,7 +507,7 @@ send_attack_roll_msg(object *op, object *attacker, const char *modifiers, int ad
  * @return
  * Dealt damage.
  */
-int attack_object(object *op, object *hitter) {
+static int attack_object_internal(object *op, object *hitter, bool target_was_unaware) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(hitter != NULL);
 
@@ -402,7 +535,6 @@ int attack_object(object *op, object *hitter) {
 
     object *metrics_owner = OWNER(hitter);
     bool metrics_melee = hitter->type == PLAYER;
-    bool metrics_projectile = hitter->type == ARROW && metrics_owner->type == PLAYER;
 
     /* Face the victim. */
     rv_vector dir;
@@ -513,14 +645,14 @@ int attack_object(object *op, object *hitter) {
     int dam;
     OBJECTS_DESTROYED_BEGIN(op, hitter) {
         if (attack_map && QUERY_FLAG(op, FLAG_HITBACK) && IS_LIVE(hitter)) {
-            dam = attack_hit(hitter, op, rndm(0, op->stats.dam));
+            dam = attack_hit_situational(hitter, op, rndm(0, op->stats.dam));
             if (OBJECTS_DESTROYED_ANY(op, hitter) || attack_check_abort(op, hitter, attack_map)) {
                 return dam;
             }
         }
 
         int real_dam = rndm(hitter->stats.dam * 0.8 + 1.0, hitter->stats.dam);
-        dam = attack_hit(op, hitter, real_dam);
+        dam = attack_hit_internal(op, hitter, real_dam, true, target_was_unaware, 0);
 
         /* Remove the if directives if you add ANY code dealing with op/hitter
          * after this point. */
@@ -536,12 +668,18 @@ int attack_object(object *op, object *hitter) {
     if (dam > 0 && metrics_owner->type == PLAYER) {
         if (metrics_melee) {
             metrics_add(&CONTR(metrics_owner)->metrics, METRIC_CHARACTER_MELEE_HITS, 1);
-        } else if (metrics_projectile) {
-            metrics_add(&CONTR(metrics_owner)->metrics, METRIC_CHARACTER_PROJECTILE_HITS, 1);
         }
     }
 
     return dam;
+}
+
+int attack_object(object *op, object *hitter) {
+    return attack_object_internal(op, hitter, false);
+}
+
+int attack_object_unaware(object *op, object *hitter) {
+    return attack_object_internal(op, hitter, true);
 }
 
 /**
@@ -556,6 +694,9 @@ int attack_object(object *op, object *hitter) {
  * @return
  * True if the attack was completely blocked, false otherwise.
  */
+int attack_block_test_override = -1;
+int attack_status_effect_test_override = -1;
+
 static bool attack_block_hit(object *op, object *hitter, double *damage) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(hitter != NULL);
@@ -579,7 +720,11 @@ static bool attack_block_hit(object *op, object *hitter, double *damage) {
         chance -= rndm(op->block / 2.0 + 0.5, op->block);
         chance = MAX(3, chance);
 
-        if (rndm_chance(chance)) {
+        /* Unit tests can force the probabilistic decision without changing
+         * the process-wide gameplay random stream. */
+        bool blocked =
+            attack_block_test_override >= 0 ? attack_block_test_override != 0 : rndm_chance(chance);
+        if (blocked) {
             return true;
         }
     }
@@ -648,6 +793,8 @@ send_attack_msg(object *op, object *hitter, atnr_t atnr, double dam_done, double
  * Attacker.
  * @param dam
  * Damage to deal.
+ * @param effect_dam
+ * Unbonused damage strength used by secondary status effects.
  * @param dam_orig
  * Original damage that ought to have been done (not counting
  * protections/blocking/etc).
@@ -656,8 +803,12 @@ send_attack_msg(object *op, object *hitter, atnr_t atnr, double dam_done, double
  * @return
  * Damage to actually do.
  */
-static double
-attack_hit_attacktype(object *op, object *hitter, double dam, double dam_orig, atnr_t atnr) {
+static double attack_hit_attacktype(object *op,
+                                    object *hitter,
+                                    double dam,
+                                    double effect_dam,
+                                    double dam_orig,
+                                    atnr_t atnr) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(hitter != NULL);
     HARD_ASSERT(dam >= 0.0);
@@ -665,8 +816,12 @@ attack_hit_attacktype(object *op, object *hitter, double dam, double dam_orig, a
     /* Adjust the damage based on the attacker's attack type value. */
     double modifier = hitter->attack[atnr] / 100.0;
     dam *= modifier;
+    effect_dam *= modifier;
     if (dam_orig > 0 && dam < 1.0) {
         dam = 1.0;
+    }
+    if (dam_orig > 0 && effect_dam < 1.0) {
+        effect_dam = 1.0;
     }
 
     dam_orig *= modifier;
@@ -674,6 +829,11 @@ attack_hit_attacktype(object *op, object *hitter, double dam, double dam_orig, a
 #define ATTACK_PROTECT_DAMAGE()                        \
     do {                                               \
         dam *= (100.0 - op->protection[atnr]) / 100.0; \
+    } while (0)
+
+#define ATTACK_PROTECT_EFFECT()                               \
+    do {                                                      \
+        effect_dam *= (100.0 - op->protection[atnr]) / 100.0; \
     } while (0)
 
     /* AT_INTERNAL is supposed to do exactly 'dam' amount of damage. */
@@ -713,10 +873,11 @@ attack_hit_attacktype(object *op, object *hitter, double dam, double dam_orig, a
 
         case ATNR_POISON:
             ATTACK_PROTECT_DAMAGE();
+            ATTACK_PROTECT_EFFECT();
             send_attack_msg(op, hitter, atnr, dam, dam_orig);
 
             if (dam > 0.0 && IS_LIVE(op)) {
-                attack_perform_poison(op, hitter, dam);
+                attack_perform_poison(op, hitter, effect_dam);
             }
 
             break;
@@ -726,10 +887,14 @@ attack_hit_attacktype(object *op, object *hitter, double dam, double dam_orig, a
         case ATNR_PARALYZE:
         case ATNR_BLIND: {
             int ldiff = MIN(MAXLEVEL, MAX(0, op->level - hitter->level));
+            bool apply_effect =
+                !DBL_EQUAL(op->speed, 0.0) && IS_LIVE(op) &&
+                (attack_status_effect_test_override >= 0
+                     ? attack_status_effect_test_override != 0
+                     : rndm_chance(atnr == ATNR_SLOW ? 6 : 3) &&
+                           ((rndm(1, 20) + op->protection[atnr] / 10) < savethrow[ldiff]));
 
-            if (!DBL_EQUAL(op->speed, 0.0) && IS_LIVE(op) &&
-                rndm_chance(atnr == ATNR_SLOW ? 6 : 3) &&
-                ((rndm(1, 20) + op->protection[atnr] / 10) < savethrow[ldiff])) {
+            if (apply_effect) {
                 if (atnr == ATNR_CONFUSION) {
                     draw_info_format(COLOR_ORANGE, hitter, "You confuse %s!", op->name);
                     draw_info_format(COLOR_PURPLE, op, "%s confused you!", hitter->name);
@@ -741,11 +906,11 @@ attack_hit_attacktype(object *op, object *hitter, double dam, double dam_orig, a
                 } else if (atnr == ATNR_PARALYZE) {
                     draw_info_format(COLOR_ORANGE, hitter, "You paralyze %s!", op->name);
                     draw_info_format(COLOR_PURPLE, op, "%s paralyzed you!", hitter->name);
-                    attack_peform_paralyze(op, dam);
+                    attack_peform_paralyze(op, effect_dam);
                 } else if (atnr == ATNR_BLIND && !QUERY_FLAG(op, FLAG_UNDEAD)) {
                     draw_info_format(COLOR_ORANGE, hitter, "You blind %s!", op->name);
                     draw_info_format(COLOR_PURPLE, op, "%s blinded you!", hitter->name);
-                    attack_perform_blind(op, hitter, dam);
+                    attack_perform_blind(op, hitter, effect_dam);
                 }
             }
 
@@ -775,9 +940,15 @@ attack_hit_attacktype(object *op, object *hitter, double dam, double dam_orig, a
     return dam;
 
 #undef ATTACK_PROTECT_DAMAGE
+#undef ATTACK_PROTECT_EFFECT
 }
 
-static int attack_hit_min_hp(object *op, object *hitter, int dam, int min_hp) {
+static int attack_hit_internal(object *op,
+                               object *hitter,
+                               int dam,
+                               bool situational,
+                               bool target_was_unaware,
+                               int min_hp) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(hitter != NULL);
     HARD_ASSERT(min_hp >= 0);
@@ -833,36 +1004,50 @@ static int attack_hit_min_hp(object *op, object *hitter, int dam, int min_hp) {
         return 0;
     }
 
-    double damage = dam;
+    attack_bonus_t bonus = {.damage = dam};
+    if (situational) {
+        bonus = attack_bonus_calculate(op, hitter, hitter_owner, dam, target_was_unaware);
+    }
+
+    double damage = bonus.damage;
+    double effect_damage = dam;
     if (hitter->slaying != NULL && hitter->slaying == op->race) {
         if (QUERY_FLAG(hitter, FLAG_IS_ASSASSINATION)) {
             damage *= 2.25;
+            effect_damage *= 2.25;
         } else {
             damage *= 1.75;
+            effect_damage *= 1.75;
         }
     }
 
     if (hitter_owner->type == MONSTER && hitter_owner->level > op->level) {
         double modifier = hitter_owner->level - op->level;
         modifier /= MIN(20, op->level);
-        damage += dam / 2.0 * modifier;
+        damage += bonus.damage / 2.0 * modifier;
+        effect_damage += dam / 2.0 * modifier;
     }
 
     double dam_orig = damage;
     double maxdam = 0.0;
 
     /* Try to block the attack. */
+    double damage_before_block = damage;
     if (attack_block_hit(op, hitter, &damage)) {
         draw_info_format(COLOR_PURPLE, hitter, "%s blocked your attack!", op->name);
         draw_info_format(COLOR_ORANGE, op, "You block %s!", hitter->name);
     } else if (damage > 0.0) {
+        if (damage_before_block > 0.0) {
+            effect_damage *= damage / damage_before_block;
+        }
+
         /* Go through and hit the player with each attacktype, one by one.
          * hit_player_attacktype only figures out the damage, doesn't inflict
          * it. It will do the appropriate action for attacktypes with
          * effects (slow, paralization, etc). */
         for (atnr_t atnr = 0; atnr < NROFATTACKS; atnr++) {
             if (hitter->attack[atnr] != 0) {
-                maxdam += attack_hit_attacktype(op, hitter, damage, dam_orig, atnr);
+                maxdam += attack_hit_attacktype(op, hitter, damage, effect_damage, dam_orig, atnr);
             }
         }
     }
@@ -896,7 +1081,8 @@ static int attack_hit_min_hp(object *op, object *hitter, int dam, int min_hp) {
         }
     }
 
-    op->last_damage += maxdam;
+    double accumulated_damage = op->last_damage + maxdam;
+    op->last_damage = (int16_t)MIN(accumulated_damage, INT16_MAX);
 
     /* Preserve full damage for the on-screen accumulator, but cap the damage
      * actually dealt and returned at the configured HP floor. */
@@ -905,33 +1091,43 @@ static int attack_hit_min_hp(object *op, object *hitter, int dam, int min_hp) {
         maxdam = max_damage;
     }
 
-    if (maxdam > 0 && hitter_owner->type == PLAYER) {
-        metrics_add(&CONTR(hitter_owner)->metrics, METRIC_CHARACTER_DAMAGE_DEALT, (uint64_t)maxdam);
+    int hp_after = (int)(op->stats.hp - maxdam);
+    int effective_damage = op->stats.hp - hp_after;
+
+    if (effective_damage > 0 && hitter_owner->type == PLAYER) {
+        metrics_add(&CONTR(hitter_owner)->metrics,
+                    METRIC_CHARACTER_DAMAGE_DEALT,
+                    (uint64_t)effective_damage);
         metrics_update_max(&CONTR(hitter_owner)->metrics,
                            METRIC_CHARACTER_LARGEST_HIT_DEALT,
-                           (uint64_t)maxdam);
+                           (uint64_t)effective_damage);
+        if (bonus.reasons != ATTACK_BONUS_NONE) {
+            attack_bonus_send(hitter_owner, &bonus);
+        }
     }
-    if (maxdam > 0 && op->type == PLAYER) {
-        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_DAMAGE_TAKEN, (uint64_t)maxdam);
+    if (effective_damage > 0 && op->type == PLAYER) {
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_DAMAGE_TAKEN, (uint64_t)effective_damage);
         metrics_update_max(&CONTR(op)->metrics,
                            METRIC_CHARACTER_LARGEST_HIT_TAKEN,
-                           (uint64_t)maxdam);
+                           (uint64_t)effective_damage);
     }
-    if (maxdam > 0 && hitter_owner->type == PLAYER && op->type == PLAYER) {
+    if (effective_damage > 0 && hitter_owner->type == PLAYER && op->type == PLAYER) {
         metrics_add(&CONTR(hitter_owner)->metrics,
                     METRIC_CHARACTER_PVP_DAMAGE_DEALT,
-                    (uint64_t)maxdam);
-        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_PVP_DAMAGE_TAKEN, (uint64_t)maxdam);
+                    (uint64_t)effective_damage);
+        metrics_add(&CONTR(op)->metrics,
+                    METRIC_CHARACTER_PVP_DAMAGE_TAKEN,
+                    (uint64_t)effective_damage);
     }
 
     object *damage_skill = hitter->chosen_skill;
     if (damage_skill == NULL) {
         damage_skill = hitter_owner->chosen_skill;
     }
-    attack_record_combat_contribution(op, hitter_owner, damage_skill, maxdam);
+    attack_record_combat_contribution(op, hitter_owner, damage_skill, effective_damage);
 
     /* Damage the target got */
-    op->stats.hp -= maxdam;
+    op->stats.hp = hp_after;
 
     /* Check to see if monster runs away. */
     if (op->stats.hp >= 0 && QUERY_FLAG(op, FLAG_MONSTER) &&
@@ -944,24 +1140,15 @@ static int attack_hit_min_hp(object *op, object *hitter, int dam, int min_hp) {
         attack_kill(op, hitter);
     }
 
-    return maxdam;
+    return effective_damage;
 }
 
-/**
- * Hit the specified object for the given amount of damage.
- *
- * @param op
- * Object to be hit.
- * @param hitter
- * What is hitting the object.
- * @param dam
- * Base damage. Protections, slaying, blocking, etc, will be taken into
- * account.
- * @return
- * Dealt damage.
- */
 int attack_hit(object *op, object *hitter, int dam) {
-    return attack_hit_min_hp(op, hitter, dam, 0);
+    return attack_hit_internal(op, hitter, dam, false, false, 0);
+}
+
+int attack_hit_situational(object *op, object *hitter, int dam) {
+    return attack_hit_internal(op, hitter, dam, true, false, 0);
 }
 
 /**
@@ -980,7 +1167,7 @@ int attack_hit(object *op, object *hitter, int dam) {
  * Dealt damage.
  */
 int attack_hit_nonlethal(object *op, object *hitter, int dam) {
-    return attack_hit_min_hp(op, hitter, dam, 1);
+    return attack_hit_internal(op, hitter, dam, false, false, 1);
 }
 
 /**
@@ -1038,7 +1225,7 @@ void attack_hit_map(object *op, int dir, bool multi_reduce) {
             dam /= (tmp->quick_pos >> 4) + 1;
         }
 
-        attack_hit(tmp, op, dam);
+        attack_hit_situational(tmp, op, dam);
     }
     FOR_MAP_LAYER_END
 }
@@ -1690,7 +1877,7 @@ void attack_perform_fall(object *op, int fall_floors) {
     damager->stats.dam = dam;
     damager->stats.dam = rndm(damager->stats.dam / 2.0 + 1.0, damager->stats.dam);
 
-    attack_hit(op, damager, damager->stats.dam);
+    attack_hit_situational(op, damager, damager->stats.dam);
     object_destroy(damager);
 }
 
