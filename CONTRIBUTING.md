@@ -31,6 +31,28 @@ cannot publish. The retired nested component workflow and semantic-release
 files remain available in Git history; never restore them as independent
 release trains.
 
+Linux Check compiles protocol/libatrinik, server, and client inside the exact
+digest-pinned `ghcr.io/atrinik/classic-build` image declared in
+`.github/workflows/check.yml`. Each job restores only its own ccache directory,
+uses explicit C and C++ CMake launchers, and normalizes workspace paths through
+`CCACHE_BASEDIR`. Cache keys include the runner platform, trust scope, GCC and
+image identities, relevant configuration files, and a manual epoch. Pull
+request and merge-group entries never share a write key with `main`; only the
+ccache directory is persisted, never a CMake build tree.
+
+To update the image, first publish and validate an immutable devcontainer
+candidate. Use that candidate digest only for pre-merge consumer evidence. Once
+the devcontainer change is released, verify the release image's embedded
+inventory and source coordinates, then replace both image and digest constants
+with its versioned digest before making the Classic pull request ready. Update
+the GCC identity if needed, and increment `CLASSIC_LINUX_CCACHE_EPOCH` for any
+cache contract change not represented by the hashed configuration inputs. Run
+the cache-key unit tests, then use cold and repeated Check runs to inspect the
+raw ccache artifacts and image timing summary before accepting the pin.
+Reusable `classic-build` and `windows-build` images are public: pull them
+anonymously in pull-request validation and do not grant `packages: read` or log
+in to GHCR merely to consume either image.
+
 ## Module requirements
 
 ### Client
