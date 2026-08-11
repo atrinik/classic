@@ -441,10 +441,11 @@ int common_object_projectile_hit(object *op, object *victim) {
     victim = HEAD(victim);
     object *victim_owner = object_owner(victim);
 
-    /* Victim is not an alive object or we're friends with the victim,
-     * pass... */
+    /* Pass nonliving and friendly victims. A player's projectile must also
+     * not bypass PvP rules by attacking another player's owned monster. */
     if (!IS_LIVE(victim) || is_friend_of(owner, victim) ||
-        (victim_owner != NULL && victim_owner->type == PLAYER)) {
+        (owner != NULL && owner->type == PLAYER && victim_owner != NULL &&
+         victim_owner->type == PLAYER)) {
         return OBJECT_METHOD_UNHANDLED;
     }
 

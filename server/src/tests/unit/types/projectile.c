@@ -25,13 +25,14 @@ static object *projectile_test_target(mapstruct *map, object *pl) {
     object *target = arch_get("kobold");
     target->x = pl->x + 1;
     target->y = pl->y;
+    target = object_insert_map(target, map, NULL, INS_NO_MERGE);
+    monster_data_init(target);
+    target = HEAD(target);
     target->stats.hp = 1000;
     target->stats.maxhp = 1000;
     target->block = 0;
     target->absorb = 0;
     memset(target->protection, 0, sizeof(target->protection));
-    target = object_insert_map(target, map, NULL, INS_NO_MERGE);
-    monster_data_init(target);
     return target;
 }
 
@@ -117,6 +118,7 @@ START_TEST(test_archery_impact_bonuses_and_feedback) {
     pl->direction = 1;
     target->direction = 3;
     ck_assert_int_eq(projectile_test_hit(arrow, target), 36);
+    ck_assert_ptr_eq(arrow->env, target);
     ck_assert(OBJECT_VALID(target->enemy, target->enemy_count));
     ck_assert_ptr_eq(target->enemy, pl);
     ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS), 1);
@@ -207,6 +209,26 @@ START_TEST(test_archery_invisibility_and_target_ownership_exclusions) {
     ck_assert_int_eq(object_projectile_hit(arrow, target), OBJECT_METHOD_UNHANDLED);
     ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 1);
 
+    object *npc = arch_get("goblin");
+    npc->x = pl->x;
+    npc->y = pl->y + 1;
+    npc = object_insert_map(npc, map, NULL, INS_NO_MERGE);
+    monster_data_init(npc);
+    npc->enemy = target;
+    npc->enemy_count = target->count;
+    arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
+    object_owner_set(arrow, npc);
+    ck_assert_int_eq(projectile_test_hit(arrow, target), TEST_BASE_DAMAGE);
+    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 1);
+
+    arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
+    arrow->type = BULLET;
+    CLEAR_FLAG(arrow, FLAG_IS_MISSILE);
+    SET_FLAG(arrow, FLAG_IS_SPELL);
+    object_owner_set(arrow, npc);
+    ck_assert_int_eq(projectile_test_hit(arrow, target), TEST_BASE_DAMAGE);
+    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 1);
+
     object *other_player = player_get_dummy("Projectile target", NULL);
     object_remove(other_player, 0);
     other_player->x = pl->x + 1;
@@ -278,6 +300,46 @@ START_TEST(test_archery_slaying_stacks_after_bounded_bonus_without_mutation) {
 }
 END_TEST
 
+START_TEST(test_archery_rounding_and_overflow_boundaries) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+
+    object *target = projectile_test_target(map, pl);
+    target->direction = 3;
+    object *arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
+    arrow->stats.dam = 25;
+    FREE_AND_COPY_HASH(arrow->slaying, target->race);
+    ck_assert_int_eq(projectile_test_hit(arrow, target), 64);
+    ck_assert_uint_eq(
+        projectile_test_bonus_messages(
+            pl,
+            "Archery damage bonus: +50% (+12 base damage) — rear shot, unaware target."),
+        1);
+
+    target = projectile_test_target(map, pl);
+    target->direction = 3;
+    arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
+    arrow->stats.dam = 25;
+    FREE_AND_COPY_HASH(arrow->slaying, target->race);
+    SET_FLAG(arrow, FLAG_IS_ASSASSINATION);
+    ck_assert_int_eq(projectile_test_hit(arrow, target), 83);
+
+    target = projectile_test_target(map, pl);
+    target->direction = 3;
+    arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
+    arrow->stats.dam = INT16_MAX;
+    arrow->weight = 1001;
+    ck_assert_int_eq(object_projectile_hit(arrow, target), OBJECT_METHOD_OK);
+    ck_assert_uint_eq(
+        projectile_test_bonus_messages(
+            pl,
+            "Archery damage bonus: +50% (+16383 base damage) — rear shot, unaware target."),
+        1);
+}
+END_TEST
+
 START_TEST(test_archery_immune_hit_alerts_without_feedback_or_metric) {
     mapstruct *map;
     object *pl;
@@ -285,15 +347,28 @@ START_TEST(test_archery_immune_hit_alerts_without_feedback_or_metric) {
     CONTR(pl)->cs->state = ST_PLAYING;
     object *target = projectile_test_target(map, pl);
     target->direction = 3;
-    target->protection[ATNR_PIERCE] = 100;
+    target->protection[ATNR_PIERCE] = 99;
 
     object *arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
     arrow->weight = 1001;
     ck_assert_int_eq(projectile_test_hit(arrow, target), 0);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS), 1);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_DAMAGE_DEALT), 1);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_LARGEST_HIT_DEALT), 1);
+    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 1);
+
+    target = projectile_test_target(map, pl);
+    target->direction = 3;
+    target->protection[ATNR_PIERCE] = 100;
+
+    arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
+    arrow->weight = 1001;
+    ck_assert_int_eq(projectile_test_hit(arrow, target), 0);
     ck_assert(OBJECT_VALID(target->enemy, target->enemy_count));
     ck_assert_ptr_eq(target->enemy, pl);
-    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS), 0);
-    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 0);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS), 1);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_DAMAGE_DEALT), 1);
+    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 1);
 }
 END_TEST
 
@@ -416,7 +491,7 @@ START_TEST(test_archery_blocked_and_lethal_impact_ordering) {
     target->stats.maxhp = 10;
     target->stats.exp = 1000;
     object *arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
-    arrow->weight = 1001;
+    tag_t arrow_count = arrow->count;
     object *skill = arrow->chosen_skill;
     object *saved_skill = CONTR(pl)->skill_ptr[SK_BOW_ARCHERY];
     CONTR(pl)->skill_ptr[SK_BOW_ARCHERY] = skill;
@@ -424,6 +499,8 @@ START_TEST(test_archery_blocked_and_lethal_impact_ordering) {
     uint64_t metric_before = metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS);
     size_t messages_before = projectile_test_bonus_messages(pl, NULL);
     ck_assert_int_eq(object_projectile_hit(arrow, target), OBJECT_METHOD_OK);
+    ck_assert(OBJECT_VALID(arrow, arrow_count));
+    ck_assert_ptr_nonnull(arrow->env);
     ck_assert_int_gt(skill->stats.exp, experience_before);
     ck_assert_uint_eq(
         metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS),
@@ -445,6 +522,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_archery_invisibility_and_target_ownership_exclusions);
     tcase_add_test(tc_core, test_projectile_metric_and_non_archery_exclusions);
     tcase_add_test(tc_core, test_archery_slaying_stacks_after_bounded_bonus_without_mutation);
+    tcase_add_test(tc_core, test_archery_rounding_and_overflow_boundaries);
     tcase_add_test(tc_core, test_archery_immune_hit_alerts_without_feedback_or_metric);
     tcase_add_test(tc_core, test_archery_alert_sources_stealth_and_direction_boundaries);
     tcase_add_test(tc_core, test_archery_rejects_nonphysical_and_invalid_sources);

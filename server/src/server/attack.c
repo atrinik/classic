@@ -901,33 +901,42 @@ static int attack_hit_min_hp(object *op, object *hitter, int dam, int min_hp) {
         maxdam = max_damage;
     }
 
-    if (maxdam > 0 && hitter_owner->type == PLAYER) {
-        metrics_add(&CONTR(hitter_owner)->metrics, METRIC_CHARACTER_DAMAGE_DEALT, (uint64_t)maxdam);
+    int hp_after = (int)(op->stats.hp - maxdam);
+    int effective_damage = op->stats.hp - hp_after;
+
+    if (effective_damage > 0 && hitter_owner->type == PLAYER) {
+        metrics_add(&CONTR(hitter_owner)->metrics,
+                    METRIC_CHARACTER_DAMAGE_DEALT,
+                    (uint64_t)effective_damage);
         metrics_update_max(&CONTR(hitter_owner)->metrics,
                            METRIC_CHARACTER_LARGEST_HIT_DEALT,
-                           (uint64_t)maxdam);
+                           (uint64_t)effective_damage);
     }
-    if (maxdam > 0 && op->type == PLAYER) {
-        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_DAMAGE_TAKEN, (uint64_t)maxdam);
+    if (effective_damage > 0 && op->type == PLAYER) {
+        metrics_add(&CONTR(op)->metrics,
+                    METRIC_CHARACTER_DAMAGE_TAKEN,
+                    (uint64_t)effective_damage);
         metrics_update_max(&CONTR(op)->metrics,
                            METRIC_CHARACTER_LARGEST_HIT_TAKEN,
-                           (uint64_t)maxdam);
+                           (uint64_t)effective_damage);
     }
-    if (maxdam > 0 && hitter_owner->type == PLAYER && op->type == PLAYER) {
+    if (effective_damage > 0 && hitter_owner->type == PLAYER && op->type == PLAYER) {
         metrics_add(&CONTR(hitter_owner)->metrics,
                     METRIC_CHARACTER_PVP_DAMAGE_DEALT,
-                    (uint64_t)maxdam);
-        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_PVP_DAMAGE_TAKEN, (uint64_t)maxdam);
+                    (uint64_t)effective_damage);
+        metrics_add(&CONTR(op)->metrics,
+                    METRIC_CHARACTER_PVP_DAMAGE_TAKEN,
+                    (uint64_t)effective_damage);
     }
 
     object *damage_skill = hitter->chosen_skill;
     if (damage_skill == NULL) {
         damage_skill = hitter_owner->chosen_skill;
     }
-    attack_record_combat_contribution(op, hitter_owner, damage_skill, maxdam);
+    attack_record_combat_contribution(op, hitter_owner, damage_skill, effective_damage);
 
     /* Damage the target got */
-    op->stats.hp -= maxdam;
+    op->stats.hp = hp_after;
 
     /* Check to see if monster runs away. */
     if (op->stats.hp >= 0 && QUERY_FLAG(op, FLAG_MONSTER) &&
@@ -940,7 +949,7 @@ static int attack_hit_min_hp(object *op, object *hitter, int dam, int min_hp) {
         attack_kill(op, hitter);
     }
 
-    return maxdam;
+    return effective_damage;
 }
 
 /**
