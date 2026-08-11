@@ -1,13 +1,6 @@
 {
   "schema_version": 1,
   "dependencies": {
-    "atrinik_protocol": {
-      "repository": "atrinik/protocol",
-      "tag": "v1.0.1",
-      "commit": "7e10ecaa279489fcdb843ecbe020fc9befeba4fd",
-      "url": "https://github.com/atrinik/protocol/releases/download/v1.0.1/atrinik-protocol-1.0.1.tar.gz",
-      "sha256": "d8e113210a395913d27446e5764f212f6f1de028c9945ae9f0479588474b3137"
-    },
     "libatrinik": {
       "repository": "atrinik/libatrinik",
       "tag": "v1.0.3",

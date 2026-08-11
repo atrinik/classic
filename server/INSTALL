@@ -10,13 +10,17 @@ cmake --build --preset linux-debug
 ctest --preset linux-debug
 ```
 
-The first configure downloads the exact protocol and libatrinik source release
-archives recorded in `cmake/dependencies.lock.json` and verifies their SHA-256
-digests. Runtime content and server resources are installed from the release
-archives recorded in `dependencies.lock.json`.
-
-CMake's `FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL` and
-`FETCHCONTENT_SOURCE_DIR_LIBATRINIK` overrides support coordinated local work.
+The Classic protocol must be available from the sibling `protocol/` tree, the
+packaged `dependencies/protocol` tree, or CMake's
+`FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL` override. This keeps the server and
+its evolving wire contract on the same repository revision. The first
+configure downloads the exact libatrinik source release recorded in
+`cmake/dependencies.lock.json` and verifies its SHA-256 digest. Runtime content
+and server resources are installed from the release archives recorded in
+`dependencies.lock.json`. Use `FETCHCONTENT_SOURCE_DIR_LIBATRINIK` for
+coordinated local work. Independently pinned third-party sources such as
+libpcpnatpmp retain their checksum-verified FetchContent fallback; use
+`FETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP` to supply an existing local source tree.
 
 The server core object library precompiles `src/include/global.h` by default.
 Pass `-DENABLE_PRECOMPILED_HEADERS=OFF` for a conventional build. See

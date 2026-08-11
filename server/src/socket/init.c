@@ -83,7 +83,7 @@ bool init_connection(socket_struct *ns) {
 
     ns->packet_recv = packet_new(0, 1024 * 3, 0);
     ns->packet_recv_cmd = packet_new(0, 1024 * 64, 0);
-    packet_writer_set_limit(ns->packet_recv_cmd, SOCKET_COMMAND_QUEUE_MAX);
+    packet_writer_set_limit(ns->packet_recv_cmd, SOCKET_COMMAND_QUEUE_STORAGE_MAX);
 
     memset(&ns->lastmap, 0, sizeof(struct Map));
     ns->packets = NULL;
@@ -144,6 +144,8 @@ void free_newsocket(socket_struct *ns) {
     if (ns->packet_recv_cmd != NULL) {
         packet_free(ns->packet_recv_cmd);
     }
+    free(ns->movement_stream_move.entries);
+    free(ns->movement_stream_fire.entries);
 
     socket_buffer_clear(ns);
     free(ns);
