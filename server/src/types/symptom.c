@@ -62,7 +62,11 @@ static void process_func(object *op) {
             }
 
             if (damage > 0) {
-                attack_hit(victim, op, damage);
+                if (op->stats.dam > 0) {
+                    attack_hit(victim, op, damage);
+                } else {
+                    attack_hit_nonlethal(victim, op, damage);
+                }
             }
 
             if (OBJECTS_DESTROYED_ANY(op, victim)) {

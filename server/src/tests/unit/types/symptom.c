@@ -10,6 +10,7 @@
 #include <arch.h>
 #include <attack.h>
 #include <object.h>
+#include <player.h>
 
 static object *insert_symptom(object *victim, int damage, int mana_drain) {
     object *symptom = arch_get("symptom");
@@ -35,11 +36,13 @@ START_TEST(test_zero_damage_and_mana_are_noops) {
     pl->stats.maxhp = 100;
     pl->stats.sp = 47;
     pl->stats.maxsp = 100;
+    CONTR(pl)->last_combat = pticks + 1;
 
     process_symptom(symptom);
 
     ck_assert_int_eq(pl->stats.hp, 83);
     ck_assert_int_eq(pl->stats.sp, 47);
+    ck_assert_int_eq(CONTR(pl)->last_combat, pticks + 1);
 }
 END_TEST
 
@@ -85,6 +88,7 @@ START_TEST(test_percentage_damage_is_nonlethal_and_mana_is_bounded) {
 
     check_setup_env_pl(&map, &pl);
     object *symptom = insert_symptom(pl, -10, -10);
+    symptom->attack[ATNR_IMPACT] = 100;
     pl->stats.hp = 5;
     pl->stats.maxhp = 100;
     pl->stats.sp = 3;

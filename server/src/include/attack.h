@@ -99,6 +99,7 @@ extern const char *const attack_name[NROFATTACKS];
 
 int attack_object(object *op, object *hitter);
 int attack_hit(object *op, object *hitter, int dam);
+int attack_hit_nonlethal(object *op, object *hitter, int dam);
 void attack_hit_map(object *op, int dir, bool multi_reduce);
 bool attack_kill(object *op, object *hitter);
 void attack_perform_poison(object *op, object *hitter, double dam);
