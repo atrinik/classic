@@ -35,6 +35,8 @@
 - New classic code must be GPL-2.0-or-later compatible. Never use provenance
   grants intended for clean-room MIT replacements to infer a different license
   here.
+- On touch, refresh existing copyright terminal years and blanket holders per
+  `CONTRIBUTING.md`; preserve precise attribution.
 - Operational language is “classic.” Historical `legacy-*` coordinates may
   appear only in provenance, import maps, migrated issue history, or archival
   references.
