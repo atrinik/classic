@@ -58,6 +58,12 @@ This design contract applies when changing classic server lighting,
 - Mark doors with `MAP2_FLAG2_DOOR` independently of the generic second-pass
   bit and cache that semantic per socket layer so a type-only change emits a
   delta. Door reveal must not broaden LOS or disclose interiors.
+- Mark only serialized, visible `EXIT` objects with `MAP2_FLAG2_EXIT` and cache
+  that semantic per socket layer so removal or a type-only change emits a
+  delta. The client outlines those objects after the complete world pass only
+  at the player's physical depth. This presentation does not broaden line of
+  sight or disclose layer-0/system exits, unexplored transitions, or hidden
+  objects that the server did not serialize.
 - Upper-level visibility is camera-top-down. A solid floor, gameplay-opaque
   cell, or hidden wall-layer roof limits enclosed storeys below to their
   structural boundary without removing a middle-storey exterior wall. A
@@ -84,8 +90,9 @@ This design contract applies when changing classic server lighting,
   withholding actors, items, effects, and interiors.
 - Connected UP/DOWN transitions include signed depth offsets so client/server
   shift existing caches rather than forcing a full refresh.
-- Protocol v1075 retains scalar light bytes and adds
-  `MAP2_FLAG_EXT_LIGHT_RGB` before the animation tail. It carries a complete
+- Protocol v1076 retains scalar light bytes and the v1075
+  `MAP2_FLAG_EXT_LIGHT_RGB` extension before the animation tail. It carries a
+  complete
   seven-bit sub-layer bitmap followed by ascending RGB888 triples. A zero
   bitmap explicitly resets all sub-layers to their scalar samples. Scalar and
   RGB caches are independent, so hue-only changes and neutral resets emit.

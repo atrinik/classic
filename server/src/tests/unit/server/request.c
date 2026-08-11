@@ -133,6 +133,25 @@ static bool map_cache_has_roof(socket_struct *cs, int depth) {
     return false;
 }
 
+static size_t map_cache_semantic_count(socket_struct *cs, bool exit_semantic) {
+    size_t count = 0;
+
+    for (int x = 0; x < cs->mapx; x++) {
+        for (int y = 0; y < cs->mapy; y++) {
+            MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, x, y, false);
+            if (cell == NULL || cell->cleared) {
+                continue;
+            }
+
+            for (size_t layer = 0; layer < NUM_REAL_LAYERS; layer++) {
+                count += (exit_semantic ? cell->exit[layer] : cell->door[layer]) != 0;
+            }
+        }
+    }
+
+    return count;
+}
+
 static void request_move_player(object **pl, mapstruct *map, int x, int y) {
     object_remove(*pl, 0);
     (*pl)->x = x;
@@ -955,6 +974,78 @@ START_TEST(test_map_rgb_cache_tracks_hue_changes_and_neutral_reset) {
 }
 END_TEST
 
+START_TEST(test_map_exit_semantic_tracks_visible_layer_and_cache_changes) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    request_move_player(&pl, map, 12, 12);
+    SET_FLAG(pl, FLAG_XRAYS);
+
+    object *exit = arch_get("stairs_down");
+    ck_assert_ptr_nonnull(exit);
+    exit->x = pl->x + 1;
+    exit->y = pl->y;
+    exit = object_insert_map(exit, map, NULL, 0);
+    ck_assert_ptr_nonnull(exit);
+
+    object *door = arch_get("door_wood1");
+    ck_assert_ptr_nonnull(door);
+    door->x = pl->x - 1;
+    door->y = pl->y;
+    door = object_insert_map(door, map, NULL, 0);
+    ck_assert_ptr_nonnull(door);
+
+    object *invisible_exit = arch_get("invis_exit");
+    ck_assert_ptr_nonnull(invisible_exit);
+    invisible_exit->x = pl->x;
+    invisible_exit->y = pl->y + 1;
+    invisible_exit = object_insert_map(invisible_exit, map, NULL, 0);
+    ck_assert_ptr_nonnull(invisible_exit);
+
+    socket_struct *cs = CONTR(pl)->cs;
+    update_los(pl);
+    map_client_cache_clear(&cs->lastmap);
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
+
+    ck_assert_uint_eq(map_cache_semantic_count(cs, true), 1);
+    ck_assert_uint_eq(map_cache_semantic_count(cs, false), 1);
+
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
+    ck_assert_uint_eq(map_cache_semantic_count(cs, true), 1);
+    ck_assert_uint_eq(map_cache_semantic_count(cs, false), 1);
+    packet_struct *packet;
+    uint32_t level_size;
+
+    exit->type = DOOR;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
+    ck_assert_uint_eq(map_cache_semantic_count(cs, true), 0);
+    ck_assert_uint_eq(map_cache_semantic_count(cs, false), 2);
+    packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert(map_packet_level_size(packet, 0, &level_size));
+    ck_assert_uint_gt(level_size, 0);
+
+    object_remove(exit, 0);
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
+    ck_assert_uint_eq(map_cache_semantic_count(cs, true), 0);
+    ck_assert_uint_eq(map_cache_semantic_count(cs, false), 1);
+    packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert(map_packet_level_size(packet, 0, &level_size));
+    ck_assert_uint_gt(level_size, 0);
+    object_destroy(exit);
+}
+END_TEST
+
 START_TEST(test_dense_colored_level_splits_at_tile_boundaries) {
     mapstruct *old_map;
     object *pl;
@@ -1043,6 +1134,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_move_path_new_blockage_stops_without_displacement);
     tcase_add_test(tc_core, test_incuna_unchanged_roof_level_remains_present);
     tcase_add_test(tc_core, test_map_rgb_cache_tracks_hue_changes_and_neutral_reset);
+    tcase_add_test(tc_core, test_map_exit_semantic_tracks_visible_layer_and_cache_changes);
     tcase_add_test(tc_core, test_dense_colored_level_splits_at_tile_boundaries);
     return s;
 }

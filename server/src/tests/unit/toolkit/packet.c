@@ -84,7 +84,7 @@ START_TEST(test_packet_new) {
 }
 END_TEST
 
-/** Build the invariant prefix of a same-map protocol-v1075 MAP update. */
+/** Build the invariant prefix of a same-map protocol-v1076 MAP update. */
 static packet_struct *map_protocol_test_packet(uint8_t level_count) {
     packet_struct *packet = packet_new(0, 16, 16);
     packet_writer_write_uint8(packet, MAP_UPDATE_CMD_SAME);
@@ -212,6 +212,42 @@ START_TEST(test_map_protocol_validates_tile_record_flags) {
     packet_writer_write_uint16(level, 0);
     packet_writer_write_uint8(level, 0);
     packet_writer_write_uint8(level, 2);
+    packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+    packet_free(level);
+}
+END_TEST
+
+START_TEST(test_map_protocol_accepts_exit_flag_and_rejects_unknown_or_truncated_flags) {
+    packet_struct *level = packet_new(0, 32, 16);
+    packet_writer_write_uint16(level, 0);
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, LAYER_FLOOR - 1);
+    packet_writer_write_uint16(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, MAP2_FLAG_MORE);
+    packet_writer_write_uint32(level, MAP2_FLAG2_EXIT);
+    packet_writer_write_uint8(level, 0);
+    packet_struct *packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+
+    size_t flags2_offset = packet->len - sizeof(uint32_t) - sizeof(uint8_t);
+    packet->data[flags2_offset + 2] |= UINT8_C(0x08);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+    packet_free(level);
+
+    level = packet_new(0, 16, 16);
+    packet_writer_write_uint16(level, 0);
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, LAYER_FLOOR - 1);
+    packet_writer_write_uint16(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, MAP2_FLAG_MORE);
+    packet_writer_write_uint16(level, MAP2_FLAG2_EXIT);
     packet = map_protocol_test_packet(1);
     map_protocol_test_level(packet, 0, level);
     ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
@@ -997,6 +1033,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_map_protocol_enforces_level_framing);
     tcase_add_test(tc_core, test_map_protocol_rejects_bad_tile_and_layer_indices);
     tcase_add_test(tc_core, test_map_protocol_validates_tile_record_flags);
+    tcase_add_test(tc_core,
+                   test_map_protocol_accepts_exit_flag_and_rejects_unknown_or_truncated_flags);
     tcase_add_test(tc_core, test_map_protocol_validates_colored_light_extension);
     tcase_add_test(tc_core, test_map_protocol_accepts_bounded_continuation);
     tcase_add_test(tc_core, test_map_protocol_continuation_state_is_bounded_and_ordered);

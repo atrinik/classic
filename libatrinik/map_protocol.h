@@ -54,7 +54,7 @@ bool map_protocol_continuation_matches(const map_protocol_continuation_state_t *
 void map_protocol_continuation_advance(map_protocol_continuation_state_t *state);
 
 /**
- * Validate one complete protocol-v1075 CLIENT_CMD_MAP payload.
+ * Validate one complete protocol-v1076 CLIENT_CMD_MAP payload.
  *
  * No endpoint state is changed. The caller supplies the negotiated wire look
  * dimensions used to bound tile coordinates.

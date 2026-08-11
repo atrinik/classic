@@ -1738,6 +1738,7 @@ void draw_client_map2(object *pl) {
                             int is_friend = 0;
                             uint8_t is_roof = 0;
                             uint8_t is_door = 0;
+                            uint8_t is_exit = 0;
 
                             face_obj = NULL;
                             anim_speed = anim_facing = anim_flags = 0;
@@ -1859,6 +1860,11 @@ void draw_client_map2(object *pl) {
                                 is_door = 1;
                             }
 
+                            if (head->type == EXIT) {
+                                flags2 |= MAP2_FLAG2_EXIT;
+                                is_exit = 1;
+                            }
+
                             if (head->glow != NULL && CONTR(pl)->cs->socket_version >= 1060) {
                                 flags2 |= MAP2_FLAG2_GLOW;
                             }
@@ -1888,6 +1894,7 @@ void draw_client_map2(object *pl) {
                                 mp->flags[socket_layer] == flags &&
                                 mp->roof[socket_layer] == is_roof &&
                                 mp->door[socket_layer] == is_door &&
+                                mp->exit[socket_layer] == is_exit &&
                                 (layer != LAYER_LIVING || !IS_LIVE(head) ||
                                  (mp->probe == probe_val &&
                                   mp->target_object_count == target_object_count)) &&
@@ -1909,6 +1916,7 @@ void draw_client_map2(object *pl) {
                             mp->flags[socket_layer] = flags;
                             mp->roof[socket_layer] = is_roof;
                             mp->door[socket_layer] = is_door;
+                            mp->exit[socket_layer] = is_exit;
                             mp->anim_speed[socket_layer] = anim_speed;
                             mp->anim_facing[socket_layer] = anim_facing;
 
@@ -2075,6 +2083,7 @@ void draw_client_map2(object *pl) {
                             mp->flags[socket_layer] = 0;
                             mp->roof[socket_layer] = 0;
                             mp->door[socket_layer] = 0;
+                            mp->exit[socket_layer] = 0;
                             mp->anim_speed[socket_layer] = 0;
                             mp->anim_facing[socket_layer] = 0;
 
