@@ -1324,10 +1324,10 @@ static void init_clocks(void) {
     contents[length] = '\0';
 
     unsigned long parsed;
-    if (!valid_io || memchr(contents, '\0', length) != NULL ||
-        !todclock_parse(contents, &parsed)) {
+    if (!valid_io || memchr(contents, '\0', length) != NULL || !todclock_parse(contents, &parsed)) {
         LOG(ERROR,
-            "Malformed persisted world clock %s; refusing to start so the file remains recoverable.",
+            "Malformed persisted world clock %s; refusing to start so the file remains "
+            "recoverable.",
             filename);
         exit(EXIT_FAILURE);
     }
