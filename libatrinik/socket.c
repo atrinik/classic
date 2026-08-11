@@ -88,6 +88,46 @@ TOOLKIT_INIT_FUNC_FINISH
 TOOLKIT_DEINIT_FUNC(socket) {}
 TOOLKIT_DEINIT_FUNC_FINISH
 
+#ifdef HAVE_GETADDRINFO
+static int socket_create_system_resolver(const char *host,
+                                         const char *service,
+                                         const struct addrinfo *hints,
+                                         struct addrinfo **addresses) {
+    return getaddrinfo(host, service, hints, addresses);
+}
+
+static void socket_create_system_addresses_free(struct addrinfo *addresses) {
+    freeaddrinfo(addresses);
+}
+
+static int socket_create_system_handle(int family, int type, int protocol) {
+    return socket(family, type, protocol);
+}
+
+static socket_create_resolver_t socket_create_resolver = socket_create_system_resolver;
+static socket_addrinfo_free_t socket_create_addresses_free = socket_create_system_addresses_free;
+static socket_create_handle_t socket_create_handle = socket_create_system_handle;
+
+void socket_create_resolver_set_for_test(socket_create_resolver_t resolver,
+                                         socket_addrinfo_free_t release,
+                                         socket_create_handle_t create_handle) {
+    socket_create_resolver = resolver != NULL ? resolver : socket_create_system_resolver;
+    socket_create_addresses_free = release != NULL ? release : socket_create_system_addresses_free;
+    socket_create_handle = create_handle != NULL ? create_handle : socket_create_system_handle;
+}
+
+bool socket_addrinfo_copy(struct sockaddr_storage *destination, const struct addrinfo *address) {
+    if (destination == NULL || address == NULL || address->ai_addr == NULL ||
+        address->ai_addrlen == 0 || address->ai_addrlen > sizeof(*destination)) {
+        return false;
+    }
+
+    memset(destination, 0, sizeof(*destination));
+    memcpy(destination, address->ai_addr, address->ai_addrlen);
+    return true;
+}
+#endif
+
 /**
  * Creates a new socket structure, complete with a socket for the specified
  * host/port.
@@ -129,7 +169,7 @@ socket_t *socket_create(const char *host, uint16_t port, socket_role_t role, boo
         hints.ai_flags |= AI_PASSIVE;
     }
 
-    if (getaddrinfo(host, port_str, &hints, &res) != 0) {
+    if (socket_create_resolver(host, port_str, &hints, &res) != 0) {
         LOG(ERROR,
             "Cannot getaddrinfo(), host %s, port %" PRIu16 ": %s (%d)",
             host != NULL ? host : "<none>",
@@ -146,7 +186,11 @@ socket_t *socket_create(const char *host, uint16_t port, socket_role_t role, boo
         }
 #endif
 
-        sc->handle = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (!socket_addrinfo_copy(&sc->addr, ai)) {
+            continue;
+        }
+
+        sc->handle = socket_create_handle(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (sc->handle == -1) {
             continue;
         }
@@ -161,17 +205,16 @@ socket_t *socket_create(const char *host, uint16_t port, socket_role_t role, boo
                            sizeof(flag)) != 0) {
                 LOG(ERROR, "Cannot setsockopt(IPV6_V6ONLY): %s (%d)", s_strerror(s_errno), s_errno);
                 socket_close(sc);
-                freeaddrinfo(res);
+                socket_create_addresses_free(res);
                 goto error;
             }
         }
 #endif
 
-        memcpy(&sc->addr, ai->ai_addr, res->ai_addrlen);
         break;
     }
 
-    freeaddrinfo(res);
+    socket_create_addresses_free(res);
 #else
     if (host != NULL) {
         struct hostent *host_entry = gethostbyname(host);
@@ -1428,15 +1471,16 @@ bool socket_host2addr(const char *host, struct sockaddr_storage *addr) {
             continue;
         }
 
-        retval = true;
-        memcpy(addr, ai->ai_addr, sizeof(*addr));
+        retval = socket_addrinfo_copy(addr, ai);
 
 #ifndef WIN32
         close(handle);
 #else
         closesocket(handle);
 #endif
-        break;
+        if (retval) {
+            break;
+        }
     }
 
     freeaddrinfo(res);

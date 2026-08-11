@@ -87,6 +87,12 @@ typedef int (*socket_stun_resolver_t)(const char *host,
                                       const char *service,
                                       const struct addrinfo *hints,
                                       struct addrinfo **addresses);
+typedef int (*socket_create_resolver_t)(const char *host,
+                                        const char *service,
+                                        const struct addrinfo *hints,
+                                        struct addrinfo **addresses);
+typedef void (*socket_addrinfo_free_t)(struct addrinfo *addresses);
+typedef int (*socket_create_handle_t)(int family, int type, int protocol);
 typedef uint64_t (*socket_stun_clock_t)(void);
 typedef void (*socket_stun_after_send_t)(void);
 typedef bool (*socket_rendezvous_fallback_t)(socket_t *sc,
@@ -95,6 +101,14 @@ typedef bool (*socket_rendezvous_fallback_t)(socket_t *sc,
                                              size_t host_size,
                                              uint16_t *port);
 
+#ifdef HAVE_GETADDRINFO
+/** Copy one complete resolved address into zeroed caller-owned storage. */
+bool socket_addrinfo_copy(struct sockaddr_storage *destination, const struct addrinfo *address);
+/** Replace socket_create() resolver ownership callbacks for one isolated test. */
+void socket_create_resolver_set_for_test(socket_create_resolver_t resolver,
+                                         socket_addrinfo_free_t release,
+                                         socket_create_handle_t create_handle);
+#endif
 bool socket_stun_discover_until(socket_t *sc,
                                 const char *endpoint,
                                 char *host,
