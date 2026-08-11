@@ -70,9 +70,9 @@ START_TEST(test_object_can_merge) {
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob2);
     ob2 = arch_get("bolt");
-    FREE_AND_COPY_HASH(ob1->name_pl, "bolts");
+    FREE_AND_COPY_HASH(ob1->name_pl, "custom bolts");
     ck_assert(!object_can_merge(ob1, ob2));
-    FREE_AND_COPY_HASH(ob2->name_pl, "bolts");
+    FREE_AND_COPY_HASH(ob2->name_pl, "custom bolts");
     ck_assert(object_can_merge(ob1, ob2));
     FREE_AND_COPY_HASH(ob2->name_pl, "projectiles");
     ck_assert(!object_can_merge(ob1, ob2));
@@ -182,12 +182,29 @@ START_TEST(test_object_plural_name_contract) {
     object_destroy(clone);
     object_destroy(ob);
 
+    ob = object_load_str("arch sack\nname_pl torches\nname torch\nend\n");
+    ck_assert_ptr_nonnull(ob);
+    ck_assert_str_eq(ob->name, "torch");
+    ck_assert_str_eq(ob->name_pl, "torches");
+    object_destroy(ob);
+
     ob = object_load_str("arch sack\nname torch\nend\n");
     ck_assert_ptr_nonnull(ob);
+    ck_assert_ptr_null(ob->name_pl);
     ob->nrof = 2;
     sb = object_get_display_name(ob, NULL, NULL);
     name = stringbuffer_finish(sb);
     ck_assert_str_eq(name, "torch");
+    free(name);
+    object_destroy(ob);
+
+    ob = object_load_str("arch sack\nend\n");
+    ck_assert_ptr_nonnull(ob);
+    ck_assert_str_eq(ob->name_pl, "sacks");
+    ob->nrof = 2;
+    sb = object_get_display_name(ob, NULL, NULL);
+    name = stringbuffer_finish(sb);
+    ck_assert_str_eq(name, "sacks");
     free(name);
     object_destroy(ob);
 }
