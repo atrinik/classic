@@ -525,11 +525,15 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn(
             "libatrinik-metaserver-url libatrinik-socket-address "
-            "libatrinik-stun \\",
+            "libatrinik-socket-quic \\",
             build,
         )
+        self.assertIn("libatrinik-stun \\", build)
         self.assertIn(
             "libatrinik/build/windows-tests/libatrinik-socket-address.exe", build
+        )
+        self.assertIn(
+            "libatrinik/build/windows-tests/libatrinik-socket-quic.exe", build
         )
         self.assertIn(
             "libatrinik/build/windows-tests/libatrinik-stun.exe", build
@@ -551,6 +555,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"libatrinik-metaserver-publisher.exe"', run)
         self.assertIn('"libatrinik-metaserver-url.exe"', run)
         self.assertIn('"libatrinik-socket-address.exe"', run)
+        self.assertIn('"libatrinik-socket-quic.exe"', run)
         self.assertIn('"libatrinik-stun.exe"', run)
         self.assertIn('"client-rich-presence-tests.exe"', run)
         self.assertIn('"atrinik-classic-server-*-windows-x86_64.zip"', run)
