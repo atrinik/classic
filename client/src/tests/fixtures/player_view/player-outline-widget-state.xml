@@ -7,9 +7,9 @@
              archdef="data/archdef.dat"
              archdef-sha256="977ce63e38f4795545f42bd2f4a9c62bd38fcdb4cfde7cb7fe3c2cd9fe73983e"
              snapshot="src/tests/fixtures/player_view/player-outline-widget-state.map2.hex"
-             snapshot-sha256="ab45bdfde3263f7c5a7933bcc13ce369f1c8e7feb13e6340f884ebe3116e0e6e"
+             snapshot-sha256="b72e3304c95afed128ff97febf6deae51ed4e02da09a270e53e852601e46e437"
              next-snapshot="src/tests/fixtures/player_view/player-outline-widget-move.map2.hex"
-             next-snapshot-sha256="6d49343bb1ddc25fed078dd5a6ced193e0e57e7438baafaa08bbd2833b5ea178"
+             next-snapshot-sha256="80a15e9b67e52d9dc914c38de215c599668016de94fdf29ee82c334d982d32f0"
              font="fonts/sans.ttf"
              font-sha256="c4c45690b345435b2cba52ecabe275f05e49b389b39fe68ad03afbb551288d3d"
              viewport-width="320"
@@ -23,7 +23,7 @@
              player-names="true"
              target-ui="true"
              clock-ms="1200"
-             expected-ui-pixels-sha256="0dd208b688ff91a086bae0cb79f901025a31ee07140c0a0893d13387660b8eb0"
+             expected-ui-pixels-sha256="4db448ba1fdd547af4e7d517cee4fa6c30fe1e4e17ee040907dd88a73c15fd03"
              expected-pixels-sha256="0c52ce3bbf9aacfc0609638d5ff363b45a0fdf53c6bce961e72f23abb51768c8">
   <asset face="1" path="textures/square_highlight.png" sha256="fecfd2da236702bc874c58a767d0d237f5425e423e6699742accb26215c9676b"/>
   <asset face="2" path="textures/target_attack.png" sha256="6924dbe0a7ed3bd7b71577b0d00c91c70855cba39102c20ba3270452c2d4d806"/>
