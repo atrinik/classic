@@ -32,6 +32,7 @@ set(SOURCES
 	src/client/misc.c
 	src/client/packet_payload.c
 	src/client/player.c
+	src/client/player_status.c
 	src/client/player_view.c
 	src/client/region_map.c
 	src/client/rich_presence.c

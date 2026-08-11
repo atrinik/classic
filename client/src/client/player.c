@@ -35,6 +35,7 @@
  */
 
 #include <global.h>
+#include <player_status.h>
 #include <client_socket.h>
 #include <toolkit/packet.h>
 
@@ -68,6 +69,7 @@ const char *gender_reflexive[GENDER_MAX] = {"itself", "himself", "herself", "its
  */
 void clear_player(void) {
     objects_deinit();
+    player_status_model_clear(&player_status_model);
     skills_deinit();
     spells_deinit();
 

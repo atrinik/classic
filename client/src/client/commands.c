@@ -29,6 +29,7 @@
  */
 
 #include <global.h>
+#include <player_status.h>
 #include <video.h>
 #include <client_socket.h>
 #include <packet_payload.h>
@@ -471,11 +472,6 @@ static void command_item_apply(const item_packet_update_t *update, uint32_t flag
                       update->extra_message);
     } else if (update->extra_type == ITEM_PACKET_EXTRA_SKILL) {
         skills_update(tmp, update->skill_level, update->skill_exp, update->extra_message);
-    } else if (update->extra_type == ITEM_PACKET_EXTRA_EFFECT) {
-        widget_active_effects_update(cur_widget[ACTIVE_EFFECTS_ID],
-                                     tmp,
-                                     update->effect_seconds,
-                                     update->extra_message);
     }
 
     if (tmp->itype == TYPE_REGION_MAP) {
@@ -657,6 +653,21 @@ void socket_command_item_delete(uint8_t *data, size_t len, size_t pos) {
         delete_object(tag);
     }
     (void)packet_reader_finish(&reader);
+}
+
+/** @copydoc socket_command_struct::handle_func */
+void socket_command_player_status(uint8_t *data, size_t len, size_t pos) {
+    if (!player_status_parse_command(&player_status_model, data, len, pos)) {
+        return;
+    }
+
+    for (player_status_t *status = player_status_model.head; status != NULL;
+         status = status->next) {
+        image_request_face(status->face);
+    }
+    if (cur_widget[ACTIVE_EFFECTS_ID] != NULL) {
+        WIDGET_REDRAW(cur_widget[ACTIVE_EFFECTS_ID]);
+    }
 }
 
 /**

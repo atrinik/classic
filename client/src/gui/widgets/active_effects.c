@@ -30,52 +30,21 @@
  */
 
 #include <global.h>
+#include <player_status.h>
 #include <video.h>
 #include <toolkit/string.h>
-
-/**
- * One active effect.
- */
-typedef struct active_effect_struct {
-    /**
-     * Next active effect in a doubly-linked list.
-     */
-    struct active_effect_struct *next;
-
-    /**
-     * Previous active effect in a doubly-linked list.
-     */
-    struct active_effect_struct *prev;
-
-    /**
-     * Pointer to the actual active effect force object.
-     */
-    object *op;
-
-    /**
-     * Seconds remaining before the effect expires. -1 does not expire.
-     */
-    int32_t sec;
-
-    /**
-     * Explanation of the active effect.
-     */
-    char *msg;
-} active_effect_struct;
 
 /**
  * Active effects widget data.
  */
 typedef struct widget_active_effects_struct {
-    active_effect_struct *active_effects;
-
     uint32_t update_ticks;
 } widget_active_effects_struct;
 
 /** @copydoc widgetdata::draw_func */
 static void widget_draw(widgetdata *widget) {
     widget_active_effects_struct *tmp;
-    active_effect_struct *effect;
+    player_status_t *status;
     SDL_Rect box;
 
     tmp = widget->subwidget;
@@ -88,17 +57,7 @@ static void widget_draw(widgetdata *widget) {
         sec = (SDL_GetTicks() - tmp->update_ticks) / 1000;
         tmp->update_ticks = SDL_GetTicks();
 
-        DL_FOREACH(tmp->active_effects, effect) {
-            if (effect->sec > 0) {
-                effect->sec -= sec;
-
-                if (effect->sec < 0) {
-                    effect->sec = 0;
-                }
-
-                redraw = 1;
-            }
-        }
+        redraw = player_status_model_tick(&player_status_model, sec);
 
         widget->redraw += redraw;
     }
@@ -128,8 +87,8 @@ static void widget_draw(widgetdata *widget) {
 
         SDL_FillSurfaceRect(widget->surface, NULL, 0);
 
-        DL_FOREACH(tmp->active_effects, effect) {
-            sprite = image_get_sprite(effect->op->face);
+        for (status = player_status_model.head; status != NULL; status = status->next) {
+            sprite = image_get_sprite(status->face);
 
             if (!sprite) {
                 continue;
@@ -145,24 +104,24 @@ static void widget_draw(widgetdata *widget) {
                 widget->redraw++;
             }
 
-            if (image_get_sprite(effect->op->face) != NULL) {
-                surface_show(widget->surface,
-                             x,
-                             y,
-                             NULL,
-                             image_get_sprite(effect->op->face)->bitmap);
+            if (image_get_sprite(status->face) != NULL) {
+                surface_show(widget->surface, x, y, NULL, image_get_sprite(status->face)->bitmap);
             }
 
-            if (effect->sec != -1) {
+            if (status->seconds != -1) {
                 SDL_Rect textbox;
                 char buf[MAX_BUF];
 
                 textbox.w = sprite->bitmap->w;
 
-                if (effect->sec > 60) {
-                    snprintf(buf, sizeof(buf), "%d:%02d", effect->sec / 60, effect->sec % 60);
+                if (status->seconds > 60) {
+                    snprintf(buf,
+                             sizeof(buf),
+                             "%d:%02d",
+                             status->seconds / 60,
+                             status->seconds % 60);
                 } else {
-                    snprintf(buf, sizeof(buf), "%d", effect->sec);
+                    snprintf(buf, sizeof(buf), "%d", status->seconds);
                 }
 
                 text_show(widget->surface,
@@ -186,19 +145,15 @@ static void widget_draw(widgetdata *widget) {
 
 /** @copydoc widgetdata::event_func */
 static int widget_event(widgetdata *widget, SDL_Event *event) {
-    widget_active_effects_struct *tmp;
-
-    tmp = widget->subwidget;
-
     if (event->type == SDL_EVENT_MOUSE_MOTION) {
-        active_effect_struct *effect;
+        player_status_t *status;
         int x, y;
         sprite_struct *sprite;
 
         x = y = 0;
 
-        DL_FOREACH(tmp->active_effects, effect) {
-            sprite = image_get_sprite(effect->op->face);
+        for (status = player_status_model.head; status != NULL; status = status->next) {
+            sprite = image_get_sprite(status->face);
 
             if (!sprite) {
                 continue;
@@ -218,9 +173,9 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
                 snprintf(buf,
                          sizeof(buf),
                          "[b]%s[/b]%s%s",
-                         effect->op->s_name,
-                         effect->msg[0] != '\0' ? "\n" : "",
-                         effect->msg);
+                         status->name,
+                         status->tooltip[0] != '\0' ? "\n" : "",
+                         status->tooltip);
                 tooltip_create(event_mouse_x(event), event_mouse_y(event), FONT_ARIAL11, buf);
                 tooltip_multiline(200);
                 break;
@@ -231,53 +186,6 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
     }
 
     return 0;
-}
-
-void widget_active_effects_update(widgetdata *widget, object *op, int32_t sec, const char *msg) {
-    widget_active_effects_struct *tmp;
-    active_effect_struct *effect;
-
-    tmp = widget->subwidget;
-
-    if (!(op->flags & CS_FLAG_APPLIED)) {
-        return;
-    }
-
-    DL_FOREACH(tmp->active_effects, effect) {
-        if (effect->op == op) {
-            break;
-        }
-    }
-
-    if (!effect) {
-        effect = xcalloc(1, sizeof(*effect));
-        DL_APPEND(tmp->active_effects, effect);
-    } else {
-        free(effect->msg);
-    }
-
-    effect->op = op;
-    effect->sec = sec;
-    effect->msg = xstrdup(msg);
-
-    WIDGET_REDRAW(widget);
-}
-
-void widget_active_effects_remove(widgetdata *widget, object *op) {
-    widget_active_effects_struct *tmp;
-    active_effect_struct *effect, *next;
-
-    tmp = widget->subwidget;
-
-    DL_FOREACH_SAFE(tmp->active_effects, effect, next) {
-        if (effect->op == op) {
-            DL_DELETE(tmp->active_effects, effect);
-            free(effect->msg);
-            free(effect);
-            WIDGET_REDRAW(widget);
-            break;
-        }
-    }
 }
 
 /**

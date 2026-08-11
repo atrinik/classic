@@ -8,8 +8,38 @@
 #include <checkstd.h>
 #include <check_utils.h>
 #include <arch.h>
+#include <disease.h>
 #include <object.h>
+#include <player.h>
 #include <server.h>
+#include <player_status.h>
+#include <toolkit/packet.h>
+
+static packet_struct *queued_command_find(socket_struct *cs, uint8_t type) {
+    packet_struct *found = NULL;
+    for (packet_struct *packet = cs->packets; packet != NULL; packet = packet->next) {
+        if (packet->type == type) {
+            found = packet;
+        }
+    }
+    return found;
+}
+
+static void assert_status_entry(packet_reader_t *reader,
+                                const char *expected_key,
+                                const char *expected_name,
+                                int32_t expected_seconds) {
+    char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+    char name[ATRINIK_PLAYER_STATUS_NAME_SIZE + 1U];
+    char tooltip[ATRINIK_PLAYER_STATUS_TOOLTIP_SIZE + 1U];
+    ck_assert(packet_reader_read_string(reader, VS(key)));
+    ck_assert_str_eq(key, expected_key);
+    ck_assert_uint_gt(packet_reader_read_uint16(reader), 0);
+    ck_assert(packet_reader_read_string(reader, VS(name)));
+    ck_assert_str_eq(name, expected_name);
+    ck_assert(packet_reader_read_string(reader, VS(tooltip)));
+    ck_assert_int_eq(packet_reader_read_int32(reader), expected_seconds);
+}
 
 START_TEST(test_update_map_item_name_and_count_marks_look_stale) {
     mapstruct *map;
@@ -31,6 +61,204 @@ START_TEST(test_update_map_item_name_and_count_marks_look_stale) {
 }
 END_TEST
 
+START_TEST(test_player_status_disease_infection_duplicate_and_cure) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+    socket_buffer_clear(CONTR(pl)->cs);
+
+    object *carrier = arch_get("flu");
+    ck_assert_ptr_nonnull(carrier);
+    ck_assert(disease_infect(carrier, pl, true));
+
+    packet_struct *packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
+    assert_status_entry(&reader, "disease:flu", "flu", -1);
+    ck_assert(packet_reader_finish(&reader));
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert(!disease_infect(carrier, pl, true));
+    ck_assert_ptr_null(queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS));
+
+    ck_assert(disease_cure(pl, NULL));
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_REMOVE);
+    char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+    ck_assert(packet_reader_read_string(&reader, VS(key)));
+    ck_assert_str_eq(key, "disease:flu");
+    ck_assert(packet_reader_finish(&reader));
+
+    object_destroy(carrier);
+    object_destroy(pl);
+}
+END_TEST
+
+START_TEST(test_player_status_hidden_disease_lifecycle_and_snapshot) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+    socket_buffer_clear(CONTR(pl)->cs);
+
+    object *disease = arch_get("flu");
+    ck_assert_ptr_nonnull(disease);
+    disease = object_insert_into(disease, pl, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(disease);
+    ck_assert(player_status_should_publish(disease));
+
+    packet_struct *packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
+    assert_status_entry(&reader, "disease:flu", "flu", -1);
+    ck_assert(packet_reader_finish(&reader));
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    esrv_send_inventory(pl, pl);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_SNAPSHOT);
+    ck_assert_uint_eq(packet_reader_read_uint16(&reader), 1);
+    assert_status_entry(&reader, "disease:flu", "flu", -1);
+    ck_assert(packet_reader_finish(&reader));
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    object_remove(disease, 0);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_REMOVE);
+    char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+    ck_assert(packet_reader_read_string(&reader, VS(key)));
+    ck_assert_str_eq(key, "disease:flu");
+    ck_assert(packet_reader_finish(&reader));
+    object_destroy(disease);
+
+    object_destroy(pl);
+}
+END_TEST
+
+START_TEST(test_player_status_explicit_force_allowlist) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+    socket_buffer_clear(CONTR(pl)->cs);
+
+    static const char *const published[] = {
+        "blindness",
+        "confusion",
+        "depletion",
+        "force_effect",
+        "soul_depletion",
+    };
+    for (size_t i = 0; i < arraysize(published); i++) {
+        socket_buffer_clear(CONTR(pl)->cs);
+        object *effect = arch_get(published[i]);
+        ck_assert_ptr_nonnull(effect);
+        SET_FLAG(effect, FLAG_APPLIED);
+        effect = object_insert_into(effect, pl, INS_NO_MERGE);
+        ck_assert_ptr_nonnull(effect);
+        ck_assert(player_status_should_publish(effect));
+        ck_assert_ptr_nonnull(queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS));
+    }
+
+    static const char *const excluded[] = {
+        "force",
+        "immunity",
+        "player_force",
+        "town_portal",
+        "marker",
+        "ability_stone_throw",
+        "symptom",
+    };
+    for (size_t i = 0; i < arraysize(excluded); i++) {
+        socket_buffer_clear(CONTR(pl)->cs);
+        object *effect = arch_get(excluded[i]);
+        ck_assert_ptr_nonnull(effect);
+        SET_FLAG(effect, FLAG_APPLIED);
+        effect = object_insert_into(effect, pl, INS_NO_MERGE);
+        ck_assert_ptr_nonnull(effect);
+        ck_assert(!player_status_should_publish(effect));
+        ck_assert_ptr_null(queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS));
+    }
+
+    object_destroy(pl);
+}
+END_TEST
+
+START_TEST(test_player_status_poison_and_timed_force_refresh_and_remove) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+    socket_buffer_clear(CONTR(pl)->cs);
+
+    object *poison = arch_get("poisoning");
+    ck_assert_ptr_nonnull(poison);
+    poison = object_insert_into(poison, pl, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(poison);
+    ck_assert(player_status_should_publish(poison));
+    ck_assert_ptr_nonnull(queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS));
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    object *effect = arch_get("force_effect");
+    ck_assert_ptr_nonnull(effect);
+    SET_FLAG(effect, FLAG_APPLIED);
+    SET_FLAG(effect, FLAG_IS_USED_UP);
+    effect->speed = 0.05;
+    effect->speed_left = -1.0;
+    effect->stats.food = 10;
+    effect = object_insert_into(effect, pl, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(effect);
+
+    packet_struct *packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
+    char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+    char name[ATRINIK_PLAYER_STATUS_NAME_SIZE + 1U];
+    char tooltip[ATRINIK_PLAYER_STATUS_TOOLTIP_SIZE + 1U];
+    ck_assert(packet_reader_read_string(&reader, VS(key)));
+    ck_assert_uint_gt(packet_reader_read_uint16(&reader), 0);
+    ck_assert(packet_reader_read_string(&reader, VS(name)));
+    ck_assert(packet_reader_read_string(&reader, VS(tooltip)));
+    ck_assert_int_gt(packet_reader_read_int32(&reader), 0);
+    ck_assert(packet_reader_finish(&reader));
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    effect->stats.food = 20;
+    esrv_update_item(UPD_EXTRA, effect);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    CLEAR_FLAG(effect, FLAG_APPLIED);
+    esrv_update_item(UPD_FLAGS, effect);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_REMOVE);
+    char removed_key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+    ck_assert(packet_reader_read_string(&reader, VS(removed_key)));
+    ck_assert_str_eq(removed_key, key);
+    ck_assert(packet_reader_finish(&reader));
+
+    object_destroy(pl);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("item");
     TCase *tc_core = tcase_create("Core");
@@ -39,6 +267,10 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_update_map_item_name_and_count_marks_look_stale);
+    tcase_add_test(tc_core, test_player_status_hidden_disease_lifecycle_and_snapshot);
+    tcase_add_test(tc_core, test_player_status_disease_infection_duplicate_and_cure);
+    tcase_add_test(tc_core, test_player_status_explicit_force_allowlist);
+    tcase_add_test(tc_core, test_player_status_poison_and_timed_force_refresh_and_remove);
 
     return s;
 }

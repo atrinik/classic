@@ -32,7 +32,13 @@ def load_schema(path: Path) -> dict[str, object]:
 
     if not isinstance(data, dict):
         raise ValueError("schema root must be an object")
-    if set(data) != {"schema_version", "protocol_version", "item_name_size", *DIRECTIONS}:
+    if set(data) != {
+        "schema_version",
+        "protocol_version",
+        "item_name_size",
+        "player_status",
+        *DIRECTIONS,
+    }:
         raise ValueError("schema root has missing or unsupported keys")
     if data["schema_version"] != 1:
         raise ValueError("unsupported schema_version")
@@ -46,6 +52,51 @@ def load_schema(path: Path) -> dict[str, object]:
         raise ValueError("item_name_size must be an integer")
     if item_name_size <= 1 or item_name_size > 0xFFFFFFFF:
         raise ValueError("item_name_size is outside the supported range")
+
+    player_status = data["player_status"]
+    if not isinstance(player_status, dict) or set(player_status) != {
+        "max_statuses",
+        "key_size",
+        "name_size",
+        "tooltip_size",
+        "operations",
+    }:
+        raise ValueError("player_status has an invalid shape")
+    for field in ("max_statuses", "key_size", "name_size", "tooltip_size"):
+        value = player_status[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0 or value > 0xFFFF:
+            raise ValueError(f"player_status.{field} is outside the uint16 range")
+    status_entry_size = (
+        player_status["key_size"]
+        + 1
+        + 2
+        + player_status["name_size"]
+        + 1
+        + player_status["tooltip_size"]
+        + 1
+        + 4
+    )
+    if 1 + 2 + player_status["max_statuses"] * status_entry_size > 0xFFFE:
+        raise ValueError("player_status snapshot exceeds the maximum packet payload")
+    operations = player_status["operations"]
+    if not isinstance(operations, list) or not operations or len(operations) > 256:
+        raise ValueError("player_status.operations must fit in the uint8 operation space")
+    seen_status_symbols: set[str] = set()
+    for expected_id, operation in enumerate(operations):
+        if not isinstance(operation, dict) or set(operation) != {"id", "symbol"}:
+            raise ValueError(f"player_status.operations[{expected_id}] has an invalid shape")
+        operation_id = operation["id"]
+        symbol = operation["symbol"]
+        if isinstance(operation_id, bool) or operation_id != expected_id:
+            raise ValueError(
+                f"player_status.operations[{expected_id}].id must be the contiguous value "
+                f"{expected_id}"
+            )
+        if not isinstance(symbol, str) or not SYMBOL_RE.fullmatch(symbol):
+            raise ValueError(f"player_status.operations[{expected_id}].symbol is invalid")
+        if symbol in seen_status_symbols:
+            raise ValueError(f"duplicate player_status operation symbol: {symbol}")
+        seen_status_symbols.add(symbol)
 
     for direction in DIRECTIONS:
         commands = data[direction]
@@ -97,8 +148,21 @@ def render_header(schema: dict[str, object]) -> str:
         f"#define ATRINIK_PROTOCOL_VERSION {schema['protocol_version']}U\n",
         "#define SOCKET_VERSION ATRINIK_PROTOCOL_VERSION\n",
         f"#define ATRINIK_PROTOCOL_ITEM_NAME_SIZE {schema['item_name_size']}U\n\n",
-        "typedef enum atrinik_client_to_server_command {\n",
+        f"#define ATRINIK_PLAYER_STATUS_MAX_STATUSES {schema['player_status']['max_statuses']}U\n",
+        f"#define ATRINIK_PLAYER_STATUS_KEY_SIZE {schema['player_status']['key_size']}U\n",
+        f"#define ATRINIK_PLAYER_STATUS_NAME_SIZE {schema['player_status']['name_size']}U\n",
+        f"#define ATRINIK_PLAYER_STATUS_TOOLTIP_SIZE {schema['player_status']['tooltip_size']}U\n\n",
+        "typedef enum atrinik_player_status_operation {\n",
     ]
+    for operation in schema["player_status"]["operations"]:
+        lines.append(f"    PLAYER_STATUS_{operation['symbol']} = {operation['id']},\n")
+    lines.extend(
+        [
+            f"    PLAYER_STATUS_OPERATION_NROF = {len(schema['player_status']['operations'])}\n",
+            "} atrinik_player_status_operation_t;\n\n",
+            "typedef enum atrinik_client_to_server_command {\n",
+        ]
+    )
     for command in schema["client_to_server"]:
         lines.append(f"    SERVER_CMD_{command['symbol']} = {command['id']},\n")
     lines.extend(
@@ -181,8 +245,15 @@ def render_python(schema: dict[str, object]) -> str:
         "from enum import IntEnum\n\n",
         f"PROTOCOL_VERSION = {schema['protocol_version']}\n\n\n",
         f"ITEM_NAME_SIZE = {schema['item_name_size']}\n\n\n",
-        "class ClientToServerCommand(IntEnum):\n",
+        f"PLAYER_STATUS_MAX_STATUSES = {schema['player_status']['max_statuses']}\n",
+        f"PLAYER_STATUS_KEY_SIZE = {schema['player_status']['key_size']}\n",
+        f"PLAYER_STATUS_NAME_SIZE = {schema['player_status']['name_size']}\n",
+        f"PLAYER_STATUS_TOOLTIP_SIZE = {schema['player_status']['tooltip_size']}\n\n\n",
+        "class PlayerStatusOperation(IntEnum):\n",
     ]
+    for operation in schema["player_status"]["operations"]:
+        lines.append(f"    {operation['symbol']} = {operation['id']}\n")
+    lines.extend(["\n\nclass ClientToServerCommand(IntEnum):\n"])
     for command in schema["client_to_server"]:
         lines.append(f"    {command['symbol']} = {command['id']}\n")
     lines.extend(["\n\nclass ServerToClientCommand(IntEnum):\n"])
