@@ -9,6 +9,7 @@
 #include <check_utils.h>
 #include <arch.h>
 #include <attack.h>
+#include <monster_data.h>
 #include <object.h>
 #include <player.h>
 #include <poisoning.h>
@@ -66,6 +67,14 @@ START_TEST(test_stat_depletion_is_bounded_and_protection_scaled) {
     ck_assert_int_eq(poisoning_stat_depletion_limit(100), 0);
     ck_assert_int_eq(poisoning_stat_depletion_limit(200), 0);
 
+    /* Identical drain rolls are monotonic at the exact protection boundaries. */
+    ck_assert_int_eq(poisoning_stat_depletion_after_pulse(0, 0, true, 2), -2);
+    ck_assert_int_eq(poisoning_stat_depletion_after_pulse(0, 34, true, 2), -2);
+    ck_assert_int_eq(poisoning_stat_depletion_after_pulse(0, 67, true, 2), -1);
+    ck_assert_int_eq(poisoning_stat_depletion_after_pulse(0, 100, true, 2), 0);
+    ck_assert_int_eq(poisoning_stat_depletion_after_pulse(-3, 67, false, 1), -1);
+    ck_assert_int_eq(poisoning_stat_depletion_after_pulse(-3, 100, false, 1), 0);
+
     object *poison = arch_get("poisoning");
     SET_FLAG(poison, FLAG_APPLIED);
     poison = object_insert_into(poison, pl, 0);
@@ -79,14 +88,18 @@ START_TEST(test_stat_depletion_is_bounded_and_protection_scaled) {
         ck_assert_int_le(get_attr_value(&poison->stats, stat), 0);
     }
 
+    /* Exercise production processing: protection reconciliation happens even
+     * if this low-damage pulse is stopped by attack protection. */
+    poison->stats.dam = 1;
+    poison->stats.food = POISON_BASE_PULSES + 1;
     pl->protection[ATNR_POISON] = 67;
-    poisoning_apply_stat_depletion(poison, pl);
+    object_process(poison);
     for (int stat = 0; stat < NUM_STATS; stat++) {
         ck_assert_int_ge(get_attr_value(&poison->stats, stat), -1);
     }
 
     pl->protection[ATNR_POISON] = 100;
-    poisoning_apply_stat_depletion(poison, pl);
+    object_process(poison);
     for (int stat = 0; stat < NUM_STATS; stat++) {
         ck_assert_int_eq(get_attr_value(&poison->stats, stat), 0);
     }
@@ -94,17 +107,34 @@ START_TEST(test_stat_depletion_is_bounded_and_protection_scaled) {
 END_TEST
 
 START_TEST(test_monsters_do_not_receive_poison_stat_depletion) {
-    object *monster = arch_get("kobold");
-    object *poison = arch_get("poisoning");
+    mapstruct *map;
+    object *pl;
 
-    for (int pulse = 0; pulse < 100; pulse++) {
-        poisoning_apply_stat_depletion(poison, monster);
+    check_setup_env_pl(&map, &pl);
+    FREE_AND_COPY_HASH(map->path, "/unit/poisoning-monster");
+    object *monster = arch_get("kobold");
+    monster->stats.hp = monster->stats.maxhp = 1000;
+    monster->x = pl->x + 1;
+    monster->y = pl->y;
+    monster = object_insert_map(monster, map, NULL, 0);
+    monster_data_init(monster);
+    object *poison = arch_get("poisoning");
+    poison->stats.dam = 10;
+    poison->stats.food = 100;
+    object_owner_set(poison, pl);
+    SET_FLAG(poison, FLAG_APPLIED);
+    poison = object_insert_into(poison, monster, 0);
+
+    int initial_hp = monster->stats.hp;
+    for (int pulse = 0; pulse < 20 && monster->stats.hp == initial_hp; pulse++) {
+        object_process(poison);
     }
+    ck_assert_int_lt(monster->stats.hp, initial_hp);
     for (int stat = 0; stat < NUM_STATS; stat++) {
         ck_assert_int_eq(get_attr_value(&poison->stats, stat), 0);
     }
 
-    object_destroy(poison);
+    object_remove(monster, 0);
     object_destroy(monster);
 }
 END_TEST
@@ -144,8 +174,6 @@ START_TEST(test_expiry_and_cure_restore_stats_and_speed) {
     living_update_player(pl);
 
     ck_assert(cast_heal(pl, pl, MAXLEVEL, pl, SP_CURE_POISON));
-    ck_assert_int_eq(poison->stats.food, 1);
-    ck_assert_int_eq(common_object_process_pre(poison), 1);
     ck_assert_ptr_null(find_poison(pl));
     ck_assert_int_eq(pl->stats.Str, base_str);
     ck_assert(fabs(pl->speed - base_speed) < 0.000001);

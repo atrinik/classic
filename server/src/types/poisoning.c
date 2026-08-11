@@ -48,6 +48,45 @@ int poisoning_stat_depletion_limit(int protection) {
 }
 
 /**
+ * Calculate one stat's depletion after a poison pulse.
+ *
+ * Keeping protection scaling in this pure calculation makes exact boundary
+ * behavior deterministic even though the decision to drain is random.
+ */
+int poisoning_stat_depletion_after_pulse(int depletion, int protection, bool drains, int amount) {
+    int limit = poisoning_stat_depletion_limit(protection);
+
+    depletion = MAX(-limit, MIN(0, depletion));
+    if (!drains || limit == 0 || depletion == -limit) {
+        return depletion;
+    }
+
+    return MAX(-limit, depletion - MAX(1, amount));
+}
+
+/**
+ * Clamp existing player depletion to the target's current protection.
+ *
+ * This is separate from adding depletion so protection changes are honored
+ * even when the next poison pulse deals no damage.
+ */
+static bool poisoning_reconcile_stat_depletion(object *poison, object *target) {
+    int limit = poisoning_stat_depletion_limit(target->protection[ATNR_POISON]);
+    bool changed = false;
+
+    for (int i = 0; i < NUM_STATS; i++) {
+        int8_t depletion = get_attr_value(&poison->stats, i);
+
+        if (depletion < -limit) {
+            set_attr_value(&poison->stats, i, -limit);
+            changed = true;
+        }
+    }
+
+    return changed;
+}
+
+/**
  * Apply one pulse of player-only poison stat depletion.
  */
 void poisoning_apply_stat_depletion(object *poison, object *target) {
@@ -59,21 +98,17 @@ void poisoning_apply_stat_depletion(object *poison, object *target) {
     }
 
     int protection = MAX(0, MIN(100, target->protection[ATNR_POISON]));
-    int limit = poisoning_stat_depletion_limit(protection);
+
+    poisoning_reconcile_stat_depletion(poison, target);
 
     for (int i = 0; i < NUM_STATS; i++) {
         int8_t depletion = get_attr_value(&poison->stats, i);
+        bool drains = rndm_chance(2) && rndm(1, 100) > protection;
+        int amount = drains && rndm_chance(6) ? 2 : 1;
 
-        /* Protection gained while poisoned takes effect on the next pulse. */
-        if (depletion < -limit) {
-            set_attr_value(&poison->stats, i, -limit);
-            depletion = -limit;
-        }
-
-        if (limit > 0 && depletion > -limit && rndm_chance(2) && rndm(1, 100) > protection) {
-            int amount = rndm_chance(6) ? 2 : 1;
-            set_attr_value(&poison->stats, i, MAX(-limit, depletion - amount));
-        }
+        set_attr_value(&poison->stats,
+                       i,
+                       poisoning_stat_depletion_after_pulse(depletion, protection, drains, amount));
     }
 }
 
@@ -88,6 +123,8 @@ static void process_func(object *op) {
     }
 
     object *target = op->env;
+    bool depletion_reconciled =
+        target->type == PLAYER && poisoning_reconcile_stat_depletion(op, target);
 
     if (op->owner != NULL && !object_owner(op)) {
         object_owner_clear(op);
@@ -95,6 +132,9 @@ static void process_func(object *op) {
 
     OBJECTS_DESTROYED_BEGIN(target) {
         if (!attack_hit(target, op, op->stats.dam)) {
+            if (depletion_reconciled && !OBJECTS_DESTROYED(target)) {
+                living_update(target);
+            }
             return;
         }
 

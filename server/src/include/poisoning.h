@@ -22,6 +22,7 @@
 #define POISON_MAX_STAT_DEPLETION 3
 
 int poisoning_stat_depletion_limit(int protection);
+int poisoning_stat_depletion_after_pulse(int depletion, int protection, bool drains, int amount);
 void poisoning_apply_stat_depletion(object *poison, object *target);
 
 #endif
