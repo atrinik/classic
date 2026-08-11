@@ -73,6 +73,23 @@ TOOLKIT_DEINIT_FUNC(math) {
 TOOLKIT_DEINIT_FUNC_FINISH
 
 /**
+ * Re-seed the default gameplay random number stream.
+ *
+ * This is primarily useful for deterministic integration tests. Production
+ * startup continues to seed the stream from OpenSSL.
+ *
+ * @param seed
+ * Deterministic seed.
+ */
+void rndm_seed(uint64_t seed) {
+    TOOLKIT_PROTECT();
+
+    pthread_mutex_lock(&gameplay_rng_mutex);
+    rng_seed(&gameplay_rng, seed);
+    pthread_mutex_unlock(&gameplay_rng_mutex);
+}
+
+/**
  * Advance a PCG-XSH-RR stream and return 32 random bits.
  *
  * @param rng

@@ -308,23 +308,35 @@ START_TEST(test_archery_rounding_and_overflow_boundaries) {
 
     object *target = projectile_test_target(map, pl);
     target->direction = 3;
+    target->enemy = pl;
+    target->enemy_count = pl->count;
     object *arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
     arrow->stats.dam = 25;
+    arrow->weight = 1001;
     FREE_AND_COPY_HASH(arrow->slaying, target->race);
-    ck_assert_int_eq(projectile_test_hit(arrow, target), 64);
+    object *combat_target = HEAD(target);
+    int hp_before = combat_target->stats.hp;
+    ck_assert_int_eq(projectile_test_hit(arrow, target), 54);
+    ck_assert_int_eq(combat_target->stats.hp, hp_before - 55);
     ck_assert_uint_eq(
         projectile_test_bonus_messages(
             pl,
-            "Archery damage bonus: +50% (+12 base damage) — rear shot, unaware target."),
+            "Archery damage bonus: +25% (+6 base damage) — rear shot."),
         1);
 
     target = projectile_test_target(map, pl);
     target->direction = 3;
+    target->enemy = pl;
+    target->enemy_count = pl->count;
     arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
     arrow->stats.dam = 25;
+    arrow->weight = 1001;
     FREE_AND_COPY_HASH(arrow->slaying, target->race);
     SET_FLAG(arrow, FLAG_IS_ASSASSINATION);
-    ck_assert_int_eq(projectile_test_hit(arrow, target), 83);
+    combat_target = HEAD(target);
+    hp_before = combat_target->stats.hp;
+    ck_assert_int_eq(projectile_test_hit(arrow, target), 69);
+    ck_assert_int_eq(combat_target->stats.hp, hp_before - 70);
 
     target = projectile_test_target(map, pl);
     target->direction = 3;
@@ -462,35 +474,37 @@ START_TEST(test_archery_blocked_and_lethal_impact_ordering) {
     check_setup_env_pl(&map, &pl);
     CONTR(pl)->cs->state = ST_PLAYING;
 
-    bool blocked = false;
-    for (int i = 0; i < 64 && !blocked; i++) {
-        object *target = projectile_test_target(map, pl);
-        target->direction = 3;
-        target->enemy = pl;
-        target->enemy_count = pl->count;
-        target->block = 100;
-        object *arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
-        arrow->weight = 1001;
-        uint64_t metric_before =
-            metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS);
-        size_t messages_before = projectile_test_bonus_messages(pl, NULL);
-        if (projectile_test_hit(arrow, target) == 0) {
-            blocked = true;
-            ck_assert_uint_eq(
-                metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS),
-                metric_before);
-            ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), messages_before);
-        }
-    }
-    ck_assert(blocked);
-
     object *target = projectile_test_target(map, pl);
+    target->direction = 3;
+    target->block = 100;
+    object *arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
+    arrow->weight = 1001;
+    rndm_seed(42);
+    ck_assert_int_eq(projectile_test_hit(arrow, target), 0);
+    ck_assert(OBJECT_VALID(target->enemy, target->enemy_count));
+    ck_assert_ptr_eq(target->enemy, pl);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS), 0);
+    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 0);
+
+    /* The block consumed the unaware opening through the normal alert
+     * transition, so a subsequent rear hit receives rear only. */
+    target->block = 0;
+    arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
+    arrow->weight = 1001;
+    ck_assert_int_eq(projectile_test_hit(arrow, target), 30);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS), 1);
+    ck_assert_uint_eq(
+        projectile_test_bonus_messages(
+            pl, "Archery damage bonus: +25% (+6 base damage) — rear shot."),
+        1);
+
+    target = projectile_test_target(map, pl);
     target->direction = 3;
     target->level = 1;
     target->stats.hp = 10;
     target->stats.maxhp = 10;
     target->stats.exp = 1000;
-    object *arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
+    arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
     tag_t arrow_count = arrow->count;
     object *skill = arrow->chosen_skill;
     object *saved_skill = CONTR(pl)->skill_ptr[SK_BOW_ARCHERY];
