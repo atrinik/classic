@@ -72,6 +72,7 @@ typedef struct player_view_manifest {
     uint32_t clock_ms;
     bool smooth_lighting;
     bool zoom_smoothing;
+    bool primary_surface;
 } player_view_manifest_t;
 
 static void player_view_manifest_free(player_view_manifest_t *manifest) {
@@ -397,6 +398,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "map-zoom",
                                            "smooth-lighting",
                                            "zoom-smoothing",
+                                           "primary-surface",
                                            "clock-ms",
                                            "expected-pixels-sha256"};
     bool success = root != NULL && root->ns == NULL && root->nsDef == NULL &&
@@ -419,6 +421,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
     char *map_zoom = success ? player_view_xml_property(root, "map-zoom") : NULL;
     char *smooth_lighting = success ? player_view_xml_property(root, "smooth-lighting") : NULL;
     char *zoom_smoothing = success ? player_view_xml_property(root, "zoom-smoothing") : NULL;
+    char *primary_surface = success ? player_view_xml_property(root, "primary-surface") : NULL;
     char *clock_ms = success ? player_view_xml_property(root, "clock-ms") : NULL;
     char *expected = success ? player_view_xml_property(root, "expected-pixels-sha256") : NULL;
 
@@ -440,8 +443,13 @@ static bool player_view_manifest_parse(const char *manifest_path,
               player_view_parse_uint(map_zoom, 50, 400, &manifest->map_zoom) &&
               player_view_parse_bool(smooth_lighting, &manifest->smooth_lighting) &&
               player_view_parse_bool(zoom_smoothing, &manifest->zoom_smoothing) &&
+              (primary_surface == NULL ||
+               player_view_parse_bool(primary_surface, &manifest->primary_surface)) &&
               player_view_parse_uint(clock_ms, 0, UINT32_MAX, &manifest->clock_ms) &&
               player_view_sha256_text_valid(expected);
+    if (success && primary_surface == NULL) {
+        manifest->primary_surface = true;
+    }
 
     char *manifest_directory = player_view_directory(canonical_manifest);
     if (success) {
@@ -593,6 +601,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(map_zoom);
     free(smooth_lighting);
     free(zoom_smoothing);
+    free(primary_surface);
     free(clock_ms);
     free(expected);
     free(manifest_directory);
@@ -976,6 +985,7 @@ int player_view_main(int argc, char *argv[]) {
     bool sdl_ready = false;
     bool map_ready = false;
     SDL_Surface *surface = NULL;
+    SDL_Surface *map_widget_surface = NULL;
     int result = 6;
     if (!settings_ready) {
         fprintf(stderr, "player-view: cannot load immutable setting defaults\n");
@@ -1016,8 +1026,20 @@ int player_view_main(int argc, char *argv[]) {
         fprintf(stderr, "player-view: cannot create viewport: %s\n", SDL_GetError());
         goto cleanup;
     }
+    map_widget_surface = surface;
+    if (!manifest.primary_surface) {
+        map_widget_surface = SDL_CreateSurface((int)manifest.viewport_width,
+                                               (int)manifest.viewport_height,
+                                               SDL_PIXELFORMAT_ARGB8888);
+        if (map_widget_surface == NULL) {
+            fprintf(stderr,
+                    "player-view: cannot create primary-surface sentinel: %s\n",
+                    SDL_GetError());
+            goto cleanup;
+        }
+    }
     widgetdata map_widget = {
-        .surface = surface,
+        .surface = map_widget_surface,
         .w = (int)manifest.viewport_width,
         .h = (int)manifest.viewport_height,
     };
@@ -1059,6 +1081,9 @@ int player_view_main(int argc, char *argv[]) {
 cleanup:
     cur_widget[MAP_ID] = NULL;
     ScreenSurface = NULL;
+    if (map_widget_surface != surface) {
+        SDL_DestroySurface(map_widget_surface);
+    }
     SDL_DestroySurface(surface);
     if (map_ready) {
         map_runtime_deinit();

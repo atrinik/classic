@@ -664,6 +664,9 @@ if (BUILD_TESTING)
     add_test(NAME client-player-view-player-outline-nearby-living
         COMMAND atrinik --player-view
             "${player_view_fixtures}/player-outline-nearby-living.xml" -)
+    add_test(NAME client-player-view-player-outline-non-primary
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/player-outline-non-primary.xml" -)
     add_test(NAME client-player-view-colored-smooth
         COMMAND atrinik --player-view "${player_view_fixtures}/colored-smooth.xml" -)
     add_test(NAME client-player-view-colored-discrete

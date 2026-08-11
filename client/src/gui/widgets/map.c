@@ -1448,6 +1448,7 @@ typedef struct map_render_data {
 
     uint8_t layer; ///< Layer to render on.
     uint8_t sub_layer; ///< Sub-layer to render on.
+    uint8_t alpha_forced; ///< Force applying the specified alpha value.
     bool smooth_lighting; ///< Whether smooth world lighting is enabled.
     bool lightmap_pending; ///< Whether the ground lightmap has not been composited yet.
     bool defer_rendering; ///< Queue this sprite in the global painter order.
@@ -1588,6 +1589,14 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     }
 
     effects.alpha = data->cell->alpha[map_layer];
+
+    if (data->alpha_forced != 0) {
+        if (effects.alpha != 0) {
+            effects.alpha = MIN(effects.alpha, data->alpha_forced);
+        } else {
+            effects.alpha = data->alpha_forced;
+        }
+    }
 
     /* Stretch floor and floor mask layers. */
     if (data->layer <= LAYER_FMASK) {
@@ -2299,7 +2308,7 @@ static void map_draw_level(SDL_Surface *surface,
                            SDL_Surface *ground_surface,
                            int depth,
                            bool primary_level,
-                           bool allow_smooth_lighting,
+                           bool primary_surface,
                            map_render_context_t *render_context) {
     HARD_ASSERT(surface != NULL);
     HARD_ASSERT(ground_surface != NULL);
@@ -2312,8 +2321,7 @@ static void map_draw_level(SDL_Surface *surface,
     };
     int x, y, w, h;
     map_setup_render_data(surface, &data, &x, &y, &w, &h);
-    data.smooth_lighting =
-        allow_smooth_lighting && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING);
+    data.smooth_lighting = primary_surface && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING);
     if (data.smooth_lighting) {
         uint64_t cache_key = map_lighting_cache_key(surface, &data, x, y, w, h);
         data.smooth_lighting = lighting_begin(surface->w, surface->h, cache_key);
@@ -2507,6 +2515,38 @@ static void map_draw_level(SDL_Surface *surface,
                 data.layer = LAYER_WALL;
                 data.sub_layer = 0;
                 draw_map_object(surface, &data);
+            }
+        }
+    }
+
+    /* Preserve the legacy living cue on secondary destinations such as the
+     * dynamic minimap. The primary map uses the identity-specific final
+     * outline instead. */
+    if (primary_level && !primary_surface) {
+        for (data.x = x; data.x < w; data.x++) {
+            for (data.y = y; data.y < h; data.y++) {
+                if (!map_should_draw(surface, &data)) {
+                    continue;
+                }
+
+                for (data.sub_layer = NUM_SUB_LAYERS - 1; data.sub_layer >= 1; data.sub_layer--) {
+                    uint8_t map_layer = GET_MAP_LAYER(LAYER_EFFECT, data.sub_layer);
+                    if (data.cell->height[map_layer] != 0 && data.cell->faces[map_layer] != 0) {
+                        data.cell = NULL;
+                        break;
+                    }
+                }
+
+                if (data.cell == NULL) {
+                    continue;
+                }
+
+                data.layer = LAYER_LIVING;
+                data.alpha_forced = 100;
+
+                for (data.sub_layer = 0; data.sub_layer < NUM_SUB_LAYERS; data.sub_layer++) {
+                    draw_map_object(surface, &data);
+                }
             }
         }
     }

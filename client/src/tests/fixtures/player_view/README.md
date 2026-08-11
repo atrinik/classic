@@ -37,7 +37,12 @@ and a nearby living object that must retain ordinary rendering. The structural
 occluders continue to hide the player's interior while the final primary-map
 pass reveals only the transformed yellow silhouette.
 
+The non-primary outline scene replays the nearby-living snapshot onto a surface
+other than the map widget. It models the dynamic minimap's `map_draw_map()` call
+and freezes the retained legacy living cue without enabling the new outline.
+
 `expected-pixels-sha256` hashes the viewport width and height as big-endian
-32-bit integers followed by canonical RGBA bytes in row-major order. This is
-the pixel-exact reference from the same primary software map surface that
-`/screenshot map` saves; PNG encoder metadata is deliberately excluded.
+32-bit integers followed by canonical RGBA bytes in row-major order. Except for
+the explicit non-primary regression scene, this is the pixel-exact reference
+from the same primary software map surface that `/screenshot map` saves; PNG
+encoder metadata is deliberately excluded.
