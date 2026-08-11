@@ -203,6 +203,22 @@ START_TEST(test_archery_invisibility_and_target_ownership_exclusions) {
     arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
     ck_assert_int_eq(object_projectile_hit(arrow, target), OBJECT_METHOD_UNHANDLED);
     ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 0);
+
+    object *other_player = player_get_dummy("Projectile target", NULL);
+    object_remove(other_player, 0);
+    other_player->x = pl->x + 1;
+    other_player->y = pl->y;
+    other_player->stats.hp = 1000;
+    other_player->stats.maxhp = 1000;
+    other_player->block = 0;
+    memset(other_player->protection, 0, sizeof(other_player->protection));
+    other_player = object_insert_map(other_player, map, NULL, INS_NO_MERGE);
+    map->map_flags |= MAP_FLAG_PVP;
+    arrow = projectile_test_arrow(map, pl, other_player, 3, SK_BOW_ARCHERY);
+    int pvp_damage = projectile_test_hit(arrow, other_player);
+    ck_assert_int_gt(pvp_damage, 0);
+    ck_assert_int_le(pvp_damage, TEST_BASE_DAMAGE);
+    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 0);
 }
 END_TEST
 
@@ -330,6 +346,15 @@ START_TEST(test_archery_rejects_nonphysical_and_invalid_sources) {
     target->direction = 3;
     arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
     arrow->type = LIGHTNING;
+    CLEAR_FLAG(arrow, FLAG_IS_MISSILE);
+    SET_FLAG(arrow, FLAG_IS_SPELL);
+    ck_assert_int_eq(common_object_projectile_hit(arrow, target), OBJECT_METHOD_OK);
+    ck_assert_int_eq(target->last_damage, TEST_BASE_DAMAGE);
+
+    target = projectile_test_target(map, pl);
+    target->direction = 3;
+    arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
+    arrow->type = BULLET;
     CLEAR_FLAG(arrow, FLAG_IS_MISSILE);
     SET_FLAG(arrow, FLAG_IS_SPELL);
     ck_assert_int_eq(common_object_projectile_hit(arrow, target), OBJECT_METHOD_OK);
