@@ -401,7 +401,6 @@ int attack_object(object *op, object *hitter) {
 
     object *metrics_owner = OWNER(hitter);
     bool metrics_melee = hitter->type == PLAYER;
-    bool metrics_projectile = hitter->type == ARROW && metrics_owner->type == PLAYER;
 
     /* Face the victim. */
     rv_vector dir;
@@ -535,8 +534,6 @@ int attack_object(object *op, object *hitter) {
     if (dam > 0 && metrics_owner->type == PLAYER) {
         if (metrics_melee) {
             metrics_add(&CONTR(metrics_owner)->metrics, METRIC_CHARACTER_MELEE_HITS, 1);
-        } else if (metrics_projectile) {
-            metrics_add(&CONTR(metrics_owner)->metrics, METRIC_CHARACTER_PROJECTILE_HITS, 1);
         }
     }
 

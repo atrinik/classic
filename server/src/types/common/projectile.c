@@ -34,6 +34,96 @@
 #include <monster.h>
 #include <arch.h>
 #include <object_methods.h>
+#include <metrics.h>
+#include <player.h>
+#include <server.h>
+#include <skills.h>
+
+/** Damage added for each qualifying archery situation. */
+#define ARCHERY_SITUATIONAL_BONUS_PERCENT 25
+
+/** Qualifying reasons for an archery situational damage bonus. */
+typedef enum archery_bonus_reason {
+    ARCHERY_BONUS_NONE = 0,
+    ARCHERY_BONUS_REAR = 1 << 0,
+    ARCHERY_BONUS_UNAWARE = 1 << 1
+} archery_bonus_reason_t;
+
+/** One impact's centrally calculated archery bonus. */
+typedef struct archery_bonus {
+    int damage;
+    int percent;
+    int added_damage;
+    archery_bonus_reason_t reasons;
+} archery_bonus_t;
+
+/**
+ * Calculate the bounded situational bonus for an active archery impact.
+ *
+ * The calculation deliberately uses only impact-time projectile and target
+ * state. Slaying and assassination remain later multipliers in attack_hit().
+ */
+static archery_bonus_t
+archery_bonus_calculate(object *projectile, object *victim, object *owner, int base_damage) {
+    archery_bonus_t bonus = {.damage = base_damage};
+
+    if (base_damage <= 0 || projectile->type != ARROW ||
+        !OBJECT_IS_PROJECTILE(projectile) || owner == NULL || owner->type != PLAYER ||
+        projectile->chosen_skill == NULL ||
+        !SKILL_IS_ARCHERY(projectile->chosen_skill->stats.sp) || victim->type != MONSTER) {
+        return bonus;
+    }
+
+    object *victim_owner = object_owner(victim);
+    if (victim_owner != NULL && victim_owner->type == PLAYER) {
+        return bonus;
+    }
+
+    if (projectile->direction != 0 && projectile->direction == victim->direction) {
+        bonus.reasons |= ARCHERY_BONUS_REAR;
+    }
+
+    if (!OBJECT_VALID(victim->enemy, victim->enemy_count) &&
+        !OBJECT_VALID(victim->attacked_by, victim->attacked_by_count) &&
+        !IS_INVISIBLE(owner, victim)) {
+        bonus.reasons |= ARCHERY_BONUS_UNAWARE;
+    }
+
+    if (bonus.reasons == ARCHERY_BONUS_NONE) {
+        return bonus;
+    }
+
+    int reason_count = (bonus.reasons & ARCHERY_BONUS_REAR ? 1 : 0) +
+                       (bonus.reasons & ARCHERY_BONUS_UNAWARE ? 1 : 0);
+    bonus.percent = ARCHERY_SITUATIONAL_BONUS_PERCENT * reason_count;
+
+    int64_t added = (int64_t)base_damage * bonus.percent / 100;
+    bonus.added_damage = (int)MIN(added, INT_MAX - base_damage);
+    bonus.damage = base_damage + bonus.added_damage;
+    return bonus;
+}
+
+/** Send the single combined feedback message for a successful bonus hit. */
+static void archery_bonus_send(object *owner, const archery_bonus_t *bonus) {
+    HARD_ASSERT(owner != NULL);
+    HARD_ASSERT(bonus != NULL);
+
+    const char *reasons;
+    if (bonus->reasons == (ARCHERY_BONUS_REAR | ARCHERY_BONUS_UNAWARE)) {
+        reasons = "rear shot, unaware target";
+    } else if (bonus->reasons == ARCHERY_BONUS_REAR) {
+        reasons = "rear shot";
+    } else {
+        reasons = "unaware target";
+    }
+
+    draw_info_format(COLOR_ORANGE,
+                     owner,
+                     "Archery damage bonus: +%d%% (+%d base damage) — %s.",
+                     bonus->percent,
+                     bonus->added_damage,
+                     reasons);
+}
 
 /**
  * Attempts to stick a projectile such as an arrow into the victim.
@@ -348,20 +438,36 @@ int common_object_projectile_hit(object *op, object *victim) {
     object *owner;
 
     owner = object_owner(op);
+    victim = HEAD(victim);
+    object *victim_owner = object_owner(victim);
 
     /* Victim is not an alive object or we're friends with the victim,
      * pass... */
-    if (!IS_LIVE(victim) || is_friend_of(owner, victim)) {
+    if (!IS_LIVE(victim) || is_friend_of(owner, victim) ||
+        (victim_owner != NULL && victim_owner->type == PLAYER)) {
         return OBJECT_METHOD_UNHANDLED;
     }
 
     if (op->stats.dam > 0) {
         int dam;
+        tag_t owner_count = owner != NULL ? owner->count : 0;
+        bool metrics_projectile =
+            op->type == ARROW && OBJECT_IS_PROJECTILE(op) && owner != NULL && owner->type == PLAYER;
+        archery_bonus_t bonus = archery_bonus_calculate(op, victim, owner, op->stats.dam);
 
         op = projectile_stick(op, victim);
 
         OBJ_DESTROYED_BEGIN(op) {
-            dam = attack_hit(victim, op, op->stats.dam);
+            dam = attack_hit(victim, op, bonus.damage);
+
+            if (dam > 0 && OBJECT_VALID(owner, owner_count) && owner->type == PLAYER) {
+                if (metrics_projectile) {
+                    metrics_add(&CONTR(owner)->metrics, METRIC_CHARACTER_PROJECTILE_HITS, 1);
+                }
+                if (bonus.reasons != ARCHERY_BONUS_NONE) {
+                    archery_bonus_send(owner, &bonus);
+                }
+            }
 
             if (OBJ_DESTROYED(op)) {
                 return OBJECT_METHOD_ERROR;
