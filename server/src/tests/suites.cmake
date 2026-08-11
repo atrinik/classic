@@ -34,6 +34,7 @@ set(ATRINIK_SERVER_TEST_SUITES
     "types.container|check_types_container|src/tests/unit/types/container.c"
     "types.duplicator|check_types_duplicator|src/tests/unit/types/duplicator.c"
     "types.light_apply|check_types_light_apply|src/tests/unit/types/light_apply.c"
+    "types.poisoning|check_types_poisoning|src/tests/unit/types/poisoning.c"
     "types.projectile|check_types_projectile|src/tests/unit/types/projectile.c"
     "types.sound_ambient|check_types_sound_ambient|src/tests/unit/types/sound_ambient.c"
     "types.symptom|check_types_symptom|src/tests/unit/types/symptom.c")
