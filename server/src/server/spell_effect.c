@@ -409,7 +409,7 @@ int cast_heal_around(object *op, int level, int type) {
  */
 int cast_heal(object *op, object *caster, int level, object *target, int spell_type) {
     archetype_t *at;
-    object *temp;
+    object *temp, *next;
     int heal = 0, success = 0;
 
     if (op == NULL || target == NULL) {
@@ -433,6 +433,7 @@ int cast_heal(object *op, object *caster, int level, object *target, int spell_t
 
         case SP_CURE_POISON:
             at = arch_find("poisoning");
+            bool target_was_batching = QUERY_FLAG(target, FLAG_NO_FIX_PLAYER);
 
             if (op != target && target->type == PLAYER) {
                 draw_info_format(COLOR_WHITE,
@@ -448,11 +449,22 @@ int cast_heal(object *op, object *caster, int level, object *target, int spell_t
                                  target->name ? target->name : "someone");
             }
 
-            for (temp = target->inv; temp != NULL; temp = temp->below) {
+            SET_FLAG(target, FLAG_NO_FIX_PLAYER);
+            for (temp = target->inv; temp != NULL; temp = next) {
+                next = temp->below;
                 if (temp->arch == at) {
                     success = 1;
-                    temp->stats.food = 1;
+                    object_remove(temp, 0);
+                    object_destroy(temp);
                 }
+            }
+
+            if (!target_was_batching) {
+                CLEAR_FLAG(target, FLAG_NO_FIX_PLAYER);
+            }
+
+            if (success && !target_was_batching) {
+                living_update(target);
             }
 
             if (success) {
