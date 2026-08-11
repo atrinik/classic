@@ -776,22 +776,10 @@ attack_hit_attacktype(object *op, object *hitter, double dam, double dam_orig, a
 #undef ATTACK_PROTECT_DAMAGE
 }
 
-/**
- * Hit the specified object for the given amount of damage.
- *
- * @param op
- * Object to be hit.
- * @param hitter
- * What is hitting the object.
- * @param dam
- * Base damage. Protections, slaying, blocking, etc, will be taken into
- * account.
- * @return
- * Dealt damage.
- */
-int attack_hit(object *op, object *hitter, int dam) {
+static int attack_hit_min_hp(object *op, object *hitter, int dam, int min_hp) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(hitter != NULL);
+    HARD_ASSERT(min_hp >= 0);
 
     op = HEAD(op);
     hitter = HEAD(hitter);
@@ -909,12 +897,11 @@ int attack_hit(object *op, object *hitter, int dam) {
 
     op->last_damage += maxdam;
 
-    /* For the purposes of statistics and damage visible on-screen, we want to
-     * show the full damage. However, to the function's callers, we only want
-     * to return the total damage dealt to the object, capping it at the
-     * object's hp. */
-    if (maxdam > op->stats.hp) {
-        maxdam = op->stats.hp;
+    /* Preserve full damage for the on-screen accumulator, but cap the damage
+     * actually dealt and returned at the configured HP floor. */
+    int max_damage = MAX(0, op->stats.hp - min_hp);
+    if (maxdam > max_damage) {
+        maxdam = max_damage;
     }
 
     if (maxdam > 0 && hitter_owner->type == PLAYER) {
@@ -957,6 +944,42 @@ int attack_hit(object *op, object *hitter, int dam) {
     }
 
     return maxdam;
+}
+
+/**
+ * Hit the specified object for the given amount of damage.
+ *
+ * @param op
+ * Object to be hit.
+ * @param hitter
+ * What is hitting the object.
+ * @param dam
+ * Base damage. Protections, slaying, blocking, etc, will be taken into
+ * account.
+ * @return
+ * Dealt damage.
+ */
+int attack_hit(object *op, object *hitter, int dam) {
+    return attack_hit_min_hp(op, hitter, dam, 0);
+}
+
+/**
+ * Hit an object without reducing it below one HP.
+ *
+ * Attack types, protections, slaying, blocking, and other ordinary damage
+ * modifiers are applied before the final damage is capped.
+ *
+ * @param op
+ * Object to be hit.
+ * @param hitter
+ * What is hitting the object.
+ * @param dam
+ * Base damage.
+ * @return
+ * Dealt damage.
+ */
+int attack_hit_nonlethal(object *op, object *hitter, int dam) {
+    return attack_hit_min_hp(op, hitter, dam, 1);
 }
 
 /**
