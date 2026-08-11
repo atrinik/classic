@@ -34,7 +34,9 @@
 #include <monster.h>
 #include <arch.h>
 #include <object_methods.h>
-
+#include <metrics.h>
+#include <player.h>
+#include <server.h>
 /**
  * Attempts to stick a projectile such as an arrow into the victim.
  * @param op
@@ -210,6 +212,7 @@ object *common_object_projectile_stop_missile(object *op, int reason) {
 
         owner = object_owner(op);
         object_owner_clear(op);
+        op->chosen_skill = NULL;
 
         op->direction = 0;
         SET_ANIMATION_STATE(op);
@@ -348,26 +351,40 @@ int common_object_projectile_hit(object *op, object *victim) {
     object *owner;
 
     owner = object_owner(op);
+    victim = HEAD(victim);
+    object *victim_owner = object_owner(victim);
 
-    /* Victim is not an alive object or we're friends with the victim,
-     * pass... */
-    if (!IS_LIVE(victim) || is_friend_of(owner, victim)) {
+    /* Pass nonliving and friendly victims. A player's projectile must also
+     * not bypass PvP rules by attacking another player's owned monster. */
+    if (!IS_LIVE(victim) || is_friend_of(owner, victim) ||
+        (owner != NULL && owner->type == PLAYER && victim_owner != NULL &&
+         victim_owner->type == PLAYER)) {
         return OBJECT_METHOD_UNHANDLED;
     }
 
     if (op->stats.dam > 0) {
         int dam;
-
+        tag_t owner_count = owner != NULL ? owner->count : 0;
+        bool metrics_projectile =
+            op->type == ARROW && OBJECT_IS_PROJECTILE(op) && QUERY_FLAG(op, FLAG_IS_MISSILE) &&
+            !QUERY_FLAG(op, FLAG_IS_SPELL) && owner != NULL && owner->type == PLAYER;
         op = projectile_stick(op, victim);
 
         OBJ_DESTROYED_BEGIN(op) {
-            dam = attack_hit(victim, op, op->stats.dam);
+            dam = attack_hit_situational(victim, op, op->stats.dam);
+
+            if (dam > 0 && OBJECT_VALID(owner, owner_count) && owner->type == PLAYER) {
+                if (metrics_projectile) {
+                    metrics_add(&CONTR(owner)->metrics, METRIC_CHARACTER_PROJECTILE_HITS, 1);
+                }
+            }
 
             if (OBJ_DESTROYED(op)) {
                 return OBJECT_METHOD_ERROR;
             }
 
-            op->stats.dam -= dam;
+            int64_t residual_damage = (int64_t)op->stats.dam - dam;
+            op->stats.dam = (int16_t)MAX(residual_damage, INT16_MIN);
         }
         OBJ_DESTROYED_END();
     }

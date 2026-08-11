@@ -142,7 +142,7 @@ void rune_spring(object *op, object *victim) {
         OBJECTS_DESTROYED_BEGIN(op, victim) {
             int dam =
                 (int)(op->stats.dam * (LEVEL_DAMAGE(op->level) * TRAP_DIRECT_DAMAGE_MULTIPLIER));
-            attack_hit(victim, op, dam);
+            attack_hit_situational(victim, op, dam);
 
             if (!OBJECTS_DESTROYED(victim)) {
                 if (op->randomitems != NULL) {
