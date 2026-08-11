@@ -107,6 +107,7 @@ set(SOURCES
 	src/gui/widgets/notification.c
 	src/gui/widgets/party.c
 	src/gui/widgets/playerdoll.c
+	src/gui/widgets/playerdoll_equipment.c
 	src/gui/widgets/playerinfo.c
 	src/gui/widgets/protections.c
 	src/gui/widgets/quickslots.c
