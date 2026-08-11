@@ -15,6 +15,7 @@ set(ATRINIK_SERVER_TEST_SUITES
     "server.light|check_server_light|src/tests/unit/server/light.c"
     "server.object|check_server_object|src/tests/unit/server/object.c"
     "server.pathfinder|check_server_pathfinder|src/tests/unit/server/pathfinder.c"
+    "server.random_map_style|check_server_random_map_style|src/tests/unit/server/random_map_style.c"
     "server.re_cmp|check_server_re_cmp|src/tests/unit/server/re_cmp.c"
     "server.request|check_server_request|src/tests/unit/server/request.c"
     "server.rune|check_server_rune|src/tests/unit/server/rune.c"
