@@ -90,6 +90,7 @@ static struct sockaddr_in selected_socket_address;
 static struct addrinfo selected_socket_result;
 static struct addrinfo first_socket_result;
 static bool fake_socket_addresses_freed;
+static unsigned int fake_socket_create_calls;
 
 static int fake_socket_resolver(const char *host,
                                 const char *service,
@@ -128,18 +129,37 @@ static void fake_socket_addresses_free(struct addrinfo *addresses) {
     fake_socket_addresses_freed = true;
 }
 
+static int fake_socket_create(int family, int type, int protocol) {
+    REQUIRE(type == SOCK_STREAM);
+    REQUIRE(protocol == 0);
+    fake_socket_create_calls++;
+    if (fake_socket_create_calls == 1U) {
+        REQUIRE(family == -1);
+        return -1;
+    }
+
+    REQUIRE(fake_socket_create_calls == 2U);
+    REQUIRE(family == AF_INET);
+    return 42;
+}
+
 static void test_socket_create_copies_selected_result_length(void) {
     fake_socket_addresses_freed = false;
-    socket_create_resolver_set_for_test(fake_socket_resolver, fake_socket_addresses_free);
+    fake_socket_create_calls = 0;
+    socket_create_resolver_set_for_test(fake_socket_resolver,
+                                        fake_socket_addresses_free,
+                                        fake_socket_create);
     socket_t *connection = socket_create("selected.example", 13327, SOCKET_ROLE_CLIENT, false);
-    socket_create_resolver_set_for_test(NULL, NULL);
+    socket_create_resolver_set_for_test(NULL, NULL, NULL);
 
     REQUIRE(connection != NULL);
     REQUIRE(fake_socket_addresses_freed);
+    REQUIRE(fake_socket_create_calls == 2U);
     REQUIRE(connection->addr.ss_family == AF_INET);
     REQUIRE(memcmp(&connection->addr, &selected_socket_address, sizeof(selected_socket_address)) ==
             0);
     require_zero_tail(&connection->addr, sizeof(selected_socket_address));
+    connection->handle = -1;
     socket_destroy(connection);
 }
 

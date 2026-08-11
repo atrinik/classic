@@ -89,13 +89,31 @@ TOOLKIT_DEINIT_FUNC(socket) {}
 TOOLKIT_DEINIT_FUNC_FINISH
 
 #ifdef HAVE_GETADDRINFO
-static socket_create_resolver_t socket_create_resolver = getaddrinfo;
-static socket_addrinfo_free_t socket_create_addresses_free = freeaddrinfo;
+static int socket_create_system_resolver(const char *host,
+                                         const char *service,
+                                         const struct addrinfo *hints,
+                                         struct addrinfo **addresses) {
+    return getaddrinfo(host, service, hints, addresses);
+}
+
+static void socket_create_system_addresses_free(struct addrinfo *addresses) {
+    freeaddrinfo(addresses);
+}
+
+static int socket_create_system_handle(int family, int type, int protocol) {
+    return socket(family, type, protocol);
+}
+
+static socket_create_resolver_t socket_create_resolver = socket_create_system_resolver;
+static socket_addrinfo_free_t socket_create_addresses_free = socket_create_system_addresses_free;
+static socket_create_handle_t socket_create_handle = socket_create_system_handle;
 
 void socket_create_resolver_set_for_test(socket_create_resolver_t resolver,
-                                         socket_addrinfo_free_t release) {
-    socket_create_resolver = resolver != NULL ? resolver : getaddrinfo;
-    socket_create_addresses_free = release != NULL ? release : freeaddrinfo;
+                                         socket_addrinfo_free_t release,
+                                         socket_create_handle_t create_handle) {
+    socket_create_resolver = resolver != NULL ? resolver : socket_create_system_resolver;
+    socket_create_addresses_free = release != NULL ? release : socket_create_system_addresses_free;
+    socket_create_handle = create_handle != NULL ? create_handle : socket_create_system_handle;
 }
 
 bool socket_addrinfo_copy(struct sockaddr_storage *destination, const struct addrinfo *address) {
@@ -172,7 +190,7 @@ socket_t *socket_create(const char *host, uint16_t port, socket_role_t role, boo
             continue;
         }
 
-        sc->handle = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        sc->handle = socket_create_handle(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (sc->handle == -1) {
             continue;
         }

@@ -287,6 +287,24 @@ class WorkflowContractTests(unittest.TestCase):
             migration.count("timeout=SERVER_TIMEOUT_SECONDS"), 3
         )
 
+    def test_core_validation_runs_libatrinik_sanitizers(self) -> None:
+        runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
+            encoding="utf-8"
+        )
+        core = runner[runner.index("  core)") : runner.index("  server)")]
+        self.assertIn("cmake --preset linux-sanitizers", core)
+        self.assertIn("cmake --build --preset linux-sanitizers --parallel", core)
+        self.assertIn("ctest --preset linux-sanitizers", core)
+        self.assertIn("ASAN_OPTIONS=detect_leaks=0:halt_on_error=1", core)
+        self.assertIn("UBSAN_OPTIONS=halt_on_error=1", core)
+
+        presets = json.loads((ROOT / "libatrinik/CMakePresets.json").read_text())
+        for section in ("configurePresets", "buildPresets", "testPresets"):
+            self.assertIn(
+                "linux-sanitizers",
+                {preset["name"] for preset in presets[section]},
+            )
+
     def test_component_validation_compares_conventional_and_pch_builds(self) -> None:
         runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
             encoding="utf-8"
