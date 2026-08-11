@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -31,6 +31,8 @@
 
 #include <global.h>
 #include <toolkit/string.h>
+
+#include "playerdoll_equipment.h"
 
 /**
  * Player doll item positions.
@@ -121,38 +123,13 @@ static const char *player_doll_text_abbr =
                      cpl.stats.ranged_ws);
 
 object *playerdoll_get_equipment(int i, int *xpos, int *ypos) {
-    object *obj;
-
-    if (cpl.equipment[i] == 0) {
-        return NULL;
-    }
-
     if (player_doll_positions[i][0] == -1 && player_doll_positions[i][1] == -1) {
         return NULL;
     }
 
-    obj = object_find(cpl.equipment[i]);
-
+    object *obj = playerdoll_equipment_resolve(i, cpl.equipment);
     if (obj == NULL) {
         return NULL;
-    }
-
-    if (i == PLAYER_EQUIP_SHIELD) {
-        object *obj2 = NULL;
-
-        if (cpl.equipment[PLAYER_EQUIP_WEAPON_RANGED] != 0) {
-            obj2 = object_find(cpl.equipment[PLAYER_EQUIP_WEAPON_RANGED]);
-        } else if (cpl.equipment[PLAYER_EQUIP_WEAPON] != 0) {
-            obj2 = object_find(cpl.equipment[PLAYER_EQUIP_WEAPON]);
-        }
-
-        if (obj2 != NULL && obj2->flags & CS_FLAG_WEAPON_2H) {
-            obj = obj2;
-        }
-    } else if (i == PLAYER_EQUIP_WEAPON_RANGED) {
-        if (obj->flags & CS_FLAG_WEAPON_2H) {
-            return NULL;
-        }
     }
 
     *xpos = player_doll_positions[i][0] + 2;

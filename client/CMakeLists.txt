@@ -636,6 +636,19 @@ if (BUILD_TESTING)
     target_link_libraries(client-map-light-state-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-map-light-state COMMAND client-map-light-state-tests)
 
+    add_executable(client-playerdoll-equipment-tests
+        src/tests/playerdoll_equipment.c
+        src/gui/widgets/playerdoll_equipment.c)
+    atrinik_configure_target(client-playerdoll-equipment-tests)
+    target_compile_definitions(client-playerdoll-equipment-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-playerdoll-equipment-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-playerdoll-equipment-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-playerdoll-equipment COMMAND client-playerdoll-equipment-tests)
+
     add_test(NAME client-widget-priority-integration
         COMMAND atrinik --widget-priority-test
             "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/widget-priority-interface.cfg"
