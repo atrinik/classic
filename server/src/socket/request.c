@@ -2480,11 +2480,12 @@ void socket_command_clear(socket_struct *ns, player *pl, uint8_t *data, size_t l
         }
         return;
     }
+    bool applies_to_current_stream = epoch != 0 && epoch == ns->movement_stream_epoch;
     if (!socket_server_command_queue_clear_stream(ns, command, epoch)) {
         LOG(DEVEL, "Refused to clear inconsistent movement-stream queue metadata");
         return;
     }
-    if (command == SERVER_CMD_MOVE && pl != NULL) {
+    if (applies_to_current_stream && command == SERVER_CMD_MOVE && pl != NULL) {
         player_path_clear(pl);
         pl->run_on = 0;
     }

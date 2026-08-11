@@ -37,7 +37,10 @@ void socket_send_packet(packet_struct *packet) {
     TEST_CHECK(packet->len <= sizeof(captured[captured_num].data));
     captured[captured_num].type = packet->type;
     captured[captured_num].len = packet->len;
-    memcpy(captured[captured_num].data, packet->data, packet->len);
+    if (packet->len != 0) {
+        TEST_CHECK(packet->data != NULL);
+        memcpy(captured[captured_num].data, packet->data, packet->len);
+    }
     captured_num++;
     packet_free(packet);
 }

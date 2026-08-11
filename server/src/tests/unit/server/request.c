@@ -799,11 +799,14 @@ START_TEST(test_scoped_clear_replaces_only_queued_movement_stream) {
     command_frame_append(expected, UINT8_MAX, move_south, sizeof(move_south));
     command_frame_append(expected, SERVER_CMD_COMBAT, combat, sizeof(combat));
 
+    player_path_add(pl, op->map, op->x, op->y);
+    ck_assert_ptr_nonnull(pl->move_path);
     pl->run_on = 1;
     uint8_t request[] = {SERVER_CMD_CLEAR, SERVER_CMD_MOVE, 0, 0, 0, 2};
     ck_assert(socket_server_handle_command(cs, NULL, request, sizeof(request)));
     ck_assert_uint_eq(cs->packet_recv_cmd->len, expected->len);
     ck_assert_mem_eq(cs->packet_recv_cmd->data, expected->data, expected->len);
+    ck_assert_ptr_null(pl->move_path);
     ck_assert_uint_eq(pl->run_on, 0);
     packet_free(expected);
 }
@@ -842,6 +845,37 @@ START_TEST(test_scoped_clear_replaces_only_untagged_directional_fire) {
     ck_assert(socket_server_handle_command(cs, NULL, request, sizeof(request)));
     ck_assert_uint_eq(cs->packet_recv_cmd->len, expected->len);
     ck_assert_mem_eq(cs->packet_recv_cmd->data, expected->data, expected->len);
+    ck_assert_uint_eq(pl->run_on, 1);
+    packet_free(expected);
+}
+END_TEST
+
+START_TEST(test_zero_and_stale_scoped_clears_preserve_movement_state) {
+    mapstruct *map;
+    object *op;
+
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    const uint8_t move[] = {6, 1, 0, 0, 0, 2};
+    command_queue_append(cs, SERVER_CMD_MOVE, move, sizeof(move));
+    packet_struct *expected = packet_dup(cs->packet_recv_cmd);
+    player_path_add(pl, op->map, op->x, op->y);
+    ck_assert_ptr_nonnull(pl->move_path);
+    pl->run_on = 1;
+
+    uint8_t zero[] = {SERVER_CMD_CLEAR, SERVER_CMD_MOVE, 0, 0, 0, 0};
+    ck_assert(socket_server_handle_command(cs, NULL, zero, sizeof(zero)));
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, expected->len);
+    ck_assert_mem_eq(cs->packet_recv_cmd->data, expected->data, expected->len);
+    ck_assert_ptr_nonnull(pl->move_path);
+    ck_assert_uint_eq(pl->run_on, 1);
+
+    uint8_t stale[] = {SERVER_CMD_CLEAR, SERVER_CMD_MOVE, 0, 0, 0, 1};
+    ck_assert(socket_server_handle_command(cs, NULL, stale, sizeof(stale)));
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, expected->len);
+    ck_assert_mem_eq(cs->packet_recv_cmd->data, expected->data, expected->len);
+    ck_assert_ptr_nonnull(pl->move_path);
     ck_assert_uint_eq(pl->run_on, 1);
     packet_free(expected);
 }
@@ -1398,6 +1432,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_clear_immediately_discards_queued_commands_and_stops_run);
     tcase_add_test(tc_core, test_scoped_clear_replaces_only_queued_movement_stream);
     tcase_add_test(tc_core, test_scoped_clear_replaces_only_untagged_directional_fire);
+    tcase_add_test(tc_core, test_zero_and_stale_scoped_clears_preserve_movement_state);
     tcase_add_test(tc_core, test_invalid_scoped_clear_preserves_queued_commands);
     tcase_add_test(tc_core, test_direction_zero_move_clears_deferred_path);
     tcase_add_test(tc_core, test_replacement_tombstones_do_not_delay_latest_direction);
