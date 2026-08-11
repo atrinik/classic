@@ -87,9 +87,16 @@ static void test_one_handed_ranged_keeps_ordinary_slots(void) {
 static void test_melee_and_shield_priority_is_preserved(void) {
     tag_t equipment[PLAYER_EQUIP_MAX] = {0};
     equipment[PLAYER_EQUIP_WEAPON] = TAG_MELEE;
-    equipment[PLAYER_EQUIP_SHIELD] = TAG_SHIELD;
 
     TEST_CHECK(playerdoll_equipment_resolve(PLAYER_EQUIP_WEAPON, equipment) == &melee);
+    TEST_CHECK(playerdoll_equipment_resolve(PLAYER_EQUIP_SHIELD, equipment) == NULL);
+
+    melee.flags = CS_FLAG_WEAPON_2H;
+    TEST_CHECK(playerdoll_equipment_resolve(PLAYER_EQUIP_WEAPON, equipment) == &melee);
+    TEST_CHECK(playerdoll_equipment_resolve(PLAYER_EQUIP_SHIELD, equipment) == NULL);
+
+    equipment[PLAYER_EQUIP_SHIELD] = TAG_SHIELD;
+    melee.flags = 0;
     TEST_CHECK(playerdoll_equipment_resolve(PLAYER_EQUIP_SHIELD, equipment) == &shield);
 
     melee.flags = CS_FLAG_WEAPON_2H;

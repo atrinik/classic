@@ -21,7 +21,7 @@ object *playerdoll_equipment_resolve(int slot, const tag_t equipment[PLAYER_EQUI
 
         if (equipment[PLAYER_EQUIP_WEAPON_RANGED] != 0) {
             weapon = object_find(equipment[PLAYER_EQUIP_WEAPON_RANGED]);
-        } else if (equipment[PLAYER_EQUIP_WEAPON] != 0) {
+        } else if (obj != NULL && equipment[PLAYER_EQUIP_WEAPON] != 0) {
             weapon = object_find(equipment[PLAYER_EQUIP_WEAPON]);
         }
 
