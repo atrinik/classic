@@ -11,15 +11,31 @@
         "BUILD_TESTING": true,
         "ENABLE_COVERAGE": true
       }
+    },
+    {
+      "name": "linux-sanitizers",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-sanitizers",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTING": true,
+        "ENABLE_SANITIZERS": true
+      }
     }
   ],
   "buildPresets": [
-    {"name": "linux-coverage", "configurePreset": "linux-coverage"}
+    {"name": "linux-coverage", "configurePreset": "linux-coverage"},
+    {"name": "linux-sanitizers", "configurePreset": "linux-sanitizers"}
   ],
   "testPresets": [
     {
       "name": "linux-coverage",
       "configurePreset": "linux-coverage",
+      "output": {"outputOnFailure": true}
+    },
+    {
+      "name": "linux-sanitizers",
+      "configurePreset": "linux-sanitizers",
       "output": {"outputOnFailure": true}
     }
   ]
