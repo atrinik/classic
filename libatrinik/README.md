@@ -29,6 +29,16 @@ gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
   --exclude '.*/build/.*' --print-summary
 ```
 
+To run the standalone suite with address and undefined-behavior sanitizers:
+
+```sh
+cmake --preset linux-sanitizers
+cmake --build --preset linux-sanitizers
+ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
+UBSAN_OPTIONS=halt_on_error=1 \
+ctest --preset linux-sanitizers
+```
+
 Set `LIBATRINIK_USE_INSTALLED_PROTOCOL=ON` to use an installed
 `AtrinikProtocol` CMake package instead of the locked source release.
 

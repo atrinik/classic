@@ -60,6 +60,12 @@ case "${component}" in
     ctest --preset linux-coverage
     gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
       --exclude '.*/build/.*' --print-summary --xml coverage.xml
+    cmake --preset linux-sanitizers \
+      -DATRINIK_PROTOCOL_SOURCE_DIR="${source_root}/protocol" \
+      "${launcher[@]}"
+    cmake --build --preset linux-sanitizers --parallel "${jobs}"
+    env ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+      ctest --preset linux-sanitizers
     cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX="${PWD}/build/install" \
       -DATRINIK_PROTOCOL_SOURCE_DIR="${source_root}/protocol" \
