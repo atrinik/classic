@@ -63,8 +63,7 @@ static int pointer_strcmp(const void *p1, const void *p2) {
  * Array of file names returned. It needs to be freed by
  * the caller.
  * @param skip_dirs
- * If nonzero, we don't skip any subdirectories - if
- * zero, we store those away, since there are cases where we want to
+ * If nonzero, omit subdirectories. If zero, retain them so callers can
  * choose a random directory.
  * @return
  * -1 if directory is invalid, number of files otherwise.
@@ -83,6 +82,10 @@ int load_dir(const char *dir, char ***namelist, int skip_dirs) {
     }
 
     while ((d = readdir(dp)) != NULL) {
+        if (strcmp(d->d_name, ".") == 0 || strcmp(d->d_name, "..") == 0) {
+            continue;
+        }
+
         if (skip_dirs) {
             size_t name_size = strlen(dir) + strlen(d->d_name) + 2;
             char *name = xmalloc(name_size);
@@ -107,7 +110,9 @@ int load_dir(const char *dir, char ***namelist, int skip_dirs) {
 
     closedir(dp);
 
-    qsort(rn, entries, sizeof(char *), pointer_strcmp);
+    if (entries > 1) {
+        qsort(rn, entries, sizeof(char *), pointer_strcmp);
+    }
 
     *namelist = rn;
 
@@ -191,7 +196,15 @@ find_style(const char *dirname, const char *stylename, int difficulty, rng_state
              settings.mapspath,
              style_file_path);
 
-    stat(style_file_full_path, &file_stat);
+    if (stat(style_file_full_path, &file_stat) != 0) {
+        int errnum = errno;
+        LOG(ERROR,
+            "Could not inspect style path %s: %s (%d).",
+            style_file_full_path,
+            strerror(errnum),
+            errnum);
+        return NULL;
+    }
 
     if (!(S_ISDIR(file_stat.st_mode))) {
         style_map = load_style_map(style_file_path);
