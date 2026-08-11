@@ -107,9 +107,9 @@ static void map_cache_mark_fow(struct MapCell *level,
 /** Vertical screen projection of one linked physical map level. */
 #define MAP_LEVEL_PIXEL_HEIGHT 46
 
-/** Nearby occluded doors receive a camera hint without exposing interiors. */
+/** Primary-map outlines reveal silhouettes without exposing interiors. */
 #define DOOR_HINT_RADIUS 3
-#define DOOR_HINT_COLOR "ffc64a"
+#define MAP_OUTLINE_COLOR "ffc64a"
 
 /** Select one protocol map depth, allocating its cache on demand. */
 bool map_select_level(int depth, bool create) {
@@ -1405,6 +1405,7 @@ typedef struct map_render_command {
     bool door;
     bool door_hint;
     bool exit;
+    bool local_player;
     bool transformed;
 } map_render_command_t;
 
@@ -1447,7 +1448,6 @@ typedef struct map_render_data {
 
     uint8_t layer; ///< Layer to render on.
     uint8_t sub_layer; ///< Sub-layer to render on.
-    uint8_t alpha_forced; ///< Force applying the specified alpha value.
     bool smooth_lighting; ///< Whether smooth world lighting is enabled.
     bool lightmap_pending; ///< Whether the ground lightmap has not been composited yet.
     bool defer_rendering; ///< Queue this sprite in the global painter order.
@@ -1589,14 +1589,6 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
 
     effects.alpha = data->cell->alpha[map_layer];
 
-    if (data->alpha_forced != 0) {
-        if (effects.alpha != 0) {
-            effects.alpha = MIN(effects.alpha, data->alpha_forced);
-        } else {
-            effects.alpha = data->alpha_forced;
-        }
-    }
-
     /* Stretch floor and floor mask layers. */
     if (data->layer <= LAYER_FMASK) {
         effects.stretch = data->cell->stretch[data->sub_layer];
@@ -1669,6 +1661,9 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
             .door = (data->cell->door[data->sub_layer] & (UINT8_C(1) << (data->layer - 1))) != 0,
             .exit = !data->cell->fow &&
                     (data->cell->exit[data->sub_layer] & (UINT8_C(1) << (data->layer - 1))) != 0,
+            .local_player = data->primary_level && data->x == data->midx && data->y == data->midy &&
+                            data->layer == LAYER_LIVING &&
+                            data->sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1),
             .transformed = transformed,
         };
         context->commands_num++;
@@ -2516,37 +2511,6 @@ static void map_draw_level(SDL_Surface *surface,
         }
     }
 
-    if (!primary_level) {
-        render_profiler_end(RENDER_PROFILE_MAP_OBJECTS, profile_objects_started);
-        return;
-    }
-
-    for (data.x = x; data.x < w; data.x++) {
-        for (data.y = y; data.y < h; data.y++) {
-            if (!map_should_draw(surface, &data)) {
-                continue;
-            }
-
-            for (data.sub_layer = NUM_SUB_LAYERS - 1; data.sub_layer >= 1; data.sub_layer--) {
-                uint8_t map_layer = GET_MAP_LAYER(LAYER_EFFECT, data.sub_layer);
-                if (data.cell->height[map_layer] != 0 && data.cell->faces[map_layer] != 0) {
-                    data.cell = NULL;
-                    break;
-                }
-            }
-
-            if (data.cell == NULL) {
-                continue;
-            }
-
-            data.layer = LAYER_LIVING;
-            data.alpha_forced = 100;
-
-            for (data.sub_layer = 0; data.sub_layer < NUM_SUB_LAYERS; data.sub_layer++) {
-                draw_map_object(surface, &data);
-            }
-        }
-    }
     render_profiler_end(RENDER_PROFILE_MAP_OBJECTS, profile_objects_started);
 
 #undef CALCULATE_POSITIONS
@@ -2697,7 +2661,7 @@ static void map_render_commands_find_door_hints(map_render_context_t *context) {
 
 /** Paint all projected sprites in one isometric order. */
 static void
-map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool door_hints_enabled) {
+map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool primary_surface) {
     uint64_t profile_paint_started = render_profiler_begin();
     if (context->commands_num > 1) {
         qsort(context->commands,
@@ -2706,7 +2670,7 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool do
               map_render_command_compare);
     }
 
-    if (door_hints_enabled) {
+    if (primary_surface) {
         map_render_commands_find_door_hints(context);
     }
 
@@ -2736,10 +2700,11 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool do
         }
     }
 
-    if (door_hints_enabled) {
+    if (primary_surface) {
         for (size_t i = 0; i < context->commands_num; i++) {
             const map_render_command_t *command = &context->commands[i];
-            if (!command->door_hint && !(command->exit && command->depth == 0)) {
+            if (!command->local_player && !command->door_hint &&
+                !(command->exit && command->depth == 0)) {
                 continue;
             }
 
@@ -2747,7 +2712,7 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool do
             effects.zoom_x = command->effects.zoom_x;
             effects.zoom_y = command->effects.zoom_y;
             effects.rotate = command->effects.rotate;
-            snprintf(VS(effects.outline), "%s", DOOR_HINT_COLOR);
+            snprintf(VS(effects.outline), "%s", MAP_OUTLINE_COLOR);
             surface_show_effects(surface, command->x, command->y, NULL, command->source, &effects);
             if (command->draw_double) {
                 surface_show_effects(surface,

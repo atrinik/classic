@@ -29,6 +29,14 @@ snapshot also caches an exit on a secondary layer, soft-clears that cell, and
 then reuses the tile for fresh non-exit data. This reaches the soft-FOW reset
 that discards stale per-layer exit semantics before the new layer is decoded.
 
+The four local-player outline scenes identify only the depth-zero center-cell
+living object at the MAP header's player sub-layer. They freeze an unobscured
+animated, rotated, non-uniformly zoomed and aligned player; a later-painted
+same-level wall; an authorized positive-depth roof projected across the player;
+and a nearby living object that must retain ordinary rendering. The structural
+occluders continue to hide the player's interior while the final primary-map
+pass reveals only the transformed yellow silhouette.
+
 `expected-pixels-sha256` hashes the viewport width and height as big-endian
 32-bit integers followed by canonical RGBA bytes in row-major order. This is
 the pixel-exact reference from the same primary software map surface that
