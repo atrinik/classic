@@ -1,3 +1,5 @@
+#include "../socket_private.h"
+
 #include <toolkit/datetime.h>
 #include <toolkit/path.h>
 #include <toolkit/socket.h>
@@ -34,8 +36,15 @@ typedef struct quic_test_server {
     size_t count;
     bool delay_accept;
     atomic_uint *clients_completed;
+    atomic_uint *pending;
     bool failed;
 } quic_test_server_t;
+
+static int quic_test_pending_connection(SSL_CTX *ctx, SSL *connection, void *data) {
+    atomic_uint *pending = data;
+    atomic_fetch_add(pending, 1U);
+    return 1;
+}
 
 static void *quic_test_client_main(void *data) {
     quic_test_client_t *client = data;
@@ -65,11 +74,20 @@ static void *quic_test_server_main(void *data) {
     quic_test_server_t *server = data;
     uint64_t deadline = datetime_monotonic_ms() + QUIC_TEST_TIMEOUT_MS;
     if (server->delay_accept) {
-        if (!socket_wait(server->listener, true, false, (unsigned int)QUIC_TEST_TIMEOUT_MS)) {
+        while ((atomic_load(server->pending) != server->count ||
+                atomic_load(server->clients_completed) != server->count) &&
+               datetime_monotonic_ms() < deadline) {
+            socket_wait(server->listener, true, false, 10);
+            if (SSL_handle_events(server->listener->quic) != 1) {
+                server->failed = true;
+                return NULL;
+            }
+        }
+        if (atomic_load(server->pending) != server->count ||
+            atomic_load(server->clients_completed) != server->count) {
             server->failed = true;
             return NULL;
         }
-        usleep(100000);
     }
 
     for (size_t i = 0; i < server->count; i++) {
@@ -91,11 +109,25 @@ static void *quic_test_server_main(void *data) {
 }
 
 static void quic_test_run(size_t count, bool delay_accept) {
-    char directory[] = "/tmp/atrinik-libatrinik-quic-XXXXXX";
+    char directory[HUGE_BUF];
+#ifdef WIN32
+    char temporary_root[HUGE_BUF];
+    DWORD temporary_root_length = GetTempPathA(sizeof(temporary_root), temporary_root);
+    REQUIRE(temporary_root_length > 0 && temporary_root_length < sizeof(temporary_root));
+    int directory_length = snprintf(directory,
+                                    sizeof(directory),
+                                    "%satrinik-libatrinik-quic-%lu",
+                                    temporary_root,
+                                    (unsigned long)GetCurrentProcessId());
+    REQUIRE(directory_length > 0 && (size_t)directory_length < sizeof(directory));
+    REQUIRE(CreateDirectoryA(directory, NULL));
+#else
+    snprintf(directory, sizeof(directory), "/tmp/atrinik-libatrinik-quic-XXXXXX");
     REQUIRE(mkdtemp(directory) != NULL);
+#endif
     char identity[4096];
-    int length = snprintf(identity, sizeof(identity), "%s/identity.pem", directory);
-    REQUIRE(length > 0 && (size_t)length < sizeof(identity));
+    int identity_length = snprintf(identity, sizeof(identity), "%s/identity.pem", directory);
+    REQUIRE(identity_length > 0 && (size_t)identity_length < sizeof(identity));
 
     socket_t *listener = socket_quic_server_create("127.0.0.1", 0, false, identity);
     REQUIRE(listener != NULL);
@@ -106,8 +138,11 @@ static void quic_test_run(size_t count, bool delay_accept) {
 
     atomic_uint started;
     atomic_uint completed;
+    atomic_uint pending;
     atomic_init(&started, 0U);
     atomic_init(&completed, 0U);
+    atomic_init(&pending, 0U);
+    SSL_CTX_set_new_pending_conn_cb(listener->quic_ctx, quic_test_pending_connection, &pending);
     quic_test_client_t clients[QUIC_TEST_CLIENTS] = {0};
     pthread_t threads[QUIC_TEST_CLIENTS];
     socket_t *accepted[QUIC_TEST_CLIENTS] = {0};
@@ -117,6 +152,7 @@ static void quic_test_run(size_t count, bool delay_accept) {
         .count = count,
         .delay_accept = delay_accept,
         .clients_completed = &completed,
+        .pending = &pending,
     };
     pthread_t server_thread;
     REQUIRE(pthread_create(&server_thread, NULL, quic_test_server_main, &server) == 0);
@@ -215,7 +251,11 @@ static void quic_test_run(size_t count, bool delay_accept) {
     socket_destroy(selected);
     socket_destroy(listener);
     REQUIRE(unlink(identity) == 0);
+#ifdef WIN32
+    REQUIRE(RemoveDirectoryA(directory));
+#else
     REQUIRE(rmdir(directory) == 0);
+#endif
 }
 
 int main(void) {
