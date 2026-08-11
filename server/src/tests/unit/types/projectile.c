@@ -189,12 +189,15 @@ START_TEST(test_archery_invisibility_and_target_ownership_exclusions) {
     CONTR(pl)->cs->state = ST_PLAYING;
 
     object *target = projectile_test_target(map, pl);
-    target->direction = 1;
+    target->direction = 3;
     SET_MULTI_FLAG(pl, FLAG_IS_INVISIBLE);
     object *arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
-    ck_assert_int_eq(projectile_test_hit(arrow, target), TEST_BASE_DAMAGE);
+    ck_assert_int_eq(projectile_test_hit(arrow, target), 30);
     ck_assert(!OBJECT_VALID(target->enemy, target->enemy_count));
-    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 0);
+    ck_assert_uint_eq(
+        projectile_test_bonus_messages(
+            pl, "Archery damage bonus: +25% (+6 base damage) — rear shot."),
+        1);
     CLEAR_MULTI_FLAG(pl, FLAG_IS_INVISIBLE);
 
     target = projectile_test_target(map, pl);
@@ -202,7 +205,7 @@ START_TEST(test_archery_invisibility_and_target_ownership_exclusions) {
     target->direction = 3;
     arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
     ck_assert_int_eq(object_projectile_hit(arrow, target), OBJECT_METHOD_UNHANDLED);
-    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 0);
+    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 1);
 
     object *other_player = player_get_dummy("Projectile target", NULL);
     object_remove(other_player, 0);
@@ -218,7 +221,7 @@ START_TEST(test_archery_invisibility_and_target_ownership_exclusions) {
     int pvp_damage = projectile_test_hit(arrow, other_player);
     ck_assert_int_gt(pvp_damage, 0);
     ck_assert_int_le(pvp_damage, TEST_BASE_DAMAGE);
-    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 0);
+    ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 1);
 }
 END_TEST
 
