@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <setting_value.h>
 
@@ -69,6 +70,11 @@ static void test_range(void) {
     check_rejected(&setting, "8");
     check_rejected(&setting, "10");
     check_rejected(&setting, "18");
+
+    range.advance = 0;
+    check_rejected(&setting, "9");
+    range.advance = -1;
+    check_rejected(&setting, "9");
 }
 
 static void test_integer_syntax_and_bounds(void) {
@@ -86,10 +92,25 @@ static void test_integer_syntax_and_bounds(void) {
     check_value(&setting, "+12", 12);
 }
 
+static void test_text_and_unknown_types(void) {
+    setting_struct setting = {.type = OPT_TYPE_INPUT_TEXT};
+
+    TEST_CHECK(setting_value_parse(&setting, "first"));
+    TEST_CHECK(strcmp(setting.val.str, "first") == 0);
+    setting.type = OPT_TYPE_COLOR;
+    TEST_CHECK(setting_value_parse(&setting, "#abcdef"));
+    TEST_CHECK(strcmp(setting.val.str, "#abcdef") == 0);
+    free(setting.val.str);
+
+    setting.type = OPT_TYPE_NUM;
+    check_rejected(&setting, "1");
+}
+
 int main(void) {
     test_boolean();
     test_select();
     test_range();
     test_integer_syntax_and_bounds();
+    test_text_and_unknown_types();
     return 0;
 }
