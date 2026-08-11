@@ -55,7 +55,10 @@ bool setting_value_parse(setting_struct *setting, const char *text) {
 
         case OPT_TYPE_RANGE:
             if (!setting_value_parse_int64(text, &value) || value < SETTING_RANGE(setting)->min ||
-                value > SETTING_RANGE(setting)->max) {
+                value > SETTING_RANGE(setting)->max || SETTING_RANGE(setting)->advance <= 0 ||
+                ((uint64_t)value - (uint64_t)SETTING_RANGE(setting)->min) %
+                        (uint64_t)SETTING_RANGE(setting)->advance !=
+                    0) {
                 return false;
             }
             break;

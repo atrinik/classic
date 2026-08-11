@@ -61,12 +61,13 @@ static void test_select(void) {
 }
 
 static void test_range(void) {
-    setting_range range = {.min = 9, .max = 17, .advance = 1};
+    setting_range range = {.min = 9, .max = 17, .advance = 2};
     setting_struct setting = {.type = OPT_TYPE_RANGE, .custom_attrset = &range};
 
     check_value(&setting, "9", 9);
     check_value(&setting, "17", 17);
     check_rejected(&setting, "8");
+    check_rejected(&setting, "10");
     check_rejected(&setting, "18");
 }
 
