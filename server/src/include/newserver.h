@@ -106,6 +106,9 @@ typedef struct MapCell_struct {
     /** Whether each sent object is a door. */
     uint8_t door[NUM_REAL_LAYERS];
 
+    /** Whether each sent object is a visible exit. */
+    uint8_t exit[NUM_REAL_LAYERS];
+
     uint8_t anim_speed[NUM_REAL_LAYERS];
 
     uint8_t anim_facing[NUM_REAL_LAYERS];

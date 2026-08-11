@@ -1738,6 +1738,7 @@ void draw_client_map2(object *pl) {
                             int is_friend = 0;
                             uint8_t is_roof = 0;
                             uint8_t is_door = 0;
+                            uint8_t is_exit = 0;
 
                             face_obj = NULL;
                             anim_speed = anim_facing = anim_flags = 0;
@@ -1859,6 +1860,11 @@ void draw_client_map2(object *pl) {
                                 is_door = 1;
                             }
 
+                            if (head->type == EXIT && level_visibility == MAP_LEVEL_VISIBLE) {
+                                flags2 |= MAP2_FLAG2_EXIT;
+                                is_exit = 1;
+                            }
+
                             if (head->glow != NULL && CONTR(pl)->cs->socket_version >= 1060) {
                                 flags2 |= MAP2_FLAG2_GLOW;
                             }
@@ -1870,6 +1876,47 @@ void draw_client_map2(object *pl) {
 
                             if (flags2) {
                                 flags |= MAP2_FLAG_MORE;
+                            }
+
+                            /* Plugin-controlled visibility is authoritative.
+                             * Treat hidden objects as absent before consulting
+                             * or mutating the delta cache so both hide and
+                             * reveal transitions produce the required wire
+                             * update. */
+                            if (OBJECT_IS_HIDDEN(pl, head)) {
+                                if (flags2 & MAP2_FLAG2_PROBE) {
+                                    CONTR(pl)->target_object = NULL;
+                                    CONTR(pl)->target_object_count = 0;
+                                    send_target_command(CONTR(pl));
+                                }
+
+                                bool was_cached = mp->faces[socket_layer] != 0;
+                                mp->faces[socket_layer] = 0;
+                                mp->quick_pos[socket_layer] = 0;
+                                mp->flags[socket_layer] = 0;
+                                mp->roof[socket_layer] = 0;
+                                mp->door[socket_layer] = 0;
+                                mp->exit[socket_layer] = 0;
+                                mp->anim_speed[socket_layer] = 0;
+                                mp->anim_facing[socket_layer] = 0;
+
+                                if (layer == LAYER_LIVING) {
+                                    mp->anim_flags[sub_layer] = 0;
+                                    mp->client_flags[sub_layer] = 0;
+                                    mp->probe = 0;
+                                    mp->target_object_count = 0;
+                                    mp->is_friend &= ~(1 << sub_layer);
+                                }
+
+                                if (was_cached) {
+                                    packet_debug_data(packet_layer, 1, "Socket layer ID (clear)");
+                                    packet_writer_write_uint8(packet_layer, MAP2_LAYER_CLEAR);
+                                    packet_debug_data(packet_layer, 1, "Actual socket layer");
+                                    packet_writer_write_uint8(packet_layer, socket_layer);
+                                    num_layers++;
+                                }
+
+                                continue;
                             }
 
                             /* Damage animation? Store it for later. */
@@ -1888,6 +1935,7 @@ void draw_client_map2(object *pl) {
                                 mp->flags[socket_layer] == flags &&
                                 mp->roof[socket_layer] == is_roof &&
                                 mp->door[socket_layer] == is_door &&
+                                mp->exit[socket_layer] == is_exit &&
                                 (layer != LAYER_LIVING || !IS_LIVE(head) ||
                                  (mp->probe == probe_val &&
                                   mp->target_object_count == target_object_count)) &&
@@ -1909,6 +1957,7 @@ void draw_client_map2(object *pl) {
                             mp->flags[socket_layer] = flags;
                             mp->roof[socket_layer] = is_roof;
                             mp->door[socket_layer] = is_door;
+                            mp->exit[socket_layer] = is_exit;
                             mp->anim_speed[socket_layer] = anim_speed;
                             mp->anim_facing[socket_layer] = anim_facing;
 
@@ -1928,25 +1977,6 @@ void draw_client_map2(object *pl) {
                                         mp->is_friend &= ~(1 << sub_layer);
                                     }
                                 }
-                            }
-
-                            if (OBJECT_IS_HIDDEN(pl, head)) {
-                                /* Update target if applicable. */
-                                if (flags2 & MAP2_FLAG2_PROBE) {
-                                    CONTR(pl)->target_object = NULL;
-                                    CONTR(pl)->target_object_count = 0;
-                                    send_target_command(CONTR(pl));
-                                }
-
-                                if (mp->faces[socket_layer]) {
-                                    packet_debug_data(packet_layer, 1, "Socket layer ID (clear)");
-                                    packet_writer_write_uint8(packet_layer, MAP2_LAYER_CLEAR);
-                                    packet_debug_data(packet_layer, 1, "Actual socket layer");
-                                    packet_writer_write_uint8(packet_layer, socket_layer);
-                                    num_layers++;
-                                }
-
-                                continue;
                             }
 
                             num_layers++;
@@ -2075,6 +2105,7 @@ void draw_client_map2(object *pl) {
                             mp->flags[socket_layer] = 0;
                             mp->roof[socket_layer] = 0;
                             mp->door[socket_layer] = 0;
+                            mp->exit[socket_layer] = 0;
                             mp->anim_speed[socket_layer] = 0;
                             mp->anim_facing[socket_layer] = 0;
 

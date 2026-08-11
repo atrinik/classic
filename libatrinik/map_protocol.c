@@ -105,7 +105,7 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
     const uint32_t known_flags2 = MAP2_FLAG2_ALPHA | MAP2_FLAG2_ROTATE | MAP2_FLAG2_ZOOM |
                                   MAP2_FLAG2_TARGET | MAP2_FLAG2_PROBE | MAP2_FLAG2_PRIORITY |
                                   MAP2_FLAG2_SECONDPASS | MAP2_FLAG2_GLOW | MAP2_FLAG2_ROOF |
-                                  MAP2_FLAG2_DOOR;
+                                  MAP2_FLAG2_DOOR | MAP2_FLAG2_EXIT;
 
     while (reader->pos < reader->len) {
         uint16_t mask;
