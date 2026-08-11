@@ -1212,19 +1212,67 @@ static void init_dynamic(void) {
  * Write out the current time to a file so time does not reset every
  * time the server reboots.
  */
-void write_todclock(void) {
+static bool write_todclock_atomic(void) {
     char filename[HUGE_BUF];
-    FILE *fp;
+    char contents[64];
 
     snprintf(filename, sizeof(filename), "%s/clockdata", settings.datapath);
 
-    if ((fp = fopen(filename, "w")) == NULL) {
-        LOG(BUG, "Cannot open %s for writing.", filename);
-        return;
+    int length = snprintf(contents, sizeof(contents), "%lu", todtick);
+    if (length < 0 || (size_t)length >= sizeof(contents) ||
+        !path_write_atomic(filename, contents, (size_t)length, SAVE_MODE)) {
+        return false;
     }
 
-    fprintf(fp, "%lu", todtick);
-    fclose(fp);
+    return true;
+}
+
+void write_todclock(void) {
+    if (!write_todclock_atomic()) {
+        LOG(BUG, "Cannot atomically write persisted world clock.");
+    }
+}
+
+/**
+ * Parse a persisted world-clock value.
+ *
+ * Surrounding whitespace is accepted, but a sign, overflow, embedded junk, or
+ * an empty value is rejected.
+ *
+ * @param input
+ * NUL-terminated persisted value.
+ * @param value
+ * Where to store the parsed value on success. Unchanged on failure.
+ * @return
+ * Whether the complete input contains one valid decimal value.
+ */
+bool todclock_parse(const char *input, unsigned long *value) {
+    HARD_ASSERT(input != NULL);
+    HARD_ASSERT(value != NULL);
+
+    const unsigned char *cursor = (const unsigned char *)input;
+    while (isspace(*cursor)) {
+        cursor++;
+    }
+    if (!isdigit(*cursor)) {
+        return false;
+    }
+
+    errno = 0;
+    char *end;
+    unsigned long parsed = strtoul((const char *)cursor, &end, 10);
+    if (errno == ERANGE) {
+        return false;
+    }
+    while (isspace((unsigned char)*end)) {
+        end++;
+    }
+    if (*end != '\0') {
+        return false;
+    }
+
+    *value = parsed;
+    return true;
 }
 
 /**
@@ -1234,6 +1282,7 @@ void write_todclock(void) {
  */
 static void init_clocks(void) {
     char filename[HUGE_BUF];
+    char contents[128];
     FILE *fp;
     static int has_been_done = 0;
 
@@ -1245,16 +1294,45 @@ static void init_clocks(void) {
 
     snprintf(filename, sizeof(filename), "%s/clockdata", settings.datapath);
 
-    if ((fp = fopen(filename, "r")) == NULL) {
-        LOG(DEBUG, "Can't open %s.", filename);
+    if ((fp = fopen(filename, "rb")) == NULL) {
+        if (errno != ENOENT) {
+            LOG(ERROR,
+                "Cannot read persisted world clock %s: %s (%d)",
+                filename,
+                strerror(errno),
+                errno);
+            exit(EXIT_FAILURE);
+        }
+
+        LOG(DEBUG, "No persisted world clock at %s; initializing it.", filename);
         todtick = 0;
-        write_todclock();
+        if (!write_todclock_atomic()) {
+            LOG(ERROR, "Cannot initialize persisted world clock %s.", filename);
+            exit(EXIT_FAILURE);
+        }
         return;
     }
 
-    if (fscanf(fp, "%lu", &todtick)) {}
+    size_t length = fread(contents, 1, sizeof(contents) - 1, fp);
+    bool valid_io = !ferror(fp);
+    if (valid_io && length == sizeof(contents) - 1) {
+        valid_io = fgetc(fp) == EOF && feof(fp);
+    }
+    if (fclose(fp) != 0) {
+        valid_io = false;
+    }
+    contents[length] = '\0';
 
-    fclose(fp);
+    unsigned long parsed;
+    if (!valid_io || memchr(contents, '\0', length) != NULL ||
+        !todclock_parse(contents, &parsed)) {
+        LOG(ERROR,
+            "Malformed persisted world clock %s; refusing to start so the file remains recoverable.",
+            filename);
+        exit(EXIT_FAILURE);
+    }
+
+    todtick = parsed;
 }
 
 /**
