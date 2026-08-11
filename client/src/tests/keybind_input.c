@@ -157,6 +157,26 @@ static void keybind_fixture_reset(void) {
     keybindings_num = 0;
 }
 
+keybind_struct *keybind_add(SDL_Keycode key, SDL_Keymod mod, const char *command) {
+    keybind_struct *keybind = xcalloc(1, sizeof(*keybind));
+
+    keybind->key = key;
+    keybind->mod = keybind_adjust_kmod(mod);
+    keybind->command = xstrdup(command);
+    keybindings = xreallocarray(keybindings, keybindings_num + 1, sizeof(*keybindings));
+    keybindings[keybindings_num++] = keybind;
+    return keybind;
+}
+
+keybind_struct *keybind_find_by_command(const char *command) {
+    for (size_t i = 0; i < keybindings_num; i++) {
+        if (!strcmp(command, keybindings[i]->command)) {
+            return keybindings[i];
+        }
+    }
+    return NULL;
+}
+
 static void test_keybind_loader(void) {
     path_fopen = keybind_fixture_open;
     keybind_fixture = "end\r\n"
@@ -185,23 +205,59 @@ static void test_keybind_loader(void) {
 
     keybind_fixture =
         "keycode_format " KEYBIND_KEYCODE_FORMAT "\nbind\nkey 102\ncommand ?FIRE_READY\nend\n"
-        "bind\nkey 103\ncommand ?FIRE_READY_CUSTOM\nend\n"
+        "bind\nkey 103\nmod 3\nrepeat 1\ncommand ?FIRE_READY_CUSTOM\nend\n"
         "bind\nkey 104\ncommand ?FIRE_READY;?HELP\nend\n"
-        "bind\nkey 105\ncommand /custom\nend\n";
+        "bind\nkey 105\ncommand /custom\nend\n"
+        "bind\nkey 293\nmod 192\nrepeat 1\ncommand ?HELP\nend\n";
     keybind_load();
-    TEST_CHECK(keybindings_num == 3);
+    TEST_CHECK(keybindings_num == 4);
     TEST_CHECK(!strcmp(keybindings[0]->command, "?FIRE_READY_CUSTOM"));
+    TEST_CHECK(keybindings[0]->key == SDLK_G);
+    TEST_CHECK(keybindings[0]->mod == SDL_KMOD_SHIFT);
+    TEST_CHECK(keybindings[0]->repeat == 1);
     TEST_CHECK(!strcmp(keybindings[1]->command, "?FIRE_READY;?HELP"));
     TEST_CHECK(!strcmp(keybindings[2]->command, "/custom"));
+    TEST_CHECK(!strcmp(keybindings[3]->command, "?HELP"));
+
+    FILE *legacy = tmpfile();
+    TEST_CHECK(legacy != NULL);
+    TEST_CHECK(fputs("102 1 \"f\" \"?M_FIRE_READY\"\n"
+                     "273 0 \"up\" \"?M_HELP\"\n"
+                     "120 1 \"x\" \"/legacy-custom\"\n",
+                     legacy) >= 0);
+    rewind(legacy);
+    keybind_upgrade_legacy(legacy);
+    TEST_CHECK(fclose(legacy) == 0);
+    TEST_CHECK(keybindings_num == 5);
+    TEST_CHECK(keybindings[0]->key == SDLK_G);
+    TEST_CHECK(keybindings[0]->mod == SDL_KMOD_SHIFT);
+    TEST_CHECK(keybindings[0]->repeat == 1);
+    TEST_CHECK(keybindings[3]->key == SDLK_UP);
+    TEST_CHECK(keybindings[3]->mod == SDL_KMOD_CTRL);
+    TEST_CHECK(keybindings[3]->repeat == 1);
+    TEST_CHECK(!strcmp(keybindings[4]->command, "/legacy-custom"));
+    TEST_CHECK(keybindings[4]->key == SDLK_X);
+    TEST_CHECK(keybindings[4]->mod == SDL_KMOD_NONE);
+    TEST_CHECK(keybindings[4]->repeat == 1);
 
     keybind_fixture = NULL;
     keybind_save();
     keybind_fixture_reset();
     keybind_load();
-    TEST_CHECK(keybindings_num == 3);
+    TEST_CHECK(keybindings_num == 5);
     TEST_CHECK(!strcmp(keybindings[0]->command, "?FIRE_READY_CUSTOM"));
+    TEST_CHECK(keybindings[0]->key == SDLK_G);
+    TEST_CHECK(keybindings[0]->mod == SDL_KMOD_SHIFT);
+    TEST_CHECK(keybindings[0]->repeat == 1);
     TEST_CHECK(!strcmp(keybindings[1]->command, "?FIRE_READY;?HELP"));
     TEST_CHECK(!strcmp(keybindings[2]->command, "/custom"));
+    TEST_CHECK(keybindings[3]->key == SDLK_UP);
+    TEST_CHECK(keybindings[3]->mod == SDL_KMOD_CTRL);
+    TEST_CHECK(keybindings[3]->repeat == 1);
+    TEST_CHECK(!strcmp(keybindings[4]->command, "/legacy-custom"));
+    TEST_CHECK(keybindings[4]->key == SDLK_X);
+    TEST_CHECK(keybindings[4]->mod == SDL_KMOD_NONE);
+    TEST_CHECK(keybindings[4]->repeat == 1);
     keybind_save();
     keybind_fixture_reset();
     TEST_CHECK(remove(ATRINIK_TEST_BINARY_DIR "/keybind-roundtrip.dat") == 0);

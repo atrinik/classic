@@ -62,65 +62,8 @@ static void upgrade_20_to_25(const char *from, const char *to) {
     free(src);
 
     if (fp) {
-        int keycode, repeat;
-        char keyname[MAX_BUF], command[HUGE_BUF];
-
         keybind_load();
-
-        /* Read the old keys.dat file. */
-        while (fgets(buf, sizeof(buf) - 1, fp)) {
-            /* Try to parse the macro definition lines. */
-            if (sscanf(buf,
-                       "%d %d \"%200[^\"]\" \"%2000[^\"]\"",
-                       &keycode,
-                       &repeat,
-                       keyname,
-                       command) == 4) {
-                keybind_struct *keybind;
-                SDL_Keycode migrated_keycode;
-
-                if (keycode < 0) {
-                    continue;
-                }
-                migrated_keycode = keybind_keycode_from_legacy((uint32_t)keycode);
-
-                /* Is it a command? */
-                if (*command == '/') {
-                    keybind = keybind_find_by_command(command);
-
-                    /* Does not exist yet, add it. */
-                    if (!keybind) {
-                        keybind = keybind_add(migrated_keycode, 0, command);
-                    } else {
-                        keybind->key = migrated_keycode;
-                    }
-
-                    keybind->repeat = repeat;
-                } else if (!strncmp(command, "?M_MCON", 7)) {
-                    char mcon_buf[HUGE_BUF];
-
-                    snprintf(mcon_buf, sizeof(mcon_buf), "?MCON %s", command + 7);
-
-                    if (!keybind_find_by_command(mcon_buf)) {
-                        keybind = keybind_add(migrated_keycode, 0, mcon_buf);
-                        keybind->repeat = repeat;
-                    }
-                } else if (*command == '?') {
-                    const char *new_cmd = keybind_command_from_legacy(command);
-
-                    if (new_cmd == NULL) {
-                        continue;
-                    }
-
-                    keybind = keybind_find_by_command(new_cmd);
-
-                    if (keybind) {
-                        keybind->key = migrated_keycode;
-                    }
-                }
-            }
-        }
-
+        keybind_upgrade_legacy(fp);
         keybind_deinit();
         fclose(fp);
     }

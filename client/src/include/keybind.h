@@ -128,6 +128,8 @@ extern size_t keybindings_num;
 
 extern void keybind_load(void);
 
+extern void keybind_upgrade_legacy(FILE *stream);
+
 extern void keybind_save(void);
 
 extern void keybind_free(keybind_struct *keybind);
