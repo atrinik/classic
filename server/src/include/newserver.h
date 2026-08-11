@@ -43,6 +43,12 @@
 /** Maximum buffered player-command bytes retained by one connection. */
 #define SOCKET_COMMAND_QUEUE_MAX (1024U * 1024U)
 
+/** Physical queue storage including canceled movement records awaiting compaction. */
+#define SOCKET_COMMAND_QUEUE_STORAGE_MAX (SOCKET_COMMAND_QUEUE_MAX * 2U)
+
+/** Amortize queue compaction against a meaningful amount of canceled input. */
+#define SOCKET_COMMAND_QUEUE_COMPACT_MIN (64U * 1024U)
+
 typedef struct asset_stream_state asset_stream_state_t;
 
 /** How many items to show in the below window. Used in esrv_draw_look(). */
@@ -145,6 +151,19 @@ enum {
     ST_DEAD,
     ST_ZOMBIE
 };
+
+/** One queued command belonging to the client's current keyboard movement epoch. */
+typedef struct socket_movement_queue_entry {
+    uint64_t offset;
+} socket_movement_queue_entry;
+
+/** Queue index for one replaceable movement command type. */
+typedef struct socket_movement_queue_index {
+    socket_movement_queue_entry *entries;
+    size_t entries_start;
+    size_t entries_num;
+    size_t entries_size;
+} socket_movement_queue_index;
 
 /** This contains basic information on the socket structure. */
 typedef struct socket_struct {
@@ -266,6 +285,11 @@ typedef struct socket_struct {
 
     struct packet_struct *packet_recv;
     struct packet_struct *packet_recv_cmd;
+    uint64_t packet_recv_cmd_base;
+    uint32_t movement_stream_epoch;
+    socket_movement_queue_index movement_stream_move;
+    socket_movement_queue_index movement_stream_fire;
+    size_t movement_stream_tombstone_bytes;
 } socket_struct;
 
 /**

@@ -89,13 +89,18 @@ static void notification_action_do(void) {
  * 1 if the notification handled the keybinding, 0 otherwise.
  */
 int notification_keybind_check(const char *cmd) {
-    if (notification && notification->action && notification->shortcut &&
-        !strcmp(notification->shortcut, cmd)) {
+    if (notification_keybind_matches(cmd)) {
         notification_action_do();
         return 1;
     }
 
     return 0;
+}
+
+/** Return whether the active notification owns a keybinding macro. */
+bool notification_keybind_matches(const char *cmd) {
+    return notification && notification->action && notification->shortcut &&
+           !strcmp(notification->shortcut, cmd);
 }
 
 /** @copydoc socket_command_struct::handle_func */

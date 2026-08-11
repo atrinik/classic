@@ -30,9 +30,11 @@
 
 ## Dependencies, protocols, and generated files
 
-- Integrated builds use sibling `protocol/` and `libatrinik/`; immutable
-  checksum-pinned locks remain release/standalone fallbacks. Content/resources
-  also come from pinned releases; add no submodules.
+- Integrated builds use sibling `protocol/` and `libatrinik/`. Classic protocol
+  must come from that sibling, the release's embedded `dependencies/protocol`
+  tree, or an explicit source override so its wire revision cannot drift;
+  libatrinik remains an immutable checksum-pinned release fallback.
+  Content/resources also come from pinned releases; add no submodules.
 - Packet-layout changes are coordinated protocol work. Generated IDs originate
   at `protocol/schema/game-commands.json`; never copy or renumber them locally.
 - Edit Flex/CMake definition inputs rather than generated lexer/configured
@@ -51,7 +53,10 @@
   gcovr summary; pull-request CI also runs `linux-sanitizers`.
 - Classic has one release line. Preserve source, Windows package, checksum, and
   server-image contracts. Scoped source packages embed matching protocol/
-  libatrinik under `dependencies/` for network-free standalone configuration.
+  libatrinik under `dependencies/` and select those repository-owned inputs
+  without network access. Independently pinned third-party FetchContent sources
+  retain their checksum-verified fallback unless a release contract explicitly
+  bundles them.
 - Commits/PR titles use Conventional Commits. Preserve unrelated work, keep
   generated output under `build/`, and finish with `git diff --check`.
 - Update this guide when ownership, layout, commands, persistence/runtime, or

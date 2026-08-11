@@ -50,6 +50,71 @@
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 
+/** Active physical keys contributing to the logical gameplay movement stream. */
+static keybind_movement_state movement_state;
+
+/** Whether run/fire mode is owned by a momentary held command rather than a toggle. */
+static bool movement_run_held;
+static bool movement_fire_held;
+
+static bool keybind_event_running(void *user_data) {
+    (void)user_data;
+    return cpl.run_on;
+}
+
+static bool keybind_event_firing(void *user_data) {
+    (void)user_data;
+    return cpl.fire_on;
+}
+
+static void keybind_event_flush(void *user_data) {
+    (void)user_data;
+    keybind_movement_flush();
+}
+
+static bool keybind_event_movement_intercept_matches(const char *command, void *user_data) {
+    (void)user_data;
+    return notification_keybind_matches(command);
+}
+
+static void keybind_event_movement_intercept(const char *command, void *user_data) {
+    (void)user_data;
+    (void)notification_keybind_check(command);
+}
+
+static bool keybind_event_command_down(const char *command, void *user_data) {
+    (void)user_data;
+    if (notification_keybind_matches(command)) {
+        (void)notification_keybind_check(command);
+        return false;
+    }
+    return keybind_process_command(command) != 0;
+}
+
+static void keybind_event_command_up(const char *command, void *user_data) {
+    (void)user_data;
+    keybind_process_command_up(command);
+}
+
+static void keybind_event_reconcile_modes(void *user_data) {
+    (void)user_data;
+    keybind_state_ensure();
+}
+
+static keybind_event_handler keybind_event_handler_create(void) {
+    return (keybind_event_handler){
+        .movement = &movement_state,
+        .running = keybind_event_running,
+        .firing = keybind_event_firing,
+        .reconcile_modes = keybind_event_reconcile_modes,
+        .flush = keybind_event_flush,
+        .movement_intercept_matches = keybind_event_movement_intercept_matches,
+        .movement_intercept = keybind_event_movement_intercept,
+        .command_down = keybind_event_command_down,
+        .command_up = keybind_event_command_up,
+    };
+}
+
 /**
  * Add a keybinding to the ::keybindings array.
  * @param key
@@ -193,20 +258,7 @@ int keybind_command_matches_event(const char *cmd, SDL_KeyboardEvent *event) {
  * 1 if it matches, 0 otherwise.
  */
 int keybind_command_matches_state(const char *cmd) {
-    size_t i;
-
-    for (i = 0; i < keybindings_num; i++) {
-        if (!strcmp(cmd, keybindings[i]->command)) {
-            SDL_Scancode scancode = SDL_GetScancodeFromKey(keybindings[i]->key, NULL);
-            if (scancode != SDL_SCANCODE_UNKNOWN && keys[scancode].pressed &&
-                (!keybindings[i]->mod ||
-                 keybindings[i]->mod == keybind_adjust_kmod(SDL_GetModState()))) {
-                return 1;
-            }
-        }
-    }
-
-    return 0;
+    return keybind_command_matches_held(keybindings, keybindings_num, cmd, keys, SDL_GetModState());
 }
 
 /**
@@ -217,62 +269,22 @@ int keybind_command_matches_state(const char *cmd) {
  * 1 if the event was handled, 0 otherwise.
  */
 int keybind_process_event(SDL_KeyboardEvent *event) {
-    size_t i;
+    keybind_event_handler handler = keybind_event_handler_create();
 
-    /* Try to handle keybindings with modifier keys first. */
-    for (i = 0; i < keybindings_num; i++) {
-        if (event->key == keybindings[i]->key &&
-            keybindings[i]->mod == keybind_adjust_kmod(event->mod)) {
-            keybind_process(keybindings[i], event->type, event->repeat);
-            return 1;
-        }
-    }
-
-    /* Now handle keys with no modifier keys, regardless of what the
-     * current keyboard modifier combination is. */
-    for (i = 0; i < keybindings_num; i++) {
-        if (event->key == keybindings[i]->key && !keybindings[i]->mod) {
-            keybind_process(keybindings[i], event->type, event->repeat);
-            return 1;
-        }
-    }
-
-    return 0;
+    return keybind_event_process(keybindings, keybindings_num, event, &handler);
 }
 
 /**
  * Process a keybinding.
  * @param keybind
  * The keybinding to process.
- * @param type
- * Either SDL_EVENT_KEY_DOWN or SDL_EVENT_KEY_UP.
+ * @param event
+ * Physical keyboard event to process.
  */
-void keybind_process(keybind_struct *keybind, SDL_EventType type, bool repeated) {
-    char command[MAX_BUF], *cp;
+void keybind_process(keybind_struct *keybind, const SDL_KeyboardEvent *event) {
+    keybind_event_handler handler = keybind_event_handler_create();
 
-    /* Do not repeat keys that should not be repeated. */
-    if (!keybind->repeat && repeated) {
-        return;
-    }
-
-    strncpy(command, keybind->command, sizeof(command) - 1);
-    command[sizeof(command) - 1] = '\0';
-
-    cp = strtok(command, ";");
-
-    while (cp) {
-        while (*cp == ' ') {
-            cp++;
-        }
-
-        if (type == SDL_EVENT_KEY_DOWN) {
-            keybind_process_command(cp);
-        } else {
-            keybind_process_command_up(cp);
-        }
-
-        cp = strtok(NULL, ";");
-    }
+    keybind_event_process_binding(keybind, event, &handler);
 }
 
 /**
@@ -289,9 +301,11 @@ int keybind_process_command_up(const char *cmd) {
         cmd++;
 
         if (!strcmp(cmd, "RUNON")) {
+            movement_run_held = false;
             cpl.run_on = 0;
-            move_keys(0);
+            keybind_movement_state_run_released(&movement_state, move_keys_run_stream_active());
         } else if (!strcmp(cmd, "FIREON")) {
+            movement_fire_held = false;
             cpl.fire_on = 0;
         } else if (!strncmp(cmd, "MOVE_", 5)) {
             keybind_struct *keybind;
@@ -318,13 +332,48 @@ int keybind_process_command_up(const char *cmd) {
  * done so, even if the 'key up' event was handled by something else.
  */
 void keybind_state_ensure(void) {
-    if (cpl.run_on && !keybind_command_matches_state("?RUNON")) {
-        keybind_process_command_up("?RUNON");
+    for (SDL_Scancode i = 0; i < SDL_SCANCODE_COUNT; i++) {
+        if (!keys[i].pressed) {
+            keybind_movement_state_release(&movement_state, i, cpl.run_on, cpl.fire_on);
+        }
     }
 
-    if (cpl.fire_on && !keybind_command_matches_state("?FIREON")) {
-        keybind_process_command_up("?FIREON");
+    if (movement_run_held && !keybind_movement_state_mode_owned(&movement_state, true)) {
+        if (cpl.run_on) {
+            keybind_process_command_up("?RUNON");
+        } else {
+            movement_run_held = false;
+        }
     }
+
+    if (movement_fire_held && !keybind_movement_state_mode_owned(&movement_state, false)) {
+        if (cpl.fire_on) {
+            keybind_process_command_up("?FIREON");
+        } else {
+            movement_fire_held = false;
+        }
+    }
+}
+
+/** Emit the next pending logical movement update. */
+void keybind_movement_flush(void) {
+    keybind_movement_state_emit(&movement_state);
+}
+
+/** Reconcile a physical key-up even when a focused UI element consumes it. */
+void keybind_movement_key_released(const SDL_KeyboardEvent *event) {
+    keybind_event_handler handler = keybind_event_handler_create();
+
+    keybind_event_reconcile_release(keybindings, keybindings_num, event, keys, &handler);
+    if (keybind_event_is_modifier(event)) {
+        keybind_state_ensure();
+    }
+}
+
+/** Cancel un-emitted movement and stop an established stream on focus loss. */
+void keybind_movement_focus_lost(void) {
+    keybind_movement_state_clear(&movement_state, cpl.run_on, cpl.fire_on);
+    keybind_movement_state_run_released(&movement_state, move_keys_run_stream_active());
 }
 
 /**
@@ -335,6 +384,8 @@ void keybind_state_ensure(void) {
  * 1 if the command was handled, 0 otherwise.
  */
 int keybind_process_command(const char *cmd) {
+    const char *cmd_orig = cmd;
+
     if (notification_keybind_check(cmd)) {
         return 1;
     }
@@ -342,28 +393,12 @@ int keybind_process_command(const char *cmd) {
     if (*cmd == '?') {
         cmd++;
 
-        if (!strncmp(cmd, "MOVE_", 5)) {
+        uint8_t direction;
+        if (keybind_movement_command_direction(cmd_orig, &direction)) {
+            move_keys(direction);
+        } else if (!strncmp(cmd, "MOVE_", 5)) {
             cmd += 5;
-
-            if (!strcmp(cmd, "N")) {
-                move_keys(8);
-            } else if (!strcmp(cmd, "NE")) {
-                move_keys(9);
-            } else if (!strcmp(cmd, "E")) {
-                move_keys(6);
-            } else if (!strcmp(cmd, "SE")) {
-                move_keys(3);
-            } else if (!strcmp(cmd, "S")) {
-                move_keys(2);
-            } else if (!strcmp(cmd, "SW")) {
-                move_keys(1);
-            } else if (!strcmp(cmd, "W")) {
-                move_keys(4);
-            } else if (!strcmp(cmd, "NW")) {
-                move_keys(7);
-            } else if (!strcmp(cmd, "N")) {
-                move_keys(8);
-            } else if (!strcmp(cmd, "STAY")) {
+            if (!strcmp(cmd, "STAY")) {
                 move_keys(5);
             }
         } else if (!strcmp(cmd, "CONSOLE")) {
@@ -421,18 +456,24 @@ int keybind_process_command(const char *cmd) {
             widget_inventory_handle_arrow_key(cpl.inventory_focus, SDLK_RIGHT);
         } else if (!strncmp(cmd, "RUNON", 5)) {
             if (!strcmp(cmd + 5, "_TOGGLE")) {
+                movement_run_held = false;
+                keybind_movement_state_mode_clear(&movement_state, true);
                 if (cpl.run_on) {
                     move_keys(5);
                 }
 
                 cpl.run_on = !cpl.run_on;
             } else {
+                movement_run_held = true;
                 cpl.run_on = 1;
             }
         } else if (!strncmp(cmd, "FIREON", 6)) {
             if (!strcmp(cmd + 6, "_TOGGLE")) {
+                movement_fire_held = false;
+                keybind_movement_state_mode_clear(&movement_state, false);
                 cpl.fire_on = !cpl.fire_on;
             } else {
+                movement_fire_held = true;
                 cpl.fire_on = 1;
             }
         } else if (!strncmp(cmd, "QUICKSLOT_", 10)) {
