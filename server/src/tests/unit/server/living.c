@@ -7,7 +7,23 @@
 #include <checkstd.h>
 #include <check_utils.h>
 #include <arch.h>
+#include <attack.h>
 #include <disease.h>
+#include <object.h>
+#include <player.h>
+#include <poisoning.h>
+
+static void configure_speed_player(object *pl, int str, int dex, double speed) {
+    set_attr_value(&pl->arch->clone.stats, STR, str);
+    set_attr_value(&pl->arch->clone.stats, DEX, dex);
+    pl->arch->clone.speed = speed;
+}
+
+static double player_speed_at_weight(object *pl, uint32_t carrying) {
+    pl->carrying = carrying;
+    living_update_player(pl);
+    return pl->speed;
+}
 
 START_TEST(test_depletion_tooltip_lists_current_stats) {
     object *depletion = arch_get("depletion");
@@ -22,6 +38,125 @@ START_TEST(test_depletion_tooltip_lists_current_stats) {
 
     free(tooltip);
     object_destroy(depletion);
+}
+END_TEST
+
+START_TEST(test_player_encumbrance_curve_has_one_final_floor) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    configure_speed_player(pl, 13, 13, 1.0);
+
+    const uint32_t threshold = weight_limit[13] * 65 / 100;
+    double speeds[] = {
+        player_speed_at_weight(pl, threshold - 1),
+        player_speed_at_weight(pl, threshold),
+        player_speed_at_weight(pl, threshold + 1),
+        player_speed_at_weight(pl, weight_limit[13] - 1),
+        player_speed_at_weight(pl, weight_limit[13]),
+        player_speed_at_weight(pl, weight_limit[13] + 1),
+    };
+
+    ck_assert(fabs(speeds[0] - speeds[1]) < 0.000001);
+    for (size_t i = 0; i < arraysize(speeds); i++) {
+        ck_assert_double_ge(speeds[i], PLAYER_MIN_SPEED);
+        if (i > 0) {
+            ck_assert_double_le(speeds[i], speeds[i - 1]);
+        }
+    }
+    ck_assert(fabs(speeds[3] - PLAYER_MIN_SPEED) < 0.000001);
+    ck_assert(fabs(speeds[4] - PLAYER_MIN_SPEED) < 0.000001);
+    ck_assert(fabs(speeds[5] - PLAYER_MIN_SPEED) < 0.000001);
+}
+END_TEST
+
+START_TEST(test_player_speed_floor_follows_all_ordinary_modifiers) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    configure_speed_player(pl, 13, 13, 1.0);
+
+    object *force = arch_get("force");
+    force->stats.exp = -9;
+    SET_FLAG(force, FLAG_APPLIED);
+    force = object_insert_into(force, pl, 0);
+
+    object *disease = arch_get("disease");
+    disease->last_sp = 10;
+    SET_FLAG(disease, FLAG_APPLIED);
+    disease = object_insert_into(disease, pl, 0);
+
+    object *poison = arch_get("poisoning");
+    poison->stats.Str = -3;
+    poison->stats.Dex = -3;
+    SET_FLAG(poison, FLAG_APPLIED);
+    poison = object_insert_into(poison, pl, 0);
+
+    pl->carrying = weight_limit[13] * 65 / 100;
+    living_update_player(pl);
+
+    ck_assert(fabs(pl->speed - PLAYER_MIN_SPEED) < 0.000001);
+    ck_assert_int_eq((int)ceil(1.0 / PLAYER_MIN_SPEED), 10);
+    ck_assert_int_eq((int)(ceil(1.0 / PLAYER_MIN_SPEED) * MAX_TIME / 1000), 1250);
+}
+END_TEST
+
+START_TEST(test_poison_encumbrance_regression_uses_recoverable_floor) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    configure_speed_player(pl, 13, 13, 1.0);
+
+    pl->carrying = 100000;
+    living_update_player(pl);
+    ck_assert_double_gt(pl->speed, PLAYER_MIN_SPEED);
+
+    object *poison = arch_get("poisoning");
+    poison->stats.Str = -POISON_MAX_STAT_DEPLETION;
+    poison->stats.Dex = -POISON_MAX_STAT_DEPLETION;
+    SET_FLAG(poison, FLAG_APPLIED);
+    poison = object_insert_into(poison, pl, 0);
+
+    living_update_player(pl);
+    ck_assert(fabs(pl->speed - PLAYER_MIN_SPEED) < 0.000001);
+
+    /* A load at the pre-poison 65% boundary remains above the floor even at
+     * the maximum ordinary poison depletion. */
+    pl->carrying = weight_limit[13] * 65 / 100;
+    living_update_player(pl);
+    ck_assert_double_gt(pl->speed, PLAYER_MIN_SPEED);
+}
+END_TEST
+
+START_TEST(test_paralysis_timing_remains_in_speed_credit) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    configure_speed_player(pl, 13, 13, 1.0);
+    living_update_player(pl);
+    pl->speed_left = 0.0;
+
+    attack_peform_paralyze(pl, 4.0);
+    double paralyzed_until = pl->speed_left;
+    ck_assert_double_lt(paralyzed_until, 0.0);
+
+    living_update_player(pl);
+    ck_assert_double_eq(pl->speed_left, paralyzed_until);
+}
+END_TEST
+
+START_TEST(test_non_player_speed_is_not_clamped) {
+    object *poison = arch_get("poisoning");
+    poison->speed = -0.015;
+
+    object_update_speed(poison);
+
+    ck_assert(fabs(poison->speed - -0.015) < 0.000001);
+    object_destroy(poison);
 }
 END_TEST
 
@@ -82,6 +217,11 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_depletion_force_is_applied_before_stat_updates);
     tcase_add_test(tc_core, test_reduce_symptoms_ignores_non_progressive_symptoms);
     tcase_add_test(tc_core, test_reduce_symptoms_reduces_and_reschedules_progressive_symptoms);
+    tcase_add_test(tc_core, test_player_encumbrance_curve_has_one_final_floor);
+    tcase_add_test(tc_core, test_player_speed_floor_follows_all_ordinary_modifiers);
+    tcase_add_test(tc_core, test_poison_encumbrance_regression_uses_recoverable_floor);
+    tcase_add_test(tc_core, test_paralysis_timing_remains_in_speed_credit);
+    tcase_add_test(tc_core, test_non_player_speed_is_not_clamped);
 
     return s;
 }

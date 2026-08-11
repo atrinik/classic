@@ -56,6 +56,14 @@
 #define NO_STAT_VAL 99
 
 /**
+ * Minimum speed produced by ordinary player stat calculation.
+ *
+ * At the default 125 ms tick, this permits one speed-costing action every
+ * 10 ticks (1.25 seconds). Hard-control mechanics may still delay speed_left.
+ */
+#define PLAYER_MIN_SPEED 0.10
+
+/**
  * Calculates damage based on level.
  */
 #define LEVEL_DAMAGE(level) (float)((level) > 0 ? 0.75 + (level) * 0.25 : 1.0)

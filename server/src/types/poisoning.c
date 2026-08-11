@@ -33,6 +33,49 @@
 #include <server_main.h>
 #include <object.h>
 #include <object_methods.h>
+#include <poisoning.h>
+
+/**
+ * Calculate the per-stat poison depletion bound for a protection value.
+ *
+ * Protection is clamped to the normal 0-100 range. The ceiling division keeps
+ * the result monotonic while ensuring that partial protection never increases
+ * depletion.
+ */
+int poisoning_stat_depletion_limit(int protection) {
+    protection = MAX(0, MIN(100, protection));
+    return (POISON_MAX_STAT_DEPLETION * (100 - protection) + 99) / 100;
+}
+
+/**
+ * Apply one pulse of player-only poison stat depletion.
+ */
+void poisoning_apply_stat_depletion(object *poison, object *target) {
+    HARD_ASSERT(poison != NULL);
+    HARD_ASSERT(target != NULL);
+
+    if (target->type != PLAYER) {
+        return;
+    }
+
+    int protection = MAX(0, MIN(100, target->protection[ATNR_POISON]));
+    int limit = poisoning_stat_depletion_limit(protection);
+
+    for (int i = 0; i < NUM_STATS; i++) {
+        int8_t depletion = get_attr_value(&poison->stats, i);
+
+        /* Protection gained while poisoned takes effect on the next pulse. */
+        if (depletion < -limit) {
+            set_attr_value(&poison->stats, i, -limit);
+            depletion = -limit;
+        }
+
+        if (limit > 0 && depletion > -limit && rndm_chance(2) && rndm(1, 100) > protection) {
+            int amount = rndm_chance(6) ? 2 : 1;
+            set_attr_value(&poison->stats, i, MAX(-limit, depletion - amount));
+        }
+    }
+}
 
 /** @copydoc object_methods_t::process_func */
 static void process_func(object *op) {
@@ -65,14 +108,7 @@ static void process_func(object *op) {
         return;
     }
 
-    /* Pick some stats to 'deplete'. */
-    for (int i = 0; i < NUM_STATS; i++) {
-        if (rndm_chance(2) && get_attr_value(&op->stats, i) > -(MAX_STAT / 2)) {
-            /* Now deplete the stat. Relatively small chance that the
-             * depletion will be worse than usual. */
-            change_attr_value(&op->stats, i, rndm_chance(6) ? -2 : -1);
-        }
-    }
+    poisoning_apply_stat_depletion(op, target);
 
     living_update(target);
 }
