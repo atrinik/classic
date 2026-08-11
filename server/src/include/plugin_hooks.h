@@ -657,6 +657,13 @@ struct plugin_hooklist
                                                                                                                         long,
                                                                                                                         max_time)
 
+    /* Append-only plugin ABI: new hooks belong after every existing field. */
+    PLUGIN_HOOK_FUNCTION(bool,
+                         socket_server_command_queue_append,
+                         socket_struct *,
+                         const uint8_t *,
+                         size_t)
+
 };
 // clang-format on
 

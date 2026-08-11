@@ -157,6 +157,11 @@ int Event_PollInputDevice(void) {
             keys[event.key.scancode].pressed = 1;
         } else if (event.type == SDL_EVENT_KEY_UP) {
             keys[event.key.scancode].pressed = 0;
+            keybind_movement_key_released(&event.key);
+        } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+            memset(keys, 0, sizeof(keys));
+            keybind_movement_focus_lost();
+            keybind_movement_flush();
         } else if (event.type == SDL_EVENT_MOUSE_MOTION) {
             tooltip_dismiss();
         }
@@ -245,6 +250,9 @@ int Event_PollInputDevice(void) {
             event_dragging_stop_internal();
         }
     }
+
+    keybind_state_ensure();
+    keybind_movement_flush();
 
     return done;
 }

@@ -115,6 +115,7 @@ static uint16_t quic_public_port;
 static char quic_certificate_sha256[65];
 static uint64_t quic_punches_received;
 static uint64_t quic_punches_echoed;
+static player *socket_server_player_find(socket_struct *cs);
 /**
  * List of client sockets that are not yet playing.
  */
@@ -671,6 +672,10 @@ bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, 
         return false;
     }
 
+    if (pl == NULL && socket_commands[type].policy == SOCKET_COMMAND_POLICY_PLAYING) {
+        pl = socket_server_player_find(cs);
+    }
+
     packet_reader_scope_t scope;
     packet_reader_scope_begin(&scope);
     packet_reader_init_at(&reader, data + pos, len - pos, 0);
@@ -771,6 +776,273 @@ static bool socket_server_quic_network_ready(socket_t *sc) {
     return false;
 }
 
+#define SOCKET_COMMAND_QUEUE_TOMBSTONE UINT8_MAX
+
+static uint32_t socket_server_command_epoch(const uint8_t *data, size_t len) {
+    size_t epoch_pos;
+
+    if (len == 7 && data[0] == SERVER_CMD_MOVE) {
+        epoch_pos = 3;
+    } else if (len == 10 && data[0] == SERVER_CMD_FIRE && data[2] == 0 && data[3] == 0 &&
+               data[4] == 0 && data[5] == 0) {
+        epoch_pos = 6;
+    } else {
+        return 0;
+    }
+    return ((uint32_t)data[epoch_pos] << 24) | ((uint32_t)data[epoch_pos + 1] << 16) |
+           ((uint32_t)data[epoch_pos + 2] << 8) | data[epoch_pos + 3];
+}
+
+static socket_movement_queue_index *socket_server_command_queue_index(socket_struct *cs,
+                                                                      uint8_t command) {
+    if (command == SERVER_CMD_MOVE) {
+        return &cs->movement_stream_move;
+    }
+    if (command == SERVER_CMD_FIRE) {
+        return &cs->movement_stream_fire;
+    }
+    return NULL;
+}
+
+static void socket_server_command_queue_prune_index(socket_struct *cs,
+                                                    socket_movement_queue_index *index) {
+    while (index->entries_start < index->entries_num &&
+           index->entries[index->entries_start].offset < cs->packet_recv_cmd_base) {
+        index->entries_start++;
+    }
+    if (index->entries_start == index->entries_num) {
+        index->entries_start = 0;
+        index->entries_num = 0;
+    }
+}
+
+static void socket_server_command_queue_prune(socket_struct *cs) {
+    socket_server_command_queue_prune_index(cs, &cs->movement_stream_move);
+    socket_server_command_queue_prune_index(cs, &cs->movement_stream_fire);
+}
+
+static bool
+socket_server_command_queue_frame(const packet_struct *queue, size_t offset, size_t *frame_len) {
+    if (offset > queue->len || queue->len - offset < 3) {
+        return false;
+    }
+    size_t payload_len = ((size_t)queue->data[offset] << 8) | queue->data[offset + 1];
+    if (payload_len == 0 || payload_len > queue->len - offset - 2) {
+        return false;
+    }
+    *frame_len = payload_len + 2;
+    return true;
+}
+
+/** Compact canceled movement records once while preserving every live frame's order. */
+static bool socket_server_command_queue_compact(socket_struct *cs) {
+    if (cs->movement_stream_tombstone_bytes == 0) {
+        return true;
+    }
+
+    socket_server_command_queue_prune(cs);
+    socket_movement_queue_index *indexes[] = {
+        &cs->movement_stream_move,
+        &cs->movement_stream_fire,
+    };
+    const uint8_t commands[] = {SERVER_CMD_MOVE, SERVER_CMD_FIRE};
+    size_t entry_indexes[] = {
+        indexes[0]->entries_start,
+        indexes[1]->entries_start,
+    };
+    size_t tombstone_bytes = 0;
+    for (size_t offset = 0; offset < cs->packet_recv_cmd->len;) {
+        size_t frame_len;
+        if (!socket_server_command_queue_frame(cs->packet_recv_cmd, offset, &frame_len)) {
+            return false;
+        }
+        uint64_t type_offset = cs->packet_recv_cmd_base + offset + 2;
+        for (size_t i = 0; i < arraysize(indexes); i++) {
+            if (entry_indexes[i] < indexes[i]->entries_num &&
+                indexes[i]->entries[entry_indexes[i]].offset < type_offset) {
+                return false;
+            }
+            if (entry_indexes[i] < indexes[i]->entries_num &&
+                indexes[i]->entries[entry_indexes[i]].offset == type_offset) {
+                if (cs->packet_recv_cmd->data[offset + 2] != commands[i]) {
+                    return false;
+                }
+                entry_indexes[i]++;
+            }
+        }
+        if (cs->packet_recv_cmd->data[offset + 2] == SOCKET_COMMAND_QUEUE_TOMBSTONE) {
+            tombstone_bytes += frame_len;
+        }
+        offset += frame_len;
+    }
+    for (size_t i = 0; i < arraysize(indexes); i++) {
+        if (entry_indexes[i] != indexes[i]->entries_num) {
+            return false;
+        }
+        entry_indexes[i] = indexes[i]->entries_start;
+    }
+    if (tombstone_bytes != cs->movement_stream_tombstone_bytes) {
+        return false;
+    }
+
+    size_t write_offset = 0;
+    for (size_t read_offset = 0; read_offset < cs->packet_recv_cmd->len;) {
+        size_t frame_len;
+        if (!socket_server_command_queue_frame(cs->packet_recv_cmd, read_offset, &frame_len)) {
+            return false;
+        }
+        uint64_t old_type_offset = cs->packet_recv_cmd_base + read_offset + 2;
+        if (cs->packet_recv_cmd->data[read_offset + 2] != SOCKET_COMMAND_QUEUE_TOMBSTONE) {
+            for (size_t i = 0; i < arraysize(indexes); i++) {
+                if (entry_indexes[i] < indexes[i]->entries_num &&
+                    indexes[i]->entries[entry_indexes[i]].offset == old_type_offset) {
+                    indexes[i]->entries[entry_indexes[i]].offset =
+                        cs->packet_recv_cmd_base + write_offset + 2;
+                    entry_indexes[i]++;
+                }
+            }
+            if (write_offset != read_offset) {
+                memmove(cs->packet_recv_cmd->data + write_offset,
+                        cs->packet_recv_cmd->data + read_offset,
+                        frame_len);
+            }
+            write_offset += frame_len;
+        }
+        read_offset += frame_len;
+    }
+    cs->packet_recv_cmd->len = write_offset;
+    for (size_t i = 0; i < arraysize(indexes); i++) {
+        if (indexes[i]->entries_start == 0) {
+            continue;
+        }
+        size_t live = indexes[i]->entries_num - indexes[i]->entries_start;
+        memmove(indexes[i]->entries,
+                indexes[i]->entries + indexes[i]->entries_start,
+                live * sizeof(*indexes[i]->entries));
+        indexes[i]->entries_num = live;
+        indexes[i]->entries_start = 0;
+    }
+    cs->movement_stream_tombstone_bytes = 0;
+    return true;
+}
+
+/** Append one framed player command and index its replaceable movement epoch. */
+bool socket_server_command_queue_append(socket_struct *cs, const uint8_t *data, size_t len) {
+    if (cs->packet_recv_cmd->len == 0) {
+        socket_server_command_queue_reset(cs);
+    }
+    if (len == 0 || len > UINT16_MAX || len > SIZE_MAX - 2) {
+        cs->packet_recv_cmd->error = PACKET_ERROR_SIZE_OVERFLOW;
+        return false;
+    }
+    size_t frame_len = len + 2;
+    if (cs->movement_stream_tombstone_bytes > cs->packet_recv_cmd->len ||
+        frame_len > SOCKET_COMMAND_QUEUE_MAX ||
+        cs->packet_recv_cmd->len - cs->movement_stream_tombstone_bytes >
+            SOCKET_COMMAND_QUEUE_MAX - frame_len) {
+        cs->packet_recv_cmd->error = PACKET_ERROR_LIMIT_EXCEEDED;
+        return false;
+    }
+    if (cs->movement_stream_tombstone_bytes >= SOCKET_COMMAND_QUEUE_COMPACT_MIN ||
+        cs->packet_recv_cmd->len > SOCKET_COMMAND_QUEUE_STORAGE_MAX - frame_len) {
+        if (!socket_server_command_queue_compact(cs)) {
+            cs->packet_recv_cmd->error = PACKET_ERROR_INVALID_ENCODING;
+            return false;
+        }
+    }
+
+    size_t type_offset = cs->packet_recv_cmd->len + 2;
+    packet_writer_write_uint16(cs->packet_recv_cmd, len);
+    packet_writer_write_bytes(cs->packet_recv_cmd, data, len);
+    if (!packet_writer_finish(cs->packet_recv_cmd)) {
+        return false;
+    }
+
+    uint32_t epoch = socket_server_command_epoch(data, len);
+    if (epoch == 0) {
+        return true;
+    }
+    if (epoch != cs->movement_stream_epoch) {
+        cs->movement_stream_epoch = epoch;
+        cs->movement_stream_move.entries_start = 0;
+        cs->movement_stream_move.entries_num = 0;
+        cs->movement_stream_fire.entries_start = 0;
+        cs->movement_stream_fire.entries_num = 0;
+    } else {
+        socket_server_command_queue_prune(cs);
+    }
+    socket_movement_queue_index *index = socket_server_command_queue_index(cs, data[0]);
+    HARD_ASSERT(index != NULL);
+    if (index->entries_num == index->entries_size) {
+        if (index->entries_start != 0) {
+            size_t live = index->entries_num - index->entries_start;
+            memmove(index->entries,
+                    index->entries + index->entries_start,
+                    live * sizeof(*index->entries));
+            index->entries_start = 0;
+            index->entries_num = live;
+        } else {
+            size_t new_size = index->entries_size == 0 ? 8 : index->entries_size * 2;
+            index->entries = xrealloc(index->entries, new_size * sizeof(*index->entries));
+            index->entries_size = new_size;
+        }
+    }
+    socket_movement_queue_entry *entry = &index->entries[index->entries_num++];
+    entry->offset = cs->packet_recv_cmd_base + type_offset;
+    return true;
+}
+
+/** Tombstone queued records from the current keyboard movement epoch in bounded work. */
+bool socket_server_command_queue_clear_stream(socket_struct *cs, uint8_t command, uint32_t epoch) {
+    if (epoch == 0 || epoch != cs->movement_stream_epoch) {
+        return true;
+    }
+    socket_movement_queue_index *index = socket_server_command_queue_index(cs, command);
+    if (index == NULL) {
+        return false;
+    }
+    socket_server_command_queue_prune_index(cs, index);
+    for (size_t i = index->entries_start; i < index->entries_num; i++) {
+        socket_movement_queue_entry *entry = &index->entries[i];
+        uint64_t relative = entry->offset - cs->packet_recv_cmd_base;
+        size_t frame_len;
+        if (relative < 2 || relative >= cs->packet_recv_cmd->len ||
+            cs->packet_recv_cmd->data[relative] != command ||
+            !socket_server_command_queue_frame(cs->packet_recv_cmd,
+                                               (size_t)relative - 2,
+                                               &frame_len)) {
+            return false;
+        }
+    }
+
+    for (size_t i = index->entries_start; i < index->entries_num; i++) {
+        size_t relative = (size_t)(index->entries[i].offset - cs->packet_recv_cmd_base);
+        size_t frame_offset = relative - 2;
+        size_t frame_len;
+        if (!socket_server_command_queue_frame(cs->packet_recv_cmd, frame_offset, &frame_len)) {
+            return false;
+        }
+        cs->packet_recv_cmd->data[relative] = SOCKET_COMMAND_QUEUE_TOMBSTONE;
+        cs->movement_stream_tombstone_bytes += frame_len;
+    }
+    index->entries_start = 0;
+    index->entries_num = 0;
+    return true;
+}
+
+/** Discard the buffered command queue and all of its movement-stream metadata. */
+void socket_server_command_queue_reset(socket_struct *cs) {
+    cs->packet_recv_cmd->len = 0;
+    cs->packet_recv_cmd->error = PACKET_ERROR_NONE;
+    cs->packet_recv_cmd_base = 0;
+    cs->movement_stream_epoch = 0;
+    cs->movement_stream_move.entries_start = 0;
+    cs->movement_stream_move.entries_num = 0;
+    cs->movement_stream_fire.entries_start = 0;
+    cs->movement_stream_fire.entries_num = 0;
+    cs->movement_stream_tombstone_bytes = 0;
+}
+
 /**
  * Handle client commands.
  *
@@ -783,10 +1055,18 @@ static bool socket_server_quic_network_ready(socket_t *sc) {
 void socket_server_handle_client(player *pl) {
     HARD_ASSERT(pl != NULL);
 
+    if (!socket_server_command_queue_compact(pl->cs)) {
+        LOG(ERROR, "Discarding an inconsistent buffered player-command queue");
+        socket_server_command_queue_reset(pl->cs);
+        return;
+    }
+
     for (int num_cmds = 0; num_cmds < SOCKET_SERVER_PLAYER_MAX_COMMANDS; num_cmds++) {
         if (pl->cs->packet_recv_cmd->len == 0) {
             break;
         }
+
+        size_t len = 2 + (pl->cs->packet_recv_cmd->data[0] << 8) + pl->cs->packet_recv_cmd->data[1];
 
         /* Ensure the player is in a state capable of issue commands, and
          * has enough speed left to do so. */
@@ -794,8 +1074,6 @@ void socket_server_handle_client(player *pl) {
             (pl->cs->state == ST_PLAYING && pl->ob != NULL && pl->ob->speed_left < 0)) {
             break;
         }
-
-        size_t len = 2 + (pl->cs->packet_recv_cmd->data[0] << 8) + pl->cs->packet_recv_cmd->data[1];
 
         /* Reset idle counter. */
         if (pl->cs->state == ST_PLAYING) {
@@ -805,6 +1083,8 @@ void socket_server_handle_client(player *pl) {
 
         socket_server_handle_command(pl->cs, pl, pl->cs->packet_recv_cmd->data + 2, len - 2);
         packet_delete(pl->cs->packet_recv_cmd, 0, len);
+        pl->cs->packet_recv_cmd_base += len;
+        socket_server_command_queue_prune(pl->cs);
     }
 }
 
@@ -901,9 +1181,7 @@ static inline void socket_server_csocket_read(socket_struct *cs) {
         if (!socket_server_handle_command(cs, NULL, decrypted_data, decrypted_len)) {
             /* Couldn't handle it immediately, add it to the commands
              * packet. */
-            packet_writer_write_uint16(cs->packet_recv_cmd, decrypted_len);
-            packet_writer_write_bytes(cs->packet_recv_cmd, decrypted_data, decrypted_len);
-            if (!packet_writer_finish(cs->packet_recv_cmd)) {
+            if (!socket_server_command_queue_append(cs, decrypted_data, decrypted_len)) {
                 LOG(ERROR,
                     "Connection %s exceeded the buffered command limit: %s",
                     socket_get_id(cs->sc),
