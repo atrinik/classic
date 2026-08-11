@@ -105,6 +105,14 @@ text_render_glyph(TTF_Font *font, const char *glyph, uint64_t flags, SDL_Color c
  */
 static font_struct *fonts;
 
+#ifdef ATRINIK_WIDGET_TESTS
+static const char *text_test_font_path;
+
+void text_test_font_path_set(const char *path) {
+    text_test_font_path = path;
+}
+#endif
+
 /**
  * Get a hash table key for a font.
  * @param name
@@ -136,6 +144,12 @@ static char *font_get_hash_key(const char *name, uint8_t size, char *buf, size_t
 static TTF_Font *font_open(const char *name, uint8_t size) {
     char path[MAX_BUF];
     TTF_Font *ttf_font;
+
+#ifdef ATRINIK_WIDGET_TESTS
+    if (text_test_font_path != NULL && strcmp(name, "sans") == 0) {
+        return TTF_OpenFont(text_test_font_path, size);
+    }
+#endif
 
     snprintf(path, sizeof(path), "fonts/%s.ttf", name);
     ttf_font = TTF_OpenFont_wrapper(path, size);

@@ -189,6 +189,9 @@ static bool map_interaction_test_active;
 static int map_interaction_test_moves;
 static int map_interaction_test_targets;
 static int map_interaction_test_talks;
+static bool map_ui_test_active;
+static int map_ui_test_names;
+static int map_ui_test_targets;
 #endif
 
 static int get_top_floor_height(struct MapCell *cell, int sub_layer);
@@ -1780,6 +1783,11 @@ static void map_draw_annotations(SDL_Surface *surface, map_render_context_t *con
             }
 
             if (draw_name) {
+#ifdef ATRINIK_WIDGET_TESTS
+                if (map_ui_test_active) {
+                    map_ui_test_names++;
+                }
+#endif
                 text_show(surface,
                           FONT_SANS9,
                           name,
@@ -2799,6 +2807,11 @@ static void map_draw_ui(SDL_Surface *surface, map_render_context_t *context) {
     context->tiles_num = 0;
 
     if (context->target_cell != NULL && cpl.target_code != 0) {
+#ifdef ATRINIK_WIDGET_TESTS
+        if (map_ui_test_active) {
+            map_ui_test_targets++;
+        }
+#endif
         const char *hp_color;
 
         if (cpl.target_hp > 90) {
@@ -3546,6 +3559,21 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
 }
 
 #ifdef ATRINIK_WIDGET_TESTS
+
+void widget_map_draw_test(widgetdata *widget) {
+    widget_draw(widget);
+}
+
+void widget_map_ui_test_begin(void) {
+    map_ui_test_names = 0;
+    map_ui_test_targets = 0;
+    map_ui_test_active = true;
+}
+
+bool widget_map_ui_test_end(void) {
+    map_ui_test_active = false;
+    return map_ui_test_names > 0 && map_ui_test_targets > 0;
+}
 
 bool widget_map_interaction_test(widgetdata *widget) {
     int old_map_width = map_width;

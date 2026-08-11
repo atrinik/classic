@@ -493,6 +493,9 @@ extern void widget_map_init(widgetdata *widget);
 
 #ifdef ATRINIK_WIDGET_TESTS
 extern bool widget_map_interaction_test(widgetdata *widget);
+extern void widget_map_draw_test(widgetdata *widget);
+extern void widget_map_ui_test_begin(void);
+extern bool widget_map_ui_test_end(void);
 #endif
 
 /** Public API implemented in src/gui/widgets/minimap.c. */
