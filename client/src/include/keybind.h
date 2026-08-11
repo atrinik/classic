@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -147,6 +147,8 @@ extern void keybind_repeat_toggle(size_t i);
 /** Input compatibility API implemented in src/client/keybind_input.c. */
 
 extern SDL_Keycode keybind_keycode_from_legacy(uint32_t key);
+
+extern const char *keybind_command_from_legacy(const char *command);
 
 extern bool keybind_uint32_parse(const char *text, uint32_t maximum, uint32_t *value);
 

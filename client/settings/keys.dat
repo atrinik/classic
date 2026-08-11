@@ -173,11 +173,6 @@ bind
 	command /region_map
 end
 bind
-	# f
-	key 102
-	command ?FIRE_READY
-end
-bind
 	# c
 	key 99
 	command ?COMBAT

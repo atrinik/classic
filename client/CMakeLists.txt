@@ -420,6 +420,7 @@ if (BUILD_TESTING)
         src/client/keybind_storage.c)
     atrinik_configure_target(client-keybind-input-tests)
     target_compile_definitions(client-keybind-input-tests PRIVATE
+        ATRINIK_TEST_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}"
         ATRINIK_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
         SDL_DISABLE_OLD_NAMES)
     target_include_directories(client-keybind-input-tests BEFORE PRIVATE

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2026 Atrinik Development Team                         *
+ *   Copyright 2026 The Atrinik Project                                  *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -71,6 +71,42 @@ static void test_legacy_keycode_migration(void) {
     TEST_CHECK(!keybind_uint32_parse("2", 1, &value));
 }
 
+static void test_legacy_command_migration(void) {
+    static const struct {
+        const char *legacy;
+        const char *current;
+    } cases[] = {
+        {"?M_NORTH", "?MOVE_N"},
+        {"?M_NORTHEAST", "?MOVE_NE"},
+        {"?M_EAST", "?MOVE_E"},
+        {"?M_SOUTHEAST", "?MOVE_SE"},
+        {"?M_SOUTH", "?MOVE_S"},
+        {"?M_SOUTHWEST", "?MOVE_SW"},
+        {"?M_WEST", "?MOVE_W"},
+        {"?M_NORTHWEST", "?MOVE_NW"},
+        {"?M_STAY", "?MOVE_STAY"},
+        {"?M_UP", "?UP"},
+        {"?M_DOWN", "?DOWN"},
+        {"?M_LEFT", "?LEFT"},
+        {"?M_RIGHT", "?RIGHT"},
+        {"?M_SPELL_LIST", "?SPELL_LIST"},
+        {"?M_SKILL_LIST", "?SKILL_LIST"},
+        {"?M_HELP", "?HELP"},
+        {"?M_KEYBIND", "?PARTY_LIST"},
+        {"?M_QLIST", "?QLIST"},
+        {"?M_RANGE", "?RANGE"},
+        {"?M_TARGET_ENEMY", "?TARGET_ENEMY"},
+        {"?M_TARGET_FRIEND", "?TARGET_FRIEND"},
+    };
+
+    for (size_t i = 0; i < arraysize(cases); i++) {
+        TEST_CHECK(!strcmp(keybind_command_from_legacy(cases[i].legacy), cases[i].current));
+    }
+    TEST_CHECK(keybind_command_from_legacy("?M_FIRE_READY") == NULL);
+    TEST_CHECK(keybind_command_from_legacy("?M_CUSTOM") == NULL);
+    TEST_CHECK(keybind_command_from_legacy(NULL) == NULL);
+}
+
 static void test_shortcut_names(void) {
     char buf[64];
     char one[1] = {'x'};
@@ -100,6 +136,10 @@ static FILE *keybind_fixture_open(const char *filename, const char *modes) {
     FILE *stream;
 
     TEST_CHECK(!strcmp(filename, FILE_KEYBIND));
+    if (keybind_fixture == NULL) {
+        return fopen(ATRINIK_TEST_BINARY_DIR "/keybind-roundtrip.dat", modes);
+    }
+
     TEST_CHECK(!strcmp(modes, "r"));
     stream = tmpfile();
     TEST_CHECK(stream != NULL);
@@ -142,6 +182,29 @@ static void test_keybind_loader(void) {
     TEST_CHECK(keybindings[0]->mod == SDL_KMOD_CTRL);
     TEST_CHECK(keybindings[0]->repeat == 1);
     keybind_fixture_reset();
+
+    keybind_fixture =
+        "keycode_format " KEYBIND_KEYCODE_FORMAT "\nbind\nkey 102\ncommand ?FIRE_READY\nend\n"
+        "bind\nkey 103\ncommand ?FIRE_READY_CUSTOM\nend\n"
+        "bind\nkey 104\ncommand ?FIRE_READY;?HELP\nend\n"
+        "bind\nkey 105\ncommand /custom\nend\n";
+    keybind_load();
+    TEST_CHECK(keybindings_num == 3);
+    TEST_CHECK(!strcmp(keybindings[0]->command, "?FIRE_READY_CUSTOM"));
+    TEST_CHECK(!strcmp(keybindings[1]->command, "?FIRE_READY;?HELP"));
+    TEST_CHECK(!strcmp(keybindings[2]->command, "/custom"));
+
+    keybind_fixture = NULL;
+    keybind_save();
+    keybind_fixture_reset();
+    keybind_load();
+    TEST_CHECK(keybindings_num == 3);
+    TEST_CHECK(!strcmp(keybindings[0]->command, "?FIRE_READY_CUSTOM"));
+    TEST_CHECK(!strcmp(keybindings[1]->command, "?FIRE_READY;?HELP"));
+    TEST_CHECK(!strcmp(keybindings[2]->command, "/custom"));
+    keybind_save();
+    keybind_fixture_reset();
+    TEST_CHECK(remove(ATRINIK_TEST_BINARY_DIR "/keybind-roundtrip.dat") == 0);
 }
 
 static void test_bundled_defaults(void) {
@@ -197,6 +260,7 @@ static void test_bundled_defaults(void) {
         } else if (!strncmp(text, "key ", 4)) {
             TEST_CHECK(keybind_keycode_parse(text + 4, false, &key));
         } else if (!strncmp(text, "command ", 8)) {
+            TEST_CHECK(strcmp(text + 8, "?FIRE_READY"));
             for (size_t i = 0; i < sizeof(expected) / sizeof(*expected); i++) {
                 if (!found[i] && key == expected[i].key && !strcmp(text + 8, expected[i].command)) {
                     found[i] = true;
@@ -2078,6 +2142,7 @@ static void test_keybind_event_integration(void) {
 
 int main(void) {
     test_legacy_keycode_migration();
+    test_legacy_command_migration();
     test_shortcut_names();
     test_keybind_loader();
     test_bundled_defaults();

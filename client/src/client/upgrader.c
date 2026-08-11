@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -106,53 +106,9 @@ static void upgrade_20_to_25(const char *from, const char *to) {
                         keybind->repeat = repeat;
                     }
                 } else if (*command == '?') {
-                    const char *new_cmd;
+                    const char *new_cmd = keybind_command_from_legacy(command);
 
-                    if (!strcmp(command, "?M_NORTH")) {
-                        new_cmd = "?MOVE_N";
-                    } else if (!strcmp(command, "?M_NORTHEAST")) {
-                        new_cmd = "?MOVE_NE";
-                    } else if (!strcmp(command, "?M_EAST")) {
-                        new_cmd = "?MOVE_E";
-                    } else if (!strcmp(command, "?M_SOUTHEAST")) {
-                        new_cmd = "?MOVE_SE";
-                    } else if (!strcmp(command, "?M_SOUTH")) {
-                        new_cmd = "?MOVE_S";
-                    } else if (!strcmp(command, "?M_SOUTHWEST")) {
-                        new_cmd = "?MOVE_SW";
-                    } else if (!strcmp(command, "?M_WEST")) {
-                        new_cmd = "?MOVE_W";
-                    } else if (!strcmp(command, "?M_NORTHWEST")) {
-                        new_cmd = "?MOVE_NW";
-                    } else if (!strcmp(command, "?M_STAY")) {
-                        new_cmd = "?MOVE_STAY";
-                    } else if (!strcmp(command, "?M_UP")) {
-                        new_cmd = "?UP";
-                    } else if (!strcmp(command, "?M_DOWN")) {
-                        new_cmd = "?DOWN";
-                    } else if (!strcmp(command, "?M_LEFT")) {
-                        new_cmd = "?LEFT";
-                    } else if (!strcmp(command, "?M_RIGHT")) {
-                        new_cmd = "?RIGHT";
-                    } else if (!strcmp(command, "?M_SPELL_LIST")) {
-                        new_cmd = "?SPELL_LIST";
-                    } else if (!strcmp(command, "?M_SKILL_LIST")) {
-                        new_cmd = "?SKILL_LIST";
-                    } else if (!strcmp(command, "?M_HELP")) {
-                        new_cmd = "?HELP";
-                    } else if (!strcmp(command, "?M_KEYBIND")) {
-                        new_cmd = "?PARTY_LIST";
-                    } else if (!strcmp(command, "?M_QLIST")) {
-                        new_cmd = "?QLIST";
-                    } else if (!strcmp(command, "?M_RANGE")) {
-                        new_cmd = "?RANGE";
-                    } else if (!strcmp(command, "?M_FIRE_READY")) {
-                        new_cmd = "?FIRE_READY";
-                    } else if (!strcmp(command, "?M_TARGET_ENEMY")) {
-                        new_cmd = "?TARGET_ENEMY";
-                    } else if (!strcmp(command, "?M_TARGET_FRIEND")) {
-                        new_cmd = "?TARGET_FRIEND";
-                    } else {
+                    if (new_cmd == NULL) {
                         continue;
                     }
 
