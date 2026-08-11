@@ -1080,7 +1080,8 @@ static int attack_hit_internal(object *op,
         }
     }
 
-    op->last_damage += maxdam;
+    double accumulated_damage = op->last_damage + maxdam;
+    op->last_damage = (int16_t)MIN(accumulated_damage, INT16_MAX);
 
     /* Preserve full damage for the on-screen accumulator, but cap the damage
      * actually dealt and returned at the configured HP floor. */

@@ -365,10 +365,13 @@ START_TEST(test_archery_rounding_and_overflow_boundaries) {
 
     target = projectile_test_target(map, pl);
     target->direction = 3;
+    target->stats.hp = 100000;
+    target->stats.maxhp = 100000;
     arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
     arrow->stats.dam = INT16_MAX;
     arrow->weight = 1001;
     ck_assert_int_eq(object_projectile_hit(arrow, target), OBJECT_METHOD_OK);
+    ck_assert_int_eq(target->last_damage, INT16_MAX);
     ck_assert_uint_eq(
         projectile_test_bonus_messages(
             pl,
