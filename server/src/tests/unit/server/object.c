@@ -70,22 +70,26 @@ START_TEST(test_object_can_merge) {
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob2);
     ob2 = arch_get("bolt");
-    FREE_AND_COPY_HASH(ob1->name_pl, "bolts");
+    FREE_AND_COPY_HASH(ob1->name_pl, "custom bolts one");
+    FREE_AND_COPY_HASH(ob2->name_pl, "custom bolts two");
     ck_assert(!object_can_merge(ob1, ob2));
-    FREE_AND_COPY_HASH(ob2->name_pl, "bolts");
+    FREE_AND_COPY_HASH(ob2->name_pl, "custom bolts one");
     ck_assert(object_can_merge(ob1, ob2));
     FREE_AND_COPY_HASH(ob2->name_pl, "projectiles");
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob2);
     ob2 = arch_get("bolt");
+    FREE_AND_COPY_HASH(ob2->name_pl, "custom bolts one");
     ob2->type++;
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob2);
     ob2 = arch_get("bolt");
+    FREE_AND_COPY_HASH(ob2->name_pl, "custom bolts one");
     ob2->light_color = UINT32_C(0xff0000);
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob2);
     ob2 = arch_get("bolt");
+    FREE_AND_COPY_HASH(ob2->name_pl, "custom bolts one");
     ob1->nrof = INT32_MAX;
     ob2->nrof = 1;
     ck_assert(!object_can_merge(ob1, ob2));
@@ -182,12 +186,31 @@ START_TEST(test_object_plural_name_contract) {
     object_destroy(clone);
     object_destroy(ob);
 
+    ob = object_load_str("arch sack\nname_pl torches\nname torch\nend\n");
+    ck_assert_ptr_nonnull(ob);
+    ck_assert_str_eq(ob->name, "torch");
+    ck_assert_str_eq(ob->name_pl, "torches");
+    object_destroy(ob);
+
     ob = object_load_str("arch sack\nname torch\nend\n");
     ck_assert_ptr_nonnull(ob);
+    ck_assert_ptr_null(ob->name_pl);
     ob->nrof = 2;
     sb = object_get_display_name(ob, NULL, NULL);
     name = stringbuffer_finish(sb);
     ck_assert_str_eq(name, "torch");
+    free(name);
+    object_destroy(ob);
+
+    archetype_t *sack = arch_find("sack");
+    ck_assert_ptr_nonnull(sack);
+    ob = object_load_str("arch sack\nend\n");
+    ck_assert_ptr_nonnull(ob);
+    ck_assert_ptr_eq(ob->name_pl, sack->clone.name_pl);
+    ob->nrof = 2;
+    sb = object_get_display_name(ob, NULL, NULL);
+    name = stringbuffer_finish(sb);
+    ck_assert_str_eq(name, sack->clone.name_pl != NULL ? sack->clone.name_pl : ob->name);
     free(name);
     object_destroy(ob);
 }
