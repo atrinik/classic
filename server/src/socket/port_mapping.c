@@ -39,7 +39,8 @@ static bool socket_port_mapping_pcp(void *data,
     memset(&source, 0, sizeof(source));
     source.sin_family = AF_INET;
     source.sin_port = htons(port);
-    if (local_host != NULL && inet_pton(AF_INET, local_host, &source.sin_addr) != 1) {
+    if (local_host != NULL) {
+        /* Autodiscovery cannot prove which interface NAT-PMP used. */
         return false;
     }
 
@@ -244,9 +245,16 @@ bool socket_port_mapping_init(uint16_t port,
             .close = socket_port_mapping_upnp_close,
         },
     };
+    const socket_port_mapping_backend_t *selected_backends = backends;
+    size_t selected_backend_count = arraysize(backends);
+    if (local_host != NULL) {
+        /* Only UPnP reports the LAN address selected for a restricted bind. */
+        selected_backends = &backends[1];
+        selected_backend_count = 1;
+    }
     if (socket_port_mapping_controller_open(&mapping_controller,
-                                            backends,
-                                            arraysize(backends),
+                                            selected_backends,
+                                            selected_backend_count,
                                             port,
                                             local_host,
                                             host,
