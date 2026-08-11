@@ -63,6 +63,7 @@ typedef struct player_view_manifest {
     char snapshot_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char next_snapshot_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char font_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+    char expected_ui_pixels_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char expected_pixels_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     player_view_asset_t assets[PLAYER_VIEW_MAX_ASSETS];
     size_t assets_num;
@@ -416,6 +417,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "player-names",
                                            "target-ui",
                                            "clock-ms",
+                                           "expected-ui-pixels-sha256",
                                            "expected-pixels-sha256"};
     bool success = root != NULL && root->ns == NULL && root->nsDef == NULL &&
                    xmlStrEqual(root->name, BAD_CAST "player-view") &&
@@ -447,6 +449,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
     char *player_names = success ? player_view_xml_property(root, "player-names") : NULL;
     char *target_ui = success ? player_view_xml_property(root, "target-ui") : NULL;
     char *clock_ms = success ? player_view_xml_property(root, "clock-ms") : NULL;
+    char *expected_ui =
+        success ? player_view_xml_property(root, "expected-ui-pixels-sha256") : NULL;
     char *expected = success ? player_view_xml_property(root, "expected-pixels-sha256") : NULL;
 
     uint32_t parsed_version;
@@ -486,7 +490,9 @@ static bool player_view_manifest_parse(const char *manifest_path,
     bool ui_test = manifest->player_names && manifest->target_ui;
     success = success && (!manifest->widget_render || manifest->primary_surface) &&
               manifest->player_names == manifest->target_ui &&
-              ((ui_test && manifest->widget_render && font != NULL) || (!ui_test && font == NULL));
+              ((ui_test && manifest->widget_render && font != NULL &&
+                player_view_sha256_text_valid(expected_ui)) ||
+               (!ui_test && font == NULL && expected_ui == NULL));
 #ifndef ATRINIK_WIDGET_TESTS
     success = success && !manifest->widget_render && font == NULL;
 #endif
@@ -531,6 +537,9 @@ static bool player_view_manifest_parse(const char *manifest_path,
         }
         if (font != NULL) {
             snprintf(VS(manifest->font_digest), "%s", font_digest);
+        }
+        if (expected_ui != NULL) {
+            snprintf(VS(manifest->expected_ui_pixels_digest), "%s", expected_ui);
         }
         snprintf(VS(manifest->expected_pixels_digest), "%s", expected);
     }
@@ -666,6 +675,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(player_names);
     free(target_ui);
     free(clock_ms);
+    free(expected_ui);
     free(expected);
     free(manifest_directory);
     xmlFreeDoc(document);
@@ -1196,6 +1206,19 @@ int player_view_main(int argc, char *argv[]) {
     if (manifest.player_names && manifest.target_ui) {
         if (!widget_map_ui_test_end()) {
             fprintf(stderr, "player-view: name or target UI was not rendered\n");
+            goto cleanup;
+        }
+        char ui_pixels_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+        if (!player_view_surface_sha256(surface, ui_pixels_digest)) {
+            fprintf(stderr, "player-view: cannot hash name and target UI pixels\n");
+            goto cleanup;
+        }
+        if (strcmp(ui_pixels_digest, manifest.expected_ui_pixels_digest) != 0) {
+            fprintf(stderr,
+                    "player-view: name and target UI pixel mismatch (expected %s, got %s)\n",
+                    manifest.expected_ui_pixels_digest,
+                    ui_pixels_digest);
+            result = 7;
             goto cleanup;
         }
         setting_set_int(OPT_CAT_MAP, OPT_PLAYER_NAMES, 0);

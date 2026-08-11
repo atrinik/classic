@@ -698,6 +698,7 @@ void text_show_character_init(text_info_struct *info) {
     info->anchor_tag = NULL;
     info->anchor_action[0] = '\0';
     info->outline_color.r = info->outline_color.g = info->outline_color.b = 0;
+    info->outline_color.a = 255;
     info->outline_show = 0;
     info->in_book_title = 0;
     info->used_alpha = 255;

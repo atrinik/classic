@@ -44,11 +44,14 @@ and freezes the retained legacy living cue without enabling the new outline.
 The widget-state scene freezes `sans.ttf`, enables names and target UI, renders
 through the real widget zoom/blit path at 125%, then applies a second validated
 MAP update that scrolls the cache and redraws the local player at the new center.
-The harness asserts that both UI paths executed, then disables their font pass
-before hashing the deterministic final pixels for the moved, zoomed outline.
+The harness asserts that both UI paths executed and separately hashes the
+UI-enabled pixels, including the name, target label, health bar, placement, and
+ordering. It then disables the UI and hashes a second deterministic reference
+for the moved, zoomed outline.
 
-`expected-pixels-sha256` hashes the viewport width and height as big-endian
+`expected-pixels-sha256` and the widget scene's
+`expected-ui-pixels-sha256` hash the viewport width and height as big-endian
 32-bit integers followed by canonical RGBA bytes in row-major order. Except for
-the explicit non-primary regression scene, this is the pixel-exact reference
+the explicit non-primary regression scene, these are pixel-exact references
 from the same primary software map surface that `/screenshot map` saves; PNG
 encoder metadata is deliberately excluded.
