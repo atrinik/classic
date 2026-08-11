@@ -264,6 +264,28 @@ START_TEST(test_administrative_freeze_keeps_requested_tick_duration) {
 }
 END_TEST
 
+START_TEST(test_long_administrative_freeze_does_not_gain_roundoff_tick) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    configure_speed_player(pl, 13, 13, 1.0);
+    pl->carrying = weight_limit[13];
+    living_update_player(pl);
+
+    char params[MAX_BUF];
+    snprintf(params, sizeof(params), "%s 13146", pl->name);
+    command_freeze(pl, "freeze", params);
+
+    for (int tick = 0; tick < 13145; tick++) {
+        process_events();
+    }
+    ck_assert_double_lt(pl->speed_left, 0.0);
+    process_events();
+    ck_assert_double_eq(pl->speed_left, 0.0);
+}
+END_TEST
+
 START_TEST(test_non_player_speed_is_not_clamped) {
     object *poison = arch_get("poisoning");
     poison->speed = -0.015;
@@ -362,6 +384,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_poison_encumbrance_regression_uses_recoverable_floor);
     tcase_add_test(tc_core, test_paralysis_timing_remains_in_speed_credit);
     tcase_add_test(tc_core, test_administrative_freeze_keeps_requested_tick_duration);
+    tcase_add_test(tc_core, test_long_administrative_freeze_does_not_gain_roundoff_tick);
     tcase_add_test(tc_core, test_non_player_speed_is_not_clamped);
     tcase_add_test(tc_core, test_monster_living_speed_is_not_player_clamped);
 

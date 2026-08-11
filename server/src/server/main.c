@@ -229,11 +229,16 @@ void process_events(void) {
             op->speed_left += FABS(op->speed);
 
             /* Player hard controls are expressed as an integral number of
-             * speed-credit ticks. Avoid a rounding residue extending them by
-             * one additional tick. */
-            if (op->type == PLAYER &&
-                fabs(op->speed_left) <= FABS(op->speed) * 0.000000001) {
-                op->speed_left = 0.0;
+             * speed-credit ticks. Snap roundoff back to that grid on every
+             * tick so it cannot accumulate and extend long controls. */
+            if (op->type == PLAYER) {
+                double speed_ticks = op->speed_left / FABS(op->speed);
+                double integral_ticks = round(speed_ticks);
+                double tolerance = fmax(1.0, fabs(speed_ticks)) * DBL_EPSILON * 8.0;
+
+                if (fabs(speed_ticks - integral_ticks) <= tolerance) {
+                    op->speed_left = integral_ticks * FABS(op->speed);
+                }
             }
         }
 
