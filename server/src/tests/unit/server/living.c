@@ -13,6 +13,7 @@
 #include <object.h>
 #include <player.h>
 #include <poisoning.h>
+#include <server_main.h>
 
 static void configure_speed_player(object *pl, int str, int dex, double speed) {
     set_attr_value(&pl->arch->clone.stats, STR, str);
@@ -228,11 +229,13 @@ START_TEST(test_paralysis_timing_remains_in_speed_credit) {
     ck_assert_double_eq(pl->speed_left, paralyzed_until);
 
     for (int tick = 0; tick < 11; tick++) {
-        pl->speed_left += fabs(pl->speed);
+        process_events();
     }
     ck_assert_double_lt(pl->speed_left, 0.0);
-    pl->speed_left += fabs(pl->speed);
-    ck_assert(fabs(pl->speed_left) < 0.000001);
+    ck_assert(QUERY_FLAG(pl, FLAG_PARALYZED));
+    process_events();
+    ck_assert_double_eq(pl->speed_left, 0.0);
+    ck_assert(!QUERY_FLAG(pl, FLAG_PARALYZED));
 }
 END_TEST
 
@@ -252,11 +255,11 @@ START_TEST(test_administrative_freeze_keeps_requested_tick_duration) {
 
     living_update_player(pl);
     for (int tick = 0; tick < 9; tick++) {
-        pl->speed_left += fabs(pl->speed);
+        process_events();
     }
     ck_assert_double_lt(pl->speed_left, 0.0);
-    pl->speed_left += fabs(pl->speed);
-    ck_assert(fabs(pl->speed_left) < 0.000001);
+    process_events();
+    ck_assert_double_eq(pl->speed_left, 0.0);
 }
 END_TEST
 

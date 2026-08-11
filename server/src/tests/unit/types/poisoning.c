@@ -180,6 +180,32 @@ START_TEST(test_expiry_and_cure_restore_stats_and_speed) {
 }
 END_TEST
 
+START_TEST(test_cure_preserves_caller_owned_living_update_batch) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    int base_str = pl->arch->clone.stats.Str;
+
+    object *poison = arch_get("poisoning");
+    poison->stats.Str = -3;
+    SET_FLAG(poison, FLAG_APPLIED);
+    poison = object_insert_into(poison, pl, 0);
+    living_update_player(pl);
+    ck_assert_int_eq(pl->stats.Str, base_str - 3);
+
+    SET_FLAG(pl, FLAG_NO_FIX_PLAYER);
+    ck_assert(cast_heal(pl, pl, MAXLEVEL, pl, SP_CURE_POISON));
+    ck_assert(QUERY_FLAG(pl, FLAG_NO_FIX_PLAYER));
+    ck_assert_ptr_null(find_poison(pl));
+    ck_assert_int_eq(pl->stats.Str, base_str - 3);
+
+    CLEAR_FLAG(pl, FLAG_NO_FIX_PLAYER);
+    living_update_player(pl);
+    ck_assert_int_eq(pl->stats.Str, base_str);
+}
+END_TEST
+
 START_TEST(test_lethal_poison_does_not_reuse_cured_effect) {
     mapstruct *map;
     object *pl;
@@ -220,6 +246,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_stat_depletion_is_bounded_and_protection_scaled);
     tcase_add_test(tc_core, test_monsters_do_not_receive_poison_stat_depletion);
     tcase_add_test(tc_core, test_expiry_and_cure_restore_stats_and_speed);
+    tcase_add_test(tc_core, test_cure_preserves_caller_owned_living_update_batch);
     tcase_add_test(tc_core, test_lethal_poison_does_not_reuse_cured_effect);
 
     return s;

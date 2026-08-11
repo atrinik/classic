@@ -227,6 +227,13 @@ void process_events(void) {
 
         if (op->speed_left <= 0) {
             op->speed_left += FABS(op->speed);
+
+            /* Player hard controls are expressed as an integral number of
+             * speed-credit ticks. Avoid a rounding residue extending them by
+             * one additional tick. */
+            if (op->type == PLAYER && DBL_EQUAL(op->speed_left, 0.0)) {
+                op->speed_left = 0.0;
+            }
         }
 
         if (op->type == PLAYER && op->speed_left > op->speed) {
