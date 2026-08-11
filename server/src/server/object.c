@@ -965,6 +965,7 @@ void object_owner_clear(object *op) {
     HARD_ASSERT(op != NULL);
     op->owner = NULL;
     op->ownercount = 0;
+    op->player_attack_source = false;
 }
 
 /**
@@ -996,7 +997,8 @@ static void object_owner_set_internal(object *op, object *owner) {
 }
 
 /**
- * Sets the owner and sets the chosen skill pointer owner's current skill.
+ * Sets the owner and snapshots a player owner's current skill. Non-player
+ * ownership clears any stale skill provenance.
  *
  * @param op
  * The object.
@@ -1015,9 +1017,8 @@ void object_owner_set(object *op, object *owner) {
     owner = HEAD(owner);
     object_owner_set_internal(op, owner);
 
-    if (owner->type == PLAYER) {
-        op->chosen_skill = owner->chosen_skill;
-    }
+    op->chosen_skill = owner->type == PLAYER ? owner->chosen_skill : NULL;
+    op->player_attack_source = owner->type == PLAYER;
 }
 
 /**
@@ -1027,10 +1028,11 @@ void object_owner_set(object *op, object *owner) {
  * skill that was currently chosen at the time when the source object's
  * owner was set and not the owner's current skill object).
  *
- * Use this function if player created an object (e.g. fire bullet, swarm
- * spell), and this object creates further objects whose kills should be
- * accounted for the player's original skill, even if player has changed
- * skills in the meanwhile.
+ * Use this function if a player-created effect (e.g. fire bullet, swarm
+ * spell) creates further effects whose kills should be accounted for the
+ * player's original skill, even if the player has changed skills in the
+ * meanwhile. Direct-player attack provenance propagates only through
+ * nonliving effect chains, not through player-owned monsters.
  *
  * @param op
  * The object.
@@ -1054,6 +1056,7 @@ void object_owner_copy(object *op, object *src) {
 
     object_owner_set_internal(op, owner);
     op->chosen_skill = src->chosen_skill;
+    op->player_attack_source = src->type == PLAYER || (!IS_LIVE(src) && src->player_attack_source);
 }
 
 /**
@@ -3240,7 +3243,7 @@ bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool
     }
 
     if (exit != NULL && exit->stats.dam != 0 && op->type == PLAYER) {
-        attack_hit(op, exit, exit->stats.dam);
+        attack_hit_situational(op, exit, exit->stats.dam);
     }
 
     return true;

@@ -133,7 +133,7 @@ static int move_on_func(object *op, object *victim, object *originator, int stat
     }
 
     if (IS_LIVE(victim)) {
-        attack_hit(victim, op, op->stats.dam);
+        attack_hit_situational(victim, op, op->stats.dam);
     }
 
     return OBJECT_METHOD_OK;

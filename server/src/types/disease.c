@@ -254,12 +254,8 @@ static void disease_do_symptoms(object *op) {
         }
 
         if (object_owner(op) != NULL) {
-            object_owner_set(new_symptom, op->owner);
+            object_owner_copy(new_symptom, op);
         }
-
-        /* Unfortunately, set_owner does the wrong thing to the skills pointers
-         * resulting in exp going into the owners *current* chosen skill. */
-        new_symptom->chosen_skill = op->chosen_skill;
 
         CLEAR_FLAG(new_symptom, FLAG_NO_PASS);
         object_insert_into(new_symptom, victim, 0);
@@ -427,11 +423,8 @@ bool disease_infect(object *op, object *victim, bool force) {
     /* self-limiting factor */
     new_disease->stats.wc -= op->last_grace;
 
-    /* Unfortunately, set_owner does the wrong thing to the skills pointers
-     * resulting in exp going into the owners *current* chosen skill. */
     if (owner != NULL) {
-        object_owner_set(new_disease, op->owner);
-        new_disease->chosen_skill = op->chosen_skill;
+        object_owner_copy(new_disease, op);
     }
 
     new_disease = object_insert_into(new_disease, victim, 0);
