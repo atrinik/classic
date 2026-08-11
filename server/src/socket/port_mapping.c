@@ -31,6 +31,7 @@ static socket_port_mapping_controller_t mapping_controller;
 
 static bool socket_port_mapping_pcp(void *data,
                                     uint16_t port,
+                                    const char *local_host,
                                     char *host,
                                     size_t host_size,
                                     uint16_t *external_port) {
@@ -38,6 +39,10 @@ static bool socket_port_mapping_pcp(void *data,
     memset(&source, 0, sizeof(source));
     source.sin_family = AF_INET;
     source.sin_port = htons(port);
+    if (local_host != NULL) {
+        /* Autodiscovery cannot prove which interface NAT-PMP used. */
+        return false;
+    }
 
     mapping_pcp_context = pcp_init(ENABLE_AUTODISCOVERY, NULL);
     if (mapping_pcp_context == NULL) {
@@ -117,11 +122,13 @@ static void socket_port_mapping_pcp_close(void *data) {
 
 static bool socket_port_mapping_upnp(void *data,
                                      uint16_t port,
+                                     const char *local_host,
                                      char *host,
                                      size_t host_size,
                                      uint16_t *external_port) {
     int error = 0;
-    struct UPNPDev *devices = upnpDiscover(2000, NULL, NULL, UPNP_LOCAL_PORT_ANY, 0, 2, &error);
+    struct UPNPDev *devices =
+        upnpDiscover(2000, local_host, NULL, UPNP_LOCAL_PORT_ANY, 0, 2, &error);
     if (devices == NULL) {
         return false;
     }
@@ -138,7 +145,11 @@ static bool socket_port_mapping_upnp(void *data,
     int status = UPNP_GetValidIGD(devices, &mapping_upnp_urls, &mapping_upnp_data, VS(lan_address));
 #endif
     freeUPNPDevlist(devices);
-    if (status == 0) {
+    if (status == 0 || (local_host != NULL && strcmp(local_host, lan_address) != 0)) {
+        if (status != 0) {
+            FreeUPNPUrls(&mapping_upnp_urls);
+            memset(&mapping_upnp_urls, 0, sizeof(mapping_upnp_urls));
+        }
         return false;
     }
 
@@ -147,6 +158,14 @@ static bool socket_port_mapping_upnp(void *data,
     int address_result = UPNP_GetExternalIPAddress(mapping_upnp_urls.controlURL,
                                                    mapping_upnp_data.first.servicetype,
                                                    external_address);
+    struct in_addr parsed_address;
+    if (address_result != UPNPCOMMAND_SUCCESS ||
+        inet_pton(AF_INET, external_address, &parsed_address) != 1) {
+        LOG(DEBUG, "UPnP external address discovery failed");
+        FreeUPNPUrls(&mapping_upnp_urls);
+        memset(&mapping_upnp_urls, 0, sizeof(mapping_upnp_urls));
+        return false;
+    }
     int mapping_result = UPNP_AddPortMapping(mapping_upnp_urls.controlURL,
                                              mapping_upnp_data.first.servicetype,
                                              mapping_upnp_port,
@@ -156,9 +175,7 @@ static bool socket_port_mapping_upnp(void *data,
                                              "UDP",
                                              NULL,
                                              "7200");
-    struct in_addr parsed_address;
-    if (address_result != UPNPCOMMAND_SUCCESS || mapping_result != UPNPCOMMAND_SUCCESS ||
-        inet_pton(AF_INET, external_address, &parsed_address) != 1) {
+    if (mapping_result != UPNPCOMMAND_SUCCESS) {
         LOG(DEBUG, "UPnP UDP mapping failed: %s", strupnperror(mapping_result));
         FreeUPNPUrls(&mapping_upnp_urls);
         memset(&mapping_upnp_urls, 0, sizeof(mapping_upnp_urls));
@@ -212,6 +229,7 @@ static void socket_port_mapping_upnp_close(void *data) {
 }
 
 bool socket_port_mapping_init(uint16_t port,
+                              const char *local_host,
                               char *host,
                               size_t host_size,
                               uint16_t *external_port) {
@@ -233,10 +251,18 @@ bool socket_port_mapping_init(uint16_t port,
             .close = socket_port_mapping_upnp_close,
         },
     };
+    const socket_port_mapping_backend_t *selected_backends = backends;
+    size_t selected_backend_count = arraysize(backends);
+    if (local_host != NULL) {
+        /* Only UPnP reports the LAN address selected for a restricted bind. */
+        selected_backends = &backends[1];
+        selected_backend_count = 1;
+    }
     if (socket_port_mapping_controller_open(&mapping_controller,
-                                            backends,
-                                            arraysize(backends),
+                                            selected_backends,
+                                            selected_backend_count,
                                             port,
+                                            local_host,
                                             host,
                                             host_size,
                                             external_port)) {
