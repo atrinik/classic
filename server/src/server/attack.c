@@ -38,6 +38,7 @@
 #include <arch.h>
 #include <attack.h>
 #include <player.h>
+#include <poisoning.h>
 #include <object.h>
 #include <exp.h>
 #include <disease.h>
@@ -1614,7 +1615,7 @@ void attack_perform_poison(object *op, object *hitter, double dam) {
     }
 
     /* Save some work if we know it isn't going to affect the player */
-    if (op->protection[ATNR_POISON] == 100) {
+    if (op->protection[ATNR_POISON] >= 100) {
         return;
     }
 
@@ -1636,6 +1637,7 @@ void attack_perform_poison(object *op, object *hitter, double dam) {
         tmp = arch_to_object(at);
         tmp->level = hitter->level;
         tmp->stats.dam = dam2;
+        tmp->stats.food = POISON_BASE_PULSES + 1;
 
         /* So we get credit for poisoning kills */
         if (IS_LIVE(hitter)) {
@@ -1667,7 +1669,9 @@ void attack_perform_poison(object *op, object *hitter, double dam) {
 
         tmp->speed_left = 0;
     } else {
-        tmp->stats.food++;
+        /* stats.food includes the terminal expiry tick, so the number of
+         * remaining poison pulses is always one less than this value. */
+        tmp->stats.food = MIN(tmp->stats.food + 1, POISON_REFRESH_MAX_PULSES + 1);
         esrv_update_item(UPD_EXTRA, tmp);
 
         if (dam2 > tmp->stats.dam) {
