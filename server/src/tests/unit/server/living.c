@@ -271,6 +271,28 @@ START_TEST(test_non_player_speed_is_not_clamped) {
 }
 END_TEST
 
+START_TEST(test_monster_living_speed_is_not_player_clamped) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    FREE_AND_COPY_HASH(map->path, "/unit/slow-monster");
+
+    object *monster = arch_get("kobold");
+    monster->speed = 0.04;
+    monster->x = pl->x + 1;
+    monster->y = pl->y;
+    monster = object_insert_map(monster, map, NULL, 0);
+
+    living_update(monster);
+    ck_assert(fabs(monster->speed - 0.08) < 0.000001);
+    ck_assert_double_lt(monster->speed, PLAYER_MIN_SPEED);
+
+    object_remove(monster, 0);
+    object_destroy(monster);
+}
+END_TEST
+
 START_TEST(test_depletion_force_is_applied_before_stat_updates) {
     mapstruct *map;
     object *pl;
@@ -337,6 +359,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_paralysis_timing_remains_in_speed_credit);
     tcase_add_test(tc_core, test_administrative_freeze_keeps_requested_tick_duration);
     tcase_add_test(tc_core, test_non_player_speed_is_not_clamped);
+    tcase_add_test(tc_core, test_monster_living_speed_is_not_player_clamped);
 
     return s;
 }

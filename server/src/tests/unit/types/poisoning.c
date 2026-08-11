@@ -180,6 +180,34 @@ START_TEST(test_expiry_and_cure_restore_stats_and_speed) {
 }
 END_TEST
 
+START_TEST(test_lethal_poison_does_not_reuse_cured_effect) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    FREE_AND_COPY_HASH(map->path, "/unit/lethal-poison");
+
+    object *hitter = arch_get("kobold");
+    hitter->x = pl->x + 1;
+    hitter->y = pl->y;
+    hitter = object_insert_map(hitter, map, NULL, 0);
+
+    attack_perform_poison(pl, hitter, 1000);
+    object *poison = find_poison(pl);
+    ck_assert_ptr_nonnull(poison);
+    poison->stats.dam = 1000;
+    pl->stats.hp = 1;
+
+    object_process(poison);
+
+    ck_assert_ptr_null(find_poison(pl));
+    ck_assert_int_gt(pl->stats.hp, 0);
+
+    object_remove(hitter, 0);
+    object_destroy(hitter);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("poisoning");
     TCase *tc_core = tcase_create("Core");
@@ -192,6 +220,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_stat_depletion_is_bounded_and_protection_scaled);
     tcase_add_test(tc_core, test_monsters_do_not_receive_poison_stat_depletion);
     tcase_add_test(tc_core, test_expiry_and_cure_restore_stats_and_speed);
+    tcase_add_test(tc_core, test_lethal_poison_does_not_reuse_cured_effect);
 
     return s;
 }

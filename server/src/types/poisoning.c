@@ -130,7 +130,7 @@ static void process_func(object *op) {
         object_owner_clear(op);
     }
 
-    OBJECTS_DESTROYED_BEGIN(target) {
+    OBJECTS_DESTROYED_BEGIN(op, target) {
         if (!attack_hit(target, op, op->stats.dam)) {
             if (depletion_reconciled && !OBJECTS_DESTROYED(target)) {
                 living_update(target);
@@ -138,7 +138,7 @@ static void process_func(object *op) {
             return;
         }
 
-        if (OBJECTS_DESTROYED(target)) {
+        if (OBJECTS_DESTROYED_ANY(op, target)) {
             return;
         }
     }
