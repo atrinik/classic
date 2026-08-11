@@ -158,6 +158,14 @@ static bool socket_port_mapping_upnp(void *data,
     int address_result = UPNP_GetExternalIPAddress(mapping_upnp_urls.controlURL,
                                                    mapping_upnp_data.first.servicetype,
                                                    external_address);
+    struct in_addr parsed_address;
+    if (address_result != UPNPCOMMAND_SUCCESS ||
+        inet_pton(AF_INET, external_address, &parsed_address) != 1) {
+        LOG(DEBUG, "UPnP external address discovery failed");
+        FreeUPNPUrls(&mapping_upnp_urls);
+        memset(&mapping_upnp_urls, 0, sizeof(mapping_upnp_urls));
+        return false;
+    }
     int mapping_result = UPNP_AddPortMapping(mapping_upnp_urls.controlURL,
                                              mapping_upnp_data.first.servicetype,
                                              mapping_upnp_port,
@@ -167,9 +175,7 @@ static bool socket_port_mapping_upnp(void *data,
                                              "UDP",
                                              NULL,
                                              "7200");
-    struct in_addr parsed_address;
-    if (address_result != UPNPCOMMAND_SUCCESS || mapping_result != UPNPCOMMAND_SUCCESS ||
-        inet_pton(AF_INET, external_address, &parsed_address) != 1) {
+    if (mapping_result != UPNPCOMMAND_SUCCESS) {
         LOG(DEBUG, "UPnP UDP mapping failed: %s", strupnperror(mapping_result));
         FreeUPNPUrls(&mapping_upnp_urls);
         memset(&mapping_upnp_urls, 0, sizeof(mapping_upnp_urls));
