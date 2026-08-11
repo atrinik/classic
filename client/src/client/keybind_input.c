@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright 2026 The Atrinik Project                                  *
+ *   Copyright (C) 2026 Atrinik Development Team                         *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -140,46 +140,6 @@ SDL_Keycode keybind_keycode_from_legacy(uint32_t key) {
         default:
             return (SDL_Keycode)key;
     }
-}
-
-/** Translate a supported 2.0 internal keybinding command. */
-const char *keybind_command_from_legacy(const char *command) {
-    static const struct {
-        const char *legacy;
-        const char *current;
-    } commands[] = {
-        {"?M_NORTH", "?MOVE_N"},
-        {"?M_NORTHEAST", "?MOVE_NE"},
-        {"?M_EAST", "?MOVE_E"},
-        {"?M_SOUTHEAST", "?MOVE_SE"},
-        {"?M_SOUTH", "?MOVE_S"},
-        {"?M_SOUTHWEST", "?MOVE_SW"},
-        {"?M_WEST", "?MOVE_W"},
-        {"?M_NORTHWEST", "?MOVE_NW"},
-        {"?M_STAY", "?MOVE_STAY"},
-        {"?M_UP", "?UP"},
-        {"?M_DOWN", "?DOWN"},
-        {"?M_LEFT", "?LEFT"},
-        {"?M_RIGHT", "?RIGHT"},
-        {"?M_SPELL_LIST", "?SPELL_LIST"},
-        {"?M_SKILL_LIST", "?SKILL_LIST"},
-        {"?M_HELP", "?HELP"},
-        {"?M_KEYBIND", "?PARTY_LIST"},
-        {"?M_QLIST", "?QLIST"},
-        {"?M_RANGE", "?RANGE"},
-        {"?M_TARGET_ENEMY", "?TARGET_ENEMY"},
-        {"?M_TARGET_FRIEND", "?TARGET_FRIEND"},
-    };
-
-    if (command == NULL) {
-        return NULL;
-    }
-    for (size_t i = 0; i < arraysize(commands); i++) {
-        if (!strcmp(command, commands[i].legacy)) {
-            return commands[i].current;
-        }
-    }
-    return NULL;
 }
 
 /** Parse a bounded persisted unsigned decimal value. */

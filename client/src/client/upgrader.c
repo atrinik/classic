@@ -42,6 +42,95 @@ static const char *const client_versions[] = {"2.0", "2.5", "3.0"};
 /** ::client_versions entry we are currently migrating. */
 static int64_t version_id_migrating = -1;
 
+/** Translate a supported 2.0 internal keybinding command. */
+static const char *upgrade_20_keybind_command(const char *command) {
+    static const struct {
+        const char *legacy;
+        const char *current;
+    } commands[] = {
+        {"?M_NORTH", "?MOVE_N"},
+        {"?M_NORTHEAST", "?MOVE_NE"},
+        {"?M_EAST", "?MOVE_E"},
+        {"?M_SOUTHEAST", "?MOVE_SE"},
+        {"?M_SOUTH", "?MOVE_S"},
+        {"?M_SOUTHWEST", "?MOVE_SW"},
+        {"?M_WEST", "?MOVE_W"},
+        {"?M_NORTHWEST", "?MOVE_NW"},
+        {"?M_STAY", "?MOVE_STAY"},
+        {"?M_UP", "?UP"},
+        {"?M_DOWN", "?DOWN"},
+        {"?M_LEFT", "?LEFT"},
+        {"?M_RIGHT", "?RIGHT"},
+        {"?M_SPELL_LIST", "?SPELL_LIST"},
+        {"?M_SKILL_LIST", "?SKILL_LIST"},
+        {"?M_HELP", "?HELP"},
+        {"?M_KEYBIND", "?PARTY_LIST"},
+        {"?M_QLIST", "?QLIST"},
+        {"?M_RANGE", "?RANGE"},
+        {"?M_TARGET_ENEMY", "?TARGET_ENEMY"},
+        {"?M_TARGET_FRIEND", "?TARGET_FRIEND"},
+    };
+
+    for (size_t i = 0; i < arraysize(commands); i++) {
+        if (!strcmp(command, commands[i].legacy)) {
+            return commands[i].current;
+        }
+    }
+    return NULL;
+}
+
+/** Migrate keybindings from the 2.0 line-oriented macro format. */
+static void upgrade_20_keybinds(FILE *stream) {
+    char buf[HUGE_BUF];
+
+    while (fgets(buf, sizeof(buf) - 1, stream)) {
+        int keycode, repeat;
+        char keyname[MAX_BUF], command[HUGE_BUF];
+
+        if (sscanf(buf,
+                   "%d %d \"%200[^\"]\" \"%2000[^\"]\"",
+                   &keycode,
+                   &repeat,
+                   keyname,
+                   command) != 4 ||
+            keycode < 0) {
+            continue;
+        }
+
+        SDL_Keycode migrated_keycode = keybind_keycode_from_legacy((uint32_t)keycode);
+        keybind_struct *keybind;
+
+        if (*command == '/') {
+            keybind = keybind_find_by_command(command);
+            if (keybind == NULL) {
+                keybind = keybind_add(migrated_keycode, 0, command);
+            } else {
+                keybind->key = migrated_keycode;
+            }
+            keybind->repeat = repeat;
+        } else if (!strncmp(command, "?M_MCON", 7)) {
+            char mcon_buf[HUGE_BUF];
+
+            snprintf(mcon_buf, sizeof(mcon_buf), "?MCON %s", command + 7);
+            if (!keybind_find_by_command(mcon_buf)) {
+                keybind = keybind_add(migrated_keycode, 0, mcon_buf);
+                keybind->repeat = repeat;
+            }
+        } else if (*command == '?') {
+            const char *new_cmd = upgrade_20_keybind_command(command);
+
+            if (new_cmd == NULL) {
+                continue;
+            }
+
+            keybind = keybind_find_by_command(new_cmd);
+            if (keybind != NULL) {
+                keybind->key = migrated_keycode;
+            }
+        }
+    }
+}
+
 /**
  * Upgrade 2.0 settings to 2.5.
  *
@@ -63,7 +152,7 @@ static void upgrade_20_to_25(const char *from, const char *to) {
 
     if (fp) {
         keybind_load();
-        keybind_upgrade_legacy(fp);
+        upgrade_20_keybinds(fp);
         keybind_deinit();
         fclose(fp);
     }

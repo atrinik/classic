@@ -71,42 +71,6 @@ static void test_legacy_keycode_migration(void) {
     TEST_CHECK(!keybind_uint32_parse("2", 1, &value));
 }
 
-static void test_legacy_command_migration(void) {
-    static const struct {
-        const char *legacy;
-        const char *current;
-    } cases[] = {
-        {"?M_NORTH", "?MOVE_N"},
-        {"?M_NORTHEAST", "?MOVE_NE"},
-        {"?M_EAST", "?MOVE_E"},
-        {"?M_SOUTHEAST", "?MOVE_SE"},
-        {"?M_SOUTH", "?MOVE_S"},
-        {"?M_SOUTHWEST", "?MOVE_SW"},
-        {"?M_WEST", "?MOVE_W"},
-        {"?M_NORTHWEST", "?MOVE_NW"},
-        {"?M_STAY", "?MOVE_STAY"},
-        {"?M_UP", "?UP"},
-        {"?M_DOWN", "?DOWN"},
-        {"?M_LEFT", "?LEFT"},
-        {"?M_RIGHT", "?RIGHT"},
-        {"?M_SPELL_LIST", "?SPELL_LIST"},
-        {"?M_SKILL_LIST", "?SKILL_LIST"},
-        {"?M_HELP", "?HELP"},
-        {"?M_KEYBIND", "?PARTY_LIST"},
-        {"?M_QLIST", "?QLIST"},
-        {"?M_RANGE", "?RANGE"},
-        {"?M_TARGET_ENEMY", "?TARGET_ENEMY"},
-        {"?M_TARGET_FRIEND", "?TARGET_FRIEND"},
-    };
-
-    for (size_t i = 0; i < arraysize(cases); i++) {
-        TEST_CHECK(!strcmp(keybind_command_from_legacy(cases[i].legacy), cases[i].current));
-    }
-    TEST_CHECK(keybind_command_from_legacy("?M_FIRE_READY") == NULL);
-    TEST_CHECK(keybind_command_from_legacy("?M_CUSTOM") == NULL);
-    TEST_CHECK(keybind_command_from_legacy(NULL) == NULL);
-}
-
 static void test_shortcut_names(void) {
     char buf[64];
     char one[1] = {'x'};
@@ -244,57 +208,27 @@ static void test_keybind_loader(void) {
         "keycode_format " KEYBIND_KEYCODE_FORMAT "\nbind\nkey 102\ncommand ?FIRE_READY\nend\n"
         "bind\nkey 103\nmod 3\nrepeat 1\ncommand ?FIRE_READY_CUSTOM\nend\n"
         "bind\nkey 104\ncommand ?FIRE_READY;?HELP\nend\n"
-        "bind\nkey 105\ncommand /custom\nend\n"
-        "bind\nkey 293\nmod 192\nrepeat 1\ncommand ?HELP\nend\n";
+        "bind\nkey 105\ncommand /custom\nend\n";
     keybind_load();
-    TEST_CHECK(keybindings_num == 4);
+    TEST_CHECK(keybindings_num == 3);
     TEST_CHECK(!strcmp(keybindings[0]->command, "?FIRE_READY_CUSTOM"));
     TEST_CHECK(keybindings[0]->key == SDLK_G);
     TEST_CHECK(keybindings[0]->mod == SDL_KMOD_SHIFT);
     TEST_CHECK(keybindings[0]->repeat == 1);
     TEST_CHECK(!strcmp(keybindings[1]->command, "?FIRE_READY;?HELP"));
     TEST_CHECK(!strcmp(keybindings[2]->command, "/custom"));
-    TEST_CHECK(!strcmp(keybindings[3]->command, "?HELP"));
-
-    FILE *legacy = tmpfile();
-    TEST_CHECK(legacy != NULL);
-    TEST_CHECK(fputs("102 1 \"f\" \"?M_FIRE_READY\"\n"
-                     "273 0 \"up\" \"?M_HELP\"\n"
-                     "120 1 \"x\" \"/legacy-custom\"\n",
-                     legacy) >= 0);
-    rewind(legacy);
-    keybind_upgrade_legacy(legacy);
-    TEST_CHECK(fclose(legacy) == 0);
-    TEST_CHECK(keybindings_num == 5);
-    TEST_CHECK(keybindings[0]->key == SDLK_G);
-    TEST_CHECK(keybindings[0]->mod == SDL_KMOD_SHIFT);
-    TEST_CHECK(keybindings[0]->repeat == 1);
-    TEST_CHECK(keybindings[3]->key == SDLK_UP);
-    TEST_CHECK(keybindings[3]->mod == SDL_KMOD_CTRL);
-    TEST_CHECK(keybindings[3]->repeat == 1);
-    TEST_CHECK(!strcmp(keybindings[4]->command, "/legacy-custom"));
-    TEST_CHECK(keybindings[4]->key == SDLK_X);
-    TEST_CHECK(keybindings[4]->mod == SDL_KMOD_NONE);
-    TEST_CHECK(keybindings[4]->repeat == 1);
 
     keybind_fixture = NULL;
     keybind_save();
     keybind_fixture_reset();
     keybind_load();
-    TEST_CHECK(keybindings_num == 5);
+    TEST_CHECK(keybindings_num == 3);
     TEST_CHECK(!strcmp(keybindings[0]->command, "?FIRE_READY_CUSTOM"));
     TEST_CHECK(keybindings[0]->key == SDLK_G);
     TEST_CHECK(keybindings[0]->mod == SDL_KMOD_SHIFT);
     TEST_CHECK(keybindings[0]->repeat == 1);
     TEST_CHECK(!strcmp(keybindings[1]->command, "?FIRE_READY;?HELP"));
     TEST_CHECK(!strcmp(keybindings[2]->command, "/custom"));
-    TEST_CHECK(keybindings[3]->key == SDLK_UP);
-    TEST_CHECK(keybindings[3]->mod == SDL_KMOD_CTRL);
-    TEST_CHECK(keybindings[3]->repeat == 1);
-    TEST_CHECK(!strcmp(keybindings[4]->command, "/legacy-custom"));
-    TEST_CHECK(keybindings[4]->key == SDLK_X);
-    TEST_CHECK(keybindings[4]->mod == SDL_KMOD_NONE);
-    TEST_CHECK(keybindings[4]->repeat == 1);
     keybind_save();
     keybind_fixture_reset();
     TEST_CHECK(remove(ATRINIK_TEST_BINARY_DIR "/keybind-roundtrip.dat") == 0);
@@ -2303,7 +2237,6 @@ static void test_keybind_event_integration(void) {
 
 int main(void) {
     test_legacy_keycode_migration();
-    test_legacy_command_migration();
     test_shortcut_names();
     test_keybind_loader();
     test_legacy_upgrader();

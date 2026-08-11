@@ -110,58 +110,6 @@ void keybind_load(void) {
     fclose(fp);
 }
 
-/** Migrate keybindings from the 2.0 line-oriented macro format. */
-void keybind_upgrade_legacy(FILE *stream) {
-    char buf[HUGE_BUF];
-
-    while (fgets(buf, sizeof(buf) - 1, stream)) {
-        int keycode, repeat;
-        char keyname[MAX_BUF], command[HUGE_BUF];
-
-        if (sscanf(buf,
-                   "%d %d \"%200[^\"]\" \"%2000[^\"]\"",
-                   &keycode,
-                   &repeat,
-                   keyname,
-                   command) != 4 ||
-            keycode < 0) {
-            continue;
-        }
-
-        SDL_Keycode migrated_keycode = keybind_keycode_from_legacy((uint32_t)keycode);
-        keybind_struct *keybind;
-
-        if (*command == '/') {
-            keybind = keybind_find_by_command(command);
-            if (keybind == NULL) {
-                keybind = keybind_add(migrated_keycode, 0, command);
-            } else {
-                keybind->key = migrated_keycode;
-            }
-            keybind->repeat = repeat;
-        } else if (!strncmp(command, "?M_MCON", 7)) {
-            char mcon_buf[HUGE_BUF];
-
-            snprintf(mcon_buf, sizeof(mcon_buf), "?MCON %s", command + 7);
-            if (!keybind_find_by_command(mcon_buf)) {
-                keybind = keybind_add(migrated_keycode, 0, mcon_buf);
-                keybind->repeat = repeat;
-            }
-        } else if (*command == '?') {
-            const char *new_cmd = keybind_command_from_legacy(command);
-
-            if (new_cmd == NULL) {
-                continue;
-            }
-
-            keybind = keybind_find_by_command(new_cmd);
-            if (keybind != NULL) {
-                keybind->key = migrated_keycode;
-            }
-        }
-    }
-}
-
 /** Save the keybindings. */
 void keybind_save(void) {
     bool write_failed;
