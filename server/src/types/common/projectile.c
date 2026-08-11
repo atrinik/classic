@@ -302,6 +302,7 @@ object *common_object_projectile_stop_missile(object *op, int reason) {
 
         owner = object_owner(op);
         object_owner_clear(op);
+        op->chosen_skill = NULL;
 
         op->direction = 0;
         SET_ANIMATION_STATE(op);

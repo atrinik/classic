@@ -209,6 +209,8 @@ START_TEST(test_archery_invisibility_and_target_ownership_exclusions) {
     ck_assert_int_eq(object_projectile_hit(arrow, target), OBJECT_METHOD_UNHANDLED);
     ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 1);
 
+    target = projectile_test_target(map, pl);
+    target->direction = 3;
     object *npc = arch_get("goblin");
     npc->x = pl->x;
     npc->y = pl->y + 1;
@@ -216,8 +218,10 @@ START_TEST(test_archery_invisibility_and_target_ownership_exclusions) {
     monster_data_init(npc);
     npc->enemy = target;
     npc->enemy_count = target->count;
+    object_owner_set(npc, pl);
     arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
     object_owner_set(arrow, npc);
+    ck_assert_ptr_null(arrow->chosen_skill);
     ck_assert_int_eq(projectile_test_hit(arrow, target), TEST_BASE_DAMAGE);
     ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 1);
 
@@ -226,6 +230,7 @@ START_TEST(test_archery_invisibility_and_target_ownership_exclusions) {
     CLEAR_FLAG(arrow, FLAG_IS_MISSILE);
     SET_FLAG(arrow, FLAG_IS_SPELL);
     object_owner_set(arrow, npc);
+    ck_assert_ptr_null(arrow->chosen_skill);
     ck_assert_int_eq(projectile_test_hit(arrow, target), TEST_BASE_DAMAGE);
     ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 1);
 
@@ -286,6 +291,7 @@ START_TEST(test_archery_slaying_stacks_after_bounded_bonus_without_mutation) {
     object *stopped = object_projectile_stop(arrow, OBJECT_PROJECTILE_STOP_HIT);
     ck_assert_ptr_nonnull(stopped);
     ck_assert_int_eq(stopped->stats.dam, stopped->arch->clone.stats.dam);
+    ck_assert_ptr_null(stopped->chosen_skill);
 
     target = projectile_test_target(map, pl);
     target->direction = 3;
@@ -296,6 +302,7 @@ START_TEST(test_archery_slaying_stacks_after_bounded_bonus_without_mutation) {
     stopped = object_projectile_stop(arrow, OBJECT_PROJECTILE_STOP_HIT);
     ck_assert_ptr_nonnull(stopped);
     ck_assert_int_eq(stopped->stats.dam, stopped->arch->clone.stats.dam);
+    ck_assert_ptr_null(stopped->chosen_skill);
     ck_assert_uint_eq(projectile_test_bonus_messages(pl, NULL), 2);
 }
 END_TEST
@@ -493,8 +500,9 @@ START_TEST(test_archery_blocked_and_lethal_impact_ordering) {
     target->block = 100;
     object *arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
     arrow->weight = 1001;
-    rndm_seed(42);
+    attack_block_test_override = 1;
     ck_assert_int_eq(projectile_test_hit(arrow, target), 0);
+    attack_block_test_override = -1;
     ck_assert(OBJECT_VALID(target->enemy, target->enemy_count));
     ck_assert_ptr_eq(target->enemy, pl);
     ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_PROJECTILE_HITS), 0);

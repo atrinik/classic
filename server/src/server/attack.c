@@ -552,6 +552,8 @@ int attack_object(object *op, object *hitter) {
  * @return
  * True if the attack was completely blocked, false otherwise.
  */
+int attack_block_test_override = -1;
+
 static bool attack_block_hit(object *op, object *hitter, double *damage) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(hitter != NULL);
@@ -575,7 +577,12 @@ static bool attack_block_hit(object *op, object *hitter, double *damage) {
         chance -= rndm(op->block / 2.0 + 0.5, op->block);
         chance = MAX(3, chance);
 
-        if (rndm_chance(chance)) {
+        /* Unit tests can force the probabilistic decision without changing
+         * the process-wide gameplay random stream. */
+        bool blocked = attack_block_test_override >= 0
+                           ? attack_block_test_override != 0
+                           : rndm_chance(chance);
+        if (blocked) {
             return true;
         }
     }

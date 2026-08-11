@@ -996,7 +996,8 @@ static void object_owner_set_internal(object *op, object *owner) {
 }
 
 /**
- * Sets the owner and sets the chosen skill pointer owner's current skill.
+ * Sets the owner and snapshots a player owner's current skill. Non-player
+ * ownership clears any stale skill provenance.
  *
  * @param op
  * The object.
@@ -1015,9 +1016,7 @@ void object_owner_set(object *op, object *owner) {
     owner = HEAD(owner);
     object_owner_set_internal(op, owner);
 
-    if (owner->type == PLAYER) {
-        op->chosen_skill = owner->chosen_skill;
-    }
+    op->chosen_skill = owner->type == PLAYER ? owner->chosen_skill : NULL;
 }
 
 /**

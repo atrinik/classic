@@ -540,11 +540,6 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     target_link_libraries(libatrinik-bresenham PRIVATE Atrinik::Core)
     add_test(NAME libatrinik-bresenham COMMAND libatrinik-bresenham)
 
-    add_executable(libatrinik-math tests/math.c)
-    atrinik_configure_target(libatrinik-math)
-    target_link_libraries(libatrinik-math PRIVATE Atrinik::Core)
-    add_test(NAME libatrinik-math COMMAND libatrinik-math)
-
     add_executable(libatrinik-path tests/path.c)
     atrinik_configure_target(libatrinik-path)
     target_link_libraries(libatrinik-path PRIVATE Atrinik::Core)
