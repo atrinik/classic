@@ -347,6 +347,15 @@ if (BUILD_TESTING)
     target_link_libraries(client-stun-config-tests PRIVATE Atrinik::Core)
     add_test(NAME client-stun-config COMMAND client-stun-config-tests)
 
+    add_executable(client-setting-value-tests
+        src/tests/setting_value.c
+        src/client/setting_value.c)
+    atrinik_configure_target(client-setting-value-tests)
+    target_include_directories(client-setting-value-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-setting-value-tests PRIVATE Atrinik::Core)
+    add_test(NAME client-setting-value COMMAND client-setting-value-tests)
+
     add_executable(client-metaserver-options-tests
         src/tests/metaserver_options.c
         src/client/metaserver_options.c)
