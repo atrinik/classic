@@ -221,14 +221,15 @@ START_TEST(test_paralysis_timing_remains_in_speed_credit) {
     living_update_player(pl);
     pl->speed_left = 0.0;
 
-    attack_peform_paralyze(pl, 4.0);
+    /* Unprotected paralysis is capped at 50 ticks. */
+    attack_peform_paralyze(pl, 100.0);
     double paralyzed_until = pl->speed_left;
-    ck_assert(fabs(paralyzed_until - -(PLAYER_MIN_SPEED * 12.0)) < 0.000001);
+    ck_assert(fabs(paralyzed_until - -(PLAYER_MIN_SPEED * 50.0)) < 0.000001);
 
     living_update_player(pl);
     ck_assert_double_eq(pl->speed_left, paralyzed_until);
 
-    for (int tick = 0; tick < 11; tick++) {
+    for (int tick = 0; tick < 49; tick++) {
         process_events();
     }
     ck_assert_double_lt(pl->speed_left, 0.0);
@@ -249,12 +250,12 @@ START_TEST(test_administrative_freeze_keeps_requested_tick_duration) {
     living_update_player(pl);
 
     char params[MAX_BUF];
-    snprintf(params, sizeof(params), "%s 10", pl->name);
+    snprintf(params, sizeof(params), "%s", pl->name);
     command_freeze(pl, "freeze", params);
-    ck_assert(fabs(pl->speed_left - -(PLAYER_MIN_SPEED * 10.0)) < 0.000001);
+    ck_assert(fabs(pl->speed_left - -(PLAYER_MIN_SPEED * 100.0)) < 0.000001);
 
     living_update_player(pl);
-    for (int tick = 0; tick < 9; tick++) {
+    for (int tick = 0; tick < 99; tick++) {
         process_events();
     }
     ck_assert_double_lt(pl->speed_left, 0.0);
