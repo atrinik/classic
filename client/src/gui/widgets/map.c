@@ -1667,7 +1667,8 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
             .depth = data->depth,
             .draw_double = data->cell->draw_double[map_layer],
             .door = (data->cell->door[data->sub_layer] & (UINT8_C(1) << (data->layer - 1))) != 0,
-            .exit = (data->cell->exit[data->sub_layer] & (UINT8_C(1) << (data->layer - 1))) != 0,
+            .exit = !data->cell->fow &&
+                    (data->cell->exit[data->sub_layer] & (UINT8_C(1) << (data->layer - 1))) != 0,
             .transformed = transformed,
         };
         context->commands_num++;

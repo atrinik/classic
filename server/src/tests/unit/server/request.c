@@ -927,6 +927,61 @@ START_TEST(test_incuna_unchanged_roof_level_remains_present) {
 }
 END_TEST
 
+START_TEST(test_map_exit_semantic_not_disclosed_by_boundary_geometry) {
+    mapstruct *base;
+    object *pl;
+    check_setup_env_pl(&base, &pl);
+    request_move_player(&pl, base, 12, 12);
+
+    mapstruct *upper = get_empty_map(24, 24);
+    base->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = base;
+    base->coords[2] = 0;
+    base->level_min = upper->level_min = 0;
+    base->level_max = upper->level_max = 1;
+    upper->coords[2] = 1;
+
+    int target_x = pl->x + 1;
+    int target_y = pl->y;
+
+    object *exit = arch_get("stairs_down");
+    ck_assert_ptr_nonnull(exit);
+    exit->x = target_x;
+    exit->y = target_y;
+    exit = object_insert_map(exit, base, NULL, 0);
+    ck_assert_ptr_nonnull(exit);
+
+    object *roof = arch_get("roof_thatch");
+    ck_assert_ptr_nonnull(roof);
+    roof->x = target_x;
+    roof->y = target_y;
+    roof = object_insert_map(roof, upper, NULL, 0);
+    ck_assert_ptr_nonnull(roof);
+
+    socket_struct *cs = CONTR(pl)->cs;
+    int ax = cs->mapx_2 + 1;
+    int ay = cs->mapy_2;
+
+    update_los(pl);
+    CONTR(pl)->blocked_los[ax][ay] |= BLOCKED_LOS_BLOCKED;
+    map_client_cache_clear(&cs->lastmap);
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+
+    ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
+    ck_assert(map_cache_cell_has_roof(cs, 1, ax, ay));
+
+    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->cleared, 0);
+    ck_assert_uint_eq(cell->fow, 1);
+
+    size_t socket_layer = NUM_LAYERS * exit->sub_layer + LAYER_WALL - 1;
+    ck_assert_uint_eq(cell->exit[socket_layer], 0);
+}
+END_TEST
+
 START_TEST(test_map_rgb_cache_tracks_hue_changes_and_neutral_reset) {
     mapstruct *map;
     object *pl;
@@ -1133,6 +1188,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_move_path_invalid_request_preserves_existing_queue);
     tcase_add_test(tc_core, test_move_path_new_blockage_stops_without_displacement);
     tcase_add_test(tc_core, test_incuna_unchanged_roof_level_remains_present);
+    tcase_add_test(tc_core, test_map_exit_semantic_not_disclosed_by_boundary_geometry);
     tcase_add_test(tc_core, test_map_rgb_cache_tracks_hue_changes_and_neutral_reset);
     tcase_add_test(tc_core, test_map_exit_semantic_tracks_visible_layer_and_cache_changes);
     tcase_add_test(tc_core, test_dense_colored_level_splits_at_tile_boundaries);
