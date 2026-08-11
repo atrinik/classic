@@ -372,6 +372,29 @@ START_TEST(test_unaware_bonus_does_not_increase_status_effect_strength) {
     object *unaware_blindness = object_find_arch(unaware_target, arch_find("blindness"));
     ck_assert_ptr_nonnull(unaware_blindness);
     ck_assert_int_eq(unaware_blindness->stats.food, aware_blindness->stats.food);
+
+    /* Poison has its own protected effect-strength path. Use a split whose
+     * protected poison strength deterministically rounds to one while the
+     * total HP damage remains an exact 4 -> 5 unaware increase. */
+    memset(pl->attack, 0, sizeof(pl->attack));
+    pl->attack[ATNR_IMPACT] = 25;
+    pl->attack[ATNR_POISON] = 75;
+
+    object *aware_poison_target = attack_test_target(map, pl);
+    aware_poison_target->protection[ATNR_POISON] = 67;
+    aware_poison_target->enemy = pl;
+    aware_poison_target->enemy_count = pl->count;
+    ck_assert_int_eq(attack_hit_situational(aware_poison_target, pl, 8), 4);
+    object *aware_poisoning = object_find_arch(aware_poison_target, arch_find("poisoning"));
+    ck_assert_ptr_nonnull(aware_poisoning);
+    ck_assert_int_eq(aware_poisoning->stats.dam, 1);
+
+    object *unaware_poison_target = attack_test_target(map, pl);
+    unaware_poison_target->protection[ATNR_POISON] = 67;
+    ck_assert_int_eq(attack_hit_situational(unaware_poison_target, pl, 8), 5);
+    object *unaware_poisoning = object_find_arch(unaware_poison_target, arch_find("poisoning"));
+    ck_assert_ptr_nonnull(unaware_poisoning);
+    ck_assert_int_eq(unaware_poisoning->stats.dam, aware_poisoning->stats.dam);
 }
 END_TEST
 
