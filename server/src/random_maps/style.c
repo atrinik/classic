@@ -110,7 +110,9 @@ int load_dir(const char *dir, char ***namelist, int skip_dirs) {
 
     closedir(dp);
 
-    qsort(rn, entries, sizeof(char *), pointer_strcmp);
+    if (entries > 1) {
+        qsort(rn, entries, sizeof(char *), pointer_strcmp);
+    }
 
     *namelist = rn;
 
