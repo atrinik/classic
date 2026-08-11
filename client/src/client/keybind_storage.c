@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2026 Atrinik Development Team                         *
+ *   Copyright 2026 The Atrinik Project                                  *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -59,7 +59,8 @@ void keybind_load(void) {
             LOG(ERROR, "Unknown keybinding keycode format, preserving numeric values: %s", cp + 15);
             legacy_keycodes = false;
         } else if (!strcmp(cp, "end")) {
-            if (keybind != NULL && keybind->command != NULL && keycode_valid && record_valid) {
+            if (keybind != NULL && keybind->command != NULL && keycode_valid && record_valid &&
+                strcmp(keybind->command, "?FIRE_READY")) {
                 keybindings =
                     xreallocarray(keybindings, (keybindings_num + 1), sizeof(*keybindings));
                 keybindings[keybindings_num++] = keybind;
