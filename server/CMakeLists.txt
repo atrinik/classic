@@ -189,8 +189,8 @@ endif ()
 file(STRINGS
     "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
     ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
-if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1076U$")
-    message(FATAL_ERROR "Server requires classic game protocol v1076")
+if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1077U$")
+    message(FATAL_ERROR "Server requires classic game protocol v1077")
 endif ()
 if (NOT TARGET Atrinik::Core)
     set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)

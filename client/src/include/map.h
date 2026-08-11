@@ -243,6 +243,9 @@ typedef struct MapCell {
     /** Door bits for each object layer, grouped by sub-layer. */
     uint8_t door[NUM_SUB_LAYERS];
 
+    /** Object-layer bitmap identifying visible map transitions. */
+    uint8_t exit[NUM_SUB_LAYERS];
+
     /** Double drawing. */
     uint8_t draw_double[NUM_REAL_LAYERS];
 
@@ -453,6 +456,7 @@ extern void map_set_data(int x,
                          uint8_t secondpass,
                          uint8_t roof,
                          uint8_t door,
+                         uint8_t exit,
                          const char *glow,
                          uint8_t glow_speed);
 

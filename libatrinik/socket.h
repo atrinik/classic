@@ -396,6 +396,8 @@ typedef struct socket_face_batch_response {
 #define MAP2_FLAG2_ROOF 256
 /** The object is a door and may need a local camera reveal. */
 #define MAP2_FLAG2_DOOR 512
+/** The object is a visible map transition. */
+#define MAP2_FLAG2_EXIT 1024
 /*@}*/
 
 /**
