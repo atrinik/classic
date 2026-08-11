@@ -318,6 +318,63 @@ static void test_darken_preserves_alpha(void) {
     SDL_DestroySurface(surface);
 }
 
+static void assert_map_marker_palette(SDL_Surface *surface) {
+    int visible = 0;
+    int bright = 0;
+
+    for (int y = 0; y < surface->h; y++) {
+        for (int x = 0; x < surface->w; x++) {
+            Uint8 red, green, blue, alpha;
+            TEST_CHECK(SDL_ReadSurfacePixel(surface, x, y, &red, &green, &blue, &alpha));
+            if (alpha == SDL_ALPHA_TRANSPARENT) {
+                continue;
+            }
+
+            visible++;
+            if (alpha >= SPRITE_ALPHA_VISIBLE_MIN) {
+                TEST_CHECK(red != 0 || green != 0 || blue != 0);
+                TEST_CHECK(red >= green && green >= blue);
+            }
+            if (red >= 240 && green >= 180 && blue >= 50) {
+                bright++;
+            }
+        }
+    }
+
+    TEST_CHECK(visible > 0);
+    TEST_CHECK(bright > 0);
+}
+
+static void test_map_marker_transform_contract(void) {
+    char path[1024];
+    int length =
+        snprintf(path, sizeof(path), "%s/textures/map_marker.png", ATRINIK_TEST_SOURCE_DIR);
+    TEST_CHECK(length > 0 && (size_t)length < sizeof(path));
+
+    SDL_Surface *source = IMG_Load(path);
+    TEST_CHECK(source != NULL);
+    TEST_CHECK(source->w == 19 && source->h == 28);
+    TEST_CHECK(surface_set_transparent_black(source));
+
+    SDL_Surface *converted = surface_to_display_alpha(source);
+    SDL_DestroySurface(source);
+    TEST_CHECK(converted != NULL);
+    assert_map_marker_palette(converted);
+
+    const double zooms[] = {0.5, 1.0, 2.0};
+    for (size_t zoom = 0; zoom < arraysize(zooms); zoom++) {
+        for (int direction = 0; direction < 8; direction++) {
+            SDL_Surface *transformed =
+                rotozoomSurface(converted, -(direction * 45.0), zooms[zoom], 1);
+            TEST_CHECK(transformed != NULL);
+            assert_map_marker_palette(transformed);
+            SDL_DestroySurface(transformed);
+        }
+    }
+
+    SDL_DestroySurface(converted);
+}
+
 int main(void) {
     test_packed_indexed_conversion();
     test_index8_visible_bounds();
@@ -331,5 +388,6 @@ int main(void) {
     test_transform_invalid_input();
     test_true_color_alpha_rotation();
     test_darken_preserves_alpha();
+    test_map_marker_transform_contract();
     return 0;
 }
