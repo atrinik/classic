@@ -2490,13 +2490,33 @@ void socket_command_quest_list(socket_struct *ns,
 }
 
 void socket_command_clear(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos) {
-    /* The graphical client sends CLEAR for its Stay action. Besides dropping
-     * commands which have not been dispatched yet, cancel movement already
-     * expanded into the player's persistent server-side path queue and stop
-     * directional run mode. This lets combat or other urgent input reliably
-     * interrupt click-to-move. */
-    ns->packet_recv_cmd->len = 0;
-    if (pl != NULL) {
+    if (pos == len) {
+        /* Empty CLEAR retains Stay's historical broad queue/path reset. */
+        socket_server_command_queue_reset(ns);
+        if (pl != NULL) {
+            player_path_clear(pl);
+            pl->run_on = 0;
+        }
+        return;
+    }
+
+    packet_reader_t reader;
+    packet_reader_init_cursor(&reader, data, len, &pos);
+    uint8_t command = packet_reader_read_uint8(&reader);
+    uint32_t epoch = packet_reader_read_uint32(&reader);
+    if ((command != SERVER_CMD_MOVE && command != SERVER_CMD_FIRE) ||
+        !packet_reader_finish(&reader)) {
+        if (packet_reader_error(&reader) == PACKET_ERROR_NONE) {
+            packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
+        }
+        return;
+    }
+    bool applies_to_current_stream = epoch != 0 && epoch == ns->movement_stream_epoch;
+    if (!socket_server_command_queue_clear_stream(ns, command, epoch)) {
+        LOG(DEVEL, "Refused to clear inconsistent movement-stream queue metadata");
+        return;
+    }
+    if (applies_to_current_stream && command == SERVER_CMD_MOVE && pl != NULL) {
         player_path_clear(pl);
         pl->run_on = 0;
     }
@@ -2584,12 +2604,18 @@ void socket_command_fire(socket_struct *ns, player *pl, uint8_t *data, size_t le
     packet_reader_init_cursor(&reader, data, len, &pos);
     int dir;
     tag_t tag;
+    uint32_t epoch;
     object *tmp;
     double skill_time, delay;
 
     dir = packet_reader_read_uint8(&reader);
     dir = MAX(0, MIN(dir, 8));
     tag = packet_reader_read_uint32(&reader);
+    epoch = packet_reader_read_uint32(&reader);
+    (void)epoch;
+    if (!packet_reader_finish(&reader)) {
+        return;
+    }
 
     if (tag) {
         if (pl->equipment[PLAYER_EQUIP_WEAPON_RANGED] &&
@@ -2668,9 +2694,15 @@ void socket_command_move(socket_struct *ns, player *pl, uint8_t *data, size_t le
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     uint8_t dir, run_on;
+    uint32_t epoch;
 
     dir = packet_reader_read_uint8(&reader);
     run_on = packet_reader_read_uint8(&reader);
+    epoch = packet_reader_read_uint32(&reader);
+    (void)epoch;
+    if (!packet_reader_finish(&reader)) {
+        return;
+    }
 
     if (dir > 8) {
         LOG(PACKET, "%s: Invalid dir: %d", socket_get_id(ns->sc), dir);
@@ -2693,6 +2725,8 @@ void socket_command_move(socket_struct *ns, player *pl, uint8_t *data, size_t le
         pl->run_on_dir = dir - 1;
         pl->ob->speed_left -= 1.0;
         move_object(pl->ob, dir);
+    } else {
+        player_path_clear(pl);
     }
 }
 

@@ -194,6 +194,12 @@ if (NOT FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL)
         endif ()
     endforeach ()
 endif ()
+if (NOT FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL)
+    message(FATAL_ERROR
+        "Classic protocol source is required: use the sibling protocol/ tree, "
+        "the packaged dependencies/protocol tree, or "
+        "FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL")
+endif ()
 if (NOT FETCHCONTENT_SOURCE_DIR_LIBATRINIK)
     foreach (candidate
             "${CMAKE_CURRENT_SOURCE_DIR}/../libatrinik"
@@ -208,8 +214,15 @@ if (NOT FETCHCONTENT_SOURCE_DIR_LIBATRINIK)
 endif ()
 
 if (NOT TARGET Atrinik::Protocol)
-    atrinik_fetch_source(atrinik_protocol "atrinik/protocol" "atrinik-protocol")
+    FetchContent_Declare(atrinik_protocol
+        SOURCE_DIR "${FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL}")
     FetchContent_MakeAvailable(atrinik_protocol)
+endif ()
+file(STRINGS
+    "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
+    ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
+if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1076U$")
+    message(FATAL_ERROR "Client requires classic game protocol v1076")
 endif ()
 if (NOT TARGET Atrinik::Core)
     set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
@@ -393,6 +406,7 @@ if (BUILD_TESTING)
 
     add_executable(client-keybind-input-tests
         src/tests/keybind_input.c
+        src/client/keybind_event.c
         src/client/keybind_input.c
         src/client/keybind_storage.c)
     atrinik_configure_target(client-keybind-input-tests)
@@ -406,6 +420,20 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(client-keybind-input-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-keybind-input COMMAND client-keybind-input-tests)
+
+    add_executable(client-move-stream-tests
+        src/tests/move_stream.c
+        src/client/keybind_input.c
+        src/events/move.c)
+    atrinik_configure_target(client-move-stream-tests)
+    target_compile_definitions(client-move-stream-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-move-stream-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-move-stream-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-move-stream COMMAND client-move-stream-tests)
 
     add_executable(client-compound-packet-tests
         src/tests/compound_packet.c

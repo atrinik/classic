@@ -198,9 +198,9 @@ static fields_struct fields[] = {
     {"s_packet_recv_cmd",
      FIELDTYPE_PACKET,
      offsetof(player, cs),
-     0,
+     FIELDFLAG_READONLY,
      offsetof(socket_struct, packet_recv_cmd),
-     "Commands received from the player's client.; bytes"},
+     "Commands received from the player's client.; bytes (readonly)"},
 };
 
 /** Documentation for Atrinik_Player_GetEquipment(). */
@@ -563,6 +563,49 @@ static PyObject *Atrinik_Player_ExecuteCommand(Atrinik_Player *self, PyObject *a
 
     Py_INCREF(Py_None);
     return Py_None;
+}
+
+/** Documentation for Atrinik_Player_QueueCommand(). */
+static const char doc_Atrinik_Player_QueueCommand[] =
+    ".. method:: QueueCommand(packet).\n\n"
+    "Queue one framed client command for the player.\n\n"
+    ":param packet: One complete client command, including its two-byte length.\n"
+    ":type packet: bytes\n"
+    ":raises ValueError: If packet is not exactly one valid framed command.\n"
+    ":raises Atrinik.AtrinikError: If the command queue rejects the packet.";
+
+/**
+ * Implements Atrinik.Player.Player.QueueCommand() Python method.
+ * @copydoc PyMethod_O
+ */
+static PyObject *Atrinik_Player_QueueCommand(Atrinik_Player *self, PyObject *packet) {
+    if (!PyBytes_Check(packet)) {
+        PyErr_SetString(PyExc_TypeError, "packet must be bytes");
+        return NULL;
+    }
+    if (self->pl->cs->state != ST_PLAYING) {
+        PyErr_SetString(AtrinikError, "Player is not in a state to queue commands.");
+        return NULL;
+    }
+
+    Py_ssize_t py_len = PyBytes_Size(packet);
+    const uint8_t *data = (const uint8_t *)PyBytes_AsString(packet);
+    if (py_len < 3 || data == NULL) {
+        PyErr_SetString(PyExc_ValueError, "packet must contain one framed command");
+        return NULL;
+    }
+    size_t len = (size_t)py_len;
+    size_t command_len = ((size_t)data[0] << 8) | data[1];
+    if (command_len == 0 || command_len != len - 2) {
+        PyErr_SetString(PyExc_ValueError, "packet must contain exactly one framed command");
+        return NULL;
+    }
+    if (!hooks->socket_server_command_queue_append(self->pl->cs, data + 2, command_len)) {
+        PyErr_SetString(AtrinikError, "Player command queue rejected the packet.");
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
 }
 
 /** Documentation for Atrinik_Player_FindMarkedObject(). */
@@ -1101,6 +1144,10 @@ static PyMethodDef methods[] = {
      PY_METHOD(Atrinik_Player_ExecuteCommand),
      METH_VARARGS,
      doc_Atrinik_Player_ExecuteCommand},
+    {"QueueCommand",
+     PY_METHOD(Atrinik_Player_QueueCommand),
+     METH_O,
+     doc_Atrinik_Player_QueueCommand},
     {"FindMarkedObject",
      PY_METHOD(Atrinik_Player_FindMarkedObject),
      METH_NOARGS,

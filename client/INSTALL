@@ -10,10 +10,13 @@ cmake --build --preset linux-debug
 ctest --preset linux-debug
 ```
 
-The first configure downloads the exact protocol and libatrinik source release
-archives recorded in `cmake/dependencies.lock.json` and verifies their SHA-256
-digests. Use CMake's `FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL` and
-`FETCHCONTENT_SOURCE_DIR_LIBATRINIK` overrides for coordinated local work.
+The Classic protocol must be available from the sibling `protocol/` tree, the
+packaged `dependencies/protocol` tree, or CMake's
+`FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL` override. This keeps the client and
+its evolving wire contract on the same repository revision. The first
+configure downloads the exact libatrinik source release recorded in
+`cmake/dependencies.lock.json` and verifies its SHA-256 digest; use
+`FETCHCONTENT_SOURCE_DIR_LIBATRINIK` for coordinated local work.
 
 The main client target precompiles `src/include/global.h` by default. Pass
 `-DENABLE_PRECOMPILED_HEADERS=OFF` for a conventional build. See

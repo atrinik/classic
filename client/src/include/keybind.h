@@ -53,6 +53,73 @@ typedef struct keybind_struct {
     uint8_t repeat;
 } keybind_struct;
 
+/** Result emitted by a pending gameplay movement stream update. */
+typedef enum keybind_movement_action {
+    KEYBIND_MOVEMENT_ACTION_NONE,
+    KEYBIND_MOVEMENT_ACTION_MOVE,
+    KEYBIND_MOVEMENT_ACTION_STOP,
+    KEYBIND_MOVEMENT_ACTION_RUN_STOP,
+    KEYBIND_MOVEMENT_ACTION_RUN_TAP_STOP,
+    KEYBIND_MOVEMENT_ACTION_REPLACE
+} keybind_movement_action;
+
+/** One physical key participating in the gameplay movement stream. */
+typedef struct keybind_movement_key {
+    uint64_t order;
+    SDL_Keymod mod;
+    uint8_t direction;
+    bool repeat;
+    bool owned;
+    bool preseeded;
+    bool run_owned;
+    bool fire_owned;
+    SDL_Keymod run_mod;
+    SDL_Keymod fire_mod;
+} keybind_movement_key;
+
+/** Replacement binding for a held movement key after modifiers change. */
+typedef struct keybind_movement_rebind {
+    SDL_Scancode scancode;
+    SDL_Keymod mod;
+    uint8_t direction;
+    bool repeat;
+} keybind_movement_rebind;
+
+/** Physical-key state used to resolve one logical gameplay movement stream. */
+typedef struct keybind_movement_state {
+    keybind_movement_key keys[SDL_SCANCODE_COUNT];
+    uint64_t next_order;
+    uint32_t next_epoch;
+    uint32_t epoch;
+    SDL_Scancode repeat_scancode;
+    uint8_t emitted_direction;
+    uint8_t pending_direction;
+    bool repeated;
+    bool pending_move;
+    bool pending_move_repeated;
+    bool pending_stop;
+    bool pending_stop_ordered;
+    bool pending_run_stop;
+    bool deferred_move;
+} keybind_movement_state;
+
+/** Drain a logical movement state through the production packet adapter. */
+extern void keybind_movement_state_emit(keybind_movement_state *state);
+
+/** Callbacks used by the testable physical keybinding dispatcher. */
+typedef struct keybind_event_handler {
+    keybind_movement_state *movement;
+    void *user_data;
+    bool (*running)(void *user_data);
+    bool (*firing)(void *user_data);
+    void (*reconcile_modes)(void *user_data);
+    void (*flush)(void *user_data);
+    bool (*movement_intercept_matches)(const char *command, void *user_data);
+    void (*movement_intercept)(const char *command, void *user_data);
+    bool (*command_down)(const char *command, void *user_data);
+    void (*command_up)(const char *command, void *user_data);
+} keybind_event_handler;
+
 /** State and persistence API implemented in src/client/keybind_storage.c. */
 
 extern keybind_struct **keybindings;
@@ -91,6 +158,115 @@ extern bool keybind_matches_event(const keybind_struct *keybind, const SDL_Keybo
 
 extern char *keybind_get_key_shortcut(SDL_Keycode key, SDL_Keymod mod, char *buf, size_t len);
 
+extern bool keybind_command_contains(const char *commands, const char *command);
+
+extern bool keybind_command_matches_held(keybind_struct *const *bindings,
+                                         size_t bindings_num,
+                                         const char *command,
+                                         const key_struct *key_states,
+                                         SDL_Keymod mod);
+
+extern bool keybind_event_process(keybind_struct *const *bindings,
+                                  size_t bindings_num,
+                                  const SDL_KeyboardEvent *event,
+                                  const keybind_event_handler *handler);
+
+extern void keybind_event_process_binding(const keybind_struct *keybind,
+                                          const SDL_KeyboardEvent *event,
+                                          const keybind_event_handler *handler);
+
+extern void keybind_event_reconcile_release(keybind_struct *const *bindings,
+                                            size_t bindings_num,
+                                            const SDL_KeyboardEvent *event,
+                                            const key_struct *key_states,
+                                            const keybind_event_handler *handler);
+
+extern bool keybind_event_is_modifier(const SDL_KeyboardEvent *event);
+
+extern bool keybind_movement_command_direction(const char *cmd, uint8_t *direction);
+
+extern void keybind_movement_state_init(keybind_movement_state *state);
+
+extern bool keybind_movement_state_has_scancode(const keybind_movement_state *state,
+                                                SDL_Scancode scancode);
+
+extern void keybind_movement_state_set_modifier(keybind_movement_state *state,
+                                                SDL_Scancode scancode,
+                                                SDL_Keymod mod);
+
+extern void keybind_movement_state_defer_move(keybind_movement_state *state);
+
+extern void keybind_movement_state_cancel_deferred_move(keybind_movement_state *state);
+
+/** Separate explicitly ordered movement commands from held-stream replacement. */
+extern void keybind_movement_state_ordered_boundary(keybind_movement_state *state);
+
+extern void keybind_movement_state_mode_pressed(keybind_movement_state *state,
+                                                SDL_Scancode scancode,
+                                                SDL_Keymod mod,
+                                                bool run);
+
+extern bool keybind_movement_state_mode_released(keybind_movement_state *state,
+                                                 SDL_Scancode scancode,
+                                                 bool run);
+
+extern bool keybind_movement_state_mode_owned(const keybind_movement_state *state, bool run);
+
+extern bool keybind_movement_state_mode_release_changes(const keybind_movement_state *state,
+                                                        SDL_Scancode scancode,
+                                                        bool run);
+
+extern void keybind_movement_state_mode_rebind(keybind_movement_state *state,
+                                               SDL_Scancode scancode,
+                                               SDL_Keymod mod,
+                                               bool run);
+
+extern void keybind_movement_state_mode_clear(keybind_movement_state *state, bool run);
+
+extern bool
+keybind_movement_state_scancode_has_invalid_mode_modifier(const keybind_movement_state *state,
+                                                          SDL_Scancode scancode,
+                                                          SDL_Keymod mod);
+
+extern bool keybind_movement_state_mode_modifier_changes(const keybind_movement_state *state,
+                                                         SDL_Keymod mod);
+
+extern void keybind_movement_state_release_invalid_mode_modifiers(keybind_movement_state *state,
+                                                                  SDL_Keymod mod,
+                                                                  bool *run_released,
+                                                                  bool *fire_released);
+
+extern void keybind_movement_state_reconcile_modifiers(keybind_movement_state *state,
+                                                       SDL_Keymod mod,
+                                                       const keybind_movement_rebind *rebinds,
+                                                       size_t rebinds_num,
+                                                       bool force_move,
+                                                       bool defer_move,
+                                                       bool running,
+                                                       bool firing);
+
+extern bool keybind_movement_state_has_invalid_modifier(const keybind_movement_state *state,
+                                                        SDL_Keymod mod);
+
+extern bool keybind_movement_state_press(keybind_movement_state *state,
+                                         SDL_Scancode scancode,
+                                         uint8_t direction,
+                                         bool repeated,
+                                         bool repeat);
+
+extern void keybind_movement_state_release(keybind_movement_state *state,
+                                           SDL_Scancode scancode,
+                                           bool running,
+                                           bool firing);
+
+extern void keybind_movement_state_clear(keybind_movement_state *state, bool running, bool firing);
+
+extern void keybind_movement_state_run_released(keybind_movement_state *state,
+                                                bool run_stream_active);
+
+extern keybind_movement_action
+keybind_movement_state_flush(keybind_movement_state *state, uint8_t *direction, uint32_t *epoch);
+
 extern keybind_struct *keybind_find_by_command(const char *cmd);
 
 extern int keybind_command_matches_event(const char *cmd, SDL_KeyboardEvent *event);
@@ -99,11 +275,17 @@ extern int keybind_command_matches_state(const char *cmd);
 
 extern int keybind_process_event(SDL_KeyboardEvent *event);
 
-extern void keybind_process(keybind_struct *keybind, SDL_EventType type, bool repeated);
+extern void keybind_process(keybind_struct *keybind, const SDL_KeyboardEvent *event);
 
 extern int keybind_process_command_up(const char *cmd);
 
 extern void keybind_state_ensure(void);
+
+extern void keybind_movement_flush(void);
+
+extern void keybind_movement_key_released(const SDL_KeyboardEvent *event);
+
+extern void keybind_movement_focus_lost(void);
 
 extern int keybind_process_command(const char *cmd);
 
