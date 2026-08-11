@@ -22,28 +22,57 @@ static void capture_log(const char *message) {
     snprintf(VS(captured_log), "%s", message);
 }
 
-START_TEST(test_directory_only_candidates_exclude_traversal_entries) {
+static void write_style_map(const char *path) {
+    FILE *fp = fopen(path, "wb");
+    ck_assert_ptr_ne(fp, NULL);
+    ck_assert_int_ne(fputs("arch map\n"
+                           "name child style\n"
+                           "width 1\n"
+                           "height 1\n"
+                           "difficulty 1\n"
+                           "end\n"
+                           "arch door1_locked\n"
+                           "end\n",
+                           fp),
+                     EOF);
+    ck_assert_int_eq(fclose(fp), 0);
+}
+
+START_TEST(test_directory_only_selection_stays_within_child) {
     char directory[] = "/tmp/atrinik-random-map-style-XXXXXX";
     ck_assert_ptr_ne(mkdtemp(directory), NULL);
 
-    char child[MAX_BUF];
-    snprintf(VS(child), "%s/child", directory);
+    char styles_dir[sizeof(directory) + sizeof("/styles")];
+    char child[sizeof(styles_dir) + sizeof("/child")];
+    char style_map_path[sizeof(child) + sizeof("/style_1")];
+    snprintf(VS(styles_dir), "%s/styles", directory);
+    snprintf(VS(child), "%s/child", styles_dir);
+    snprintf(VS(style_map_path), "%s/style_1", child);
+    ck_assert_int_eq(mkdir(styles_dir, 0700), 0);
     ck_assert_int_eq(mkdir(child, 0700), 0);
+    write_style_map(style_map_path);
 
     char **namelist = NULL;
-    int count = load_dir(directory, &namelist, 0);
+    int count = load_dir(styles_dir, &namelist, 0);
     ck_assert_int_eq(count, 1);
     ck_assert_str_eq(namelist[0], "child");
+    free(namelist[0]);
+    free(namelist);
+
+    snprintf(VS(settings.mapspath), "%s", directory);
 
     for (uint64_t seed = 0; seed < 64; seed++) {
         rng_state_t rng;
         rng_seed(&rng, seed);
-        ck_assert_str_eq(namelist[rng_range(&rng, 0, count - 1)], "child");
+        mapstruct *style = find_style("/styles", NULL, 1, &rng);
+        ck_assert_ptr_ne(style, NULL);
+        ck_assert_str_eq(style->path, "/styles/child/style_1");
     }
 
-    free(namelist[0]);
-    free(namelist);
+    free_style_maps();
+    ck_assert_int_eq(unlink(style_map_path), 0);
     ck_assert_int_eq(rmdir(child), 0);
+    ck_assert_int_eq(rmdir(styles_dir), 0);
     ck_assert_int_eq(rmdir(directory), 0);
 }
 END_TEST
@@ -74,7 +103,7 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
-    tcase_add_test(tc_core, test_directory_only_candidates_exclude_traversal_entries);
+    tcase_add_test(tc_core, test_directory_only_selection_stays_within_child);
     tcase_add_test(tc_core, test_missing_style_fails_closed_with_path_diagnostic);
     return s;
 }
