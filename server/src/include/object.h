@@ -245,6 +245,9 @@ struct obj {
     /** The tag of attacker, so we can be sure */
     tag_t attacked_by_count;
 
+    /** Whether this nonliving attack chain originated directly from a player. */
+    bool player_attack_source;
+
     /** Pointer to archetype */
     struct archetype *arch;
 

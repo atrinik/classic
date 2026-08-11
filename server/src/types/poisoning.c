@@ -51,7 +51,7 @@ static void process_func(object *op) {
     }
 
     OBJECTS_DESTROYED_BEGIN(target) {
-        if (!attack_hit(target, op, op->stats.dam)) {
+        if (!attack_hit_situational(target, op, op->stats.dam)) {
             return;
         }
 

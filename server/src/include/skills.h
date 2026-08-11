@@ -144,6 +144,8 @@ extern void link_player_skills(object *pl);
 extern int change_skill(object *who, int sk_index);
 
 extern int skill_attack(object *tmp, object *pl, int dir, char *string);
+/** Skill attack whose target was unaware before required pre-roll aggro. */
+extern int skill_attack_unaware(object *tmp, object *pl, int dir, char *string);
 
 extern int SK_level(object *op);
 
