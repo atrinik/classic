@@ -367,16 +367,43 @@ START_TEST(test_archery_rounding_and_overflow_boundaries) {
     target->direction = 3;
     target->stats.hp = 100000;
     target->stats.maxhp = 100000;
+    target->enemy = pl;
+    target->enemy_count = pl->count;
     arrow = projectile_test_arrow(map, pl, target, 3, SK_BOW_ARCHERY);
     arrow->stats.dam = INT16_MAX;
     arrow->weight = 1001;
+    FREE_AND_COPY_HASH(arrow->slaying, target->race);
     ck_assert_int_eq(object_projectile_hit(arrow, target), OBJECT_METHOD_OK);
+    ck_assert_int_eq(target->stats.hp, 28323);
     ck_assert_int_eq(target->last_damage, INT16_MAX);
-    ck_assert_uint_eq(
-        projectile_test_bonus_messages(
-            pl,
-            "Archery damage bonus: +50% (+16383 base damage) — rear shot, unaware target."),
-        1);
+    ck_assert_int_eq(arrow->stats.dam, INT16_MIN);
+    ck_assert_uint_eq(projectile_test_bonus_messages(
+                          pl,
+                          "Archery damage bonus: +25% (+8191 base damage) — rear shot."),
+                      1);
+
+    target = projectile_test_target(map, pl);
+    target->stats.hp = 100000;
+    target->stats.maxhp = 100000;
+    target->enemy = pl;
+    target->enemy_count = pl->count;
+    projectile_test_skill(pl, SK_WIZARDRY_SPELLS);
+    object *spell = arch_get("lightning");
+    ck_assert_ptr_null(spell->other_arch);
+    spell->x = target->x;
+    spell->y = target->y;
+    spell->stats.dam = INT16_MAX;
+    memset(spell->attack, 0, sizeof(spell->attack));
+    spell->attack[ATNR_ELECTRICITY] = 100;
+    FREE_AND_COPY_HASH(spell->slaying, target->race);
+    SET_FLAG(spell, FLAG_IS_ASSASSINATION);
+    object_owner_set(spell, pl);
+    spell = object_insert_map(spell, map, NULL, INS_NO_MERGE);
+    tag_t spell_count = spell->count;
+    GET_MAP_SPACE_PTR(map, spell->x, spell->y)->flags |= P_NO_PASS;
+    check_fired_arch(spell);
+    ck_assert_int_eq(target->stats.hp, 26274);
+    ck_assert(!OBJECT_VALID(spell, spell_count));
 }
 END_TEST
 

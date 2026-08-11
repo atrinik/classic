@@ -954,7 +954,8 @@ void check_fired_arch(object *op) {
                 return;
             }
 
-            op->stats.dam -= dam;
+            int64_t residual_damage = (int64_t)op->stats.dam - dam;
+            op->stats.dam = (int16_t)MAX(residual_damage, INT16_MIN);
             if (op->stats.dam < 0) {
                 object_remove(op, 0);
                 object_destroy(op);

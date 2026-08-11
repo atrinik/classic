@@ -383,7 +383,8 @@ int common_object_projectile_hit(object *op, object *victim) {
                 return OBJECT_METHOD_ERROR;
             }
 
-            op->stats.dam -= dam;
+            int64_t residual_damage = (int64_t)op->stats.dam - dam;
+            op->stats.dam = (int16_t)MAX(residual_damage, INT16_MIN);
         }
         OBJ_DESTROYED_END();
     }
