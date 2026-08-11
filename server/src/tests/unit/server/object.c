@@ -70,9 +70,10 @@ START_TEST(test_object_can_merge) {
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob2);
     ob2 = arch_get("bolt");
-    FREE_AND_COPY_HASH(ob1->name_pl, "custom bolts");
+    FREE_AND_COPY_HASH(ob1->name_pl, "custom bolts one");
+    FREE_AND_COPY_HASH(ob2->name_pl, "custom bolts two");
     ck_assert(!object_can_merge(ob1, ob2));
-    FREE_AND_COPY_HASH(ob2->name_pl, "custom bolts");
+    FREE_AND_COPY_HASH(ob2->name_pl, "custom bolts one");
     ck_assert(object_can_merge(ob1, ob2));
     FREE_AND_COPY_HASH(ob2->name_pl, "projectiles");
     ck_assert(!object_can_merge(ob1, ob2));
@@ -198,13 +199,15 @@ START_TEST(test_object_plural_name_contract) {
     free(name);
     object_destroy(ob);
 
+    archetype_t *sack = arch_find("sack");
+    ck_assert_ptr_nonnull(sack);
     ob = object_load_str("arch sack\nend\n");
     ck_assert_ptr_nonnull(ob);
-    ck_assert_str_eq(ob->name_pl, "sacks");
+    ck_assert_ptr_eq(ob->name_pl, sack->clone.name_pl);
     ob->nrof = 2;
     sb = object_get_display_name(ob, NULL, NULL);
     name = stringbuffer_finish(sb);
-    ck_assert_str_eq(name, "sacks");
+    ck_assert_str_eq(name, sack->clone.name_pl != NULL ? sack->clone.name_pl : ob->name);
     free(name);
     object_destroy(ob);
 }
