@@ -15,6 +15,9 @@ description: Implement and validate classic C17/CMake code, tests, headers, and 
    sibling modules. Keep coordinated changes in one monorepo branch and PR.
 4. Preserve unrelated work and never edit generated outputs when their source
    input is available.
+5. Apply the root `CONTRIBUTING.md` copyright-header contract to every edited
+   existing Atrinik-authored header; preserve named, mixed, and upstream
+   attribution and update generated headers only at their source.
 
 ## Implement safely
 
