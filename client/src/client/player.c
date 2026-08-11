@@ -82,6 +82,7 @@ void clear_player(void) {
     skills_init();
     spells_init();
     WIDGET_REDRAW_ALL(PLAYER_INFO_ID);
+    WIDGET_REDRAW_ALL(ACTIVE_EFFECTS_ID);
 }
 
 /**

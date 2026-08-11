@@ -142,10 +142,31 @@ static void test_malformed_packets_are_transactional(void) {
     player_status_model_clear(&model);
 }
 
+static void test_reconnect_clears_presented_rows(void) {
+    player_status_model_clear(&player_status_model);
+    packet_struct *packet = make_upsert("disease:old-session", -1);
+    TEST_CHECK(player_status_parse_command(&player_status_model, packet->data, packet->len, 0));
+    packet_free(packet);
+    TEST_CHECK(active_effects_model_count() == 1);
+
+    player_status_model_clear(&player_status_model);
+    TEST_CHECK(active_effects_model_count() == 0);
+    TEST_CHECK(active_effects_model_rows() == NULL);
+
+    packet = make_upsert("effect:new-session", 10);
+    TEST_CHECK(player_status_parse_command(&player_status_model, packet->data, packet->len, 0));
+    packet_free(packet);
+    TEST_CHECK(active_effects_model_count() == 1);
+    TEST_CHECK(active_effects_model_find("disease:old-session") == NULL);
+    TEST_CHECK(active_effects_model_find("effect:new-session") != NULL);
+    player_status_model_clear(&player_status_model);
+}
+
 int main(void) {
     toolkit_import(packet);
     test_snapshot_add_update_remove();
     test_malformed_packets_are_transactional();
+    test_reconnect_clears_presented_rows();
     toolkit_deinit();
     return 0;
 }

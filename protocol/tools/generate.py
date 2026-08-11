@@ -262,10 +262,36 @@ def render_python(schema: dict[str, object]) -> str:
     return "".join(lines)
 
 
+def render_python_init(schema: dict[str, object]) -> str:
+    del schema
+    exports = [
+        "ClientToServerCommand",
+        "ITEM_NAME_SIZE",
+        "PLAYER_STATUS_KEY_SIZE",
+        "PLAYER_STATUS_MAX_STATUSES",
+        "PLAYER_STATUS_NAME_SIZE",
+        "PLAYER_STATUS_TOOLTIP_SIZE",
+        "PROTOCOL_VERSION",
+        "PlayerStatusOperation",
+        "ServerToClientCommand",
+    ]
+    lines = [
+        generated_banner("#"),
+        '"""Generated Python bindings for Atrinik wire protocols."""\n\n',
+        "from .game import (\n",
+    ]
+    lines.extend(f"    {name},\n" for name in exports)
+    lines.extend([")\n\n", "__all__ = [\n"])
+    lines.extend(f'    "{name}",\n' for name in exports)
+    lines.append("]\n")
+    return "".join(lines)
+
+
 def expected_outputs(root: Path, schema: dict[str, object]) -> dict[Path, str]:
     return {
         root / "generated/c/include/atrinik/protocol/game_commands.h": render_header(schema),
         root / "generated/c/include/atrinik/protocol/game_commands.def": render_registry(schema),
+        root / "generated/python/atrinik_protocol/__init__.py": render_python_init(schema),
         root / "generated/python/atrinik_protocol/game.py": render_python(schema),
     }
 

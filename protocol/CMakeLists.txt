@@ -39,6 +39,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(ATRINIK_PROTOCOL_GENERATED_OUTPUTS
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.def"
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/python/atrinik_protocol/__init__.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/python/atrinik_protocol/game.py")
 set(ATRINIK_PROTOCOL_GENERATE_STAMP
     "${CMAKE_CURRENT_BINARY_DIR}/protocol-generate-check.stamp")
