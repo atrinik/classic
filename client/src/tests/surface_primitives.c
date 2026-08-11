@@ -347,7 +347,8 @@ static void assert_map_marker_palette(SDL_Surface *surface) {
 
 static void test_map_marker_transform_contract(void) {
     char path[1024];
-    int length = snprintf(path, sizeof(path), "%s/textures/map_marker.png", ATRINIK_TEST_SOURCE_DIR);
+    int length =
+        snprintf(path, sizeof(path), "%s/textures/map_marker.png", ATRINIK_TEST_SOURCE_DIR);
     TEST_CHECK(length > 0 && (size_t)length < sizeof(path));
 
     SDL_Surface *source = IMG_Load(path);
