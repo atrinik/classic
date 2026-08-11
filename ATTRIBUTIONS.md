@@ -56,7 +56,7 @@ Zoey Rose - GPLv2:
 	loading_on.png
 	lock.png
 	magic.png
-	map_marker.png
+	map_marker.png (bright-gold derivative of the original marker)
 	number.png
 	paralyzed.png
 	player_doll_slot_border.png
