@@ -18,9 +18,12 @@ roof-only cell, and physical depths zero, +1, and +2. Separate smooth and
 discrete manifests freeze both rendering paths; discrete intentionally retains
 the authoritative scalar projection while smooth lighting applies RGB.
 
-The radial-light scene fills a 9-by-9 floor with the server's strongest
-default radial profile. Its smooth and discrete manifests freeze the circular,
-monotonic falloff independently in both client lighting paths.
+The radial-light scene freezes the default profiles for the applied portable
+torch (strength 3) and wall sconce (strength 5) on a 13-by-13 floor. The
+sconce's exposed boundary column receives light while the cells beyond it are
+occluded. Smooth and discrete manifests use identical coordinates, revision
+`atrinik/content@bf460d92ce8e42cb169cdff57c99638df2fd4d95`, camera, zoom,
+assets, and MAP2 samples.
 
 The exit-cue scene marks unobscured and later-occluded base-level objects as
 EXIT-only positive cases; the occluded case also exercises `draw_double`. A

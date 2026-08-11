@@ -7,15 +7,16 @@
              archdef="data/archdef.dat"
              archdef-sha256="977ce63e38f4795545f42bd2f4a9c62bd38fcdb4cfde7cb7fe3c2cd9fe73983e"
              snapshot="src/tests/fixtures/player_view/radial-light.map2.hex"
-             snapshot-sha256="de97326f4ef984a7d6a47d532bd6dbcddbcbcd7d6983f1af8e27d51f3af5d842"
-             viewport-width="320"
-             viewport-height="240"
-             look-width="9"
-             look-height="9"
+             snapshot-sha256="054c801dd3ca4abd0df95771dc32dde2dd8e18fd95ad59ccd7618843b6f2ddaf"
+             viewport-width="480"
+             viewport-height="320"
+             look-width="13"
+             look-height="13"
              map-zoom="100"
              smooth-lighting="false"
              zoom-smoothing="false"
              clock-ms="1200"
-             expected-pixels-sha256="94a19818328d8921c1c15a6cdc18f25f976dbd95aae025af36b0e66b0e8bed8f">
+             expected-pixels-sha256="56c250165266b30e1cafe250d686dffbe8ed8a6dd32b36470fa542c3b3c18882">
   <asset face="1" path="textures/square_highlight.png" sha256="fecfd2da236702bc874c58a767d0d237f5425e423e6699742accb26215c9676b"/>
+  <asset face="2" path="textures/target_attack.png" sha256="6924dbe0a7ed3bd7b71577b0d00c91c70855cba39102c20ba3270452c2d4d806"/>
 </player-view>

@@ -112,6 +112,37 @@ START_TEST(test_legacy_light_falloff_remains_available) {
 }
 END_TEST
 
+START_TEST(test_colored_radial_light_removal_restores_whole_field) {
+    mapstruct *map = get_empty_map(11, 11);
+    int baseline[11 * 11];
+    set_light_falloff("radial");
+    adjust_light_source(map, 5, 5, -3);
+    for (int y = 0; y < MAP_HEIGHT(map); y++) {
+        for (int x = 0; x < MAP_WIDTH(map); x++) {
+            baseline[y * MAP_WIDTH(map) + x] = GET_MAP_SPACE_PTR(map, x, y)->light_source_value;
+        }
+    }
+
+    adjust_light_source_color(map, 5, 5, 3, UINT32_C(0x40a0ff), 1);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(map, 7, 6)->light_source_positive_value, 0);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(map, 7, 6)->light_source_color_weight, 0);
+    adjust_light_source_color(map, 5, 5, 3, UINT32_C(0x40a0ff), -1);
+
+    for (int y = 0; y < MAP_HEIGHT(map); y++) {
+        for (int x = 0; x < MAP_WIDTH(map); x++) {
+            MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
+            ck_assert_int_eq(space->light_source_value, baseline[y * MAP_WIDTH(map) + x]);
+            ck_assert_int_eq(space->light_source_positive_value, 0);
+            ck_assert_int_eq(space->light_source_color[0], 0);
+            ck_assert_int_eq(space->light_source_color[1], 0);
+            ck_assert_int_eq(space->light_source_color[2], 0);
+            ck_assert_int_eq(space->light_source_color_weight, 0);
+        }
+    }
+    adjust_light_source(map, 5, 5, 3);
+}
+END_TEST
+
 START_TEST(test_light_color_parser_is_exact) {
     uint32_t color = 0;
     ck_assert(light_color_parse("12aBcF", &color));
@@ -451,6 +482,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_light_level_interpolation);
     tcase_add_test(tc_core, test_radial_light_profile_is_symmetric_monotonic_and_exact);
     tcase_add_test(tc_core, test_legacy_light_falloff_remains_available);
+    tcase_add_test(tc_core, test_colored_radial_light_removal_restores_whole_field);
     tcase_add_test(tc_core, test_light_color_parser_is_exact);
     tcase_add_test(tc_core, test_colored_lights_add_remove_and_order_are_exact);
     tcase_add_test(tc_core, test_colored_lights_blend_green_yellow_and_capped_same_cell);
