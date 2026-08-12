@@ -96,6 +96,37 @@ gh workflow run package-release.yml --repo atrinik/classic --ref main \
 
 ## Publication flow
 
+### Verified content lock updates
+
+`.github/workflows/update-content.yml` checks for a newer compatible
+`content@1.x` runtime on manual dispatch and contains the reviewed daily
+schedule. Scheduled events remain inert until the repository variable
+`DEPENDENCY_UPDATE_SCHEDULE_ENABLED` is exactly `true`; enable it only after the
+first generated lock pull request, rehearsal, normal release, artifact audit,
+and runtime check all succeed. Its read-only phase runs
+`tools/release/update_content_lock.py`, which evaluates every newer canonical
+semantic release and emits machine-readable old/new evidence only after the
+release tag, checksums, archive, complete manifest, compatibility range,
+consumer contract, license attributions, and commit ancestry all agree. Invalid
+candidates are recorded and skipped; incomplete discovery or an invalid current
+coordinate stops the run.
+
+When a verified update exists, the workflow mints the narrowly installed
+GitHub App credential and creates or refreshes at most one App-owned pull
+request from `automation/content-update`. It refuses an unexpected branch,
+author, changed path, pull request, or concurrent ref change. The App credential
+is operationally limited to that branch/PR step; although GitHub couples tag,
+release, and review APIs to the same repository permission families, this
+workflow contains no approval, merge, tag, release, dispatch, settings, or
+default-branch mutation. Review the evidence and ordinary required checks, then
+merge the lock pull request manually.
+
+After a lock update merges, manually dispatch `Release Rehearsal` on current
+`main`. Do not enable the daily schedule until that rehearsal and the next
+normal Classic release both show the new content
+tag, commit, URL, and digest in `release-manifest.json`, the SPDX relationships,
+and the server image labels, and the released runtime starts successfully.
+
 1. The root Check workflow validates import evidence and every module. Its
    aggregate result is `Classic validation`.
 2. A successful Check run for the current `main` commit triggers Semantic
