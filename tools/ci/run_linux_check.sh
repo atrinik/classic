@@ -138,7 +138,7 @@ case "${component}" in
         client/src/client/main.c \
         client/src/client/player_view.c \
         client/src/include/player_view.h >"${instrumentation_patch}"
-      if ! grep -q -- '--player-view-benchmark' \
+      if ! grep -q -- '--player-view-movement-benchmark' \
         "${baseline_root}/client/src/client/player_view.c"; then
         git -C "${baseline_root}" apply "${instrumentation_patch}"
       fi
