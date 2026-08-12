@@ -665,6 +665,12 @@ if (BUILD_TESTING)
             "${player_view_fixtures}/smooth-player-sublayer-1.xml" -)
     add_test(NAME client-player-view-discrete
         COMMAND atrinik --player-view "${player_view_fixtures}/discrete.xml" -)
+    add_test(NAME client-player-view-radial-light-smooth
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/radial-light-smooth.xml" -)
+    add_test(NAME client-player-view-radial-light-discrete
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/radial-light-discrete.xml" -)
     add_test(NAME client-player-view-exit-cues
         COMMAND atrinik --player-view "${player_view_fixtures}/exit-cues.xml" -)
     add_test(NAME client-player-view-colored-smooth
