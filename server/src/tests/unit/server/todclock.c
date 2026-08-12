@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -73,6 +73,21 @@ START_TEST(test_write_replaces_clockdata_with_complete_value) {
 }
 END_TEST
 
+START_TEST(test_set_persists_clockdata) {
+    char filename[HUGE_BUF];
+    snprintf(VS(filename), "%s/clockdata", settings.datapath);
+
+    todtick = 17;
+    ck_assert(todclock_set(23));
+    ck_assert_uint_eq(todtick, 23);
+
+    char *contents = path_file_contents(filename);
+    ck_assert_ptr_nonnull(contents);
+    ck_assert_str_eq(contents, "23");
+    free(contents);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("todclock");
     TCase *tc_parse = tcase_create("Parse");
@@ -84,6 +99,7 @@ static Suite *suite(void) {
     TCase *tc_persistence = tcase_create("Persistence");
     tcase_add_unchecked_fixture(tc_persistence, check_setup, check_teardown);
     tcase_add_test(tc_persistence, test_write_replaces_clockdata_with_complete_value);
+    tcase_add_test(tc_persistence, test_set_persists_clockdata);
     suite_add_tcase(s, tc_persistence);
     return s;
 }

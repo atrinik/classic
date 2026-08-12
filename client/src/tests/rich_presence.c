@@ -204,6 +204,75 @@ static void test_policy(void) {
     rich_presence_controller_tick(&controller, &input, &backend);
     require(captured.clears == 1U);
     require(captured.publishes == 1U);
+
+    /* Character disclosure is opt-in, session-local, and includes level
+     * changes without changing the elapsed-play timestamp. */
+    memset(&captured, 0, sizeof(captured));
+    rich_presence_controller_init(&controller);
+    input.privacy = RICH_PRESENCE_SERVER_ZONE_CHARACTER;
+    input.server = "Public Realm";
+    input.zone = "Crystal Caverns";
+    input.character = "  Éowyn\t  ";
+    input.level = 12U;
+    input.character_available = true;
+    input.playing = true;
+    input.public_server = true;
+    input.now_ms = 80000;
+    input.now_unix = 8000;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    require(captured.publishes == 1U);
+    require(strcmp(captured.activity.details, "Éowyn - Level 12") == 0);
+    require(strcmp(captured.activity.state, "On Public Realm / Crystal Caverns") == 0);
+    require(captured.activity.started_at == 8000U);
+    input.privacy = RICH_PRESENCE_SERVER_ZONE;
+    input.now_ms = 84100;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    require(captured.publishes == 1U);
+    require(strstr(captured.activity.state, "Public Realm") != NULL);
+
+    input.now_ms = 88200;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    require(captured.publishes == 2U);
+    require(strstr(captured.activity.details, "Éowyn") == NULL);
+
+    input.privacy = RICH_PRESENCE_SERVER_ZONE_CHARACTER;
+    input.level = 13U;
+    input.now_ms = 92300;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    require(captured.publishes == 3U);
+    require(strcmp(captured.activity.details, "Éowyn - Level 13") == 0);
+    require(captured.activity.started_at == 8000U);
+    input.character_available = false;
+    input.now_ms = 104600;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    require(captured.publishes == 4U);
+    require(strstr(captured.activity.details, "Éowyn") == NULL);
+
+    input.character = "AccountName";
+    input.level = 99U;
+    input.character_available = true;
+    input.public_server = false;
+    input.server = "192.0.2.1:13327";
+    input.now_ms = 108700;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    require(captured.publishes == 5U);
+    require(strcmp(captured.activity.state, "On Private server / Crystal Caverns") == 0);
+    require(strstr(captured.activity.state, "192.0.2.1") == NULL);
+
+    /* A reconnect starts a fresh elapsed session and cannot retain the prior
+     * character payload. */
+    rich_presence_controller_begin_session(&controller, &backend, 109000);
+    input.character = "New Character";
+    input.level = 2U;
+    input.character_available = true;
+    input.public_server = true;
+    input.server = "New Realm";
+    input.playing = true;
+    input.now_ms = 113100;
+    input.now_unix = 9000;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    require(strcmp(captured.activity.details, "New Character - Level 2") == 0);
+    require(captured.activity.started_at == 9000U);
 }
 
 typedef struct fake_io {

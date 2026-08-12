@@ -9,6 +9,11 @@ The game and metaserver protocols are separate contract families. This package
 currently publishes only the classic game command registry. Add another family
 only with its own namespace, specification, version, fixtures, and validation.
 
+Protocol v1078 atomically replaces MAP2 scalar-byte and RGB888 lighting with
+network-order Q5.11 scalar and RGB radiance words. The shared bounded preflight
+validates the complete packet before client cache mutation; the v1077 lighting
+layout is not retained as a compatibility path.
+
 Protocol v1077 adds the server-authoritative `MAP2_FLAG2_EXIT` semantic for
 visible type-66 map objects. Clients use it only for the main-map depth-zero
 post-world cue; it does not disclose boundary-only, hidden, or unexplored

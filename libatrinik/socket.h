@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -90,6 +90,16 @@ typedef enum socket_role {
 #define MAP2_PROTOCOL_SUB_LAYERS 7
 /** Total number of addressable real layers in one MAP cell. */
 #define MAP2_PROTOCOL_REAL_LAYERS (MAP2_PROTOCOL_OBJECT_LAYERS * MAP2_PROTOCOL_SUB_LAYERS)
+/** Maximum continuation packets declared by one complete MAP update. */
+#define MAP2_PROTOCOL_CONTINUATIONS_MAX 4096
+/** Maximum byte length of a visible object's MAP display name. */
+#define MAP2_PROTOCOL_NAME_MAX 63
+/** Maximum byte length of a MAP color or glow notation. */
+#define MAP2_PROTOCOL_COLOR_MAX 6
+/** Maximum byte length of a MAP name, music identifier, or path. */
+#define MAP2_PROTOCOL_METADATA_LONG_MAX 4095
+/** Maximum byte length of MAP weather or region metadata. */
+#define MAP2_PROTOCOL_METADATA_SHORT_MAX 255
 
 /**
  * @defgroup CMD_TARGET_xxx Target command types
@@ -407,8 +417,8 @@ typedef struct socket_face_batch_response {
  *@{*/
 /** An animation. */
 #define MAP2_FLAG_EXT_ANIM 1
-/** Complete per-tile set of explicitly colored sub-layer samples follows. */
-#define MAP2_FLAG_EXT_LIGHT_RGB 2
+/** Complete per-tile set of explicitly colored Q5.11 RGB radiance follows. */
+#define MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16 2
 /*@}*/
 
 /**

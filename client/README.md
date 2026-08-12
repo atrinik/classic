@@ -73,16 +73,20 @@
  - `Game only` shares only `Playing Atrinik Classic` and elapsed play time.
  - `Server` additionally shares `On <friendly server>`.
  - `Server and zone` additionally shares `Exploring <friendly zone>`.
+ - `Server, zone and character` additionally shares `<character name> - Level
+   <level>` and combines the friendly server and zone in the other field.
 
  Activity exists only while a character is in the playing state. It is cleared
  on logout, disconnect, opt-out/privacy reduction, and clean shutdown. Direct,
  manual, and command-line servers are always shown as `Private server`; only a
  public-directory display name may be shared. Zone text uses the friendly map
  display name and then friendly region name. Markup, controls, invalid UTF-8,
- whitespace, and length are normalized before any update. Account and character
- names, host/IP, port, server ID, certificate fingerprint, internal map path,
+ whitespace, and length are normalized before any update. Account names,
+ host/IP, port, server ID, certificate fingerprint, internal map path,
  coordinates, connection data, invites, passwords, party data, OAuth material,
- and Discord secrets are never included. This feature has no join, spectate,
+ and Discord secrets are never included. The active character name and level
+ are shared only by the highest tier while playing; they are normalized and
+ bounded like all other presence text. This feature has no join, spectate,
  deep-link, account-linking, or Discord authentication capability.
 
  Discord must be running locally. If it is absent, starts later, restarts,
@@ -246,6 +250,17 @@
  drift fail before publishing an output. The maintained fixtures cover normal
  and stretched terrain, multipart and animated sprites, fog/cutaway behavior,
  lighting modes, and physical depths zero, +1, and +2.
+
+ Release builds also expose the bounded lighting benchmark used by CI:
+  $ build/linux-release/atrinik --player-view-benchmark \
+      src/tests/fixtures/player_view/colored-smooth.xml standard
+
+ The final argument is `standard` for the manifest's frozen viewport or
+ `large` for 1920x1080. The harness warms five frames, measures 101 live
+ `map_draw_map` calls, and emits one tab-separated median record. CI applies
+ the same harness to the pull request base and candidate on one runner, records
+ the raw samples as an artifact, and enforces the 10% standard and 15% large
+ viewport regression budgets.
 
 =================================================
 = 3.1. Licensing (Atrinik client)               =

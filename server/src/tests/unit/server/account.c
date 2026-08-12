@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -111,6 +111,7 @@ START_TEST(test_account_provision_password_file_permissions) {
                                            password_path,
                                            character_name,
                                            "human_male",
+                                           "basic-player",
                                            VS(error)));
     ck_assert_ptr_nonnull(strstr(error, "mode 0600"));
     ck_assert_int_eq(chmod(password_path, SAVE_MODE), 0);
@@ -119,6 +120,7 @@ START_TEST(test_account_provision_password_file_permissions) {
                                            password_path,
                                            character_name,
                                            "human_male",
+                                           "basic-player",
                                            VS(error)));
     ck_assert_ptr_nonnull(strstr(error, "exactly one line"));
 
@@ -132,6 +134,7 @@ START_TEST(test_account_provision_password_file_permissions) {
                                           password_path,
                                           character_name,
                                           "human_male",
+                                          "basic-player",
                                           VS(error)));
 
     ck_assert_int_eq(unlink(account_path), 0);
@@ -139,6 +142,113 @@ START_TEST(test_account_provision_password_file_permissions) {
     ck_assert_int_eq(unlink(password_path), 0);
     free(account_path);
     free(player_path);
+}
+END_TEST
+
+START_TEST(test_account_provision_lighting_preset) {
+    const char *account_name = "ScenarioLighting";
+    const char *account_name_canonical = "scenariolighting";
+    const char *character_name = "scenario lighting";
+    const char *character_name_canonical = "Scenario Lighting";
+    char error[HUGE_BUF];
+    char password_path[HUGE_BUF];
+    snprintf(VS(password_path), "%s/scenario-lighting-password", settings.datapath);
+    char *account_path = account_make_path(account_name_canonical);
+    char *player_path = player_make_path(character_name_canonical, "player.dat");
+
+    unlink(account_path);
+    unlink(player_path);
+    unlink(password_path);
+    int fd = open(password_path, O_WRONLY | O_CREAT | O_EXCL, SAVE_MODE);
+    ck_assert_int_ge(fd, 0);
+    const char password[] = "local-light-9!\n";
+    ck_assert_int_eq(write(fd, password, sizeof(password) - 1), sizeof(password) - 1);
+    ck_assert_int_eq(close(fd), 0);
+
+    ck_assert(!account_provision_from_file(account_name,
+                                           password_path,
+                                           character_name,
+                                           "human_male",
+                                           "not-a-preset",
+                                           VS(error)));
+    ck_assert_ptr_nonnull(strstr(error, "unknown scenario preset"));
+    ck_assert(account_provision_from_file(account_name,
+                                          password_path,
+                                          character_name,
+                                          "human_male",
+                                          "lighting-radiance-inside",
+                                          VS(error)));
+    ck_assert_uint_eq(todtick, 23);
+
+    FILE *fp = fopen(player_path, "rb");
+    ck_assert_ptr_nonnull(fp);
+    char contents[HUGE_BUF * 4];
+    size_t length = fread(contents, 1, sizeof(contents) - 1, fp);
+    ck_assert(!ferror(fp));
+    contents[length] = '\0';
+    fclose(fp);
+    ck_assert_ptr_nonnull(
+        strstr(contents,
+               "map /shattered_islands/strakewood_island/greyton/house/luxury_house_0_0"));
+    ck_assert_ptr_nonnull(strstr(contents, "bed_x 8\nbed_y 19\n"));
+    ck_assert_ptr_nonnull(strstr(contents, "arch human_male"));
+    ck_assert_ptr_nonnull(strstr(contents, "x 8\ny 19\n"));
+    ck_assert_ptr_nonnull(strstr(contents, "arch mithril_lamp"));
+
+    ck_assert_int_eq(unlink(account_path), 0);
+    ck_assert_int_eq(unlink(player_path), 0);
+    ck_assert_int_eq(unlink(password_path), 0);
+    free(account_path);
+    free(player_path);
+}
+END_TEST
+
+START_TEST(test_account_provision_lighting_preset_rolls_back) {
+    const char *account_name = "ScenarioRollback";
+    const char *account_name_canonical = "scenariorollback";
+    const char *character_name = "scenario rollback";
+    const char *character_name_canonical = "Scenario Rollback";
+    char error[HUGE_BUF];
+    char password_path[HUGE_BUF];
+    char clock_path[HUGE_BUF];
+    snprintf(VS(password_path), "%s/scenario-rollback-password", settings.datapath);
+    snprintf(VS(clock_path), "%s/clockdata", settings.datapath);
+    char *account_path = account_make_path(account_name_canonical);
+    char *player_path = player_make_path(character_name_canonical, "player.dat");
+    char *metrics_path = player_make_path(character_name_canonical, "metrics.dat");
+
+    unlink(account_path);
+    unlink(player_path);
+    unlink(metrics_path);
+    unlink(password_path);
+    unlink(clock_path);
+    ck_assert_int_eq(mkdir(clock_path, 0700), 0);
+    int fd = open(password_path, O_WRONLY | O_CREAT | O_EXCL, SAVE_MODE);
+    ck_assert_int_ge(fd, 0);
+    const char password[] = "local-rollback-9!\n";
+    ck_assert_int_eq(write(fd, password, sizeof(password) - 1), sizeof(password) - 1);
+    ck_assert_int_eq(close(fd), 0);
+
+    ck_assert(!account_provision_from_file(account_name,
+                                           password_path,
+                                           character_name,
+                                           "human_male",
+                                           "lighting-radiance-inside",
+                                           VS(error)));
+    ck_assert_ptr_nonnull(strstr(error, "world clock"));
+    struct stat statbuf;
+    ck_assert_int_eq(stat(account_path, &statbuf), -1);
+    ck_assert_int_eq(errno, ENOENT);
+    ck_assert_int_eq(stat(player_path, &statbuf), -1);
+    ck_assert_int_eq(errno, ENOENT);
+    ck_assert_int_eq(stat(metrics_path, &statbuf), -1);
+    ck_assert_int_eq(errno, ENOENT);
+
+    ck_assert_int_eq(rmdir(clock_path), 0);
+    ck_assert_int_eq(unlink(password_path), 0);
+    free(account_path);
+    free(player_path);
+    free(metrics_path);
 }
 END_TEST
 
@@ -152,6 +262,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_account_provision);
     tcase_add_test(tc_core, test_account_provision_rejects_invalid_inputs);
     tcase_add_test(tc_core, test_account_provision_password_file_permissions);
+    tcase_add_test(tc_core, test_account_provision_lighting_preset);
+    tcase_add_test(tc_core, test_account_provision_lighting_preset_rolls_back);
     return s;
 }
 

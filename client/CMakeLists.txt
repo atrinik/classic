@@ -221,8 +221,8 @@ endif ()
 file(STRINGS
     "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
     ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
-if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1077U$")
-    message(FATAL_ERROR "Client requires classic game protocol v1077")
+if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1078U$")
+    message(FATAL_ERROR "Client requires classic game protocol v1078")
 endif ()
 if (NOT TARGET Atrinik::Core)
     set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
@@ -321,6 +321,19 @@ if (MINGW)
 endif ()
 
 if (BUILD_TESTING)
+    find_program(ATRINIK_PYTHON3_EXECUTABLE python3 REQUIRED)
+    add_test(NAME client-lighting-lut-generated
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_lighting_lut.py" --check)
+
+    add_executable(client-lighting-transfer-tests
+        src/tests/lighting_transfer.c
+        src/client/lighting_transfer.c)
+    atrinik_configure_target(client-lighting-transfer-tests)
+    target_include_directories(client-lighting-transfer-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    add_test(NAME client-lighting-transfer COMMAND client-lighting-transfer-tests)
+
     add_executable(client-rich-presence-tests
         src/tests/rich_presence.c
         src/client/discord_rpc.c
@@ -417,9 +430,11 @@ if (BUILD_TESTING)
         src/tests/keybind_input.c
         src/client/keybind_event.c
         src/client/keybind_input.c
-        src/client/keybind_storage.c)
+        src/client/keybind_storage.c
+        src/client/upgrader.c)
     atrinik_configure_target(client-keybind-input-tests)
     target_compile_definitions(client-keybind-input-tests PRIVATE
+        ATRINIK_TEST_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}"
         ATRINIK_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
         SDL_DISABLE_OLD_NAMES)
     target_include_directories(client-keybind-input-tests BEFORE PRIVATE
@@ -634,6 +649,19 @@ if (BUILD_TESTING)
     target_link_libraries(client-map-light-state-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-map-light-state COMMAND client-map-light-state-tests)
 
+    add_executable(client-playerdoll-equipment-tests
+        src/tests/playerdoll_equipment.c
+        src/gui/widgets/playerdoll_equipment.c)
+    atrinik_configure_target(client-playerdoll-equipment-tests)
+    target_compile_definitions(client-playerdoll-equipment-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-playerdoll-equipment-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-playerdoll-equipment-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-playerdoll-equipment COMMAND client-playerdoll-equipment-tests)
+
     add_test(NAME client-widget-priority-integration
         COMMAND atrinik --widget-priority-test
             "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/widget-priority-interface.cfg"
@@ -650,6 +678,12 @@ if (BUILD_TESTING)
             "${player_view_fixtures}/smooth-player-sublayer-1.xml" -)
     add_test(NAME client-player-view-discrete
         COMMAND atrinik --player-view "${player_view_fixtures}/discrete.xml" -)
+    add_test(NAME client-player-view-radial-light-smooth
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/radial-light-smooth.xml" -)
+    add_test(NAME client-player-view-radial-light-discrete
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/radial-light-discrete.xml" -)
     add_test(NAME client-player-view-exit-cues
         COMMAND atrinik --player-view "${player_view_fixtures}/exit-cues.xml" -)
     add_test(NAME client-player-view-player-outline-unobscured
@@ -674,6 +708,10 @@ if (BUILD_TESTING)
         COMMAND atrinik --player-view "${player_view_fixtures}/colored-smooth.xml" -)
     add_test(NAME client-player-view-colored-discrete
         COMMAND atrinik --player-view "${player_view_fixtures}/colored-discrete.xml" -)
+    add_test(NAME client-player-view-high-key-smooth
+        COMMAND atrinik --player-view "${player_view_fixtures}/high-key-smooth.xml" -)
+    add_test(NAME client-player-view-high-key-discrete
+        COMMAND atrinik --player-view "${player_view_fixtures}/high-key-discrete.xml" -)
     add_test(NAME client-player-view-output
         COMMAND ${CMAKE_COMMAND}
             "-DATRINIK_CLIENT=$<TARGET_FILE:atrinik>"

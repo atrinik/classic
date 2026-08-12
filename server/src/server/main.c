@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -227,6 +227,19 @@ void process_events(void) {
 
         if (op->speed_left <= 0) {
             op->speed_left += FABS(op->speed);
+
+            /* Player hard controls are expressed as an integral number of
+             * speed-credit ticks. Snap roundoff back to that grid on every
+             * tick so it cannot accumulate and extend long controls. */
+            if (op->type == PLAYER) {
+                double speed_ticks = op->speed_left / FABS(op->speed);
+                double integral_ticks = round(speed_ticks);
+                double tolerance = fmax(1.0, fabs(speed_ticks)) * DBL_EPSILON * 8.0;
+
+                if (fabs(speed_ticks - integral_ticks) <= tolerance) {
+                    op->speed_left = integral_ticks * FABS(op->speed);
+                }
+            }
         }
 
         if (op->type == PLAYER && op->speed_left > op->speed) {
@@ -598,11 +611,13 @@ int server_run(int argc, char **argv) {
 
     if (settings.provision_scenario) {
         char error[HUGE_BUF];
-        bool ok = account_provision_from_file(settings.provision_account,
-                                              settings.provision_password_file,
-                                              settings.provision_character,
-                                              settings.provision_archetype,
-                                              VS(error));
+        bool ok = account_provision_from_file(
+            settings.provision_account,
+            settings.provision_password_file,
+            settings.provision_character,
+            settings.provision_archetype,
+            settings.provision_preset[0] != '\0' ? settings.provision_preset : "basic-player",
+            VS(error));
         if (ok) {
             LOG(INFO,
                 "Provisioned local scenario account %s with character %s.",

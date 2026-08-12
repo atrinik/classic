@@ -236,7 +236,8 @@ jobs:
                 -DATRINIK_PROTOCOL_SOURCE_DIR=/workspace/protocol
               cmake --build libatrinik/build/windows-tests \
                 --target libatrinik-path libatrinik-rendezvous libatrinik-metaserver-publisher \
-                  libatrinik-metaserver-url libatrinik-socket-address libatrinik-stun \
+                  libatrinik-metaserver-url libatrinik-socket-address libatrinik-socket-quic \
+                  libatrinik-stun \
                 --parallel "$(nproc)"
               cd client
               bash tools/build-windows-package.sh build/windows-pr-package
@@ -283,6 +284,7 @@ jobs:
                 libatrinik/build/windows-tests/libatrinik-metaserver-publisher.exe \
                 libatrinik/build/windows-tests/libatrinik-metaserver-url.exe \
                 libatrinik/build/windows-tests/libatrinik-socket-address.exe \
+                libatrinik/build/windows-tests/libatrinik-socket-quic.exe \
                 libatrinik/build/windows-tests/libatrinik-stun.exe \
                 client/build/windows-release/client-rich-presence-tests.exe
               cmake -E copy_directory libatrinik/tests/fixtures "${stage}/fixtures"
@@ -399,6 +401,11 @@ jobs:
             throw "libatrinik-socket-address.exe failed with exit code ${LASTEXITCODE}"
           }
 
+          & (Join-Path $bundle "libatrinik-socket-quic.exe")
+          if ($LASTEXITCODE -ne 0) {
+            throw "libatrinik-socket-quic.exe failed with exit code ${LASTEXITCODE}"
+          }
+
           & (Join-Path $bundle "libatrinik-stun.exe")
           if ($LASTEXITCODE -ne 0) {
             throw "libatrinik-stun.exe failed with exit code ${LASTEXITCODE}"
@@ -499,6 +506,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - id: linux-cache
         name: Resolve isolated client compiler cache key
@@ -516,6 +524,7 @@ jobs:
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/check.yml \
             --material tools/ci/run_linux_check.sh \
+            --material client/tools/benchmark_lighting_regression.py \
             --material client/CMakeLists.txt \
             --material client/CMakePresets.json \
             --github-output "${GITHUB_OUTPUT}"
@@ -537,6 +546,7 @@ jobs:
             --env CCACHE_DIR=/cache/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env HOME=/tmp/classic-home \
+            --env ATRINIK_LIGHTING_BASE_SHA="${{ github.event.pull_request.base.sha }}" \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --volume "${RUNNER_TEMP}/classic-ccache/client:/cache/ccache" \
             --workdir /workspace \
@@ -544,8 +554,10 @@ jobs:
             tools/ci/run_linux_check.sh client /workspace
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: linux-client-ccache-${{ github.run_attempt }}
-          path: build/ci-evidence/ccache-client.tsv
+          name: linux-client-evidence-${{ github.run_attempt }}
+          path: |
+            build/ci-evidence/ccache-client.tsv
+            build/ci-evidence/lighting-frame-time.json
           if-no-files-found: error
           retention-days: 14
       - name: Upload coverage

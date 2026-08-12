@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -14,7 +14,7 @@
 #ifndef PLAYER_VIEW_H
 #define PLAYER_VIEW_H
 
-/** Run `atrinik --player-view MANIFEST OUTPUT`. */
+/** Run a deterministic player-view render or lighting benchmark. */
 extern int player_view_main(int argc, char *argv[]);
 
 #endif

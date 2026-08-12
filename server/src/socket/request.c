@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -841,27 +841,44 @@ static const char *get_living_level_color(const object *pl, const object *op) {
     return COLOR_YELLOW;
 }
 
+/** Write a MAP string without exceeding its decoder-owned byte limit. */
+static void
+packet_writer_write_map_string(packet_struct *packet, const char *value, size_t max_len) {
+    size_t len = MIN(strlen(value), max_len);
+    packet_writer_write_string_n(packet, value, len);
+    packet_writer_write_uint8(packet, 0);
+}
+
 void packet_writer_write_map_name(struct packet_struct *packet, object *op, object *map_info) {
+    static const char prefix[] = "[b][o=#000000]";
+    static const char suffix[] = "[/o][/b]";
+    const char *name = map_info && map_info->race ? map_info->race : op->map->name;
+
     packet_debug_data(packet, 0, "Map name");
-    packet_writer_write_string(packet, "[b][o=#000000]");
-    packet_writer_write_string(packet, map_info && map_info->race ? map_info->race : op->map->name);
-    packet_writer_write_cstring(packet, "[/o][/b]");
+    packet_writer_write_string(packet, prefix);
+    packet_writer_write_string_n(
+        packet,
+        name,
+        MIN(strlen(name), MAP2_PROTOCOL_METADATA_LONG_MAX - strlen(prefix) - strlen(suffix)));
+    packet_writer_write_cstring(packet, suffix);
 }
 
 void packet_writer_write_map_music(struct packet_struct *packet, object *op, object *map_info) {
     packet_debug_data(packet, 0, "Map music");
-    packet_writer_write_cstring(packet,
-                                map_info && map_info->slaying
-                                    ? map_info->slaying
-                                    : (op->map->bg_music ? op->map->bg_music : "no_music"));
+    packet_writer_write_map_string(packet,
+                                   map_info && map_info->slaying
+                                       ? map_info->slaying
+                                       : (op->map->bg_music ? op->map->bg_music : "no_music"),
+                                   MAP2_PROTOCOL_METADATA_LONG_MAX);
 }
 
 void packet_writer_write_map_weather(struct packet_struct *packet, object *op, object *map_info) {
     packet_debug_data(packet, 0, "Map weather");
-    packet_writer_write_cstring(packet,
-                                map_info && map_info->title
-                                    ? map_info->title
-                                    : (op->map->weather ? op->map->weather : "none"));
+    packet_writer_write_map_string(packet,
+                                   map_info && map_info->title
+                                       ? map_info->title
+                                       : (op->map->weather ? op->map->weather : "none"),
+                                   MAP2_PROTOCOL_METADATA_SHORT_MAX);
 }
 
 /**
@@ -1278,8 +1295,8 @@ void draw_client_map2(object *pl) {
     int special_vision;
     uint16_t mask;
     int layer, raw_light[NUM_SUB_LAYERS], light_set[NUM_SUB_LAYERS];
-    uint8_t light_level[NUM_SUB_LAYERS];
-    uint8_t light_rgb[NUM_SUB_LAYERS][3];
+    uint16_t light_radiance[NUM_SUB_LAYERS];
+    uint16_t light_rgb_radiance[NUM_SUB_LAYERS][3];
     int ext_flags, anim_num;
     int num_layers;
     object *tmp, *tmp2;
@@ -1375,11 +1392,15 @@ void draw_client_map2(object *pl) {
             packet_debug_data(packet, 0, "Display region map");
             packet_writer_write_uint8(packet, has_map);
             packet_debug_data(packet, 0, "Region name");
-            packet_writer_write_cstring(packet, region != NULL ? region->name : "");
+            packet_writer_write_map_string(packet,
+                                           region != NULL ? region->name : "",
+                                           MAP2_PROTOCOL_METADATA_SHORT_MAX);
             packet_debug_data(packet, 0, "Region long name");
-            packet_writer_write_cstring(packet, region != NULL ? region_get_longname(region) : "");
+            packet_writer_write_map_string(packet,
+                                           region != NULL ? region_get_longname(region) : "",
+                                           MAP2_PROTOCOL_METADATA_SHORT_MAX);
             packet_debug_data(packet, 0, "Map path");
-            packet_writer_write_cstring(packet, pl->map->path);
+            packet_writer_write_map_string(packet, pl->map->path, MAP2_PROTOCOL_METADATA_LONG_MAX);
         }
 
         if (CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED) {
@@ -1600,8 +1621,8 @@ void draw_client_map2(object *pl) {
 
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                     light_set[sub_layer] = 0;
-                    light_level[sub_layer] = 0;
-                    memset(light_rgb[sub_layer], 0, sizeof(light_rgb[sub_layer]));
+                    light_radiance[sub_layer] = 0;
+                    memset(light_rgb_radiance[sub_layer], 0, sizeof(light_rgb_radiance[sub_layer]));
                 }
 
                 /* Initialize default values for some variables. */
@@ -1705,10 +1726,10 @@ void draw_client_map2(object *pl) {
                                 }
                             }
 
-                            light_level[sub_layer] = light_level_from_raw(raw_light[sub_layer]);
-                            light_levels_from_raw(GET_MAP_SPACE_PTR(tmp->map, tmp->x, tmp->y),
-                                                  raw_light[sub_layer],
-                                                  light_rgb[sub_layer]);
+                            light_radiance_from_raw(GET_MAP_SPACE_PTR(tmp->map, tmp->x, tmp->y),
+                                                    raw_light[sub_layer],
+                                                    &light_radiance[sub_layer],
+                                                    light_rgb_radiance[sub_layer]);
                         }
 
                         if (tmp != NULL && raw_light[sub_layer] <= 0) {
@@ -1865,7 +1886,9 @@ void draw_client_map2(object *pl) {
                                 is_exit = 1;
                             }
 
-                            if (head->glow != NULL && CONTR(pl)->cs->socket_version >= 1060) {
+                            if (head->glow != NULL &&
+                                strlen(head->glow) <= MAP2_PROTOCOL_COLOR_MAX &&
+                                CONTR(pl)->cs->socket_version >= 1060) {
                                 flags2 |= MAP2_FLAG2_GLOW;
                             }
 
@@ -2016,9 +2039,13 @@ void draw_client_map2(object *pl) {
                                 }
 
                                 packet_debug_data(packet_layer, 2, "Living object name");
-                                packet_writer_write_cstring(packet_layer, name);
+                                packet_writer_write_map_string(packet_layer,
+                                                               name,
+                                                               MAP2_PROTOCOL_NAME_MAX);
                                 packet_debug_data(packet_layer, 2, "Living object name color");
-                                packet_writer_write_cstring(packet_layer, name_color);
+                                packet_writer_write_map_string(packet_layer,
+                                                               name_color,
+                                                               MAP2_PROTOCOL_COLOR_MAX);
                                 free(living_name);
                             }
 
@@ -2091,7 +2118,9 @@ void draw_client_map2(object *pl) {
                                 /* Target's HP bar. */
                                 if (flags2 & MAP2_FLAG2_GLOW) {
                                     packet_debug_data(packet_layer, 3, "Glow color");
-                                    packet_writer_write_cstring(packet_layer, head->glow);
+                                    packet_writer_write_map_string(packet_layer,
+                                                                   head->glow,
+                                                                   MAP2_PROTOCOL_COLOR_MAX);
                                     packet_debug_data(packet_layer, 3, "Glow speed");
                                     packet_writer_write_uint8(packet_layer, head->glow_speed);
                                 }
@@ -2126,10 +2155,10 @@ void draw_client_map2(object *pl) {
                  * light field independently of whether a dark tile had a drawable
                  * object, and send every visible sub-layer at least once. */
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                    uint8_t resolved_light = light_set[sub_layer] ? light_level[sub_layer] : 0;
+                    uint16_t resolved_light = light_set[sub_layer] ? light_radiance[sub_layer] : 0;
 
                     if (!mp->light_known[sub_layer] ||
-                        resolved_light != mp->light_level[sub_layer]) {
+                        resolved_light != mp->light_radiance[sub_layer]) {
                         if (sub_layer == 0) {
                             mask |= MAP2_MASK_LIGHT_LEVEL;
                         } else {
@@ -2141,10 +2170,10 @@ void draw_client_map2(object *pl) {
                 uint8_t light_rgb_bitmap = 0;
                 bool light_rgb_changed = false;
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                    uint8_t resolved_light = light_set[sub_layer] ? light_level[sub_layer] : 0;
-                    uint8_t resolved_rgb[3] = {resolved_light, resolved_light, resolved_light};
+                    uint16_t resolved_light = light_set[sub_layer] ? light_radiance[sub_layer] : 0;
+                    uint16_t resolved_rgb[3] = {resolved_light, resolved_light, resolved_light};
                     if (light_set[sub_layer]) {
-                        memcpy(resolved_rgb, light_rgb[sub_layer], sizeof(resolved_rgb));
+                        memcpy(resolved_rgb, light_rgb_radiance[sub_layer], sizeof(resolved_rgb));
                     }
 
                     if (resolved_rgb[0] != resolved_light || resolved_rgb[1] != resolved_light ||
@@ -2155,10 +2184,13 @@ void draw_client_map2(object *pl) {
                     if ((!mp->light_rgb_known[sub_layer] &&
                          (light_rgb_bitmap & (UINT8_C(1) << sub_layer))) ||
                         (mp->light_rgb_known[sub_layer] &&
-                         memcmp(mp->light_rgb[sub_layer], resolved_rgb, sizeof(resolved_rgb)) !=
+                         memcmp(mp->light_rgb_radiance[sub_layer], resolved_rgb, sizeof(resolved_rgb)) !=
                              0)) {
                         light_rgb_changed = true;
                     }
+                }
+                if (light_rgb_bitmap != mp->light_rgb_explicit) {
+                    light_rgb_changed = true;
                 }
 
                 /* Add the mask. Any mask changes should go above this line. */
@@ -2182,20 +2214,24 @@ void draw_client_map2(object *pl) {
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                     if ((sub_layer == 0 && !(mask & MAP2_MASK_LIGHT_LEVEL)) ||
                         (sub_layer != 0 && !(mask & MAP2_MASK_LIGHT_LEVEL_MORE))) {
-                        if (!light_set[sub_layer] && mp->light_level[sub_layer] != 0) {
-                            mp->light_level[sub_layer] = 0;
+                        if (!light_set[sub_layer] && mp->light_radiance[sub_layer] != 0) {
+                            mp->light_radiance[sub_layer] = 0;
                         }
 
                         continue;
                     }
 
-                    packet_debug_data(packet, 1, "Light level (sub-layer: %d)", sub_layer);
-                    mp->light_level[sub_layer] = light_set[sub_layer] ? light_level[sub_layer] : 0;
+                    packet_debug_data(packet, 1, "Q5.11 scalar radiance (sub-layer: %d)", sub_layer);
+                    mp->light_radiance[sub_layer] =
+                        light_set[sub_layer] ? light_radiance[sub_layer] : 0;
                     mp->light_known[sub_layer] = 1;
-                    packet_writer_write_uint8(packet, mp->light_level[sub_layer]);
+                    packet_writer_write_uint16(packet, mp->light_radiance[sub_layer]);
 
                     if (!(light_rgb_bitmap & (UINT8_C(1) << sub_layer))) {
-                        memset(mp->light_rgb[sub_layer], mp->light_level[sub_layer], 3);
+                        for (size_t channel = 0; channel < 3; channel++) {
+                            mp->light_rgb_radiance[sub_layer][channel] =
+                                mp->light_radiance[sub_layer];
+                        }
                         mp->light_rgb_known[sub_layer] = 1;
                     }
                 }
@@ -2230,7 +2266,7 @@ void draw_client_map2(object *pl) {
                 }
 
                 if (light_rgb_changed) {
-                    ext_flags |= MAP2_FLAG_EXT_LIGHT_RGB;
+                    ext_flags |= MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16;
                 }
 
                 /* Add flags for this tile. */
@@ -2239,28 +2275,34 @@ void draw_client_map2(object *pl) {
 
                 /* RGB complete state precedes animation data. A zero bitmap
                  * explicitly resets every sub-layer to its scalar level. */
-                if (ext_flags & MAP2_FLAG_EXT_LIGHT_RGB) {
+                if (ext_flags & MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16) {
                     packet_debug_data(packet, 1, "Colored-light sub-layer bitmap");
                     packet_writer_write_uint8(packet, light_rgb_bitmap);
                     for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                        uint8_t resolved_light = light_set[sub_layer] ? light_level[sub_layer] : 0;
-                        uint8_t resolved_rgb[3] = {
+                        uint16_t resolved_light =
+                            light_set[sub_layer] ? light_radiance[sub_layer] : 0;
+                        uint16_t resolved_rgb[3] = {
                             resolved_light,
                             resolved_light,
                             resolved_light,
                         };
                         if (light_set[sub_layer]) {
-                            memcpy(resolved_rgb, light_rgb[sub_layer], sizeof(resolved_rgb));
+                            memcpy(resolved_rgb,
+                                   light_rgb_radiance[sub_layer],
+                                   sizeof(resolved_rgb));
                         }
 
                         if (light_rgb_bitmap & (UINT8_C(1) << sub_layer)) {
-                            packet_writer_write_uint8(packet, resolved_rgb[0]);
-                            packet_writer_write_uint8(packet, resolved_rgb[1]);
-                            packet_writer_write_uint8(packet, resolved_rgb[2]);
+                            packet_writer_write_uint16(packet, resolved_rgb[0]);
+                            packet_writer_write_uint16(packet, resolved_rgb[1]);
+                            packet_writer_write_uint16(packet, resolved_rgb[2]);
                         }
-                        memcpy(mp->light_rgb[sub_layer], resolved_rgb, sizeof(resolved_rgb));
+                        memcpy(mp->light_rgb_radiance[sub_layer],
+                               resolved_rgb,
+                               sizeof(resolved_rgb));
                         mp->light_rgb_known[sub_layer] = 1;
                     }
+                    mp->light_rgb_explicit = light_rgb_bitmap;
                 }
 
                 /* Animation? Add its type and value. */
@@ -2377,7 +2419,7 @@ void draw_client_map2(object *pl) {
         }
         continuation->data[count_pos] = continuation_count;
         HARD_ASSERT(packet_writer_finish(continuation));
-        HARD_ASSERT(continuation_packet_count < MAP2_LEVEL_CHUNKS_MAX);
+        HARD_ASSERT(continuation_packet_count < MAP2_PROTOCOL_CONTINUATIONS_MAX);
         continuation_packets[continuation_packet_count++] = continuation;
     }
 

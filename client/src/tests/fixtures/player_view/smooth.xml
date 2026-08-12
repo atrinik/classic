@@ -3,11 +3,11 @@
              renderer="software"
              input-root="../../../.."
              settings="data/settings.txt"
-             settings-sha256="6ee840ff8e575e938f35d5a25622ee5867b0f45511f9a1734afddce9f3225c42"
+             settings-sha256="c3ad2bbf5bd19b50c926b0660421e1d8467f011ea012275f25d9449731ffa62d"
              archdef="data/archdef.dat"
              archdef-sha256="977ce63e38f4795545f42bd2f4a9c62bd38fcdb4cfde7cb7fe3c2cd9fe73983e"
              snapshot="src/tests/fixtures/player_view/scene.map2.hex"
-             snapshot-sha256="911cbd06be13e22b334fee40d427bfc56b20a9407c0343d193994f4fbe779a2a"
+             snapshot-sha256="2bfc3e526016a4914662f7c49c629727c708f6a4b243d5330bfc68245ee118a7"
              viewport-width="320"
              viewport-height="240"
              look-width="9"
@@ -16,7 +16,7 @@
              smooth-lighting="true"
              zoom-smoothing="false"
              clock-ms="1200"
-             expected-pixels-sha256="c16f8d97c2f0f2e26535d054a4ed722ba8ed9aa9794053d24a3bcb929c2f9164">
+             expected-pixels-sha256="34b83b0b014cc7c3c6d070e8d1d9852061bfb6439ef3b025e54e1409ba377386">
   <asset face="1" path="textures/square_highlight.png" sha256="fecfd2da236702bc874c58a767d0d237f5425e423e6699742accb26215c9676b"/>
   <asset face="2" path="textures/target_attack.png" sha256="6924dbe0a7ed3bd7b71577b0d00c91c70855cba39102c20ba3270452c2d4d806"/>
   <asset face="3" path="textures/icon_map.png" sha256="314b2212e2bf2ecf69a88d872ec504b794ec52d680402e23ca78679ad1c66435"/>

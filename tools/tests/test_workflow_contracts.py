@@ -12,6 +12,43 @@ class WorkflowContractTests(unittest.TestCase):
     def text(self, name: str) -> str:
         return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
+    def test_content_updater_has_a_narrow_human_reviewed_mutation_boundary(self) -> None:
+        workflow = self.text("update-content.yml")
+        self.assertIn("  schedule:\n", workflow)
+        self.assertIn("  workflow_dispatch:\n", workflow)
+        self.assertIn("group: classic-content-lock-update", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+        self.assertIn(
+            "github.event_name == 'workflow_dispatch' || vars.DEPENDENCY_UPDATE_SCHEDULE_ENABLED == 'true'",
+            workflow,
+        )
+        self.assertEqual(workflow[: workflow.index("jobs:")].count("contents: read"), 1)
+        self.assertNotIn("\n  contents: write", workflow)
+        self.assertNotIn("\n  pull-requests: write", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("test \"${GITHUB_REF}\" = refs/heads/main", workflow)
+        self.assertIn("tools/release/update_content_lock.py", workflow)
+        token = workflow.index("name: Mint the installation token")
+        verification = workflow.index("name: Verify all content releases")
+        ownership = workflow.index("name: Fail closed on unexpected automation")
+        mutation = workflow.index("name: Create or update the single App-owned")
+        self.assertLess(verification, ownership)
+        self.assertLess(ownership, token)
+        self.assertLess(token, mutation)
+        self.assertIn(
+            "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0",
+            workflow,
+        )
+        self.assertIn("permission-contents: write", workflow)
+        self.assertIn("permission-pull-requests: write", workflow)
+        self.assertIn("--force-with-lease=", workflow)
+        self.assertIn("server/dependencies.lock.json", workflow)
+        for forbidden in (
+            "gh pr review", "gh pr merge", "gh release", "git tag",
+            "workflow dispatch", "repos/${GITHUB_REPOSITORY}/branches/main",
+        ):
+            self.assertNotIn(forbidden, workflow)
+
     def test_nested_component_automation_remains_retired(self) -> None:
         for module in ("client", "editor", "libatrinik", "protocol", "server"):
             with self.subTest(module=module):
@@ -42,9 +79,13 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_rehearsal_is_bound_to_current_main(self) -> None:
         workflow = self.text("release-rehearsal.yml")
+        candidate = self.text("build-release-candidate.yml")
         self.assertIn('test "${DISPATCH_REF}" = refs/heads/main', workflow)
         self.assertIn("refs/remotes/origin/main", workflow)
         self.assertIn("needs: preflight", workflow)
+        self.assertNotIn("contents: write", workflow)
+        self.assertNotIn("contents: write", candidate)
+        self.assertIn("source_epoch: ${{ needs.preflight.outputs.source_epoch }}", workflow)
 
     def test_package_dispatch_is_bound_to_a_tag_or_current_main_recovery(self) -> None:
         workflow = self.text("package-release.yml")
@@ -66,34 +107,34 @@ class WorkflowContractTests(unittest.TestCase):
     def test_production_metadata_can_read_drafts_without_broad_write_access(self) -> None:
         package = self.text("package-release.yml")
         candidate = self.text("build-release-candidate.yml")
+        preflight_job = package[
+            package.index("  preflight:") : package.index("  discord-config:")
+        ]
         candidate_job = package[
             package.index("  candidate:") : package.index("  publish:")
         ]
         metadata_job = candidate[
             candidate.index("  metadata:") : candidate.index("  sources:")
         ]
+        self.assertIn("contents: write", preflight_job)
+        self.assertIn("Validate tag, release, checks, and ancestry", preflight_job)
+        self.assertNotIn("gh release edit", preflight_job)
         for job in (candidate_job, metadata_job):
-            self.assertIn("permissions:\n", job)
-            self.assertIn("contents: write", job)
+            self.assertIn("contents: read", job)
+            self.assertNotIn("contents: write", job)
         self.assertEqual(package[: package.index("jobs:")].count("contents: read"), 1)
-        self.assertNotIn("gh release edit", metadata_job)
 
-    def test_current_main_candidate_uses_the_trusted_recovery_verifier(self) -> None:
-        workflow = self.text("build-release-candidate.yml")
-        metadata_job = workflow[
-            workflow.index("  metadata:") : workflow.index("  sources:")
+    def test_current_main_preflight_uses_the_trusted_recovery_verifier(self) -> None:
+        workflow = self.text("package-release.yml")
+        preflight_job = workflow[
+            workflow.index("  preflight:") : workflow.index("  discord-config:")
         ]
-        self.assertIn("Check out the trusted recovery verifier", metadata_job)
-        self.assertIn("fetch-depth: 0", metadata_job)
-        self.assertIn("path: build/release-automation", metadata_job)
-        self.assertIn("ref: ${{ github.sha }}", metadata_job)
-        self.assertIn("if test \"${GITHUB_REF}\" = refs/heads/main", metadata_job)
-        self.assertIn(
-            "build/release-automation/tools/release/validate_release.py",
-            metadata_job,
-        )
-        self.assertIn("recovery_arguments+=(--recovery-main)", metadata_job)
-        self.assertIn("verifier=tools/release/validate_release.py", metadata_job)
+        self.assertIn("Check out the current main recovery definition", preflight_job)
+        self.assertIn("fetch-depth: 0", preflight_job)
+        self.assertIn("ref: main", preflight_job)
+        self.assertIn('test "${GITHUB_REF}" = refs/heads/main', preflight_job)
+        self.assertIn("recovery_arguments+=(--recovery-main)", preflight_job)
+        self.assertIn("python3 tools/release/validate_release.py", preflight_job)
 
     def test_semantic_release_skips_cross_repository_issue_comments(self) -> None:
         config = (ROOT / ".releaserc.cjs").read_text(encoding="utf-8")
@@ -420,8 +461,8 @@ class WorkflowContractTests(unittest.TestCase):
             candidate.index("  metadata:") : candidate.index("  sources:")
         ]
         remaining_jobs = candidate[candidate.index("  sources:") :]
-        self.assertEqual(candidate.count("fetch-depth: 0"), 2)
-        self.assertEqual(metadata_job.count("fetch-depth: 0"), 2)
+        self.assertEqual(candidate.count("fetch-depth: 0"), 1)
+        self.assertEqual(metadata_job.count("fetch-depth: 0"), 1)
         self.assertNotIn("fetch-depth: 0", remaining_jobs)
 
     def test_core_uploads_exercised_python_release_tool_coverage(self) -> None:
@@ -525,11 +566,15 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn(
             "libatrinik-metaserver-url libatrinik-socket-address "
-            "libatrinik-stun \\",
+            "libatrinik-socket-quic \\",
             build,
         )
+        self.assertIn("libatrinik-stun \\", build)
         self.assertIn(
             "libatrinik/build/windows-tests/libatrinik-socket-address.exe", build
+        )
+        self.assertIn(
+            "libatrinik/build/windows-tests/libatrinik-socket-quic.exe", build
         )
         self.assertIn(
             "libatrinik/build/windows-tests/libatrinik-stun.exe", build
@@ -551,6 +596,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"libatrinik-metaserver-publisher.exe"', run)
         self.assertIn('"libatrinik-metaserver-url.exe"', run)
         self.assertIn('"libatrinik-socket-address.exe"', run)
+        self.assertIn('"libatrinik-socket-quic.exe"', run)
         self.assertIn('"libatrinik-stun.exe"', run)
         self.assertIn('"client-rich-presence-tests.exe"', run)
         self.assertIn('"atrinik-classic-server-*-windows-x86_64.zip"', run)

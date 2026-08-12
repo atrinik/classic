@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -42,6 +42,95 @@ static const char *const client_versions[] = {"2.0", "2.5", "3.0"};
 /** ::client_versions entry we are currently migrating. */
 static int64_t version_id_migrating = -1;
 
+/** Translate a supported 2.0 internal keybinding command. */
+static const char *upgrade_20_keybind_command(const char *command) {
+    static const struct {
+        const char *legacy;
+        const char *current;
+    } commands[] = {
+        {"?M_NORTH", "?MOVE_N"},
+        {"?M_NORTHEAST", "?MOVE_NE"},
+        {"?M_EAST", "?MOVE_E"},
+        {"?M_SOUTHEAST", "?MOVE_SE"},
+        {"?M_SOUTH", "?MOVE_S"},
+        {"?M_SOUTHWEST", "?MOVE_SW"},
+        {"?M_WEST", "?MOVE_W"},
+        {"?M_NORTHWEST", "?MOVE_NW"},
+        {"?M_STAY", "?MOVE_STAY"},
+        {"?M_UP", "?UP"},
+        {"?M_DOWN", "?DOWN"},
+        {"?M_LEFT", "?LEFT"},
+        {"?M_RIGHT", "?RIGHT"},
+        {"?M_SPELL_LIST", "?SPELL_LIST"},
+        {"?M_SKILL_LIST", "?SKILL_LIST"},
+        {"?M_HELP", "?HELP"},
+        {"?M_KEYBIND", "?PARTY_LIST"},
+        {"?M_QLIST", "?QLIST"},
+        {"?M_RANGE", "?RANGE"},
+        {"?M_TARGET_ENEMY", "?TARGET_ENEMY"},
+        {"?M_TARGET_FRIEND", "?TARGET_FRIEND"},
+    };
+
+    for (size_t i = 0; i < arraysize(commands); i++) {
+        if (!strcmp(command, commands[i].legacy)) {
+            return commands[i].current;
+        }
+    }
+    return NULL;
+}
+
+/** Migrate keybindings from the 2.0 line-oriented macro format. */
+static void upgrade_20_keybinds(FILE *stream) {
+    char buf[HUGE_BUF];
+
+    while (fgets(buf, sizeof(buf) - 1, stream)) {
+        int keycode, repeat;
+        char keyname[MAX_BUF], command[HUGE_BUF];
+
+        if (sscanf(buf,
+                   "%d %d \"%200[^\"]\" \"%2000[^\"]\"",
+                   &keycode,
+                   &repeat,
+                   keyname,
+                   command) != 4 ||
+            keycode < 0) {
+            continue;
+        }
+
+        SDL_Keycode migrated_keycode = keybind_keycode_from_legacy((uint32_t)keycode);
+        keybind_struct *keybind;
+
+        if (*command == '/') {
+            keybind = keybind_find_by_command(command);
+            if (keybind == NULL) {
+                keybind = keybind_add(migrated_keycode, 0, command);
+            } else {
+                keybind->key = migrated_keycode;
+            }
+            keybind->repeat = repeat;
+        } else if (!strncmp(command, "?M_MCON", 7)) {
+            char mcon_buf[HUGE_BUF];
+
+            snprintf(mcon_buf, sizeof(mcon_buf), "?MCON %s", command + 7);
+            if (!keybind_find_by_command(mcon_buf)) {
+                keybind = keybind_add(migrated_keycode, 0, mcon_buf);
+                keybind->repeat = repeat;
+            }
+        } else if (*command == '?') {
+            const char *new_cmd = upgrade_20_keybind_command(command);
+
+            if (new_cmd == NULL) {
+                continue;
+            }
+
+            keybind = keybind_find_by_command(new_cmd);
+            if (keybind != NULL) {
+                keybind->key = migrated_keycode;
+            }
+        }
+    }
+}
+
 /**
  * Upgrade 2.0 settings to 2.5.
  *
@@ -62,109 +151,8 @@ static void upgrade_20_to_25(const char *from, const char *to) {
     free(src);
 
     if (fp) {
-        int keycode, repeat;
-        char keyname[MAX_BUF], command[HUGE_BUF];
-
         keybind_load();
-
-        /* Read the old keys.dat file. */
-        while (fgets(buf, sizeof(buf) - 1, fp)) {
-            /* Try to parse the macro definition lines. */
-            if (sscanf(buf,
-                       "%d %d \"%200[^\"]\" \"%2000[^\"]\"",
-                       &keycode,
-                       &repeat,
-                       keyname,
-                       command) == 4) {
-                keybind_struct *keybind;
-                SDL_Keycode migrated_keycode;
-
-                if (keycode < 0) {
-                    continue;
-                }
-                migrated_keycode = keybind_keycode_from_legacy((uint32_t)keycode);
-
-                /* Is it a command? */
-                if (*command == '/') {
-                    keybind = keybind_find_by_command(command);
-
-                    /* Does not exist yet, add it. */
-                    if (!keybind) {
-                        keybind = keybind_add(migrated_keycode, 0, command);
-                    } else {
-                        keybind->key = migrated_keycode;
-                    }
-
-                    keybind->repeat = repeat;
-                } else if (!strncmp(command, "?M_MCON", 7)) {
-                    char mcon_buf[HUGE_BUF];
-
-                    snprintf(mcon_buf, sizeof(mcon_buf), "?MCON %s", command + 7);
-
-                    if (!keybind_find_by_command(mcon_buf)) {
-                        keybind = keybind_add(migrated_keycode, 0, mcon_buf);
-                        keybind->repeat = repeat;
-                    }
-                } else if (*command == '?') {
-                    const char *new_cmd;
-
-                    if (!strcmp(command, "?M_NORTH")) {
-                        new_cmd = "?MOVE_N";
-                    } else if (!strcmp(command, "?M_NORTHEAST")) {
-                        new_cmd = "?MOVE_NE";
-                    } else if (!strcmp(command, "?M_EAST")) {
-                        new_cmd = "?MOVE_E";
-                    } else if (!strcmp(command, "?M_SOUTHEAST")) {
-                        new_cmd = "?MOVE_SE";
-                    } else if (!strcmp(command, "?M_SOUTH")) {
-                        new_cmd = "?MOVE_S";
-                    } else if (!strcmp(command, "?M_SOUTHWEST")) {
-                        new_cmd = "?MOVE_SW";
-                    } else if (!strcmp(command, "?M_WEST")) {
-                        new_cmd = "?MOVE_W";
-                    } else if (!strcmp(command, "?M_NORTHWEST")) {
-                        new_cmd = "?MOVE_NW";
-                    } else if (!strcmp(command, "?M_STAY")) {
-                        new_cmd = "?MOVE_STAY";
-                    } else if (!strcmp(command, "?M_UP")) {
-                        new_cmd = "?UP";
-                    } else if (!strcmp(command, "?M_DOWN")) {
-                        new_cmd = "?DOWN";
-                    } else if (!strcmp(command, "?M_LEFT")) {
-                        new_cmd = "?LEFT";
-                    } else if (!strcmp(command, "?M_RIGHT")) {
-                        new_cmd = "?RIGHT";
-                    } else if (!strcmp(command, "?M_SPELL_LIST")) {
-                        new_cmd = "?SPELL_LIST";
-                    } else if (!strcmp(command, "?M_SKILL_LIST")) {
-                        new_cmd = "?SKILL_LIST";
-                    } else if (!strcmp(command, "?M_HELP")) {
-                        new_cmd = "?HELP";
-                    } else if (!strcmp(command, "?M_KEYBIND")) {
-                        new_cmd = "?PARTY_LIST";
-                    } else if (!strcmp(command, "?M_QLIST")) {
-                        new_cmd = "?QLIST";
-                    } else if (!strcmp(command, "?M_RANGE")) {
-                        new_cmd = "?RANGE";
-                    } else if (!strcmp(command, "?M_FIRE_READY")) {
-                        new_cmd = "?FIRE_READY";
-                    } else if (!strcmp(command, "?M_TARGET_ENEMY")) {
-                        new_cmd = "?TARGET_ENEMY";
-                    } else if (!strcmp(command, "?M_TARGET_FRIEND")) {
-                        new_cmd = "?TARGET_FRIEND";
-                    } else {
-                        continue;
-                    }
-
-                    keybind = keybind_find_by_command(new_cmd);
-
-                    if (keybind) {
-                        keybind->key = migrated_keycode;
-                    }
-                }
-            }
-        }
-
+        upgrade_20_keybinds(fp);
         keybind_deinit();
         fclose(fp);
     }

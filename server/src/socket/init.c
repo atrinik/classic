@@ -129,9 +129,13 @@ void free_all_newserver(void) {
  * @param ns
  * The socket.
  */
-void free_newsocket(socket_struct *ns) {
+static void free_newsocket_internal(socket_struct *ns, bool connected) {
     socket_assets_connection_clear(ns);
-    socket_destroy(ns->sc);
+    if (connected) {
+        socket_destroy(ns->sc);
+    } else {
+        HARD_ASSERT(ns->sc == NULL);
+    }
 
     map_client_cache_free(&ns->lastmap);
 
@@ -149,6 +153,14 @@ void free_newsocket(socket_struct *ns) {
 
     socket_buffer_clear(ns);
     free(ns);
+}
+
+void free_newsocket(socket_struct *ns) {
+    free_newsocket_internal(ns, true);
+}
+
+void free_newsocket_unconnected(socket_struct *ns) {
+    free_newsocket_internal(ns, false);
 }
 
 /**

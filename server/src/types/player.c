@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -223,7 +223,7 @@ static player *get_player(player *p) {
  * @param pl
  * The player structure to free.
  */
-void free_player(player *pl) {
+static void free_player_internal(player *pl, bool free_socket) {
     /* If this player is in a party, leave the party */
     if (pl->party) {
         command_party(pl->ob, "party", "leave");
@@ -281,7 +281,15 @@ void free_player(player *pl) {
         object_destroy(pl->ob);
     }
 
-    free_newsocket(pl->cs);
+    if (free_socket) {
+        free_newsocket(pl->cs);
+    } else {
+        free_newsocket_unconnected(pl->cs);
+    }
+}
+
+void free_player(player *pl) {
+    free_player_internal(pl, true);
 }
 
 /**
@@ -2896,6 +2904,85 @@ static void player_create(player *pl, archetype_t *at, const char *name) {
 }
 
 /**
+ * Persist a deterministic offline scenario character without opening a
+ * network socket or bypassing the normal player serializer.
+ *
+ * @param name Character name.
+ * @param archname Player archetype name.
+ * @param map_path Canonical map path.
+ * @param x Destination X coordinate.
+ * @param y Destination Y coordinate.
+ * @param item_archname Optional inventory item archetype name.
+ * @param error Output buffer for a failure description.
+ * @param error_size Size of error.
+ * @return True on success, false on failure.
+ */
+bool player_provision_scenario(const char *name,
+                               const char *archname,
+                               const char *map_path,
+                               int x,
+                               int y,
+                               const char *item_archname,
+                               char *error,
+                               size_t error_size) {
+    HARD_ASSERT(name != NULL);
+    HARD_ASSERT(archname != NULL);
+    HARD_ASSERT(map_path != NULL);
+    HARD_ASSERT(error != NULL);
+    HARD_ASSERT(error_size > 0);
+
+    archetype_t *at = arch_find(archname);
+    if (at == NULL || at->clone.type != PLAYER) {
+        snprintf(error, error_size, "invalid player archetype: %s", archname);
+        return false;
+    }
+    mapstruct *map = ready_map_name(map_path, NULL, 0);
+    if (map == NULL) {
+        snprintf(error, error_size, "could not load scenario map");
+        return false;
+    }
+    object *item = NULL;
+    if (item_archname != NULL) {
+        item = arch_get(item_archname);
+        if (item == NULL) {
+            snprintf(error, error_size, "could not load scenario item");
+            return false;
+        }
+    }
+
+    player *pl = get_player(NULL);
+    pl->cs = xcalloc(1, sizeof(*pl->cs));
+    pl->ob = object_get();
+    player_create(pl, at, name);
+    if (!object_enter_map(pl->ob, NULL, map, x, y, true)) {
+        if (item != NULL) {
+            object_destroy(item);
+        }
+        free_player_internal(pl, false);
+        snprintf(error, error_size, "could not place scenario player");
+        return false;
+    }
+
+    snprintf(VS(pl->savebed_map), "%s", map_path);
+    pl->bed_x = x;
+    pl->bed_y = y;
+    if (item != NULL) {
+        object_insert_into(item, pl->ob, 0);
+    }
+    player_save(pl->ob);
+    free_player_internal(pl, false);
+
+    char *path = player_make_path(name, "player.dat");
+    struct stat statbuf;
+    bool saved = stat(path, &statbuf) == 0 && statbuf.st_size > 0;
+    free(path);
+    if (!saved) {
+        snprintf(error, error_size, "could not save scenario player");
+    }
+    return saved;
+}
+
+/**
  * Creates a dummy player structure and returns a pointer to the player's
  * object.
  *
@@ -3489,17 +3576,25 @@ static void process_func(object *op) {
                 pl->ob->enemy->owner == pl->ob) {
                 pl->ob->enemy = NULL;
             } else if (attack_is_melee_range(pl->ob, pl->ob->enemy)) {
-                if (!OBJECT_VALID(pl->ob->enemy->enemy, pl->ob->enemy->enemy_count)) {
-                    set_npc_enemy(pl->ob->enemy, pl->ob, NULL);
+                object *target = pl->ob->enemy;
+                bool target_unaware = !OBJECT_VALID(target->enemy, target->enemy_count) &&
+                                      !OBJECT_VALID(target->attacked_by, target->attacked_by_count);
+
+                if (!OBJECT_VALID(target->enemy, target->enemy_count)) {
+                    set_npc_enemy(target, pl->ob, NULL);
                 } else {
                     /* Our target already has an enemy - then note we had
                      * attacked */
-                    pl->ob->enemy->attacked_by = pl->ob;
-                    pl->ob->enemy->attacked_by_count = pl->ob->count;
-                    pl->ob->enemy->attacked_by_distance = 1;
+                    target->attacked_by = pl->ob;
+                    target->attacked_by_count = pl->ob->count;
+                    target->attacked_by_distance = 1;
                 }
 
-                skill_attack(pl->ob->enemy, pl->ob, 0, NULL);
+                if (target_unaware) {
+                    skill_attack_unaware(target, pl->ob, 0, NULL);
+                } else {
+                    skill_attack(target, pl->ob, 0, NULL);
+                }
 
                 pl->action_attack = global_round_tag + pl->ob->weapon_speed;
 

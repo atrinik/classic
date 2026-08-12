@@ -874,11 +874,7 @@ void cone_drop(object *op) {
     new_ob->y = op->y;
     new_ob->stats.food = op->stats.hp;
     new_ob->level = op->level;
-    object_owner_set(new_ob, op->owner);
-
-    if (op->chosen_skill) {
-        new_ob->chosen_skill = op->chosen_skill;
-    }
+    object_owner_copy(new_ob, op);
 
     object_insert_map(new_ob, op->map, op, 0);
 }
@@ -953,12 +949,13 @@ void check_fired_arch(object *op) {
         }
 
         OBJECTS_DESTROYED_BEGIN(op) {
-            int dam = attack_hit(tmp, op, op->stats.dam);
+            int dam = attack_hit_situational(tmp, op, op->stats.dam);
             if (OBJECTS_DESTROYED(op)) {
                 return;
             }
 
-            op->stats.dam -= dam;
+            int64_t residual_damage = (int64_t)op->stats.dam - dam;
+            op->stats.dam = (int16_t)MAX(residual_damage, INT16_MIN);
             if (op->stats.dam < 0) {
                 object_remove(op, 0);
                 object_destroy(op);
