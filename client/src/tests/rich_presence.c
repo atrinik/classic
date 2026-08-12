@@ -258,6 +258,21 @@ static void test_policy(void) {
     require(captured.publishes == 5U);
     require(strcmp(captured.activity.state, "On Private server / Crystal Caverns") == 0);
     require(strstr(captured.activity.state, "192.0.2.1") == NULL);
+
+    /* A reconnect starts a fresh elapsed session and cannot retain the prior
+     * character payload. */
+    rich_presence_controller_begin_session(&controller, &backend, 109000);
+    input.character = "New Character";
+    input.level = 2U;
+    input.character_available = true;
+    input.public_server = true;
+    input.server = "New Realm";
+    input.playing = true;
+    input.now_ms = 113100;
+    input.now_unix = 9000;
+    rich_presence_controller_tick(&controller, &input, &backend);
+    require(strcmp(captured.activity.details, "New Character - Level 2") == 0);
+    require(captured.activity.started_at == 9000U);
 }
 
 typedef struct fake_io {
