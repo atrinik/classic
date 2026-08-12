@@ -1524,17 +1524,18 @@ START_TEST(test_dense_colored_level_splits_at_tile_boundaries) {
     mapstruct *map = get_empty_map(MAP_CLIENT_X, MAP_CLIENT_Y);
     request_move_player(&pl, map, MAP_CLIENT_X / 2, MAP_CLIENT_Y / 2);
 
-    char glow[241];
-    memset(glow, 'a', sizeof(glow) - 1);
-    glow[sizeof(glow) - 1] = '\0';
+    char name[MAP2_PROTOCOL_NAME_MAX + 1];
+    memset(name, 'a', sizeof(name) - 1);
+    name[sizeof(name) - 1] = '\0';
     for (int y = 0; y < MAP_CLIENT_Y; y++) {
         for (int x = 0; x < MAP_CLIENT_X; x++) {
             for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                object *marker = arch_get("letter");
+                object *marker = arch_get("kobold");
                 marker->x = x;
                 marker->y = y;
                 marker->sub_layer = sub_layer;
-                FREE_AND_COPY_HASH(marker->glow, glow);
+                FREE_AND_COPY_HASH(marker->name, name);
+                FREE_AND_COPY_HASH(marker->glow, "ffffff");
                 marker->glow_speed = 1;
                 ck_assert_ptr_nonnull(object_insert_map(marker, map, NULL, 0));
             }

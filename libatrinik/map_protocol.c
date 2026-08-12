@@ -91,9 +91,9 @@ static bool map_packet_read_uint32(map_packet_reader_t *reader, uint32_t *value)
     return packet_reader_error(reader) == PACKET_ERROR_NONE;
 }
 
-/** Skip one required NUL-terminated string in a MAP command. */
-static bool map_packet_skip_string(map_packet_reader_t *reader) {
-    (void)packet_reader_read_string_view(reader, PACKET_PAYLOAD_MAX);
+/** Skip one required bounded NUL-terminated string in a MAP command. */
+static bool map_packet_skip_string(map_packet_reader_t *reader, size_t max_len) {
+    (void)packet_reader_read_string_view(reader, max_len);
     return packet_reader_error(reader) == PACKET_ERROR_NONE;
 }
 
@@ -188,7 +188,8 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
                 return false;
             }
             if ((flags & MAP2_FLAG_NAME) &&
-                (!map_packet_skip_string(reader) || !map_packet_skip_string(reader))) {
+                (!map_packet_skip_string(reader, MAP2_PROTOCOL_NAME_MAX) ||
+                 !map_packet_skip_string(reader, MAP2_PROTOCOL_COLOR_MAX))) {
                 return false;
             }
             if (flags & MAP2_FLAG_ANIMATION) {
@@ -239,8 +240,9 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
                         return false;
                     }
                 }
-                if ((flags2 & MAP2_FLAG2_GLOW) && (!map_packet_skip_string(reader) ||
-                                                   !map_packet_skip(reader, sizeof(uint8_t)))) {
+                if ((flags2 & MAP2_FLAG2_GLOW) &&
+                    (!map_packet_skip_string(reader, MAP2_PROTOCOL_COLOR_MAX) ||
+                     !map_packet_skip(reader, sizeof(uint8_t)))) {
                     return false;
                 }
             }
@@ -317,11 +319,14 @@ bool map_protocol_validate(const uint8_t *data,
     if (mapstat != MAP_UPDATE_CMD_SAME && mapstat != MAP_UPDATE_CMD_PARTIAL) {
         uint8_t height_diff, region_has_map;
 
-        if (!map_packet_skip_string(&reader) || !map_packet_skip_string(&reader) ||
-            !map_packet_skip_string(&reader) || !map_packet_read_uint8(&reader, &height_diff) ||
-            height_diff > 1 || !map_packet_read_uint8(&reader, &region_has_map) ||
-            region_has_map > 1 || !map_packet_skip_string(&reader) ||
-            !map_packet_skip_string(&reader) || !map_packet_skip_string(&reader)) {
+        if (!map_packet_skip_string(&reader, PACKET_PAYLOAD_MAX) ||
+            !map_packet_skip_string(&reader, PACKET_PAYLOAD_MAX) ||
+            !map_packet_skip_string(&reader, PACKET_PAYLOAD_MAX) ||
+            !map_packet_read_uint8(&reader, &height_diff) || height_diff > 1 ||
+            !map_packet_read_uint8(&reader, &region_has_map) || region_has_map > 1 ||
+            !map_packet_skip_string(&reader, PACKET_PAYLOAD_MAX) ||
+            !map_packet_skip_string(&reader, PACKET_PAYLOAD_MAX) ||
+            !map_packet_skip_string(&reader, PACKET_PAYLOAD_MAX)) {
             return false;
         }
 

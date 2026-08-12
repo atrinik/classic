@@ -841,6 +841,14 @@ static const char *get_living_level_color(const object *pl, const object *op) {
     return COLOR_YELLOW;
 }
 
+/** Write a MAP string without exceeding its decoder-owned byte limit. */
+static void
+packet_writer_write_map_string(packet_struct *packet, const char *value, size_t max_len) {
+    size_t len = MIN(strlen(value), max_len);
+    packet_writer_write_string_n(packet, value, len);
+    packet_writer_write_uint8(packet, 0);
+}
+
 void packet_writer_write_map_name(struct packet_struct *packet, object *op, object *map_info) {
     packet_debug_data(packet, 0, "Map name");
     packet_writer_write_string(packet, "[b][o=#000000]");
@@ -1865,7 +1873,9 @@ void draw_client_map2(object *pl) {
                                 is_exit = 1;
                             }
 
-                            if (head->glow != NULL && CONTR(pl)->cs->socket_version >= 1060) {
+                            if (head->glow != NULL &&
+                                strlen(head->glow) <= MAP2_PROTOCOL_COLOR_MAX &&
+                                CONTR(pl)->cs->socket_version >= 1060) {
                                 flags2 |= MAP2_FLAG2_GLOW;
                             }
 
@@ -2016,9 +2026,13 @@ void draw_client_map2(object *pl) {
                                 }
 
                                 packet_debug_data(packet_layer, 2, "Living object name");
-                                packet_writer_write_cstring(packet_layer, name);
+                                packet_writer_write_map_string(packet_layer,
+                                                               name,
+                                                               MAP2_PROTOCOL_NAME_MAX);
                                 packet_debug_data(packet_layer, 2, "Living object name color");
-                                packet_writer_write_cstring(packet_layer, name_color);
+                                packet_writer_write_map_string(packet_layer,
+                                                               name_color,
+                                                               MAP2_PROTOCOL_COLOR_MAX);
                                 free(living_name);
                             }
 
@@ -2091,7 +2105,9 @@ void draw_client_map2(object *pl) {
                                 /* Target's HP bar. */
                                 if (flags2 & MAP2_FLAG2_GLOW) {
                                     packet_debug_data(packet_layer, 3, "Glow color");
-                                    packet_writer_write_cstring(packet_layer, head->glow);
+                                    packet_writer_write_map_string(packet_layer,
+                                                                   head->glow,
+                                                                   MAP2_PROTOCOL_COLOR_MAX);
                                     packet_debug_data(packet_layer, 3, "Glow speed");
                                     packet_writer_write_uint8(packet_layer, head->glow_speed);
                                 }

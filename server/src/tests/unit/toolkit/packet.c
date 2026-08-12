@@ -256,6 +256,64 @@ START_TEST(test_map_protocol_accepts_exit_flag_and_rejects_unknown_or_truncated_
 }
 END_TEST
 
+START_TEST(test_map_protocol_enforces_layer_string_bounds) {
+    packet_struct *level = packet_new(0, 128, 128);
+    packet_writer_write_uint16(level, 0);
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, LAYER_LIVING - 1);
+    packet_writer_write_uint16(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, MAP2_FLAG_NAME | MAP2_FLAG_MORE);
+    packet_writer_write_cstring(level,
+                                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    packet_writer_write_cstring(level, "ffffff");
+    packet_writer_write_uint32(level, MAP2_FLAG2_GLOW);
+    packet_writer_write_cstring(level, "ffffff");
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_struct *packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+    packet_free(level);
+
+    level = packet_new(0, 128, 128);
+    packet_writer_write_uint16(level, 0);
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, LAYER_LIVING - 1);
+    packet_writer_write_uint16(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, MAP2_FLAG_NAME);
+    packet_writer_write_cstring(
+        level,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    packet_writer_write_cstring(level, "ffffff");
+    packet_writer_write_uint8(level, 0);
+    packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+    packet_free(level);
+
+    level = packet_new(0, 32, 32);
+    packet_writer_write_uint16(level, 0);
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, LAYER_FLOOR - 1);
+    packet_writer_write_uint16(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, MAP2_FLAG_MORE);
+    packet_writer_write_uint32(level, MAP2_FLAG2_GLOW);
+    packet_writer_write_cstring(level, "fffffff");
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+    packet_free(level);
+}
+END_TEST
+
 START_TEST(test_map_protocol_validates_colored_light_extension) {
     packet_struct *level = packet_new(0, 32, 16);
     packet_writer_write_uint16(level, MAP2_MASK_LIGHT_LEVEL);
@@ -332,6 +390,12 @@ START_TEST(test_map_protocol_accepts_bounded_continuation) {
     map_protocol_test_level(packet, 2, level);
     ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     ck_assert_uint_le(packet->len, PACKET_PAYLOAD_MAX);
+    packet->data[4] = (uint8_t)(MAP2_PROTOCOL_CONTINUATIONS_MAX >> 8);
+    packet->data[5] = (uint8_t)MAP2_PROTOCOL_CONTINUATIONS_MAX;
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet->data[4] = (uint8_t)((MAP2_PROTOCOL_CONTINUATIONS_MAX + 1) >> 8);
+    packet->data[5] = (uint8_t)(MAP2_PROTOCOL_CONTINUATIONS_MAX + 1);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     packet->data[4] = packet->data[5] = 0;
     ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     packet->data[4] = packet->data[5] = UINT8_MAX;
@@ -1059,6 +1123,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_map_protocol_validates_tile_record_flags);
     tcase_add_test(tc_core,
                    test_map_protocol_accepts_exit_flag_and_rejects_unknown_or_truncated_flags);
+    tcase_add_test(tc_core, test_map_protocol_enforces_layer_string_bounds);
     tcase_add_test(tc_core, test_map_protocol_validates_colored_light_extension);
     tcase_add_test(tc_core, test_map_protocol_accepts_bounded_continuation);
     tcase_add_test(tc_core, test_map_protocol_continuation_state_is_bounded_and_ordered);
