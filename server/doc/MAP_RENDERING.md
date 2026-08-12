@@ -54,9 +54,11 @@ subtract only the scalar-equivalent neutral vector.  After all additions and
 subtractions, clamp each aggregate channel to zero.  Quantize once at the
 wire boundary.  Checked/saturating helpers are mandatory: signed overflow,
 order-dependent saturation, and independently clipping a finite RGB vector
-are forbidden.  If an RGB vector exceeds 65535, multiply all three channels
-by `65535 / max(rgb)` with round-half-up before encoding; this common scaling
-preserves chromaticity.  The scalar is encoded independently.
+are forbidden. If an RGB vector exceeds the finite raw range, multiply all
+three channels by the Q0.16 common gain `65536 / max(rgb)` with round-half-up,
+then clamp the one-past-maximum peak to `65535`; this makes the fixed overflow
+vectors exact while preserving chromaticity. The scalar is encoded
+independently.
 
 The client caches and interpolates the Q5.11 fields before filtering or tone
 mapping.  It derives one common gain/shoulder from the interpolated scalar,
@@ -107,6 +109,16 @@ most 66,048 bytes total; and the standard and large-viewport lighting passes
 may regress no more than 10% and 15%,
 respectively, from their recorded v1077 medians.  CI must measure dense initial
 state packets, continuations, both cache sizes, and both frame-time baselines.
+Frame-time comparison uses the release `--player-view-benchmark` harness on
+the same runner for the v1077 base and candidate, with 5 warmups and the median
+of 101 live map draws at 320x240 and 1920x1080; three alternating process
+samples are retained in the CI evidence artifact.
+The widened client raster sample is at most 10 bytes; each linked-depth context
+owns two viewport-sized fields and one row scratch field. Lit-sprite cache
+storage remains capped at 8 MiB per retained depth context. Each entry is
+charged its actual surface pitch times height plus a conservative 512-byte
+entry/surface/allocator allowance, and no context retains more than 8,192
+entries, so tiny sprites cannot bypass the byte cap through metadata overhead.
 
 - `src/server/light.c` propagates source masks as spherical 3D volumes across
   horizontal and `TILED_UP`/`TILED_DOWN` links. Opaque cells stop rays after
@@ -138,8 +150,8 @@ state packets, continuations, both cache sizes, and both frame-time baselines.
   The resolver rounds once at the wire boundary and uses common-vector scaling
   on overflow. This keeps insertion order irrelevant, retains capped equal
   red/blue or red/green sources as magenta or yellow, and makes `ffffff`
-  reproduce the scalar sample exactly. `light_levels_from_raw()` remains the
-  legacy RGB8 projection only until the atomic v1078 transition replaces it.
+  reproduce the scalar sample exactly. The v1078 transition removes the
+  legacy RGB8 projection instead of retaining a parallel transfer path.
   Ambient, floors, world light, special vision, and `tli` stay neutral;
   negative sources affect only the scalar raw light and are therefore
   achromatic even if an object carries a non-white authored color.
@@ -205,13 +217,12 @@ state packets, continuations, both cache sizes, and both frame-time baselines.
   withholding actors, items, effects, and interiors.
 - Connected UP/DOWN transitions include signed depth offsets so client/server
   shift existing caches rather than forcing a full refresh.
-- Until the v1078 producer/preflight/decoder transition lands atomically,
-  protocol v1077 retains scalar light bytes and the v1075
-  `MAP2_FLAG_EXT_LIGHT_RGB` extension before the animation tail. It carries a
-  complete
-  seven-bit sub-layer bitmap followed by ascending RGB888 triples. A zero
-  bitmap explicitly resets all sub-layers to their scalar samples. Scalar and
-  RGB caches are independent, so hue-only changes and neutral resets emit.
+- Protocol v1078 carries Q5.11 scalar words and the
+  `MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16` extension before the animation tail. It
+  carries a complete seven-bit sub-layer bitmap followed by ascending RGB
+  Q5.11 triples. A zero bitmap explicitly resets all sub-layers to their scalar
+  samples. Scalar and RGB caches are independent, so hue-only changes and
+  neutral resets emit.
 - The first update declares the complete depth set. If its framed level blocks
   would exceed the 65,534-byte game payload, it reserves zero-length blocks for
   omitted depths and sends their complete payloads in deterministic

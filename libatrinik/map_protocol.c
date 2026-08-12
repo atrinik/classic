@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -91,9 +91,9 @@ static bool map_packet_read_uint32(map_packet_reader_t *reader, uint32_t *value)
     return packet_reader_error(reader) == PACKET_ERROR_NONE;
 }
 
-/** Skip one required NUL-terminated string in a MAP command. */
-static bool map_packet_skip_string(map_packet_reader_t *reader) {
-    (void)packet_reader_read_string_view(reader, PACKET_PAYLOAD_MAX);
+/** Skip one required bounded NUL-terminated string in a MAP command. */
+static bool map_packet_skip_string(map_packet_reader_t *reader, size_t max_len) {
+    (void)packet_reader_read_string_view(reader, max_len);
     return packet_reader_error(reader) == PACKET_ERROR_NONE;
 }
 
@@ -144,11 +144,11 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
                 return false;
             }
         }
-        if ((values & MAP2_MASK_LIGHT_LEVEL) && !map_packet_skip(reader, sizeof(uint8_t))) {
+        if ((values & MAP2_MASK_LIGHT_LEVEL) && !map_packet_skip(reader, sizeof(uint16_t))) {
             return false;
         }
         if ((values & MAP2_MASK_LIGHT_LEVEL_MORE) &&
-            !map_packet_skip(reader, MAP2_PROTOCOL_SUB_LAYERS - 1)) {
+            !map_packet_skip(reader, sizeof(uint16_t) * (MAP2_PROTOCOL_SUB_LAYERS - 1))) {
             return false;
         }
 
@@ -188,7 +188,8 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
                 return false;
             }
             if ((flags & MAP2_FLAG_NAME) &&
-                (!map_packet_skip_string(reader) || !map_packet_skip_string(reader))) {
+                (!map_packet_skip_string(reader, MAP2_PROTOCOL_NAME_MAX) ||
+                 !map_packet_skip_string(reader, MAP2_PROTOCOL_COLOR_MAX))) {
                 return false;
             }
             if (flags & MAP2_FLAG_ANIMATION) {
@@ -239,8 +240,9 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
                         return false;
                     }
                 }
-                if ((flags2 & MAP2_FLAG2_GLOW) && (!map_packet_skip_string(reader) ||
-                                                   !map_packet_skip(reader, sizeof(uint8_t)))) {
+                if ((flags2 & MAP2_FLAG2_GLOW) &&
+                    (!map_packet_skip_string(reader, MAP2_PROTOCOL_COLOR_MAX) ||
+                     !map_packet_skip(reader, sizeof(uint8_t)))) {
                     return false;
                 }
             }
@@ -248,11 +250,11 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
 
         uint8_t ext_flags;
         if (!map_packet_read_uint8(reader, &ext_flags) ||
-            (ext_flags & ~(MAP2_FLAG_EXT_ANIM | MAP2_FLAG_EXT_LIGHT_RGB)) != 0) {
+            (ext_flags & ~(MAP2_FLAG_EXT_ANIM | MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16)) != 0) {
             return false;
         }
 
-        if (ext_flags & MAP2_FLAG_EXT_LIGHT_RGB) {
+        if (ext_flags & MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16) {
             uint8_t bitmap;
 
             if (!map_packet_read_uint8(reader, &bitmap) ||
@@ -262,7 +264,7 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
 
             for (uint8_t sub_layer = 0; sub_layer < MAP2_PROTOCOL_SUB_LAYERS; sub_layer++) {
                 if ((bitmap & (UINT8_C(1) << sub_layer)) &&
-                    !map_packet_skip(reader, sizeof(uint8_t) * 3)) {
+                    !map_packet_skip(reader, sizeof(uint16_t) * 3)) {
                     return false;
                 }
             }
@@ -317,11 +319,14 @@ bool map_protocol_validate(const uint8_t *data,
     if (mapstat != MAP_UPDATE_CMD_SAME && mapstat != MAP_UPDATE_CMD_PARTIAL) {
         uint8_t height_diff, region_has_map;
 
-        if (!map_packet_skip_string(&reader) || !map_packet_skip_string(&reader) ||
-            !map_packet_skip_string(&reader) || !map_packet_read_uint8(&reader, &height_diff) ||
-            height_diff > 1 || !map_packet_read_uint8(&reader, &region_has_map) ||
-            region_has_map > 1 || !map_packet_skip_string(&reader) ||
-            !map_packet_skip_string(&reader) || !map_packet_skip_string(&reader)) {
+        if (!map_packet_skip_string(&reader, MAP2_PROTOCOL_METADATA_LONG_MAX) ||
+            !map_packet_skip_string(&reader, MAP2_PROTOCOL_METADATA_LONG_MAX) ||
+            !map_packet_skip_string(&reader, MAP2_PROTOCOL_METADATA_SHORT_MAX) ||
+            !map_packet_read_uint8(&reader, &height_diff) || height_diff > 1 ||
+            !map_packet_read_uint8(&reader, &region_has_map) || region_has_map > 1 ||
+            !map_packet_skip_string(&reader, MAP2_PROTOCOL_METADATA_SHORT_MAX) ||
+            !map_packet_skip_string(&reader, MAP2_PROTOCOL_METADATA_SHORT_MAX) ||
+            !map_packet_skip_string(&reader, MAP2_PROTOCOL_METADATA_LONG_MAX)) {
             return false;
         }
 
@@ -358,8 +363,7 @@ bool map_protocol_validate(const uint8_t *data,
         (new_map_width != 0 && (xpos >= new_map_width || ypos >= new_map_height)) ||
         !map_packet_read_uint16(&reader, &continuation_marker) ||
         (mapstat == MAP_UPDATE_CMD_PARTIAL && continuation_marker == 0) ||
-        continuation_marker >
-            (size_t)MAP2_LEVELS * (size_t)map_width_limit * (size_t)map_height_limit ||
+        continuation_marker > MAP2_PROTOCOL_CONTINUATIONS_MAX ||
         !map_packet_read_uint8(&reader, &level_count) || level_count == 0 ||
         level_count > MAP2_LEVELS) {
         return false;
@@ -372,7 +376,9 @@ bool map_protocol_validate(const uint8_t *data,
 
         if (!map_packet_read_int8(&reader, &depth) ||
             !map_packet_read_uint32(&reader, &level_size) || depth < -MAP2_MAX_DEPTH ||
-            depth > MAP2_MAX_DEPTH || level_size > packet_reader_remaining(&reader)) {
+            depth > MAP2_MAX_DEPTH ||
+            (mapstat == MAP_UPDATE_CMD_PARTIAL && level_size == 0) ||
+            level_size > packet_reader_remaining(&reader)) {
             return false;
         }
 

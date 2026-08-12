@@ -1091,7 +1091,7 @@ START_TEST(test_opposite_scoped_clear_does_not_scan_near_limit_fire_index) {
 }
 END_TEST
 
-START_TEST(test_move_and_fire_require_exact_v1077_payloads) {
+START_TEST(test_move_and_fire_require_exact_v1078_payloads) {
     mapstruct *map;
     object *op;
 
@@ -1408,7 +1408,8 @@ START_TEST(test_map_rgb_cache_tracks_hue_changes_and_neutral_reset) {
                                           CONTR(pl)->cs->mapy_2,
                                           false);
     ck_assert_ptr_nonnull(cell);
-    ck_assert_uint_gt(cell->light_rgb[pl->sub_layer][0], cell->light_rgb[pl->sub_layer][2]);
+    ck_assert_uint_gt(cell->light_rgb_radiance[pl->sub_layer][0],
+                      cell->light_rgb_radiance[pl->sub_layer][2]);
 
     adjust_light_source_color(map, source->x, source->y, 1, source->light_color, -1);
     source->light_color = UINT32_C(0x0000ff);
@@ -1416,7 +1417,8 @@ START_TEST(test_map_rgb_cache_tracks_hue_changes_and_neutral_reset) {
     socket_buffer_clear(CONTR(pl)->cs);
     draw_client_map2(pl);
     ck_assert_uint_eq(validate_queued_map_payloads(CONTR(pl)->cs), 1);
-    ck_assert_uint_gt(cell->light_rgb[pl->sub_layer][2], cell->light_rgb[pl->sub_layer][0]);
+    ck_assert_uint_gt(cell->light_rgb_radiance[pl->sub_layer][2],
+                      cell->light_rgb_radiance[pl->sub_layer][0]);
 
     adjust_light_source_color(map, source->x, source->y, 1, source->light_color, -1);
     source->light_color = LIGHT_COLOR_WHITE;
@@ -1424,9 +1426,22 @@ START_TEST(test_map_rgb_cache_tracks_hue_changes_and_neutral_reset) {
     socket_buffer_clear(CONTR(pl)->cs);
     draw_client_map2(pl);
     ck_assert_uint_eq(validate_queued_map_payloads(CONTR(pl)->cs), 1);
-    ck_assert_uint_eq(cell->light_rgb[pl->sub_layer][0], cell->light_level[pl->sub_layer]);
-    ck_assert_uint_eq(cell->light_rgb[pl->sub_layer][1], cell->light_level[pl->sub_layer]);
-    ck_assert_uint_eq(cell->light_rgb[pl->sub_layer][2], cell->light_level[pl->sub_layer]);
+    ck_assert_uint_eq(cell->light_rgb_radiance[pl->sub_layer][0],
+                      cell->light_radiance[pl->sub_layer]);
+    ck_assert_uint_eq(cell->light_rgb_radiance[pl->sub_layer][1],
+                      cell->light_radiance[pl->sub_layer]);
+    ck_assert_uint_eq(cell->light_rgb_radiance[pl->sub_layer][2],
+                      cell->light_radiance[pl->sub_layer]);
+    ck_assert_uint_eq(cell->light_rgb_explicit, 0);
+
+    /* Complete bitmap semantics must emit even when cached channel values are
+     * already equal to the resolved neutral vector. */
+    cell->light_rgb_explicit = UINT8_C(1) << pl->sub_layer;
+    socket_buffer_clear(CONTR(pl)->cs);
+    draw_client_map2(pl);
+    ck_assert_uint_eq(validate_queued_map_payloads(CONTR(pl)->cs), 1);
+    ck_assert_uint_eq(cell->light_rgb_explicit, 0);
+    ck_assert_uint_eq(sizeof(cell->light_radiance) + sizeof(cell->light_rgb_radiance), 56);
 }
 END_TEST
 
@@ -1509,21 +1524,26 @@ START_TEST(test_dense_colored_level_splits_at_tile_boundaries) {
     mapstruct *map = get_empty_map(MAP_CLIENT_X, MAP_CLIENT_Y);
     request_move_player(&pl, map, MAP_CLIENT_X / 2, MAP_CLIENT_Y / 2);
 
-    char glow[241];
-    memset(glow, 'a', sizeof(glow) - 1);
-    glow[sizeof(glow) - 1] = '\0';
+    char name[MAP2_PROTOCOL_NAME_MAX + 1];
+    memset(name, 'a', sizeof(name) - 1);
+    name[sizeof(name) - 1] = '\0';
     for (int y = 0; y < MAP_CLIENT_Y; y++) {
         for (int x = 0; x < MAP_CLIENT_X; x++) {
-            object *marker = arch_get("letter");
-            marker->x = x;
-            marker->y = y;
-            FREE_AND_COPY_HASH(marker->glow, glow);
-            marker->glow_speed = 1;
-            ck_assert_ptr_nonnull(object_insert_map(marker, map, NULL, 0));
+            for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                object *marker = arch_get("kobold");
+                marker->x = x;
+                marker->y = y;
+                marker->sub_layer = sub_layer;
+                FREE_AND_COPY_HASH(marker->name, name);
+                FREE_AND_COPY_HASH(marker->glow, "ffffff");
+                marker->glow_speed = 1;
+                ck_assert_ptr_nonnull(object_insert_map(marker, map, NULL, 0));
+            }
             MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
             space->light_source_value = 40;
-            space->light_source_color[0] = INT64_C(40) * UINT8_MAX;
-            space->light_source_color_weight = INT64_C(40) * UINT8_MAX;
+            space->light_source_positive_value = 40;
+            space->light_source_color[0] = INT64_C(40) * UINT16_MAX;
+            space->light_source_color_weight = INT64_C(40) * UINT16_MAX;
         }
     }
 
@@ -1540,6 +1560,7 @@ START_TEST(test_dense_colored_level_splits_at_tile_boundaries) {
     ck_assert_uint_ge(first->len, 7);
     uint16_t expected_continuations = ((uint16_t)first->data[4] << 8) | first->data[5];
     ck_assert_uint_gt(expected_continuations, 0);
+    ck_assert_uint_le(expected_continuations, MAP2_PROTOCOL_CONTINUATIONS_MAX);
     bool continuation_found = false;
     uint16_t continuation_sequence = 0;
     for (packet_struct *packet = CONTR(pl)->cs->packets; packet != NULL && packet->next != NULL;
@@ -1549,6 +1570,7 @@ START_TEST(test_dense_colored_level_splits_at_tile_boundaries) {
             packet->next->data[0] == MAP_UPDATE_CMD_PARTIAL) {
             continuation_found = true;
             continuation_sequence++;
+            ck_assert_uint_le(packet->next->len, PACKET_PAYLOAD_MAX);
             ck_assert_uint_ge(packet->next->len, 7);
             ck_assert_uint_eq(((uint16_t)packet->next->data[4] << 8) | packet->next->data[5],
                               continuation_sequence);
@@ -1585,7 +1607,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_quick_running_tap_executes_before_ordered_stop);
     tcase_add_test(tc_core, test_canceled_movement_bytes_do_not_exhaust_live_queue_limit);
     tcase_add_test(tc_core, test_opposite_scoped_clear_does_not_scan_near_limit_fire_index);
-    tcase_add_test(tc_core, test_move_and_fire_require_exact_v1077_payloads);
+    tcase_add_test(tc_core, test_move_and_fire_require_exact_v1078_payloads);
     tcase_add_test(tc_core, test_malformed_tombstone_queue_is_discarded_safely);
     tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
     tcase_add_test(tc_core, test_version_requires_exact_match);

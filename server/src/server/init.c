@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -278,6 +278,13 @@ static const char *clioptions_option_provision_archetype_desc =
     "Player archetype for --provision_scenario.";
 static bool clioptions_option_provision_archetype(const char *arg, char **errmsg) {
     snprintf(VS(settings.provision_archetype), "%s", arg);
+    return true;
+}
+
+static const char *clioptions_option_provision_preset_desc =
+    "Server-owned deterministic preset for --provision_scenario.";
+static bool clioptions_option_provision_preset(const char *arg, char **errmsg) {
+    snprintf(VS(settings.provision_preset), "%s", arg);
     return true;
 }
 
@@ -1036,6 +1043,7 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, provision_account, "Scenario account name");
     CLIOPTIONS_CREATE_ARGUMENT(cli, provision_character, "Scenario character name");
     CLIOPTIONS_CREATE_ARGUMENT(cli, provision_archetype, "Scenario player archetype");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, provision_preset, "Scenario server-owned preset");
     CLIOPTIONS_CREATE_ARGUMENT(cli, provision_password_file, "Scenario password file");
     CLIOPTIONS_CREATE_ARGUMENT(cli, content_benchmark, "Authored-content benchmark map IDs");
     CLIOPTIONS_CREATE_ARGUMENT(cli,
@@ -1244,6 +1252,17 @@ void write_todclock(void) {
     if (!write_todclock_atomic()) {
         LOG(BUG, "Cannot atomically write persisted world clock.");
     }
+}
+
+bool todclock_set(unsigned long value) {
+    unsigned long previous = todtick;
+    todtick = value;
+    if (write_todclock_atomic()) {
+        return true;
+    }
+
+    todtick = previous;
+    return false;
 }
 
 /**

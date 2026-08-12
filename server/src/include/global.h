@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -407,6 +407,9 @@ typedef struct settings_struct {
 
     /** Player archetype used by the offline scenario provisioner. */
     char provision_archetype[MAX_BUF];
+
+    /** Server-owned deterministic preset used by the scenario provisioner. */
+    char provision_preset[MAX_BUF];
 
     /** Protected file containing the scenario account password. */
     char provision_password_file[HUGE_BUF];
