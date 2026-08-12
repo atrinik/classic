@@ -422,34 +422,39 @@ SDL_Surface *sprite_outline_create(SDL_Surface *surface, const SDL_Color *color)
 
     Uint32 edge = pixel_format_map_rgba(outline->format, color->r, color->g, color->b, 235);
     Uint32 halo = pixel_format_map_rgba(outline->format, color->r, color->g, color->b, 90);
-    for (int y = 0; y < outline->h; y++) {
-        for (int x = 0; x < outline->w; x++) {
-            int source_x = x - SPRITE_GLOW_SIZE;
-            int source_y = y - SPRITE_GLOW_SIZE;
-            if (surface_pixel_visible(surface, source_x, source_y)) {
-                continue;
-            }
+    for (int radius = SPRITE_GLOW_SIZE; radius >= 1; radius--) {
+        Uint32 pixel = radius == 1 ? edge : halo;
+        for (int source_y = 0; source_y < surface->h; source_y++) {
+            for (int source_x = 0; source_x < surface->w; source_x++) {
+                if (!surface_pixel_visible(surface, source_x, source_y)) {
+                    continue;
+                }
 
-            int nearest = 0;
-            for (int radius = 1; radius <= SPRITE_GLOW_SIZE && nearest == 0; radius++) {
-                for (int offset_y = -radius; offset_y <= radius && nearest == 0; offset_y++) {
+                for (int offset_y = -radius; offset_y <= radius; offset_y++) {
                     for (int offset_x = -radius; offset_x <= radius; offset_x++) {
                         if (abs(offset_x) != radius && abs(offset_y) != radius) {
                             continue;
                         }
 
-                        if (surface_pixel_visible(surface,
-                                                  source_x + offset_x,
-                                                  source_y + offset_y)) {
-                            nearest = radius;
-                            break;
-                        }
+                        putpixel(outline,
+                                 source_x + SPRITE_GLOW_SIZE + offset_x,
+                                 source_y + SPRITE_GLOW_SIZE + offset_y,
+                                 pixel);
                     }
                 }
             }
+        }
+    }
 
-            if (nearest != 0) {
-                putpixel(outline, x, y, nearest == 1 ? edge : halo);
+    /* The dilation passes also touch visible source locations near other
+     * silhouette pixels. Keep the overlay outline-only by clearing them last. */
+    for (int source_y = 0; source_y < surface->h; source_y++) {
+        for (int source_x = 0; source_x < surface->w; source_x++) {
+            if (surface_pixel_visible(surface, source_x, source_y)) {
+                putpixel(outline,
+                         source_x + SPRITE_GLOW_SIZE,
+                         source_y + SPRITE_GLOW_SIZE,
+                         transparent);
             }
         }
     }
