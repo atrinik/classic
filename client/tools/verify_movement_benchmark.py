@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 EXPECTED_SAMPLES = {"cold": 1, "sustained": 480, "idle": 16, "resumed": 80}
+EXPECTED_CHANGED = {"cold": 1, "sustained": 480, "idle": 1, "resumed": 80}
 
 
 def run(client: Path, manifest: Path, viewport: str) -> dict[str, object]:
@@ -40,10 +41,16 @@ def verify(record: dict[str, object]) -> None:
             raise SystemExit(f"movement benchmark phase {name} has incomplete map accounting")
         if phase.get("changed_map_packets", 0) + phase.get("noop_map_packets", 0) != samples:
             raise SystemExit(f"movement benchmark phase {name} has invalid packet accounting")
+        if phase.get("changed_map_packets") != EXPECTED_CHANGED[name]:
+            raise SystemExit(f"movement benchmark phase {name} did not replay the expected stream")
+        if any(phase.get(key, 0) <= 0 for key in ("first_window_p95_ns", "last_window_p95_ns")):
+            raise SystemExit(f"movement benchmark phase {name} has no sliding-window evidence")
         if phase.get("queue") != {"depth": 0, "bytes": 0, "oldest_age_ms": 0, "processing_ns": 0}:
             raise SystemExit(f"movement benchmark phase {name} has invalid synchronous queue data")
     if len(record.get("checkpoint_sha256", "")) != 64:
         raise SystemExit("movement benchmark checkpoint is invalid")
+    if record.get("same_process_checkpoint_sha256") != record["checkpoint_sha256"]:
+        raise SystemExit("movement benchmark checkpoint is not deterministic in one process")
 
 
 def main() -> int:

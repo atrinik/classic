@@ -957,6 +957,13 @@ typedef struct player_view_movement_phase {
     uint64_t durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
 } player_view_movement_phase_t;
 
+typedef enum player_view_movement_stream {
+    PLAYER_VIEW_MOVEMENT_COLD,
+    PLAYER_VIEW_MOVEMENT_SUSTAINED,
+    PLAYER_VIEW_MOVEMENT_IDLE,
+    PLAYER_VIEW_MOVEMENT_RESUMED,
+} player_view_movement_stream_t;
+
 static uint64_t player_view_percentile(uint64_t *durations, size_t count, size_t numerator) {
     qsort(durations, count, sizeof(*durations), player_view_duration_compare);
     size_t index = (count - 1) * numerator / 100;
@@ -967,16 +974,37 @@ static bool player_view_movement_draw(player_view_movement_phase_t *phase,
                                       SDL_Surface *surface,
                                       const uint8_t *snapshot,
                                       size_t snapshot_size,
-                                      bool packet_changed,
+                                      const uint8_t *next_snapshot,
+                                      size_t next_snapshot_size,
+                                      player_view_movement_stream_t stream,
+                                      const uint8_t **previous_packet,
+                                      size_t *previous_packet_size,
                                       uint32_t *clock_ms) {
     for (uint32_t tick = 0; tick < phase->ticks; tick++) {
+        const uint8_t *packet = snapshot;
+        size_t packet_size = snapshot_size;
+        if (stream == PLAYER_VIEW_MOVEMENT_SUSTAINED) {
+            /* A/B/A changes exercise scroll restoration instead of replaying one frame. */
+            packet = tick % 2 == 0 ? next_snapshot : snapshot;
+            packet_size = tick % 2 == 0 ? next_snapshot_size : snapshot_size;
+        } else if (stream == PLAYER_VIEW_MOVEMENT_IDLE) {
+            /* Same MAP headers while simulated time advances animations. */
+            packet = next_snapshot;
+            packet_size = next_snapshot_size;
+        } else if (stream == PLAYER_VIEW_MOVEMENT_RESUMED) {
+            packet = tick % 2 == 0 ? snapshot : next_snapshot;
+            packet_size = tick % 2 == 0 ? snapshot_size : next_snapshot_size;
+        }
         LastTick = *clock_ms;
-        socket_command_map((uint8_t *)snapshot, snapshot_size, 0);
-        if (packet_changed && tick == 0) {
+        socket_command_map((uint8_t *)packet, packet_size, 0);
+        if (*previous_packet == NULL || *previous_packet_size != packet_size ||
+            memcmp(*previous_packet, packet, packet_size) != 0) {
             phase->changed_packets++;
         } else {
             phase->noop_packets++;
         }
+        *previous_packet = packet;
+        *previous_packet_size = packet_size;
         uint64_t started = SDL_GetTicksNS();
         map_draw_map(surface);
         phase->durations[tick] = SDL_GetTicksNS() - started;
@@ -1004,14 +1032,18 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
         {.name = "resumed", .ticks = PLAYER_VIEW_MOVEMENT_RESUMED_TICKS},
     };
     uint32_t clock_ms = manifest->clock_ms;
+    const uint8_t *previous_packet = NULL;
+    size_t previous_packet_size = 0;
     for (size_t i = 0; i < arraysize(phases); i++) {
-        const uint8_t *packet = i == 0 ? snapshot : next_snapshot;
-        size_t packet_size = i == 0 ? snapshot_size : next_snapshot_size;
         if (!player_view_movement_draw(&phases[i],
                                        surface,
-                                       packet,
-                                       packet_size,
-                                       i < 2,
+                                       snapshot,
+                                       snapshot_size,
+                                       next_snapshot,
+                                       next_snapshot_size,
+                                       (player_view_movement_stream_t)i,
+                                       &previous_packet,
+                                       &previous_packet_size,
                                        &clock_ms)) {
             return false;
         }
@@ -1021,10 +1053,45 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
     if (!player_view_surface_sha256(surface, digest)) {
         return false;
     }
+    /* Repeat the identical stream without reinitializing renderer state.  This
+     * catches cache lifetime bugs which a fresh-process-only probe misses. */
+    player_view_movement_phase_t repeat_phases[] = {
+        {.name = "cold", .ticks = 1},
+        {.name = "sustained", .ticks = PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS},
+        {.name = "idle", .ticks = PLAYER_VIEW_MOVEMENT_IDLE_TICKS},
+        {.name = "resumed", .ticks = PLAYER_VIEW_MOVEMENT_RESUMED_TICKS},
+    };
+    const uint8_t *repeat_previous_packet = NULL;
+    size_t repeat_previous_packet_size = 0;
+    clock_ms = manifest->clock_ms;
+    for (size_t i = 0; i < arraysize(repeat_phases); i++) {
+        if (!player_view_movement_draw(&repeat_phases[i],
+                                       surface,
+                                       snapshot,
+                                       snapshot_size,
+                                       next_snapshot,
+                                       next_snapshot_size,
+                                       (player_view_movement_stream_t)i,
+                                       &repeat_previous_packet,
+                                       &repeat_previous_packet_size,
+                                       &clock_ms)) {
+            return false;
+        }
+    }
+    char same_process_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+    if (!player_view_surface_sha256(surface, same_process_digest)) {
+        return false;
+    }
+    if (strcmp(digest, same_process_digest) != 0) {
+        fprintf(stderr, "player-view: movement replay checkpoint changed in one process\n");
+        return false;
+    }
     printf("{\"schema_version\":1,\"benchmark\":\"player-view-movement\","
-           "\"tick_ms\":%u,\"checkpoint_sha256\":\"%s\",\"phases\":[",
+           "\"tick_ms\":%u,\"checkpoint_sha256\":\"%s\","
+           "\"same_process_checkpoint_sha256\":\"%s\",\"phases\":[",
            PLAYER_VIEW_MOVEMENT_TICK_MS,
-           digest);
+           digest,
+           same_process_digest);
     for (size_t i = 0; i < arraysize(phases); i++) {
         player_view_movement_phase_t *phase = &phases[i];
         uint64_t sorted[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
@@ -1035,9 +1102,17 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
         memcpy(sorted, phase->durations, phase->ticks * sizeof(*sorted));
         uint64_t p99 = player_view_percentile(sorted, phase->ticks, 99);
         uint64_t maximum = sorted[phase->ticks - 1];
+        size_t window = MIN((size_t)32, phase->ticks);
+        memcpy(sorted, phase->durations, window * sizeof(*sorted));
+        uint64_t first_window_p95 = player_view_percentile(sorted, window, 95);
+        memcpy(sorted, &phase->durations[phase->ticks - window], window * sizeof(*sorted));
+        uint64_t last_window_p95 = player_view_percentile(sorted, window, 95);
         printf("%s{\"name\":\"%s\",\"samples\":%u,\"p50_ns\":%" PRIu64
                ",\"p95_ns\":%" PRIu64 ",\"p99_ns\":%" PRIu64
                ",\"max_ns\":%" PRIu64
+               ",\"first_window_p95_ns\":%" PRIu64
+               ",\"last_window_p95_ns\":%" PRIu64
+               ",\"simulated_fps\":%u"
                ",\"map_packets\":%u,\"changed_map_packets\":%u"
                ",\"noop_map_packets\":%u,\"full_map_draws\":%u"
                ",\"queue\":{\"depth\":0,\"bytes\":0,\"oldest_age_ms\":0"
@@ -1049,6 +1124,9 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
                p95,
                p99,
                maximum,
+               first_window_p95,
+               last_window_p95,
+               1000U / PLAYER_VIEW_MOVEMENT_TICK_MS,
                phase->ticks,
                phase->changed_packets,
                phase->noop_packets,
