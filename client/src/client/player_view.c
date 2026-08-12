@@ -1006,6 +1006,10 @@ static bool player_view_movement_draw(player_view_movement_phase_t *phase,
         *previous_packet = packet;
         *previous_packet_size = packet_size;
         uint64_t started = SDL_GetTicksNS();
+        if (!SDL_FillSurfaceRect(surface, NULL, 0)) {
+            fprintf(stderr, "player-view: cannot clear movement benchmark surface: %s\n", SDL_GetError());
+            return false;
+        }
         map_draw_map(surface);
         phase->durations[tick] = SDL_GetTicksNS() - started;
         phase->full_map_draws++;

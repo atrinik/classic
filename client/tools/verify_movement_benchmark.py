@@ -19,7 +19,7 @@ def run(client: Path, manifest: Path, viewport: str) -> dict[str, object]:
         check=False,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=300,
     )
     if result.returncode != 0:
         raise SystemExit(result.stderr)

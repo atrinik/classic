@@ -19,6 +19,14 @@ roof-only cell, and physical depths zero, +1, and +2. Separate smooth and
 discrete manifests freeze both rendering paths; discrete intentionally retains
 the authoritative scalar projection while smooth lighting applies RGB.
 
+The movement-colored fixture expands the same validated colored MAP2 geometry
+to all five physical depths and pairs it with a compact `MAP_UPDATE_CMD_SAME`
+scroll/clear delta for every retained depth. `generate_movement_five_depth.py`
+and `generate_movement_delta.py` recreate the pinned hex inputs. The movement
+replay clears its offscreen frame target before every map draw, matching the
+software renderer's per-frame compositor contract; frame timing therefore
+includes that clear and the full primary map draw.
+
 The radial-light scene freezes the default profiles for the applied portable
 torch (strength 3) and wall sconce (strength 5) on a 13-by-13 floor. The
 sconce's exposed boundary column receives light while the cells beyond it are

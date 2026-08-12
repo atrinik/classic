@@ -63,6 +63,21 @@ def phase(record: dict[str, object], name: str) -> dict[str, object]:
     return next(item for item in record["phases"] if item["name"] == name)
 
 
+def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, object]:
+    """Present stable throughput units without disguising the fixed replay cadence."""
+    representative = phase(records[0], name)
+    p50_ns = int(statistics.median(phase(record, name)["p50_ns"] for record in records))
+    p95_ns = int(statistics.median(phase(record, name)["p95_ns"] for record in records))
+    return {
+        "samples": representative["samples"],
+        "replay_tick_hz": 1000 // int(records[0]["tick_ms"]),
+        "p50_ms": round(p50_ns / 1_000_000, 2),
+        "p95_ms": round(p95_ns / 1_000_000, 2),
+        "p50_render_fps": round(1_000_000_000 / p50_ns, 1),
+        "p95_render_fps": round(1_000_000_000 / p95_ns, 1),
+    }
+
+
 def compare(
     baseline_client: Path,
     baseline_manifest: Path,
@@ -118,7 +133,15 @@ def compare(
             )
         },
     }
-    return {"schema_version": SCHEMA_VERSION, "failed": not all(check["passed"] for check in checks.values()), "samples": samples, "checks": checks}
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "failed": not all(check["passed"] for check in checks.values()),
+        "samples": samples,
+        "checks": checks,
+        "candidate_phases": {
+            name: phase_summary(records["candidate"], name) for name in REQUIRED_PHASES
+        },
+    }
 
 
 def regular_file(path: str) -> Path:

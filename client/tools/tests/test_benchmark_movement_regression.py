@@ -41,6 +41,13 @@ class BenchmarkMovementRegressionTests(unittest.TestCase):
         with self.assertRaisesRegex(benchmark.BenchmarkError, "incomplete"):
             benchmark.parse_result(json.dumps(malformed))
 
+    def test_phase_summary_reports_timing_and_render_throughput(self) -> None:
+        summary = benchmark.phase_summary([benchmark.parse_result(record())], "sustained")
+        self.assertEqual(summary["samples"], 480)
+        self.assertEqual(summary["replay_tick_hz"], 8)
+        self.assertEqual(summary["p50_ms"], 0.0)
+        self.assertEqual(summary["p95_render_fps"], 500_000_000.0)
+
 
 if __name__ == "__main__":
     unittest.main()

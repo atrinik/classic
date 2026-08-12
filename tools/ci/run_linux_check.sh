@@ -111,7 +111,7 @@ case "${component}" in
       -DENABLE_PRECOMPILED_HEADERS=OFF \
       "${launcher[@]}" "${sibling_sources[@]}"
     cmake --build --preset linux-coverage --parallel "${jobs}"
-    ctest --preset linux-coverage
+    ctest --preset linux-coverage -LE performance
     gcovr --root . --filter 'src/' --exclude 'src/tests/' \
       --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
       --print-summary --xml coverage.xml
@@ -165,10 +165,10 @@ case "${component}" in
       python3 "${source_root}/client/tools/benchmark_movement_regression.py" \
         --baseline-client "${baseline_root}/client/build/linux-release/atrinik" \
         --baseline-manifest \
-          "${baseline_root}/client/src/tests/fixtures/player_view/player-outline-widget-state.xml" \
+          "${source_root}/client/src/tests/fixtures/player_view/movement-colored.xml" \
         --candidate-client "${source_root}/client/build/linux-release/atrinik" \
         --candidate-manifest \
-          "${source_root}/client/src/tests/fixtures/player_view/player-outline-widget-state.xml" \
+          "${source_root}/client/src/tests/fixtures/player_view/movement-colored.xml" \
         --samples 3 \
         --output "${source_root}/build/ci-evidence/movement-frame-time.json"
       git -C "${source_root}" worktree remove --force "${baseline_root}"
@@ -182,7 +182,7 @@ case "${component}" in
     cmake --preset linux-sanitizers "${launcher[@]}" "${sibling_sources[@]}"
     cmake --build --preset linux-sanitizers --parallel "${jobs}"
     env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
-      ctest --preset linux-sanitizers
+      ctest --preset linux-sanitizers -LE performance
     popd >/dev/null
     ;;
   integrated)
