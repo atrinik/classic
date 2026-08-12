@@ -11,7 +11,8 @@ enum {
     RICH_PRESENCE_OFF,
     RICH_PRESENCE_GAME,
     RICH_PRESENCE_SERVER,
-    RICH_PRESENCE_SERVER_ZONE
+    RICH_PRESENCE_SERVER_ZONE,
+    RICH_PRESENCE_SERVER_ZONE_CHARACTER
 };
 
 typedef struct rich_presence_input {
@@ -20,6 +21,9 @@ typedef struct rich_presence_input {
     bool public_server;
     const char *server;
     const char *zone;
+    const char *character;
+    uint32_t level;
+    bool character_available;
     uint64_t now_ms;
     uint64_t now_unix;
 } rich_presence_input_t;

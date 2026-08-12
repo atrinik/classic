@@ -1,6 +1,7 @@
 #include <rich_presence.h>
 
 #include <ctype.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -148,6 +149,89 @@ static void normalized_with_prefix(char output[DISCORD_RPC_TEXT_BYTES],
     }
 }
 
+static size_t copy_utf8_prefix(char *output,
+                               size_t output_size,
+                               const char *value,
+                               size_t max_characters) {
+    size_t input_size = strlen(value);
+    size_t input_pos = 0;
+    size_t output_pos = 0;
+    size_t characters = 0;
+    while (input_pos < input_size && characters < max_characters) {
+        size_t width;
+        uint32_t codepoint;
+        if (!utf8_character((const unsigned char *)value + input_pos,
+                            input_size - input_pos,
+                            &width,
+                            &codepoint) ||
+            output_pos + width >= output_size) {
+            break;
+        }
+        (void)codepoint;
+        memcpy(output + output_pos, value + input_pos, width);
+        output_pos += width;
+        input_pos += width;
+        characters++;
+    }
+    output[output_pos] = '\0';
+    return output_pos;
+}
+
+static void character_details(char output[DISCORD_RPC_TEXT_BYTES],
+                              const char *character,
+                              uint32_t level) {
+    char normalized[DISCORD_RPC_TEXT_BYTES];
+    if (!rich_presence_normalize(character, normalized)) {
+        output[0] = '\0';
+        return;
+    }
+    char suffix[32];
+    int suffix_size = snprintf(suffix, sizeof(suffix), " - Level %" PRIu32, level);
+    if (suffix_size < 0 || (size_t)suffix_size >= sizeof(suffix)) {
+        output[0] = '\0';
+        return;
+    }
+    size_t name_limit = DISCORD_RPC_TEXT_BYTES - 1U - (size_t)suffix_size;
+    char bounded[DISCORD_RPC_TEXT_BYTES];
+    copy_utf8_prefix(bounded, sizeof(bounded), normalized, 96U);
+    if (strlen(bounded) > name_limit) {
+        bounded[name_limit] = '\0';
+        while (name_limit != 0U &&
+               ((unsigned char)bounded[name_limit] & 0xc0U) == 0x80U) {
+            bounded[--name_limit] = '\0';
+        }
+    }
+    if (bounded[0] == '\0') {
+        output[0] = '\0';
+        return;
+    }
+    size_t bounded_size = strlen(bounded);
+    memcpy(output, bounded, bounded_size);
+    memcpy(output + bounded_size, suffix, (size_t)suffix_size + 1U);
+}
+
+static void server_and_zone(char output[DISCORD_RPC_TEXT_BYTES],
+                            const rich_presence_input_t *input) {
+    char server[DISCORD_RPC_TEXT_BYTES];
+    char zone[DISCORD_RPC_TEXT_BYTES];
+    if (!rich_presence_normalize(input->public_server ? input->server : "Private server",
+                                 server)) {
+        snprintf(server, sizeof(server), "%s", input->public_server ? "Atrinik server"
+                                                                        : "Private server");
+    }
+    if (!rich_presence_normalize(input->zone, zone)) {
+        snprintf(zone, sizeof(zone), "Unknown zone");
+    }
+    char bounded_server[DISCORD_RPC_TEXT_BYTES];
+    char bounded_zone[DISCORD_RPC_TEXT_BYTES];
+    copy_utf8_prefix(bounded_server, sizeof(bounded_server), server, 56U);
+    copy_utf8_prefix(bounded_zone, sizeof(bounded_zone), zone, 56U);
+    char combined[DISCORD_RPC_TEXT_BYTES * 2U];
+    snprintf(combined, sizeof(combined), "On %.*s / %.*s", 384, bounded_server, 384,
+             bounded_zone);
+    rich_presence_normalize(combined, output);
+}
+
 static void build_activity(const rich_presence_controller_t *controller,
                            const rich_presence_input_t *input,
                            discord_rpc_activity_t *activity) {
@@ -155,18 +239,27 @@ static void build_activity(const rich_presence_controller_t *controller,
     activity->started_at = controller->session_started_at;
     snprintf(activity->details, sizeof(activity->details), "Playing Atrinik Classic");
 
-    if (input->privacy >= RICH_PRESENCE_SERVER) {
+    if (input->privacy >= RICH_PRESENCE_SERVER &&
+        input->privacy < RICH_PRESENCE_SERVER_ZONE_CHARACTER) {
         normalized_with_prefix(activity->state,
                                "On ",
                                input->public_server ? input->server : "Private server",
                                input->public_server ? "Atrinik server" : "Private server");
     }
     if (input->privacy >= RICH_PRESENCE_SERVER_ZONE) {
-        char zone[DISCORD_RPC_TEXT_BYTES];
-        if (rich_presence_normalize(input->zone, zone)) {
-            normalized_with_prefix(activity->details, "Exploring ", zone, "Atrinik");
+        if (input->privacy >= RICH_PRESENCE_SERVER_ZONE_CHARACTER) {
+            server_and_zone(activity->state, input);
+        }
+        if (input->privacy >= RICH_PRESENCE_SERVER_ZONE_CHARACTER &&
+            input->character_available) {
+            character_details(activity->details, input->character, input->level);
         } else {
-            snprintf(activity->details, sizeof(activity->details), "Exploring");
+            char zone[DISCORD_RPC_TEXT_BYTES];
+            if (rich_presence_normalize(input->zone, zone)) {
+                normalized_with_prefix(activity->details, "Exploring ", zone, "Atrinik");
+            } else {
+                snprintf(activity->details, sizeof(activity->details), "Exploring");
+            }
         }
     }
 }
@@ -213,7 +306,7 @@ void rich_presence_controller_tick(rich_presence_controller_t *controller,
                                    const rich_presence_input_t *input,
                                    const rich_presence_backend_t *backend) {
     int privacy = input->privacy;
-    if (privacy < RICH_PRESENCE_OFF || privacy > RICH_PRESENCE_SERVER_ZONE) {
+    if (privacy < RICH_PRESENCE_OFF || privacy > RICH_PRESENCE_SERVER_ZONE_CHARACTER) {
         privacy = RICH_PRESENCE_GAME;
     }
 
