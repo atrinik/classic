@@ -143,6 +143,8 @@ void rich_presence_tick(void) {
             ? MapData.name_new
             : (MapData.name[0] != '\0' ? MapData.name : MapData.region_longname);
     normalized_markup(presence_zone_fresh ? zone_source : NULL, zone);
+    char character[DISCORD_RPC_TEXT_BYTES];
+    normalized_markup(cpl.name, character);
 
     time_t wall_time = time(NULL);
     rich_presence_input_t input = {
@@ -151,6 +153,9 @@ void rich_presence_tick(void) {
         .public_server = selected_server != NULL && selected_server->is_meta,
         .server = server,
         .zone = zone,
+        .character = character,
+        .level = cpl.stats.level,
+        .character_available = character[0] != '\0' && cpl.stats.level != 0U,
         .now_ms = now_ms,
         .now_unix = wall_time > 0 ? (uint64_t)wall_time : 1U,
     };
