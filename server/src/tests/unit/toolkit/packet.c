@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -84,7 +84,7 @@ START_TEST(test_packet_new) {
 }
 END_TEST
 
-/** Build the invariant prefix of a same-map protocol-v1077 MAP update. */
+/** Build the invariant prefix of a same-map protocol-v1078 MAP update. */
 static packet_struct *map_protocol_test_packet(uint8_t level_count) {
     packet_struct *packet = packet_new(0, 16, 16);
     packet_writer_write_uint8(packet, MAP_UPDATE_CMD_SAME);
@@ -199,7 +199,7 @@ START_TEST(test_map_protocol_validates_tile_record_flags) {
     packet_struct *level = packet_new(0, 16, 16);
     packet_writer_write_uint16(level, MAP2_MASK_FOW | MAP2_MASK_LIGHT_LEVEL);
     packet_writer_write_uint8(level, 1);
-    packet_writer_write_uint8(level, 128);
+    packet_writer_write_uint16(level, 2176);
     packet_writer_write_uint8(level, 0);
     packet_writer_write_uint8(level, 0);
     packet_struct *packet = map_protocol_test_packet(1);
@@ -259,27 +259,29 @@ END_TEST
 START_TEST(test_map_protocol_validates_colored_light_extension) {
     packet_struct *level = packet_new(0, 32, 16);
     packet_writer_write_uint16(level, MAP2_MASK_LIGHT_LEVEL);
-    packet_writer_write_uint8(level, 80);
+    packet_writer_write_uint16(level, 2176);
     packet_writer_write_uint8(level, 0);
-    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_RGB);
+    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16);
     packet_writer_write_uint8(level, 1);
-    packet_writer_write_uint8(level, 80);
-    packet_writer_write_uint8(level, 0);
-    packet_writer_write_uint8(level, 40);
+    packet_writer_write_uint16(level, 2176);
+    packet_writer_write_uint16(level, 2062);
+    packet_writer_write_uint16(level, 2051);
     packet_struct *packet = map_protocol_test_packet(1);
     map_protocol_test_level(packet, 0, level);
     ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
 
-    for (size_t len = packet->len - 3; len < packet->len; len++) {
+    for (size_t len = 0; len < packet->len; len++) {
         ck_assert(!map_protocol_validate(packet->data, len, 0, 21, 21));
     }
+    packet_writer_write_uint8(packet, 0xff);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     packet_free(packet);
     packet_free(level);
 
     level = packet_new(0, 16, 16);
     packet_writer_write_uint16(level, 0);
     packet_writer_write_uint8(level, 0);
-    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_RGB);
+    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16);
     packet_writer_write_uint8(level, 0);
     packet = map_protocol_test_packet(1);
     map_protocol_test_level(packet, 0, level);
@@ -290,6 +292,20 @@ START_TEST(test_map_protocol_validates_colored_light_extension) {
     packet = map_protocol_test_packet(1);
     map_protocol_test_level(packet, 0, level);
     ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+    packet_free(level);
+
+    level = packet_new(0, 32, 16);
+    packet_writer_write_uint16(level, MAP2_MASK_LIGHT_LEVEL | MAP2_MASK_LIGHT_LEVEL_MORE);
+    packet_writer_write_uint16(level, 0);
+    for (size_t sub_layer = 1; sub_layer < MAP2_PROTOCOL_SUB_LAYERS; sub_layer++) {
+        packet_writer_write_uint16(level, UINT16_MAX);
+    }
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, 0);
+    packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     packet_free(packet);
     packet_free(level);
 }

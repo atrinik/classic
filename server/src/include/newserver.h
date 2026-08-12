@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -67,14 +67,14 @@ typedef struct MapCell_struct {
 
     uint8_t cleared;
 
-    /** Last normalized light levels sent to the client. */
-    uint8_t light_level[NUM_SUB_LAYERS];
+    /** Last Q5.11 scalar radiance samples sent to the client. */
+    uint16_t light_radiance[NUM_SUB_LAYERS];
 
     /** Whether each normalized light level has been sent at least once. */
     uint8_t light_known[NUM_SUB_LAYERS];
 
-    /** Last resolved RGB light samples sent to the client. */
-    uint8_t light_rgb[NUM_SUB_LAYERS][3];
+    /** Last resolved Q5.11 RGB radiance samples sent to the client. */
+    uint16_t light_rgb_radiance[NUM_SUB_LAYERS][3];
 
     /** Whether each resolved RGB sample is established in the client cache. */
     uint8_t light_rgb_known[NUM_SUB_LAYERS];

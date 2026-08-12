@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -144,11 +144,11 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
                 return false;
             }
         }
-        if ((values & MAP2_MASK_LIGHT_LEVEL) && !map_packet_skip(reader, sizeof(uint8_t))) {
+        if ((values & MAP2_MASK_LIGHT_LEVEL) && !map_packet_skip(reader, sizeof(uint16_t))) {
             return false;
         }
         if ((values & MAP2_MASK_LIGHT_LEVEL_MORE) &&
-            !map_packet_skip(reader, MAP2_PROTOCOL_SUB_LAYERS - 1)) {
+            !map_packet_skip(reader, sizeof(uint16_t) * (MAP2_PROTOCOL_SUB_LAYERS - 1))) {
             return false;
         }
 
@@ -248,11 +248,11 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
 
         uint8_t ext_flags;
         if (!map_packet_read_uint8(reader, &ext_flags) ||
-            (ext_flags & ~(MAP2_FLAG_EXT_ANIM | MAP2_FLAG_EXT_LIGHT_RGB)) != 0) {
+            (ext_flags & ~(MAP2_FLAG_EXT_ANIM | MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16)) != 0) {
             return false;
         }
 
-        if (ext_flags & MAP2_FLAG_EXT_LIGHT_RGB) {
+        if (ext_flags & MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16) {
             uint8_t bitmap;
 
             if (!map_packet_read_uint8(reader, &bitmap) ||
@@ -262,7 +262,7 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
 
             for (uint8_t sub_layer = 0; sub_layer < MAP2_PROTOCOL_SUB_LAYERS; sub_layer++) {
                 if ((bitmap & (UINT8_C(1) << sub_layer)) &&
-                    !map_packet_skip(reader, sizeof(uint8_t) * 3)) {
+                    !map_packet_skip(reader, sizeof(uint16_t) * 3)) {
                     return false;
                 }
             }

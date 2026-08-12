@@ -21,6 +21,7 @@ set(SOURCES
 	src/client/keybind_input.c
 	src/client/keybind_storage.c
 	src/client/lighting.c
+	src/client/lighting_transfer.c
 	src/client/main.c
 	src/client/menu.c
 	src/client/metaserver.c

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -902,10 +902,10 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
                 tile_values++;
             }
             if (mask & MAP2_MASK_LIGHT_LEVEL) {
-                tile_values++;
+                tile_values += sizeof(uint16_t);
             }
             if (mask & MAP2_MASK_LIGHT_LEVEL_MORE) {
-                tile_values += NUM_SUB_LAYERS - 1;
+                tile_values += sizeof(uint16_t) * (NUM_SUB_LAYERS - 1);
             }
             if (len - pos < tile_values + sizeof(num_layers)) {
                 LOG(PACKET, "Truncated map tile metadata.");
@@ -922,14 +922,17 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
 
             /* Do we have light-level information? */
             if (mask & MAP2_MASK_LIGHT_LEVEL) {
-                map_set_light_level(x, y, 0, packet_reader_read_uint8(&reader));
+                map_set_light_radiance(x, y, 0, packet_reader_read_uint16(&reader));
             }
 
             if (mask & MAP2_MASK_LIGHT_LEVEL_MORE) {
                 int sub_layer;
 
                 for (sub_layer = 1; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                    map_set_light_level(x, y, sub_layer, packet_reader_read_uint8(&reader));
+                    map_set_light_radiance(x,
+                                           y,
+                                           sub_layer,
+                                           packet_reader_read_uint16(&reader));
                 }
             }
 
@@ -1128,19 +1131,19 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
             /* Get tile flags. */
             ext_flags = packet_reader_read_uint8(&reader);
 
-            if (ext_flags & MAP2_FLAG_EXT_LIGHT_RGB) {
+            if (ext_flags & MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16) {
                 uint8_t bitmap = packet_reader_read_uint8(&reader);
-                uint8_t rgb[NUM_SUB_LAYERS][3] = {{0}};
+                uint16_t rgb[NUM_SUB_LAYERS][3] = {{0}};
 
                 for (uint8_t sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                     if (!(bitmap & (UINT8_C(1) << sub_layer))) {
                         continue;
                     }
                     for (size_t channel = 0; channel < 3; channel++) {
-                        rgb[sub_layer][channel] = packet_reader_read_uint8(&reader);
+                        rgb[sub_layer][channel] = packet_reader_read_uint16(&reader);
                     }
                 }
-                map_set_light_rgb(x, y, bitmap, rgb);
+                map_set_light_rgb_radiance(x, y, bitmap, rgb);
             }
 
             /* Animation? */
