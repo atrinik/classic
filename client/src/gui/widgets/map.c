@@ -131,16 +131,6 @@ bool map_select_level(int depth, bool create) {
 void map_set_level_mask(uint16_t mask) {
     map_level_mask = mask;
 
-    if (!SDL_FillSurfaceRect(*level_surface,
-                             NULL,
-                             pixel_format_map_rgb((*level_surface)->format, 0, 0, 0))) {
-        LOG(ERROR, "Could not clear map level surface: %s", SDL_GetError());
-        map_select_level(0, true);
-        lighting_select_level(0);
-        render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
-        return;
-    }
-
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         size_t index = (size_t)MAP2_DEPTH_INDEX(depth);
 
@@ -2927,6 +2917,16 @@ void map_draw_map(SDL_Surface *surface) {
             render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
             return;
         }
+    }
+
+    if (!SDL_FillSurfaceRect(*level_surface,
+                             NULL,
+                             pixel_format_map_rgb((*level_surface)->format, 0, 0, 0))) {
+        LOG(ERROR, "Could not clear map level surface: %s", SDL_GetError());
+        map_select_level(0, true);
+        lighting_select_level(0);
+        render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
+        return;
     }
 
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
