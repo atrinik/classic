@@ -107,6 +107,7 @@ static bool test_asset_replacement_progressed;
 static size_t test_book_redraws;
 static size_t test_interface_redraws;
 static size_t test_widget_redraws;
+static size_t test_active_effect_redraws;
 
 static FILE *test_path_fopen(const char *path, const char *mode) {
     TEST_CHECK(path != NULL);
@@ -349,8 +350,10 @@ void interface_redraw(void) {
 }
 
 void widget_redraw_all(int widget_type_id) {
-    (void)widget_type_id;
     test_widget_redraws++;
+    if (widget_type_id == ACTIVE_EFFECTS_ID) {
+        test_active_effect_redraws++;
+    }
 }
 
 static void test_png_load(void) {
@@ -852,6 +855,7 @@ static void test_counters_reset(void) {
     test_book_redraws = 0;
     test_interface_redraws = 0;
     test_widget_redraws = 0;
+    test_active_effect_redraws = 0;
 }
 
 static void test_foreground_promotes_a_prefetch(void) {
@@ -1231,11 +1235,13 @@ static void test_production_completion_budget(void) {
     TEST_CHECK(face_loader_test_wait_results(TEST_BUDGET_FACE_COUNT, TEST_ASYNC_TIMEOUT_MS));
 
     size_t redraws_before = test_book_redraws;
+    size_t active_effect_redraws_before = test_active_effect_redraws;
     test_budget_clock_calls = 0;
     image_face_requests_test_clock_set(test_budget_clock);
     image_face_requests_service();
     TEST_CHECK(test_loaded_budget_faces() == 1);
     TEST_CHECK(test_book_redraws == redraws_before + 1);
+    TEST_CHECK(test_active_effect_redraws == active_effect_redraws_before + 1);
 
     image_face_requests_test_clock_set(NULL);
     for (uint16_t face = TEST_BUDGET_FACE_FIRST;

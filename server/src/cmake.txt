@@ -125,6 +125,7 @@ set(SERVER_CORE_SOURCES
 	src/socket/network_metrics.c
 	src/socket/port_mapping.c
 	src/socket/port_mapping_controller.c
+	src/socket/player_status.c
 	src/socket/assets.c
 	src/socket/request.c
 	src/socket/server.c

@@ -71,10 +71,6 @@ bool item_packet_parse_update(packet_reader_t *reader,
             update->skill_level = packet_reader_read_uint8(reader);
             update->skill_exp = packet_reader_read_int64(reader);
             packet_reader_read_string(reader, update->extra_message, MAX_BUF);
-        } else if (update->item.itype == TYPE_FORCE || update->item.itype == TYPE_POISONING) {
-            update->extra_type = ITEM_PACKET_EXTRA_EFFECT;
-            update->effect_seconds = packet_reader_read_int32(reader);
-            packet_reader_read_string(reader, VS(update->extra_message));
         }
     }
     if (flags & UPD_GLOW) {

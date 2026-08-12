@@ -221,8 +221,8 @@ endif ()
 file(STRINGS
     "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
     ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
-if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1078U$")
-    message(FATAL_ERROR "Client requires classic game protocol v1078")
+if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1079U$")
+    message(FATAL_ERROR "Client requires classic game protocol v1079")
 endif ()
 if (NOT TARGET Atrinik::Core)
     set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
@@ -476,6 +476,22 @@ if (BUILD_TESTING)
         SDL3_image::SDL3_image
         SDL3_ttf::SDL3_ttf)
     add_test(NAME client-compound-packet COMMAND client-compound-packet-tests)
+
+    add_executable(client-player-status-tests
+        src/tests/player_status.c
+        src/client/player_status.c
+        src/gui/widgets/active_effects_model.c)
+    atrinik_configure_target(client-player-status-tests)
+    target_compile_definitions(client-player-status-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-player-status-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-player-status-tests PRIVATE
+        Atrinik::Core
+        SDL3::SDL3)
+    add_test(NAME client-player-status COMMAND client-player-status-tests)
 
     add_executable(client-face-asset-tests
         src/tests/face_asset.c

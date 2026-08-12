@@ -17,10 +17,11 @@ SPEC.loader.exec_module(GENERATE)
 class GenerateTests(unittest.TestCase):
     def test_repository_schema_is_valid(self) -> None:
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
-        self.assertEqual(schema["protocol_version"], 1078)
+        self.assertEqual(schema["protocol_version"], 1079)
         self.assertEqual(schema["item_name_size"], 128)
+        self.assertEqual(schema["player_status"]["max_statuses"], 48)
         self.assertEqual(len(schema["client_to_server"]), 23)
-        self.assertEqual(len(schema["server_to_client"]), 28)
+        self.assertEqual(len(schema["server_to_client"]), 29)
 
     def test_repository_outputs_are_current(self) -> None:
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
@@ -58,6 +59,25 @@ class GenerateTests(unittest.TestCase):
             path = Path(directory) / "schema.json"
             path.write_text(json.dumps(data), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "duplicate server_to_client symbol"):
+                GENERATE.load_schema(path)
+
+    def test_invalid_player_status_operation_is_rejected(self) -> None:
+        data = json.loads((ROOT / "schema/game-commands.json").read_text(encoding="utf-8"))
+        data["player_status"]["operations"][1]["id"] = 9
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "schema.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "contiguous value 1"):
+                GENERATE.load_schema(path)
+
+    def test_oversized_player_status_snapshot_is_rejected(self) -> None:
+        data = json.loads((ROOT / "schema/game-commands.json").read_text(encoding="utf-8"))
+        data["player_status"]["max_statuses"] = 49
+        data["player_status"]["tooltip_size"] = 65535
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "schema.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "maximum packet payload"):
                 GENERATE.load_schema(path)
 
 
