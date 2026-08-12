@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -1278,8 +1278,8 @@ void draw_client_map2(object *pl) {
     int special_vision;
     uint16_t mask;
     int layer, raw_light[NUM_SUB_LAYERS], light_set[NUM_SUB_LAYERS];
-    uint8_t light_level[NUM_SUB_LAYERS];
-    uint8_t light_rgb[NUM_SUB_LAYERS][3];
+    uint16_t light_radiance[NUM_SUB_LAYERS];
+    uint16_t light_rgb_radiance[NUM_SUB_LAYERS][3];
     int ext_flags, anim_num;
     int num_layers;
     object *tmp, *tmp2;
@@ -1600,8 +1600,8 @@ void draw_client_map2(object *pl) {
 
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                     light_set[sub_layer] = 0;
-                    light_level[sub_layer] = 0;
-                    memset(light_rgb[sub_layer], 0, sizeof(light_rgb[sub_layer]));
+                    light_radiance[sub_layer] = 0;
+                    memset(light_rgb_radiance[sub_layer], 0, sizeof(light_rgb_radiance[sub_layer]));
                 }
 
                 /* Initialize default values for some variables. */
@@ -1705,10 +1705,10 @@ void draw_client_map2(object *pl) {
                                 }
                             }
 
-                            light_level[sub_layer] = light_level_from_raw(raw_light[sub_layer]);
-                            light_levels_from_raw(GET_MAP_SPACE_PTR(tmp->map, tmp->x, tmp->y),
-                                                  raw_light[sub_layer],
-                                                  light_rgb[sub_layer]);
+                            light_radiance_from_raw(GET_MAP_SPACE_PTR(tmp->map, tmp->x, tmp->y),
+                                                    raw_light[sub_layer],
+                                                    &light_radiance[sub_layer],
+                                                    light_rgb_radiance[sub_layer]);
                         }
 
                         if (tmp != NULL && raw_light[sub_layer] <= 0) {
@@ -2126,10 +2126,10 @@ void draw_client_map2(object *pl) {
                  * light field independently of whether a dark tile had a drawable
                  * object, and send every visible sub-layer at least once. */
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                    uint8_t resolved_light = light_set[sub_layer] ? light_level[sub_layer] : 0;
+                    uint16_t resolved_light = light_set[sub_layer] ? light_radiance[sub_layer] : 0;
 
                     if (!mp->light_known[sub_layer] ||
-                        resolved_light != mp->light_level[sub_layer]) {
+                        resolved_light != mp->light_radiance[sub_layer]) {
                         if (sub_layer == 0) {
                             mask |= MAP2_MASK_LIGHT_LEVEL;
                         } else {
@@ -2141,10 +2141,10 @@ void draw_client_map2(object *pl) {
                 uint8_t light_rgb_bitmap = 0;
                 bool light_rgb_changed = false;
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                    uint8_t resolved_light = light_set[sub_layer] ? light_level[sub_layer] : 0;
-                    uint8_t resolved_rgb[3] = {resolved_light, resolved_light, resolved_light};
+                    uint16_t resolved_light = light_set[sub_layer] ? light_radiance[sub_layer] : 0;
+                    uint16_t resolved_rgb[3] = {resolved_light, resolved_light, resolved_light};
                     if (light_set[sub_layer]) {
-                        memcpy(resolved_rgb, light_rgb[sub_layer], sizeof(resolved_rgb));
+                        memcpy(resolved_rgb, light_rgb_radiance[sub_layer], sizeof(resolved_rgb));
                     }
 
                     if (resolved_rgb[0] != resolved_light || resolved_rgb[1] != resolved_light ||
@@ -2155,7 +2155,7 @@ void draw_client_map2(object *pl) {
                     if ((!mp->light_rgb_known[sub_layer] &&
                          (light_rgb_bitmap & (UINT8_C(1) << sub_layer))) ||
                         (mp->light_rgb_known[sub_layer] &&
-                         memcmp(mp->light_rgb[sub_layer], resolved_rgb, sizeof(resolved_rgb)) !=
+                         memcmp(mp->light_rgb_radiance[sub_layer], resolved_rgb, sizeof(resolved_rgb)) !=
                              0)) {
                         light_rgb_changed = true;
                     }
@@ -2182,20 +2182,24 @@ void draw_client_map2(object *pl) {
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                     if ((sub_layer == 0 && !(mask & MAP2_MASK_LIGHT_LEVEL)) ||
                         (sub_layer != 0 && !(mask & MAP2_MASK_LIGHT_LEVEL_MORE))) {
-                        if (!light_set[sub_layer] && mp->light_level[sub_layer] != 0) {
-                            mp->light_level[sub_layer] = 0;
+                        if (!light_set[sub_layer] && mp->light_radiance[sub_layer] != 0) {
+                            mp->light_radiance[sub_layer] = 0;
                         }
 
                         continue;
                     }
 
-                    packet_debug_data(packet, 1, "Light level (sub-layer: %d)", sub_layer);
-                    mp->light_level[sub_layer] = light_set[sub_layer] ? light_level[sub_layer] : 0;
+                    packet_debug_data(packet, 1, "Q5.11 scalar radiance (sub-layer: %d)", sub_layer);
+                    mp->light_radiance[sub_layer] =
+                        light_set[sub_layer] ? light_radiance[sub_layer] : 0;
                     mp->light_known[sub_layer] = 1;
-                    packet_writer_write_uint8(packet, mp->light_level[sub_layer]);
+                    packet_writer_write_uint16(packet, mp->light_radiance[sub_layer]);
 
                     if (!(light_rgb_bitmap & (UINT8_C(1) << sub_layer))) {
-                        memset(mp->light_rgb[sub_layer], mp->light_level[sub_layer], 3);
+                        for (size_t channel = 0; channel < 3; channel++) {
+                            mp->light_rgb_radiance[sub_layer][channel] =
+                                mp->light_radiance[sub_layer];
+                        }
                         mp->light_rgb_known[sub_layer] = 1;
                     }
                 }
@@ -2230,7 +2234,7 @@ void draw_client_map2(object *pl) {
                 }
 
                 if (light_rgb_changed) {
-                    ext_flags |= MAP2_FLAG_EXT_LIGHT_RGB;
+                    ext_flags |= MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16;
                 }
 
                 /* Add flags for this tile. */
@@ -2239,26 +2243,31 @@ void draw_client_map2(object *pl) {
 
                 /* RGB complete state precedes animation data. A zero bitmap
                  * explicitly resets every sub-layer to its scalar level. */
-                if (ext_flags & MAP2_FLAG_EXT_LIGHT_RGB) {
+                if (ext_flags & MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16) {
                     packet_debug_data(packet, 1, "Colored-light sub-layer bitmap");
                     packet_writer_write_uint8(packet, light_rgb_bitmap);
                     for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                        uint8_t resolved_light = light_set[sub_layer] ? light_level[sub_layer] : 0;
-                        uint8_t resolved_rgb[3] = {
+                        uint16_t resolved_light =
+                            light_set[sub_layer] ? light_radiance[sub_layer] : 0;
+                        uint16_t resolved_rgb[3] = {
                             resolved_light,
                             resolved_light,
                             resolved_light,
                         };
                         if (light_set[sub_layer]) {
-                            memcpy(resolved_rgb, light_rgb[sub_layer], sizeof(resolved_rgb));
+                            memcpy(resolved_rgb,
+                                   light_rgb_radiance[sub_layer],
+                                   sizeof(resolved_rgb));
                         }
 
                         if (light_rgb_bitmap & (UINT8_C(1) << sub_layer)) {
-                            packet_writer_write_uint8(packet, resolved_rgb[0]);
-                            packet_writer_write_uint8(packet, resolved_rgb[1]);
-                            packet_writer_write_uint8(packet, resolved_rgb[2]);
+                            packet_writer_write_uint16(packet, resolved_rgb[0]);
+                            packet_writer_write_uint16(packet, resolved_rgb[1]);
+                            packet_writer_write_uint16(packet, resolved_rgb[2]);
                         }
-                        memcpy(mp->light_rgb[sub_layer], resolved_rgb, sizeof(resolved_rgb));
+                        memcpy(mp->light_rgb_radiance[sub_layer],
+                               resolved_rgb,
+                               sizeof(resolved_rgb));
                         mp->light_rgb_known[sub_layer] = 1;
                     }
                 }

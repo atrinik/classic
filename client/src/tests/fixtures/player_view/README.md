@@ -12,8 +12,9 @@ without floor geometry and gives only its canonical object sub-layer a light
 sample. It guards against shading such roofs with an unrelated empty player
 sub-layer.
 
-The colored scene retains neutral ambient cells and adds resolved red, blue,
-and magenta overlap samples across ground, fog, ordinary objects, walls, a
+The colored scene retains neutral ambient cells and adds the normative subtle
+warm and cool full-day vectors together with resolved red, blue, and magenta
+overlap samples across ground, fog, ordinary and elevated objects, walls, a
 roof-only cell, and physical depths zero, +1, and +2. Separate smooth and
 discrete manifests freeze both rendering paths; discrete intentionally retains
 the authoritative scalar projection while smooth lighting applies RGB.

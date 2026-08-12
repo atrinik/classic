@@ -1091,7 +1091,7 @@ START_TEST(test_opposite_scoped_clear_does_not_scan_near_limit_fire_index) {
 }
 END_TEST
 
-START_TEST(test_move_and_fire_require_exact_v1077_payloads) {
+START_TEST(test_move_and_fire_require_exact_v1078_payloads) {
     mapstruct *map;
     object *op;
 
@@ -1408,7 +1408,8 @@ START_TEST(test_map_rgb_cache_tracks_hue_changes_and_neutral_reset) {
                                           CONTR(pl)->cs->mapy_2,
                                           false);
     ck_assert_ptr_nonnull(cell);
-    ck_assert_uint_gt(cell->light_rgb[pl->sub_layer][0], cell->light_rgb[pl->sub_layer][2]);
+    ck_assert_uint_gt(cell->light_rgb_radiance[pl->sub_layer][0],
+                      cell->light_rgb_radiance[pl->sub_layer][2]);
 
     adjust_light_source_color(map, source->x, source->y, 1, source->light_color, -1);
     source->light_color = UINT32_C(0x0000ff);
@@ -1416,7 +1417,8 @@ START_TEST(test_map_rgb_cache_tracks_hue_changes_and_neutral_reset) {
     socket_buffer_clear(CONTR(pl)->cs);
     draw_client_map2(pl);
     ck_assert_uint_eq(validate_queued_map_payloads(CONTR(pl)->cs), 1);
-    ck_assert_uint_gt(cell->light_rgb[pl->sub_layer][2], cell->light_rgb[pl->sub_layer][0]);
+    ck_assert_uint_gt(cell->light_rgb_radiance[pl->sub_layer][2],
+                      cell->light_rgb_radiance[pl->sub_layer][0]);
 
     adjust_light_source_color(map, source->x, source->y, 1, source->light_color, -1);
     source->light_color = LIGHT_COLOR_WHITE;
@@ -1424,9 +1426,13 @@ START_TEST(test_map_rgb_cache_tracks_hue_changes_and_neutral_reset) {
     socket_buffer_clear(CONTR(pl)->cs);
     draw_client_map2(pl);
     ck_assert_uint_eq(validate_queued_map_payloads(CONTR(pl)->cs), 1);
-    ck_assert_uint_eq(cell->light_rgb[pl->sub_layer][0], cell->light_level[pl->sub_layer]);
-    ck_assert_uint_eq(cell->light_rgb[pl->sub_layer][1], cell->light_level[pl->sub_layer]);
-    ck_assert_uint_eq(cell->light_rgb[pl->sub_layer][2], cell->light_level[pl->sub_layer]);
+    ck_assert_uint_eq(cell->light_rgb_radiance[pl->sub_layer][0],
+                      cell->light_radiance[pl->sub_layer]);
+    ck_assert_uint_eq(cell->light_rgb_radiance[pl->sub_layer][1],
+                      cell->light_radiance[pl->sub_layer]);
+    ck_assert_uint_eq(cell->light_rgb_radiance[pl->sub_layer][2],
+                      cell->light_radiance[pl->sub_layer]);
+    ck_assert_uint_eq(sizeof(cell->light_radiance) + sizeof(cell->light_rgb_radiance), 56);
 }
 END_TEST
 
@@ -1540,6 +1546,7 @@ START_TEST(test_dense_colored_level_splits_at_tile_boundaries) {
     ck_assert_uint_ge(first->len, 7);
     uint16_t expected_continuations = ((uint16_t)first->data[4] << 8) | first->data[5];
     ck_assert_uint_gt(expected_continuations, 0);
+    ck_assert_uint_le(expected_continuations, 4096);
     bool continuation_found = false;
     uint16_t continuation_sequence = 0;
     for (packet_struct *packet = CONTR(pl)->cs->packets; packet != NULL && packet->next != NULL;
@@ -1549,6 +1556,7 @@ START_TEST(test_dense_colored_level_splits_at_tile_boundaries) {
             packet->next->data[0] == MAP_UPDATE_CMD_PARTIAL) {
             continuation_found = true;
             continuation_sequence++;
+            ck_assert_uint_le(packet->next->len, PACKET_PAYLOAD_MAX);
             ck_assert_uint_ge(packet->next->len, 7);
             ck_assert_uint_eq(((uint16_t)packet->next->data[4] << 8) | packet->next->data[5],
                               continuation_sequence);
@@ -1585,7 +1593,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_quick_running_tap_executes_before_ordered_stop);
     tcase_add_test(tc_core, test_canceled_movement_bytes_do_not_exhaust_live_queue_limit);
     tcase_add_test(tc_core, test_opposite_scoped_clear_does_not_scan_near_limit_fire_index);
-    tcase_add_test(tc_core, test_move_and_fire_require_exact_v1077_payloads);
+    tcase_add_test(tc_core, test_move_and_fire_require_exact_v1078_payloads);
     tcase_add_test(tc_core, test_malformed_tombstone_queue_is_discarded_safely);
     tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
     tcase_add_test(tc_core, test_version_requires_exact_match);

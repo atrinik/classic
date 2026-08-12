@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -407,8 +407,8 @@ typedef struct socket_face_batch_response {
  *@{*/
 /** An animation. */
 #define MAP2_FLAG_EXT_ANIM 1
-/** Complete per-tile set of explicitly colored sub-layer samples follows. */
-#define MAP2_FLAG_EXT_LIGHT_RGB 2
+/** Complete per-tile set of explicitly colored Q5.11 RGB radiance follows. */
+#define MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16 2
 /*@}*/
 
 /**

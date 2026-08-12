@@ -221,8 +221,8 @@ endif ()
 file(STRINGS
     "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
     ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
-if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1077U$")
-    message(FATAL_ERROR "Client requires classic game protocol v1077")
+if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1078U$")
+    message(FATAL_ERROR "Client requires classic game protocol v1078")
 endif ()
 if (NOT TARGET Atrinik::Core)
     set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
@@ -321,6 +321,19 @@ if (MINGW)
 endif ()
 
 if (BUILD_TESTING)
+    find_program(ATRINIK_PYTHON3_EXECUTABLE python3 REQUIRED)
+    add_test(NAME client-lighting-lut-generated
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_lighting_lut.py" --check)
+
+    add_executable(client-lighting-transfer-tests
+        src/tests/lighting_transfer.c
+        src/client/lighting_transfer.c)
+    atrinik_configure_target(client-lighting-transfer-tests)
+    target_include_directories(client-lighting-transfer-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    add_test(NAME client-lighting-transfer COMMAND client-lighting-transfer-tests)
+
     add_executable(client-rich-presence-tests
         src/tests/rich_presence.c
         src/client/discord_rpc.c
@@ -671,6 +684,10 @@ if (BUILD_TESTING)
         COMMAND atrinik --player-view "${player_view_fixtures}/colored-smooth.xml" -)
     add_test(NAME client-player-view-colored-discrete
         COMMAND atrinik --player-view "${player_view_fixtures}/colored-discrete.xml" -)
+    add_test(NAME client-player-view-high-key-smooth
+        COMMAND atrinik --player-view "${player_view_fixtures}/high-key-smooth.xml" -)
+    add_test(NAME client-player-view-high-key-discrete
+        COMMAND atrinik --player-view "${player_view_fixtures}/high-key-discrete.xml" -)
     add_test(NAME client-player-view-output
         COMMAND ${CMAKE_COMMAND}
             "-DATRINIK_CLIENT=$<TARGET_FILE:atrinik>"
