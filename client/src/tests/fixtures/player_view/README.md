@@ -33,9 +33,10 @@ The four local-player outline scenes identify only the depth-zero center-cell
 living object at the MAP header's player sub-layer. They freeze an unobscured
 animated, rotated, non-uniformly zoomed and aligned player; a later-painted
 same-level wall; an authorized positive-depth roof projected across the player;
-and a nearby living object that must retain ordinary rendering. The structural
-occluders continue to hide the player's interior while the final primary-map
-pass reveals only the transformed yellow silhouette.
+and a nearby living object that must retain ordinary rendering. The unobscured
+and nearby-living scenes receive no outline. In the other two scenes, the
+structural occluders continue to hide the player's interior while the final
+primary-map pass reveals only the transformed yellow silhouette.
 
 The non-primary outline scene replays the nearby-living snapshot onto a surface
 other than the map widget. It models the dynamic minimap's `map_draw_map()` call
@@ -43,11 +44,11 @@ and freezes the retained legacy living cue without enabling the new outline.
 
 The widget-state scene freezes `sans.ttf`, enables names and target UI, renders
 through the real widget zoom/blit path at 125%, then applies a second validated
-MAP update that scrolls the cache and redraws the local player at the new center.
-The harness asserts that both UI paths executed and separately hashes the
-UI-enabled pixels, including the name, target label, health bar, placement, and
-ordering. It then disables the UI and hashes a second deterministic reference
-for the moved, zoomed outline.
+MAP update that scrolls the cache and redraws the unobscured local player at the
+new center. The harness asserts that both UI paths executed and separately
+hashes the UI-enabled pixels, including the name, target label, health bar,
+placement, and ordering. It then disables the UI and hashes a second
+deterministic reference for the moved, zoomed player without an outline.
 
 `expected-pixels-sha256` and the widget scene's
 `expected-ui-pixels-sha256` hash the viewport width and height as big-endian

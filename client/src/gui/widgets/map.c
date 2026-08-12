@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -1409,6 +1409,7 @@ typedef struct map_render_command {
     bool door_hint;
     bool exit;
     bool local_player;
+    bool player_occluded;
     bool transformed;
 } map_render_command_t;
 
@@ -2593,67 +2594,73 @@ static bool map_render_command_overlaps(const map_render_command_t *left,
            right->bounds_y < left->bounds_y + left->bounds_h;
 }
 
-/** Return whether an opaque later sprite hides a substantial part of a door. */
-static bool map_render_command_covers_door(const map_render_command_t *door,
-                                           const map_render_command_t *occluder) {
-    if (!map_render_command_overlaps(door, occluder)) {
+/** Return whether a later sprite hides the requested share of another sprite. */
+static bool map_render_command_covers(const map_render_command_t *covered_command,
+                                      const map_render_command_t *occluder,
+                                      bool substantial) {
+    if (!map_render_command_overlaps(covered_command, occluder)) {
         return false;
     }
 
     /* Rotated/zoomed sprites are uncommon structural geometry. Their projected
      * bounds remain the safe fallback because mapping a transformed source
      * pixel back exactly would duplicate the rotozoom implementation. */
-    if (door->transformed || occluder->transformed) {
+    if (covered_command->transformed || occluder->transformed) {
         return true;
     }
 
-    bool door_locked = false;
+    bool covered_command_locked = false;
     bool occluder_locked = false;
-    if (SDL_MUSTLOCK(door->source)) {
-        if (!SDL_LockSurface(door->source)) {
+    if (SDL_MUSTLOCK(covered_command->source)) {
+        if (!SDL_LockSurface(covered_command->source)) {
             return false;
         }
-        door_locked = true;
+        covered_command_locked = true;
     }
-    if (occluder->source != door->source && SDL_MUSTLOCK(occluder->source)) {
+    if (occluder->source != covered_command->source && SDL_MUSTLOCK(occluder->source)) {
         if (!SDL_LockSurface(occluder->source)) {
-            if (door_locked) {
-                SDL_UnlockSurface(door->source);
+            if (covered_command_locked) {
+                SDL_UnlockSurface(covered_command->source);
             }
             return false;
         }
         occluder_locked = true;
     }
 
-    size_t door_pixels = 0;
-    for (int y = 0; y < door->source->h; y++) {
-        for (int x = 0; x < door->source->w; x++) {
-            door_pixels += surface_pixel_visible(door->source, x, y);
+    size_t visible_pixels = 0;
+    for (int y = 0; y < covered_command->source->h; y++) {
+        for (int x = 0; x < covered_command->source->w; x++) {
+            visible_pixels += surface_pixel_visible(covered_command->source, x, y);
         }
     }
 
     bool covered = false;
-    int door_copies = door->draw_double ? 2 : 1;
+    int covered_copies = covered_command->draw_double ? 2 : 1;
     int occluder_copies = occluder->draw_double ? 2 : 1;
-    for (int door_copy = 0; door_copy < door_copies && !covered; door_copy++) {
-        int door_y = door->y - door_copy * 22;
+    for (int covered_copy = 0; covered_copy < covered_copies && !covered; covered_copy++) {
+        int covered_y = covered_command->y - covered_copy * 22;
         for (int occluder_copy = 0; occluder_copy < occluder_copies && !covered; occluder_copy++) {
             int occluder_y = occluder->y - occluder_copy * 22;
-            int x_start = MAX(door->x, occluder->x);
-            int x_end = MIN(door->x + door->source->w, occluder->x + occluder->source->w);
-            int y_start = MAX(door_y, occluder_y);
-            int y_end = MIN(door_y + door->source->h, occluder_y + occluder->source->h);
+            int x_start = MAX(covered_command->x, occluder->x);
+            int x_end = MIN(covered_command->x + covered_command->source->w,
+                            occluder->x + occluder->source->w);
+            int y_start = MAX(covered_y, occluder_y);
+            int y_end =
+                MIN(covered_y + covered_command->source->h, occluder_y + occluder->source->h);
             size_t covered_pixels = 0;
 
             for (int y = y_start; y < y_end && !covered; y++) {
                 for (int x = x_start; x < x_end; x++) {
-                    if (!surface_pixel_visible(door->source, x - door->x, y - door_y) ||
+                    if (!surface_pixel_visible(covered_command->source,
+                                               x - covered_command->x,
+                                               y - covered_y) ||
                         !surface_pixel_visible(occluder->source, x - occluder->x, y - occluder_y)) {
                         continue;
                     }
 
                     covered_pixels++;
-                    if (covered_pixels * 2 >= door_pixels) {
+                    if ((!substantial && covered_pixels != 0) ||
+                        (substantial && covered_pixels * 2 >= visible_pixels)) {
                         covered = true;
                         break;
                     }
@@ -2665,8 +2672,8 @@ static bool map_render_command_covers_door(const map_render_command_t *door,
     if (occluder_locked) {
         SDL_UnlockSurface(occluder->source);
     }
-    if (door_locked) {
-        SDL_UnlockSurface(door->source);
+    if (covered_command_locked) {
+        SDL_UnlockSurface(covered_command->source);
     }
     return covered;
 }
@@ -2697,11 +2704,34 @@ static void map_render_commands_find_door_hints(map_render_context_t *context) {
             map_render_command_t *occluder = &context->commands[occluder_index];
             if (occluder->object_layer != LAYER_WALL || occluder->door ||
                 (occluder->effects.alpha != 0 && occluder->effects.alpha < 128) ||
-                !map_render_command_covers_door(door, occluder)) {
+                !map_render_command_covers(door, occluder, true)) {
                 continue;
             }
 
             door->door_hint = true;
+            break;
+        }
+    }
+}
+
+/** Mark the local player only when later structural geometry covers it. */
+static void map_render_commands_find_player_occlusion(map_render_context_t *context) {
+    for (size_t player_index = 0; player_index < context->commands_num; player_index++) {
+        map_render_command_t *player = &context->commands[player_index];
+        if (!player->local_player) {
+            continue;
+        }
+
+        for (size_t occluder_index = player_index + 1; occluder_index < context->commands_num;
+             occluder_index++) {
+            const map_render_command_t *occluder = &context->commands[occluder_index];
+            if (occluder->object_layer != LAYER_WALL ||
+                (occluder->effects.alpha != 0 && occluder->effects.alpha < 128) ||
+                !map_render_command_covers(player, occluder, false)) {
+                continue;
+            }
+
+            player->player_occluded = true;
             break;
         }
     }
@@ -2720,6 +2750,7 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool pr
 
     if (primary_surface) {
         map_render_commands_find_door_hints(context);
+        map_render_commands_find_player_occlusion(context);
     }
 
     int selected_depth = MAP2_MAX_DEPTH + 1;
@@ -2751,7 +2782,7 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool pr
     if (primary_surface) {
         for (size_t i = 0; i < context->commands_num; i++) {
             const map_render_command_t *command = &context->commands[i];
-            if (!command->local_player && !command->door_hint &&
+            if (!(command->local_player && command->player_occluded) && !command->door_hint &&
                 !(command->exit && command->depth == 0)) {
                 continue;
             }
