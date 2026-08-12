@@ -32,10 +32,10 @@ jobs:
       checks: read
       contents: write
     outputs:
-      commit: ${{ steps.retained.outputs.commit }}
-      source_epoch: ${{ steps.retained.outputs.source_epoch }}
-      tag: ${{ steps.retained.outputs.tag }}
-      version: ${{ steps.retained.outputs.version }}
+      commit: ${{ steps.metadata.outputs.commit || steps.retained.outputs.commit }}
+      source_epoch: ${{ steps.metadata.outputs.source_epoch || steps.retained.outputs.source_epoch }}
+      tag: ${{ steps.metadata.outputs.tag || steps.retained.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version || steps.retained.outputs.version }}
     steps:
       - name: Check out the current main recovery definition
         if: github.ref == 'refs/heads/main'
@@ -43,6 +43,12 @@ jobs:
         with:
           fetch-depth: 0
           ref: main
+      - name: Check out the immutable release tag
+        if: github.ref_type == 'tag'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag }}
       - name: Require an immutable tag or validated main recovery definition
         env:
           GH_TOKEN: ${{ github.token }}
@@ -69,6 +75,22 @@ jobs:
               --jq '[.check_runs[] | select(.name == "Classic validation" and .conclusion == "success" and .app.id == 15368)] | length')
             test "${successful}" -ge 1
           fi
+      - id: metadata
+        name: Validate tag, release, checks, and ancestry
+        if: inputs.candidate_run_id == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          recovery_arguments=()
+          if test "${GITHUB_REF}" = refs/heads/main; then
+            recovery_arguments+=(--recovery-main)
+          fi
+          python3 tools/release/validate_release.py \
+            --tag "${RELEASE_TAG}" \
+            --repository "${RELEASE_REPOSITORY}" \
+            "${recovery_arguments[@]}"
       - id: retained
         name: Validate the retained complete candidate
         if: inputs.candidate_run_id != ''
@@ -147,12 +169,15 @@ jobs:
     permissions:
       actions: read
       checks: read
-      contents: write
+      contents: read
       packages: read
     uses: ./.github/workflows/build-release-candidate.yml
     with:
       rehearsal: false
+      revision: ${{ needs.preflight.outputs.commit }}
+      source_epoch: ${{ needs.preflight.outputs.source_epoch }}
       tag: ${{ inputs.tag }}
+      version: ${{ needs.preflight.outputs.version }}
 
   publish:
     name: Publish unified release

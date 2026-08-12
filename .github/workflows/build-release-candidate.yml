@@ -9,7 +9,12 @@ on:
         required: false
         type: boolean
       revision:
-        description: Commit to rehearse without publishing
+        description: Exact preflight-validated candidate commit
+        default: ""
+        required: false
+        type: string
+      source_epoch:
+        description: Exact preflight-validated candidate source epoch
         default: ""
         required: false
         type: string
@@ -53,65 +58,48 @@ concurrency:
 
 jobs:
   metadata:
-    name: Validate unified release
+    name: Bind preflight-validated candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # GitHub exposes drafts only to tokens with push access. Production callers
-    # grant this job contents:write so it can inspect (but never mutate) the
-    # semantic-release draft; rehearsal callers cap it at contents:read.
     permissions:
-      checks: read
-      contents: write
+      contents: read
     outputs:
-      commit: ${{ steps.metadata.outputs.commit || steps.rehearsal.outputs.commit }}
-      source_epoch: ${{ steps.metadata.outputs.source_epoch || steps.rehearsal.outputs.source_epoch }}
-      tag: ${{ steps.metadata.outputs.tag || steps.rehearsal.outputs.tag }}
-      version: ${{ steps.metadata.outputs.version || steps.rehearsal.outputs.version }}
+      commit: ${{ steps.metadata.outputs.commit }}
+      source_epoch: ${{ steps.metadata.outputs.source_epoch }}
+      tag: ${{ steps.metadata.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: ${{ inputs.rehearsal && inputs.revision || inputs.tag }}
-      - name: Check out the trusted recovery verifier
-        if: inputs.rehearsal != true && github.ref == 'refs/heads/main'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          path: build/release-automation
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.revision }}
       - id: metadata
-        name: Validate tag, release, checks, and ancestry
-        if: inputs.rehearsal != true
+        name: Validate immutable candidate coordinates
         env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_COMMIT: ${{ inputs.revision }}
+          RELEASE_REHEARSAL: ${{ inputs.rehearsal }}
+          RELEASE_SOURCE_EPOCH: ${{ inputs.source_epoch }}
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          verifier=tools/release/validate_release.py
-          recovery_arguments=()
-          if test "${GITHUB_REF}" = refs/heads/main; then
-            verifier=build/release-automation/tools/release/validate_release.py
-            recovery_arguments+=(--recovery-main)
-          fi
-          python3 "${verifier}" \
-            --tag "${RELEASE_TAG}" \
-            --repository "${RELEASE_REPOSITORY}" \
-            "${recovery_arguments[@]}"
-      - id: rehearsal
-        name: Validate non-publishing rehearsal inputs
-        if: inputs.rehearsal == true
-        env:
-          REHEARSAL_REVISION: ${{ inputs.revision }}
-          REHEARSAL_VERSION: ${{ inputs.version }}
-        run: |
-          [[ ${REHEARSAL_VERSION} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          commit=$(git rev-parse "${REHEARSAL_REVISION}^{commit}")
+          commit=$(git rev-parse "${RELEASE_COMMIT}^{commit}")
           test "${commit}" = "$(git rev-parse HEAD)"
+          source_epoch=$(git show -s --format=%ct "${commit}")
+          if test -n "${RELEASE_SOURCE_EPOCH}"; then
+            test "${source_epoch}" = "${RELEASE_SOURCE_EPOCH}"
+          fi
+          [[ ${RELEASE_VERSION} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          if test "${RELEASE_REHEARSAL}" = true; then
+            test "${RELEASE_TAG}" = "rehearsal-${commit}"
+          else
+            test "${RELEASE_TAG}" = "v${RELEASE_VERSION}"
+            test -n "${RELEASE_SOURCE_EPOCH}"
+          fi
           {
-            echo "tag=rehearsal-${commit}"
-            echo "version=${REHEARSAL_VERSION}"
+            echo "tag=${RELEASE_TAG}"
+            echo "version=${RELEASE_VERSION}"
             echo "commit=${commit}"
-            echo "source_epoch=$(git show -s --format=%ct "${commit}")"
+            echo "source_epoch=${source_epoch}"
           } >>"${GITHUB_OUTPUT}"
 
   sources:

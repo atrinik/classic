@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 3
     outputs:
       revision: ${{ steps.revision.outputs.commit }}
+      source_epoch: ${{ steps.revision.outputs.source_epoch }}
+      tag: ${{ steps.revision.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -30,7 +32,11 @@ jobs:
           commit=$(git rev-parse HEAD)
           test "${commit}" = "${DISPATCH_SHA}"
           test "${commit}" = "$(git rev-parse refs/remotes/origin/main)"
-          echo "commit=${commit}" >>"${GITHUB_OUTPUT}"
+          {
+            echo "commit=${commit}"
+            echo "source_epoch=$(git show -s --format=%ct "${commit}")"
+            echo "tag=rehearsal-${commit}"
+          } >>"${GITHUB_OUTPUT}"
 
   rehearse:
     needs: preflight
@@ -38,4 +44,6 @@ jobs:
     with:
       rehearsal: true
       revision: ${{ needs.preflight.outputs.revision }}
+      source_epoch: ${{ needs.preflight.outputs.source_epoch }}
+      tag: ${{ needs.preflight.outputs.tag }}
       version: 0.0.0
