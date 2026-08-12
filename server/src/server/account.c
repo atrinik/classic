@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -49,6 +49,10 @@
 #define ACCOUNT_PBKDF2_FIELD_SIZE 32
 #define ACCOUNT_AUTH_WORK_BURST 8
 #define ACCOUNT_AUTH_WORK_REFILL_SECONDS 2
+
+#define SCENARIO_LIGHTING_MAP "/shattered_islands/strakewood_island/greyton/house/luxury_house_0_0"
+#define SCENARIO_LIGHTING_X 33
+#define SCENARIO_LIGHTING_Y 4
 
 static time_t account_auth_work_refill_time;
 static unsigned int account_auth_work_tokens;
@@ -581,10 +585,41 @@ out:
     return ok;
 }
 
+static int account_provision_preset_hour(const char *preset) {
+    if (strcmp(preset, "basic-player") == 0) {
+        return -1;
+    }
+    if (strcmp(preset, "lighting-radiance-day") == 0) {
+        return 12;
+    }
+    if (strcmp(preset, "lighting-radiance-dawn") == 0) {
+        return 5;
+    }
+    if (strcmp(preset, "lighting-radiance-night") == 0) {
+        return 23;
+    }
+    return -2;
+}
+
+static bool account_provision_lighting_player(const char *character,
+                                              const char *archname,
+                                              char *error,
+                                              size_t error_size) {
+    return player_provision_scenario(character,
+                                     archname,
+                                     SCENARIO_LIGHTING_MAP,
+                                     SCENARIO_LIGHTING_X,
+                                     SCENARIO_LIGHTING_Y,
+                                     "mithril_lamp",
+                                     error,
+                                     error_size);
+}
+
 bool account_provision_from_file(const char *name,
                                  const char *password_file,
                                  const char *character,
                                  const char *archname,
+                                 const char *preset,
                                  char *error,
                                  size_t error_size) {
     char password[MAX_BUF];
@@ -593,8 +628,16 @@ bool account_provision_from_file(const char *name,
     FILE *fp = NULL;
 
     HARD_ASSERT(password_file != NULL);
+    HARD_ASSERT(preset != NULL);
     HARD_ASSERT(error != NULL);
     HARD_ASSERT(error_size > 0);
+    error[0] = '\0';
+
+    int preset_hour = account_provision_preset_hour(preset);
+    if (preset_hour == -2) {
+        snprintf(error, error_size, "unknown scenario preset: %s", preset);
+        return false;
+    }
 
     memset(password, 0, sizeof(password));
     int flags = O_RDONLY;
@@ -647,7 +690,30 @@ bool account_provision_from_file(const char *name,
         goto out;
     }
     ok = account_provision(name, password, character, archname, error, error_size);
-
+    if (ok && preset_hour >= 0 &&
+        (!account_provision_lighting_player(character, archname, error, error_size) ||
+         !todclock_set((unsigned long)preset_hour))) {
+        if (error[0] == '\0') {
+            snprintf(error, error_size, "could not persist scenario world clock");
+        }
+        char *account_path = account_make_path(name);
+        char *player_path = player_make_path(character, "player.dat");
+        if (unlink(account_path) != 0 && errno != ENOENT) {
+            LOG(ERROR,
+                "Could not roll back provisioned account file %s: %s",
+                account_path,
+                strerror(errno));
+        }
+        if (unlink(player_path) != 0 && errno != ENOENT) {
+            LOG(ERROR,
+                "Could not roll back provisioned player file %s: %s",
+                player_path,
+                strerror(errno));
+        }
+        free(account_path);
+        free(player_path);
+        ok = false;
+    }
 out:
     if (fp != NULL) {
         fclose(fp);

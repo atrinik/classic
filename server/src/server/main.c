@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -611,11 +611,13 @@ int server_run(int argc, char **argv) {
 
     if (settings.provision_scenario) {
         char error[HUGE_BUF];
-        bool ok = account_provision_from_file(settings.provision_account,
-                                              settings.provision_password_file,
-                                              settings.provision_character,
-                                              settings.provision_archetype,
-                                              VS(error));
+        bool ok = account_provision_from_file(
+            settings.provision_account,
+            settings.provision_password_file,
+            settings.provision_character,
+            settings.provision_archetype,
+            settings.provision_preset[0] != '\0' ? settings.provision_preset : "basic-player",
+            VS(error));
         if (ok) {
             LOG(INFO,
                 "Provisioned local scenario account %s with character %s.",

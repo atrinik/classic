@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -111,6 +111,7 @@ START_TEST(test_account_provision_password_file_permissions) {
                                            password_path,
                                            character_name,
                                            "human_male",
+                                           "basic-player",
                                            VS(error)));
     ck_assert_ptr_nonnull(strstr(error, "mode 0600"));
     ck_assert_int_eq(chmod(password_path, SAVE_MODE), 0);
@@ -119,6 +120,7 @@ START_TEST(test_account_provision_password_file_permissions) {
                                            password_path,
                                            character_name,
                                            "human_male",
+                                           "basic-player",
                                            VS(error)));
     ck_assert_ptr_nonnull(strstr(error, "exactly one line"));
 
@@ -132,7 +134,61 @@ START_TEST(test_account_provision_password_file_permissions) {
                                           password_path,
                                           character_name,
                                           "human_male",
+                                          "basic-player",
                                           VS(error)));
+
+    ck_assert_int_eq(unlink(account_path), 0);
+    ck_assert_int_eq(unlink(player_path), 0);
+    ck_assert_int_eq(unlink(password_path), 0);
+    free(account_path);
+    free(player_path);
+}
+END_TEST
+
+START_TEST(test_account_provision_lighting_preset) {
+    const char *account_name = "scenariolighting";
+    const char *character_name = "Scenario Lighting";
+    char error[HUGE_BUF];
+    char password_path[HUGE_BUF];
+    snprintf(VS(password_path), "%s/scenario-lighting-password", settings.datapath);
+    char *account_path = account_make_path(account_name);
+    char *player_path = player_make_path(character_name, "player.dat");
+
+    unlink(account_path);
+    unlink(player_path);
+    unlink(password_path);
+    int fd = open(password_path, O_WRONLY | O_CREAT | O_EXCL, SAVE_MODE);
+    ck_assert_int_ge(fd, 0);
+    const char password[] = "local-light-9!\n";
+    ck_assert_int_eq(write(fd, password, sizeof(password) - 1), sizeof(password) - 1);
+    ck_assert_int_eq(close(fd), 0);
+
+    ck_assert(!account_provision_from_file(account_name,
+                                           password_path,
+                                           character_name,
+                                           "human_male",
+                                           "not-a-preset",
+                                           VS(error)));
+    ck_assert_ptr_nonnull(strstr(error, "unknown scenario preset"));
+    ck_assert(account_provision_from_file(account_name,
+                                          password_path,
+                                          character_name,
+                                          "human_male",
+                                          "lighting-radiance-day",
+                                          VS(error)));
+    ck_assert_uint_eq(todtick, 12);
+
+    FILE *fp = fopen(player_path, "rb");
+    ck_assert_ptr_nonnull(fp);
+    char contents[HUGE_BUF * 4];
+    size_t length = fread(contents, 1, sizeof(contents) - 1, fp);
+    ck_assert(!ferror(fp));
+    contents[length] = '\0';
+    fclose(fp);
+    ck_assert_ptr_nonnull(
+        strstr(contents,
+               "map /shattered_islands/strakewood_island/greyton/house/luxury_house_0_0"));
+    ck_assert_ptr_nonnull(strstr(contents, "arch mithril_lamp"));
 
     ck_assert_int_eq(unlink(account_path), 0);
     ck_assert_int_eq(unlink(player_path), 0);
@@ -152,6 +208,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_account_provision);
     tcase_add_test(tc_core, test_account_provision_rejects_invalid_inputs);
     tcase_add_test(tc_core, test_account_provision_password_file_permissions);
+    tcase_add_test(tc_core, test_account_provision_lighting_preset);
     return s;
 }
 
