@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "protocol_version": 1077,
+  "protocol_version": 1078,
   "item_name_size": 128,
   "client_to_server": [
     {"id": 0, "symbol": "CONTROL", "wire_name": "control"},

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -55,6 +55,7 @@ extern void cleanup(void);
 extern void init_globals(void);
 
 extern void write_todclock(void);
+extern bool todclock_set(unsigned long value);
 extern bool todclock_parse(const char *input, unsigned long *value);
 
 extern void init(int argc, char **argv);

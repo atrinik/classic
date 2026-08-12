@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -38,14 +38,16 @@ typedef struct lighting_sprite_cache_entry {
 } lighting_sprite_cache_entry;
 
 typedef struct lighting_sample {
-    uint8_t red;
-    uint8_t green;
-    uint8_t blue;
+    uint16_t scalar;
+    uint16_t red;
+    uint16_t green;
+    uint16_t blue;
     uint8_t present;
 } lighting_sample;
 
+_Static_assert(sizeof(lighting_sample) <= 10U, "high-precision lighting sample budget exceeded");
+
 typedef struct lighting_context {
-    SDL_Surface *lightmap;
     lighting_sample *light_samples;
     lighting_sample *structure_samples;
     lighting_sample *structure_blur_row;
@@ -55,7 +57,6 @@ typedef struct lighting_context {
     int height;
     bool active;
     bool cache_valid;
-    bool surface_valid;
     bool update_needed;
     uint64_t cache_key;
     uint64_t pending_cache_key;
@@ -73,18 +74,7 @@ static lighting_sample *structure_column_illumination;
 
 static void lighting_sprite_cache_clear(lighting_context *context);
 
-/** Release an optional compositing surface while retaining sampled light. */
-static void lighting_context_free_surface(lighting_context *context) {
-    if (context->lightmap != NULL) {
-        SDL_DestroySurface(context->lightmap);
-        context->lightmap = NULL;
-        context->surface_valid = false;
-    }
-}
-
 static void lighting_context_free(lighting_context *context) {
-    lighting_context_free_surface(context);
-
     free(context->light_samples);
     free(context->structure_samples);
     free(context->structure_blur_row);
@@ -93,7 +83,6 @@ static void lighting_context_free(lighting_context *context) {
     memset(context, 0, sizeof(*context));
 }
 
-#define lightmap (lighting_context_current->lightmap)
 #define light_samples (lighting_context_current->light_samples)
 #define structure_samples (lighting_context_current->structure_samples)
 #define structure_blur_row (lighting_context_current->structure_blur_row)
@@ -108,7 +97,49 @@ static void lighting_context_free(lighting_context *context) {
 #define lighting_pending_cache_key (lighting_context_current->pending_cache_key)
 
 #define LIGHT_STRUCTURE_BLUR_RADIUS 24
-#define LIGHTING_SPRITE_CACHE_MAX_BYTES (8 * 1024 * 1024)
+
+_Static_assert(sizeof(lighting_sprite_cache_entry) + sizeof(SDL_Surface) <=
+                   LIGHTING_SPRITE_CACHE_ENTRY_OVERHEAD,
+               "lit-sprite cache entry accounting overhead is too small");
+
+static uint16_t lighting_sample_channel(const lighting_sample *sample, size_t channel) {
+    HARD_ASSERT(sample != NULL);
+    switch (channel) {
+    case 0:
+        return sample->scalar;
+    case 1:
+        return sample->red;
+    case 2:
+        return sample->green;
+    case 3:
+        return sample->blue;
+    default:
+        HARD_ASSERT(false);
+        return 0;
+    }
+}
+
+static void lighting_sample_channel_set(lighting_sample *sample,
+                                        size_t channel,
+                                        uint16_t value) {
+    HARD_ASSERT(sample != NULL);
+    switch (channel) {
+    case 0:
+        sample->scalar = value;
+        break;
+    case 1:
+        sample->red = value;
+        break;
+    case 2:
+        sample->green = value;
+        break;
+    case 3:
+        sample->blue = value;
+        break;
+    default:
+        HARD_ASSERT(false);
+    }
+}
 
 static void lighting_sprite_cache_clear(lighting_context *context) {
     lighting_sprite_cache_entry *entry, *next;
@@ -157,7 +188,8 @@ static void lighting_sprite_cache_touch(lighting_context *context,
 /** Make room for one lit sprite without discarding the whole warm cache. */
 static void lighting_sprite_cache_reserve(lighting_context *context, size_t bytes) {
     while (context->sprite_cache != NULL &&
-           context->sprite_cache_bytes + bytes > LIGHTING_SPRITE_CACHE_MAX_BYTES) {
+           (context->sprite_cache_bytes + bytes > LIGHTING_SPRITE_CACHE_MAX_BYTES ||
+            HASH_COUNT(context->sprite_cache) >= LIGHTING_SPRITE_CACHE_MAX_ENTRIES)) {
         lighting_sprite_cache_entry *oldest = context->sprite_cache_lru_oldest;
         HARD_ASSERT(oldest != NULL);
         context->sprite_cache_lru_oldest = oldest->lru_next;
@@ -216,13 +248,6 @@ void lighting_level_scroll(int dz) {
         lighting_context_free(&lighting_contexts[i]);
         lighting_contexts[i] = shifted[i];
 
-        /* Only relative depth zero is ever composited through a standalone
-         * screen-sized lightmap. Release a shifted surface immediately even
-         * when smooth lighting is currently disabled and no begin call will
-         * otherwise visit this context. */
-        if (i != MAP2_DEPTH_INDEX(0)) {
-            lighting_context_free_surface(&lighting_contexts[i]);
-        }
     }
 
     lighting_context_current = &lighting_contexts[MAP2_DEPTH_INDEX(0)];
@@ -249,11 +274,6 @@ static SDL_Surface *lighting_rgba_surface_create(int width, int height) {
 static bool lighting_surface_create(int width, int height) {
     bool size_changed = lighting_width != width || lighting_height != height;
     if (size_changed) {
-        if (lightmap != NULL) {
-            SDL_DestroySurface(lightmap);
-            lightmap = NULL;
-        }
-
         size_t samples_num = (size_t)width * (size_t)height;
         light_samples = xreallocarray(light_samples, samples_num, sizeof(*light_samples));
         structure_samples =
@@ -266,32 +286,6 @@ static bool lighting_surface_create(int width, int height) {
         lighting_width = width;
         lighting_height = height;
         lighting_cache_valid = false;
-        lighting_context_current->surface_valid = false;
-    }
-
-    bool needs_lightmap = lighting_context_current == &lighting_contexts[MAP2_DEPTH_INDEX(0)];
-    if (!needs_lightmap) {
-        if (lightmap != NULL) {
-            SDL_DestroySurface(lightmap);
-            lightmap = NULL;
-            lighting_context_current->surface_valid = false;
-        }
-        return true;
-    }
-
-    if (lightmap == NULL) {
-        lightmap = lighting_rgba_surface_create(width, height);
-        if (lightmap == NULL) {
-            LOG(ERROR, "Could not create map lightmap: %s", SDL_GetError());
-            return false;
-        }
-
-        surface_set_alpha(lightmap, SDL_ALPHA_OPAQUE);
-        if (!SDL_SetSurfaceBlendMode(lightmap, SDL_BLENDMODE_MOD)) {
-            LOG(ERROR, "Could not configure RGB map lightmap: %s", SDL_GetError());
-            return false;
-        }
-        lighting_context_current->surface_valid = false;
     }
     return true;
 }
@@ -344,6 +338,10 @@ static void lighting_draw_triangle(const lighting_vertex_t vertices[4], bool fir
 
     int orientation = area < 0 ? -1 : 1;
     area *= orientation;
+    if ((uint64_t)area > UINT64_MAX / (UINT64_C(1) + UINT16_MAX)) {
+        LOG(ERROR, "Lighting quad exceeds the bounded interpolation range.");
+        return;
+    }
 
     int min_x = MAX(0, MIN(a->x, MIN(b->x, c->x)));
     int max_x = MIN(lighting_width - 1, MAX(a->x, MAX(b->x, c->x)));
@@ -373,16 +371,17 @@ static void lighting_draw_triangle(const lighting_vertex_t vertices[4], bool fir
                  * by treating the two halves as unrelated planes. */
                 int64_t u = first_half ? weight_b + weight_c : weight_b;
                 int64_t v = first_half ? weight_c : weight_b + weight_c;
-                int64_t inverse_u = area - u;
-                int64_t inverse_v = area - v;
-                int64_t divisor = area * area;
                 lighting_sample *sample =
                     &light_samples[(size_t)y * (size_t)lighting_width + (size_t)x];
-#define INTERPOLATE_CHANNEL(_channel_)                                                 \
-    (uint8_t)((vertices[0]._channel_ * inverse_u * inverse_v +                         \
-               vertices[1]._channel_ * u * inverse_v + vertices[2]._channel_ * u * v + \
-               vertices[3]._channel_ * inverse_u * v + divisor / 2) /                  \
-              divisor)
+#define INTERPOLATE_CHANNEL(_channel_)                                            \
+    lighting_bilinear_channel(vertices[0]._channel_,                              \
+                               vertices[1]._channel_,                              \
+                               vertices[2]._channel_,                              \
+                               vertices[3]._channel_,                              \
+                               (uint64_t)u,                                        \
+                               (uint64_t)v,                                        \
+                               (uint64_t)area)
+                sample->scalar = INTERPOLATE_CHANNEL(scalar);
                 sample->red = INTERPOLATE_CHANNEL(red);
                 sample->green = INTERPOLATE_CHANNEL(green);
                 sample->blue = INTERPOLATE_CHANNEL(blue);
@@ -452,13 +451,16 @@ static void lighting_extrapolate(void) {
                 int distance = x - previous_sample;
 
                 for (int fill_x = previous_sample + 1; fill_x < x; fill_x++) {
-                    for (size_t channel = 0; channel < 3; channel++) {
-                        uint8_t *first = &samples[previous_sample].red;
-                        uint8_t *last = &samples[x].red;
-                        uint8_t *destination = &samples[fill_x].red;
-                        destination[channel] =
-                            (uint8_t)(first[channel] + (last[channel] - first[channel]) *
-                                                           (fill_x - previous_sample) / distance);
+                    for (size_t channel = 0; channel < 4; channel++) {
+                        uint16_t first =
+                            lighting_sample_channel(&samples[previous_sample], channel);
+                        uint16_t last = lighting_sample_channel(&samples[x], channel);
+                        lighting_sample_channel_set(
+                            &samples[fill_x],
+                            channel,
+                            (uint16_t)((int32_t)first +
+                                       ((int32_t)last - first) *
+                                           (fill_x - previous_sample) / distance));
                     }
                     samples[fill_x].present = 1;
                 }
@@ -492,14 +494,15 @@ static void lighting_extrapolate(void) {
                     light_samples + (size_t)fill_y * (size_t)lighting_width;
 
                 for (int fill_x = 0; fill_x < lighting_width; fill_x++) {
-                    for (size_t channel = 0; channel < 3; channel++) {
-                        uint8_t *first_rgb = &first[fill_x].red;
-                        uint8_t *last_rgb = &samples[fill_x].red;
-                        uint8_t *destination_rgb = &destination[fill_x].red;
-                        destination_rgb[channel] =
-                            (uint8_t)(first_rgb[channel] +
-                                      (last_rgb[channel] - first_rgb[channel]) *
-                                          (fill_y - previous_sampled_row) / distance);
+                    for (size_t channel = 0; channel < 4; channel++) {
+                        uint16_t first_value = lighting_sample_channel(&first[fill_x], channel);
+                        uint16_t last_value = lighting_sample_channel(&samples[fill_x], channel);
+                        lighting_sample_channel_set(
+                            &destination[fill_x],
+                            channel,
+                            (uint16_t)((int32_t)first_value +
+                                       ((int32_t)last_value - first_value) *
+                                           (fill_y - previous_sampled_row) / distance));
                     }
                     destination[fill_x].present = 1;
                 }
@@ -511,7 +514,7 @@ static void lighting_extrapolate(void) {
 
     if (first_sampled_row == -1) {
         for (size_t i = 0; i < light_samples_num; i++) {
-            light_samples[i] = (lighting_sample){UINT8_MAX, UINT8_MAX, UINT8_MAX, 1};
+            light_samples[i] = (lighting_sample){2048, 2048, 2048, 2048, 1};
         }
         return;
     }
@@ -528,26 +531,27 @@ static void lighting_extrapolate(void) {
 static void lighting_blur_row(const lighting_sample *source, lighting_sample *destination) {
     const int radius = LIGHT_STRUCTURE_BLUR_RADIUS;
     const uint32_t diameter = radius * 2 + 1;
-    uint32_t sum[3] = {0};
+    uint32_t sum[4] = {0};
 
     for (int offset = -radius; offset <= radius; offset++) {
         int source_x = MAX(0, MIN(lighting_width - 1, offset));
-        for (size_t channel = 0; channel < 3; channel++) {
-            sum[channel] += (&source[source_x].red)[channel];
+        for (size_t channel = 0; channel < 4; channel++) {
+            sum[channel] += lighting_sample_channel(&source[source_x], channel);
         }
     }
 
     for (int x = 0; x < lighting_width; x++) {
-        for (size_t channel = 0; channel < 3; channel++) {
-            (&destination[x].red)[channel] = (uint8_t)((sum[channel] + diameter / 2) / diameter);
+        for (size_t channel = 0; channel < 4; channel++) {
+            lighting_sample_channel_set(
+                &destination[x], channel, (uint16_t)((sum[channel] + diameter / 2) / diameter));
         }
         destination[x].present = 1;
 
         int outgoing_x = MAX(0, MIN(lighting_width - 1, x - radius));
         int incoming_x = MAX(0, MIN(lighting_width - 1, x + radius + 1));
-        for (size_t channel = 0; channel < 3; channel++) {
-            sum[channel] -= (&source[outgoing_x].red)[channel];
-            sum[channel] += (&source[incoming_x].red)[channel];
+        for (size_t channel = 0; channel < 4; channel++) {
+            sum[channel] -= lighting_sample_channel(&source[outgoing_x], channel);
+            sum[channel] += lighting_sample_channel(&source[incoming_x], channel);
         }
     }
 }
@@ -571,7 +575,7 @@ static void lighting_blur_structure_row(int y) {
 /** Sample the structural field through a vertical triangular filter. */
 static lighting_sample lighting_structure_illumination(int x, int y) {
     const int radius = LIGHT_STRUCTURE_BLUR_RADIUS;
-    uint32_t total[3] = {0};
+    uint32_t total[4] = {0};
     uint32_t weights = 0;
 
     for (int offset = -radius; offset <= radius; offset++) {
@@ -580,15 +584,16 @@ static lighting_sample lighting_structure_illumination(int x, int y) {
         lighting_blur_structure_row(sample_y);
         const lighting_sample *sample =
             &structure_samples[(size_t)sample_y * (size_t)lighting_width + (size_t)x];
-        for (size_t channel = 0; channel < 3; channel++) {
-            total[channel] += (&sample->red)[channel] * weight;
+        for (size_t channel = 0; channel < 4; channel++) {
+            total[channel] += lighting_sample_channel(sample, channel) * weight;
         }
         weights += weight;
     }
 
     lighting_sample result = {.present = 1};
-    for (size_t channel = 0; channel < 3; channel++) {
-        (&result.red)[channel] = (uint8_t)((total[channel] + weights / 2) / weights);
+    for (size_t channel = 0; channel < 4; channel++) {
+        lighting_sample_channel_set(
+            &result, channel, (uint16_t)((total[channel] + weights / 2) / weights));
     }
     return result;
 }
@@ -604,41 +609,65 @@ void lighting_render(SDL_Surface *destination) {
         memset(structure_rows_valid, 0, (size_t)lighting_height * sizeof(*structure_rows_valid));
         lighting_cache_key = lighting_pending_cache_key;
         lighting_cache_valid = true;
-        lighting_context_current->surface_valid = false;
     }
     lighting_active = false;
     if (destination == NULL) {
         return;
     }
-    HARD_ASSERT(lightmap != NULL);
-    if (lighting_context_current->surface_valid) {
-        SDL_BlitSurface(lightmap, NULL, destination, NULL);
-        return;
-    }
-
-    if (!SDL_LockSurface(lightmap)) {
-        LOG(ERROR, "Could not lock map lightmap: %s", SDL_GetError());
+    if (!SDL_LockSurface(destination)) {
+        LOG(ERROR, "Could not lock map ground for lighting: %s", SDL_GetError());
         lighting_cache_valid = false;
         return;
     }
 
+    Uint32 colorkey = 0;
+    bool has_colorkey = SDL_GetSurfaceColorKey(destination, &colorkey);
+    const SDL_PixelFormatDetails *format = SDL_GetPixelFormatDetails(destination->format);
+    if (format == NULL || format->bytes_per_pixel != sizeof(Uint32)) {
+        LOG(ERROR, "Cannot light a map ground surface that is not 32-bit RGBA.");
+        lighting_cache_valid = false;
+        SDL_UnlockSurface(destination);
+        return;
+    }
+    SDL_Palette *palette = SDL_GetSurfacePalette(destination);
+    bool direct_argb = destination->format == SDL_PIXELFORMAT_ARGB8888;
     for (int y = 0; y < lighting_height; y++) {
-        Uint32 *pixels = (Uint32 *)((Uint8 *)lightmap->pixels + y * lightmap->pitch);
+        Uint32 *pixels = (Uint32 *)((Uint8 *)destination->pixels + y * destination->pitch);
         const lighting_sample *samples = light_samples + (size_t)y * (size_t)lighting_width;
 
         for (int x = 0; x < lighting_width; x++) {
-            pixels[x] = SDL_MapRGBA(SDL_GetPixelFormatDetails(lightmap->format),
-                                    SDL_GetSurfacePalette(lightmap),
-                                    samples[x].red,
-                                    samples[x].green,
-                                    samples[x].blue,
-                                    SDL_ALPHA_OPAQUE);
+            if (has_colorkey && pixels[x] == colorkey) {
+                continue;
+            }
+
+            uint8_t red, green, blue, alpha;
+            if (direct_argb) {
+                red = (uint8_t)(pixels[x] >> 16);
+                green = (uint8_t)(pixels[x] >> 8);
+                blue = (uint8_t)pixels[x];
+                alpha = (uint8_t)(pixels[x] >> 24);
+            } else {
+                SDL_GetRGBA(pixels[x], format, palette, &red, &green, &blue, &alpha);
+            }
+            const uint16_t radiance[3] = {
+                samples[x].red,
+                samples[x].green,
+                samples[x].blue,
+            };
+            uint16_t illumination[3];
+            lighting_tone_map_linear(samples[x].scalar, radiance, illumination);
+            red = lighting_multiply_channel(red, illumination[0]);
+            green = lighting_multiply_channel(green, illumination[1]);
+            blue = lighting_multiply_channel(blue, illumination[2]);
+            if (direct_argb) {
+                pixels[x] = (Uint32)alpha << 24 | (Uint32)red << 16 | (Uint32)green << 8 | blue;
+            } else {
+                pixels[x] = SDL_MapRGBA(format, palette, red, green, blue, alpha);
+            }
         }
     }
 
-    SDL_UnlockSurface(lightmap);
-    lighting_context_current->surface_valid = true;
-    SDL_BlitSurface(lightmap, NULL, destination, NULL);
+    SDL_UnlockSurface(destination);
 }
 
 /** Ensure the reusable smoothly lit sprite surface is large enough. */
@@ -722,6 +751,14 @@ static uint64_t lighting_signature_byte(uint64_t signature, uint8_t value) {
     return signature;
 }
 
+static uint64_t lighting_signature_uint32(uint64_t signature, uint32_t value) {
+    for (size_t i = 0; i < sizeof(value); i++) {
+        signature = lighting_signature_byte(signature, (uint8_t)value);
+        value >>= 8;
+    }
+    return signature;
+}
+
 /** Draw a sprite through the cached continuous light field. */
 void lighting_show_surface(SDL_Surface *destination,
                            int x,
@@ -754,13 +791,39 @@ void lighting_show_surface(SDL_Surface *destination,
     Uint8 surface_alpha = SDL_ALPHA_OPAQUE;
     SDL_GetSurfaceAlphaMod(source, &surface_alpha);
     bool has_surface_alpha = surface_alpha != SDL_ALPHA_OPAQUE;
+    /* The field cache key names the complete projected illumination state.
+     * Adding the sample coordinates identifies this sprite's exact profile
+     * without rescanning every covered light sample on cache hits. */
+    uint64_t illumination_signature = lighting_cache_key;
+    illumination_signature = lighting_signature_uint32(illumination_signature, (uint32_t)x);
+    illumination_signature = lighting_signature_uint32(illumination_signature, (uint32_t)y);
+    illumination_signature =
+        lighting_signature_uint32(illumination_signature, (uint32_t)sample_y);
+
+    lighting_sprite_cache_key cache_key;
+    memset(&cache_key, 0, sizeof(cache_key));
+    cache_key.source = source;
+    cache_key.source_x = source_rect.x;
+    cache_key.source_y = source_rect.y;
+    cache_key.source_w = source_rect.w;
+    cache_key.source_h = source_rect.h;
+    cache_key.illumination_signature = illumination_signature;
+    cache_key.mode = mode;
+    cache_key.surface_alpha = surface_alpha;
+    lighting_sprite_cache_entry *cached;
+    HASH_FIND(hh, lighting_context_current->sprite_cache, &cache_key, sizeof(cache_key), cached);
+    if (cached != NULL) {
+        lighting_sprite_cache_touch(lighting_context_current, cached);
+        surface_show(destination, x, y, NULL, cached->surface);
+        return;
+    }
+
     if (!lighting_lit_surface_create(source_rect.w, source_rect.h)) {
         surface_show(destination, x, y, srcrect, source);
         return;
     }
 
     bool source_locked = false;
-    uint64_t illumination_signature = UINT64_C(14695981039346656037);
 
     if (mode == LIGHTING_SURFACE_STRUCTURE) {
         if (!SDL_LockSurface(source)) {
@@ -795,7 +858,7 @@ void lighting_show_surface(SDL_Surface *destination,
             int bottom = structure_column_bottom[source_x];
             if (bottom < 0) {
                 structure_column_illumination[source_x] =
-                    (lighting_sample){UINT8_MAX, UINT8_MAX, UINT8_MAX, 1};
+                    (lighting_sample){2048, 2048, 2048, 2048, 1};
                 continue;
             }
 
@@ -803,52 +866,7 @@ void lighting_show_surface(SDL_Surface *destination,
             int light_y = MAX(0, MIN(lighting_height - 1, sample_y - max_bottom + bottom));
             structure_column_illumination[source_x] =
                 lighting_structure_illumination(light_x, light_y);
-            for (size_t channel = 0; channel < 3; channel++) {
-                illumination_signature = lighting_signature_byte(
-                    illumination_signature,
-                    (&structure_column_illumination[source_x].red)[channel]);
-            }
         }
-    } else {
-        /* Hash the exact projected illumination profile. The signature moves
-         * with world geometry across a camera scroll, allowing an existing
-         * lit surface to be reused at a new destination without accepting a
-         * stale lighting result. */
-        for (int source_y = 0; source_y < source_rect.h; source_y++) {
-            int light_y = MAX(0, MIN(lighting_height - 1, y + source_y));
-            for (int source_x = 0; source_x < source_rect.w; source_x++) {
-                int light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
-                const lighting_sample *illumination =
-                    &light_samples[(size_t)light_y * lighting_width + (size_t)light_x];
-                illumination_signature =
-                    lighting_signature_byte(illumination_signature, illumination->red);
-                illumination_signature =
-                    lighting_signature_byte(illumination_signature, illumination->green);
-                illumination_signature =
-                    lighting_signature_byte(illumination_signature, illumination->blue);
-            }
-        }
-    }
-
-    lighting_sprite_cache_key cache_key;
-    memset(&cache_key, 0, sizeof(cache_key));
-    cache_key.source = source;
-    cache_key.source_x = source_rect.x;
-    cache_key.source_y = source_rect.y;
-    cache_key.source_w = source_rect.w;
-    cache_key.source_h = source_rect.h;
-    cache_key.illumination_signature = illumination_signature;
-    cache_key.mode = mode;
-    cache_key.surface_alpha = surface_alpha;
-    lighting_sprite_cache_entry *cached;
-    HASH_FIND(hh, lighting_context_current->sprite_cache, &cache_key, sizeof(cache_key), cached);
-    if (cached != NULL) {
-        lighting_sprite_cache_touch(lighting_context_current, cached);
-        if (source_locked) {
-            SDL_UnlockSurface(source);
-        }
-        surface_show(destination, x, y, NULL, cached->surface);
-        return;
     }
 
     if (!source_locked) {
@@ -900,9 +918,16 @@ void lighting_show_surface(SDL_Surface *destination,
                 int light_y = MAX(0, MIN(lighting_height - 1, y + source_y));
                 illumination = light_samples[(size_t)light_y * lighting_width + (size_t)light_x];
             }
-            red = (uint8_t)((unsigned int)red * illumination.red / UINT8_MAX);
-            green = (uint8_t)((unsigned int)green * illumination.green / UINT8_MAX);
-            blue = (uint8_t)((unsigned int)blue * illumination.blue / UINT8_MAX);
+            const uint16_t radiance[3] = {
+                illumination.red,
+                illumination.green,
+                illumination.blue,
+            };
+            uint16_t linear[3];
+            lighting_tone_map_linear(illumination.scalar, radiance, linear);
+            red = lighting_multiply_channel(red, linear[0]);
+            green = lighting_multiply_channel(green, linear[1]);
+            blue = lighting_multiply_channel(blue, linear[2]);
             destination_pixels[source_x] =
                 SDL_MapRGBA(SDL_GetPixelFormatDetails(lighting_lit_surface->format),
                             SDL_GetSurfacePalette(lighting_lit_surface),
@@ -917,8 +942,8 @@ void lighting_show_surface(SDL_Surface *destination,
     SDL_UnlockSurface(source);
 
     SDL_Rect lit_rect = {.x = 0, .y = 0, .w = source_rect.w, .h = source_rect.h};
-    size_t cache_bytes = (size_t)source_rect.w * (size_t)source_rect.h *
-                         SDL_GetPixelFormatDetails(lighting_lit_surface->format)->bytes_per_pixel;
+    size_t cache_bytes = lighting_sprite_cache_charge((size_t)lighting_lit_surface->pitch,
+                                                      (size_t)source_rect.h);
     if (cache_bytes <= LIGHTING_SPRITE_CACHE_MAX_BYTES) {
         lighting_sprite_cache_reserve(lighting_context_current, cache_bytes);
         SDL_Surface *copy = lighting_lit_surface_copy(source_rect.w, source_rect.h);
@@ -938,7 +963,6 @@ void lighting_show_surface(SDL_Surface *destination,
     surface_show(destination, x, y, &lit_rect, lighting_lit_surface);
 }
 
-#undef lightmap
 #undef light_samples
 #undef structure_samples
 #undef structure_blur_row
