@@ -73,16 +73,20 @@
  - `Game only` shares only `Playing Atrinik Classic` and elapsed play time.
  - `Server` additionally shares `On <friendly server>`.
  - `Server and zone` additionally shares `Exploring <friendly zone>`.
+ - `Server, zone and character` additionally shares `<character name> - Level
+   <level>` and combines the friendly server and zone in the other field.
 
  Activity exists only while a character is in the playing state. It is cleared
  on logout, disconnect, opt-out/privacy reduction, and clean shutdown. Direct,
  manual, and command-line servers are always shown as `Private server`; only a
  public-directory display name may be shared. Zone text uses the friendly map
  display name and then friendly region name. Markup, controls, invalid UTF-8,
- whitespace, and length are normalized before any update. Account and character
- names, host/IP, port, server ID, certificate fingerprint, internal map path,
+ whitespace, and length are normalized before any update. Account names,
+ host/IP, port, server ID, certificate fingerprint, internal map path,
  coordinates, connection data, invites, passwords, party data, OAuth material,
- and Discord secrets are never included. This feature has no join, spectate,
+ and Discord secrets are never included. The active character name and level
+ are shared only by the highest tier while playing; they are normalized and
+ bounded like all other presence text. This feature has no join, spectate,
  deep-link, account-linking, or Discord authentication capability.
 
  Discord must be running locally. If it is absent, starts later, restarts,
