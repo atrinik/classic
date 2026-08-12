@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -63,6 +63,41 @@ START_TEST(test_light_color_parser_is_exact) {
     ck_assert(!light_color_parse("#ffffff", &color));
     ck_assert(!light_color_parse("ffffff00", &color));
     ck_assert(!light_color_parse("fffffg", &color));
+}
+END_TEST
+
+START_TEST(test_radiance_resolver_preserves_linear_warm_and_cool_daylight) {
+    MapSpace space = {0};
+    uint16_t scalar;
+    uint16_t radiance[3];
+
+    light_radiance_from_raw(&space, 1280, &scalar, radiance);
+    ck_assert_uint_eq(scalar, 2048);
+    ck_assert_uint_eq(radiance[0], 2048);
+    ck_assert_uint_eq(radiance[1], 2048);
+    ck_assert_uint_eq(radiance[2], 2048);
+
+    space.light_source_positive_value = 80;
+    space.light_source_color_weight = INT64_C(80) * UINT16_MAX;
+    space.light_source_color[0] = INT64_C(80) * UINT16_MAX;
+    space.light_source_color[1] = INT64_C(80) * 7666;
+    space.light_source_color[2] = INT64_C(80) * 1937;
+    light_radiance_from_raw(&space, 1360, &scalar, radiance);
+    ck_assert_uint_eq(scalar, 2176);
+    ck_assert_uint_eq(radiance[0], 2176);
+    ck_assert_uint_eq(radiance[1], 2062);
+    ck_assert_uint_eq(radiance[2], 2051);
+
+    space.light_source_positive_value = 320;
+    space.light_source_color_weight = INT64_C(320) * UINT16_MAX;
+    space.light_source_color[0] = INT64_C(320) * 7666;
+    space.light_source_color[1] = INT64_C(320) * 41337;
+    space.light_source_color[2] = INT64_C(320) * UINT16_MAX;
+    light_radiance_from_raw(&space, 1600, &scalar, radiance);
+    ck_assert_uint_eq(scalar, 2560);
+    ck_assert_uint_eq(radiance[0], 2107);
+    ck_assert_uint_eq(radiance[1], 2371);
+    ck_assert_uint_eq(radiance[2], 2560);
 }
 END_TEST
 
@@ -173,7 +208,7 @@ START_TEST(test_neutral_and_darkness_sources_remain_achromatic) {
     ck_assert_uint_eq(levels[1], levels[2]);
 
     object *dark = add_colored_light(map, 4, 4, -1, UINT32_C(0xff0000));
-    ck_assert_int_eq(space->light_source_color_weight, INT64_C(40) * UINT8_MAX);
+    ck_assert_int_eq(space->light_source_color_weight, INT64_C(40) * UINT16_MAX);
     light_levels_from_raw(space, space->light_source_value, levels);
     ck_assert_uint_eq(levels[0], levels[1]);
     ck_assert_uint_eq(levels[1], levels[2]);
@@ -375,6 +410,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_light_level_anchors);
     tcase_add_test(tc_core, test_light_level_interpolation);
     tcase_add_test(tc_core, test_light_color_parser_is_exact);
+    tcase_add_test(tc_core, test_radiance_resolver_preserves_linear_warm_and_cool_daylight);
     tcase_add_test(tc_core, test_colored_lights_add_remove_and_order_are_exact);
     tcase_add_test(tc_core, test_colored_lights_blend_green_yellow_and_capped_same_cell);
     tcase_add_test(tc_core, test_neutral_and_darkness_sources_remain_achromatic);

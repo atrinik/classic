@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -360,10 +360,10 @@ typedef struct MapSpace_s {
     /** Grouped positive-source illumination before achromatic subtraction. */
     int32_t light_source_positive_value;
 
-    /** Sum of per-source attenuated sRGB components, scaled by 255. */
+    /** Sum of per-source attenuated scene-linear Q0.16 components. */
     int64_t light_source_color[3];
 
-    /** Positive-source white-reference sum, scaled by 255. */
+    /** Positive-source white-reference sum, scaled by Q0.16 one. */
     int64_t light_source_color_weight;
 
     /**
