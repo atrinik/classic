@@ -23,6 +23,24 @@ expected archive digest. A tag is a human-readable release coordinate; the
 digest is the integrity boundary. Git submodules and floating branches are
 intentionally not used.
 
+The repository-root `Update verified content lock` workflow is the only
+automated writer for the content record. Daily and manual runs enumerate the
+complete published `atrinik/content` release history and accept a newer `1.x`
+runtime only after verifying its tag target, canonical assets, SHA256SUMS,
+bounded archive structure, schema-v2 manifest, Classic compatibility, complete
+file digests, license attributions, and ancestry from the current lock. It
+changes only `tag`, `commit`, `url`, and `sha256`, then re-runs this server's
+existing dependency loader before proposing a pull request.
+
+Discovery uses the read-only workflow token. Only after verification and
+automation-branch ownership checks does the workflow mint the repository-only
+`atrinik-classic-dependency-updater` installation token. That token may update
+the stable `automation/content-update` branch and create or edit its one pull
+request; the workflow never approves, merges, tags, publishes, dispatches a
+release, changes settings, or writes `main`. Unexpected branch, author, pull
+request, pagination, network, release, archive, or lock state fails without
+mutation. A human must review and merge the generated lock pull request.
+
 CMake stores the digest-verified, read-only pcpnatpmp extraction in
 `ATRINIK_DEPENDENCY_CACHE_DIR`, which defaults to a cache beside the active
 server build root. Build roots sharing that parent reuse one extraction while
