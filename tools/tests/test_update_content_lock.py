@@ -404,6 +404,24 @@ class UpdateContentLockTests(unittest.TestCase):
         self.assertFalse(legacy)
         self.assertTrue(checksums.call_args.kwargs["classic_target"])
 
+    def test_generic_main_runtime_cannot_claim_the_legacy_migration_gate(self) -> None:
+        current = {
+            "tag": "v2.14.0",
+            "commit": "a" * 40,
+            "url": (
+                "https://github.com/atrinik/content/releases/download/v2.14.0/"
+                "atrinik-content-2.14.0-runtime.tar.gz"
+            ),
+            "sha256": "b" * 64,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                UPDATER.UpdateError, "canonical coordinates"
+            ):
+                UPDATER.verify_current_coordinate(
+                    current, [], mock.Mock(), Path(directory), mock.Mock()
+                )
+
     def test_noncanonical_lock_format_is_not_rewritten(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "lock.json"

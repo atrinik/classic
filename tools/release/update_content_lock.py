@@ -507,7 +507,7 @@ def verify_current_coordinate(
     classic_url = (
         f"{base}/atrinik-content-{version}-{CONTENT_TARGET}-runtime.tar.gz"
     )
-    if url == legacy_url:
+    if url == legacy_url and semver[0] == 1:
         legacy = True
     elif url == classic_url:
         legacy = False
