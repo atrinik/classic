@@ -651,12 +651,46 @@ jobs:
                   f"{summary['p95_ms']:.2f} ms | {summary['p50_render_fps']:.1f} | "
                   f"{summary['p95_render_fps']:.1f} |"
               )
+
+          def timing(value):
+              milliseconds = value / 1_000_000
+              return f"{milliseconds:.2f} ms ({1_000_000_000 / value:.1f} render FPS)"
+
+          def guard_evidence(name, check):
+              if name == "candidate_sustained_p95":
+                  return f"candidate {timing(check['value_ns'])}; budget {timing(check['limit_ns'])}"
+              if name == "base_candidate_sustained_p95":
+                  baseline = check["baseline_ns"]
+                  candidate = check["candidate_ns"]
+                  change = (candidate / baseline - 1) * 100
+                  return (
+                      f"base {timing(baseline)}; candidate {timing(candidate)} "
+                      f"({change:+.1f}%); 10% limit {timing(check['limit_ns'])}"
+                  )
+              if name == "candidate_resumed_p50":
+                  initial = check["initial_ns"]
+                  resumed = check["resumed_ns"]
+                  change = (resumed / initial - 1) * 100
+                  return (
+                      f"initial {timing(initial)}; resumed {timing(resumed)} "
+                      f"({change:+.1f}%); 10% limit {timing(check['limit_ns'])}"
+                  )
+              if name == "checkpoint":
+                  return "all candidate checkpoints match" if check["passed"] else "candidate checkpoints differ"
+              raise SystemExit(f"unknown movement regression guard: {name}")
+
+          lines.extend([
+              "",
+              "### Regression guards",
+              "",
+              "| Guard | Result | Human-readable evidence |",
+              "| --- | --- | --- |",
+          ])
           for name, check in checks.items():
               if not isinstance(check, dict) or not isinstance(check.get("passed"), bool):
                   raise SystemExit(f"invalid check: {name}")
               result = "pass" if check["passed"] else "fail"
-              values = ", ".join(f"{key}={value}" for key, value in check.items() if key != "passed")
-              lines.append(f"| `{name}` | {result} | {values or 'n/a'} |")
+              lines.append(f"| `{name}` | {result} | {guard_evidence(name, check)} |")
           lines.append("")
           lines.append("Full versioned JSON is attached as the `linux-client-evidence` workflow artifact.")
           print("\n".join(lines))
