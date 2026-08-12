@@ -36,6 +36,12 @@ def verify(record: dict[str, object]) -> None:
         if phase.get("samples") != samples or any(phase.get(key, 0) <= 0 for key in
                                                    ("p50_ns", "p95_ns", "p99_ns", "max_ns")):
             raise SystemExit(f"movement benchmark phase {name} is invalid")
+        if phase.get("map_packets") != samples or phase.get("full_map_draws") != samples:
+            raise SystemExit(f"movement benchmark phase {name} has incomplete map accounting")
+        if phase.get("changed_map_packets", 0) + phase.get("noop_map_packets", 0) != samples:
+            raise SystemExit(f"movement benchmark phase {name} has invalid packet accounting")
+        if phase.get("queue") != {"depth": 0, "bytes": 0, "oldest_age_ms": 0, "processing_ns": 0}:
+            raise SystemExit(f"movement benchmark phase {name} has invalid synchronous queue data")
     if len(record.get("checkpoint_sha256", "")) != 64:
         raise SystemExit("movement benchmark checkpoint is invalid")
 

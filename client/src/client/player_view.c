@@ -951,6 +951,9 @@ static uint64_t player_view_benchmark(SDL_Surface *surface) {
 typedef struct player_view_movement_phase {
     const char *name;
     uint32_t ticks;
+    uint32_t changed_packets;
+    uint32_t noop_packets;
+    uint32_t full_map_draws;
     uint64_t durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
 } player_view_movement_phase_t;
 
@@ -964,13 +967,20 @@ static bool player_view_movement_draw(player_view_movement_phase_t *phase,
                                       SDL_Surface *surface,
                                       const uint8_t *snapshot,
                                       size_t snapshot_size,
+                                      bool packet_changed,
                                       uint32_t *clock_ms) {
     for (uint32_t tick = 0; tick < phase->ticks; tick++) {
         LastTick = *clock_ms;
         socket_command_map((uint8_t *)snapshot, snapshot_size, 0);
+        if (packet_changed && tick == 0) {
+            phase->changed_packets++;
+        } else {
+            phase->noop_packets++;
+        }
         uint64_t started = SDL_GetTicksNS();
         map_draw_map(surface);
         phase->durations[tick] = SDL_GetTicksNS() - started;
+        phase->full_map_draws++;
         *clock_ms += PLAYER_VIEW_MOVEMENT_TICK_MS;
     }
     return true;
@@ -997,7 +1007,12 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
     for (size_t i = 0; i < arraysize(phases); i++) {
         const uint8_t *packet = i == 0 ? snapshot : next_snapshot;
         size_t packet_size = i == 0 ? snapshot_size : next_snapshot_size;
-        if (!player_view_movement_draw(&phases[i], surface, packet, packet_size, &clock_ms)) {
+        if (!player_view_movement_draw(&phases[i],
+                                       surface,
+                                       packet,
+                                       packet_size,
+                                       i < 2,
+                                       &clock_ms)) {
             return false;
         }
     }
@@ -1022,14 +1037,22 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
         uint64_t maximum = sorted[phase->ticks - 1];
         printf("%s{\"name\":\"%s\",\"samples\":%u,\"p50_ns\":%" PRIu64
                ",\"p95_ns\":%" PRIu64 ",\"p99_ns\":%" PRIu64
-               ",\"max_ns\":%" PRIu64 "}",
+               ",\"max_ns\":%" PRIu64
+               ",\"map_packets\":%u,\"changed_map_packets\":%u"
+               ",\"noop_map_packets\":%u,\"full_map_draws\":%u"
+               ",\"queue\":{\"depth\":0,\"bytes\":0,\"oldest_age_ms\":0"
+               ",\"processing_ns\":0}}",
                i == 0 ? "" : ",",
                phase->name,
                phase->ticks,
                p50,
                p95,
                p99,
-               maximum);
+               maximum,
+               phase->ticks,
+               phase->changed_packets,
+               phase->noop_packets,
+               phase->full_map_draws);
     }
     printf("]}\n");
     return true;
