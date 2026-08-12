@@ -70,6 +70,8 @@ extern void socket_command_item_update(uint8_t *data, size_t len, size_t pos);
 
 extern void socket_command_item_delete(uint8_t *data, size_t len, size_t pos);
 
+extern void socket_command_player_status(uint8_t *data, size_t len, size_t pos);
+
 extern void socket_command_mapstats(uint8_t *data, size_t len, size_t pos);
 
 extern void socket_command_map(uint8_t *data, size_t len, size_t pos);
