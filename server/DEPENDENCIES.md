@@ -25,12 +25,15 @@ intentionally not used.
 
 The repository-root `Update verified content lock` workflow is the only
 automated writer for the content record. Daily and manual runs enumerate the
-complete published `atrinik/content` release history and accept a newer `1.x`
-runtime only after verifying its tag target, canonical assets, SHA256SUMS,
-bounded archive structure, schema-v2 manifest, Classic compatibility, complete
-file digests, license attributions, and ancestry from the current lock. It
-changes only `tag`, `commit`, `url`, and `sha256`, then re-runs this server's
-existing dependency loader before proposing a pull request.
+complete published `atrinik/content` release history and accept only the
+`classic` target derived from `main`, after verifying its tag target, canonical
+assets, SHA256SUMS, bounded archive structure, schema-v2 target and source
+identity, Classic compatibility, complete file digests, and license
+attributions. After the one-time migration from the authenticated historical
+coordinate, every update must also be a strict descendant of the current
+`main` commit. It changes only `tag`, `commit`, `url`, and `sha256`, then
+re-runs this server's existing dependency loader before proposing a pull
+request.
 
 Discovery uses the read-only workflow token. Only after verification and
 automation-branch ownership checks does the workflow mint the repository-only

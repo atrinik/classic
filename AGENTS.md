@@ -7,8 +7,9 @@
   `libatrinik/`, and `protocol/`. Read this file and the nearest subtree
   `AGENTS.md` before editing. Module guides preserve their component-specific
   invariants while using monorepo ownership and release terminology.
-- Content is not vendored here. Classic runtime content comes from
-  `atrinik/content@1.x`; sound and resources remain separate repositories.
+- Content is not vendored here. Classic runtime content is the `classic`
+  target derived from `atrinik/content@main`; sound and resources remain
+  separate repositories.
 - Root `.github/` and `.releaserc.cjs` are the only active GitHub/release
   configuration. Retired nested component copies remain recoverable from Git
   history; do not reintroduce an independent module release train.
