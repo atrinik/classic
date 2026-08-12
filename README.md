@@ -20,8 +20,9 @@ repositories. Consolidating classic Atrinik does not change that direction.
 
 Authored maps and gameplay content remain in
 [`atrinik/content`](https://github.com/atrinik/content). Classic builds select
-its `1.x` branch; replacement development selects `main`. Sound and resources
-also remain external so both implementations can consume compatible releases.
+the immutable `classic` runtime target derived from `main`; replacement
+development consumes the corresponding `main` target. Sound and resources also
+remain external so both implementations can consume compatible releases.
 
 ## Workspace setup
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select a fully verified content@1.x runtime release and update its lock."""
+"""Select a fully verified content@main Classic release and update its lock."""
 
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ import urllib.request
 
 
 CONTENT_REPOSITORY = "atrinik/content"
-CONTENT_BRANCH = "1.x"
+CONTENT_BRANCH = "main"
+CONTENT_TARGET = "classic"
 LOCK_PATH = Path("server/dependencies.lock.json")
 RUNTIME_FORMAT = "atrinik-classic-runtime-content-v1"
 CONTENT_FORMAT = "classic-ads-v1"
@@ -262,7 +263,7 @@ def validate_manifest(
     if not isinstance(value, dict):
         raise UpdateError("runtime manifest root must be an object")
     require_keys(value, {
-        "schema_version", "source", "release_line", "release_version",
+        "schema_version", "target", "source", "release_version",
         "content_format", "artifact_format", "compatible_classic_releases",
         "consumers", "replacement_ready", "replacement_toolkit_package",
         "license_files", "files",
@@ -273,7 +274,7 @@ def validate_manifest(
     require_keys(source, {"repository", "branch", "commit"}, "runtime manifest source")
     expected = {
         "schema_version": 2,
-        "release_line": CONTENT_BRANCH,
+        "target": CONTENT_TARGET,
         "release_version": version,
         "content_format": CONTENT_FORMAT,
         "artifact_format": RUNTIME_FORMAT,
@@ -333,7 +334,7 @@ def validate_manifest(
 def verify_archive(
     path: Path, *, version: str, commit: str, classic_version: tuple[int, int, int]
 ) -> None:
-    root = f"atrinik-content-{version}-runtime"
+    root = f"atrinik-content-{version}-{CONTENT_TARGET}-runtime"
     seen: set[str] = set()
     file_paths: set[str] = set()
     files: dict[str, tuple[str, int]] = {}
@@ -415,9 +416,11 @@ def download_asset(
 def checksum_for_release(
     release: dict[str, object], tag: str, version: str, directory: Path,
     downloader: Callable[[str, BinaryIO, int], tuple[str, int]],
+    *, classic_target: bool,
 ) -> tuple[str, dict[str, object], str]:
     assets = asset_map(release)
-    runtime_name = f"atrinik-content-{version}-runtime.tar.gz"
+    suffix = f"-{CONTENT_TARGET}" if classic_target else ""
+    runtime_name = f"atrinik-content-{version}{suffix}-runtime.tar.gz"
     runtime = assets.get(runtime_name)
     checksums = assets.get("SHA256SUMS")
     if runtime is None or checksums is None:
@@ -438,12 +441,10 @@ def verify_candidate(
 ) -> dict[str, object]:
     tag = str(release.get("tag_name"))
     semver = semantic_version(tag)
-    if semver[0] != 1:
-        raise UpdateError(f"{tag}: release is not on content 1.x")
     version = tag[1:]
     commit = api.tag_commit(CONTENT_REPOSITORY, tag)
     expected_digest, runtime, runtime_url = checksum_for_release(
-        release, tag, version, directory, downloader
+        release, tag, version, directory, downloader, classic_target=True
     )
     runtime_path = directory / f"{tag}-runtime.tar.gz"
     actual_digest = download_asset(runtime, runtime_url, runtime_path, MAX_ARCHIVE_BYTES, downloader)
@@ -488,25 +489,44 @@ def current_classic_version(root: Path) -> tuple[int, int, int]:
 def verify_current_coordinate(
     current: dict[str, object], releases: list[dict[str, object]], api: GitHubAPI,
     directory: Path, downloader: Callable[[str, BinaryIO, int], tuple[str, int]],
-) -> tuple[int, int, int]:
+) -> tuple[tuple[int, int, int], bool]:
     tag = current.get("tag")
     commit = current.get("commit")
     digest = current.get("sha256")
     url = current.get("url")
     semver = semantic_version(tag)
-    if semver[0] != 1 or not isinstance(commit, str) or not isinstance(digest, str):
+    if not isinstance(commit, str) or COMMIT_RE.fullmatch(commit) is None:
         raise UpdateError("current content lock coordinate is malformed")
+    if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
+        raise UpdateError("current content lock coordinate is malformed")
+    if not isinstance(url, str):
+        raise UpdateError("current content lock coordinate is malformed")
+    version = str(tag)[1:]
+    base = f"https://github.com/{CONTENT_REPOSITORY}/releases/download/{tag}"
+    legacy_url = f"{base}/atrinik-content-{version}-runtime.tar.gz"
+    classic_url = (
+        f"{base}/atrinik-content-{version}-{CONTENT_TARGET}-runtime.tar.gz"
+    )
+    if url == legacy_url and semver[0] == 1:
+        legacy = True
+    elif url == classic_url:
+        legacy = False
+    else:
+        raise UpdateError(
+            "current content release URL differs from canonical coordinates"
+        )
     release = release_by_tag(releases, str(tag))
     if api.tag_commit(CONTENT_REPOSITORY, str(tag)) != commit:
         raise UpdateError("current content tag was reused for a different commit")
     expected, _, expected_url = checksum_for_release(
-        release, str(tag), str(tag)[1:], directory, downloader
+        release, str(tag), version, directory, downloader,
+        classic_target=not legacy,
     )
     if expected != digest:
         raise UpdateError("current content release digest differs from the lock")
     if url != expected_url:
         raise UpdateError("current content release URL differs from the lock")
-    return semver
+    return semver, legacy
 
 
 def validate_lock_with_server(root: Path, value: dict[str, object]) -> None:
@@ -574,7 +594,9 @@ def execute(
     classic_version = current_classic_version(root)
     with tempfile.TemporaryDirectory(prefix="atrinik-content-update-") as directory_name:
         directory = Path(directory_name)
-        current_version = verify_current_coordinate(current, releases, api, directory, downloader)
+        current_version, current_is_legacy = verify_current_coordinate(
+            current, releases, api, directory, downloader
+        )
         accepted: list[dict[str, object]] = []
         rejected: list[dict[str, str]] = []
         for release in releases:
@@ -585,14 +607,23 @@ def execute(
                 version = semantic_version(tag)
             except UpdateError:
                 continue
-            if version[0] != 1 or version <= current_version:
+            if version <= current_version:
                 continue
             try:
                 candidate = verify_candidate(
                     release, api, directory, classic_version, downloader
                 )
-                if api.compare(CONTENT_REPOSITORY, str(current["commit"]), str(candidate["commit"])) != "ahead":
-                    raise UpdateError("candidate commit is not a strict descendant of the current lock")
+                if (
+                    not current_is_legacy
+                    and api.compare(
+                        CONTENT_REPOSITORY,
+                        str(current["commit"]),
+                        str(candidate["commit"]),
+                    ) != "ahead"
+                ):
+                    raise UpdateError(
+                        "candidate commit is not a strict descendant of the current lock"
+                    )
                 accepted.append(candidate)
             except UpdateError as error:
                 rejected.append({"tag": str(tag), "reason": str(error)})
@@ -637,7 +668,7 @@ def write_pr_body(evidence: dict[str, object], path: Path) -> None:
         "",
         "- Enumerated all published content releases with bounded pagination.",
         "- Verified the tag, runtime asset, SHA256SUMS, archive safety, manifest, compatibility, file digests, and license attributions.",
-        "- Confirmed the selected commit is a strict descendant of the previously locked commit.",
+        "- Required the Classic target to originate from `content@main`; subsequent updates must be strict descendants of the current main coordinate.",
         "- Re-ran the existing server dependency-lock loader before mutation.",
         "",
         "Generated by the repository-owned verified content updater. This pull request is never approved or merged by that automation.",
