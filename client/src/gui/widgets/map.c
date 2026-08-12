@@ -2910,9 +2910,20 @@ void map_draw_map(SDL_Surface *surface) {
             render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
             return;
         }
-        Uint32 black = pixel_format_map_rgb((*level_surface)->format, 0, 0, 0);
-        SDL_SetSurfaceColorKey(*level_surface, true, black);
-        SDL_SetSurfaceRLE(*level_surface, true);
+        if (!surface_set_transparent_black_mutable(*level_surface)) {
+            LOG(ERROR, "Could not prepare map level surface: %s", SDL_GetError());
+            SDL_DestroySurface(*level_surface);
+            *level_surface = NULL;
+            render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
+            return;
+        }
+    }
+
+    if (!surface_clear_transparent_black(*level_surface)) {
+        map_select_level(0, true);
+        lighting_select_level(0);
+        render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
+        return;
     }
 
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
@@ -2922,11 +2933,6 @@ void map_draw_map(SDL_Surface *surface) {
             continue;
         }
 
-        if (depth == 0) {
-            SDL_FillSurfaceRect(*level_surface,
-                                NULL,
-                                pixel_format_map_rgb((*level_surface)->format, 0, 0, 0));
-        }
         map_draw_level(surface,
                        *level_surface,
                        depth,
