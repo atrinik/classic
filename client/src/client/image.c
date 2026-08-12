@@ -1212,6 +1212,7 @@ void image_face_requests_service(void) {
         WIDGET_REDRAW_ALL(PDOLL_ID);
         WIDGET_REDRAW_ALL(QUICKSLOT_ID);
         WIDGET_REDRAW_ALL(INVENTORY_ID);
+        WIDGET_REDRAW_ALL(ACTIVE_EFFECTS_ID);
     }
     if (face_completion_now_us() - started > FACE_COMPLETION_BUDGET_US) {
         LOG(DEBUG,

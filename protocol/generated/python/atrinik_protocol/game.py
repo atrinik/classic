@@ -2,10 +2,22 @@
 # Do not edit by hand.
 from enum import IntEnum
 
-PROTOCOL_VERSION = 1078
+PROTOCOL_VERSION = 1079
 
 
 ITEM_NAME_SIZE = 128
+
+
+PLAYER_STATUS_MAX_STATUSES = 48
+PLAYER_STATUS_KEY_SIZE = 64
+PLAYER_STATUS_NAME_SIZE = 128
+PLAYER_STATUS_TOOLTIP_SIZE = 1024
+
+
+class PlayerStatusOperation(IntEnum):
+    SNAPSHOT = 0
+    UPSERT = 1
+    REMOVE = 2
 
 
 class ClientToServerCommand(IntEnum):
@@ -63,3 +75,4 @@ class ServerToClientCommand(IntEnum):
     INTERFACE = 25
     NOTIFICATION = 26
     KEEPALIVE = 27
+    PLAYER_STATUS = 28

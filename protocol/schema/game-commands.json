@@ -1,7 +1,18 @@
 {
   "schema_version": 1,
-  "protocol_version": 1078,
+  "protocol_version": 1079,
   "item_name_size": 128,
+  "player_status": {
+    "max_statuses": 48,
+    "key_size": 64,
+    "name_size": 128,
+    "tooltip_size": 1024,
+    "operations": [
+      {"id": 0, "symbol": "SNAPSHOT"},
+      {"id": 1, "symbol": "UPSERT"},
+      {"id": 2, "symbol": "REMOVE"}
+    ]
+  },
   "client_to_server": [
     {"id": 0, "symbol": "CONTROL", "wire_name": "control"},
     {"id": 1, "symbol": "ASK_FACE", "wire_name": "ask_face"},
@@ -55,6 +66,7 @@
     {"id": 24, "symbol": "SOUND_AMBIENT", "wire_name": "sound_ambient"},
     {"id": 25, "symbol": "INTERFACE", "wire_name": "interface"},
     {"id": 26, "symbol": "NOTIFICATION", "wire_name": "notification"},
-    {"id": 27, "symbol": "KEEPALIVE", "wire_name": "keepalive"}
+    {"id": 27, "symbol": "KEEPALIVE", "wire_name": "keepalive"},
+    {"id": 28, "symbol": "PLAYER_STATUS", "wire_name": "player_status"}
   ]
 }

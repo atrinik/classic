@@ -29,8 +29,6 @@ static void write_item_record(packet_struct *packet, const char *glow) {
     packet_writer_write_uint16(packet, 0);
     packet_writer_write_uint8(packet, 0);
     packet_writer_write_uint32(packet, 1);
-    packet_writer_write_int32(packet, 10);
-    packet_writer_write_cstring(packet, "effect");
     packet_writer_write_cstring(packet, glow);
     packet_writer_write_uint8(packet, 1);
 }

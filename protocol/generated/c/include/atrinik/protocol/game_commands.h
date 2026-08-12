@@ -3,9 +3,21 @@
 #ifndef ATRINIK_PROTOCOL_GAME_COMMANDS_H
 #define ATRINIK_PROTOCOL_GAME_COMMANDS_H
 
-#define ATRINIK_PROTOCOL_VERSION 1078U
+#define ATRINIK_PROTOCOL_VERSION 1079U
 #define SOCKET_VERSION ATRINIK_PROTOCOL_VERSION
 #define ATRINIK_PROTOCOL_ITEM_NAME_SIZE 128U
+
+#define ATRINIK_PLAYER_STATUS_MAX_STATUSES 48U
+#define ATRINIK_PLAYER_STATUS_KEY_SIZE 64U
+#define ATRINIK_PLAYER_STATUS_NAME_SIZE 128U
+#define ATRINIK_PLAYER_STATUS_TOOLTIP_SIZE 1024U
+
+typedef enum atrinik_player_status_operation {
+    PLAYER_STATUS_SNAPSHOT = 0,
+    PLAYER_STATUS_UPSERT = 1,
+    PLAYER_STATUS_REMOVE = 2,
+    PLAYER_STATUS_OPERATION_NROF = 3
+} atrinik_player_status_operation_t;
 
 typedef enum atrinik_client_to_server_command {
     SERVER_CMD_CONTROL = 0,
@@ -88,7 +100,8 @@ typedef enum atrinik_server_to_client_command {
     CLIENT_CMD_INTERFACE = 25,
     CLIENT_CMD_NOTIFICATION = 26,
     CLIENT_CMD_KEEPALIVE = 27,
-    CLIENT_CMD_NROF = 28
+    CLIENT_CMD_PLAYER_STATUS = 28,
+    CLIENT_CMD_NROF = 29
 } atrinik_server_to_client_command_t;
 
 /* Stable diagnostic names for server-to-client commands. */
@@ -120,5 +133,6 @@ typedef enum atrinik_server_to_client_command {
 #define CLIENT_CMD_NAME_INTERFACE "interface"
 #define CLIENT_CMD_NAME_NOTIFICATION "notification"
 #define CLIENT_CMD_NAME_KEEPALIVE "keepalive"
+#define CLIENT_CMD_NAME_PLAYER_STATUS "player_status"
 
 #endif

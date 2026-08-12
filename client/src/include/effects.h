@@ -338,11 +338,6 @@ extern SDL_Surface *effect_sprite_overlay(SDL_Surface *surface);
 
 /** Public API implemented in src/gui/widgets/active_effects.c. */
 
-extern void
-widget_active_effects_update(widgetdata *widget, object *op, int32_t sec, const char *msg);
-
-extern void widget_active_effects_remove(widgetdata *widget, object *op);
-
 extern void widget_active_effects_init(widgetdata *widget);
 
 #endif
