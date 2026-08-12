@@ -201,9 +201,10 @@ static void test_mutable_color_key_surface_reuse(void) {
     TEST_CHECK(surface_clear_transparent_black(surface));
     TEST_CHECK(SDL_ReadSurfacePixel(surface, 2, 0, &red, &green, &blue, &alpha));
     TEST_CHECK(red == 0 && green == 0 && blue == 0);
-    TEST_CHECK(SDL_LockSurface(surface));
+    TEST_CHECK(SDL_SetSurfaceRLE(surface, true));
+    TEST_CHECK(SDL_BlitSurface(surface, NULL, destination, NULL));
     TEST_CHECK(!surface_clear_transparent_black(surface));
-    SDL_UnlockSurface(surface);
+    TEST_CHECK(SDL_SetSurfaceRLE(surface, false));
 
     TEST_CHECK(SDL_ReadSurfacePixel(destination, 0, 0, &red, &green, &blue, &alpha));
     TEST_CHECK(red == 1 && green == 2 && blue == 3);
