@@ -98,18 +98,19 @@ gh workflow run package-release.yml --repo atrinik/classic --ref main \
 
 ### Verified content lock updates
 
-`.github/workflows/update-content.yml` checks for a newer compatible
-`content@1.x` runtime on manual dispatch and contains the reviewed daily
-schedule. Scheduled events remain inert until the repository variable
+`.github/workflows/update-content.yml` checks for a newer compatible Classic
+runtime derived from `content@main` on manual dispatch and contains the
+reviewed daily schedule. Scheduled events remain inert until the repository variable
 `DEPENDENCY_UPDATE_SCHEDULE_ENABLED` is exactly `true`; enable it only after the
 first generated lock pull request, rehearsal, normal release, artifact audit,
 and runtime check all succeed. Its read-only phase runs
 `tools/release/update_content_lock.py`, which evaluates every newer canonical
 semantic release and emits machine-readable old/new evidence only after the
-release tag, checksums, archive, complete manifest, compatibility range,
-consumer contract, license attributions, and commit ancestry all agree. Invalid
-candidates are recorded and skipped; incomplete discovery or an invalid current
-coordinate stops the run.
+release tag, checksums, archive, complete manifest, explicit `classic` target,
+`main` source identity, compatibility range, consumer contract, and license
+attributions all agree. After the authenticated one-time cross-line cutover,
+commit ancestry must agree as well. Invalid candidates are recorded and
+skipped; incomplete discovery or an invalid current coordinate stops the run.
 
 When a verified update exists, the workflow mints the narrowly installed
 GitHub App credential and creates or refreshes at most one App-owned pull
@@ -303,10 +304,10 @@ promoter recomputes GitHub's latest complete immutable release on every run, and
 the alias is never a rollback source.
 
 Before upgrading a production server, snapshot its state and retain the exact
-`content@1.x` revision. Roll back by stopping the topology, restoring that
-snapshot, selecting the prior immutable classic commit/image and compatible
-content revision in a classic-derived wrapper profile, then running the full
-supervised lifecycle above. A unified packaging version alone does not change
+prior `content@main` Classic artifact coordinate. Roll back by stopping the
+topology, restoring that snapshot, selecting the prior immutable Classic
+commit/image and compatible content artifact in a classic-derived wrapper
+profile, then running the full supervised lifecycle above. A unified packaging version alone does not change
 the wire protocol or save format; protocol, persistence, or content migrations
 must document their own compatibility and rollback requirements in the change
 that introduces them. Pre-consolidation releases and assets remain available

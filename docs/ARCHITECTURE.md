@@ -10,7 +10,7 @@ protocol ──> libatrinik ──> client
     ├─────────────────────> client
     └─────────────────────> server
 
-content@1.x + resources ──> server
+content@main (Classic target) + resources ──> server
 sound ────────────────────> client
 Gridarta checkout ────────> editor packaging
 ```

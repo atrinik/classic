@@ -20,7 +20,7 @@ UPDATER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UPDATER)
 
 
-def manifest(version: str = "1.8.6", commit: str = "a" * 40) -> dict[str, object]:
+def manifest(version: str = "2.14.0", commit: str = "a" * 40) -> dict[str, object]:
     payload = b"content\n"
     digest = hashlib.sha256(payload).hexdigest()
     file_entry = {
@@ -30,12 +30,12 @@ def manifest(version: str = "1.8.6", commit: str = "a" * 40) -> dict[str, object
     }
     return {
         "schema_version": 2,
+        "target": "classic",
         "source": {
             "repository": "atrinik/content",
-            "branch": "1.x",
+            "branch": "main",
             "commit": commit,
         },
-        "release_line": "1.x",
         "release_version": version,
         "content_format": "classic-ads-v1",
         "artifact_format": "atrinik-classic-runtime-content-v1",
@@ -49,7 +49,7 @@ def manifest(version: str = "1.8.6", commit: str = "a" * 40) -> dict[str, object
 
 
 def runtime_archive(path: Path, value: dict[str, object], *, unsafe: str | None = None) -> None:
-    root = f"atrinik-content-{value['release_version']}-runtime"
+    root = f"atrinik-content-{value['release_version']}-classic-runtime"
     payload = b"content\n"
     value["license_files"] = list(value["files"])
     with tarfile.open(path, "w:gz") as archive:
@@ -98,7 +98,7 @@ class UpdateContentLockTests(unittest.TestCase):
             FakeAPI([["bad"]]).releases("atrinik/content")
 
     def test_checksums_require_one_strict_runtime_entry(self) -> None:
-        name = "atrinik-content-1.8.6-runtime.tar.gz"
+        name = "atrinik-content-2.14.0-classic-runtime.tar.gz"
         digest = "a" * 64
         self.assertEqual(UPDATER.parse_checksums(f"{digest}  {name}\n".encode(), name), digest)
         for data in (
@@ -129,13 +129,13 @@ class UpdateContentLockTests(unittest.TestCase):
             runtime_archive(archive_path, manifest())
             archive_data = archive_path.read_bytes()
             digest = hashlib.sha256(archive_data).hexdigest()
-            runtime_name = "atrinik-content-1.8.6-runtime.tar.gz"
-            base = "https://github.com/atrinik/content/releases/download/v1.8.6"
+            runtime_name = "atrinik-content-2.14.0-classic-runtime.tar.gz"
+            base = "https://github.com/atrinik/content/releases/download/v2.14.0"
             runtime_url = f"{base}/{runtime_name}"
             checksum_url = f"{base}/SHA256SUMS"
             checksum_data = f"{digest}  {runtime_name}\n".encode()
             release = {
-                "tag_name": "v1.8.6",
+                "tag_name": "v2.14.0",
                 "assets": [
                     {"name": runtime_name, "browser_download_url": runtime_url, "size": len(archive_data)},
                     {"name": "SHA256SUMS", "browser_download_url": checksum_url, "size": len(checksum_data)},
@@ -160,7 +160,7 @@ class UpdateContentLockTests(unittest.TestCase):
             bad_checksums = f"{'f' * 64}  {runtime_name}\n".encode()
             downloads[checksum_url] = bad_checksums
             release["assets"][1]["size"] = len(bad_checksums)
-            for generated in Path(directory).glob("v1.8.6-*"):
+            for generated in Path(directory).glob("v2.14.0-*"):
                 generated.unlink()
             with self.assertRaisesRegex(UPDATER.UpdateError, "differs from SHA256SUMS"):
                 UPDATER.verify_candidate(
@@ -172,7 +172,7 @@ class UpdateContentLockTests(unittest.TestCase):
             path = Path(directory) / "runtime.tar.gz"
             runtime_archive(path, manifest())
             UPDATER.verify_archive(
-                path, version="1.8.6", commit="a" * 40,
+                path, version="2.14.0", commit="a" * 40,
                 classic_version=(5, 15, 4),
             )
 
@@ -181,11 +181,11 @@ class UpdateContentLockTests(unittest.TestCase):
             path = Path(directory) / "runtime.tar.gz"
             runtime_archive(
                 path, manifest(),
-                unsafe="atrinik-content-1.8.6-runtime/maps/link",
+                unsafe="atrinik-content-2.14.0-classic-runtime/maps/link",
             )
             with self.assertRaisesRegex(UPDATER.UpdateError, "unsafe member type"):
                 UPDATER.verify_archive(
-                    path, version="1.8.6", commit="a" * 40,
+                    path, version="2.14.0", commit="a" * 40,
                     classic_version=(5, 15, 4),
                 )
 
@@ -199,12 +199,12 @@ class UpdateContentLockTests(unittest.TestCase):
                     archive.addfile(info, BytesIO(b"x"))
                 with self.assertRaises(UPDATER.UpdateError):
                     UPDATER.verify_archive(
-                        path, version="1.8.6", commit="a" * 40,
+                        path, version="2.14.0", commit="a" * 40,
                         classic_version=(5, 15, 4),
                     )
 
     def test_archive_rejects_file_directory_collisions(self) -> None:
-        root = "atrinik-content-1.8.6-runtime"
+        root = "atrinik-content-2.14.0-classic-runtime"
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.tar.gz"
             with tarfile.open(path, "w:gz") as archive:
@@ -216,7 +216,7 @@ class UpdateContentLockTests(unittest.TestCase):
                 archive.addfile(child, BytesIO(b"x"))
             with self.assertRaisesRegex(UPDATER.UpdateError, "collision"):
                 UPDATER.verify_archive(
-                    path, version="1.8.6", commit="a" * 40,
+                    path, version="2.14.0", commit="a" * 40,
                     classic_version=(5, 15, 4),
                 )
 
@@ -224,6 +224,8 @@ class UpdateContentLockTests(unittest.TestCase):
         for mutation, message in (
             (lambda value: value["files"][0].update(sha256="b" * 64), "exactly match"),
             (lambda value: value["source"].update(commit="b" * 40), "source coordinate"),
+            (lambda value: value["source"].update(branch="1.x"), "source coordinate"),
+            (lambda value: value.update(target="replacement"), "target"),
             (lambda value: value.update(replacement_ready=True), "replacement_ready"),
             (lambda value: value.update(consumers=["classic/server"]), "consumers"),
         ):
@@ -234,7 +236,7 @@ class UpdateContentLockTests(unittest.TestCase):
                 runtime_archive(path, value)
                 with self.assertRaisesRegex(UPDATER.UpdateError, message):
                     UPDATER.verify_archive(
-                        path, version="1.8.6", commit="a" * 40,
+                        path, version="2.14.0", commit="a" * 40,
                         classic_version=(5, 15, 4),
                     )
 
@@ -244,7 +246,7 @@ class UpdateContentLockTests(unittest.TestCase):
             runtime_archive(path, manifest())
             with self.assertRaisesRegex(UPDATER.UpdateError, "does not satisfy"):
                 UPDATER.verify_archive(
-                    path, version="1.8.6", commit="a" * 40,
+                    path, version="2.14.0", commit="a" * 40,
                     classic_version=(6, 0, 0),
                 )
 
@@ -261,7 +263,7 @@ class UpdateContentLockTests(unittest.TestCase):
                     UPDATER.validate_manifest(
                         json.dumps(value).encode(),
                         {"attribution/maps/COPYING": (hashlib.sha256(b"content\n").hexdigest(), 8)},
-                        version="1.8.6", commit="a" * 40,
+                        version="2.14.0", commit="a" * 40,
                         classic_version=(5, 15, 4),
                     )
 
@@ -351,7 +353,8 @@ class UpdateContentLockTests(unittest.TestCase):
     def test_current_coordinate_detects_digest_drift(self) -> None:
         current = {
             "tag": "v1.2.0", "commit": "a" * 40,
-            "url": "https://expected", "sha256": "b" * 64,
+            "url": "https://github.com/atrinik/content/releases/download/v1.2.0/atrinik-content-1.2.0-runtime.tar.gz",
+            "sha256": "b" * 64,
         }
         release = {"tag_name": "v1.2.0", "draft": False, "published_at": "now"}
         api = mock.Mock()
@@ -359,12 +362,47 @@ class UpdateContentLockTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with mock.patch.object(
                 UPDATER, "checksum_for_release",
-                return_value=("c" * 64, {}, "https://expected"),
+                return_value=(
+                    "c" * 64,
+                    {},
+                    "https://github.com/atrinik/content/releases/download/v1.2.0/atrinik-content-1.2.0-runtime.tar.gz",
+                ),
             ):
                 with self.assertRaisesRegex(UPDATER.UpdateError, "digest differs"):
                     UPDATER.verify_current_coordinate(
                         current, [release], api, Path(directory), mock.Mock()
                     )
+
+    def test_current_main_coordinate_uses_the_classic_target_asset(self) -> None:
+        url = (
+            "https://github.com/atrinik/content/releases/download/v2.14.0/"
+            "atrinik-content-2.14.0-classic-runtime.tar.gz"
+        )
+        current = {
+            "tag": "v2.14.0",
+            "commit": "a" * 40,
+            "url": url,
+            "sha256": "b" * 64,
+        }
+        release = {
+            "tag_name": "v2.14.0",
+            "draft": False,
+            "published_at": "now",
+        }
+        api = mock.Mock()
+        api.tag_commit.return_value = "a" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(
+                UPDATER,
+                "checksum_for_release",
+                return_value=("b" * 64, {}, url),
+            ) as checksums:
+                version, legacy = UPDATER.verify_current_coordinate(
+                    current, [release], api, Path(directory), mock.Mock()
+                )
+        self.assertEqual(version, (2, 14, 0))
+        self.assertFalse(legacy)
+        self.assertTrue(checksums.call_args.kwargs["classic_target"])
 
     def test_noncanonical_lock_format_is_not_rewritten(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -376,8 +414,8 @@ class UpdateContentLockTests(unittest.TestCase):
     def test_highest_passing_candidate_wins_and_failures_are_evidence(self) -> None:
         root = ROOT
         releases = [
-            {"tag_name": "v1.8.7", "draft": False, "published_at": "now"},
-            {"tag_name": "v1.8.6", "draft": False, "published_at": "now"},
+            {"tag_name": "v2.15.0", "draft": False, "published_at": "now"},
+            {"tag_name": "v2.14.0", "draft": False, "published_at": "now"},
         ]
         api = mock.Mock()
         api.releases.return_value = releases
@@ -386,10 +424,10 @@ class UpdateContentLockTests(unittest.TestCase):
         current = {"tag": "v1.2.0", "commit": "a" * 40, "url": "old", "sha256": "b" * 64}
 
         def verify(release: dict[str, object], *_args: object, **_kwargs: object) -> dict[str, object]:
-            if release["tag_name"] == "v1.8.7":
+            if release["tag_name"] == "v2.15.0":
                 raise UPDATER.UpdateError("bad archive")
             return {
-                "tag": "v1.8.6", "version": [1, 8, 6], "commit": "c" * 40,
+                "tag": "v2.14.0", "version": [2, 14, 0], "commit": "c" * 40,
                 "url": "new", "sha256": "d" * 64,
             }
 
@@ -397,14 +435,55 @@ class UpdateContentLockTests(unittest.TestCase):
         with (
             mock.patch.object(UPDATER, "load_lock", return_value=(lock, current)),
             mock.patch.object(UPDATER, "current_classic_version", return_value=(5, 15, 4)),
-            mock.patch.object(UPDATER, "verify_current_coordinate", return_value=(1, 2, 0)),
+            mock.patch.object(
+                UPDATER,
+                "verify_current_coordinate",
+                return_value=((1, 2, 0), True),
+            ),
             mock.patch.object(UPDATER, "verify_candidate", side_effect=verify),
             mock.patch.object(UPDATER, "update_lock", return_value=mutation) as update,
         ):
             evidence = UPDATER.execute(root, apply=False, api=api)
         self.assertTrue(evidence["changed"])
-        self.assertEqual(evidence["rejected"], [{"tag": "v1.8.7", "reason": "bad archive"}])
-        self.assertEqual(update.call_args.args[3]["tag"], "v1.8.6")
+        self.assertEqual(evidence["rejected"], [{"tag": "v2.15.0", "reason": "bad archive"}])
+        self.assertEqual(update.call_args.args[3]["tag"], "v2.14.0")
+        api.compare.assert_not_called()
+
+    def test_main_updates_require_strict_commit_ancestry(self) -> None:
+        release = {"tag_name": "v2.15.0", "draft": False, "published_at": "now"}
+        api = mock.Mock()
+        api.releases.return_value = [release]
+        api.compare.return_value = "diverged"
+        current = {
+            "tag": "v2.14.0",
+            "commit": "a" * 40,
+            "url": "old",
+            "sha256": "b" * 64,
+        }
+        candidate = {
+            "tag": "v2.15.0",
+            "version": [2, 15, 0],
+            "commit": "c" * 40,
+            "url": "new",
+            "sha256": "d" * 64,
+        }
+        with (
+            mock.patch.object(UPDATER, "load_lock", return_value=({}, current)),
+            mock.patch.object(
+                UPDATER, "current_classic_version", return_value=(5, 22, 0)
+            ),
+            mock.patch.object(
+                UPDATER,
+                "verify_current_coordinate",
+                return_value=((2, 14, 0), False),
+            ),
+            mock.patch.object(UPDATER, "verify_candidate", return_value=candidate),
+            mock.patch.object(UPDATER, "update_lock") as update,
+        ):
+            evidence = UPDATER.execute(ROOT, apply=False, api=api)
+        self.assertFalse(evidence["changed"])
+        self.assertIn("strict descendant", evidence["rejected"][0]["reason"])
+        update.assert_not_called()
 
     def test_duplicate_published_tags_fail_as_ambiguous(self) -> None:
         release = {"tag_name": "v1.8.6", "draft": False, "published_at": "now"}
