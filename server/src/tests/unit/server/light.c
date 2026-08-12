@@ -105,6 +105,24 @@ START_TEST(test_radiance_resolver_preserves_linear_warm_and_cool_daylight) {
     ck_assert_uint_eq(radiance[0], UINT16_MAX);
     ck_assert_uint_eq(radiance[1], UINT16_MAX);
     ck_assert_uint_eq(radiance[2], UINT16_MAX);
+
+    memset(&space, 0, sizeof(space));
+    light_radiance_from_raw(&space, -1, &scalar, radiance);
+    ck_assert_uint_eq(scalar, 0);
+    ck_assert_uint_eq(radiance[0], 0);
+    ck_assert_uint_eq(radiance[1], 0);
+    ck_assert_uint_eq(radiance[2], 0);
+
+    space.light_source_positive_value = 40959;
+    space.light_source_color_weight = INT64_C(40959) * UINT16_MAX;
+    space.light_source_color[0] = space.light_source_color_weight;
+    space.light_source_color[1] = INT64_C(40959) * 32768;
+    space.light_source_color[2] = INT64_C(40959) * 16384;
+    light_radiance_from_raw(&space, 81919, &scalar, radiance);
+    ck_assert_uint_eq(scalar, UINT16_MAX);
+    ck_assert_uint_eq(radiance[0], UINT16_MAX);
+    ck_assert_uint_eq(radiance[1], 49152);
+    ck_assert_uint_eq(radiance[2], 40960);
 }
 END_TEST
 
