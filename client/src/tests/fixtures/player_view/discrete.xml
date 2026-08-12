@@ -7,7 +7,7 @@
              archdef="data/archdef.dat"
              archdef-sha256="977ce63e38f4795545f42bd2f4a9c62bd38fcdb4cfde7cb7fe3c2cd9fe73983e"
              snapshot="src/tests/fixtures/player_view/scene.map2.hex"
-             snapshot-sha256="911cbd06be13e22b334fee40d427bfc56b20a9407c0343d193994f4fbe779a2a"
+             snapshot-sha256="2bfc3e526016a4914662f7c49c629727c708f6a4b243d5330bfc68245ee118a7"
              viewport-width="320"
              viewport-height="240"
              look-width="9"

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -1202,26 +1202,27 @@ bool map_get_fow(int x, int y) {
 }
 
 /**
- * Set normalized light level for a map cell.
+ * Set pre-tone Q5.11 scalar radiance for a map cell.
  * @param x
  * X of the cell.
  * @param y
  * Y of the cell.
  * @param sub_layer
  * Sub-layer.
- * @param light_level
- * Light level to set: zero is unlit and 255 is fully lit.
+ * @param radiance
+ * Q5.11 scalar radiance to set.
  */
-void map_set_light_level(int x, int y, int sub_layer, uint8_t light_level) {
+void map_set_light_radiance(int x, int y, int sub_layer, uint16_t radiance) {
     struct MapCell *cell;
 
     cell = MAP_CELL_GET_MIDDLE(x, y);
-    bool changed = !cell->light_known[sub_layer] || cell->light_level[sub_layer] != light_level;
-    cell->light_level[sub_layer] = light_level;
+    bool changed =
+        !cell->light_known[sub_layer] || cell->light_radiance[sub_layer] != radiance;
+    cell->light_radiance[sub_layer] = radiance;
     cell->light_known[sub_layer] = 1;
     if (!(cell->light_rgb_explicit & (UINT8_C(1) << sub_layer))) {
         for (size_t channel = 0; channel < 3; channel++) {
-            cell->light_rgb[sub_layer][channel] = light_level;
+            cell->light_rgb_radiance[sub_layer][channel] = radiance;
         }
     }
     if (changed) {
@@ -1230,20 +1231,25 @@ void map_set_light_level(int x, int y, int sub_layer, uint8_t light_level) {
 }
 
 /** Apply one complete per-tile colored-light state. */
-void map_set_light_rgb(int x, int y, uint8_t bitmap, const uint8_t rgb[NUM_SUB_LAYERS][3]) {
+void map_set_light_rgb_radiance(int x,
+                                int y,
+                                uint8_t bitmap,
+                                const uint16_t rgb[NUM_SUB_LAYERS][3]) {
     struct MapCell *cell = MAP_CELL_GET_MIDDLE(x, y);
     bool changed = cell->light_rgb_explicit != bitmap;
 
     for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-        uint8_t resolved[3];
+        uint16_t resolved[3];
         if (bitmap & (UINT8_C(1) << sub_layer)) {
             memcpy(resolved, rgb[sub_layer], sizeof(resolved));
         } else {
-            memset(resolved, cell->light_level[sub_layer], sizeof(resolved));
+            for (size_t channel = 0; channel < 3; channel++) {
+                resolved[channel] = cell->light_radiance[sub_layer];
+            }
         }
 
-        if (memcmp(cell->light_rgb[sub_layer], resolved, sizeof(resolved)) != 0) {
-            memcpy(cell->light_rgb[sub_layer], resolved, sizeof(resolved));
+        if (memcmp(cell->light_rgb_radiance[sub_layer], resolved, sizeof(resolved)) != 0) {
+            memcpy(cell->light_rgb_radiance[sub_layer], resolved, sizeof(resolved));
             changed = true;
         }
     }
@@ -1561,9 +1567,7 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
         BIT_SET(effects.flags, SPRITE_FLAG_RED);
     } else if (data->cell->flags[map_layer] & FFLAG_INVISIBLE) {
         BIT_SET(effects.flags, SPRITE_FLAG_GRAY);
-    } else if (data->world_surface && data->smooth_lighting && !data->lightmap_pending &&
-               (data->layer == LAYER_WALL ||
-                (data->cell->light_rgb_explicit & (UINT8_C(1) << data->sub_layer)))) {
+    } else if (data->world_surface && data->smooth_lighting && !data->lightmap_pending) {
         if (data->cell->roof[map_layer]) {
             BIT_SET(effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
         } else {
@@ -1584,7 +1588,8 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
 
     if (BIT_QUERY(effects.flags, SPRITE_FLAG_DARK)) {
         effects.dark_level =
-            (UINT8_MAX - data->cell->light_level[data->sub_layer]) * DARK_LEVELS / UINT8_MAX;
+            (UINT8_MAX - lighting_radiance_to_level(data->cell->light_radiance[data->sub_layer])) *
+            DARK_LEVELS / UINT8_MAX;
     }
 
     effects.alpha = data->cell->alpha[map_layer];
@@ -2121,13 +2126,18 @@ static uint8_t map_lighting_sub_layer(const struct MapCell *cell) {
  * ring. This extends the known field naturally at map and FOW boundaries and
  * prevents temporary dark bands from influencing nearby structures.
  */
-static void
-map_lighting_rgb(int x, int y, const struct MapCell *cell, uint8_t sub_layer, uint8_t rgb[3]) {
+static void map_lighting_radiance(int x,
+                                  int y,
+                                  const struct MapCell *cell,
+                                  uint8_t sub_layer,
+                                  uint16_t *scalar,
+                                  uint16_t rgb[3]) {
     int cache_width = map_width * MAP_FOW_SIZE;
     int cache_height = map_height * MAP_FOW_SIZE;
 
     if (cell->light_known[sub_layer]) {
-        memcpy(rgb, cell->light_rgb[sub_layer], 3);
+        *scalar = cell->light_radiance[sub_layer];
+        memcpy(rgb, cell->light_rgb_radiance[sub_layer], sizeof(cell->light_rgb_radiance[0]));
         return;
     }
 
@@ -2137,7 +2147,7 @@ map_lighting_rgb(int x, int y, const struct MapCell *cell, uint8_t sub_layer, ui
      * an unbounded nearest-neighbour scan while map data is still arriving. */
     const int search_radius = 3;
     for (int radius = 1; radius <= search_radius; radius++) {
-        unsigned int total[3] = {0};
+        uint32_t total[4] = {0};
         unsigned int samples = 0;
 
         for (int offset_x = -radius; offset_x <= radius; offset_x++) {
@@ -2159,22 +2169,26 @@ map_lighting_rgb(int x, int y, const struct MapCell *cell, uint8_t sub_layer, ui
                     continue;
                 }
 
+                total[0] += sample_cell->light_radiance[sample_sub_layer];
                 for (size_t channel = 0; channel < 3; channel++) {
-                    total[channel] += sample_cell->light_rgb[sample_sub_layer][channel];
+                    total[channel + 1] +=
+                        sample_cell->light_rgb_radiance[sample_sub_layer][channel];
                 }
                 samples++;
             }
         }
 
         if (samples != 0) {
+            *scalar = (uint16_t)((total[0] + samples / 2) / samples);
             for (size_t channel = 0; channel < 3; channel++) {
-                rgb[channel] = (uint8_t)((total[channel] + samples / 2) / samples);
+                rgb[channel] = (uint16_t)((total[channel + 1] + samples / 2) / samples);
             }
             return;
         }
     }
 
-    memset(rgb, 0, 3);
+    *scalar = 0;
+    memset(rgb, 0, sizeof(uint16_t) * 3);
 }
 
 /** Project one cell's selected light sample into map-widget coordinates. */
@@ -2190,8 +2204,8 @@ map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, 
              height + data->player_height_offset - data->depth * MAP_LEVEL_PIXEL_HEIGHT -
              map_level_support_height(x, y, data->depth),
     };
-    uint8_t rgb[3];
-    map_lighting_rgb(x, y, cell, sub_layer, rgb);
+    uint16_t rgb[3];
+    map_lighting_radiance(x, y, cell, sub_layer, &vertex.scalar, rgb);
     vertex.red = rgb[0];
     vertex.green = rgb[1];
     vertex.blue = rgb[2];
@@ -2218,6 +2232,7 @@ static uint64_t map_lighting_cache_key(SDL_Surface *surface,
                                        int h) {
     uint64_t hash = UINT64_C(14695981039346656037);
 
+    hash = map_lighting_hash_value(hash, LIGHTING_TRANSFER_VERSION);
     hash = map_lighting_hash_value(hash, level_lighting_revision[current_level_index]);
     if (data->depth > 0) {
         hash = map_lighting_hash_value(hash, level_lighting_revision[MAP2_DEPTH_INDEX(0)]);
@@ -2325,11 +2340,9 @@ static void map_draw_level(SDL_Surface *surface,
         data.lightmap_pending = data.smooth_lighting;
 
         /* Positive-depth ground is composited through a color-keyed scratch
-         * surface. Applying the screen-sized RGB modulation map to that surface
-         * changes transparent background pixels and makes the
-         * higher level erase parts of the levels below it. Keep neutral floor
-         * sprites on the legacy discrete path; explicitly colored floors use
-         * the transparency-preserving per-sprite RGB path. */
+         * surface. Light each sprite through the transparency-preserving
+         * high-precision path so untouched background pixels cannot erase
+         * lower levels. */
         if (!primary_level) {
             data.lightmap_pending = false;
         }

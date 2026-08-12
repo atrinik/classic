@@ -40,7 +40,6 @@ extern uint8_t light_level_from_raw(int raw_light);
 #define LIGHT_COLOR_WHITE UINT32_C(0xffffff)
 
 extern bool light_color_parse(const char *value, uint32_t *color);
-extern void light_levels_from_raw(const MapSpace *space, int raw_light, uint8_t levels[3]);
 
 /** Resolve aggregate pre-tone Q5.11 radiance for one authorized map sample. */
 extern void light_radiance_from_raw(const MapSpace *space,

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -65,6 +65,8 @@ extern bool account_provision(const char *name,
  * Read a plaintext password from a protected file and call
  * account_provision(). The file must be regular, non-symlink, owned by the
  * current user, and mode 0600. It may have no terminator or one LF/CRLF.
+ * The preset must be one of the server-owned deterministic scenario
+ * presets; `basic-player` preserves the empty first-login character.
  *
  * @see account_provision
  */
@@ -72,6 +74,7 @@ extern bool account_provision_from_file(const char *name,
                                         const char *password_file,
                                         const char *character,
                                         const char *archname,
+                                        const char *preset,
                                         char *error,
                                         size_t error_size);
 

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -84,7 +84,7 @@ START_TEST(test_packet_new) {
 }
 END_TEST
 
-/** Build the invariant prefix of a same-map protocol-v1077 MAP update. */
+/** Build the invariant prefix of a same-map protocol-v1078 MAP update. */
 static packet_struct *map_protocol_test_packet(uint8_t level_count) {
     packet_struct *packet = packet_new(0, 16, 16);
     packet_writer_write_uint8(packet, MAP_UPDATE_CMD_SAME);
@@ -93,6 +93,36 @@ static packet_struct *map_protocol_test_packet(uint8_t level_count) {
     packet_writer_write_uint8(packet, 0);
     packet_writer_write_uint16(packet, 0);
     packet_writer_write_uint8(packet, level_count);
+    return packet;
+}
+
+static void map_protocol_test_level(packet_struct *packet, int8_t depth, packet_struct *level);
+
+/** Build a complete NEW MAP update with caller-selected metadata. */
+static packet_struct *map_protocol_test_new_packet(const char *map_name,
+                                                   const char *music,
+                                                   const char *weather,
+                                                   const char *region_name,
+                                                   const char *region_longname,
+                                                   const char *map_path) {
+    packet_struct *packet = packet_new(0, 128, PACKET_PAYLOAD_MAX);
+    packet_writer_write_uint8(packet, MAP_UPDATE_CMD_NEW);
+    packet_writer_write_cstring(packet, map_name);
+    packet_writer_write_cstring(packet, music);
+    packet_writer_write_cstring(packet, weather);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_cstring(packet, region_name);
+    packet_writer_write_cstring(packet, region_longname);
+    packet_writer_write_cstring(packet, map_path);
+    packet_writer_write_uint8(packet, 21);
+    packet_writer_write_uint8(packet, 21);
+    packet_writer_write_uint8(packet, 10);
+    packet_writer_write_uint8(packet, 10);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint16(packet, 0);
+    packet_writer_write_uint8(packet, 1);
+    map_protocol_test_level(packet, 0, NULL);
     return packet;
 }
 
@@ -199,7 +229,7 @@ START_TEST(test_map_protocol_validates_tile_record_flags) {
     packet_struct *level = packet_new(0, 16, 16);
     packet_writer_write_uint16(level, MAP2_MASK_FOW | MAP2_MASK_LIGHT_LEVEL);
     packet_writer_write_uint8(level, 1);
-    packet_writer_write_uint8(level, 128);
+    packet_writer_write_uint16(level, 2176);
     packet_writer_write_uint8(level, 0);
     packet_writer_write_uint8(level, 0);
     packet_struct *packet = map_protocol_test_packet(1);
@@ -256,30 +286,89 @@ START_TEST(test_map_protocol_accepts_exit_flag_and_rejects_unknown_or_truncated_
 }
 END_TEST
 
+START_TEST(test_map_protocol_enforces_layer_string_bounds) {
+    packet_struct *level = packet_new(0, 128, 128);
+    packet_writer_write_uint16(level, 0);
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, LAYER_LIVING - 1);
+    packet_writer_write_uint16(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, MAP2_FLAG_NAME | MAP2_FLAG_MORE);
+    packet_writer_write_cstring(level,
+                                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    packet_writer_write_cstring(level, "ffffff");
+    packet_writer_write_uint32(level, MAP2_FLAG2_GLOW);
+    packet_writer_write_cstring(level, "ffffff");
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_struct *packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+    packet_free(level);
+
+    level = packet_new(0, 128, 128);
+    packet_writer_write_uint16(level, 0);
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, LAYER_LIVING - 1);
+    packet_writer_write_uint16(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, MAP2_FLAG_NAME);
+    packet_writer_write_cstring(level,
+                                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    packet_writer_write_cstring(level, "ffffff");
+    packet_writer_write_uint8(level, 0);
+    packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+    packet_free(level);
+
+    level = packet_new(0, 32, 32);
+    packet_writer_write_uint16(level, 0);
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, LAYER_FLOOR - 1);
+    packet_writer_write_uint16(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, MAP2_FLAG_MORE);
+    packet_writer_write_uint32(level, MAP2_FLAG2_GLOW);
+    packet_writer_write_cstring(level, "fffffff");
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+    packet_free(level);
+}
+END_TEST
+
 START_TEST(test_map_protocol_validates_colored_light_extension) {
     packet_struct *level = packet_new(0, 32, 16);
     packet_writer_write_uint16(level, MAP2_MASK_LIGHT_LEVEL);
-    packet_writer_write_uint8(level, 80);
+    packet_writer_write_uint16(level, 2176);
     packet_writer_write_uint8(level, 0);
-    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_RGB);
+    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16);
     packet_writer_write_uint8(level, 1);
-    packet_writer_write_uint8(level, 80);
-    packet_writer_write_uint8(level, 0);
-    packet_writer_write_uint8(level, 40);
+    packet_writer_write_uint16(level, 2176);
+    packet_writer_write_uint16(level, 2062);
+    packet_writer_write_uint16(level, 2051);
     packet_struct *packet = map_protocol_test_packet(1);
     map_protocol_test_level(packet, 0, level);
     ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
 
-    for (size_t len = packet->len - 3; len < packet->len; len++) {
+    for (size_t len = 0; len < packet->len; len++) {
         ck_assert(!map_protocol_validate(packet->data, len, 0, 21, 21));
     }
+    packet_writer_write_uint8(packet, 0xff);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     packet_free(packet);
     packet_free(level);
 
     level = packet_new(0, 16, 16);
     packet_writer_write_uint16(level, 0);
     packet_writer_write_uint8(level, 0);
-    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_RGB);
+    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16);
     packet_writer_write_uint8(level, 0);
     packet = map_protocol_test_packet(1);
     map_protocol_test_level(packet, 0, level);
@@ -290,6 +379,20 @@ START_TEST(test_map_protocol_validates_colored_light_extension) {
     packet = map_protocol_test_packet(1);
     map_protocol_test_level(packet, 0, level);
     ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+    packet_free(level);
+
+    level = packet_new(0, 32, 16);
+    packet_writer_write_uint16(level, MAP2_MASK_LIGHT_LEVEL | MAP2_MASK_LIGHT_LEVEL_MORE);
+    packet_writer_write_uint16(level, 0);
+    for (size_t sub_layer = 1; sub_layer < MAP2_PROTOCOL_SUB_LAYERS; sub_layer++) {
+        packet_writer_write_uint16(level, UINT16_MAX);
+    }
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, 0);
+    packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     packet_free(packet);
     packet_free(level);
 }
@@ -311,13 +414,27 @@ START_TEST(test_map_protocol_accepts_bounded_continuation) {
     packet_writer_write_uint8(packet, 0);
     packet_writer_write_uint16(packet, 1);
     packet_writer_write_uint8(packet, 1);
-    map_protocol_test_level(packet, 2, NULL);
+    packet_struct *level = packet_new(0, 2, 2);
+    packet_writer_write_uint16(level, MAP2_MASK_CLEAR);
+    map_protocol_test_level(packet, 2, level);
     ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     ck_assert_uint_le(packet->len, PACKET_PAYLOAD_MAX);
+    packet->data[4] = (uint8_t)(MAP2_PROTOCOL_CONTINUATIONS_MAX >> 8);
+    packet->data[5] = (uint8_t)MAP2_PROTOCOL_CONTINUATIONS_MAX;
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet->data[4] = (uint8_t)((MAP2_PROTOCOL_CONTINUATIONS_MAX + 1) >> 8);
+    packet->data[5] = (uint8_t)(MAP2_PROTOCOL_CONTINUATIONS_MAX + 1);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     packet->data[4] = packet->data[5] = 0;
     ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     packet->data[4] = packet->data[5] = UINT8_MAX;
     ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet->data[4] = 0;
+    packet->data[5] = 1;
+    /* Partial continuation frames cannot consume a sequence without data. */
+    packet->data[8] = packet->data[9] = packet->data[10] = packet->data[11] = 0;
+    ck_assert(!map_protocol_validate(packet->data, packet->len - 2, 0, 21, 21));
+    packet_free(level);
     packet_free(packet);
 }
 END_TEST
@@ -365,6 +482,45 @@ START_TEST(test_map_protocol_rejects_unterminated_metadata) {
 
     ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     packet_free(packet);
+}
+END_TEST
+
+START_TEST(test_map_protocol_enforces_metadata_string_bounds) {
+    char long_boundary[MAP2_PROTOCOL_METADATA_LONG_MAX + 1];
+    char long_oversized[MAP2_PROTOCOL_METADATA_LONG_MAX + 2];
+    char short_boundary[MAP2_PROTOCOL_METADATA_SHORT_MAX + 1];
+    char short_oversized[MAP2_PROTOCOL_METADATA_SHORT_MAX + 2];
+    memset(long_boundary, 'a', sizeof(long_boundary) - 1);
+    long_boundary[sizeof(long_boundary) - 1] = '\0';
+    memset(long_oversized, 'a', sizeof(long_oversized) - 1);
+    long_oversized[sizeof(long_oversized) - 1] = '\0';
+    memset(short_boundary, 'a', sizeof(short_boundary) - 1);
+    short_boundary[sizeof(short_boundary) - 1] = '\0';
+    memset(short_oversized, 'a', sizeof(short_oversized) - 1);
+    short_oversized[sizeof(short_oversized) - 1] = '\0';
+
+    packet_struct *packet = map_protocol_test_new_packet(long_boundary,
+                                                         long_boundary,
+                                                         short_boundary,
+                                                         short_boundary,
+                                                         short_boundary,
+                                                         long_boundary);
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+
+    const char *valid = "valid";
+    for (size_t field = 0; field < 6; field++) {
+        const char *values[] = {valid, valid, valid, valid, valid, valid};
+        values[field] = field == 0 || field == 1 || field == 5 ? long_oversized : short_oversized;
+        packet = map_protocol_test_new_packet(values[0],
+                                              values[1],
+                                              values[2],
+                                              values[3],
+                                              values[4],
+                                              values[5]);
+        ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+        packet_free(packet);
+    }
 }
 END_TEST
 
@@ -1035,10 +1191,12 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_map_protocol_validates_tile_record_flags);
     tcase_add_test(tc_core,
                    test_map_protocol_accepts_exit_flag_and_rejects_unknown_or_truncated_flags);
+    tcase_add_test(tc_core, test_map_protocol_enforces_layer_string_bounds);
     tcase_add_test(tc_core, test_map_protocol_validates_colored_light_extension);
     tcase_add_test(tc_core, test_map_protocol_accepts_bounded_continuation);
     tcase_add_test(tc_core, test_map_protocol_continuation_state_is_bounded_and_ordered);
     tcase_add_test(tc_core, test_map_protocol_rejects_unterminated_metadata);
+    tcase_add_test(tc_core, test_map_protocol_enforces_metadata_string_bounds);
 
     return s;
 }
