@@ -226,16 +226,24 @@ void light_radiance_from_raw(const MapSpace *space,
 
     *scalar_radiance = light_raw_to_radiance(raw_light);
     int64_t effective_source_raw = 0;
+    int64_t accumulated_source_raw = 0;
     if (space->light_source_color_weight > 0) {
-        effective_source_raw = MIN(MAX(space->light_source_positive_value, 0),
-                                   space->light_source_color_weight / UINT16_MAX);
+        accumulated_source_raw = space->light_source_color_weight / UINT16_MAX;
+        effective_source_raw =
+            MIN(MAX(space->light_source_positive_value, 0), accumulated_source_raw);
     }
     int64_t channels[3];
     for (size_t channel = 0; channel < arraysize(channels); channel++) {
         uint64_t colored_raw = 0;
         if (effective_source_raw > 0) {
             uint64_t color_sum = (uint64_t)MAX(space->light_source_color[channel], 0);
-            colored_raw = light_div_round(color_sum, UINT16_MAX);
+            if (effective_source_raw < accumulated_source_raw) {
+                colored_raw = light_muldiv_round(color_sum,
+                                                 (uint64_t)effective_source_raw,
+                                                 (uint64_t)space->light_source_color_weight);
+            } else {
+                colored_raw = light_div_round(color_sum, UINT16_MAX);
+            }
         }
         channels[channel] = MAX((int64_t)raw_light - effective_source_raw + (int64_t)colored_raw, 0);
     }

@@ -160,6 +160,16 @@ static void test_high_precision_bilinear_interpolation(void) {
                65535);
 }
 
+static void test_sprite_cache_accounting_is_bounded_for_tiny_entries(void) {
+    TEST_CHECK(lighting_sprite_cache_charge(4, 1) ==
+               4 + LIGHTING_SPRITE_CACHE_ENTRY_OVERHEAD);
+    TEST_CHECK(LIGHTING_SPRITE_CACHE_MAX_BYTES /
+                   lighting_sprite_cache_charge(4, 1) <
+               20000);
+    TEST_CHECK(LIGHTING_SPRITE_CACHE_MAX_ENTRIES < 20000);
+    TEST_CHECK(lighting_sprite_cache_charge(SIZE_MAX, 2) == SIZE_MAX);
+}
+
 int main(void) {
     test_lookup_tables();
     test_discrete_projection();
@@ -167,5 +177,6 @@ int main(void) {
     test_common_exposure_vectors();
     test_gamma_aware_multiplication();
     test_high_precision_bilinear_interpolation();
+    test_sprite_cache_accounting_is_bounded_for_tiny_entries();
     return EXIT_SUCCESS;
 }

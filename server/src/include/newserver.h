@@ -79,6 +79,9 @@ typedef struct MapCell_struct {
     /** Whether each resolved RGB sample is established in the client cache. */
     uint8_t light_rgb_known[NUM_SUB_LAYERS];
 
+    /** Last complete bitmap of explicitly colored sub-layers. */
+    uint8_t light_rgb_explicit;
+
     /** Last base-map structural support height sent to the client. */
     int16_t support_height;
 

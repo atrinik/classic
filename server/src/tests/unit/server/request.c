@@ -1432,6 +1432,15 @@ START_TEST(test_map_rgb_cache_tracks_hue_changes_and_neutral_reset) {
                       cell->light_radiance[pl->sub_layer]);
     ck_assert_uint_eq(cell->light_rgb_radiance[pl->sub_layer][2],
                       cell->light_radiance[pl->sub_layer]);
+    ck_assert_uint_eq(cell->light_rgb_explicit, 0);
+
+    /* Complete bitmap semantics must emit even when cached channel values are
+     * already equal to the resolved neutral vector. */
+    cell->light_rgb_explicit = UINT8_C(1) << pl->sub_layer;
+    socket_buffer_clear(CONTR(pl)->cs);
+    draw_client_map2(pl);
+    ck_assert_uint_eq(validate_queued_map_payloads(CONTR(pl)->cs), 1);
+    ck_assert_uint_eq(cell->light_rgb_explicit, 0);
     ck_assert_uint_eq(sizeof(cell->light_radiance) + sizeof(cell->light_rgb_radiance), 56);
 }
 END_TEST
@@ -1520,16 +1529,20 @@ START_TEST(test_dense_colored_level_splits_at_tile_boundaries) {
     glow[sizeof(glow) - 1] = '\0';
     for (int y = 0; y < MAP_CLIENT_Y; y++) {
         for (int x = 0; x < MAP_CLIENT_X; x++) {
-            object *marker = arch_get("letter");
-            marker->x = x;
-            marker->y = y;
-            FREE_AND_COPY_HASH(marker->glow, glow);
-            marker->glow_speed = 1;
-            ck_assert_ptr_nonnull(object_insert_map(marker, map, NULL, 0));
+            for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                object *marker = arch_get("letter");
+                marker->x = x;
+                marker->y = y;
+                marker->sub_layer = sub_layer;
+                FREE_AND_COPY_HASH(marker->glow, glow);
+                marker->glow_speed = 1;
+                ck_assert_ptr_nonnull(object_insert_map(marker, map, NULL, 0));
+            }
             MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
             space->light_source_value = 40;
-            space->light_source_color[0] = INT64_C(40) * UINT8_MAX;
-            space->light_source_color_weight = INT64_C(40) * UINT8_MAX;
+            space->light_source_positive_value = 40;
+            space->light_source_color[0] = INT64_C(40) * UINT16_MAX;
+            space->light_source_color_weight = INT64_C(40) * UINT16_MAX;
         }
     }
 
@@ -1546,7 +1559,7 @@ START_TEST(test_dense_colored_level_splits_at_tile_boundaries) {
     ck_assert_uint_ge(first->len, 7);
     uint16_t expected_continuations = ((uint16_t)first->data[4] << 8) | first->data[5];
     ck_assert_uint_gt(expected_continuations, 0);
-    ck_assert_uint_le(expected_continuations, 4096);
+    ck_assert_uint_le(expected_continuations, MAP2_PROTOCOL_CONTINUATIONS_MAX);
     bool continuation_found = false;
     uint16_t continuation_sequence = 0;
     for (packet_struct *packet = CONTR(pl)->cs->packets; packet != NULL && packet->next != NULL;

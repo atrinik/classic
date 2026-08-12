@@ -285,7 +285,7 @@ START_TEST(test_colored_lights_blend_green_yellow_and_capped_same_cell) {
     test_light_radiance(space, space->light_source_value, yellow);
     ck_assert_uint_eq(space->light_source_value, 1280);
     ck_assert_uint_eq(yellow[0], yellow[1]);
-    ck_assert_uint_gt(yellow[0], 0);
+    ck_assert_uint_eq(yellow[0], 1024);
     ck_assert_uint_eq(yellow[2], 0);
 
     mapstruct *reverse_map = get_empty_map(9, 9);
@@ -303,7 +303,7 @@ START_TEST(test_colored_lights_blend_green_yellow_and_capped_same_cell) {
     space = GET_MAP_SPACE_PTR(magenta_map, 4, 4);
     test_light_radiance(space, space->light_source_value, magenta);
     ck_assert_uint_eq(magenta[0], magenta[2]);
-    ck_assert_uint_gt(magenta[0], 0);
+    ck_assert_uint_eq(magenta[0], 1024);
     ck_assert_uint_eq(magenta[1], 0);
 
     mapstruct *overlap_map = get_empty_map(9, 9);

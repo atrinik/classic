@@ -327,13 +327,21 @@ START_TEST(test_map_protocol_accepts_bounded_continuation) {
     packet_writer_write_uint8(packet, 0);
     packet_writer_write_uint16(packet, 1);
     packet_writer_write_uint8(packet, 1);
-    map_protocol_test_level(packet, 2, NULL);
+    packet_struct *level = packet_new(0, 2, 2);
+    packet_writer_write_uint16(level, MAP2_MASK_CLEAR);
+    map_protocol_test_level(packet, 2, level);
     ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     ck_assert_uint_le(packet->len, PACKET_PAYLOAD_MAX);
     packet->data[4] = packet->data[5] = 0;
     ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     packet->data[4] = packet->data[5] = UINT8_MAX;
     ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet->data[4] = 0;
+    packet->data[5] = 1;
+    /* Partial continuation frames cannot consume a sequence without data. */
+    packet->data[8] = packet->data[9] = packet->data[10] = packet->data[11] = 0;
+    ck_assert(!map_protocol_validate(packet->data, packet->len - 2, 0, 21, 21));
+    packet_free(level);
     packet_free(packet);
 }
 END_TEST

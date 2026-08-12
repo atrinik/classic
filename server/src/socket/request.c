@@ -2160,6 +2160,9 @@ void draw_client_map2(object *pl) {
                         light_rgb_changed = true;
                     }
                 }
+                if (light_rgb_bitmap != mp->light_rgb_explicit) {
+                    light_rgb_changed = true;
+                }
 
                 /* Add the mask. Any mask changes should go above this line. */
                 packet_debug_data(packet, 0, "Tile %d,%d data, mask", ax, ay);
@@ -2270,6 +2273,7 @@ void draw_client_map2(object *pl) {
                                sizeof(resolved_rgb));
                         mp->light_rgb_known[sub_layer] = 1;
                     }
+                    mp->light_rgb_explicit = light_rgb_bitmap;
                 }
 
                 /* Animation? Add its type and value. */
@@ -2386,7 +2390,7 @@ void draw_client_map2(object *pl) {
         }
         continuation->data[count_pos] = continuation_count;
         HARD_ASSERT(packet_writer_finish(continuation));
-        HARD_ASSERT(continuation_packet_count < MAP2_LEVEL_CHUNKS_MAX);
+        HARD_ASSERT(continuation_packet_count < MAP2_PROTOCOL_CONTINUATIONS_MAX);
         continuation_packets[continuation_packet_count++] = continuation;
     }
 

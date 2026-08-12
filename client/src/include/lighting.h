@@ -14,6 +14,7 @@
 
 #include <assert.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct SDL_Rect SDL_Rect;
@@ -21,6 +22,17 @@ typedef struct SDL_Surface SDL_Surface;
 
 /** Increment when cached lighting transfer semantics change. */
 #define LIGHTING_TRANSFER_VERSION UINT8_C(1)
+#define LIGHTING_SPRITE_CACHE_MAX_BYTES (8U * 1024U * 1024U)
+#define LIGHTING_SPRITE_CACHE_ENTRY_OVERHEAD 512U
+#define LIGHTING_SPRITE_CACHE_MAX_ENTRIES 8192U
+
+/** Conservatively charge pixels plus retained entry/surface/allocator metadata. */
+static inline size_t lighting_sprite_cache_charge(size_t pitch, size_t height) {
+    if (height != 0 && pitch > (SIZE_MAX - LIGHTING_SPRITE_CACHE_ENTRY_OVERHEAD) / height) {
+        return SIZE_MAX;
+    }
+    return pitch * height + LIGHTING_SPRITE_CACHE_ENTRY_OVERHEAD;
+}
 
 typedef enum lighting_surface_mode {
     LIGHTING_SURFACE_STRUCTURE,

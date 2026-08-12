@@ -97,7 +97,49 @@ static void lighting_context_free(lighting_context *context) {
 #define lighting_pending_cache_key (lighting_context_current->pending_cache_key)
 
 #define LIGHT_STRUCTURE_BLUR_RADIUS 24
-#define LIGHTING_SPRITE_CACHE_MAX_BYTES (8 * 1024 * 1024)
+
+_Static_assert(sizeof(lighting_sprite_cache_entry) + sizeof(SDL_Surface) <=
+                   LIGHTING_SPRITE_CACHE_ENTRY_OVERHEAD,
+               "lit-sprite cache entry accounting overhead is too small");
+
+static uint16_t lighting_sample_channel(const lighting_sample *sample, size_t channel) {
+    HARD_ASSERT(sample != NULL);
+    switch (channel) {
+    case 0:
+        return sample->scalar;
+    case 1:
+        return sample->red;
+    case 2:
+        return sample->green;
+    case 3:
+        return sample->blue;
+    default:
+        HARD_ASSERT(false);
+        return 0;
+    }
+}
+
+static void lighting_sample_channel_set(lighting_sample *sample,
+                                        size_t channel,
+                                        uint16_t value) {
+    HARD_ASSERT(sample != NULL);
+    switch (channel) {
+    case 0:
+        sample->scalar = value;
+        break;
+    case 1:
+        sample->red = value;
+        break;
+    case 2:
+        sample->green = value;
+        break;
+    case 3:
+        sample->blue = value;
+        break;
+    default:
+        HARD_ASSERT(false);
+    }
+}
 
 static void lighting_sprite_cache_clear(lighting_context *context) {
     lighting_sprite_cache_entry *entry, *next;
@@ -146,7 +188,8 @@ static void lighting_sprite_cache_touch(lighting_context *context,
 /** Make room for one lit sprite without discarding the whole warm cache. */
 static void lighting_sprite_cache_reserve(lighting_context *context, size_t bytes) {
     while (context->sprite_cache != NULL &&
-           context->sprite_cache_bytes + bytes > LIGHTING_SPRITE_CACHE_MAX_BYTES) {
+           (context->sprite_cache_bytes + bytes > LIGHTING_SPRITE_CACHE_MAX_BYTES ||
+            HASH_COUNT(context->sprite_cache) >= LIGHTING_SPRITE_CACHE_MAX_ENTRIES)) {
         lighting_sprite_cache_entry *oldest = context->sprite_cache_lru_oldest;
         HARD_ASSERT(oldest != NULL);
         context->sprite_cache_lru_oldest = oldest->lru_next;
@@ -409,13 +452,15 @@ static void lighting_extrapolate(void) {
 
                 for (int fill_x = previous_sample + 1; fill_x < x; fill_x++) {
                     for (size_t channel = 0; channel < 4; channel++) {
-                        uint16_t *first = &samples[previous_sample].scalar;
-                        uint16_t *last = &samples[x].scalar;
-                        uint16_t *destination = &samples[fill_x].scalar;
-                        destination[channel] =
-                            (uint16_t)((int32_t)first[channel] +
-                                       ((int32_t)last[channel] - first[channel]) *
-                                           (fill_x - previous_sample) / distance);
+                        uint16_t first =
+                            lighting_sample_channel(&samples[previous_sample], channel);
+                        uint16_t last = lighting_sample_channel(&samples[x], channel);
+                        lighting_sample_channel_set(
+                            &samples[fill_x],
+                            channel,
+                            (uint16_t)((int32_t)first +
+                                       ((int32_t)last - first) *
+                                           (fill_x - previous_sample) / distance));
                     }
                     samples[fill_x].present = 1;
                 }
@@ -450,13 +495,14 @@ static void lighting_extrapolate(void) {
 
                 for (int fill_x = 0; fill_x < lighting_width; fill_x++) {
                     for (size_t channel = 0; channel < 4; channel++) {
-                        uint16_t *first_rgb = &first[fill_x].scalar;
-                        uint16_t *last_rgb = &samples[fill_x].scalar;
-                        uint16_t *destination_rgb = &destination[fill_x].scalar;
-                        destination_rgb[channel] =
-                            (uint16_t)((int32_t)first_rgb[channel] +
-                                       ((int32_t)last_rgb[channel] - first_rgb[channel]) *
-                                           (fill_y - previous_sampled_row) / distance);
+                        uint16_t first_value = lighting_sample_channel(&first[fill_x], channel);
+                        uint16_t last_value = lighting_sample_channel(&samples[fill_x], channel);
+                        lighting_sample_channel_set(
+                            &destination[fill_x],
+                            channel,
+                            (uint16_t)((int32_t)first_value +
+                                       ((int32_t)last_value - first_value) *
+                                           (fill_y - previous_sampled_row) / distance));
                     }
                     destination[fill_x].present = 1;
                 }
@@ -490,22 +536,22 @@ static void lighting_blur_row(const lighting_sample *source, lighting_sample *de
     for (int offset = -radius; offset <= radius; offset++) {
         int source_x = MAX(0, MIN(lighting_width - 1, offset));
         for (size_t channel = 0; channel < 4; channel++) {
-            sum[channel] += (&source[source_x].scalar)[channel];
+            sum[channel] += lighting_sample_channel(&source[source_x], channel);
         }
     }
 
     for (int x = 0; x < lighting_width; x++) {
         for (size_t channel = 0; channel < 4; channel++) {
-            (&destination[x].scalar)[channel] =
-                (uint16_t)((sum[channel] + diameter / 2) / diameter);
+            lighting_sample_channel_set(
+                &destination[x], channel, (uint16_t)((sum[channel] + diameter / 2) / diameter));
         }
         destination[x].present = 1;
 
         int outgoing_x = MAX(0, MIN(lighting_width - 1, x - radius));
         int incoming_x = MAX(0, MIN(lighting_width - 1, x + radius + 1));
         for (size_t channel = 0; channel < 4; channel++) {
-            sum[channel] -= (&source[outgoing_x].scalar)[channel];
-            sum[channel] += (&source[incoming_x].scalar)[channel];
+            sum[channel] -= lighting_sample_channel(&source[outgoing_x], channel);
+            sum[channel] += lighting_sample_channel(&source[incoming_x], channel);
         }
     }
 }
@@ -539,14 +585,15 @@ static lighting_sample lighting_structure_illumination(int x, int y) {
         const lighting_sample *sample =
             &structure_samples[(size_t)sample_y * (size_t)lighting_width + (size_t)x];
         for (size_t channel = 0; channel < 4; channel++) {
-            total[channel] += (&sample->scalar)[channel] * weight;
+            total[channel] += lighting_sample_channel(sample, channel) * weight;
         }
         weights += weight;
     }
 
     lighting_sample result = {.present = 1};
     for (size_t channel = 0; channel < 4; channel++) {
-        (&result.scalar)[channel] = (uint16_t)((total[channel] + weights / 2) / weights);
+        lighting_sample_channel_set(
+            &result, channel, (uint16_t)((total[channel] + weights / 2) / weights));
     }
     return result;
 }
@@ -895,8 +942,8 @@ void lighting_show_surface(SDL_Surface *destination,
     SDL_UnlockSurface(source);
 
     SDL_Rect lit_rect = {.x = 0, .y = 0, .w = source_rect.w, .h = source_rect.h};
-    size_t cache_bytes = (size_t)source_rect.w * (size_t)source_rect.h *
-                         SDL_GetPixelFormatDetails(lighting_lit_surface->format)->bytes_per_pixel;
+    size_t cache_bytes = lighting_sprite_cache_charge((size_t)lighting_lit_surface->pitch,
+                                                      (size_t)source_rect.h);
     if (cache_bytes <= LIGHTING_SPRITE_CACHE_MAX_BYTES) {
         lighting_sprite_cache_reserve(lighting_context_current, cache_bytes);
         SDL_Surface *copy = lighting_lit_surface_copy(source_rect.w, source_rect.h);

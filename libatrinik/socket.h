@@ -90,6 +90,8 @@ typedef enum socket_role {
 #define MAP2_PROTOCOL_SUB_LAYERS 7
 /** Total number of addressable real layers in one MAP cell. */
 #define MAP2_PROTOCOL_REAL_LAYERS (MAP2_PROTOCOL_OBJECT_LAYERS * MAP2_PROTOCOL_SUB_LAYERS)
+/** Maximum continuation packets declared by one complete MAP update. */
+#define MAP2_PROTOCOL_CONTINUATIONS_MAX 4096
 
 /**
  * @defgroup CMD_TARGET_xxx Target command types

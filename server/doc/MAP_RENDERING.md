@@ -115,7 +115,10 @@ of 101 live map draws at 320x240 and 1920x1080; three alternating process
 samples are retained in the CI evidence artifact.
 The widened client raster sample is at most 10 bytes; each linked-depth context
 owns two viewport-sized fields and one row scratch field. Lit-sprite cache
-storage remains capped at 8 MiB per retained depth context.
+storage remains capped at 8 MiB per retained depth context. Each entry is
+charged its actual surface pitch times height plus a conservative 512-byte
+entry/surface/allocator allowance, and no context retains more than 8,192
+entries, so tiny sprites cannot bypass the byte cap through metadata overhead.
 
 - `src/server/light.c` propagates source masks as spherical 3D volumes across
   horizontal and `TILED_UP`/`TILED_DOWN` links. Opaque cells stop rays after

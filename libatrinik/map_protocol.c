@@ -358,8 +358,7 @@ bool map_protocol_validate(const uint8_t *data,
         (new_map_width != 0 && (xpos >= new_map_width || ypos >= new_map_height)) ||
         !map_packet_read_uint16(&reader, &continuation_marker) ||
         (mapstat == MAP_UPDATE_CMD_PARTIAL && continuation_marker == 0) ||
-        continuation_marker >
-            (size_t)MAP2_LEVELS * (size_t)map_width_limit * (size_t)map_height_limit ||
+        continuation_marker > MAP2_PROTOCOL_CONTINUATIONS_MAX ||
         !map_packet_read_uint8(&reader, &level_count) || level_count == 0 ||
         level_count > MAP2_LEVELS) {
         return false;
@@ -372,7 +371,9 @@ bool map_protocol_validate(const uint8_t *data,
 
         if (!map_packet_read_int8(&reader, &depth) ||
             !map_packet_read_uint32(&reader, &level_size) || depth < -MAP2_MAX_DEPTH ||
-            depth > MAP2_MAX_DEPTH || level_size > packet_reader_remaining(&reader)) {
+            depth > MAP2_MAX_DEPTH ||
+            (mapstat == MAP_UPDATE_CMD_PARTIAL && level_size == 0) ||
+            level_size > packet_reader_remaining(&reader)) {
             return false;
         }
 
