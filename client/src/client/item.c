@@ -31,6 +31,7 @@
 #include <client_socket.h>
 #include <animations.h>
 #include <region_map.h>
+#include <player_status.h>
 #include <toolkit/packet.h>
 
 /**
@@ -60,6 +61,7 @@ void object_init(void) {
  */
 void object_deinit(void) {
     objects_deinit();
+    player_status_model_clear(&player_status_model);
 }
 
 /**
@@ -75,8 +77,6 @@ void objects_free(object *op) {
             spells_remove(op);
         } else if (op->itype == TYPE_SKILL) {
             skills_remove(op);
-        } else if (op->itype == TYPE_FORCE || op->itype == TYPE_POISONING) {
-            widget_active_effects_remove(cur_widget[ACTIVE_EFFECTS_ID], op);
         }
 
         if (op->inv) {
@@ -182,8 +182,6 @@ void object_remove(object *op) {
         spells_remove(op);
     } else if (op->itype == TYPE_SKILL) {
         skills_remove(op);
-    } else if (op->itype == TYPE_FORCE || op->itype == TYPE_POISONING) {
-        widget_active_effects_remove(cur_widget[ACTIVE_EFFECTS_ID], op);
     }
 
     object_redraw(op);

@@ -9,6 +9,15 @@ The game and metaserver protocols are separate contract families. This package
 currently publishes only the classic game command registry. Add another family
 only with its own namespace, specification, version, fixtures, and validation.
 
+Protocol v1079 adds the server-to-client `PLAYER_STATUS` command. Its payload is
+one bounded operation byte: a snapshot contains a 16-bit count and complete
+entries, an upsert contains one complete entry, and a removal contains one
+status key. Each entry contains a NUL-terminated stable key, a 16-bit face, a
+NUL-terminated display name and tooltip, and a signed 32-bit remaining-seconds
+value (`-1` means indefinite). Snapshots replace the client model
+transactionally; upserts replace matching keys and removals are idempotent.
+The generated limits bound status counts and every string field.
+
 Protocol v1078 atomically replaces MAP2 scalar-byte and RGB888 lighting with
 network-order Q5.11 scalar and RGB radiance words. The shared bounded preflight
 validates the complete packet before client cache mutation; the v1077 lighting

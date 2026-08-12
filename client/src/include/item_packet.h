@@ -13,7 +13,6 @@ typedef enum item_packet_extra_type {
     ITEM_PACKET_EXTRA_NONE,
     ITEM_PACKET_EXTRA_SPELL,
     ITEM_PACKET_EXTRA_SKILL,
-    ITEM_PACKET_EXTRA_EFFECT,
 } item_packet_extra_type_t;
 
 typedef struct item_packet_update {
@@ -24,7 +23,6 @@ typedef struct item_packet_update {
     uint32_t spell_flags;
     uint8_t skill_level;
     int64_t skill_exp;
-    int32_t effect_seconds;
     char extra_message[HUGE_BUF];
 } item_packet_update_t;
 

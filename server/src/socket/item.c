@@ -39,6 +39,7 @@
 #include <arch.h>
 #include <player.h>
 #include <object.h>
+#include <player_status.h>
 
 static int check_container(object *pl, object *con);
 
@@ -296,35 +297,6 @@ void add_object_to_packet(struct packet_struct *packet,
             if (CONTR(pl)->cs->socket_version >= 1065) {
                 packet_debug_data(packet, level + 1, "Message");
                 packet_writer_write_cstring(packet, op->msg ? op->msg : "");
-            }
-        } else if (op->type == FORCE || op->type == POISONING) {
-            int32_t sec;
-
-            packet_debug(packet, level, "Force info:\n");
-
-            sec = -1;
-
-            if (QUERY_FLAG(op, FLAG_IS_USED_UP)) {
-                double tmp_sec = op->speed_left / op->speed / MAX_TICKS;
-                tmp_sec = ABS(tmp_sec);
-                double tmp_sec2 = 1.0 / op->speed / MAX_TICKS;
-                tmp_sec2 *= op->stats.food - 1;
-                tmp_sec2 = ABS(tmp_sec2);
-                sec = tmp_sec + tmp_sec2;
-            }
-
-            packet_debug_data(packet, level + 1, "Seconds");
-            packet_writer_write_int32(packet, sec);
-            packet_debug_data(packet, level + 1, "Message");
-            if (op->arch != NULL && op->arch->name != NULL &&
-                strcmp(op->arch->name, "depletion") == 0) {
-                StringBuffer *sb = depletion_get_tooltip(op, NULL);
-                packet_writer_write_cstring_n(packet,
-                                              stringbuffer_data(sb),
-                                              stringbuffer_length(sb));
-                stringbuffer_free(sb);
-            } else {
-                packet_writer_write_cstring(packet, op->msg != NULL ? op->msg : "");
             }
         }
     }
@@ -642,6 +614,9 @@ void esrv_send_inventory(object *pl, object *op) {
     }
 
     socket_send_packet(CONTR(pl)->cs, packet);
+    if (pl == op) {
+        player_status_send_snapshot(pl);
+    }
 }
 
 /**
@@ -682,6 +657,7 @@ static void esrv_update_item_send(int flags, object *pl, object *op) {
  * The object to update.
  */
 void esrv_update_item(int flags, object *op) {
+    player_status_update(op);
     if (op->map != NULL && (flags & (UPD_NAME | UPD_NROF)) != 0) {
         object_update(op, UP_OBJ_FACE);
     }
@@ -758,6 +734,8 @@ void esrv_send_item(object *op) {
         return;
     }
 
+    player_status_update(op);
+
     if (op->env->type == CONTAINER) {
         /* Send the item information to all players that are looking
          * inside this container. */
@@ -805,6 +783,8 @@ void esrv_del_item(object *op) {
     if (!op || !op->env) {
         return;
     }
+
+    player_status_remove(op);
 
     if (op->env->type == CONTAINER) {
         object *tmp;
