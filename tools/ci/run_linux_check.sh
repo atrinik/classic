@@ -59,7 +59,9 @@ case "${component}" in
     cmake --build --preset linux-coverage --parallel "${jobs}"
     ctest --preset linux-coverage
     gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
-      --exclude '.*/build/.*' --print-summary --xml coverage.xml
+      --exclude '.*/build/.*' \
+      --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
+      --print-summary --xml coverage.xml
     cmake --preset linux-sanitizers \
       -DATRINIK_PROTOCOL_SOURCE_DIR="${source_root}/protocol" \
       "${launcher[@]}"
@@ -89,6 +91,7 @@ case "${component}" in
     cmake --build --preset linux-coverage --parallel "${jobs}"
     ctest --preset linux-coverage --parallel 4
     gcovr --root . --filter 'src/' --exclude 'src/tests/' \
+      --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
       --print-summary --xml coverage.xml
     cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
     cmake --build --preset linux-release --parallel "${jobs}"
@@ -110,6 +113,7 @@ case "${component}" in
     cmake --build --preset linux-coverage --parallel "${jobs}"
     ctest --preset linux-coverage
     gcovr --root . --filter 'src/' --exclude 'src/tests/' \
+      --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
       --print-summary --xml coverage.xml
     cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
     cmake --build --preset linux-release --parallel "${jobs}"
