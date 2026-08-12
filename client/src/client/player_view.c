@@ -1109,9 +1109,9 @@ int player_view_main(int argc, char *argv[]) {
         }
         printf("%s  %s\n", pixels_digest, argv[2]);
     } else {
-        printf("player-view-benchmark\t%s\t%zu\t%" PRIu64 "\n",
+        printf("player-view-benchmark\t%s\t%" PRIu64 "\t%" PRIu64 "\n",
                mode == PLAYER_VIEW_BENCHMARK_STANDARD ? "standard" : "large",
-               (size_t)PLAYER_VIEW_BENCHMARK_ITERATIONS,
+               (uint64_t)PLAYER_VIEW_BENCHMARK_ITERATIONS,
                benchmark_median_ns);
     }
     result = 0;
