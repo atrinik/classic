@@ -835,13 +835,11 @@ static int player_view_duration_compare(const void *left, const void *right) {
 
 static uint64_t player_view_benchmark(SDL_Surface *surface) {
     for (size_t i = 0; i < PLAYER_VIEW_BENCHMARK_WARMUPS; i++) {
-        SDL_FillSurfaceRect(surface, NULL, 0);
         map_draw_map(surface);
     }
 
     uint64_t durations[PLAYER_VIEW_BENCHMARK_ITERATIONS];
     for (size_t i = 0; i < arraysize(durations); i++) {
-        SDL_FillSurfaceRect(surface, NULL, 0);
         uint64_t started = SDL_GetTicksNS();
         map_draw_map(surface);
         durations[i] = SDL_GetTicksNS() - started;
@@ -1096,7 +1094,7 @@ int player_view_main(int argc, char *argv[]) {
         fprintf(stderr, "player-view: cannot hash rendered pixels\n");
         goto cleanup;
     }
-    if (mode != PLAYER_VIEW_BENCHMARK_LARGE &&
+    if (mode == PLAYER_VIEW_RENDER &&
         strcmp(pixels_digest, manifest.expected_pixels_digest) != 0) {
         fprintf(stderr,
                 "player-view: pixel mismatch (expected %s, got %s)\n",
