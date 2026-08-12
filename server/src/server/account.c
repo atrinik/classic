@@ -54,7 +54,7 @@
 #define SCENARIO_LIGHTING_X 33
 #define SCENARIO_LIGHTING_Y 4
 #define SCENARIO_LIGHTING_INSIDE_X 8
-#define SCENARIO_LIGHTING_INSIDE_Y 18
+#define SCENARIO_LIGHTING_INSIDE_Y 19
 
 static time_t account_auth_work_refill_time;
 static unsigned int account_auth_work_tokens;
@@ -630,6 +630,8 @@ bool account_provision_from_file(const char *name,
                                  char *error,
                                  size_t error_size) {
     char password[MAX_BUF];
+    char account_name[MAX_BUF];
+    char character_name[MAX_BUF];
     bool ok = false;
     int fd = -1;
     FILE *fp = NULL;
@@ -639,6 +641,10 @@ bool account_provision_from_file(const char *name,
     HARD_ASSERT(error != NULL);
     HARD_ASSERT(error_size > 0);
     error[0] = '\0';
+    snprintf(VS(account_name), "%s", name);
+    snprintf(VS(character_name), "%s", character);
+    string_tolower(account_name);
+    string_title(character_name);
 
     int preset_hour = account_provision_preset_hour(preset);
     if (preset_hour == -2) {
@@ -698,13 +704,14 @@ bool account_provision_from_file(const char *name,
     }
     ok = account_provision(name, password, character, archname, error, error_size);
     if (ok && preset_hour >= 0 &&
-        (!account_provision_lighting_player(character, archname, preset, error, error_size) ||
+        (!account_provision_lighting_player(character_name, archname, preset, error, error_size) ||
          !todclock_set((unsigned long)preset_hour))) {
         if (error[0] == '\0') {
             snprintf(error, error_size, "could not persist scenario world clock");
         }
-        char *account_path = account_make_path(name);
-        char *player_path = player_make_path(character, "player.dat");
+        char *account_path = account_make_path(account_name);
+        char *player_path = player_make_path(character_name, "player.dat");
+        char *metrics_path = player_make_path(character_name, "metrics.dat");
         if (unlink(account_path) != 0 && errno != ENOENT) {
             LOG(ERROR,
                 "Could not roll back provisioned account file %s: %s",
@@ -717,8 +724,15 @@ bool account_provision_from_file(const char *name,
                 player_path,
                 strerror(errno));
         }
+        if (unlink(metrics_path) != 0 && errno != ENOENT) {
+            LOG(ERROR,
+                "Could not roll back provisioned player metrics file %s: %s",
+                metrics_path,
+                strerror(errno));
+        }
         free(account_path);
         free(player_path);
+        free(metrics_path);
         ok = false;
     }
 out:
