@@ -44,7 +44,8 @@ same-level wall; an authorized positive-depth roof projected across the player;
 and a nearby living object that must retain ordinary rendering. The unobscured
 and nearby-living scenes receive no outline. In the other two scenes, the
 structural occluders continue to hide the player's interior while the final
-primary-map pass reveals only the transformed yellow silhouette.
+primary-map pass outlines only the transformed pixels that those structures
+cover. Fully visible parts of the player retain their ordinary rendering.
 
 The non-primary outline scene replays the nearby-living snapshot onto a surface
 other than the map widget. It models the dynamic minimap's `map_draw_map()` call

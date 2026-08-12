@@ -1290,8 +1290,7 @@ int player_view_main(int argc, char *argv[]) {
         fprintf(stderr, "player-view: cannot hash rendered pixels\n");
         goto cleanup;
     }
-    if (mode != PLAYER_VIEW_BENCHMARK_LARGE &&
-        strcmp(pixels_digest, manifest.expected_pixels_digest) != 0) {
+    if (mode == PLAYER_VIEW_RENDER && strcmp(pixels_digest, manifest.expected_pixels_digest) != 0) {
         fprintf(stderr,
                 "player-view: pixel mismatch (expected %s, got %s)\n",
                 manifest.expected_pixels_digest,

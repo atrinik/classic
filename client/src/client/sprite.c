@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -389,7 +389,7 @@ static SDL_Surface *sprite_effect_fow(SDL_Surface *surface) {
 }
 
 /** Create an outline-only version of a sprite without exposing pixels behind it. */
-static SDL_Surface *sprite_effect_outline(SDL_Surface *surface, const SDL_Color *color) {
+SDL_Surface *sprite_outline_create(SDL_Surface *surface, const SDL_Color *color) {
     SDL_Surface *outline = SDL_CreateSurface(surface->w + SPRITE_GLOW_SIZE * 2,
                                              surface->h + SPRITE_GLOW_SIZE * 2,
                                              FormatHolder->format);
@@ -657,7 +657,7 @@ sprite_effect_glow(SDL_Surface *surface, const SDL_Color *color, double speed, d
  * @return
  * New surface, NULL on failure.
  */
-static SDL_Surface *sprite_effects_create(SDL_Surface *surface, const sprite_effects_t *effects) {
+SDL_Surface *sprite_effects_create(SDL_Surface *surface, const sprite_effects_t *effects) {
 #define FREE_TMP_SURFACE()           \
     do {                             \
         if (tmp != NULL) {           \
@@ -765,7 +765,7 @@ static SDL_Surface *sprite_effects_create(SDL_Surface *surface, const sprite_eff
     if (effects->outline[0] != '\0') {
         SDL_Color color;
         if (text_color_parse(effects->outline, &color)) {
-            surface = sprite_effect_outline(surface, &color);
+            surface = sprite_outline_create(surface, &color);
             if (surface == NULL) {
                 goto done;
             }

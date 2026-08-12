@@ -181,6 +181,40 @@ static void test_legacy_texture_transparency(void) {
     SDL_DestroySurface(surface);
 }
 
+static void test_mutable_color_key_surface_reuse(void) {
+    SDL_Surface *surface = SDL_CreateSurface(4, 1, SDL_PIXELFORMAT_XRGB8888);
+    SDL_Surface *destination = SDL_CreateSurface(4, 1, SDL_PIXELFORMAT_XRGB8888);
+    TEST_CHECK(surface != NULL && destination != NULL);
+    TEST_CHECK(surface_set_transparent_black_mutable(surface));
+    Uint8 red, green, blue, alpha;
+
+    Uint32 black = surface_map_rgb(surface, 0, 0, 0);
+    TEST_CHECK(SDL_FillSurfaceRect(surface, NULL, black));
+    TEST_CHECK(SDL_WriteSurfacePixel(surface, 0, 0, 240, 20, 10, SDL_ALPHA_OPAQUE));
+    TEST_CHECK(SDL_BlitSurface(surface, NULL, destination, NULL));
+
+    TEST_CHECK(SDL_FillSurfaceRect(surface, NULL, black));
+    TEST_CHECK(SDL_WriteSurfacePixel(surface, 2, 0, 10, 20, 240, SDL_ALPHA_OPAQUE));
+    TEST_CHECK(SDL_FillSurfaceRect(destination, NULL, surface_map_rgb(destination, 1, 2, 3)));
+    TEST_CHECK(SDL_BlitSurface(surface, NULL, destination, NULL));
+
+    TEST_CHECK(surface_clear_transparent_black(surface));
+    TEST_CHECK(SDL_ReadSurfacePixel(surface, 2, 0, &red, &green, &blue, &alpha));
+    TEST_CHECK(red == 0 && green == 0 && blue == 0);
+    TEST_CHECK(SDL_SetSurfaceRLE(surface, true));
+    TEST_CHECK(SDL_BlitSurface(surface, NULL, destination, NULL));
+    TEST_CHECK(!surface_clear_transparent_black(surface));
+    TEST_CHECK(SDL_SetSurfaceRLE(surface, false));
+
+    TEST_CHECK(SDL_ReadSurfacePixel(destination, 0, 0, &red, &green, &blue, &alpha));
+    TEST_CHECK(red == 1 && green == 2 && blue == 3);
+    TEST_CHECK(SDL_ReadSurfacePixel(destination, 2, 0, &red, &green, &blue, &alpha));
+    TEST_CHECK(red == 10 && green == 20 && blue == 240);
+
+    SDL_DestroySurface(destination);
+    SDL_DestroySurface(surface);
+}
+
 static SDL_Surface *create_indexed_alpha_surface(void) {
     SDL_Surface *surface = SDL_CreateSurface(5, 5, SDL_PIXELFORMAT_INDEX8);
     TEST_CHECK(surface != NULL);
@@ -365,8 +399,7 @@ static void test_map_marker_rotation_contract(void) {
     for (size_t zoom = 0; zoom < arraysize(zooms); zoom++) {
         /* Region-map facings advance clockwise in 45-degree steps. */
         for (int direction = 0; direction < 8; direction++) {
-            SDL_Surface *transformed =
-                rotozoomSurface(converted, direction * 45.0, zooms[zoom], 1);
+            SDL_Surface *transformed = rotozoomSurface(converted, direction * 45.0, zooms[zoom], 1);
             TEST_CHECK(transformed != NULL);
             assert_map_marker_palette(transformed);
             SDL_DestroySurface(transformed);
@@ -381,6 +414,7 @@ int main(void) {
     test_index8_visible_bounds();
     test_truecolor_pixel_visibility();
     test_legacy_texture_transparency();
+    test_mutable_color_key_surface_reuse();
     test_indexed_alpha_rotation(0);
     test_indexed_alpha_rotation(1);
     test_color_key_rotation();
