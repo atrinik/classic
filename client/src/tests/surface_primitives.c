@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2026 Atrinik Development Team                         *
+ *   Copyright (C) 2026 The Atrinik Project                              *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -345,7 +345,7 @@ static void assert_map_marker_palette(SDL_Surface *surface) {
     TEST_CHECK(bright > 0);
 }
 
-static void test_map_marker_transform_contract(void) {
+static void test_map_marker_rotation_contract(void) {
     char path[1024];
     int length =
         snprintf(path, sizeof(path), "%s/textures/map_marker.png", ATRINIK_TEST_SOURCE_DIR);
@@ -363,9 +363,10 @@ static void test_map_marker_transform_contract(void) {
 
     const double zooms[] = {0.5, 1.0, 2.0};
     for (size_t zoom = 0; zoom < arraysize(zooms); zoom++) {
+        /* Region-map facings advance clockwise in 45-degree steps. */
         for (int direction = 0; direction < 8; direction++) {
             SDL_Surface *transformed =
-                rotozoomSurface(converted, -(direction * 45.0), zooms[zoom], 1);
+                rotozoomSurface(converted, direction * 45.0, zooms[zoom], 1);
             TEST_CHECK(transformed != NULL);
             assert_map_marker_palette(transformed);
             SDL_DestroySurface(transformed);
@@ -388,6 +389,6 @@ int main(void) {
     test_transform_invalid_input();
     test_true_color_alpha_rotation();
     test_darken_preserves_alpha();
-    test_map_marker_transform_contract();
+    test_map_marker_rotation_contract();
     return 0;
 }
