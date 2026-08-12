@@ -583,6 +583,7 @@ void lighting_render(SDL_Surface *destination) {
         return;
     }
     SDL_Palette *palette = SDL_GetSurfacePalette(destination);
+    bool direct_argb = destination->format == SDL_PIXELFORMAT_ARGB8888;
     for (int y = 0; y < lighting_height; y++) {
         Uint32 *pixels = (Uint32 *)((Uint8 *)destination->pixels + y * destination->pitch);
         const lighting_sample *samples = light_samples + (size_t)y * (size_t)lighting_width;
@@ -593,7 +594,14 @@ void lighting_render(SDL_Surface *destination) {
             }
 
             uint8_t red, green, blue, alpha;
-            SDL_GetRGBA(pixels[x], format, palette, &red, &green, &blue, &alpha);
+            if (direct_argb) {
+                red = (uint8_t)(pixels[x] >> 16);
+                green = (uint8_t)(pixels[x] >> 8);
+                blue = (uint8_t)pixels[x];
+                alpha = (uint8_t)(pixels[x] >> 24);
+            } else {
+                SDL_GetRGBA(pixels[x], format, palette, &red, &green, &blue, &alpha);
+            }
             const uint16_t radiance[3] = {
                 samples[x].red,
                 samples[x].green,
@@ -601,12 +609,14 @@ void lighting_render(SDL_Surface *destination) {
             };
             uint16_t illumination[3];
             lighting_tone_map_linear(samples[x].scalar, radiance, illumination);
-            pixels[x] = SDL_MapRGBA(format,
-                                    palette,
-                                    lighting_multiply_channel(red, illumination[0]),
-                                    lighting_multiply_channel(green, illumination[1]),
-                                    lighting_multiply_channel(blue, illumination[2]),
-                                    alpha);
+            red = lighting_multiply_channel(red, illumination[0]);
+            green = lighting_multiply_channel(green, illumination[1]);
+            blue = lighting_multiply_channel(blue, illumination[2]);
+            if (direct_argb) {
+                pixels[x] = (Uint32)alpha << 24 | (Uint32)red << 16 | (Uint32)green << 8 | blue;
+            } else {
+                pixels[x] = SDL_MapRGBA(format, palette, red, green, blue, alpha);
+            }
         }
     }
 
@@ -694,9 +704,12 @@ static uint64_t lighting_signature_byte(uint64_t signature, uint8_t value) {
     return signature;
 }
 
-static uint64_t lighting_signature_uint16(uint64_t signature, uint16_t value) {
-    signature = lighting_signature_byte(signature, (uint8_t)(value >> 8));
-    return lighting_signature_byte(signature, (uint8_t)value);
+static uint64_t lighting_signature_uint32(uint64_t signature, uint32_t value) {
+    for (size_t i = 0; i < sizeof(value); i++) {
+        signature = lighting_signature_byte(signature, (uint8_t)value);
+        value >>= 8;
+    }
+    return signature;
 }
 
 /** Draw a sprite through the cached continuous light field. */
@@ -731,13 +744,39 @@ void lighting_show_surface(SDL_Surface *destination,
     Uint8 surface_alpha = SDL_ALPHA_OPAQUE;
     SDL_GetSurfaceAlphaMod(source, &surface_alpha);
     bool has_surface_alpha = surface_alpha != SDL_ALPHA_OPAQUE;
+    /* The field cache key names the complete projected illumination state.
+     * Adding the sample coordinates identifies this sprite's exact profile
+     * without rescanning every covered light sample on cache hits. */
+    uint64_t illumination_signature = lighting_cache_key;
+    illumination_signature = lighting_signature_uint32(illumination_signature, (uint32_t)x);
+    illumination_signature = lighting_signature_uint32(illumination_signature, (uint32_t)y);
+    illumination_signature =
+        lighting_signature_uint32(illumination_signature, (uint32_t)sample_y);
+
+    lighting_sprite_cache_key cache_key;
+    memset(&cache_key, 0, sizeof(cache_key));
+    cache_key.source = source;
+    cache_key.source_x = source_rect.x;
+    cache_key.source_y = source_rect.y;
+    cache_key.source_w = source_rect.w;
+    cache_key.source_h = source_rect.h;
+    cache_key.illumination_signature = illumination_signature;
+    cache_key.mode = mode;
+    cache_key.surface_alpha = surface_alpha;
+    lighting_sprite_cache_entry *cached;
+    HASH_FIND(hh, lighting_context_current->sprite_cache, &cache_key, sizeof(cache_key), cached);
+    if (cached != NULL) {
+        lighting_sprite_cache_touch(lighting_context_current, cached);
+        surface_show(destination, x, y, NULL, cached->surface);
+        return;
+    }
+
     if (!lighting_lit_surface_create(source_rect.w, source_rect.h)) {
         surface_show(destination, x, y, srcrect, source);
         return;
     }
 
     bool source_locked = false;
-    uint64_t illumination_signature = UINT64_C(14695981039346656037);
 
     if (mode == LIGHTING_SURFACE_STRUCTURE) {
         if (!SDL_LockSurface(source)) {
@@ -780,54 +819,7 @@ void lighting_show_surface(SDL_Surface *destination,
             int light_y = MAX(0, MIN(lighting_height - 1, sample_y - max_bottom + bottom));
             structure_column_illumination[source_x] =
                 lighting_structure_illumination(light_x, light_y);
-            for (size_t channel = 0; channel < 4; channel++) {
-                illumination_signature = lighting_signature_uint16(
-                    illumination_signature,
-                    (&structure_column_illumination[source_x].scalar)[channel]);
-            }
         }
-    } else {
-        /* Hash the exact projected illumination profile. The signature moves
-         * with world geometry across a camera scroll, allowing an existing
-         * lit surface to be reused at a new destination without accepting a
-         * stale lighting result. */
-        for (int source_y = 0; source_y < source_rect.h; source_y++) {
-            int light_y = MAX(0, MIN(lighting_height - 1, y + source_y));
-            for (int source_x = 0; source_x < source_rect.w; source_x++) {
-                int light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
-                const lighting_sample *illumination =
-                    &light_samples[(size_t)light_y * lighting_width + (size_t)light_x];
-                illumination_signature =
-                    lighting_signature_uint16(illumination_signature, illumination->scalar);
-                illumination_signature =
-                    lighting_signature_uint16(illumination_signature, illumination->red);
-                illumination_signature =
-                    lighting_signature_uint16(illumination_signature, illumination->green);
-                illumination_signature =
-                    lighting_signature_uint16(illumination_signature, illumination->blue);
-            }
-        }
-    }
-
-    lighting_sprite_cache_key cache_key;
-    memset(&cache_key, 0, sizeof(cache_key));
-    cache_key.source = source;
-    cache_key.source_x = source_rect.x;
-    cache_key.source_y = source_rect.y;
-    cache_key.source_w = source_rect.w;
-    cache_key.source_h = source_rect.h;
-    cache_key.illumination_signature = illumination_signature;
-    cache_key.mode = mode;
-    cache_key.surface_alpha = surface_alpha;
-    lighting_sprite_cache_entry *cached;
-    HASH_FIND(hh, lighting_context_current->sprite_cache, &cache_key, sizeof(cache_key), cached);
-    if (cached != NULL) {
-        lighting_sprite_cache_touch(lighting_context_current, cached);
-        if (source_locked) {
-            SDL_UnlockSurface(source);
-        }
-        surface_show(destination, x, y, NULL, cached->surface);
-        return;
     }
 
     if (!source_locked) {

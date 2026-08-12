@@ -53,27 +53,61 @@ uint8_t lighting_radiance_to_level(uint16_t radiance) {
 
 /** Resolve the unquantized neutral display anchor in scene-linear Q0.16. */
 static uint16_t lighting_neutral_linear(uint16_t radiance) {
-    static const uint16_t anchors[] = {0, 32, 64, 128, 256, 512, 1024, 2048};
-    static const uint8_t levels[] = {0, 45, 80, 120, 165, 215, 245, 255};
-
-    for (size_t i = 1; i < sizeof(anchors) / sizeof(anchors[0]); i++) {
-        if (radiance <= anchors[i]) {
-            uint32_t range = anchors[i] - anchors[i - 1];
-            uint32_t offset = radiance - anchors[i - 1];
-            uint32_t code_numerator = (uint32_t)levels[i - 1] * range +
-                                      offset * (uint32_t)(levels[i] - levels[i - 1]);
-            uint32_t code = code_numerator / range;
-            uint32_t remainder = code_numerator % range;
-            if (code >= UINT8_MAX || remainder == 0) {
-                return lighting_srgb8_to_linear_q16_lut[code];
-            }
-            uint32_t low = lighting_srgb8_to_linear_q16_lut[code];
-            uint32_t high = lighting_srgb8_to_linear_q16_lut[code + 1];
-            return (uint16_t)(low + (remainder * (high - low) + range / 2) / range);
-        }
+    if (radiance > 2048) {
+        return UINT16_MAX;
     }
 
-    return UINT16_MAX;
+    uint32_t lower;
+    uint32_t low_level;
+    uint32_t level_range;
+    uint32_t shift;
+    if (radiance <= 32) {
+        lower = 0;
+        low_level = 0;
+        level_range = 45;
+        shift = 5;
+    } else if (radiance <= 64) {
+        lower = 32;
+        low_level = 45;
+        level_range = 35;
+        shift = 5;
+    } else if (radiance <= 128) {
+        lower = 64;
+        low_level = 80;
+        level_range = 40;
+        shift = 6;
+    } else if (radiance <= 256) {
+        lower = 128;
+        low_level = 120;
+        level_range = 45;
+        shift = 7;
+    } else if (radiance <= 512) {
+        lower = 256;
+        low_level = 165;
+        level_range = 50;
+        shift = 8;
+    } else if (radiance <= 1024) {
+        lower = 512;
+        low_level = 215;
+        level_range = 30;
+        shift = 9;
+    } else {
+        lower = 1024;
+        low_level = 245;
+        level_range = 10;
+        shift = 10;
+    }
+
+    uint32_t range = UINT32_C(1) << shift;
+    uint32_t numerator = (low_level << shift) + (radiance - lower) * level_range;
+    uint32_t code = numerator >> shift;
+    uint32_t remainder = numerator & (range - 1);
+    if (code >= UINT8_MAX || remainder == 0) {
+        return lighting_srgb8_to_linear_q16_lut[code];
+    }
+    uint32_t low = lighting_srgb8_to_linear_q16_lut[code];
+    uint32_t high = lighting_srgb8_to_linear_q16_lut[code + 1];
+    return (uint16_t)(low + (remainder * (high - low) + range / 2) / range);
 }
 
 void lighting_tone_map_linear(uint16_t scalar,

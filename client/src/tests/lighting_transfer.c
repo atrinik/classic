@@ -64,6 +64,41 @@ static void test_discrete_projection(void) {
     }
 }
 
+static uint16_t reference_neutral_linear(uint16_t radiance) {
+    static const uint16_t anchors[] = {0, 32, 64, 128, 256, 512, 1024, 2048};
+    static const uint8_t levels[] = {0, 45, 80, 120, 165, 215, 245, 255};
+
+    for (size_t i = 1; i < sizeof(anchors) / sizeof(anchors[0]); i++) {
+        if (radiance <= anchors[i]) {
+            uint32_t range = anchors[i] - anchors[i - 1];
+            uint32_t offset = radiance - anchors[i - 1];
+            uint32_t numerator =
+                (uint32_t)levels[i - 1] * range + offset * (levels[i] - levels[i - 1]);
+            uint32_t code = numerator / range;
+            uint32_t remainder = numerator % range;
+            if (code >= UINT8_MAX || remainder == 0) {
+                return lighting_srgb8_to_linear((uint8_t)code);
+            }
+            uint32_t low = lighting_srgb8_to_linear((uint8_t)code);
+            uint32_t high = lighting_srgb8_to_linear((uint8_t)(code + 1));
+            return (uint16_t)(low + (remainder * (high - low) + range / 2) / range);
+        }
+    }
+    return UINT16_MAX;
+}
+
+static void test_neutral_transfer_all_inputs(void) {
+    for (uint32_t scalar = 1; scalar <= UINT16_MAX; scalar++) {
+        const uint16_t neutral[3] = {(uint16_t)scalar, (uint16_t)scalar, (uint16_t)scalar};
+        uint16_t linear[3];
+        lighting_tone_map_linear((uint16_t)scalar, neutral, linear);
+        uint16_t expected = reference_neutral_linear((uint16_t)scalar);
+        TEST_CHECK(linear[0] == expected);
+        TEST_CHECK(linear[1] == expected);
+        TEST_CHECK(linear[2] == expected);
+    }
+}
+
 static void test_common_exposure_vectors(void) {
     static const struct {
         uint16_t scalar;
@@ -128,6 +163,7 @@ static void test_high_precision_bilinear_interpolation(void) {
 int main(void) {
     test_lookup_tables();
     test_discrete_projection();
+    test_neutral_transfer_all_inputs();
     test_common_exposure_vectors();
     test_gamma_aware_multiplication();
     test_high_precision_bilinear_interpolation();

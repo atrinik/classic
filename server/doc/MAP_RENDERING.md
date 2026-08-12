@@ -109,6 +109,10 @@ most 66,048 bytes total; and the standard and large-viewport lighting passes
 may regress no more than 10% and 15%,
 respectively, from their recorded v1077 medians.  CI must measure dense initial
 state packets, continuations, both cache sizes, and both frame-time baselines.
+Frame-time comparison uses the release `--player-view-benchmark` harness on
+the same runner for the v1077 base and candidate, with 5 warmups and the median
+of 101 live map draws at 320x240 and 1920x1080; three alternating process
+samples are retained in the CI evidence artifact.
 The widened client raster sample is at most 10 bytes; each linked-depth context
 owns two viewport-sized fields and one row scratch field. Lit-sprite cache
 storage remains capped at 8 MiB per retained depth context.
