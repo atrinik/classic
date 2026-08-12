@@ -835,11 +835,13 @@ static int player_view_duration_compare(const void *left, const void *right) {
 
 static uint64_t player_view_benchmark(SDL_Surface *surface) {
     for (size_t i = 0; i < PLAYER_VIEW_BENCHMARK_WARMUPS; i++) {
+        SDL_FillSurfaceRect(surface, NULL, 0);
         map_draw_map(surface);
     }
 
     uint64_t durations[PLAYER_VIEW_BENCHMARK_ITERATIONS];
     for (size_t i = 0; i < arraysize(durations); i++) {
+        SDL_FillSurfaceRect(surface, NULL, 0);
         uint64_t started = SDL_GetTicksNS();
         map_draw_map(surface);
         durations[i] = SDL_GetTicksNS() - started;
