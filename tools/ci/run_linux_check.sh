@@ -117,7 +117,10 @@ case "${component}" in
       --print-summary --xml coverage.xml
     cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
     cmake --build --preset linux-release --parallel "${jobs}"
-    ctest --preset linux-release
+    # The sustained replay is invoked below by its controlled base/candidate
+    # regression gate.  Do not also run its four fresh-process probes here:
+    # that duplicates the costly large-viewport replay and starves the gate.
+    ctest --preset linux-release -LE performance
     lighting_base_sha=${ATRINIK_LIGHTING_BASE_SHA:-}
     if [[ -n ${lighting_base_sha} ]] &&
       ! git -C "${source_root}" diff --quiet "${lighting_base_sha}" HEAD -- \
