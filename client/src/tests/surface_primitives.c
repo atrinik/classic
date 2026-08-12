@@ -181,6 +181,32 @@ static void test_legacy_texture_transparency(void) {
     SDL_DestroySurface(surface);
 }
 
+static void test_mutable_color_key_surface_reuse(void) {
+    SDL_Surface *surface = SDL_CreateSurface(4, 1, SDL_PIXELFORMAT_XRGB8888);
+    SDL_Surface *destination = SDL_CreateSurface(4, 1, SDL_PIXELFORMAT_XRGB8888);
+    TEST_CHECK(surface != NULL && destination != NULL);
+    TEST_CHECK(surface_set_transparent_black_mutable(surface));
+
+    Uint32 black = surface_map_rgb(surface, 0, 0, 0);
+    TEST_CHECK(SDL_FillSurfaceRect(surface, NULL, black));
+    TEST_CHECK(SDL_WriteSurfacePixel(surface, 0, 0, 240, 20, 10, SDL_ALPHA_OPAQUE));
+    TEST_CHECK(SDL_BlitSurface(surface, NULL, destination, NULL));
+
+    TEST_CHECK(SDL_FillSurfaceRect(surface, NULL, black));
+    TEST_CHECK(SDL_WriteSurfacePixel(surface, 2, 0, 10, 20, 240, SDL_ALPHA_OPAQUE));
+    TEST_CHECK(SDL_FillSurfaceRect(destination, NULL, surface_map_rgb(destination, 1, 2, 3)));
+    TEST_CHECK(SDL_BlitSurface(surface, NULL, destination, NULL));
+
+    Uint8 red, green, blue, alpha;
+    TEST_CHECK(SDL_ReadSurfacePixel(destination, 0, 0, &red, &green, &blue, &alpha));
+    TEST_CHECK(red == 1 && green == 2 && blue == 3);
+    TEST_CHECK(SDL_ReadSurfacePixel(destination, 2, 0, &red, &green, &blue, &alpha));
+    TEST_CHECK(red == 10 && green == 20 && blue == 240);
+
+    SDL_DestroySurface(destination);
+    SDL_DestroySurface(surface);
+}
+
 static SDL_Surface *create_indexed_alpha_surface(void) {
     SDL_Surface *surface = SDL_CreateSurface(5, 5, SDL_PIXELFORMAT_INDEX8);
     TEST_CHECK(surface != NULL);
@@ -381,6 +407,7 @@ int main(void) {
     test_index8_visible_bounds();
     test_truecolor_pixel_visibility();
     test_legacy_texture_transparency();
+    test_mutable_color_key_surface_reuse();
     test_indexed_alpha_rotation(0);
     test_indexed_alpha_rotation(1);
     test_color_key_rotation();
