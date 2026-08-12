@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -36,6 +36,16 @@
 #define PLAYER_VIEW_MAX_ASSET_PIXELS (16U * 1024U * 1024U)
 #define PLAYER_VIEW_MAX_TOTAL_ASSET_PIXELS (64U * 1024U * 1024U)
 #define PLAYER_VIEW_SHA256_HEX_SIZE 65
+#define PLAYER_VIEW_BENCHMARK_ITERATIONS 101
+#define PLAYER_VIEW_BENCHMARK_WARMUPS 5
+#define PLAYER_VIEW_LARGE_WIDTH 1920
+#define PLAYER_VIEW_LARGE_HEIGHT 1080
+
+typedef enum player_view_mode {
+    PLAYER_VIEW_RENDER,
+    PLAYER_VIEW_BENCHMARK_STANDARD,
+    PLAYER_VIEW_BENCHMARK_LARGE,
+} player_view_mode_t;
 
 typedef struct player_view_asset {
     uint16_t face;
@@ -817,6 +827,27 @@ static bool player_view_surface_sha256(SDL_Surface *surface,
     return true;
 }
 
+static int player_view_duration_compare(const void *left, const void *right) {
+    const uint64_t left_duration = *(const uint64_t *)left;
+    const uint64_t right_duration = *(const uint64_t *)right;
+    return (left_duration > right_duration) - (left_duration < right_duration);
+}
+
+static uint64_t player_view_benchmark(SDL_Surface *surface) {
+    for (size_t i = 0; i < PLAYER_VIEW_BENCHMARK_WARMUPS; i++) {
+        map_draw_map(surface);
+    }
+
+    uint64_t durations[PLAYER_VIEW_BENCHMARK_ITERATIONS];
+    for (size_t i = 0; i < arraysize(durations); i++) {
+        uint64_t started = SDL_GetTicksNS();
+        map_draw_map(surface);
+        durations[i] = SDL_GetTicksNS() - started;
+    }
+    qsort(durations, arraysize(durations), sizeof(*durations), player_view_duration_compare);
+    return durations[arraysize(durations) / 2];
+}
+
 static bool player_view_output_write(SDL_Surface *surface,
                                      const player_view_manifest_t *manifest,
                                      const char *output,
@@ -944,14 +975,30 @@ static bool player_view_output_write(SDL_Surface *surface,
 }
 
 int player_view_main(int argc, char *argv[]) {
-    if (argc != 3) {
-        fprintf(stderr, "usage: atrinik --player-view MANIFEST OUTPUT.png|-\n");
+    player_view_mode_t mode = PLAYER_VIEW_RENDER;
+    if (argc == 3 && strcmp(argv[0], "--player-view-benchmark") == 0) {
+        if (strcmp(argv[2], "standard") == 0) {
+            mode = PLAYER_VIEW_BENCHMARK_STANDARD;
+        } else if (strcmp(argv[2], "large") == 0) {
+            mode = PLAYER_VIEW_BENCHMARK_LARGE;
+        } else {
+            fprintf(stderr, "player-view: benchmark viewport must be standard or large\n");
+            return 2;
+        }
+    } else if (argc != 3 || strcmp(argv[0], "--player-view") != 0) {
+        fprintf(stderr,
+                "usage: atrinik --player-view MANIFEST OUTPUT.png|-\n"
+                "       atrinik --player-view-benchmark MANIFEST standard|large\n");
         return 2;
     }
 
     player_view_manifest_t manifest;
     if (!player_view_manifest_parse(argv[1], &manifest)) {
         return 3;
+    }
+    if (mode == PLAYER_VIEW_BENCHMARK_LARGE) {
+        manifest.viewport_width = PLAYER_VIEW_LARGE_WIDTH;
+        manifest.viewport_height = PLAYER_VIEW_LARGE_HEIGHT;
     }
     if (!player_view_inputs_verify(&manifest)) {
         player_view_manifest_free(&manifest);
@@ -1030,7 +1077,12 @@ int player_view_main(int argc, char *argv[]) {
         fprintf(stderr, "player-view: snapshot references an unavailable face\n");
         goto cleanup;
     }
-    map_draw_map(surface);
+    uint64_t benchmark_median_ns = 0;
+    if (mode == PLAYER_VIEW_RENDER) {
+        map_draw_map(surface);
+    } else {
+        benchmark_median_ns = player_view_benchmark(surface);
+    }
 
     if (!player_view_inputs_verify(&manifest)) {
         fprintf(stderr, "player-view: frozen inputs changed during replay\n");
@@ -1042,7 +1094,8 @@ int player_view_main(int argc, char *argv[]) {
         fprintf(stderr, "player-view: cannot hash rendered pixels\n");
         goto cleanup;
     }
-    if (strcmp(pixels_digest, manifest.expected_pixels_digest) != 0) {
+    if (mode != PLAYER_VIEW_BENCHMARK_LARGE &&
+        strcmp(pixels_digest, manifest.expected_pixels_digest) != 0) {
         fprintf(stderr,
                 "player-view: pixel mismatch (expected %s, got %s)\n",
                 manifest.expected_pixels_digest,
@@ -1050,10 +1103,17 @@ int player_view_main(int argc, char *argv[]) {
         result = 7;
         goto cleanup;
     }
-    if (!player_view_output_write(surface, &manifest, argv[2], pixels_digest)) {
-        goto cleanup;
+    if (mode == PLAYER_VIEW_RENDER) {
+        if (!player_view_output_write(surface, &manifest, argv[2], pixels_digest)) {
+            goto cleanup;
+        }
+        printf("%s  %s\n", pixels_digest, argv[2]);
+    } else {
+        printf("player-view-benchmark\t%s\t%" PRIu64 "\t%" PRIu64 "\n",
+               mode == PLAYER_VIEW_BENCHMARK_STANDARD ? "standard" : "large",
+               (uint64_t)PLAYER_VIEW_BENCHMARK_ITERATIONS,
+               benchmark_median_ns);
     }
-    printf("%s  %s\n", pixels_digest, argv[2]);
     result = 0;
 
 cleanup:

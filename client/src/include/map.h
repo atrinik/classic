@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -201,14 +201,14 @@ typedef struct MapCell {
     /** Target HP percentage for the living object on each sub-layer. */
     uint8_t probe[NUM_SUB_LAYERS];
 
-    /** Normalized cell light levels: zero is unlit, 255 is fully lit. */
-    uint8_t light_level[NUM_SUB_LAYERS];
+    /** Pre-tone Q5.11 scalar radiance for each sub-layer. */
+    uint16_t light_radiance[NUM_SUB_LAYERS];
 
     /** Whether each light level has been received from the server. */
     uint8_t light_known[NUM_SUB_LAYERS];
 
-    /** Resolved RGB illumination for each sub-layer. */
-    uint8_t light_rgb[NUM_SUB_LAYERS][3];
+    /** Pre-tone Q5.11 RGB radiance for each sub-layer. */
+    uint16_t light_rgb_radiance[NUM_SUB_LAYERS][3];
 
     /** Bitmap of sub-layers whose RGB state is explicitly colored. */
     uint8_t light_rgb_explicit;
@@ -310,7 +310,7 @@ typedef struct MapCell {
 static inline void map_cell_clear_light_state(MapCell *cell) {
     HARD_ASSERT(cell != NULL);
     memset(cell->light_known, 0, sizeof(cell->light_known));
-    memset(cell->light_rgb, 0, sizeof(cell->light_rgb));
+    memset(cell->light_rgb_radiance, 0, sizeof(cell->light_rgb_radiance));
     cell->light_rgb_explicit = 0;
 }
 
@@ -474,8 +474,11 @@ extern void map_set_fow(int x, int y, bool fow);
 
 extern bool map_get_fow(int x, int y);
 
-extern void map_set_light_level(int x, int y, int sub_layer, uint8_t light_level);
-extern void map_set_light_rgb(int x, int y, uint8_t bitmap, const uint8_t rgb[NUM_SUB_LAYERS][3]);
+extern void map_set_light_radiance(int x, int y, int sub_layer, uint16_t radiance);
+extern void map_set_light_rgb_radiance(int x,
+                                       int y,
+                                       uint8_t bitmap,
+                                       const uint16_t rgb[NUM_SUB_LAYERS][3]);
 
 extern void map_animate(void);
 
