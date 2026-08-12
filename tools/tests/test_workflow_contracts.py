@@ -12,6 +12,43 @@ class WorkflowContractTests(unittest.TestCase):
     def text(self, name: str) -> str:
         return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
+    def test_content_updater_has_a_narrow_human_reviewed_mutation_boundary(self) -> None:
+        workflow = self.text("update-content.yml")
+        self.assertIn("  schedule:\n", workflow)
+        self.assertIn("  workflow_dispatch:\n", workflow)
+        self.assertIn("group: classic-content-lock-update", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+        self.assertIn(
+            "github.event_name == 'workflow_dispatch' || vars.DEPENDENCY_UPDATE_SCHEDULE_ENABLED == 'true'",
+            workflow,
+        )
+        self.assertEqual(workflow[: workflow.index("jobs:")].count("contents: read"), 1)
+        self.assertNotIn("\n  contents: write", workflow)
+        self.assertNotIn("\n  pull-requests: write", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("test \"${GITHUB_REF}\" = refs/heads/main", workflow)
+        self.assertIn("tools/release/update_content_lock.py", workflow)
+        token = workflow.index("name: Mint the installation token")
+        verification = workflow.index("name: Verify all content releases")
+        ownership = workflow.index("name: Fail closed on unexpected automation")
+        mutation = workflow.index("name: Create or update the single App-owned")
+        self.assertLess(verification, ownership)
+        self.assertLess(ownership, token)
+        self.assertLess(token, mutation)
+        self.assertIn(
+            "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0",
+            workflow,
+        )
+        self.assertIn("permission-contents: write", workflow)
+        self.assertIn("permission-pull-requests: write", workflow)
+        self.assertIn("--force-with-lease=", workflow)
+        self.assertIn("server/dependencies.lock.json", workflow)
+        for forbidden in (
+            "gh pr review", "gh pr merge", "gh release", "git tag",
+            "workflow dispatch", "repos/${GITHUB_REPOSITORY}/branches/main",
+        ):
+            self.assertNotIn(forbidden, workflow)
+
     def test_nested_component_automation_remains_retired(self) -> None:
         for module in ("client", "editor", "libatrinik", "protocol", "server"):
             with self.subTest(module=module):
