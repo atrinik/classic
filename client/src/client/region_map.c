@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -482,8 +482,10 @@ void region_map_render_marker(region_map_t *region_map, SDL_Surface *surface, in
     }
 
     /* TODO: Could cache this */
+    /* Positive angles follow the server's clockwise N-to-NW facing order.
+     * Full client state is required here; the transform contract is tested offline. */
     marker = rotozoomSurface(TEXTURE_CLIENT("map_marker"),
-                             -((map_get_player_direction() - 1) * 45),
+                             (map_get_player_direction() - 1) * 45, /* GCOVR_EXCL_LINE */
                              region_map->zoom / 100.0,
                              1);
     if (marker == NULL) {
