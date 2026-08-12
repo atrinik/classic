@@ -10,6 +10,7 @@
  ************************************************************************/
 
 #include <global.h>
+#include <initialization.h>
 #include <server_main.h>
 #include <light.h>
 #include <check.h>
@@ -53,6 +54,94 @@ static object *add_colored_light(mapstruct *map, int x, int y, int radius, uint3
     source->light_color = color;
     return object_insert_map(source, map, NULL, 0);
 }
+
+static void set_light_falloff(const char *falloff) {
+    snprintf(VS(settings.light_falloff), "%s", falloff);
+}
+
+START_TEST(test_radial_light_profile_is_symmetric_monotonic_and_exact) {
+    mapstruct *map = get_empty_map(11, 11);
+    set_light_falloff("radial");
+    adjust_light_source(map, 5, 5, 3);
+
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 5, 5)->light_source_value, 160);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 6, 5)->light_source_value, 71);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 6, 6)->light_source_value, 45);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 7, 5)->light_source_value, 18);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 7, 6)->light_source_value, 10);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 7, 7)->light_source_value, 1);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 8, 5)->light_source_value, 0);
+
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 4, 5)->light_source_value,
+                     GET_MAP_SPACE_PTR(map, 6, 5)->light_source_value);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 5, 4)->light_source_value,
+                     GET_MAP_SPACE_PTR(map, 6, 5)->light_source_value);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 4, 4)->light_source_value,
+                     GET_MAP_SPACE_PTR(map, 6, 6)->light_source_value);
+
+    adjust_light_source(map, 5, 5, -3);
+    for (int y = 0; y < MAP_HEIGHT(map); y++) {
+        for (int x = 0; x < MAP_WIDTH(map); x++) {
+            ck_assert_int_eq(GET_MAP_SPACE_PTR(map, x, y)->light_source_value, 0);
+        }
+    }
+
+    adjust_light_source(map, 5, 5, -3);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 5, 5)->light_source_value, -160);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 6, 6)->light_source_value, -45);
+    adjust_light_source(map, 5, 5, 3);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 5, 5)->light_source_value, 0);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 6, 6)->light_source_value, 0);
+}
+END_TEST
+
+START_TEST(test_legacy_light_falloff_remains_available) {
+    mapstruct *map = get_empty_map(9, 9);
+    set_light_falloff("legacy");
+    adjust_light_source(map, 4, 4, 3);
+
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 4, 4)->light_source_value, 160);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 5, 4)->light_source_value, 80);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 5, 5)->light_source_value, 40);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 6, 4)->light_source_value, 40);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 6, 5)->light_source_value, 0);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 6, 6)->light_source_value, 0);
+
+    adjust_light_source(map, 4, 4, -3);
+    set_light_falloff("radial");
+}
+END_TEST
+
+START_TEST(test_colored_radial_light_removal_restores_whole_field) {
+    mapstruct *map = get_empty_map(11, 11);
+    int baseline[11 * 11];
+    set_light_falloff("radial");
+    adjust_light_source(map, 5, 5, -3);
+    for (int y = 0; y < MAP_HEIGHT(map); y++) {
+        for (int x = 0; x < MAP_WIDTH(map); x++) {
+            baseline[y * MAP_WIDTH(map) + x] = GET_MAP_SPACE_PTR(map, x, y)->light_source_value;
+        }
+    }
+
+    adjust_light_source_color(map, 5, 5, 3, UINT32_C(0x40a0ff), 1);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(map, 7, 6)->light_source_positive_value, 0);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(map, 7, 6)->light_source_color_weight, 0);
+    adjust_light_source_color(map, 5, 5, 3, UINT32_C(0x40a0ff), -1);
+
+    for (int y = 0; y < MAP_HEIGHT(map); y++) {
+        for (int x = 0; x < MAP_WIDTH(map); x++) {
+            MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
+            ck_assert_int_eq(space->light_source_value, baseline[y * MAP_WIDTH(map) + x]);
+            ck_assert_int_eq(space->light_source_positive_value, 0);
+            ck_assert_int_eq(space->light_source_color[0], 0);
+            ck_assert_int_eq(space->light_source_color[1], 0);
+            ck_assert_int_eq(space->light_source_color[2], 0);
+            ck_assert_int_eq(space->light_source_color_weight, 0);
+        }
+    }
+    adjust_light_source(map, 5, 5, 3);
+}
+END_TEST
 
 START_TEST(test_light_color_parser_is_exact) {
     uint32_t color = 0;
@@ -322,13 +411,30 @@ END_TEST
 START_TEST(test_light_mask_propagates_in_three_dimensions) {
     mapstruct *lower = get_empty_map(9, 9);
     mapstruct *upper = get_empty_map(9, 9);
+    mapstruct *top = get_empty_map(9, 9);
     link_stacked_maps(lower, upper);
+    link_stacked_maps(upper, top);
 
     add_light_source(lower, 4, 4);
 
     ck_assert_int_eq(GET_MAP_SPACE_PTR(lower, 4, 4)->light_source_value, 1280);
-    ck_assert_int_eq(GET_MAP_SPACE_PTR(upper, 4, 4)->light_source_value, 640);
-    ck_assert_int_eq(GET_MAP_SPACE_PTR(upper, 5, 4)->light_source_value, 160);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(upper, 4, 4)->light_source_value, 720);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(upper, 5, 4)->light_source_value, 535);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(top, 4, 4)->light_source_value, 320);
+}
+END_TEST
+
+START_TEST(test_radial_light_crosses_horizontal_map_boundaries) {
+    mapstruct *west = get_empty_map(7, 7);
+    mapstruct *east = get_empty_map(7, 7);
+    west->tile_path[TILED_EAST] = add_string("/east");
+    east->tile_path[TILED_WEST] = add_string("/west");
+    west->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = west;
+
+    add_light_source(west, 6, 3);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(east, 0, 3)->light_source_value, 720);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(east, 1, 3)->light_source_value, 320);
 }
 END_TEST
 
@@ -364,7 +470,7 @@ START_TEST(test_light_mask_lights_exposed_upper_wall_face) {
 
     add_light_source(lower, 4, 4);
 
-    ck_assert_int_eq(GET_MAP_SPACE_PTR(upper, 5, 4)->light_source_value, 160);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(upper, 5, 4)->light_source_value, 535);
 }
 END_TEST
 
@@ -434,6 +540,9 @@ static Suite *suite(void) {
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_light_level_anchors);
     tcase_add_test(tc_core, test_light_level_interpolation);
+    tcase_add_test(tc_core, test_radial_light_profile_is_symmetric_monotonic_and_exact);
+    tcase_add_test(tc_core, test_legacy_light_falloff_remains_available);
+    tcase_add_test(tc_core, test_colored_radial_light_removal_restores_whole_field);
     tcase_add_test(tc_core, test_light_color_parser_is_exact);
     tcase_add_test(tc_core, test_radiance_resolver_preserves_linear_warm_and_cool_daylight);
     tcase_add_test(tc_core, test_colored_lights_add_remove_and_order_are_exact);
@@ -442,6 +551,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_darkness_subtracts_achromatically_from_colored_light);
     tcase_add_test(tc_core, test_colored_light_recalculation_and_linked_depth_are_stable);
     tcase_add_test(tc_core, test_light_mask_propagates_in_three_dimensions);
+    tcase_add_test(tc_core, test_radial_light_crosses_horizontal_map_boundaries);
     tcase_add_test(tc_core, test_light_mask_is_blocked_by_floors_in_both_directions);
     tcase_add_test(tc_core, test_light_mask_lights_exposed_upper_wall_face);
     tcase_add_test(tc_core, test_light_mask_recalculates_around_opaque_cells);
