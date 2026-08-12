@@ -2813,11 +2813,28 @@ done:
     return added;
 }
 
+/** Return whether structural geometry can hide pixels of the local player. */
+static bool map_render_command_is_player_occluder(const map_render_command_t *player,
+                                                  const map_render_command_t *occluder) {
+    return occluder->object_layer == LAYER_WALL &&
+           (occluder->effects.alpha == 0 || occluder->effects.alpha >= 128) &&
+           map_render_command_overlaps(player, occluder);
+}
+
 /** Record only local-player pixels hidden by later structural geometry. */
 static void map_render_commands_find_player_occlusion(map_render_context_t *context) {
     for (size_t player_index = 0; player_index < context->commands_num; player_index++) {
         map_render_command_t *player = &context->commands[player_index];
         if (!player->local_player) {
+            continue;
+        }
+
+        size_t occluder_index = player_index + 1;
+        while (occluder_index < context->commands_num &&
+               !map_render_command_is_player_occluder(player, &context->commands[occluder_index])) {
+            occluder_index++;
+        }
+        if (occluder_index == context->commands_num) {
             continue;
         }
 
@@ -2842,11 +2859,9 @@ static void map_render_commands_find_player_occlusion(map_render_context_t *cont
         }
 
         bool player_occluded = false;
-        for (size_t occluder_index = player_index + 1; occluder_index < context->commands_num;
-             occluder_index++) {
+        for (; occluder_index < context->commands_num; occluder_index++) {
             const map_render_command_t *occluder = &context->commands[occluder_index];
-            if (occluder->object_layer != LAYER_WALL ||
-                (occluder->effects.alpha != 0 && occluder->effects.alpha < 128)) {
+            if (!map_render_command_is_player_occluder(player, occluder)) {
                 continue;
             }
 
