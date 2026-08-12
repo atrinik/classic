@@ -720,6 +720,11 @@ if (BUILD_TESTING)
     add_test(NAME client-player-view-player-outline-widget-state
         COMMAND atrinik --player-view
             "${player_view_fixtures}/player-outline-widget-state.xml" -)
+    add_test(NAME client-player-view-movement-benchmark
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
+            "$<TARGET_FILE:atrinik>"
+            "${player_view_fixtures}/player-outline-widget-state.xml")
     add_test(NAME client-player-view-colored-smooth
         COMMAND atrinik --player-view "${player_view_fixtures}/colored-smooth.xml" -)
     add_test(NAME client-player-view-colored-discrete

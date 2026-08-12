@@ -655,7 +655,8 @@ int main(int argc, char *argv[]) {
     path_fopen = client_fopen_wrapper;
 
     if (argc > 1 && (strcmp(argv[1], "--player-view") == 0 ||
-                     strcmp(argv[1], "--player-view-benchmark") == 0)) {
+                     strcmp(argv[1], "--player-view-benchmark") == 0 ||
+                     strcmp(argv[1], "--player-view-movement-benchmark") == 0)) {
         return player_view_main(argc - 1, &argv[1]);
     }
 

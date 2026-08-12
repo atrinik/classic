@@ -40,11 +40,16 @@
 #define PLAYER_VIEW_BENCHMARK_WARMUPS 5
 #define PLAYER_VIEW_LARGE_WIDTH 1920
 #define PLAYER_VIEW_LARGE_HEIGHT 1080
+#define PLAYER_VIEW_MOVEMENT_TICK_MS 125U
+#define PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS 480U
+#define PLAYER_VIEW_MOVEMENT_IDLE_TICKS 16U
+#define PLAYER_VIEW_MOVEMENT_RESUMED_TICKS 80U
 
 typedef enum player_view_mode {
     PLAYER_VIEW_RENDER,
     PLAYER_VIEW_BENCHMARK_STANDARD,
     PLAYER_VIEW_BENCHMARK_LARGE,
+    PLAYER_VIEW_BENCHMARK_MOVEMENT,
 } player_view_mode_t;
 
 typedef struct player_view_asset {
@@ -943,6 +948,93 @@ static uint64_t player_view_benchmark(SDL_Surface *surface) {
     return durations[arraysize(durations) / 2];
 }
 
+typedef struct player_view_movement_phase {
+    const char *name;
+    uint32_t ticks;
+    uint64_t durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
+} player_view_movement_phase_t;
+
+static uint64_t player_view_percentile(uint64_t *durations, size_t count, size_t numerator) {
+    qsort(durations, count, sizeof(*durations), player_view_duration_compare);
+    size_t index = (count - 1) * numerator / 100;
+    return durations[index];
+}
+
+static bool player_view_movement_draw(player_view_movement_phase_t *phase,
+                                      SDL_Surface *surface,
+                                      const uint8_t *snapshot,
+                                      size_t snapshot_size,
+                                      uint32_t *clock_ms) {
+    for (uint32_t tick = 0; tick < phase->ticks; tick++) {
+        LastTick = *clock_ms;
+        socket_command_map((uint8_t *)snapshot, snapshot_size, 0);
+        uint64_t started = SDL_GetTicksNS();
+        map_draw_map(surface);
+        phase->durations[tick] = SDL_GetTicksNS() - started;
+        *clock_ms += PLAYER_VIEW_MOVEMENT_TICK_MS;
+    }
+    return true;
+}
+
+static bool player_view_movement_benchmark(SDL_Surface *surface,
+                                           const player_view_manifest_t *manifest,
+                                           const uint8_t *snapshot,
+                                           size_t snapshot_size,
+                                           const uint8_t *next_snapshot,
+                                           size_t next_snapshot_size) {
+    if (next_snapshot == NULL) {
+        fprintf(stderr, "player-view: movement benchmark requires next-snapshot\n");
+        return false;
+    }
+
+    player_view_movement_phase_t phases[] = {
+        {.name = "cold", .ticks = 1},
+        {.name = "sustained", .ticks = PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS},
+        {.name = "idle", .ticks = PLAYER_VIEW_MOVEMENT_IDLE_TICKS},
+        {.name = "resumed", .ticks = PLAYER_VIEW_MOVEMENT_RESUMED_TICKS},
+    };
+    uint32_t clock_ms = manifest->clock_ms;
+    for (size_t i = 0; i < arraysize(phases); i++) {
+        const uint8_t *packet = i == 0 ? snapshot : next_snapshot;
+        size_t packet_size = i == 0 ? snapshot_size : next_snapshot_size;
+        if (!player_view_movement_draw(&phases[i], surface, packet, packet_size, &clock_ms)) {
+            return false;
+        }
+    }
+
+    char digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+    if (!player_view_surface_sha256(surface, digest)) {
+        return false;
+    }
+    printf("{\"schema_version\":1,\"benchmark\":\"player-view-movement\","
+           "\"tick_ms\":%u,\"checkpoint_sha256\":\"%s\",\"phases\":[",
+           PLAYER_VIEW_MOVEMENT_TICK_MS,
+           digest);
+    for (size_t i = 0; i < arraysize(phases); i++) {
+        player_view_movement_phase_t *phase = &phases[i];
+        uint64_t sorted[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
+        memcpy(sorted, phase->durations, phase->ticks * sizeof(*sorted));
+        uint64_t p50 = player_view_percentile(sorted, phase->ticks, 50);
+        memcpy(sorted, phase->durations, phase->ticks * sizeof(*sorted));
+        uint64_t p95 = player_view_percentile(sorted, phase->ticks, 95);
+        memcpy(sorted, phase->durations, phase->ticks * sizeof(*sorted));
+        uint64_t p99 = player_view_percentile(sorted, phase->ticks, 99);
+        uint64_t maximum = sorted[phase->ticks - 1];
+        printf("%s{\"name\":\"%s\",\"samples\":%u,\"p50_ns\":%" PRIu64
+               ",\"p95_ns\":%" PRIu64 ",\"p99_ns\":%" PRIu64
+               ",\"max_ns\":%" PRIu64 "}",
+               i == 0 ? "" : ",",
+               phase->name,
+               phase->ticks,
+               p50,
+               p95,
+               p99,
+               maximum);
+    }
+    printf("]}\n");
+    return true;
+}
+
 static bool player_view_output_write(SDL_Surface *surface,
                                      const player_view_manifest_t *manifest,
                                      const char *output,
@@ -1071,11 +1163,16 @@ static bool player_view_output_write(SDL_Surface *surface,
 
 int player_view_main(int argc, char *argv[]) {
     player_view_mode_t mode = PLAYER_VIEW_RENDER;
-    if (argc == 3 && strcmp(argv[0], "--player-view-benchmark") == 0) {
+    if (argc == 3 && (strcmp(argv[0], "--player-view-benchmark") == 0 ||
+                      strcmp(argv[0], "--player-view-movement-benchmark") == 0)) {
         if (strcmp(argv[2], "standard") == 0) {
-            mode = PLAYER_VIEW_BENCHMARK_STANDARD;
+            mode = strcmp(argv[0], "--player-view-benchmark") == 0
+                       ? PLAYER_VIEW_BENCHMARK_STANDARD
+                       : PLAYER_VIEW_BENCHMARK_MOVEMENT;
         } else if (strcmp(argv[2], "large") == 0) {
-            mode = PLAYER_VIEW_BENCHMARK_LARGE;
+            mode = strcmp(argv[0], "--player-view-benchmark") == 0
+                       ? PLAYER_VIEW_BENCHMARK_LARGE
+                       : PLAYER_VIEW_BENCHMARK_MOVEMENT;
         } else {
             fprintf(stderr, "player-view: benchmark viewport must be standard or large\n");
             return 2;
@@ -1083,7 +1180,8 @@ int player_view_main(int argc, char *argv[]) {
     } else if (argc != 3 || strcmp(argv[0], "--player-view") != 0) {
         fprintf(stderr,
                 "usage: atrinik --player-view MANIFEST OUTPUT.png|-\n"
-                "       atrinik --player-view-benchmark MANIFEST standard|large\n");
+                "       atrinik --player-view-benchmark MANIFEST standard|large\n"
+                "       atrinik --player-view-movement-benchmark MANIFEST standard|large\n");
         return 2;
     }
 
@@ -1091,7 +1189,8 @@ int player_view_main(int argc, char *argv[]) {
     if (!player_view_manifest_parse(argv[1], &manifest)) {
         return 3;
     }
-    if (mode == PLAYER_VIEW_BENCHMARK_LARGE) {
+    if ((mode == PLAYER_VIEW_BENCHMARK_LARGE ||
+         (mode == PLAYER_VIEW_BENCHMARK_MOVEMENT && strcmp(argv[2], "large") == 0))) {
         manifest.viewport_width = PLAYER_VIEW_LARGE_WIDTH;
         manifest.viewport_height = PLAYER_VIEW_LARGE_HEIGHT;
     }
@@ -1222,8 +1321,17 @@ int player_view_main(int argc, char *argv[]) {
         goto cleanup;
     }
     uint64_t benchmark_median_ns = 0;
-    if (mode != PLAYER_VIEW_RENDER) {
+    if (mode == PLAYER_VIEW_BENCHMARK_STANDARD || mode == PLAYER_VIEW_BENCHMARK_LARGE) {
         benchmark_median_ns = player_view_benchmark(surface);
+    } else if (mode == PLAYER_VIEW_BENCHMARK_MOVEMENT) {
+        if (!player_view_movement_benchmark(surface,
+                                            &manifest,
+                                            snapshot,
+                                            snapshot_size,
+                                            next_snapshot,
+                                            next_snapshot_size)) {
+            goto cleanup;
+        }
     } else if (manifest.widget_render) {
 #ifdef ATRINIK_WIDGET_TESTS
         widget_map_draw_test(&map_widget);
@@ -1303,7 +1411,7 @@ int player_view_main(int argc, char *argv[]) {
             goto cleanup;
         }
         printf("%s  %s\n", pixels_digest, argv[2]);
-    } else {
+    } else if (mode != PLAYER_VIEW_BENCHMARK_MOVEMENT) {
         printf("player-view-benchmark\t%s\t%" PRIu64 "\t%" PRIu64 "\n",
                mode == PLAYER_VIEW_BENCHMARK_STANDARD ? "standard" : "large",
                (uint64_t)PLAYER_VIEW_BENCHMARK_ITERATIONS,
