@@ -955,6 +955,7 @@ typedef struct player_view_movement_phase {
     uint32_t noop_packets;
     uint32_t full_map_draws;
     lighting_benchmark_statistics_t lighting;
+    lighting_benchmark_statistics_t lighting_before;
     uint64_t durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
 } player_view_movement_phase_t;
 
@@ -981,6 +982,7 @@ static bool player_view_movement_draw(player_view_movement_phase_t *phase,
                                       const uint8_t **previous_packet,
                                       size_t *previous_packet_size,
                                       uint32_t *clock_ms) {
+    lighting_benchmark_statistics_get(&phase->lighting_before);
     for (uint32_t tick = 0; tick < phase->ticks; tick++) {
         const uint8_t *packet = snapshot;
         size_t packet_size = snapshot_size;
@@ -1017,6 +1019,12 @@ static bool player_view_movement_draw(player_view_movement_phase_t *phase,
         *clock_ms += PLAYER_VIEW_MOVEMENT_TICK_MS;
     }
     lighting_benchmark_statistics_get(&phase->lighting);
+    phase->lighting.field_rebuilds -= phase->lighting_before.field_rebuilds;
+    phase->lighting.field_reuses -= phase->lighting_before.field_reuses;
+    phase->lighting.lit_sprite_lookups -= phase->lighting_before.lit_sprite_lookups;
+    phase->lighting.lit_sprite_hits -= phase->lighting_before.lit_sprite_hits;
+    phase->lighting.lit_sprite_misses -= phase->lighting_before.lit_sprite_misses;
+    phase->lighting.lit_sprite_evictions -= phase->lighting_before.lit_sprite_evictions;
     return true;
 }
 
