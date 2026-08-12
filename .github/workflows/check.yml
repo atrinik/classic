@@ -625,10 +625,11 @@ jobs:
               "",
               "### Candidate replay throughput",
               "",
-              "Measured renderer throughput is derived from frame timing; replay cadence is fixed "
-              "at 8 Hz (125 ms simulated ticks) and is not an FPS measurement.",
+              "Renderer FPS values are frame-time equivalents (the p95 column is the inverse of "
+              "p95 frame time); replay cadence is fixed at 8 Hz (125 ms simulated ticks) and is "
+              "not an FPS measurement.",
               "",
-              "| Phase | Frames | Median | p95 | Median render FPS | p95 render FPS |",
+              "| Phase | Frames | Median | p95 | Median FPS equivalent | p95-frame FPS equivalent |",
               "| --- | ---: | ---: | ---: | ---: | ---: |",
           ])
           for name in ("cold", "sustained", "idle", "resumed"):
@@ -651,7 +652,7 @@ jobs:
 
           def timing(value):
               milliseconds = value / 1_000_000
-              return f"{milliseconds:.2f} ms ({1_000_000_000 / value:.1f} render FPS)"
+              return f"{milliseconds:.2f} ms ({1_000_000_000 / value:.1f} FPS equivalent)"
 
           def guard_evidence(name, check):
               if name == "candidate_sustained_p95":
