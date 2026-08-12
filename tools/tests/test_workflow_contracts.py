@@ -79,9 +79,13 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_rehearsal_is_bound_to_current_main(self) -> None:
         workflow = self.text("release-rehearsal.yml")
+        candidate = self.text("build-release-candidate.yml")
         self.assertIn('test "${DISPATCH_REF}" = refs/heads/main', workflow)
         self.assertIn("refs/remotes/origin/main", workflow)
         self.assertIn("needs: preflight", workflow)
+        self.assertNotIn("contents: write", workflow)
+        self.assertNotIn("contents: write", candidate)
+        self.assertIn("source_epoch: ${{ needs.preflight.outputs.source_epoch }}", workflow)
 
     def test_package_dispatch_is_bound_to_a_tag_or_current_main_recovery(self) -> None:
         workflow = self.text("package-release.yml")
@@ -103,34 +107,34 @@ class WorkflowContractTests(unittest.TestCase):
     def test_production_metadata_can_read_drafts_without_broad_write_access(self) -> None:
         package = self.text("package-release.yml")
         candidate = self.text("build-release-candidate.yml")
+        preflight_job = package[
+            package.index("  preflight:") : package.index("  discord-config:")
+        ]
         candidate_job = package[
             package.index("  candidate:") : package.index("  publish:")
         ]
         metadata_job = candidate[
             candidate.index("  metadata:") : candidate.index("  sources:")
         ]
+        self.assertIn("contents: write", preflight_job)
+        self.assertIn("Validate tag, release, checks, and ancestry", preflight_job)
+        self.assertNotIn("gh release edit", preflight_job)
         for job in (candidate_job, metadata_job):
-            self.assertIn("permissions:\n", job)
-            self.assertIn("contents: write", job)
+            self.assertIn("contents: read", job)
+            self.assertNotIn("contents: write", job)
         self.assertEqual(package[: package.index("jobs:")].count("contents: read"), 1)
-        self.assertNotIn("gh release edit", metadata_job)
 
-    def test_current_main_candidate_uses_the_trusted_recovery_verifier(self) -> None:
-        workflow = self.text("build-release-candidate.yml")
-        metadata_job = workflow[
-            workflow.index("  metadata:") : workflow.index("  sources:")
+    def test_current_main_preflight_uses_the_trusted_recovery_verifier(self) -> None:
+        workflow = self.text("package-release.yml")
+        preflight_job = workflow[
+            workflow.index("  preflight:") : workflow.index("  discord-config:")
         ]
-        self.assertIn("Check out the trusted recovery verifier", metadata_job)
-        self.assertIn("fetch-depth: 0", metadata_job)
-        self.assertIn("path: build/release-automation", metadata_job)
-        self.assertIn("ref: ${{ github.sha }}", metadata_job)
-        self.assertIn("if test \"${GITHUB_REF}\" = refs/heads/main", metadata_job)
-        self.assertIn(
-            "build/release-automation/tools/release/validate_release.py",
-            metadata_job,
-        )
-        self.assertIn("recovery_arguments+=(--recovery-main)", metadata_job)
-        self.assertIn("verifier=tools/release/validate_release.py", metadata_job)
+        self.assertIn("Check out the current main recovery definition", preflight_job)
+        self.assertIn("fetch-depth: 0", preflight_job)
+        self.assertIn("ref: main", preflight_job)
+        self.assertIn('test "${GITHUB_REF}" = refs/heads/main', preflight_job)
+        self.assertIn("recovery_arguments+=(--recovery-main)", preflight_job)
+        self.assertIn("python3 tools/release/validate_release.py", preflight_job)
 
     def test_semantic_release_skips_cross_repository_issue_comments(self) -> None:
         config = (ROOT / ".releaserc.cjs").read_text(encoding="utf-8")
@@ -457,8 +461,8 @@ class WorkflowContractTests(unittest.TestCase):
             candidate.index("  metadata:") : candidate.index("  sources:")
         ]
         remaining_jobs = candidate[candidate.index("  sources:") :]
-        self.assertEqual(candidate.count("fetch-depth: 0"), 2)
-        self.assertEqual(metadata_job.count("fetch-depth: 0"), 2)
+        self.assertEqual(candidate.count("fetch-depth: 0"), 1)
+        self.assertEqual(metadata_job.count("fetch-depth: 0"), 1)
         self.assertNotIn("fetch-depth: 0", remaining_jobs)
 
     def test_core_uploads_exercised_python_release_tool_coverage(self) -> None:
