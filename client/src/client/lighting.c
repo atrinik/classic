@@ -68,11 +68,19 @@ typedef struct lighting_context {
 
 static lighting_context lighting_contexts[MAP2_LEVELS];
 static lighting_context *lighting_context_current = &lighting_contexts[MAP2_DEPTH_INDEX(0)];
+static lighting_benchmark_statistics_t lighting_benchmark_statistics;
 static SDL_Surface *lighting_lit_surface;
 static int *structure_column_bottom;
 static lighting_sample *structure_column_illumination;
 
 static void lighting_sprite_cache_clear(lighting_context *context);
+
+static size_t lighting_context_retained_field_bytes(const lighting_context *context) {
+    return context->light_samples_num * (sizeof(*context->light_samples) +
+                                         sizeof(*context->structure_samples)) +
+           (size_t)context->width * sizeof(*context->structure_blur_row) +
+           (size_t)context->height * sizeof(*context->structure_rows_valid);
+}
 
 static void lighting_context_free(lighting_context *context) {
     free(context->light_samples);
@@ -200,6 +208,7 @@ static void lighting_sprite_cache_reserve(lighting_context *context, size_t byte
         }
         HASH_DEL(context->sprite_cache, oldest);
         context->sprite_cache_bytes -= oldest->bytes;
+        lighting_benchmark_statistics.lit_sprite_evictions++;
         SDL_DestroySurface(oldest->surface);
         free(oldest);
     }
@@ -302,7 +311,10 @@ bool lighting_begin(int width, int height, uint64_t cache_key) {
     lighting_update_needed = !lighting_cache_valid || lighting_cache_key != cache_key;
     lighting_pending_cache_key = cache_key;
     if (lighting_update_needed) {
+        lighting_benchmark_statistics.field_rebuilds++;
         memset(light_samples, 0, light_samples_num * sizeof(*light_samples));
+    } else {
+        lighting_benchmark_statistics.field_reuses++;
     }
 
     lighting_active = true;
@@ -312,6 +324,21 @@ bool lighting_begin(int width, int height, uint64_t cache_key) {
 void lighting_clear_sprite_cache(void) {
     for (size_t i = 0; i < arraysize(lighting_contexts); i++) {
         lighting_sprite_cache_clear(&lighting_contexts[i]);
+    }
+}
+
+void lighting_benchmark_statistics_reset(void) {
+    memset(&lighting_benchmark_statistics, 0, sizeof(lighting_benchmark_statistics));
+}
+
+void lighting_benchmark_statistics_get(lighting_benchmark_statistics_t *statistics) {
+    HARD_ASSERT(statistics != NULL);
+    *statistics = lighting_benchmark_statistics;
+    for (size_t i = 0; i < arraysize(lighting_contexts); i++) {
+        lighting_context *context = &lighting_contexts[i];
+        statistics->lit_sprite_entries += HASH_COUNT(context->sprite_cache);
+        statistics->lit_sprite_bytes += context->sprite_cache_bytes;
+        statistics->retained_field_bytes += lighting_context_retained_field_bytes(context);
     }
 }
 
@@ -812,11 +839,14 @@ void lighting_show_surface(SDL_Surface *destination,
     cache_key.surface_alpha = surface_alpha;
     lighting_sprite_cache_entry *cached;
     HASH_FIND(hh, lighting_context_current->sprite_cache, &cache_key, sizeof(cache_key), cached);
+    lighting_benchmark_statistics.lit_sprite_lookups++;
     if (cached != NULL) {
+        lighting_benchmark_statistics.lit_sprite_hits++;
         lighting_sprite_cache_touch(lighting_context_current, cached);
         surface_show(destination, x, y, NULL, cached->surface);
         return;
     }
+    lighting_benchmark_statistics.lit_sprite_misses++;
 
     if (!lighting_lit_surface_create(source_rect.w, source_rect.h)) {
         surface_show(destination, x, y, srcrect, source);

@@ -49,6 +49,19 @@ typedef struct lighting_vertex {
     uint16_t blue;
 } lighting_vertex_t;
 
+/** Observable software-lighting cache state for deterministic benchmarks. */
+typedef struct lighting_benchmark_statistics {
+    uint64_t field_rebuilds;
+    uint64_t field_reuses;
+    uint64_t lit_sprite_lookups;
+    uint64_t lit_sprite_hits;
+    uint64_t lit_sprite_misses;
+    uint64_t lit_sprite_evictions;
+    size_t lit_sprite_entries;
+    size_t lit_sprite_bytes;
+    size_t retained_field_bytes;
+} lighting_benchmark_statistics_t;
+
 uint16_t lighting_srgb8_to_linear(uint8_t value);
 uint8_t lighting_linear_to_srgb8(uint16_t value);
 uint8_t lighting_radiance_to_level(uint16_t radiance);
@@ -93,5 +106,8 @@ void lighting_show_surface(SDL_Surface *destination,
                            lighting_surface_mode_t mode);
 void lighting_clear_sprite_cache(void);
 void lighting_deinit(void);
+
+void lighting_benchmark_statistics_reset(void);
+void lighting_benchmark_statistics_get(lighting_benchmark_statistics_t *statistics);
 
 #endif

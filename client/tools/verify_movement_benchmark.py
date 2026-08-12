@@ -47,6 +47,18 @@ def verify(record: dict[str, object]) -> None:
             raise SystemExit(f"movement benchmark phase {name} has no sliding-window evidence")
         if phase.get("queue") != {"depth": 0, "bytes": 0, "oldest_age_ms": 0, "processing_ns": 0}:
             raise SystemExit(f"movement benchmark phase {name} has invalid synchronous queue data")
+        lighting = phase.get("lighting")
+        expected_lighting = {
+            "field_rebuilds", "field_reuses", "lit_sprite_lookups", "lit_sprite_hits",
+            "lit_sprite_misses", "lit_sprite_evictions", "entries", "bytes",
+            "retained_field_bytes",
+        }
+        if not isinstance(lighting, dict) or set(lighting) != expected_lighting:
+            raise SystemExit(f"movement benchmark phase {name} has invalid lighting telemetry")
+        if any(not isinstance(value, int) or value < 0 for value in lighting.values()):
+            raise SystemExit(f"movement benchmark phase {name} has invalid lighting values")
+        if lighting["lit_sprite_hits"] + lighting["lit_sprite_misses"] != lighting["lit_sprite_lookups"]:
+            raise SystemExit(f"movement benchmark phase {name} has inconsistent lit-sprite telemetry")
     if len(record.get("checkpoint_sha256", "")) != 64:
         raise SystemExit("movement benchmark checkpoint is invalid")
     if record.get("same_process_checkpoint_sha256") != record["checkpoint_sha256"]:

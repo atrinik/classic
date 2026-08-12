@@ -954,6 +954,7 @@ typedef struct player_view_movement_phase {
     uint32_t changed_packets;
     uint32_t noop_packets;
     uint32_t full_map_draws;
+    lighting_benchmark_statistics_t lighting;
     uint64_t durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
 } player_view_movement_phase_t;
 
@@ -1015,6 +1016,7 @@ static bool player_view_movement_draw(player_view_movement_phase_t *phase,
         phase->full_map_draws++;
         *clock_ms += PLAYER_VIEW_MOVEMENT_TICK_MS;
     }
+    lighting_benchmark_statistics_get(&phase->lighting);
     return true;
 }
 
@@ -1036,6 +1038,7 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
         {.name = "resumed", .ticks = PLAYER_VIEW_MOVEMENT_RESUMED_TICKS},
     };
     uint32_t clock_ms = manifest->clock_ms;
+    lighting_benchmark_statistics_reset();
     const uint8_t *previous_packet = NULL;
     size_t previous_packet_size = 0;
     for (size_t i = 0; i < arraysize(phases); i++) {
@@ -1120,7 +1123,11 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
                ",\"map_packets\":%u,\"changed_map_packets\":%u"
                ",\"noop_map_packets\":%u,\"full_map_draws\":%u"
                ",\"queue\":{\"depth\":0,\"bytes\":0,\"oldest_age_ms\":0"
-               ",\"processing_ns\":0}}",
+               ",\"processing_ns\":0},\"lighting\":{\"field_rebuilds\":%" PRIu64
+               ",\"field_reuses\":%" PRIu64 ",\"lit_sprite_lookups\":%" PRIu64
+               ",\"lit_sprite_hits\":%" PRIu64 ",\"lit_sprite_misses\":%" PRIu64
+               ",\"lit_sprite_evictions\":%" PRIu64 ",\"entries\":%zu,\"bytes\":%zu"
+               ",\"retained_field_bytes\":%zu}}",
                i == 0 ? "" : ",",
                phase->name,
                phase->ticks,
@@ -1134,7 +1141,16 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
                phase->ticks,
                phase->changed_packets,
                phase->noop_packets,
-               phase->full_map_draws);
+               phase->full_map_draws,
+               phase->lighting.field_rebuilds,
+               phase->lighting.field_reuses,
+               phase->lighting.lit_sprite_lookups,
+               phase->lighting.lit_sprite_hits,
+               phase->lighting.lit_sprite_misses,
+               phase->lighting.lit_sprite_evictions,
+               phase->lighting.lit_sprite_entries,
+               phase->lighting.lit_sprite_bytes,
+               phase->lighting.retained_field_bytes);
     }
     printf("]}\n");
     return true;
