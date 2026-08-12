@@ -53,6 +53,8 @@
 #define SCENARIO_LIGHTING_MAP "/shattered_islands/strakewood_island/greyton/house/luxury_house_0_0"
 #define SCENARIO_LIGHTING_X 33
 #define SCENARIO_LIGHTING_Y 4
+#define SCENARIO_LIGHTING_INSIDE_X 8
+#define SCENARIO_LIGHTING_INSIDE_Y 18
 
 static time_t account_auth_work_refill_time;
 static unsigned int account_auth_work_tokens;
@@ -598,18 +600,23 @@ static int account_provision_preset_hour(const char *preset) {
     if (strcmp(preset, "lighting-radiance-night") == 0) {
         return 23;
     }
+    if (strcmp(preset, "lighting-radiance-inside") == 0) {
+        return 23;
+    }
     return -2;
 }
 
 static bool account_provision_lighting_player(const char *character,
                                               const char *archname,
+                                              const char *preset,
                                               char *error,
                                               size_t error_size) {
+    bool inside = strcmp(preset, "lighting-radiance-inside") == 0;
     return player_provision_scenario(character,
                                      archname,
                                      SCENARIO_LIGHTING_MAP,
-                                     SCENARIO_LIGHTING_X,
-                                     SCENARIO_LIGHTING_Y,
+                                     inside ? SCENARIO_LIGHTING_INSIDE_X : SCENARIO_LIGHTING_X,
+                                     inside ? SCENARIO_LIGHTING_INSIDE_Y : SCENARIO_LIGHTING_Y,
                                      "mithril_lamp",
                                      error,
                                      error_size);
@@ -691,7 +698,7 @@ bool account_provision_from_file(const char *name,
     }
     ok = account_provision(name, password, character, archname, error, error_size);
     if (ok && preset_hour >= 0 &&
-        (!account_provision_lighting_player(character, archname, error, error_size) ||
+        (!account_provision_lighting_player(character, archname, preset, error, error_size) ||
          !todclock_set((unsigned long)preset_hour))) {
         if (error[0] == '\0') {
             snprintf(error, error_size, "could not persist scenario world clock");

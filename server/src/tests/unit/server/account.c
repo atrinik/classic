@@ -174,9 +174,9 @@ START_TEST(test_account_provision_lighting_preset) {
                                           password_path,
                                           character_name,
                                           "human_male",
-                                          "lighting-radiance-day",
+                                          "lighting-radiance-inside",
                                           VS(error)));
-    ck_assert_uint_eq(todtick, 12);
+    ck_assert_uint_eq(todtick, 23);
 
     FILE *fp = fopen(player_path, "rb");
     ck_assert_ptr_nonnull(fp);
@@ -188,6 +188,7 @@ START_TEST(test_account_provision_lighting_preset) {
     ck_assert_ptr_nonnull(
         strstr(contents,
                "map /shattered_islands/strakewood_island/greyton/house/luxury_house_0_0"));
+    ck_assert_ptr_nonnull(strstr(contents, "bed_x 8\nbed_y 18\n"));
     ck_assert_ptr_nonnull(strstr(contents, "arch mithril_lamp"));
 
     ck_assert_int_eq(unlink(account_path), 0);
