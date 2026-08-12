@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -41,6 +41,12 @@ extern uint8_t light_level_from_raw(int raw_light);
 
 extern bool light_color_parse(const char *value, uint32_t *color);
 extern void light_levels_from_raw(const MapSpace *space, int raw_light, uint8_t levels[3]);
+
+/** Resolve aggregate pre-tone Q5.11 radiance for one authorized map sample. */
+extern void light_radiance_from_raw(const MapSpace *space,
+                                    int raw_light,
+                                    uint16_t *scalar_radiance,
+                                    uint16_t radiance[3]);
 
 extern void adjust_light_source(mapstruct *map, int x, int y, int light);
 

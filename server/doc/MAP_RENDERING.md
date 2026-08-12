@@ -117,17 +117,16 @@ state packets, continuations, both cache sizes, and both frame-time baselines.
   use `MapSpace.light_source_value` so masks can rebuild when an opaque object
   or floor changes. Apply lighting through `map_get_darkness()` rather than
   reading either component alone.
-- Positive sources additionally accumulate authored sRGB `RRGGBB` components
-  as signed 64-bit fixed-point values scaled by 255. The component sums define
-  a weighted tint which is applied to the effective positive-source scalar,
-  tracked separately from the legacy net scalar so negative sources subtract
-  equally from every channel. The positive scalar retains the same-cell grouping
-  cap, so co-located high-radius emitters cannot overstate the scalar authority.
-  Integer multiplication/division rounds to nearest without overflow, then
-  `light_level_from_raw()` is applied once.
-  Values below zero and above the brightest anchor saturate there. This makes
-  insertion order irrelevant, keeps capped equal red/blue or red/green sources
-  magenta or yellow, and makes `ffffff` reproduce the scalar sample exactly.
+- Positive sources additionally accumulate normalized authored sRGB `RRGGBB`
+  through the canonical scene-linear Q0.16 lookup in signed 64-bit fields.
+  `light_radiance_from_raw()` resolves the aggregate Q5.11 scalar exposure
+  reference and RGB vector after the existing positive-source grouping cap;
+  negative sources remain scalar-only and therefore subtract achromatically.
+  The resolver rounds once at the wire boundary and uses common-vector scaling
+  on overflow. This keeps insertion order irrelevant, retains capped equal
+  red/blue or red/green sources as magenta or yellow, and makes `ffffff`
+  reproduce the scalar sample exactly. `light_levels_from_raw()` remains the
+  legacy RGB8 projection only until the atomic v1078 transition replaces it.
   Ambient, floors, world light, special vision, and `tli` stay neutral;
   negative sources affect only the scalar raw light and are therefore
   achromatic even if an object carries a non-white authored color.
