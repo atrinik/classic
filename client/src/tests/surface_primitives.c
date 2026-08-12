@@ -399,8 +399,7 @@ static void test_map_marker_rotation_contract(void) {
     for (size_t zoom = 0; zoom < arraysize(zooms); zoom++) {
         /* Region-map facings advance clockwise in 45-degree steps. */
         for (int direction = 0; direction < 8; direction++) {
-            SDL_Surface *transformed =
-                rotozoomSurface(converted, direction * 45.0, zooms[zoom], 1);
+            SDL_Surface *transformed = rotozoomSurface(converted, direction * 45.0, zooms[zoom], 1);
             TEST_CHECK(transformed != NULL);
             assert_map_marker_palette(transformed);
             SDL_DestroySurface(transformed);

@@ -475,10 +475,8 @@ extern void map_set_fow(int x, int y, bool fow);
 extern bool map_get_fow(int x, int y);
 
 extern void map_set_light_radiance(int x, int y, int sub_layer, uint16_t radiance);
-extern void map_set_light_rgb_radiance(int x,
-                                       int y,
-                                       uint8_t bitmap,
-                                       const uint16_t rgb[NUM_SUB_LAYERS][3]);
+extern void
+map_set_light_rgb_radiance(int x, int y, uint8_t bitmap, const uint16_t rgb[NUM_SUB_LAYERS][3]);
 
 extern void map_animate(void);
 
@@ -496,6 +494,9 @@ extern void widget_map_init(widgetdata *widget);
 
 #ifdef ATRINIK_WIDGET_TESTS
 extern bool widget_map_interaction_test(widgetdata *widget);
+extern void widget_map_draw_test(widgetdata *widget);
+extern void widget_map_ui_test_begin(void);
+extern bool widget_map_ui_test_end(void);
 #endif
 
 /** Public API implemented in src/gui/widgets/minimap.c. */

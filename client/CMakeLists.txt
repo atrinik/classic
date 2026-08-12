@@ -702,6 +702,24 @@ if (BUILD_TESTING)
             "${player_view_fixtures}/radial-light-discrete.xml" -)
     add_test(NAME client-player-view-exit-cues
         COMMAND atrinik --player-view "${player_view_fixtures}/exit-cues.xml" -)
+    add_test(NAME client-player-view-player-outline-unobscured
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/player-outline-unobscured.xml" -)
+    add_test(NAME client-player-view-player-outline-same-level
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/player-outline-same-level.xml" -)
+    add_test(NAME client-player-view-player-outline-upper-level
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/player-outline-upper-level.xml" -)
+    add_test(NAME client-player-view-player-outline-nearby-living
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/player-outline-nearby-living.xml" -)
+    add_test(NAME client-player-view-player-outline-non-primary
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/player-outline-non-primary.xml" -)
+    add_test(NAME client-player-view-player-outline-widget-state
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/player-outline-widget-state.xml" -)
     add_test(NAME client-player-view-colored-smooth
         COMMAND atrinik --player-view "${player_view_fixtures}/colored-smooth.xml" -)
     add_test(NAME client-player-view-colored-discrete

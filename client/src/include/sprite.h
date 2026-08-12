@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -112,6 +112,12 @@ typedef struct sprite_struct {
  * The caller must lock the surface first when SDL_MUSTLOCK() is true.
  */
 bool surface_pixel_visible(SDL_Surface *surface, int x, int y);
+
+/** Create a new surface by applying sprite effects to a source surface. */
+SDL_Surface *sprite_effects_create(SDL_Surface *surface, const sprite_effects_t *effects);
+
+/** Create an outline-only surface for a source silhouette. */
+SDL_Surface *sprite_outline_create(SDL_Surface *surface, const SDL_Color *color);
 
 /** Calculate the transparent padding around a sprite's visible pixels. */
 bool sprite_borders_get(SDL_Surface *surface, sprite_struct *sprite);
