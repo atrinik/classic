@@ -517,6 +517,7 @@ jobs:
             --material .github/workflows/check.yml \
             --material tools/ci/run_linux_check.sh \
             --material client/tools/benchmark_lighting_regression.py \
+            --material client/tools/benchmark_movement_regression.py \
             --material client/CMakeLists.txt \
             --material client/CMakePresets.json \
             --github-output "${GITHUB_OUTPUT}"
@@ -550,6 +551,7 @@ jobs:
           path: |
             build/ci-evidence/ccache-client.tsv
             build/ci-evidence/lighting-frame-time.json
+            build/ci-evidence/movement-frame-time.json
           if-no-files-found: error
           retention-days: 14
       - name: Upload coverage

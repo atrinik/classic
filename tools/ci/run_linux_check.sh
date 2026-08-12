@@ -162,11 +162,22 @@ case "${component}" in
           "${source_root}/client/src/tests/fixtures/player_view/colored-smooth.xml" \
         --samples 3 \
         --output "${source_root}/build/ci-evidence/lighting-frame-time.json"
+      python3 "${source_root}/client/tools/benchmark_movement_regression.py" \
+        --baseline-client "${baseline_root}/client/build/linux-release/atrinik" \
+        --baseline-manifest \
+          "${baseline_root}/client/src/tests/fixtures/player_view/player-outline-widget-state.xml" \
+        --candidate-client "${source_root}/client/build/linux-release/atrinik" \
+        --candidate-manifest \
+          "${source_root}/client/src/tests/fixtures/player_view/player-outline-widget-state.xml" \
+        --samples 3 \
+        --output "${source_root}/build/ci-evidence/movement-frame-time.json"
       git -C "${source_root}" worktree remove --force "${baseline_root}"
       trap - EXIT
     else
       printf '%s\n' '{"schema_version":1,"skipped":true}' \
         >"${source_root}/build/ci-evidence/lighting-frame-time.json"
+      printf '%s\n' '{"schema_version":1,"skipped":true}' \
+        >"${source_root}/build/ci-evidence/movement-frame-time.json"
     fi
     cmake --preset linux-sanitizers "${launcher[@]}" "${sibling_sources[@]}"
     cmake --build --preset linux-sanitizers --parallel "${jobs}"
