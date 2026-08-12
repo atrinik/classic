@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -158,6 +158,93 @@ static uint64_t light_muldiv_round(uint64_t numerator, uint64_t multiplier, uint
     return quotient;
 }
 
+/** Canonical IEC 61966-2-1 sRGB8 to scene-linear Q0.16 lookup. */
+static const uint16_t srgb8_to_linear_q16[UINT8_MAX + 1] = {
+    0, 20, 40, 60, 80, 99, 119, 139, 159, 179, 199, 219, 241, 264, 288, 313,
+    340, 367, 396, 427, 458, 491, 526, 562, 599, 637, 677, 718, 761, 805,
+    851, 898, 947, 997, 1048, 1101, 1156, 1212, 1270, 1330, 1391, 1453,
+    1517, 1583, 1651, 1720, 1790, 1863, 1937, 2013, 2090, 2170, 2250, 2333,
+    2418, 2504, 2592, 2681, 2773, 2866, 2961, 3058, 3157, 3258, 3360, 3464,
+    3570, 3678, 3788, 3900, 4014, 4129, 4247, 4366, 4488, 4611, 4736, 4864,
+    4993, 5124, 5257, 5392, 5530, 5669, 5810, 5953, 6099, 6246, 6395, 6547,
+    6700, 6856, 7014, 7174, 7335, 7500, 7666, 7834, 8004, 8177, 8352, 8528,
+    8708, 8889, 9072, 9258, 9445, 9635, 9828, 10022, 10219, 10417, 10619,
+    10822, 11028, 11235, 11446, 11658, 11873, 12090, 12309, 12530, 12754,
+    12980, 13209, 13440, 13673, 13909, 14146, 14387, 14629, 14874, 15122,
+    15371, 15623, 15878, 16135, 16394, 16656, 16920, 17187, 17456, 17727,
+    18001, 18277, 18556, 18837, 19121, 19407, 19696, 19987, 20281, 20577,
+    20876, 21177, 21481, 21787, 22096, 22407, 22721, 23038, 23357, 23678,
+    24002, 24329, 24658, 24990, 25325, 25662, 26001, 26344, 26688, 27036,
+    27386, 27739, 28094, 28452, 28813, 29176, 29542, 29911, 30282, 30656,
+    31033, 31412, 31794, 32179, 32567, 32957, 33350, 33745, 34143, 34544,
+    34948, 35355, 35764, 36176, 36591, 37008, 37429, 37852, 38278, 38706,
+    39138, 39572, 40009, 40449, 40891, 41337, 41785, 42236, 42690, 43147,
+    43606, 44069, 44534, 45002, 45473, 45947, 46423, 46903, 47385, 47871,
+    48359, 48850, 49344, 49841, 50341, 50844, 51349, 51858, 52369, 52884,
+    53401, 53921, 54445, 54971, 55500, 56032, 56567, 57105, 57646, 58190,
+    58737, 59287, 59840, 60396, 60955, 61517, 62082, 62650, 63221, 63795,
+    64372, 64952, 65535,
+};
+
+static uint16_t light_color_linear_component(uint32_t color, size_t channel) {
+    uint16_t components[3] = {
+        srgb8_to_linear_q16[(color >> 16) & UINT8_MAX],
+        srgb8_to_linear_q16[(color >> 8) & UINT8_MAX],
+        srgb8_to_linear_q16[color & UINT8_MAX],
+    };
+    uint16_t peak = MAX(components[0], MAX(components[1], components[2]));
+    return peak == 0 ? 0 : light_muldiv_round(components[channel], UINT16_MAX, peak);
+}
+
+static uint16_t light_raw_to_radiance(int64_t raw_light) {
+    if (raw_light <= 0) {
+        return 0;
+    }
+    if (raw_light >= INT64_C(40959)) {
+        return UINT16_MAX;
+    }
+    return (uint16_t)((raw_light * 8 + 2) / 5);
+}
+
+void light_radiance_from_raw(const MapSpace *space,
+                             int raw_light,
+                             uint16_t *scalar_radiance,
+                             uint16_t radiance[3]) {
+    HARD_ASSERT(space != NULL);
+    HARD_ASSERT(scalar_radiance != NULL);
+    HARD_ASSERT(radiance != NULL);
+
+    *scalar_radiance = light_raw_to_radiance(raw_light);
+    int64_t effective_source_raw = 0;
+    if (space->light_source_color_weight > 0) {
+        effective_source_raw = MIN(MAX(space->light_source_positive_value, 0),
+                                   space->light_source_color_weight / UINT16_MAX);
+    }
+    int64_t channels[3];
+    for (size_t channel = 0; channel < arraysize(channels); channel++) {
+        uint64_t colored_raw = 0;
+        if (effective_source_raw > 0) {
+            uint64_t color_sum = MIN(MAX(space->light_source_color[channel], 0),
+                                     space->light_source_color_weight);
+            colored_raw = light_muldiv_round(color_sum,
+                                              (uint64_t)effective_source_raw,
+                                              (uint64_t)space->light_source_color_weight);
+        }
+        channels[channel] = MAX((int64_t)raw_light - effective_source_raw + (int64_t)colored_raw, 0);
+    }
+    int64_t maximum = MAX(channels[0], MAX(channels[1], channels[2]));
+    if (maximum > INT64_C(40959)) {
+        for (size_t channel = 0; channel < arraysize(channels); channel++) {
+            channels[channel] = light_muldiv_round((uint64_t)channels[channel], UINT16_MAX, (uint64_t)maximum);
+            radiance[channel] = (uint16_t)channels[channel];
+        }
+        return;
+    }
+    for (size_t channel = 0; channel < arraysize(channels); channel++) {
+        radiance[channel] = light_raw_to_radiance(channels[channel]);
+    }
+}
+
 /** Resolve the authoritative scalar level and presentation-only RGB tint. */
 void light_levels_from_raw(const MapSpace *space, int raw_light, uint8_t levels[3]) {
     HARD_ASSERT(space != NULL);
@@ -169,7 +256,7 @@ void light_levels_from_raw(const MapSpace *space, int raw_light, uint8_t levels[
         return;
     }
 
-    int64_t positive_weight_raw = space->light_source_color_weight / UINT8_MAX;
+    int64_t positive_weight_raw = space->light_source_color_weight / UINT16_MAX;
     int64_t effective_source_raw =
         MIN(MAX(space->light_source_positive_value, 0), positive_weight_raw);
     for (size_t channel = 0; channel < 3; channel++) {
@@ -545,10 +632,10 @@ static void light_mask_adjust(mapstruct *map,
             } else if (component == LIGHT_MASK_POSITIVE) {
                 space->light_source_positive_value += value;
             } else {
-                space->light_source_color[0] += (int64_t)value * ((color >> 16) & UINT8_MAX);
-                space->light_source_color[1] += (int64_t)value * ((color >> 8) & UINT8_MAX);
-                space->light_source_color[2] += (int64_t)value * (color & UINT8_MAX);
-                space->light_source_color_weight += (int64_t)value * UINT8_MAX;
+                space->light_source_color[0] += (int64_t)value * light_color_linear_component(color, 0);
+                space->light_source_color[1] += (int64_t)value * light_color_linear_component(color, 1);
+                space->light_source_color[2] += (int64_t)value * light_color_linear_component(color, 2);
+                space->light_source_color_weight += (int64_t)value * UINT16_MAX;
             }
         }
     }
