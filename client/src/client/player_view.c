@@ -66,9 +66,14 @@ typedef struct player_view_manifest {
     char *settings_path;
     char *archdef_path;
     char *snapshot_path;
+    char *next_snapshot_path;
+    char *font_path;
     char settings_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char archdef_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char snapshot_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+    char next_snapshot_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+    char font_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+    char expected_ui_pixels_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char expected_pixels_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     player_view_asset_t assets[PLAYER_VIEW_MAX_ASSETS];
     size_t assets_num;
@@ -82,6 +87,10 @@ typedef struct player_view_manifest {
     uint32_t clock_ms;
     bool smooth_lighting;
     bool zoom_smoothing;
+    bool primary_surface;
+    bool widget_render;
+    bool player_names;
+    bool target_ui;
 } player_view_manifest_t;
 
 static void player_view_manifest_free(player_view_manifest_t *manifest) {
@@ -89,6 +98,8 @@ static void player_view_manifest_free(player_view_manifest_t *manifest) {
     free(manifest->settings_path);
     free(manifest->archdef_path);
     free(manifest->snapshot_path);
+    free(manifest->next_snapshot_path);
+    free(manifest->font_path);
     for (size_t i = 0; i < manifest->assets_num; i++) {
         free(manifest->assets[i].path);
     }
@@ -400,6 +411,10 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "archdef-sha256",
                                            "snapshot",
                                            "snapshot-sha256",
+                                           "next-snapshot",
+                                           "next-snapshot-sha256",
+                                           "font",
+                                           "font-sha256",
                                            "viewport-width",
                                            "viewport-height",
                                            "look-width",
@@ -407,7 +422,12 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "map-zoom",
                                            "smooth-lighting",
                                            "zoom-smoothing",
+                                           "primary-surface",
+                                           "widget-render",
+                                           "player-names",
+                                           "target-ui",
                                            "clock-ms",
+                                           "expected-ui-pixels-sha256",
                                            "expected-pixels-sha256"};
     bool success = root != NULL && root->ns == NULL && root->nsDef == NULL &&
                    xmlStrEqual(root->name, BAD_CAST "player-view") &&
@@ -422,6 +442,11 @@ static bool player_view_manifest_parse(const char *manifest_path,
     char *archdef_digest = success ? player_view_xml_property(root, "archdef-sha256") : NULL;
     char *snapshot = success ? player_view_xml_property(root, "snapshot") : NULL;
     char *snapshot_digest = success ? player_view_xml_property(root, "snapshot-sha256") : NULL;
+    char *next_snapshot = success ? player_view_xml_property(root, "next-snapshot") : NULL;
+    char *next_snapshot_digest =
+        success ? player_view_xml_property(root, "next-snapshot-sha256") : NULL;
+    char *font = success ? player_view_xml_property(root, "font") : NULL;
+    char *font_digest = success ? player_view_xml_property(root, "font-sha256") : NULL;
     char *viewport_width = success ? player_view_xml_property(root, "viewport-width") : NULL;
     char *viewport_height = success ? player_view_xml_property(root, "viewport-height") : NULL;
     char *look_width = success ? player_view_xml_property(root, "look-width") : NULL;
@@ -429,29 +454,58 @@ static bool player_view_manifest_parse(const char *manifest_path,
     char *map_zoom = success ? player_view_xml_property(root, "map-zoom") : NULL;
     char *smooth_lighting = success ? player_view_xml_property(root, "smooth-lighting") : NULL;
     char *zoom_smoothing = success ? player_view_xml_property(root, "zoom-smoothing") : NULL;
+    char *primary_surface = success ? player_view_xml_property(root, "primary-surface") : NULL;
+    char *widget_render = success ? player_view_xml_property(root, "widget-render") : NULL;
+    char *player_names = success ? player_view_xml_property(root, "player-names") : NULL;
+    char *target_ui = success ? player_view_xml_property(root, "target-ui") : NULL;
     char *clock_ms = success ? player_view_xml_property(root, "clock-ms") : NULL;
+    char *expected_ui =
+        success ? player_view_xml_property(root, "expected-ui-pixels-sha256") : NULL;
     char *expected = success ? player_view_xml_property(root, "expected-pixels-sha256") : NULL;
 
     uint32_t parsed_version;
-    success = success &&
-              player_view_parse_uint(version,
-                                     PLAYER_VIEW_SCHEMA_VERSION,
-                                     PLAYER_VIEW_SCHEMA_VERSION,
-                                     &parsed_version) &&
-              strcmp(renderer != NULL ? renderer : "", "software") == 0 &&
-              player_view_path_relative(input_root) && settings != NULL &&
-              player_view_sha256_text_valid(settings_digest) && archdef != NULL &&
-              player_view_sha256_text_valid(archdef_digest) && snapshot != NULL &&
-              player_view_sha256_text_valid(snapshot_digest) &&
-              player_view_parse_uint(viewport_width, 64, 4096, &manifest->viewport_width) &&
-              player_view_parse_uint(viewport_height, 64, 4096, &manifest->viewport_height) &&
-              player_view_parse_uint(look_width, 9, 17, &manifest->look_width) &&
-              player_view_parse_uint(look_height, 9, 17, &manifest->look_height) &&
-              player_view_parse_uint(map_zoom, 50, 400, &manifest->map_zoom) &&
-              player_view_parse_bool(smooth_lighting, &manifest->smooth_lighting) &&
-              player_view_parse_bool(zoom_smoothing, &manifest->zoom_smoothing) &&
-              player_view_parse_uint(clock_ms, 0, UINT32_MAX, &manifest->clock_ms) &&
-              player_view_sha256_text_valid(expected);
+    success =
+        success &&
+        player_view_parse_uint(version,
+                               PLAYER_VIEW_SCHEMA_VERSION,
+                               PLAYER_VIEW_SCHEMA_VERSION,
+                               &parsed_version) &&
+        strcmp(renderer != NULL ? renderer : "", "software") == 0 &&
+        player_view_path_relative(input_root) && settings != NULL &&
+        player_view_sha256_text_valid(settings_digest) && archdef != NULL &&
+        player_view_sha256_text_valid(archdef_digest) && snapshot != NULL &&
+        player_view_sha256_text_valid(snapshot_digest) &&
+        ((next_snapshot == NULL && next_snapshot_digest == NULL) ||
+         (next_snapshot != NULL && player_view_sha256_text_valid(next_snapshot_digest))) &&
+        ((font == NULL && font_digest == NULL) ||
+         (font != NULL && player_view_sha256_text_valid(font_digest))) &&
+        player_view_parse_uint(viewport_width, 64, 4096, &manifest->viewport_width) &&
+        player_view_parse_uint(viewport_height, 64, 4096, &manifest->viewport_height) &&
+        player_view_parse_uint(look_width, 9, 17, &manifest->look_width) &&
+        player_view_parse_uint(look_height, 9, 17, &manifest->look_height) &&
+        player_view_parse_uint(map_zoom, 50, 400, &manifest->map_zoom) &&
+        player_view_parse_bool(smooth_lighting, &manifest->smooth_lighting) &&
+        player_view_parse_bool(zoom_smoothing, &manifest->zoom_smoothing) &&
+        (primary_surface == NULL ||
+         player_view_parse_bool(primary_surface, &manifest->primary_surface)) &&
+        (widget_render == NULL ||
+         player_view_parse_bool(widget_render, &manifest->widget_render)) &&
+        (player_names == NULL || player_view_parse_bool(player_names, &manifest->player_names)) &&
+        (target_ui == NULL || player_view_parse_bool(target_ui, &manifest->target_ui)) &&
+        player_view_parse_uint(clock_ms, 0, UINT32_MAX, &manifest->clock_ms) &&
+        player_view_sha256_text_valid(expected);
+    if (success && primary_surface == NULL) {
+        manifest->primary_surface = true;
+    }
+    bool ui_test = manifest->player_names && manifest->target_ui;
+    success = success && (!manifest->widget_render || manifest->primary_surface) &&
+              manifest->player_names == manifest->target_ui &&
+              ((ui_test && manifest->widget_render && font != NULL &&
+                player_view_sha256_text_valid(expected_ui)) ||
+               (!ui_test && font == NULL && expected_ui == NULL));
+#ifndef ATRINIK_WIDGET_TESTS
+    success = success && !manifest->widget_render && font == NULL;
+#endif
 
     char *manifest_directory = player_view_directory(canonical_manifest);
     if (success) {
@@ -471,13 +525,32 @@ static bool player_view_manifest_parse(const char *manifest_path,
             player_view_resolve_path(manifest->input_root, archdef, manifest->input_root);
         manifest->snapshot_path =
             player_view_resolve_path(manifest->input_root, snapshot, manifest->input_root);
+        if (next_snapshot != NULL) {
+            manifest->next_snapshot_path =
+                player_view_resolve_path(manifest->input_root, next_snapshot, manifest->input_root);
+        }
+        if (font != NULL) {
+            manifest->font_path =
+                player_view_resolve_path(manifest->input_root, font, manifest->input_root);
+        }
         success = manifest->settings_path != NULL && manifest->archdef_path != NULL &&
-                  manifest->snapshot_path != NULL;
+                  manifest->snapshot_path != NULL &&
+                  (next_snapshot == NULL || manifest->next_snapshot_path != NULL) &&
+                  (font == NULL || manifest->font_path != NULL);
     }
     if (success) {
         snprintf(VS(manifest->settings_digest), "%s", settings_digest);
         snprintf(VS(manifest->archdef_digest), "%s", archdef_digest);
         snprintf(VS(manifest->snapshot_digest), "%s", snapshot_digest);
+        if (next_snapshot != NULL) {
+            snprintf(VS(manifest->next_snapshot_digest), "%s", next_snapshot_digest);
+        }
+        if (font != NULL) {
+            snprintf(VS(manifest->font_digest), "%s", font_digest);
+        }
+        if (expected_ui != NULL) {
+            snprintf(VS(manifest->expected_ui_pixels_digest), "%s", expected_ui);
+        }
         snprintf(VS(manifest->expected_pixels_digest), "%s", expected);
     }
 
@@ -596,6 +669,10 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(archdef_digest);
     free(snapshot);
     free(snapshot_digest);
+    free(next_snapshot);
+    free(next_snapshot_digest);
+    free(font);
+    free(font_digest);
     free(viewport_width);
     free(viewport_height);
     free(look_width);
@@ -603,7 +680,12 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(map_zoom);
     free(smooth_lighting);
     free(zoom_smoothing);
+    free(primary_surface);
+    free(widget_render);
+    free(player_names);
+    free(target_ui);
     free(clock_ms);
+    free(expected_ui);
     free(expected);
     free(manifest_directory);
     xmlFreeDoc(document);
@@ -628,6 +710,19 @@ static bool player_view_inputs_verify(const player_view_manifest_t *manifest) {
                                   manifest->snapshot_path,
                                   manifest->snapshot_digest,
                                   &total_size)) {
+        return false;
+    }
+    if (manifest->next_snapshot_path != NULL &&
+        !player_view_verify_input("next snapshot",
+                                  manifest->next_snapshot_path,
+                                  manifest->next_snapshot_digest,
+                                  &total_size)) {
+        return false;
+    }
+    if (manifest->font_path != NULL && !player_view_verify_input("font",
+                                                                 manifest->font_path,
+                                                                 manifest->font_digest,
+                                                                 &total_size)) {
         return false;
     }
     for (size_t i = 0; i < manifest->assets_num; i++) {
@@ -1007,6 +1102,8 @@ int player_view_main(int argc, char *argv[]) {
 
     uint8_t *snapshot = NULL;
     size_t snapshot_size = 0;
+    uint8_t *next_snapshot = NULL;
+    size_t next_snapshot_size = 0;
     if (!player_view_snapshot_load(manifest.snapshot_path, &snapshot, &snapshot_size) ||
         !map_protocol_validate(snapshot,
                                snapshot_size,
@@ -1018,11 +1115,28 @@ int player_view_main(int argc, char *argv[]) {
         player_view_manifest_free(&manifest);
         return 5;
     }
+    if (manifest.next_snapshot_path != NULL &&
+        (!player_view_snapshot_load(manifest.next_snapshot_path,
+                                    &next_snapshot,
+                                    &next_snapshot_size) ||
+         !map_protocol_validate(next_snapshot,
+                                next_snapshot_size,
+                                0,
+                                MAP_LOOK_TO_WIRE_SIZE(manifest.look_width),
+                                MAP_LOOK_TO_WIRE_SIZE(manifest.look_height)))) {
+        fprintf(stderr, "player-view: malformed or incompatible next MAP snapshot\n");
+        free(next_snapshot);
+        free(snapshot);
+        player_view_manifest_free(&manifest);
+        return 5;
+    }
 
     bool settings_ready = settings_init_read_only(manifest.settings_path);
     bool sdl_ready = false;
+    bool text_ready = false;
     bool map_ready = false;
     SDL_Surface *surface = NULL;
+    SDL_Surface *map_widget_surface = NULL;
     int result = 6;
     if (!settings_ready) {
         fprintf(stderr, "player-view: cannot load immutable setting defaults\n");
@@ -1032,7 +1146,7 @@ int player_view_main(int argc, char *argv[]) {
     setting_set_int(OPT_CAT_MAP, OPT_MAP_HEIGHT, manifest.look_height);
     setting_set_int(OPT_CAT_MAP, OPT_MAP_ZOOM, manifest.map_zoom);
     setting_set_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING, manifest.smooth_lighting);
-    setting_set_int(OPT_CAT_MAP, OPT_PLAYER_NAMES, 0);
+    setting_set_int(OPT_CAT_MAP, OPT_PLAYER_NAMES, manifest.player_names ? 1 : 0);
     setting_set_int(OPT_CAT_CLIENT, OPT_ZOOM_SMOOTH, manifest.zoom_smoothing);
 
     if (!SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "dummy", SDL_HINT_OVERRIDE)) {
@@ -1044,8 +1158,21 @@ int player_view_main(int argc, char *argv[]) {
         goto cleanup;
     }
     sdl_ready = true;
+    if (manifest.font_path != NULL) {
+#ifdef ATRINIK_WIDGET_TESTS
+        text_test_font_path_set(manifest.font_path);
+        text_init();
+        text_ready = true;
+#endif
+    }
     sprite_init_system();
     memset(&cpl, 0, sizeof(cpl));
+    if (manifest.target_ui) {
+        cpl.target_code = CMD_TARGET_ENEMY;
+        cpl.target_hp = 64;
+        snprintf(VS(cpl.target_color), "%s", "ffffff");
+        snprintf(VS(cpl.target_name), "%s", "Local Player");
+    }
     memset(&MapData, 0, sizeof(MapData));
     memset(FaceList, 0, sizeof(FaceList));
     map_runtime_init();
@@ -1063,8 +1190,20 @@ int player_view_main(int argc, char *argv[]) {
         fprintf(stderr, "player-view: cannot create viewport: %s\n", SDL_GetError());
         goto cleanup;
     }
+    map_widget_surface = manifest.widget_render ? NULL : surface;
+    if (!manifest.primary_surface) {
+        map_widget_surface = SDL_CreateSurface((int)manifest.viewport_width,
+                                               (int)manifest.viewport_height,
+                                               SDL_PIXELFORMAT_ARGB8888);
+        if (map_widget_surface == NULL) {
+            fprintf(stderr,
+                    "player-view: cannot create primary-surface sentinel: %s\n",
+                    SDL_GetError());
+            goto cleanup;
+        }
+    }
     widgetdata map_widget = {
-        .surface = surface,
+        .surface = map_widget_surface,
         .w = (int)manifest.viewport_width,
         .h = (int)manifest.viewport_height,
     };
@@ -1072,17 +1211,74 @@ int player_view_main(int argc, char *argv[]) {
     ScreenSurface = surface;
     LastTick = manifest.clock_ms;
     image_missing_faces_reset();
+#ifdef ATRINIK_WIDGET_TESTS
+    if (manifest.player_names && manifest.target_ui) {
+        widget_map_ui_test_begin();
+    }
+#endif
     socket_command_map(snapshot, snapshot_size, 0);
     if (image_missing_faces_detected()) {
         fprintf(stderr, "player-view: snapshot references an unavailable face\n");
         goto cleanup;
     }
     uint64_t benchmark_median_ns = 0;
-    if (mode == PLAYER_VIEW_RENDER) {
-        map_draw_map(surface);
-    } else {
+    if (mode != PLAYER_VIEW_RENDER) {
         benchmark_median_ns = player_view_benchmark(surface);
+    } else if (manifest.widget_render) {
+#ifdef ATRINIK_WIDGET_TESTS
+        widget_map_draw_test(&map_widget);
+        map_widget_surface = map_widget.surface;
+#endif
+    } else {
+        map_draw_map(surface);
     }
+
+    if (next_snapshot != NULL) {
+        LastTick = 0;
+        socket_command_map(next_snapshot, next_snapshot_size, 0);
+        LastTick = manifest.clock_ms;
+        if (image_missing_faces_detected()) {
+            fprintf(stderr, "player-view: next snapshot references an unavailable face\n");
+            goto cleanup;
+        }
+        SDL_FillSurfaceRect(surface, NULL, 0);
+        if (manifest.widget_render) {
+#ifdef ATRINIK_WIDGET_TESTS
+            widget_map_draw_test(&map_widget);
+            map_widget_surface = map_widget.surface;
+#endif
+        } else {
+            map_draw_map(surface);
+        }
+    }
+
+#ifdef ATRINIK_WIDGET_TESTS
+    if (manifest.player_names && manifest.target_ui) {
+        if (!widget_map_ui_test_end()) {
+            fprintf(stderr, "player-view: name or target UI was not rendered\n");
+            goto cleanup;
+        }
+        char ui_pixels_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+        if (!player_view_surface_sha256(surface, ui_pixels_digest)) {
+            fprintf(stderr, "player-view: cannot hash name and target UI pixels\n");
+            goto cleanup;
+        }
+        if (strcmp(ui_pixels_digest, manifest.expected_ui_pixels_digest) != 0) {
+            fprintf(stderr,
+                    "player-view: name and target UI pixel mismatch (expected %s, got %s)\n",
+                    manifest.expected_ui_pixels_digest,
+                    ui_pixels_digest);
+            result = 7;
+            goto cleanup;
+        }
+        setting_set_int(OPT_CAT_MAP, OPT_PLAYER_NAMES, 0);
+        cpl.target_code = 0;
+        map_redraw_flag = 1;
+        SDL_FillSurfaceRect(surface, NULL, 0);
+        widget_map_draw_test(&map_widget);
+        map_widget_surface = map_widget.surface;
+    }
+#endif
 
     if (!player_view_inputs_verify(&manifest)) {
         fprintf(stderr, "player-view: frozen inputs changed during replay\n");
@@ -1094,8 +1290,7 @@ int player_view_main(int argc, char *argv[]) {
         fprintf(stderr, "player-view: cannot hash rendered pixels\n");
         goto cleanup;
     }
-    if (mode == PLAYER_VIEW_RENDER &&
-        strcmp(pixels_digest, manifest.expected_pixels_digest) != 0) {
+    if (mode == PLAYER_VIEW_RENDER && strcmp(pixels_digest, manifest.expected_pixels_digest) != 0) {
         fprintf(stderr,
                 "player-view: pixel mismatch (expected %s, got %s)\n",
                 manifest.expected_pixels_digest,
@@ -1119,6 +1314,9 @@ int player_view_main(int argc, char *argv[]) {
 cleanup:
     cur_widget[MAP_ID] = NULL;
     ScreenSurface = NULL;
+    if (map_widget_surface != surface) {
+        SDL_DestroySurface(map_widget_surface);
+    }
     SDL_DestroySurface(surface);
     if (map_ready) {
         map_runtime_deinit();
@@ -1132,12 +1330,19 @@ cleanup:
         FormatHolder = NULL;
     }
     if (sdl_ready) {
+        if (text_ready) {
+            text_deinit();
+#ifdef ATRINIK_WIDGET_TESTS
+            text_test_font_path_set(NULL);
+#endif
+        }
         SDL_Quit();
     }
     if (settings_ready) {
         settings_deinit_read_only();
     }
     free(snapshot);
+    free(next_snapshot);
     player_view_manifest_free(&manifest);
     return result;
 }

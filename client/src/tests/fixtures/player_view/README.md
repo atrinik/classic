@@ -37,7 +37,31 @@ snapshot also caches an exit on a secondary layer, soft-clears that cell, and
 then reuses the tile for fresh non-exit data. This reaches the soft-FOW reset
 that discards stale per-layer exit semantics before the new layer is decoded.
 
-`expected-pixels-sha256` hashes the viewport width and height as big-endian
-32-bit integers followed by canonical RGBA bytes in row-major order. This is
-the pixel-exact reference from the same primary software map surface that
-`/screenshot map` saves; PNG encoder metadata is deliberately excluded.
+The four local-player outline scenes identify only the depth-zero center-cell
+living object at the MAP header's player sub-layer. They freeze an unobscured
+animated, rotated, non-uniformly zoomed and aligned player; a later-painted
+same-level wall; an authorized positive-depth roof projected across the player;
+and a nearby living object that must retain ordinary rendering. The unobscured
+and nearby-living scenes receive no outline. In the other two scenes, the
+structural occluders continue to hide the player's interior while the final
+primary-map pass outlines only the transformed pixels that those structures
+cover. Fully visible parts of the player retain their ordinary rendering.
+
+The non-primary outline scene replays the nearby-living snapshot onto a surface
+other than the map widget. It models the dynamic minimap's `map_draw_map()` call
+and freezes the retained legacy living cue without enabling the new outline.
+
+The widget-state scene freezes `sans.ttf`, enables names and target UI, renders
+through the real widget zoom/blit path at 125%, then applies a second validated
+MAP update that scrolls the cache and redraws the unobscured local player at the
+new center. The harness asserts that both UI paths executed and separately
+hashes the UI-enabled pixels, including the name, target label, health bar,
+placement, and ordering. It then disables the UI and hashes a second
+deterministic reference for the moved, zoomed player without an outline.
+
+`expected-pixels-sha256` and the widget scene's
+`expected-ui-pixels-sha256` hash the viewport width and height as big-endian
+32-bit integers followed by canonical RGBA bytes in row-major order. Except for
+the explicit non-primary regression scene, these are pixel-exact references
+from the same primary software map surface that `/screenshot map` saves; PNG
+encoder metadata is deliberately excluded.

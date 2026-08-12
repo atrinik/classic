@@ -107,9 +107,9 @@ static void map_cache_mark_fow(struct MapCell *level,
 /** Vertical screen projection of one linked physical map level. */
 #define MAP_LEVEL_PIXEL_HEIGHT 46
 
-/** Nearby occluded doors receive a camera hint without exposing interiors. */
+/** Primary-map outlines reveal silhouettes without exposing interiors. */
 #define DOOR_HINT_RADIUS 3
-#define DOOR_HINT_COLOR "ffc64a"
+#define MAP_OUTLINE_COLOR "ffc64a"
 
 /** Select one protocol map depth, allocating its cache on demand. */
 bool map_select_level(int depth, bool create) {
@@ -189,6 +189,9 @@ static bool map_interaction_test_active;
 static int map_interaction_test_moves;
 static int map_interaction_test_targets;
 static int map_interaction_test_talks;
+static bool map_ui_test_active;
+static int map_ui_test_names;
+static int map_ui_test_targets;
 #endif
 
 static int get_top_floor_height(struct MapCell *cell, int sub_layer);
@@ -1216,8 +1219,7 @@ void map_set_light_radiance(int x, int y, int sub_layer, uint16_t radiance) {
     struct MapCell *cell;
 
     cell = MAP_CELL_GET_MIDDLE(x, y);
-    bool changed =
-        !cell->light_known[sub_layer] || cell->light_radiance[sub_layer] != radiance;
+    bool changed = !cell->light_known[sub_layer] || cell->light_radiance[sub_layer] != radiance;
     cell->light_radiance[sub_layer] = radiance;
     cell->light_known[sub_layer] = 1;
     if (!(cell->light_rgb_explicit & (UINT8_C(1) << sub_layer))) {
@@ -1411,6 +1413,8 @@ typedef struct map_render_command {
     bool door;
     bool door_hint;
     bool exit;
+    bool local_player;
+    SDL_Surface *player_occlusion_mask;
     bool transformed;
 } map_render_command_t;
 
@@ -1674,6 +1678,9 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
             .door = (data->cell->door[data->sub_layer] & (UINT8_C(1) << (data->layer - 1))) != 0,
             .exit = !data->cell->fow &&
                     (data->cell->exit[data->sub_layer] & (UINT8_C(1) << (data->layer - 1))) != 0,
+            .local_player = data->primary_level && data->x == data->midx && data->y == data->midy &&
+                            data->layer == LAYER_LIVING &&
+                            data->sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1),
             .transformed = transformed,
         };
         context->commands_num++;
@@ -1781,6 +1788,11 @@ static void map_draw_annotations(SDL_Surface *surface, map_render_context_t *con
             }
 
             if (draw_name) {
+#ifdef ATRINIK_WIDGET_TESTS
+                if (map_ui_test_active) {
+                    map_ui_test_names++;
+                }
+#endif
                 text_show(surface,
                           FONT_SANS9,
                           name,
@@ -2319,7 +2331,7 @@ static void map_draw_level(SDL_Surface *surface,
                            SDL_Surface *ground_surface,
                            int depth,
                            bool primary_level,
-                           bool allow_smooth_lighting,
+                           bool primary_surface,
                            map_render_context_t *render_context) {
     HARD_ASSERT(surface != NULL);
     HARD_ASSERT(ground_surface != NULL);
@@ -2332,8 +2344,7 @@ static void map_draw_level(SDL_Surface *surface,
     };
     int x, y, w, h;
     map_setup_render_data(surface, &data, &x, &y, &w, &h);
-    data.smooth_lighting =
-        allow_smooth_lighting && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING);
+    data.smooth_lighting = primary_surface && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING);
     if (data.smooth_lighting) {
         uint64_t cache_key = map_lighting_cache_key(surface, &data, x, y, w, h);
         data.smooth_lighting = lighting_begin(surface->w, surface->h, cache_key);
@@ -2529,37 +2540,38 @@ static void map_draw_level(SDL_Surface *surface,
         }
     }
 
-    if (!primary_level) {
-        render_profiler_end(RENDER_PROFILE_MAP_OBJECTS, profile_objects_started);
-        return;
-    }
-
-    for (data.x = x; data.x < w; data.x++) {
-        for (data.y = y; data.y < h; data.y++) {
-            if (!map_should_draw(surface, &data)) {
-                continue;
-            }
-
-            for (data.sub_layer = NUM_SUB_LAYERS - 1; data.sub_layer >= 1; data.sub_layer--) {
-                uint8_t map_layer = GET_MAP_LAYER(LAYER_EFFECT, data.sub_layer);
-                if (data.cell->height[map_layer] != 0 && data.cell->faces[map_layer] != 0) {
-                    data.cell = NULL;
-                    break;
+    /* Preserve the legacy living cue on secondary destinations such as the
+     * dynamic minimap. The primary map uses the identity-specific final
+     * outline instead. */
+    if (primary_level && !primary_surface) {
+        for (data.x = x; data.x < w; data.x++) {
+            for (data.y = y; data.y < h; data.y++) {
+                if (!map_should_draw(surface, &data)) {
+                    continue;
                 }
-            }
 
-            if (data.cell == NULL) {
-                continue;
-            }
+                for (data.sub_layer = NUM_SUB_LAYERS - 1; data.sub_layer >= 1; data.sub_layer--) {
+                    uint8_t map_layer = GET_MAP_LAYER(LAYER_EFFECT, data.sub_layer);
+                    if (data.cell->height[map_layer] != 0 && data.cell->faces[map_layer] != 0) {
+                        data.cell = NULL;
+                        break;
+                    }
+                }
 
-            data.layer = LAYER_LIVING;
-            data.alpha_forced = 100;
+                if (data.cell == NULL) {
+                    continue;
+                }
 
-            for (data.sub_layer = 0; data.sub_layer < NUM_SUB_LAYERS; data.sub_layer++) {
-                draw_map_object(surface, &data);
+                data.layer = LAYER_LIVING;
+                data.alpha_forced = 100;
+
+                for (data.sub_layer = 0; data.sub_layer < NUM_SUB_LAYERS; data.sub_layer++) {
+                    draw_map_object(surface, &data);
+                }
             }
         }
     }
+
     render_profiler_end(RENDER_PROFILE_MAP_OBJECTS, profile_objects_started);
 
 #undef CALCULATE_POSITIONS
@@ -2594,67 +2606,73 @@ static bool map_render_command_overlaps(const map_render_command_t *left,
            right->bounds_y < left->bounds_y + left->bounds_h;
 }
 
-/** Return whether an opaque later sprite hides a substantial part of a door. */
-static bool map_render_command_covers_door(const map_render_command_t *door,
-                                           const map_render_command_t *occluder) {
-    if (!map_render_command_overlaps(door, occluder)) {
+/** Return whether a later sprite hides the requested share of another sprite. */
+static bool map_render_command_covers(const map_render_command_t *covered_command,
+                                      const map_render_command_t *occluder,
+                                      bool substantial) {
+    if (!map_render_command_overlaps(covered_command, occluder)) {
         return false;
     }
 
     /* Rotated/zoomed sprites are uncommon structural geometry. Their projected
      * bounds remain the safe fallback because mapping a transformed source
      * pixel back exactly would duplicate the rotozoom implementation. */
-    if (door->transformed || occluder->transformed) {
+    if (covered_command->transformed || occluder->transformed) {
         return true;
     }
 
-    bool door_locked = false;
+    bool covered_command_locked = false;
     bool occluder_locked = false;
-    if (SDL_MUSTLOCK(door->source)) {
-        if (!SDL_LockSurface(door->source)) {
+    if (SDL_MUSTLOCK(covered_command->source)) {
+        if (!SDL_LockSurface(covered_command->source)) {
             return false;
         }
-        door_locked = true;
+        covered_command_locked = true;
     }
-    if (occluder->source != door->source && SDL_MUSTLOCK(occluder->source)) {
+    if (occluder->source != covered_command->source && SDL_MUSTLOCK(occluder->source)) {
         if (!SDL_LockSurface(occluder->source)) {
-            if (door_locked) {
-                SDL_UnlockSurface(door->source);
+            if (covered_command_locked) {
+                SDL_UnlockSurface(covered_command->source);
             }
             return false;
         }
         occluder_locked = true;
     }
 
-    size_t door_pixels = 0;
-    for (int y = 0; y < door->source->h; y++) {
-        for (int x = 0; x < door->source->w; x++) {
-            door_pixels += surface_pixel_visible(door->source, x, y);
+    size_t visible_pixels = 0;
+    for (int y = 0; y < covered_command->source->h; y++) {
+        for (int x = 0; x < covered_command->source->w; x++) {
+            visible_pixels += surface_pixel_visible(covered_command->source, x, y);
         }
     }
 
     bool covered = false;
-    int door_copies = door->draw_double ? 2 : 1;
+    int covered_copies = covered_command->draw_double ? 2 : 1;
     int occluder_copies = occluder->draw_double ? 2 : 1;
-    for (int door_copy = 0; door_copy < door_copies && !covered; door_copy++) {
-        int door_y = door->y - door_copy * 22;
+    for (int covered_copy = 0; covered_copy < covered_copies && !covered; covered_copy++) {
+        int covered_y = covered_command->y - covered_copy * 22;
         for (int occluder_copy = 0; occluder_copy < occluder_copies && !covered; occluder_copy++) {
             int occluder_y = occluder->y - occluder_copy * 22;
-            int x_start = MAX(door->x, occluder->x);
-            int x_end = MIN(door->x + door->source->w, occluder->x + occluder->source->w);
-            int y_start = MAX(door_y, occluder_y);
-            int y_end = MIN(door_y + door->source->h, occluder_y + occluder->source->h);
+            int x_start = MAX(covered_command->x, occluder->x);
+            int x_end = MIN(covered_command->x + covered_command->source->w,
+                            occluder->x + occluder->source->w);
+            int y_start = MAX(covered_y, occluder_y);
+            int y_end =
+                MIN(covered_y + covered_command->source->h, occluder_y + occluder->source->h);
             size_t covered_pixels = 0;
 
             for (int y = y_start; y < y_end && !covered; y++) {
                 for (int x = x_start; x < x_end; x++) {
-                    if (!surface_pixel_visible(door->source, x - door->x, y - door_y) ||
+                    if (!surface_pixel_visible(covered_command->source,
+                                               x - covered_command->x,
+                                               y - covered_y) ||
                         !surface_pixel_visible(occluder->source, x - occluder->x, y - occluder_y)) {
                         continue;
                     }
 
                     covered_pixels++;
-                    if (covered_pixels * 2 >= door_pixels) {
+                    if ((!substantial && covered_pixels != 0) ||
+                        (substantial && covered_pixels * 2 >= visible_pixels)) {
                         covered = true;
                         break;
                     }
@@ -2666,8 +2684,8 @@ static bool map_render_command_covers_door(const map_render_command_t *door,
     if (occluder_locked) {
         SDL_UnlockSurface(occluder->source);
     }
-    if (door_locked) {
-        SDL_UnlockSurface(door->source);
+    if (covered_command_locked) {
+        SDL_UnlockSurface(covered_command->source);
     }
     return covered;
 }
@@ -2698,7 +2716,7 @@ static void map_render_commands_find_door_hints(map_render_context_t *context) {
             map_render_command_t *occluder = &context->commands[occluder_index];
             if (occluder->object_layer != LAYER_WALL || occluder->door ||
                 (occluder->effects.alpha != 0 && occluder->effects.alpha < 128) ||
-                !map_render_command_covers_door(door, occluder)) {
+                !map_render_command_covers(door, occluder, true)) {
                 continue;
             }
 
@@ -2708,9 +2726,161 @@ static void map_render_commands_find_door_hints(map_render_context_t *context) {
     }
 }
 
+/** Return the geometry-only transformed surface used by the final painter. */
+static SDL_Surface *map_render_command_geometry(const map_render_command_t *command) {
+    if (!command->transformed) {
+        return command->source;
+    }
+
+    sprite_effects_t effects = {
+        .zoom_x = command->effects.zoom_x,
+        .zoom_y = command->effects.zoom_y,
+        .rotate = command->effects.rotate,
+    };
+    return sprite_effects_create(command->source, &effects);
+}
+
+/** Add pixels hidden by one structural sprite to the player's occlusion mask. */
+static bool map_render_command_mask_occlusion(map_render_command_t *player,
+                                              SDL_Surface *player_geometry,
+                                              const map_render_command_t *occluder) {
+    SDL_Surface *occluder_geometry = map_render_command_geometry(occluder);
+    if (occluder_geometry == NULL) {
+        return false;
+    }
+
+    bool player_locked = false;
+    bool occluder_locked = false;
+    bool mask_locked = false;
+    bool added = false;
+    if (SDL_MUSTLOCK(player_geometry)) {
+        if (!SDL_LockSurface(player_geometry)) {
+            goto done;
+        }
+        player_locked = true;
+    }
+    if (occluder_geometry != player_geometry && SDL_MUSTLOCK(occluder_geometry)) {
+        if (!SDL_LockSurface(occluder_geometry)) {
+            goto done;
+        }
+        occluder_locked = true;
+    }
+    if (SDL_MUSTLOCK(player->player_occlusion_mask)) {
+        if (!SDL_LockSurface(player->player_occlusion_mask)) {
+            goto done;
+        }
+        mask_locked = true;
+    }
+
+    Uint32 visible =
+        pixel_format_map_rgba(player->player_occlusion_mask->format, 255, 255, 255, 255);
+    int occluder_copies = occluder->draw_double ? 2 : 1;
+    for (int copy = 0; copy < occluder_copies; copy++) {
+        int occluder_y = occluder->y - copy * 22;
+        int x_start = MAX(player->x, occluder->x);
+        int x_end = MIN(player->x + player_geometry->w, occluder->x + occluder_geometry->w);
+        int y_start = MAX(player->y, occluder_y);
+        int y_end = MIN(player->y + player_geometry->h, occluder_y + occluder_geometry->h);
+
+        for (int y = y_start; y < y_end; y++) {
+            for (int x = x_start; x < x_end; x++) {
+                int player_x = x - player->x;
+                int player_y = y - player->y;
+                if (!surface_pixel_visible(player_geometry, player_x, player_y) ||
+                    !surface_pixel_visible(occluder_geometry, x - occluder->x, y - occluder_y)) {
+                    continue;
+                }
+
+                putpixel(player->player_occlusion_mask, player_x, player_y, visible);
+                added = true;
+            }
+        }
+    }
+
+done:
+    if (mask_locked) {
+        SDL_UnlockSurface(player->player_occlusion_mask);
+    }
+    if (occluder_locked) {
+        SDL_UnlockSurface(occluder_geometry);
+    }
+    if (player_locked) {
+        SDL_UnlockSurface(player_geometry);
+    }
+    if (occluder_geometry != occluder->source) {
+        SDL_DestroySurface(occluder_geometry);
+    }
+    return added;
+}
+
+/** Return whether structural geometry can hide pixels of the local player. */
+static bool map_render_command_is_player_occluder(const map_render_command_t *player,
+                                                  const map_render_command_t *occluder) {
+    return occluder->object_layer == LAYER_WALL &&
+           (occluder->effects.alpha == 0 || occluder->effects.alpha >= 128) &&
+           map_render_command_overlaps(player, occluder);
+}
+
+/** Record only local-player pixels hidden by later structural geometry. */
+static void map_render_commands_find_player_occlusion(map_render_context_t *context) {
+    for (size_t player_index = 0; player_index < context->commands_num; player_index++) {
+        map_render_command_t *player = &context->commands[player_index];
+        if (!player->local_player) {
+            continue;
+        }
+
+        size_t occluder_index = player_index + 1;
+        while (occluder_index < context->commands_num &&
+               !map_render_command_is_player_occluder(player, &context->commands[occluder_index])) {
+            occluder_index++;
+        }
+        if (occluder_index == context->commands_num) {
+            continue;
+        }
+
+        SDL_Surface *player_geometry = map_render_command_geometry(player);
+        if (player_geometry == NULL) {
+            continue;
+        }
+        player->player_occlusion_mask =
+            SDL_CreateSurface(player_geometry->w, player_geometry->h, FormatHolder->format);
+        Uint32 transparent =
+            player->player_occlusion_mask != NULL
+                ? pixel_format_map_rgba(player->player_occlusion_mask->format, 0, 0, 0, 0)
+                : 0;
+        if (player->player_occlusion_mask == NULL ||
+            !SDL_FillSurfaceRect(player->player_occlusion_mask, NULL, transparent)) {
+            SDL_DestroySurface(player->player_occlusion_mask);
+            player->player_occlusion_mask = NULL;
+            if (player_geometry != player->source) {
+                SDL_DestroySurface(player_geometry);
+            }
+            continue;
+        }
+
+        bool player_occluded = false;
+        for (; occluder_index < context->commands_num; occluder_index++) {
+            const map_render_command_t *occluder = &context->commands[occluder_index];
+            if (!map_render_command_is_player_occluder(player, occluder)) {
+                continue;
+            }
+
+            player_occluded |= map_render_command_mask_occlusion(player, player_geometry, occluder);
+        }
+
+        if (player_geometry != player->source) {
+            SDL_DestroySurface(player_geometry);
+        }
+        if (!player_occluded) {
+            SDL_DestroySurface(player->player_occlusion_mask);
+            player->player_occlusion_mask = NULL;
+        }
+    }
+}
+
 /** Paint all projected sprites in one isometric order. */
 static void
-map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool door_hints_enabled) {
+map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool primary_surface) {
     uint64_t profile_paint_started = render_profiler_begin();
     if (context->commands_num > 1) {
         qsort(context->commands,
@@ -2719,8 +2889,9 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool do
               map_render_command_compare);
     }
 
-    if (door_hints_enabled) {
+    if (primary_surface) {
         map_render_commands_find_door_hints(context);
+        map_render_commands_find_player_occlusion(context);
     }
 
     int selected_depth = MAP2_MAX_DEPTH + 1;
@@ -2749,18 +2920,40 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool do
         }
     }
 
-    if (door_hints_enabled) {
+    if (primary_surface) {
         for (size_t i = 0; i < context->commands_num; i++) {
-            const map_render_command_t *command = &context->commands[i];
-            if (!command->door_hint && !(command->exit && command->depth == 0)) {
+            map_render_command_t *command = &context->commands[i];
+            if (!(command->local_player && command->player_occlusion_mask != NULL) &&
+                !command->door_hint && !(command->exit && command->depth == 0)) {
                 continue;
             }
 
             sprite_effects_t effects = {0};
+            if (command->local_player && command->player_occlusion_mask != NULL) {
+                SDL_Color color;
+                if (text_color_parse(MAP_OUTLINE_COLOR, &color)) {
+                    SDL_Surface *outline =
+                        sprite_outline_create(command->player_occlusion_mask, &color);
+                    if (outline != NULL) {
+                        surface_show(surface,
+                                     command->x - SPRITE_GLOW_SIZE,
+                                     command->y - SPRITE_GLOW_SIZE,
+                                     NULL,
+                                     outline);
+                        SDL_DestroySurface(outline);
+                    }
+                }
+                SDL_DestroySurface(command->player_occlusion_mask);
+                command->player_occlusion_mask = NULL;
+                if (!command->door_hint && !(command->exit && command->depth == 0)) {
+                    continue;
+                }
+            }
+
             effects.zoom_x = command->effects.zoom_x;
             effects.zoom_y = command->effects.zoom_y;
             effects.rotate = command->effects.rotate;
-            snprintf(VS(effects.outline), "%s", DOOR_HINT_COLOR);
+            snprintf(VS(effects.outline), "%s", MAP_OUTLINE_COLOR);
             surface_show_effects(surface, command->x, command->y, NULL, command->source, &effects);
             if (command->draw_double) {
                 surface_show_effects(surface,
@@ -2807,6 +3000,11 @@ static void map_draw_ui(SDL_Surface *surface, map_render_context_t *context) {
     context->tiles_num = 0;
 
     if (context->target_cell != NULL && cpl.target_code != 0) {
+#ifdef ATRINIK_WIDGET_TESTS
+        if (map_ui_test_active) {
+            map_ui_test_targets++;
+        }
+#endif
         const char *hp_color;
 
         if (cpl.target_hp > 90) {
@@ -3560,6 +3758,21 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
 }
 
 #ifdef ATRINIK_WIDGET_TESTS
+
+void widget_map_draw_test(widgetdata *widget) {
+    widget_draw(widget);
+}
+
+void widget_map_ui_test_begin(void) {
+    map_ui_test_names = 0;
+    map_ui_test_targets = 0;
+    map_ui_test_active = true;
+}
+
+bool widget_map_ui_test_end(void) {
+    map_ui_test_active = false;
+    return map_ui_test_names > 0 && map_ui_test_targets > 0;
+}
 
 bool widget_map_interaction_test(widgetdata *widget) {
     int old_map_width = map_width;

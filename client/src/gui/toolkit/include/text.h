@@ -367,6 +367,10 @@ extern void text_init(void);
 
 extern void text_deinit(void);
 
+#ifdef ATRINIK_WIDGET_TESTS
+extern void text_test_font_path_set(const char *path);
+#endif
+
 extern void text_offset_set(int x, int y);
 
 extern void text_offset_reset(void);
