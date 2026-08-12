@@ -96,6 +96,10 @@ typedef enum socket_role {
 #define MAP2_PROTOCOL_NAME_MAX 63
 /** Maximum byte length of a MAP color or glow notation. */
 #define MAP2_PROTOCOL_COLOR_MAX 6
+/** Maximum byte length of a MAP name, music identifier, or path. */
+#define MAP2_PROTOCOL_METADATA_LONG_MAX 4095
+/** Maximum byte length of MAP weather or region metadata. */
+#define MAP2_PROTOCOL_METADATA_SHORT_MAX 255
 
 /**
  * @defgroup CMD_TARGET_xxx Target command types

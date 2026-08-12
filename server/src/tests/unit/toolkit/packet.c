@@ -96,6 +96,36 @@ static packet_struct *map_protocol_test_packet(uint8_t level_count) {
     return packet;
 }
 
+static void map_protocol_test_level(packet_struct *packet, int8_t depth, packet_struct *level);
+
+/** Build a complete NEW MAP update with caller-selected metadata. */
+static packet_struct *map_protocol_test_new_packet(const char *map_name,
+                                                   const char *music,
+                                                   const char *weather,
+                                                   const char *region_name,
+                                                   const char *region_longname,
+                                                   const char *map_path) {
+    packet_struct *packet = packet_new(0, 128, PACKET_PAYLOAD_MAX);
+    packet_writer_write_uint8(packet, MAP_UPDATE_CMD_NEW);
+    packet_writer_write_cstring(packet, map_name);
+    packet_writer_write_cstring(packet, music);
+    packet_writer_write_cstring(packet, weather);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_cstring(packet, region_name);
+    packet_writer_write_cstring(packet, region_longname);
+    packet_writer_write_cstring(packet, map_path);
+    packet_writer_write_uint8(packet, 21);
+    packet_writer_write_uint8(packet, 21);
+    packet_writer_write_uint8(packet, 10);
+    packet_writer_write_uint8(packet, 10);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint16(packet, 0);
+    packet_writer_write_uint8(packet, 1);
+    map_protocol_test_level(packet, 0, NULL);
+    return packet;
+}
+
 /** Append one framed MAP level to a test packet. */
 static void map_protocol_test_level(packet_struct *packet, int8_t depth, packet_struct *level) {
     packet_writer_write_int8(packet, depth);
@@ -284,9 +314,8 @@ START_TEST(test_map_protocol_enforces_layer_string_bounds) {
     packet_writer_write_uint16(level, 1);
     packet_writer_write_uint8(level, 0);
     packet_writer_write_uint8(level, MAP2_FLAG_NAME);
-    packet_writer_write_cstring(
-        level,
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    packet_writer_write_cstring(level,
+                                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     packet_writer_write_cstring(level, "ffffff");
     packet_writer_write_uint8(level, 0);
     packet = map_protocol_test_packet(1);
@@ -453,6 +482,45 @@ START_TEST(test_map_protocol_rejects_unterminated_metadata) {
 
     ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     packet_free(packet);
+}
+END_TEST
+
+START_TEST(test_map_protocol_enforces_metadata_string_bounds) {
+    char long_boundary[MAP2_PROTOCOL_METADATA_LONG_MAX + 1];
+    char long_oversized[MAP2_PROTOCOL_METADATA_LONG_MAX + 2];
+    char short_boundary[MAP2_PROTOCOL_METADATA_SHORT_MAX + 1];
+    char short_oversized[MAP2_PROTOCOL_METADATA_SHORT_MAX + 2];
+    memset(long_boundary, 'a', sizeof(long_boundary) - 1);
+    long_boundary[sizeof(long_boundary) - 1] = '\0';
+    memset(long_oversized, 'a', sizeof(long_oversized) - 1);
+    long_oversized[sizeof(long_oversized) - 1] = '\0';
+    memset(short_boundary, 'a', sizeof(short_boundary) - 1);
+    short_boundary[sizeof(short_boundary) - 1] = '\0';
+    memset(short_oversized, 'a', sizeof(short_oversized) - 1);
+    short_oversized[sizeof(short_oversized) - 1] = '\0';
+
+    packet_struct *packet = map_protocol_test_new_packet(long_boundary,
+                                                         long_boundary,
+                                                         short_boundary,
+                                                         short_boundary,
+                                                         short_boundary,
+                                                         long_boundary);
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+
+    const char *valid = "valid";
+    for (size_t field = 0; field < 6; field++) {
+        const char *values[] = {valid, valid, valid, valid, valid, valid};
+        values[field] = field == 0 || field == 1 || field == 5 ? long_oversized : short_oversized;
+        packet = map_protocol_test_new_packet(values[0],
+                                              values[1],
+                                              values[2],
+                                              values[3],
+                                              values[4],
+                                              values[5]);
+        ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+        packet_free(packet);
+    }
 }
 END_TEST
 
@@ -1128,6 +1196,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_map_protocol_accepts_bounded_continuation);
     tcase_add_test(tc_core, test_map_protocol_continuation_state_is_bounded_and_ordered);
     tcase_add_test(tc_core, test_map_protocol_rejects_unterminated_metadata);
+    tcase_add_test(tc_core, test_map_protocol_enforces_metadata_string_bounds);
 
     return s;
 }

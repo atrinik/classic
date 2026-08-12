@@ -319,14 +319,14 @@ bool map_protocol_validate(const uint8_t *data,
     if (mapstat != MAP_UPDATE_CMD_SAME && mapstat != MAP_UPDATE_CMD_PARTIAL) {
         uint8_t height_diff, region_has_map;
 
-        if (!map_packet_skip_string(&reader, PACKET_PAYLOAD_MAX) ||
-            !map_packet_skip_string(&reader, PACKET_PAYLOAD_MAX) ||
-            !map_packet_skip_string(&reader, PACKET_PAYLOAD_MAX) ||
+        if (!map_packet_skip_string(&reader, MAP2_PROTOCOL_METADATA_LONG_MAX) ||
+            !map_packet_skip_string(&reader, MAP2_PROTOCOL_METADATA_LONG_MAX) ||
+            !map_packet_skip_string(&reader, MAP2_PROTOCOL_METADATA_SHORT_MAX) ||
             !map_packet_read_uint8(&reader, &height_diff) || height_diff > 1 ||
             !map_packet_read_uint8(&reader, &region_has_map) || region_has_map > 1 ||
-            !map_packet_skip_string(&reader, PACKET_PAYLOAD_MAX) ||
-            !map_packet_skip_string(&reader, PACKET_PAYLOAD_MAX) ||
-            !map_packet_skip_string(&reader, PACKET_PAYLOAD_MAX)) {
+            !map_packet_skip_string(&reader, MAP2_PROTOCOL_METADATA_SHORT_MAX) ||
+            !map_packet_skip_string(&reader, MAP2_PROTOCOL_METADATA_SHORT_MAX) ||
+            !map_packet_skip_string(&reader, MAP2_PROTOCOL_METADATA_LONG_MAX)) {
             return false;
         }
 

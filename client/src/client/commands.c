@@ -38,6 +38,11 @@
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 
+static_assert(MAP2_PROTOCOL_METADATA_LONG_MAX == HUGE_BUF - 1,
+              "MAP long metadata bound must match its client destination");
+static_assert(MAP2_PROTOCOL_METADATA_SHORT_MAX == MAX_BUF - 1,
+              "MAP short metadata bound must match its client destination");
+
 /** @copydoc socket_command_struct::handle_func */
 void socket_command_book(uint8_t *data, size_t len, size_t pos) {
     sound_play_effect("book.ogg", 100);

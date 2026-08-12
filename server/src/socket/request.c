@@ -850,26 +850,35 @@ packet_writer_write_map_string(packet_struct *packet, const char *value, size_t 
 }
 
 void packet_writer_write_map_name(struct packet_struct *packet, object *op, object *map_info) {
+    static const char prefix[] = "[b][o=#000000]";
+    static const char suffix[] = "[/o][/b]";
+    const char *name = map_info && map_info->race ? map_info->race : op->map->name;
+
     packet_debug_data(packet, 0, "Map name");
-    packet_writer_write_string(packet, "[b][o=#000000]");
-    packet_writer_write_string(packet, map_info && map_info->race ? map_info->race : op->map->name);
-    packet_writer_write_cstring(packet, "[/o][/b]");
+    packet_writer_write_string(packet, prefix);
+    packet_writer_write_string_n(
+        packet,
+        name,
+        MIN(strlen(name), MAP2_PROTOCOL_METADATA_LONG_MAX - strlen(prefix) - strlen(suffix)));
+    packet_writer_write_cstring(packet, suffix);
 }
 
 void packet_writer_write_map_music(struct packet_struct *packet, object *op, object *map_info) {
     packet_debug_data(packet, 0, "Map music");
-    packet_writer_write_cstring(packet,
-                                map_info && map_info->slaying
-                                    ? map_info->slaying
-                                    : (op->map->bg_music ? op->map->bg_music : "no_music"));
+    packet_writer_write_map_string(packet,
+                                   map_info && map_info->slaying
+                                       ? map_info->slaying
+                                       : (op->map->bg_music ? op->map->bg_music : "no_music"),
+                                   MAP2_PROTOCOL_METADATA_LONG_MAX);
 }
 
 void packet_writer_write_map_weather(struct packet_struct *packet, object *op, object *map_info) {
     packet_debug_data(packet, 0, "Map weather");
-    packet_writer_write_cstring(packet,
-                                map_info && map_info->title
-                                    ? map_info->title
-                                    : (op->map->weather ? op->map->weather : "none"));
+    packet_writer_write_map_string(packet,
+                                   map_info && map_info->title
+                                       ? map_info->title
+                                       : (op->map->weather ? op->map->weather : "none"),
+                                   MAP2_PROTOCOL_METADATA_SHORT_MAX);
 }
 
 /**
@@ -1383,11 +1392,15 @@ void draw_client_map2(object *pl) {
             packet_debug_data(packet, 0, "Display region map");
             packet_writer_write_uint8(packet, has_map);
             packet_debug_data(packet, 0, "Region name");
-            packet_writer_write_cstring(packet, region != NULL ? region->name : "");
+            packet_writer_write_map_string(packet,
+                                           region != NULL ? region->name : "",
+                                           MAP2_PROTOCOL_METADATA_SHORT_MAX);
             packet_debug_data(packet, 0, "Region long name");
-            packet_writer_write_cstring(packet, region != NULL ? region_get_longname(region) : "");
+            packet_writer_write_map_string(packet,
+                                           region != NULL ? region_get_longname(region) : "",
+                                           MAP2_PROTOCOL_METADATA_SHORT_MAX);
             packet_debug_data(packet, 0, "Map path");
-            packet_writer_write_cstring(packet, pl->map->path);
+            packet_writer_write_map_string(packet, pl->map->path, MAP2_PROTOCOL_METADATA_LONG_MAX);
         }
 
         if (CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED) {
