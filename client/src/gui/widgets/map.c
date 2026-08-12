@@ -2919,10 +2919,7 @@ void map_draw_map(SDL_Surface *surface) {
         }
     }
 
-    if (!SDL_FillSurfaceRect(*level_surface,
-                             NULL,
-                             pixel_format_map_rgb((*level_surface)->format, 0, 0, 0))) {
-        LOG(ERROR, "Could not clear map level surface: %s", SDL_GetError());
+    if (!surface_clear_transparent_black(*level_surface)) {
         map_select_level(0, true);
         lighting_select_level(0);
         render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);

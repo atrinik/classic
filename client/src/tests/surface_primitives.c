@@ -186,6 +186,7 @@ static void test_mutable_color_key_surface_reuse(void) {
     SDL_Surface *destination = SDL_CreateSurface(4, 1, SDL_PIXELFORMAT_XRGB8888);
     TEST_CHECK(surface != NULL && destination != NULL);
     TEST_CHECK(surface_set_transparent_black_mutable(surface));
+    Uint8 red, green, blue, alpha;
 
     Uint32 black = surface_map_rgb(surface, 0, 0, 0);
     TEST_CHECK(SDL_FillSurfaceRect(surface, NULL, black));
@@ -197,7 +198,10 @@ static void test_mutable_color_key_surface_reuse(void) {
     TEST_CHECK(SDL_FillSurfaceRect(destination, NULL, surface_map_rgb(destination, 1, 2, 3)));
     TEST_CHECK(SDL_BlitSurface(surface, NULL, destination, NULL));
 
-    Uint8 red, green, blue, alpha;
+    TEST_CHECK(surface_clear_transparent_black(surface));
+    TEST_CHECK(SDL_ReadSurfacePixel(surface, 2, 0, &red, &green, &blue, &alpha));
+    TEST_CHECK(red == 0 && green == 0 && blue == 0);
+
     TEST_CHECK(SDL_ReadSurfacePixel(destination, 0, 0, &red, &green, &blue, &alpha));
     TEST_CHECK(red == 1 && green == 2 && blue == 3);
     TEST_CHECK(SDL_ReadSurfacePixel(destination, 2, 0, &red, &green, &blue, &alpha));

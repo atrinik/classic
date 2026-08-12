@@ -110,6 +110,23 @@ bool surface_set_transparent_black_mutable(SDL_Surface *surface) {
     return SDL_SetSurfaceColorKey(surface, true, color_key) && SDL_SetSurfaceRLE(surface, false);
 }
 
+/** Clear a mutable color-keyed surface to its transparent exact-black value. */
+bool surface_clear_transparent_black(SDL_Surface *surface) {
+    HARD_ASSERT(surface != NULL);
+
+    Uint32 black = SDL_MapRGB(SDL_GetPixelFormatDetails(surface->format),
+                              SDL_GetSurfacePalette(surface),
+                              0,
+                              0,
+                              0);
+    if (!SDL_FillSurfaceRect(surface, NULL, black)) {
+        LOG(ERROR, "Could not clear transparent surface: %s", SDL_GetError());
+        return false;
+    }
+
+    return true;
+}
+
 /**
  * Convert packed indexed surfaces to a format supported by SDL's blitters.
  *
