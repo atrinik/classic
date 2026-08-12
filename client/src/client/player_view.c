@@ -1311,7 +1311,7 @@ int player_view_main(int argc, char *argv[]) {
     LastTick = manifest.clock_ms;
     image_missing_faces_reset();
 #ifdef ATRINIK_WIDGET_TESTS
-    if (manifest.player_names && manifest.target_ui) {
+    if (mode == PLAYER_VIEW_RENDER && manifest.player_names && manifest.target_ui) {
         widget_map_ui_test_begin();
     }
 #endif
@@ -1361,7 +1361,7 @@ int player_view_main(int argc, char *argv[]) {
     }
 
 #ifdef ATRINIK_WIDGET_TESTS
-    if (manifest.player_names && manifest.target_ui) {
+    if (mode == PLAYER_VIEW_RENDER && manifest.player_names && manifest.target_ui) {
         if (!widget_map_ui_test_end()) {
             fprintf(stderr, "player-view: name or target UI was not rendered\n");
             goto cleanup;
