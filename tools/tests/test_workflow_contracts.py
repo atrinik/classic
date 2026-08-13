@@ -473,7 +473,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("Publish one pre-rendered summary comment", comment)
         self.assertIn("evidence/movement-comment.md", comment)
         self.assertIn("test \"$(wc -c <evidence/movement-comment.md)\" -le 65536", comment)
-        self.assertIn("--paginate --slurp", comment)
+        self.assertIn("--paginate", comment)
+        self.assertNotIn("--slurp", comment)
+        self.assertIn("sed -n '1p'", comment)
 
     def test_windows_packages_persist_toolchain_bound_compiler_caches(self) -> None:
         candidate = self.text("build-release-candidate.yml")

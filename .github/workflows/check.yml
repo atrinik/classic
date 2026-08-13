@@ -634,8 +634,9 @@ jobs:
               >comment.md
           fi
           comment_id=$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-            --paginate --slurp \
-            --jq "[.[][] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"${marker}\")))] | first | .id // empty")
+            --paginate \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"${marker}\"))) | .id" |
+            sed -n '1p')
           if test -n "${comment_id}"; then
             gh api --method PATCH "repos/${REPOSITORY}/issues/comments/${comment_id}" \
               --raw-field body="$(<comment.md)" >/dev/null
