@@ -492,6 +492,9 @@ typedef enum map_redraw_reason {
     MAP_REDRAW_REASON_MAP_PACKET = 1U << 1,
     MAP_REDRAW_REASON_ANIMATION = 1U << 2,
     MAP_REDRAW_REASON_RESIZE = 1U << 3,
+    MAP_REDRAW_REASON_SCROLL = 1U << 4,
+    MAP_REDRAW_REASON_LIGHTING = 1U << 5,
+    MAP_REDRAW_REASON_UI = 1U << 6,
 } map_redraw_reason_t;
 
 /** Request a primary-map redraw and retain its production reason. */
@@ -500,21 +503,32 @@ extern void map_redraw_request(map_redraw_reason_t reason);
 /** Return whether the production widget would rebuild its primary map surface. */
 extern bool map_redraw_due(void);
 
+/** Return whether changed animation output needs an object-only map pass. */
+extern bool map_animation_redraw_due(void);
+
 /** Return the reasons accumulated for the pending primary-map redraw. */
 extern uint32_t map_redraw_pending_reasons(void);
 
 /** Mark the pending primary-map redraw as consumed. */
 extern void map_redraw_consume(void);
 
+/** Mark an object-only animation pass as consumed. */
+extern void map_animation_redraw_consume(void);
+
 extern void map_draw_map(SDL_Surface *surface);
 
-#define MAP_BENCHMARK_STATISTICS_VERSION UINT8_C(2)
+/** Repaint map objects over the cached lit ground without rebuilding static levels. */
+extern bool map_draw_animation(SDL_Surface *surface);
+
+#define MAP_BENCHMARK_STATISTICS_VERSION UINT8_C(3)
 
 /** Map renderer work accumulated since the last benchmark reset. */
 typedef struct map_benchmark_statistics {
     uint64_t map_draws;
     uint64_t primary_map_draws;
     uint64_t auxiliary_map_draws;
+    uint64_t animation_draws;
+    uint64_t animation_level_draws;
     uint64_t presents;
     uint64_t present_failures;
     uint64_t render_failures;

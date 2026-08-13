@@ -192,7 +192,7 @@ void socket_command_target(uint8_t *data, size_t len, size_t pos) {
     cpl.combat_force = packet_reader_read_uint8(&reader);
     WIDGET_REDRAW_ALL(TARGET_ID);
 
-    map_redraw_flag = 1;
+    map_redraw_request(MAP_REDRAW_REASON_UI);
 }
 
 /** @copydoc socket_command_struct::handle_func */
@@ -400,7 +400,7 @@ void socket_command_player(uint8_t *data, size_t len, size_t pos) {
     packet_reader_read_string(&reader, cpl.name, sizeof(cpl.name));
 
     new_player(tag, weight, face);
-    map_redraw_flag = 1;
+    map_redraw_request(MAP_REDRAW_REASON_UI);
 
     cur_widget[INPUT_ID]->show = 0;
 

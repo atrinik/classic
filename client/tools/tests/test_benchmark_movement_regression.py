@@ -156,8 +156,9 @@ def native_record(
     phases = []
     packet_counts = {"cold": 1, "sustained": 480, "idle": 8, "resumed": 80}
     changed_counts = {"cold": 1, "sustained": 480, "idle": 0, "resumed": 80}
-    draw_counts = {"cold": 1, "sustained": 480, "idle": 8, "resumed": 80}
-    minimap_draw_counts = {"cold": 1, "sustained": 240, "idle": 8, "resumed": 40}
+    draw_counts = {"cold": 1, "sustained": 480, "idle": 0, "resumed": 80}
+    animation_draw_counts = {"cold": 0, "sustained": 0, "idle": 16, "resumed": 0}
+    minimap_draw_counts = {"cold": 1, "sustained": 240, "idle": 0, "resumed": 40}
     for name, samples in benchmark.REQUIRED_PHASES.items():
         p95_ns = sustained_p95_ns if name == "sustained" else 2_000_000
         first_ns = first_window_ns if name == "sustained" else 2_000_000
@@ -165,15 +166,18 @@ def native_record(
         packets = packet_counts[name]
         changed = changed_counts[name]
         draws = draw_counts[name]
+        animation_draws = animation_draw_counts[name]
         minimap_draws = minimap_draw_counts[name]
         renderer_draws = draws + minimap_draws
+        render_passes = renderer_draws + animation_draws
         reasons = {
-            "reset_packet": draws if name == "cold" else 0,
-            "changed_map_packet": draws if name in ("sustained", "resumed") else 0,
-            "noop_map_packet": 0,
-            "animation_only_tick": draws if name == "idle" else 0,
+            "external": 0,
+            "packet": changed,
+            "scroll": 0,
+            "animation": samples,
+            "lighting": 0,
             "resize": 0,
-            "map_transition": 0,
+            "ui": 0,
         }
         work = timing(samples, p95_ns=p95_ns, first_ns=first_ns, last_ns=last_ns)
         loop = timing(samples, p50_ns=125_000_000, p95_ns=125_000_000,
@@ -199,8 +203,9 @@ def native_record(
                 "changed_map_packets": changed,
                 "noop_map_packets": packets - changed,
                 "full_map_draws": draws,
+                "animation_draws": animation_draws,
                 "animation_ticks": samples,
-                "full_draw_reasons": reasons,
+                "draw_reasons": reasons,
                 "frame_time": copy.deepcopy(work),
                 "main_loop": {
                     "update_cadence_hz": 8,
@@ -214,6 +219,7 @@ def native_record(
                     },
                 },
                 "map_time": timing(draws),
+                "animation_time": timing(animation_draws),
                 "local_minimap": {
                     "enabled": True,
                     "update_interval_ms": 250,
@@ -249,6 +255,8 @@ def native_record(
                     "map_draws": renderer_draws,
                     "primary_map_draws": draws,
                     "auxiliary_map_draws": minimap_draws,
+                    "animation_draws": animation_draws,
+                    "animation_level_draws": animation_draws * 5,
                     "presents": 0,
                     "present_failures": 0,
                     "render_failures": 0,
@@ -270,15 +278,19 @@ def native_record(
                         "elapsed": (
                             0
                             if stage == "lighting" and not lighting_active
-                            else draws if stage == "lighting" else renderer_draws
+                            else draws if stage == "lighting" else render_passes
                         ),
                         "calls": (
                             0
                             if stage == "lighting" and not lighting_active
                             else draws * 5
                             if stage == "lighting"
+                            else render_passes
+                            if stage in ("map", "paint", "ui")
                             else renderer_draws
-                            if scope == "per_map_draw"
+                            if stage in ("map_scratch_clear", "ground_composite")
+                            else renderer_draws * 5 + animation_draws * 5
+                            if stage == "objects"
                             else renderer_draws * 5
                         ),
                         "scope": scope,
@@ -328,17 +340,17 @@ def native_record(
     )]
     standard_checkpoint_sha = visual_lifecycle_digest(standard_checkpoints)
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "benchmark": "player-view-movement",
         "tick_ms": 125,
         "simulated_tick_hz": 8,
         "identity": {
             "instrumentation": {
-                "schema_version": 4,
+                "schema_version": 5,
                 "fixture_schema_version": 2,
                 "workload": "pvm1-map2-lifecycle-v3",
                 "lighting_statistics_version": 3,
-                "map_statistics_version": 2,
+                "map_statistics_version": 3,
                 "render_profiler_statistics_version": 2,
                 "sprite_cache_statistics_version": 1,
             },
@@ -412,15 +424,17 @@ def discrete_pair() -> list[dict[str, object]]:
 
 def remove_phase_map_draws(phase: dict[str, object]) -> None:
     phase["full_map_draws"] = 0
-    phase["full_draw_reasons"] = {
-        field: 0 for field in phase["full_draw_reasons"]
-    }
+    phase["animation_draws"] = 0
+    phase["draw_reasons"] = {field: 0 for field in phase["draw_reasons"]}
     phase["map_time"] = timing(0)
+    phase["animation_time"] = timing(0)
     phase["local_minimap"]["map_draws"] = 0
     phase["local_minimap"]["map_time"] = timing(0)
     phase["map"]["map_draws"] = 0
     phase["map"]["primary_map_draws"] = 0
     phase["map"]["auxiliary_map_draws"] = 0
+    phase["map"]["animation_draws"] = 0
+    phase["map"]["animation_level_draws"] = 0
     phase["map"]["level_draws"] = 0
     phase["map"]["render_commands"] = 0
     phase["map"]["peak_render_commands"] = 0
@@ -443,16 +457,16 @@ def additional_contexts(*, full: bool = False) -> dict[str, list[dict[str, objec
     return contexts
 
 
-class NativeV4RecordTests(unittest.TestCase):
-    def test_parse_accepts_closed_v4_record(self) -> None:
-        self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 4)
+class NativeV5RecordTests(unittest.TestCase):
+    def test_parse_accepts_closed_v5_record(self) -> None:
+        self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 5)
 
     def test_parse_rejects_extra_output_and_duplicate_fields(self) -> None:
         encoded = json.dumps(native_record())
         with self.assertRaisesRegex(benchmark.BenchmarkError, "exactly one"):
             benchmark.parse_result(encoded + "\nnoise\n")
-        duplicate = encoded.replace('"schema_version": 4,',
-                                    '"schema_version": 4, "schema_version": 4,', 1)
+        duplicate = encoded.replace('"schema_version": 5,',
+                                    '"schema_version": 5, "schema_version": 5,', 1)
         with self.assertRaisesRegex(benchmark.BenchmarkError, "repeated JSON field"):
             benchmark.parse_result(duplicate)
         with self.assertRaisesRegex(ValueError, "repeated JSON field"):
@@ -547,32 +561,27 @@ class NativeV4RecordTests(unittest.TestCase):
     def test_accepts_coalesced_redraw_reasons_and_rejects_unexplained_draw(self) -> None:
         record = native_record()
         sustained = record["phases"][1]
-        sustained["full_draw_reasons"]["animation_only_tick"] = sustained["full_map_draws"]
+        sustained["draw_reasons"]["scroll"] = sustained["full_map_draws"]
         benchmark.validate_record(record)
-        sustained["full_draw_reasons"] = {field: 0 for field in sustained["full_draw_reasons"]}
+        sustained["draw_reasons"] = {field: 0 for field in sustained["draw_reasons"]}
         with self.assertRaisesRegex(ValueError, "draw reasons accounting"):
             benchmark.validate_record(record)
         malformed = native_record()
         idle = malformed["phases"][2]
-        idle["full_draw_reasons"]["animation_only_tick"] = 0
-        idle["full_draw_reasons"]["changed_map_packet"] = idle["full_map_draws"]
-        with self.assertRaisesRegex(ValueError, "draw reason is impossible"):
+        idle["draw_reasons"]["animation"] = 0
+        idle["draw_reasons"]["packet"] = 1
+        with self.assertRaisesRegex(ValueError, "draw reasons accounting"):
             benchmark.validate_record(malformed)
 
     def test_rejects_missing_cold_reset_draw_without_pinning_other_phase_draws(self) -> None:
         malformed = native_record()
         cold = malformed["phases"][0]
         remove_phase_map_draws(cold)
-        with self.assertRaisesRegex(ValueError, "did not render its reset"):
+        with self.assertRaisesRegex(ValueError, "draw reason is impossible"):
             benchmark.validate_record(malformed)
 
+    def test_accepts_idle_zero_full_map_timing(self) -> None:
         record = native_record()
-        remove_phase_map_draws(record["phases"][2])
-        benchmark.validate_record(record)
-
-    def test_accepts_zero_draw_map_timing(self) -> None:
-        record = native_record()
-        remove_phase_map_draws(record["phases"][2])
         benchmark.validate_record(record)
 
     def test_accepts_zero_wait_for_an_over_budget_phase(self) -> None:
@@ -884,7 +893,7 @@ class EvidenceTests(unittest.TestCase):
 
     def test_injected_noop_full_redraw_fails_noop_redraw_guard(self) -> None:
         redrawn = native_record()
-        redrawn["phases"][2]["full_draw_reasons"]["noop_map_packet"] = 8
+        redrawn["phases"][2]["draw_reasons"]["packet"] = 1
         evidence = benchmark._build_evidence(
             [],
             [redrawn, copy.deepcopy(redrawn)],
@@ -894,7 +903,7 @@ class EvidenceTests(unittest.TestCase):
             comparison_note="event-has-no-comparison-base",
         )
         self.assertFalse(evidence["checks"]["noop_redraw_avoidance"]["passed"])
-        self.assertFalse(evidence["checks"]["noop_redraw_avoidance"]["enforced"])
+        self.assertTrue(evidence["checks"]["noop_redraw_avoidance"]["enforced"])
         self.assertTrue(evidence["checks"]["full_redraw_accounting"]["passed"])
 
     def test_injected_slower_candidate_fails_only_relative_latency_guard(self) -> None:
@@ -939,9 +948,9 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(check["enforced"])
         self.assertTrue(evidence["failed"])
 
-    def test_optimization_findings_are_informational_in_foundation_mode(self) -> None:
+    def test_noop_correctness_is_enforced_while_lighting_is_informational(self) -> None:
         record = native_record()
-        record["phases"][2]["full_draw_reasons"]["noop_map_packet"] = 8
+        record["phases"][2]["draw_reasons"]["packet"] = 1
         record["phases"][1]["lighting"]["counters"]["field_reuses"] = 0
         evidence = benchmark._build_evidence(
             [], [record, copy.deepcopy(record)], [], additional_contexts(),
@@ -949,9 +958,9 @@ class EvidenceTests(unittest.TestCase):
             comparison_note="bootstrap-base-missing-movement-instrumentation",
         )
         self.assertFalse(evidence["checks"]["noop_redraw_avoidance"]["passed"])
-        self.assertFalse(evidence["checks"]["noop_redraw_avoidance"]["enforced"])
+        self.assertTrue(evidence["checks"]["noop_redraw_avoidance"]["enforced"])
         self.assertFalse(evidence["checks"]["lighting_cache_churn"]["enforced"])
-        self.assertFalse(evidence["failed"])
+        self.assertTrue(evidence["failed"])
 
     def test_resource_plateau_remains_enforced_in_foundation_mode(self) -> None:
         record = native_record()
@@ -1105,7 +1114,8 @@ class CommentTests(unittest.TestCase):
         report = benchmark.render_comment(self.valid_evidence(), "success")
         self.assertIn("update cadence is not the client display frame rate", report)
         self.assertIn("Measured replay-work capacity FPS (p50/slow-tail)", report)
-        self.assertIn("Main map p50/p95", report)
+        self.assertIn("Full map p50/p95", report)
+        self.assertIn("Animation pass p50/p95", report)
         self.assertIn("Local minimap map-core p50/p95", report)
         self.assertIn("Display reference", report)
         self.assertIn("8 Hz", report)
@@ -1161,8 +1171,6 @@ class CommentTests(unittest.TestCase):
 
     def test_report_accepts_a_phase_with_no_map_draws(self) -> None:
         records = [native_record(), native_record(), *discrete_pair()]
-        for record in records:
-            remove_phase_map_draws(record["phases"][2])
         evidence = benchmark._build_evidence(
             [],
             records[:2],
@@ -1181,7 +1189,7 @@ class CommentTests(unittest.TestCase):
         self.assertIn("Measured replay-work capacity FPS", report)
         self.assertIn("Before/after summary (standard smooth sustained)", report)
         self.assertIn("| Total map-focused update work p95 | 2.00 ms | 2.00 ms | +0.0% |", report)
-        self.assertIn("| Main map p95 | 2.00 ms | 2.00 ms | +0.0% |", report)
+        self.assertIn("| Full map p95 | 2.00 ms | 2.00 ms | +0.0% |", report)
         self.assertIn("| Local minimap map-core p95 | 2.00 ms | 2.00 ms | +0.0% |", report)
         self.assertIn("| Slow-tail work capacity | 500.00 FPS | 500.00 FPS | +0.0% |", report)
         self.assertIn("Positive timing changes are slower", report)

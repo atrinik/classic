@@ -50,7 +50,7 @@
 #define PLAYER_VIEW_MOVEMENT_RESUMED_TICKS 80U
 #define PLAYER_VIEW_MOVEMENT_PACKETS 5U
 #define PLAYER_VIEW_MOVEMENT_ACTIVE_PACKETS 4U
-#define PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION 4U
+#define PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION 5U
 #define PLAYER_VIEW_MOVEMENT_WINDOW_TICKS 32U
 #define PLAYER_VIEW_MOVEMENT_FIXTURE_SCHEMA 2U
 #define PLAYER_VIEW_MOVEMENT_CHECKPOINTS 12U
@@ -1044,16 +1044,18 @@ typedef struct player_view_movement_phase {
     uint32_t changed_packets;
     uint32_t noop_packets;
     uint32_t full_map_draws;
+    uint32_t animation_draws;
     uint32_t local_minimap_draws;
     uint32_t animation_ticks;
     struct {
-        uint32_t reset_packet;
-        uint32_t changed_map_packet;
-        uint32_t noop_map_packet;
-        uint32_t animation_only_tick;
+        uint32_t external;
+        uint32_t packet;
+        uint32_t scroll;
+        uint32_t animation;
+        uint32_t lighting;
         uint32_t resize;
-        uint32_t map_transition;
-    } full_draw_reasons;
+        uint32_t ui;
+    } draw_reasons;
     client_command_queue_statistics_t queue;
     lighting_benchmark_statistics_t lighting;
     lighting_benchmark_statistics_t lighting_before;
@@ -1068,8 +1070,10 @@ typedef struct player_view_movement_phase {
     uint64_t loop_durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
     uint64_t queue_durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
     uint64_t map_durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
+    uint64_t animation_durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
     uint64_t local_minimap_durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
     size_t map_samples;
+    size_t animation_samples;
     size_t local_minimap_samples;
 } player_view_movement_phase_t;
 
@@ -1302,7 +1306,8 @@ static void player_view_lighting_level_json(const lighting_benchmark_level_stati
 
 static void player_view_map_json(const map_benchmark_statistics_t *statistics) {
     printf("{\"map_draws\":%" PRIu64 ",\"primary_map_draws\":%" PRIu64
-           ",\"auxiliary_map_draws\":%" PRIu64 ",\"presents\":%" PRIu64
+           ",\"auxiliary_map_draws\":%" PRIu64 ",\"animation_draws\":%" PRIu64
+           ",\"animation_level_draws\":%" PRIu64 ",\"presents\":%" PRIu64
            ",\"present_failures\":%" PRIu64 ",\"render_failures\":%" PRIu64
            ",\"fault_injections\":%" PRIu64 ",\"fault_detections\":%" PRIu64
            ",\"level_draws\":%" PRIu64 ",\"render_commands\":%" PRIu64 ",\"annotations\":%" PRIu64
@@ -1312,6 +1317,8 @@ static void player_view_map_json(const map_benchmark_statistics_t *statistics) {
            statistics->map_draws,
            statistics->primary_map_draws,
            statistics->auxiliary_map_draws,
+           statistics->animation_draws,
+           statistics->animation_level_draws,
            statistics->presents,
            statistics->present_failures,
            statistics->render_failures,
@@ -1555,22 +1562,21 @@ static const char *player_view_movement_phase_checkpoint(player_view_movement_st
 }
 
 static void player_view_movement_draw_reasons_record(player_view_movement_phase_t *phase,
-                                                     player_view_movement_stream_t stream,
-                                                     uint32_t reasons,
-                                                     bool map_packet) {
-    if (map_packet && (reasons & MAP_REDRAW_REASON_MAP_PACKET) != 0) {
-        if (stream == PLAYER_VIEW_MOVEMENT_COLD) {
-            phase->full_draw_reasons.reset_packet++;
-        } else if (stream == PLAYER_VIEW_MOVEMENT_SUSTAINED ||
-                   stream == PLAYER_VIEW_MOVEMENT_RESUMED) {
-            phase->full_draw_reasons.changed_map_packet++;
-        } else if (stream == PLAYER_VIEW_MOVEMENT_IDLE) {
-            phase->full_draw_reasons.noop_map_packet++;
-        }
-    }
-    if ((reasons & MAP_REDRAW_REASON_ANIMATION) != 0) {
-        phase->full_draw_reasons.animation_only_tick++;
-    }
+                                                     uint32_t reasons) {
+#define RECORD_REASON(_name, _reason)     \
+    do {                                  \
+        if ((reasons & (_reason)) != 0) { \
+            phase->draw_reasons._name++;  \
+        }                                 \
+    } while (0)
+    RECORD_REASON(external, MAP_REDRAW_REASON_EXTERNAL);
+    RECORD_REASON(packet, MAP_REDRAW_REASON_MAP_PACKET);
+    RECORD_REASON(scroll, MAP_REDRAW_REASON_SCROLL);
+    RECORD_REASON(animation, MAP_REDRAW_REASON_ANIMATION);
+    RECORD_REASON(lighting, MAP_REDRAW_REASON_LIGHTING);
+    RECORD_REASON(resize, MAP_REDRAW_REASON_RESIZE);
+    RECORD_REASON(ui, MAP_REDRAW_REASON_UI);
+#undef RECORD_REASON
 }
 
 static bool player_view_movement_draw(player_view_movement_replay_t *replay,
@@ -1643,8 +1649,9 @@ static bool player_view_movement_draw(player_view_movement_replay_t *replay,
         phase->queue_durations[tick] = SDL_GetTicksNS() - queue_started;
         map_animate();
         phase->animation_ticks++;
-        bool drawn = map_redraw_due();
-        if (drawn) {
+        bool full_drawn = map_redraw_due();
+        bool animation_drawn = !full_drawn && map_animation_redraw_due();
+        if (full_drawn) {
             uint32_t reasons = map_redraw_pending_reasons();
             if (!SDL_FillSurfaceRect(surface, NULL, 0)) {
                 fprintf(stderr,
@@ -1672,7 +1679,7 @@ static bool player_view_movement_draw(player_view_movement_replay_t *replay,
                     *next_local_minimap_us += (uint64_t)MINIMAP_DYNAMIC_REDRAW_INTERVAL * 1000U;
                 } while (*next_local_minimap_us <= *tick_us);
             }
-            player_view_movement_draw_reasons_record(phase, stream, reasons, drain.commands != 0);
+            player_view_movement_draw_reasons_record(phase, reasons);
             map_redraw_consume();
             effect_sprites_play();
 #ifdef ATRINIK_WIDGET_TESTS
@@ -1682,8 +1689,22 @@ static bool player_view_movement_draw(player_view_movement_replay_t *replay,
                 return false;
             }
 #endif
+        } else if (animation_drawn) {
+            uint32_t reasons = map_redraw_pending_reasons();
+            uint64_t animation_started = SDL_GetTicksNS();
+            if (!map_draw_animation(surface)) {
+                fprintf(stderr, "player-view: cannot draw animation-only map pass\n");
+                return false;
+            }
+            phase->animation_durations[phase->animation_samples++] =
+                SDL_GetTicksNS() - animation_started;
+            phase->animation_draws++;
+            player_view_movement_draw_reasons_record(phase, reasons);
+            map_animation_redraw_consume();
+            effect_sprites_play();
         }
         sprite_cache_gc();
+        bool drawn = full_drawn || animation_drawn;
         render_profiler_frame_finished(drawn);
         uint64_t elapsed = SDL_GetTicksNS() - frame_started;
         uint64_t target = (uint64_t)PLAYER_VIEW_MOVEMENT_TICK_MS * UINT64_C(1000000);
@@ -1997,9 +2018,10 @@ static void player_view_movement_phase_json(const player_view_movement_phase_t *
                                &work_max);
     printf("%s{\"name\":\"%s\",\"samples\":%u,\"map_packets\":%u,"
            "\"changed_map_packets\":%u,\"noop_map_packets\":%u,"
-           "\"full_map_draws\":%u,\"animation_ticks\":%u,\"full_draw_reasons\":{"
-           "\"reset_packet\":%u,\"changed_map_packet\":%u,\"noop_map_packet\":%u,"
-           "\"animation_only_tick\":%u,\"resize\":%u,\"map_transition\":%u},"
+           "\"full_map_draws\":%u,\"animation_draws\":%u,\"animation_ticks\":%u,"
+           "\"draw_reasons\":{"
+           "\"external\":%u,\"packet\":%u,\"scroll\":%u,\"animation\":%u,"
+           "\"lighting\":%u,\"resize\":%u,\"ui\":%u},"
            "\"frame_time\":",
            index == 0 ? "" : ",",
            phase->name,
@@ -2008,13 +2030,15 @@ static void player_view_movement_phase_json(const player_view_movement_phase_t *
            phase->changed_packets,
            phase->noop_packets,
            phase->full_map_draws,
+           phase->animation_draws,
            phase->animation_ticks,
-           phase->full_draw_reasons.reset_packet,
-           phase->full_draw_reasons.changed_map_packet,
-           phase->full_draw_reasons.noop_map_packet,
-           phase->full_draw_reasons.animation_only_tick,
-           phase->full_draw_reasons.resize,
-           phase->full_draw_reasons.map_transition);
+           phase->draw_reasons.external,
+           phase->draw_reasons.packet,
+           phase->draw_reasons.scroll,
+           phase->draw_reasons.animation,
+           phase->draw_reasons.lighting,
+           phase->draw_reasons.resize,
+           phase->draw_reasons.ui);
     player_view_timing_json(phase->frame_durations, phase->ticks);
     printf(",\"main_loop\":{\"update_cadence_hz\":%.3f,"
            "\"update_interval_ns\":%" PRIu64 ",\"work_time\":",
@@ -2029,6 +2053,8 @@ static void player_view_movement_phase_json(const player_view_movement_phase_t *
            work_p50 == 0 ? 0.0 : 1000000000.0 / work_p50,
            work_p95 == 0 ? 0.0 : 1000000000.0 / work_p95);
     player_view_timing_json(phase->map_durations, phase->map_samples);
+    printf(",\"animation_time\":");
+    player_view_timing_json(phase->animation_durations, phase->animation_samples);
     printf(",\"local_minimap\":{\"enabled\":true,\"update_interval_ms\":%u,"
            "\"surface_width\":%d,\"surface_height\":%d,\"map_draws\":%u,\"map_time\":",
            MINIMAP_DYNAMIC_REDRAW_INTERVAL,
@@ -2835,7 +2861,7 @@ int player_view_main(int argc, char *argv[]) {
         }
         setting_set_int(OPT_CAT_MAP, OPT_PLAYER_NAMES, 0);
         cpl.target_code = 0;
-        map_redraw_flag = 1;
+        map_redraw_request(MAP_REDRAW_REASON_UI);
         SDL_FillSurfaceRect(surface, NULL, 0);
         widget_map_draw_test(&map_widget);
         map_widget_surface = map_widget.surface;

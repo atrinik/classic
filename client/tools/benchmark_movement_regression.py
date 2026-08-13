@@ -18,7 +18,7 @@ from movement_benchmark_schema import validate_record
 
 
 EVIDENCE_SCHEMA_VERSION = 4
-NATIVE_SCHEMA_VERSION = 4
+NATIVE_SCHEMA_VERSION = 5
 SUSTAINED_P95_LIMIT_NS = 33_300_000
 LARGE_SUSTAINED_P95_LIMIT_NS = 125_000_000
 DISPLAY_REFERENCE_FPS = 144
@@ -48,9 +48,11 @@ LIGHTING_FIELDS = {
     "bytes",
     "retained_field_bytes",
 }
-V3_GUARD_NAMES = (
+NATIVE_GUARD_NAMES = (
     "full_redraw_accounting",
     "noop_redraw_avoidance",
+    "animation_isolation",
+    "idle_wait_recovery",
     "queue_plateau_recovery",
     "lighting_cache_churn",
     "cache_memory_plateau",
@@ -64,7 +66,6 @@ PERFORMANCE_CHECK_NAMES = {
     "base_candidate_sustained_p95",
 }
 INFORMATIONAL_OPTIMIZATION_SUFFIXES = (
-    "noop_redraw_avoidance",
     "lighting_cache_churn",
 )
 
@@ -235,6 +236,12 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
     map_p95_ns = _median_integer(
         [phase(record, name)["map_time"]["p95"] for record in records]
     )
+    animation_p50_ns = _median_integer(
+        [phase(record, name)["animation_time"]["p50"] for record in records]
+    )
+    animation_p95_ns = _median_integer(
+        [phase(record, name)["animation_time"]["p95"] for record in records]
+    )
     minimap_p50_ns = _median_integer(
         [phase(record, name)["local_minimap"]["map_time"]["p50"] for record in records]
     )
@@ -284,6 +291,8 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
         "work_p95_ms": round(p95_ns / 1_000_000, 2),
         "map_p50_ms": round(map_p50_ns / 1_000_000, 2),
         "map_p95_ms": round(map_p95_ns / 1_000_000, 2),
+        "animation_p50_ms": round(animation_p50_ns / 1_000_000, 2),
+        "animation_p95_ms": round(animation_p95_ns / 1_000_000, 2),
         "local_minimap_p50_ms": round(minimap_p50_ns / 1_000_000, 2),
         "local_minimap_p95_ms": round(minimap_p95_ns / 1_000_000, 2),
         "work_p99_ms": round(_phase_median(records, name, "p99_ns") / 1_000_000, 2),
@@ -311,6 +320,7 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
                     "changed_map_packets",
                     "noop_map_packets",
                     "full_map_draws",
+                    "animation_draws",
                 )
             },
             **{
@@ -318,6 +328,7 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
                 for field in (
                     "primary_map_draws",
                     "auxiliary_map_draws",
+                    "animation_level_draws",
                     "presents",
                 )
             },
@@ -341,6 +352,12 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
                 if allocation_available
                 else 0
             ),
+            "draw_reasons": {
+                field: _median_integer(
+                    [phase(record, name)["draw_reasons"][field] for record in records]
+                )
+                for field in representative["draw_reasons"]
+            },
         },
         "queue": {
             **{field: queue[field] for field in ("enqueued", "dequeued", "budget_yields", "recoveries", "peak_depth", "peak_bytes")},
@@ -510,6 +527,7 @@ def _guard_native_record(record: dict[str, object]) -> dict[str, dict[str, objec
         return {}
     phases = {item["name"]: item for item in record["phases"]}
     sustained = phases["sustained"]
+    idle = phases["idle"]
     resumed = phases["resumed"]
     guards: dict[str, dict[str, object]] = {}
 
@@ -524,20 +542,43 @@ def _guard_native_record(record: dict[str, object]) -> dict[str, dict[str, objec
         and phase_record["map"]["primary_map_draws"] == phase_record["full_map_draws"]
         and phase_record["map"]["auxiliary_map_draws"]
         == phase_record["local_minimap"]["map_draws"]
-        and sum(phase_record["full_draw_reasons"].values()) >= phase_record["full_map_draws"]
+        and phase_record["map"]["animation_draws"] == phase_record["animation_draws"]
+        and sum(phase_record["draw_reasons"].values())
+        >= phase_record["full_map_draws"] + phase_record["animation_draws"]
         for phase_record in phases.values()
     )
-    noop_redraws = sum(
-        phase_record["full_draw_reasons"]["noop_map_packet"]
-        for phase_record in phases.values()
-    )
+    noop_redraws = idle["full_map_draws"]
     guards["full_redraw_accounting"] = {
         "unexpected_or_failed_draws": map_failures,
         "passed": map_failures == 0 and map_draws_match,
     }
     guards["noop_redraw_avoidance"] = {
-        "noop_packet_redraws": noop_redraws,
-        "passed": noop_redraws == 0,
+        "noop_packet_full_redraws": noop_redraws,
+        "passed": noop_redraws == 0 and idle["draw_reasons"]["packet"] == 0,
+    }
+    animation_isolated = (
+        idle["animation_draws"] == idle["samples"]
+        and idle["map"]["animation_level_draws"]
+        == idle["animation_draws"] * idle["map"]["peak_active_levels"]
+        and all(
+            idle["render_stages"][stage]["calls"] == 0
+            for stage in ("map_scratch_clear", "ground", "ground_composite", "lighting")
+        )
+    )
+    guards["animation_isolation"] = {
+        "animation_draws": idle["animation_draws"],
+        "ground_calls": idle["render_stages"]["ground"]["calls"],
+        "lighting_calls": idle["render_stages"]["lighting"]["calls"],
+        "passed": animation_isolated,
+    }
+    idle_wait_recovered = (
+        idle["main_loop"]["work_time"]["max"] < idle["main_loop"]["update_interval_ns"]
+        and idle["main_loop"]["simulated_wait_time"]["p50"] > 0
+    )
+    guards["idle_wait_recovery"] = {
+        "work_max_ns": idle["main_loop"]["work_time"]["max"],
+        "update_interval_ns": idle["main_loop"]["update_interval_ns"],
+        "passed": idle_wait_recovered,
     }
 
     queue_valid = all(
@@ -1050,6 +1091,8 @@ def _phase_summary_for_report(summary: object, context: str) -> dict[str, object
         "work_p95_ms",
         "map_p50_ms",
         "map_p95_ms",
+        "animation_p50_ms",
+        "animation_p95_ms",
         "local_minimap_p50_ms",
         "local_minimap_p95_ms",
         "work_p99_ms",
@@ -1082,6 +1125,8 @@ def _phase_summary_for_report(summary: object, context: str) -> dict[str, object
     for field in (
         "map_p50_ms",
         "map_p95_ms",
+        "animation_p50_ms",
+        "animation_p95_ms",
         "local_minimap_p50_ms",
         "local_minimap_p95_ms",
     ):
@@ -1136,7 +1181,7 @@ def _expected_evidence_checks(
         "checkpoint",
         "instrumentation_identity",
         "candidate_standard_determinism",
-        *V3_GUARD_NAMES,
+        *NATIVE_GUARD_NAMES,
     }
     if comparison:
         expected.add("base_candidate_sustained_p95")
@@ -1151,7 +1196,7 @@ def _expected_evidence_checks(
         )
     for context in contexts:
         expected.add(f"{context}_determinism")
-        expected.update(f"{context}_{name}" for name in V3_GUARD_NAMES)
+        expected.update(f"{context}_{name}" for name in NATIVE_GUARD_NAMES)
     return expected
 
 
@@ -1199,7 +1244,7 @@ def _validate_evidence_check(name: str, value: object, enforce_performance: bool
         }
         integer_fields = expected - common
         boolean_fields = common
-    elif any(name == guard or name.endswith(f"_{guard}") for guard in V3_GUARD_NAMES):
+    elif any(name == guard or name.endswith(f"_{guard}") for guard in NATIVE_GUARD_NAMES):
         expected = common | {"failed_runs", "runs"}
         integer_fields = {"failed_runs", "runs"}
         boolean_fields = common
@@ -1508,8 +1553,9 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             "",
             "The replay injects MAP state at 8 Hz (one 125 ms simulation tick); that update "
             "cadence is not the client display frame rate. Measured replay-work capacity is the "
-            "unslept throughput implied by decode, the main-map draw, production-sized local "
-            "minimap map-core draws when due, and maintenance work. The local minimap uses its "
+            "unslept throughput implied by decode, full-map or animation-only rendering, "
+            "production-sized local minimap map-core draws when due, and maintenance work. "
+            "The local minimap uses its "
             "real 250 ms refresh cadence and 1700×1200 render surface; widget masking/zooming and "
             "the otherwise small UI/widget work are outside this map-focused measurement. The "
             "144 FPS reference (6.944 ms/frame) is informational only and is not an enforced "
@@ -1541,7 +1587,7 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
         )
         summary_metrics = (
             ("Total map-focused update work p95", "work_p95_ms", "ms"),
-            ("Main map p95", "map_p95_ms", "ms"),
+            ("Full map p95", "map_p95_ms", "ms"),
             ("Local minimap map-core p95", "local_minimap_p95_ms", "ms"),
             ("Slow-tail work capacity", "work_capacity_fps_p95", "FPS"),
         )
@@ -1563,7 +1609,7 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             [
                 "### Base → candidate change (standard smooth)",
                 "",
-                "| Phase | Total update work p95 | Change | Main map p95 | Change | "
+                "| Phase | Total update work p95 | Change | Full map p95 | Change | "
                 "Local minimap map-core p95 | Change | Work-capacity FPS (slow tail) |",
                 "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
@@ -1595,7 +1641,7 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             [
                 f"| Total map-focused update work p95 | {unavailable} | "
                 f"{candidate_sustained['work_p95_ms']:.2f} ms | Not computed |",
-                f"| Main map p95 | {unavailable} | "
+                f"| Full map p95 | {unavailable} | "
                 f"{candidate_sustained['map_p95_ms']:.2f} ms | Not computed |",
                 f"| Local minimap map-core p95 | {unavailable} | "
                 f"{candidate_sustained['local_minimap_p95_ms']:.2f} ms | Not computed |",
@@ -1613,10 +1659,11 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             "",
             "| Context | Phase | Ticks/run | Runs | MAP update rate | "
             "Measured replay-work capacity FPS (p50/slow-tail) | Display reference | "
-            "Total work p50/p95 | Main map p50/p95 | Local minimap map-core p50/p95 | "
+            "Total work p50/p95 | Full map p50/p95 | Animation pass p50/p95 | "
+            "Local minimap map-core p50/p95 | "
             "Work p95 / 144 FPS budget | "
             "First → last work-window p95 |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     summaries: list[tuple[str, str, dict[str, object]]] = []
@@ -1640,6 +1687,8 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
                 f"({summary['render_reference_budget_ms']:.3f} ms) | "
                 f"{summary['work_p50_ms']:.2f}/{summary['work_p95_ms']:.2f} ms | "
                 f"{summary['map_p50_ms']:.2f}/{summary['map_p95_ms']:.2f} ms | "
+                f"{summary['animation_p50_ms']:.2f}/"
+                f"{summary['animation_p95_ms']:.2f} ms | "
                 f"{summary['local_minimap_p50_ms']:.2f}/"
                 f"{summary['local_minimap_p95_ms']:.2f} ms | "
                 f"{budget_percent:.1f}% | "
@@ -1653,14 +1702,15 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             "### Candidate MAP and queue activity",
             "",
             "Values are medians per run when a viewport has multiple runs.",
+            "Reason columns are packet, scroll, animation, lighting, resize, UI, and external.",
             "",
-            "| Context | Phase | MAP packets (changed/no-op) | Main-map calls | "
-            "Local-minimap calls | Presents | "
+            "| Context | Phase | MAP packets (changed/no-op) | Full-map calls | "
+            "Animation-only calls | Reasons P/S/A/L/R/U/E | Local-minimap calls | Presents | "
             "Queue peak | Peak bytes | Budget yields/recoveries | Oldest queued | "
             "Simulated queue service | Actual drain p50/p95 | Queue order proof | "
             "Renderer allocations |",
             "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | "
-            "---: | ---: | ---: |",
+            "---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for viewport, name, summary in summaries:
@@ -1668,7 +1718,8 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             summary["map"],
             {
                 "map_packets", "changed_map_packets", "noop_map_packets", "full_map_draws",
-                "primary_map_draws", "auxiliary_map_draws", "presents",
+                "animation_draws", "primary_map_draws", "auxiliary_map_draws",
+                "animation_level_draws", "presents", "draw_reasons",
                 "local_minimap_update_interval_ms", "local_minimap_surface_width",
                 "local_minimap_surface_height",
                 "renderer_allocation_statistics_available", "renderer_allocations",
@@ -1698,10 +1749,18 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             if map_stats["renderer_allocation_statistics_available"]
             else "unavailable"
         )
+        reasons = _require_exact_fields(
+            map_stats["draw_reasons"],
+            {"packet", "scroll", "animation", "lighting", "resize", "ui", "external"},
+            f"{viewport} {name} redraw reasons",
+        )
         lines.append(
             f"| {viewport} | `{name}` | {map_stats['map_packets']} "
             f"({map_stats['changed_map_packets']}/{map_stats['noop_map_packets']}) | "
-            f"{map_stats['primary_map_draws']} | {map_stats['auxiliary_map_draws']} | "
+            f"{map_stats['primary_map_draws']} | {map_stats['animation_draws']} | "
+            f"{reasons['packet']}/{reasons['scroll']}/{reasons['animation']}/"
+            f"{reasons['lighting']}/{reasons['resize']}/{reasons['ui']}/"
+            f"{reasons['external']} | {map_stats['auxiliary_map_draws']} | "
             f"{map_stats['presents']} | {queue['peak_depth']} | "
             f"{_human_bytes(queue['peak_bytes'])} | "
             f"{queue['budget_yields']}/{queue['recoveries']} | "
@@ -1840,6 +1899,8 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             for suffix in (
                 "full_redraw_accounting",
                 "noop_redraw_avoidance",
+                "animation_isolation",
+                "idle_wait_recovery",
                 "queue_plateau_recovery",
                 "lighting_cache_churn",
                 "cache_memory_plateau",
