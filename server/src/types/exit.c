@@ -110,6 +110,22 @@ loop_exit:
 }
 
 /**
+ * Determine whether an exit should be presented as having a usable
+ * destination.
+ *
+ * @param op
+ * Exit to inspect.
+ * @return
+ * True if the exit has an explicit/canonical path or uses the nonzero subtype
+ * contract for automatic linking, false otherwise.
+ */
+bool exit_has_usable_destination(const object *op) {
+    HARD_ASSERT(op != NULL);
+
+    return EXIT_PATH(op) != NULL || op->sub_type != 0;
+}
+
+/**
  * Activate the exit, teleporting the person who applied it to the appropriate
  * destination.
  *
