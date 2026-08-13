@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -30,6 +30,7 @@
 #ifndef CLIENT_H
 #define CLIENT_H
 
+#include <client_command_queue.h>
 #include <metaserver_options.h>
 #include <stun_config.h>
 
@@ -78,6 +79,9 @@ typedef struct command_buffer {
 
     /** Previous command in queue. */
     struct command_buffer *prev;
+
+    /** Monotonic arrival timestamp, in microseconds. */
+    uint64_t enqueued_us;
 
     /** Length of the data. */
     size_t len;
@@ -152,6 +156,12 @@ typedef struct clioption_settings_struct {
 extern Client_Player cpl;
 
 extern void DoClient(void);
+
+/** Drain inbound envelopes through the production dispatcher using an injected clock. */
+extern void client_commands_drain_with_clock(uint64_t budget_us,
+                                             client_command_queue_clock_func clock_func,
+                                             void *clock_data,
+                                             client_command_queue_drain_result_t *result);
 
 extern bool check_animation_status(int anum);
 

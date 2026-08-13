@@ -6,6 +6,7 @@ set(SOURCES
 	src/client/face_loader.c
 	src/client/animations.c
 	src/client/client.c
+	src/client/client_command_queue.c
 	src/client/cmd_aliases.c
 	src/client/commands.c
 	src/client/connection_failure.c

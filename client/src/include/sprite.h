@@ -106,6 +106,23 @@ typedef struct sprite_struct {
     SDL_Surface *bitmap;
 } sprite_struct;
 
+#define SPRITE_CACHE_STATISTICS_VERSION UINT8_C(1)
+
+/** Observable transformed/effects-sprite cache state for benchmarks. */
+typedef struct sprite_cache_statistics {
+    uint64_t lookups;
+    uint64_t hits;
+    uint64_t misses;
+    uint64_t insertions;
+    uint64_t gc_runs;
+    uint64_t gc_removals;
+    uint64_t gc_time_ns;
+    size_t entries;
+    size_t estimated_bytes;
+    size_t peak_entries;
+    size_t peak_estimated_bytes;
+} sprite_cache_statistics_t;
+
 /**
  * Return whether a surface pixel belongs to its visible silhouette.
  *
@@ -149,6 +166,23 @@ extern void sprite_free_sprite(sprite_struct *sprite);
 extern void sprite_cache_free_all(void);
 
 extern void sprite_cache_gc(void);
+
+#ifdef ATRINIK_WIDGET_TESTS
+/** Run one transformed-sprite GC pass without its production random sampling gate. */
+extern void sprite_cache_gc_force(void);
+#endif
+
+/** Use a deterministic timestamp for transformed-sprite cache aging in offline replays. */
+extern void sprite_cache_clock_override_set(time_t now);
+
+/** Restore wall-clock transformed-sprite cache aging. */
+extern void sprite_cache_clock_override_clear(void);
+
+/** Reset cache event counters while retaining the current occupancy gauges. */
+extern void sprite_cache_statistics_reset(void);
+
+/** Copy transformed/effects-sprite cache counters and occupancy gauges. */
+extern void sprite_cache_statistics_get(sprite_cache_statistics_t *statistics);
 
 extern void surface_show(SDL_Surface *surface, int x, int y, SDL_Rect *srcrect, SDL_Surface *src);
 
