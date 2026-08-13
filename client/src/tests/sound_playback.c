@@ -183,6 +183,10 @@ static void test_server_and_ambient_sources(void) {
     TEST_CHECK(strstr(captured, "loop=-1") != NULL);
     TEST_CHECK(strstr(captured, "distance=") != NULL);
     packet_free(ambient);
+
+    size_t starts = occurrences("effect started");
+    sound_ambient_mapcroll(1, 0);
+    TEST_CHECK(occurrences("effect started") == starts);
     sound_ambient_clear();
 }
 
@@ -222,11 +226,22 @@ static void test_music_lifecycle(void) {
     TEST_CHECK(occurrences("music stopped") == 2);
     TEST_CHECK(!sound_playing_music());
 
+    sound_start_bg_music("missing.ogg", 50, 0);
+    TEST_CHECK(occurrences("music started") == 2);
+    TEST_CHECK(occurrences("music stopped") == 2);
+    TEST_CHECK(!sound_playing_music());
+
     reset_capture();
     update_map_bg_music("map-track.ogg -1 -20");
     TEST_CHECK(strstr(captured, "music started source=map") != NULL);
     TEST_CHECK(strstr(captured, "requested=\"map-track.ogg\"") != NULL);
     TEST_CHECK(strstr(captured, "volume=80 loop=-1") != NULL);
+
+    reset_capture();
+    sound_stop_bg_music();
+    TEST_CHECK(occurrences("music stopped") == 1);
+    TEST_CHECK(strstr(captured, "source=map") != NULL);
+    TEST_CHECK(strstr(captured, "reason=stopped") != NULL);
 
     reset_capture();
     sound_deinit();

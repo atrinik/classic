@@ -89,7 +89,7 @@ void audio_log_effect_started(const char *source,
         LOG(AUDIO,
             "effect started source=%s requested=\"%s\" effective=\"%s\" channel=%d volume=%d "
             "loop=%d angle=%d distance=%d",
-            source,
+            source != NULL ? source : "unknown",
             requested_log,
             effective_log,
             channel,
@@ -101,7 +101,7 @@ void audio_log_effect_started(const char *source,
         LOG(AUDIO,
             "effect started source=%s requested=\"%s\" effective=\"%s\" channel=%d volume=%d "
             "loop=%d",
-            source,
+            source != NULL ? source : "unknown",
             requested_log,
             effective_log,
             channel,
@@ -120,7 +120,7 @@ void audio_log_music_started(const char *source,
     audio_log_asset_escape(effective, VS(effective_log));
     LOG(AUDIO,
         "music started source=%s requested=\"%s\" effective=\"%s\" volume=%d loop=%d",
-        source,
+        source != NULL ? source : "unknown",
         requested_log,
         effective_log,
         volume,
@@ -130,5 +130,9 @@ void audio_log_music_started(const char *source,
 void audio_log_music_stopped(const char *source, const char *effective, const char *reason) {
     char effective_log[MAX_BUF * 2];
     audio_log_asset_escape(effective, VS(effective_log));
-    LOG(AUDIO, "music stopped source=%s effective=\"%s\" reason=%s", source, effective_log, reason);
+    LOG(AUDIO,
+        "music stopped source=%s effective=\"%s\" reason=%s",
+        source != NULL ? source : "unknown",
+        effective_log,
+        reason != NULL ? reason : "unknown");
 }
