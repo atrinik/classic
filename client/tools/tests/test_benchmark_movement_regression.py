@@ -92,6 +92,8 @@ def lighting_level(depth: int, draws: int, name: str, mode: str) -> dict[str, ob
                 "field_begins": draws,
                 "field_dirty_marks": rebuilds,
                 "field_dirty_pixels": rebuilds * 1024,
+                "field_translations": rebuilds if name == "sustained" else 0,
+                "field_partial_rebuilds": rebuilds if name == "sustained" else 0,
                 "field_rebuilds": rebuilds,
                 "field_reuses": reuses,
                 "render_calls": draws,
@@ -919,6 +921,54 @@ class EvidenceTests(unittest.TestCase):
         self.assertFalse(evidence["checks"]["lighting_cache_churn"]["enforced"])
         self.assertTrue(evidence["checks"]["noop_redraw_avoidance"]["passed"])
         self.assertTrue(evidence["checks"]["full_redraw_accounting"]["passed"])
+
+    def test_translated_partial_lighting_passes_without_whole_field_reuse(self) -> None:
+        translated = native_record()
+        sustained = translated["phases"][1]
+        counters = sustained["lighting"]["counters"]
+        counters["field_reuses"] = 0
+        counters["field_rebuilds"] = 2_400
+        counters["field_dirty_marks"] = 2_400
+        counters["field_translations"] = 2_400
+        counters["field_partial_rebuilds"] = 2_380
+        counters["field_dirty_pixels"] = 93_765_760
+        guard = benchmark._guard_native_record(translated)["lighting_cache_churn"]
+        self.assertTrue(guard["passed"])
+        self.assertEqual(guard["field_translations"], 2_400)
+        self.assertEqual(guard["field_partial_rebuilds"], 2_380)
+
+        counters["field_dirty_pixels"] = 480 * 5 * 320 * 240
+        self.assertFalse(
+            benchmark._guard_native_record(translated)["lighting_cache_churn"][
+                "passed"
+            ]
+        )
+
+    def test_incidental_lighting_reuse_does_not_mask_full_rebuilds(self) -> None:
+        regressed = native_record()
+        counters = regressed["phases"][1]["lighting"]["counters"]
+        counters["field_translations"] = 0
+        counters["field_partial_rebuilds"] = 0
+        self.assertFalse(
+            benchmark._guard_native_record(regressed)["lighting_cache_churn"][
+                "passed"
+            ]
+        )
+
+    def test_incidental_partial_rebuild_does_not_mask_full_rebuilds(self) -> None:
+        regressed = native_record()
+        counters = regressed["phases"][1]["lighting"]["counters"]
+        counters["field_reuses"] = 0
+        counters["field_rebuilds"] = 2_400
+        counters["field_dirty_marks"] = 2_400
+        counters["field_translations"] = 1
+        counters["field_partial_rebuilds"] = 1
+        counters["field_dirty_pixels"] = 320 * 240 * 2_400 - 1
+        self.assertFalse(
+            benchmark._guard_native_record(regressed)["lighting_cache_churn"][
+                "passed"
+            ]
+        )
 
     def test_injected_noop_full_redraw_fails_noop_redraw_guard(self) -> None:
         redrawn = native_record()

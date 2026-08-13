@@ -22,9 +22,15 @@ telemetry includes changed/no-op MAP traffic, queue peak depth and oldest age,
 lighting rebuild/reuse, sprite-cache hits/misses/evictions, memory/resource
 data, redraw reasons, and correctness checks. Large-viewport phases are shown
 separately when present. The 144 FPS value in the benchmark contract is an
-informational display reference; the enforced movement budgets are the existing
+informational display reference. Hosted-runner timing, including the existing
 standard and large sustained p95 limits in
-`client/tools/benchmark_movement_regression.py`.
+`client/tools/benchmark_movement_regression.py`, remains informational in this
+reporting phase. The workflow can record a compatible regression and open an
+alert after two observations, but timing alone does not fail the benchmark job.
+Enabling an absolute or relative timing gate requires a separate reviewed
+policy change backed by pinned-runner variance evidence. Correctness,
+determinism, queue recovery, redraw isolation, and resource bounds remain
+enforced.
 
 ## Rerun and backfill
 
@@ -33,16 +39,38 @@ is serialized with `classic-daily-client-performance`; it never runs from a
 pull-request ref and never executes untrusted pull-request code in its
 publishing job. The run records its source SHA, workflow URL, artifact, and
 cohort. Re-running the same run identity replaces its point rather than
-duplicating it.
+duplicating it, while each attempt retains an attempt-qualified raw artifact.
+Both benchmark and publisher check out and verify the exact triggering `main`
+commit, so a moving branch cannot mislabel the measured source.
+
+Before publication, the reporter revalidates the closed movement-evidence
+schema and recomputes its summaries and checks from the raw records. It requires
+two clean, commit-matched runs for each standard/large and smooth/discrete
+context. Missing contexts, contradictory status, or a mismatched implementation
+revision fail as infrastructure errors rather than entering the trusted trend.
+The workflow run ID is the durable observation identity, including when an
+attempt crosses a UTC date boundary.
 
 ## Alerts and response
 
-An enforced check failure is retained as a report result. A regression issue is
-keyed by cohort and metric and is opened only after two consecutive compatible
-failures. Subsequent failures update that one issue. Two consecutive compatible
-passes close the alert and document recovery. Missing, corrupt, or incomplete
-evidence is an infrastructure failure and must be investigated from the job
-logs/artifact; it is never treated as a green point.
+A monitored check failure is retained as a report result. An enforced
+correctness or resource failure fails the benchmark; an informational timing
+failure does not. A regression issue is keyed by cohort and metric and is
+opened only after two consecutive compatible failures. Subsequent failures
+update that one issue. Two consecutive compatible passes close the alert and
+document recovery. Missing, corrupt, or incomplete evidence is an
+infrastructure failure and must be investigated from the job logs/artifact; it
+is never treated as a green point.
+Only transitions produced by the current observation are reconciled; a cohort
+change cannot replay an older cohort's alert transition. A corrected retained
+observation is recomputed in stable workflow-run order. Once an observation has
+aged beyond detailed retention it cannot be rerun into the trend because its
+original position and result can no longer be replaced safely.
+
+Before entering the pinned build container, the workflow acquires and verifies
+the complete immutable dependency input bundle. The benchmark itself then runs
+with container networking disabled, so a missing or stale input fails closed
+instead of silently changing the measured cohort.
 
 When responding, first verify the cohort and source SHA, then compare the
 sustained p95 and first-to-last window, redraw reasons, queue recovery,
