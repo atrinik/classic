@@ -359,6 +359,13 @@ int handle_newcs_player(player *pl) {
         return -1;
     }
 
+    /* Clear paralysis before dispatching the first action whose speed debt has
+     * been repaid. Commands such as push also consult the paralysis flag. */
+    if (pl->ob->speed_left >= 0.0f && QUERY_FLAG(pl->ob, FLAG_PARALYZED)) {
+        CLEAR_FLAG(pl->ob, FLAG_PARALYZED);
+        player_status_update_paralysis(pl->ob);
+    }
+
     socket_server_handle_client(pl);
 
     if (!pl->ob || !OBJECT_ACTIVE(pl->ob) || pl->cs->state == ST_DEAD) {
@@ -368,12 +375,6 @@ int handle_newcs_player(player *pl) {
     /* Check speed. */
     if (pl->ob->speed_left < 0.0f) {
         return 0;
-    }
-
-    /* If we are here, we're never paralyzed anymore. */
-    if (QUERY_FLAG(pl->ob, FLAG_PARALYZED)) {
-        CLEAR_FLAG(pl->ob, FLAG_PARALYZED);
-        player_status_update_paralysis(pl->ob);
     }
 
     if (CONTR(pl->ob)->run_on) {

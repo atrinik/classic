@@ -27,6 +27,26 @@ static packet_struct *queued_command_find(socket_struct *cs, uint8_t type) {
     return found;
 }
 
+static bool queued_drawinfo_has(socket_struct *cs, const char *expected) {
+    for (packet_struct *packet = cs->packets; packet != NULL; packet = packet->next) {
+        if (packet->type != CLIENT_CMD_DRAWINFO) {
+            continue;
+        }
+        packet_reader_t reader;
+        char color[64];
+        char message[HUGE_BUF];
+        packet_reader_init(&reader, packet->data, packet->len);
+        (void)packet_reader_read_uint8(&reader);
+        ck_assert(packet_reader_read_string(&reader, VS(color)));
+        ck_assert(packet_reader_read_string(&reader, VS(message)));
+        ck_assert_int_eq(packet_reader_error(&reader), PACKET_ERROR_NONE);
+        if (strcmp(message, expected) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void assert_status_entry(packet_reader_t *reader,
                                 const char *expected_key,
                                 const char *expected_name,
@@ -596,8 +616,13 @@ START_TEST(test_player_status_paralysis_refresh_snapshot_and_cure) {
 
     socket_buffer_clear(CONTR(pl)->cs);
     pl->speed_left = 0.0;
+    pl->direction = 1;
+    const uint8_t push[] = {SERVER_CMD_PLAYER_CMD, '/', 'p', 'u', 's', 'h', '\0'};
+    ck_assert(socket_server_command_queue_append(CONTR(pl)->cs, push, sizeof(push)));
     ck_assert_int_eq(handle_newcs_player(CONTR(pl)), 0);
     ck_assert(!QUERY_FLAG(pl, FLAG_PARALYZED));
+    ck_assert(queued_drawinfo_has(CONTR(pl)->cs, "You fail to push anything."));
+    ck_assert(!queued_drawinfo_has(CONTR(pl)->cs, "You are unable to push anything."));
     packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
     ck_assert_ptr_nonnull(packet);
     packet_reader_init(&reader, packet->data, packet->len);
