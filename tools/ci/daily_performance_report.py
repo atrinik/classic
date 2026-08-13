@@ -72,8 +72,9 @@ def _record_summary(records: list[dict[str, Any]], name: str) -> dict[str, Any]:
 
     return {
         "runs": len(records),
-        "work_ms": {field: round(_median(_phase_values(records, name, field)) / 1_000_000, 2)
-                    for field in ("p50_ns", "p95_ns", "p99_ns", "max_ns")},
+        "work_ms": {short: round(_median(_phase_values(records, name, field)) / 1_000_000, 2)
+                    for short, field in (("p50", "p50_ns"), ("p95", "p95_ns"),
+                                         ("p99", "p99_ns"), ("max", "max_ns"))},
         "window_p95_ms": {
             "first": round(_median(_phase_values(records, name, "first_window_p95_ns")) / 1_000_000, 2),
             "last": round(_median(_phase_values(records, name, "last_window_p95_ns")) / 1_000_000, 2),

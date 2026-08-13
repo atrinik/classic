@@ -78,6 +78,33 @@ class DailyReportTests(unittest.TestCase):
         self.assertFalse(state["active"])
         self.assertEqual(state["last_transition"], "recovered")
 
+    def test_large_context_and_summary_links_are_retained(self) -> None:
+        item = evidence()
+        item["records"]["candidate_large"] = [copy.deepcopy(item["records"]["candidate_standard"][0])]
+        item["records"]["additional_contexts"] = {
+            "standard_discrete": [copy.deepcopy(item["records"]["candidate_standard"][0])]
+        }
+        item["checks"] = {
+            "candidate_sustained_p95": {"passed": True},
+            "candidate_large_sustained_p95": {"passed": True},
+        }
+        point = report.build_point(item, commit="a" * 40, run_id="7",
+                                   recorded_at="2026-08-13T00:00:00+00:00",
+                                   environment={"workflow_url": "https://example.test/run"})
+        trend = report.merge_trend(None, point)
+        summary = report.render_summary(point, trend)
+        self.assertIn("Large viewport", summary)
+        self.assertIn("Workflow run", summary)
+
+    def test_failed_complete_evidence_is_retained_for_alerting(self) -> None:
+        item = evidence()
+        item["status"] = "failed"
+        item["failed"] = True
+        item["checks"] = {"candidate_sustained_p95": {"passed": False}}
+        point = report.build_point(item, commit="a" * 40, run_id="7",
+                                   recorded_at="2026-08-13T00:00:00+00:00", environment={})
+        self.assertEqual(point["status"], "failed")
+
 
 if __name__ == "__main__":
     unittest.main()
