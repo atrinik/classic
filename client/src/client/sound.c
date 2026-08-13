@@ -1026,6 +1026,26 @@ void sound_stop_effect(int channel) {
 #endif
 }
 
+static void sound_set_effect_position(int channel, int angle, int distance) {
+#ifdef HAVE_SDL_MIXER
+    if (channel < 0 || channel >= SOUND_EFFECT_TRACKS || sound_effect_tracks[channel] == NULL) {
+        return;
+    }
+
+    float pan = sinf((float)angle * (float)M_PI / 180.0f);
+    float attenuation = 1.0f - MIN(255, MAX(0, distance)) / 255.0f;
+    MIX_StereoGains gains = {
+        .left = attenuation * (pan > 0.0f ? 1.0f - pan : 1.0f),
+        .right = attenuation * (pan < 0.0f ? 1.0f + pan : 1.0f),
+    };
+    MIX_SetTrackStereo(sound_effect_tracks[channel], &gains);
+#else
+    (void)channel;
+    (void)angle;
+    (void)distance;
+#endif
+}
+
 static sound_effect_position_t
 sound_position_from_offset(int x, int y, int max_range, int min_3d_distance) {
     sound_effect_position_t position = {.positioned = true};

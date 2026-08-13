@@ -365,6 +365,7 @@ if (BUILD_TESTING)
     add_executable(client-sound-playback-tests
         src/tests/sound_playback.c
         src/client/audio_log.c
+        src/client/sound_command.c
         src/client/sound.c)
     atrinik_configure_target(client-sound-playback-tests)
     target_compile_definitions(client-sound-playback-tests PRIVATE
