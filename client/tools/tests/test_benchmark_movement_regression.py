@@ -853,11 +853,23 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(summary["queue"]["drain_p50_ms"], 1.0)
         self.assertTrue(summary["queue"]["order_digests_comparable"])
         self.assertEqual(summary["lighting"]["field_dirty_pixels"], 2_456_576)
+        self.assertEqual(
+            summary["render_stages"]["map"],
+            {"scope": "per_map_draw", "calls_per_run": 720, "avg_ms_per_call": 0.001},
+        )
+        self.assertEqual(summary["render_stages"]["lighting"]["scope"], "per_level")
+        self.assertEqual(summary["render_stages"]["lighting"]["calls_per_run"], 2400)
         resources = benchmark.resource_summary([native_record(), native_record()])
         self.assertEqual(resources["process_peak_rss_median_bytes"], 1024)
         self.assertEqual(resources["sprite_cache_end_entries"], 4)
         self.assertEqual(resources["sprite_cache_peak_bytes"], 1024)
         self.assertEqual(resources["sprite_cache_gc_removals"], 0)
+
+    def test_zero_call_render_stage_is_not_reported_as_zero_cost(self) -> None:
+        record = native_record(mode="discrete")
+        summary = benchmark.phase_summary([record], "sustained")
+        self.assertEqual(summary["render_stages"]["lighting"]["calls_per_run"], 0)
+        self.assertIsNone(summary["render_stages"]["lighting"]["avg_ms_per_call"])
 
     def test_window_guard_uses_actual_first_and_last_windows(self) -> None:
         candidate = native_record(first_window_ns=1_000_000, last_window_ns=1_110_000)
@@ -1141,7 +1153,7 @@ class EvidenceTests(unittest.TestCase):
 
     def test_error_evidence_is_bounded_and_versioned(self) -> None:
         evidence = benchmark.error_evidence(benchmark.BenchmarkError("x" * 600))
-        self.assertEqual(evidence["schema_version"], 4)
+        self.assertEqual(evidence["schema_version"], 5)
         self.assertEqual(len(evidence["error"]), 500)
 
 
@@ -1177,6 +1189,12 @@ class CommentTests(unittest.TestCase):
         self.assertIn("Process peak RSS median/max", report)
         self.assertIn("Sprite entries end/peak", report)
         self.assertIn("GC removals", report)
+        self.assertIn("Render-profiler stages (standard smooth sustained)", report)
+        self.assertIn("Average ms/call (base → candidate)", report)
+        self.assertIn("Parent and child scopes overlap and are not additive", report)
+        self.assertIn("live profiler buckets", report)
+        self.assertIn("`per_level`", report)
+        self.assertIn("n/a", report)
         self.assertLessEqual(len(report.encode()), 65_536)
         self.assertNotIn("FPS equivalent", report)
 
@@ -1249,7 +1267,7 @@ class CommentTests(unittest.TestCase):
         self.assertIn("was skipped", benchmark.render_comment(
             benchmark.skipped_evidence("not selected"), "success"
         ))
-        error = {"schema_version": 4, "status": "error", "error": "untrusted | markdown"}
+        error = {"schema_version": 5, "status": "error", "error": "untrusted | markdown"}
         error_report = benchmark.render_comment(error, "failure")
         self.assertIn("generation failed", error_report)
         self.assertNotIn("untrusted", error_report)
@@ -1363,7 +1381,7 @@ class CommentTests(unittest.TestCase):
             discrete.write_text("x")
             output = root / "evidence.json"
             with mock.patch.object(benchmark, "candidate_only", return_value={
-                "schema_version": 4, "status": "passed", "failed": False
+                "schema_version": 5, "status": "passed", "failed": False
             }) as candidate:
                 result = benchmark.main(
                     [
@@ -1440,7 +1458,7 @@ class CommentTests(unittest.TestCase):
             with mock.patch.object(
                 benchmark,
                 "compare",
-                return_value={"schema_version": 4, "status": "passed", "failed": False},
+                return_value={"schema_version": 5, "status": "passed", "failed": False},
             ) as compare:
                 self.assertEqual(benchmark.main(arguments), 0)
             self.assertFalse(compare.call_args.kwargs["enforce_performance"])

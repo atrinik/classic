@@ -15,9 +15,11 @@ from pathlib import Path
 import statistics
 from typing import Any
 
+from client.tools.movement_benchmark_schema import RENDER_STAGES
 
-SCHEMA_VERSION = 1
-EVIDENCE_SCHEMA_VERSION = 4
+
+SCHEMA_VERSION = 2
+EVIDENCE_SCHEMA_VERSION = 5
 TREND_RETENTION = 90
 PHASES = ("cold", "sustained", "idle", "resumed")
 
@@ -42,6 +44,25 @@ def _median(values: list[int]) -> int:
     if not values:
         raise ReportError("cannot summarize an empty sample")
     return int(statistics.median(values))
+
+
+def _render_stage_summary(phases: list[dict[str, Any]], name: str) -> dict[str, dict[str, Any | None]]:
+    result: dict[str, dict[str, Any | None]] = {}
+    for stage_name, scope in RENDER_STAGES.items():
+        stages = [_mapping(_mapping(phase.get("render_stages"), f"{name} render stages").get(stage_name),
+                           f"{name}.{stage_name} render stage") for phase in phases]
+        calls = _median([_integer(stage.get("calls"), f"{name}.{stage_name} calls") for stage in stages])
+        elapsed = [_integer(stage.get("elapsed"), f"{name}.{stage_name} elapsed") for stage in stages]
+        if any(stage.get("unit") != "us" or stage.get("scope") != scope for stage in stages):
+            raise ReportError(f"{name}.{stage_name} render metadata is invalid")
+        averages = [value / stage["calls"] / 1_000 for value, stage in zip(elapsed, stages)
+                    if stage["calls"]]
+        result[stage_name] = {
+            "scope": scope,
+            "calls_per_run": calls,
+            "avg_ms_per_call": round(statistics.median(averages), 3) if averages else None,
+        }
+    return result
 
 
 def _phase_values(records: list[dict[str, Any]], name: str, field: str) -> list[int]:
@@ -91,6 +112,7 @@ def _record_summary(records: list[dict[str, Any]], name: str) -> dict[str, Any]:
                           "changed_map_packets", "noop_map_packets")
         },
         "draw_reasons": reasons,
+        "render_stages": _render_stage_summary(phases, name),
         "queue": {
             field: _median([_integer(item.get(field), f"{name}.queue.{field}") for item in queue])
             for field in ("peak_depth", "peak_bytes", "oldest_age_us", "budget_yields", "recoveries")
@@ -255,6 +277,14 @@ def render_summary(point: dict[str, Any], trend: dict[str, Any]) -> str:
                   f"- Sprite cache hits/misses/evictions: `{sprite['hits']}` / `{sprite['misses']}` / `{sprite['gc_removals']}`",
                   "", "### Retention", "",
                   f"This cohort retains `{len(trend['cohorts'][point['cohort']])}` points (up to {TREND_RETENTION})."])
+    lines.extend(["", "### Sustained render-profiler stages", "",
+                  "Timing is the median of each fresh run's average `elapsed / calls` in "
+                  "milliseconds per invocation, not a p50/p95 distribution. Parent and child "
+                  "scopes overlap and are not additive.", "",
+                  "| Stage | Scope | Calls/run | Average ms/call |", "| --- | --- | ---: | ---: |"])
+    for name, stage in sustained["render_stages"].items():
+        average = "n/a" if stage["avg_ms_per_call"] is None else f"{stage['avg_ms_per_call']:.3f} ms"
+        lines.append(f"| `{name}` | `{stage['scope']}` | {stage['calls_per_run']} | {average} |")
     transitions = [key for key, value in trend.get("alerts", {}).items()
                    if value.get("last_transition") in ("regressed", "recovered")]
     if transitions:
