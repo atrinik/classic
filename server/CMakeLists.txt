@@ -398,6 +398,7 @@ if (BUILD_TESTING AND NOT MINGW)
         target_include_directories(atrinik-server-tests BEFORE PRIVATE
             ${ATRINIK_SERVER_INCLUDE_DIRS})
         target_compile_definitions(atrinik-server-tests PRIVATE
+            ATRINIK_TESTING
             ATRINIK_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data")
         target_link_libraries(atrinik-server-tests PRIVATE
             Atrinik::Core

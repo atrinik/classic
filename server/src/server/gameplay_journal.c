@@ -24,12 +24,13 @@
 
 #ifdef WIN32
 #include <io.h>
+#include <windows.h>
 #endif
 
 #define JOURNAL_DIRECTORY "gameplay-journal"
 #define JOURNAL_FILE_LIMIT (8U * 1024U * 1024U)
 #define JOURNAL_RETENTION_FILES 16U
-#define JOURNAL_PENDING_LIMIT 1024U
+#define JOURNAL_PENDING_LIMIT 64U
 
 typedef struct pending_transaction {
     char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
@@ -37,6 +38,7 @@ typedef struct pending_transaction {
 
 typedef struct journal_state {
     FILE *fp;
+    int lock_fd;
     char directory[HUGE_BUF];
     char server_id[GAMEPLAY_JOURNAL_ID_MAX + 1];
     char run_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
@@ -53,7 +55,28 @@ typedef struct journal_state {
     bool failed;
 } journal_state_t;
 
-static journal_state_t journal;
+static journal_state_t journal = {.lock_fd = -1};
+
+#ifdef ATRINIK_TESTING
+static bool journal_test_fail_writes;
+static size_t journal_test_file_limit = JOURNAL_FILE_LIMIT;
+
+void gameplay_journal_fail_writes_for_test(bool fail) {
+    journal_test_fail_writes = fail;
+}
+
+void gameplay_journal_file_limit_for_test(size_t limit) {
+    journal_test_file_limit = limit;
+}
+#endif
+
+static size_t journal_file_limit(void) {
+#ifdef ATRINIK_TESTING
+    return journal_test_file_limit;
+#else
+    return JOURNAL_FILE_LIMIT;
+#endif
+}
 
 typedef struct retained_file {
     char path[HUGE_BUF];
@@ -72,6 +95,24 @@ static bool journal_token_valid(const char *value, bool allow_empty) {
         bool alphanumeric =
             (*cp >= 'a' && *cp <= 'z') || (*cp >= 'A' && *cp <= 'Z') || (*cp >= '0' && *cp <= '9');
         if (!alphanumeric && strchr("_.:/@+-", *cp) == NULL) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool journal_character_valid(const char *value) {
+    if (value == NULL) {
+        return false;
+    }
+    size_t length = strlen(value);
+    if (length == 0 || length > GAMEPLAY_JOURNAL_ID_MAX) {
+        return false;
+    }
+    for (const unsigned char *cp = (const unsigned char *)value; *cp != '\0'; cp++) {
+        bool alphanumeric =
+            (*cp >= 'a' && *cp <= 'z') || (*cp >= 'A' && *cp <= 'Z') || (*cp >= '0' && *cp <= '9');
+        if (!alphanumeric && *cp != ' ' && *cp != '\'' && *cp != '-') {
             return false;
         }
     }
@@ -111,6 +152,65 @@ static int journal_retained_compare(const void *left, const void *right) {
         return 1;
     }
     return strcmp(a->path, b->path);
+}
+
+static bool journal_sync_directory(void) {
+#ifdef WIN32
+    return true;
+#else
+    int fd = open(journal.directory, O_RDONLY | O_DIRECTORY);
+    if (fd < 0) {
+        return false;
+    }
+    bool ok = fsync(fd) == 0;
+    if (close(fd) != 0) {
+        ok = false;
+    }
+    return ok;
+#endif
+}
+
+static bool journal_lock(void) {
+    char path[HUGE_BUF];
+    if (snprintf(VS(path), "%s/journal.lock", journal.directory) >= (int)sizeof(path)) {
+        return false;
+    }
+    int flags = O_RDWR | O_CREAT;
+#ifndef WIN32
+    flags |= O_NOFOLLOW;
+#endif
+    int fd = open(path, flags, SAVE_MODE);
+    if (fd < 0) {
+        return false;
+    }
+#ifndef WIN32
+    struct stat metadata;
+    if (fstat(fd, &metadata) != 0 || !S_ISREG(metadata.st_mode) ||
+        (metadata.st_mode & 0777) != SAVE_MODE) {
+        close(fd);
+        return false;
+    }
+#endif
+#ifdef WIN32
+    OVERLAPPED overlapped = {0};
+    HANDLE handle = (HANDLE)_get_osfhandle(fd);
+    bool ok = handle != INVALID_HANDLE_VALUE &&
+              LockFileEx(handle,
+                         LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                         0,
+                         1,
+                         0,
+                         &overlapped) != 0;
+#else
+    struct flock lock = {.l_type = F_WRLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 1};
+    bool ok = fcntl(fd, F_SETLK, &lock) == 0;
+#endif
+    if (!ok) {
+        close(fd);
+        return false;
+    }
+    journal.lock_fd = fd;
+    return journal_sync_directory();
 }
 
 static bool journal_enforce_retention(void) {
@@ -160,6 +260,7 @@ static bool journal_enforce_retention(void) {
     if (closedir(dir) != 0) {
         ok = false;
     }
+    bool removed = false;
     if (ok && count >= JOURNAL_RETENTION_FILES) {
         qsort(files, count, sizeof(*files), journal_retained_compare);
         size_t remove_count = count - JOURNAL_RETENTION_FILES + 1;
@@ -168,7 +269,11 @@ static bool journal_enforce_retention(void) {
                 ok = false;
                 break;
             }
+            removed = true;
         }
+    }
+    if (ok && removed) {
+        ok = journal_sync_directory();
     }
     free(files);
     return ok;
@@ -240,12 +345,20 @@ static bool journal_open_file(void) {
         unlink(path);
         return false;
     }
+    if (!journal_sync_directory()) {
+        fclose(journal.fp);
+        journal.fp = NULL;
+        return false;
+    }
     journal.file_size = 0;
     return true;
 }
 
 static bool journal_rotate(size_t next_size) {
-    if (journal.fp != NULL && journal.file_size + next_size <= JOURNAL_FILE_LIMIT) {
+    if (journal.fp != NULL && journal.file_size + next_size <= journal_file_limit()) {
+        return true;
+    }
+    if (journal.fp != NULL && journal.pending_count != 0) {
         return true;
     }
     if (journal.fp != NULL) {
@@ -287,7 +400,7 @@ static bool journal_append(StringBuffer *record) {
     size_t length = stringbuffer_length(record);
     bool forced_failure = false;
 #ifdef ATRINIK_TESTING
-    forced_failure = getenv("ATRINIK_TEST_GAMEPLAY_JOURNAL_WRITE_FAILURE") != NULL;
+    forced_failure = journal_test_fail_writes;
 #endif
     if (forced_failure || !journal_rotate(length) ||
         fwrite(stringbuffer_data(record), 1, length, journal.fp) != length || !journal_sync()) {
@@ -371,8 +484,7 @@ bool gameplay_journal_init(const char *datapath,
         !journal_profile_copy(profile) ||
         snprintf(VS(journal.directory), "%s/%s", datapath, JOURNAL_DIRECTORY) >=
             (int)sizeof(journal.directory) ||
-        path_ensure_real_directory(journal.directory, SAVE_MODE_DIR) != PATH_DIRECTORY_OK ||
-        !journal_random_id(journal.run_id)) {
+        path_ensure_real_directory(journal.directory, SAVE_MODE_DIR) != PATH_DIRECTORY_OK) {
         journal.failed = true;
         return false;
     }
@@ -383,6 +495,10 @@ bool gameplay_journal_init(const char *datapath,
         return false;
     }
 #endif
+    if (!journal_lock() || !journal_random_id(journal.run_id)) {
+        journal.failed = true;
+        return false;
+    }
     snprintf(VS(journal.server_id), "%s", server_id);
     if (!journal_open_file()) {
         journal.failed = true;
@@ -405,7 +521,21 @@ void gameplay_journal_deinit(void) {
             LOG(ERROR, "Gameplay journal could not complete its shutdown flush.");
         }
     }
+    if (journal.lock_fd >= 0) {
+#ifdef WIN32
+        OVERLAPPED overlapped = {0};
+        HANDLE handle = (HANDLE)_get_osfhandle(journal.lock_fd);
+        if (handle != INVALID_HANDLE_VALUE) {
+            (void)UnlockFileEx(handle, 0, 1, 0, &overlapped);
+        }
+#else
+        struct flock lock = {.l_type = F_UNLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 1};
+        (void)fcntl(journal.lock_fd, F_SETLK, &lock);
+#endif
+        (void)close(journal.lock_fd);
+    }
     memset(&journal, 0, sizeof(journal));
+    journal.lock_fd = -1;
 }
 
 bool gameplay_journal_available(void) {
@@ -430,7 +560,7 @@ bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
     if (!gameplay_journal_available() || subject == NULL || change == NULL ||
         transaction_id == NULL || kind_name == NULL || !journal_token_valid(reason, false) ||
         !journal_token_valid(subject->account_id, false) ||
-        !journal_token_valid(subject->character_id, false) ||
+        !journal_character_valid(subject->character_id) ||
         !journal_token_valid(subject->map_id, true) ||
         !journal_token_valid(change->subject_id, false) ||
         !journal_token_valid(change->lineage_id, true) || !journal_change_valid(change) ||

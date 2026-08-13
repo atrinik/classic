@@ -68,12 +68,21 @@ and journal on the same durability domain and include both in backups.
 ## Files, privacy, and retention
 
 Records live under `DATAPATH/gameplay-journal`, normally mode `0700`, in files
-named `journal-RUNID-NNNN.jsonl`, mode `0600`. A file rotates before exceeding
-8 MiB. At process start the server retains at most 15 older regular, private
-journal files before opening the new file, for an upper bound of 16 files
-(approximately 128 MiB). Unsafe types, symlinks, or insecure retained-file
-permissions fail startup closed. Retention is age-ordered and intentionally
-does not inspect or modify unrelated names.
+named `journal-RUNID-NNNN.jsonl`, mode `0600`. An exclusive `journal.lock`
+prevents two server processes from sharing a journal directory. Files target
+8 MiB; a file with in-flight intents stays open until their terminal records
+are synced, with a 64-intent cap and a validator-enforced 9 MiB hard bound.
+Transactions therefore never straddle retained files. Before each new file the
+server retains at most 15 older regular, private journal files, for an upper
+bound of 16 files (approximately 144 MiB). Unsafe types, symlinks, insecure
+retained-file permissions, or lock contention fail startup closed. Retention is
+age-ordered and intentionally does not inspect or modify unrelated names.
+
+When retention removes the beginning of a run, the first retained file is an
+explicit verification anchor: its first sequence and `prev_hash` identify the
+pruned prefix, and its own records remain hash-chained from that value. Because
+transactions never cross files, reconciliation within the retained horizon
+still has every intent and terminal outcome.
 
 ## Validation, query, and recovery
 
@@ -97,18 +106,22 @@ python3 server/tools/gameplay_journal.py \
   DATAPATH/gameplay-journal query --lineage LINEAGE_ID
 ```
 
-Validation checks schema, duplicate JSON fields, permissions, redaction,
-event-ID uniqueness, per-run sequence, and every hash chain across rotated
-files. Only an unterminated final record is classified as a torn tail and
-ignored; malformed interior records, a torn rotated predecessor followed by
-more records, conflicting duplicate intents, commit-without-intent, and
-commit/abort conflicts fail validation.
+Validation checks schema, filenames, duplicate JSON fields, permissions,
+redaction, size bounds, event-ID uniqueness, per-run sequence, and every hash
+chain across rotated files. Only an unterminated record in the highest retained
+file for its run is classified as a torn tail and ignored; malformed interior
+records, a torn rotated predecessor followed by more records, conflicting
+duplicate intents, commit-without-intent, and commit/abort conflicts fail
+validation.
 
 Reconciliation is idempotent: identical repeated intents and terminal records
 do not apply a mutation. A transaction ending at `attempted` requires the
 operator to compare its typed before/after values with authoritative saved
 state. `committed` is applied at most once by transaction ID; `aborted` is
 never applied. The tool reports evidence and does not edit game state.
+Account, character, subject, and lineage queries first select matching intents,
+then return each selected transaction's complete ordered intent/terminal
+timeline so an attempted action cannot be mistaken for a committed change.
 
 ## Trusted producer APIs
 

@@ -15,6 +15,11 @@
 #include <checkstd.h>
 #include <check_utils.h>
 #include <gameplay_journal.h>
+#include <plugin_hooklist.h>
+
+#ifndef WIN32
+#include <sys/wait.h>
+#endif
 
 static void remove_fixture(const char *directory) {
     char journal_directory[MAX_BUF];
@@ -23,7 +28,8 @@ static void remove_fixture(const char *directory) {
     ck_assert_ptr_ne(dir, NULL);
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
-        if (strncmp(entry->d_name, "journal-", 8) == 0) {
+        if (strncmp(entry->d_name, "journal-", 8) == 0 ||
+            strcmp(entry->d_name, "journal.lock") == 0) {
             char path[HUGE_BUF];
             snprintf(VS(path), "%s/%s", journal_directory, entry->d_name);
             ck_assert_int_eq(unlink(path), 0);
@@ -49,7 +55,7 @@ START_TEST(test_intent_commit_abort_and_private_storage) {
 
     const gameplay_journal_subject_t subject = {
         .account_id = "account",
-        .character_id = "character",
+        .character_id = "O'Brien Smith",
         .map_id = "/world/start",
         .x = 4,
         .y = 7,
@@ -123,6 +129,16 @@ START_TEST(test_intent_commit_abort_and_private_storage) {
     ck_assert_int_eq(closedir(dir), 0);
     ck_assert_uint_eq(files, 1);
     remove_fixture(directory);
+}
+END_TEST
+
+START_TEST(test_plugin_journal_hooks_are_append_only) {
+    ck_assert_uint_gt(offsetof(struct plugin_hooklist, gameplay_journal_player_begin),
+                      offsetof(struct plugin_hooklist, socket_server_command_queue_append));
+    ck_assert_uint_gt(offsetof(struct plugin_hooklist, gameplay_journal_commit),
+                      offsetof(struct plugin_hooklist, gameplay_journal_player_begin));
+    ck_assert_uint_gt(offsetof(struct plugin_hooklist, gameplay_journal_abort),
+                      offsetof(struct plugin_hooklist, gameplay_journal_commit));
 }
 END_TEST
 
@@ -205,6 +221,171 @@ START_TEST(test_retention_stays_bounded_when_opening_a_file) {
 }
 END_TEST
 
+START_TEST(test_real_rotation_and_retention_keep_complete_transactions) {
+    char directory[] = "/tmp/atrinik-gameplay-journal-rotation-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    gameplay_journal_file_limit_for_test(1);
+    const gameplay_journal_subject_t subject = {
+        .account_id = "account",
+        .character_id = "Character",
+        .map_id = "/world/start",
+        .x = 1,
+        .y = 2,
+    };
+    const gameplay_journal_change_t change = {
+        .subject_id = "currency:gold",
+        .lineage_id = "",
+        .before = 1,
+        .delta = 1,
+        .after = 2,
+    };
+    for (size_t i = 0; i < 18; i++) {
+        char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+        ck_assert(gameplay_journal_begin(&subject,
+                                         GAMEPLAY_JOURNAL_CURRENCY,
+                                         "test.rotate",
+                                         &change,
+                                         transaction));
+        ck_assert(gameplay_journal_commit(transaction));
+    }
+    gameplay_journal_file_limit_for_test(8U * 1024U * 1024U);
+    gameplay_journal_deinit();
+
+    char journal_directory[MAX_BUF];
+    snprintf(VS(journal_directory), "%s/gameplay-journal", directory);
+    DIR *dir = opendir(journal_directory);
+    ck_assert_ptr_ne(dir, NULL);
+    size_t files = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, "journal-", 8) == 0) {
+            files++;
+            char path[HUGE_BUF];
+            snprintf(VS(path), "%s/%s", journal_directory, entry->d_name);
+            struct stat metadata;
+            ck_assert_int_eq(stat(path, &metadata), 0);
+            ck_assert_int_gt(metadata.st_size, 0);
+        }
+    }
+    ck_assert_int_eq(closedir(dir), 0);
+    ck_assert_uint_eq(files, 16);
+    remove_fixture(directory);
+}
+END_TEST
+
+#ifndef WIN32
+static void crash_writer(const char *directory, int phase) {
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    if (phase != 0) {
+        const gameplay_journal_subject_t subject = {
+            .account_id = "account",
+            .character_id = "Character",
+            .map_id = "/world/start",
+            .x = 1,
+            .y = 2,
+        };
+        const gameplay_journal_change_t change = {
+            .subject_id = "currency:gold",
+            .lineage_id = "",
+            .before = 1,
+            .delta = 1,
+            .after = 2,
+        };
+        char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+        ck_assert(gameplay_journal_begin(&subject,
+                                         GAMEPLAY_JOURNAL_CURRENCY,
+                                         "test.crash",
+                                         &change,
+                                         transaction));
+        if (phase == 2) {
+            ck_assert(gameplay_journal_commit(transaction));
+        }
+    }
+    _exit(EXIT_SUCCESS);
+}
+
+START_TEST(test_abrupt_process_crash_preserves_synced_phases) {
+    for (int phase = 0; phase < 3; phase++) {
+        char directory[] = "/tmp/atrinik-gameplay-journal-crash-XXXXXX";
+        ck_assert_ptr_ne(mkdtemp(directory), NULL);
+        pid_t child = fork();
+        ck_assert_int_ge(child, 0);
+        if (child == 0) {
+            crash_writer(directory, phase);
+        }
+        int status;
+        ck_assert_int_eq(waitpid(child, &status, 0), child);
+        ck_assert(WIFEXITED(status));
+        ck_assert_int_eq(WEXITSTATUS(status), EXIT_SUCCESS);
+
+        char journal_directory[MAX_BUF];
+        snprintf(VS(journal_directory), "%s/gameplay-journal", directory);
+        DIR *dir = opendir(journal_directory);
+        ck_assert_ptr_ne(dir, NULL);
+        struct dirent *entry;
+        bool saw_intent = false, saw_commit = false;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strncmp(entry->d_name, "journal-", 8) != 0) {
+                continue;
+            }
+            char path[HUGE_BUF];
+            snprintf(VS(path), "%s/%s", journal_directory, entry->d_name);
+            FILE *fp = fopen(path, "rb");
+            ck_assert_ptr_ne(fp, NULL);
+            char contents[HUGE_BUF];
+            size_t length = fread(contents, 1, sizeof(contents) - 1, fp);
+            contents[length] = '\0';
+            saw_intent |= strstr(contents, "\"phase\":\"intent\"") != NULL;
+            saw_commit |= strstr(contents, "\"phase\":\"commit\"") != NULL;
+            ck_assert_int_eq(fclose(fp), 0);
+        }
+        ck_assert_int_eq(closedir(dir), 0);
+        ck_assert_int_eq(saw_intent, phase >= 1);
+        ck_assert_int_eq(saw_commit, phase == 2);
+        remove_fixture(directory);
+    }
+}
+END_TEST
+
+START_TEST(test_second_writer_is_rejected_while_lock_is_held) {
+    char directory[] = "/tmp/atrinik-gameplay-journal-lock-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    pid_t child = fork();
+    ck_assert_int_ge(child, 0);
+    if (child == 0) {
+        bool initialized = gameplay_journal_init(directory, "server", &profile);
+        _exit(initialized ? EXIT_FAILURE : EXIT_SUCCESS);
+    }
+    int status;
+    ck_assert_int_eq(waitpid(child, &status, 0), child);
+    ck_assert(WIFEXITED(status));
+    ck_assert_int_eq(WEXITSTATUS(status), EXIT_SUCCESS);
+    gameplay_journal_deinit();
+    remove_fixture(directory);
+}
+END_TEST
+#endif
+
 START_TEST(test_append_failure_disables_journal) {
 #ifndef WIN32
     char directory[] = "/tmp/atrinik-gameplay-journal-write-XXXXXX";
@@ -232,7 +413,7 @@ START_TEST(test_append_failure_disables_journal) {
         .after = 2,
     };
     char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
-    ck_assert_int_eq(setenv("ATRINIK_TEST_GAMEPLAY_JOURNAL_WRITE_FAILURE", "1", 1), 0);
+    gameplay_journal_fail_writes_for_test(true);
     ck_assert(!gameplay_journal_begin(&subject,
                                       GAMEPLAY_JOURNAL_CURRENCY,
                                       "test.write",
@@ -240,7 +421,7 @@ START_TEST(test_append_failure_disables_journal) {
                                       transaction));
     ck_assert(!gameplay_journal_available());
 
-    ck_assert_int_eq(unsetenv("ATRINIK_TEST_GAMEPLAY_JOURNAL_WRITE_FAILURE"), 0);
+    gameplay_journal_fail_writes_for_test(false);
     gameplay_journal_deinit();
     remove_fixture(directory);
 #endif
@@ -252,10 +433,16 @@ static Suite *suite(void) {
     TCase *tc_core = tcase_create("Core");
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_test(tc_core, test_intent_commit_abort_and_private_storage);
+    tcase_add_test(tc_core, test_plugin_journal_hooks_are_append_only);
     tcase_add_test(tc_core, test_init_fails_closed_for_unsafe_directory_or_profile);
     tcase_add_test(tc_core, test_init_rejects_insecure_directory_permissions);
     tcase_add_test(tc_core, test_retention_stays_bounded_when_opening_a_file);
+    tcase_add_test(tc_core, test_real_rotation_and_retention_keep_complete_transactions);
     tcase_add_test(tc_core, test_append_failure_disables_journal);
+#ifndef WIN32
+    tcase_add_test(tc_core, test_abrupt_process_crash_preserves_synced_phases);
+    tcase_add_test(tc_core, test_second_writer_is_rejected_while_lock_is_held);
+#endif
     suite_add_tcase(s, tc_core);
     return s;
 }

@@ -20,9 +20,11 @@ SCHEMA_VERSION = 1
 HASH_MARKER = b',"record_hash":"'
 FORBIDDEN_FIELDS = {"password", "session_secret", "chat", "inscription", "text"}
 TOKEN = re.compile(r"[A-Za-z0-9_.:/@+\-]{1,255}\Z")
+CHARACTER = re.compile(r"[A-Za-z0-9 '\-]{1,255}\Z")
 HASH = re.compile(r"[0-9a-f]{64}\Z")
 KINDS = {"item", "currency", "quest", "progression"}
-FILE_LIMIT = 8 * 1024 * 1024
+FILE_LIMIT = 9 * 1024 * 1024
+JOURNAL_FILE = re.compile(r"journal-([0-9a-f]{32})-(\d{4,})\.jsonl\Z")
 
 
 class JournalError(ValueError):
@@ -134,7 +136,9 @@ def _validate_schema(value: dict[str, Any], source: str) -> None:
         return
     if phase != "intent" or value["kind"] not in KINDS or not _token(transaction):
         raise JournalError(f"invalid transaction record at {source}")
-    if not _token(value["account_id"]) or not _token(value["character_id"]):
+    if not _token(value["account_id"]) or not isinstance(
+        value["character_id"], str
+    ) or CHARACTER.fullmatch(value["character_id"]) is None:
         raise JournalError(f"invalid player identity at {source}")
     context = value["context"]
     if not isinstance(context, dict) or set(context) != {"map_id", "x", "y"} or not _token(
@@ -218,7 +222,20 @@ def load(inputs: Iterable[Path]) -> Journal:
     torn_tails: list[str] = []
     chains: dict[str, tuple[str, int]] = {}
     event_ids: set[str] = set()
-    for path in _paths(inputs):
+    paths = _paths(inputs)
+    file_coordinates: dict[Path, tuple[str, int]] = {}
+    final_indexes: dict[str, int] = {}
+    for path in paths:
+        match = JOURNAL_FILE.fullmatch(path.name)
+        if match is None:
+            raise JournalError(f"invalid journal filename: {path}")
+        run_id, raw_index = match.groups()
+        index = int(raw_index)
+        file_coordinates[path] = (run_id, index)
+        final_indexes[run_id] = max(final_indexes.get(run_id, -1), index)
+
+    for path in sorted(paths, key=lambda value: file_coordinates[value]):
+        filename_run, file_index = file_coordinates[path]
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
             raise JournalError(f"journal path is not a direct regular file: {path}")
@@ -231,13 +248,19 @@ def load(inputs: Iterable[Path]) -> Journal:
         for index, raw in enumerate(lines, 1):
             source = f"{path}:{index}"
             if not raw.endswith(b"\n"):
-                if index == len(lines):
+                if index == len(lines) and file_index == final_indexes[filename_run]:
                     torn_tails.append(source)
                     continue
                 raise JournalError(f"torn non-final record at {source}")
             record = _record(raw, source)
             run_id = record["run_id"]
-            previous_hash, sequence = chains.get(run_id, ("", 0))
+            if run_id != filename_run:
+                raise JournalError(f"filename/run identity mismatch at {source}")
+            if run_id not in chains and file_index != 0:
+                previous_hash = record["prev_hash"]
+                sequence = record["sequence"] - 1
+            else:
+                previous_hash, sequence = chains.get(run_id, ("", 0))
             if record["prev_hash"] != previous_hash or record["sequence"] != sequence + 1:
                 raise JournalError(f"broken hash/sequence chain at {source}")
             if record["event_id"] in event_ids:
@@ -294,8 +317,10 @@ def load(inputs: Iterable[Path]) -> Journal:
 
 
 def query(journal: Journal, **filters: str | None) -> list[dict[str, Any]]:
-    selected: list[dict[str, Any]] = []
+    matching_transactions: set[str] = set()
     for record in journal.records:
+        if record["phase"] != "intent":
+            continue
         change = record.get("change", {})
         matches = (
             (not filters.get("account") or record.get("account_id") == filters["account"])
@@ -305,14 +330,22 @@ def query(journal: Journal, **filters: str | None) -> list[dict[str, Any]]:
             )
             and (not filters.get("subject") or change.get("subject_id") == filters["subject"])
             and (not filters.get("lineage") or change.get("lineage_id") == filters["lineage"])
-            and (
-                not filters.get("transaction")
-                or record.get("transaction_id") == filters["transaction"]
-            )
         )
         if matches:
-            selected.append({key: value for key, value in record.items() if key != "_source"})
-    return sorted(selected, key=lambda value: (value["utc"], value["event_id"]))
+            matching_transactions.add(record["transaction_id"])
+    if filters.get("transaction"):
+        matching_transactions &= {filters["transaction"]}
+    selected = [
+        {key: value for key, value in record.items() if key != "_source"}
+        for record in journal.records
+        if record["transaction_id"] in matching_transactions
+    ]
+    return sorted(
+        selected,
+        key=lambda value: (
+            value["utc"], value["server_id"], value["run_id"], value["sequence"]
+        ),
+    )
 
 
 def _parser() -> argparse.ArgumentParser:

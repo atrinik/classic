@@ -96,4 +96,10 @@ bool gameplay_journal_player_begin(player *pl,
                                    int64_t after,
                                    char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]);
 
+#ifdef ATRINIK_TESTING
+/** Unit-test seam for the fail-stop write policy; unavailable in release builds. */
+void gameplay_journal_fail_writes_for_test(bool fail);
+void gameplay_journal_file_limit_for_test(size_t limit);
+#endif
+
 #endif
