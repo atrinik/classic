@@ -107,7 +107,7 @@ typedef struct sprite_struct {
     SDL_Surface *bitmap;
 } sprite_struct;
 
-#define SPRITE_CACHE_STATISTICS_VERSION UINT8_C(2)
+#define SPRITE_CACHE_STATISTICS_VERSION UINT8_C(3)
 
 /** Observable transformed/effects-sprite cache state for benchmarks. */
 typedef struct sprite_cache_statistics {
@@ -119,6 +119,7 @@ typedef struct sprite_cache_statistics {
     uint64_t gc_removals;
     uint64_t gc_time_ns;
     uint64_t evictions;
+    uint64_t rejections;
     size_t entries;
     size_t estimated_bytes;
     size_t peak_entries;

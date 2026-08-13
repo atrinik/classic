@@ -341,13 +341,13 @@ static void sprite_cache_reserve(size_t bytes) {
  * @param cache
  * Cache entry to add.
  */
-static void sprite_cache_add(sprite_cache_t *cache) {
+static bool sprite_cache_add(sprite_cache_t *cache) {
     HARD_ASSERT(cache != NULL);
     HARD_ASSERT(cache->surface != NULL);
     cache->estimated_bytes = sprite_cache_estimated_bytes(cache);
     if (cache->estimated_bytes > SPRITE_CACHE_MAX_BYTES) {
-        sprite_cache_free(cache);
-        return;
+        sprite_cache_statistics.rejections++;
+        return false;
     }
     sprite_cache_reserve(cache->estimated_bytes);
     HASH_ADD_KEYPTR(hh, sprites_cache, cache->name, strlen(cache->name), cache);
@@ -360,6 +360,7 @@ static void sprite_cache_add(sprite_cache_t *cache) {
         MAX(sprite_cache_statistics.peak_entries, sprite_cache_statistics.entries);
     sprite_cache_statistics.peak_estimated_bytes =
         MAX(sprite_cache_statistics.peak_estimated_bytes, sprite_cache_statistics.estimated_bytes);
+    return true;
 }
 
 /**
@@ -1025,6 +1026,7 @@ void surface_show_effects(SDL_Surface *surface,
                           SDL_Surface *src,
                           const sprite_effects_t *effects) {
     HARD_ASSERT(surface != NULL);
+    bool temporary_effect_surface = false;
 
     if (src == NULL) {
         return;
@@ -1067,7 +1069,11 @@ void surface_show_effects(SDL_Surface *surface,
 
                 cache = sprite_cache_create(name);
                 cache->surface = src;
-                sprite_cache_add(cache);
+                if (!sprite_cache_add(cache)) {
+                    free(cache->name);
+                    free(cache);
+                    temporary_effect_surface = true;
+                }
             }
         }
 
@@ -1098,6 +1104,10 @@ void surface_show_effects(SDL_Surface *surface,
         lighting_show_surface(surface, x, y, srcrect, src, 0, LIGHTING_SURFACE_PROJECTED);
     } else {
         surface_show(surface, x, y, srcrect, src);
+    }
+
+    if (temporary_effect_surface) {
+        SDL_DestroySurface(src);
     }
 }
 

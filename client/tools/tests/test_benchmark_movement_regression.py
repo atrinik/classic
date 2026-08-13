@@ -312,6 +312,7 @@ def native_record(
                         "misses": 0,
                         "insertions": 0,
                         "evictions": 0,
+                        "rejections": 0,
                         "gc_runs": samples,
                         "gc_removals": 0,
                         "gc_time_ns": 1000,
@@ -344,7 +345,7 @@ def native_record(
                 "lighting_statistics_version": 3,
                 "map_statistics_version": 2,
                 "render_profiler_statistics_version": 3,
-                "sprite_cache_statistics_version": 2,
+                "sprite_cache_statistics_version": 3,
             },
             "implementation": {
                 "revision": "a" * 40,

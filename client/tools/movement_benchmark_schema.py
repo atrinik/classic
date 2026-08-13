@@ -417,7 +417,7 @@ def validate_record(value: object) -> dict[str, object]:
         "lighting_statistics_version": 3,
         "map_statistics_version": 2,
         "render_profiler_statistics_version": 3,
-        "sprite_cache_statistics_version": 2,
+        "sprite_cache_statistics_version": 3,
     }:
         raise ValueError("movement benchmark instrumentation identity is invalid")
     implementation = _mapping(
@@ -858,7 +858,7 @@ def validate_record(value: object) -> dict[str, object]:
         limits = _mapping(sprite["limits"], {"entries", "estimated_bytes"}, f"phase {name} sprite limits")
         for field, item in limits.items():
             _integer(item, f"phase {name} sprite limit {field}", positive=True)
-        sprite_counters = _mapping(sprite["counters"], {"lookups", "hits", "misses", "insertions", "evictions", "gc_runs", "gc_removals", "gc_time_ns"}, f"phase {name} sprite counters")
+        sprite_counters = _mapping(sprite["counters"], {"lookups", "hits", "misses", "insertions", "evictions", "rejections", "gc_runs", "gc_removals", "gc_time_ns"}, f"phase {name} sprite counters")
         for field, item in sprite_counters.items():
             _integer(item, f"phase {name} sprite counter {field}")
         if sprite_counters["hits"] + sprite_counters["misses"] != sprite_counters["lookups"]:
@@ -869,7 +869,7 @@ def validate_record(value: object) -> dict[str, object]:
                 _integer(item, f"phase {name} sprite {boundary} {field}")
         available_entries = sprite["start"]["entries"] + sprite_counters["insertions"]
         if (
-            sprite_counters["misses"] != sprite_counters["insertions"]
+            sprite_counters["misses"] != sprite_counters["insertions"] + sprite_counters["rejections"]
             or sprite_counters["gc_removals"] + sprite_counters["evictions"] > available_entries
             or sprite["end"]["entries"]
             != available_entries - sprite_counters["gc_removals"] - sprite_counters["evictions"]
