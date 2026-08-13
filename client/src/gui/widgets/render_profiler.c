@@ -40,6 +40,10 @@ static const render_profile_stage_metadata_t stage_metadata[RENDER_PROFILE_STAGE
     [RENDER_PROFILE_LIGHTING] = {"lighting", RENDER_PROFILE_SCOPE_MAP_LEVEL},
     [RENDER_PROFILE_MAP_OBJECTS] = {"objects", RENDER_PROFILE_SCOPE_MAP_LEVEL},
     [RENDER_PROFILE_MAP_PAINT] = {"paint", RENDER_PROFILE_SCOPE_MAP_DRAW},
+    [RENDER_PROFILE_MAP_COMMAND_SORT] = {"command_sort", RENDER_PROFILE_SCOPE_MAP_DRAW},
+    [RENDER_PROFILE_MAP_DOOR_OCCLUSION] = {"door_occlusion", RENDER_PROFILE_SCOPE_MAP_DRAW},
+    [RENDER_PROFILE_MAP_SPRITE_EFFECTS] = {"sprite_effects", RENDER_PROFILE_SCOPE_MAP_DRAW},
+    [RENDER_PROFILE_MAP_HINT_REPLAY] = {"hint_replay", RENDER_PROFILE_SCOPE_MAP_DRAW},
     [RENDER_PROFILE_MAP_UI] = {"ui", RENDER_PROFILE_SCOPE_MAP_DRAW},
 };
 
@@ -184,7 +188,9 @@ static void widget_draw(widgetdata *widget) {
                      "[c=#ffd060]Map/draw[/c] %5.2f ms @ %.1f/s\n"
                      " scratch/draw %4.2f  ground/level %4.2f\n"
                      " composite/draw %4.2f  lighting/level %4.2f\n"
-                     " objects/level %4.2f  paint/draw %4.2f  UI/draw %4.2f",
+                     " objects/level %4.2f  paint/draw %4.2f\n"
+                     " sort %4.2f  doors %4.2f  sprites %4.2f  hints %4.2f\n"
+                     " UI/draw %4.2f",
                      snapshot->interval_us / 1000000.0,
                      render_profile_rate(snapshot, snapshot->frames),
                      render_profile_rate(snapshot, snapshot->drawn_frames),
@@ -205,6 +211,10 @@ static void widget_draw(widgetdata *widget) {
                      render_profile_average_ms(snapshot, RENDER_PROFILE_LIGHTING),
                      render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_OBJECTS),
                      render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_PAINT),
+                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_COMMAND_SORT),
+                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_DOOR_OCCLUSION),
+                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_SPRITE_EFFECTS),
+                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_HINT_REPLAY),
                      render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_UI));
 }
 
