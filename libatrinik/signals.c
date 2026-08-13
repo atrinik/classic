@@ -84,8 +84,8 @@ static void *alternate_signal_stack;
 /** Registered Windows vectored exception handler. */
 static PVOID vectored_exception_handler;
 
-/** Whether the Windows exception handler is already writing a traceback. */
-static volatile LONG exception_handler_active;
+/** First fatal exception code, or zero before traceback handling starts. */
+static volatile LONG first_exception_code;
 #endif
 
 TOOLKIT_API();
@@ -196,8 +196,12 @@ static void signal_handler(int sig, siginfo_t *siginfo, void *context)
     if (!exception_is_fatal(ExceptionInfo->ExceptionRecord->ExceptionCode)) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
-    if (InterlockedCompareExchange(&exception_handler_active, 1, 0) != 0) {
-        terminate_after_exception(ExceptionInfo->ExceptionRecord->ExceptionCode);
+    LONG previous_exception_code =
+        InterlockedCompareExchange(&first_exception_code,
+                                   (LONG)ExceptionInfo->ExceptionRecord->ExceptionCode,
+                                   0);
+    if (previous_exception_code != 0) {
+        terminate_after_exception((DWORD)previous_exception_code);
         return EXCEPTION_CONTINUE_SEARCH;
     }
 #endif
@@ -557,7 +561,7 @@ TOOLKIT_INIT_FUNC(signals) {
 #endif
 
 #ifdef WIN32
-    exception_handler_active = 0;
+    first_exception_code = 0;
     HARD_ASSERT(vectored_exception_handler == NULL);
     vectored_exception_handler = AddVectoredExceptionHandler(1, signal_handler);
     if (vectored_exception_handler == NULL) {
