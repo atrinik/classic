@@ -1,8 +1,8 @@
 # Atrinik classic monorepo guide
 
-- This repository owns the maintained classic Atrinik implementation. The new
-  MIT server, client, editor, renderer, protocol, and toolkit remain in their
-  separate replacement repositories.
+- This repository owns the maintained classic Atrinik implementation. The
+  next-generation MIT server, client, editor, renderer, protocol, and toolkit
+  remain in separate repositories.
 - Logical ownership remains split across `client/`, `server/`, `editor/`,
   `libatrinik/`, and `protocol/`. Read this file and the nearest subtree
   `AGENTS.md` before editing. Module guides preserve their component-specific
@@ -33,9 +33,21 @@
   record, and the unprefixed release-tag policy. Original source graphs remain
   authoritative in the archived source repositories; do not recreate a live
   `history/*` branch namespace here.
-- New classic code must be GPL-2.0-or-later compatible. Never use provenance
-  grants intended for clean-room MIT replacements to infer a different license
-  here.
+- New classic code must be GPL-2.0-or-later compatible. That source license is
+  not a blanket outbound reuse ban. Under the
+  [canonical provenance policy](https://github.com/atrinik/atrinik/blob/main/docs/PROVENANCE.md),
+  an MIT destination may inspect exact, independently separable material as
+  source reference, copy it, migrate or port it, translate or adapt it, or
+  relicense it only after a complete audit proves each selected contribution
+  is the applicable named grantor's original work. Each contribution must be
+  solely authored by that grantor and fall within the row's temporal scope.
+  Distinct contributions may cite different rows only when each independently
+  satisfies one row. Rows cannot be combined to cover jointly authored
+  contributions, generated output, or inseparable mixed work. Later material
+  needs contemporaneous compatible permission. The grants authorize only
+  proven destination use. They neither change this repository's source license
+  nor by themselves approve a GPL dependency, linked or combined binary,
+  bundle, or surrounding material.
 - On touch, refresh existing Atrinik-owned copyright terminal years and blanket
   holders per `CONTRIBUTING.md`; preserve precise attribution.
 - Operational language is “classic.” Historical `legacy-*` coordinates may
