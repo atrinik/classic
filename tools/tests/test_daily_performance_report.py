@@ -43,6 +43,11 @@ class DailyReportTests(unittest.TestCase):
                                    recorded_at="2026-08-13T00:00:00+00:00", environment={})
         self.assertEqual(set(point["phases"]), set(report.PHASES))
         self.assertEqual(len(point["cohort"]), 16)
+        sustained_map = point["phases"]["sustained"]["map"]
+        self.assertEqual(
+            sustained_map["map_draws"],
+            sustained_map["primary_map_draws"] + sustained_map["auxiliary_map_draws"],
+        )
 
     def test_merge_is_idempotent_and_retains_only_latest_points(self) -> None:
         point = report.build_point(evidence(), commit="a" * 40, run_id="7",
@@ -78,10 +83,28 @@ class DailyReportTests(unittest.TestCase):
                 environment={},
             )
 
+    def test_incompatible_context_identity_is_not_published(self) -> None:
+        item = evidence()
+        for record in item["records"]["candidate_large"]:
+            record["identity"]["implementation"]["compiler_version"] = "16.0.0"
+        item = fixtures.benchmark._build_evidence(
+            [],
+            item["records"]["candidate_standard"],
+            item["records"]["candidate_large"],
+            item["records"]["additional_contexts"],
+            enforce_performance=False,
+            comparison_note="event-has-no-comparison-base",
+        )
+        with self.assertRaisesRegex(report.ReportError, "incompatible implementation"):
+            report.build_point(
+                item, commit="a" * 40, run_id="7",
+                recorded_at="2026-08-13T00:00:00+00:00", environment={}
+            )
+
     def test_two_failed_points_open_one_alert_and_two_passes_recover_it(self) -> None:
         item = evidence()
         point = report.build_point(item, commit="a" * 40, run_id="7",
-                                   recorded_at="2026-08-13T00:00:00+00:00", environment={})
+                                   recorded_at="2026-08-01T00:00:00+00:00", environment={})
         point["checks"] = {"candidate_sustained_p95": {"passed": False}}
         trend = report.merge_trend(None, point)
         for index, passed in enumerate((False, True, True), 2):
@@ -171,6 +194,66 @@ class DailyReportTests(unittest.TestCase):
         other["checks"] = {"candidate_sustained_p95": {"passed": True}}
         trend = report.merge_trend(trend, other)
         self.assertEqual(trend["alerts"][old_key]["last_transition"], "none")
+
+    def test_result_changing_rerun_recomputes_active_alert(self) -> None:
+        first = report.build_point(
+            evidence(), commit="a" * 40, run_id="7",
+            recorded_at="2026-08-13T00:00:00+00:00", environment={}
+        )
+        first["checks"] = {"candidate_sustained_p95": {"passed": False}}
+        second = dict(first, id="run-8", run_id="8", recorded_at="2026-08-14T00:00:00+00:00")
+        trend = report.merge_trend(report.merge_trend(None, first), second)
+        key = next(iter(trend["alerts"]))
+        self.assertTrue(trend["alerts"][key]["active"])
+
+        replacement = dict(
+            second,
+            recorded_at="2026-08-14T01:00:00+00:00",
+            checks={"candidate_sustained_p95": {"passed": True}},
+        )
+        trend = report.merge_trend(trend, replacement)
+        self.assertFalse(trend["alerts"][key]["active"])
+        self.assertEqual(trend["alerts"][key]["last_transition"], "recovered")
+
+    def test_historical_rerun_keeps_chronological_alert_order(self) -> None:
+        first = report.build_point(
+            evidence(), commit="a" * 40, run_id="7",
+            recorded_at="2026-08-13T00:00:00+00:00", environment={}
+        )
+        first["checks"] = {"candidate_sustained_p95": {"passed": False}}
+        second = dict(
+            first, id="run-8", run_id="8",
+            recorded_at="2026-08-14T00:00:00+00:00",
+            checks={"candidate_sustained_p95": {"passed": True}},
+        )
+        third = dict(second, id="run-9", run_id="9", recorded_at="2026-08-15T00:00:00+00:00")
+        trend = report.merge_trend(report.merge_trend(report.merge_trend(None, first), second), third)
+        replacement = dict(first, recorded_at="2026-08-13T01:00:00+00:00")
+        trend = report.merge_trend(trend, replacement)
+        key = next(iter(trend["alerts"]))
+        self.assertEqual(
+            [item["id"] for item in trend["alerts"][key]["history"]],
+            ["run-7", "run-8", "run-9"],
+        )
+        self.assertFalse(trend["alerts"][key]["active"])
+
+    def test_active_alert_recovers_when_rerun_moves_cohort(self) -> None:
+        first = report.build_point(
+            evidence(), commit="a" * 40, run_id="7",
+            recorded_at="2026-08-13T00:00:00+00:00", environment={}
+        )
+        first["checks"] = {"candidate_sustained_p95": {"passed": False}}
+        second = dict(first, id="run-8", run_id="8", recorded_at="2026-08-14T00:00:00+00:00")
+        trend = report.merge_trend(report.merge_trend(None, first), second)
+        old_key = next(iter(trend["alerts"]))
+        moved = dict(
+            second,
+            cohort="new-cohort",
+            checks={"candidate_sustained_p95": {"passed": True}},
+        )
+        trend = report.merge_trend(trend, moved)
+        self.assertFalse(trend["alerts"][old_key]["active"])
+        self.assertEqual(trend["alerts"][old_key]["last_transition"], "recovered")
 
 
 if __name__ == "__main__":

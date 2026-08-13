@@ -63,6 +63,16 @@ def _median(values: list[int]) -> int:
     return int(statistics.median(values))
 
 
+def _advance_alert(active: bool, states: list[str]) -> bool:
+    for index in range(1, len(states)):
+        recent = states[index - 1:index + 1]
+        if recent == ["failed", "failed"]:
+            active = True
+        elif recent == ["passed", "passed"]:
+            active = False
+    return active
+
+
 def _record_summary(records: list[dict[str, Any]], name: str) -> dict[str, Any]:
     summary = benchmark_contract.phase_summary(records, name)
     map_summary = _mapping(summary.get("map"), f"{name} map")
@@ -91,13 +101,17 @@ def _record_summary(records: list[dict[str, Any]], name: str) -> dict[str, Any]:
             "last": _number(summary.get("last_window_p95_ms"), f"{name}.last window"),
         },
         "map": {
-            field: _integer(map_summary.get(source), f"{name}.map.{source}")
-            for field, source in (("map_draws", "full_map_draws"),
-                                  ("primary_map_draws", "primary_map_draws"),
-                                  ("auxiliary_map_draws", "auxiliary_map_draws"),
-                                  ("presents", "presents"),
-                                  ("changed_map_packets", "changed_map_packets"),
-                                  ("noop_map_packets", "noop_map_packets"))
+            "map_draws": _integer(
+                map_summary.get("primary_map_draws"), f"{name}.map.primary_map_draws"
+            )
+            + _integer(
+                map_summary.get("auxiliary_map_draws"), f"{name}.map.auxiliary_map_draws"
+            ),
+            **{
+                field: _integer(map_summary.get(field), f"{name}.map.{field}")
+                for field in ("primary_map_draws", "auxiliary_map_draws", "presents",
+                              "changed_map_packets", "noop_map_packets")
+            },
         },
         "draw_reasons": _mapping(map_summary.get("draw_reasons"), "draw reasons"),
         "queue": {
@@ -160,17 +174,36 @@ def build_point(evidence: Any, *, commit: str, run_id: str, recorded_at: str,
     instrumentation = _mapping(identity["instrumentation"], "instrumentation identity")
     viewport = _mapping(run["viewport"], "viewport identity")
     implementation = _mapping(identity["implementation"], "implementation identity")
+    instrumentation_cohort = json.dumps(instrumentation, sort_keys=True, separators=(",", ":"))
+    implementation_cohort = json.dumps(
+        {key: value for key, value in implementation.items()
+         if key not in ("revision", "dirty", "dirty_known")},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     candidate_sets = [records["candidate_standard"], records["candidate_large"]]
     candidate_sets.extend(records["additional_contexts"].values())
     for record_set in candidate_sets:
         for record in record_set:
             record_implementation = record["identity"]["implementation"]
+            record_instrumentation = record["identity"]["instrumentation"]
             if (
                 record_implementation["revision"].lower() != commit.lower()
                 or record_implementation["dirty_known"] is not True
                 or record_implementation["dirty"] is not False
             ):
                 raise ReportError("movement evidence does not identify the published commit")
+            if (
+                json.dumps(record_instrumentation, sort_keys=True, separators=(",", ":"))
+                != instrumentation_cohort
+                or json.dumps(
+                    {key: value for key, value in record_implementation.items()
+                     if key not in ("revision", "dirty", "dirty_known")},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ) != implementation_cohort
+            ):
+                raise ReportError("movement evidence mixes incompatible implementation cohorts")
     cohort_material = {
         "instrumentation": instrumentation,
         "fixture": fixture,
@@ -235,41 +268,68 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
     points[:] = [item for item in points if isinstance(item, dict) and item.get("id") != point["id"]]
     points.append(point)
     points.sort(key=lambda item: (item.get("recorded_at", ""), item.get("id", "")))
+    dropped_points = points[:-TREND_RETENTION]
     del points[:-TREND_RETENTION]
     alerts = trend.setdefault("alerts", {})
     if not isinstance(alerts, dict):
         raise ReportError("trend alerts must be an object")
-    for state in alerts.values():
+    previous_active: dict[str, bool] = {}
+    for key, state in alerts.items():
         if not isinstance(state, dict) or not isinstance(state.get("history"), list):
             raise ReportError("alert state is malformed")
-        state["last_transition"] = "none"
-        state["history"] = [
-            item
-            for item in state["history"]
-            if isinstance(item, dict) and item.get("id") != point["id"]
-        ]
-    for metric, check_name in (("standard:sustained_p95", "candidate_sustained_p95"),
-                               ("large:sustained_p95", "candidate_large_sustained_p95")):
-        check = point["checks"].get(check_name)
-        if not isinstance(check, dict):
-            continue
-        key = f"{point['cohort']}:{metric}"
-        state = alerts.setdefault(key, {"active": False, "history": []})
-        if not isinstance(state, dict) or not isinstance(state.get("history"), list):
-            raise ReportError("alert state is malformed")
-        state["history"] = [item for item in state["history"] if item.get("id") != point["id"]]
-        result = "failed" if check.get("passed") is not True else "passed"
-        state["history"].append({"id": point["id"], "state": result})
-        state["history"] = state["history"][-5:]
-        recent = [item["state"] for item in state["history"][-2:]]
-        transition = "none"
-        if recent == ["failed", "failed"] and not state["active"]:
-            state["active"] = True
-            transition = "regressed"
-        elif recent == ["passed", "passed"] and state["active"]:
-            state["active"] = False
-            transition = "recovered"
-        state["last_transition"] = transition
+        previous_active[key] = state.get("active") is True
+    metric_checks = (("standard:sustained_p95", "candidate_sustained_p95"),
+                     ("large:sustained_p95", "candidate_large_sustained_p95"))
+    for cohort, cohort_points in cohorts.items():
+        for metric, check_name in metric_checks:
+            history = []
+            for item in cohort_points:
+                check = _mapping(item.get("checks", {}), "point checks").get(check_name)
+                if isinstance(check, dict):
+                    history.append({
+                        "id": item.get("id"),
+                        "state": "failed" if check.get("passed") is not True else "passed",
+                    })
+            key = f"{cohort}:{metric}"
+            if not history and key not in alerts:
+                continue
+            state = alerts.setdefault(key, {"active": False, "history": []})
+            retained_initial_active = state.get("retained_initial_active", False)
+            if type(retained_initial_active) is not bool:
+                raise ReportError("alert state is malformed")
+            retained_previous_state = state.get("retained_previous_state")
+            if retained_previous_state not in (None, "failed", "passed"):
+                raise ReportError("alert state is malformed")
+            if cohort == point["cohort"] and dropped_points:
+                dropped_states = []
+                for item in dropped_points:
+                    check = _mapping(item.get("checks", {}), "point checks").get(check_name)
+                    if isinstance(check, dict):
+                        dropped_states.append(
+                            "failed" if check.get("passed") is not True else "passed"
+                        )
+                retained_initial_active = _advance_alert(
+                    retained_initial_active,
+                    ([retained_previous_state] if retained_previous_state else [])
+                    + dropped_states,
+                )
+                if dropped_states:
+                    retained_previous_state = dropped_states[-1]
+            active = _advance_alert(
+                retained_initial_active,
+                ([retained_previous_state] if retained_previous_state else [])
+                + [item["state"] for item in history],
+            )
+            was_active = previous_active.get(key, False)
+            state["active"] = active
+            state["retained_initial_active"] = retained_initial_active
+            state["retained_previous_state"] = retained_previous_state
+            state["history"] = history[-5:]
+            state["last_transition"] = (
+                "regressed" if active and not was_active
+                else "recovered" if was_active and not active
+                else "none"
+            )
     return trend
 
 
