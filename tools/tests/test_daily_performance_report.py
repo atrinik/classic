@@ -74,6 +74,12 @@ class DailyReportTests(unittest.TestCase):
         self.assertEqual(len(points), report.TREND_RETENTION)
         self.assertEqual(report.merge_trend(trend, points[-1])["cohorts"][point["cohort"]], points)
 
+    def test_merge_migrates_existing_trend_schema(self) -> None:
+        point = report.build_point(evidence(), commit="a" * 40, run_id="7",
+                                   recorded_at="2026-08-13T00:00:00+00:00", environment={})
+        trend = report.merge_trend({"schema_version": 1, "cohorts": {}}, point)
+        self.assertEqual(trend["schema_version"], report.SCHEMA_VERSION)
+
     def test_failed_evidence_is_not_published(self) -> None:
         bad = evidence()
         bad["status"] = "error"

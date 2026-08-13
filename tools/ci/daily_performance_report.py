@@ -210,7 +210,11 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
     if trend is None:
         trend = {"schema_version": SCHEMA_VERSION, "cohorts": {}}
     trend = _mapping(trend, "trend")
-    if trend.get("schema_version") != SCHEMA_VERSION:
+    if trend.get("schema_version") == 1:
+        # Existing benchmark-data history has no stage summaries, but remains
+        # valid historical context when the point contract gains new fields.
+        trend["schema_version"] = SCHEMA_VERSION
+    elif trend.get("schema_version") != SCHEMA_VERSION:
         raise ReportError("unsupported trend schema")
     cohorts = trend.setdefault("cohorts", {})
     if not isinstance(cohorts, dict):
