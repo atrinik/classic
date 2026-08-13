@@ -1831,6 +1831,45 @@ static PyObject *Atrinik_Object_WriteKey(Atrinik_Object *self, PyObject *args) {
     return Py_BuildBoolean(hooks->object_set_value(self->obj, key, value, add_key));
 }
 
+/** Documentation for Atrinik_Object_PublishStatus(). */
+static const char doc_Atrinik_Object_PublishStatus[] =
+    ".. method:: PublishStatus(key, name, face, tooltip).\n\n"
+    "Explicitly publish this inventory object as a player status.\n\n"
+    ":param key: Stable status identity.\n"
+    ":type key: str\n"
+    ":param name: Display name.\n"
+    ":type name: str\n"
+    ":param face: Face name.\n"
+    ":type face: str\n"
+    ":param tooltip: Status tooltip.\n"
+    ":type tooltip: str";
+
+/**
+ * Implements Atrinik.Object.Object.PublishStatus() Python method.
+ * @copydoc PyMethod_VARARGS
+ */
+static PyObject *Atrinik_Object_PublishStatus(Atrinik_Object *self, PyObject *args) {
+    const char *key, *name, *face, *tooltip;
+
+    if (!PyArg_ParseTuple(args, "ssss", &key, &name, &face, &tooltip)) {
+        return NULL;
+    }
+
+    OBJEXISTCHECK(self);
+
+    int face_id = hooks->find_face(face, 0);
+    if (face_id <= 0) {
+        PyErr_Format(PyExc_ValueError, "Unknown face: %s", face);
+        return NULL;
+    }
+    if (!hooks->player_status_set(self->obj, key, name, tooltip, &(*hooks->new_faces)[face_id])) {
+        PyErr_SetString(PyExc_ValueError, "Invalid player status presentation");
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
+}
+
 /** Documentation for Atrinik_Object_GetName(). */
 static const char doc_Atrinik_Object_GetName[] =
     ".. method:: GetName(caller=None).\n\n"
@@ -2629,6 +2668,10 @@ static PyMethodDef methods[] = {
     {"Clone", PY_METHOD(Atrinik_Object_Clone), METH_VARARGS, doc_Atrinik_Object_Clone},
     {"ReadKey", PY_METHOD(Atrinik_Object_ReadKey), METH_VARARGS, doc_Atrinik_Object_ReadKey},
     {"WriteKey", PY_METHOD(Atrinik_Object_WriteKey), METH_VARARGS, doc_Atrinik_Object_WriteKey},
+    {"PublishStatus",
+     PY_METHOD(Atrinik_Object_PublishStatus),
+     METH_VARARGS,
+     doc_Atrinik_Object_PublishStatus},
     {"GetName", PY_METHOD(Atrinik_Object_GetName), METH_VARARGS, doc_Atrinik_Object_GetName},
     {"Controller",
      PY_METHOD(Atrinik_Object_Controller),

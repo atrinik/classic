@@ -43,6 +43,7 @@
 #include <monster_data.h>
 #include <arch.h>
 #include <ban.h>
+#include <player_status.h>
 #include <player.h>
 #include <object.h>
 #include <exp.h>
@@ -358,6 +359,13 @@ int handle_newcs_player(player *pl) {
         return -1;
     }
 
+    /* Clear paralysis before dispatching the first action whose speed debt has
+     * been repaid. Commands such as push also consult the paralysis flag. */
+    if (pl->ob->speed_left >= 0.0f && QUERY_FLAG(pl->ob, FLAG_PARALYZED)) {
+        CLEAR_FLAG(pl->ob, FLAG_PARALYZED);
+        player_status_update_paralysis(pl->ob);
+    }
+
     socket_server_handle_client(pl);
 
     if (!pl->ob || !OBJECT_ACTIVE(pl->ob) || pl->cs->state == ST_DEAD) {
@@ -368,9 +376,6 @@ int handle_newcs_player(player *pl) {
     if (pl->ob->speed_left < 0.0f) {
         return 0;
     }
-
-    /* If we are here, we're never paralyzed anymore. */
-    CLEAR_FLAG(pl->ob, FLAG_PARALYZED);
 
     if (CONTR(pl->ob)->run_on) {
         /* All move commands take 1 tick, at least for now. */
@@ -758,6 +763,15 @@ static void player_death_deplete_stats(object *op) {
     }
 }
 
+/** Remove paralysis when a player death is accepted. */
+static void player_death_clear_paralysis(object *op) {
+    if (!QUERY_FLAG(op, FLAG_PARALYZED)) {
+        return;
+    }
+    CLEAR_FLAG(op, FLAG_PARALYZED);
+    player_status_update_paralysis(op);
+}
+
 /**
  * If the player should die (lack of hp, food, etc), we call this.
  *
@@ -771,6 +785,7 @@ void kill_player(object *op, bool pvp, bool environmental) {
 
     if (pvp_area(NULL, op)) {
         metrics_character_death(CONTR(op), pvp, environmental);
+        player_death_clear_paralysis(op);
         draw_info(COLOR_NAVY, op, "You have been defeated in combat!");
         draw_info(COLOR_NAVY, op, "Local medics have saved your life...");
 
@@ -833,6 +848,7 @@ void kill_player(object *op, bool pvp, bool environmental) {
         return;
     }
 
+    player_death_clear_paralysis(op);
     metrics_character_death(CONTR(op), pvp, environmental);
 
     /* Trigger the global GDEATH event */
