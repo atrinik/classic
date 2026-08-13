@@ -115,7 +115,11 @@ void set_npc_enemy(object *npc, object *enemy, rv_vector *rv) {
             rv = &rv2;
         }
 
-        get_rangevector(npc, enemy, rv, RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH | RV_NO_LOAD);
+        get_rangevector(npc,
+                        enemy,
+                        rv,
+                        RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH | RV_NO_LOAD |
+                            RV_RECURSIVE_SEARCH_EXTENDED);
         npc->enemy_count = enemy->count;
 
         /* important: that's our "we lose aggro count" - reset to zero here */
@@ -388,7 +392,8 @@ object *find_enemy(object *npc, rv_vector *rv) {
                     get_rangevector(npc,
                                     attacker,
                                     rv,
-                                    RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH | RV_NO_LOAD)) {
+                                    RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH | RV_NO_LOAD |
+                                        RV_RECURSIVE_SEARCH_EXTENDED)) {
                     /* The only thing we must know... */
 
                     CLEAR_FLAG(npc, FLAG_SLEEP);
@@ -445,7 +450,10 @@ static int can_detect_enemy(object *op, object *enemy, rv_vector *rv) {
         return 0;
     }
 
-    if (!get_rangevector(op, enemy, rv, RV_RECURSIVE_SEARCH | RV_NO_LOAD)) {
+    if (!get_rangevector(op,
+                         enemy,
+                         rv,
+                         RV_RECURSIVE_SEARCH | RV_NO_LOAD | RV_RECURSIVE_SEARCH_EXTENDED)) {
         return 0;
     }
 

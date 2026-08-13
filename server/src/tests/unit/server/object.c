@@ -274,6 +274,11 @@ START_TEST(test_find_enemy_returns_valid_direction_for_tiled_exit_tiled_enemy) {
     };
 
     ck_assert(on_same_map(monster, pl));
+    ck_assert(!get_rangevector(monster,
+                               pl,
+                               &rv,
+                               RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH | RV_NO_LOAD));
+    rv.direction = INT_MIN;
     ck_assert_ptr_eq(find_enemy(monster, &rv), pl);
     ck_assert_msg(rv.direction > 0 && rv.direction <= NUM_DIRECTION,
                   "find_enemy returned a tiled-exit-tiled enemy with stale rv.direction %d",
