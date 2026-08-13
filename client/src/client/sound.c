@@ -1400,6 +1400,18 @@ int sound_test_main(const char *fixture_root) {
     SOUND_TEST_CHECK(sound_test_hook_count == 1);
     SOUND_TEST_CHECK(MIX_GetTrackPlaybackPosition(sound_music_track) >= position_before_update);
 
+    /* A successful replacement stops the old track before publishing the new one. */
+    sound_start_bg_music("opus-tone-alias.mid", 70, -1);
+    SOUND_TEST_CHECK(sound_playing_music());
+    SOUND_TEST_CHECK(strcmp(sound_get_bg_music_basename(), "opus-tone-alias.mid") == 0);
+    SOUND_TEST_CHECK(MIX_GetTrackAudio(sound_music_track) != first_audio);
+    SOUND_TEST_CHECK(HASH_COUNT(sound_data) == 2);
+    SOUND_TEST_CHECK(sound_test_hook_count == 3);
+    SOUND_TEST_CHECK(strcmp(sound_test_hook_values[1], "<stopped>") == 0);
+    SOUND_TEST_CHECK(!sound_test_hook_track_active[1]);
+    SOUND_TEST_CHECK(strcmp(sound_test_hook_values[2], "opus-tone-alias.mid") == 0);
+    SOUND_TEST_CHECK(sound_test_hook_track_active[2]);
+
     sound_pause_music();
     SOUND_TEST_CHECK(MIX_TrackPaused(sound_music_track));
     SOUND_TEST_CHECK(!sound_background_update_duration);
@@ -1408,30 +1420,30 @@ int sound_test_main(const char *fixture_root) {
     sound_stop_bg_music();
     SOUND_TEST_CHECK(!sound_playing_music());
     SOUND_TEST_CHECK(sound_get_bg_music() == NULL);
-    SOUND_TEST_CHECK(sound_test_hook_count == 2);
-    SOUND_TEST_CHECK(strcmp(sound_test_hook_values[1], "<stopped>") == 0);
-    SOUND_TEST_CHECK(!sound_test_hook_track_active[1]);
-
-    sound_start_bg_music("opus-tone.mid", 80, -1);
-    SOUND_TEST_CHECK(sound_playing_music());
-    SOUND_TEST_CHECK(HASH_COUNT(sound_data) == 1);
-    SOUND_TEST_CHECK(sound_test_hook_count == 3);
-
-    /* Missing and malformed replacements stop the old audible track first. */
-    sound_start_bg_music("missing.mid", 80, -1);
-    SOUND_TEST_CHECK(!sound_playing_music());
-    SOUND_TEST_CHECK(sound_get_bg_music() == NULL);
-    SOUND_TEST_CHECK(HASH_COUNT(sound_data) == 1);
     SOUND_TEST_CHECK(sound_test_hook_count == 4);
     SOUND_TEST_CHECK(strcmp(sound_test_hook_values[3], "<stopped>") == 0);
     SOUND_TEST_CHECK(!sound_test_hook_track_active[3]);
 
     sound_start_bg_music("opus-tone.mid", 80, -1);
     SOUND_TEST_CHECK(sound_playing_music());
+    SOUND_TEST_CHECK(HASH_COUNT(sound_data) == 2);
+    SOUND_TEST_CHECK(sound_test_hook_count == 5);
+
+    /* Missing and malformed replacements stop the old audible track first. */
+    sound_start_bg_music("missing.mid", 80, -1);
+    SOUND_TEST_CHECK(!sound_playing_music());
+    SOUND_TEST_CHECK(sound_get_bg_music() == NULL);
+    SOUND_TEST_CHECK(HASH_COUNT(sound_data) == 2);
+    SOUND_TEST_CHECK(sound_test_hook_count == 6);
+    SOUND_TEST_CHECK(strcmp(sound_test_hook_values[5], "<stopped>") == 0);
+    SOUND_TEST_CHECK(!sound_test_hook_track_active[5]);
+
+    sound_start_bg_music("opus-tone.mid", 80, -1);
+    SOUND_TEST_CHECK(sound_playing_music());
     sound_start_bg_music("malformed.mid", 80, -1);
     SOUND_TEST_CHECK(!sound_playing_music());
     SOUND_TEST_CHECK(sound_get_bg_music() == NULL);
-    SOUND_TEST_CHECK(sound_test_hook_count == 6);
+    SOUND_TEST_CHECK(sound_test_hook_count == 8);
 
     /* A mixer-start failure never publishes the requested state to hooks. */
     sound_start_bg_music("opus-tone.mid", 80, -1);
@@ -1506,6 +1518,8 @@ int sound_test_main(const char *fixture_root) {
     for (int i = 0; i < SOUND_EFFECT_TRACKS; i++) {
         sound_stop_effect(i);
     }
+    SOUND_TEST_CHECK(sound_play_effect_loop("missing.mid", 100, 0) == -1);
+    SOUND_TEST_CHECK(sound_play_effect_loop("malformed.mid", 100, 0) == -1);
 
     MIX_StereoGains centered = sound_effect_stereo_gains(0, 0);
     MIX_StereoGains right = sound_effect_stereo_gains(90, 0);
@@ -1537,6 +1551,19 @@ int sound_test_main(const char *fixture_root) {
     SOUND_TEST_CHECK(sound_test_effect_gains[positioned_channel].right > 0.0f);
     SOUND_TEST_CHECK(sound_test_effect_gains[positioned_channel].right < 1.0f);
     sound_stop_effect(positioned_channel);
+
+    packet = packet_new(0, 64, 32);
+    packet_writer_write_uint8(packet, 8);
+    packet_writer_write_uint8(packet, 8);
+    packet_writer_write_uint32(packet, 0);
+    packet_writer_write_uint32(packet, 43);
+    packet_writer_write_cstring(packet, "missing.mid");
+    packet_writer_write_uint8(packet, 100);
+    packet_writer_write_uint8(packet, 12);
+    socket_command_sound_ambient(packet->data, packet->len, 0);
+    packet_free(packet);
+    packet = NULL;
+    SOUND_TEST_CHECK(sound_test_ambient_count() == 0);
 
     /* Ambient protocol starts, repositions, removes, and clears looping effects. */
     packet = packet_new(0, 64, 32);

@@ -388,7 +388,7 @@ if (BUILD_TESTING)
         add_test(NAME client-sound-fixture
             COMMAND ${CMAKE_COMMAND}
                 -DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/audio/opus-tone.mid
-                -DEXPECTED_SHA256=4908f4bf08be6c111894c18da9d82737b83defa5450c9dbe005f4ac892934513
+                -DCHECKSUM_FILE=${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/audio/opus-tone.sha256
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/audio/verify.cmake)
 
     add_executable(client-stun-config-tests
