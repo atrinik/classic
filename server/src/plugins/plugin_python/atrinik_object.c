@@ -2788,25 +2788,31 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
             return -1;
         }
         if (direction < 0 || direction > NUM_DIRECTION) {
-            PyErr_Format(PyExc_ValueError,
-                         "direction must be between 0 and %d.",
-                         NUM_DIRECTION);
+            PyErr_Format(PyExc_ValueError, "direction must be between 0 and %d.", NUM_DIRECTION);
             return -1;
         }
     }
 
-    if (obj->obj->map != NULL && (field->offset == offsetof(object, layer) ||
-                                  field->offset == offsetof(object, sub_layer))) {
+    if (obj->obj->map != NULL &&
+        (field->offset == offsetof(object, layer) || field->offset == offsetof(object, sub_layer) ||
+         field->offset == offsetof(object, type))) {
         hooks->object_remove(obj->obj, 0);
     }
 
     ret = generic_field_setter(field, obj->obj, value);
 
-    if (field->offset == offsetof(object, layer) || field->offset == offsetof(object, sub_layer)) {
-        obj->obj->layer = MIN(NUM_LAYERS, obj->obj->layer);
-        obj->obj->sub_layer = MIN(NUM_SUB_LAYERS - 1, obj->obj->sub_layer);
+    if (field->offset == offsetof(object, layer) || field->offset == offsetof(object, sub_layer) ||
+        field->offset == offsetof(object, type)) {
+        if (field->offset == offsetof(object, layer) ||
+            field->offset == offsetof(object, sub_layer)) {
+            obj->obj->layer = MIN(NUM_LAYERS, obj->obj->layer);
+            obj->obj->sub_layer = MIN(NUM_SUB_LAYERS - 1, obj->obj->sub_layer);
+        }
 
         if (obj->obj->map != NULL) {
+            /* Type contributes to the map's spatial flags just like layer
+             * contributes to its object index. Reinsert after either change
+             * so queries observe the new object contract immediately. */
             hooks->object_insert_map(obj->obj, obj->obj->map, NULL, 0);
         }
     }

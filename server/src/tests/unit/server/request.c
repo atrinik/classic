@@ -1603,6 +1603,7 @@ START_TEST(test_map_exit_semantic_accepts_usable_destination_forms_without_loadi
     ck_assert_ptr_nonnull(paired_shop_mat);
     paired_shop_mat->x = pl->x + 1;
     paired_shop_mat->y = pl->y - 1;
+    paired_shop_mat->type = SIGN;
     paired_shop_mat = object_insert_map(paired_shop_mat, map, NULL, 0);
     ck_assert_ptr_nonnull(paired_shop_mat);
 
@@ -1623,9 +1624,21 @@ START_TEST(test_map_exit_semantic_accepts_usable_destination_forms_without_loadi
     rndm_seed(UINT64_C(260));
     draw_client_map2(pl);
     ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
-    ck_assert_uint_eq(map_cache_semantic_count(cs, true), 5);
+    ck_assert_uint_eq(map_cache_semantic_count(cs, true), 3);
     ck_assert_ptr_eq(has_been_loaded_sh(EXIT_PATH(explicit_exit)), NULL);
     ck_assert_uint_eq(rndm_u64(), expected_random);
+
+    /* The supported Python type setter removes and reinserts on-map objects.
+     * Mirror that transition to prove the map's P_IS_EXIT index and both
+     * directions of auto-link eligibility gain update together. */
+    object_remove(paired_shop_mat, 0);
+    paired_shop_mat->type = EXIT;
+    paired_shop_mat = object_insert_map(paired_shop_mat, map, NULL, 0);
+    ck_assert_ptr_nonnull(paired_shop_mat);
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
+    ck_assert_uint_eq(map_cache_semantic_count(cs, true), 5);
 
     object_remove(paired_shop_mat, 0);
     socket_buffer_clear(cs);
