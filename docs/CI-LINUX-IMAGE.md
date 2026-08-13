@@ -167,7 +167,9 @@ that this pull request did not write the trusted-main namespace.
   and integrated-graph jobs to hash the shared validation driver and their
   component CMake configuration, mount only the component ccache directory,
   and activate both C and C++ launchers.
-- Pull request, merge-group, and trusted-main scopes have distinct keys; unsafe
+- Pull request, merge-group, manually dispatched commit, and trusted-main
+  scopes have distinct keys. A manual full-matrix run can neither restore nor
+  write the trusted-main namespace, even when dispatched from `main`; unsafe
   material paths, missing files, symlinks, invalid digests, and unsupported
   events fail closed.
 - Attempts 3 and 4 both passed core, client, server, native Windows, and the
