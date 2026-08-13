@@ -214,6 +214,8 @@ def _download(
     cache_dir.mkdir(parents=True, exist_ok=True)
     expected = str(dependency["sha256"])
     archive = cache_dir / f"{dependency['name']}-{expected}.tar.gz"
+    if archive.is_symlink():
+        archive.unlink()
     if archive.exists():
         if archive.is_file() and archive.stat().st_size <= MAX_ARCHIVE_BYTES and sha256_file(archive) == expected:
             print(
@@ -533,12 +535,33 @@ def stage_bundle(
 ) -> bool:
     if output_dir.exists():
         raise DependencyError(f"dependency bundle output already exists: {output_dir}")
+    cache_dir.mkdir(parents=True, exist_ok=True)
     cache_downloads = cache_dir / "downloads"
+    expected_cache_names = {
+        f"{material['name']}-{material['sha256']}.tar.gz" for material in materials
+    }
+    cache_changed = False
+    for path in cache_dir.iterdir():
+        if path.name == "downloads" and path.is_dir() and not path.is_symlink():
+            continue
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+        cache_changed = True
+    cache_downloads.mkdir(exist_ok=True)
+    for path in cache_downloads.iterdir():
+        if path.name in expected_cache_names and path.is_file() and not path.is_symlink():
+            continue
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+        cache_changed = True
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(
         tempfile.mkdtemp(prefix=f".{output_dir.name}-staging-", dir=output_dir.parent)
     )
-    cache_changed = False
     try:
         downloads = staging / "downloads"
         downloads.mkdir()

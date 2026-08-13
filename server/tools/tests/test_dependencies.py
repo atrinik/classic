@@ -343,6 +343,31 @@ class DependencyTests(unittest.TestCase):
         bundle2 = self.root / "bundle2"
         self.assertFalse(dependencies.stage_bundle([material], cache, bundle2))
 
+    def test_bundle_stage_canonicalizes_stale_and_linked_cache_entries(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        material = {
+            "kind": "dependency",
+            "owner": "client",
+            **self.dependency(archive),
+        }
+        cache = self.root / "cache"
+        downloads = cache / "downloads"
+        downloads.mkdir(parents=True)
+        expected = downloads / f"sound-{material['sha256']}.tar.gz"
+        target = self.root / "target.tar.gz"
+        target.write_bytes(archive.read_bytes())
+        expected.symlink_to(target)
+        (downloads / "stale.tar.gz").write_bytes(b"stale")
+        (cache / "extracted-tree").mkdir()
+
+        bundle = self.root / "bundle"
+        self.assertTrue(dependencies.stage_bundle([material], cache, bundle))
+        self.assertFalse(expected.is_symlink())
+        self.assertEqual(expected.read_bytes(), archive.read_bytes())
+        self.assertEqual(set(cache.iterdir()), {downloads})
+        self.assertEqual(set(downloads.iterdir()), {expected})
+        dependencies.verify_bundle([material], bundle)
+
     def test_bundle_manifest_digest_covers_schema_and_material_metadata(self) -> None:
         archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
         material = {
