@@ -10,10 +10,12 @@ The server has four dependency classes:
   validates every lock field and uses `FetchContent` with an exact SHA-256
   digest.
 - `dependencies.lock.json` records install-time content and runtime resources.
-  `tools/dependencies.py` validates, downloads, safely extracts, and verifies
-  those archives below ignored runtime paths.
-- `cmake/pcpnatpmp.cmake` pins the third-party libpcpnatpmp source URL and
-  SHA-256 digest directly at its single build integration point. Use
+  The repository-level `server/tools/dependencies.py` is the authoritative
+  immutable acquisition boundary used by both client and server commands. It
+  safely extracts and verifies those archives below ignored runtime paths.
+- `cmake/immutable_sources.lock.json` records the third-party libpcpnatpmp
+  source URL and its archive/tree digests. CMake invokes the same authoritative
+  fetcher for this source. Use
   `FETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP` to provide an existing local source
   tree when network fetching is unavailable.
 
@@ -52,7 +54,15 @@ published only after verification, and revalidates the complete extracted tree
 against its digest-bound marker on reuse. An incomplete or mismatched cache
 fails closed. MinGW builds copy and patch the immutable source inside their own
 binary directory; they never modify the shared extraction, and a changed local
-copy is recreated from the verified source.
+copy is recreated from the verified source. A cache hit always re-hashes the
+archive or source tree before reuse. A cache miss downloads each attempt to a
+unique partial file, removes failed partials, verifies the digest and source
+tree, then atomically publishes the result. Transport resets, timeouts, and
+HTTP 408, 429, and 5xx responses retry at most four times with jittered
+exponential backoff (honouring a bounded `Retry-After`); policy, TLS, URL,
+digest, archive-safety, and extraction failures fail immediately. Diagnostics
+identify the dependency, cache state, attempt, public URL, category, and
+terminal classification without retaining URL query strings.
 
 For coordinated local changes, configure CMake with
 `FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL` or

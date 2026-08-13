@@ -3,16 +3,38 @@ include_guard(GLOBAL)
 include(FetchContent)
 include(${CMAKE_CURRENT_LIST_DIR}/immutable_source_cache.cmake)
 
-set(ATRINIK_PCPNATPMP_COMMIT
-    866d283da99f5e98eecff702a8df63e2ae57ffca)
-set(ATRINIK_PCPNATPMP_SHA256
-    65ab99547ecc8277434527607d24f8a1b02a2344ed4cea475bed751606e60202)
-set(ATRINIK_PCPNATPMP_TREE_SHA256
-    16dbd3e0d59aaa060da9e78b953d3f5e310b5312edc4743218dc8297cbd1292e)
-set(ATRINIK_PCPNATPMP_MINGW_TREE_SHA256
-    0c5d3ed95ee594d4506c9690a22e0a15f7bf4ae23a33b5fa3e3e758617193038)
-set(ATRINIK_PCPNATPMP_URL
-    "https://github.com/libpcpnatpmp/libpcpnatpmp/archive/${ATRINIK_PCPNATPMP_COMMIT}.tar.gz")
+file(READ "${CMAKE_CURRENT_LIST_DIR}/immutable_sources.lock.json"
+    ATRINIK_IMMUTABLE_SOURCE_LOCK)
+string(JSON ATRINIK_IMMUTABLE_SOURCE_SCHEMA ERROR_VARIABLE lock_error
+    GET "${ATRINIK_IMMUTABLE_SOURCE_LOCK}" schema_version)
+if (lock_error OR NOT ATRINIK_IMMUTABLE_SOURCE_SCHEMA EQUAL 1)
+    message(FATAL_ERROR "immutable_sources.lock.json has an unsupported schema")
+endif ()
+foreach (field IN ITEMS url sha256 tree_sha256 mingw_tree_sha256)
+    string(JSON ATRINIK_PCPNATPMP_${field} ERROR_VARIABLE lock_error
+        GET "${ATRINIK_IMMUTABLE_SOURCE_LOCK}" sources libpcpnatpmp ${field})
+    if (lock_error)
+        message(FATAL_ERROR "libpcpnatpmp immutable source metadata is invalid")
+    endif ()
+    if (field STREQUAL "url")
+        string(REGEX MATCH
+            "^https://github.com/libpcpnatpmp/libpcpnatpmp/archive/([0-9a-f]+)\\.tar\\.gz$"
+            source_url_match "${ATRINIK_PCPNATPMP_${field}}")
+        string(REGEX REPLACE
+            "^https://github.com/libpcpnatpmp/libpcpnatpmp/archive/([0-9a-f]+)\\.tar\\.gz$"
+            "\\1" source_commit "${ATRINIK_PCPNATPMP_${field}}")
+        string(LENGTH "${source_commit}" source_commit_length)
+        if (NOT source_url_match OR NOT source_commit_length EQUAL 40)
+            message(FATAL_ERROR "libpcpnatpmp immutable source URL is invalid")
+        endif ()
+    else ()
+        string(LENGTH "${ATRINIK_PCPNATPMP_${field}}" digest_length)
+        if (NOT ATRINIK_PCPNATPMP_${field} MATCHES "^[0-9a-f]+$" OR
+                NOT digest_length EQUAL 64)
+            message(FATAL_ERROR "libpcpnatpmp immutable source digest is invalid")
+        endif ()
+    endif ()
+endforeach ()
 set(ATRINIK_DEPENDENCY_CACHE_DIR
     "${CMAKE_CURRENT_BINARY_DIR}/../dependency-cache" CACHE PATH
     "Shared verified source cache for immutable Atrinik build dependencies")
@@ -30,9 +52,9 @@ function(atrinik_add_pcpnatpmp)
     else ()
         atrinik_extract_immutable_source(
             NAME libpcpnatpmp
-            URL "${ATRINIK_PCPNATPMP_URL}"
-            SHA256 "${ATRINIK_PCPNATPMP_SHA256}"
-            TREE_SHA256 "${ATRINIK_PCPNATPMP_TREE_SHA256}"
+            URL "${ATRINIK_PCPNATPMP_url}"
+            SHA256 "${ATRINIK_PCPNATPMP_sha256}"
+            TREE_SHA256 "${ATRINIK_PCPNATPMP_tree_sha256}"
             CACHE_DIR "${ATRINIK_DEPENDENCY_CACHE_DIR}"
             OUTPUT pcpnatpmp_shared_source)
         if (MINGW)
@@ -45,9 +67,9 @@ function(atrinik_add_pcpnatpmp)
             set(pcpnatpmp_patch_marker
                 "${pcpnatpmp_source}/.atrinik-mingw-patch-sha256")
             set(expected_patch_prefix
-                "${ATRINIK_PCPNATPMP_SHA256}:${pcpnatpmp_patch_sha256}")
+                "${ATRINIK_PCPNATPMP_sha256}:${pcpnatpmp_patch_sha256}")
             set(expected_patch_marker
-                "${expected_patch_prefix}:${ATRINIK_PCPNATPMP_MINGW_TREE_SHA256}\n")
+                "${expected_patch_prefix}:${ATRINIK_PCPNATPMP_mingw_tree_sha256}\n")
             set(recreate_pcpnatpmp_source true)
             if (EXISTS "${pcpnatpmp_patch_marker}")
                 file(READ "${pcpnatpmp_patch_marker}" actual_patch_marker)
@@ -55,7 +77,7 @@ function(atrinik_add_pcpnatpmp)
                     atrinik_source_tree_sha256("${pcpnatpmp_source}"
                         actual_patched_tree_sha256)
                     if (actual_patched_tree_sha256 STREQUAL
-                            ATRINIK_PCPNATPMP_MINGW_TREE_SHA256)
+                            ATRINIK_PCPNATPMP_mingw_tree_sha256)
                         set(recreate_pcpnatpmp_source false)
                     endif ()
                 endif ()
@@ -82,7 +104,7 @@ function(atrinik_add_pcpnatpmp)
                 atrinik_source_tree_sha256("${pcpnatpmp_source}"
                     patched_tree_sha256)
                 if (NOT patched_tree_sha256 STREQUAL
-                        ATRINIK_PCPNATPMP_MINGW_TREE_SHA256)
+                        ATRINIK_PCPNATPMP_mingw_tree_sha256)
                     message(FATAL_ERROR
                         "Patched libpcpnatpmp source has unexpected content")
                 endif ()

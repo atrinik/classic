@@ -87,7 +87,7 @@ class CMakeIncrementalContractTests(unittest.TestCase):
                 text=True,
             )
             self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
-            self.assertIn("Mismatched shared fixture source content", rejected.stdout)
+            self.assertIn("fixture: mismatched shared source content", rejected.stdout)
             cached_cmake.write_bytes(payload)
 
             marker = Path(first) / ".atrinik-source-sha256"
@@ -101,7 +101,7 @@ class CMakeIncrementalContractTests(unittest.TestCase):
                 text=True,
             )
             self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
-            self.assertIn("Mismatched shared fixture source cache", rejected.stdout)
+            self.assertIn("fixture: mismatched shared source cache", rejected.stdout)
 
 
 if __name__ == "__main__":
