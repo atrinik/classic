@@ -2782,6 +2782,19 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
         }
     }
 
+    if (field->offset == offsetof(object, direction) && PyInt_Check(value)) {
+        long direction = PyLong_AsLong(value);
+        if (PyErr_Occurred()) {
+            return -1;
+        }
+        if (direction < 0 || direction > NUM_DIRECTION) {
+            PyErr_Format(PyExc_ValueError,
+                         "direction must be between 0 and %d.",
+                         NUM_DIRECTION);
+            return -1;
+        }
+    }
+
     if (obj->obj->map != NULL && (field->offset == offsetof(object, layer) ||
                                   field->offset == offsetof(object, sub_layer))) {
         hooks->object_remove(obj->obj, 0);

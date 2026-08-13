@@ -53,6 +53,7 @@
 #include <connection.h>
 #include <face.h>
 #include <faction.h>
+#include <gameplay_journal.h>
 #include <gods.h>
 #include <initialization.h>
 #include <living.h>
@@ -600,7 +601,6 @@ struct plugin_hooklist
                                                                                      player *,
                                                                                      const char *,
                                                                                      int)
-
                                                                 PLUGIN_HOOK_ARRAY(const char *, season_name) PLUGIN_HOOK_ARRAY(
                                                                     const char *,
                                                                     weekdays) PLUGIN_HOOK_ARRAY(const char *, month_name)
@@ -664,6 +664,19 @@ struct plugin_hooklist
                          socket_struct *,
                          const uint8_t *,
                          size_t)
+    PLUGIN_HOOK_FUNCTION(bool,
+                         gameplay_journal_player_begin,
+                         player *,
+                         const char *,
+                         const char *,
+                         const char *,
+                         const char *,
+                         int64_t,
+                         int64_t,
+                         int64_t,
+                         char *)
+    PLUGIN_HOOK_FUNCTION(bool, gameplay_journal_commit, const char *)
+    PLUGIN_HOOK_FUNCTION(bool, gameplay_journal_abort, const char *, const char *)
     PLUGIN_HOOK_FUNCTION(bool,
                          player_status_set,
                          object *,

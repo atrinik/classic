@@ -78,3 +78,25 @@ elseif (NOT raw_queue_write_count EQUAL 0 OR
         "Reassess the content command-queue compatibility fixture")
 endif ()
 file(WRITE "${player_tests}" "${normalized_player_tests}")
+
+# Direction is a semantic 0..8 value even though its storage is a signed byte.
+# Adapt the external content field-width test to the server's stricter runtime
+# boundary until the selected content release carries the semantic test.
+set(object_tests "${runtime_server}/maps/python/tests/Atrinik_tests/Object.py")
+file(READ "${object_tests}" object_tests_content)
+set(old_direction_test
+    "    def test_direction(self):\n        self.field_test_int(\"direction\", 8)\n")
+set(new_direction_test
+    "    def test_direction(self):\n        with self.assertRaises(ValueError):\n            self.obj.direction = -1\n        with self.assertRaises(ValueError):\n            self.obj.direction = 9\n        with self.assertRaises(ValueError):\n            self.obj.direction = 127\n        for direction in (0, 1, 8):\n            self.obj.direction = direction\n            self.assertEqual(self.obj.direction, direction)\n")
+string(FIND "${object_tests_content}" "${old_direction_test}" direction_test_offset)
+if (direction_test_offset EQUAL -1)
+    string(FIND "${object_tests_content}" "${new_direction_test}" normalized_direction_test_offset)
+    if (normalized_direction_test_offset EQUAL -1)
+        message(FATAL_ERROR
+            "Reassess the content direction-field compatibility fixture")
+    endif ()
+else ()
+    string(REPLACE "${old_direction_test}" "${new_direction_test}"
+        object_tests_content "${object_tests_content}")
+    file(WRITE "${object_tests}" "${object_tests_content}")
+endif ()
