@@ -954,6 +954,17 @@ START_TEST(test_object_load_str) {
     ck_assert_uint_eq(ob->light_color, UINT32_C(0xffffff));
     object_destroy(ob);
 
+    ob = object_load_str("arch sack\ndirection -1\nend\n");
+    ck_assert_ptr_nonnull(ob);
+    ck_assert_int_eq(ob->direction, NUM_DIRECTION);
+    object_destroy(ob);
+
+    ob = object_load_str("arch sack\ndirection -2147483648\nend\n");
+    ck_assert_ptr_nonnull(ob);
+    ck_assert_int_ge(ob->direction, 0);
+    ck_assert_int_le(ob->direction, NUM_DIRECTION);
+    object_destroy(ob);
+
     ob = object_load_str("arch sack\nlight_color 12aBcF\nend\n");
     ck_assert_ptr_ne(ob, NULL);
     ck_assert_uint_eq(ob->light_color, UINT32_C(0x12abcf));

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -2823,7 +2823,8 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
         /* Direction. */
 
         /* If the object is animated and turnable, update its face. */
-        if (obj->obj->animation_id && QUERY_FLAG(obj->obj, FLAG_IS_TURNABLE)) {
+        if (obj->obj->animation_id && QUERY_FLAG(obj->obj, FLAG_IS_TURNABLE) &&
+            obj->obj->direction >= 0 && obj->obj->direction <= NUM_DIRECTION) {
             SET_ANIMATION(obj->obj,
                           (NUM_ANIMATIONS(obj->obj) / NUM_FACINGS(obj->obj)) * obj->obj->direction +
                               obj->obj->state);
