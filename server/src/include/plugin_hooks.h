@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -62,6 +62,7 @@
 #include <movement.h>
 #include <object_methods.h>
 #include <party.h>
+#include <player_status.h>
 #include <player.h>
 #include <object.h>
 #include <plugin.h>
@@ -663,6 +664,13 @@ struct plugin_hooklist
                          socket_struct *,
                          const uint8_t *,
                          size_t)
+    PLUGIN_HOOK_FUNCTION(bool,
+                         player_status_set,
+                         object *,
+                         const char *,
+                         const char *,
+                         const char *,
+                         New_Face *)
 
 };
 // clang-format on

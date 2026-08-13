@@ -43,6 +43,7 @@
 #include <exp.h>
 #include <disease.h>
 #include <skills.h>
+#include <player_status.h>
 
 /**
  * Names of attack types to use when saving them to file.
@@ -1845,6 +1846,9 @@ void attack_peform_paralyze(object *op, double dam) {
     double max = (100.0 - op->protection[ATNR_PARALYZE]) / 2.0;
     if (op->speed_left < -(FABS(op->speed) * max)) {
         op->speed_left = -(FABS(op->speed) * max);
+    }
+    if (op->type == PLAYER) {
+        player_status_update_paralysis(op);
     }
 }
 

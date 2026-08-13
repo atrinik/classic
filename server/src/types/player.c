@@ -43,6 +43,7 @@
 #include <monster_data.h>
 #include <arch.h>
 #include <ban.h>
+#include <player_status.h>
 #include <player.h>
 #include <object.h>
 #include <exp.h>
@@ -370,7 +371,10 @@ int handle_newcs_player(player *pl) {
     }
 
     /* If we are here, we're never paralyzed anymore. */
-    CLEAR_FLAG(pl->ob, FLAG_PARALYZED);
+    if (QUERY_FLAG(pl->ob, FLAG_PARALYZED)) {
+        CLEAR_FLAG(pl->ob, FLAG_PARALYZED);
+        player_status_update_paralysis(pl->ob);
+    }
 
     if (CONTR(pl->ob)->run_on) {
         /* All move commands take 1 tick, at least for now. */
@@ -758,6 +762,15 @@ static void player_death_deplete_stats(object *op) {
     }
 }
 
+/** Remove paralysis when a player death is accepted. */
+static void player_death_clear_paralysis(object *op) {
+    if (!QUERY_FLAG(op, FLAG_PARALYZED)) {
+        return;
+    }
+    CLEAR_FLAG(op, FLAG_PARALYZED);
+    player_status_update_paralysis(op);
+}
+
 /**
  * If the player should die (lack of hp, food, etc), we call this.
  *
@@ -771,6 +784,7 @@ void kill_player(object *op, bool pvp, bool environmental) {
 
     if (pvp_area(NULL, op)) {
         metrics_character_death(CONTR(op), pvp, environmental);
+        player_death_clear_paralysis(op);
         draw_info(COLOR_NAVY, op, "You have been defeated in combat!");
         draw_info(COLOR_NAVY, op, "Local medics have saved your life...");
 
@@ -833,6 +847,7 @@ void kill_player(object *op, bool pvp, bool environmental) {
         return;
     }
 
+    player_death_clear_paralysis(op);
     metrics_character_death(CONTR(op), pvp, environmental);
 
     /* Trigger the global GDEATH event */

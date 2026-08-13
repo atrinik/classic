@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -37,6 +37,7 @@
 #include <object.h>
 #include <object_methods.h>
 #include <artifact.h>
+#include <player_status.h>
 
 #include "common/process_treasure.h"
 
@@ -109,6 +110,9 @@ static void food_create_force(object *who, object *food, object *force) {
 
     SET_FLAG(force, FLAG_APPLIED);
     SET_FLAG(force, FLAG_IS_USED_UP);
+    SOFT_ASSERT(player_status_set_from_source(force, food, "food"),
+                "Failed to publish food status for %s",
+                object_get_str(food));
 
     force = object_insert_into(force, who, 0);
     SOFT_ASSERT(force != NULL,

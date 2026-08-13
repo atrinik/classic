@@ -339,6 +339,161 @@ START_TEST(test_player_status_capacity_resnapshots_membership_changes) {
 }
 END_TEST
 
+START_TEST(test_player_status_explicit_opt_in_lifecycle) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+    socket_buffer_clear(CONTR(pl)->cs);
+
+    object *effect = arch_get("force");
+    ck_assert_ptr_nonnull(effect);
+    effect = object_insert_into(effect, pl, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(effect);
+    ck_assert(!player_status_should_publish(effect));
+    ck_assert_ptr_null(queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS));
+
+    ck_assert(player_status_set(effect,
+                                "condition:test",
+                                "test condition",
+                                "An explicitly published test condition.",
+                                effect->face));
+    ck_assert(player_status_should_publish(effect));
+    packet_struct *packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
+    assert_status_entry(&reader, "condition:test", "test condition", -1);
+    ck_assert(packet_reader_finish(&reader));
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    player_status_send_snapshot(pl);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_SNAPSHOT);
+    ck_assert_uint_eq(packet_reader_read_uint16(&reader), 1);
+    assert_status_entry(&reader, "condition:test", "test condition", -1);
+    ck_assert(packet_reader_finish(&reader));
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    object_remove(effect, 0);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_REMOVE);
+    char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+    ck_assert(packet_reader_read_string(&reader, VS(key)));
+    ck_assert_str_eq(key, "condition:test");
+    ck_assert(packet_reader_finish(&reader));
+    object_destroy(effect);
+    object_destroy(pl);
+}
+END_TEST
+
+START_TEST(test_player_status_source_presentation_and_stable_key) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+
+    object *source = arch_get("apple");
+    object *effect = arch_get("force");
+    ck_assert_ptr_nonnull(source);
+    ck_assert_ptr_nonnull(effect);
+    set_attr_value(&effect->stats, STR, 2);
+    effect->protection[ATNR_FIRE] = 15;
+    effect->stats.food = 10;
+    ck_assert(player_status_set_from_source(effect, source, "food"));
+    effect = object_insert_into(effect, pl, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(effect);
+
+    packet_struct *packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
+    char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+    char name[ATRINIK_PLAYER_STATUS_NAME_SIZE + 1U];
+    char tooltip[ATRINIK_PLAYER_STATUS_TOOLTIP_SIZE + 1U];
+    ck_assert(packet_reader_read_string(&reader, VS(key)));
+    ck_assert(strncmp(key, "food:", strlen("food:")) == 0);
+    ck_assert_uint_gt(packet_reader_read_uint16(&reader), 0);
+    ck_assert(packet_reader_read_string(&reader, VS(name)));
+    ck_assert_str_eq(name, "red apple");
+    ck_assert(packet_reader_read_string(&reader, VS(tooltip)));
+    ck_assert_ptr_nonnull(strstr(tooltip, "Str +2"));
+    ck_assert_ptr_nonnull(strstr(tooltip, "fire protection 15%"));
+    (void)packet_reader_read_int32(&reader);
+    ck_assert(packet_reader_finish(&reader));
+
+    object *same_effect = arch_get("force");
+    set_attr_value(&same_effect->stats, STR, 2);
+    same_effect->protection[ATNR_FIRE] = 15;
+    same_effect->stats.food = 50;
+    ck_assert(player_status_set_from_source(same_effect, source, "food"));
+    ck_assert_str_eq(object_get_value(effect, "player_status_key"),
+                     object_get_value(same_effect, "player_status_key"));
+
+    object_destroy(same_effect);
+    object_destroy(source);
+    object_destroy(pl);
+}
+END_TEST
+
+START_TEST(test_player_status_paralysis_refresh_snapshot_and_cure) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+    socket_buffer_clear(CONTR(pl)->cs);
+
+    SET_FLAG(pl, FLAG_PARALYZED);
+    pl->speed = 0.1;
+    pl->speed_left = -0.5;
+    player_status_update_paralysis(pl);
+
+    packet_struct *packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
+    assert_status_entry(&reader,
+                        "condition:paralysis",
+                        "paralysis",
+                        (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
+    ck_assert(packet_reader_finish(&reader));
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    player_status_send_snapshot(pl);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_SNAPSHOT);
+    ck_assert_uint_eq(packet_reader_read_uint16(&reader), 1);
+    assert_status_entry(&reader,
+                        "condition:paralysis",
+                        "paralysis",
+                        (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
+    ck_assert(packet_reader_finish(&reader));
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    CLEAR_FLAG(pl, FLAG_PARALYZED);
+    player_status_update_paralysis(pl);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_REMOVE);
+    char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+    ck_assert(packet_reader_read_string(&reader, VS(key)));
+    ck_assert_str_eq(key, "condition:paralysis");
+    ck_assert(packet_reader_finish(&reader));
+
+    object_destroy(pl);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("item");
     TCase *tc_core = tcase_create("Core");
@@ -352,6 +507,9 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_player_status_explicit_force_allowlist);
     tcase_add_test(tc_core, test_player_status_poison_and_timed_force_refresh_and_remove);
     tcase_add_test(tc_core, test_player_status_capacity_resnapshots_membership_changes);
+    tcase_add_test(tc_core, test_player_status_explicit_opt_in_lifecycle);
+    tcase_add_test(tc_core, test_player_status_source_presentation_and_stable_key);
+    tcase_add_test(tc_core, test_player_status_paralysis_refresh_snapshot_and_cure);
 
     return s;
 }
