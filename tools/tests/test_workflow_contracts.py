@@ -368,6 +368,115 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertIn("ctest --preset linux-release", component)
                 self.assertIn("ctest --preset linux-sanitizers", component)
 
+    def test_movement_regression_uses_only_compatible_immutable_baselines(self) -> None:
+        runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
+            encoding="utf-8"
+        )
+        client_start = runner.index("  client)")
+        client = runner[client_start : runner.index("esac", client_start)]
+
+        self.assertIn("movement_contract_paths=(", client)
+        self.assertIn(
+            '"${benchmark_base_sha}:client/tools/movement_benchmark_schema.py"',
+            client,
+        )
+        self.assertIn(
+            "comparison_note=bootstrap-base-missing-movement-instrumentation",
+            client,
+        )
+        self.assertIn(
+            "comparison_note=baseline-movement-schema-mismatch",
+            client,
+        )
+        self.assertIn('--comparison-note "${comparison_note}"', client)
+        self.assertIn("--informational-performance", client)
+        self.assertIn(
+            "--comparison-note performance-calibration-pending-sibling-integration",
+            client,
+        )
+        self.assertIn("movement_event_name} == merge_group", client)
+        self.assertIn("the full movement matrix is candidate-only", client)
+        self.assertEqual(client.count("--discrete-manifest"), 2)
+        self.assertIn("movement_matrix_arguments+=(--full-matrix)", client)
+        self.assertIn("client-validation-ended-before-movement-evidence", client)
+        self.assertIn("lighting-regression-generation-failed", client)
+        self.assertIn(
+            "lighting-base-missing-benchmark-instrumentation",
+            client,
+        )
+        self.assertNotIn("lighting_bootstrap", client)
+        self.assertNotIn("instrumentation_patch", client)
+        self.assertNotIn('git -C "${baseline_root}" apply', client)
+        self.assertIn(
+            'git -C "${baseline_root}" diff --quiet HEAD --',
+            client,
+        )
+
+    def test_client_regression_evidence_is_initialized_and_always_uploaded(self) -> None:
+        workflow = self.text("check.yml")
+        client = workflow[
+            workflow.index("  client:\n    name: Client validation") : workflow.index(
+                "  movement-regression-comment:"
+            )
+        ]
+        initialization = client.index("Initialize client benchmark evidence")
+        validation = client.index("Validate, build, and test")
+        coverage = client.index("Upload coverage")
+        rendering = client.index("Render movement regression comment")
+        upload = client.index("linux-client-evidence-${{ github.run_attempt }}")
+        upload_action = client.rindex("uses: actions/upload-artifact", 0, upload)
+        self.assertLess(initialization, validation)
+        self.assertLess(validation, coverage)
+        self.assertLess(coverage, rendering)
+        self.assertLess(rendering, upload)
+        self.assertIn("client-validation-ended-before-movement-evidence", client)
+        self.assertIn("if: always()", client[rendering:upload_action])
+        self.assertIn("if: always()", client[upload_action:upload])
+        self.assertIn("path: build/ci-evidence", client[upload:])
+        self.assertIn("if-no-files-found: error", client[upload:])
+        self.assertIn(
+            "github.event_name == 'workflow_dispatch' && 'full' || 'fast'",
+            client,
+        )
+        self.assertIn(
+            "timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 120 || 30 }}",
+            client,
+        )
+        self.assertIn(
+            "github.event.pull_request.base.sha || github.event.merge_group.base_sha",
+            client,
+        )
+        for runner_identity in ("CI", "ImageOS", "ImageVersion", "RUNNER_ARCH", "RUNNER_OS"):
+            self.assertIn(f"--env {runner_identity} \\", client)
+        self.assertNotIn("schedule", workflow[: workflow.index("jobs:")])
+        self.assertIn("  workflow_dispatch:\n", workflow[: workflow.index("jobs:")])
+        self.assertIn(
+            "github.event_name == 'workflow_dispatch' && github.run_id || github.ref",
+            workflow[: workflow.index("jobs:")],
+        )
+
+        comment = workflow[
+            workflow.index("  movement-regression-comment:") : workflow.index(
+                "  integrated:"
+            )
+        ]
+        self.assertNotIn("actions/checkout", comment)
+        self.assertNotIn("python3 ", comment)
+        self.assertIn(
+            "github.event.pull_request.head.repo.full_name == github.repository",
+            comment,
+        )
+        self.assertIn("      actions: read\n      pull-requests: write\n", comment)
+        self.assertNotIn("contents: write", comment)
+        self.assertNotIn("id-token: write", comment)
+        self.assertIn("continue-on-error: true", comment)
+        self.assertIn("Publish one pre-rendered summary comment", comment)
+        self.assertIn("evidence/movement-comment.md", comment)
+        self.assertIn("test \"$(wc -c <evidence/movement-comment.md)\" -le 65536", comment)
+        self.assertIn("--paginate", comment)
+        self.assertNotIn("--slurp", comment)
+        self.assertIn("sed -n '1p'", comment)
+
     def test_windows_packages_persist_toolchain_bound_compiler_caches(self) -> None:
         candidate = self.text("build-release-candidate.yml")
         cache_action = (

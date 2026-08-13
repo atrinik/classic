@@ -654,8 +654,9 @@ int main(int argc, char *argv[]) {
 
     path_fopen = client_fopen_wrapper;
 
-    if (argc > 1 && (strcmp(argv[1], "--player-view") == 0 ||
-                     strcmp(argv[1], "--player-view-benchmark") == 0)) {
+    if (argc > 1 &&
+        (strcmp(argv[1], "--player-view") == 0 || strcmp(argv[1], "--player-view-benchmark") == 0 ||
+         strcmp(argv[1], "--player-view-movement-benchmark") == 0)) {
         return player_view_main(argc - 1, &argv[1]);
     }
 
@@ -856,7 +857,7 @@ int main(int argc, char *argv[]) {
                     update = 1;
                 } else if (tooltip_need_redraw()) {
                     update = 1;
-                } else if (map_redraw_flag || minimap_redraw_due()) {
+                } else if (map_redraw_due() || minimap_redraw_due()) {
                     update = 1;
                 } else if (map_anims_need_redraw()) {
                     update = 1;
@@ -914,7 +915,9 @@ int main(int argc, char *argv[]) {
 
         uint64_t profile_present_started = render_profiler_begin();
         if (update) {
-            if (!SDL_UpdateWindowSurface(ScreenWindow)) {
+            bool presented = SDL_UpdateWindowSurface(ScreenWindow);
+            map_benchmark_statistics_present(presented);
+            if (!presented) {
                 LOG(ERROR, "Could not present the window surface: %s", SDL_GetError());
             }
         }

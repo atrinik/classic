@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -42,14 +42,12 @@
  */
 
 #include <global.h>
+#include <client_command_queue.h>
 #include <client_socket.h>
 #include <notification.h>
 #include <resources.h>
 #include <toolkit/datetime.h>
 #include <toolkit/packet.h>
-
-/** Maximum time spent draining server commands before yielding to rendering. */
-#define CLIENT_COMMAND_BUDGET_US UINT64_C(4000)
 
 /** Client player structure with things like stats, damage, etc */
 Client_Player cpl;
@@ -63,52 +61,64 @@ static socket_command_struct commands[CLIENT_CMD_NROF] = {
 };
 CASSERT_ARRAY(commands, CLIENT_CMD_NROF);
 
+/** Dispatch one complete server command envelope through the production table. */
+static void client_command_dispatch(uint8_t *data, size_t len, void *user_data) {
+    (void)user_data;
+
+    size_t pos = 0;
+    packet_reader_t reader;
+    packet_reader_init_cursor(&reader, data, len, &pos);
+    uint8_t type = packet_reader_read_uint8(&reader);
+
+    if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
+        LOG(ERROR, "Rejected command envelope: %s", packet_error_string(reader.error));
+    } else if (type >= CLIENT_CMD_NROF || commands[type].handle_func == NULL) {
+        LOG(ERROR, "Bad command from server (%d)", type);
+    } else {
+        packet_reader_scope_t scope;
+        packet_reader_scope_begin(&scope);
+        packet_reader_init_at(&reader, data, len, pos);
+        commands[type].handle_func(data, len, pos);
+        packet_error_t error = packet_reader_scope_finish(&scope);
+        if (error != PACKET_ERROR_NONE) {
+            LOG(ERROR,
+                "Rejected malformed %s command: %s",
+                commands[type].name,
+                packet_error_string(error));
+        }
+    }
+}
+
+void client_commands_drain_with_clock(uint64_t budget_us,
+                                      client_command_queue_clock_func clock_func,
+                                      void *clock_data,
+                                      client_command_queue_drain_result_t *result) {
+    client_command_queue_drain(budget_us,
+                               clock_func,
+                               clock_data,
+                               client_command_dispatch,
+                               NULL,
+                               result);
+}
+
+static uint64_t client_command_clock(void *user_data) {
+    (void)user_data;
+    return datetime_monotonic_us();
+}
+
 /**
  * Do client. The main loop for commands. From this, the data and
  * commands from server are received.
  */
 void DoClient(void) {
-    command_buffer *cmd;
-    uint64_t commands_started = datetime_monotonic_us();
-
-    /* Handle all enqueued commands */
-    while ((cmd = get_next_input_command()) != NULL) {
-        uint8_t *data = cmd->data;
-        size_t len = cmd->len;
-
-        size_t pos = 0;
-        packet_reader_t reader;
-        packet_reader_init_cursor(&reader, data, len, &pos);
-        uint8_t type = packet_reader_read_uint8(&reader);
-
-        if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
-            LOG(ERROR, "Rejected command envelope: %s", packet_error_string(reader.error));
-        } else if (type >= CLIENT_CMD_NROF || commands[type].handle_func == NULL) {
-            LOG(ERROR, "Bad command from server (%d)", type);
-        } else {
-            packet_reader_scope_t scope;
-            packet_reader_scope_begin(&scope);
-            packet_reader_init_at(&reader, data, len, pos);
-            commands[type].handle_func(data, len, pos);
-            packet_error_t error = packet_reader_scope_finish(&scope);
-            if (error != PACKET_ERROR_NONE) {
-                LOG(ERROR,
-                    "Rejected malformed %s command: %s",
-                    commands[type].name,
-                    packet_error_string(error));
-            }
-        }
-
-        command_buffer_free(cmd);
-
-        /* A sustained stream of multi-level map updates must not starve the
-         * main loop's render/present phases. Packet order is retained; the
-         * remaining queue resumes on the next frame. Always finish at least
-         * the command already dequeued, even when it exceeds this budget. */
-        if (datetime_monotonic_us() - commands_started >= CLIENT_COMMAND_BUDGET_US) {
-            break;
-        }
-    }
+    /* A sustained stream of multi-level map updates must not starve the
+     * main loop's render/present phases. Packet order is retained; the
+     * remaining queue resumes on the next frame. Always finish at least
+     * the command already dequeued, even when it exceeds this budget. */
+    client_commands_drain_with_clock(CLIENT_COMMAND_QUEUE_BUDGET_US,
+                                     client_command_clock,
+                                     NULL,
+                                     NULL);
 }
 
 /**

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -84,9 +84,6 @@ typedef struct minimap_widget {
     /** Last expensive dynamic-world render, in SDL ticks. */
     uint32_t dynamic_redraw_ticks;
 } minimap_widget_t;
-
-/** Dynamic minimaps are informational and do not need frame-rate updates. */
-#define MINIMAP_DYNAMIC_REDRAW_INTERVAL 250
 
 /**
  * Texture names to load.
@@ -260,8 +257,8 @@ static void widget_draw(widgetdata *widget) {
 
             if (minimap->surface == NULL) {
                 minimap->surface = surface_create_rgb(get_video_flags(),
-                                                      850 * (MAP_FOW_SIZE / 2),
-                                                      600 * (MAP_FOW_SIZE / 2),
+                                                      MINIMAP_DYNAMIC_SURFACE_WIDTH,
+                                                      MINIMAP_DYNAMIC_SURFACE_HEIGHT,
                                                       video_get_bpp(),
                                                       0,
                                                       0,

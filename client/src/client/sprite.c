@@ -41,6 +41,7 @@
 typedef struct sprite_cache {
     char *name; ///< Name of the sprite. Used for hash table lookups.
     SDL_Surface *surface; ///< The sprite's surface.
+    size_t estimated_bytes; ///< Entry, key, surface, and pixel storage estimate.
     time_t last_used; ///< Last time the sprite was used.
     UT_hash_handle hh; ///< Hash handle.
 } sprite_cache_t;
@@ -55,6 +56,66 @@ static int dark_alpha[DARK_LEVELS] = {0, 44, 80, 117, 153, 190, 226};
  * The sprite cache hash table.
  */
 static sprite_cache_t *sprites_cache = NULL;
+static sprite_cache_statistics_t sprite_cache_statistics;
+static bool sprite_cache_clock_overridden;
+static time_t sprite_cache_clock_override;
+
+static time_t sprite_cache_now(void) {
+    return sprite_cache_clock_overridden ? sprite_cache_clock_override : time(NULL);
+}
+
+void sprite_cache_clock_override_set(time_t now) {
+    sprite_cache_clock_override = now;
+    sprite_cache_clock_overridden = true;
+}
+
+void sprite_cache_clock_override_clear(void) {
+    sprite_cache_clock_overridden = false;
+    sprite_cache_clock_override = 0;
+}
+
+static size_t sprite_cache_estimated_bytes(const sprite_cache_t *cache) {
+    HARD_ASSERT(cache != NULL);
+    HARD_ASSERT(cache->surface != NULL);
+
+    size_t bytes = sizeof(*cache) + strlen(cache->name) + 1 + sizeof(*cache->surface);
+    size_t pitch = cache->surface->pitch >= 0 ? (size_t)cache->surface->pitch
+                                              : (size_t)(-(int64_t)cache->surface->pitch);
+    size_t height = (size_t)cache->surface->h;
+    if (height != 0 && pitch > (SIZE_MAX - bytes) / height) {
+        return SIZE_MAX;
+    }
+    return bytes + pitch * height;
+}
+
+static size_t sprite_cache_total_estimated_bytes(void) {
+    size_t total = 0;
+    sprite_cache_t *cache;
+    sprite_cache_t *temporary;
+    HASH_ITER(hh, sprites_cache, cache, temporary) {
+        if (cache->estimated_bytes > SIZE_MAX - total) {
+            return SIZE_MAX;
+        }
+        total += cache->estimated_bytes;
+    }
+    return total;
+}
+
+void sprite_cache_statistics_reset(void) {
+    size_t entries = sprite_cache_statistics.entries;
+    size_t estimated_bytes = sprite_cache_statistics.estimated_bytes;
+    sprite_cache_statistics = (sprite_cache_statistics_t){
+        .entries = entries,
+        .estimated_bytes = estimated_bytes,
+        .peak_entries = entries,
+        .peak_estimated_bytes = estimated_bytes,
+    };
+}
+
+void sprite_cache_statistics_get(sprite_cache_statistics_t *statistics) {
+    HARD_ASSERT(statistics != NULL);
+    *statistics = sprite_cache_statistics;
+}
 
 /**
  * Initialize the sprite system.
@@ -186,11 +247,15 @@ void sprite_free_sprite(sprite_struct *sprite) {
 static sprite_cache_t *sprite_cache_find(const char *name) {
     HARD_ASSERT(name != NULL);
 
+    sprite_cache_statistics.lookups++;
     sprite_cache_t *cache;
     HASH_FIND_STR(sprites_cache, name, cache);
 
     if (cache != NULL) {
-        cache->last_used = time(NULL);
+        sprite_cache_statistics.hits++;
+        cache->last_used = sprite_cache_now();
+    } else {
+        sprite_cache_statistics.misses++;
     }
 
     return cache;
@@ -209,7 +274,7 @@ static sprite_cache_t *sprite_cache_create(const char *name) {
 
     sprite_cache_t *cache = xcalloc(1, sizeof(*cache));
     cache->name = xstrdup(name);
-    cache->last_used = time(NULL);
+    cache->last_used = sprite_cache_now();
     return cache;
 }
 
@@ -221,7 +286,20 @@ static sprite_cache_t *sprite_cache_create(const char *name) {
  */
 static void sprite_cache_add(sprite_cache_t *cache) {
     HARD_ASSERT(cache != NULL);
+    HARD_ASSERT(cache->surface != NULL);
+    cache->estimated_bytes = sprite_cache_estimated_bytes(cache);
     HASH_ADD_KEYPTR(hh, sprites_cache, cache->name, strlen(cache->name), cache);
+    sprite_cache_statistics.insertions++;
+    sprite_cache_statistics.entries++;
+    if (cache->estimated_bytes > SIZE_MAX - sprite_cache_statistics.estimated_bytes) {
+        sprite_cache_statistics.estimated_bytes = SIZE_MAX;
+    } else {
+        sprite_cache_statistics.estimated_bytes += cache->estimated_bytes;
+    }
+    sprite_cache_statistics.peak_entries =
+        MAX(sprite_cache_statistics.peak_entries, sprite_cache_statistics.entries);
+    sprite_cache_statistics.peak_estimated_bytes =
+        MAX(sprite_cache_statistics.peak_estimated_bytes, sprite_cache_statistics.estimated_bytes);
 }
 
 /**
@@ -233,6 +311,14 @@ static void sprite_cache_add(sprite_cache_t *cache) {
 static void sprite_cache_remove(sprite_cache_t *cache) {
     HARD_ASSERT(cache != NULL);
     HASH_DEL(sprites_cache, cache);
+    HARD_ASSERT(sprite_cache_statistics.entries != 0);
+    sprite_cache_statistics.entries--;
+    if (sprite_cache_statistics.estimated_bytes == SIZE_MAX) {
+        sprite_cache_statistics.estimated_bytes = sprite_cache_total_estimated_bytes();
+    } else {
+        HARD_ASSERT(sprite_cache_statistics.estimated_bytes >= cache->estimated_bytes);
+        sprite_cache_statistics.estimated_bytes -= cache->estimated_bytes;
+    }
 }
 
 /**
@@ -263,12 +349,14 @@ void sprite_cache_free_all(void) {
 /**
  * Free unused sprite cache entries.
  */
-void sprite_cache_gc(void) {
-    if (!rndm_chance(SPRITE_CACHE_GC_CHANCE)) {
+static void sprite_cache_gc_run(bool force) {
+    if (!force && !rndm_chance(SPRITE_CACHE_GC_CHANCE)) {
         return;
     }
 
-    time_t now = time(NULL);
+    sprite_cache_statistics.gc_runs++;
+    uint64_t gc_started_ns = SDL_GetTicksNS();
+    time_t now = sprite_cache_now();
 
     struct timeval tv1;
     gettimeofday(&tv1, NULL);
@@ -279,6 +367,7 @@ void sprite_cache_gc(void) {
         if (now - cache->last_used >= SPRITE_CACHE_GC_FREE_TIME) {
             sprite_cache_remove(cache);
             sprite_cache_free(cache);
+            sprite_cache_statistics.gc_removals++;
             removed = true;
         }
 
@@ -293,7 +382,18 @@ void sprite_cache_gc(void) {
     if (removed) {
         lighting_clear_sprite_cache();
     }
+    sprite_cache_statistics.gc_time_ns += SDL_GetTicksNS() - gc_started_ns;
 }
+
+void sprite_cache_gc(void) {
+    sprite_cache_gc_run(false);
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+void sprite_cache_gc_force(void) {
+    sprite_cache_gc_run(true);
+}
+#endif
 
 /**
  * Creates a red version of the specified sprite surface.

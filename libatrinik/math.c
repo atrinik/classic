@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -248,6 +248,24 @@ int rndm(int min, int max) {
     int result = rng_range(&gameplay_rng, min, max);
     pthread_mutex_unlock(&gameplay_rng_mutex);
     return result;
+}
+
+/**
+ * Reseed the process gameplay stream for a deterministic offline replay.
+ *
+ * Production callers normally retain the entropy-backed initialization from
+ * toolkit startup. This API exists so bounded test workloads can replay the
+ * same animation and cache-maintenance decisions in one or more passes.
+ *
+ * @param seed
+ * Deterministic stream seed.
+ */
+void rndm_seed(uint64_t seed) {
+    TOOLKIT_PROTECT();
+
+    pthread_mutex_lock(&gameplay_rng_mutex);
+    rng_seed(&gameplay_rng, seed);
+    pthread_mutex_unlock(&gameplay_rng_mutex);
 }
 
 /**

@@ -943,10 +943,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
                 int sub_layer;
 
                 for (sub_layer = 1; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                    map_set_light_radiance(x,
-                                           y,
-                                           sub_layer,
-                                           packet_reader_read_uint16(&reader));
+                    map_set_light_radiance(x, y, sub_layer, packet_reader_read_uint16(&reader));
                 }
             }
 
@@ -1220,7 +1217,8 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         }
     }
     map_select_level(0, true);
-    map_redraw_flag = minimap_redraw_flag = 1;
+    map_redraw_request(MAP_REDRAW_REASON_MAP_PACKET);
+    minimap_redraw_flag = 1;
 
     if (region_map_fow_need_update) {
         region_map_fow_update(MapData.region_map);
