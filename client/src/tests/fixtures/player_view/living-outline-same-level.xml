@@ -6,8 +6,8 @@
              settings-sha256="c3ad2bbf5bd19b50c926b0660421e1d8467f011ea012275f25d9449731ffa62d"
              archdef="data/archdef.dat"
              archdef-sha256="977ce63e38f4795545f42bd2f4a9c62bd38fcdb4cfde7cb7fe3c2cd9fe73983e"
-             snapshot="src/tests/fixtures/player_view/colored-scene.map2.hex"
-             snapshot-sha256="ba401a44d126ec77c523c774c7de9f437f78e27721b60ec086a27c5468cd3c2e"
+             snapshot="src/tests/fixtures/player_view/living-outline-same-level.map2.hex"
+             snapshot-sha256="cf8b462caff5f481d1cae5f36bb395e81e760eecc989a205188472be3ddd4854"
              viewport-width="320"
              viewport-height="240"
              look-width="9"
@@ -16,7 +16,7 @@
              smooth-lighting="true"
              zoom-smoothing="false"
              clock-ms="1200"
-             expected-pixels-sha256="1effb0d31478bee271252dfb67107678c292a0dbbd44f93b5f9a053915b64160">
+             expected-pixels-sha256="868d2e85ccd0b96fa42cca61ed065fd966b861193c5bc8af29dbffb3ec635b44">
   <asset face="1" path="textures/square_highlight.png" sha256="fecfd2da236702bc874c58a767d0d237f5425e423e6699742accb26215c9676b"/>
   <asset face="2" path="textures/target_attack.png" sha256="6924dbe0a7ed3bd7b71577b0d00c91c70855cba39102c20ba3270452c2d4d806"/>
   <asset face="3" path="textures/icon_map.png" sha256="314b2212e2bf2ecf69a88d872ec504b794ec52d680402e23ca78679ad1c66435"/>
@@ -24,5 +24,5 @@
   <asset face="5" path="textures/minimap_bg.png" sha256="99007449f52e37576de6745b7388b6e9343c9876eb0e41073a3c47dd6a1c44a4"/>
   <asset face="6" path="textures/cursor_pointer.png" sha256="52a15c204aec7e4ed9f22b86c55e7c6783b4cc5d1bf8b5fc999fb84ff2369855"/>
   <asset face="7" path="textures/checkbox_on.png" sha256="e7be6e130e3fac6ce3892f799738288bdade0ba5ade0c366d6fbba3fbeb430fd"/>
-  <animation id="10" flags="0" facings="1" frames="3,4"/>
+  <asset face="8" path="textures/invslot.png" sha256="e53d10a315ba01e611863e91dd6b498d8ada5970f001ab796a6658ee2a1b6f0f"/>
 </player-view>
