@@ -1,84 +1,91 @@
 #!/usr/bin/env python3
-"""Verify the closed JSON contract of the offline movement benchmark."""
+"""Verify deterministic fresh-process movement benchmark records."""
 
 from __future__ import annotations
 
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
+from movement_benchmark_schema import validate_record
 
-EXPECTED_SAMPLES = {"cold": 1, "sustained": 480, "idle": 16, "resumed": 80}
-EXPECTED_CHANGED = {"cold": 1, "sustained": 480, "idle": 1, "resumed": 80}
+
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"movement benchmark repeated JSON field: {key}")
+        result[key] = value
+    return result
+
+
+def parse_record(output: str) -> dict[str, object]:
+    lines = [line for line in output.splitlines() if line.strip()]
+    if len(lines) != 1:
+        raise ValueError("movement benchmark must emit exactly one JSON record")
+    return validate_record(json.loads(lines[0], object_pairs_hook=_reject_duplicate_keys))
 
 
 def run(client: Path, manifest: Path, viewport: str) -> dict[str, object]:
+    started = time.monotonic()
+    print(f"movement benchmark: starting fresh {viewport} process", file=sys.stderr, flush=True)
     result = subprocess.run(
         [client, "--player-view-movement-benchmark", manifest, viewport],
         check=False,
         capture_output=True,
         text=True,
-        timeout=300,
+        timeout=900 if viewport == "large" else 180,
+    )
+    print(
+        f"movement benchmark: completed fresh {viewport} process in "
+        f"{time.monotonic() - started:.1f}s",
+        file=sys.stderr,
+        flush=True,
     )
     if result.returncode != 0:
         raise SystemExit(result.stderr)
-    return json.loads(result.stdout)
+    try:
+        return parse_record(result.stdout)
+    except (json.JSONDecodeError, ValueError) as error:
+        raise SystemExit(str(error)) from error
 
 
-def verify(record: dict[str, object]) -> None:
-    if record.get("schema_version") != 1 or record.get("tick_ms") != 125:
-        raise SystemExit("movement benchmark emitted an incompatible schema")
-    phases = {phase["name"]: phase for phase in record.get("phases", [])}
-    if set(phases) != set(EXPECTED_SAMPLES):
-        raise SystemExit("movement benchmark phases are incomplete")
-    for name, samples in EXPECTED_SAMPLES.items():
-        phase = phases[name]
-        if phase.get("samples") != samples or any(phase.get(key, 0) <= 0 for key in
-                                                   ("p50_ns", "p95_ns", "p99_ns", "max_ns")):
-            raise SystemExit(f"movement benchmark phase {name} is invalid")
-        if phase.get("map_packets") != samples or phase.get("full_map_draws") != samples:
-            raise SystemExit(f"movement benchmark phase {name} has incomplete map accounting")
-        if phase.get("changed_map_packets", 0) + phase.get("noop_map_packets", 0) != samples:
-            raise SystemExit(f"movement benchmark phase {name} has invalid packet accounting")
-        if phase.get("changed_map_packets") != EXPECTED_CHANGED[name]:
-            raise SystemExit(f"movement benchmark phase {name} did not replay the expected stream")
-        if any(phase.get(key, 0) <= 0 for key in ("first_window_p95_ns", "last_window_p95_ns")):
-            raise SystemExit(f"movement benchmark phase {name} has no sliding-window evidence")
-        if phase.get("queue") != {"depth": 0, "bytes": 0, "oldest_age_ms": 0, "processing_ns": 0}:
-            raise SystemExit(f"movement benchmark phase {name} has invalid synchronous queue data")
-        lighting = phase.get("lighting")
-        expected_lighting = {
-            "field_rebuilds", "field_reuses", "lit_sprite_lookups", "lit_sprite_hits",
-            "lit_sprite_misses", "lit_sprite_evictions", "entries", "bytes",
-            "retained_field_bytes",
-        }
-        if not isinstance(lighting, dict) or set(lighting) != expected_lighting:
-            raise SystemExit(f"movement benchmark phase {name} has invalid lighting telemetry")
-        if any(not isinstance(value, int) or value < 0 for value in lighting.values()):
-            raise SystemExit(f"movement benchmark phase {name} has invalid lighting values")
-        if lighting["lit_sprite_hits"] + lighting["lit_sprite_misses"] != lighting["lit_sprite_lookups"]:
-            raise SystemExit(f"movement benchmark phase {name} has inconsistent lit-sprite telemetry")
-    if len(record.get("checkpoint_sha256", "")) != 64:
-        raise SystemExit("movement benchmark checkpoint is invalid")
-    if record.get("same_process_checkpoint_sha256") != record["checkpoint_sha256"]:
-        raise SystemExit("movement benchmark checkpoint is not deterministic in one process")
+def verify_fresh_process_pair(
+    first: dict[str, object], second: dict[str, object], viewport: str
+) -> None:
+    if first["identity"]["run"] != second["identity"]["run"]:
+        raise SystemExit(f"{viewport} run identity differs across fresh processes")
+    if first["identity"]["instrumentation"] != second["identity"]["instrumentation"]:
+        raise SystemExit(f"{viewport} instrumentation differs across fresh processes")
+    if first["fixture"] != second["fixture"]:
+        raise SystemExit(f"{viewport} fixture identity differs across fresh processes")
+    if first["checkpoint_sha256"] != second["checkpoint_sha256"]:
+        raise SystemExit(f"{viewport} checkpoint is not deterministic across fresh processes")
+    if first["final_state_digest"] != second["final_state_digest"]:
+        raise SystemExit(f"{viewport} final state is not deterministic across fresh processes")
+    if first["checkpoints"] != second["checkpoints"]:
+        raise SystemExit(f"{viewport} lifecycle checkpoints differ across fresh processes")
+    if first["lifecycle"] != second["lifecycle"]:
+        raise SystemExit(f"{viewport} lifecycle accounting differs across fresh processes")
+    if [phase["samples"] for phase in first["phases"]] != [
+        phase["samples"] for phase in second["phases"]
+    ]:
+        raise SystemExit(f"{viewport} sample counts differ across fresh processes")
 
 
 def main() -> int:
+    if len(sys.argv) != 4 or sys.argv[3] not in ("standard", "large"):
+        raise SystemExit(
+            "usage: verify_movement_benchmark.py CLIENT MANIFEST standard|large"
+        )
     client = Path(sys.argv[1])
     manifest = Path(sys.argv[2])
-    for viewport in ("standard", "large"):
-        first = run(client, manifest, viewport)
-        second = run(client, manifest, viewport)
-        verify(first)
-        verify(second)
-        if first["checkpoint_sha256"] != second["checkpoint_sha256"]:
-            raise SystemExit(f"{viewport} checkpoint is not deterministic across fresh processes")
-        if [phase["samples"] for phase in first["phases"]] != [
-            phase["samples"] for phase in second["phases"]
-        ]:
-            raise SystemExit(f"{viewport} sample counts differ across fresh processes")
+    viewport = sys.argv[3]
+    first = run(client, manifest, viewport)
+    second = run(client, manifest, viewport)
+    verify_fresh_process_pair(first, second, viewport)
     return 0
 
 

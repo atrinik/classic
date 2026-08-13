@@ -49,8 +49,55 @@ typedef struct lighting_vertex {
     uint16_t blue;
 } lighting_vertex_t;
 
+/** Increment when the statistics-only benchmark API changes. */
+#define LIGHTING_BENCHMARK_STATISTICS_VERSION UINT8_C(3)
+
+/** Event counters accumulated for one logical lighting level. */
+typedef struct lighting_benchmark_counters {
+    uint64_t field_begins;
+    uint64_t field_dirty_marks;
+    /** Lighting-field pixels invalidated for a subsequent full rebuild. */
+    uint64_t field_dirty_pixels;
+    uint64_t field_rebuilds;
+    uint64_t field_reuses;
+    uint64_t render_calls;
+    uint64_t render_failures;
+    uint64_t lit_sprite_draws;
+    uint64_t lit_sprite_lookups;
+    uint64_t lit_sprite_hits;
+    uint64_t lit_sprite_misses;
+    uint64_t lit_sprite_insertions;
+    uint64_t lit_sprite_evictions;
+    uint64_t lit_sprite_fallbacks;
+    uint64_t lit_sprite_clears;
+    uint64_t lit_sprite_cleared_entries;
+} lighting_benchmark_counters_t;
+
+/** Current and peak cache state for one protocol depth. */
+typedef struct lighting_benchmark_level_statistics {
+    lighting_benchmark_counters_t counters;
+    int depth;
+    bool allocated;
+    bool active;
+    bool cache_valid;
+    bool update_needed;
+    int width;
+    int height;
+    uint64_t cache_key;
+    uint64_t pending_cache_key;
+    size_t lit_sprite_entries;
+    size_t lit_sprite_bytes;
+    size_t retained_field_bytes;
+    size_t peak_lit_sprite_entries;
+    size_t peak_lit_sprite_bytes;
+    size_t peak_retained_field_bytes;
+    uint64_t state_digest;
+} lighting_benchmark_level_statistics_t;
+
 /** Observable software-lighting cache state for deterministic benchmarks. */
 typedef struct lighting_benchmark_statistics {
+    lighting_benchmark_counters_t counters;
+    /* Version-one aliases retained for baseline overlay consumers. */
     uint64_t field_rebuilds;
     uint64_t field_reuses;
     uint64_t lit_sprite_lookups;
@@ -60,14 +107,33 @@ typedef struct lighting_benchmark_statistics {
     size_t lit_sprite_entries;
     size_t lit_sprite_bytes;
     size_t retained_field_bytes;
+    /** Occupancy gauges captured immediately before the phase. */
+    size_t start_allocated_levels;
+    size_t start_active_levels;
+    size_t start_cache_valid_levels;
+    size_t start_dirty_levels;
+    size_t start_lit_sprite_entries;
+    size_t start_lit_sprite_bytes;
+    size_t start_retained_field_bytes;
+    uint64_t start_state_digest;
+    size_t allocated_levels;
+    size_t active_levels;
+    size_t cache_valid_levels;
+    size_t dirty_levels;
+    size_t peak_allocated_levels;
+    size_t peak_active_levels;
+    size_t peak_cache_valid_levels;
+    size_t peak_dirty_levels;
+    size_t peak_lit_sprite_entries;
+    size_t peak_lit_sprite_bytes;
+    size_t peak_retained_field_bytes;
+    uint64_t state_digest;
 } lighting_benchmark_statistics_t;
 
 uint16_t lighting_srgb8_to_linear(uint8_t value);
 uint8_t lighting_linear_to_srgb8(uint16_t value);
 uint8_t lighting_radiance_to_level(uint16_t radiance);
-void lighting_tone_map_linear(uint16_t scalar,
-                              const uint16_t radiance[3],
-                              uint16_t linear[3]);
+void lighting_tone_map_linear(uint16_t scalar, const uint16_t radiance[3], uint16_t linear[3]);
 uint8_t lighting_multiply_channel(uint8_t source, uint16_t illumination_linear);
 
 /** Bilinearly interpolate one Q5.11 channel without overflowing its bounds. */
@@ -109,5 +175,8 @@ void lighting_deinit(void);
 
 void lighting_benchmark_statistics_reset(void);
 void lighting_benchmark_statistics_get(lighting_benchmark_statistics_t *statistics);
+/** Copy the benchmark state for one protocol depth. */
+bool lighting_benchmark_level_statistics_get(int depth,
+                                             lighting_benchmark_level_statistics_t *statistics);
 
 #endif

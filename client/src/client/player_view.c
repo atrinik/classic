@@ -22,6 +22,10 @@
 #include <openssl/evp.h>
 #include <libxml/parser.h>
 #include <libxml/tree.h>
+#ifndef WIN32
+#include <sys/resource.h>
+#include <unistd.h>
+#endif
 
 #define PLAYER_VIEW_SCHEMA_VERSION 1
 #define PLAYER_VIEW_MAX_ASSETS 256
@@ -44,6 +48,33 @@
 #define PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS 480U
 #define PLAYER_VIEW_MOVEMENT_IDLE_TICKS 16U
 #define PLAYER_VIEW_MOVEMENT_RESUMED_TICKS 80U
+#define PLAYER_VIEW_MOVEMENT_PACKETS 5U
+#define PLAYER_VIEW_MOVEMENT_ACTIVE_PACKETS 4U
+#define PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION 3U
+#define PLAYER_VIEW_MOVEMENT_WINDOW_TICKS 32U
+#define PLAYER_VIEW_MOVEMENT_FIXTURE_SCHEMA 2U
+#define PLAYER_VIEW_MOVEMENT_CHECKPOINTS 12U
+#define PLAYER_VIEW_MOVEMENT_RNG_SEED UINT64_C(0x1961932026)
+#define PLAYER_VIEW_MOVEMENT_SIMULATED_COMMAND_US UINT64_C(5000)
+
+#ifndef ATRINIK_BUILD_TYPE
+#define ATRINIK_BUILD_TYPE "unknown"
+#endif
+#ifndef ATRINIK_COMPILER_ID
+#define ATRINIK_COMPILER_ID "unknown"
+#endif
+#ifndef ATRINIK_COMPILER_VERSION
+#define ATRINIK_COMPILER_VERSION "unknown"
+#endif
+#ifndef ATRINIK_SYSTEM_NAME
+#define ATRINIK_SYSTEM_NAME "unknown"
+#endif
+#ifndef ATRINIK_BENCHMARK_REVISION
+#define ATRINIK_BENCHMARK_REVISION "unknown"
+#endif
+#ifndef ATRINIK_BENCHMARK_DIRTY
+#define ATRINIK_BENCHMARK_DIRTY "unknown"
+#endif
 
 typedef enum player_view_mode {
     PLAYER_VIEW_RENDER,
@@ -72,14 +103,18 @@ typedef struct player_view_manifest {
     char *archdef_path;
     char *snapshot_path;
     char *next_snapshot_path;
+    char *transition_snapshot_path;
     char *font_path;
     char settings_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char archdef_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char snapshot_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char next_snapshot_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+    char transition_snapshot_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char font_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char expected_ui_pixels_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char expected_pixels_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+    char expected_standard_checkpoint_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+    char manifest_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     player_view_asset_t assets[PLAYER_VIEW_MAX_ASSETS];
     size_t assets_num;
     player_view_animation_t animations[PLAYER_VIEW_MAX_ANIMATIONS];
@@ -90,6 +125,8 @@ typedef struct player_view_manifest {
     uint32_t look_height;
     uint32_t map_zoom;
     uint32_t clock_ms;
+    uint32_t resize_width_delta;
+    uint32_t resize_height_delta;
     bool smooth_lighting;
     bool zoom_smoothing;
     bool primary_surface;
@@ -104,6 +141,7 @@ static void player_view_manifest_free(player_view_manifest_t *manifest) {
     free(manifest->archdef_path);
     free(manifest->snapshot_path);
     free(manifest->next_snapshot_path);
+    free(manifest->transition_snapshot_path);
     free(manifest->font_path);
     for (size_t i = 0; i < manifest->assets_num; i++) {
         free(manifest->assets[i].path);
@@ -418,10 +456,14 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "snapshot-sha256",
                                            "next-snapshot",
                                            "next-snapshot-sha256",
+                                           "transition-snapshot",
+                                           "transition-snapshot-sha256",
                                            "font",
                                            "font-sha256",
                                            "viewport-width",
                                            "viewport-height",
+                                           "resize-width-delta",
+                                           "resize-height-delta",
                                            "look-width",
                                            "look-height",
                                            "map-zoom",
@@ -433,6 +475,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "target-ui",
                                            "clock-ms",
                                            "expected-ui-pixels-sha256",
+                                           "expected-standard-checkpoint-sha256",
                                            "expected-pixels-sha256"};
     bool success = root != NULL && root->ns == NULL && root->nsDef == NULL &&
                    xmlStrEqual(root->name, BAD_CAST "player-view") &&
@@ -450,10 +493,18 @@ static bool player_view_manifest_parse(const char *manifest_path,
     char *next_snapshot = success ? player_view_xml_property(root, "next-snapshot") : NULL;
     char *next_snapshot_digest =
         success ? player_view_xml_property(root, "next-snapshot-sha256") : NULL;
+    char *transition_snapshot =
+        success ? player_view_xml_property(root, "transition-snapshot") : NULL;
+    char *transition_snapshot_digest =
+        success ? player_view_xml_property(root, "transition-snapshot-sha256") : NULL;
     char *font = success ? player_view_xml_property(root, "font") : NULL;
     char *font_digest = success ? player_view_xml_property(root, "font-sha256") : NULL;
     char *viewport_width = success ? player_view_xml_property(root, "viewport-width") : NULL;
     char *viewport_height = success ? player_view_xml_property(root, "viewport-height") : NULL;
+    char *resize_width_delta =
+        success ? player_view_xml_property(root, "resize-width-delta") : NULL;
+    char *resize_height_delta =
+        success ? player_view_xml_property(root, "resize-height-delta") : NULL;
     char *look_width = success ? player_view_xml_property(root, "look-width") : NULL;
     char *look_height = success ? player_view_xml_property(root, "look-height") : NULL;
     char *map_zoom = success ? player_view_xml_property(root, "map-zoom") : NULL;
@@ -466,6 +517,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
     char *clock_ms = success ? player_view_xml_property(root, "clock-ms") : NULL;
     char *expected_ui =
         success ? player_view_xml_property(root, "expected-ui-pixels-sha256") : NULL;
+    char *expected_standard_checkpoint =
+        success ? player_view_xml_property(root, "expected-standard-checkpoint-sha256") : NULL;
     char *expected = success ? player_view_xml_property(root, "expected-pixels-sha256") : NULL;
 
     uint32_t parsed_version;
@@ -482,10 +535,18 @@ static bool player_view_manifest_parse(const char *manifest_path,
         player_view_sha256_text_valid(snapshot_digest) &&
         ((next_snapshot == NULL && next_snapshot_digest == NULL) ||
          (next_snapshot != NULL && player_view_sha256_text_valid(next_snapshot_digest))) &&
+        ((transition_snapshot == NULL && transition_snapshot_digest == NULL) ||
+         (transition_snapshot != NULL &&
+          player_view_sha256_text_valid(transition_snapshot_digest))) &&
         ((font == NULL && font_digest == NULL) ||
          (font != NULL && player_view_sha256_text_valid(font_digest))) &&
         player_view_parse_uint(viewport_width, 64, 4096, &manifest->viewport_width) &&
         player_view_parse_uint(viewport_height, 64, 4096, &manifest->viewport_height) &&
+        ((resize_width_delta == NULL && resize_height_delta == NULL) ||
+         (player_view_parse_uint(resize_width_delta, 1, 4096, &manifest->resize_width_delta) &&
+          player_view_parse_uint(resize_height_delta, 1, 4096, &manifest->resize_height_delta) &&
+          manifest->resize_width_delta <= 4096 - manifest->viewport_width &&
+          manifest->resize_height_delta <= 4096 - manifest->viewport_height)) &&
         player_view_parse_uint(look_width, 9, 17, &manifest->look_width) &&
         player_view_parse_uint(look_height, 9, 17, &manifest->look_height) &&
         player_view_parse_uint(map_zoom, 50, 400, &manifest->map_zoom) &&
@@ -498,6 +559,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
         (player_names == NULL || player_view_parse_bool(player_names, &manifest->player_names)) &&
         (target_ui == NULL || player_view_parse_bool(target_ui, &manifest->target_ui)) &&
         player_view_parse_uint(clock_ms, 0, UINT32_MAX, &manifest->clock_ms) &&
+        (expected_standard_checkpoint == NULL ||
+         player_view_sha256_text_valid(expected_standard_checkpoint)) &&
         player_view_sha256_text_valid(expected);
     if (success && primary_surface == NULL) {
         manifest->primary_surface = true;
@@ -534,6 +597,11 @@ static bool player_view_manifest_parse(const char *manifest_path,
             manifest->next_snapshot_path =
                 player_view_resolve_path(manifest->input_root, next_snapshot, manifest->input_root);
         }
+        if (transition_snapshot != NULL) {
+            manifest->transition_snapshot_path = player_view_resolve_path(manifest->input_root,
+                                                                          transition_snapshot,
+                                                                          manifest->input_root);
+        }
         if (font != NULL) {
             manifest->font_path =
                 player_view_resolve_path(manifest->input_root, font, manifest->input_root);
@@ -541,6 +609,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
         success = manifest->settings_path != NULL && manifest->archdef_path != NULL &&
                   manifest->snapshot_path != NULL &&
                   (next_snapshot == NULL || manifest->next_snapshot_path != NULL) &&
+                  (transition_snapshot == NULL || manifest->transition_snapshot_path != NULL) &&
                   (font == NULL || manifest->font_path != NULL);
     }
     if (success) {
@@ -550,11 +619,19 @@ static bool player_view_manifest_parse(const char *manifest_path,
         if (next_snapshot != NULL) {
             snprintf(VS(manifest->next_snapshot_digest), "%s", next_snapshot_digest);
         }
+        if (transition_snapshot != NULL) {
+            snprintf(VS(manifest->transition_snapshot_digest), "%s", transition_snapshot_digest);
+        }
         if (font != NULL) {
             snprintf(VS(manifest->font_digest), "%s", font_digest);
         }
         if (expected_ui != NULL) {
             snprintf(VS(manifest->expected_ui_pixels_digest), "%s", expected_ui);
+        }
+        if (expected_standard_checkpoint != NULL) {
+            snprintf(VS(manifest->expected_standard_checkpoint_digest),
+                     "%s",
+                     expected_standard_checkpoint);
         }
         snprintf(VS(manifest->expected_pixels_digest), "%s", expected);
     }
@@ -676,10 +753,14 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(snapshot_digest);
     free(next_snapshot);
     free(next_snapshot_digest);
+    free(transition_snapshot);
+    free(transition_snapshot_digest);
     free(font);
     free(font_digest);
     free(viewport_width);
     free(viewport_height);
+    free(resize_width_delta);
+    free(resize_height_delta);
     free(look_width);
     free(look_height);
     free(map_zoom);
@@ -691,6 +772,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(target_ui);
     free(clock_ms);
     free(expected_ui);
+    free(expected_standard_checkpoint);
     free(expected);
     free(manifest_directory);
     xmlFreeDoc(document);
@@ -721,6 +803,13 @@ static bool player_view_inputs_verify(const player_view_manifest_t *manifest) {
         !player_view_verify_input("next snapshot",
                                   manifest->next_snapshot_path,
                                   manifest->next_snapshot_digest,
+                                  &total_size)) {
+        return false;
+    }
+    if (manifest->transition_snapshot_path != NULL &&
+        !player_view_verify_input("transition snapshot",
+                                  manifest->transition_snapshot_path,
+                                  manifest->transition_snapshot_digest,
                                   &total_size)) {
         return false;
     }
@@ -951,13 +1040,44 @@ static uint64_t player_view_benchmark(SDL_Surface *surface) {
 typedef struct player_view_movement_phase {
     const char *name;
     uint32_t ticks;
+    uint32_t map_packets;
     uint32_t changed_packets;
     uint32_t noop_packets;
     uint32_t full_map_draws;
+    uint32_t animation_ticks;
+    struct {
+        uint32_t reset_packet;
+        uint32_t changed_map_packet;
+        uint32_t noop_map_packet;
+        uint32_t animation_only_tick;
+        uint32_t resize;
+        uint32_t map_transition;
+    } full_draw_reasons;
+    client_command_queue_statistics_t queue;
     lighting_benchmark_statistics_t lighting;
     lighting_benchmark_statistics_t lighting_before;
-    uint64_t durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
+    lighting_benchmark_level_statistics_t lighting_levels_start[MAP2_LEVELS];
+    lighting_benchmark_level_statistics_t lighting_levels_end[MAP2_LEVELS];
+    map_benchmark_statistics_t map;
+    render_profile_snapshot_t render;
+    sprite_cache_statistics_t sprite_cache_start;
+    sprite_cache_statistics_t sprite_cache_end;
+    uint64_t frame_durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
+    uint64_t wait_durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
+    uint64_t loop_durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
+    uint64_t queue_durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
+    uint64_t map_durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
+    size_t map_samples;
 } player_view_movement_phase_t;
+
+typedef struct player_view_movement_packet {
+    const uint8_t *data;
+    size_t size;
+} player_view_movement_packet_t;
+
+typedef struct player_view_movement_fixture {
+    player_view_movement_packet_t packets[PLAYER_VIEW_MOVEMENT_PACKETS];
+} player_view_movement_fixture_t;
 
 typedef enum player_view_movement_stream {
     PLAYER_VIEW_MOVEMENT_COLD,
@@ -966,66 +1086,1011 @@ typedef enum player_view_movement_stream {
     PLAYER_VIEW_MOVEMENT_RESUMED,
 } player_view_movement_stream_t;
 
+typedef struct player_view_movement_checkpoint {
+    const char *name;
+    char pixels_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+    uint64_t state_digest;
+    int map_x;
+    int map_y;
+    int viewport_width;
+    int viewport_height;
+} player_view_movement_checkpoint_t;
+
+typedef struct player_view_movement_replay {
+    player_view_movement_phase_t phases[4];
+    player_view_movement_checkpoint_t checkpoints[PLAYER_VIEW_MOVEMENT_CHECKPOINTS];
+    size_t checkpoints_num;
+    struct {
+        uint32_t full_map_draws;
+        uint32_t reset_packet;
+        uint32_t changed_map_packet;
+        uint32_t noop_map_packet;
+        uint32_t animation_only_tick;
+        uint32_t resize;
+        uint32_t map_transition;
+    } lifecycle;
+} player_view_movement_replay_t;
+
+typedef struct player_view_movement_clock {
+    uint64_t now_us;
+    uint64_t reads;
+} player_view_movement_clock_t;
+
+static bool player_view_output_write(SDL_Surface *surface,
+                                     const player_view_manifest_t *manifest,
+                                     const char *output,
+                                     const char *expected_digest);
+
 static uint64_t player_view_percentile(uint64_t *durations, size_t count, size_t numerator) {
     qsort(durations, count, sizeof(*durations), player_view_duration_compare);
     size_t index = (count - 1) * numerator / 100;
     return durations[index];
 }
 
-static bool player_view_movement_draw(player_view_movement_phase_t *phase,
-                                      SDL_Surface *surface,
-                                      const uint8_t *snapshot,
-                                      size_t snapshot_size,
-                                      const uint8_t *next_snapshot,
-                                      size_t next_snapshot_size,
-                                      player_view_movement_stream_t stream,
-                                      const uint8_t **previous_packet,
-                                      size_t *previous_packet_size,
-                                      uint32_t *clock_ms) {
-    lighting_benchmark_statistics_get(&phase->lighting_before);
-    for (uint32_t tick = 0; tick < phase->ticks; tick++) {
-        const uint8_t *packet = snapshot;
-        size_t packet_size = snapshot_size;
-        if (stream == PLAYER_VIEW_MOVEMENT_SUSTAINED) {
-            /* A/B/A changes exercise scroll restoration instead of replaying one frame. */
-            packet = tick % 2 == 0 ? next_snapshot : snapshot;
-            packet_size = tick % 2 == 0 ? next_snapshot_size : snapshot_size;
-        } else if (stream == PLAYER_VIEW_MOVEMENT_IDLE) {
-            /* Same MAP headers while simulated time advances animations. */
-            packet = next_snapshot;
-            packet_size = next_snapshot_size;
-        } else if (stream == PLAYER_VIEW_MOVEMENT_RESUMED) {
-            packet = tick % 2 == 0 ? snapshot : next_snapshot;
-            packet_size = tick % 2 == 0 ? snapshot_size : next_snapshot_size;
-        }
-        LastTick = *clock_ms;
-        socket_command_map((uint8_t *)packet, packet_size, 0);
-        if (*previous_packet == NULL || *previous_packet_size != packet_size ||
-            memcmp(*previous_packet, packet, packet_size) != 0) {
-            phase->changed_packets++;
-        } else {
-            phase->noop_packets++;
-        }
-        *previous_packet = packet;
-        *previous_packet_size = packet_size;
-        uint64_t started = SDL_GetTicksNS();
-        if (!SDL_FillSurfaceRect(surface, NULL, 0)) {
-            fprintf(stderr, "player-view: cannot clear movement benchmark surface: %s\n", SDL_GetError());
+static bool
+player_view_lighting_levels_get(lighting_benchmark_level_statistics_t levels[MAP2_LEVELS]) {
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
+        if (!lighting_benchmark_level_statistics_get(depth, &levels[MAP2_DEPTH_INDEX(depth)])) {
             return false;
         }
-        map_draw_map(surface);
-        phase->durations[tick] = SDL_GetTicksNS() - started;
-        phase->full_map_draws++;
-        *clock_ms += PLAYER_VIEW_MOVEMENT_TICK_MS;
+    }
+    return true;
+}
+
+static const char *player_view_environment(const char *name) {
+    const char *value = getenv(name);
+    return value != NULL && *value != '\0' ? value : "unknown";
+}
+
+static bool player_view_json_string(const char *value) {
+    for (const unsigned char *cursor = (const unsigned char *)value; *cursor != '\0'; cursor++) {
+        if (*cursor < 0x20 || *cursor == '"' || *cursor == '\\') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static uint64_t player_view_process_peak_rss_bytes(void) {
+#ifdef WIN32
+    return 0;
+#else
+    struct rusage usage;
+    if (getrusage(RUSAGE_SELF, &usage) != 0 || usage.ru_maxrss < 0) {
+        return 0;
+    }
+#ifdef __APPLE__
+    return (uint64_t)usage.ru_maxrss;
+#else
+    return (uint64_t)usage.ru_maxrss * UINT64_C(1024);
+#endif
+#endif
+}
+
+static uint64_t player_view_state_hash_uint64(uint64_t hash, uint64_t value) {
+    for (size_t i = 0; i < sizeof(value); i++) {
+        hash ^= (uint8_t)value;
+        hash *= UINT64_C(1099511628211);
+        value >>= 8;
+    }
+    return hash;
+}
+
+static void player_view_timing_summary(const uint64_t *durations,
+                                       size_t count,
+                                       uint64_t *p50,
+                                       uint64_t *p95,
+                                       uint64_t *p99,
+                                       uint64_t *maximum) {
+    uint64_t sorted[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
+    HARD_ASSERT(count > 0 && count <= arraysize(sorted));
+    memcpy(sorted, durations, count * sizeof(*sorted));
+    *p50 = player_view_percentile(sorted, count, 50);
+    memcpy(sorted, durations, count * sizeof(*sorted));
+    *p95 = player_view_percentile(sorted, count, 95);
+    memcpy(sorted, durations, count * sizeof(*sorted));
+    *p99 = player_view_percentile(sorted, count, 99);
+    *maximum = sorted[count - 1];
+}
+
+static void player_view_timing_json(const uint64_t *durations, size_t count) {
+    uint64_t p50 = 0, p95 = 0, p99 = 0, maximum = 0;
+    if (count != 0) {
+        player_view_timing_summary(durations, count, &p50, &p95, &p99, &maximum);
+    }
+    printf("{\"unit\":\"ns\",\"samples\":%zu,\"p50\":%" PRIu64 ",\"p95\":%" PRIu64
+           ",\"p99\":%" PRIu64 ",\"max\":%" PRIu64,
+           count,
+           p50,
+           p95,
+           p99,
+           maximum);
+    printf(",\"windows\":[");
+    for (size_t start = 0; start < count; start += PLAYER_VIEW_MOVEMENT_WINDOW_TICKS) {
+        size_t samples = MIN((size_t)PLAYER_VIEW_MOVEMENT_WINDOW_TICKS, count - start);
+        uint64_t sorted[PLAYER_VIEW_MOVEMENT_WINDOW_TICKS];
+        memcpy(sorted, &durations[start], samples * sizeof(*sorted));
+        uint64_t window_p95 = player_view_percentile(sorted, samples, 95);
+        printf("%s{\"start_tick\":%zu,\"samples\":%zu,\"p95_ns\":%" PRIu64 "}",
+               start == 0 ? "" : ",",
+               start,
+               samples,
+               window_p95);
+    }
+    printf("]}");
+}
+
+static void player_view_lighting_counters_json(const lighting_benchmark_counters_t *counters) {
+    printf("{\"field_begins\":%" PRIu64 ",\"field_dirty_marks\":%" PRIu64
+           ",\"field_dirty_pixels\":%" PRIu64 ",\"field_rebuilds\":%" PRIu64
+           ",\"field_reuses\":%" PRIu64 ",\"render_calls\":%" PRIu64 ",\"render_failures\":%" PRIu64
+           ",\"lit_sprite_draws\":%" PRIu64 ",\"lit_sprite_lookups\":%" PRIu64
+           ",\"lit_sprite_hits\":%" PRIu64 ",\"lit_sprite_misses\":%" PRIu64
+           ",\"lit_sprite_insertions\":%" PRIu64 ",\"lit_sprite_evictions\":%" PRIu64
+           ",\"lit_sprite_fallbacks\":%" PRIu64 ",\"lit_sprite_clears\":%" PRIu64
+           ",\"lit_sprite_cleared_entries\":%" PRIu64 "}",
+           counters->field_begins,
+           counters->field_dirty_marks,
+           counters->field_dirty_pixels,
+           counters->field_rebuilds,
+           counters->field_reuses,
+           counters->render_calls,
+           counters->render_failures,
+           counters->lit_sprite_draws,
+           counters->lit_sprite_lookups,
+           counters->lit_sprite_hits,
+           counters->lit_sprite_misses,
+           counters->lit_sprite_insertions,
+           counters->lit_sprite_evictions,
+           counters->lit_sprite_fallbacks,
+           counters->lit_sprite_clears,
+           counters->lit_sprite_cleared_entries);
+}
+
+static void player_view_lighting_state_json(const lighting_benchmark_statistics_t *statistics,
+                                            bool start) {
+    printf("{\"allocated_levels\":%zu,\"active_levels\":%zu"
+           ",\"cache_valid_levels\":%zu,\"dirty_levels\":%zu"
+           ",\"lit_sprite_entries\":%zu,\"lit_sprite_bytes\":%zu"
+           ",\"retained_field_bytes\":%zu,\"state_digest\":\"%016" PRIx64 "\"}",
+           start ? statistics->start_allocated_levels : statistics->allocated_levels,
+           start ? statistics->start_active_levels : statistics->active_levels,
+           start ? statistics->start_cache_valid_levels : statistics->cache_valid_levels,
+           start ? statistics->start_dirty_levels : statistics->dirty_levels,
+           start ? statistics->start_lit_sprite_entries : statistics->lit_sprite_entries,
+           start ? statistics->start_lit_sprite_bytes : statistics->lit_sprite_bytes,
+           start ? statistics->start_retained_field_bytes : statistics->retained_field_bytes,
+           start ? statistics->start_state_digest : statistics->state_digest);
+}
+
+static void player_view_lighting_level_json(const lighting_benchmark_level_statistics_t *start,
+                                            const lighting_benchmark_level_statistics_t *end) {
+    printf("{\"depth\":%d,\"start\":{\"allocated\":%s,\"cache_valid\":%s"
+           ",\"dirty\":%s,\"entries\":%zu,\"bytes\":%zu,\"retained_field_bytes\":%zu"
+           ",\"state_digest\":\"%016" PRIx64 "\"},\"end\":{\"allocated\":%s"
+           ",\"cache_valid\":%s,\"dirty\":%s,\"entries\":%zu,\"bytes\":%zu"
+           ",\"retained_field_bytes\":%zu"
+           ",\"state_digest\":\"%016" PRIx64 "\"},\"peak\":{\"entries\":%zu"
+           ",\"bytes\":%zu,\"retained_field_bytes\":%zu},\"counters\":",
+           end->depth,
+           start->allocated ? "true" : "false",
+           start->cache_valid ? "true" : "false",
+           start->update_needed ? "true" : "false",
+           start->lit_sprite_entries,
+           start->lit_sprite_bytes,
+           start->retained_field_bytes,
+           start->state_digest,
+           end->allocated ? "true" : "false",
+           end->cache_valid ? "true" : "false",
+           end->update_needed ? "true" : "false",
+           end->lit_sprite_entries,
+           end->lit_sprite_bytes,
+           end->retained_field_bytes,
+           end->state_digest,
+           end->peak_lit_sprite_entries,
+           end->peak_lit_sprite_bytes,
+           end->peak_retained_field_bytes);
+    player_view_lighting_counters_json(&end->counters);
+    printf("}");
+}
+
+static void player_view_map_json(const map_benchmark_statistics_t *statistics) {
+    printf("{\"map_draws\":%" PRIu64 ",\"primary_map_draws\":%" PRIu64
+           ",\"auxiliary_map_draws\":%" PRIu64 ",\"presents\":%" PRIu64
+           ",\"present_failures\":%" PRIu64 ",\"render_failures\":%" PRIu64
+           ",\"fault_injections\":%" PRIu64 ",\"fault_detections\":%" PRIu64
+           ",\"level_draws\":%" PRIu64 ",\"render_commands\":%" PRIu64 ",\"annotations\":%" PRIu64
+           ",\"ui_tiles\":%" PRIu64 ",\"peak_render_commands\":%" PRIu64
+           ",\"peak_active_levels\":%" PRIu64 ",\"renderer_allocation_statistics_available\":%s"
+           ",\"renderer_allocations\":%" PRIu64 ",\"renderer_allocation_bytes\":%" PRIu64 "}",
+           statistics->map_draws,
+           statistics->primary_map_draws,
+           statistics->auxiliary_map_draws,
+           statistics->presents,
+           statistics->present_failures,
+           statistics->render_failures,
+           statistics->fault_injections,
+           statistics->fault_detections,
+           statistics->level_draws,
+           statistics->render_commands,
+           statistics->annotations,
+           statistics->ui_tiles,
+           statistics->peak_render_commands,
+           statistics->peak_active_levels,
+           statistics->renderer_allocation_statistics_available ? "true" : "false",
+           statistics->renderer_allocations,
+           statistics->renderer_allocation_bytes);
+}
+
+static void player_view_render_stages_json(const render_profile_snapshot_t *statistics) {
+    static const struct {
+        const char *name;
+        render_profile_stage_t stage;
+    } stages[] = {
+        {"map", RENDER_PROFILE_MAP},
+        {"map_scratch_clear", RENDER_PROFILE_MAP_SCRATCH_CLEAR},
+        {"ground", RENDER_PROFILE_MAP_GROUND},
+        {"ground_composite", RENDER_PROFILE_MAP_GROUND_COMPOSITE},
+        {"lighting", RENDER_PROFILE_LIGHTING},
+        {"objects", RENDER_PROFILE_MAP_OBJECTS},
+        {"paint", RENDER_PROFILE_MAP_PAINT},
+        {"ui", RENDER_PROFILE_MAP_UI},
+    };
+    printf("{");
+    for (size_t i = 0; i < arraysize(stages); i++) {
+        render_profile_stage_t stage = stages[i].stage;
+        render_profile_stage_metadata_t metadata;
+        if (!render_profiler_stage_metadata_get(stage, &metadata)) {
+            metadata.scope = RENDER_PROFILE_SCOPE_FRAME;
+        }
+        printf("%s\"%s\":{\"unit\":\"us\",\"elapsed\":%" PRIu64 ",\"calls\":%u,\"scope\":\"%s\"}",
+               i == 0 ? "" : ",",
+               stages[i].name,
+               statistics->elapsed_us[stage],
+               statistics->calls[stage],
+               render_profiler_scope_name(metadata.scope));
+    }
+    printf("}");
+}
+
+static void player_view_sprite_cache_json(const sprite_cache_statistics_t *start,
+                                          const sprite_cache_statistics_t *end) {
+    printf("{\"available\":%s,\"counters\":{\"lookups\":%" PRIu64 ",\"hits\":%" PRIu64
+           ",\"misses\":%" PRIu64 ",\"insertions\":%" PRIu64 ",\"gc_runs\":%" PRIu64
+           ",\"gc_removals\":%" PRIu64 ",\"gc_time_ns\":%" PRIu64
+           "},\"start\":{\"entries\":%zu,\"estimated_bytes\":%zu}"
+           ",\"end\":{\"entries\":%zu,\"estimated_bytes\":%zu}"
+           ",\"peak\":{\"entries\":%zu,\"estimated_bytes\":%zu}}",
+           SPRITE_CACHE_STATISTICS_VERSION > 0 ? "true" : "false",
+           end->lookups,
+           end->hits,
+           end->misses,
+           end->insertions,
+           end->gc_runs,
+           end->gc_removals,
+           end->gc_time_ns,
+           start->entries,
+           start->estimated_bytes,
+           end->entries,
+           end->estimated_bytes,
+           end->peak_entries,
+           end->peak_estimated_bytes);
+}
+
+static bool player_view_movement_fixture_parse(const uint8_t *data,
+                                               size_t size,
+                                               int wire_width,
+                                               int wire_height,
+                                               player_view_movement_fixture_t *fixture) {
+    static const uint8_t magic[] = {'P', 'V', 'M', '1'};
+    size_t cursor = sizeof(magic);
+    if (data == NULL || fixture == NULL || size < cursor + 1 ||
+        memcmp(data, magic, sizeof(magic)) != 0 || data[cursor++] != PLAYER_VIEW_MOVEMENT_PACKETS) {
+        return false;
+    }
+
+    memset(fixture, 0, sizeof(*fixture));
+    for (size_t i = 0; i < arraysize(fixture->packets); i++) {
+        if (size - cursor < sizeof(uint32_t)) {
+            return false;
+        }
+        uint32_t packet_size = (uint32_t)data[cursor] << 24 | (uint32_t)data[cursor + 1] << 16 |
+                               (uint32_t)data[cursor + 2] << 8 | data[cursor + 3];
+        cursor += sizeof(uint32_t);
+        if (packet_size == 0 || packet_size > size - cursor || packet_size > PACKET_PAYLOAD_MAX ||
+            data[cursor] != MAP_UPDATE_CMD_SAME ||
+            !map_protocol_validate(&data[cursor], packet_size, 0, wire_width, wire_height)) {
+            return false;
+        }
+        fixture->packets[i].data = &data[cursor];
+        fixture->packets[i].size = packet_size;
+        cursor += packet_size;
+    }
+    return cursor == size;
+}
+
+static bool player_view_movement_fixture_closed(const player_view_movement_fixture_t *fixture,
+                                                int origin_x,
+                                                int origin_y) {
+    static const int8_t offsets[PLAYER_VIEW_MOVEMENT_PACKETS][2] = {
+        {1, 0},
+        {0, 0},
+        {0, 1},
+        {0, 0},
+        {0, 0},
+    };
+    for (size_t i = 0; i < arraysize(fixture->packets); i++) {
+        const uint8_t *packet = fixture->packets[i].data;
+        if ((int)packet[1] != origin_x + offsets[i][0] ||
+            (int)packet[2] != origin_y + offsets[i][1]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static uint64_t player_view_movement_queue_clock(void *user_data) {
+    player_view_movement_clock_t *clock = user_data;
+    /* Drain reads once at its boundary and then in start/finish pairs. Charge
+     * only a completed dispatch, never clock observation itself. */
+    if (clock->reads != 0 && clock->reads % 2 == 0) {
+        clock->now_us += PLAYER_VIEW_MOVEMENT_SIMULATED_COMMAND_US;
+    }
+    clock->reads++;
+    return clock->now_us;
+}
+
+static bool player_view_movement_queue_enqueue(player_view_movement_packet_t packet,
+                                               uint64_t arrival_us) {
+    if (packet.data == NULL || packet.size == 0 || packet.size >= SIZE_MAX) {
+        return false;
+    }
+    uint8_t *envelope = xmalloc(packet.size + 1);
+    envelope[0] = CLIENT_CMD_MAP;
+    memcpy(&envelope[1], packet.data, packet.size);
+    bool success = client_command_queue_enqueue_envelope_at(envelope, packet.size + 1, arrival_us);
+    free(envelope);
+    return success;
+}
+
+static bool player_view_movement_checkpoint_capture(player_view_movement_replay_t *replay,
+                                                    SDL_Surface *surface,
+                                                    const player_view_manifest_t *manifest,
+                                                    const char *prefix,
+                                                    const char *name) {
+    if (replay->checkpoints_num == arraysize(replay->checkpoints)) {
+        return false;
+    }
+    player_view_movement_checkpoint_t *checkpoint = &replay->checkpoints[replay->checkpoints_num++];
+    lighting_benchmark_statistics_t lighting;
+    sprite_cache_statistics_t sprite;
+    lighting_benchmark_statistics_get(&lighting);
+    sprite_cache_statistics_get(&sprite);
+    *checkpoint = (player_view_movement_checkpoint_t){
+        .name = name,
+        .map_x = MapData.posx,
+        .map_y = MapData.posy,
+        .viewport_width = surface->w,
+        .viewport_height = surface->h,
+    };
+    if (!player_view_surface_sha256(surface, checkpoint->pixels_digest)) {
+        return false;
+    }
+    uint64_t hash = UINT64_C(14695981039346656037);
+    hash = player_view_state_hash_uint64(hash, (uint32_t)MapData.posx);
+    hash = player_view_state_hash_uint64(hash, (uint32_t)MapData.posy);
+    hash = player_view_state_hash_uint64(hash, (uint32_t)MapData.xlen);
+    hash = player_view_state_hash_uint64(hash, (uint32_t)MapData.ylen);
+    hash = player_view_state_hash_uint64(hash, lighting.state_digest);
+    hash = player_view_state_hash_uint64(hash, sprite.entries);
+    hash = player_view_state_hash_uint64(hash, sprite.estimated_bytes);
+    hash = player_view_state_hash_uint64(hash, (uint32_t)surface->w);
+    hash = player_view_state_hash_uint64(hash, (uint32_t)surface->h);
+    for (const unsigned char *cursor = (const unsigned char *)MapData.name; *cursor != '\0';
+         cursor++) {
+        hash ^= *cursor;
+        hash *= UINT64_C(1099511628211);
+    }
+    for (const unsigned char *cursor = (const unsigned char *)MapData.map_path; *cursor != '\0';
+         cursor++) {
+        hash ^= *cursor;
+        hash *= UINT64_C(1099511628211);
+    }
+    for (const unsigned char *cursor = (const unsigned char *)checkpoint->pixels_digest;
+         *cursor != '\0';
+         cursor++) {
+        hash ^= *cursor;
+        hash *= UINT64_C(1099511628211);
+    }
+    checkpoint->state_digest = hash;
+    const char *directory = getenv("ATRINIK_MOVEMENT_CHECKPOINT_DIR");
+    if (directory != NULL && *directory != '\0') {
+        size_t path_size = strlen(directory) + strlen(prefix) + strlen(name) + sizeof("//-.png");
+        if (path_size > HUGE_BUF * 4U) {
+            fprintf(stderr, "player-view: checkpoint output path exceeds the limit\n");
+            return false;
+        }
+        char *path = xmalloc(path_size);
+        snprintf(path, path_size, "%s/%s-%s.png", directory, prefix, name);
+        bool written = player_view_output_write(surface, manifest, path, checkpoint->pixels_digest);
+        free(path);
+        if (!written) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static const char *player_view_movement_phase_checkpoint(player_view_movement_stream_t stream,
+                                                         uint32_t tick,
+                                                         uint32_t ticks) {
+    if (stream == PLAYER_VIEW_MOVEMENT_COLD && tick == 0) {
+        return "cold";
+    }
+    if (stream == PLAYER_VIEW_MOVEMENT_SUSTAINED) {
+        static const char *const first_cycle[] = {
+            "step_b",
+            "restored_a_1",
+            "step_c",
+            "restored_a_2",
+        };
+        if (tick < arraysize(first_cycle)) {
+            return first_cycle[tick];
+        }
+        if (tick + 1 == ticks) {
+            return "sustained_end";
+        }
+    } else if (stream == PLAYER_VIEW_MOVEMENT_IDLE && tick + 1 == ticks) {
+        return "idle_end";
+    } else if (stream == PLAYER_VIEW_MOVEMENT_RESUMED && tick + 1 == ticks) {
+        return "resumed_end";
+    }
+    return NULL;
+}
+
+static void player_view_movement_draw_reasons_record(player_view_movement_phase_t *phase,
+                                                     player_view_movement_stream_t stream,
+                                                     uint32_t reasons,
+                                                     bool map_packet) {
+    if (map_packet && (reasons & MAP_REDRAW_REASON_MAP_PACKET) != 0) {
+        if (stream == PLAYER_VIEW_MOVEMENT_COLD) {
+            phase->full_draw_reasons.reset_packet++;
+        } else if (stream == PLAYER_VIEW_MOVEMENT_SUSTAINED ||
+                   stream == PLAYER_VIEW_MOVEMENT_RESUMED) {
+            phase->full_draw_reasons.changed_map_packet++;
+        } else if (stream == PLAYER_VIEW_MOVEMENT_IDLE) {
+            phase->full_draw_reasons.noop_map_packet++;
+        }
+    }
+    if ((reasons & MAP_REDRAW_REASON_ANIMATION) != 0) {
+        phase->full_draw_reasons.animation_only_tick++;
+    }
+}
+
+static bool player_view_movement_draw(player_view_movement_replay_t *replay,
+                                      player_view_movement_phase_t *phase,
+                                      SDL_Surface *surface,
+                                      const player_view_movement_fixture_t *fixture,
+                                      const player_view_manifest_t *manifest,
+                                      const char *checkpoint_prefix,
+                                      player_view_movement_packet_t reset_packet,
+                                      player_view_movement_stream_t stream,
+                                      size_t *active_packet,
+                                      uint64_t *tick_us) {
+    if (!client_command_queue_statistics_reset()) {
+        fprintf(stderr, "player-view: movement phase began with queued commands\n");
+        return false;
+    }
+    lighting_benchmark_statistics_get(&phase->lighting_before);
+    lighting_benchmark_statistics_reset();
+    if (!player_view_lighting_levels_get(phase->lighting_levels_start)) {
+        fprintf(stderr, "player-view: cannot read starting per-depth lighting telemetry\n");
+        return false;
+    }
+    map_benchmark_statistics_reset();
+    render_profiler_statistics_reset();
+    sprite_cache_statistics_get(&phase->sprite_cache_start);
+    sprite_cache_statistics_reset();
+    for (uint32_t tick = 0; tick < phase->ticks; tick++) {
+        sprite_cache_clock_override_set((time_t)(*tick_us / UINT64_C(1000000)));
+        size_t produced = 1;
+        if (stream == PLAYER_VIEW_MOVEMENT_RESUMED && tick < 8) {
+            produced = 2;
+        } else if (stream == PLAYER_VIEW_MOVEMENT_RESUMED && tick < 16) {
+            produced = 0;
+        } else if (stream == PLAYER_VIEW_MOVEMENT_IDLE && tick % 2 != 0) {
+            produced = 0;
+        }
+        for (size_t i = 0; i < produced; i++) {
+            bool movement =
+                stream == PLAYER_VIEW_MOVEMENT_SUSTAINED || stream == PLAYER_VIEW_MOVEMENT_RESUMED;
+            player_view_movement_packet_t packet =
+                fixture->packets[PLAYER_VIEW_MOVEMENT_ACTIVE_PACKETS];
+            if (stream == PLAYER_VIEW_MOVEMENT_COLD) {
+                packet = reset_packet;
+            } else if (movement) {
+                packet = fixture->packets[*active_packet];
+                *active_packet = (*active_packet + 1) % PLAYER_VIEW_MOVEMENT_ACTIVE_PACKETS;
+            }
+            if (!player_view_movement_queue_enqueue(packet, *tick_us)) {
+                fprintf(stderr, "player-view: cannot enqueue movement command envelope\n");
+                return false;
+            }
+            phase->map_packets++;
+            if (movement || stream == PLAYER_VIEW_MOVEMENT_COLD) {
+                phase->changed_packets++;
+            } else {
+                phase->noop_packets++;
+            }
+        }
+        LastTick = (uint32_t)(*tick_us / 1000);
+        uint64_t frame_started = SDL_GetTicksNS();
+        player_view_movement_clock_t queue_clock = {.now_us = *tick_us};
+        client_command_queue_drain_result_t drain;
+        uint64_t queue_started = SDL_GetTicksNS();
+        client_commands_drain_with_clock(CLIENT_COMMAND_QUEUE_BUDGET_US,
+                                         player_view_movement_queue_clock,
+                                         &queue_clock,
+                                         &drain);
+        phase->queue_durations[tick] = SDL_GetTicksNS() - queue_started;
+        map_animate();
+        phase->animation_ticks++;
+        bool drawn = map_redraw_due();
+        if (drawn) {
+            uint32_t reasons = map_redraw_pending_reasons();
+            if (!SDL_FillSurfaceRect(surface, NULL, 0)) {
+                fprintf(stderr,
+                        "player-view: cannot clear movement benchmark surface: %s\n",
+                        SDL_GetError());
+                return false;
+            }
+            uint64_t map_started = SDL_GetTicksNS();
+            map_draw_map(surface);
+            phase->map_durations[phase->map_samples++] = SDL_GetTicksNS() - map_started;
+            phase->full_map_draws++;
+            player_view_movement_draw_reasons_record(phase, stream, reasons, drain.commands != 0);
+            map_redraw_consume();
+            effect_sprites_play();
+#ifdef ATRINIK_WIDGET_TESTS
+            map_benchmark_fault_status_t fault_status;
+            map_benchmark_fault_status_get(&fault_status);
+            if (fault_status.detected) {
+                return false;
+            }
+#endif
+        }
+        sprite_cache_gc();
+        render_profiler_frame_finished(drawn);
+        uint64_t elapsed = SDL_GetTicksNS() - frame_started;
+        uint64_t target = (uint64_t)PLAYER_VIEW_MOVEMENT_TICK_MS * UINT64_C(1000000);
+        phase->frame_durations[tick] = elapsed;
+        phase->wait_durations[tick] = elapsed < target ? target - elapsed : 0;
+        phase->loop_durations[tick] = MAX(elapsed, target);
+        const char *checkpoint = player_view_movement_phase_checkpoint(stream, tick, phase->ticks);
+        if (checkpoint != NULL && !player_view_movement_checkpoint_capture(replay,
+                                                                           surface,
+                                                                           manifest,
+                                                                           checkpoint_prefix,
+                                                                           checkpoint)) {
+            fprintf(stderr, "player-view: cannot capture movement checkpoint\n");
+            return false;
+        }
+        *tick_us += (uint64_t)PLAYER_VIEW_MOVEMENT_TICK_MS * 1000;
+    }
+    client_command_queue_statistics_get(*tick_us, &phase->queue);
+    if (phase->queue.due || phase->queue.depth != 0) {
+        fprintf(stderr, "player-view: movement replay phase left queued packets\n");
+        return false;
     }
     lighting_benchmark_statistics_get(&phase->lighting);
-    phase->lighting.field_rebuilds -= phase->lighting_before.field_rebuilds;
-    phase->lighting.field_reuses -= phase->lighting_before.field_reuses;
-    phase->lighting.lit_sprite_lookups -= phase->lighting_before.lit_sprite_lookups;
-    phase->lighting.lit_sprite_hits -= phase->lighting_before.lit_sprite_hits;
-    phase->lighting.lit_sprite_misses -= phase->lighting_before.lit_sprite_misses;
-    phase->lighting.lit_sprite_evictions -= phase->lighting_before.lit_sprite_evictions;
+    phase->lighting.field_rebuilds = phase->lighting.counters.field_rebuilds;
+    phase->lighting.field_reuses = phase->lighting.counters.field_reuses;
+    phase->lighting.lit_sprite_lookups = phase->lighting.counters.lit_sprite_lookups;
+    phase->lighting.lit_sprite_hits = phase->lighting.counters.lit_sprite_hits;
+    phase->lighting.lit_sprite_misses = phase->lighting.counters.lit_sprite_misses;
+    phase->lighting.lit_sprite_evictions = phase->lighting.counters.lit_sprite_evictions;
+    phase->lighting.start_allocated_levels = phase->lighting_before.allocated_levels;
+    phase->lighting.start_active_levels = phase->lighting_before.active_levels;
+    phase->lighting.start_cache_valid_levels = phase->lighting_before.cache_valid_levels;
+    phase->lighting.start_dirty_levels = phase->lighting_before.dirty_levels;
+    phase->lighting.start_lit_sprite_entries = phase->lighting_before.lit_sprite_entries;
+    phase->lighting.start_lit_sprite_bytes = phase->lighting_before.lit_sprite_bytes;
+    phase->lighting.start_retained_field_bytes = phase->lighting_before.retained_field_bytes;
+    phase->lighting.start_state_digest = phase->lighting_before.state_digest;
+    if (!player_view_lighting_levels_get(phase->lighting_levels_end)) {
+        fprintf(stderr, "player-view: cannot read ending per-depth lighting telemetry\n");
+        return false;
+    }
+    map_benchmark_statistics_get(&phase->map);
+    render_profiler_statistics_get(&phase->render);
+    sprite_cache_statistics_get(&phase->sprite_cache_end);
     return true;
+}
+
+static void player_view_movement_replay_initialize(player_view_movement_replay_t *replay) {
+    memset(replay, 0, sizeof(*replay));
+    replay->phases[0] = (player_view_movement_phase_t){.name = "cold", .ticks = 1};
+    replay->phases[1] = (player_view_movement_phase_t){
+        .name = "sustained",
+        .ticks = PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS,
+    };
+    replay->phases[2] = (player_view_movement_phase_t){
+        .name = "idle",
+        .ticks = PLAYER_VIEW_MOVEMENT_IDLE_TICKS,
+    };
+    replay->phases[3] = (player_view_movement_phase_t){
+        .name = "resumed",
+        .ticks = PLAYER_VIEW_MOVEMENT_RESUMED_TICKS,
+    };
+}
+
+static bool player_view_movement_lifecycle_draw(player_view_movement_replay_t *replay,
+                                                SDL_Surface *surface,
+                                                const player_view_manifest_t *manifest,
+                                                const char *checkpoint_prefix,
+                                                const char *checkpoint,
+                                                map_redraw_reason_t reason) {
+    map_benchmark_statistics_t before, after;
+    map_benchmark_statistics_get(&before);
+    map_redraw_request(reason);
+    if (!SDL_FillSurfaceRect(surface, NULL, 0)) {
+        return false;
+    }
+    map_draw_map(surface);
+    map_redraw_consume();
+    effect_sprites_play();
+    sprite_cache_gc();
+    render_profiler_frame_finished(true);
+    map_benchmark_statistics_get(&after);
+    if (after.render_failures != before.render_failures) {
+        fprintf(stderr, "player-view: lifecycle checkpoint renderer failed\n");
+        return false;
+    }
+    replay->lifecycle.full_map_draws++;
+    if (reason == MAP_REDRAW_REASON_RESIZE) {
+        replay->lifecycle.resize++;
+    } else if (strcmp(checkpoint, "reset") == 0) {
+        replay->lifecycle.reset_packet++;
+    } else if (strcmp(checkpoint, "transition") == 0) {
+        replay->lifecycle.map_transition++;
+    }
+    return player_view_movement_checkpoint_capture(replay,
+                                                   surface,
+                                                   manifest,
+                                                   checkpoint_prefix,
+                                                   checkpoint);
+}
+
+static bool player_view_movement_lifecycle_packet(player_view_movement_packet_t packet,
+                                                  uint64_t tick_us) {
+    if (!client_command_queue_statistics_reset() ||
+        !player_view_movement_queue_enqueue(packet, tick_us)) {
+        return false;
+    }
+    player_view_movement_clock_t queue_clock = {.now_us = tick_us};
+    client_command_queue_drain_result_t drain;
+    client_commands_drain_with_clock(CLIENT_COMMAND_QUEUE_BUDGET_US,
+                                     player_view_movement_queue_clock,
+                                     &queue_clock,
+                                     &drain);
+    client_command_queue_statistics_t statistics;
+    client_command_queue_statistics_get(queue_clock.now_us, &statistics);
+    return drain.commands == 1 && !statistics.due && statistics.depth == 0 &&
+           statistics.order_digests_comparable &&
+           statistics.enqueued_order_digest == statistics.dequeued_order_digest;
+}
+
+static bool player_view_movement_lifecycle(player_view_movement_replay_t *replay,
+                                           SDL_Surface *surface,
+                                           const player_view_manifest_t *manifest,
+                                           const char *checkpoint_prefix,
+                                           player_view_movement_packet_t reset_packet,
+                                           player_view_movement_packet_t transition_packet,
+                                           uint64_t tick_us) {
+    int original_width = surface->w;
+    int original_height = surface->h;
+    SDL_Surface *resized = SDL_CreateSurface(original_width + (int)manifest->resize_width_delta,
+                                             original_height + (int)manifest->resize_height_delta,
+                                             surface->format);
+    if (resized == NULL) {
+        return false;
+    }
+    widgetdata *map_widget = cur_widget[MAP_ID];
+    map_widget->surface = resized;
+    map_widget->w = resized->w;
+    map_widget->h = resized->h;
+    ScreenSurface = resized;
+    bool success = player_view_movement_lifecycle_draw(replay,
+                                                       resized,
+                                                       manifest,
+                                                       checkpoint_prefix,
+                                                       "resized",
+                                                       MAP_REDRAW_REASON_RESIZE);
+    map_widget->surface = surface;
+    map_widget->w = original_width;
+    map_widget->h = original_height;
+    ScreenSurface = surface;
+    if (success) {
+        success = player_view_movement_lifecycle_draw(replay,
+                                                      surface,
+                                                      manifest,
+                                                      checkpoint_prefix,
+                                                      "resize_restored",
+                                                      MAP_REDRAW_REASON_RESIZE);
+    }
+    SDL_DestroySurface(resized);
+    if (!success || !player_view_movement_lifecycle_packet(reset_packet, tick_us) ||
+        !player_view_movement_lifecycle_draw(replay,
+                                             surface,
+                                             manifest,
+                                             checkpoint_prefix,
+                                             "reset",
+                                             MAP_REDRAW_REASON_MAP_PACKET) ||
+        !player_view_movement_lifecycle_packet(transition_packet,
+                                               tick_us + PLAYER_VIEW_MOVEMENT_TICK_MS * 1000U) ||
+        !player_view_movement_lifecycle_draw(replay,
+                                             surface,
+                                             manifest,
+                                             checkpoint_prefix,
+                                             "transition",
+                                             MAP_REDRAW_REASON_MAP_PACKET)) {
+        return false;
+    }
+    return true;
+}
+
+static bool player_view_movement_replay_run(player_view_movement_replay_t *replay,
+                                            SDL_Surface *surface,
+                                            const player_view_manifest_t *manifest,
+                                            const char *checkpoint_prefix,
+                                            const player_view_movement_fixture_t *fixture,
+                                            player_view_movement_packet_t reset_packet,
+                                            player_view_movement_packet_t transition_packet) {
+    player_view_movement_replay_initialize(replay);
+    uint64_t tick_us = (uint64_t)manifest->clock_ms * 1000U;
+    sprite_cache_clock_override_set((time_t)(tick_us / UINT64_C(1000000)));
+    size_t active_packet = 0;
+    int origin_x = -1;
+    int origin_y = -1;
+    for (size_t i = 0; i < arraysize(replay->phases); i++) {
+        if (!player_view_movement_draw(replay,
+                                       &replay->phases[i],
+                                       surface,
+                                       fixture,
+                                       manifest,
+                                       checkpoint_prefix,
+                                       reset_packet,
+                                       (player_view_movement_stream_t)i,
+                                       &active_packet,
+                                       &tick_us)) {
+            return false;
+        }
+        sprite_cache_clock_override_set((time_t)(tick_us / UINT64_C(1000000)));
+        if (i == PLAYER_VIEW_MOVEMENT_COLD) {
+            origin_x = MapData.posx;
+            origin_y = MapData.posy;
+            if (!player_view_movement_fixture_closed(fixture, origin_x, origin_y) ||
+                image_missing_faces_detected()) {
+                fprintf(stderr, "player-view: movement fixture is not closed or self-contained\n");
+                return false;
+            }
+        }
+    }
+    if (MapData.posx != origin_x || MapData.posy != origin_y || active_packet != 0) {
+        fprintf(stderr, "player-view: movement replay did not restore its origin\n");
+        return false;
+    }
+    return player_view_movement_lifecycle(replay,
+                                          surface,
+                                          manifest,
+                                          checkpoint_prefix,
+                                          reset_packet,
+                                          transition_packet,
+                                          tick_us) &&
+           replay->checkpoints_num == PLAYER_VIEW_MOVEMENT_CHECKPOINTS;
+}
+
+static bool player_view_movement_checkpoints_equal(const player_view_movement_replay_t *first,
+                                                   const player_view_movement_replay_t *repeat) {
+    if (first->checkpoints_num != repeat->checkpoints_num) {
+        return false;
+    }
+    for (size_t i = 0; i < first->checkpoints_num; i++) {
+        const player_view_movement_checkpoint_t *left = &first->checkpoints[i];
+        const player_view_movement_checkpoint_t *right = &repeat->checkpoints[i];
+        if (strcmp(left->name, right->name) != 0 ||
+            strcmp(left->pixels_digest, right->pixels_digest) != 0 ||
+            left->state_digest != right->state_digest || left->map_x != right->map_x ||
+            left->map_y != right->map_y || left->viewport_width != right->viewport_width ||
+            left->viewport_height != right->viewport_height) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool player_view_movement_checkpoint_digest(const player_view_movement_replay_t *replay,
+                                                   char digest[PLAYER_VIEW_SHA256_HEX_SIZE]) {
+    static const char prefix[] = "pvm-checkpoints-v1\n";
+    EVP_MD_CTX *context = EVP_MD_CTX_new();
+    bool success = context != NULL && EVP_DigestInit_ex(context, EVP_sha256(), NULL) == 1 &&
+                   EVP_DigestUpdate(context, prefix, sizeof(prefix) - 1) == 1;
+    for (size_t i = 0; success && i < replay->checkpoints_num; i++) {
+        const player_view_movement_checkpoint_t *checkpoint = &replay->checkpoints[i];
+        char row[256];
+        int length = snprintf(row,
+                              sizeof(row),
+                              "%s\t%s\t%d\t%d\t%d\t%d\n",
+                              checkpoint->name,
+                              checkpoint->pixels_digest,
+                              checkpoint->map_x,
+                              checkpoint->map_y,
+                              checkpoint->viewport_width,
+                              checkpoint->viewport_height);
+        success = length > 0 && (size_t)length < sizeof(row) &&
+                  EVP_DigestUpdate(context, row, (size_t)length) == 1;
+    }
+
+    uint8_t raw[EVP_MAX_MD_SIZE];
+    unsigned int raw_size = 0;
+    if (success && (EVP_DigestFinal_ex(context, raw, &raw_size) != 1 || raw_size != 32)) {
+        success = false;
+    }
+    EVP_MD_CTX_free(context);
+    if (!success) {
+        return false;
+    }
+    for (size_t i = 0; i < 32; i++) {
+        snprintf(&digest[i * 2], 3, "%02x", raw[i]);
+    }
+    return true;
+}
+
+static void player_view_movement_checkpoint_json(const player_view_movement_checkpoint_t *point) {
+    printf("{\"name\":\"%s\",\"pixels_sha256\":\"%s\",\"state_digest\":\"%016" PRIx64
+           "\",\"map_x\":%d,\"map_y\":%d,\"viewport_width\":%d,\"viewport_height\":%d}",
+           point->name,
+           point->pixels_digest,
+           point->state_digest,
+           point->map_x,
+           point->map_y,
+           point->viewport_width,
+           point->viewport_height);
+}
+
+static void player_view_movement_phase_json(const player_view_movement_phase_t *phase,
+                                            size_t index) {
+    uint64_t loop_p50 = 0, loop_p95 = 0, loop_p99 = 0, loop_max = 0;
+    player_view_timing_summary(phase->loop_durations,
+                               phase->ticks,
+                               &loop_p50,
+                               &loop_p95,
+                               &loop_p99,
+                               &loop_max);
+    printf("%s{\"name\":\"%s\",\"samples\":%u,\"map_packets\":%u,"
+           "\"changed_map_packets\":%u,\"noop_map_packets\":%u,"
+           "\"full_map_draws\":%u,\"animation_ticks\":%u,\"full_draw_reasons\":{"
+           "\"reset_packet\":%u,\"changed_map_packet\":%u,\"noop_map_packet\":%u,"
+           "\"animation_only_tick\":%u,\"resize\":%u,\"map_transition\":%u},"
+           "\"frame_time\":",
+           index == 0 ? "" : ",",
+           phase->name,
+           phase->ticks,
+           phase->map_packets,
+           phase->changed_packets,
+           phase->noop_packets,
+           phase->full_map_draws,
+           phase->animation_ticks,
+           phase->full_draw_reasons.reset_packet,
+           phase->full_draw_reasons.changed_map_packet,
+           phase->full_draw_reasons.noop_map_packet,
+           phase->full_draw_reasons.animation_only_tick,
+           phase->full_draw_reasons.resize,
+           phase->full_draw_reasons.map_transition);
+    player_view_timing_json(phase->frame_durations, phase->ticks);
+    printf(",\"main_loop\":{\"target_fps\":%.3f,\"target_tick_ns\":%" PRIu64 ",\"work_time\":",
+           1000.0 / PLAYER_VIEW_MOVEMENT_TICK_MS,
+           (uint64_t)PLAYER_VIEW_MOVEMENT_TICK_MS * UINT64_C(1000000));
+    player_view_timing_json(phase->frame_durations, phase->ticks);
+    printf(",\"wait_time\":");
+    player_view_timing_json(phase->wait_durations, phase->ticks);
+    printf(",\"loop_time\":");
+    player_view_timing_json(phase->loop_durations, phase->ticks);
+    printf(",\"achieved_fps\":{\"p50\":%.3f,\"p95\":%.3f}},\"map_time\":",
+           loop_p50 == 0 ? 0.0 : 1000000000.0 / loop_p50,
+           loop_p95 == 0 ? 0.0 : 1000000000.0 / loop_p95);
+    player_view_timing_json(phase->map_durations, phase->map_samples);
+    printf(",\"queue\":{\"enqueued\":%" PRIu64 ",\"dequeued\":%" PRIu64
+           ",\"budget_yields\":%" PRIu64 ",\"recoveries\":%" PRIu64
+           ",\"start_depth\":0,\"end_depth\":%" PRIu64 ",\"peak_depth\":%" PRIu64
+           ",\"start_bytes\":0,\"end_bytes\":%" PRIu64 ",\"peak_bytes\":%" PRIu64
+           ",\"oldest_age_us\":%" PRIu64 ",\"current_oldest_age_us\":%" PRIu64
+           ",\"processing_us\":%" PRIu64 ",\"due\":%s,\"budget_due\":%s,"
+           "\"service_clock\":\"simulated\",\"simulated_command_us\":%" PRIu64 ","
+           "\"order_digests_comparable\":%s,"
+           "\"enqueued_order_digest\":\"%016" PRIx64 "\",\"dequeued_order_digest\":\"%016" PRIx64
+           "\"",
+           phase->queue.enqueued,
+           phase->queue.dequeued,
+           phase->queue.budget_yields,
+           phase->queue.recoveries,
+           phase->queue.depth,
+           phase->queue.peak_depth,
+           phase->queue.bytes,
+           phase->queue.peak_bytes,
+           phase->queue.oldest_age_us,
+           phase->queue.current_oldest_age_us,
+           phase->queue.processing_us,
+           phase->queue.due ? "true" : "false",
+           phase->queue.budget_due ? "true" : "false",
+           PLAYER_VIEW_MOVEMENT_SIMULATED_COMMAND_US,
+           phase->queue.order_digests_comparable ? "true" : "false",
+           phase->queue.enqueued_order_digest,
+           phase->queue.dequeued_order_digest);
+    printf(",\"drain_time\":");
+    player_view_timing_json(phase->queue_durations, phase->ticks);
+    printf("},\"map\":");
+    player_view_map_json(&phase->map);
+    printf(",\"render_stages\":");
+    player_view_render_stages_json(&phase->render);
+    printf(",\"lighting\":{\"available\":%s,\"start\":",
+           LIGHTING_BENCHMARK_STATISTICS_VERSION > 0 ? "true" : "false");
+    player_view_lighting_state_json(&phase->lighting, true);
+    printf(",\"end\":");
+    player_view_lighting_state_json(&phase->lighting, false);
+    printf(",\"peak\":{\"allocated_levels\":%zu,\"active_levels\":%zu,"
+           "\"cache_valid_levels\":%zu,\"dirty_levels\":%zu,"
+           "\"lit_sprite_entries\":%zu,\"lit_sprite_bytes\":%zu,"
+           "\"retained_field_bytes\":%zu},\"counters\":",
+           phase->lighting.peak_allocated_levels,
+           phase->lighting.peak_active_levels,
+           phase->lighting.peak_cache_valid_levels,
+           phase->lighting.peak_dirty_levels,
+           phase->lighting.peak_lit_sprite_entries,
+           phase->lighting.peak_lit_sprite_bytes,
+           phase->lighting.peak_retained_field_bytes);
+    player_view_lighting_counters_json(&phase->lighting.counters);
+    printf(",\"levels\":[");
+    for (size_t level = 0; level < arraysize(phase->lighting_levels_end); level++) {
+        printf("%s", level == 0 ? "" : ",");
+        player_view_lighting_level_json(&phase->lighting_levels_start[level],
+                                        &phase->lighting_levels_end[level]);
+    }
+    printf("]},\"sprite_cache\":");
+    player_view_sprite_cache_json(&phase->sprite_cache_start, &phase->sprite_cache_end);
+    printf("}");
+}
+
+static void player_view_cpu_model(char *buffer, size_t size) {
+    snprintf(buffer, size, "%s", player_view_environment("ATRINIK_BENCHMARK_CPU_MODEL"));
+#ifndef WIN32
+    if (strcmp(buffer, "unknown") == 0) {
+        FILE *stream = fopen("/proc/cpuinfo", "r");
+        char line[512];
+        while (stream != NULL && fgets(line, sizeof(line), stream) != NULL) {
+            if (strncmp(line, "model name", 10) != 0 && strncmp(line, "Hardware", 8) != 0) {
+                continue;
+            }
+            char *value = strchr(line, ':');
+            if (value != NULL) {
+                value++;
+                while (isspace((unsigned char)*value)) {
+                    value++;
+                }
+                value[strcspn(value, "\r\n")] = '\0';
+                snprintf(buffer, size, "%s", *value != '\0' ? value : "unknown");
+            }
+            break;
+        }
+        if (stream != NULL) {
+            fclose(stream);
+        }
+    }
+#else
+    if (strcmp(buffer, "unknown") == 0) {
+        snprintf(buffer, size, "%s", player_view_environment("PROCESSOR_IDENTIFIER"));
+    }
+#endif
 }
 
 static bool player_view_movement_benchmark(SDL_Surface *surface,
@@ -1033,135 +2098,325 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
                                            const uint8_t *snapshot,
                                            size_t snapshot_size,
                                            const uint8_t *next_snapshot,
-                                           size_t next_snapshot_size) {
-    if (next_snapshot == NULL) {
-        fprintf(stderr, "player-view: movement benchmark requires next-snapshot\n");
-        return false;
+                                           size_t next_snapshot_size,
+                                           bool large_viewport) {
+    bool success = false;
+    uint8_t *transition = NULL;
+    size_t transition_size = 0;
+    bool queue_ready = false;
+    player_view_movement_fixture_t fixture;
+    int wire_width = MAP_LOOK_TO_WIRE_SIZE(manifest->look_width);
+    int wire_height = MAP_LOOK_TO_WIRE_SIZE(manifest->look_height);
+    if (next_snapshot == NULL || manifest->transition_snapshot_path == NULL ||
+        manifest->expected_standard_checkpoint_digest[0] == '\0' ||
+        manifest->resize_width_delta == 0 || manifest->resize_height_delta == 0 ||
+        snapshot[0] != MAP_UPDATE_CMD_NEW ||
+        !player_view_movement_fixture_parse(next_snapshot,
+                                            next_snapshot_size,
+                                            wire_width,
+                                            wire_height,
+                                            &fixture) ||
+        !player_view_snapshot_load(manifest->transition_snapshot_path,
+                                   &transition,
+                                   &transition_size) ||
+        transition[0] != MAP_UPDATE_CMD_NEW ||
+        !map_protocol_validate(transition, transition_size, 0, wire_width, wire_height)) {
+        fprintf(stderr, "player-view: invalid or incomplete movement lifecycle fixture\n");
+        goto cleanup;
     }
-
-    player_view_movement_phase_t phases[] = {
-        {.name = "cold", .ticks = 1},
-        {.name = "sustained", .ticks = PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS},
-        {.name = "idle", .ticks = PLAYER_VIEW_MOVEMENT_IDLE_TICKS},
-        {.name = "resumed", .ticks = PLAYER_VIEW_MOVEMENT_RESUMED_TICKS},
-    };
-    uint32_t clock_ms = manifest->clock_ms;
+    const char *fault = getenv("ATRINIK_MOVEMENT_FAULT");
+    bool fault_requested = fault != NULL && *fault != '\0';
+    bool mutable_rle_fault = fault_requested && strcmp(fault, "mutable-rle") == 0;
+    bool sprite_cache_clock_fault = fault_requested && strcmp(fault, "sprite-cache-clock") == 0;
+    if (fault_requested && !mutable_rle_fault && !sprite_cache_clock_fault) {
+        fprintf(stderr, "player-view: unknown movement fault '%s'\n", fault);
+        goto cleanup;
+    }
+#ifdef ATRINIK_WIDGET_TESTS
+    map_benchmark_fault_configure(mutable_rle_fault ? MAP_BENCHMARK_FAULT_MUTABLE_RLE
+                                                    : MAP_BENCHMARK_FAULT_NONE);
+#else
+    if (fault_requested) {
+        fprintf(stderr, "player-view: movement fault injection is unavailable\n");
+        goto cleanup;
+    }
+#endif
+    if (!client_command_queue_initialize()) {
+        fprintf(stderr, "player-view: cannot initialize production command queue\n");
+        goto cleanup;
+    }
+    queue_ready = true;
+    effects_deinit();
+    render_profiler_set_enabled(true);
     lighting_benchmark_statistics_reset();
-    const uint8_t *previous_packet = NULL;
-    size_t previous_packet_size = 0;
-    for (size_t i = 0; i < arraysize(phases); i++) {
-        if (!player_view_movement_draw(&phases[i],
-                                       surface,
-                                       snapshot,
-                                       snapshot_size,
-                                       next_snapshot,
-                                       next_snapshot_size,
-                                       (player_view_movement_stream_t)i,
-                                       &previous_packet,
-                                       &previous_packet_size,
-                                       &clock_ms)) {
-            return false;
-        }
-    }
-
-    char digest[PLAYER_VIEW_SHA256_HEX_SIZE];
-    if (!player_view_surface_sha256(surface, digest)) {
-        return false;
-    }
-    /* Repeat the identical stream without reinitializing renderer state.  This
-     * catches cache lifetime bugs which a fresh-process-only probe misses. */
-    player_view_movement_phase_t repeat_phases[] = {
-        {.name = "cold", .ticks = 1},
-        {.name = "sustained", .ticks = PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS},
-        {.name = "idle", .ticks = PLAYER_VIEW_MOVEMENT_IDLE_TICKS},
-        {.name = "resumed", .ticks = PLAYER_VIEW_MOVEMENT_RESUMED_TICKS},
+    sprite_cache_statistics_reset();
+    rndm_seed(PLAYER_VIEW_MOVEMENT_RNG_SEED);
+    player_view_movement_packet_t reset_packet = {.data = snapshot, .size = snapshot_size};
+    player_view_movement_packet_t transition_packet = {
+        .data = transition,
+        .size = transition_size,
     };
-    const uint8_t *repeat_previous_packet = NULL;
-    size_t repeat_previous_packet_size = 0;
-    clock_ms = manifest->clock_ms;
-    for (size_t i = 0; i < arraysize(repeat_phases); i++) {
-        if (!player_view_movement_draw(&repeat_phases[i],
+#ifdef ATRINIK_WIDGET_TESTS
+    if (sprite_cache_clock_fault) {
+        player_view_movement_replay_t clock_probe;
+        player_view_movement_replay_initialize(&clock_probe);
+        uint64_t tick_us = (uint64_t)manifest->clock_ms * 1000U;
+        size_t active_packet = 0;
+        if (!player_view_movement_draw(&clock_probe,
+                                       &clock_probe.phases[PLAYER_VIEW_MOVEMENT_COLD],
                                        surface,
-                                       snapshot,
-                                       snapshot_size,
-                                       next_snapshot,
-                                       next_snapshot_size,
-                                       (player_view_movement_stream_t)i,
-                                       &repeat_previous_packet,
-                                       &repeat_previous_packet_size,
-                                       &clock_ms)) {
-            return false;
+                                       &fixture,
+                                       manifest,
+                                       "clock-probe",
+                                       reset_packet,
+                                       PLAYER_VIEW_MOVEMENT_COLD,
+                                       &active_packet,
+                                       &tick_us)) {
+            fprintf(stderr, "player-view: movement sprite-cache clock probe failed\n");
+            goto cleanup;
+        }
+        sprite_cache_statistics_t before, after;
+        sprite_cache_statistics_get(&before);
+        sprite_cache_clock_override_set((time_t)(tick_us / UINT64_C(1000000)) +
+                                        SPRITE_CACHE_GC_FREE_TIME + 1);
+        sprite_cache_gc_force();
+        sprite_cache_statistics_get(&after);
+        if (before.entries != 0 && after.entries < before.entries &&
+            after.gc_removals > before.gc_removals) {
+            fprintf(stderr,
+                    "player-view: movement fault sprite-cache-clock was injected and detected\n");
+        } else {
+            fprintf(stderr, "player-view: movement fault sprite-cache-clock was not detected\n");
+        }
+        goto cleanup;
+    }
+#endif
+    player_view_movement_replay_t first;
+    bool first_success = player_view_movement_replay_run(&first,
+                                                         surface,
+                                                         manifest,
+                                                         "first",
+                                                         &fixture,
+                                                         reset_packet,
+                                                         transition_packet);
+#ifdef ATRINIK_WIDGET_TESTS
+    if (mutable_rle_fault) {
+        map_benchmark_fault_status_t status;
+        map_benchmark_fault_status_get(&status);
+        if (status.injected && status.detected) {
+            fprintf(stderr, "player-view: movement fault mutable-rle was injected and detected\n");
+        } else {
+            fprintf(stderr, "player-view: movement fault mutable-rle was not detected\n");
+        }
+        goto cleanup;
+    }
+#endif
+    if (!first_success) {
+        goto cleanup;
+    }
+    for (size_t i = 0; i < arraysize(first.phases); i++) {
+        if (first.phases[i].map.render_failures != 0) {
+            fprintf(stderr, "player-view: movement renderer reported a failure\n");
+            goto cleanup;
         }
     }
-    char same_process_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
-    if (!player_view_surface_sha256(surface, same_process_digest)) {
-        return false;
+    sprite_cache_free_all();
+    map_runtime_deinit();
+    memset(&MapData, 0, sizeof(MapData));
+    map_runtime_init();
+    map_redraw_consume();
+    image_missing_faces_reset();
+    if (!SDL_FillSurfaceRect(surface, NULL, 0)) {
+        goto cleanup;
     }
-    if (strcmp(digest, same_process_digest) != 0) {
-        fprintf(stderr, "player-view: movement replay checkpoint changed in one process\n");
-        return false;
+    rndm_seed(PLAYER_VIEW_MOVEMENT_RNG_SEED);
+    lighting_benchmark_statistics_reset();
+    sprite_cache_statistics_reset();
+    player_view_movement_replay_t repeat;
+    if (!player_view_movement_replay_run(&repeat,
+                                         surface,
+                                         manifest,
+                                         "repeat",
+                                         &fixture,
+                                         reset_packet,
+                                         transition_packet) ||
+        !player_view_movement_checkpoints_equal(&first, &repeat)) {
+        fprintf(stderr, "player-view: same-process replay checkpoints diverged\n");
+        goto cleanup;
     }
-    printf("{\"schema_version\":1,\"benchmark\":\"player-view-movement\","
-           "\"tick_ms\":%u,\"checkpoint_sha256\":\"%s\","
-           "\"same_process_checkpoint_sha256\":\"%s\",\"phases\":[",
+    for (size_t i = 0; i < arraysize(repeat.phases); i++) {
+        if (repeat.phases[i].map.render_failures != 0) {
+            fprintf(stderr, "player-view: repeated movement renderer reported a failure\n");
+            goto cleanup;
+        }
+    }
+    char first_checkpoint_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+    char repeat_checkpoint_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+    if (!player_view_movement_checkpoint_digest(&first, first_checkpoint_digest) ||
+        !player_view_movement_checkpoint_digest(&repeat, repeat_checkpoint_digest) ||
+        strcmp(first_checkpoint_digest, repeat_checkpoint_digest) != 0) {
+        fprintf(stderr, "player-view: cannot verify the ordered movement lifecycle digest\n");
+        goto cleanup;
+    }
+    if (!large_viewport &&
+        strcmp(first_checkpoint_digest, manifest->expected_standard_checkpoint_digest) != 0) {
+        fprintf(stderr,
+                "player-view: standard movement lifecycle digest mismatch: expected %s, got %s\n",
+                manifest->expected_standard_checkpoint_digest,
+                first_checkpoint_digest);
+        goto cleanup;
+    }
+    if (!player_view_inputs_verify(manifest)) {
+        fprintf(stderr, "player-view: frozen inputs changed during movement replay\n");
+        goto cleanup;
+    }
+    const char *runner_os = player_view_environment("RUNNER_OS");
+    const char *runner_arch = player_view_environment("RUNNER_ARCH");
+    const char *runner_image_os = player_view_environment("ImageOS");
+    const char *runner_image_version = player_view_environment("ImageVersion");
+    const char *ci = player_view_environment("CI");
+    char cpu_model[512];
+    player_view_cpu_model(cpu_model, sizeof(cpu_model));
+    const char *identity_values[] = {
+        ATRINIK_BENCHMARK_REVISION,
+        ATRINIK_BUILD_TYPE,
+        ATRINIK_COMPILER_ID,
+        ATRINIK_COMPILER_VERSION,
+        ATRINIK_SYSTEM_NAME,
+        SDL_GetPlatform(),
+        runner_os,
+        runner_arch,
+        runner_image_os,
+        runner_image_version,
+        ci,
+        cpu_model,
+    };
+    for (size_t i = 0; i < arraysize(identity_values); i++) {
+        if (!player_view_json_string(identity_values[i])) {
+            fprintf(stderr, "player-view: benchmark identity contains unsafe text\n");
+            goto cleanup;
+        }
+    }
+    const char *viewport_name = large_viewport ? "large" : "standard";
+    bool dirty_known = strcmp(ATRINIK_BENCHMARK_DIRTY, "unknown") != 0;
+    const char *dirty =
+        !dirty_known ? "null" : (strcmp(ATRINIK_BENCHMARK_DIRTY, "true") == 0 ? "true" : "false");
+    int sdl_version = SDL_GetVersion();
+    int cpu_count = MAX(1, SDL_GetNumLogicalCPUCores());
+    uint64_t peak_rss = player_view_process_peak_rss_bytes();
+    const player_view_movement_checkpoint_t *final = &first.checkpoints[first.checkpoints_num - 1];
+    const player_view_movement_checkpoint_t *repeat_final =
+        &repeat.checkpoints[repeat.checkpoints_num - 1];
+    printf("{\"schema_version\":%u,\"benchmark\":\"player-view-movement\","
+           "\"tick_ms\":%u,\"simulated_tick_hz\":%u,\"identity\":{"
+           "\"instrumentation\":{\"schema_version\":%u,\"fixture_schema_version\":%u,"
+           "\"workload\":\"pvm1-map2-lifecycle-v2\",\"lighting_statistics_version\":%u,"
+           "\"map_statistics_version\":%u,\"render_profiler_statistics_version\":%u,"
+           "\"sprite_cache_statistics_version\":%u},\"implementation\":{"
+           "\"revision\":\"%s\",\"dirty\":%s,\"dirty_known\":%s,"
+           "\"build_type\":\"%s\",\"compiler_id\":\"%s\","
+           "\"compiler_version\":\"%s\",\"cmake_system\":\"%s\","
+           "\"sdl_version\":\"%d.%d.%d\",\"sdl_platform\":\"%s\"},"
+           "\"run\":{\"runner_os\":\"%s\",\"runner_arch\":\"%s\","
+           "\"runner_image_os\":\"%s\",\"runner_image_version\":\"%s\","
+           "\"ci\":\"%s\",\"cpu_count\":%d,\"cpu_model\":\"%s\",\"viewport\":{"
+           "\"name\":\"%s\",\"width\":%d,\"height\":%d},\"mode\":\"%s\"}},"
+           "\"fixture\":{\"manifest_schema_version\":%u,\"manifest_sha256\":\"%s\","
+           "\"snapshot_sha256\":\"%s\",\"movement_stream_sha256\":\"%s\","
+           "\"transition_snapshot_sha256\":\"%s\","
+           "\"expected_standard_checkpoint_sha256\":\"%s\",\"resize_width_delta\":%u,"
+           "\"resize_height_delta\":%u,\"rng_seed\":%" PRIu64 ",\"look_width\":%u,"
+           "\"look_height\":%u,\"smooth_lighting\":%s},"
+           "\"checkpoint_sha256\":\"%s\",\"same_process_checkpoint_sha256\":\"%s\","
+           "\"final_state_digest\":\"%016" PRIx64 "\","
+           "\"same_process_final_state_digest\":\"%016" PRIx64 "\","
+           "\"process_peak_rss_bytes\":%" PRIu64 ",\"process_peak_rss_available\":%s,"
+           "\"checkpoints\":[",
+           PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION,
            PLAYER_VIEW_MOVEMENT_TICK_MS,
-           digest,
-           same_process_digest);
-    for (size_t i = 0; i < arraysize(phases); i++) {
-        player_view_movement_phase_t *phase = &phases[i];
-        uint64_t sorted[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
-        memcpy(sorted, phase->durations, phase->ticks * sizeof(*sorted));
-        uint64_t p50 = player_view_percentile(sorted, phase->ticks, 50);
-        memcpy(sorted, phase->durations, phase->ticks * sizeof(*sorted));
-        uint64_t p95 = player_view_percentile(sorted, phase->ticks, 95);
-        memcpy(sorted, phase->durations, phase->ticks * sizeof(*sorted));
-        uint64_t p99 = player_view_percentile(sorted, phase->ticks, 99);
-        uint64_t maximum = sorted[phase->ticks - 1];
-        size_t window = MIN((size_t)32, phase->ticks);
-        memcpy(sorted, phase->durations, window * sizeof(*sorted));
-        uint64_t first_window_p95 = player_view_percentile(sorted, window, 95);
-        memcpy(sorted, &phase->durations[phase->ticks - window], window * sizeof(*sorted));
-        uint64_t last_window_p95 = player_view_percentile(sorted, window, 95);
-        printf("%s{\"name\":\"%s\",\"samples\":%u,\"p50_ns\":%" PRIu64
-               ",\"p95_ns\":%" PRIu64 ",\"p99_ns\":%" PRIu64
-               ",\"max_ns\":%" PRIu64
-               ",\"first_window_p95_ns\":%" PRIu64
-               ",\"last_window_p95_ns\":%" PRIu64
-               ",\"simulated_fps\":%u"
-               ",\"map_packets\":%u,\"changed_map_packets\":%u"
-               ",\"noop_map_packets\":%u,\"full_map_draws\":%u"
-               ",\"queue\":{\"depth\":0,\"bytes\":0,\"oldest_age_ms\":0"
-               ",\"processing_ns\":0},\"lighting\":{\"field_rebuilds\":%" PRIu64
-               ",\"field_reuses\":%" PRIu64 ",\"lit_sprite_lookups\":%" PRIu64
-               ",\"lit_sprite_hits\":%" PRIu64 ",\"lit_sprite_misses\":%" PRIu64
-               ",\"lit_sprite_evictions\":%" PRIu64 ",\"entries\":%zu,\"bytes\":%zu"
-               ",\"retained_field_bytes\":%zu}}",
-               i == 0 ? "" : ",",
-               phase->name,
-               phase->ticks,
-               p50,
-               p95,
-               p99,
-               maximum,
-               first_window_p95,
-               last_window_p95,
-               1000U / PLAYER_VIEW_MOVEMENT_TICK_MS,
-               phase->ticks,
-               phase->changed_packets,
-               phase->noop_packets,
-               phase->full_map_draws,
-               phase->lighting.field_rebuilds,
-               phase->lighting.field_reuses,
-               phase->lighting.lit_sprite_lookups,
-               phase->lighting.lit_sprite_hits,
-               phase->lighting.lit_sprite_misses,
-               phase->lighting.lit_sprite_evictions,
-               phase->lighting.lit_sprite_entries,
-               phase->lighting.lit_sprite_bytes,
-               phase->lighting.retained_field_bytes);
+           1000U / PLAYER_VIEW_MOVEMENT_TICK_MS,
+           PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION,
+           PLAYER_VIEW_MOVEMENT_FIXTURE_SCHEMA,
+           LIGHTING_BENCHMARK_STATISTICS_VERSION,
+           MAP_BENCHMARK_STATISTICS_VERSION,
+           RENDER_PROFILER_STATISTICS_VERSION,
+           SPRITE_CACHE_STATISTICS_VERSION,
+           ATRINIK_BENCHMARK_REVISION,
+           dirty,
+           dirty_known ? "true" : "false",
+           ATRINIK_BUILD_TYPE,
+           ATRINIK_COMPILER_ID,
+           ATRINIK_COMPILER_VERSION,
+           ATRINIK_SYSTEM_NAME,
+           SDL_VERSIONNUM_MAJOR(sdl_version),
+           SDL_VERSIONNUM_MINOR(sdl_version),
+           SDL_VERSIONNUM_MICRO(sdl_version),
+           SDL_GetPlatform(),
+           runner_os,
+           runner_arch,
+           runner_image_os,
+           runner_image_version,
+           ci,
+           cpu_count,
+           cpu_model,
+           viewport_name,
+           surface->w,
+           surface->h,
+           manifest->smooth_lighting ? "smooth" : "discrete",
+           PLAYER_VIEW_SCHEMA_VERSION,
+           manifest->manifest_digest,
+           manifest->snapshot_digest,
+           manifest->next_snapshot_digest,
+           manifest->transition_snapshot_digest,
+           manifest->expected_standard_checkpoint_digest,
+           manifest->resize_width_delta,
+           manifest->resize_height_delta,
+           PLAYER_VIEW_MOVEMENT_RNG_SEED,
+           manifest->look_width,
+           manifest->look_height,
+           manifest->smooth_lighting ? "true" : "false",
+           first_checkpoint_digest,
+           repeat_checkpoint_digest,
+           final->state_digest,
+           repeat_final->state_digest,
+           peak_rss,
+           peak_rss != 0 ? "true" : "false");
+    for (size_t i = 0; i < first.checkpoints_num; i++) {
+        printf("%s", i == 0 ? "" : ",");
+        player_view_movement_checkpoint_json(&first.checkpoints[i]);
+    }
+    printf("],\"same_process_checkpoints\":[");
+    for (size_t i = 0; i < repeat.checkpoints_num; i++) {
+        printf("%s", i == 0 ? "" : ",");
+        player_view_movement_checkpoint_json(&repeat.checkpoints[i]);
+    }
+    printf("],\"lifecycle\":{\"full_map_draws\":%u,\"full_draw_reasons\":{"
+           "\"reset_packet\":%u,\"changed_map_packet\":%u,\"noop_map_packet\":%u,"
+           "\"animation_only_tick\":%u,\"resize\":%u,\"map_transition\":%u}},"
+           "\"phases\":[",
+           first.lifecycle.full_map_draws,
+           first.lifecycle.reset_packet,
+           first.lifecycle.changed_map_packet,
+           first.lifecycle.noop_map_packet,
+           first.lifecycle.animation_only_tick,
+           first.lifecycle.resize,
+           first.lifecycle.map_transition);
+    for (size_t i = 0; i < arraysize(first.phases); i++) {
+        player_view_movement_phase_json(&first.phases[i], i);
     }
     printf("]}\n");
-    return true;
+    success = true;
+
+cleanup:
+    sprite_cache_clock_override_clear();
+#ifdef ATRINIK_WIDGET_TESTS
+    map_benchmark_fault_clear();
+#endif
+    if (queue_ready) {
+        client_command_queue_deinitialize();
+    }
+    free(transition);
+    return success;
 }
 
 static bool player_view_output_write(SDL_Surface *surface,
@@ -1295,13 +2550,11 @@ int player_view_main(int argc, char *argv[]) {
     if (argc == 3 && (strcmp(argv[0], "--player-view-benchmark") == 0 ||
                       strcmp(argv[0], "--player-view-movement-benchmark") == 0)) {
         if (strcmp(argv[2], "standard") == 0) {
-            mode = strcmp(argv[0], "--player-view-benchmark") == 0
-                       ? PLAYER_VIEW_BENCHMARK_STANDARD
-                       : PLAYER_VIEW_BENCHMARK_MOVEMENT;
+            mode = strcmp(argv[0], "--player-view-benchmark") == 0 ? PLAYER_VIEW_BENCHMARK_STANDARD
+                                                                   : PLAYER_VIEW_BENCHMARK_MOVEMENT;
         } else if (strcmp(argv[2], "large") == 0) {
-            mode = strcmp(argv[0], "--player-view-benchmark") == 0
-                       ? PLAYER_VIEW_BENCHMARK_LARGE
-                       : PLAYER_VIEW_BENCHMARK_MOVEMENT;
+            mode = strcmp(argv[0], "--player-view-benchmark") == 0 ? PLAYER_VIEW_BENCHMARK_LARGE
+                                                                   : PLAYER_VIEW_BENCHMARK_MOVEMENT;
         } else {
             fprintf(stderr, "player-view: benchmark viewport must be standard or large\n");
             return 2;
@@ -1315,7 +2568,8 @@ int player_view_main(int argc, char *argv[]) {
     }
 
     player_view_manifest_t manifest;
-    if (!player_view_manifest_parse(argv[1], &manifest)) {
+    if (!player_view_manifest_parse(argv[1], &manifest) ||
+        !player_view_file_sha256(argv[1], manifest.manifest_digest)) {
         return 3;
     }
     if ((mode == PLAYER_VIEW_BENCHMARK_LARGE ||
@@ -1343,20 +2597,31 @@ int player_view_main(int argc, char *argv[]) {
         player_view_manifest_free(&manifest);
         return 5;
     }
-    if (manifest.next_snapshot_path != NULL &&
-        (!player_view_snapshot_load(manifest.next_snapshot_path,
-                                    &next_snapshot,
-                                    &next_snapshot_size) ||
-         !map_protocol_validate(next_snapshot,
-                                next_snapshot_size,
-                                0,
-                                MAP_LOOK_TO_WIRE_SIZE(manifest.look_width),
-                                MAP_LOOK_TO_WIRE_SIZE(manifest.look_height)))) {
-        fprintf(stderr, "player-view: malformed or incompatible next MAP snapshot\n");
-        free(next_snapshot);
-        free(snapshot);
-        player_view_manifest_free(&manifest);
-        return 5;
+    if (manifest.next_snapshot_path != NULL) {
+        player_view_movement_fixture_t movement_fixture;
+        bool loaded = player_view_snapshot_load(manifest.next_snapshot_path,
+                                                &next_snapshot,
+                                                &next_snapshot_size);
+        bool compatible =
+            loaded &&
+            (mode == PLAYER_VIEW_BENCHMARK_MOVEMENT
+                 ? player_view_movement_fixture_parse(next_snapshot,
+                                                      next_snapshot_size,
+                                                      MAP_LOOK_TO_WIRE_SIZE(manifest.look_width),
+                                                      MAP_LOOK_TO_WIRE_SIZE(manifest.look_height),
+                                                      &movement_fixture)
+                 : map_protocol_validate(next_snapshot,
+                                         next_snapshot_size,
+                                         0,
+                                         MAP_LOOK_TO_WIRE_SIZE(manifest.look_width),
+                                         MAP_LOOK_TO_WIRE_SIZE(manifest.look_height)));
+        if (!compatible) {
+            fprintf(stderr, "player-view: malformed or incompatible next MAP input\n");
+            free(next_snapshot);
+            free(snapshot);
+            player_view_manifest_free(&manifest);
+            return 5;
+        }
     }
 
     bool settings_ready = settings_init_read_only(manifest.settings_path);
@@ -1444,10 +2709,12 @@ int player_view_main(int argc, char *argv[]) {
         widget_map_ui_test_begin();
     }
 #endif
-    socket_command_map(snapshot, snapshot_size, 0);
-    if (image_missing_faces_detected()) {
-        fprintf(stderr, "player-view: snapshot references an unavailable face\n");
-        goto cleanup;
+    if (mode != PLAYER_VIEW_BENCHMARK_MOVEMENT) {
+        socket_command_map(snapshot, snapshot_size, 0);
+        if (image_missing_faces_detected()) {
+            fprintf(stderr, "player-view: snapshot references an unavailable face\n");
+            goto cleanup;
+        }
     }
     uint64_t benchmark_median_ns = 0;
     if (mode == PLAYER_VIEW_BENCHMARK_STANDARD || mode == PLAYER_VIEW_BENCHMARK_LARGE) {
@@ -1458,9 +2725,15 @@ int player_view_main(int argc, char *argv[]) {
                                             snapshot,
                                             snapshot_size,
                                             next_snapshot,
-                                            next_snapshot_size)) {
+                                            next_snapshot_size,
+                                            strcmp(argv[2], "large") == 0)) {
             goto cleanup;
         }
+        /* The movement path verifies every frozen input, hashes every
+         * checkpoint, and emits its record atomically. Avoid fallible generic
+         * render/output work after that record has reached stdout. */
+        result = 0;
+        goto cleanup;
     } else if (manifest.widget_render) {
 #ifdef ATRINIK_WIDGET_TESTS
         widget_map_draw_test(&map_widget);
@@ -1470,7 +2743,7 @@ int player_view_main(int argc, char *argv[]) {
         map_draw_map(surface);
     }
 
-    if (next_snapshot != NULL) {
+    if (next_snapshot != NULL && mode != PLAYER_VIEW_BENCHMARK_MOVEMENT) {
         LastTick = 0;
         socket_command_map(next_snapshot, next_snapshot_size, 0);
         LastTick = manifest.clock_ms;

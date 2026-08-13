@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -25,6 +25,8 @@
 #ifndef CLIENT_SOCKET_H
 #define CLIENT_SOCKET_H
 
+#include <client_command_queue.h>
+
 /**
  * @file
  * Public declarations for the corresponding client module.
@@ -32,15 +34,7 @@
 
 /** Public API implemented in src/client/socket.c. */
 
-extern command_buffer *command_buffer_new(size_t len, uint8_t *data);
-
-extern void command_buffer_free(command_buffer *buf);
-
 extern void socket_send_packet(struct packet_struct *packet);
-
-extern command_buffer *get_next_input_command(void);
-
-extern void add_input_command(command_buffer *buf);
 
 extern void socket_thread_start(void);
 

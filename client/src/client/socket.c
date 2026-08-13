@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -30,11 +30,11 @@
 #include <global.h>
 #include <metaserver.h>
 #include <client_socket.h>
+#include <toolkit/datetime.h>
 #include <toolkit/packet.h>
 #include <network_graph.h>
 
 static SDL_Thread *io_thread;
-static SDL_Mutex *input_buffer_mutex;
 static SDL_Mutex *output_buffer_mutex;
 
 /**
@@ -48,42 +48,7 @@ static SDL_Mutex *socket_mutex;
 static int abort_thread = 0;
 
 /* start is the first waiting item in queue, end is the most recent enqueued */
-static command_buffer *input_queue_start = NULL, *input_queue_end = NULL;
 static command_buffer *output_queue_start = NULL, *output_queue_end = NULL;
-
-/**
- * Create a new command buffer of the given size, copying the data buffer
- * if not NULL. The buffer will always be null-terminated for safety (and
- * one byte larger than requested).
- * @param len
- * Requested buffer size in bytes.
- * @param data
- * Buffer data to copy (len bytes), or NULL.
- * @return
- * A new command buffer or NULL in case of an error.
- */
-command_buffer *command_buffer_new(size_t len, uint8_t *data) {
-    command_buffer *buf = xmalloc(sizeof(command_buffer) + len + 1);
-
-    buf->next = buf->prev = NULL;
-    buf->len = len;
-
-    if (data) {
-        memcpy(buf->data, data, len);
-    }
-
-    buf->data[len] = '\0';
-    return buf;
-}
-
-/**
- * Free all memory related to a single command buffer.
- * @param buf
- * Buffer to free.
- */
-void command_buffer_free(command_buffer *buf) {
-    free(buf);
-}
 
 /**
  * Enqueue a command buffer last in a queue.
@@ -103,26 +68,6 @@ static void command_buffer_enqueue(command_buffer *buf,
     }
 
     *queue_end = buf;
-}
-
-/**
- * Enqueue a command buffer first in a queue.
- */
-static void command_buffer_enqueue_first(command_buffer *buf,
-                                         command_buffer **queue_start,
-                                         command_buffer **queue_end) {
-    buf->next = *queue_start;
-    buf->prev = NULL;
-
-    if (*queue_end == NULL) {
-        *queue_end = buf;
-    }
-
-    if (buf->next) {
-        buf->next->prev = buf;
-    }
-
-    *queue_start = buf;
 }
 
 /**
@@ -180,27 +125,6 @@ void socket_send_packet(struct packet_struct *packet) {
     command_buffer_enqueue(buf1, &output_queue_start, &output_queue_end);
     command_buffer_enqueue(buf2, &output_queue_start, &output_queue_end);
     SDL_UnlockMutex(output_buffer_mutex);
-}
-
-/**
- * Get a command from the queue.
- * @return
- * The command (being removed from queue), NULL if there is no
- * command.
- */
-command_buffer *get_next_input_command(void) {
-    command_buffer *buf;
-
-    SDL_LockMutex(input_buffer_mutex);
-    buf = command_buffer_dequeue(&input_queue_start, &input_queue_end);
-    SDL_UnlockMutex(input_buffer_mutex);
-    return buf;
-}
-
-void add_input_command(command_buffer *buf) {
-    SDL_LockMutex(input_buffer_mutex);
-    command_buffer_enqueue_first(buf, &input_queue_start, &input_queue_end);
-    SDL_UnlockMutex(input_buffer_mutex);
 }
 
 static bool socket_thread_aborted(void) {
@@ -297,9 +221,10 @@ static int socket_io_thread_loop(void *dummy) {
             if (readbuf_len == cmd_len + header_len && !socket_thread_aborted()) {
                 command_buffer *input =
                     command_buffer_new(readbuf_len - header_len, readbuf + header_len);
-                SDL_LockMutex(input_buffer_mutex);
-                command_buffer_enqueue(input, &input_queue_start, &input_queue_end);
-                SDL_UnlockMutex(input_buffer_mutex);
+                if (!client_command_queue_enqueue_buffer_at(input, datetime_monotonic_us())) {
+                    command_buffer_free(input);
+                    break;
+                }
                 cmd_len = -1;
                 header_len = 0;
                 readbuf_len = 0;
@@ -341,8 +266,11 @@ static int socket_io_thread_loop(void *dummy) {
  * Initialize and start the transport I/O thread.
  */
 void socket_thread_start(void) {
+    if (!client_command_queue_initialize()) {
+        LOG(ERROR, "Unable to create the inbound command queue: %s", SDL_GetError());
+        exit(1);
+    }
     if (socket_mutex == NULL) {
-        input_buffer_mutex = SDL_CreateMutex();
         output_buffer_mutex = SDL_CreateMutex();
         socket_mutex = SDL_CreateMutex();
     }
@@ -384,9 +312,10 @@ int handle_socket_shutdown(void) {
         SDL_UnlockMutex(socket_mutex);
 
         /* Empty all queues */
-        while (input_queue_start) {
-            command_buffer_free(command_buffer_dequeue(&input_queue_start, &input_queue_end));
-        }
+        client_command_queue_clear();
+        bool input_statistics_reset = client_command_queue_statistics_reset();
+        HARD_ASSERT(input_statistics_reset);
+        (void)input_statistics_reset;
 
         while (output_queue_start) {
             command_buffer_free(command_buffer_dequeue(&output_queue_start, &output_queue_end));
@@ -464,10 +393,7 @@ void client_socket_deinitialize(void) {
     } else if (csocket.sc != NULL) {
         client_socket_close(&csocket);
     }
-    if (input_buffer_mutex != NULL) {
-        SDL_DestroyMutex(input_buffer_mutex);
-        input_buffer_mutex = NULL;
-    }
+    client_command_queue_deinitialize();
     if (output_buffer_mutex != NULL) {
         SDL_DestroyMutex(output_buffer_mutex);
         output_buffer_mutex = NULL;

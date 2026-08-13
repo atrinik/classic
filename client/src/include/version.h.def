@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -36,5 +36,13 @@
 
 /* Patch version of the package. */
 #define PACKAGE_VERSION_PATCH @PACKAGE_VERSION_PATCH@
+
+/* Reproducibility coordinates embedded by the configuring toolchain. */
+#define ATRINIK_BUILD_TYPE "@ATRINIK_BUILD_TYPE@"
+#define ATRINIK_COMPILER_ID "@ATRINIK_COMPILER_ID@"
+#define ATRINIK_COMPILER_VERSION "@ATRINIK_COMPILER_VERSION@"
+#define ATRINIK_SYSTEM_NAME "@ATRINIK_SYSTEM_NAME@"
+#define ATRINIK_BENCHMARK_REVISION "@ATRINIK_BENCHMARK_REVISION@"
+#define ATRINIK_BENCHMARK_DIRTY "@ATRINIK_BENCHMARK_DIRTY@"
 
 #endif

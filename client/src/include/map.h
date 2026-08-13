@@ -480,7 +480,56 @@ map_set_light_rgb_radiance(int x, int y, uint8_t bitmap, const uint16_t rgb[NUM_
 
 extern void map_animate(void);
 
+/** Why the primary map surface needs to be rebuilt. */
+typedef enum map_redraw_reason {
+    MAP_REDRAW_REASON_EXTERNAL = 1U << 0,
+    MAP_REDRAW_REASON_MAP_PACKET = 1U << 1,
+    MAP_REDRAW_REASON_ANIMATION = 1U << 2,
+    MAP_REDRAW_REASON_RESIZE = 1U << 3,
+} map_redraw_reason_t;
+
+/** Request a primary-map redraw and retain its production reason. */
+extern void map_redraw_request(map_redraw_reason_t reason);
+
+/** Return whether the production widget would rebuild its primary map surface. */
+extern bool map_redraw_due(void);
+
+/** Return the reasons accumulated for the pending primary-map redraw. */
+extern uint32_t map_redraw_pending_reasons(void);
+
+/** Mark the pending primary-map redraw as consumed. */
+extern void map_redraw_consume(void);
+
 extern void map_draw_map(SDL_Surface *surface);
+
+#define MAP_BENCHMARK_STATISTICS_VERSION UINT8_C(2)
+
+/** Map renderer work accumulated since the last benchmark reset. */
+typedef struct map_benchmark_statistics {
+    uint64_t map_draws;
+    uint64_t primary_map_draws;
+    uint64_t auxiliary_map_draws;
+    uint64_t presents;
+    uint64_t present_failures;
+    uint64_t render_failures;
+    uint64_t fault_injections;
+    uint64_t fault_detections;
+    uint64_t level_draws;
+    uint64_t render_commands;
+    uint64_t annotations;
+    uint64_t ui_tiles;
+    uint64_t peak_render_commands;
+    uint64_t peak_active_levels;
+    /** False until the complete renderer allocation graph can be observed safely. */
+    bool renderer_allocation_statistics_available;
+    uint64_t renderer_allocations;
+    uint64_t renderer_allocation_bytes;
+} map_benchmark_statistics_t;
+
+void map_benchmark_statistics_reset(void);
+void map_benchmark_statistics_get(map_benchmark_statistics_t *statistics);
+/** Record an attempted window presentation and whether it succeeded. */
+void map_benchmark_statistics_present(bool success);
 
 extern void map_draw_one(int x, int y, SDL_Surface *surface);
 
@@ -493,6 +542,23 @@ extern bool map_mouse_fire(void);
 extern void widget_map_init(widgetdata *widget);
 
 #ifdef ATRINIK_WIDGET_TESTS
+typedef enum map_benchmark_fault {
+    MAP_BENCHMARK_FAULT_NONE,
+    MAP_BENCHMARK_FAULT_MUTABLE_RLE,
+} map_benchmark_fault_t;
+
+typedef struct map_benchmark_fault_status {
+    bool injected;
+    bool detected;
+} map_benchmark_fault_status_t;
+
+/** Configure one movement-benchmark-only renderer fault. */
+extern void map_benchmark_fault_configure(map_benchmark_fault_t fault);
+/** Read fault state independently of per-phase telemetry resets. */
+extern void map_benchmark_fault_status_get(map_benchmark_fault_status_t *status);
+/** Remove any armed mutation and restore normal renderer state. */
+extern void map_benchmark_fault_clear(void);
+
 extern bool widget_map_interaction_test(widgetdata *widget);
 extern void widget_map_draw_test(widgetdata *widget);
 extern void widget_map_ui_test_begin(void);

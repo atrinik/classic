@@ -20,12 +20,92 @@ discrete manifests freeze both rendering paths; discrete intentionally retains
 the authoritative scalar projection while smooth lighting applies RGB.
 
 The movement-colored fixture expands the same validated colored MAP2 geometry
-to all five physical depths and pairs it with a compact `MAP_UPDATE_CMD_SAME`
-scroll/clear delta for every retained depth. `generate_movement_five_depth.py`
-and `generate_movement_delta.py` recreate the pinned hex inputs. The movement
-replay clears its offscreen frame target before every map draw, matching the
-software renderer's per-frame compositor contract; frame timing therefore
-includes that clear and the full primary map draw.
+to all five physical depths and covers every cell of the 17-by-17 visible look
+area with varied scalar illumination. Its base depth has dense ordinary floor
+geometry while the two lower and two upper depths have representative sparse
+floor, wall, item, and effect objects. The generated field adds three explicit
+colored-light accents per depth around the preserved source scene, modeling the
+distribution of colored sources in ordinary play instead of stacking five
+fully furnished, uniquely colored maps. The fixture pairs that scene with a
+closed, length-prefixed MAP2 stream. Its four active
+`MAP_UPDATE_CMD_SAME` packets move east, return to the origin, turn south, and
+return again; a fifth `SAME` packet holds the origin without map data for the
+idle phase. Every active step carries per-depth clear, floor-object,
+scalar-light, and colored-light deltas, so the smooth and discrete manifests
+exercise ordinary scroll/cache work without using `MAP_UPDATE_CMD_NEW` during
+sustained or resumed movement.
+The initial and same-process-repeat `NEW` packets are explicit resets, and each
+whole active stream deterministically restores the origin. The `PVM1` envelope
+is a fixture-only framing layer; each enclosed packet still goes through the
+normal MAP validator and decoder. `generate_movement_five_depth.py` and
+`generate_movement_delta.py` recreate the pinned hex inputs. Passing
+`--transition` to the five-depth generator preserves the same bounded geometry
+and assets while assigning a distinct map name and path to a second validated
+`MAP_UPDATE_CMD_NEW` packet. Both movement manifests pin that transition and a
+32-by-24-pixel resize delta so reset, resized, restored, and map-transition
+checkpoints remain deterministic. The movement replay clears its offscreen
+frame target before every map draw, matching the software renderer's per-frame
+compositor contract; frame timing therefore includes that clear and the full
+primary map draw.
+
+Each replay uses a simulated 125-millisecond (8 FPS) tick cadence without
+sleeping. Its phases are one cold `NEW` tick, 480 sustained ticks (60 simulated
+seconds, one active packet per tick), 16 idle ticks (eight unchanged `SAME`
+packets alternating with eight animation-only ticks), and 80 resumed ticks (two
+packets on each of the first eight ticks, no packets on the next eight, then one
+packet on each of the remaining 64). That resumed overrun intentionally creates
+and drains a bounded production-command-queue backlog. The process then records
+resize, restored-size, reset, and distinct-map-transition checkpoints and
+repeats the complete replay in the same process. A fresh-process verifier runs
+the selected viewport twice.
+
+`expected-standard-checkpoint-sha256` pins the ordered visual lifecycle for the
+standard viewport. The digest is SHA-256 over the ASCII prefix
+`pvm-checkpoints-v1\n`, followed by one line per checkpoint in replay order:
+`name<TAB>pixels-sha256<TAB>map-x<TAB>map-y<TAB>viewport-width<TAB>viewport-height<NL>`.
+Internal state digests are deliberately excluded, so implementation-only state
+may evolve while any intermediate visual, position, ordering, or resize change
+still fails the golden proof.
+
+From the client directory, recreate all three pinned movement inputs with:
+
+```sh
+python3 tools/generate_movement_five_depth.py \
+  src/tests/fixtures/player_view/colored-scene.map2.hex \
+  src/tests/fixtures/player_view/movement-colored-five-depth.map2.hex
+python3 tools/generate_movement_five_depth.py \
+  src/tests/fixtures/player_view/colored-scene.map2.hex \
+  src/tests/fixtures/player_view/movement-colored-transition.map2.hex \
+  --transition
+python3 tools/generate_movement_delta.py \
+  src/tests/fixtures/player_view/movement-colored-delta.map2.hex
+python3 -m unittest -v tools.tests.test_movement_fixture
+```
+
+The bounded standard smooth and discrete determinism tests are separate from
+the `long-performance` large-viewport tests. Run them explicitly with:
+
+```sh
+ctest --test-dir build/linux-release -L standard-performance --output-on-failure
+ctest --test-dir build/linux-release -L long-performance --output-on-failure
+```
+
+The complete candidate-only reporting matrix is also explicit:
+
+```sh
+python3 tools/benchmark_movement_regression.py candidate-only \
+  --candidate-client build/linux-release/atrinik \
+  --candidate-manifest src/tests/fixtures/player_view/movement-colored.xml \
+  --discrete-manifest src/tests/fixtures/player_view/movement-colored-discrete.xml \
+  --full-matrix --output build/movement-full-matrix.json
+```
+
+Large smooth rendering is intentionally not part of the fast PR subset. It is
+a multi-minute, hardware-dependent stress context: a 1920-by-1080 Linux Release
+probe on the development runner exceeded five minutes and reached about 315 MiB
+peak RSS before its 300-second probe ceiling. The long verifier therefore
+allows up to 900 seconds per fresh process; reserve the full matrix for a runner
+and job with an aggregate budget for all eight processes.
 
 The radial-light scene freezes the default profiles for the applied portable
 torch (strength 3) and wall sconce (strength 5) on a 13-by-13 floor. The

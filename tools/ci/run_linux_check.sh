@@ -10,6 +10,7 @@ fi
 component=$1
 source_root=$(realpath "$2")
 jobs=$(nproc)
+validation_exit=0
 
 case "${component}" in
   client | core | integrated | server) ;;
@@ -104,6 +105,15 @@ case "${component}" in
     ;;
   client)
     pushd "${source_root}/client" >/dev/null
+    evidence_dir="${source_root}/build/ci-evidence"
+    movement_evidence="${evidence_dir}/movement-frame-time.json"
+    lighting_evidence="${evidence_dir}/lighting-frame-time.json"
+    python3 tools/benchmark_movement_regression.py error \
+      --reason client-validation-ended-before-movement-evidence \
+      --output "${movement_evidence}"
+    printf '%s\n' \
+      '{"schema_version":1,"skipped":true,"reason":"client-validation-ended-before-lighting-evidence"}' \
+      >"${lighting_evidence}"
     python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/dependencies.py sync
     python3 tools/dependencies.py verify
@@ -115,47 +125,163 @@ case "${component}" in
     gcovr --root . --filter 'src/' --exclude 'src/tests/' \
       --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
       --print-summary --xml coverage.xml
-    cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
+    env ATRINIK_BENCHMARK_REVISION="${ATRINIK_BENCHMARK_REVISION:-unknown}" \
+      ATRINIK_BENCHMARK_DIRTY="${ATRINIK_BENCHMARK_DIRTY:-unknown}" \
+      cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
     cmake --build --preset linux-release --parallel "${jobs}"
     # The sustained replay is invoked below by its controlled base/candidate
-    # regression gate.  Do not also run its four fresh-process probes here:
-    # that duplicates the costly large-viewport replay and starves the gate.
+    # regression gate. Do not duplicate those fresh-process probes here.
     ctest --preset linux-release -LE performance
-    lighting_base_sha=${ATRINIK_LIGHTING_BASE_SHA:-}
-    if [[ -n ${lighting_base_sha} ]] &&
-      ! git -C "${source_root}" diff --quiet "${lighting_base_sha}" HEAD -- \
-        client/src/client/lighting.c \
-        client/src/client/lighting_transfer.c \
-        client/src/client/player_view.c \
-        client/src/gui/widgets/map.c \
-        client/src/include/lighting.h \
-        protocol/schema/game-commands.json; then
-      baseline_root="${source_root}/build/ci-lighting-baseline"
-      instrumentation_patch="${source_root}/build/ci-lighting-benchmark.patch"
-      cleanup_lighting_baseline() {
+    benchmark_base_sha=${ATRINIK_BENCHMARK_BASE_SHA:-${ATRINIK_LIGHTING_BASE_SHA:-}}
+    movement_event_name=${ATRINIK_MOVEMENT_EVENT_NAME:-unknown}
+    movement_matrix=${ATRINIK_MOVEMENT_MATRIX:-fast}
+    if [[ ${movement_matrix} != fast && ${movement_matrix} != full ]]; then
+      echo "unsupported movement validation matrix: ${movement_matrix}" >&2
+      exit 2
+    fi
+
+    lighting_paths=(
+      client/src/client/lighting.c
+      client/src/client/lighting_transfer.c
+      client/src/client/player_view.c
+      client/src/gui/widgets/map.c
+      client/src/include/lighting.h
+      protocol/schema/game-commands.json
+    )
+    movement_paths=(
+      .github/workflows/check.yml
+      client/CMakeLists.txt
+      client/src/client/client.c
+      client/src/client/client_command_queue.c
+      client/src/client/commands.c
+      client/src/client/lighting.c
+      client/src/client/main.c
+      client/src/client/player_view.c
+      client/src/client/socket.c
+      client/src/client/sprite.c
+      client/src/cmake.txt
+      client/src/gui/widgets/map.c
+      client/src/gui/widgets/render_profiler.c
+      client/src/include/client.h
+      client/src/include/client_command_queue.h
+      client/src/include/client_socket.h
+      client/src/include/lighting.h
+      client/src/include/map.h
+      client/src/include/player_view.h
+      client/src/include/render_profiler.h
+      client/src/include/sprite.h
+      client/src/include/version.h.def
+      client/src/tests/client_command_queue.c
+      client/src/tests/fixtures/player_view/movement-colored-delta.map2.hex
+      client/src/tests/fixtures/player_view/movement-colored-five-depth.map2.hex
+      client/src/tests/fixtures/player_view/movement-colored-transition.map2.hex
+      client/src/tests/fixtures/player_view/movement-colored-discrete.xml
+      client/src/tests/fixtures/player_view/movement-colored.xml
+      client/src/tests/fixtures/player_view/README.md
+      client/tools/benchmark_movement_regression.py
+      client/tools/generate_movement_delta.py
+      client/tools/generate_movement_five_depth.py
+      client/tools/movement_benchmark_schema.py
+      client/tools/tests/test_benchmark_movement_regression.py
+      client/tools/tests/test_movement_fixture.py
+      client/tools/tests/test_verify_movement_fault_injection.py
+      client/tools/verify_movement_fault_injection.py
+      client/tools/verify_movement_benchmark.py
+      libatrinik/tests/smoke.c
+      libatrinik/math.c
+      libatrinik/math.h
+      protocol/schema/game-commands.json
+      tools/ci/run_linux_check.sh
+      tools/tests/test_workflow_contracts.py
+    )
+    movement_contract_paths=(
+      client/src/tests/fixtures/player_view/movement-colored-delta.map2.hex
+      client/src/tests/fixtures/player_view/movement-colored-five-depth.map2.hex
+      client/src/tests/fixtures/player_view/movement-colored-transition.map2.hex
+      client/src/tests/fixtures/player_view/movement-colored-discrete.xml
+      client/src/tests/fixtures/player_view/movement-colored.xml
+      client/tools/benchmark_movement_regression.py
+      client/tools/generate_movement_delta.py
+      client/tools/generate_movement_five_depth.py
+      client/tools/movement_benchmark_schema.py
+      client/tools/verify_movement_benchmark.py
+    )
+
+    lighting_comparison=false
+    lighting_base_missing_instrumentation=false
+    movement_action=candidate-only
+    comparison_note=event-has-no-comparison-base
+    baseline_needed=false
+
+    if [[ -n ${benchmark_base_sha} ]] &&
+      ! git -C "${source_root}" diff --quiet "${benchmark_base_sha}" HEAD -- \
+        "${lighting_paths[@]}"; then
+      if git -C "${source_root}" grep -q --fixed-strings \
+        -e '--player-view-benchmark' "${benchmark_base_sha}" -- \
+        client/src/client/player_view.c; then
+        lighting_comparison=true
+        baseline_needed=true
+      else
+        lighting_base_missing_instrumentation=true
+      fi
+    fi
+
+    if [[ ${movement_event_name} == pull_request || ${movement_event_name} == merge_group ]] &&
+      [[ -n ${benchmark_base_sha} ]]; then
+      if git -C "${source_root}" diff --quiet "${benchmark_base_sha}" HEAD -- \
+        "${movement_paths[@]}"; then
+        movement_action=skip
+      elif ! git -C "${source_root}" cat-file -e \
+        "${benchmark_base_sha}:client/tools/movement_benchmark_schema.py" ||
+        ! git -C "${source_root}" cat-file -e \
+          "${benchmark_base_sha}:client/tools/benchmark_movement_regression.py" ||
+        ! git -C "${source_root}" grep -q --fixed-strings \
+          -e '--player-view-movement-benchmark' "${benchmark_base_sha}" -- \
+          client/src/client/player_view.c; then
+        comparison_note=bootstrap-base-missing-movement-instrumentation
+      elif ! git -C "${source_root}" diff --quiet \
+        "${benchmark_base_sha}" HEAD -- "${movement_contract_paths[@]}"; then
+        comparison_note=baseline-movement-schema-mismatch
+      else
+        movement_action=compare
+        baseline_needed=true
+      fi
+    fi
+    if [[ ${movement_matrix} == full && ${movement_action} == compare ]]; then
+      echo "the full movement matrix is candidate-only; refusing to omit its discrete/large contexts from a relative comparison" >&2
+      exit 2
+    fi
+
+    baseline_root="${source_root}/build/ci-benchmark-baseline"
+    if [[ ${baseline_needed} == true ]]; then
+      # Invoked indirectly by the EXIT trap below.
+      # shellcheck disable=SC2329
+      cleanup_benchmark_baseline() {
         git -C "${source_root}" worktree remove --force "${baseline_root}" >/dev/null 2>&1 || true
       }
-      trap cleanup_lighting_baseline EXIT
-      git -C "${source_root}" worktree add --detach "${baseline_root}" "${lighting_base_sha}"
-      git -C "${source_root}" diff --binary "${lighting_base_sha}" HEAD -- \
-        client/src/client/main.c \
-        client/src/client/player_view.c \
-        client/src/include/player_view.h >"${instrumentation_patch}"
-      if ! grep -q -- '--player-view-movement-benchmark' \
-        "${baseline_root}/client/src/client/player_view.c"; then
-        git -C "${baseline_root}" apply "${instrumentation_patch}"
-      fi
+      trap cleanup_benchmark_baseline EXIT
+      git -C "${source_root}" worktree add --detach \
+        "${baseline_root}" "${benchmark_base_sha}"
 
       pushd "${baseline_root}/client" >/dev/null
       python3 tools/dependencies.py sync
       python3 tools/dependencies.py verify
-      cmake --preset linux-release \
+      env ATRINIK_BENCHMARK_REVISION="${benchmark_base_sha}" \
+        ATRINIK_BENCHMARK_DIRTY=false \
+        cmake --preset linux-release \
         "${launcher[@]}" \
         -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL="${baseline_root}/protocol" \
         -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK="${baseline_root}/libatrinik"
       cmake --build --preset linux-release --target atrinik --parallel "${jobs}"
       popd >/dev/null
+      if ! git -C "${baseline_root}" diff --quiet HEAD --; then
+        echo "benchmark comparison build modified its immutable base source" >&2
+        exit 2
+      fi
+    fi
 
+    if [[ ${lighting_comparison} == true ]]; then
+      command_status=0
       python3 "${source_root}/client/tools/benchmark_lighting_regression.py" \
         --baseline-client "${baseline_root}/client/build/linux-release/atrinik" \
         --baseline-manifest \
@@ -164,23 +290,68 @@ case "${component}" in
         --candidate-manifest \
           "${source_root}/client/src/tests/fixtures/player_view/colored-smooth.xml" \
         --samples 3 \
-        --output "${source_root}/build/ci-evidence/lighting-frame-time.json"
-      python3 "${source_root}/client/tools/benchmark_movement_regression.py" \
+        --output "${lighting_evidence}" || command_status=$?
+      if [[ ${command_status} -ne 0 ]]; then
+        printf '%s\n' \
+          '{"schema_version":1,"error":true,"reason":"lighting-regression-generation-failed"}' \
+          >"${lighting_evidence}"
+        validation_exit=${command_status}
+      fi
+    elif [[ ${lighting_base_missing_instrumentation} == true ]]; then
+      printf '%s\n' \
+        '{"schema_version":1,"skipped":true,"reason":"lighting-base-missing-benchmark-instrumentation"}' \
+        >"${lighting_evidence}"
+    else
+      printf '%s\n' \
+        '{"schema_version":1,"skipped":true,"reason":"lighting-sensitive-files-unchanged-or-no-comparison-base"}' \
+        >"${lighting_evidence}"
+    fi
+
+    command_status=0
+    if [[ ${movement_action} == compare ]]; then
+      python3 "${source_root}/client/tools/benchmark_movement_regression.py" compare \
         --baseline-client "${baseline_root}/client/build/linux-release/atrinik" \
         --baseline-manifest \
-          "${source_root}/client/src/tests/fixtures/player_view/movement-colored.xml" \
+          "${baseline_root}/client/src/tests/fixtures/player_view/movement-colored.xml" \
         --candidate-client "${source_root}/client/build/linux-release/atrinik" \
         --candidate-manifest \
           "${source_root}/client/src/tests/fixtures/player_view/movement-colored.xml" \
+        --discrete-manifest \
+          "${source_root}/client/src/tests/fixtures/player_view/movement-colored-discrete.xml" \
+        --informational-performance \
+        --comparison-note performance-calibration-pending-sibling-integration \
+        --baseline-revision "${benchmark_base_sha}" \
+        --candidate-revision "${ATRINIK_BENCHMARK_REVISION:-unknown}" \
         --samples 3 \
-        --output "${source_root}/build/ci-evidence/movement-frame-time.json"
+        --output "${movement_evidence}" || command_status=$?
+    elif [[ ${movement_action} == candidate-only ]]; then
+      movement_matrix_arguments=(
+        --discrete-manifest
+        "${source_root}/client/src/tests/fixtures/player_view/movement-colored-discrete.xml"
+      )
+      if [[ ${movement_matrix} == full ]]; then
+        movement_matrix_arguments+=(--full-matrix)
+      fi
+      python3 "${source_root}/client/tools/benchmark_movement_regression.py" candidate-only \
+        --candidate-client "${source_root}/client/build/linux-release/atrinik" \
+        --candidate-manifest \
+          "${source_root}/client/src/tests/fixtures/player_view/movement-colored.xml" \
+        --candidate-revision "${ATRINIK_BENCHMARK_REVISION:-unknown}" \
+        --comparison-note "${comparison_note}" \
+        "${movement_matrix_arguments[@]}" \
+        --output "${movement_evidence}" || command_status=$?
+    else
+      python3 "${source_root}/client/tools/benchmark_movement_regression.py" skip \
+        --reason movement-sensitive-files-unchanged \
+        --output "${movement_evidence}" || command_status=$?
+    fi
+    if [[ ${command_status} -ne 0 ]]; then
+      validation_exit=${command_status}
+    fi
+
+    if [[ ${baseline_needed} == true ]]; then
       git -C "${source_root}" worktree remove --force "${baseline_root}"
       trap - EXIT
-    else
-      printf '%s\n' '{"schema_version":1,"skipped":true}' \
-        >"${source_root}/build/ci-evidence/lighting-frame-time.json"
-      printf '%s\n' '{"schema_version":1,"skipped":true}' \
-        >"${source_root}/build/ci-evidence/movement-frame-time.json"
     fi
     cmake --preset linux-sanitizers "${launcher[@]}" "${sibling_sources[@]}"
     cmake --build --preset linux-sanitizers --parallel "${jobs}"
@@ -212,3 +383,4 @@ if [[ ${cacheable_calls} -lt 1 ]]; then
 fi
 ccache --show-config
 ccache --show-stats
+exit "${validation_exit}"

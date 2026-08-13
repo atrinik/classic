@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -20,7 +20,31 @@
 static bool profiler_enabled;
 static render_profile_snapshot_t accumulated;
 static render_profile_snapshot_t completed;
+static render_profile_snapshot_t statistics;
 static uint64_t interval_started_us;
+static uint64_t statistics_started_us;
+
+static const render_profile_stage_metadata_t stage_metadata[RENDER_PROFILE_STAGE_NUM] = {
+    [RENDER_PROFILE_FRAME] = {"frame", RENDER_PROFILE_SCOPE_FRAME},
+    [RENDER_PROFILE_EVENTS] = {"events", RENDER_PROFILE_SCOPE_FRAME},
+    [RENDER_PROFILE_GAME] = {"game", RENDER_PROFILE_SCOPE_FRAME},
+    [RENDER_PROFILE_WIDGETS] = {"widgets", RENDER_PROFILE_SCOPE_FRAME},
+    [RENDER_PROFILE_OVERLAYS] = {"overlays", RENDER_PROFILE_SCOPE_FRAME},
+    [RENDER_PROFILE_MAINTENANCE] = {"maintenance", RENDER_PROFILE_SCOPE_FRAME},
+    [RENDER_PROFILE_PRESENT] = {"present", RENDER_PROFILE_SCOPE_FRAME},
+    [RENDER_PROFILE_WAIT] = {"wait", RENDER_PROFILE_SCOPE_FRAME},
+    [RENDER_PROFILE_MAP] = {"map", RENDER_PROFILE_SCOPE_MAP_DRAW},
+    [RENDER_PROFILE_MAP_SCRATCH_CLEAR] = {"map_scratch_clear", RENDER_PROFILE_SCOPE_MAP_DRAW},
+    [RENDER_PROFILE_MAP_GROUND] = {"ground", RENDER_PROFILE_SCOPE_MAP_LEVEL},
+    [RENDER_PROFILE_MAP_GROUND_COMPOSITE] = {"ground_composite", RENDER_PROFILE_SCOPE_MAP_DRAW},
+    [RENDER_PROFILE_LIGHTING] = {"lighting", RENDER_PROFILE_SCOPE_MAP_LEVEL},
+    [RENDER_PROFILE_MAP_OBJECTS] = {"objects", RENDER_PROFILE_SCOPE_MAP_LEVEL},
+    [RENDER_PROFILE_MAP_PAINT] = {"paint", RENDER_PROFILE_SCOPE_MAP_DRAW},
+    [RENDER_PROFILE_MAP_UI] = {"ui", RENDER_PROFILE_SCOPE_MAP_DRAW},
+};
+
+_Static_assert(arraysize(stage_metadata) == RENDER_PROFILE_STAGE_NUM,
+               "render profiler metadata must cover every stage");
 
 /** Return monotonic time in microseconds. */
 static uint64_t render_profiler_now(void) {
@@ -35,7 +59,9 @@ void render_profiler_set_enabled(bool enabled) {
     profiler_enabled = enabled;
     memset(&accumulated, 0, sizeof(accumulated));
     memset(&completed, 0, sizeof(completed));
+    memset(&statistics, 0, sizeof(statistics));
     interval_started_us = enabled ? render_profiler_now() : 0;
+    statistics_started_us = interval_started_us;
 }
 
 uint64_t render_profiler_begin(void) {
@@ -48,8 +74,11 @@ void render_profiler_end(render_profile_stage_t stage, uint64_t started_us) {
     }
 
     HARD_ASSERT(stage >= 0 && stage < RENDER_PROFILE_STAGE_NUM);
-    accumulated.elapsed_us[stage] += render_profiler_now() - started_us;
+    uint64_t elapsed = render_profiler_now() - started_us;
+    accumulated.elapsed_us[stage] += elapsed;
     accumulated.calls[stage]++;
+    statistics.elapsed_us[stage] += elapsed;
+    statistics.calls[stage]++;
 }
 
 void render_profiler_frame_finished(bool drawn) {
@@ -59,6 +88,8 @@ void render_profiler_frame_finished(bool drawn) {
 
     accumulated.frames++;
     accumulated.drawn_frames += drawn;
+    statistics.frames++;
+    statistics.drawn_frames += drawn;
 
     uint64_t now = render_profiler_now();
     uint64_t elapsed = now - interval_started_us;
@@ -76,6 +107,40 @@ void render_profiler_frame_finished(bool drawn) {
 
 const render_profile_snapshot_t *render_profiler_snapshot(void) {
     return &completed;
+}
+
+void render_profiler_statistics_reset(void) {
+    memset(&statistics, 0, sizeof(statistics));
+    statistics_started_us = profiler_enabled ? render_profiler_now() : 0;
+}
+
+void render_profiler_statistics_get(render_profile_snapshot_t *result) {
+    HARD_ASSERT(result != NULL);
+    *result = statistics;
+    result->interval_us = profiler_enabled ? render_profiler_now() - statistics_started_us : 0;
+}
+
+bool render_profiler_stage_metadata_get(render_profile_stage_t stage,
+                                        render_profile_stage_metadata_t *metadata) {
+    if (metadata == NULL || stage < 0 || stage >= RENDER_PROFILE_STAGE_NUM) {
+        return false;
+    }
+
+    *metadata = stage_metadata[stage];
+    return true;
+}
+
+const char *render_profiler_scope_name(render_profile_scope_t scope) {
+    switch (scope) {
+        case RENDER_PROFILE_SCOPE_FRAME:
+            return "per_frame";
+        case RENDER_PROFILE_SCOPE_MAP_DRAW:
+            return "per_map_draw";
+        case RENDER_PROFILE_SCOPE_MAP_LEVEL:
+            return "per_level";
+        default:
+            return NULL;
+    }
 }
 
 static double render_profile_average_ms(const render_profile_snapshot_t *snapshot,
@@ -116,9 +181,10 @@ static void widget_draw(widgetdata *widget) {
                      "Events %5.2f  game %5.2f\n"
                      "Widgets %5.2f  overlays %5.2f\n"
                      "GC %8.2f  present %5.2f\n"
-                     "[c=#ffd060]Map[/c] %8.2f ms @ %.1f/s\n"
-                     " ground %5.2f  lighting %5.2f\n"
-                     " objects %4.2f  paint %4.2f  UI %4.2f",
+                     "[c=#ffd060]Map/draw[/c] %5.2f ms @ %.1f/s\n"
+                     " scratch/draw %4.2f  ground/level %4.2f\n"
+                     " composite/draw %4.2f  lighting/level %4.2f\n"
+                     " objects/level %4.2f  paint/draw %4.2f  UI/draw %4.2f",
                      snapshot->interval_us / 1000000.0,
                      render_profile_rate(snapshot, snapshot->frames),
                      render_profile_rate(snapshot, snapshot->drawn_frames),
@@ -133,7 +199,9 @@ static void widget_draw(widgetdata *widget) {
                      render_profile_average_ms(snapshot, RENDER_PROFILE_PRESENT),
                      render_profile_average_ms(snapshot, RENDER_PROFILE_MAP),
                      render_profile_rate(snapshot, snapshot->calls[RENDER_PROFILE_MAP]),
+                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_SCRATCH_CLEAR),
                      render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_GROUND),
+                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_GROUND_COMPOSITE),
                      render_profile_average_ms(snapshot, RENDER_PROFILE_LIGHTING),
                      render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_OBJECTS),
                      render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_PAINT),
