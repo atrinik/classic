@@ -120,7 +120,8 @@ static void sound_start_bg_music_internal(const char *filename,
                                           int64_t volume,
                                           int loop,
                                           int volume_adjustment,
-                                          const char *source);
+                                          const char *source,
+                                          bool log_started);
 static void sound_stop_bg_music_internal(const char *reason);
 
 /**
@@ -257,8 +258,6 @@ static void sound_music_finished_process(void) {
     source = sound_background_source;
     duration = sound_music_get_offset();
 
-    audio_log_music_stopped(source, bg_music, "finished");
-
     sound_background = NULL;
     sound_background_hook_execute();
 
@@ -276,7 +275,10 @@ static void sound_music_finished_process(void) {
                                       sound_background_volume,
                                       sound_background_loop,
                                       sound_background_volume_adjustment,
-                                      source);
+                                      source,
+                                      false);
+    } else {
+        audio_log_music_stopped(source, bg_music, "finished");
     }
 
     free(tmp);
@@ -473,7 +475,7 @@ static int sound_add_effect(const char *path,
         if (audio == NULL) {
             char asset[MAX_BUF * 2];
             audio_log_asset_escape(effective, VS(asset));
-            LOG(BUG, "Could not load '%s'. Reason: %s.", asset, SDL_GetError());
+            LOG(BUG, "Could not load audio asset '%s'.", asset);
             return -1;
         }
 
@@ -507,7 +509,7 @@ static int sound_add_effect(const char *path,
         if (options == 0 || !SDL_SetNumberProperty(options, MIX_PROP_PLAY_LOOPS_NUMBER, loop)) {
             char asset[MAX_BUF * 2];
             audio_log_asset_escape(effective, VS(asset));
-            LOG(BUG, "Could not configure loops for '%s'. Reason: %s.", asset, SDL_GetError());
+            LOG(BUG, "Could not configure loops for audio asset '%s'.", asset);
             if (options != 0) {
                 SDL_DestroyProperties(options);
             }
@@ -537,7 +539,7 @@ static int sound_add_effect(const char *path,
     if (!played) {
         char asset[MAX_BUF * 2];
         audio_log_asset_escape(effective, VS(asset));
-        LOG(BUG, "Could not play '%s'. Reason: %s.", asset, SDL_GetError());
+        LOG(BUG, "Could not play audio asset '%s'.", asset);
         MIX_StopTrack(track, 0);
         if (options != 0) {
             SDL_DestroyProperties(options);
@@ -636,7 +638,8 @@ static void sound_start_bg_music_internal(const char *filename,
                                           int64_t volume,
                                           int loop,
                                           int volume_adjustment,
-                                          const char *source) {
+                                          const char *source,
+                                          bool log_started) {
 #ifdef HAVE_SDL_MIXER
     char path[HUGE_BUF];
     sound_data_struct *tmp;
@@ -674,7 +677,7 @@ static void sound_start_bg_music_internal(const char *filename,
         if (music == NULL) {
             char asset[MAX_BUF * 2];
             audio_log_asset_escape(filename, VS(asset));
-            LOG(BUG, "Could not load '%s'. Reason: %s.", asset, SDL_GetError());
+            LOG(BUG, "Could not load audio asset '%s'.", asset);
             return;
         }
 
@@ -706,20 +709,22 @@ static void sound_start_bg_music_internal(const char *filename,
     if (!played) {
         char asset[MAX_BUF * 2];
         audio_log_asset_escape(filename, VS(asset));
-        LOG(BUG, "Could not play '%s'. Reason: %s.", asset, SDL_GetError());
+        LOG(BUG, "Could not play audio asset '%s'.", asset);
         free(sound_background);
         sound_background = NULL;
         sound_background_hook_execute();
         return;
     }
     sound_apply_music_volume(volume);
-    audio_log_music_started(source, filename, filename, sound_background_volume, loop);
+    if (log_started) {
+        audio_log_music_started(source, filename, filename, sound_background_volume, loop);
+    }
 
 #endif
 }
 
 void sound_start_bg_music(const char *filename, int volume, int loop) {
-    sound_start_bg_music_internal(filename, volume, loop, 0, "intro-player");
+    sound_start_bg_music_internal(filename, volume, loop, 0, "intro-player", true);
 }
 
 /**
@@ -799,7 +804,8 @@ void update_map_bg_music(const char *bg_music) {
                                       setting_get_int(OPT_CAT_SOUND, OPT_VOLUME_MUSIC) + vol,
                                       loop,
                                       vol,
-                                      "map");
+                                      "map",
+                                      true);
     }
 }
 
@@ -968,7 +974,8 @@ void sound_command_play_background(const char *filename, int volume, int loop) {
                                       setting_get_int(OPT_CAT_SOUND, OPT_VOLUME_MUSIC) + volume,
                                       loop,
                                       volume,
-                                      "server-background");
+                                      "server-background",
+                                      true);
     }
 }
 
@@ -1166,5 +1173,14 @@ size_t sound_test_cache_size(void) {
         count++;
     }
     return count;
+}
+
+void sound_test_finish_music(void) {
+    if (sound_music_track != NULL) {
+        sound_background_update_duration = 0;
+        MIX_StopTrack(sound_music_track, 0);
+        SDL_Delay(10);
+        sound_music_finished_handle();
+    }
 }
 #endif

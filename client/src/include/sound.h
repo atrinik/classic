@@ -136,6 +136,7 @@ extern int sound_playing_music(void);
 #ifdef ATRINIK_SOUND_TESTING
 extern void sound_test_fail_next_playback(void);
 extern size_t sound_test_cache_size(void);
+extern void sound_test_finish_music(void);
 #endif
 
 #endif

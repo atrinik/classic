@@ -132,6 +132,19 @@ static void test_effect_paths(void) {
     reset_capture();
     TEST_CHECK(sound_play_effect_loop("missing.ogg", 75, 0) == -1);
     TEST_CHECK(strstr(captured, "effect started") == NULL);
+    TEST_CHECK(strstr(captured, "/no/such/") == NULL);
+
+    packet_struct *absolute = packet_new(0, 64, 16);
+    packet_writer_write_uint8(absolute, CMD_SOUND_ABSOLUTE);
+    packet_writer_write_cstring(absolute, "/no/such/private\nforged.wav");
+    packet_writer_write_int8(absolute, 0);
+    packet_writer_write_int8(absolute, 75);
+    reset_capture();
+    socket_command_sound(absolute->data, absolute->len, 0);
+    TEST_CHECK(strstr(captured, "effect started") == NULL);
+    TEST_CHECK(strstr(captured, "/no/such/") == NULL);
+    TEST_CHECK(strstr(captured, "private\\nforged.wav") != NULL);
+    packet_free(absolute);
 }
 
 static void test_server_and_ambient_sources(void) {
@@ -215,20 +228,31 @@ static void test_music_lifecycle(void) {
     TEST_CHECK(occurrences("music started") == 1);
     TEST_CHECK(strstr(captured, "music stopped") == NULL);
 
-    sound_start_bg_music("replacement.ogg", 60, 0);
+    sound_start_bg_music("finite-loop.ogg", 70, 1);
     TEST_CHECK(occurrences("music started") == 2);
     TEST_CHECK(occurrences("music stopped") == 1);
+    sound_test_finish_music();
+    TEST_CHECK(occurrences("music started") == 2);
+    TEST_CHECK(occurrences("music stopped") == 1);
+    sound_test_finish_music();
+    TEST_CHECK(occurrences("music started") == 2);
+    TEST_CHECK(occurrences("music stopped") == 2);
+    TEST_CHECK(strstr(captured, "reason=finished") != NULL);
+
+    sound_start_bg_music("replacement.ogg", 60, 0);
+    TEST_CHECK(occurrences("music started") == 3);
+    TEST_CHECK(occurrences("music stopped") == 2);
     TEST_CHECK(strstr(captured, "reason=replaced") != NULL);
 
     sound_test_fail_next_playback();
     sound_start_bg_music("failure.ogg", 50, 0);
-    TEST_CHECK(occurrences("music started") == 2);
-    TEST_CHECK(occurrences("music stopped") == 2);
+    TEST_CHECK(occurrences("music started") == 3);
+    TEST_CHECK(occurrences("music stopped") == 3);
     TEST_CHECK(!sound_playing_music());
 
     sound_start_bg_music("missing.ogg", 50, 0);
-    TEST_CHECK(occurrences("music started") == 2);
-    TEST_CHECK(occurrences("music stopped") == 2);
+    TEST_CHECK(occurrences("music started") == 3);
+    TEST_CHECK(occurrences("music stopped") == 3);
     TEST_CHECK(!sound_playing_music());
 
     reset_capture();
