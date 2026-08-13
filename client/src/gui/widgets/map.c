@@ -198,6 +198,7 @@ static void map_cache_mark_fow(struct MapCell *level,
 /** Primary-map outlines reveal silhouettes without exposing interiors. */
 #define DOOR_HINT_RADIUS 3
 #define MAP_OUTLINE_COLOR "ffc64a"
+#define MAP_LIVING_OUTLINE_COLOR "53d8fb"
 
 /** Select one protocol map depth, allocating its cache on demand. */
 bool map_select_level(int depth, bool create) {
@@ -1520,7 +1521,7 @@ typedef struct map_render_command {
     bool exit;
     bool local_player;
     bool ground;
-    SDL_Surface *player_occlusion_mask;
+    SDL_Surface *living_occlusion_mask;
     bool transformed;
 } map_render_command_t;
 
@@ -2864,72 +2865,79 @@ static SDL_Surface *map_render_command_geometry(const map_render_command_t *comm
     return sprite_effects_create(command->source, &effects);
 }
 
-/** Add pixels hidden by one structural sprite to the player's occlusion mask. */
-static bool map_render_command_mask_occlusion(map_render_command_t *player,
-                                              SDL_Surface *player_geometry,
+/** Add living pixels hidden by one structural sprite to its occlusion mask. */
+static bool map_render_command_mask_occlusion(map_render_command_t *living,
+                                              SDL_Surface *living_geometry,
                                               const map_render_command_t *occluder) {
     SDL_Surface *occluder_geometry = map_render_command_geometry(occluder);
     if (occluder_geometry == NULL) {
         return false;
     }
 
-    bool player_locked = false;
+    bool living_locked = false;
     bool occluder_locked = false;
     bool mask_locked = false;
     bool added = false;
-    if (SDL_MUSTLOCK(player_geometry)) {
-        if (!SDL_LockSurface(player_geometry)) {
+    if (SDL_MUSTLOCK(living_geometry)) {
+        if (!SDL_LockSurface(living_geometry)) {
             goto done;
         }
-        player_locked = true;
+        living_locked = true;
     }
-    if (occluder_geometry != player_geometry && SDL_MUSTLOCK(occluder_geometry)) {
+    if (occluder_geometry != living_geometry && SDL_MUSTLOCK(occluder_geometry)) {
         if (!SDL_LockSurface(occluder_geometry)) {
             goto done;
         }
         occluder_locked = true;
     }
-    if (SDL_MUSTLOCK(player->player_occlusion_mask)) {
-        if (!SDL_LockSurface(player->player_occlusion_mask)) {
+    if (SDL_MUSTLOCK(living->living_occlusion_mask)) {
+        if (!SDL_LockSurface(living->living_occlusion_mask)) {
             goto done;
         }
         mask_locked = true;
     }
 
     Uint32 visible =
-        pixel_format_map_rgba(player->player_occlusion_mask->format, 255, 255, 255, 255);
+        pixel_format_map_rgba(living->living_occlusion_mask->format, 255, 255, 255, 255);
+    int living_copies = living->draw_double ? 2 : 1;
     int occluder_copies = occluder->draw_double ? 2 : 1;
-    for (int copy = 0; copy < occluder_copies; copy++) {
-        int occluder_y = occluder->y - copy * 22;
-        int x_start = MAX(player->x, occluder->x);
-        int x_end = MIN(player->x + player_geometry->w, occluder->x + occluder_geometry->w);
-        int y_start = MAX(player->y, occluder_y);
-        int y_end = MIN(player->y + player_geometry->h, occluder_y + occluder_geometry->h);
+    int mask_y = living->y - (living_copies - 1) * 22;
+    for (int living_copy = 0; living_copy < living_copies; living_copy++) {
+        int living_y = living->y - living_copy * 22;
+        for (int occluder_copy = 0; occluder_copy < occluder_copies; occluder_copy++) {
+            int occluder_y = occluder->y - occluder_copy * 22;
+            int x_start = MAX(living->x, occluder->x);
+            int x_end = MIN(living->x + living_geometry->w, occluder->x + occluder_geometry->w);
+            int y_start = MAX(living_y, occluder_y);
+            int y_end = MIN(living_y + living_geometry->h, occluder_y + occluder_geometry->h);
 
-        for (int y = y_start; y < y_end; y++) {
-            for (int x = x_start; x < x_end; x++) {
-                int player_x = x - player->x;
-                int player_y = y - player->y;
-                if (!surface_pixel_visible(player_geometry, player_x, player_y) ||
-                    !surface_pixel_visible(occluder_geometry, x - occluder->x, y - occluder_y)) {
-                    continue;
+            for (int y = y_start; y < y_end; y++) {
+                for (int x = x_start; x < x_end; x++) {
+                    int source_x = x - living->x;
+                    int source_y = y - living_y;
+                    if (!surface_pixel_visible(living_geometry, source_x, source_y) ||
+                        !surface_pixel_visible(occluder_geometry,
+                                               x - occluder->x,
+                                               y - occluder_y)) {
+                        continue;
+                    }
+
+                    putpixel(living->living_occlusion_mask, source_x, y - mask_y, visible);
+                    added = true;
                 }
-
-                putpixel(player->player_occlusion_mask, player_x, player_y, visible);
-                added = true;
             }
         }
     }
 
 done:
     if (mask_locked) {
-        SDL_UnlockSurface(player->player_occlusion_mask);
+        SDL_UnlockSurface(living->living_occlusion_mask);
     }
     if (occluder_locked) {
         SDL_UnlockSurface(occluder_geometry);
     }
-    if (player_locked) {
-        SDL_UnlockSurface(player_geometry);
+    if (living_locked) {
+        SDL_UnlockSurface(living_geometry);
     }
     if (occluder_geometry != occluder->source) {
         SDL_DestroySurface(occluder_geometry);
@@ -2937,67 +2945,73 @@ done:
     return added;
 }
 
-/** Return whether structural geometry can hide pixels of the local player. */
-static bool map_render_command_is_player_occluder(const map_render_command_t *player,
+/** Return whether structural geometry can hide pixels of a living actor. */
+static bool map_render_command_is_living_occluder(const map_render_command_t *living,
                                                   const map_render_command_t *occluder) {
     return occluder->object_layer == LAYER_WALL &&
+           !(BIT_QUERY(occluder->effects.flags, SPRITE_FLAG_DARK) &&
+             occluder->effects.dark_level == DARK_LEVELS) &&
            (occluder->effects.alpha == 0 || occluder->effects.alpha >= 128) &&
-           map_render_command_overlaps(player, occluder);
+           map_render_command_overlaps(living, occluder);
 }
 
-/** Record only local-player pixels hidden by later structural geometry. */
-static void map_render_commands_find_player_occlusion(map_render_context_t *context) {
-    for (size_t player_index = 0; player_index < context->commands_num; player_index++) {
-        map_render_command_t *player = &context->commands[player_index];
-        if (!player->local_player) {
+/** Record each living actor's pixels hidden by later structural geometry. */
+static void map_render_commands_find_living_occlusion(map_render_context_t *context) {
+    for (size_t living_index = 0; living_index < context->commands_num; living_index++) {
+        map_render_command_t *living = &context->commands[living_index];
+        if (living->object_layer != LAYER_LIVING ||
+            (BIT_QUERY(living->effects.flags, SPRITE_FLAG_DARK) &&
+             living->effects.dark_level == DARK_LEVELS)) {
             continue;
         }
 
-        size_t occluder_index = player_index + 1;
+        size_t occluder_index = living_index + 1;
         while (occluder_index < context->commands_num &&
-               !map_render_command_is_player_occluder(player, &context->commands[occluder_index])) {
+               !map_render_command_is_living_occluder(living, &context->commands[occluder_index])) {
             occluder_index++;
         }
         if (occluder_index == context->commands_num) {
             continue;
         }
 
-        SDL_Surface *player_geometry = map_render_command_geometry(player);
-        if (player_geometry == NULL) {
+        SDL_Surface *living_geometry = map_render_command_geometry(living);
+        if (living_geometry == NULL) {
             continue;
         }
-        player->player_occlusion_mask =
-            SDL_CreateSurface(player_geometry->w, player_geometry->h, FormatHolder->format);
+        living->living_occlusion_mask =
+            SDL_CreateSurface(living_geometry->w,
+                              living_geometry->h + (living->draw_double ? 22 : 0),
+                              FormatHolder->format);
         Uint32 transparent =
-            player->player_occlusion_mask != NULL
-                ? pixel_format_map_rgba(player->player_occlusion_mask->format, 0, 0, 0, 0)
+            living->living_occlusion_mask != NULL
+                ? pixel_format_map_rgba(living->living_occlusion_mask->format, 0, 0, 0, 0)
                 : 0;
-        if (player->player_occlusion_mask == NULL ||
-            !SDL_FillSurfaceRect(player->player_occlusion_mask, NULL, transparent)) {
-            SDL_DestroySurface(player->player_occlusion_mask);
-            player->player_occlusion_mask = NULL;
-            if (player_geometry != player->source) {
-                SDL_DestroySurface(player_geometry);
+        if (living->living_occlusion_mask == NULL ||
+            !SDL_FillSurfaceRect(living->living_occlusion_mask, NULL, transparent)) {
+            SDL_DestroySurface(living->living_occlusion_mask);
+            living->living_occlusion_mask = NULL;
+            if (living_geometry != living->source) {
+                SDL_DestroySurface(living_geometry);
             }
             continue;
         }
 
-        bool player_occluded = false;
+        bool living_occluded = false;
         for (; occluder_index < context->commands_num; occluder_index++) {
             const map_render_command_t *occluder = &context->commands[occluder_index];
-            if (!map_render_command_is_player_occluder(player, occluder)) {
+            if (!map_render_command_is_living_occluder(living, occluder)) {
                 continue;
             }
 
-            player_occluded |= map_render_command_mask_occlusion(player, player_geometry, occluder);
+            living_occluded |= map_render_command_mask_occlusion(living, living_geometry, occluder);
         }
 
-        if (player_geometry != player->source) {
-            SDL_DestroySurface(player_geometry);
+        if (living_geometry != living->source) {
+            SDL_DestroySurface(living_geometry);
         }
-        if (!player_occluded) {
-            SDL_DestroySurface(player->player_occlusion_mask);
-            player->player_occlusion_mask = NULL;
+        if (!living_occluded) {
+            SDL_DestroySurface(living->living_occlusion_mask);
+            living->living_occlusion_mask = NULL;
         }
     }
 }
@@ -3020,8 +3034,8 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool pr
         map_render_commands_find_door_hints(context);
         render_profiler_end(RENDER_PROFILE_MAP_HINT_REPLAY, profile_hint_started);
         uint64_t profile_occlusion_started = render_profiler_begin();
-        map_render_commands_find_player_occlusion(context);
-        render_profiler_end(RENDER_PROFILE_MAP_DOOR_OCCLUSION, profile_occlusion_started);
+        map_render_commands_find_living_occlusion(context);
+        render_profiler_end(RENDER_PROFILE_MAP_LIVING_OCCLUSION, profile_occlusion_started);
     }
 
     uint64_t profile_effects_started = render_profiler_begin();
@@ -3055,28 +3069,31 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool pr
     if (primary_surface) {
         for (size_t i = 0; i < context->commands_num; i++) {
             map_render_command_t *command = &context->commands[i];
-            if (!(command->local_player && command->player_occlusion_mask != NULL) &&
-                !command->door_hint && !(command->exit && command->depth == 0)) {
+            if (command->living_occlusion_mask == NULL && !command->door_hint &&
+                !(command->exit && command->depth == 0)) {
                 continue;
             }
 
             sprite_effects_t effects = {0};
-            if (command->local_player && command->player_occlusion_mask != NULL) {
+            if (command->living_occlusion_mask != NULL) {
                 SDL_Color color;
-                if (text_color_parse(MAP_OUTLINE_COLOR, &color)) {
+                const char *outline_color =
+                    command->local_player ? MAP_OUTLINE_COLOR : MAP_LIVING_OUTLINE_COLOR;
+                if (text_color_parse(outline_color, &color)) {
                     SDL_Surface *outline =
-                        sprite_outline_create(command->player_occlusion_mask, &color);
+                        sprite_outline_create(command->living_occlusion_mask, &color);
                     if (outline != NULL) {
                         surface_show(surface,
                                      command->x - SPRITE_GLOW_SIZE,
-                                     command->y - SPRITE_GLOW_SIZE,
+                                     command->y - (command->draw_double ? 22 : 0) -
+                                         SPRITE_GLOW_SIZE,
                                      NULL,
                                      outline);
                         SDL_DestroySurface(outline);
                     }
                 }
-                SDL_DestroySurface(command->player_occlusion_mask);
-                command->player_occlusion_mask = NULL;
+                SDL_DestroySurface(command->living_occlusion_mask);
+                command->living_occlusion_mask = NULL;
                 if (!command->door_hint && !(command->exit && command->depth == 0)) {
                     continue;
                 }

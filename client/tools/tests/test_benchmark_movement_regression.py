@@ -288,7 +288,7 @@ def native_record(
                             else render_passes
                             if stage in ("map", "paint", "ui", "command_sort", "sprite_effects")
                             else draws + animation_draws
-                            if stage in ("door_occlusion", "hint_replay")
+                            if stage in ("living_occlusion", "hint_replay")
                             else renderer_draws
                             if stage in ("map_scratch_clear", "ground_composite")
                             else renderer_draws * 5 + animation_draws * 5
@@ -356,7 +356,7 @@ def native_record(
                 "workload": "pvm1-map2-lifecycle-v3",
                 "lighting_statistics_version": 3,
                 "map_statistics_version": 3,
-                "render_profiler_statistics_version": 3,
+                "render_profiler_statistics_version": 4,
                 "sprite_cache_statistics_version": 3,
             },
             "implementation": {
