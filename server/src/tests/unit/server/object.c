@@ -27,6 +27,7 @@
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
+#include <commands.h>
 #include <toolkit/string.h>
 #include <arch.h>
 #include <loader.h>
@@ -465,8 +466,21 @@ START_TEST(test_object_custody_provenance) {
 
     object_custody_relinquish(item, player);
     ck_assert_str_eq(item->custody_last, player->custody_actor);
+    object_custody_record(item, player, "custody-test");
 
-    object_destroy(item);
+    char item_name[] = "bolt";
+    item = object_insert_into(item, player, 0);
+    command_custody(player, "custody", item_name);
+    command_custody(player, "custody", "");
+
+    object *other_player = player_get_dummy("Second custody tester", NULL);
+    object *other_item = arch_get("bolt");
+    object_custody_relinquish(other_item, other_player);
+    ck_assert_ptr_ne(other_player->custody_actor, NULL);
+    ck_assert_str_eq(other_item->custody_last, other_player->custody_actor);
+
+    object_destroy(other_item);
+    object_destroy(other_player);
     object_destroy(player);
 }
 END_TEST
