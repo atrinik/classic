@@ -14,14 +14,23 @@
 #include <audio_log.h>
 
 void audio_log_asset_escape(const char *asset, char *buf, size_t size) {
+    if (size == 0) {
+        return;
+    }
+
     const char *logical = asset != NULL ? asset : "";
-    const char *slash = strrchr(logical, '/');
-    const char *backslash = strrchr(logical, '\\');
-    if (slash != NULL || backslash != NULL) {
+    bool absolute = logical[0] == '/' || logical[0] == '\\' ||
+                    (isalpha((unsigned char)logical[0]) && logical[1] == ':' &&
+                     (logical[2] == '/' || logical[2] == '\\'));
+    if (absolute) {
+        const char *slash = strrchr(logical, '/');
+        const char *backslash = strrchr(logical, '\\');
         const char *separator = slash == NULL       ? backslash
                                 : backslash == NULL ? slash
                                                     : MAX(slash, backslash);
-        logical = separator + 1;
+        if (separator != NULL) {
+            logical = separator + 1;
+        }
     }
 
     size_t pos = 0;

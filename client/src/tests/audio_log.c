@@ -44,6 +44,17 @@ int main(void) {
     logger_set_print_func(capture_print);
     TEST_CHECK(logger_get_level("audio") == LOG_AUDIO);
 
+    char escaped[MAX_BUF];
+    audio_log_asset_escape("relative/area/fireside.mid", VS(escaped));
+    TEST_CHECK(strcmp(escaped, "relative/area/fireside.mid") == 0);
+    audio_log_asset_escape("/private/media/fireside.mid", VS(escaped));
+    TEST_CHECK(strcmp(escaped, "fireside.mid") == 0);
+    audio_log_asset_escape("C:\\private\\media\\fireside.mid", VS(escaped));
+    TEST_CHECK(strcmp(escaped, "fireside.mid") == 0);
+    audio_log_asset_escape("\\\\host\\share\\fireside.mid", VS(escaped));
+    TEST_CHECK(strcmp(escaped, "fireside.mid") == 0);
+    audio_log_asset_escape("ignored", escaped, 0);
+
     char path[HUGE_BUF];
     snprintf(VS(path), "%s/audio-observability.log", ATRINIK_TEST_BINARY_DIR);
     logger_open_log(path);
