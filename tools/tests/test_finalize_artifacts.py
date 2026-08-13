@@ -549,6 +549,21 @@ class FinalizeArtifactsTests(unittest.TestCase):
             )
         )
 
+    def test_release_manifest_records_exact_dependency_bundle(self) -> None:
+        artifact = self.root / "artifact.zip"
+        artifact.write_bytes(b"artifact")
+        descriptor = {
+            "image": "ghcr.io/atrinik/classic-dependencies",
+            "digest": "sha256:" + "a" * 64,
+            "material_digest": "sha256:" + "b" * 64,
+        }
+        manifest = finalize_artifacts.build_release_manifest(
+            [artifact], "5.6.0", "c" * 40, 123, descriptor, []
+        )
+        self.assertIs(manifest["dependency_bundle"], descriptor)
+        self.assertEqual(manifest["artifacts"][0]["name"], artifact.name)
+        self.assertEqual(manifest["artifacts"][0]["size"], len(b"artifact"))
+
     def test_expected_set_uses_unambiguous_classic_names(self) -> None:
         names = finalize_artifacts.expected_names("5.6.0")
         self.assertIn("atrinik-classic-5.6.0.tar.gz", names)

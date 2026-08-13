@@ -8,8 +8,10 @@ on:
 
 permissions:
   actions: write
+  attestations: read
   checks: read
   contents: write
+  packages: read
 
 concurrency:
   group: classic-release-publication
@@ -61,6 +63,36 @@ jobs:
             --jq '[.check_runs[] | select(.name == "Classic validation" and .conclusion == "success" and .app.id == 15368)] | length')
           test "${successful}" -ge 1
           python3 tools/verify_import_history.py
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Require the exact durable dependency bundle before versioning
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in {1..10}; do
+            if tools/release/install_dependency_bundle.sh; then
+              exit 0
+            fi
+            if test "${attempt}" -eq 10; then
+              echo "durable dependency bundle is unavailable after 10 attempts; run Publish Dependency Bundle on current main" >&2
+              exit 1
+            fi
+            sleep 30
+          done
+      - name: Rebind release mutation to current main
+        env:
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+        run: |
+          git fetch --no-tags origin main
+          commit=$(git rev-parse HEAD)
+          test "${commit}" = "$(git rev-parse refs/remotes/origin/main)"
+          if test "${RELEASE_EVENT}" = workflow_run; then
+            test "${commit}" = "${RELEASE_TRIGGER_SHA}"
+          fi
       - id: pending-release
         name: Detect an incomplete semantic release
         env:
