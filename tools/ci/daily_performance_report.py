@@ -17,8 +17,6 @@ import statistics
 import sys
 from typing import Any
 
-from client.tools.movement_benchmark_schema import RENDER_STAGES
-
 SCHEMA_VERSION = 2
 TREND_RETENTION = 90
 PHASES = ("cold", "sustained", "idle", "resumed")
@@ -34,6 +32,7 @@ if _BENCHMARK_SPEC is None or _BENCHMARK_SPEC.loader is None:
     raise RuntimeError("cannot load the movement benchmark evidence contract")
 benchmark_contract = importlib.util.module_from_spec(_BENCHMARK_SPEC)
 _BENCHMARK_SPEC.loader.exec_module(benchmark_contract)
+RENDER_STAGES = benchmark_contract.validate_record.__globals__["RENDER_STAGES"]
 
 
 class ReportError(ValueError):

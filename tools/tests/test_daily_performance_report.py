@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import subprocess
 import sys
 import unittest
 
@@ -38,6 +39,16 @@ def evidence() -> dict[str, object]:
 
 
 class DailyReportTests(unittest.TestCase):
+    def test_report_cli_loads_by_repository_relative_path(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "tools/ci/daily_performance_report.py", "--help"],
+            cwd=ROOT.parent,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_point_contains_all_phases_and_cohort(self) -> None:
         point = report.build_point(evidence(), commit="a" * 40, run_id="7",
                                    recorded_at="2026-08-13T00:00:00+00:00", environment={})
