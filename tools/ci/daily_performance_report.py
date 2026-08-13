@@ -141,11 +141,13 @@ def build_point(evidence: Any, *, commit: str, run_id: str, recorded_at: str,
     fixture = _mapping(first["fixture"], "fixture identity")
     instrumentation = _mapping(identity["instrumentation"], "instrumentation identity")
     viewport = _mapping(run["viewport"], "viewport identity")
+    implementation = _mapping(identity["implementation"], "implementation identity")
     cohort_material = {
         "instrumentation": instrumentation,
         "fixture": fixture,
-        "compiler": identity["implementation"].get("compiler_version"),
-        "sdl": identity["implementation"].get("sdl_version"),
+        "implementation": {key: value for key, value in implementation.items()
+                           if key not in ("revision", "dirty", "dirty_known")},
+        "run": run,
         "runner_image": environment.get("runner_image"),
     }
     cohort = json.dumps(cohort_material, sort_keys=True, separators=(",", ":"))
@@ -158,6 +160,7 @@ def build_point(evidence: Any, *, commit: str, run_id: str, recorded_at: str,
         if isinstance(items, list) and items
     }
     checks = _mapping(evidence["checks"], "evidence checks")
+    large_records = records.get("candidate_large")
     return {
         "schema_version": SCHEMA_VERSION,
         "id": f"{recorded_at[:10]}-{commit[:12]}",
@@ -172,6 +175,8 @@ def build_point(evidence: Any, *, commit: str, run_id: str, recorded_at: str,
         "fixture": {"manifest_sha256": fixture.get("manifest_sha256"),
                     "snapshot_sha256": fixture.get("snapshot_sha256")},
         "phases": {name: _record_summary(candidate, name) for name in PHASES},
+        "large_phases": ({name: _record_summary(large_records, name) for name in PHASES}
+                         if isinstance(large_records, list) and large_records else None),
         "contexts": context_points,
         "checks": checks,
         "resources": evidence["resources"].get("candidate_standard"),
@@ -206,6 +211,7 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
         state = alerts.setdefault(key, {"active": False, "history": []})
         if not isinstance(state, dict) or not isinstance(state.get("history"), list):
             raise ReportError("alert state is malformed")
+        state["history"] = [item for item in state["history"] if item.get("id") != point["id"]]
         result = "failed" if check.get("passed") is not True else "passed"
         state["history"].append({"id": point["id"], "state": result})
         state["history"] = state["history"][-5:]
@@ -232,6 +238,12 @@ def render_summary(point: dict[str, Any], trend: dict[str, Any]) -> str:
         window = phase["window_p95_ms"]
         lines.append(f"| `{name}` | {work['p50']:.2f} ms | {work['p95']:.2f} ms | "
                      f"{work['p99']:.2f} ms | {window['first']:.2f} → {window['last']:.2f} ms |")
+    if point.get("large_phases"):
+        lines.extend(["", "### Large viewport", "",
+                      "| Phase | p50 | p95 | p99 |", "| --- | ---: | ---: | ---: |"])
+        for name, phase in point["large_phases"].items():
+            work = phase["work_ms"]
+            lines.append(f"| `{name}` | {work['p50']:.2f} ms | {work['p95']:.2f} ms | {work['p99']:.2f} ms |")
     lighting = sustained["lighting"]
     queue = sustained["queue"]
     sprite = sustained["sprite_cache"]
