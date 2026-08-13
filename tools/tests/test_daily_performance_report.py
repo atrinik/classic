@@ -22,6 +22,10 @@ def evidence() -> dict[str, object]:
             "map_draws": 1, "primary_map_draws": 1, "auxiliary_map_draws": 0,
             "presents": 1, "changed_map_packets": 1, "noop_map_packets": 0,
         }, "full_draw_reasons": {"reset_packet": 1},
+        "render_stages": {
+            name: {"unit": "us", "elapsed": 1, "calls": 1, "scope": scope}
+            for name, scope in report.RENDER_STAGES.items()
+        },
         "queue": {"peak_depth": 1, "peak_bytes": 2, "oldest_age_us": 3,
                   "budget_yields": 0, "recoveries": 0},
         "lighting": {"counters": {"field_rebuilds": 1, "field_reuses": 2,
@@ -34,7 +38,7 @@ def evidence() -> dict[str, object]:
                             "run": {"mode": "smooth", "viewport": {"name": "standard"}}},
               "fixture": {"manifest_sha256": "a", "snapshot_sha256": "b"},
               "phases": {name: copy.deepcopy(phase) for name in report.PHASES}}
-    return {"schema_version": 4, "status": "passed", "failed": False,
+    return {"schema_version": 5, "status": "passed", "failed": False,
             "records": {"candidate_standard": [record], "additional_contexts": {}},
             "checks": {}, "resources": {"candidate_standard": {}}}
 
@@ -44,7 +48,20 @@ class DailyReportTests(unittest.TestCase):
         point = report.build_point(evidence(), commit="a" * 40, run_id="7",
                                    recorded_at="2026-08-13T00:00:00+00:00", environment={})
         self.assertEqual(set(point["phases"]), set(report.PHASES))
+        self.assertEqual(set(point["phases"]["sustained"]["render_stages"]),
+                         set(report.RENDER_STAGES))
+        self.assertEqual(point["phases"]["sustained"]["render_stages"]["map"]["avg_ms_per_call"], 0.001)
         self.assertEqual(len(point["cohort"]), 16)
+
+    def test_daily_stage_report_preserves_zero_call_as_na(self) -> None:
+        item = evidence()
+        for phase in item["records"]["candidate_standard"][0]["phases"].values():
+            phase["render_stages"]["lighting"].update({"elapsed": 0, "calls": 0})
+        point = report.build_point(item, commit="a" * 40, run_id="7",
+                                   recorded_at="2026-08-13T00:00:00+00:00", environment={})
+        self.assertIsNone(point["phases"]["sustained"]["render_stages"]["lighting"]["avg_ms_per_call"])
+        trend = report.merge_trend(None, point)
+        self.assertIn("n/a", report.render_summary(point, trend))
 
     def test_merge_is_idempotent_and_retains_only_latest_points(self) -> None:
         point = report.build_point(evidence(), commit="a" * 40, run_id="7",
@@ -56,6 +73,12 @@ class DailyReportTests(unittest.TestCase):
         points = trend["cohorts"][point["cohort"]]
         self.assertEqual(len(points), report.TREND_RETENTION)
         self.assertEqual(report.merge_trend(trend, points[-1])["cohorts"][point["cohort"]], points)
+
+    def test_merge_migrates_existing_trend_schema(self) -> None:
+        point = report.build_point(evidence(), commit="a" * 40, run_id="7",
+                                   recorded_at="2026-08-13T00:00:00+00:00", environment={})
+        trend = report.merge_trend({"schema_version": 1, "cohorts": {}}, point)
+        self.assertEqual(trend["schema_version"], report.SCHEMA_VERSION)
 
     def test_failed_evidence_is_not_published(self) -> None:
         bad = evidence()
