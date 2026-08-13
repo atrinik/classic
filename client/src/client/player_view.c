@@ -1340,6 +1340,10 @@ static void player_view_render_stages_json(const render_profile_snapshot_t *stat
         {"lighting", RENDER_PROFILE_LIGHTING},
         {"objects", RENDER_PROFILE_MAP_OBJECTS},
         {"paint", RENDER_PROFILE_MAP_PAINT},
+        {"command_sort", RENDER_PROFILE_MAP_COMMAND_SORT},
+        {"door_occlusion", RENDER_PROFILE_MAP_DOOR_OCCLUSION},
+        {"sprite_effects", RENDER_PROFILE_MAP_SPRITE_EFFECTS},
+        {"hint_replay", RENDER_PROFILE_MAP_HINT_REPLAY},
         {"ui", RENDER_PROFILE_MAP_UI},
     };
     printf("{");
@@ -1361,17 +1365,21 @@ static void player_view_render_stages_json(const render_profile_snapshot_t *stat
 
 static void player_view_sprite_cache_json(const sprite_cache_statistics_t *start,
                                           const sprite_cache_statistics_t *end) {
-    printf("{\"available\":%s,\"counters\":{\"lookups\":%" PRIu64 ",\"hits\":%" PRIu64
-           ",\"misses\":%" PRIu64 ",\"insertions\":%" PRIu64 ",\"gc_runs\":%" PRIu64
+    printf("{\"available\":%s,\"limits\":{\"entries\":%u,\"estimated_bytes\":%u},\"counters\":{"
+           "\"lookups\":%" PRIu64 ",\"hits\":%" PRIu64 ",\"misses\":%" PRIu64
+           ",\"insertions\":%" PRIu64 ",\"evictions\":%" PRIu64 ",\"gc_runs\":%" PRIu64
            ",\"gc_removals\":%" PRIu64 ",\"gc_time_ns\":%" PRIu64
            "},\"start\":{\"entries\":%" PRIu64 ",\"estimated_bytes\":%" PRIu64 "}"
            ",\"end\":{\"entries\":%" PRIu64 ",\"estimated_bytes\":%" PRIu64 "}"
            ",\"peak\":{\"entries\":%" PRIu64 ",\"estimated_bytes\":%" PRIu64 "}}",
            SPRITE_CACHE_STATISTICS_VERSION > 0 ? "true" : "false",
+           SPRITE_CACHE_MAX_ENTRIES,
+           SPRITE_CACHE_MAX_BYTES,
            end->lookups,
            end->hits,
            end->misses,
            end->insertions,
+           end->evictions,
            end->gc_runs,
            end->gc_removals,
            end->gc_time_ns,
