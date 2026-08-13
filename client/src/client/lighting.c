@@ -1005,11 +1005,14 @@ static uint64_t lighting_projected_signature(int x, int y, const SDL_Rect *sourc
             int light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
             const lighting_sample *sample =
                 &light_samples[(size_t)light_y * (size_t)lighting_width + (size_t)light_x];
-            signature = lighting_signature_uint32(signature, sample->scalar);
-            signature = lighting_signature_uint32(signature, sample->red);
-            signature = lighting_signature_uint32(signature, sample->green);
-            signature = lighting_signature_uint32(signature, sample->blue);
-            signature = lighting_signature_byte(signature, sample->present);
+            uint64_t sample_value = sample->scalar;
+            sample_value = (sample_value << 16) | sample->red;
+            sample_value = (sample_value << 16) | sample->green;
+            sample_value = (sample_value << 16) | sample->blue;
+            signature ^= sample_value;
+            signature *= UINT64_C(1099511628211);
+            signature ^= sample->present;
+            signature *= UINT64_C(1099511628211);
         }
     }
     return signature;
