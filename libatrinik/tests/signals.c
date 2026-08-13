@@ -23,6 +23,55 @@ __attribute__((noinline)) static void trigger_access_violation(void) {
 
     *invalid = 1;
 }
+#else
+#include <dirent.h>
+
+#define MISSING_HOME_PREFIX "libatrinik-signals-missing-home"
+
+static int remove_tracebacks(bool verify) {
+    DIR *directory = opendir(".");
+    struct dirent *entry;
+    int found = 0;
+
+    if (directory == NULL) {
+        return -1;
+    }
+
+    while ((entry = readdir(directory)) != NULL) {
+        if (strncmp(entry->d_name,
+                    MISSING_HOME_PREFIX "-traceback-",
+                    strlen(MISSING_HOME_PREFIX "-traceback-")) != 0) {
+            continue;
+        }
+
+        if (verify) {
+            char contents[HUGE_BUF];
+            FILE *fp = fopen(entry->d_name, "r");
+            size_t length;
+
+            if (fp == NULL) {
+                closedir(directory);
+                return -1;
+            }
+            length = fread(contents, 1, sizeof(contents) - 1, fp);
+            fclose(fp);
+            contents[length] = '\0';
+            if (length == 0 || strstr(contents, "Caught SIGABRT") == NULL) {
+                closedir(directory);
+                return -1;
+            }
+        }
+
+        found++;
+        if (remove(entry->d_name) != 0) {
+            closedir(directory);
+            return -1;
+        }
+    }
+
+    closedir(directory);
+    return found;
+}
 #endif
 
 int main(int argc, char **argv) {
@@ -58,8 +107,21 @@ int main(int argc, char **argv) {
         }
     }
 #else
-    (void)argc;
-    (void)argv;
+    if (argc == 2 && strcmp(argv[1], "--missing-home") == 0) {
+        if (unsetenv("HOME") != 0 || remove_tracebacks(false) < 0) {
+            return 1;
+        }
+        signals_set_traceback_prefix(MISSING_HOME_PREFIX);
+        if (raise(SIGABRT) != 0 || remove_tracebacks(true) != 1) {
+            return 1;
+        }
+        if (setenv("HOME", "libatrinik-signals-home-does-not-exist", 1) != 0 ||
+            raise(SIGABRT) != 0 || remove_tracebacks(true) != 1) {
+            return 1;
+        }
+        toolkit_deinit();
+        return 0;
+    }
 #endif
 
     signals_enable_graceful_termination();

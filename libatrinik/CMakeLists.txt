@@ -529,6 +529,10 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     atrinik_configure_target(libatrinik-signals)
     target_link_libraries(libatrinik-signals PRIVATE Atrinik::Core)
     add_test(NAME libatrinik-signals COMMAND libatrinik-signals)
+    if (UNIX)
+        add_test(NAME libatrinik-signals-missing-home
+            COMMAND libatrinik-signals --missing-home)
+    endif ()
 
     add_executable(libatrinik-clioptions tests/clioptions.c)
     atrinik_configure_target(libatrinik-clioptions)
