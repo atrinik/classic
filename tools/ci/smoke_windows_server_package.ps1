@@ -100,13 +100,37 @@ try {
         throw "Packaged server listener is not isolated to IPv4 loopback: $boundAddresses"
     }
 
-    $process.StandardInput.WriteLine("shutdown")
-    $process.StandardInput.Flush()
-    $process.StandardInput.Close()
     $remainderTask = $process.StandardOutput.ReadToEndAsync()
-    if (-not $process.WaitForExit(30000)) {
-        $output = $lines -join "`n"
-        throw "Packaged server did not shut down within 30 seconds:`n$output"
+    $shutdownDeadline = [System.DateTime]::UtcNow.AddSeconds(30)
+    $shutdownAttempts = 0
+    while (-not $process.HasExited -and [System.DateTime]::UtcNow -lt $shutdownDeadline) {
+        $shutdownAttempts++
+        try {
+            $process.StandardInput.WriteLine("shutdown")
+            $process.StandardInput.Flush()
+        } catch {
+            if (-not $process.HasExited) {
+                throw
+            }
+            break
+        }
+        if ($process.WaitForExit(1000)) {
+            break
+        }
+    }
+    $shutdownTimedOut = -not $process.HasExited
+    $process.StandardInput.Close()
+    if ($shutdownTimedOut) {
+        try {
+            $process.Kill($true)
+        } catch {
+            if (-not $process.HasExited) {
+                throw
+            }
+        }
+        if (-not $process.WaitForExit(10000)) {
+            throw "Packaged server process tree did not exit after forced containment"
+        }
     }
     if (-not $remainderTask.Wait(10000)) {
         $output = $lines -join "`n"
@@ -119,6 +143,12 @@ try {
         Write-Host $remainder
     }
     $output = $lines -join "`n"
+    if ($shutdownTimedOut) {
+        throw (
+            "Packaged server did not shut down after $shutdownAttempts " +
+            "graceful attempts within 30 seconds:`n$output"
+        )
+    }
     if ($process.ExitCode -ne 0) {
         throw "Packaged server exited with code $($process.ExitCode):`n$output"
     }
