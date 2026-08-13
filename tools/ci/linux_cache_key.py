@@ -33,6 +33,8 @@ def cache_scope(event: str, ref: str, pr_number: str, commit: str) -> str:
         return f"pr-{int(pr_number)}"
     if event == "merge_group":
         return f"merge-{commit}"
+    if event == "workflow_dispatch":
+        return f"dispatch-{commit}"
     raise CacheKeyError(f"unsupported cache event: {event}")
 
 
