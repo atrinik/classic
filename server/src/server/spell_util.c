@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -32,6 +32,7 @@
 #include <server_item.h>
 #include <server.h>
 #include <monster.h>
+#include <movement.h>
 #include <spellist.h>
 #include <toolkit/string.h>
 #include <plugin.h>
@@ -256,6 +257,10 @@ int cast_spell(object *op,
         caster = op;
     } else if (op == NULL && caster == NULL) {
         LOG(BUG, "Both 'op' and 'caster' are NULL.");
+        return 0;
+    }
+
+    if (!movement_direction_valid(caster, dir, true)) {
         return 0;
     }
 

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -36,6 +36,8 @@
  */
 
 /** Public API implemented in src/server/move.c. */
+
+extern bool movement_direction_valid(const object *op, int dir, bool allow_zero);
 
 extern int get_random_dir(void);
 

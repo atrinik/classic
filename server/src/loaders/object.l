@@ -2,7 +2,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -513,7 +513,10 @@ stable_identity_state *identity = &identities[*depth];
 ^rotate{S}           op->rotate = IVAL;
 ^nrof{S}             op->nrof = atol(yval());
 ^level{S}            op->level = IVAL;
-^direction{S}        op->direction = (IVAL % 9);
+^direction{S}        {
+                        op->direction = ((IVAL % (NUM_DIRECTION + 1)) +
+                                         (NUM_DIRECTION + 1)) % (NUM_DIRECTION + 1);
+                    }
 ^type{S}             op->type = IVAL;
 ^material{S}         op->material = IVAL;
 ^value{S}            op->value = atoll(yval());
