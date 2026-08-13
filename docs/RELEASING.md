@@ -171,9 +171,10 @@ Dependency Bundle` to publish and attest the checked descriptor before
 dispatching a rehearsal. Semantic Release also waits for and fully verifies
 that exact bundle before it may create a tag or draft. A missing bundle therefore
 blocks versioning rather than allowing a release to race its input publication.
-The initial publisher treats only the registry's exact `name unknown` response
-as an absent repository that may be created; authentication, transport, and
-other registry errors remain terminal and cannot trigger a blind tag write.
+The initial publisher audits the material tag through GitHub's structured
+package API and treats only its exact package-not-found response as an absent
+repository that may be created; authentication, transport, malformed-response,
+and other API errors remain terminal and cannot trigger a blind tag write.
 Build Release Candidate verifies the GitHub OCI attestation, pulls the durable
 image once, verifies the outer OCI digest, closed materials statement,
 source-lock digests, archive set, sizes,

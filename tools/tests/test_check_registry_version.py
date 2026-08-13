@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import sys
+import tempfile
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "release" / "check_registry_version.py"
@@ -39,6 +42,55 @@ class CheckRegistryVersionTests(unittest.TestCase):
             check_registry_version.find_version(value, "latest"),
             "sha256:" + "b" * 64,
         )
+
+    def test_finds_material_digest_tag(self) -> None:
+        tag = "materials-" + "c" * 64
+        value = [
+            {
+                "name": "sha256:" + "d" * 64,
+                "metadata": {"container": {"tags": [tag]}},
+            }
+        ]
+        self.assertEqual(
+            check_registry_version.find_version(value, tag),
+            "sha256:" + "d" * 64,
+        )
+
+    def test_absent_material_package_writes_a_missing_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            arguments = [
+                "check_registry_version.py",
+                "--organization",
+                "atrinik",
+                "--package",
+                "classic-dependencies",
+                "--tag",
+                "materials-" + "e" * 64,
+                "--github-output",
+                str(output),
+            ]
+            response = (1, {"message": "Package not found.", "status": "404"}, "")
+            with mock.patch.object(check_registry_version, "request", return_value=response):
+                with mock.patch.object(sys, "argv", arguments):
+                    self.assertEqual(check_registry_version.main(), 0)
+            self.assertEqual(output.read_text(), "exists=false\ndigest=\n")
+
+    def test_other_material_package_errors_remain_terminal(self) -> None:
+        arguments = [
+            "check_registry_version.py",
+            "--organization",
+            "atrinik",
+            "--package",
+            "classic-dependencies",
+            "--tag",
+            "materials-" + "f" * 64,
+        ]
+        response = (1, {"message": "Forbidden", "status": "403"}, "forbidden")
+        with mock.patch.object(check_registry_version, "request", return_value=response):
+            with mock.patch.object(sys, "argv", arguments):
+                with self.assertRaisesRegex(RuntimeError, "cannot audit GHCR package"):
+                    check_registry_version.main()
 
 
 if __name__ == "__main__":

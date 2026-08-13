@@ -56,6 +56,21 @@ jobs:
             | sha256sum --check
           tar -xzf build/oras/oras.tar.gz -C build/oras oras
           test "$(build/oras/oras version | head -n 1)" = 'Version:        1.3.3'
+      - id: material-tag
+        name: Audit the immutable material tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          image=$(python3 tools/release/dependency_bundle.py show --field image)
+          tag=$(python3 tools/release/dependency_bundle.py show --field tag)
+          prefix="ghcr.io/${GITHUB_REPOSITORY_OWNER}/"
+          package=${image#"${prefix}"}
+          test "${package}" != "${image}"
+          python3 tools/release/check_registry_version.py \
+            --organization "${GITHUB_REPOSITORY_OWNER}" \
+            --package "${package}" \
+            --tag "${tag}" \
+            --github-output "${GITHUB_OUTPUT}"
       - name: Authenticate only for package publication
         env:
           GHCR_TOKEN: ${{ github.token }}
@@ -64,27 +79,30 @@ jobs:
             --username "${GITHUB_ACTOR}" --password-stdin
       - id: publish
         name: Publish or verify the immutable material tag
+        env:
+          EXISTING_DIGEST: ${{ steps.material-tag.outputs.digest }}
+          TAG_EXISTS: ${{ steps.material-tag.outputs.exists }}
         run: |
           image=$(python3 tools/release/dependency_bundle.py show --field image)
           tag=$(python3 tools/release/dependency_bundle.py show --field tag)
           digest=$(python3 tools/release/dependency_bundle.py show --field digest)
-          if ! tags=$(build/oras/oras repo tags "${image}" --format json 2>&1); then
-            if test "${tags}" != 'Error response from registry: name unknown: repository name not known to registry'; then
-              printf '%s\n' "${tags}" >&2
+          case "${TAG_EXISTS}" in
+            true)
+              if test "${EXISTING_DIGEST}" != "${digest}"; then
+                echo "immutable dependency material tag exists at ${EXISTING_DIGEST}, expected ${digest}" >&2
+                exit 1
+              fi
+              ;;
+            false)
+              test -z "${EXISTING_DIGEST}"
+              build/oras/oras cp --from-oci-layout \
+                "build/dependency-bundle-oci:${tag}" "${image}:${tag}"
+              ;;
+            *)
+              echo "invalid material-tag audit result: ${TAG_EXISTS}" >&2
               exit 1
-            fi
-            tags='{"tags":[]}'
-          fi
-          if jq -e --arg tag "${tag}" '.tags | index($tag)' <<<"${tags}" >/dev/null; then
-            existing=$(build/oras/oras resolve "${image}:${tag}")
-            if test "${existing}" != "${digest}"; then
-              echo "immutable dependency material tag exists at ${existing}, expected ${digest}" >&2
-              exit 1
-            fi
-          else
-            build/oras/oras cp --from-oci-layout \
-              "build/dependency-bundle-oci:${tag}" "${image}:${tag}"
-          fi
+              ;;
+          esac
           published=$(build/oras/oras resolve "${image}:${tag}")
           test "${published}" = "${digest}"
           {

@@ -10,7 +10,9 @@ import re
 import subprocess
 
 
-TAG_RE = re.compile(r"(?:[0-9]+\.[0-9]+\.[0-9]+|latest)")
+TAG_RE = re.compile(
+    r"(?:[0-9]+\.[0-9]+\.[0-9]+|latest|materials-[0-9a-f]{64})"
+)
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 
 
@@ -70,7 +72,9 @@ def main() -> int:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", arguments.package):
         parser.error("invalid package")
     if not TAG_RE.fullmatch(arguments.tag):
-        parser.error("--tag must be MAJOR.MINOR.PATCH or latest")
+        parser.error(
+            "--tag must be MAJOR.MINOR.PATCH, latest, or materials-SHA256"
+        )
 
     page = 1
     while True:
