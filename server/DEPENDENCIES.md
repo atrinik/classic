@@ -64,6 +64,19 @@ digest, archive-safety, and extraction failures fail immediately. Diagnostics
 identify the dependency, cache state, attempt, public URL, category, and
 terminal classification without retaining URL query strings.
 
+The Check workflow stages these immutable inputs once. Its bundle key covers
+the downloader and bundle schemas plus every field in the client lock, server
+lock, and libpcpnatpmp source metadata. A digest-keyed Actions cache contains
+raw archives only. The staging job re-hashes every restore, replaces a corrupt
+or missing entry only through the bounded acquisition boundary above, and
+publishes a per-run manifest with exactly the verified archives. Linux client,
+server, integrated, benchmark-baseline, and Windows consumers validate that
+manifest against their checkout before use. They install or extract only from
+the bundle with offline mode enabled, and every compile/test container runs
+with networking disabled. A missing, stale, extra, or mismatched material fails
+with its dependency name before configuration begins; extracted trees and
+marker files are never accepted as a cross-job cache.
+
 For coordinated local changes, configure CMake with
 `FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL` or
 `FETCHCONTENT_SOURCE_DIR_LIBATRINIK`. The protocol override must remain on the

@@ -33,6 +33,7 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     classic = commands.add_parser("classic")
     classic.add_argument("--classifier-result", required=True)
+    classic.add_argument("--dependency-inputs-result", required=True)
     classic.add_argument("--core-result", required=True)
     classic.add_argument("--client-required", required=True)
     classic.add_argument("--client-result", required=True)
@@ -52,6 +53,9 @@ def main() -> int:
     try:
         require_success("change classification", arguments.classifier_result)
         if arguments.command == "classic":
+            require_success(
+                "verified dependency inputs", arguments.dependency_inputs_result
+            )
             require_success("core validation", arguments.core_result)
             require_component(
                 "client", arguments.client_required, arguments.client_result
