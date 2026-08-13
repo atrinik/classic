@@ -143,6 +143,7 @@ static void write_module_details(FILE *fp, const char *label, DWORD64 address) {
     } else {
         fprintf(fp, "%s module name: <unknown>\n", label);
     }
+    fflush(fp);
 }
 
 /**
@@ -244,8 +245,12 @@ static void signal_handler(int sig, siginfo_t *siginfo, void *context)
     }
 
 #ifdef WIN32
-    /* Preserve the original details even if DbgHelp faults recursively. */
-    setvbuf(fp, NULL, _IONBF, 0);
+    if (fp != stderr) {
+        /* Preserve details even if a later DbgHelp operation faults. */
+        if (setvbuf(fp, NULL, _IONBF, 0) != 0) {
+            fflush(fp);
+        }
+    }
 #endif
 
 #ifdef WIN32
@@ -426,9 +431,11 @@ static void signal_handler(int sig, siginfo_t *siginfo, void *context)
         }
     }
 
+    fflush(fp);
     write_module_details(fp,
                          "Exception",
                          (DWORD64)(uintptr_t)ExceptionInfo->ExceptionRecord->ExceptionAddress);
+    fflush(fp);
     fputs("Stack trace:\n", fp);
 
     DWORD machine_type;
@@ -462,15 +469,15 @@ static void signal_handler(int sig, siginfo_t *siginfo, void *context)
 
         i = 0;
 
-        while (StackWalk64(machine_type,
-                           GetCurrentProcess(),
-                           GetCurrentThread(),
-                           &frame,
-                           ExceptionInfo->ContextRecord,
-                           0,
-                           SymFunctionTableAccess64,
-                           SymGetModuleBase64,
-                           0)) {
+        while (i < 64 && StackWalk64(machine_type,
+                                     GetCurrentProcess(),
+                                     GetCurrentThread(),
+                                     &frame,
+                                     ExceptionInfo->ContextRecord,
+                                     0,
+                                     SymFunctionTableAccess64,
+                                     SymGetModuleBase64,
+                                     0)) {
             fprintf(fp, "%d: %p\n", i, (void *)(uintptr_t)frame.AddrPC.Offset);
             write_module_details(fp, "  Frame", frame.AddrPC.Offset);
             i++;
