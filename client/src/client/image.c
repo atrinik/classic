@@ -1206,7 +1206,8 @@ void image_face_requests_service(void) {
     face_asset_requests_schedule_local(started);
 
     if (redraw) {
-        map_redraw_flag = minimap_redraw_flag = 1;
+        map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
+        minimap_redraw_flag = 1;
         book_redraw();
         interface_redraw();
         WIDGET_REDRAW_ALL(PDOLL_ID);

@@ -368,7 +368,7 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertIn("ctest --preset linux-release", component)
                 self.assertIn("ctest --preset linux-sanitizers", component)
 
-    def test_movement_regression_uses_only_compatible_immutable_baselines(self) -> None:
+    def test_movement_regression_compares_immutable_baselines_across_contracts(self) -> None:
         runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
             encoding="utf-8"
         )
@@ -376,6 +376,22 @@ class WorkflowContractTests(unittest.TestCase):
         client = runner[client_start : runner.index("esac", client_start)]
 
         self.assertIn("movement_contract_paths=(", client)
+        self.assertIn("movement_rendering_paths=(", client)
+        for path in (
+            "client/src/client/animations.c",
+            "client/src/client/image.c",
+            "client/src/client/lighting.c",
+            "client/src/client/sprite.c",
+            "client/src/client/texture.c",
+            "client/src/client/video.c",
+            "client/src/gui/misc/effects.c",
+            "client/src/gui/toolkit/surface_primitives.c",
+            "client/src/gui/widgets/map.c",
+            "client/src/gui/widgets/minimap.c",
+            "client/src/gui/widgets/render_profiler.c",
+        ):
+            self.assertIn(path, client)
+        self.assertIn('"${movement_rendering_paths[@]}"', client)
         self.assertIn(
             '"${benchmark_base_sha}:client/tools/movement_benchmark_schema.py"',
             client,
@@ -388,12 +404,17 @@ class WorkflowContractTests(unittest.TestCase):
             "comparison_note=baseline-movement-schema-mismatch",
             client,
         )
+        mismatch = client.index("comparison_note=baseline-movement-schema-mismatch")
+        normal = client.index(
+            "comparison_note=performance-calibration-pending-sibling-integration",
+            mismatch,
+        )
+        self.assertIn("movement_action=compare", client[mismatch:normal])
+        self.assertIn("baseline_needed=true", client[mismatch:normal])
         self.assertIn('--comparison-note "${comparison_note}"', client)
         self.assertIn("--informational-performance", client)
-        self.assertIn(
-            "--comparison-note performance-calibration-pending-sibling-integration",
-            client,
-        )
+        self.assertIn('--baseline-schema "${movement_baseline_schema}"', client)
+        self.assertIn('cp -- "${baseline_root}/client/tools/movement_benchmark_schema.py"', client)
         self.assertIn("movement_event_name} == merge_group", client)
         self.assertIn("the full movement matrix is candidate-only", client)
         self.assertEqual(client.count("--discrete-manifest"), 2)

@@ -65,6 +65,11 @@ SDL_Surface *ScreenSurface;
 int map_redraw_flag;
 int minimap_redraw_flag;
 
+void map_redraw_request(map_redraw_reason_t reason) {
+    TEST_CHECK(reason != 0);
+    map_redraw_flag = 1;
+}
+
 static char test_directory[HUGE_BUF];
 static char test_original_directory[HUGE_BUF];
 static char test_cache_directory[HUGE_BUF];
