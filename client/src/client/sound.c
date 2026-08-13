@@ -288,7 +288,7 @@ static uint32_t sound_music_file_get_duration(const char *filename) {
     uint32_t duration;
 
     snprintf(path, sizeof(path), DIRECTORY_MEDIA "/durations/%s", filename);
-    cp = sound_resolve_path(path);
+    cp = file_path(path, "r");
     contents = path_file_contents(cp);
     free(cp);
 
@@ -1266,6 +1266,41 @@ static bool sound_test_wait_for_effect(int channel, bool playing, uint32_t timeo
     return false;
 }
 
+static bool sound_test_wait_for_music_position(Sint64 *position, uint32_t timeout_ms) {
+    uint32_t started = SDL_GetTicks();
+    do {
+        *position = MIX_GetTrackPlaybackPosition(sound_music_track);
+        if (*position > 0) {
+            return true;
+        }
+        SDL_Delay(5);
+    } while (SDL_GetTicks() - started < timeout_ms);
+
+    return false;
+}
+
+static bool sound_test_finish_music(void) {
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {}
+
+    if (!MIX_StopTrack(sound_music_track, 0)) {
+        return false;
+    }
+
+    uint32_t started = SDL_GetTicks();
+    do {
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_EVENT_USER && event.user.code == EVENT_SOUND_MUSIC_FINISHED) {
+                sound_music_finished_handle();
+                return true;
+            }
+        }
+        SDL_Delay(5);
+    } while (SDL_GetTicks() - started < 1000);
+
+    return false;
+}
+
 static size_t sound_test_ambient_count(void) {
     size_t count = 0;
     sound_ambient_struct *ambient;
@@ -1346,6 +1381,8 @@ int sound_test_main(const char *fixture_root) {
     SOUND_TEST_CHECK(sound_test_hook_count == 1);
     SOUND_TEST_CHECK(strcmp(sound_test_hook_values[0], "opus-tone.mid") == 0);
     MIX_Audio *first_audio = MIX_GetTrackAudio(sound_music_track);
+    Sint64 position_before_update;
+    SOUND_TEST_CHECK(sound_test_wait_for_music_position(&position_before_update, 500));
 
     sound_start_bg_music("opus-tone.mid", 35, 2);
     SOUND_TEST_CHECK(sound_playing_music());
@@ -1354,9 +1391,11 @@ int sound_test_main(const char *fixture_root) {
     SOUND_TEST_CHECK(sound_background_loop == 2);
     SOUND_TEST_CHECK(sound_background_volume == 35);
     SOUND_TEST_CHECK(sound_test_hook_count == 1);
+    SOUND_TEST_CHECK(MIX_GetTrackPlaybackPosition(sound_music_track) >= position_before_update);
 
     sound_pause_music();
     SOUND_TEST_CHECK(MIX_TrackPaused(sound_music_track));
+    SOUND_TEST_CHECK(!sound_background_update_duration);
     sound_resume_music();
     SOUND_TEST_CHECK(MIX_TrackPlaying(sound_music_track));
     sound_stop_bg_music();
@@ -1399,15 +1438,13 @@ int sound_test_main(const char *fixture_root) {
     /* Natural completion clears state; finite and infinite loops restart from cache. */
     sound_start_bg_music("opus-tone.mid", 80, 0);
     sound_background_update_duration = 0;
-    MIX_StopTrack(sound_music_track, 0);
-    sound_music_finished_process();
+    SOUND_TEST_CHECK(sound_test_finish_music());
     SOUND_TEST_CHECK(sound_get_bg_music() == NULL);
     SOUND_TEST_CHECK(!sound_playing_music());
 
     sound_start_bg_music("opus-tone.mid", 80, 1);
     sound_background_update_duration = 0;
-    MIX_StopTrack(sound_music_track, 0);
-    sound_music_finished_process();
+    SOUND_TEST_CHECK(sound_test_finish_music());
     SOUND_TEST_CHECK(sound_playing_music());
     SOUND_TEST_CHECK(sound_background_loop == 0);
     SOUND_TEST_CHECK(HASH_COUNT(sound_data) == 2);
@@ -1415,8 +1452,7 @@ int sound_test_main(const char *fixture_root) {
 
     sound_start_bg_music("opus-tone.mid", 80, -1);
     sound_background_update_duration = 0;
-    MIX_StopTrack(sound_music_track, 0);
-    sound_music_finished_process();
+    SOUND_TEST_CHECK(sound_test_finish_music());
     SOUND_TEST_CHECK(sound_playing_music());
     SOUND_TEST_CHECK(sound_background_loop == -1);
     sound_stop_bg_music();
@@ -1424,10 +1460,12 @@ int sound_test_main(const char *fixture_root) {
     /* Effect one-shot, finite/infinite loop, explicit stop, repetition, and exhaustion. */
     int channel = sound_play_effect_loop("opus-tone.mid", 100, 0);
     SOUND_TEST_CHECK(channel >= 0);
+    SOUND_TEST_CHECK(MIX_TrackPlaying(sound_effect_tracks[channel]));
     SOUND_TEST_CHECK(sound_test_wait_for_effect(channel, false, 1500));
 
     channel = sound_play_effect_loop("opus-tone.mid", 100, 1);
     SOUND_TEST_CHECK(channel >= 0);
+    SOUND_TEST_CHECK(MIX_TrackPlaying(sound_effect_tracks[channel]));
     SOUND_TEST_CHECK(MIX_GetTrackLoops(sound_effect_tracks[channel]) == 1);
     SOUND_TEST_CHECK(sound_test_wait_for_effect(channel, false, 1500));
 
