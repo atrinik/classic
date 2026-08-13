@@ -638,11 +638,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(build.count(image), 4)
         self.assertEqual(build.count(digest), 4)
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", build)
-        self.assertEqual(build.count("--network none"), 2)
+        self.assertEqual(build.count("--network none"), 3)
         self.assertIn("persist-credentials: false", build)
-        self.assertIn("Stage pinned Windows server dependency", build)
+        self.assertIn("Verify and stage deterministic package inputs offline", build)
+        self.assertIn("bundle-verify", build)
         self.assertIn("server/tools/dependencies.py source", build)
         self.assertIn("--source-lock server/cmake/immutable_sources.lock.json", build)
+        self.assertGreaterEqual(build.count("--offline"), 3)
         self.assertNotIn("curl --fail --location --proto '=https'", build)
         self.assertIn("--env CCACHE_DIR=/tmp/atrinik-libatrinik-ccache", build)
         self.assertIn("-S server", build)
@@ -667,8 +669,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("--env CCACHE_MAXSIZE=250M", build)
         self.assertNotIn("--env CCACHE_DIR=/opt/mxe", build)
         self.assertIn("-DBUILD_TESTING=ON", build)
-        self.assertIn("working-directory: client", build)
-        self.assertIn("python3 tools/dependencies.py sync", build)
+        self.assertIn("python3 client/tools/dependencies.py sync --root client", build)
+        self.assertIn("python3 server/tools/dependencies.py sync --root server", build)
         self.assertIn("bash tools/build-windows-package.sh", build)
         self.assertIn("ATRINIK_DISCORD_APPLICATION_ID_FILE", build)
         self.assertIn("/data/discord-application-id", build)
@@ -702,6 +704,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", build)
         self.assertIn("Build portable Windows server package", build)
         self.assertIn("bash tools/build-windows-package.sh build/windows-pr-package", build)
+        self.assertIn(
+            "--env ATRINIK_DEPENDENCY_DOWNLOADS=/workspace/build/dependency-inputs/downloads",
+            build,
+        )
+        self.assertIn(
+            "--env ATRINIK_DEPENDENCY_CACHE_DIR=/workspace/build/dependency-source-cache",
+            build,
+        )
         self.assertIn("smoke_windows_server_package.ps1", build)
         self.assertIn("server/build/windows-pr-package/*.zip", build)
 
@@ -796,6 +806,81 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("--windows-required", aggregate)
         self.assertIn("--windows-result", aggregate)
 
+    def test_check_stages_one_verified_bundle_for_offline_consumers(self) -> None:
+        workflow = self.text("check.yml")
+        staging = workflow[
+            workflow.index("  dependency-inputs:") : workflow.index("  core:")
+        ]
+        self.assertIn("name: Verified dependency inputs", staging)
+        self.assertIn("bundle-key", staging)
+        self.assertIn("bundle-stage", staging)
+        for material in (
+            "client/dependencies.lock.json",
+            "server/dependencies.lock.json",
+            "server/cmake/immutable_sources.lock.json",
+        ):
+            self.assertEqual(staging.count(material), 2)
+        self.assertIn("actions/cache/restore@", staging)
+        self.assertIn("actions/cache/save@", staging)
+        self.assertIn("classic-dependency-archives-v1-", staging)
+        self.assertIn("steps.dependency-key.outputs.digest", staging)
+        self.assertIn("github.run_id", staging)
+        self.assertIn("github.run_attempt", staging)
+        self.assertIn("steps.dependency-stage.outputs.cache_changed == 'true'", staging)
+        self.assertIn("restore-keys:", staging)
+        self.assertIn("name: classic-dependency-inputs", staging)
+        self.assertIn("retention-days: 1", staging)
+        self.assertNotIn("contents: write", staging)
+
+        core = workflow[
+            workflow.index("  core:") : workflow.index("  windows-test-build:")
+        ]
+        self.assertIn("needs: dependency-inputs", core)
+        self.assertIn("--network none", core)
+
+        consumers = {
+            "windows": workflow[
+                workflow.index("  windows-test-build:") : workflow.index(
+                    "  windows-test:"
+                )
+            ],
+            "server": workflow[
+                workflow.index("  server:\n    name: Server validation") : workflow.index(
+                    "  client:\n    name: Client validation"
+                )
+            ],
+            "client": workflow[
+                workflow.index("  client:\n    name: Client validation") : workflow.index(
+                    "  movement-regression-comment:"
+                )
+            ],
+            "integrated": workflow[
+                workflow.index("  integrated:\n    name: Integrated client/server graph") : workflow.index(
+                    "  classic-validation:"
+                )
+            ],
+        }
+        for name, job in consumers.items():
+            with self.subTest(name=name):
+                self.assertIn("dependency-inputs", job)
+                self.assertIn("name: classic-dependency-inputs", job)
+                self.assertIn("path: build/dependency-inputs", job)
+                self.assertIn("--network none", job)
+                self.assertNotRegex(job, r"\b(curl|wget)\b")
+
+        runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("bundle-verify", runner)
+        self.assertEqual(runner.count("--offline"), 4)
+        self.assertIn('build/dependency-source-cache', runner)
+        self.assertIn('--downloads "${dependency_downloads}"', runner)
+        self.assertIn('"${baseline_root}/client/dependencies.lock.json"', runner)
+        self.assertIn("FETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP", runner)
+        aggregate = workflow[workflow.index("  classic-validation:") :]
+        self.assertIn("- dependency-inputs", aggregate)
+        self.assertIn("--dependency-inputs-result", aggregate)
+
     def test_linux_checks_pin_image_and_isolate_compiler_caches(self) -> None:
         workflow = self.text("check.yml")
         digest = "d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f"
@@ -805,6 +890,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(workflow.count(image), 1)
         self.assertEqual(workflow.count(f"sha256:{digest}"), 2)
         self.assertEqual(workflow.count(cache_action), 4)
+        self.assertEqual(workflow.count(f"actions/cache/restore@{cache_action.split('@')[1]}"), 1)
+        self.assertEqual(workflow.count(f"actions/cache/save@{cache_action.split('@')[1]}"), 1)
         self.assertEqual(workflow.count("tools/ci/linux_cache_key.py"), 4)
         self.assertEqual(workflow.count("tools/ci/run_linux_check.sh"), 8)
         self.assertEqual(workflow.count("--env CCACHE_DIR=/cache/ccache"), 4)
