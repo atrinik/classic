@@ -955,6 +955,8 @@ class EvidenceTests(unittest.TestCase):
         baseline = native_record(sustained_p95_ns=2_000_000)
         baseline["schema_version"] = 4
         baseline["identity"]["instrumentation"]["schema_version"] = 4
+        for phase in baseline["phases"]:
+            del phase["render_stages"]
         candidate = native_record(sustained_p95_ns=2_300_000)
         evidence = benchmark._build_evidence(
             [baseline, copy.deepcopy(baseline), copy.deepcopy(baseline)],
@@ -977,6 +979,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("alternated on the same runner", report)
         self.assertIn("Map render path p95 (contract-specific)", report)
         self.assertIn("base and candidate identities are not comparable", report)
+        self.assertIn("n/a → 0.001 ms", report)
 
     def test_informational_performance_failure_does_not_hide_or_fail(self) -> None:
         slow = native_record(sustained_p95_ns=50_000_000)

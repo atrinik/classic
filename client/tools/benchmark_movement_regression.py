@@ -253,6 +253,15 @@ def _render_stage_summary(
     records: list[dict[str, object]], name: str
 ) -> dict[str, dict[str, object | None]]:
     """Summarize profiler stages as median per-run average invocation times."""
+    if any(
+        not isinstance(phase(record, name).get("render_stages"), dict)
+        or set(phase(record, name)["render_stages"]) != set(RENDER_STAGES)
+        for record in records
+    ):
+        return {
+            stage_name: {"scope": scope, "calls_per_run": 0, "avg_ms_per_call": None}
+            for stage_name, scope in RENDER_STAGES.items()
+        }
     result: dict[str, dict[str, object | None]] = {}
     for stage_name, scope in RENDER_STAGES.items():
         stages = [phase(record, name)["render_stages"][stage_name] for record in records]
