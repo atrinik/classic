@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -115,7 +115,11 @@ void set_npc_enemy(object *npc, object *enemy, rv_vector *rv) {
             rv = &rv2;
         }
 
-        get_rangevector(npc, enemy, rv, RV_DIAGONAL_DISTANCE);
+        get_rangevector(npc,
+                        enemy,
+                        rv,
+                        RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH | RV_NO_LOAD |
+                            RV_RECURSIVE_SEARCH_EXTENDED);
         npc->enemy_count = enemy->count;
 
         /* important: that's our "we lose aggro count" - reset to zero here */
@@ -378,16 +382,26 @@ object *find_enemy(object *npc, rv_vector *rv) {
             if (is_friend_of(npc, npc->attacked_by)) {
                 /* Skip it, but let's wake up */
                 CLEAR_FLAG(npc, FLAG_SLEEP);
-            } else if (on_same_map(npc, npc->attacked_by)) {
-                /* The only thing we must know... */
+            } else {
+                object *attacker = npc->attacked_by;
 
-                CLEAR_FLAG(npc, FLAG_SLEEP);
-                set_npc_enemy(npc, npc->attacked_by, rv);
                 /* Always clear the attacker entry */
                 npc->attacked_by = NULL;
 
-                /* Face our attacker */
-                return npc->enemy;
+                if (on_same_map(npc, attacker) &&
+                    get_rangevector(npc,
+                                    attacker,
+                                    rv,
+                                    RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH | RV_NO_LOAD |
+                                        RV_RECURSIVE_SEARCH_EXTENDED)) {
+                    /* The only thing we must know... */
+
+                    CLEAR_FLAG(npc, FLAG_SLEEP);
+                    set_npc_enemy(npc, attacker, NULL);
+
+                    /* Face our attacker */
+                    return npc->enemy;
+                }
             }
         }
 
@@ -436,7 +450,10 @@ static int can_detect_enemy(object *op, object *enemy, rv_vector *rv) {
         return 0;
     }
 
-    if (!get_rangevector(op, enemy, rv, 0)) {
+    if (!get_rangevector(op,
+                         enemy,
+                         rv,
+                         RV_RECURSIVE_SEARCH | RV_NO_LOAD | RV_RECURSIVE_SEARCH_EXTENDED)) {
         return 0;
     }
 

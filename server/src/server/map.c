@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -301,8 +301,8 @@ static int relative_tile_position_rec(mapstruct *map1,
                                                      y,
                                                      z,
                                                      id,
-                                                     flags,
-                                                     flags & RV_RECURSIVE_SEARCH ? level : 1))) {
+                                                     flags & RV_RECURSIVE_SEARCH ? level : 1,
+                                                     flags))) {
             *z += 1;
             return 1;
         }
@@ -311,7 +311,8 @@ static int relative_tile_position_rec(mapstruct *map1,
     if (flags & RV_RECURSIVE_SEARCH) {
         /* Depth-first search for the destination map */
         for (i = 0; i < TILED_NUM; i++) {
-            if (map1->tile_path[i]) {
+            if (map1->tile_path[i] ||
+                (map1->tile_map[i] != NULL && map1->tile_map[i]->in_memory == MAP_IN_MEMORY)) {
                 if (map1->tile_map[i] == NULL || map1->tile_map[i]->in_memory != MAP_IN_MEMORY) {
                     if (flags & RV_NO_LOAD || !load_and_link_tiled_map(map1, i)) {
                         continue;
@@ -435,7 +436,12 @@ relative_tile_position(mapstruct *map1, mapstruct *map2, int *x, int *y, int *z,
     }
 
     /* Recursive search */
-    return relative_tile_position_rec(map1, map2, x, y, z, ++traversal_id, 2, flags);
+    int level = (flags & RV_RECURSIVE_SEARCH_EXTENDED) && (flags & RV_RECURSIVE_SEARCH) &&
+                        (flags & RV_NO_LOAD)
+                    ? 3
+                    : 2;
+
+    return relative_tile_position_rec(map1, map2, x, y, z, ++traversal_id, level, flags);
 }
 
 /**
