@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -198,7 +198,7 @@ static void attack_bonus_send(object *owner, const attack_bonus_t *bonus) {
 }
 
 /** Select the authoritative hurt vocal for a player. */
-static const char *attack_player_hurt_sound(const object *player) {
+const char *attack_player_hurt_sound(const object *player) {
     static const char *const female_hurt_sounds[] = {
         "doh_female_1.ogg",
         "doh_female_2.ogg",
@@ -209,6 +209,8 @@ static const char *attack_player_hurt_sound(const object *player) {
         "doh_female_7.ogg",
     };
 
+    /* Only the female-only gender uses the female vocal set. Neuter, male,
+     * and hermaphrodite players use the default vocal. */
     if (object_get_gender(player) == GENDER_FEMALE) {
         return female_hurt_sounds[rndm(0, arraysize(female_hurt_sounds) - 1)];
     }
@@ -1070,15 +1072,6 @@ static int attack_hit_internal(object *op,
 
     if (op->type == PLAYER) {
         CONTR(op)->last_combat = pticks;
-        if (maxdam > 0.0) {
-            play_sound_player_only(CONTR(op),
-                                   CMD_SOUND_EFFECT,
-                                   attack_player_hurt_sound(op),
-                                   0,
-                                   0,
-                                   0,
-                                   0);
-        }
     }
 
     double accumulated_damage = op->last_damage + maxdam;
@@ -1093,6 +1086,16 @@ static int attack_hit_internal(object *op,
 
     int hp_after = (int)(op->stats.hp - maxdam);
     int effective_damage = op->stats.hp - hp_after;
+
+    if (effective_damage > 0 && op->type == PLAYER) {
+        play_sound_player_only(CONTR(op),
+                               CMD_SOUND_EFFECT,
+                               attack_player_hurt_sound(op),
+                               0,
+                               0,
+                               0,
+                               0);
+    }
 
     if (effective_damage > 0 && hitter_owner->type == PLAYER) {
         metrics_add(&CONTR(hitter_owner)->metrics,

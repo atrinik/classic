@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -51,17 +51,6 @@ static uint8_t enabled = 0;
  * Doubly-linked list of all playing ambient sound effects.
  */
 static sound_ambient_struct *sound_ambient_head = NULL;
-
-/** Female player-hurt variants supplied by the sound submodule. */
-static const char *const sound_female_hurt_effects[] = {
-    "doh_female_1.ogg",
-    "doh_female_2.ogg",
-    "doh_female_3.ogg",
-    "doh_female_4.ogg",
-    "doh_female_5.ogg",
-    "doh_female_6.ogg",
-    "doh_female_7.ogg",
-};
 
 #ifdef HAVE_SDL_MIXER
 
@@ -880,17 +869,7 @@ void socket_command_sound(uint8_t *data, size_t len, size_t pos) {
         x = packet_reader_read_uint8(&reader);
         y = packet_reader_read_uint8(&reader);
 
-        const char *effect = filename;
-        if (strcmp(filename, "player_hurt.ogg") == 0) {
-            if (cpl.gender == GENDER_FEMALE) {
-                effect =
-                    sound_female_hurt_effects[rndm(0, arraysize(sound_female_hurt_effects) - 1)];
-            } else {
-                effect = "doh.ogg";
-            }
-        }
-
-        channel = sound_play_effect_loop(effect, 100 + volume, loop);
+        channel = sound_play_server_effect(filename, 100 + volume, loop);
 
         if (channel != -1) {
             int angle, distance;

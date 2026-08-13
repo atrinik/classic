@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -105,6 +105,7 @@ int attack_hit(object *op, object *hitter, int dam);
 /** Gameplay damage API that evaluates situational opening and archery bonuses. */
 int attack_hit_situational(object *op, object *hitter, int dam);
 int attack_hit_nonlethal(object *op, object *hitter, int dam);
+const char *attack_player_hurt_sound(const object *player);
 void attack_hit_map(object *op, int dir, bool multi_reduce);
 bool attack_kill(object *op, object *hitter);
 void attack_perform_poison(object *op, object *hitter, double dam);
