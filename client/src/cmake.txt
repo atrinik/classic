@@ -1,6 +1,7 @@
 set(SOURCES
 	src/client/asset.c
 	src/client/asset_source.c
+	src/client/audio_log.c
 	src/client/face_asset.c
 	src/client/face_cache.c
 	src/client/face_loader.c
