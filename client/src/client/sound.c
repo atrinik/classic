@@ -100,6 +100,8 @@ static void (*sound_background_hook)(void);
 #ifdef ATRINIK_SOUND_TESTS
 static const char *sound_test_fixture_root;
 static bool sound_test_fail_next_music_play;
+static MIX_StereoGains sound_test_effect_gains[SOUND_EFFECT_TRACKS];
+static bool sound_test_effect_gains_valid[SOUND_EFFECT_TRACKS];
 #endif
 
 static int sound_setting_get(int category, int setting) {
@@ -763,8 +765,9 @@ void sound_stop_bg_music(void) {
         free(sound_background);
         sound_background = NULL;
 #ifdef HAVE_SDL_MIXER
-        sound_background_hook_execute();
         MIX_StopTrack(sound_music_track, 0);
+        MIX_SetTrackAudio(sound_music_track, NULL);
+        sound_background_hook_execute();
 #endif
     }
 }
@@ -979,7 +982,12 @@ static void sound_set_effect_position(int channel, int angle, int distance) {
     }
 
     MIX_StereoGains gains = sound_effect_stereo_gains(angle, distance);
-    MIX_SetTrackStereo(sound_effect_tracks[channel], &gains);
+    if (MIX_SetTrackStereo(sound_effect_tracks[channel], &gains)) {
+#ifdef ATRINIK_SOUND_TESTS
+        sound_test_effect_gains[channel] = gains;
+        sound_test_effect_gains_valid[channel] = true;
+#endif
+    }
 #else
     (void)channel;
     (void)angle;
@@ -1237,6 +1245,7 @@ int sound_playing_music(void) {
 
 static size_t sound_test_hook_count;
 static char sound_test_hook_values[32][MAX_BUF];
+static bool sound_test_hook_track_active[32];
 
 static void sound_test_background_hook(void) {
     if (sound_test_hook_count >= arraysize(sound_test_hook_values)) {
@@ -1248,6 +1257,8 @@ static void sound_test_background_hook(void) {
              sizeof(sound_test_hook_values[sound_test_hook_count]),
              "%s",
              background != NULL ? background : "<stopped>");
+    sound_test_hook_track_active[sound_test_hook_count] =
+        MIX_TrackPlaying(sound_music_track) || MIX_TrackPaused(sound_music_track);
     sound_test_hook_count++;
 }
 
@@ -1399,6 +1410,7 @@ int sound_test_main(const char *fixture_root) {
     SOUND_TEST_CHECK(sound_get_bg_music() == NULL);
     SOUND_TEST_CHECK(sound_test_hook_count == 2);
     SOUND_TEST_CHECK(strcmp(sound_test_hook_values[1], "<stopped>") == 0);
+    SOUND_TEST_CHECK(!sound_test_hook_track_active[1]);
 
     sound_start_bg_music("opus-tone.mid", 80, -1);
     SOUND_TEST_CHECK(sound_playing_music());
@@ -1412,6 +1424,7 @@ int sound_test_main(const char *fixture_root) {
     SOUND_TEST_CHECK(HASH_COUNT(sound_data) == 1);
     SOUND_TEST_CHECK(sound_test_hook_count == 4);
     SOUND_TEST_CHECK(strcmp(sound_test_hook_values[3], "<stopped>") == 0);
+    SOUND_TEST_CHECK(!sound_test_hook_track_active[3]);
 
     sound_start_bg_music("opus-tone.mid", 80, -1);
     SOUND_TEST_CHECK(sound_playing_music());
@@ -1430,6 +1443,7 @@ int sound_test_main(const char *fixture_root) {
     SOUND_TEST_CHECK(sound_get_bg_music() == NULL);
     SOUND_TEST_CHECK(sound_test_hook_count == hooks_before_failure + 1);
     SOUND_TEST_CHECK(strcmp(sound_test_hook_values[hooks_before_failure], "<stopped>") == 0);
+    SOUND_TEST_CHECK(!sound_test_hook_track_active[hooks_before_failure]);
 
     /* Natural completion clears state; finite and infinite loops restart from cache. */
     sound_start_bg_music("opus-tone.mid", 80, 0);
@@ -1472,6 +1486,19 @@ int sound_test_main(const char *fixture_root) {
     sound_stop_effect(channel);
     SOUND_TEST_CHECK(!MIX_TrackPlaying(sound_effect_tracks[channel]));
 
+    /* Rapid one-shots consume several channels, then the same channels recycle. */
+    for (int wave = 0; wave < 3; wave++) {
+        int channels[8];
+        for (int i = 0; i < (int)arraysize(channels); i++) {
+            channels[i] = sound_play_effect_loop("opus-tone.mid", 100, 0);
+            SOUND_TEST_CHECK(channels[i] >= 0);
+            SOUND_TEST_CHECK(MIX_TrackPlaying(sound_effect_tracks[channels[i]]));
+        }
+        for (int i = 0; i < (int)arraysize(channels); i++) {
+            SOUND_TEST_CHECK(sound_test_wait_for_effect(channels[i], false, 1500));
+        }
+    }
+
     for (int i = 0; i < SOUND_EFFECT_TRACKS; i++) {
         SOUND_TEST_CHECK(sound_play_effect_loop("opus-tone.mid", 100, -1) >= 0);
     }
@@ -1487,6 +1514,30 @@ int sound_test_main(const char *fixture_root) {
     SOUND_TEST_CHECK(right.left < 0.001f && right.right > 0.999f);
     SOUND_TEST_CHECK(distant.left == 0.0f && distant.right == 0.0f);
 
+    /* The protocol path applies stereo positioning to the mixer track. */
+    packet = packet_new(0, 64, 32);
+    packet_writer_write_uint8(packet, CMD_SOUND_EFFECT);
+    packet_writer_write_cstring(packet, "opus-tone.mid");
+    packet_writer_write_int8(packet, -1);
+    packet_writer_write_int8(packet, 0);
+    packet_writer_write_uint8(packet, 6);
+    packet_writer_write_uint8(packet, 0);
+    socket_command_sound(packet->data, packet->len, 0);
+    packet_free(packet);
+    packet = NULL;
+    int positioned_channel = -1;
+    for (int i = 0; i < SOUND_EFFECT_TRACKS; i++) {
+        if (sound_test_effect_gains_valid[i] && MIX_TrackPlaying(sound_effect_tracks[i])) {
+            positioned_channel = i;
+            break;
+        }
+    }
+    SOUND_TEST_CHECK(positioned_channel >= 0);
+    SOUND_TEST_CHECK(sound_test_effect_gains[positioned_channel].left < 0.001f);
+    SOUND_TEST_CHECK(sound_test_effect_gains[positioned_channel].right > 0.0f);
+    SOUND_TEST_CHECK(sound_test_effect_gains[positioned_channel].right < 1.0f);
+    sound_stop_effect(positioned_channel);
+
     /* Ambient protocol starts, repositions, removes, and clears looping effects. */
     packet = packet_new(0, 64, 32);
     packet_writer_write_uint8(packet, 8);
@@ -1500,8 +1551,13 @@ int sound_test_main(const char *fixture_root) {
     packet_free(packet);
     packet = NULL;
     SOUND_TEST_CHECK(sound_test_ambient_count() == 1);
+    SOUND_TEST_CHECK(sound_test_effect_gains_valid[sound_ambient_head->channel]);
+    MIX_StereoGains ambient_before = sound_test_effect_gains[sound_ambient_head->channel];
     sound_ambient_mapcroll(1, 0);
     SOUND_TEST_CHECK(sound_test_ambient_count() == 1);
+    MIX_StereoGains ambient_after = sound_test_effect_gains[sound_ambient_head->channel];
+    SOUND_TEST_CHECK(ambient_before.left != ambient_after.left ||
+                     ambient_before.right != ambient_after.right);
     sound_ambient_mapcroll(100, 0);
     SOUND_TEST_CHECK(sound_test_ambient_count() == 0);
 

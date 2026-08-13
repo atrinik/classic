@@ -385,6 +385,12 @@ if (BUILD_TESTING)
             ENVIRONMENT "SDL_AUDIO_DRIVER=dummy"
             TIMEOUT 30)
 
+        add_test(NAME client-sound-fixture
+            COMMAND ${CMAKE_COMMAND}
+                -DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/audio/opus-tone.mid
+                -DEXPECTED_SHA256=4908f4bf08be6c111894c18da9d82737b83defa5450c9dbe005f4ac892934513
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/audio/verify.cmake)
+
     add_executable(client-stun-config-tests
         src/tests/stun_config.c
         src/client/stun_config.c)
