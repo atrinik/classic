@@ -44,6 +44,26 @@ sibling_sources=(
   -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK="${source_root}/libatrinik"
 )
 
+dependency_bundle=${source_root}/build/dependency-inputs
+dependency_downloads=${dependency_bundle}/downloads
+if [[ ${component} != core ]]; then
+  python3 "${source_root}/server/tools/dependencies.py" bundle-verify \
+    --client-lock "${source_root}/client/dependencies.lock.json" \
+    --server-lock "${source_root}/server/dependencies.lock.json" \
+    --source-lock "${source_root}/server/cmake/immutable_sources.lock.json" \
+    --bundle "${dependency_bundle}"
+fi
+if [[ ${component} == server || ${component} == integrated ]]; then
+  pcpnatpmp_source=$(python3 "${source_root}/server/tools/dependencies.py" source \
+    --source-lock "${source_root}/server/cmake/immutable_sources.lock.json" \
+    --source-name libpcpnatpmp \
+    --cache "${dependency_bundle}" \
+    --offline)
+  sibling_sources+=(
+    -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP="${pcpnatpmp_source}"
+  )
+fi
+
 ccache --zero-stats >/dev/null
 
 case "${component}" in
@@ -84,7 +104,8 @@ case "${component}" in
   server)
     pushd "${source_root}/server" >/dev/null
     python3 -m unittest discover -s tools/tests -p 'test_*.py'
-    python3 tools/dependencies.py sync
+    python3 tools/dependencies.py sync \
+      --cache "${dependency_downloads}" --offline
     python3 tools/dependencies.py verify
     cmake --preset linux-coverage \
       -DENABLE_PRECOMPILED_HEADERS=OFF \
@@ -117,7 +138,8 @@ case "${component}" in
       '{"schema_version":1,"skipped":true,"reason":"client-validation-ended-before-lighting-evidence"}' \
       >"${lighting_evidence}"
     python3 -m unittest discover -s tools/tests -p 'test_*.py'
-    python3 tools/dependencies.py sync
+    python3 tools/dependencies.py sync \
+      --cache "${dependency_downloads}" --offline
     python3 tools/dependencies.py verify
     cmake --preset linux-coverage \
       -DENABLE_PRECOMPILED_HEADERS=OFF \
@@ -292,8 +314,13 @@ case "${component}" in
         "${baseline_root}" "${benchmark_base_sha}"
 
       pushd "${baseline_root}/client" >/dev/null
-      python3 tools/dependencies.py sync
-      python3 tools/dependencies.py verify
+      python3 "${source_root}/server/tools/dependencies.py" sync \
+        --root "${baseline_root}/client" \
+        --lock "${baseline_root}/client/dependencies.lock.json" \
+        --cache "${dependency_downloads}" --offline
+      python3 "${source_root}/server/tools/dependencies.py" verify \
+        --root "${baseline_root}/client" \
+        --lock "${baseline_root}/client/dependencies.lock.json"
       env ATRINIK_BENCHMARK_REVISION="${benchmark_base_sha}" \
         ATRINIK_BENCHMARK_DIRTY=false \
         cmake --preset linux-release \
@@ -396,7 +423,7 @@ case "${component}" in
     pushd "${source_root}" >/dev/null
     cmake --preset linux-release \
       -DBUILD_TESTING=OFF \
-      "${launcher[@]}"
+      "${launcher[@]}" "${sibling_sources[@]}"
     cmake --build --preset linux-release --parallel "${jobs}"
     popd >/dev/null
     ;;

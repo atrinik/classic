@@ -25,6 +25,7 @@ import urllib.error
 
 
 LOCK_SCHEMA_VERSION = 1
+BUNDLE_SCHEMA_VERSION = 1
 MARKER_NAME = ".atrinik-dependency.json"
 MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_EXPANDED_BYTES = 4 * 1024 * 1024 * 1024
@@ -208,6 +209,7 @@ def _download(
     opener: object = urllib.request.urlopen,
     sleeper: object = time.sleep,
     jitter: object = random.uniform,
+    offline: bool = False,
 ) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     expected = str(dependency["sha256"])
@@ -220,6 +222,11 @@ def _download(
             )
             return archive
         archive.unlink()
+
+    if offline:
+        raise DependencyError(
+            f"{dependency['name']}: verified archive is missing from the offline dependency bundle"
+        )
 
     request = urllib.request.Request(
         str(dependency["url"]),
@@ -376,7 +383,8 @@ def load_source_lock(path: Path, name: str) -> dict[str, str]:
 
 
 def fetch_source(
-    *, name: str, url: str, sha256: str, tree_sha256: str, cache_dir: Path
+    *, name: str, url: str, sha256: str, tree_sha256: str, cache_dir: Path,
+    offline: bool = False,
 ) -> Path:
     if not name or not all(character.islower() or character.isdigit() or character == "-" for character in name):
         raise DependencyError("source name must use lowercase kebab-case")
@@ -393,7 +401,11 @@ def fetch_source(
         if source_tree_sha256(source_root) != tree_sha256:
             raise DependencyError(f"{name}: mismatched shared source content")
         return source_root
-    archive = _download({"name": name, "url": url, "sha256": sha256}, cache_dir / "downloads")
+    archive = _download(
+        {"name": name, "url": url, "sha256": sha256},
+        cache_dir / "downloads",
+        offline=offline,
+    )
     source_root.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{name}-staging-", dir=source_root.parent))
     try:
@@ -439,6 +451,7 @@ def install_dependency(
     dependency: dict[str, object],
     *,
     refresh: bool = False,
+    offline: bool = False,
 ) -> str:
     root = root.resolve(strict=True)
     destination = (root / str(dependency["destination"])).resolve(strict=False)
@@ -453,7 +466,7 @@ def install_dependency(
     if destination.exists() and existing_marker is None:
         raise DependencyError(f"refusing to replace unmanaged destination: {destination}")
 
-    archive = _download(dependency, cache_dir)
+    archive = _download(dependency, cache_dir, offline=offline)
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{dependency['name']}-staging-", dir=destination.parent))
     backup: Path | None = None
@@ -484,9 +497,125 @@ def verify_dependency(root: Path, dependency: dict[str, object]) -> None:
         raise DependencyError(f"dependency {dependency['name']} does not match the lock")
 
 
+def bundle_materials(
+    client_lock: Path, server_lock: Path, source_lock: Path
+) -> list[dict[str, object]]:
+    materials: list[dict[str, object]] = []
+    for owner, lock in (("client", client_lock), ("server", server_lock)):
+        for dependency in load_lock(lock):
+            materials.append({"kind": "dependency", "owner": owner, **dependency})
+    source = load_source_lock(source_lock, "libpcpnatpmp")
+    materials.append({"kind": "source", "owner": "server", **source})
+    names = [str(material["name"]) for material in materials]
+    if len(names) != len(set(names)):
+        raise DependencyError("dependency bundle material names must be unique")
+    return materials
+
+
+def bundle_manifest(materials: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "bundle_schema_version": BUNDLE_SCHEMA_VERSION,
+        "downloader_schema_version": LOCK_SCHEMA_VERSION,
+        "materials": materials,
+    }
+
+
+def bundle_digest(materials: list[dict[str, object]]) -> str:
+    encoded = json.dumps(
+        bundle_manifest(materials), sort_keys=True, separators=(",", ":")
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def stage_bundle(
+    materials: list[dict[str, object]], cache_dir: Path, output_dir: Path
+) -> None:
+    if output_dir.exists():
+        raise DependencyError(f"dependency bundle output already exists: {output_dir}")
+    cache_downloads = cache_dir / "downloads"
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{output_dir.name}-staging-", dir=output_dir.parent)
+    )
+    try:
+        downloads = staging / "downloads"
+        downloads.mkdir()
+        for material in materials:
+            archive = _download(material, cache_downloads)
+            destination = downloads / archive.name
+            shutil.copyfile(archive, destination)
+            if sha256_file(destination) != material["sha256"]:
+                raise DependencyError(
+                    f"{material['name']}: copied dependency bundle archive failed verification"
+                )
+        (staging / "manifest.json").write_text(
+            json.dumps(bundle_manifest(materials), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        staging.replace(output_dir)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
+def verify_bundle(materials: list[dict[str, object]], bundle_dir: Path) -> None:
+    try:
+        top_level = {path.name for path in bundle_dir.iterdir()}
+    except OSError as error:
+        raise DependencyError(f"cannot read dependency bundle: {error}") from error
+    if top_level != {"downloads", "manifest.json"}:
+        raise DependencyError(
+            "dependency bundle must contain only manifest.json and downloads"
+        )
+    manifest_path = bundle_dir / "manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise DependencyError("dependency bundle manifest must be a regular file")
+    try:
+        with manifest_path.open(encoding="utf-8") as stream:
+            actual_manifest = json.load(stream, object_pairs_hook=_reject_duplicate_keys)
+    except (OSError, json.JSONDecodeError) as error:
+        raise DependencyError(f"cannot read dependency bundle manifest: {error}") from error
+    expected_manifest = bundle_manifest(materials)
+    if actual_manifest != expected_manifest:
+        raise DependencyError("dependency bundle manifest does not match the current locks")
+
+    downloads = bundle_dir / "downloads"
+    expected_names = {
+        f"{material['name']}-{material['sha256']}.tar.gz" for material in materials
+    }
+    try:
+        archive_paths = list(downloads.iterdir())
+    except OSError as error:
+        raise DependencyError(f"cannot read dependency bundle archives: {error}") from error
+    if any(path.is_symlink() or not path.is_file() for path in archive_paths):
+        raise DependencyError("dependency bundle downloads must contain regular files only")
+    actual_names = {path.name for path in archive_paths}
+    if actual_names != expected_names:
+        missing = sorted(expected_names - actual_names)
+        extra = sorted(actual_names - expected_names)
+        details = []
+        if missing:
+            details.append(f"missing {', '.join(missing)}")
+        if extra:
+            details.append(f"unexpected {', '.join(extra)}")
+        raise DependencyError(f"dependency bundle archives: {'; '.join(details)}")
+    for material in materials:
+        archive = downloads / f"{material['name']}-{material['sha256']}.tar.gz"
+        if sha256_file(archive) != material["sha256"]:
+            raise DependencyError(
+                f"dependency bundle archive {material['name']} failed SHA-256 verification"
+            )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("validate", "sync", "verify", "list", "source"))
+    parser.add_argument(
+        "command",
+        choices=(
+            "validate", "sync", "verify", "list", "source",
+            "bundle-key", "bundle-stage", "bundle-verify",
+        ),
+    )
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--lock", type=Path)
     parser.add_argument("--cache", type=Path)
@@ -497,6 +626,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tree-sha256")
     parser.add_argument("--source-lock", type=Path)
     parser.add_argument("--source-name")
+    parser.add_argument("--client-lock", type=Path)
+    parser.add_argument("--server-lock", type=Path)
+    parser.add_argument("--bundle", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--github-output", type=Path)
+    parser.add_argument("--offline", action="store_true")
     return parser.parse_args()
 
 
@@ -506,6 +641,33 @@ def main() -> int:
     lock_path = args.lock or root / "dependencies.lock.json"
     cache_dir = args.cache or root / "build" / "dependencies" / "downloads"
     try:
+        if args.command.startswith("bundle-"):
+            if not all((args.client_lock, args.server_lock, args.source_lock)):
+                raise DependencyError(
+                    f"{args.command} requires --client-lock, --server-lock, and --source-lock"
+                )
+            materials = bundle_materials(
+                args.client_lock, args.server_lock, args.source_lock
+            )
+            if args.command == "bundle-key":
+                digest = bundle_digest(materials)
+                print(digest)
+                if args.github_output:
+                    with args.github_output.open("a", encoding="utf-8") as stream:
+                        stream.write(f"digest={digest}\n")
+                return 0
+            if args.command == "bundle-stage":
+                if not args.cache or not args.output:
+                    raise DependencyError("bundle-stage requires --cache and --output")
+                stage_bundle(materials, args.cache, args.output)
+                verify_bundle(materials, args.output)
+                print(f"{args.output}: verified dependency bundle")
+                return 0
+            if not args.bundle:
+                raise DependencyError("bundle-verify requires --bundle")
+            verify_bundle(materials, args.bundle)
+            print(f"{args.bundle}: verified dependency bundle")
+            return 0
         if args.command == "source":
             if not all((args.source_lock, args.source_name, args.cache)):
                 raise DependencyError("source requires --source-lock, --source-name, and --cache")
@@ -513,6 +675,7 @@ def main() -> int:
             print(fetch_source(
                 name=source["name"], url=source["url"], sha256=source["sha256"],
                 tree_sha256=source["tree_sha256"], cache_dir=args.cache,
+                offline=args.offline,
             ))
             return 0
         dependencies = load_lock(lock_path)
@@ -521,7 +684,10 @@ def main() -> int:
                 print(f"{dependency['name']}\t{dependency['tag']}\t{dependency['destination']}")
         elif args.command == "sync":
             for dependency in dependencies:
-                status = install_dependency(root, cache_dir, dependency, refresh=args.refresh)
+                status = install_dependency(
+                    root, cache_dir, dependency,
+                    refresh=args.refresh, offline=args.offline,
+                )
                 print(f"{dependency['name']}: {status}")
         elif args.command == "verify":
             for dependency in dependencies:
