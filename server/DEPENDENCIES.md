@@ -32,8 +32,9 @@ digest. The trusted default-branch publisher builds that deterministic layout
 through this same fetcher. Release staging verifies the OCI digest, closed
 manifest, source-lock and material digests, provenance, sizes, and all four
 archive hashes before installing the raw archives into their ordinary cache
-locations. Component sync and the CMake source extractor then run with
-`ATRINIK_DEPENDENCY_OFFLINE=1`; a missing or invalid cache entry fails without
+locations. Component sync selects those staged download directories and uses
+the fetcher's explicit `--refresh --offline` boundary; server CMake also uses
+the staged immutable-source cache. A missing or invalid entry fails without
 opening a network connection.
 
 The repository-root `Update verified content lock` workflow is the only
@@ -74,6 +75,19 @@ exponential backoff (honouring a bounded `Retry-After`); policy, TLS, URL,
 digest, archive-safety, and extraction failures fail immediately. Diagnostics
 identify the dependency, cache state, attempt, public URL, category, and
 terminal classification without retaining URL query strings.
+
+The Check workflow stages these immutable inputs once. Its bundle key covers
+the downloader and bundle schemas plus every field in the client lock, server
+lock, and libpcpnatpmp source metadata. A digest-keyed Actions cache contains
+raw archives only. The staging job re-hashes every restore, replaces a corrupt
+or missing entry only through the bounded acquisition boundary above, and
+publishes a per-run manifest with exactly the verified archives. Linux client,
+server, integrated, benchmark-baseline, and Windows consumers validate that
+manifest against their checkout before use. They install or extract only from
+the bundle with offline mode enabled, and every compile/test container runs
+with networking disabled. A missing, stale, extra, or mismatched material fails
+with its dependency name before configuration begins; extracted trees and
+marker files are never accepted as a cross-job cache.
 
 For coordinated local changes, configure CMake with
 `FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL` or

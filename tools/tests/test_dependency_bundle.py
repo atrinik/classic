@@ -37,7 +37,7 @@ class DependencyBundleTests(unittest.TestCase):
                 info.size = len(payload)
                 output.addfile(info, io.BytesIO(payload))
             digest = dependency_bundle.sha256_file(archive)
-            cached = self.cache / f"{name}-{digest}.tar.gz"
+            cached = self.cache / "downloads" / f"{name}-{digest}.tar.gz"
             cached.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(archive, cached)
             records[name] = {

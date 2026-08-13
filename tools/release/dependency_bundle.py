@@ -28,6 +28,10 @@ LOCK_PATHS = (
     Path("server/dependencies.lock.json"),
     Path("server/cmake/immutable_sources.lock.json"),
 )
+ACQUISITION_CONTRACT_PATHS = (
+    Path("server/tools/dependencies.py"),
+    Path("tools/release/dependency_bundle.py"),
+)
 EXPECTED_NAMES = ("content", "libpcpnatpmp", "resources", "sound")
 
 
@@ -94,18 +98,10 @@ def locked_material(root: Path) -> tuple[dict[str, str], list[dict[str, object]]
         path.as_posix(): sha256_file(root / path)
         for path in LOCK_PATHS
     }
-    records: list[dict[str, object]] = []
-    for component in ("client", "server"):
-        path = root / component / "dependencies.lock.json"
-        for dependency in fetcher.load_lock(path):
-            records.append({"kind": "dependency", "component": component, **dependency})
-    source_lock = root / "server" / "cmake" / "immutable_sources.lock.json"
-    records.append(
-        {
-            "kind": "source",
-            "component": "server",
-            **fetcher.load_source_lock(source_lock, "libpcpnatpmp"),
-        }
+    records = fetcher.bundle_materials(
+        root / "client" / "dependencies.lock.json",
+        root / "server" / "dependencies.lock.json",
+        root / "server" / "cmake" / "immutable_sources.lock.json",
     )
     records.sort(key=lambda item: str(item["name"]))
     if tuple(record["name"] for record in records) != EXPECTED_NAMES:
@@ -117,9 +113,22 @@ def locked_material(root: Path) -> tuple[dict[str, str], list[dict[str, object]]
 
 def material_document(root: Path) -> dict[str, object]:
     lock_digests, records = locked_material(root)
+    fetcher = dependency_module(root)
+    verified_inputs = fetcher.bundle_materials(
+        root / "client" / "dependencies.lock.json",
+        root / "server" / "dependencies.lock.json",
+        root / "server" / "cmake" / "immutable_sources.lock.json",
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "source_locks": lock_digests,
+        "acquisition_contracts": {
+            path.as_posix(): sha256_file(root / path)
+            for path in ACQUISITION_CONTRACT_PATHS
+        },
+        "verified_input_bundle_digest": (
+            "sha256:" + fetcher.bundle_digest(verified_inputs)
+        ),
         "inputs": records,
     }
 
@@ -132,19 +141,17 @@ def archive_name(record: dict[str, object]) -> str:
     return f"{record['name']}-{record['sha256']}.tar.gz"
 
 
-def acquire_archives(root: Path, cache: Path) -> list[tuple[dict[str, object], Path]]:
+def acquire_archives(
+    root: Path, cache: Path, staging: Path
+) -> list[tuple[dict[str, object], Path]]:
     fetcher = dependency_module(root)
     _locks, records = locked_material(root)
-    acquired = []
-    for record in records:
-        dependency = {
-            "name": record["name"],
-            "url": record["url"],
-            "sha256": record["sha256"],
-        }
-        path = fetcher._download(dependency, cache)
-        acquired.append((record, path))
-    return acquired
+    fetcher.stage_bundle(records, cache, staging)
+    fetcher.verify_bundle(records, staging)
+    return [
+        (record, staging / "downloads" / archive_name(record))
+        for record in records
+    ]
 
 
 def provenance_document(material: dict[str, object]) -> dict[str, object]:
@@ -229,6 +236,10 @@ def descriptor_for(
         "material_digest": digest,
         "bundle_manifest_sha256": "sha256:" + sha256_bytes(bundle_manifest),
         "source_locks": material_document(root)["source_locks"],
+        "acquisition_contracts": material_document(root)["acquisition_contracts"],
+        "verified_input_bundle_digest": material_document(root)[
+            "verified_input_bundle_digest"
+        ],
     }
 
 
@@ -237,7 +248,8 @@ def build_layout(root: Path, cache: Path, output: Path) -> dict[str, object]:
         raise BundleError(f"output directory is not empty: {output}")
     output.mkdir(parents=True, exist_ok=True)
     material = material_document(root)
-    acquired = acquire_archives(root, cache)
+    staged_inputs = output / "staged-dependency-inputs"
+    acquired = acquire_archives(root, cache, staged_inputs)
     bundle = output / "bundle"
     archives = bundle / "archives"
     archives.mkdir(parents=True)
@@ -258,6 +270,10 @@ def build_layout(root: Path, cache: Path, output: Path) -> dict[str, object]:
         "schema_version": SCHEMA_VERSION,
         "material_digest": "sha256:" + sha256_bytes(canonical_json(material)),
         "source_locks": material["source_locks"],
+        "acquisition_contracts": material["acquisition_contracts"],
+        "verified_input_bundle_digest": material[
+            "verified_input_bundle_digest"
+        ],
         "inputs": material["inputs"],
         "artifacts": artifact_records,
     }
@@ -266,6 +282,7 @@ def build_layout(root: Path, cache: Path, output: Path) -> dict[str, object]:
     (bundle / "provenance.json").write_bytes(
         canonical_json(provenance_document(material))
     )
+    shutil.rmtree(staged_inputs)
 
     blobs = output / "blobs" / "sha256"
     blobs.mkdir(parents=True)
@@ -358,13 +375,19 @@ def load_descriptor(path: Path) -> dict[str, object]:
         descriptor,
         {
             "schema_version", "image", "tag", "digest", "material_digest",
-            "bundle_manifest_sha256", "source_locks",
+            "bundle_manifest_sha256", "source_locks", "acquisition_contracts",
+            "verified_input_bundle_digest",
         },
         "dependency bundle descriptor",
     )
     if descriptor["schema_version"] != SCHEMA_VERSION or descriptor["image"] != IMAGE:
         raise BundleError("dependency bundle descriptor has unsupported coordinates")
-    for field in ("digest", "material_digest", "bundle_manifest_sha256"):
+    for field in (
+        "digest",
+        "material_digest",
+        "bundle_manifest_sha256",
+        "verified_input_bundle_digest",
+    ):
         value = descriptor[field]
         if (
             not isinstance(value, str)
@@ -391,6 +414,17 @@ def verify_descriptor(root: Path, descriptor: dict[str, object]) -> None:
         )
     if descriptor["source_locks"] != current["source_locks"]:
         raise BundleError("dependency bundle source-lock digests do not match the current checkout")
+    if descriptor["acquisition_contracts"] != current["acquisition_contracts"]:
+        raise BundleError(
+            "dependency bundle acquisition contracts do not match the current checkout"
+        )
+    if (
+        descriptor["verified_input_bundle_digest"]
+        != current["verified_input_bundle_digest"]
+    ):
+        raise BundleError(
+            "dependency bundle does not match the verified CI input-bundle contract"
+        )
 
 
 def verify_bundle(
@@ -409,7 +443,11 @@ def verify_bundle(
     manifest = load_json(manifest_path)
     require_keys(
         manifest,
-        {"schema_version", "material_digest", "source_locks", "inputs", "artifacts"},
+        {
+            "schema_version", "material_digest", "source_locks",
+            "acquisition_contracts", "verified_input_bundle_digest", "inputs",
+            "artifacts",
+        },
         "dependency bundle manifest",
     )
     expected_material = material_document(root)
@@ -417,6 +455,10 @@ def verify_bundle(
         manifest["schema_version"] != SCHEMA_VERSION
         or manifest["material_digest"] != descriptor["material_digest"]
         or manifest["source_locks"] != expected_material["source_locks"]
+        or manifest["acquisition_contracts"]
+        != expected_material["acquisition_contracts"]
+        or manifest["verified_input_bundle_digest"]
+        != expected_material["verified_input_bundle_digest"]
         or manifest["inputs"] != expected_material["inputs"]
     ):
         raise BundleError("dependency bundle manifest does not match current locked materials")

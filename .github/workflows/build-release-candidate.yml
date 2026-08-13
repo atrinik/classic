@@ -240,7 +240,7 @@ jobs:
             --network none \
             --user "$(id -u):$(id -g)" \
             --env ATRINIK_PACKAGE_VERSION="${RELEASE_VERSION}" \
-            --env ATRINIK_DEPENDENCY_OFFLINE=1 \
+            --env ATRINIK_DEPENDENCY_DOWNLOADS=/workspace/client/build/dependencies/downloads \
             --env ATRINIK_DISCORD_APPLICATION_ID_FILE="${DISCORD_CONFIG_FILE}" \
             --env CCACHE_DIR=/workspace/client/build/ccache \
             --env CCACHE_MAXSIZE=500M \
@@ -303,7 +303,8 @@ jobs:
             --network none \
             --user "$(id -u):$(id -g)" \
             --env ATRINIK_PACKAGE_VERSION="${RELEASE_VERSION}" \
-            --env ATRINIK_DEPENDENCY_OFFLINE=1 \
+            --env ATRINIK_DEPENDENCY_DOWNLOADS=/workspace/server/build/dependencies/downloads \
+            --env ATRINIK_DEPENDENCY_CACHE_DIR=/workspace/server/build/dependency-cache \
             --env CCACHE_DIR=/workspace/server/build/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env CCACHE_TEMPDIR=/tmp/atrinik-server-ccache \
