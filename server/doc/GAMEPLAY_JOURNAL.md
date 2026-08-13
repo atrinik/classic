@@ -74,15 +74,19 @@ prevents two server processes from sharing a journal directory. Files target
 are synced, with a 64-intent cap and a validator-enforced 9 MiB hard bound.
 Transactions therefore never straddle retained files. Before each new file the
 server retains at most 15 older regular, private journal files, for an upper
-bound of 16 files (approximately 144 MiB). Unsafe types, symlinks, insecure
+bound of 16 files (approximately 144 MiB). A transaction that remains open at
+the rotation target may extend the current file only to the 9 MiB hard limit;
+the writer then fails closed before appending beyond that bound. Unsafe types, symlinks, insecure
 retained-file permissions, or lock contention fail startup closed. Retention is
 age-ordered and intentionally does not inspect or modify unrelated names.
 
-When retention removes the beginning of a run, the first retained file is an
-explicit verification anchor: its first sequence and `prev_hash` identify the
-pruned prefix, and its own records remain hash-chained from that value. Because
-transactions never cross files, reconciliation within the retained horizon
-still has every intent and terminal outcome.
+When retention removes the beginning of a run, the first retained file is the
+declared verification horizon: its first sequence and `prev_hash` identify the
+pruned prefix, and subsequent retained records remain hash-chained from that
+value. Integrity before the retained horizon can only be established from an
+older protected copy or backup. Because transactions never cross files,
+reconciliation within the retained horizon still has every intent and terminal
+outcome.
 
 ## Validation, query, and recovery
 

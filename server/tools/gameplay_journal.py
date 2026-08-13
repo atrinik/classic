@@ -20,7 +20,7 @@ SCHEMA_VERSION = 1
 HASH_MARKER = b',"record_hash":"'
 FORBIDDEN_FIELDS = {"password", "session_secret", "chat", "inscription", "text"}
 TOKEN = re.compile(r"[A-Za-z0-9_.:/@+\-]{1,255}\Z")
-CHARACTER = re.compile(r"[A-Za-z0-9 '\-]{1,255}\Z")
+IDENTITY = re.compile(r"[ -~]{1,255}\Z")
 HASH = re.compile(r"[0-9a-f]{64}\Z")
 KINDS = {"item", "currency", "quest", "progression"}
 FILE_LIMIT = 9 * 1024 * 1024
@@ -136,9 +136,10 @@ def _validate_schema(value: dict[str, Any], source: str) -> None:
         return
     if phase != "intent" or value["kind"] not in KINDS or not _token(transaction):
         raise JournalError(f"invalid transaction record at {source}")
-    if not _token(value["account_id"]) or not isinstance(
-        value["character_id"], str
-    ) or CHARACTER.fullmatch(value["character_id"]) is None:
+    if not all(
+        isinstance(value[name], str) and IDENTITY.fullmatch(value[name]) is not None
+        for name in ("account_id", "character_id")
+    ):
         raise JournalError(f"invalid player identity at {source}")
     context = value["context"]
     if not isinstance(context, dict) or set(context) != {"map_id", "x", "y"} or not _token(
@@ -299,17 +300,31 @@ def load(inputs: Iterable[Path]) -> Journal:
             else:
                 state["intent"] = record
         else:
+            variable = {
+                "_source", "event_id", "sequence", "utc", "server_id", "run_id",
+                "prev_hash", "record_hash",
+            }
+            comparable = {
+                key: value for key, value in record.items() if key not in variable
+            }
             terminal = state["terminal"]
-            if terminal is not None and terminal != phase:
+            if terminal is not None and terminal["phase"] != phase:
                 raise JournalError(f"commit/abort conflict for {transaction_id}")
-            state["terminal"] = phase
+            if terminal is not None:
+                existing = {
+                    key: value for key, value in terminal.items() if key not in variable
+                }
+                if comparable != existing:
+                    raise JournalError(f"conflicting duplicate terminal for {transaction_id}")
+            else:
+                state["terminal"] = record
     for transaction_id, state in transactions.items():
         if state["intent"] is None:
             raise JournalError(f"terminal record without intent for {transaction_id}")
         terminal = state.pop("terminal")
-        if terminal == "commit":
+        if terminal is not None and terminal["phase"] == "commit":
             state["status"] = "committed"
-        elif terminal == "abort":
+        elif terminal is not None and terminal["phase"] == "abort":
             state["status"] = "aborted"
         else:
             state["status"] = "attempted"
@@ -340,12 +355,15 @@ def query(journal: Journal, **filters: str | None) -> list[dict[str, Any]]:
         for record in journal.records
         if record["transaction_id"] in matching_transactions
     ]
-    return sorted(
-        selected,
-        key=lambda value: (
-            value["utc"], value["server_id"], value["run_id"], value["sequence"]
-        ),
-    )
+    transaction_order = {
+        transaction_id: min(record["utc"] for record in selected if record["transaction_id"] == transaction_id)
+        for transaction_id in matching_transactions
+        if any(record["transaction_id"] == transaction_id for record in selected)
+    }
+    return sorted(selected, key=lambda value: (
+        transaction_order[value["transaction_id"]], value["transaction_id"],
+        value["server_id"], value["run_id"], value["sequence"],
+    ))
 
 
 def _parser() -> argparse.ArgumentParser:

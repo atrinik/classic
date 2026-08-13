@@ -54,8 +54,8 @@ START_TEST(test_intent_commit_abort_and_private_storage) {
     ck_assert(gameplay_journal_available());
 
     const gameplay_journal_subject_t subject = {
-        .account_id = "account",
-        .character_id = "O'Brien Smith",
+        .account_id = "account\"configured",
+        .character_id = "Hero_One\\Configured",
         .map_id = "/world/start",
         .x = 4,
         .y = 7,
@@ -74,6 +74,7 @@ START_TEST(test_intent_commit_abort_and_private_storage) {
                                      &change,
                                      committed));
     ck_assert_uint_eq(strlen(committed), GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE - 1);
+    ck_assert(!gameplay_journal_profile_boundary(&profile, "profile.pending"));
     ck_assert(gameplay_journal_commit(committed));
     ck_assert(!gameplay_journal_commit(committed));
 
@@ -128,6 +129,73 @@ START_TEST(test_intent_commit_abort_and_private_storage) {
     }
     ck_assert_int_eq(closedir(dir), 0);
     ck_assert_uint_eq(files, 1);
+    remove_fixture(directory);
+}
+END_TEST
+
+START_TEST(test_long_lived_intent_fails_before_hard_file_limit) {
+    char directory[] = "/tmp/atrinik-gameplay-journal-hard-limit-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    gameplay_journal_file_limit_for_test(1);
+    gameplay_journal_hard_limit_for_test(4096);
+    const gameplay_journal_subject_t subject = {
+        .account_id = "account",
+        .character_id = "Character",
+        .map_id = "/world/start",
+        .x = 1,
+        .y = 2,
+    };
+    const gameplay_journal_change_t change = {
+        .subject_id = "currency:gold",
+        .lineage_id = "",
+        .before = 1,
+        .delta = 1,
+        .after = 2,
+    };
+    char held[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    ck_assert(
+        gameplay_journal_begin(&subject, GAMEPLAY_JOURNAL_CURRENCY, "test.held", &change, held));
+    while (gameplay_journal_available()) {
+        char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+        if (!gameplay_journal_begin(&subject,
+                                    GAMEPLAY_JOURNAL_CURRENCY,
+                                    "test.cycle",
+                                    &change,
+                                    transaction)) {
+            break;
+        }
+        if (!gameplay_journal_commit(transaction)) {
+            break;
+        }
+    }
+    ck_assert(!gameplay_journal_available());
+    gameplay_journal_file_limit_for_test(8U * 1024U * 1024U);
+    gameplay_journal_hard_limit_for_test(9U * 1024U * 1024U);
+    gameplay_journal_deinit();
+
+    char journal_directory[MAX_BUF];
+    snprintf(VS(journal_directory), "%s/gameplay-journal", directory);
+    DIR *dir = opendir(journal_directory);
+    ck_assert_ptr_ne(dir, NULL);
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, "journal-", 8) != 0) {
+            continue;
+        }
+        char path[HUGE_BUF];
+        snprintf(VS(path), "%s/%s", journal_directory, entry->d_name);
+        struct stat metadata;
+        ck_assert_int_eq(stat(path, &metadata), 0);
+        ck_assert_int_le(metadata.st_size, 4096);
+    }
+    ck_assert_int_eq(closedir(dir), 0);
     remove_fixture(directory);
 }
 END_TEST
@@ -436,6 +504,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_plugin_journal_hooks_are_append_only);
     tcase_add_test(tc_core, test_init_fails_closed_for_unsafe_directory_or_profile);
     tcase_add_test(tc_core, test_init_rejects_insecure_directory_permissions);
+    tcase_add_test(tc_core, test_long_lived_intent_fails_before_hard_file_limit);
     tcase_add_test(tc_core, test_retention_stays_bounded_when_opening_a_file);
     tcase_add_test(tc_core, test_real_rotation_and_retention_keep_complete_transactions);
     tcase_add_test(tc_core, test_append_failure_disables_journal);

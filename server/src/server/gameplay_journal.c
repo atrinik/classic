@@ -29,6 +29,7 @@
 
 #define JOURNAL_DIRECTORY "gameplay-journal"
 #define JOURNAL_FILE_LIMIT (8U * 1024U * 1024U)
+#define JOURNAL_FILE_HARD_LIMIT (9U * 1024U * 1024U)
 #define JOURNAL_RETENTION_FILES 16U
 #define JOURNAL_PENDING_LIMIT 64U
 
@@ -60,6 +61,7 @@ static journal_state_t journal = {.lock_fd = -1};
 #ifdef ATRINIK_TESTING
 static bool journal_test_fail_writes;
 static size_t journal_test_file_limit = JOURNAL_FILE_LIMIT;
+static size_t journal_test_hard_limit = JOURNAL_FILE_HARD_LIMIT;
 
 void gameplay_journal_fail_writes_for_test(bool fail) {
     journal_test_fail_writes = fail;
@@ -68,6 +70,10 @@ void gameplay_journal_fail_writes_for_test(bool fail) {
 void gameplay_journal_file_limit_for_test(size_t limit) {
     journal_test_file_limit = limit;
 }
+
+void gameplay_journal_hard_limit_for_test(size_t limit) {
+    journal_test_hard_limit = limit;
+}
 #endif
 
 static size_t journal_file_limit(void) {
@@ -75,6 +81,14 @@ static size_t journal_file_limit(void) {
     return journal_test_file_limit;
 #else
     return JOURNAL_FILE_LIMIT;
+#endif
+}
+
+static size_t journal_hard_limit(void) {
+#ifdef ATRINIK_TESTING
+    return journal_test_hard_limit;
+#else
+    return JOURNAL_FILE_HARD_LIMIT;
 #endif
 }
 
@@ -101,7 +115,7 @@ static bool journal_token_valid(const char *value, bool allow_empty) {
     return true;
 }
 
-static bool journal_character_valid(const char *value) {
+static bool journal_identity_valid(const char *value) {
     if (value == NULL) {
         return false;
     }
@@ -110,13 +124,20 @@ static bool journal_character_valid(const char *value) {
         return false;
     }
     for (const unsigned char *cp = (const unsigned char *)value; *cp != '\0'; cp++) {
-        bool alphanumeric =
-            (*cp >= 'a' && *cp <= 'z') || (*cp >= 'A' && *cp <= 'Z') || (*cp >= '0' && *cp <= '9');
-        if (!alphanumeric && *cp != ' ' && *cp != '\'' && *cp != '-') {
+        if (*cp < 0x20 || *cp > 0x7e) {
             return false;
         }
     }
     return true;
+}
+
+static void journal_append_json_string(StringBuffer *record, const char *value) {
+    for (const unsigned char *cp = (const unsigned char *)value; *cp != '\0'; cp++) {
+        if (*cp == '"' || *cp == '\\') {
+            stringbuffer_append_char(record, '\\');
+        }
+        stringbuffer_append_char(record, (char)*cp);
+    }
 }
 
 static bool journal_change_valid(const gameplay_journal_change_t *change) {
@@ -355,11 +376,13 @@ static bool journal_open_file(void) {
 }
 
 static bool journal_rotate(size_t next_size) {
-    if (journal.fp != NULL && journal.file_size + next_size <= journal_file_limit()) {
+    if (journal.fp != NULL && journal.file_size <= journal_file_limit() &&
+        next_size <= journal_file_limit() - journal.file_size) {
         return true;
     }
     if (journal.fp != NULL && journal.pending_count != 0) {
-        return true;
+        return journal.file_size <= journal_hard_limit() &&
+               next_size <= journal_hard_limit() - journal.file_size;
     }
     if (journal.fp != NULL) {
         if (!journal_sync() || fclose(journal.fp) != 0) {
@@ -559,8 +582,8 @@ bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
     const char *kind_name = journal_kind_name(kind);
     if (!gameplay_journal_available() || subject == NULL || change == NULL ||
         transaction_id == NULL || kind_name == NULL || !journal_token_valid(reason, false) ||
-        !journal_token_valid(subject->account_id, false) ||
-        !journal_character_valid(subject->character_id) ||
+        !journal_identity_valid(subject->account_id) ||
+        !journal_identity_valid(subject->character_id) ||
         !journal_token_valid(subject->map_id, true) ||
         !journal_token_valid(change->subject_id, false) ||
         !journal_token_valid(change->lineage_id, true) || !journal_change_valid(change) ||
@@ -571,14 +594,15 @@ bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
     if (record == NULL) {
         return false;
     }
+    stringbuffer_append_string(record, ",\"account_id\":\"");
+    journal_append_json_string(record, subject->account_id);
+    stringbuffer_append_string(record, "\",\"character_id\":\"");
+    journal_append_json_string(record, subject->character_id);
     stringbuffer_append_printf(
         record,
-        ",\"account_id\":\"%s\",\"character_id\":\"%s\""
-        ",\"context\":{\"map_id\":\"%s\",\"x\":%" PRId32 ",\"y\":%" PRId32 "}"
+        "\",\"context\":{\"map_id\":\"%s\",\"x\":%" PRId32 ",\"y\":%" PRId32 "}"
         ",\"change\":{\"subject_id\":\"%s\",\"lineage_id\":\"%s\""
         ",\"before\":%" PRId64 ",\"delta\":%" PRId64 ",\"after\":%" PRId64 "}",
-        subject->account_id,
-        subject->character_id,
         subject->map_id != NULL ? subject->map_id : "",
         subject->x,
         subject->y,
@@ -632,7 +656,7 @@ bool gameplay_journal_abort(const char *transaction_id, const char *reason) {
 bool gameplay_journal_profile_boundary(const gameplay_journal_profile_t *profile,
                                        const char *reason) {
     if (!gameplay_journal_available() || !journal_token_valid(reason, false) ||
-        !journal_profile_copy(profile)) {
+        journal.pending_count != 0 || !journal_profile_copy(profile)) {
         return false;
     }
     StringBuffer *record = journal_record("boundary", NULL, "profile", reason);

@@ -433,8 +433,8 @@ static const char doc_Atrinik_Player_JournalIntent[] =
     "Kinds are item, currency, quest, and progression. Values and identifiers are structured; "
     "free-form record text is not accepted.\n\n"
     ":returns: Opaque transaction identifier to commit or abort.\n:rtype: str\n"
-    ":raises ValueError: If any typed field is invalid.\n"
-    ":raises RuntimeError: If the journal cannot durably write the intent.";
+    ":raises RuntimeError: If a typed field is invalid or the journal cannot durably write the "
+    "intent.";
 
 static PyObject *Atrinik_Player_JournalIntent(Atrinik_Player *self, PyObject *args) {
     const char *kind, *reason, *subject, *lineage = "";

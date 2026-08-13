@@ -171,6 +171,15 @@ class JournalTests(unittest.TestCase):
         journal = gameplay_journal.load([self.root])
         self.assertEqual(journal.transactions["tx1"]["status"], "committed")
 
+    def test_conflicting_duplicate_terminal_is_rejected(self) -> None:
+        self.write(
+            self.record("intent", "tx1"),
+            self.record("abort", "tx1", reason="first.reason"),
+            self.record("abort", "tx1", reason="different.reason"),
+        )
+        with self.assertRaisesRegex(gameplay_journal.JournalError, "conflicting duplicate terminal"):
+            gameplay_journal.load([self.root])
+
     def test_duplicate_intent_across_restart_is_idempotent(self) -> None:
         self.write(self.record("intent", "tx1"))
         self.sequence = 0
@@ -237,10 +246,24 @@ class JournalTests(unittest.TestCase):
         )
         self.assertEqual([record["sequence"] for record in selected], [9, 10])
 
+    def test_transaction_query_uses_sequence_when_utc_moves_backward(self) -> None:
+        self.write(
+            self.record("intent", "tx1", utc="2026-08-13T00:00:10Z"),
+            self.record("commit", "tx1", utc="2026-08-13T00:00:09Z"),
+        )
+        selected = gameplay_journal.query(
+            gameplay_journal.load([self.root]), transaction="tx1"
+        )
+        self.assertEqual([record["phase"] for record in selected], ["intent", "commit"])
+
     def test_character_identity_accepts_configured_name_characters(self) -> None:
-        self.write(self.record("intent", "tx1", character_id="O'Brien Smith"))
+        self.write(self.record(
+            "intent", "tx1", account_id='acct"quoted', character_id=r"Hero_One\\Two"
+        ))
         journal = gameplay_journal.load([self.root])
-        self.assertEqual(journal.transactions["tx1"]["intent"]["character_id"], "O'Brien Smith")
+        intent = journal.transactions["tx1"]["intent"]
+        self.assertEqual(intent["account_id"], 'acct"quoted')
+        self.assertEqual(intent["character_id"], r"Hero_One\\Two")
 
     def test_crash_phase_reconciliation_is_conservative(self) -> None:
         boundary = self.record("boundary")
