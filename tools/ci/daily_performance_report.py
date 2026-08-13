@@ -265,7 +265,9 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
     point_run_id = int(point["run_id"])
     retained_run_ids: set[int] = set()
     replacement_retained = False
-    for cohort_points in cohorts.values():
+    replacement_cohort: str | None = None
+    destination_min_run_id: int | None = None
+    for cohort, cohort_points in cohorts.items():
         if not isinstance(cohort_points, list):
             raise ReportError("trend cohort points must be an array")
         for item in cohort_points:
@@ -273,13 +275,28 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
                 raise ReportError("trend point has an invalid run ID")
             item_run_id = int(item["run_id"])
             retained_run_ids.add(item_run_id)
-            replacement_retained = replacement_retained or item_run_id == point_run_id
+            if item_run_id == point_run_id:
+                replacement_retained = True
+                replacement_cohort = cohort
+            if cohort == point["cohort"]:
+                destination_min_run_id = (
+                    item_run_id
+                    if destination_min_run_id is None
+                    else min(destination_min_run_id, item_run_id)
+                )
     if (
         retained_run_ids
         and not replacement_retained
         and point_run_id <= max(retained_run_ids)
     ):
         raise ReportError("cannot replace an observation outside retained history")
+    if (
+        replacement_retained
+        and replacement_cohort != point["cohort"]
+        and destination_min_run_id is not None
+        and point_run_id < destination_min_run_id
+    ):
+        raise ReportError("cannot move an observation before retained cohort history")
     for cohort_points in cohorts.values():
         cohort_points[:] = [
             item

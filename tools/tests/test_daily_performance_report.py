@@ -332,6 +332,30 @@ class DailyReportTests(unittest.TestCase):
         self.assertFalse(trend["alerts"][old_key]["active"])
         self.assertEqual(trend["alerts"][old_key]["last_transition"], "recovered")
 
+    def test_cohort_move_before_destination_retention_is_rejected(self) -> None:
+        template = report.build_point(
+            evidence(), commit="a" * 40, run_id="1",
+            recorded_at="2026-08-01T00:00:00+00:00", environment={}
+        )
+        source = dict(
+            template,
+            cohort="source-cohort",
+            checks={"candidate_sustained_p95": {"passed": False}},
+        )
+        trend = report.merge_trend(None, source)
+        for run_id in range(10, 101):
+            item = dict(
+                template,
+                id=f"run-{run_id}",
+                run_id=str(run_id),
+                cohort="destination-cohort",
+                checks={"candidate_sustained_p95": {"passed": run_id % 2 == 0}},
+            )
+            trend = report.merge_trend(trend, item)
+        moved = dict(source, cohort="destination-cohort")
+        with self.assertRaisesRegex(report.ReportError, "before retained cohort"):
+            report.merge_trend(trend, moved)
+
 
 if __name__ == "__main__":
     unittest.main()
