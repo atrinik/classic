@@ -1,5 +1,7 @@
 #include <toolkit/signals.h>
 
+#include "../signals_private.h"
+
 #include <signal.h>
 
 #ifdef WIN32
@@ -40,6 +42,18 @@ int main(int argc, char **argv) {
         }
         RaiseException(TEST_EXCEPTION_CODE, 0, 0, NULL);
         if (RemoveVectoredExceptionHandler(handler) == 0) {
+            return 1;
+        }
+    }
+    if (argc == 2 && strcmp(argv[1], "--exception-guard") == 0) {
+        volatile LONG stored_code = 0;
+        signals_exception_claim first =
+            signals_claim_exception(&stored_code, EXCEPTION_INT_DIVIDE_BY_ZERO);
+        signals_exception_claim nested =
+            signals_claim_exception(&stored_code, EXCEPTION_ACCESS_VIOLATION);
+
+        if (!first.acquired || first.code != EXCEPTION_INT_DIVIDE_BY_ZERO ||
+            nested.acquired || nested.code != EXCEPTION_INT_DIVIDE_BY_ZERO) {
             return 1;
         }
     }

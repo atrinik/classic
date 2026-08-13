@@ -452,6 +452,11 @@ jobs:
             throw "libatrinik-signals.exe handled exception test failed with exit code ${LASTEXITCODE}"
           }
 
+          & (Join-Path $bundle "libatrinik-signals.exe") --exception-guard
+          if ($LASTEXITCODE -ne 0) {
+            throw "libatrinik-signals.exe exception guard test failed with exit code ${LASTEXITCODE}"
+          }
+
           $publisher = Join-Path $bundle "fixtures/metaserver-publisher-v1.json"
           & (Join-Path $bundle "libatrinik-metaserver-publisher.exe") $publisher
           if ($LASTEXITCODE -ne 0) {

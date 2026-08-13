@@ -40,6 +40,7 @@
 #endif
 
 #include "signals.h"
+#include "signals_private.h"
 #include "memory.h"
 #include <signal.h>
 
@@ -197,12 +198,11 @@ static void signal_handler(int sig, siginfo_t *siginfo, void *context)
     if (!exception_is_fatal(ExceptionInfo->ExceptionRecord->ExceptionCode)) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
-    LONG previous_exception_code =
-        InterlockedCompareExchange(&first_exception_code,
-                                   (LONG)ExceptionInfo->ExceptionRecord->ExceptionCode,
-                                   0);
-    if (previous_exception_code != 0) {
-        terminate_after_exception((DWORD)previous_exception_code);
+    signals_exception_claim exception_claim =
+        signals_claim_exception(&first_exception_code,
+                                ExceptionInfo->ExceptionRecord->ExceptionCode);
+    if (!exception_claim.acquired) {
+        terminate_after_exception(exception_claim.code);
         return EXCEPTION_CONTINUE_SEARCH;
     }
 #endif
@@ -516,7 +516,7 @@ static void signal_handler(int sig, siginfo_t *siginfo, void *context)
     }
 
 #ifdef WIN32
-    terminate_after_exception(ExceptionInfo->ExceptionRecord->ExceptionCode);
+    terminate_after_exception(exception_claim.code);
     return EXCEPTION_CONTINUE_SEARCH;
 #else
     simple_signal_handler(sig);

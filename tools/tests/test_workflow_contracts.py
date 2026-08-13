@@ -717,6 +717,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("Start-Process", run)
         self.assertIn('"C0000005"', run)
         self.assertIn("--handled-exception", run)
+        self.assertIn("--exception-guard", run)
         self.assertIn("$originalAppData", run)
         self.assertIn("Remove-Item Env:APPDATA -ErrorAction SilentlyContinue", run)
         self.assertIn("Remove-Item Env:APPDATA", run)
