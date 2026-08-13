@@ -908,6 +908,26 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(evidence["checks"]["noop_redraw_avoidance"]["passed"])
         self.assertTrue(evidence["checks"]["full_redraw_accounting"]["passed"])
 
+    def test_translated_partial_lighting_passes_without_whole_field_reuse(self) -> None:
+        translated = native_record()
+        sustained = translated["phases"][1]
+        counters = sustained["lighting"]["counters"]
+        counters["field_reuses"] = 0
+        counters["field_translations"] = 2_400
+        counters["field_partial_rebuilds"] = 2_400
+        counters["field_dirty_pixels"] = 93_765_760
+        guard = benchmark._guard_native_record(translated)["lighting_cache_churn"]
+        self.assertTrue(guard["passed"])
+        self.assertEqual(guard["field_translations"], 2_400)
+        self.assertEqual(guard["field_partial_rebuilds"], 2_400)
+
+        counters["field_dirty_pixels"] = 480 * 5 * 320 * 240
+        self.assertFalse(
+            benchmark._guard_native_record(translated)["lighting_cache_churn"][
+                "passed"
+            ]
+        )
+
     def test_injected_noop_full_redraw_fails_noop_redraw_guard(self) -> None:
         redrawn = native_record()
         redrawn["phases"][2]["draw_reasons"]["packet"] = 1

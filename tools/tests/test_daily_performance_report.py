@@ -25,6 +25,8 @@ def evidence() -> dict[str, object]:
         "queue": {"peak_depth": 1, "peak_bytes": 2, "oldest_age_us": 3,
                   "budget_yields": 0, "recoveries": 0},
         "lighting": {"counters": {"field_rebuilds": 1, "field_reuses": 2,
+                    "field_translations": 3, "field_partial_rebuilds": 3,
+                    "field_dirty_pixels": 1024,
                     "lit_sprite_lookups": 3, "lit_sprite_hits": 2,
                     "lit_sprite_misses": 1, "lit_sprite_evictions": 0}},
         "sprite_cache": {"counters": {"lookups": 1, "hits": 1, "misses": 0, "gc_removals": 0}},
@@ -95,6 +97,8 @@ class DailyReportTests(unittest.TestCase):
         summary = report.render_summary(point, trend)
         self.assertIn("Large viewport", summary)
         self.assertIn("Workflow run", summary)
+        self.assertIn("Lighting translated/partial rebuild: `3` / `3`", summary)
+        self.assertIn("Lighting dirty pixels: `1024`", summary)
 
     def test_failed_complete_evidence_is_retained_for_alerting(self) -> None:
         item = evidence()

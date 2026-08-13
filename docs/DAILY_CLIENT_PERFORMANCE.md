@@ -39,7 +39,9 @@ is serialized with `classic-daily-client-performance`; it never runs from a
 pull-request ref and never executes untrusted pull-request code in its
 publishing job. The run records its source SHA, workflow URL, artifact, and
 cohort. Re-running the same run identity replaces its point rather than
-duplicating it.
+duplicating it, while each attempt retains an attempt-qualified raw artifact.
+Both benchmark and publisher check out and verify the exact triggering `main`
+commit, so a moving branch cannot mislabel the measured source.
 
 ## Alerts and response
 

@@ -97,8 +97,9 @@ def _record_summary(records: list[dict[str, Any]], name: str) -> dict[str, Any]:
         },
         "lighting": {
             field: _median([_integer(item.get(field), f"{name}.lighting.{field}") for item in counters])
-            for field in ("field_rebuilds", "field_reuses", "lit_sprite_lookups", "lit_sprite_hits",
-                          "lit_sprite_misses", "lit_sprite_evictions")
+            for field in ("field_rebuilds", "field_reuses", "field_translations",
+                          "field_partial_rebuilds", "field_dirty_pixels", "lit_sprite_lookups",
+                          "lit_sprite_hits", "lit_sprite_misses", "lit_sprite_evictions")
         },
         "sprite_cache": {
             field: _median([_integer(item.get(field), f"{name}.sprite.{field}") for item in sprite_counters])
@@ -252,6 +253,8 @@ def render_summary(point: dict[str, Any], trend: dict[str, Any]) -> str:
                   f"- MAP changed/no-op packets: `{sustained['map']['changed_map_packets']}` / `{sustained['map']['noop_map_packets']}`",
                   f"- Queue peak depth/oldest age: `{queue['peak_depth']}` / `{queue['oldest_age_us']} µs`",
                   f"- Lighting rebuild/reuse: `{lighting['field_rebuilds']}` / `{lighting['field_reuses']}`",
+                  f"- Lighting translated/partial rebuild: `{lighting['field_translations']}` / `{lighting['field_partial_rebuilds']}`",
+                  f"- Lighting dirty pixels: `{lighting['field_dirty_pixels']}`",
                   f"- Sprite cache hits/misses/evictions: `{sprite['hits']}` / `{sprite['misses']}` / `{sprite['gc_removals']}`",
                   "", "### Retention", "",
                   f"This cohort retains `{len(trend['cohorts'][point['cohort']])}` points (up to {TREND_RETENTION})."])

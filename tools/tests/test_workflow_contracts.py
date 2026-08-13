@@ -1102,7 +1102,10 @@ class WorkflowContractTests(unittest.TestCase):
         benchmark = workflow[
             workflow.index("  benchmark:") : workflow.index("  publish:")
         ]
-        self.assertIn("ref: main", benchmark)
+        self.assertIn("ref: ${{ github.sha }}", benchmark)
+        self.assertIn(
+            'test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"', benchmark
+        )
         self.assertIn("bundle-key", benchmark)
         self.assertIn("bundle-stage", benchmark)
         self.assertIn("--output build/dependency-inputs", benchmark)
@@ -1112,8 +1115,15 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("--network none", benchmark)
         self.assertIn("ATRINIK_MOVEMENT_EVENT_NAME: schedule", benchmark)
         self.assertIn("ATRINIK_MOVEMENT_MATRIX: full", benchmark)
-        self.assertIn("continue-on-error: true", benchmark)
+        self.assertNotIn("continue-on-error: true", benchmark)
+        self.assertIn("id: benchmark", benchmark)
+        self.assertIn("CLIENT_RESULT: ${{ steps.benchmark.outcome }}", benchmark)
+        self.assertIn('--client-result "${CLIENT_RESULT}"', benchmark)
         self.assertIn("path: build/ci-evidence", benchmark)
+        self.assertIn(
+            "daily-client-performance-${{ github.run_id }}-${{ github.run_attempt }}",
+            benchmark,
+        )
 
         runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
             encoding="utf-8"
@@ -1126,6 +1136,14 @@ class WorkflowContractTests(unittest.TestCase):
         publish = workflow[workflow.index("  publish:") :]
         self.assertIn("if: always() && github.ref == 'refs/heads/main'", publish)
         self.assertIn("contents: write", publish)
+        self.assertIn("ref: ${{ github.sha }}", publish)
+        self.assertIn(
+            'test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"', publish
+        )
+        self.assertIn(
+            "daily-client-performance-${{ github.run_id }}-${{ github.run_attempt }}",
+            publish,
+        )
         self.assertNotIn("pull_request:", workflow[: workflow.index("jobs:")])
 
     def test_linux_checks_pin_image_and_isolate_compiler_caches(self) -> None:
