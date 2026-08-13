@@ -2343,7 +2343,13 @@ static void pick_up_object(object *pl, object *op, object *tmp, int nrof, int no
     }
 
     tmp = get_pickup_object(pl, tmp, nrof);
-    object_insert_into(tmp, op, 0);
+    if (pl->type == PLAYER) {
+        object_custody_acquire(tmp, pl);
+    }
+    object *inserted = object_insert_into(tmp, op, 0);
+    if (pl->type == PLAYER) {
+        object_custody_record(inserted, pl, "custody-acquired");
+    }
 }
 
 /**
@@ -2587,7 +2593,13 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
                      (floor_ob->randomitems && QUERY_FLAG(floor_ob, FLAG_CURSED)))) {
                     tmp->x = op->x;
                     tmp->y = op->y;
-                    object_insert_map(tmp, op->map, op, 0);
+                    if (op->type == PLAYER) {
+                        object_custody_relinquish(tmp, op);
+                    }
+                    tmp = object_insert_map(tmp, op->map, op, 0);
+                    if (op->type == PLAYER) {
+                        object_custody_record(tmp, op, "custody-relinquished");
+                    }
                     return;
                 }
             } else {
@@ -2623,6 +2635,10 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
          * if the floor is not magical (i.e., unique shop) */
         if (QUERY_FLAG(tmp, FLAG_UNPAID) && !QUERY_FLAG(floor_ob, FLAG_IS_MAGICAL)) {
             if (op->type == PLAYER) {
+                object_custody_relinquish(tmp, op);
+                object_custody_record(tmp, op, "custody-sold");
+            }
+            if (op->type == PLAYER) {
                 draw_info(COLOR_WHITE, op, "The shop magic put it to the storage.");
             }
 
@@ -2635,7 +2651,13 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
     tmp->y = op->y;
     tmp->sub_layer = op->sub_layer;
 
-    object_insert_map(tmp, op->map, op, 0);
+    if (op->type == PLAYER) {
+        object_custody_relinquish(tmp, op);
+    }
+    tmp = object_insert_map(tmp, op->map, op, 0);
+    if (op->type == PLAYER) {
+        object_custody_record(tmp, op, "custody-relinquished");
+    }
 
     SET_FLAG(op, FLAG_NO_APPLY);
     object_remove(op, 0);

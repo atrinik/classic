@@ -135,6 +135,10 @@ extern void command_ban(object *op, const char *command, char *params);
 
 extern void command_config(object *op, const char *command, char *params);
 
+/** Public API implemented in src/commands/permission/custody.c. */
+
+extern void command_custody(object *op, const char *command, char *params);
+
 /** Public API implemented in src/commands/permission/follow.c. */
 
 extern void command_follow(object *op, const char *command, char *params);

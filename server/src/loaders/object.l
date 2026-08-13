@@ -347,6 +347,10 @@ stable_identity_state *identity = &identities[*depth];
         }
     }
 }
+^custody_lineage{S}  FREE_AND_COPY_HASH(op->custody_lineage, yval());
+^custody_first{S}    FREE_AND_COPY_HASH(op->custody_first, yval());
+^custody_last{S}     FREE_AND_COPY_HASH(op->custody_last, yval());
+^custody_actor{S}    FREE_AND_COPY_HASH(op->custody_actor, yval());
 ^race{S}             FREE_AND_COPY_HASH(op->race, yval());
 ^slaying{S}          {
     FREE_AND_COPY_HASH(op->slaying, yval());
@@ -1325,6 +1329,22 @@ get_ob_diff (StringBuffer *sb, const object *op, const object *op2)
 
     if (op->glow && op->glow != op2->glow) {
         SAVE_STRING(sb, "glow", op->glow);
+    }
+
+    if (op->custody_lineage && op->custody_lineage != op2->custody_lineage) {
+        SAVE_STRING(sb, "custody_lineage", op->custody_lineage);
+    }
+
+    if (op->custody_first && op->custody_first != op2->custody_first) {
+        SAVE_STRING(sb, "custody_first", op->custody_first);
+    }
+
+    if (op->custody_last && op->custody_last != op2->custody_last) {
+        SAVE_STRING(sb, "custody_last", op->custody_last);
+    }
+
+    if (op->custody_actor && op->custody_actor != op2->custody_actor) {
+        SAVE_STRING(sb, "custody_actor", op->custody_actor);
     }
 
     if (op->title && op->title != op2->title) {
