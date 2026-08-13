@@ -2583,7 +2583,9 @@ MODULEAPI void initPlugin(struct plugin_hooklist *hooklist) {
     /* Add Atrinik module members to the global scope. */
     module_tmp = PyRun_String("from Atrinik import *", Py_file_input, py_globals_dict, NULL);
     Py_XDECREF(module_tmp);
+#ifdef IS_PY3K
     Py_DECREF(m);
+#endif
 
     py_tstate = PyGILState_GetThisThreadState();
     PyEval_ReleaseThread(py_tstate);
