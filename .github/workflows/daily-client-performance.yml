@@ -1,0 +1,146 @@
+name: Daily Classic client performance
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: classic-daily-client-performance
+  cancel-in-progress: false
+
+env:
+  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.2.3@sha256:d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f
+  CLASSIC_LINUX_IMAGE_DIGEST: sha256:d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f
+  CLASSIC_LINUX_CCACHE_COMPILER: gcc-15.2.0
+  CLASSIC_LINUX_CCACHE_EPOCH: "1"
+
+jobs:
+  benchmark:
+    name: Full movement and frozen-frame report
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare isolated compiler cache
+        run: |
+          mkdir -p "${RUNNER_TEMP}/classic-ccache"
+          chmod 1777 "${RUNNER_TEMP}/classic-ccache"
+      - name: Run the pinned full benchmark matrix
+        continue-on-error: true
+        env:
+          ATRINIK_BENCHMARK_REVISION: ${{ github.sha }}
+          ATRINIK_BENCHMARK_DIRTY: false
+          ATRINIK_MOVEMENT_EVENT_NAME: schedule
+          ATRINIK_MOVEMENT_MATRIX: full
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env ATRINIK_BENCHMARK_REVISION \
+            --env ATRINIK_BENCHMARK_DIRTY \
+            --env ATRINIK_MOVEMENT_EVENT_NAME \
+            --env ATRINIK_MOVEMENT_MATRIX \
+            --env CCACHE_DIR=/cache/ccache \
+            --env CCACHE_MAXSIZE=500M \
+            --env HOME=/tmp/classic-home \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --volume "${RUNNER_TEMP}/classic-ccache:/cache/ccache" \
+            --workdir /workspace \
+            "${CLASSIC_LINUX_IMAGE}" \
+            tools/ci/run_linux_check.sh client /workspace
+      - name: Publish job summary and raw evidence
+        if: always()
+        run: |
+          python3 client/tools/benchmark_movement_regression.py render-comment \
+            --input build/ci-evidence/movement-frame-time.json \
+            --client-result passed --output build/ci-evidence/benchmark-summary.md
+          cat build/ci-evidence/benchmark-summary.md >>"${GITHUB_STEP_SUMMARY}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: daily-client-performance-${{ github.run_id }}
+          path: build/ci-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Persist compatible trend and alert state
+    needs: benchmark
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: daily-client-performance-${{ github.run_id }}
+          path: build/ci-evidence
+      - name: Load the dedicated trend ref
+        run: |
+          git fetch origin benchmark-data:refs/remotes/origin/benchmark-data || true
+          if git show-ref --verify --quiet refs/remotes/origin/benchmark-data; then
+            git worktree add --detach build/benchmark-data origin/benchmark-data
+          else
+            git init build/benchmark-data
+            git -C build/benchmark-data checkout --orphan benchmark-data
+            git -C build/benchmark-data remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          fi
+      - name: Build the versioned point and report
+        run: |
+          python3 tools/ci/daily_performance_report.py \
+            --evidence build/ci-evidence/movement-frame-time.json \
+            --commit "${GITHUB_SHA}" --run-id "${GITHUB_RUN_ID}" \
+            --environment "{\"repository\":\"${GITHUB_REPOSITORY}\",\"workflow_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\",\"runner_image\":\"${ImageOS:-ubuntu24}\"}" \
+            --point "build/benchmark-data/points/${GITHUB_RUN_ID}.json" \
+            --trend "build/benchmark-data/trend.json" \
+            --summary "build/benchmark-data/reports/${GITHUB_RUN_ID}.md"
+          cat "build/benchmark-data/reports/${GITHUB_RUN_ID}.md" >>"${GITHUB_STEP_SUMMARY}"
+      - name: Reconcile sustained regression alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh auth setup-git
+          jq -r '.alerts | to_entries[] | select(.value.last_transition != "none") |
+            [.key, .value.last_transition] | @tsv' build/benchmark-data/trend.json |
+          while IFS=$'\t' read -r key transition; do
+            title="[perf-alert] ${key}"
+            number=$(gh issue list --state open --search "in:title ${title}" \
+              --json number,title --jq ".[] | select(.title == \"${title}\") | .number" | head -n 1)
+            if test "${transition}" = regressed && test -z "${number}"; then
+              gh issue create --title "${title}" --body-file \
+                "build/benchmark-data/reports/${GITHUB_RUN_ID}.md" \
+                --label "component: client"
+            elif test "${transition}" = regressed; then
+              gh issue comment "${number}" --body-file \
+                "build/benchmark-data/reports/${GITHUB_RUN_ID}.md"
+            elif test "${transition}" = recovered && test -n "${number}"; then
+              gh issue close "${number}" --comment \
+                "Two consecutive compatible reports recovered this cohort."
+            fi
+          done
+      - name: Commit the dedicated trend ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd build/benchmark-data
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add points trend.json reports
+          git diff --cached --quiet || git commit -m "chore(perf): record daily client report"
+          git push origin HEAD:benchmark-data
