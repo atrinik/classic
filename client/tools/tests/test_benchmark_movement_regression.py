@@ -277,6 +277,8 @@ def native_record(
                             if stage == "lighting" and not lighting_active
                             else draws * 5
                             if stage == "lighting"
+                            else draws
+                            if stage in ("door_occlusion", "hint_replay")
                             else renderer_draws
                             if scope == "per_map_draw"
                             else renderer_draws * 5
@@ -303,11 +305,14 @@ def native_record(
                 },
                 "sprite_cache": {
                     "available": True,
+                    "limits": {"entries": 4096, "estimated_bytes": 67108864},
                     "counters": {
                         "lookups": 10,
                         "hits": 10,
                         "misses": 0,
                         "insertions": 0,
+                        "evictions": 0,
+                        "rejections": 0,
                         "gc_runs": samples,
                         "gc_removals": 0,
                         "gc_time_ns": 1000,
@@ -339,8 +344,8 @@ def native_record(
                 "workload": "pvm1-map2-lifecycle-v3",
                 "lighting_statistics_version": 3,
                 "map_statistics_version": 2,
-                "render_profiler_statistics_version": 2,
-                "sprite_cache_statistics_version": 1,
+                "render_profiler_statistics_version": 3,
+                "sprite_cache_statistics_version": 3,
             },
             "implementation": {
                 "revision": "a" * 40,
@@ -758,6 +763,14 @@ class NativeV4RecordTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "sprite peak"):
             benchmark.validate_record(malformed)
         malformed = native_record()
+        malformed["phases"][0]["sprite_cache"]["limits"]["entries"] = 3
+        with self.assertRaisesRegex(ValueError, "sprite occupancy"):
+            benchmark.validate_record(malformed)
+        malformed = native_record()
+        malformed["phases"][0]["sprite_cache"]["peak"]["estimated_bytes"] = 67_108_865
+        with self.assertRaisesRegex(ValueError, "sprite occupancy"):
+            benchmark.validate_record(malformed)
+        malformed = native_record()
         counters = malformed["phases"][0]["sprite_cache"]["counters"]
         counters["misses"] += 1
         counters["lookups"] += 1
@@ -767,6 +780,10 @@ class NativeV4RecordTests(unittest.TestCase):
         malformed["phases"][0]["sprite_cache"]["counters"]["gc_removals"] = 99
         with self.assertRaisesRegex(ValueError, "sprite occupancy"):
             benchmark.validate_record(malformed)
+        malformed = native_record()
+        malformed["phases"][0]["sprite_cache"]["counters"]["evictions"] = 1
+        malformed["phases"][0]["sprite_cache"]["end"]["entries"] = 3
+        benchmark.validate_record(malformed)
         malformed = native_record()
         malformed["phases"][0]["sprite_cache"]["end"]["entries"] += 1
         malformed["phases"][0]["sprite_cache"]["peak"]["entries"] += 1

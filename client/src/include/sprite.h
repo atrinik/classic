@@ -30,9 +30,10 @@
 #ifndef SPRITE_H
 #define SPRITE_H
 
+#define SPRITE_CACHE_MAX_BYTES (64U * 1024U * 1024U)
+#define SPRITE_CACHE_MAX_ENTRIES 4096U
 #define SPRITE_CACHE_GC_MAX_TIME 100000
-#define SPRITE_CACHE_GC_CHANCE 500
-#define SPRITE_CACHE_GC_FREE_TIME 60 * 15
+#define SPRITE_CACHE_GC_FREE_TIME (60 * 15)
 
 /**
  * Size of the glow effect in pixels.
@@ -106,7 +107,7 @@ typedef struct sprite_struct {
     SDL_Surface *bitmap;
 } sprite_struct;
 
-#define SPRITE_CACHE_STATISTICS_VERSION UINT8_C(1)
+#define SPRITE_CACHE_STATISTICS_VERSION UINT8_C(3)
 
 /** Observable transformed/effects-sprite cache state for benchmarks. */
 typedef struct sprite_cache_statistics {
@@ -117,6 +118,8 @@ typedef struct sprite_cache_statistics {
     uint64_t gc_runs;
     uint64_t gc_removals;
     uint64_t gc_time_ns;
+    uint64_t evictions;
+    uint64_t rejections;
     size_t entries;
     size_t estimated_bytes;
     size_t peak_entries;

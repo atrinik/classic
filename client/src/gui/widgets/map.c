@@ -2954,18 +2954,25 @@ static void map_render_commands_find_player_occlusion(map_render_context_t *cont
 static void
 map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool primary_surface) {
     uint64_t profile_paint_started = render_profiler_begin();
+    uint64_t profile_sort_started = render_profiler_begin();
     if (context->commands_num > 1) {
         qsort(context->commands,
               context->commands_num,
               sizeof(*context->commands),
               map_render_command_compare);
     }
+    render_profiler_end(RENDER_PROFILE_MAP_COMMAND_SORT, profile_sort_started);
 
     if (primary_surface) {
+        uint64_t profile_hint_started = render_profiler_begin();
         map_render_commands_find_door_hints(context);
+        render_profiler_end(RENDER_PROFILE_MAP_HINT_REPLAY, profile_hint_started);
+        uint64_t profile_occlusion_started = render_profiler_begin();
         map_render_commands_find_player_occlusion(context);
+        render_profiler_end(RENDER_PROFILE_MAP_DOOR_OCCLUSION, profile_occlusion_started);
     }
 
+    uint64_t profile_effects_started = render_profiler_begin();
     int selected_depth = MAP2_MAX_DEPTH + 1;
     for (size_t i = 0; i < context->commands_num; i++) {
         map_render_command_t *command = &context->commands[i];
@@ -2991,6 +2998,7 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool pr
                                  &command->effects);
         }
     }
+    render_profiler_end(RENDER_PROFILE_MAP_SPRITE_EFFECTS, profile_effects_started);
 
     if (primary_surface) {
         for (size_t i = 0; i < context->commands_num; i++) {
