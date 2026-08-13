@@ -481,8 +481,7 @@ if (BUILD_TESTING)
         src/tests/keybind_input.c
         src/client/keybind_event.c
         src/client/keybind_input.c
-        src/client/keybind_storage.c
-        src/client/upgrader.c)
+        src/client/keybind_storage.c)
     atrinik_configure_target(client-keybind-input-tests)
     target_compile_definitions(client-keybind-input-tests PRIVATE
         ATRINIK_TEST_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}"

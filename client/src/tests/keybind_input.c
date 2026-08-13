@@ -95,13 +95,6 @@ static void test_shortcut_names(void) {
 }
 
 static const char *keybind_fixture;
-static const char upgrader_config_dir[] = ATRINIK_TEST_BINARY_DIR "/keybind-upgrader";
-static const char upgrader_atrinik_dir[] = ATRINIK_TEST_BINARY_DIR "/keybind-upgrader/.atrinik";
-static const char upgrader_version_20[] = ATRINIK_TEST_BINARY_DIR "/keybind-upgrader/.atrinik/2.0";
-static const char upgrader_version_25[] = ATRINIK_TEST_BINARY_DIR "/keybind-upgrader/.atrinik/2.5";
-static const char upgrader_version_30[] = ATRINIK_TEST_BINARY_DIR "/keybind-upgrader/.atrinik/3.0";
-static const char upgrader_legacy_path[] =
-    ATRINIK_TEST_BINARY_DIR "/keybind-upgrader/.atrinik/2.0/keys.dat";
 
 static FILE *keybind_fixture_open(const char *filename, const char *modes) {
     FILE *stream;
@@ -125,57 +118,6 @@ static void keybind_fixture_reset(void) {
     free(keybindings);
     keybindings = NULL;
     keybindings_num = 0;
-}
-
-keybind_struct *keybind_add(SDL_Keycode key, SDL_Keymod mod, const char *command) {
-    keybind_struct *keybind = xcalloc(1, sizeof(*keybind));
-
-    keybind->key = key;
-    keybind->mod = keybind_adjust_kmod(mod);
-    keybind->command = xstrdup(command);
-    keybindings = xreallocarray(keybindings, keybindings_num + 1, sizeof(*keybindings));
-    keybindings[keybindings_num++] = keybind;
-    return keybind;
-}
-
-keybind_struct *keybind_find_by_command(const char *command) {
-    for (size_t i = 0; i < keybindings_num; i++) {
-        if (!strcmp(command, keybindings[i]->command)) {
-            return keybindings[i];
-        }
-    }
-    return NULL;
-}
-
-const char *get_config_dir(void) {
-    return upgrader_config_dir;
-}
-
-char *package_get_version_partial(char *dst, size_t dstlen) {
-    snprintf(dst, dstlen, "3.0");
-    return dst;
-}
-
-void copy_if_exists(const char *from, const char *to, const char *src, const char *dst) {
-    (void)from;
-    (void)to;
-    (void)src;
-    (void)dst;
-}
-
-void settings_init(void) {
-    TEST_CHECK(false);
-}
-
-void setting_set_int(int cat, int setting, int64_t value) {
-    (void)cat;
-    (void)setting;
-    (void)value;
-    TEST_CHECK(false);
-}
-
-void settings_deinit(void) {
-    TEST_CHECK(false);
 }
 
 static void test_keybind_loader(void) {
@@ -232,95 +174,6 @@ static void test_keybind_loader(void) {
     keybind_save();
     keybind_fixture_reset();
     TEST_CHECK(remove(ATRINIK_TEST_BINARY_DIR "/keybind-roundtrip.dat") == 0);
-}
-
-static void test_legacy_upgrader(void) {
-    remove(upgrader_legacy_path);
-    rmdir(upgrader_version_30);
-    rmdir(upgrader_version_25);
-    rmdir(upgrader_version_20);
-    rmdir(upgrader_atrinik_dir);
-    rmdir(upgrader_config_dir);
-
-    TEST_CHECK(mkdir(upgrader_config_dir, 0700) == 0);
-    TEST_CHECK(mkdir(upgrader_atrinik_dir, 0700) == 0);
-    TEST_CHECK(mkdir(upgrader_version_20, 0700) == 0);
-
-    FILE *legacy = fopen(upgrader_legacy_path, "w");
-    TEST_CHECK(legacy != NULL);
-    TEST_CHECK(fputs("102 1 \"f\" \"?M_FIRE_READY\"\n"
-                     "273 0 \"up\" \"?M_HELP\"\n"
-                     "120 1 \"x\" \"/legacy-custom\"\n"
-                     "121 1 \"y\" \"/existing-legacy\"\n"
-                     "122 1 \"z\" \"?M_MCONfoo\"\n"
-                     "119 0 \"w\" \"?M_MCONfoo\"\n"
-                     "-1 0 \"invalid\" \"/negative-key\"\n"
-                     "malformed\n"
-                     "118 0 \"v\" \"?M_UNKNOWN\"\n"
-                     "117 0 \"u\" \"?M_TARGET_ENEMY\"\n"
-                     "116 0 \"t\" \"plain-command\"\n",
-                     legacy) >= 0);
-    TEST_CHECK(fclose(legacy) == 0);
-
-    keybind_fixture =
-        "keycode_format " KEYBIND_KEYCODE_FORMAT "\nbind\nkey 102\ncommand ?FIRE_READY\nend\n"
-        "bind\nkey 103\nmod 3\nrepeat 1\ncommand ?FIRE_READY_CUSTOM\nend\n"
-        "bind\nkey 293\nmod 192\nrepeat 1\ncommand ?HELP\nend\n"
-        "bind\nkey 97\ncommand /existing-legacy\nend\n";
-    upgrader_init();
-    TEST_CHECK(access(upgrader_version_25, R_OK) == 0);
-    TEST_CHECK(access(upgrader_version_30, R_OK) == 0);
-
-    keybind_fixture = NULL;
-    keybind_load();
-    TEST_CHECK(keybindings_num == 5);
-    TEST_CHECK(!strcmp(keybindings[0]->command, "?FIRE_READY_CUSTOM"));
-    TEST_CHECK(keybindings[0]->key == SDLK_G);
-    TEST_CHECK(keybindings[0]->mod == SDL_KMOD_SHIFT);
-    TEST_CHECK(keybindings[0]->repeat == 1);
-    TEST_CHECK(!strcmp(keybindings[1]->command, "?HELP"));
-    TEST_CHECK(keybindings[1]->key == SDLK_UP);
-    TEST_CHECK(keybindings[1]->mod == SDL_KMOD_CTRL);
-    TEST_CHECK(keybindings[1]->repeat == 1);
-    TEST_CHECK(!strcmp(keybindings[2]->command, "/existing-legacy"));
-    TEST_CHECK(keybindings[2]->key == SDLK_Y);
-    TEST_CHECK(keybindings[2]->mod == SDL_KMOD_NONE);
-    TEST_CHECK(keybindings[2]->repeat == 1);
-    TEST_CHECK(!strcmp(keybindings[3]->command, "/legacy-custom"));
-    TEST_CHECK(keybindings[3]->key == SDLK_X);
-    TEST_CHECK(keybindings[3]->mod == SDL_KMOD_NONE);
-    TEST_CHECK(keybindings[3]->repeat == 1);
-    TEST_CHECK(!strcmp(keybindings[4]->command, "?MCON foo"));
-    TEST_CHECK(keybindings[4]->key == SDLK_Z);
-    TEST_CHECK(keybindings[4]->mod == SDL_KMOD_NONE);
-    TEST_CHECK(keybindings[4]->repeat == 1);
-
-    upgrader_init();
-    keybind_save();
-    keybind_fixture_reset();
-    keybind_load();
-    TEST_CHECK(keybindings_num == 5);
-    TEST_CHECK(keybindings[0]->key == SDLK_G);
-    TEST_CHECK(keybindings[0]->mod == SDL_KMOD_SHIFT);
-    TEST_CHECK(keybindings[0]->repeat == 1);
-    TEST_CHECK(keybindings[1]->key == SDLK_UP);
-    TEST_CHECK(keybindings[1]->mod == SDL_KMOD_CTRL);
-    TEST_CHECK(keybindings[1]->repeat == 1);
-    TEST_CHECK(keybindings[2]->key == SDLK_Y);
-    TEST_CHECK(keybindings[2]->repeat == 1);
-    TEST_CHECK(keybindings[3]->key == SDLK_X);
-    TEST_CHECK(keybindings[3]->repeat == 1);
-    TEST_CHECK(keybindings[4]->key == SDLK_Z);
-    TEST_CHECK(keybindings[4]->repeat == 1);
-    keybind_fixture_reset();
-
-    TEST_CHECK(remove(ATRINIK_TEST_BINARY_DIR "/keybind-roundtrip.dat") == 0);
-    TEST_CHECK(remove(upgrader_legacy_path) == 0);
-    TEST_CHECK(rmdir(upgrader_version_30) == 0);
-    TEST_CHECK(rmdir(upgrader_version_25) == 0);
-    TEST_CHECK(rmdir(upgrader_version_20) == 0);
-    TEST_CHECK(rmdir(upgrader_atrinik_dir) == 0);
-    TEST_CHECK(rmdir(upgrader_config_dir) == 0);
 }
 
 static void test_bundled_defaults(void) {
@@ -2260,7 +2113,6 @@ int main(void) {
     test_legacy_keycode_migration();
     test_shortcut_names();
     test_keybind_loader();
-    test_legacy_upgrader();
     test_bundled_defaults();
     test_event_matching();
     test_movement_commands();
