@@ -801,6 +801,11 @@ typedef struct rv_vector_s {
  * Do not load any maps when attempting to calculate the range vector.
  */
 #define RV_NO_LOAD 0x10
+/**
+ * Extend a loaded-only recursive search by one hop. This flag is only honored
+ * together with ::RV_RECURSIVE_SEARCH and ::RV_NO_LOAD.
+ */
+#define RV_RECURSIVE_SEARCH_EXTENDED 0x20
 /*@}*/
 
 /**
