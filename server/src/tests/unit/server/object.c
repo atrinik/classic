@@ -442,6 +442,35 @@ START_TEST(test_object_can_merge) {
 }
 END_TEST
 
+START_TEST(test_object_custody_provenance) {
+    object *player = player_get_dummy("Custody tester", NULL);
+    object *item = arch_get("bolt");
+
+    ck_assert_ptr_eq(item->custody_lineage, NULL);
+    ck_assert_ptr_eq(item->custody_first, NULL);
+    ck_assert_ptr_eq(item->custody_last, NULL);
+
+    object_custody_acquire(item, player);
+    ck_assert_ptr_ne(item->custody_lineage, NULL);
+    ck_assert_ptr_ne(item->custody_first, NULL);
+    ck_assert_ptr_ne(player->custody_actor, NULL);
+    ck_assert_str_eq(item->custody_first, player->custody_actor);
+    ck_assert_msg(strncmp(item->custody_lineage, "item:", 5) == 0,
+                  "custody lineage must use the persistent item prefix");
+
+    shstr *first = add_refcount(item->custody_first);
+    object_custody_acquire(item, player);
+    ck_assert_ptr_eq(item->custody_first, first);
+    free_string_shared(first);
+
+    object_custody_relinquish(item, player);
+    ck_assert_str_eq(item->custody_last, player->custody_actor);
+
+    object_destroy(item);
+    object_destroy(player);
+}
+END_TEST
+
 START_TEST(test_map_stack_operations_increment_update_once) {
     mapstruct *map;
     object *pl;
@@ -1369,6 +1398,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_exit_tiled_enemy);
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_tiled_enemy);
     tcase_add_test(tc_core, test_object_can_merge);
+    tcase_add_test(tc_core, test_object_custody_provenance);
     tcase_add_test(tc_core, test_object_plural_name_contract);
     tcase_add_test(tc_core, test_object_merge_updates_name_and_count);
     tcase_add_test(tc_core, test_map_stack_operations_increment_update_once);
