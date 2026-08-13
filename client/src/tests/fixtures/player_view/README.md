@@ -46,18 +46,27 @@ and assets while assigning a distinct map name and path to a second validated
 checkpoints remain deterministic. The movement replay clears its offscreen
 frame target before every map draw, matching the software renderer's per-frame
 compositor contract; frame timing therefore includes that clear and the full
-primary map draw.
+primary map draw. It also renders the map core into the production 1700-by-1200
+local-minimap surface whenever the real 250-millisecond dynamic-minimap cadence
+is due. Main-map and local-minimap calls and timings remain separate, while the
+complete update-frame work measurement includes both. Minimap zoom/masking and
+the remaining UI/widget work are outside this map-focused measurement.
 
-Each replay uses a simulated 125-millisecond (8 FPS) tick cadence without
-sleeping. Its phases are one cold `NEW` tick, 480 sustained ticks (60 simulated
-seconds, one active packet per tick), 16 idle ticks (eight unchanged `SAME`
-packets alternating with eight animation-only ticks), and 80 resumed ticks (two
-packets on each of the first eight ticks, no packets on the next eight, then one
-packet on each of the remaining 64). That resumed overrun intentionally creates
-and drains a bounded production-command-queue backlog. The process then records
-resize, restored-size, reset, and distinct-map-transition checkpoints and
-repeats the complete replay in the same process. A fresh-process verifier runs
-the selected viewport twice.
+Each replay injects MAP state at a simulated 125-millisecond (8 Hz) update
+cadence without sleeping. This is not a display-frame-rate target: reports show
+measured replay-work capacity against a separate, informational 144 FPS
+(6.944-millisecond) display reference. Hosted CI is not expected to attain that
+rate; candidate-only runs establish its baseline, and schema-compatible changes
+alternate base and candidate Release processes on the same runner before
+reporting their timing deltas. Its phases are one cold `NEW` tick, 480 sustained
+ticks (60 simulated seconds, one active packet per tick), 16 idle ticks (eight
+unchanged `SAME` packets alternating with eight animation-only ticks), and 80
+resumed ticks (two packets on each of the first eight ticks, no packets on the
+next eight, then one packet on each of the remaining 64). That resumed overrun
+intentionally creates and drains a bounded production-command-queue backlog.
+The process then records resize, restored-size, reset, and the distinct map
+transition checkpoints and repeats the complete replay in the same process. A
+fresh-process verifier runs the selected viewport twice.
 
 `expected-standard-checkpoint-sha256` pins the ordered visual lifecycle for the
 standard viewport. The digest is SHA-256 over the ASCII prefix

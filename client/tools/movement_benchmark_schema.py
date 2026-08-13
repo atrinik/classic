@@ -11,6 +11,7 @@ import re
 EXPECTED_SAMPLES = {"cold": 1, "sustained": 480, "idle": 16, "resumed": 80}
 EXPECTED_PACKETS = {"cold": 1, "sustained": 480, "idle": 8, "resumed": 80}
 EXPECTED_CHANGED = {"cold": 1, "sustained": 480, "idle": 0, "resumed": 80}
+EXPECTED_LOCAL_MINIMAP_DRAWS = {"cold": 1, "sustained": 240, "idle": 8, "resumed": 40}
 EXPECTED_CHECKPOINTS = (
     "cold",
     "step_b",
@@ -334,7 +335,7 @@ def _visual_lifecycle_digest(checkpoints: list[dict[str, object]]) -> str:
 
 
 def validate_record(value: object) -> dict[str, object]:
-    """Validate and return one complete version-three native record."""
+    """Validate and return one complete version-four native record."""
     record = _mapping(
         value,
         {
@@ -357,7 +358,7 @@ def validate_record(value: object) -> dict[str, object]:
         },
         "record",
     )
-    if record["schema_version"] != 3 or record["benchmark"] != "player-view-movement" \
+    if record["schema_version"] != 4 or record["benchmark"] != "player-view-movement" \
             or record["tick_ms"] != 125 or record["simulated_tick_hz"] != 8:
         raise ValueError("movement benchmark emitted an incompatible schema")
     checkpoint = _digest(record["checkpoint_sha256"], SHA256, "checkpoint")
@@ -406,9 +407,9 @@ def validate_record(value: object) -> dict[str, object]:
         "instrumentation identity",
     )
     if instrumentation != {
-        "schema_version": 3,
+        "schema_version": 4,
         "fixture_schema_version": 2,
-        "workload": "pvm1-map2-lifecycle-v2",
+        "workload": "pvm1-map2-lifecycle-v3",
         "lighting_statistics_version": 3,
         "map_statistics_version": 2,
         "render_profiler_statistics_version": 2,
@@ -550,6 +551,7 @@ def validate_record(value: object) -> dict[str, object]:
                 "frame_time",
                 "main_loop",
                 "map_time",
+                "local_minimap",
                 "queue",
                 "map",
                 "render_stages",
@@ -596,23 +598,37 @@ def validate_record(value: object) -> dict[str, object]:
         del map_time
         main_loop = _mapping(
             phase["main_loop"],
-            {"target_fps", "target_tick_ns", "work_time", "wait_time", "loop_time", "achieved_fps"},
+            {
+                "update_cadence_hz",
+                "update_interval_ns",
+                "work_time",
+                "simulated_wait_time",
+                "simulated_update_loop_time",
+                "work_capacity_fps",
+            },
             f"phase {name} main loop",
         )
-        if _number(main_loop["target_fps"], f"phase {name} target FPS", positive=True) != 8 \
-                or main_loop["target_tick_ns"] != 125_000_000:
-            raise ValueError(f"movement benchmark phase {name} main-loop target is invalid")
+        if _number(
+            main_loop["update_cadence_hz"],
+            f"phase {name} update cadence",
+            positive=True,
+        ) != 8 or main_loop["update_interval_ns"] != 125_000_000:
+            raise ValueError(f"movement benchmark phase {name} update cadence is invalid")
         work_time = _timing(main_loop["work_time"], samples, f"phase {name} work time")
         wait_time = _timing(
-            main_loop["wait_time"],
+            main_loop["simulated_wait_time"],
             samples,
-            f"phase {name} wait time",
+            f"phase {name} simulated wait time",
             allow_zero=True,
         )
-        loop_time = _timing(main_loop["loop_time"], samples, f"phase {name} loop time")
+        loop_time = _timing(
+            main_loop["simulated_update_loop_time"],
+            samples,
+            f"phase {name} simulated update loop time",
+        )
         if work_time != frame_time:
             raise ValueError(f"movement benchmark phase {name} work timing is inconsistent")
-        target_tick = main_loop["target_tick_ns"]
+        target_tick = main_loop["update_interval_ns"]
         if any(
             loop_time[field] != max(work_time[field], target_tick)
             for field in ("p50", "p95", "p99", "max")
@@ -624,15 +640,56 @@ def validate_record(value: object) -> dict[str, object]:
         ):
             raise ValueError(f"movement benchmark phase {name} loop timing is inconsistent")
         del wait_time
-        achieved = _mapping(main_loop["achieved_fps"], {"p50", "p95"}, f"phase {name} achieved FPS")
-        fps_p50 = _number(achieved["p50"], f"phase {name} achieved p50 FPS", positive=True)
-        fps_p95 = _number(achieved["p95"], f"phase {name} achieved p95 FPS", positive=True)
-        expected_p50 = 1_000_000_000 / loop_time["p50"]
-        expected_p95 = 1_000_000_000 / loop_time["p95"]
+        capacity = _mapping(
+            main_loop["work_capacity_fps"],
+            {"p50", "p95"},
+            f"phase {name} work capacity FPS",
+        )
+        fps_p50 = _number(capacity["p50"], f"phase {name} p50 work capacity", positive=True)
+        fps_p95 = _number(capacity["p95"], f"phase {name} p95 work capacity", positive=True)
+        expected_p50 = 1_000_000_000 / work_time["p50"]
+        expected_p95 = 1_000_000_000 / work_time["p95"]
         if not math.isclose(fps_p50, expected_p50, rel_tol=1e-4) or not math.isclose(
             fps_p95, expected_p95, rel_tol=1e-4
         ):
-            raise ValueError(f"movement benchmark phase {name} achieved FPS is inconsistent")
+            raise ValueError(f"movement benchmark phase {name} work capacity is inconsistent")
+
+        local_minimap = _mapping(
+            phase["local_minimap"],
+            {
+                "enabled",
+                "update_interval_ms",
+                "surface_width",
+                "surface_height",
+                "map_draws",
+                "map_time",
+            },
+            f"phase {name} local minimap",
+        )
+        if (
+            local_minimap["enabled"] is not True
+            or local_minimap["update_interval_ms"] != 250
+            or local_minimap["surface_width"] != 1700
+            or local_minimap["surface_height"] != 1200
+            or (
+                name != "idle"
+                and local_minimap["map_draws"] != EXPECTED_LOCAL_MINIMAP_DRAWS[name]
+            )
+            or (
+                name == "idle"
+                and local_minimap["map_draws"] not in range(
+                    EXPECTED_LOCAL_MINIMAP_DRAWS[name] + 1
+                )
+            )
+            or local_minimap["map_draws"] > phase["full_map_draws"]
+        ):
+            raise ValueError(f"movement benchmark phase {name} local minimap is invalid")
+        _timing(
+            local_minimap["map_time"],
+            local_minimap["map_draws"],
+            f"phase {name} local minimap map time",
+            allow_empty=True,
+        )
 
         queue = _mapping(
             phase["queue"],
@@ -724,9 +781,11 @@ def validate_record(value: object) -> dict[str, object]:
             raise ValueError(f"movement benchmark phase {name} allocation availability is invalid")
         for field in map_stats.keys() - {"renderer_allocation_statistics_available"}:
             _integer(map_stats[field], f"phase {name} map {field}")
-        if map_stats["map_draws"] != phase["full_map_draws"] \
+        total_map_draws = phase["full_map_draws"] + local_minimap["map_draws"]
+        if map_stats["map_draws"] != total_map_draws \
                 or map_stats["primary_map_draws"] != phase["full_map_draws"] \
-                or any(map_stats[field] != 0 for field in ("auxiliary_map_draws", "presents", "present_failures", "render_failures", "fault_injections", "fault_detections")) \
+                or map_stats["auxiliary_map_draws"] != local_minimap["map_draws"] \
+                or any(map_stats[field] != 0 for field in ("presents", "present_failures", "render_failures", "fault_injections", "fault_detections")) \
                 or (not map_stats["renderer_allocation_statistics_available"] and any(
                     map_stats[field] != 0 for field in ("renderer_allocations", "renderer_allocation_bytes")
                 )):
@@ -740,7 +799,7 @@ def validate_record(value: object) -> dict[str, object]:
             _integer(stage["elapsed"], f"phase {name} render elapsed")
             _integer(stage["calls"], f"phase {name} render calls")
         if any(
-            stages[stage]["calls"] != phase["full_map_draws"]
+            stages[stage]["calls"] != total_map_draws
             for stage in ("map", "map_scratch_clear", "ground_composite", "paint", "ui")
         ) or any(
             stages[stage]["calls"] != map_stats["level_draws"]
@@ -754,10 +813,13 @@ def validate_record(value: object) -> dict[str, object]:
         lighting = phase["lighting"]
         lighting_counters = lighting["counters"]
         if run["mode"] == "smooth":
+            primary_level_draws = (
+                map_stats["primary_map_draws"] * map_stats["peak_active_levels"]
+            )
             if (
-                stages["lighting"]["calls"] != map_stats["level_draws"]
-                or lighting_counters["render_calls"] != map_stats["level_draws"]
-                or lighting_counters["field_begins"] != map_stats["level_draws"]
+                stages["lighting"]["calls"] != primary_level_draws
+                or lighting_counters["render_calls"] != primary_level_draws
+                or lighting_counters["field_begins"] != primary_level_draws
                 or lighting_counters["field_rebuilds"]
                 + lighting_counters["field_reuses"]
                 != lighting_counters["field_begins"]

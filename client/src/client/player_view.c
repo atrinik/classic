@@ -50,7 +50,7 @@
 #define PLAYER_VIEW_MOVEMENT_RESUMED_TICKS 80U
 #define PLAYER_VIEW_MOVEMENT_PACKETS 5U
 #define PLAYER_VIEW_MOVEMENT_ACTIVE_PACKETS 4U
-#define PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION 3U
+#define PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION 4U
 #define PLAYER_VIEW_MOVEMENT_WINDOW_TICKS 32U
 #define PLAYER_VIEW_MOVEMENT_FIXTURE_SCHEMA 2U
 #define PLAYER_VIEW_MOVEMENT_CHECKPOINTS 12U
@@ -1044,6 +1044,7 @@ typedef struct player_view_movement_phase {
     uint32_t changed_packets;
     uint32_t noop_packets;
     uint32_t full_map_draws;
+    uint32_t local_minimap_draws;
     uint32_t animation_ticks;
     struct {
         uint32_t reset_packet;
@@ -1067,7 +1068,9 @@ typedef struct player_view_movement_phase {
     uint64_t loop_durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
     uint64_t queue_durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
     uint64_t map_durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
+    uint64_t local_minimap_durations[PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS];
     size_t map_samples;
+    size_t local_minimap_samples;
 } player_view_movement_phase_t;
 
 typedef struct player_view_movement_packet {
@@ -1573,12 +1576,14 @@ static void player_view_movement_draw_reasons_record(player_view_movement_phase_
 static bool player_view_movement_draw(player_view_movement_replay_t *replay,
                                       player_view_movement_phase_t *phase,
                                       SDL_Surface *surface,
+                                      SDL_Surface *local_minimap_surface,
                                       const player_view_movement_fixture_t *fixture,
                                       const player_view_manifest_t *manifest,
                                       const char *checkpoint_prefix,
                                       player_view_movement_packet_t reset_packet,
                                       player_view_movement_stream_t stream,
                                       size_t *active_packet,
+                                      uint64_t *next_local_minimap_us,
                                       uint64_t *tick_us) {
     if (!client_command_queue_statistics_reset()) {
         fprintf(stderr, "player-view: movement phase began with queued commands\n");
@@ -1651,6 +1656,22 @@ static bool player_view_movement_draw(player_view_movement_replay_t *replay,
             map_draw_map(surface);
             phase->map_durations[phase->map_samples++] = SDL_GetTicksNS() - map_started;
             phase->full_map_draws++;
+            if (*tick_us >= *next_local_minimap_us) {
+                if (!SDL_FillSurfaceRect(local_minimap_surface, NULL, 0)) {
+                    fprintf(stderr,
+                            "player-view: cannot clear local minimap benchmark surface: %s\n",
+                            SDL_GetError());
+                    return false;
+                }
+                uint64_t minimap_started = SDL_GetTicksNS();
+                map_draw_map(local_minimap_surface);
+                phase->local_minimap_durations[phase->local_minimap_samples++] =
+                    SDL_GetTicksNS() - minimap_started;
+                phase->local_minimap_draws++;
+                do {
+                    *next_local_minimap_us += (uint64_t)MINIMAP_DYNAMIC_REDRAW_INTERVAL * 1000U;
+                } while (*next_local_minimap_us <= *tick_us);
+            }
             player_view_movement_draw_reasons_record(phase, stream, reasons, drain.commands != 0);
             map_redraw_consume();
             effect_sprites_play();
@@ -1844,6 +1865,7 @@ static bool player_view_movement_lifecycle(player_view_movement_replay_t *replay
 
 static bool player_view_movement_replay_run(player_view_movement_replay_t *replay,
                                             SDL_Surface *surface,
+                                            SDL_Surface *local_minimap_surface,
                                             const player_view_manifest_t *manifest,
                                             const char *checkpoint_prefix,
                                             const player_view_movement_fixture_t *fixture,
@@ -1851,6 +1873,7 @@ static bool player_view_movement_replay_run(player_view_movement_replay_t *repla
                                             player_view_movement_packet_t transition_packet) {
     player_view_movement_replay_initialize(replay);
     uint64_t tick_us = (uint64_t)manifest->clock_ms * 1000U;
+    uint64_t next_local_minimap_us = tick_us;
     sprite_cache_clock_override_set((time_t)(tick_us / UINT64_C(1000000)));
     size_t active_packet = 0;
     int origin_x = -1;
@@ -1859,12 +1882,14 @@ static bool player_view_movement_replay_run(player_view_movement_replay_t *repla
         if (!player_view_movement_draw(replay,
                                        &replay->phases[i],
                                        surface,
+                                       local_minimap_surface,
                                        fixture,
                                        manifest,
                                        checkpoint_prefix,
                                        reset_packet,
                                        (player_view_movement_stream_t)i,
                                        &active_packet,
+                                       &next_local_minimap_us,
                                        &tick_us)) {
             return false;
         }
@@ -1963,13 +1988,13 @@ static void player_view_movement_checkpoint_json(const player_view_movement_chec
 
 static void player_view_movement_phase_json(const player_view_movement_phase_t *phase,
                                             size_t index) {
-    uint64_t loop_p50 = 0, loop_p95 = 0, loop_p99 = 0, loop_max = 0;
-    player_view_timing_summary(phase->loop_durations,
+    uint64_t work_p50 = 0, work_p95 = 0, work_p99 = 0, work_max = 0;
+    player_view_timing_summary(phase->frame_durations,
                                phase->ticks,
-                               &loop_p50,
-                               &loop_p95,
-                               &loop_p99,
-                               &loop_max);
+                               &work_p50,
+                               &work_p95,
+                               &work_p99,
+                               &work_max);
     printf("%s{\"name\":\"%s\",\"samples\":%u,\"map_packets\":%u,"
            "\"changed_map_packets\":%u,\"noop_map_packets\":%u,"
            "\"full_map_draws\":%u,\"animation_ticks\":%u,\"full_draw_reasons\":{"
@@ -1991,19 +2016,27 @@ static void player_view_movement_phase_json(const player_view_movement_phase_t *
            phase->full_draw_reasons.resize,
            phase->full_draw_reasons.map_transition);
     player_view_timing_json(phase->frame_durations, phase->ticks);
-    printf(",\"main_loop\":{\"target_fps\":%.3f,\"target_tick_ns\":%" PRIu64 ",\"work_time\":",
+    printf(",\"main_loop\":{\"update_cadence_hz\":%.3f,"
+           "\"update_interval_ns\":%" PRIu64 ",\"work_time\":",
            1000.0 / PLAYER_VIEW_MOVEMENT_TICK_MS,
            (uint64_t)PLAYER_VIEW_MOVEMENT_TICK_MS * UINT64_C(1000000));
     player_view_timing_json(phase->frame_durations, phase->ticks);
-    printf(",\"wait_time\":");
+    printf(",\"simulated_wait_time\":");
     player_view_timing_json(phase->wait_durations, phase->ticks);
-    printf(",\"loop_time\":");
+    printf(",\"simulated_update_loop_time\":");
     player_view_timing_json(phase->loop_durations, phase->ticks);
-    printf(",\"achieved_fps\":{\"p50\":%.3f,\"p95\":%.3f}},\"map_time\":",
-           loop_p50 == 0 ? 0.0 : 1000000000.0 / loop_p50,
-           loop_p95 == 0 ? 0.0 : 1000000000.0 / loop_p95);
+    printf(",\"work_capacity_fps\":{\"p50\":%.3f,\"p95\":%.3f}},\"map_time\":",
+           work_p50 == 0 ? 0.0 : 1000000000.0 / work_p50,
+           work_p95 == 0 ? 0.0 : 1000000000.0 / work_p95);
     player_view_timing_json(phase->map_durations, phase->map_samples);
-    printf(",\"queue\":{\"enqueued\":%" PRIu64 ",\"dequeued\":%" PRIu64
+    printf(",\"local_minimap\":{\"enabled\":true,\"update_interval_ms\":%u,"
+           "\"surface_width\":%d,\"surface_height\":%d,\"map_draws\":%u,\"map_time\":",
+           MINIMAP_DYNAMIC_REDRAW_INTERVAL,
+           MINIMAP_DYNAMIC_SURFACE_WIDTH,
+           MINIMAP_DYNAMIC_SURFACE_HEIGHT,
+           phase->local_minimap_draws);
+    player_view_timing_json(phase->local_minimap_durations, phase->local_minimap_samples);
+    printf("},\"queue\":{\"enqueued\":%" PRIu64 ",\"dequeued\":%" PRIu64
            ",\"budget_yields\":%" PRIu64 ",\"recoveries\":%" PRIu64
            ",\"start_depth\":0,\"end_depth\":%" PRIu64 ",\"peak_depth\":%" PRIu64
            ",\"start_bytes\":0,\"end_bytes\":%" PRIu64 ",\"peak_bytes\":%" PRIu64
@@ -2107,6 +2140,7 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
     uint8_t *transition = NULL;
     size_t transition_size = 0;
     bool queue_ready = false;
+    SDL_Surface *local_minimap_surface = NULL;
     player_view_movement_fixture_t fixture;
     int wire_width = MAP_LOOK_TO_WIRE_SIZE(manifest->look_width);
     int wire_height = MAP_LOOK_TO_WIRE_SIZE(manifest->look_height);
@@ -2149,6 +2183,15 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
         goto cleanup;
     }
     queue_ready = true;
+    local_minimap_surface = SDL_CreateSurface(MINIMAP_DYNAMIC_SURFACE_WIDTH,
+                                              MINIMAP_DYNAMIC_SURFACE_HEIGHT,
+                                              surface->format);
+    if (local_minimap_surface == NULL || !SDL_FillSurfaceRect(local_minimap_surface, NULL, 0)) {
+        fprintf(stderr,
+                "player-view: cannot create local minimap benchmark surface: %s\n",
+                SDL_GetError());
+        goto cleanup;
+    }
     effects_deinit();
     render_profiler_set_enabled(true);
     lighting_benchmark_statistics_reset();
@@ -2164,16 +2207,19 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
         player_view_movement_replay_t clock_probe;
         player_view_movement_replay_initialize(&clock_probe);
         uint64_t tick_us = (uint64_t)manifest->clock_ms * 1000U;
+        uint64_t next_local_minimap_us = tick_us;
         size_t active_packet = 0;
         if (!player_view_movement_draw(&clock_probe,
                                        &clock_probe.phases[PLAYER_VIEW_MOVEMENT_COLD],
                                        surface,
+                                       local_minimap_surface,
                                        &fixture,
                                        manifest,
                                        "clock-probe",
                                        reset_packet,
                                        PLAYER_VIEW_MOVEMENT_COLD,
                                        &active_packet,
+                                       &next_local_minimap_us,
                                        &tick_us)) {
             fprintf(stderr, "player-view: movement sprite-cache clock probe failed\n");
             goto cleanup;
@@ -2197,6 +2243,7 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
     player_view_movement_replay_t first;
     bool first_success = player_view_movement_replay_run(&first,
                                                          surface,
+                                                         local_minimap_surface,
                                                          manifest,
                                                          "first",
                                                          &fixture,
@@ -2238,6 +2285,7 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
     player_view_movement_replay_t repeat;
     if (!player_view_movement_replay_run(&repeat,
                                          surface,
+                                         local_minimap_surface,
                                          manifest,
                                          "repeat",
                                          &fixture,
@@ -2313,7 +2361,7 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
     printf("{\"schema_version\":%u,\"benchmark\":\"player-view-movement\","
            "\"tick_ms\":%u,\"simulated_tick_hz\":%u,\"identity\":{"
            "\"instrumentation\":{\"schema_version\":%u,\"fixture_schema_version\":%u,"
-           "\"workload\":\"pvm1-map2-lifecycle-v2\",\"lighting_statistics_version\":%u,"
+           "\"workload\":\"pvm1-map2-lifecycle-v3\",\"lighting_statistics_version\":%u,"
            "\"map_statistics_version\":%u,\"render_profiler_statistics_version\":%u,"
            "\"sprite_cache_statistics_version\":%u},\"implementation\":{"
            "\"revision\":\"%s\",\"dirty\":%s,\"dirty_known\":%s,"
@@ -2418,6 +2466,7 @@ cleanup:
     if (queue_ready) {
         client_command_queue_deinitialize();
     }
+    SDL_DestroySurface(local_minimap_surface);
     free(transition);
     return success;
 }

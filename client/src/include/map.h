@@ -567,6 +567,15 @@ extern bool widget_map_ui_test_end(void);
 
 /** Public API implemented in src/gui/widgets/minimap.c. */
 
+/** Minimum interval between expensive local-world minimap renders. */
+#define MINIMAP_DYNAMIC_REDRAW_INTERVAL 250U
+
+/** Production local-world minimap render-surface width. */
+#define MINIMAP_DYNAMIC_SURFACE_WIDTH (850 * (MAP_FOW_SIZE / 2))
+
+/** Production local-world minimap render-surface height. */
+#define MINIMAP_DYNAMIC_SURFACE_HEIGHT (600 * (MAP_FOW_SIZE / 2))
+
 extern bool minimap_redraw_due(void);
 
 extern void widget_minimap_init(widgetdata *widget);

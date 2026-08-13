@@ -157,6 +157,7 @@ def native_record(
     packet_counts = {"cold": 1, "sustained": 480, "idle": 8, "resumed": 80}
     changed_counts = {"cold": 1, "sustained": 480, "idle": 0, "resumed": 80}
     draw_counts = {"cold": 1, "sustained": 480, "idle": 8, "resumed": 80}
+    minimap_draw_counts = {"cold": 1, "sustained": 240, "idle": 8, "resumed": 40}
     for name, samples in benchmark.REQUIRED_PHASES.items():
         p95_ns = sustained_p95_ns if name == "sustained" else 2_000_000
         first_ns = first_window_ns if name == "sustained" else 2_000_000
@@ -164,6 +165,8 @@ def native_record(
         packets = packet_counts[name]
         changed = changed_counts[name]
         draws = draw_counts[name]
+        minimap_draws = minimap_draw_counts[name]
+        renderer_draws = draws + minimap_draws
         reasons = {
             "reset_packet": draws if name == "cold" else 0,
             "changed_map_packet": draws if name in ("sustained", "resumed") else 0,
@@ -200,14 +203,25 @@ def native_record(
                 "full_draw_reasons": reasons,
                 "frame_time": copy.deepcopy(work),
                 "main_loop": {
-                    "target_fps": 8,
-                    "target_tick_ns": 125_000_000,
+                    "update_cadence_hz": 8,
+                    "update_interval_ns": 125_000_000,
                     "work_time": copy.deepcopy(work),
-                    "wait_time": wait,
-                    "loop_time": loop,
-                    "achieved_fps": {"p50": 8.0, "p95": 8.0},
+                    "simulated_wait_time": wait,
+                    "simulated_update_loop_time": loop,
+                    "work_capacity_fps": {
+                        "p50": 1_000_000_000 / work["p50"],
+                        "p95": 1_000_000_000 / work["p95"],
+                    },
                 },
                 "map_time": timing(draws),
+                "local_minimap": {
+                    "enabled": True,
+                    "update_interval_ms": 250,
+                    "surface_width": 1700,
+                    "surface_height": 1200,
+                    "map_draws": minimap_draws,
+                    "map_time": timing(minimap_draws),
+                },
                 "queue": {
                     "enqueued": packets,
                     "dequeued": packets,
@@ -232,16 +246,16 @@ def native_record(
                     "dequeued_order_digest": queue_digest,
                 },
                 "map": {
-                    "map_draws": draws,
+                    "map_draws": renderer_draws,
                     "primary_map_draws": draws,
-                    "auxiliary_map_draws": 0,
+                    "auxiliary_map_draws": minimap_draws,
                     "presents": 0,
                     "present_failures": 0,
                     "render_failures": 0,
                     "fault_injections": 0,
                     "fault_detections": 0,
-                    "level_draws": draws * 5,
-                    "render_commands": draws * 10,
+                    "level_draws": renderer_draws * 5,
+                    "render_commands": renderer_draws * 10,
                     "annotations": 0,
                     "ui_tiles": 0,
                     "peak_render_commands": 10,
@@ -254,12 +268,18 @@ def native_record(
                     stage: {
                         "unit": "us",
                         "elapsed": (
-                            0 if stage == "lighting" and not lighting_active else draws
+                            0
+                            if stage == "lighting" and not lighting_active
+                            else draws if stage == "lighting" else renderer_draws
                         ),
                         "calls": (
                             0
                             if stage == "lighting" and not lighting_active
-                            else draws if scope == "per_map_draw" else draws * 5
+                            else draws * 5
+                            if stage == "lighting"
+                            else renderer_draws
+                            if scope == "per_map_draw"
+                            else renderer_draws * 5
                         ),
                         "scope": scope,
                     }
@@ -308,15 +328,15 @@ def native_record(
     )]
     standard_checkpoint_sha = visual_lifecycle_digest(standard_checkpoints)
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "benchmark": "player-view-movement",
         "tick_ms": 125,
         "simulated_tick_hz": 8,
         "identity": {
             "instrumentation": {
-                "schema_version": 3,
+                "schema_version": 4,
                 "fixture_schema_version": 2,
-                "workload": "pvm1-map2-lifecycle-v2",
+                "workload": "pvm1-map2-lifecycle-v3",
                 "lighting_statistics_version": 3,
                 "map_statistics_version": 2,
                 "render_profiler_statistics_version": 2,
@@ -396,8 +416,11 @@ def remove_phase_map_draws(phase: dict[str, object]) -> None:
         field: 0 for field in phase["full_draw_reasons"]
     }
     phase["map_time"] = timing(0)
+    phase["local_minimap"]["map_draws"] = 0
+    phase["local_minimap"]["map_time"] = timing(0)
     phase["map"]["map_draws"] = 0
     phase["map"]["primary_map_draws"] = 0
+    phase["map"]["auxiliary_map_draws"] = 0
     phase["map"]["level_draws"] = 0
     phase["map"]["render_commands"] = 0
     phase["map"]["peak_render_commands"] = 0
@@ -420,16 +443,16 @@ def additional_contexts(*, full: bool = False) -> dict[str, list[dict[str, objec
     return contexts
 
 
-class NativeV3RecordTests(unittest.TestCase):
-    def test_parse_accepts_closed_v3_record(self) -> None:
-        self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 3)
+class NativeV4RecordTests(unittest.TestCase):
+    def test_parse_accepts_closed_v4_record(self) -> None:
+        self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 4)
 
     def test_parse_rejects_extra_output_and_duplicate_fields(self) -> None:
         encoded = json.dumps(native_record())
         with self.assertRaisesRegex(benchmark.BenchmarkError, "exactly one"):
             benchmark.parse_result(encoded + "\nnoise\n")
-        duplicate = encoded.replace('"schema_version": 3,',
-                                    '"schema_version": 3, "schema_version": 3,', 1)
+        duplicate = encoded.replace('"schema_version": 4,',
+                                    '"schema_version": 4, "schema_version": 4,', 1)
         with self.assertRaisesRegex(benchmark.BenchmarkError, "repeated JSON field"):
             benchmark.parse_result(duplicate)
         with self.assertRaisesRegex(ValueError, "repeated JSON field"):
@@ -456,6 +479,20 @@ class NativeV3RecordTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "phase idle accounting"):
             benchmark.validate_record(malformed)
 
+    def test_rejects_local_minimap_geometry_cadence_and_call_mismatch(self) -> None:
+        malformed = native_record()
+        malformed["phases"][1]["local_minimap"]["surface_width"] = 1699
+        with self.assertRaisesRegex(ValueError, "local minimap is invalid"):
+            benchmark.validate_record(malformed)
+        malformed = native_record()
+        malformed["phases"][1]["local_minimap"]["update_interval_ms"] = 125
+        with self.assertRaisesRegex(ValueError, "local minimap is invalid"):
+            benchmark.validate_record(malformed)
+        malformed = native_record()
+        malformed["phases"][1]["map"]["auxiliary_map_draws"] -= 1
+        with self.assertRaisesRegex(ValueError, "map accounting is invalid"):
+            benchmark.validate_record(malformed)
+
     def test_rejects_queue_reordering_and_coherently_accepts_unknown_dirty(self) -> None:
         malformed = native_record()
         malformed["phases"][1]["queue"]["dequeued_order_digest"] = "f" * 16
@@ -472,18 +509,18 @@ class NativeV3RecordTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "dirty identity"):
             benchmark.validate_record(unknown)
 
-    def test_rejects_fabricated_achieved_fps_and_profiler_scope(self) -> None:
+    def test_rejects_fabricated_work_capacity_and_profiler_scope(self) -> None:
         malformed = native_record()
-        malformed["phases"][0]["main_loop"]["achieved_fps"]["p95"] = 1000.0
-        with self.assertRaisesRegex(ValueError, "achieved FPS is inconsistent"):
+        malformed["phases"][0]["main_loop"]["work_capacity_fps"]["p95"] = 1000.0
+        with self.assertRaisesRegex(ValueError, "work capacity is inconsistent"):
             benchmark.validate_record(malformed)
         malformed = native_record()
-        loop = malformed["phases"][1]["main_loop"]["loop_time"]
+        loop = malformed["phases"][1]["main_loop"]["simulated_update_loop_time"]
         for field in ("p50", "p95", "p99", "max"):
             loop[field] = 1_000_000
         for window in loop["windows"]:
             window["p95_ns"] = 1_000_000
-        malformed["phases"][1]["main_loop"]["achieved_fps"] = {
+        malformed["phases"][1]["main_loop"]["work_capacity_fps"] = {
             "p50": 1000.0,
             "p95": 1000.0,
         }
@@ -550,12 +587,12 @@ class NativeV3RecordTests(unittest.TestCase):
         )
         record["phases"][1]["frame_time"] = copy.deepcopy(over_budget)
         main_loop["work_time"] = copy.deepcopy(over_budget)
-        main_loop["loop_time"] = copy.deepcopy(over_budget)
-        main_loop["achieved_fps"] = {
+        main_loop["simulated_update_loop_time"] = copy.deepcopy(over_budget)
+        main_loop["work_capacity_fps"] = {
             "p50": 1_000_000_000 / 130_000_000,
             "p95": 1_000_000_000 / 140_000_000,
         }
-        wait = main_loop["wait_time"]
+        wait = main_loop["simulated_wait_time"]
         for field in ("p50", "p95", "p99", "max"):
             wait[field] = 0
         for window in wait["windows"]:
@@ -574,12 +611,12 @@ class NativeV3RecordTests(unittest.TestCase):
         )
         record["phases"][1]["frame_time"] = copy.deepcopy(work)
         main_loop["work_time"] = copy.deepcopy(work)
-        main_loop["loop_time"] = copy.deepcopy(work)
-        main_loop["achieved_fps"] = {
+        main_loop["simulated_update_loop_time"] = copy.deepcopy(work)
+        main_loop["work_capacity_fps"] = {
             "p50": 8.0,
             "p95": 1_000_000_000 / 140_000_000,
         }
-        wait = main_loop["wait_time"]
+        wait = main_loop["simulated_wait_time"]
         wait["p50"] = 0
         wait["windows"][0]["p95_ns"] = 0
         benchmark.validate_record(record)
@@ -775,11 +812,17 @@ class EvidenceTests(unittest.TestCase):
     def test_phase_summary_preserves_real_fps_and_readable_telemetry(self) -> None:
         summary = benchmark.phase_summary([native_record()], "sustained")
         self.assertEqual(summary["ticks_per_run"], 480)
-        self.assertEqual(summary["target_fps"], 8)
-        self.assertEqual(summary["achieved_fps_p50"], 8.0)
+        self.assertEqual(summary["update_cadence_hz"], 8)
+        self.assertEqual(summary["update_interval_ms"], 125)
+        self.assertEqual(summary["render_reference_fps"], 144)
+        self.assertEqual(summary["render_reference_budget_ms"], 6.944)
         self.assertEqual(summary["work_capacity_fps_p50"], 1000.0)
         self.assertEqual(summary["map_p95_ms"], 2.0)
+        self.assertEqual(summary["local_minimap_p95_ms"], 2.0)
         self.assertEqual(summary["work_p95_ms"], 2.0)
+        self.assertEqual(summary["map"]["primary_map_draws"], 480)
+        self.assertEqual(summary["map"]["auxiliary_map_draws"], 240)
+        self.assertEqual(summary["map"]["presents"], 0)
         self.assertEqual(summary["queue"]["processing_ms"], 2400.0)
         self.assertEqual(summary["queue"]["drain_p50_ms"], 1.0)
         self.assertTrue(summary["queue"]["order_digests_comparable"])
@@ -928,17 +971,17 @@ class EvidenceTests(unittest.TestCase):
 
     def test_queue_and_cache_guards_fail_independently(self) -> None:
         record = native_record()
-        self.assertTrue(all(item["passed"] for item in benchmark._guard_v3_record(record).values()))
+        self.assertTrue(all(item["passed"] for item in benchmark._guard_native_record(record).values()))
         queue_bad = copy.deepcopy(record)
         queue_bad["phases"][3]["queue"]["recoveries"] = 0
-        self.assertFalse(benchmark._guard_v3_record(queue_bad)["queue_plateau_recovery"]["passed"])
+        self.assertFalse(benchmark._guard_native_record(queue_bad)["queue_plateau_recovery"]["passed"])
         cache_bad = copy.deepcopy(record)
         cache_bad["phases"][1]["lighting"]["counters"]["field_rebuilds"] = 10_000
-        self.assertFalse(benchmark._guard_v3_record(cache_bad)["lighting_cache_churn"]["passed"])
+        self.assertFalse(benchmark._guard_native_record(cache_bad)["lighting_cache_churn"]["passed"])
         memory_bad = copy.deepcopy(record)
         memory_bad["phases"][3]["sprite_cache"]["peak"]["estimated_bytes"] *= 2
         self.assertFalse(
-            benchmark._guard_v3_record(memory_bad)["cache_memory_plateau"]["passed"]
+            benchmark._guard_native_record(memory_bad)["cache_memory_plateau"]["passed"]
         )
 
     def test_candidate_only_retains_raw_records_and_note(self) -> None:
@@ -1045,7 +1088,7 @@ class EvidenceTests(unittest.TestCase):
 
     def test_error_evidence_is_bounded_and_versioned(self) -> None:
         evidence = benchmark.error_evidence(benchmark.BenchmarkError("x" * 600))
-        self.assertEqual(evidence["schema_version"], 3)
+        self.assertEqual(evidence["schema_version"], 4)
         self.assertEqual(len(evidence["error"]), 500)
 
 
@@ -1058,13 +1101,20 @@ class CommentTests(unittest.TestCase):
             additional_contexts(),
         )
 
-    def test_report_uses_achieved_and_target_fps_and_humanized_stats(self) -> None:
+    def test_report_separates_update_cadence_from_display_reference(self) -> None:
         report = benchmark.render_comment(self.valid_evidence(), "success")
-        self.assertIn("FPS at p50/p95 frame time", report)
-        self.assertIn("Render capacity FPS (p50/p95)", report)
-        self.assertIn("MAP p50/p95", report)
-        self.assertIn("Target FPS", report)
-        self.assertIn("8.00/8.00", report)
+        self.assertIn("update cadence is not the client display frame rate", report)
+        self.assertIn("Measured replay-work capacity FPS (p50/slow-tail)", report)
+        self.assertIn("Main map p50/p95", report)
+        self.assertIn("Local minimap map-core p50/p95", report)
+        self.assertIn("Display reference", report)
+        self.assertIn("8 Hz", report)
+        self.assertIn("144 FPS (6.944 ms)", report)
+        self.assertIn("informational only", report)
+        self.assertIn("Local-minimap calls", report)
+        self.assertIn("Presents", report)
+        self.assertNotIn("Target FPS", report)
+        self.assertNotIn("8.00/8.00", report)
         self.assertIn("1.0 KiB", report)
         self.assertIn("2,456,576", report)
         self.assertIn("unavailable", report)
@@ -1075,6 +1125,20 @@ class CommentTests(unittest.TestCase):
         self.assertIn("GC removals", report)
         self.assertLessEqual(len(report.encode()), 65_536)
         self.assertNotIn("FPS equivalent", report)
+
+    def test_candidate_only_report_establishes_baseline_without_claiming_delta(self) -> None:
+        evidence = benchmark._build_evidence(
+            [],
+            [native_record(), native_record()],
+            [],
+            additional_contexts(),
+            enforce_performance=False,
+            comparison_note="bootstrap-base-missing-movement-instrumentation",
+        )
+        report = benchmark.render_comment(evidence, "success")
+        self.assertIn("establishes the hosted-runner baseline", report)
+        self.assertIn("No before/after delta is claimed", report)
+        self.assertNotIn("Base → candidate change", report)
 
     def test_report_explicitly_labels_informational_finding(self) -> None:
         slow = native_record(sustained_p95_ns=50_000_000)
@@ -1108,7 +1172,9 @@ class CommentTests(unittest.TestCase):
             benchmark.write_evidence(evidence_path, self.valid_evidence())
             evidence = json.loads(evidence_path.read_text())
         report = benchmark.render_comment(evidence, "success")
-        self.assertIn("FPS at p50/p95 frame time", report)
+        self.assertIn("Measured replay-work capacity FPS", report)
+        self.assertIn("Base → candidate change", report)
+        self.assertIn("positive timing deltas mean the candidate was slower", report)
 
     def test_report_prominently_preserves_overall_client_failure(self) -> None:
         report = benchmark.render_comment(self.valid_evidence(), "failure")
@@ -1119,7 +1185,7 @@ class CommentTests(unittest.TestCase):
         self.assertIn("was skipped", benchmark.render_comment(
             benchmark.skipped_evidence("not selected"), "success"
         ))
-        error = {"schema_version": 3, "status": "error", "error": "untrusted | markdown"}
+        error = {"schema_version": 4, "status": "error", "error": "untrusted | markdown"}
         error_report = benchmark.render_comment(error, "failure")
         self.assertIn("generation failed", error_report)
         self.assertNotIn("untrusted", error_report)
@@ -1146,7 +1212,7 @@ class CommentTests(unittest.TestCase):
 
         for mutate in (
             lambda evidence: evidence["phases"]["candidate_standard"]["sustained"].update(
-                {"achieved_fps_p50": 9_999.0}
+                {"work_capacity_fps_p50": 9_999.0}
             ),
             lambda evidence: evidence["checks"]["candidate_sustained_p95"].update(
                 {"value_ns": evidence["checks"]["candidate_sustained_p95"]["value_ns"] + 1}
@@ -1233,7 +1299,7 @@ class CommentTests(unittest.TestCase):
             discrete.write_text("x")
             output = root / "evidence.json"
             with mock.patch.object(benchmark, "candidate_only", return_value={
-                "schema_version": 3, "status": "passed", "failed": False
+                "schema_version": 4, "status": "passed", "failed": False
             }) as candidate:
                 result = benchmark.main(
                     [
@@ -1300,7 +1366,7 @@ class CommentTests(unittest.TestCase):
             with mock.patch.object(
                 benchmark,
                 "compare",
-                return_value={"schema_version": 3, "status": "passed", "failed": False},
+                return_value={"schema_version": 4, "status": "passed", "failed": False},
             ) as compare:
                 self.assertEqual(benchmark.main(arguments), 0)
             self.assertFalse(compare.call_args.kwargs["enforce_performance"])

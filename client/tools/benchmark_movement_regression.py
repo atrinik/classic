@@ -17,9 +17,12 @@ from typing import NoReturn
 from movement_benchmark_schema import validate_record
 
 
-EVIDENCE_SCHEMA_VERSION = 3
+EVIDENCE_SCHEMA_VERSION = 4
+NATIVE_SCHEMA_VERSION = 4
 SUSTAINED_P95_LIMIT_NS = 33_300_000
 LARGE_SUSTAINED_P95_LIMIT_NS = 125_000_000
+DISPLAY_REFERENCE_FPS = 144
+DISPLAY_REFERENCE_BUDGET_MS = 1000 / DISPLAY_REFERENCE_FPS
 RELATIVE_LIMIT_PERCENT = 10
 REQUIRED_PHASES = {"cold": 1, "sustained": 480, "idle": 16, "resumed": 80}
 EXPECTED_CHANGED_PACKETS = {"cold": 1, "sustained": 480, "idle": 0, "resumed": 80}
@@ -146,7 +149,7 @@ def run_benchmark(
             f"({result.returncode}): {detail}"
         )
     record = parse_result(result.stdout)
-    if record.get("schema_version") == 3 and expected_revision is not None:
+    if record.get("schema_version") == NATIVE_SCHEMA_VERSION and expected_revision is not None:
         implementation = record["identity"]["implementation"]
         if implementation["revision"].lower() != expected_revision.lower():
             raise BenchmarkError(
@@ -171,7 +174,7 @@ def _phase_median(records: list[dict[str, object]], name: str, field: str) -> in
     values = []
     for record in records:
         phase_record = phase(record, name)
-        if record.get("schema_version") == 3 and field in (
+        if record.get("schema_version") == NATIVE_SCHEMA_VERSION and field in (
             "p50_ns",
             "p95_ns",
             "p99_ns",
@@ -198,7 +201,7 @@ def _nested_medians(
         values = []
         for record in records:
             nested = phase(record, name)[section]
-            if record.get("schema_version") == 3 and section == "lighting":
+            if record.get("schema_version") == NATIVE_SCHEMA_VERSION and section == "lighting":
                 if field in nested.get("counters", {}):
                     values.append(nested["counters"][field])
                 elif field == "entries":
@@ -209,9 +212,9 @@ def _nested_medians(
                     values.append(nested["end"][field])
                 else:
                     values.append(0)
-            elif record.get("schema_version") == 3 and section == "queue" and field == "depth":
+            elif record.get("schema_version") == NATIVE_SCHEMA_VERSION and section == "queue" and field == "depth":
                 values.append(nested["peak_depth"])
-            elif record.get("schema_version") == 3 and section == "queue" and field == "bytes":
+            elif record.get("schema_version") == NATIVE_SCHEMA_VERSION and section == "queue" and field == "bytes":
                 values.append(nested["peak_bytes"])
             else:
                 values.append(nested[field])
@@ -232,15 +235,15 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
     map_p95_ns = _median_integer(
         [phase(record, name)["map_time"]["p95"] for record in records]
     )
+    minimap_p50_ns = _median_integer(
+        [phase(record, name)["local_minimap"]["map_time"]["p50"] for record in records]
+    )
+    minimap_p95_ns = _median_integer(
+        [phase(record, name)["local_minimap"]["map_time"]["p95"] for record in records]
+    )
     lighting = _nested_medians(records, name, "lighting", LIGHTING_FIELDS)
     lookups = lighting["lit_sprite_lookups"]
     hit_rate = None if lookups == 0 else round(lighting["lit_sprite_hits"] / lookups * 100, 1)
-    achieved_p50 = statistics.median(
-        phase(record, name)["main_loop"]["achieved_fps"]["p50"] for record in records
-    )
-    achieved_p95 = statistics.median(
-        phase(record, name)["main_loop"]["achieved_fps"]["p95"] for record in records
-    )
     queue_fields = {
         "enqueued",
         "dequeued",
@@ -271,16 +274,18 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
     return {
         "runs": len(records),
         "ticks_per_run": representative["samples"],
-        "target_fps": representative["main_loop"]["target_fps"],
-        "achieved_fps_p50": round(achieved_p50, 2),
-        "achieved_fps_p95": round(achieved_p95, 2),
+        "update_cadence_hz": representative["main_loop"]["update_cadence_hz"],
+        "render_reference_fps": DISPLAY_REFERENCE_FPS,
+        "render_reference_budget_ms": round(DISPLAY_REFERENCE_BUDGET_MS, 3),
         "work_capacity_fps_p50": round(1_000_000_000 / p50_ns, 2),
         "work_capacity_fps_p95": round(1_000_000_000 / p95_ns, 2),
-        "tick_budget_ms": int(records[0]["tick_ms"]),
+        "update_interval_ms": int(records[0]["tick_ms"]),
         "work_p50_ms": round(p50_ns / 1_000_000, 2),
         "work_p95_ms": round(p95_ns / 1_000_000, 2),
         "map_p50_ms": round(map_p50_ns / 1_000_000, 2),
         "map_p95_ms": round(map_p95_ns / 1_000_000, 2),
+        "local_minimap_p50_ms": round(minimap_p50_ns / 1_000_000, 2),
+        "local_minimap_p95_ms": round(minimap_p95_ns / 1_000_000, 2),
         "work_p99_ms": round(_phase_median(records, name, "p99_ns") / 1_000_000, 2),
         "work_max_ms": round(_phase_median(records, name, "max_ns") / 1_000_000, 2),
         "first_window_p95_ms": round(
@@ -308,6 +313,23 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
                     "full_map_draws",
                 )
             },
+            **{
+                field: _median_integer([item[field] for item in map_records])
+                for field in (
+                    "primary_map_draws",
+                    "auxiliary_map_draws",
+                    "presents",
+                )
+            },
+            "local_minimap_update_interval_ms": representative["local_minimap"][
+                "update_interval_ms"
+            ],
+            "local_minimap_surface_width": representative["local_minimap"][
+                "surface_width"
+            ],
+            "local_minimap_surface_height": representative["local_minimap"][
+                "surface_height"
+            ],
             "renderer_allocation_statistics_available": allocation_available,
             "renderer_allocations": (
                 _median_integer([item["renderer_allocations"] for item in map_records])
@@ -456,7 +478,7 @@ def _identity_check(
     baseline: list[dict[str, object]], candidate: list[dict[str, object]]
 ) -> dict[str, object]:
     records = baseline + candidate
-    if not records or records[0].get("schema_version") != 3:
+    if not records or records[0].get("schema_version") != NATIVE_SCHEMA_VERSION:
         return {"passed": True}
     reference = records[0]
     instrumentation = reference["identity"]["instrumentation"]
@@ -482,9 +504,9 @@ def _identity_check(
     return {"passed": passed}
 
 
-def _guard_v3_record(record: dict[str, object]) -> dict[str, dict[str, object]]:
-    """Return explicit correctness/resource guards for one validated v3 record."""
-    if record.get("schema_version") != 3:
+def _guard_native_record(record: dict[str, object]) -> dict[str, dict[str, object]]:
+    """Return explicit correctness/resource guards for one validated native record."""
+    if record.get("schema_version") != NATIVE_SCHEMA_VERSION:
         return {}
     phases = {item["name"]: item for item in record["phases"]}
     sustained = phases["sustained"]
@@ -494,11 +516,14 @@ def _guard_v3_record(record: dict[str, object]) -> dict[str, dict[str, object]]:
     map_failures = sum(
         phase_record["map"][field]
         for phase_record in phases.values()
-        for field in ("auxiliary_map_draws", "present_failures", "render_failures", "fault_injections")
+        for field in ("present_failures", "render_failures", "fault_injections")
     )
     map_draws_match = all(
-        phase_record["map"]["map_draws"] == phase_record["full_map_draws"]
+        phase_record["map"]["map_draws"]
+        == phase_record["full_map_draws"] + phase_record["local_minimap"]["map_draws"]
         and phase_record["map"]["primary_map_draws"] == phase_record["full_map_draws"]
+        and phase_record["map"]["auxiliary_map_draws"]
+        == phase_record["local_minimap"]["map_draws"]
         and sum(phase_record["full_draw_reasons"].values()) >= phase_record["full_map_draws"]
         for phase_record in phases.values()
     )
@@ -598,8 +623,8 @@ def _guard_v3_record(record: dict[str, object]) -> dict[str, dict[str, object]]:
     return guards
 
 
-def _aggregate_v3_guards(records: list[dict[str, object]]) -> dict[str, dict[str, object]]:
-    per_record = [_guard_v3_record(record) for record in records]
+def _aggregate_native_guards(records: list[dict[str, object]]) -> dict[str, dict[str, object]]:
+    per_record = [_guard_native_record(record) for record in records]
     if not per_record or not per_record[0]:
         return {}
     result: dict[str, dict[str, object]] = {}
@@ -613,7 +638,7 @@ def _aggregate_v3_guards(records: list[dict[str, object]]) -> dict[str, dict[str
 
 
 def _context_consistency(records: list[dict[str, object]]) -> dict[str, object]:
-    if not records or records[0].get("schema_version") != 3:
+    if not records or records[0].get("schema_version") != NATIVE_SCHEMA_VERSION:
         return {"fresh_process_runs": len(records), "passed": False}
     checkpoints = {record["checkpoint_sha256"] for record in records}
     final_states = {record["final_state_digest"] for record in records}
@@ -750,7 +775,7 @@ def _build_evidence(
         }
     checks["checkpoint"] = _checkpoint_check(baseline, candidate)
     checks["instrumentation_identity"] = _identity_check(baseline, candidate)
-    checks.update(_aggregate_v3_guards(candidate + candidate_large))
+    checks.update(_aggregate_native_guards(candidate + candidate_large))
     checks["candidate_standard_determinism"] = _context_consistency(candidate)
     if candidate_large:
         checks["large_instrumentation_identity"] = _identity_check([], candidate_large)
@@ -758,7 +783,7 @@ def _build_evidence(
     if contexts:
         for context, context_records in contexts.items():
             checks[f"{context}_determinism"] = _context_consistency(context_records)
-            for name, check in _aggregate_v3_guards(context_records).items():
+            for name, check in _aggregate_native_guards(context_records).items():
                 checks[f"{context}_{name}"] = check
     for name, check in checks.items():
         policy_follows_performance = name in PERFORMANCE_CHECK_NAMES or name.endswith(
@@ -986,6 +1011,10 @@ def _milliseconds(value: int) -> str:
     return f"{value / 1_000_000:.2f} ms"
 
 
+def _percent_change(before: float, after: float) -> str:
+    return "n/a" if before == 0 else f"{(after / before - 1) * 100:+.1f}%"
+
+
 def _human_bytes(value: int) -> str:
     amount = float(value)
     for unit in ("B", "KiB", "MiB", "GiB"):
@@ -1011,16 +1040,18 @@ def _phase_summary_for_report(summary: object, context: str) -> dict[str, object
     expected = {
         "runs",
         "ticks_per_run",
-        "target_fps",
-        "achieved_fps_p50",
-        "achieved_fps_p95",
+        "update_cadence_hz",
+        "render_reference_fps",
+        "render_reference_budget_ms",
         "work_capacity_fps_p50",
         "work_capacity_fps_p95",
-        "tick_budget_ms",
+        "update_interval_ms",
         "work_p50_ms",
         "work_p95_ms",
         "map_p50_ms",
         "map_p95_ms",
+        "local_minimap_p50_ms",
+        "local_minimap_p95_ms",
         "work_p99_ms",
         "work_max_ms",
         "first_window_p95_ms",
@@ -1031,13 +1062,12 @@ def _phase_summary_for_report(summary: object, context: str) -> dict[str, object
     }
     if not isinstance(summary, dict) or set(summary) != expected:
         raise BenchmarkError(f"invalid phase summary: {context}")
-    for field in ("runs", "ticks_per_run", "tick_budget_ms"):
+    for field in ("runs", "ticks_per_run", "update_interval_ms", "render_reference_fps"):
         if type(summary[field]) is not int or summary[field] <= 0:
             raise BenchmarkError(f"invalid phase summary: {context}")
     for field in (
-        "target_fps",
-        "achieved_fps_p50",
-        "achieved_fps_p95",
+        "update_cadence_hz",
+        "render_reference_budget_ms",
         "work_capacity_fps_p50",
         "work_capacity_fps_p95",
         "work_p50_ms",
@@ -1049,10 +1079,20 @@ def _phase_summary_for_report(summary: object, context: str) -> dict[str, object
     ):
         if type(summary[field]) not in (int, float) or summary[field] <= 0:
             raise BenchmarkError(f"invalid phase summary: {context}")
-    for field in ("map_p50_ms", "map_p95_ms"):
+    for field in (
+        "map_p50_ms",
+        "map_p95_ms",
+        "local_minimap_p50_ms",
+        "local_minimap_p95_ms",
+    ):
         if type(summary[field]) not in (int, float) or summary[field] < 0:
             raise BenchmarkError(f"invalid phase summary: {context}")
-    if summary["target_fps"] != 8 or summary["tick_budget_ms"] != 125:
+    if (
+        summary["update_cadence_hz"] != 8
+        or summary["update_interval_ms"] != 125
+        or summary["render_reference_fps"] != DISPLAY_REFERENCE_FPS
+        or summary["render_reference_budget_ms"] != round(DISPLAY_REFERENCE_BUDGET_MS, 3)
+    ):
         raise BenchmarkError(f"invalid phase summary: {context}")
     return summary
 
@@ -1435,10 +1475,19 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             f"Release measurements: `{samples['baseline_standard']}` base/"
             f"`{samples['candidate_standard']}` candidate standard runs."
         )
+        lines.append(
+            "Base and candidate runs were alternated on the same runner; positive timing deltas "
+            "mean the candidate was slower."
+        )
     else:
         lines.append(
             f"Candidate-only validation measured `{samples['candidate_standard']}` candidate "
             "standard runs."
+        )
+        lines.append(
+            "This bootstrap result establishes the hosted-runner baseline. No before/after delta "
+            "is claimed because the selected base predates the compatible movement instrumentation; "
+            "later schema-compatible PRs alternate base and candidate runs on the same runner."
         )
     lines.append(
         "Both bounded paths include two fresh standard-discrete runs for correctness, "
@@ -1457,16 +1506,62 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
     lines.extend(
         [
             "",
-            "FPS at p50/p95 frame time is derived from the complete simulated main-loop duration "
-            "(work plus scheduled wait). Render capacity is the unslept throughput implied by "
-            "measured work time; target FPS is the requested 125 ms cadence.",
+            "The replay injects MAP state at 8 Hz (one 125 ms simulation tick); that update "
+            "cadence is not the client display frame rate. Measured replay-work capacity is the "
+            "unslept throughput implied by decode, the main-map draw, production-sized local "
+            "minimap map-core draws when due, and maintenance work. The local minimap uses its "
+            "real 250 ms refresh cadence and 1700×1200 render surface; widget masking/zooming and "
+            "the otherwise small UI/widget work are outside this map-focused measurement. The "
+            "144 FPS reference (6.944 ms/frame) is informational only and is not an enforced "
+            "server threshold.",
             "",
-            "### Candidate replay timing",
+        ]
+    )
+    if evidence["mode"] == "comparison":
+        baseline_phases = phases["baseline_standard"]
+        candidate_phases = phases["candidate_standard"]
+        if not isinstance(baseline_phases, dict) or not isinstance(candidate_phases, dict):
+            raise BenchmarkError("movement comparison phase summaries are incomplete")
+        lines.extend(
+            [
+                "### Base → candidate change (standard smooth)",
+                "",
+                "| Phase | Total update work p95 | Change | Main map p95 | Change | "
+                "Local minimap map-core p95 | Change | Work-capacity FPS (slow tail) |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for name in REQUIRED_PHASES:
+            baseline_summary = _phase_summary_for_report(
+                baseline_phases[name], f"baseline Standard smooth {name}"
+            )
+            candidate_summary = _phase_summary_for_report(
+                candidate_phases[name], f"candidate Standard smooth {name}"
+            )
+            lines.append(
+                f"| `{name}` | {baseline_summary['work_p95_ms']:.2f} → "
+                f"{candidate_summary['work_p95_ms']:.2f} ms | "
+                f"{_percent_change(baseline_summary['work_p95_ms'], candidate_summary['work_p95_ms'])} | "
+                f"{baseline_summary['map_p95_ms']:.2f} → "
+                f"{candidate_summary['map_p95_ms']:.2f} ms | "
+                f"{_percent_change(baseline_summary['map_p95_ms'], candidate_summary['map_p95_ms'])} | "
+                f"{baseline_summary['local_minimap_p95_ms']:.2f} → "
+                f"{candidate_summary['local_minimap_p95_ms']:.2f} ms | "
+                f"{_percent_change(baseline_summary['local_minimap_p95_ms'], candidate_summary['local_minimap_p95_ms'])} | "
+                f"{baseline_summary['work_capacity_fps_p95']:.2f} → "
+                f"{candidate_summary['work_capacity_fps_p95']:.2f} |"
+            )
+        lines.append("")
+    lines.extend(
+        [
+            "### Candidate hosted baseline timing",
             "",
-            "| Context | Phase | Ticks/run | Runs | FPS at p50/p95 frame time | "
-            "Render capacity FPS (p50/p95) | Target FPS | Work p50/p95 | MAP p50/p95 | "
-            "p95 budget | First → last work-window p95 |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| Context | Phase | Ticks/run | Runs | MAP update rate | "
+            "Measured replay-work capacity FPS (p50/slow-tail) | Display reference | "
+            "Total work p50/p95 | Main map p50/p95 | Local minimap map-core p50/p95 | "
+            "Work p95 / 144 FPS budget | "
+            "First → last work-window p95 |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     summaries: list[tuple[str, str, dict[str, object]]] = []
@@ -1478,14 +1573,20 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             if summary["runs"] != expected_runs:
                 raise BenchmarkError(f"invalid candidate phase run count: {viewport}")
             summaries.append((viewport, name, summary))
-            budget_percent = summary["work_p95_ms"] / summary["tick_budget_ms"] * 100
+            budget_percent = (
+                summary["work_p95_ms"] / summary["render_reference_budget_ms"] * 100
+            )
             lines.append(
                 f"| {viewport} | `{name}` | {summary['ticks_per_run']} | {summary['runs']} | "
-                f"{summary['achieved_fps_p50']:.2f}/{summary['achieved_fps_p95']:.2f} | "
+                f"{summary['update_cadence_hz']:.0f} Hz | "
                 f"{summary['work_capacity_fps_p50']:.2f}/"
-                f"{summary['work_capacity_fps_p95']:.2f} | {summary['target_fps']} | "
+                f"{summary['work_capacity_fps_p95']:.2f} | "
+                f"{summary['render_reference_fps']} FPS "
+                f"({summary['render_reference_budget_ms']:.3f} ms) | "
                 f"{summary['work_p50_ms']:.2f}/{summary['work_p95_ms']:.2f} ms | "
                 f"{summary['map_p50_ms']:.2f}/{summary['map_p95_ms']:.2f} ms | "
+                f"{summary['local_minimap_p50_ms']:.2f}/"
+                f"{summary['local_minimap_p95_ms']:.2f} ms | "
                 f"{budget_percent:.1f}% | "
                 f"{summary['first_window_p95_ms']:.2f} → "
                 f"{summary['last_window_p95_ms']:.2f} ms |"
@@ -1498,12 +1599,13 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             "",
             "Values are medians per run when a viewport has multiple runs.",
             "",
-            "| Context | Phase | MAP packets (changed/no-op) | Full draws | "
+            "| Context | Phase | MAP packets (changed/no-op) | Main-map calls | "
+            "Local-minimap calls | Presents | "
             "Queue peak | Peak bytes | Budget yields/recoveries | Oldest queued | "
             "Simulated queue service | Actual drain p50/p95 | Queue order proof | "
             "Renderer allocations |",
             "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | "
-            "---: |",
+            "---: | ---: | ---: |",
         ]
     )
     for viewport, name, summary in summaries:
@@ -1511,6 +1613,9 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             summary["map"],
             {
                 "map_packets", "changed_map_packets", "noop_map_packets", "full_map_draws",
+                "primary_map_draws", "auxiliary_map_draws", "presents",
+                "local_minimap_update_interval_ms", "local_minimap_surface_width",
+                "local_minimap_surface_height",
                 "renderer_allocation_statistics_available", "renderer_allocations",
                 "renderer_allocation_bytes",
             },
@@ -1541,7 +1646,8 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
         lines.append(
             f"| {viewport} | `{name}` | {map_stats['map_packets']} "
             f"({map_stats['changed_map_packets']}/{map_stats['noop_map_packets']}) | "
-            f"{map_stats['full_map_draws']} | {queue['peak_depth']} | "
+            f"{map_stats['primary_map_draws']} | {map_stats['auxiliary_map_draws']} | "
+            f"{map_stats['presents']} | {queue['peak_depth']} | "
             f"{_human_bytes(queue['peak_bytes'])} | "
             f"{queue['budget_yields']}/{queue['recoveries']} | "
             f"{queue['oldest_age_ms']:.2f} ms | {queue['processing_ms']:.2f} ms | "

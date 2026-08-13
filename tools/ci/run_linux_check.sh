@@ -161,6 +161,7 @@ case "${component}" in
       client/src/client/sprite.c
       client/src/cmake.txt
       client/src/gui/widgets/map.c
+      client/src/gui/widgets/minimap.c
       client/src/gui/widgets/render_profiler.c
       client/src/include/client.h
       client/src/include/client_command_queue.h
