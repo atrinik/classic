@@ -221,6 +221,27 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn("resolve ghcr.io/atrinik/classic-dependencies:", log)
 
             result, log = run_case(
+                package_exists="true", tag_exists="false", allow_missing="false"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(log.count("cp --from-oci-layout"), 1)
+            self.assertEqual(
+                log.count("resolve ghcr.io/atrinik/classic-dependencies:"), 1
+            )
+
+            result, log = run_case(
+                package_exists="true",
+                tag_exists="true",
+                allow_missing="false",
+                existing_digest=expected,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("cp --from-oci-layout", log)
+            self.assertEqual(
+                log.count("resolve ghcr.io/atrinik/classic-dependencies:"), 1
+            )
+
+            result, log = run_case(
                 package_exists="true",
                 tag_exists="true",
                 allow_missing="false",

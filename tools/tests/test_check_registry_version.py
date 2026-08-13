@@ -119,6 +119,30 @@ class CheckRegistryVersionTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "cannot audit GHCR package"):
                     check_registry_version.main()
 
+    def test_malformed_version_metadata_fails_closed(self) -> None:
+        malformed = (
+            {"name": "sha256:" + "a" * 64},
+            {"name": "sha256:" + "a" * 64, "metadata": None},
+            {"name": "sha256:" + "a" * 64, "metadata": {}},
+            {
+                "name": "sha256:" + "a" * 64,
+                "metadata": {"container": None},
+            },
+            {
+                "name": "sha256:" + "a" * 64,
+                "metadata": {"container": {}},
+            },
+            {
+                "name": "sha256:" + "a" * 64,
+                "metadata": {"container": {"tags": [1]}},
+            },
+        )
+        tag = "materials-" + "b" * 64
+        for value in malformed:
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(RuntimeError, "invalid .*metadata"):
+                    check_registry_version.find_version([value], tag)
+
 
 if __name__ == "__main__":
     unittest.main()

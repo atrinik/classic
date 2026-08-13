@@ -39,10 +39,16 @@ def find_version(value: object, tag: str) -> str | None:
     for item in value:
         if not isinstance(item, dict):
             raise RuntimeError("GHCR package API returned invalid version metadata")
-        metadata = item.get("metadata", {})
-        container = metadata.get("container", {}) if isinstance(metadata, dict) else {}
-        tags = container.get("tags", []) if isinstance(container, dict) else []
-        if not isinstance(tags, list):
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            raise RuntimeError("GHCR package API returned invalid version metadata")
+        container = metadata.get("container")
+        if not isinstance(container, dict):
+            raise RuntimeError("GHCR package API returned invalid container metadata")
+        tags = container.get("tags")
+        if not isinstance(tags, list) or not all(
+            isinstance(item, str) for item in tags
+        ):
             raise RuntimeError("GHCR package API returned invalid tag metadata")
         if tag in tags:
             digest = item.get("name")
