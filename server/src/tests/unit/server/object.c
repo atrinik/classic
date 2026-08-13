@@ -123,14 +123,24 @@ START_TEST(test_find_enemy_returns_valid_direction_for_tiled_exit_enemy) {
                   rv.direction);
     ck_assert_ptr_null(source->tile_map[TILED_NORTH]);
 
-    monster->attacked_by = pl;
-    monster->attacked_by_count = pl->count;
     rv.direction = INT_MIN;
 
     ck_assert_ptr_eq(find_enemy(monster, &rv), pl);
     ck_assert_msg(rv.direction > 0 && rv.direction <= NUM_DIRECTION,
                   "find_enemy returned the current enemy with stale rv.direction %d",
                   rv.direction);
+
+    set_npc_enemy(monster, NULL, NULL);
+    mapstruct *isolated = get_empty_map(24, 24);
+    FREE_AND_COPY_HASH(isolated->path, "/tests/stale-rv-isolated");
+    object_remove(pl, 0);
+    pl = object_insert_map(pl, isolated, NULL, 0);
+    ck_assert_ptr_nonnull(pl);
+    monster->attacked_by = pl;
+    monster->attacked_by_count = pl->count;
+
+    ck_assert_ptr_null(find_enemy(monster, &rv));
+    ck_assert_ptr_null(monster->attacked_by);
 
     object_remove(monster, 0);
     object_destroy(monster);
@@ -194,6 +204,87 @@ START_TEST(test_find_enemy_returns_valid_direction_for_exit_tiled_enemy) {
     ck_assert_msg(rv.direction > 0 && rv.direction <= NUM_DIRECTION,
                   "find_enemy returned an exit-tiled enemy with stale rv.direction %d",
                   rv.direction);
+
+    rv.direction = INT_MIN;
+    ck_assert_ptr_eq(find_enemy(monster, &rv), pl);
+    ck_assert_msg(rv.direction > 0 && rv.direction <= NUM_DIRECTION,
+                  "find_enemy dropped an exit-tiled current enemy or returned stale direction %d",
+                  rv.direction);
+
+    object_remove(monster, 0);
+    object_destroy(monster);
+    object_remove(pl, 0);
+    object_destroy(pl);
+}
+END_TEST
+
+START_TEST(test_find_enemy_returns_valid_direction_for_tiled_exit_tiled_enemy) {
+    mapstruct *source;
+    object *pl;
+    check_setup_env_pl(&source, &pl);
+    FREE_AND_COPY_HASH(source->path, "/tests/stale-rv-tiled-exit-tiled-source");
+
+    mapstruct *first_bridge = get_empty_map(24, 24);
+    FREE_AND_COPY_HASH(first_bridge->path, "/tests/stale-rv-tiled-exit-tiled-first-bridge");
+    source->tile_map[TILED_EAST] = first_bridge;
+    first_bridge->tile_map[TILED_WEST] = source;
+
+    mapstruct *second_bridge = get_empty_map(24, 24);
+    FREE_AND_COPY_HASH(second_bridge->path, "/tests/stale-rv-tiled-exit-tiled-second-bridge");
+
+    mapstruct *destination = get_empty_map(24, 24);
+    FREE_AND_COPY_HASH(destination->path, "/tests/stale-rv-tiled-exit-tiled-destination");
+    second_bridge->tile_map[TILED_EAST] = destination;
+    destination->tile_map[TILED_WEST] = second_bridge;
+
+    object_remove(pl, 0);
+    pl->x = 12;
+    pl->y = 12;
+    pl = object_insert_map(pl, destination, NULL, 0);
+    ck_assert_ptr_nonnull(pl);
+
+    object *exit = arch_get("stairs_down");
+    ck_assert_ptr_nonnull(exit);
+    exit->x = 1;
+    exit->y = 1;
+    EXIT_X(exit) = 1;
+    EXIT_Y(exit) = 1;
+    FREE_AND_ADD_REF_HASH(EXIT_PATH(exit), second_bridge->path);
+    exit = object_insert_map(exit, first_bridge, NULL, 0);
+    ck_assert_ptr_nonnull(exit);
+
+    object *monster = arch_get("kobold");
+    ck_assert_ptr_nonnull(monster);
+    monster->x = 10;
+    monster->y = 10;
+    monster = object_insert_map(monster, source, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(monster);
+    monster_data_init(monster);
+
+    monster->attacked_by = pl;
+    monster->attacked_by_count = pl->count;
+
+    rv_vector rv = {
+        .distance = 2,
+        .distance_x = 0,
+        .distance_y = 0,
+        .distance_z = 0,
+        .direction = INT_MIN,
+        .part = NULL,
+    };
+
+    ck_assert(on_same_map(monster, pl));
+    ck_assert_ptr_eq(find_enemy(monster, &rv), pl);
+    ck_assert_msg(rv.direction > 0 && rv.direction <= NUM_DIRECTION,
+                  "find_enemy returned a tiled-exit-tiled enemy with stale rv.direction %d",
+                  rv.direction);
+
+    rv.direction = INT_MIN;
+    ck_assert_ptr_eq(find_enemy(monster, &rv), pl);
+    ck_assert_msg(
+        rv.direction > 0 && rv.direction <= NUM_DIRECTION,
+        "find_enemy dropped a tiled-exit-tiled current enemy or returned stale direction %d",
+        rv.direction);
 
     object_remove(monster, 0);
     object_destroy(monster);
@@ -1129,6 +1220,7 @@ static Suite *suite(void) {
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_enemy);
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_exit_tiled_enemy);
+    tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_tiled_enemy);
     tcase_add_test(tc_core, test_object_can_merge);
     tcase_add_test(tc_core, test_object_plural_name_contract);
     tcase_add_test(tc_core, test_object_merge_updates_name_and_count);

@@ -436,7 +436,7 @@ relative_tile_position(mapstruct *map1, mapstruct *map2, int *x, int *y, int *z,
     }
 
     /* Recursive search */
-    return relative_tile_position_rec(map1, map2, x, y, z, ++traversal_id, 2, flags);
+    return relative_tile_position_rec(map1, map2, x, y, z, ++traversal_id, 3, flags);
 }
 
 /**
