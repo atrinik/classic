@@ -668,6 +668,12 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
+#ifdef ATRINIK_SOUND_TESTS
+    if (argc == 3 && strcmp(argv[1], "--sound-test") == 0) {
+        return sound_test_main(argv[2]);
+    }
+#endif
+
     char version[MAX_BUF];
     package_get_version_full(VS(version));
 

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -97,6 +97,107 @@ static MIX_Track *sound_effect_tracks[SOUND_EFFECT_TRACKS];
  */
 static void (*sound_background_hook)(void);
 
+#ifdef ATRINIK_SOUND_TESTS
+static const char *sound_test_fixture_root;
+static bool sound_test_fail_next_music_play;
+#endif
+
+static int sound_setting_get(int category, int setting) {
+#ifdef ATRINIK_SOUND_TESTS
+    if (sound_test_fixture_root != NULL) {
+        if (category == OPT_CAT_SOUND) {
+            return setting == OPT_3D_SOUNDS ? 1 : 100;
+        }
+        if (category == OPT_CAT_MAP && (setting == OPT_MAP_WIDTH || setting == OPT_MAP_HEIGHT)) {
+            return 17;
+        }
+    }
+#endif
+
+    return setting_get_int(category, setting);
+}
+
+static char *sound_resolve_path(const char *path) {
+#ifdef ATRINIK_SOUND_TESTS
+    if (sound_test_fixture_root != NULL) {
+        const char *basename = strrchr(path, '/');
+        basename = basename != NULL ? basename + 1 : path;
+        if (strcmp(basename, "opus-tone-alias.mid") == 0) {
+            basename = "opus-tone.mid";
+        }
+
+        char resolved[HUGE_BUF];
+        snprintf(resolved, sizeof(resolved), "%s/%s", sound_test_fixture_root, basename);
+        return xstrdup(resolved);
+    }
+#endif
+
+    return file_path(path, "r");
+}
+
+static bool sound_decoder_contract_validate(char *available, size_t available_size) {
+    static const char *const expected[] = {
+        "WAV",
+        "STBVORBIS",
+        "OPUS",
+        "VOC",
+        "AIFF",
+        "AU",
+        "DRMP3",
+        "SINEWAVE",
+        "RAW",
+    };
+    bool found[arraysize(expected)];
+    bool valid = true;
+    size_t used = 0;
+
+    memset(found, 0, sizeof(found));
+    if (available_size > 0) {
+        available[0] = '\0';
+    }
+
+    int decoder_count = MIX_GetNumAudioDecoders();
+    for (int i = 0; i < decoder_count; i++) {
+        const char *decoder = MIX_GetAudioDecoder(i);
+        if (decoder == NULL) {
+            valid = false;
+            continue;
+        }
+
+        int written = snprintf(available + used,
+                               available_size > used ? available_size - used : 0,
+                               "%s%s",
+                               used != 0 ? "," : "",
+                               decoder);
+        if (written > 0 && available_size > used) {
+            used += MIN((size_t)written, available_size - used - 1);
+        }
+
+        bool known = false;
+        for (size_t j = 0; j < arraysize(expected); j++) {
+            if (strcmp(decoder, expected[j]) == 0) {
+                known = true;
+                if (found[j]) {
+                    valid = false;
+                }
+                found[j] = true;
+                break;
+            }
+        }
+        valid = valid && known;
+    }
+
+    for (size_t i = 0; i < arraysize(found); i++) {
+        valid = valid && found[i];
+    }
+
+    if (!valid) {
+        SDL_SetError("unsupported SDL3_mixer decoder contract; found [%s]", available);
+    }
+
+    return valid;
+}
+
 static float sound_percent_to_gain(int64_t percent) {
     percent = MAX(INT64_C(0), MIN(INT64_C(100), percent));
     return (float)percent / 100.0f;
@@ -187,7 +288,7 @@ static uint32_t sound_music_file_get_duration(const char *filename) {
     uint32_t duration;
 
     snprintf(path, sizeof(path), DIRECTORY_MEDIA "/durations/%s", filename);
-    cp = file_path(path, "r");
+    cp = sound_resolve_path(path);
     contents = path_file_contents(cp);
     free(cp);
 
@@ -313,6 +414,8 @@ void sound_init(void) {
     sound_background = NULL;
 
 #ifdef HAVE_SDL_MIXER
+    char decoder_contract[256];
+
     sound_background_hook = NULL;
     sound_data = NULL;
     sound_mixer = NULL;
@@ -326,6 +429,16 @@ void sound_init(void) {
                          SDL_GetError());
         return;
     }
+
+    if (!sound_decoder_contract_validate(decoder_contract, sizeof(decoder_contract))) {
+        draw_info_format(COLOR_RED,
+                         "Unsupported SDL3_mixer decoder configuration; sound will not be "
+                         "heard. Reason: %s",
+                         SDL_GetError());
+        MIX_Quit();
+        return;
+    }
+    LOG(SYSTEM, "SDL3_mixer decoders: %s", decoder_contract);
 
     sound_mixer = MIX_CreateMixerDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, NULL);
     if (sound_mixer == NULL) {
@@ -472,7 +585,7 @@ static int sound_add_effect(const char *filename, int volume, int loop) {
     }
 
     int64_t effective_percent =
-        setting_get_int(OPT_CAT_SOUND, OPT_VOLUME_SOUND) * MAX(0, volume) / 100;
+        sound_setting_get(OPT_CAT_SOUND, OPT_VOLUME_SOUND) * MAX(0, volume) / 100;
     MIX_Track *track = sound_effect_tracks[channel];
     MIX_StereoGains stereo = {.left = 1.0f, .right = 1.0f};
     SDL_PropertiesID options = 0;
@@ -518,7 +631,7 @@ void sound_play_effect(const char *filename, int volume) {
     char path[HUGE_BUF], *cp;
 
     snprintf(path, sizeof(path), DIRECTORY_SFX "/%s", filename);
-    cp = file_path(path, "r");
+    cp = sound_resolve_path(path);
     sound_add_effect(cp, volume, 0);
     free(cp);
 }
@@ -541,7 +654,7 @@ int sound_play_effect_loop(const char *filename, int volume, int loop) {
     int ret;
 
     snprintf(path, sizeof(path), DIRECTORY_SFX "/%s", filename);
-    cp = file_path(path, "r");
+    cp = sound_resolve_path(path);
     ret = sound_add_effect(cp, volume, loop);
     free(cp);
 
@@ -576,13 +689,18 @@ static void sound_start_bg_music_internal(const char *filename,
 
     snprintf(path, sizeof(path), DIRECTORY_MEDIA "/%s", filename);
 
-    /* Same background music, nothing to do. */
-    if (sound_background && !strcmp(sound_background, path)) {
+    /* Same active background music: update policy without restarting it. */
+    if (sound_background && !strcmp(sound_background, path) &&
+        (MIX_TrackPlaying(sound_music_track) || MIX_TrackPaused(sound_music_track))) {
         sound_background_loop = loop;
         sound_background_volume_adjustment = volume_adjustment;
         sound_apply_music_volume(volume);
         return;
     }
+
+    /* A different request owns the audible state immediately. Never leave the
+     * previous map/title track playing while the replacement is loaded. */
+    sound_stop_bg_music();
 
     /* Try to find the music. */
     HASH_FIND_STR(sound_data, path, tmp);
@@ -591,7 +709,7 @@ static void sound_start_bg_music_internal(const char *filename,
         char *cp;
         MIX_Audio *music;
 
-        cp = file_path(path, "r");
+        cp = sound_resolve_path(path);
         music = MIX_LoadAudio(sound_mixer, cp, false);
         free(cp);
 
@@ -604,25 +722,27 @@ static void sound_start_bg_music_internal(const char *filename,
         tmp = sound_new(path, music);
     }
 
-    sound_stop_bg_music();
+    if (!MIX_SetTrackAudio(sound_music_track, tmp->data) ||
+        !MIX_SetTrackGain(sound_music_track, sound_percent_to_gain(volume)) ||
+#ifdef ATRINIK_SOUND_TESTS
+        (sound_test_fail_next_music_play && (sound_test_fail_next_music_play = false,
+                                             SDL_SetError("injected mixer-start failure"),
+                                             true)) ||
+#endif
+        !MIX_PlayTrack(sound_music_track, 0)) {
+        LOG(BUG, "Could not play '%s'. Reason: %s.", path, SDL_GetError());
+        MIX_StopTrack(sound_music_track, 0);
+        MIX_SetTrackAudio(sound_music_track, NULL);
+        return;
+    }
 
     sound_background = xstrdup(path);
-    sound_background_hook_execute();
     sound_background_loop = loop;
     sound_background_volume_adjustment = volume_adjustment;
     sound_background_duration = sound_music_file_get_duration(filename);
     sound_background_update_duration = 1;
-
-    if (!MIX_SetTrackAudio(sound_music_track, tmp->data) ||
-        !MIX_SetTrackGain(sound_music_track, sound_percent_to_gain(volume)) ||
-        !MIX_PlayTrack(sound_music_track, 0)) {
-        LOG(BUG, "Could not play '%s'. Reason: %s.", path, SDL_GetError());
-        free(sound_background);
-        sound_background = NULL;
-        sound_background_hook_execute();
-        return;
-    }
     sound_apply_music_volume(volume);
+    sound_background_hook_execute();
 
 #endif
 }
@@ -698,7 +818,7 @@ void update_map_bg_music(const char *bg_music) {
         }
 
         sound_start_bg_music_internal(filename,
-                                      setting_get_int(OPT_CAT_SOUND, OPT_VOLUME_MUSIC) + vol,
+                                      sound_setting_get(OPT_CAT_SOUND, OPT_VOLUME_MUSIC) + vol,
                                       loop,
                                       vol);
     }
@@ -714,7 +834,7 @@ void sound_update_volume(void) {
 
 #ifdef HAVE_SDL_MIXER
     int64_t volume =
-        setting_get_int(OPT_CAT_SOUND, OPT_VOLUME_MUSIC) + sound_background_volume_adjustment;
+        sound_setting_get(OPT_CAT_SOUND, OPT_VOLUME_MUSIC) + sound_background_volume_adjustment;
     sound_apply_music_volume(volume);
 #endif
 }
@@ -840,18 +960,25 @@ void sound_stop_effect(int channel) {
 #endif
 }
 
-static void sound_set_effect_position(int channel, int angle, int distance) {
 #ifdef HAVE_SDL_MIXER
-    if (channel < 0 || channel >= SOUND_EFFECT_TRACKS || sound_effect_tracks[channel] == NULL) {
-        return;
-    }
-
+static MIX_StereoGains sound_effect_stereo_gains(int angle, int distance) {
     float pan = sinf((float)angle * (float)M_PI / 180.0f);
     float attenuation = 1.0f - MIN(255, MAX(0, distance)) / 255.0f;
     MIX_StereoGains gains = {
         .left = attenuation * (pan > 0.0f ? 1.0f - pan : 1.0f),
         .right = attenuation * (pan < 0.0f ? 1.0f + pan : 1.0f),
     };
+    return gains;
+}
+#endif
+
+static void sound_set_effect_position(int channel, int angle, int distance) {
+#ifdef HAVE_SDL_MIXER
+    if (channel < 0 || channel >= SOUND_EFFECT_TRACKS || sound_effect_tracks[channel] == NULL) {
+        return;
+    }
+
+    MIX_StereoGains gains = sound_effect_stereo_gains(angle, distance);
     MIX_SetTrackStereo(sound_effect_tracks[channel], &gains);
 #else
     (void)channel;
@@ -898,7 +1025,7 @@ void socket_command_sound(uint8_t *data, size_t len, size_t pos) {
             angle = 0;
             distance = (255 * isqrt(POW2(x) + POW2(y))) / MAX_SOUND_DISTANCE;
 
-            if (setting_get_int(OPT_CAT_SOUND, OPT_3D_SOUNDS) &&
+            if (sound_setting_get(OPT_CAT_SOUND, OPT_3D_SOUNDS) &&
                 distance >= (255 / MAX_SOUND_DISTANCE) * 2) {
                 angle = atan2(-y, x) * (180 / M_PI);
                 angle = 90 - angle;
@@ -909,7 +1036,8 @@ void socket_command_sound(uint8_t *data, size_t len, size_t pos) {
     } else if (type == CMD_SOUND_BACKGROUND) {
         if (!sound_map_background_disabled) {
             sound_start_bg_music_internal(filename,
-                                          setting_get_int(OPT_CAT_SOUND, OPT_VOLUME_MUSIC) + volume,
+                                          sound_setting_get(OPT_CAT_SOUND, OPT_VOLUME_MUSIC) +
+                                              volume,
                                           loop,
                                           volume);
         }
@@ -943,8 +1071,8 @@ static void sound_ambient_set_position(sound_ambient_struct *tmp) {
 #ifdef HAVE_SDL_MIXER
     int x, y, angle, distance, cx, cy;
 
-    cx = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_WIDTH)) / 2;
-    cy = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT)) / 2;
+    cx = MAP_LOOK_TO_WIRE_SIZE(sound_setting_get(OPT_CAT_MAP, OPT_MAP_WIDTH)) / 2;
+    cy = MAP_LOOK_TO_WIRE_SIZE(sound_setting_get(OPT_CAT_MAP, OPT_MAP_HEIGHT)) / 2;
 
     /* The x/y positions stored in the sound effect structure are the
      * positions on the map, so we have to convert it to coordinates
@@ -958,7 +1086,7 @@ static void sound_ambient_set_position(sound_ambient_struct *tmp) {
     distance = MIN(255, (255 * isqrt(POW2(x) + POW2(y))) / range);
 
     /* Calculate the angle. */
-    if (setting_get_int(OPT_CAT_SOUND, OPT_3D_SOUNDS) && distance) {
+    if (sound_setting_get(OPT_CAT_SOUND, OPT_3D_SOUNDS) && distance) {
         angle = atan2(-y, x) * (180 / M_PI);
         angle = 90 - angle;
     }
@@ -990,10 +1118,10 @@ void sound_ambient_mapcroll(int xoff, int yoff) {
         /* If the sound effect is now off-screen, remove it. */
         if (sound_ambient->x < 0 ||
             sound_ambient->x >=
-                MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_WIDTH)) ||
+                MAP_LOOK_TO_WIRE_SIZE(sound_setting_get(OPT_CAT_MAP, OPT_MAP_WIDTH)) ||
             sound_ambient->y < 0 ||
             sound_ambient->y >=
-                MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT))) {
+                MAP_LOOK_TO_WIRE_SIZE(sound_setting_get(OPT_CAT_MAP, OPT_MAP_HEIGHT))) {
             sound_ambient_free(sound_ambient);
             continue;
         }
@@ -1095,3 +1223,280 @@ int sound_playing_music(void) {
     return 0;
 #endif
 }
+
+#ifdef ATRINIK_SOUND_TESTS
+
+#define SOUND_TEST_CHECK(condition)                                                               \
+    do {                                                                                          \
+        if (!(condition)) {                                                                       \
+            fprintf(stderr, "sound check failed at %s:%d: %s\n", __FILE__, __LINE__, #condition); \
+            result = 1;                                                                           \
+            goto done;                                                                            \
+        }                                                                                         \
+    } while (0)
+
+static size_t sound_test_hook_count;
+static char sound_test_hook_values[32][MAX_BUF];
+
+static void sound_test_background_hook(void) {
+    if (sound_test_hook_count >= arraysize(sound_test_hook_values)) {
+        return;
+    }
+
+    const char *background = sound_get_bg_music_basename();
+    snprintf(sound_test_hook_values[sound_test_hook_count],
+             sizeof(sound_test_hook_values[sound_test_hook_count]),
+             "%s",
+             background != NULL ? background : "<stopped>");
+    sound_test_hook_count++;
+}
+
+static bool sound_test_wait_for_effect(int channel, bool playing, uint32_t timeout_ms) {
+    uint32_t started = SDL_GetTicks();
+    do {
+        bool active = channel >= 0 && channel < SOUND_EFFECT_TRACKS &&
+                      sound_effect_tracks[channel] != NULL &&
+                      MIX_TrackPlaying(sound_effect_tracks[channel]);
+        if (active == playing) {
+            return true;
+        }
+        SDL_Delay(5);
+    } while (SDL_GetTicks() - started < timeout_ms);
+
+    return false;
+}
+
+static size_t sound_test_ambient_count(void) {
+    size_t count = 0;
+    sound_ambient_struct *ambient;
+    DL_FOREACH(sound_ambient_head, ambient) {
+        count++;
+    }
+    return count;
+}
+
+static bool sound_test_decode_fixture(const char *path, size_t *decoded_bytes) {
+    MIX_AudioDecoder *decoder = MIX_CreateAudioDecoder(path, 0);
+    if (decoder == NULL) {
+        return false;
+    }
+
+    SDL_AudioSpec spec = {SDL_AUDIO_S16, 2, 48000};
+    uint8_t pcm[4096];
+    size_t total = 0;
+    bool nonzero = false;
+    for (;;) {
+        int decoded = MIX_DecodeAudio(decoder, pcm, sizeof(pcm), &spec);
+        if (decoded < 0 || total > 4 * 1024 * 1024 - (size_t)MAX(decoded, 0)) {
+            MIX_DestroyAudioDecoder(decoder);
+            return false;
+        }
+        if (decoded == 0) {
+            break;
+        }
+        total += (size_t)decoded;
+        for (int i = 0; i < decoded; i++) {
+            nonzero = nonzero || pcm[i] != 0;
+        }
+    }
+
+    MIX_DestroyAudioDecoder(decoder);
+    *decoded_bytes = total;
+    return total > 0 && nonzero;
+}
+
+int sound_test_main(const char *fixture_root) {
+    int result = 0;
+    char fixture[HUGE_BUF];
+    char malformed[HUGE_BUF];
+    char missing[HUGE_BUF];
+    char decoders[256];
+    size_t decoded_bytes = 0;
+    packet_struct *packet = NULL;
+
+    sound_test_fixture_root = fixture_root;
+    snprintf(fixture, sizeof(fixture), "%s/opus-tone.mid", fixture_root);
+    snprintf(malformed, sizeof(malformed), "%s/malformed.mid", fixture_root);
+    snprintf(missing, sizeof(missing), "%s/missing.mid", fixture_root);
+
+    (void)SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
+    SOUND_TEST_CHECK(SDL_Init(SDL_INIT_AUDIO | SDL_INIT_EVENTS));
+
+    /* Disabled audio must keep every public state surface inert. */
+    sound_start_bg_music("opus-tone.mid", 100, 0);
+    SOUND_TEST_CHECK(sound_get_bg_music() == NULL);
+    SOUND_TEST_CHECK(sound_play_effect_loop("opus-tone.mid", 100, 0) == -1);
+
+    sound_init();
+    SOUND_TEST_CHECK(enabled);
+    SOUND_TEST_CHECK(sound_decoder_contract_validate(decoders, sizeof(decoders)));
+    printf("SDL3_mixer decoder contract: %s\n", decoders);
+    SOUND_TEST_CHECK(sound_test_decode_fixture(fixture, &decoded_bytes));
+    printf("decoded %zu nonzero PCM bytes from Opus content at legacy .mid path\n", decoded_bytes);
+    SOUND_TEST_CHECK(MIX_CreateAudioDecoder(malformed, 0) == NULL);
+    SOUND_TEST_CHECK(MIX_CreateAudioDecoder(missing, 0) == NULL);
+
+    sound_background_hook_register(sound_test_background_hook);
+
+    /* Uncached/cached starts, same-track policy updates, and explicit stop. */
+    sound_start_bg_music("opus-tone.mid", 80, -1);
+    SOUND_TEST_CHECK(sound_playing_music());
+    SOUND_TEST_CHECK(strcmp(sound_get_bg_music_basename(), "opus-tone.mid") == 0);
+    SOUND_TEST_CHECK(HASH_COUNT(sound_data) == 1);
+    SOUND_TEST_CHECK(sound_test_hook_count == 1);
+    SOUND_TEST_CHECK(strcmp(sound_test_hook_values[0], "opus-tone.mid") == 0);
+    MIX_Audio *first_audio = MIX_GetTrackAudio(sound_music_track);
+
+    sound_start_bg_music("opus-tone.mid", 35, 2);
+    SOUND_TEST_CHECK(sound_playing_music());
+    SOUND_TEST_CHECK(MIX_GetTrackAudio(sound_music_track) == first_audio);
+    SOUND_TEST_CHECK(HASH_COUNT(sound_data) == 1);
+    SOUND_TEST_CHECK(sound_background_loop == 2);
+    SOUND_TEST_CHECK(sound_background_volume == 35);
+    SOUND_TEST_CHECK(sound_test_hook_count == 1);
+
+    sound_pause_music();
+    SOUND_TEST_CHECK(MIX_TrackPaused(sound_music_track));
+    sound_resume_music();
+    SOUND_TEST_CHECK(MIX_TrackPlaying(sound_music_track));
+    sound_stop_bg_music();
+    SOUND_TEST_CHECK(!sound_playing_music());
+    SOUND_TEST_CHECK(sound_get_bg_music() == NULL);
+    SOUND_TEST_CHECK(sound_test_hook_count == 2);
+    SOUND_TEST_CHECK(strcmp(sound_test_hook_values[1], "<stopped>") == 0);
+
+    sound_start_bg_music("opus-tone.mid", 80, -1);
+    SOUND_TEST_CHECK(sound_playing_music());
+    SOUND_TEST_CHECK(HASH_COUNT(sound_data) == 1);
+    SOUND_TEST_CHECK(sound_test_hook_count == 3);
+
+    /* Missing and malformed replacements stop the old audible track first. */
+    sound_start_bg_music("missing.mid", 80, -1);
+    SOUND_TEST_CHECK(!sound_playing_music());
+    SOUND_TEST_CHECK(sound_get_bg_music() == NULL);
+    SOUND_TEST_CHECK(HASH_COUNT(sound_data) == 1);
+    SOUND_TEST_CHECK(sound_test_hook_count == 4);
+    SOUND_TEST_CHECK(strcmp(sound_test_hook_values[3], "<stopped>") == 0);
+
+    sound_start_bg_music("opus-tone.mid", 80, -1);
+    SOUND_TEST_CHECK(sound_playing_music());
+    sound_start_bg_music("malformed.mid", 80, -1);
+    SOUND_TEST_CHECK(!sound_playing_music());
+    SOUND_TEST_CHECK(sound_get_bg_music() == NULL);
+    SOUND_TEST_CHECK(sound_test_hook_count == 6);
+
+    /* A mixer-start failure never publishes the requested state to hooks. */
+    sound_start_bg_music("opus-tone.mid", 80, -1);
+    SOUND_TEST_CHECK(sound_playing_music());
+    size_t hooks_before_failure = sound_test_hook_count;
+    sound_test_fail_next_music_play = true;
+    sound_start_bg_music("opus-tone-alias.mid", 80, -1);
+    SOUND_TEST_CHECK(!sound_playing_music());
+    SOUND_TEST_CHECK(sound_get_bg_music() == NULL);
+    SOUND_TEST_CHECK(sound_test_hook_count == hooks_before_failure + 1);
+    SOUND_TEST_CHECK(strcmp(sound_test_hook_values[hooks_before_failure], "<stopped>") == 0);
+
+    /* Natural completion clears state; finite and infinite loops restart from cache. */
+    sound_start_bg_music("opus-tone.mid", 80, 0);
+    sound_background_update_duration = 0;
+    MIX_StopTrack(sound_music_track, 0);
+    sound_music_finished_process();
+    SOUND_TEST_CHECK(sound_get_bg_music() == NULL);
+    SOUND_TEST_CHECK(!sound_playing_music());
+
+    sound_start_bg_music("opus-tone.mid", 80, 1);
+    sound_background_update_duration = 0;
+    MIX_StopTrack(sound_music_track, 0);
+    sound_music_finished_process();
+    SOUND_TEST_CHECK(sound_playing_music());
+    SOUND_TEST_CHECK(sound_background_loop == 0);
+    SOUND_TEST_CHECK(HASH_COUNT(sound_data) == 2);
+    sound_stop_bg_music();
+
+    sound_start_bg_music("opus-tone.mid", 80, -1);
+    sound_background_update_duration = 0;
+    MIX_StopTrack(sound_music_track, 0);
+    sound_music_finished_process();
+    SOUND_TEST_CHECK(sound_playing_music());
+    SOUND_TEST_CHECK(sound_background_loop == -1);
+    sound_stop_bg_music();
+
+    /* Effect one-shot, finite/infinite loop, explicit stop, repetition, and exhaustion. */
+    int channel = sound_play_effect_loop("opus-tone.mid", 100, 0);
+    SOUND_TEST_CHECK(channel >= 0);
+    SOUND_TEST_CHECK(sound_test_wait_for_effect(channel, false, 1500));
+
+    channel = sound_play_effect_loop("opus-tone.mid", 100, 1);
+    SOUND_TEST_CHECK(channel >= 0);
+    SOUND_TEST_CHECK(MIX_GetTrackLoops(sound_effect_tracks[channel]) == 1);
+    SOUND_TEST_CHECK(sound_test_wait_for_effect(channel, false, 1500));
+
+    channel = sound_play_effect_loop("opus-tone.mid", 100, -1);
+    SOUND_TEST_CHECK(channel >= 0);
+    SDL_Delay(300);
+    SOUND_TEST_CHECK(MIX_TrackPlaying(sound_effect_tracks[channel]));
+    sound_stop_effect(channel);
+    SOUND_TEST_CHECK(!MIX_TrackPlaying(sound_effect_tracks[channel]));
+
+    for (int i = 0; i < SOUND_EFFECT_TRACKS; i++) {
+        SOUND_TEST_CHECK(sound_play_effect_loop("opus-tone.mid", 100, -1) >= 0);
+    }
+    SOUND_TEST_CHECK(sound_play_effect_loop("opus-tone.mid", 100, -1) == -1);
+    for (int i = 0; i < SOUND_EFFECT_TRACKS; i++) {
+        sound_stop_effect(i);
+    }
+
+    MIX_StereoGains centered = sound_effect_stereo_gains(0, 0);
+    MIX_StereoGains right = sound_effect_stereo_gains(90, 0);
+    MIX_StereoGains distant = sound_effect_stereo_gains(0, 255);
+    SOUND_TEST_CHECK(centered.left == 1.0f && centered.right == 1.0f);
+    SOUND_TEST_CHECK(right.left < 0.001f && right.right > 0.999f);
+    SOUND_TEST_CHECK(distant.left == 0.0f && distant.right == 0.0f);
+
+    /* Ambient protocol starts, repositions, removes, and clears looping effects. */
+    packet = packet_new(0, 64, 32);
+    packet_writer_write_uint8(packet, 8);
+    packet_writer_write_uint8(packet, 8);
+    packet_writer_write_uint32(packet, 0);
+    packet_writer_write_uint32(packet, 44);
+    packet_writer_write_cstring(packet, "opus-tone.mid");
+    packet_writer_write_uint8(packet, 100);
+    packet_writer_write_uint8(packet, 12);
+    socket_command_sound_ambient(packet->data, packet->len, 0);
+    packet_free(packet);
+    packet = NULL;
+    SOUND_TEST_CHECK(sound_test_ambient_count() == 1);
+    sound_ambient_mapcroll(1, 0);
+    SOUND_TEST_CHECK(sound_test_ambient_count() == 1);
+    sound_ambient_mapcroll(100, 0);
+    SOUND_TEST_CHECK(sound_test_ambient_count() == 0);
+
+    packet = packet_new(0, 64, 32);
+    packet_writer_write_uint8(packet, 8);
+    packet_writer_write_uint8(packet, 8);
+    packet_writer_write_uint32(packet, 0);
+    packet_writer_write_uint32(packet, 45);
+    packet_writer_write_cstring(packet, "opus-tone.mid");
+    packet_writer_write_uint8(packet, 100);
+    packet_writer_write_uint8(packet, 12);
+    socket_command_sound_ambient(packet->data, packet->len, 0);
+    SOUND_TEST_CHECK(sound_test_ambient_count() == 1);
+    sound_ambient_clear();
+    SOUND_TEST_CHECK(sound_test_ambient_count() == 0);
+
+done:
+    if (packet != NULL) {
+        packet_free(packet);
+    }
+    if (enabled) {
+        sound_deinit();
+    }
+    SDL_Quit();
+    sound_test_fixture_root = NULL;
+    if (result == 0) {
+        puts("client sound lifecycle and effect checks passed");
+    }
+    return result;
+}
+
+#endif

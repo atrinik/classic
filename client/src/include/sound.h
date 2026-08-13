@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -132,5 +132,9 @@ extern void sound_ambient_clear(void);
 extern void socket_command_sound_ambient(uint8_t *data, size_t len, size_t pos);
 
 extern int sound_playing_music(void);
+
+#ifdef ATRINIK_SOUND_TESTS
+extern int sound_test_main(const char *fixture_root);
+#endif
 
 #endif

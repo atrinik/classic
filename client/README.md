@@ -29,7 +29,9 @@
   $ gcovr --root . --filter 'src/' --exclude 'src/tests/' --print-summary
 
  The client requires SDL 3.4 or newer, SDL3_image 3.2 or newer, SDL3_ttf 3.2
- or newer, and SDL3_mixer 3.2.4 or newer. Sound effects and music are required
+ or newer, and SDL3_mixer 3.2.4 or newer. The supported mixer contract contains
+ exactly WAV, STBVORBIS, OPUS, VOC, AIFF, AU, DRMP3, SINEWAVE, and RAW; MIDI and
+ module decoders are deliberately absent. Sound effects and music are required
  on every supported platform. The client uses an SDL window-backed CPU
  surface; it does not require a hardware renderer.
 
