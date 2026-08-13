@@ -464,6 +464,12 @@ extern bool map_select_level(int depth, bool create);
 
 extern void map_set_level_mask(uint16_t mask);
 
+/** Copy one decoded map cell for packet change detection. */
+extern void map_cell_snapshot(int x, int y, MapCell *snapshot);
+
+/** Return whether a decoded map cell differs from a prior snapshot. */
+extern bool map_cell_changed(int x, int y, const MapCell *snapshot);
+
 extern void map_level_scroll(int dz);
 
 extern void map_clear_cell(int x, int y, bool hard);

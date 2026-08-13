@@ -370,6 +370,16 @@ bool load_mapdef_file(const char *path) {
     return success;
 }
 
+void map_cell_snapshot(int x, int y, MapCell *snapshot) {
+    HARD_ASSERT(snapshot != NULL);
+    *snapshot = *MAP_CELL_GET_MIDDLE(x, y);
+}
+
+bool map_cell_changed(int x, int y, const MapCell *snapshot) {
+    HARD_ASSERT(snapshot != NULL);
+    return memcmp(snapshot, MAP_CELL_GET_MIDDLE(x, y), sizeof(*snapshot)) != 0;
+}
+
 /**
  * Loads multi-arch object data offsets.
  */
