@@ -24,6 +24,21 @@ reports follow [SECURITY.md](SECURITY.md). All Atrinik-authored classic source
 remains GPL-2.0-or-later under [LICENSE.md](LICENSE.md); preserve compatible
 third-party licenses, notices, and attributions.
 
+That distribution license is not a blanket outbound reuse ban. Exact,
+independently separable material may be inspected as source reference, copied,
+migrated or ported, translated or adapted, or relicensed in an MIT destination
+only after the
+[canonical provenance audit](https://github.com/atrinik/atrinik/blob/main/docs/PROVENANCE.md)
+proves each selected contribution is the applicable named grantor's original
+work. Each contribution must be solely authored by that grantor and fall within
+the row's temporal scope. Distinct contributions may cite different rows only
+when each independently satisfies one row. Rows cannot be combined to cover
+jointly authored contributions, generated output, or inseparable mixed work.
+Later material needs contemporaneous compatible permission. The grants
+authorize only proven destination use. They neither change this repository's
+source license or notices nor by themselves approve a GPL dependency, linked
+or combined binary, bundle, or surrounding material.
+
 ## Copyright headers
 
 Use `The Atrinik Project` as the exact collective holder for every new or

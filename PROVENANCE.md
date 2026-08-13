@@ -27,9 +27,21 @@ pull refs, and assets remain in the former repositories.
 
 Atrinik-authored source throughout the classic monorepo, including the protocol
 module, is distributed under GPL-2.0-or-later through the root `LICENSE.md`.
-Required third-party asset and code notices remain authoritative. This does not
-rely on, expand, or alter any provenance grant for the separate MIT replacement
-implementation.
+Required third-party asset and code notices remain authoritative. That source
+license is not a blanket outbound reuse ban: exact, independently separable
+material may be inspected as source reference, copied, migrated or ported,
+translated or adapted, or relicensed in an MIT destination only after the
+[canonical provenance audit](https://github.com/atrinik/atrinik/blob/main/docs/PROVENANCE.md)
+proves each selected contribution is the applicable named grantor's original
+work. Each contribution must be solely authored by that grantor and fall within
+the row's temporal scope. Distinct contributions may cite different rows only
+when each independently satisfies one row. Rows cannot be combined to cover
+jointly authored contributions, generated output, or inseparable mixed work.
+Later material needs contemporaneous compatible permission. The grants
+authorize only proven destination use. They neither change the
+GPL-2.0-or-later terms or notices of the source distributed here nor by
+themselves approve a GPL dependency, linked or combined binary, bundle, or
+surrounding material.
 
 The standalone protocol's MIT terms were introduced by Zoey Rose in original
 commit `7e10ecaa279489fcdb843ecbe020fc9befeba4fd` (rewritten as
