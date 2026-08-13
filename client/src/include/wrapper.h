@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -39,10 +39,6 @@ extern void system_end(void);
 extern void mkdir_ensure(const char *path);
 
 extern void copy_file(const char *filename, const char *filename_out);
-
-extern void copy_if_exists(const char *from, const char *to, const char *src, const char *dst);
-
-extern void copy_rec(const char *src, const char *dst);
 
 extern const char *get_config_dir(void);
 
