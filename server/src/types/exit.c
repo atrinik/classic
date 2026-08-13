@@ -47,20 +47,25 @@
 #include <exit.h>
 
 /**
- * Find an automatically connected exit.
+ * Collect automatically connected exits.
  *
  * @param op
- * Exit to find a connected exit for.
+ * Exit to find connected exits for.
  * @param do_load
  * If true, will load maps if necessary.
+ * @param[out] altern
+ * Destination array.
+ * @param altern_size
+ * Capacity of @p altern.
  * @return
- * Connected exit if found, NULL otherwise.
+ * Number of connected exits collected.
  */
-static object *exit_find(object *op, bool do_load) {
+static size_t exit_collect(object *op, bool do_load, object **altern, size_t altern_size) {
     HARD_ASSERT(op != NULL);
+    HARD_ASSERT(altern != NULL);
+    HARD_ASSERT(altern_size != 0);
 
-    object *altern[20];
-    int nrofalt = 0;
+    size_t nrofalt = 0;
 
     /* Find all other teleporters within range. This range should really
      * be settable by some object attribute instead of using hard coded
@@ -87,11 +92,10 @@ static object *exit_find(object *op, bool do_load) {
 
             FOR_MAP_PREPARE(m, x, y, tmp) {
                 if (tmp->type == op->type && tmp->sub_type == op->sub_type) {
-                    /* Assumes altern can hold at least one element */
                     altern[nrofalt++] = tmp;
 
                     /* Reached the maximum, no point in going on. */
-                    if (nrofalt == arraysize(altern)) {
+                    if (nrofalt == altern_size) {
                         goto loop_exit;
                     }
                 }
@@ -102,11 +106,49 @@ static object *exit_find(object *op, bool do_load) {
 
 loop_exit:
 
-    if (nrofalt == 0) {
-        return NULL;
+    return nrofalt;
+}
+
+/**
+ * Find an automatically connected exit.
+ *
+ * @param op
+ * Exit to find a connected exit for.
+ * @param do_load
+ * If true, will load maps if necessary.
+ * @return
+ * Connected exit if found, NULL otherwise.
+ */
+static object *exit_find(object *op, bool do_load) {
+    object *altern[20];
+    size_t nrofalt = exit_collect(op, do_load, altern, arraysize(altern));
+
+    return nrofalt != 0 ? altern[rndm(0, (int)nrofalt - 1)] : NULL;
+}
+
+/**
+ * Determine whether an exit has an established usable destination without
+ * loading maps or selecting among automatically linked destinations.
+ *
+ * @param op
+ * Exit to inspect.
+ * @return
+ * True if the exit has an explicit/canonical path or a loaded matching
+ * automatically linked exit, false otherwise.
+ */
+bool exit_has_usable_destination(object *op) {
+    HARD_ASSERT(op != NULL);
+
+    if (EXIT_PATH(op) != NULL) {
+        return true;
     }
 
-    return altern[rndm(0, nrofalt - 1)];
+    if (op->map == NULL || op->sub_type == 0) {
+        return false;
+    }
+
+    object *destination;
+    return exit_collect(op, false, &destination, 1) != 0;
 }
 
 /**

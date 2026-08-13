@@ -10,6 +10,7 @@
 #include <check_utils.h>
 #include <toolkit/clioptions.h>
 #include <toolkit/map_protocol.h>
+#include <toolkit/math.h>
 #include <toolkit/packet.h>
 #include <arch.h>
 #include <initialization.h>
@@ -17,6 +18,7 @@
 #include <los.h>
 #include <object.h>
 #include <player.h>
+#include <exit.h>
 
 static size_t queued_command_count(socket_struct *cs, uint8_t type) {
     size_t count = 0;
@@ -1451,13 +1453,24 @@ START_TEST(test_map_exit_semantic_tracks_visible_layer_and_cache_changes) {
     check_setup_env_pl(&map, &pl);
     request_move_player(&pl, map, 12, 12);
     SET_FLAG(pl, FLAG_XRAYS);
+    FREE_AND_COPY_HASH(map->path, "/maps/request-exit-destination-forms");
 
     object *exit = arch_get("stairs_down");
     ck_assert_ptr_nonnull(exit);
     exit->x = pl->x + 1;
     exit->y = pl->y;
+    FREE_AND_COPY_HASH(EXIT_PATH(exit), "/maps/not-resident-exit-destination");
+    EXIT_X(exit) = 1;
+    EXIT_Y(exit) = 1;
     exit = object_insert_map(exit, map, NULL, 0);
     ck_assert_ptr_nonnull(exit);
+
+    object *decoration = arch_get("hole2");
+    ck_assert_ptr_nonnull(decoration);
+    decoration->x = pl->x + 2;
+    decoration->y = pl->y;
+    decoration = object_insert_map(decoration, map, NULL, 0);
+    ck_assert_ptr_nonnull(decoration);
 
     object *door = arch_get("door_wood1");
     ck_assert_ptr_nonnull(door);
@@ -1492,6 +1505,28 @@ START_TEST(test_map_exit_semantic_tracks_visible_layer_and_cache_changes) {
     packet_struct *packet;
     uint32_t level_size;
 
+    FREE_AND_ADD_REF_HASH(EXIT_PATH(decoration), map->path);
+    EXIT_X(decoration) = decoration->x;
+    EXIT_Y(decoration) = decoration->y;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
+    ck_assert_uint_eq(map_cache_semantic_count(cs, true), 2);
+    packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert(map_packet_level_size(packet, 0, &level_size));
+    ck_assert_uint_gt(level_size, 0);
+
+    FREE_AND_CLEAR_HASH(EXIT_PATH(decoration));
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
+    ck_assert_uint_eq(map_cache_semantic_count(cs, true), 1);
+    packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert(map_packet_level_size(packet, 0, &level_size));
+    ck_assert_uint_gt(level_size, 0);
+
     exit->type = DOOR;
     socket_buffer_clear(cs);
     draw_client_map2(pl);
@@ -1514,6 +1549,91 @@ START_TEST(test_map_exit_semantic_tracks_visible_layer_and_cache_changes) {
     ck_assert(map_packet_level_size(packet, 0, &level_size));
     ck_assert_uint_gt(level_size, 0);
     object_destroy(exit);
+}
+END_TEST
+
+START_TEST(test_map_exit_semantic_accepts_usable_destination_forms_without_loading) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    request_move_player(&pl, map, 12, 12);
+    SET_FLAG(pl, FLAG_XRAYS);
+    FREE_AND_COPY_HASH(map->path, "/maps/request-exit-destination-forms");
+
+    object *explicit_exit = arch_get("stairs_down");
+    ck_assert_ptr_nonnull(explicit_exit);
+    explicit_exit->x = pl->x + 1;
+    explicit_exit->y = pl->y;
+    FREE_AND_COPY_HASH(EXIT_PATH(explicit_exit), "/maps/not-resident-exit-destination");
+    EXIT_X(explicit_exit) = 1;
+    EXIT_Y(explicit_exit) = 1;
+    explicit_exit = object_insert_map(explicit_exit, map, NULL, 0);
+    ck_assert_ptr_nonnull(explicit_exit);
+    ck_assert_ptr_eq(has_been_loaded_sh(EXIT_PATH(explicit_exit)), NULL);
+
+    object *same_map_exit = arch_get("stairs_down");
+    ck_assert_ptr_nonnull(same_map_exit);
+    same_map_exit->x = pl->x - 1;
+    same_map_exit->y = pl->y;
+    same_map_exit->last_heal = 0;
+    EXIT_X(same_map_exit) = pl->x;
+    EXIT_Y(same_map_exit) = pl->y;
+    same_map_exit = object_insert_map(same_map_exit, map, NULL, 0);
+    ck_assert_ptr_nonnull(same_map_exit);
+    ck_assert_ptr_eq(EXIT_PATH(same_map_exit), map->path);
+
+    FREE_AND_COPY_HASH(map->tile_path[TILED_EAST], "/maps/not-resident-tiled-destination");
+    object *tiled_exit = arch_get("stairs_down");
+    ck_assert_ptr_nonnull(tiled_exit);
+    tiled_exit->x = pl->x;
+    tiled_exit->y = pl->y + 1;
+    tiled_exit->last_heal = TILED_EAST + 1;
+    tiled_exit = object_insert_map(tiled_exit, map, NULL, 0);
+    ck_assert_ptr_nonnull(tiled_exit);
+    ck_assert_ptr_eq(EXIT_PATH(tiled_exit), map->tile_path[TILED_EAST]);
+
+    object *shop_mat = arch_get("shop_mat");
+    ck_assert_ptr_nonnull(shop_mat);
+    shop_mat->x = pl->x;
+    shop_mat->y = pl->y - 1;
+    shop_mat = object_insert_map(shop_mat, map, NULL, 0);
+    ck_assert_ptr_nonnull(shop_mat);
+
+    object *paired_shop_mat = arch_get("shop_mat");
+    ck_assert_ptr_nonnull(paired_shop_mat);
+    paired_shop_mat->x = pl->x + 1;
+    paired_shop_mat->y = pl->y - 1;
+    paired_shop_mat = object_insert_map(paired_shop_mat, map, NULL, 0);
+    ck_assert_ptr_nonnull(paired_shop_mat);
+
+    object *decoration = arch_get("hole2");
+    ck_assert_ptr_nonnull(decoration);
+    decoration->x = pl->x - 2;
+    decoration->y = pl->y;
+    decoration = object_insert_map(decoration, map, NULL, 0);
+    ck_assert_ptr_nonnull(decoration);
+
+    socket_struct *cs = CONTR(pl)->cs;
+    update_los(pl);
+    map_client_cache_clear(&cs->lastmap);
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    rndm_seed(UINT64_C(260));
+    uint64_t expected_random = rndm_u64();
+    rndm_seed(UINT64_C(260));
+    draw_client_map2(pl);
+    ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
+    ck_assert_uint_eq(map_cache_semantic_count(cs, true), 5);
+    ck_assert_ptr_eq(has_been_loaded_sh(EXIT_PATH(explicit_exit)), NULL);
+    ck_assert_uint_eq(rndm_u64(), expected_random);
+
+    object_remove(paired_shop_mat, 0);
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
+    ck_assert_uint_eq(map_cache_semantic_count(cs, true), 3);
+    ck_assert_ptr_eq(has_been_loaded_sh(EXIT_PATH(explicit_exit)), NULL);
+    object_destroy(paired_shop_mat);
 }
 END_TEST
 
@@ -1626,6 +1746,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_map_exit_semantic_not_disclosed_by_boundary_geometry);
     tcase_add_test(tc_core, test_map_rgb_cache_tracks_hue_changes_and_neutral_reset);
     tcase_add_test(tc_core, test_map_exit_semantic_tracks_visible_layer_and_cache_changes);
+    tcase_add_test(tc_core,
+                   test_map_exit_semantic_accepts_usable_destination_forms_without_loading);
     tcase_add_test(tc_core, test_dense_colored_level_splits_at_tile_boundaries);
     return s;
 }

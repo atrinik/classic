@@ -59,6 +59,7 @@
 #include <sound_ambient.h>
 #include <object_methods.h>
 #include <resources.h>
+#include <exit.h>
 
 #include <openssl/crypto.h>
 #define GET_CLIENT_FLAGS(_O_) ((_O_)->flags[0] & 0x7f)
@@ -1881,7 +1882,8 @@ void draw_client_map2(object *pl) {
                                 is_door = 1;
                             }
 
-                            if (head->type == EXIT && level_visibility == MAP_LEVEL_VISIBLE) {
+                            if (head->type == EXIT && level_visibility == MAP_LEVEL_VISIBLE &&
+                                exit_has_usable_destination(head)) {
                                 flags2 |= MAP2_FLAG2_EXIT;
                                 is_exit = 1;
                             }
