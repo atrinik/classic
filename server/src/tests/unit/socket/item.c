@@ -721,7 +721,8 @@ START_TEST(test_player_status_native_consumable_producers) {
     ck_assert_int_eq(get_attr_value(&potion_effect->stats, DEX), -2);
     ck_assert_int_eq(potion_effect->protection[ATNR_COLD], -20);
     ck_assert_ptr_nonnull(strstr(object_get_value(potion_effect, "player_status_name"), "damned"));
-    ck_assert_ptr_nonnull(strstr(object_get_value(potion_effect, "player_status_tooltip"), "Dex -2"));
+    ck_assert_ptr_nonnull(
+        strstr(object_get_value(potion_effect, "player_status_tooltip"), "Dex -2"));
     ck_assert_ptr_nonnull(
         strstr(object_get_value(potion_effect, "player_status_tooltip"), "cold protection -20%"));
     socket_buffer_clear(CONTR(pl)->cs);
