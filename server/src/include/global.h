@@ -499,9 +499,6 @@ typedef struct settings_struct {
      */
     char network_stack[MAX_BUF];
 
-    /** Light-source falloff profile: radial (default) or legacy. */
-    char light_falloff[16];
-
 } settings_struct;
 
 /** Constant shared string pointers. */
