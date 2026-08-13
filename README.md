@@ -5,8 +5,21 @@ combines the complete, path-preserving histories of the former client, server,
 editor, libatrinik, and protocol repositories so coordinated maintenance can
 happen in one branch and pull request.
 
-The modern replacement implementation remains a clean-room, MIT-licensed set of
-repositories. Consolidating classic Atrinik does not change that direction.
+The next-generation MIT implementation remains in separate repositories.
+Consolidating Atrinik Classic does not change that direction or this
+repository's GPL-2.0-or-later distribution terms. Those terms are not a blanket
+outbound reuse ban. Under the
+[canonical provenance policy](https://github.com/atrinik/atrinik/blob/main/docs/PROVENANCE.md),
+an MIT destination may inspect exact, independently separable material as
+source reference, copy it, migrate or port it, translate or adapt it, or
+relicense it only after the canonical audit proves each selected contribution
+is the applicable named grantor's original work. Each contribution must be
+solely authored by that grantor and fall within the row's temporal scope.
+Distinct contributions may cite different rows only when each independently
+satisfies one row. Rows cannot be combined to cover jointly authored
+contributions, generated output, or inseparable mixed work. Later material needs
+contemporaneous compatible permission. This does not change the source license
+here or approve a GPL dependency or bundle.
 
 ## Layout
 
