@@ -2,6 +2,7 @@ set(SERVER_CORE_SOURCES
 	src/commands/permission/arrest.c
 	src/commands/permission/ban.c
 	src/commands/permission/config.c
+	src/commands/permission/custody.c
 	src/commands/permission/follow.c
 	src/commands/permission/freeze.c
 	src/commands/permission/kick.c

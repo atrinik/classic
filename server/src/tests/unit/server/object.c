@@ -398,6 +398,18 @@ START_TEST(test_object_can_merge) {
     ob1 = arch_get("bolt");
     ob2 = arch_get("bolt");
     ck_assert(object_can_merge(ob1, ob2));
+    FREE_AND_COPY_HASH(ob1->custody_lineage, "lineage-1");
+    ck_assert(!object_can_merge(ob1, ob2));
+    FREE_AND_COPY_HASH(ob2->custody_lineage, "lineage-1");
+    ck_assert(object_can_merge(ob1, ob2));
+    FREE_AND_COPY_HASH(ob2->custody_first, "account:character");
+    ck_assert(!object_can_merge(ob1, ob2));
+    FREE_AND_COPY_HASH(ob1->custody_first, "account:character");
+    ck_assert(object_can_merge(ob1, ob2));
+    FREE_AND_CLEAR_HASH(ob1->custody_lineage);
+    FREE_AND_CLEAR_HASH(ob2->custody_lineage);
+    FREE_AND_CLEAR_HASH(ob1->custody_first);
+    FREE_AND_CLEAR_HASH(ob2->custody_first);
     FREE_AND_COPY_HASH(ob2->name, "Not same name");
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob2);
@@ -1031,12 +1043,31 @@ START_TEST(test_object_stable_identity_lookup) {
 END_TEST
 
 START_TEST(test_object_stable_identity_serialization) {
-    object *ob = object_load_str("arch wand\nspell_id spell_firestorm\nend\n");
+    object *ob = object_load_str("arch bolt\ncustody_lineage 42\n"
+                                 "custody_first account:original\n"
+                                 "custody_last account:latest\n"
+                                 "custody_actor account:opaque-character\nend\n");
     ck_assert_ptr_ne(ob, NULL);
-    ck_assert_int_eq(ob->stats.sp, SP_FIRESTORM);
+    ck_assert_str_eq(ob->custody_lineage, "42");
+    ck_assert_str_eq(ob->custody_first, "account:original");
+    ck_assert_str_eq(ob->custody_last, "account:latest");
+    ck_assert_str_eq(ob->custody_actor, "account:opaque-character");
     StringBuffer *sb = stringbuffer_new();
     object_dump_rec(ob, sb);
     char *dump = stringbuffer_finish(sb);
+    ck_assert_ptr_ne(strstr(dump, "custody_lineage 42\n"), NULL);
+    ck_assert_ptr_ne(strstr(dump, "custody_first account:original\n"), NULL);
+    ck_assert_ptr_ne(strstr(dump, "custody_last account:latest\n"), NULL);
+    ck_assert_ptr_ne(strstr(dump, "custody_actor account:opaque-character\n"), NULL);
+    free(dump);
+    object_destroy(ob);
+
+    ob = object_load_str("arch wand\nspell_id spell_firestorm\nend\n");
+    ck_assert_ptr_ne(ob, NULL);
+    ck_assert_int_eq(ob->stats.sp, SP_FIRESTORM);
+    sb = stringbuffer_new();
+    object_dump_rec(ob, sb);
+    dump = stringbuffer_finish(sb);
     ck_assert_ptr_ne(strstr(dump, "spell_id spell_firestorm\n"), NULL);
     ck_assert_ptr_eq(strstr(dump, "\nsp "), NULL);
     free(dump);
