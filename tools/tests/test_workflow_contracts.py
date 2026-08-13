@@ -1095,6 +1095,39 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("- dependency-inputs", aggregate)
         self.assertIn("--dependency-inputs-result", aggregate)
 
+    def test_daily_report_stages_verified_inputs_and_keeps_timing_informational(
+        self,
+    ) -> None:
+        workflow = self.text("daily-client-performance.yml")
+        benchmark = workflow[
+            workflow.index("  benchmark:") : workflow.index("  publish:")
+        ]
+        self.assertIn("ref: main", benchmark)
+        self.assertIn("bundle-key", benchmark)
+        self.assertIn("bundle-stage", benchmark)
+        self.assertIn("--output build/dependency-inputs", benchmark)
+        self.assertIn("actions/cache/restore@", benchmark)
+        self.assertIn("actions/cache/save@", benchmark)
+        self.assertIn("steps.dependency-stage.outputs.cache_changed == 'true'", benchmark)
+        self.assertIn("--network none", benchmark)
+        self.assertIn("ATRINIK_MOVEMENT_EVENT_NAME: schedule", benchmark)
+        self.assertIn("ATRINIK_MOVEMENT_MATRIX: full", benchmark)
+        self.assertIn("continue-on-error: true", benchmark)
+        self.assertIn("path: build/ci-evidence", benchmark)
+
+        runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
+            encoding="utf-8"
+        )
+        start = runner.index("elif [[ ${movement_action} == candidate-only ]]")
+        candidate_only = runner[start : runner.index("else\n      python3", start)]
+        self.assertIn('--comparison-note "${comparison_note}"', candidate_only)
+        self.assertIn("movement_matrix_arguments+=(--full-matrix)", candidate_only)
+
+        publish = workflow[workflow.index("  publish:") :]
+        self.assertIn("if: always() && github.ref == 'refs/heads/main'", publish)
+        self.assertIn("contents: write", publish)
+        self.assertNotIn("pull_request:", workflow[: workflow.index("jobs:")])
+
     def test_linux_checks_pin_image_and_isolate_compiler_caches(self) -> None:
         workflow = self.text("check.yml")
         digest = "d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f"

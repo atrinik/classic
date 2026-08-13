@@ -32,6 +32,36 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: false
+      - id: dependency-key
+        name: Resolve complete immutable input key
+        run: |
+          python3 server/tools/dependencies.py bundle-key \
+            --client-lock client/dependencies.lock.json \
+            --server-lock server/dependencies.lock.json \
+            --source-lock server/cmake/immutable_sources.lock.json \
+            --github-output "${GITHUB_OUTPUT}"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/classic-dependency-archives
+          key: classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}
+          restore-keys: >-
+            classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}-
+      - id: dependency-stage
+        name: Acquire and verify complete immutable input bundle
+        run: |
+          python3 server/tools/dependencies.py bundle-stage \
+            --client-lock client/dependencies.lock.json \
+            --server-lock server/dependencies.lock.json \
+            --source-lock server/cmake/immutable_sources.lock.json \
+            --cache "${RUNNER_TEMP}/classic-dependency-archives" \
+            --output build/dependency-inputs \
+            --github-output "${GITHUB_OUTPUT}"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        if: steps.dependency-stage.outputs.cache_changed == 'true'
+        with:
+          path: ${{ runner.temp }}/classic-dependency-archives
+          key: >-
+            classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Prepare isolated compiler cache
         run: |
           mkdir -p "${RUNNER_TEMP}/classic-ccache"
@@ -46,6 +76,7 @@ jobs:
         run: |
           docker run --rm \
             --user "$(id -u):$(id -g)" \
+            --network none \
             --env ATRINIK_BENCHMARK_REVISION \
             --env ATRINIK_BENCHMARK_DIRTY \
             --env ATRINIK_MOVEMENT_EVENT_NAME \
