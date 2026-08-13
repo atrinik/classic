@@ -133,6 +133,10 @@ extern void socket_command_sound_ambient(uint8_t *data, size_t len, size_t pos);
 
 extern int sound_playing_music(void);
 
+#ifdef ATRINIK_SOUND_TESTS
+extern int sound_test_main(const char *fixture_root);
+#endif
+
 #ifdef ATRINIK_SOUND_TESTING
 extern void sound_test_fail_next_playback(void);
 extern void sound_test_fail_next_stop(void);
