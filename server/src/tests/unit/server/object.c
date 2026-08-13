@@ -33,6 +33,7 @@
 #include <living.h>
 #include <monster.h>
 #include <monster_data.h>
+#include <movement.h>
 #include <object.h>
 #include <object_methods.h>
 #include <player.h>
@@ -100,6 +101,26 @@ START_TEST(test_return_home_waypoint_reactivation_resets_retry_progress) {
     object_destroy(monster);
     object_remove(player, 0);
     object_destroy(player);
+}
+END_TEST
+
+START_TEST(test_move_ob_rejects_invalid_directions) {
+    static const int invalid_directions[] = {INT_MIN, 0, NUM_DIRECTION + 1, INT_MAX};
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    int direction = pl->direction;
+    uint32_t anim_flags = pl->anim_flags;
+
+    for (size_t i = 0; i < arraysize(invalid_directions); i++) {
+        ck_assert_int_eq(move_ob(pl, invalid_directions[i], pl), 0);
+        ck_assert_int_eq(pl->direction, direction);
+        ck_assert_uint_eq(pl->anim_flags, anim_flags);
+    }
+
+    object_remove(pl, 0);
+    object_destroy(pl);
 }
 END_TEST
 
@@ -1259,12 +1280,17 @@ END_TEST
 static Suite *suite(void) {
     Suite *s = suite_create("object");
     TCase *tc_core = tcase_create("Core");
+    TCase *tc_movement = tcase_create("Movement");
 
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
+    tcase_add_unchecked_fixture(tc_movement, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_movement, check_test_setup, check_test_teardown);
 
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_return_home_waypoint_reactivation_resets_retry_progress);
+    suite_add_tcase(s, tc_movement);
+    tcase_add_test(tc_movement, test_move_ob_rejects_invalid_directions);
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_enemy);
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_exit_tiled_enemy);
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_tiled_enemy);

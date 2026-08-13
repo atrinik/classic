@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -158,6 +158,10 @@ int move_ob(object *op, int dir, object *originator) {
                    "Trying to move a removed "
                    "object: %s",
                    object_get_str(op));
+    if (unlikely(dir <= 0 || dir > NUM_DIRECTION)) {
+        log_error("Invalid direction: %d", dir);
+        return 0;
+    }
 
     op = HEAD(op);
 
