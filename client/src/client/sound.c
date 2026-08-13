@@ -42,10 +42,8 @@
  * Path to the background music file being played.
  */
 static char *sound_background;
-#ifdef HAVE_SDL_MIXER
 /** Logical identifier corresponding to ::sound_background. */
 static char *sound_background_logical;
-#endif
 /**
  * If 1, will not allow music change based on map.
  */
@@ -92,6 +90,7 @@ static MIX_Track *sound_music_track;
 static MIX_Track *sound_effect_tracks[SOUND_EFFECT_TRACKS];
 #ifdef ATRINIK_SOUND_TESTING
 static bool sound_test_fail_playback;
+static bool sound_test_fail_stop;
 #endif
 /**
  * Hook function calle whenever ::sound_background changes its value.
@@ -126,7 +125,7 @@ static void sound_start_bg_music_internal(const char *filename,
                                           int volume_adjustment,
                                           const char *source,
                                           bool log_started);
-static void sound_stop_bg_music_internal(const char *reason);
+static bool sound_stop_bg_music_internal(const char *reason);
 
 /**
  * Execute the ::sound_background_hook callback.
@@ -284,6 +283,9 @@ static void sound_music_finished_process(void) {
                                       sound_background_volume_adjustment,
                                       source,
                                       false);
+        if (sound_background == NULL) {
+            audio_log_music_stopped(source, bg_music, "restart-failed");
+        }
     } else {
         audio_log_music_stopped(source, bg_music, "finished");
     }
@@ -299,9 +301,9 @@ static void sound_music_finished_process(void) {
  */
 void sound_music_finished_handle(void) {
 #ifdef HAVE_SDL_MIXER
-    /* SDL3_mixer also invokes the stopped callback for an explicit stop.
-     * sound_stop_bg_music() clears this pointer before stopping the track, so
-     * only a naturally exhausted background advances the playlist here. */
+    /* SDL3_mixer also invokes the stopped callback for an explicit stop. The
+     * main thread clears this pointer immediately after the mixer accepts that
+     * stop, so only a naturally exhausted background advances the playlist. */
     if (enabled && sound_background != NULL && !MIX_TrackPlaying(sound_music_track) &&
         !MIX_TrackPaused(sound_music_track)) {
         sound_music_finished_process();
@@ -325,9 +327,9 @@ void sound_background_hook_register(void *ptr) {
  */
 void sound_init(void) {
     sound_background = NULL;
+    sound_background_logical = NULL;
 
 #ifdef HAVE_SDL_MIXER
-    sound_background_logical = NULL;
     sound_background_source = NULL;
     sound_background_hook = NULL;
     sound_data = NULL;
@@ -336,6 +338,7 @@ void sound_init(void) {
     memset(sound_effect_tracks, 0, sizeof(sound_effect_tracks));
 #ifdef ATRINIK_SOUND_TESTING
     sound_test_fail_playback = false;
+    sound_test_fail_stop = false;
 #endif
     enabled = 0;
 
@@ -414,10 +417,8 @@ void sound_deinit(void) {
     sound_ambient_clear();
     free(sound_background);
     sound_background = NULL;
-#ifdef HAVE_SDL_MIXER
     free(sound_background_logical);
     sound_background_logical = NULL;
-#endif
 
 #ifdef HAVE_SDL_MIXER
     sound_cache_free();
@@ -698,7 +699,9 @@ static void sound_start_bg_music_internal(const char *filename,
         tmp = sound_new(path, music);
     }
 
-    sound_stop_bg_music_internal("replaced");
+    if (sound_background && !sound_stop_bg_music_internal("replaced")) {
+        return;
+    }
 
     sound_background = xstrdup(path);
     sound_background_logical = xstrdup(filename);
@@ -746,12 +749,27 @@ void sound_start_bg_music(const char *filename, int volume, int loop) {
 /**
  * Stop the background music, if there is any.
  */
-static void sound_stop_bg_music_internal(const char *reason) {
+static bool sound_stop_bg_music_internal(const char *reason) {
     if (!enabled) {
-        return;
+        return false;
     }
 
     if (sound_background) {
+#ifdef HAVE_SDL_MIXER
+        bool stopped;
+#ifdef ATRINIK_SOUND_TESTING
+        if (sound_test_fail_stop) {
+            sound_test_fail_stop = false;
+            stopped = false;
+        } else
+#endif
+        {
+            stopped = MIX_StopTrack(sound_music_track, 0);
+        }
+        if (!stopped) {
+            return false;
+        }
+#endif
         audio_log_music_stopped(sound_background_source, sound_background_logical, reason);
         free(sound_background);
         sound_background = NULL;
@@ -759,9 +777,11 @@ static void sound_stop_bg_music_internal(const char *reason) {
         sound_background_logical = NULL;
 #ifdef HAVE_SDL_MIXER
         sound_background_hook_execute();
-        MIX_StopTrack(sound_music_track, 0);
 #endif
+        return true;
     }
+
+    return false;
 }
 
 void sound_stop_bg_music(void) {
@@ -1182,6 +1202,10 @@ int sound_playing_music(void) {
 #ifdef ATRINIK_SOUND_TESTING
 void sound_test_fail_next_playback(void) {
     sound_test_fail_playback = true;
+}
+
+void sound_test_fail_next_stop(void) {
+    sound_test_fail_stop = true;
 }
 
 size_t sound_test_cache_size(void) {

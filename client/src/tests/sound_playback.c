@@ -242,20 +242,30 @@ static void test_music_lifecycle(void) {
                       "music stopped source=intro-player "
                       "effective=\"relative/area/finite-loop.ogg\" reason=finished") != NULL);
 
+    reset_capture();
+    sound_start_bg_music("restart-failure.ogg", 70, -1);
+    sound_test_fail_next_playback();
+    sound_test_finish_music();
+    TEST_CHECK(occurrences("music started") == 1);
+    TEST_CHECK(occurrences("music stopped") == 1);
+    TEST_CHECK(strstr(captured,
+                      "music stopped source=intro-player "
+                      "effective=\"restart-failure.ogg\" reason=restart-failed") != NULL);
+    TEST_CHECK(!sound_playing_music());
+
     sound_start_bg_music("replacement.ogg", 60, 0);
-    TEST_CHECK(occurrences("music started") == 3);
-    TEST_CHECK(occurrences("music stopped") == 2);
-    TEST_CHECK(strstr(captured, "reason=replaced") != NULL);
+    TEST_CHECK(occurrences("music started") == 2);
+    TEST_CHECK(occurrences("music stopped") == 1);
 
     sound_test_fail_next_playback();
     sound_start_bg_music("failure.ogg", 50, 0);
-    TEST_CHECK(occurrences("music started") == 3);
-    TEST_CHECK(occurrences("music stopped") == 3);
+    TEST_CHECK(occurrences("music started") == 2);
+    TEST_CHECK(occurrences("music stopped") == 2);
     TEST_CHECK(!sound_playing_music());
 
     sound_start_bg_music("missing.ogg", 50, 0);
-    TEST_CHECK(occurrences("music started") == 3);
-    TEST_CHECK(occurrences("music stopped") == 3);
+    TEST_CHECK(occurrences("music started") == 2);
+    TEST_CHECK(occurrences("music stopped") == 2);
     TEST_CHECK(!sound_playing_music());
 
     reset_capture();
@@ -280,6 +290,15 @@ static void test_music_lifecycle(void) {
     TEST_CHECK(strstr(captured,
                       "music stopped source=intro-player "
                       "effective=\"relative/area/fireside.mid\" reason=replaced") != NULL);
+
+    reset_capture();
+    sound_test_fail_next_stop();
+    sound_start_bg_music("rejected-replacement.ogg", 80, 0);
+    TEST_CHECK(strstr(captured, "music stopped") == NULL);
+    TEST_CHECK(strstr(captured, "music started") == NULL);
+    TEST_CHECK(sound_playing_music());
+    sound_stop_bg_music();
+    TEST_CHECK(occurrences("music stopped") == 1);
 
     reset_capture();
     sound_deinit();
