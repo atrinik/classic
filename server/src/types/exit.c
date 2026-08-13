@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -38,6 +38,7 @@
 #include <global.h>
 #include <shop.h>
 #include <server_main.h>
+#include <movement.h>
 #include <server_item.h>
 #include <server.h>
 #include <plugin.h>
@@ -288,6 +289,10 @@ static void insert_map_func(object *op) {
         EXIT_Y(op) = op->y;
 
         if (QUERY_FLAG(op, FLAG_XRAYS)) {
+            if (!movement_direction_valid(op, op->direction, false)) {
+                return;
+            }
+
             int dir;
             if (op->last_heal - 1 == TILED_UP) {
                 dir = absdir(op->direction + 4);
