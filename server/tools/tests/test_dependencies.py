@@ -73,6 +73,23 @@ class DependencyTests(unittest.TestCase):
             "current",
         )
 
+    def test_refresh_repairs_payload_behind_a_valid_marker_offline(self) -> None:
+        archive = self.make_archive(
+            [("sound-v1.0.0/effects/test.ogg", b"sound", "file")]
+        )
+        dependency = self.dependency(archive)
+        cache = self.root / "build/cache"
+        dependencies.install_dependency(self.root, cache, dependency)
+        payload = self.root / "sound/effects/test.ogg"
+        payload.write_bytes(b"corrupt")
+        self.assertEqual(
+            dependencies.install_dependency(
+                self.root, cache, dependency, refresh=True, offline=True
+            ),
+            "installed",
+        )
+        self.assertEqual(payload.read_bytes(), b"sound")
+
     def test_refuses_unmanaged_destination(self) -> None:
         archive = self.make_archive([("sound-v1.0.0/test.ogg", b"sound", "file")])
         (self.root / "sound").mkdir()
@@ -207,11 +224,31 @@ class DependencyTests(unittest.TestCase):
         archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
         dependency = self.dependency(archive)
         cache = self.root / "cache"
-        cache.mkdir()
+        cache.mkdir(exist_ok=True)
         cached = cache / f"sound-{dependency['sha256']}.tar.gz"
         cached.write_bytes(b"corrupt")
         downloaded = dependencies._download(dependency, cache)
         self.assertEqual(downloaded.read_bytes(), archive.read_bytes())
+
+    def test_offline_fetch_requires_a_verified_archive(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        dependency = self.dependency(archive)
+        cache = self.root / "cache"
+        with self.assertRaisesRegex(
+            dependencies.DependencyError,
+            "sound: verified archive is missing from the offline dependency bundle",
+        ):
+            dependencies._download(dependency, cache, offline=True)
+
+        cache.mkdir(exist_ok=True)
+        cached = cache / f"sound-{dependency['sha256']}.tar.gz"
+        cached.write_bytes(b"corrupt")
+        with self.assertRaisesRegex(
+            dependencies.DependencyError,
+            "sound: verified archive is missing from the offline dependency bundle",
+        ):
+            dependencies._download(dependency, cache, offline=True)
+        self.assertFalse(cached.exists())
 
     def test_does_not_retry_digest_failure_or_keep_partial(self) -> None:
         archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
@@ -255,6 +292,160 @@ class DependencyTests(unittest.TestCase):
                 tree_sha256=tree, cache_dir=self.root / "cache",
             )
 
+    def test_source_extraction_can_reuse_an_external_offline_bundle(self) -> None:
+        archive = self.make_archive(
+            [("source/CMakeLists.txt", b"project(source)\n", "file")]
+        )
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        tree = hashlib.sha256(
+            f"{hashlib.sha256(b'project(source)\n').hexdigest()}  CMakeLists.txt\n".encode()
+        ).hexdigest()
+        downloads = self.root / "bundle" / "downloads"
+        downloads.mkdir(parents=True)
+        (downloads / f"fixture-{digest}.tar.gz").write_bytes(archive.read_bytes())
+        source_cache = self.root / "source-cache"
+        source = dependencies.fetch_source(
+            name="fixture", url=archive.as_uri(), sha256=digest,
+            tree_sha256=tree, cache_dir=source_cache,
+            downloads_dir=downloads, offline=True,
+        )
+        self.assertTrue((source / "CMakeLists.txt").is_file())
+        self.assertEqual(set((self.root / "bundle").iterdir()), {downloads})
+
+    def test_stages_and_verifies_a_complete_raw_archive_bundle(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        material = {
+            "kind": "dependency",
+            "owner": "client",
+            **self.dependency(archive),
+        }
+        cache = self.root / "cache"
+        downloads = cache / "downloads"
+        downloads.mkdir(parents=True)
+        cached = downloads / f"sound-{material['sha256']}.tar.gz"
+        cached.write_bytes(b"poisoned")
+
+        bundle = self.root / "bundle"
+        self.assertTrue(dependencies.stage_bundle([material], cache, bundle))
+        dependencies.verify_bundle([material], bundle)
+        self.assertEqual(cached.read_bytes(), archive.read_bytes())
+        self.assertEqual(
+            set((bundle / "downloads").iterdir()),
+            {bundle / "downloads" / cached.name},
+        )
+
+        (bundle / "downloads" / cached.name).write_bytes(b"corrupt")
+        with self.assertRaisesRegex(
+            dependencies.DependencyError, "sound failed SHA-256 verification"
+        ):
+            dependencies.verify_bundle([material], bundle)
+
+        bundle2 = self.root / "bundle2"
+        self.assertFalse(dependencies.stage_bundle([material], cache, bundle2))
+
+    def test_bundle_stage_canonicalizes_stale_and_linked_cache_entries(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        material = {
+            "kind": "dependency",
+            "owner": "client",
+            **self.dependency(archive),
+        }
+        cache = self.root / "cache"
+        downloads = cache / "downloads"
+        downloads.mkdir(parents=True)
+        expected = downloads / f"sound-{material['sha256']}.tar.gz"
+        target = self.root / "target.tar.gz"
+        target.write_bytes(archive.read_bytes())
+        expected.symlink_to(target)
+        (downloads / "stale.tar.gz").write_bytes(b"stale")
+        (cache / "extracted-tree").mkdir()
+
+        bundle = self.root / "bundle"
+        self.assertTrue(dependencies.stage_bundle([material], cache, bundle))
+        self.assertFalse(expected.is_symlink())
+        self.assertEqual(expected.read_bytes(), archive.read_bytes())
+        self.assertEqual(set(cache.iterdir()), {downloads})
+        self.assertEqual(set(downloads.iterdir()), {expected})
+        dependencies.verify_bundle([material], bundle)
+
+    def test_bundle_manifest_digest_covers_schema_and_material_metadata(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        material = {
+            "kind": "dependency",
+            "owner": "client",
+            **self.dependency(archive),
+        }
+        original = dependencies.bundle_digest([material])
+        changed = {**material, "commit": "2" * 40}
+        self.assertNotEqual(original, dependencies.bundle_digest([changed]))
+        manifest = dependencies.bundle_manifest([material])
+        self.assertEqual(
+            manifest["downloader_schema_version"], dependencies.LOCK_SCHEMA_VERSION
+        )
+        self.assertEqual(
+            manifest["bundle_schema_version"], dependencies.BUNDLE_SCHEMA_VERSION
+        )
+
+    def test_bundle_rejects_incomplete_and_unexpected_archives(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        material = {
+            "kind": "dependency",
+            "owner": "client",
+            **self.dependency(archive),
+        }
+        bundle = self.root / "bundle"
+        dependencies.stage_bundle([material], self.root / "cache", bundle)
+        expected = bundle / "downloads" / f"sound-{material['sha256']}.tar.gz"
+        expected.unlink()
+        (bundle / "downloads" / "stale.tar.gz").write_bytes(b"stale")
+        with self.assertRaisesRegex(
+            dependencies.DependencyError, "missing .*; unexpected stale.tar.gz"
+        ):
+            dependencies.verify_bundle([material], bundle)
+
+    def test_bundle_rejects_extracted_or_linked_restore_content(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        material = {
+            "kind": "dependency",
+            "owner": "client",
+            **self.dependency(archive),
+        }
+        bundle = self.root / "bundle"
+        dependencies.stage_bundle([material], self.root / "cache", bundle)
+        (bundle / "sources-v1").mkdir()
+        with self.assertRaisesRegex(
+            dependencies.DependencyError,
+            "must contain only manifest.json and downloads",
+        ):
+            dependencies.verify_bundle([material], bundle)
+
+        (bundle / "sources-v1").rmdir()
+        expected = bundle / "downloads" / f"sound-{material['sha256']}.tar.gz"
+        target = self.root / "external.tar.gz"
+        expected.replace(target)
+        expected.symlink_to(target)
+        with self.assertRaisesRegex(
+            dependencies.DependencyError, "regular files only"
+        ):
+            dependencies.verify_bundle([material], bundle)
+
+    def test_bundle_reports_the_mismatched_material_name(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        material = {
+            "kind": "dependency",
+            "owner": "client",
+            **self.dependency(archive),
+        }
+        bundle = self.root / "bundle"
+        dependencies.stage_bundle([material], self.root / "cache", bundle)
+        manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+        manifest["materials"][0]["commit"] = "2" * 40
+        (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        with self.assertRaisesRegex(
+            dependencies.DependencyError,
+            "sound: dependency bundle manifest material does not match the current lock",
+        ):
+            dependencies.verify_bundle([material], bundle)
 
 if __name__ == "__main__":
     unittest.main()
