@@ -51,8 +51,56 @@ jobs:
             --github-output "${GITHUB_OUTPUT}" \
             --codeql-config build/codeql-unused.yml
 
+  dependency-inputs:
+    name: Verified dependency inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: dependency-key
+        name: Resolve complete immutable input key
+        run: |
+          python3 server/tools/dependencies.py bundle-key \
+            --client-lock client/dependencies.lock.json \
+            --server-lock server/dependencies.lock.json \
+            --source-lock server/cmake/immutable_sources.lock.json \
+            --github-output "${GITHUB_OUTPUT}"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/classic-dependency-archives
+          key: classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}
+          restore-keys: >-
+            classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}-
+      - id: dependency-stage
+        name: Acquire and verify complete immutable input bundle
+        run: |
+          python3 server/tools/dependencies.py bundle-stage \
+            --client-lock client/dependencies.lock.json \
+            --server-lock server/dependencies.lock.json \
+            --source-lock server/cmake/immutable_sources.lock.json \
+            --cache "${RUNNER_TEMP}/classic-dependency-archives" \
+            --output build/dependency-inputs \
+            --github-output "${GITHUB_OUTPUT}"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        if: steps.dependency-stage.outputs.cache_changed == 'true'
+        with:
+          path: ${{ runner.temp }}/classic-dependency-archives
+          key: >-
+            classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: classic-dependency-inputs
+          path: build/dependency-inputs
+          if-no-files-found: error
+          retention-days: 1
+
   core:
     name: Core validation
+    needs: dependency-inputs
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -141,6 +189,7 @@ jobs:
         run: |
           docker run --rm \
             --user "$(id -u):$(id -g)" \
+            --network none \
             --env CCACHE_DIR=/cache/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env HOME=/tmp/classic-home \
@@ -179,7 +228,7 @@ jobs:
 
   windows-test-build:
     name: Build native Windows tests
-    needs: changes
+    needs: [changes, dependency-inputs]
     if: needs.changes.outputs.windows == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -189,21 +238,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Stage deterministic client package inputs
-        working-directory: client
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: classic-dependency-inputs
+          path: build/dependency-inputs
+      - name: Verify and stage deterministic package inputs offline
         run: |
-          python3 tools/dependencies.py sync
-          umask 077
-          mkdir -p ../build
-          printf '%s\n' '111111111111111111' > data/discord-application-id
-          printf '%s\n' '123456789012345678' > \
-            ../build/discord-test-application-id
-      - name: Stage pinned Windows server dependency
-        run: |
+          python3 server/tools/dependencies.py bundle-verify \
+            --client-lock client/dependencies.lock.json \
+            --server-lock server/dependencies.lock.json \
+            --source-lock server/cmake/immutable_sources.lock.json \
+            --bundle build/dependency-inputs
+          python3 client/tools/dependencies.py sync --root client \
+            --cache build/dependency-inputs/downloads --refresh --offline
+          python3 server/tools/dependencies.py sync --root server \
+            --cache build/dependency-inputs/downloads --refresh --offline
           source="$(python3 server/tools/dependencies.py source \
             --source-lock server/cmake/immutable_sources.lock.json \
-            --source-name libpcpnatpmp --cache build/dependency-cache)"
+            --source-name libpcpnatpmp \
+            --cache build/dependency-source-cache \
+            --downloads build/dependency-inputs/downloads \
+            --offline)"
           printf '%s\n' "${source}" > build/libpcpnatpmp-source-path
+          umask 077
+          printf '%s\n' '111111111111111111' > client/data/discord-application-id
+          printf '%s\n' '123456789012345678' > \
+            build/discord-test-application-id
       - name: Pull pinned Windows build environment
         run: docker pull ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb
       - name: Cross-build and stage standalone tests
@@ -324,7 +384,10 @@ jobs:
         run: |
           docker run --rm \
             --user "$(id -u):$(id -g)" \
+            --network none \
             --env ATRINIK_PACKAGE_VERSION=0.0.0 \
+            --env ATRINIK_DEPENDENCY_DOWNLOADS=/workspace/build/dependency-inputs/downloads \
+            --env ATRINIK_DEPENDENCY_CACHE_DIR=/workspace/build/dependency-source-cache \
             --env CCACHE_DIR=/workspace/server/build/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env CCACHE_TEMPDIR=/tmp/atrinik-server-package-ccache \
@@ -420,7 +483,7 @@ jobs:
 
   server:
     name: Server validation
-    needs: changes
+    needs: [changes, dependency-inputs]
     if: needs.changes.outputs.server == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -431,6 +494,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: classic-dependency-inputs
+          path: build/dependency-inputs
       - id: linux-cache
         name: Resolve isolated server compiler cache key
         env:
@@ -465,6 +532,7 @@ jobs:
         run: |
           docker run --rm \
             --user "$(id -u):$(id -g)" \
+            --network none \
             --env CCACHE_DIR=/cache/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env HOME=/tmp/classic-home \
@@ -490,7 +558,7 @@ jobs:
 
   client:
     name: Client validation
-    needs: changes
+    needs: [changes, dependency-inputs]
     if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 120 || 30 }}
@@ -502,6 +570,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: classic-dependency-inputs
+          path: build/dependency-inputs
       - name: Initialize client benchmark evidence
         run: |
           mkdir -p build/ci-evidence
@@ -547,6 +619,7 @@ jobs:
         run: |
           docker run --rm \
             --user "$(id -u):$(id -g)" \
+            --network none \
             --env CCACHE_DIR=/cache/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env HOME=/tmp/classic-home \
@@ -648,7 +721,7 @@ jobs:
 
   integrated:
     name: Integrated client/server graph
-    needs: changes
+    needs: [changes, dependency-inputs]
     if: >-
       needs.changes.outputs.client == 'true' ||
       needs.changes.outputs.server == 'true'
@@ -660,6 +733,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: classic-dependency-inputs
+          path: build/dependency-inputs
       - id: linux-cache
         name: Resolve isolated integrated compiler cache key
         env:
@@ -698,6 +775,7 @@ jobs:
         run: |
           docker run --rm \
             --user "$(id -u):$(id -g)" \
+            --network none \
             --env CCACHE_DIR=/cache/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env HOME=/tmp/classic-home \
@@ -718,6 +796,7 @@ jobs:
     if: always()
     needs:
       - changes
+      - dependency-inputs
       - core
       - server
       - client
@@ -731,6 +810,7 @@ jobs:
         run: |
           python3 tools/ci/require_checks.py classic \
             --classifier-result '${{ needs.changes.result }}' \
+            --dependency-inputs-result '${{ needs.dependency-inputs.result }}' \
             --core-result '${{ needs.core.result }}' \
             --client-required '${{ needs.changes.outputs.client }}' \
             --client-result '${{ needs.client.result }}' \
