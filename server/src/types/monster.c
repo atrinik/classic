@@ -95,6 +95,13 @@ void set_npc_enemy(object *npc, object *enemy, rv_vector *rv) {
 
     /* Do nothing if new enemy == old enemy */
     if (enemy == npc->enemy && (enemy == NULL || enemy->count == npc->enemy_count)) {
+        if (enemy != NULL && rv != NULL) {
+            get_rangevector(npc,
+                            enemy,
+                            rv,
+                            RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH | RV_NO_LOAD);
+        }
+
         return;
     }
 
@@ -115,7 +122,7 @@ void set_npc_enemy(object *npc, object *enemy, rv_vector *rv) {
             rv = &rv2;
         }
 
-        get_rangevector(npc, enemy, rv, RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH);
+        get_rangevector(npc, enemy, rv, RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH | RV_NO_LOAD);
         npc->enemy_count = enemy->count;
 
         /* important: that's our "we lose aggro count" - reset to zero here */
@@ -378,11 +385,15 @@ object *find_enemy(object *npc, rv_vector *rv) {
             if (is_friend_of(npc, npc->attacked_by)) {
                 /* Skip it, but let's wake up */
                 CLEAR_FLAG(npc, FLAG_SLEEP);
-            } else if (on_same_map(npc, npc->attacked_by)) {
+            } else if (on_same_map(npc, npc->attacked_by) &&
+                       get_rangevector(npc,
+                                       npc->attacked_by,
+                                       rv,
+                                       RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH | RV_NO_LOAD)) {
                 /* The only thing we must know... */
 
                 CLEAR_FLAG(npc, FLAG_SLEEP);
-                set_npc_enemy(npc, npc->attacked_by, rv);
+                set_npc_enemy(npc, npc->attacked_by, NULL);
                 /* Always clear the attacker entry */
                 npc->attacked_by = NULL;
 

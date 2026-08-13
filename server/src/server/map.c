@@ -301,8 +301,8 @@ static int relative_tile_position_rec(mapstruct *map1,
                                                      y,
                                                      z,
                                                      id,
-                                                     flags,
-                                                     flags & RV_RECURSIVE_SEARCH ? level : 1))) {
+                                                     flags & RV_RECURSIVE_SEARCH ? level : 1,
+                                                     flags))) {
             *z += 1;
             return 1;
         }
