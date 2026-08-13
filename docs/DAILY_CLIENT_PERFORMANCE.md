@@ -62,7 +62,10 @@ document recovery. Missing, corrupt, or incomplete evidence is an
 infrastructure failure and must be investigated from the job logs/artifact; it
 is never treated as a green point.
 Only transitions produced by the current observation are reconciled; a cohort
-change cannot replay an older cohort's alert transition.
+change cannot replay an older cohort's alert transition. A corrected retained
+observation is recomputed in stable workflow-run order. Once an observation has
+aged beyond detailed retention it cannot be rerun into the trend because its
+original position and result can no longer be replaced safely.
 
 Before entering the pinned build container, the workflow acquires and verifies
 the complete immutable dependency input bundle. The benchmark itself then runs

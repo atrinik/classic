@@ -169,7 +169,7 @@ jobs:
                 "build/benchmark-data/reports/${GITHUB_RUN_ID}.md"
             elif test "${transition}" = recovered && test -n "${number}"; then
               gh issue close "${number}" --comment \
-                "Two consecutive compatible reports recovered this cohort."
+                "The current compatible trend no longer meets the sustained regression condition."
             fi
           done
       - name: Commit the dedicated trend ref

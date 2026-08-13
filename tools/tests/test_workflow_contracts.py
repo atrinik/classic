@@ -1145,6 +1145,10 @@ class WorkflowContractTests(unittest.TestCase):
             publish,
         )
         self.assertNotIn("pull_request:", workflow[: workflow.index("jobs:")])
+        self.assertIn(
+            "The current compatible trend no longer meets the sustained regression condition.",
+            publish,
+        )
 
     def test_linux_checks_pin_image_and_isolate_compiler_caches(self) -> None:
         workflow = self.text("check.yml")

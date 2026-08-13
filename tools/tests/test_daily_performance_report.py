@@ -54,7 +54,12 @@ class DailyReportTests(unittest.TestCase):
                                    recorded_at="2026-08-13T00:00:00+00:00", environment={})
         trend = None
         for index in range(report.TREND_RETENTION + 2):
-            item = dict(point, id=f"p{index}", recorded_at=f"2026-08-{(index % 9) + 1:02d}T00:00:00+00:00")
+            item = dict(
+                point,
+                id=f"run-{index + 1}",
+                run_id=str(index + 1),
+                recorded_at=f"2026-08-{(index % 9) + 1:02d}T00:00:00+00:00",
+            )
             trend = report.merge_trend(trend, item)
         points = trend["cohorts"][point["cohort"]]
         self.assertEqual(len(points), report.TREND_RETENTION)
@@ -101,9 +106,45 @@ class DailyReportTests(unittest.TestCase):
                 recorded_at="2026-08-13T00:00:00+00:00", environment={}
             )
 
+    def test_every_context_identity_contributes_to_the_cohort(self) -> None:
+        original = report.build_point(
+            evidence(), commit="a" * 40, run_id="7",
+            recorded_at="2026-08-13T00:00:00+00:00", environment={}
+        )
+        changed_fixture = evidence()
+        for record in changed_fixture["records"]["additional_contexts"]["standard_discrete"]:
+            record["fixture"]["manifest_sha256"] = "f" * 64
+        changed_fixture = fixtures.benchmark._build_evidence(
+            [], changed_fixture["records"]["candidate_standard"],
+            changed_fixture["records"]["candidate_large"],
+            changed_fixture["records"]["additional_contexts"],
+            enforce_performance=False,
+            comparison_note="event-has-no-comparison-base",
+        )
+        fixture_point = report.build_point(
+            changed_fixture, commit="a" * 40, run_id="8",
+            recorded_at="2026-08-14T00:00:00+00:00", environment={}
+        )
+        changed_runner = evidence()
+        for record in changed_runner["records"]["candidate_large"]:
+            record["identity"]["run"]["runner_image_version"] = "different"
+        changed_runner = fixtures.benchmark._build_evidence(
+            [], changed_runner["records"]["candidate_standard"],
+            changed_runner["records"]["candidate_large"],
+            changed_runner["records"]["additional_contexts"],
+            enforce_performance=False,
+            comparison_note="event-has-no-comparison-base",
+        )
+        runner_point = report.build_point(
+            changed_runner, commit="a" * 40, run_id="9",
+            recorded_at="2026-08-15T00:00:00+00:00", environment={}
+        )
+        self.assertNotEqual(original["cohort"], fixture_point["cohort"])
+        self.assertNotEqual(original["cohort"], runner_point["cohort"])
+
     def test_two_failed_points_open_one_alert_and_two_passes_recover_it(self) -> None:
         item = evidence()
-        point = report.build_point(item, commit="a" * 40, run_id="7",
+        point = report.build_point(item, commit="a" * 40, run_id="1",
                                    recorded_at="2026-08-01T00:00:00+00:00", environment={})
         point["checks"] = {"candidate_sustained_p95": {"passed": False}}
         trend = report.merge_trend(None, point)
@@ -228,7 +269,7 @@ class DailyReportTests(unittest.TestCase):
         )
         third = dict(second, id="run-9", run_id="9", recorded_at="2026-08-15T00:00:00+00:00")
         trend = report.merge_trend(report.merge_trend(report.merge_trend(None, first), second), third)
-        replacement = dict(first, recorded_at="2026-08-13T01:00:00+00:00")
+        replacement = dict(first, recorded_at="2026-08-16T00:00:00+00:00")
         trend = report.merge_trend(trend, replacement)
         key = next(iter(trend["alerts"]))
         self.assertEqual(
@@ -236,6 +277,24 @@ class DailyReportTests(unittest.TestCase):
             ["run-7", "run-8", "run-9"],
         )
         self.assertFalse(trend["alerts"][key]["active"])
+
+    def test_rerun_outside_retained_history_is_rejected(self) -> None:
+        template = report.build_point(
+            evidence(), commit="a" * 40, run_id="1",
+            recorded_at="2026-08-01T00:00:00+00:00", environment={}
+        )
+        trend = None
+        for run_id in range(1, report.TREND_RETENTION + 2):
+            item = dict(
+                template,
+                id=f"run-{run_id}",
+                run_id=str(run_id),
+                recorded_at=f"2026-08-{(run_id % 28) + 1:02d}T00:00:00+00:00",
+                checks={"candidate_sustained_p95": {"passed": run_id % 2 == 0}},
+            )
+            trend = report.merge_trend(trend, item)
+        with self.assertRaisesRegex(report.ReportError, "outside retained history"):
+            report.merge_trend(trend, template)
 
     def test_active_alert_recovers_when_rerun_moves_cohort(self) -> None:
         first = report.build_point(

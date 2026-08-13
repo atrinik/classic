@@ -181,9 +181,12 @@ def build_point(evidence: Any, *, commit: str, run_id: str, recorded_at: str,
         sort_keys=True,
         separators=(",", ":"),
     )
-    candidate_sets = [records["candidate_standard"], records["candidate_large"]]
-    candidate_sets.extend(records["additional_contexts"].values())
-    for record_set in candidate_sets:
+    named_candidate_sets = {
+        "standard_smooth": records["candidate_standard"],
+        "large_smooth": records["candidate_large"],
+        **records["additional_contexts"],
+    }
+    for record_set in named_candidate_sets.values():
         for record in record_set:
             record_implementation = record["identity"]["implementation"]
             record_instrumentation = record["identity"]["instrumentation"]
@@ -206,10 +209,15 @@ def build_point(evidence: Any, *, commit: str, run_id: str, recorded_at: str,
                 raise ReportError("movement evidence mixes incompatible implementation cohorts")
     cohort_material = {
         "instrumentation": instrumentation,
-        "fixture": fixture,
         "implementation": {key: value for key, value in implementation.items()
                            if key not in ("revision", "dirty", "dirty_known")},
-        "run": run,
+        "contexts": {
+            name: {
+                "fixture": record_set[0]["fixture"],
+                "run": record_set[0]["identity"]["run"],
+            }
+            for name, record_set in named_candidate_sets.items()
+        },
         "runner_image": environment.get("runner_image"),
     }
     cohort = json.dumps(cohort_material, sort_keys=True, separators=(",", ":"))
@@ -254,9 +262,25 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
     cohorts = trend.setdefault("cohorts", {})
     if not isinstance(cohorts, dict):
         raise ReportError("trend cohorts must be an object")
+    point_run_id = int(point["run_id"])
+    retained_run_ids: set[int] = set()
+    replacement_retained = False
     for cohort_points in cohorts.values():
         if not isinstance(cohort_points, list):
             raise ReportError("trend cohort points must be an array")
+        for item in cohort_points:
+            if not isinstance(item, dict) or not str(item.get("run_id", "")).isdigit():
+                raise ReportError("trend point has an invalid run ID")
+            item_run_id = int(item["run_id"])
+            retained_run_ids.add(item_run_id)
+            replacement_retained = replacement_retained or item_run_id == point_run_id
+    if (
+        retained_run_ids
+        and not replacement_retained
+        and point_run_id < min(retained_run_ids)
+    ):
+        raise ReportError("cannot replace an observation outside retained history")
+    for cohort_points in cohorts.values():
         cohort_points[:] = [
             item
             for item in cohort_points
@@ -267,7 +291,7 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
         raise ReportError("trend cohort points must be an array")
     points[:] = [item for item in points if isinstance(item, dict) and item.get("id") != point["id"]]
     points.append(point)
-    points.sort(key=lambda item: (item.get("recorded_at", ""), item.get("id", "")))
+    points.sort(key=lambda item: int(item["run_id"]))
     dropped_points = points[:-TREND_RETENTION]
     del points[:-TREND_RETENTION]
     alerts = trend.setdefault("alerts", {})
