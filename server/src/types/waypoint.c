@@ -264,11 +264,9 @@ void waypoint_compute_path(object *op) {
     /* A partial best-effort path is another attempt, not a successful reset. */
     if (!partial_best_effort) {
         op->stats.Int = 0;
+        op->stats.Str = 0;
+        op->stats.dam = 30000;
     }
-    /* Number of fails */
-    op->stats.Str = 0;
-    /* Best distance */
-    op->stats.dam = 30000;
 }
 
 /**
@@ -491,7 +489,7 @@ void waypoint_move(object *op, object *npc) {
 #endif
             op->stats.hp = npc->x;
             op->stats.sp = npc->y;
-            if (dest_rv->distance_z != 0) {
+            if (global_rv.distance_z != 0) {
                 FREE_AND_ADD_REF_HASH(op->slaying, npc->map->path);
             }
             return;

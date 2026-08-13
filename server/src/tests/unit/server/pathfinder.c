@@ -58,6 +58,8 @@ START_TEST(test_waypoint_retains_explicit_partial_path_and_best_effort_failures)
     waypoint->stats.hp = 20;
     waypoint->stats.sp = 20;
     waypoint->stats.Int = 7;
+    waypoint->stats.Str = 4;
+    waypoint->stats.dam = 9;
     SET_FLAG(waypoint, FLAG_NO_ATTACK);
     char *errmsg = NULL;
     ck_assert_msg(clioptions_load_str("pathfinder_max_nodes = 8", &errmsg),
@@ -70,6 +72,8 @@ START_TEST(test_waypoint_retains_explicit_partial_path_and_best_effort_failures)
     ck_assert_ptr_nonnull(waypoint->msg);
     ck_assert_uint_gt(strlen(waypoint->msg), 0);
     ck_assert_int_eq(waypoint->stats.Int, 7);
+    ck_assert_int_eq(waypoint->stats.Str, 4);
+    ck_assert_int_eq(waypoint->stats.dam, 9);
     errmsg = NULL;
     ck_assert_msg(clioptions_load_str("pathfinder_max_nodes = 10000", &errmsg),
                   "%s",
@@ -103,6 +107,14 @@ START_TEST(test_waypoint_abandons_stuck_cross_depth_best_effort_target) {
     SET_FLAG(waypoint, FLAG_NO_ATTACK);
     SET_FLAG(waypoint, FLAG_WP_PATH_REQUESTED);
 
+    path_node_t local_step = {
+        .map = source,
+        .x = npc->x + 1,
+        .y = npc->y,
+    };
+    waypoint->msg = path_encode(&local_step);
+    waypoint->attacked_by_distance = strlen(waypoint->msg);
+
     rv_vector rv;
     ck_assert(get_rangevector_from_mapcoords(source,
                                              npc->x,
@@ -113,7 +125,7 @@ START_TEST(test_waypoint_abandons_stuck_cross_depth_best_effort_target) {
                                              &rv,
                                              RV_RECURSIVE_SEARCH | RV_DIAGONAL_DISTANCE));
     ck_assert_int_ne(rv.distance_z, 0);
-    waypoint->stats.dam = rv.distance;
+    waypoint->stats.dam = 1;
 
     waypoint_move(waypoint, npc);
 
