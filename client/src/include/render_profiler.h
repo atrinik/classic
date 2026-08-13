@@ -15,7 +15,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define RENDER_PROFILER_STATISTICS_VERSION UINT8_C(3)
+#define RENDER_PROFILER_STATISTICS_VERSION UINT8_C(4)
 
 /** Timed portions of the client frame and map renderer. */
 typedef enum render_profile_stage {
@@ -35,7 +35,7 @@ typedef enum render_profile_stage {
     RENDER_PROFILE_MAP_OBJECTS,
     RENDER_PROFILE_MAP_PAINT,
     RENDER_PROFILE_MAP_COMMAND_SORT,
-    RENDER_PROFILE_MAP_DOOR_OCCLUSION,
+    RENDER_PROFILE_MAP_LIVING_OCCLUSION,
     RENDER_PROFILE_MAP_SPRITE_EFFECTS,
     RENDER_PROFILE_MAP_HINT_REPLAY,
     RENDER_PROFILE_MAP_UI,
