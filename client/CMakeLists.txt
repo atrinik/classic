@@ -807,6 +807,39 @@ if (BUILD_TESTING)
     add_test(NAME client-player-view-player-outline-widget-state
         COMMAND atrinik --player-view
             "${player_view_fixtures}/player-outline-widget-state.xml" -)
+    add_test(NAME client-player-view-living-outline-unobscured
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-unobscured.xml" -)
+    add_test(NAME client-player-view-living-outline-same-level
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-same-level.xml" -)
+    add_test(NAME client-player-view-living-outline-upper-level
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-upper-level.xml" -)
+    add_test(NAME client-player-view-living-outline-nearby-wall
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-nearby-wall.xml" -)
+    add_test(NAME client-player-view-living-outline-translucent
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-translucent.xml" -)
+    add_test(NAME client-player-view-living-outline-double
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-double.xml" -)
+    add_test(NAME client-player-view-living-outline-dark-actor
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-dark-actor.xml" -)
+    add_test(NAME client-player-view-living-outline-dark-wall
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-dark-wall.xml" -)
+    add_test(NAME client-player-view-living-outline-multiple
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-multiple.xml" -)
+    add_test(NAME client-player-view-living-outline-crowded
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-crowded.xml" -)
+    add_test(NAME client-player-view-living-outline-crowded-unobscured
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-crowded-unobscured.xml" -)
     add_test(NAME client-player-view-movement-benchmark-smooth
         COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"

@@ -60,6 +60,7 @@
 #include <content_benchmark.h>
 #include <toolkit/signals.h>
 #include <toolkit/console.h>
+#include <gameplay_journal.h>
 #include <toolkit/datetime.h>
 #include <cmake.h>
 #include <openssl/crypto.h>
@@ -185,6 +186,7 @@ static void console_command_active_objects(const char *params) {
 void cleanup(void) {
     cache_remove_all();
     remove_plugins();
+    gameplay_journal_deinit();
     player_deinit();
     account_deinit();
     socket_assets_deinit();

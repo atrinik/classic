@@ -47,6 +47,7 @@
 #include <world_maker.h>
 #include <account.h>
 #include <content_benchmark.h>
+#include <gameplay_journal.h>
 #include <toolkit/console.h>
 
 /** Object used in process_events(). */
@@ -636,6 +637,23 @@ int server_run(int argc, char **argv) {
         return result;
     }
 
+    if (!settings.world_maker) {
+        char server_id[65];
+        const gameplay_journal_profile_t legacy_profile = {
+            .id = "legacy-unknown",
+            .schema = 0,
+            .digest = "unknown",
+            .effective_axes = "unknown",
+        };
+        if (!socket_server_quic_identity(server_id) ||
+            !gameplay_journal_init(settings.datapath, server_id, &legacy_profile)) {
+            LOG(ERROR,
+                "Cannot establish the durable gameplay journal; refusing to start gameplay.");
+            cleanup();
+            return EXIT_FAILURE;
+        }
+    }
+
     atexit(cleanup);
 
     if (signal(SIGINT, shutdown_signal_handler) == SIG_ERR ||
@@ -665,7 +683,13 @@ int server_run(int argc, char **argv) {
 
     for (;;) {
         uint64_t loop_started_us = datetime_monotonic_us();
-        if (unlikely(shutdown_requested || shutdown_timer_check())) {
+        if (unlikely(shutdown_requested || shutdown_timer_check() ||
+                     !gameplay_journal_available())) {
+            if (!gameplay_journal_available()) {
+                LOG(ERROR,
+                    "Gameplay journal is unavailable; shutting down to preserve the audit "
+                    "failure policy.");
+            }
             break;
         }
 

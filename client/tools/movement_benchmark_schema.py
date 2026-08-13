@@ -85,7 +85,7 @@ RENDER_STAGES = {
     "paint": "per_map_draw",
     "ui": "per_map_draw",
     "command_sort": "per_map_draw",
-    "door_occlusion": "per_map_draw",
+    "living_occlusion": "per_map_draw",
     "sprite_effects": "per_map_draw",
     "hint_replay": "per_map_draw",
 }
@@ -431,7 +431,7 @@ def validate_record(value: object) -> dict[str, object]:
         "workload": "pvm1-map2-lifecycle-v3",
         "lighting_statistics_version": 3,
         "map_statistics_version": 3,
-        "render_profiler_statistics_version": 3,
+        "render_profiler_statistics_version": 4,
         "sprite_cache_statistics_version": 3,
     }:
         raise ValueError("movement benchmark instrumentation identity is invalid")
@@ -842,7 +842,7 @@ def validate_record(value: object) -> dict[str, object]:
             for stage in ("map_scratch_clear", "ground_composite")
         ) or any(
             stages[stage]["calls"] != phase["full_map_draws"] + phase["animation_draws"]
-            for stage in ("door_occlusion", "hint_replay")
+            for stage in ("living_occlusion", "hint_replay")
         ) or stages["ground"]["calls"] != map_stats["level_draws"] \
                 or stages["objects"]["calls"] != (
                     map_stats["level_draws"] + map_stats["animation_level_draws"]
