@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import re
 import subprocess
 import tarfile
@@ -45,6 +46,14 @@ class CMakeIncrementalContractTests(unittest.TestCase):
             ).hexdigest()
             source = temporary / "source"
             cache = temporary / "cache"
+            source_lock = temporary / "immutable_sources.lock.json"
+            source_lock.write_text(
+                json.dumps({"schema_version": 1, "sources": {"fixture": {
+                    "url": archive.as_uri(), "sha256": digest,
+                    "tree_sha256": tree_digest, "mingw_tree_sha256": "0" * 64,
+                }}}),
+                encoding="utf-8",
+            )
             source.mkdir()
             helper = (ROOT / "server/cmake/immutable_source_cache.cmake").as_posix()
             (source / "CMakeLists.txt").write_text(
@@ -53,9 +62,7 @@ class CMakeIncrementalContractTests(unittest.TestCase):
                 f'include("{helper}")\n'
                 "atrinik_extract_immutable_source(\n"
                 "  NAME fixture\n"
-                f'  URL "file://{archive.as_posix()}"\n'
-                f'  SHA256 "{digest}"\n'
-                f'  TREE_SHA256 "{tree_digest}"\n'
+                f'  SOURCE_LOCK "{source_lock.as_posix()}"\n'
                 f'  CACHE_DIR "{cache.as_posix()}"\n'
                 "  OUTPUT fixture_source)\n"
                 "file(WRITE \"${CMAKE_BINARY_DIR}/source.txt\" \"${fixture_source}\")\n",
@@ -87,7 +94,7 @@ class CMakeIncrementalContractTests(unittest.TestCase):
                 text=True,
             )
             self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
-            self.assertIn("Mismatched shared fixture source content", rejected.stdout)
+            self.assertIn("fixture: mismatched shared source content", rejected.stdout)
             cached_cmake.write_bytes(payload)
 
             marker = Path(first) / ".atrinik-source-sha256"
@@ -101,7 +108,7 @@ class CMakeIncrementalContractTests(unittest.TestCase):
                 text=True,
             )
             self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
-            self.assertIn("Mismatched shared fixture source cache", rejected.stdout)
+            self.assertIn("fixture: mismatched shared source cache", rejected.stdout)
 
 
 if __name__ == "__main__":

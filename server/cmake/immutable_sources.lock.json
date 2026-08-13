@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "sources": {
+    "libpcpnatpmp": {
+      "url": "https://github.com/libpcpnatpmp/libpcpnatpmp/archive/866d283da99f5e98eecff702a8df63e2ae57ffca.tar.gz",
+      "sha256": "65ab99547ecc8277434527607d24f8a1b02a2344ed4cea475bed751606e60202",
+      "tree_sha256": "16dbd3e0d59aaa060da9e78b953d3f5e310b5312edc4743218dc8297cbd1292e",
+      "mingw_tree_sha256": "0c5d3ed95ee594d4506c9690a22e0a15f7bf4ae23a33b5fa3e3e758617193038"
+    }
+  }
+}

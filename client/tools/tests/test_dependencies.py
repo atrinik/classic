@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "dependencies.py"
+MODULE_PATH = Path(__file__).resolve().parents[3] / "server/tools/dependencies.py"
 SPEC = importlib.util.spec_from_file_location("atrinik_dependencies", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 dependencies = importlib.util.module_from_spec(SPEC)
