@@ -506,6 +506,10 @@ void waypoint_move(object *op, object *npc) {
 
     /* Perform the actual move */
     int dir = dest_rv->direction;
+    if (!movement_direction_valid(npc, dir, true)) {
+        return;
+    }
+
     if (QUERY_FLAG(npc, FLAG_CONFUSED)) {
         dir = get_randomized_dir(dir);
     }
