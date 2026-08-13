@@ -42,8 +42,11 @@
 #include <arch.h>
 #include <object.h>
 #include <player.h>
+#include <gameplay_journal.h>
 #include <object_methods.h>
 #include <door.h>
+#include <openssl/crypto.h>
+#include <openssl/rand.h>
 
 /** List of active objects that need to be processed */
 object *active_objects;
@@ -663,7 +666,9 @@ bool object_can_merge(object *ob1, object *ob2) {
     if (ob1->name != ob2->name || ob1->name_pl != ob2->name_pl || ob1->title != ob2->title ||
         ob1->race != ob2->race || ob1->slaying != ob2->slaying || ob1->msg != ob2->msg ||
         ob1->artifact != ob2->artifact || ob1->custom_name != ob2->custom_name ||
-        ob1->glow != ob2->glow) {
+        ob1->glow != ob2->glow || ob1->custody_lineage != ob2->custody_lineage ||
+        ob1->custody_first != ob2->custody_first || ob1->custody_last != ob2->custody_last ||
+        ob1->custody_actor != ob2->custody_actor) {
         return false;
     }
 
@@ -1127,6 +1132,10 @@ void object_copy(object *op, const object *src, bool no_speed) {
     FREE_ONLY_HASH(op->artifact);
     FREE_ONLY_HASH(op->custom_name);
     FREE_ONLY_HASH(op->glow);
+    FREE_ONLY_HASH(op->custody_lineage);
+    FREE_ONLY_HASH(op->custody_first);
+    FREE_ONLY_HASH(op->custody_last);
+    FREE_ONLY_HASH(op->custody_actor);
 
     object_free_key_values(op);
 
@@ -1147,6 +1156,10 @@ void object_copy(object *op, const object *src, bool no_speed) {
     ADD_REF_NOT_NULL_HASH(op->artifact);
     ADD_REF_NOT_NULL_HASH(op->custom_name);
     ADD_REF_NOT_NULL_HASH(op->glow);
+    ADD_REF_NOT_NULL_HASH(op->custody_lineage);
+    ADD_REF_NOT_NULL_HASH(op->custody_first);
+    ADD_REF_NOT_NULL_HASH(op->custody_last);
+    ADD_REF_NOT_NULL_HASH(op->custody_actor);
 
     /* Only alter speed_left when we are sure that we have not done it before */
     if (!no_speed && op->speed < 0.0 && DBL_EQUAL(op->speed_left, op->arch->clone.speed_left)) {
@@ -1708,6 +1721,10 @@ void object_destroy(object *op) {
     FREE_AND_CLEAR_HASH2(op->artifact);
     FREE_AND_CLEAR_HASH2(op->custom_name);
     FREE_AND_CLEAR_HASH2(op->glow);
+    FREE_AND_CLEAR_HASH2(op->custody_lineage);
+    FREE_AND_CLEAR_HASH2(op->custody_first);
+    FREE_AND_CLEAR_HASH2(op->custody_last);
+    FREE_AND_CLEAR_HASH2(op->custody_actor);
 
     /* Mark object as freed and invalidate all references to it. */
     op->count = 0;
@@ -2793,6 +2810,102 @@ bool object_set_value(object *op, const char *key, const char *value, bool add_k
     }
 
     return ret;
+}
+
+static bool object_custody_random_id(char output[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    unsigned char random[16];
+    bool ok = RAND_bytes(random, sizeof(random)) == 1 &&
+              string_tohex(random,
+                           sizeof(random),
+                           output,
+                           GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE,
+                           false) == sizeof(random) * 2U;
+    OPENSSL_cleanse(random, sizeof(random));
+    return ok;
+}
+
+void object_custody_record(const object *op, object *actor_ob, const char *reason) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(actor_ob != NULL);
+    HARD_ASSERT(reason != NULL);
+
+    if (op->custody_lineage == NULL || !gameplay_journal_available()) {
+        return;
+    }
+
+    char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    if (gameplay_journal_player_begin(CONTR(actor_ob),
+                                      "item",
+                                      reason,
+                                      op->custody_lineage,
+                                      op->custody_lineage,
+                                      0,
+                                      1,
+                                      1,
+                                      transaction_id)) {
+        gameplay_journal_commit(transaction_id);
+    }
+}
+
+/** Record a successful acquisition by a player without exposing custody data to clients. */
+void object_custody_acquire(object *op, const object *player_ob) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(player_ob != NULL);
+
+    if (player_ob->type != PLAYER || CONTR(player_ob) == NULL ||
+        CONTR(player_ob)->cs == NULL || CONTR(player_ob)->cs->account == NULL || player_ob->name == NULL) {
+        return;
+    }
+
+    object *actor_ob = (object *)player_ob;
+    if (actor_ob->custody_actor == NULL) {
+        char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE], actor[MAX_BUF];
+        if (!object_custody_random_id(id)) {
+            LOG(ERROR, "Could not create durable custody identity for player %s.", actor_ob->name);
+            return;
+        }
+        snprintf(actor, sizeof(actor), "%s:%s", CONTR(actor_ob)->cs->account, id);
+        actor_ob->custody_actor = add_string(actor);
+    }
+
+    if (op->custody_first == NULL) {
+        op->custody_first = add_refcount(actor_ob->custody_actor);
+    }
+
+    if (op->custody_lineage == NULL) {
+        char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE], lineage[MAX_BUF];
+        if (!object_custody_random_id(id)) {
+            LOG(ERROR, "Could not create durable custody lineage for %s.", object_get_str(op));
+            return;
+        }
+        snprintf(lineage, sizeof(lineage), "item:%s", id);
+        op->custody_lineage = add_string(lineage);
+    }
+
+}
+
+/** Record the player that successfully relinquished custody of an item. */
+void object_custody_relinquish(object *op, const object *player_ob) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(player_ob != NULL);
+
+    if (player_ob->type != PLAYER || CONTR(player_ob) == NULL ||
+        CONTR(player_ob)->cs == NULL || CONTR(player_ob)->cs->account == NULL || player_ob->name == NULL) {
+        return;
+    }
+
+    object *actor_ob = (object *)player_ob;
+    if (actor_ob->custody_actor == NULL) {
+        char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE], actor[MAX_BUF];
+        if (!object_custody_random_id(id)) {
+            LOG(ERROR, "Could not create durable custody identity for player %s.", actor_ob->name);
+            return;
+        }
+        snprintf(actor, sizeof(actor), "%s:%s", CONTR(actor_ob)->cs->account, id);
+        actor_ob->custody_actor = add_string(actor);
+    }
+    FREE_AND_CLEAR_HASH2(op->custody_last);
+    op->custody_last = add_refcount(actor_ob->custody_actor);
 }
 
 /**

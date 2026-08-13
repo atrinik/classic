@@ -216,6 +216,18 @@ struct obj {
     /** Glow color. */
     shstr *glow;
 
+    /** Immutable lineage identifier for hidden player-custody provenance. */
+    shstr *custody_lineage;
+
+    /** First player identity to acquire this item; never overwritten. */
+    shstr *custody_first;
+
+    /** Most recent player identity to relinquish this item. */
+    shstr *custody_last;
+
+    /** Server-only durable character identity used in custody records. */
+    shstr *custody_actor;
+
     /** Monster/player to follow even if not closest */
     struct obj *enemy;
 
@@ -929,6 +941,9 @@ void object_free_key_values(object *op);
 key_value_t *object_get_key_link(const object *op, shstr *key);
 shstr *object_get_value(const object *op, const char *const key);
 bool object_set_value(object *op, const char *key, const char *value, bool add_key);
+void object_custody_acquire(object *op, const object *player_ob);
+void object_custody_relinquish(object *op, const object *player_ob);
+void object_custody_record(const object *op, object *player_ob, const char *reason);
 int object_matches_string(object *op, object *caller, const char *str);
 int object_get_gender(const object *op);
 void object_reverse_inventory(object *op);
