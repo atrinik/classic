@@ -27,10 +27,26 @@ class LinuxCacheKeyTests(unittest.TestCase):
             linux_cache_key.cache_scope("merge_group", "refs/heads/queue", "", COMMIT),
             f"merge-{COMMIT}",
         )
+        self.assertEqual(
+            linux_cache_key.cache_scope(
+                "workflow_dispatch", "refs/heads/benchmark", "", COMMIT
+            ),
+            f"dispatch-{COMMIT}",
+        )
         with self.assertRaises(linux_cache_key.CacheKeyError):
             linux_cache_key.cache_scope(
                 "push", "refs/heads/untrusted", "", COMMIT
             )
+
+    def test_manual_dispatch_cache_is_commit_bound(self) -> None:
+        first = linux_cache_key.cache_scope(
+            "workflow_dispatch", "refs/heads/benchmark", "", COMMIT
+        )
+        second = linux_cache_key.cache_scope(
+            "workflow_dispatch", "refs/heads/benchmark", "", "c" * 40
+        )
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(first, "trusted-main")
 
     def test_every_material_input_invalidates_the_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
