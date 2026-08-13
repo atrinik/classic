@@ -511,10 +511,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(build.count("--network none"), 2)
         self.assertIn("persist-credentials: false", build)
         self.assertIn("Stage pinned Windows server dependency", build)
-        self.assertIn(
-            "65ab99547ecc8277434527607d24f8a1b02a2344ed4cea475bed751606e60202",
-            build,
-        )
+        self.assertIn("server/tools/dependencies.py source", build)
+        self.assertIn("--source-lock server/cmake/immutable_sources.lock.json", build)
+        self.assertNotIn("curl --fail --location --proto '=https'", build)
         self.assertIn("--env CCACHE_DIR=/tmp/atrinik-libatrinik-ccache", build)
         self.assertIn("-S server", build)
         self.assertIn("-B server/build/windows-pr-server", build)
@@ -523,25 +522,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("--network none", server_build)
         self.assertIn("--env GH_TOKEN=", server_build)
         self.assertIn("--env GITHUB_TOKEN=", server_build)
-        self.assertIn("-DPATCH_EXECUTABLE=", server_build)
+        self.assertNotIn("-DPATCH_EXECUTABLE=", server_build)
         self.assertIn(
-            "-DSOURCE_DIR=/workspace/build/libpcpnatpmp-source", server_build
-        )
-        self.assertIn(
-            "-DPATCH_FILE=/workspace/server/cmake/patches/libpcpnatpmp-mingw.patch",
+            "-DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-mingw-source",
             server_build,
-        )
-        self.assertIn(
-            "-P /workspace/server/cmake/apply_patch_idempotent.cmake",
-            server_build,
-        )
-        self.assertIn(
-            "-DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-source",
-            server_build,
-        )
-        self.assertLess(
-            server_build.index("-P /workspace/server/cmake/apply_patch_idempotent.cmake"),
-            server_build.index("x86_64-w64-mingw32.shared-cmake"),
         )
         self.assertLess(
             server_build.index("x86_64-w64-mingw32.shared-cmake"),
