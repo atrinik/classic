@@ -128,6 +128,23 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("contents: write", workflow)
         self.assertIn("attestations: read", self.text("release.yml"))
         self.assertIn("attestations: read", self.text("release-rehearsal.yml"))
+        package = self.text("package-release.yml")
+        candidate_job = package.split("\n  candidate:\n", 1)[1].split(
+            "\n  publish:\n", 1
+        )[0]
+        self.assertIn("attestations: read", candidate_job)
+
+    def test_release_rebinds_current_main_after_waiting_for_bundle(self) -> None:
+        workflow = self.text("release.yml")
+        bundle = workflow.index("Require the exact durable dependency bundle")
+        rebind = workflow.index("Rebind release mutation to current main")
+        pending = workflow.index("Detect an incomplete semantic release")
+        self.assertLess(bundle, rebind)
+        self.assertLess(rebind, pending)
+        rebind_step = workflow[rebind:pending]
+        self.assertIn("git fetch --no-tags origin main", rebind_step)
+        self.assertIn('refs/remotes/origin/main', rebind_step)
+        self.assertIn('test "${commit}" = "${RELEASE_TRIGGER_SHA}"', rebind_step)
 
     def test_dependency_bundle_install_fails_before_pull_without_attestation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

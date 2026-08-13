@@ -82,6 +82,17 @@ jobs:
             fi
             sleep 30
           done
+      - name: Rebind release mutation to current main
+        env:
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+        run: |
+          git fetch --no-tags origin main
+          commit=$(git rev-parse HEAD)
+          test "${commit}" = "$(git rev-parse refs/remotes/origin/main)"
+          if test "${RELEASE_EVENT}" = workflow_run; then
+            test "${commit}" = "${RELEASE_TRIGGER_SHA}"
+          fi
       - id: pending-release
         name: Detect an incomplete semantic release
         env:

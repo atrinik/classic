@@ -170,6 +170,7 @@ jobs:
       needs.discord-config.result == 'success'
     permissions:
       actions: read
+      attestations: read
       checks: read
       contents: read
       packages: read
