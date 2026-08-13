@@ -43,6 +43,14 @@ duplicating it, while each attempt retains an attempt-qualified raw artifact.
 Both benchmark and publisher check out and verify the exact triggering `main`
 commit, so a moving branch cannot mislabel the measured source.
 
+Before publication, the reporter revalidates the closed movement-evidence
+schema and recomputes its summaries and checks from the raw records. It requires
+two clean, commit-matched runs for each standard/large and smooth/discrete
+context. Missing contexts, contradictory status, or a mismatched implementation
+revision fail as infrastructure errors rather than entering the trusted trend.
+The workflow run ID is the durable observation identity, including when an
+attempt crosses a UTC date boundary.
+
 ## Alerts and response
 
 A monitored check failure is retained as a report result. An enforced
@@ -53,6 +61,8 @@ update that one issue. Two consecutive compatible passes close the alert and
 document recovery. Missing, corrupt, or incomplete evidence is an
 infrastructure failure and must be investigated from the job logs/artifact; it
 is never treated as a green point.
+Only transitions produced by the current observation are reconciled; a cohort
+change cannot replay an older cohort's alert transition.
 
 Before entering the pinned build container, the workflow acquires and verifies
 the complete immutable dependency input bundle. The benchmark itself then runs

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import copy
 import importlib.util
-import json
 from pathlib import Path
+import sys
 import unittest
 
 
@@ -13,32 +12,29 @@ assert SPEC and SPEC.loader
 report = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(report)
 
+CLIENT_TOOLS = ROOT.parent / "client" / "tools"
+sys.path.insert(0, str(CLIENT_TOOLS))
+FIXTURE_SPEC = importlib.util.spec_from_file_location(
+    "daily_report_movement_fixtures",
+    CLIENT_TOOLS / "tests" / "test_benchmark_movement_regression.py",
+)
+assert FIXTURE_SPEC and FIXTURE_SPEC.loader
+fixtures = importlib.util.module_from_spec(FIXTURE_SPEC)
+FIXTURE_SPEC.loader.exec_module(fixtures)
+
 
 def evidence() -> dict[str, object]:
-    phase = {
-        "p50_ns": 1_000_000, "p95_ns": 2_000_000, "p99_ns": 3_000_000,
-        "max_ns": 4_000_000, "first_window_p95_ns": 2_000_000,
-        "last_window_p95_ns": 2_100_000, "map": {
-            "map_draws": 1, "primary_map_draws": 1, "auxiliary_map_draws": 0,
-            "presents": 1, "changed_map_packets": 1, "noop_map_packets": 0,
-        }, "full_draw_reasons": {"reset_packet": 1},
-        "queue": {"peak_depth": 1, "peak_bytes": 2, "oldest_age_us": 3,
-                  "budget_yields": 0, "recoveries": 0},
-        "lighting": {"counters": {"field_rebuilds": 1, "field_reuses": 2,
-                    "field_translations": 3, "field_partial_rebuilds": 3,
-                    "field_dirty_pixels": 1024,
-                    "lit_sprite_lookups": 3, "lit_sprite_hits": 2,
-                    "lit_sprite_misses": 1, "lit_sprite_evictions": 0}},
-        "sprite_cache": {"counters": {"lookups": 1, "hits": 1, "misses": 0, "gc_removals": 0}},
-    }
-    record = {"identity": {"instrumentation": {"schema_version": 4},
-                            "implementation": {"compiler_version": "15"},
-                            "run": {"mode": "smooth", "viewport": {"name": "standard"}}},
-              "fixture": {"manifest_sha256": "a", "snapshot_sha256": "b"},
-              "phases": {name: copy.deepcopy(phase) for name in report.PHASES}}
-    return {"schema_version": 4, "status": "passed", "failed": False,
-            "records": {"candidate_standard": [record], "additional_contexts": {}},
-            "checks": {}, "resources": {"candidate_standard": {}}}
+    return fixtures.benchmark._build_evidence(
+        [],
+        [fixtures.native_record(), fixtures.native_record()],
+        [
+            fixtures.native_record(viewport="large"),
+            fixtures.native_record(viewport="large"),
+        ],
+        fixtures.additional_contexts(full=True),
+        enforce_performance=False,
+        comparison_note="event-has-no-comparison-base",
+    )
 
 
 class DailyReportTests(unittest.TestCase):
@@ -65,16 +61,37 @@ class DailyReportTests(unittest.TestCase):
         with self.assertRaises(report.ReportError):
             report.validate_evidence(bad)
 
+    def test_incomplete_full_matrix_is_not_published(self) -> None:
+        bad = evidence()
+        bad["samples"]["candidate_large"] = 0
+        bad["records"]["candidate_large"] = []
+        with self.assertRaises(report.ReportError):
+            report.validate_evidence(bad)
+
+    def test_mismatched_revision_is_not_published(self) -> None:
+        with self.assertRaisesRegex(report.ReportError, "published commit"):
+            report.build_point(
+                evidence(),
+                commit="b" * 40,
+                run_id="7",
+                recorded_at="2026-08-13T00:00:00+00:00",
+                environment={},
+            )
+
     def test_two_failed_points_open_one_alert_and_two_passes_recover_it(self) -> None:
         item = evidence()
-        item["checks"] = {"candidate_sustained_p95": {"passed": False}}
         point = report.build_point(item, commit="a" * 40, run_id="7",
                                    recorded_at="2026-08-13T00:00:00+00:00", environment={})
+        point["checks"] = {"candidate_sustained_p95": {"passed": False}}
         trend = report.merge_trend(None, point)
         for index, passed in enumerate((False, True, True), 2):
-            item["checks"]["candidate_sustained_p95"]["passed"] = passed
-            next_point = report.build_point(item, commit=(str(index) * 40)[:40], run_id=str(index),
-                                            recorded_at=f"2026-08-{index:02d}T00:00:00+00:00", environment={})
+            next_point = dict(
+                point,
+                id=f"run-{index}",
+                run_id=str(index),
+                recorded_at=f"2026-08-{index:02d}T00:00:00+00:00",
+                checks={"candidate_sustained_p95": {"passed": passed}},
+            )
             trend = report.merge_trend(trend, next_point)
         state = next(iter(trend["alerts"].values()))
         self.assertFalse(state["active"])
@@ -82,14 +99,6 @@ class DailyReportTests(unittest.TestCase):
 
     def test_large_context_and_summary_links_are_retained(self) -> None:
         item = evidence()
-        item["records"]["candidate_large"] = [copy.deepcopy(item["records"]["candidate_standard"][0])]
-        item["records"]["additional_contexts"] = {
-            "standard_discrete": [copy.deepcopy(item["records"]["candidate_standard"][0])]
-        }
-        item["checks"] = {
-            "candidate_sustained_p95": {"passed": True},
-            "candidate_large_sustained_p95": {"passed": True},
-        }
         point = report.build_point(item, commit="a" * 40, run_id="7",
                                    recorded_at="2026-08-13T00:00:00+00:00",
                                    environment={"workflow_url": "https://example.test/run"})
@@ -97,17 +106,71 @@ class DailyReportTests(unittest.TestCase):
         summary = report.render_summary(point, trend)
         self.assertIn("Large viewport", summary)
         self.assertIn("Workflow run", summary)
-        self.assertIn("Lighting translated/partial rebuild: `3` / `3`", summary)
-        self.assertIn("Lighting dirty pixels: `1024`", summary)
+        self.assertIn("Lighting translated/partial rebuild: `2399` / `2399`", summary)
+        self.assertIn("Lighting dirty pixels: `2456576`", summary)
 
     def test_failed_complete_evidence_is_retained_for_alerting(self) -> None:
         item = evidence()
-        item["status"] = "failed"
-        item["failed"] = True
-        item["checks"] = {"candidate_sustained_p95": {"passed": False}}
+        for record in item["records"]["candidate_standard"]:
+            record["phases"][1]["queue"]["peak_depth"] = 2
+        item = fixtures.benchmark._build_evidence(
+            [],
+            item["records"]["candidate_standard"],
+            item["records"]["candidate_large"],
+            item["records"]["additional_contexts"],
+            enforce_performance=False,
+            comparison_note="event-has-no-comparison-base",
+        )
         point = report.build_point(item, commit="a" * 40, run_id="7",
                                    recorded_at="2026-08-13T00:00:00+00:00", environment={})
         self.assertEqual(point["status"], "failed")
+
+    def test_cross_day_rerun_replaces_the_same_observation(self) -> None:
+        first = report.build_point(
+            evidence(), commit="a" * 40, run_id="7",
+            recorded_at="2026-08-13T23:59:00+00:00", environment={}
+        )
+        second = report.build_point(
+            evidence(), commit="a" * 40, run_id="7",
+            recorded_at="2026-08-14T00:01:00+00:00", environment={}
+        )
+        trend = report.merge_trend(report.merge_trend(None, first), second)
+        self.assertEqual(len(trend["cohorts"][first["cohort"]]), 1)
+        for state in trend["alerts"].values():
+            self.assertEqual(len(state["history"]), 1)
+
+    def test_rerun_replaces_observation_after_cohort_change(self) -> None:
+        first = report.build_point(
+            evidence(), commit="a" * 40, run_id="7",
+            recorded_at="2026-08-13T23:59:00+00:00", environment={}
+        )
+        second = dict(
+            first,
+            cohort="new-cohort",
+            recorded_at="2026-08-14T00:01:00+00:00",
+        )
+        trend = report.merge_trend(report.merge_trend(None, first), second)
+        self.assertEqual(trend["cohorts"][first["cohort"]], [])
+        self.assertEqual(len(trend["cohorts"][second["cohort"]]), 1)
+        histories = [state["history"] for state in trend["alerts"].values()]
+        self.assertEqual(sum(len(history) for history in histories), 2)
+
+    def test_new_cohort_clears_old_alert_transition(self) -> None:
+        first = report.build_point(
+            evidence(), commit="a" * 40, run_id="7",
+            recorded_at="2026-08-13T00:00:00+00:00", environment={}
+        )
+        first["checks"] = {"candidate_sustained_p95": {"passed": False}}
+        second = dict(first, id="run-8", run_id="8", recorded_at="2026-08-14T00:00:00+00:00")
+        trend = report.merge_trend(report.merge_trend(None, first), second)
+        old_key = next(iter(trend["alerts"]))
+        self.assertEqual(trend["alerts"][old_key]["last_transition"], "regressed")
+
+        other = dict(first, id="run-9", run_id="9", cohort="other-cohort",
+                     recorded_at="2026-08-15T00:00:00+00:00")
+        other["checks"] = {"candidate_sustained_p95": {"passed": True}}
+        trend = report.merge_trend(trend, other)
+        self.assertEqual(trend["alerts"][old_key]["last_transition"], "none")
 
 
 if __name__ == "__main__":

@@ -680,14 +680,17 @@ def _guard_native_record(record: dict[str, object]) -> dict[str, dict[str, objec
         viewport = record["identity"]["run"]["viewport"]
         maximum_dirty_pixels = maximum_updates * viewport["width"] * viewport["height"]
         translated = (
-            translations > 0
-            and partial_rebuilds > 0
-            and 0 < dirty_pixels < maximum_dirty_pixels
+            rebuilds > 0
+            and translations == rebuilds
+            and partial_rebuilds == rebuilds
+            and 0 < dirty_pixels
+            and dirty_pixels * 4 <= maximum_dirty_pixels * 3
         )
         cache_valid = (
             dirty_marks <= maximum_updates
             and rebuilds <= maximum_updates
-            and (reuses > 0 or translated)
+            and rebuilds + reuses == maximum_updates
+            and translated
         )
     guards["lighting_cache_churn"] = {
         "field_dirty_marks": dirty_marks,
@@ -2038,6 +2041,15 @@ def _render_complete_evidence(
         ]
     )
     return "\n".join(lines)
+
+
+def validate_complete_evidence(
+    evidence: dict[str, object],
+    baseline_validator: RecordValidator = validate_record,
+) -> dict[str, object]:
+    """Validate complete evidence and its raw-record-derived summaries."""
+    _render_complete_evidence(evidence, "success", baseline_validator)
+    return evidence
 
 
 def render_comment(

@@ -10,16 +10,29 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import importlib.util
 import json
 from pathlib import Path
 import statistics
+import sys
 from typing import Any
 
 
 SCHEMA_VERSION = 1
-EVIDENCE_SCHEMA_VERSION = 4
 TREND_RETENTION = 90
 PHASES = ("cold", "sustained", "idle", "resumed")
+REQUIRED_CONTEXTS = ("standard_discrete", "large_discrete")
+
+CLIENT_TOOLS = Path(__file__).resolve().parents[2] / "client" / "tools"
+sys.path.insert(0, str(CLIENT_TOOLS))
+_BENCHMARK_SPEC = importlib.util.spec_from_file_location(
+    "daily_performance_benchmark_contract",
+    CLIENT_TOOLS / "benchmark_movement_regression.py",
+)
+if _BENCHMARK_SPEC is None or _BENCHMARK_SPEC.loader is None:
+    raise RuntimeError("cannot load the movement benchmark evidence contract")
+benchmark_contract = importlib.util.module_from_spec(_BENCHMARK_SPEC)
+_BENCHMARK_SPEC.loader.exec_module(benchmark_contract)
 
 
 class ReportError(ValueError):
@@ -38,65 +51,66 @@ def _integer(value: Any, context: str) -> int:
     return value
 
 
+def _number(value: Any, context: str) -> int | float:
+    if type(value) not in (int, float) or value < 0:
+        raise ReportError(f"{context} must be a non-negative number")
+    return value
+
+
 def _median(values: list[int]) -> int:
     if not values:
         raise ReportError("cannot summarize an empty sample")
     return int(statistics.median(values))
 
 
-def _phase_values(records: list[dict[str, Any]], name: str, field: str) -> list[int]:
-    values = []
-    for record in records:
-        phases = _mapping(record.get("phases"), "record phases")
-        phase = _mapping(phases.get(name), f"{name} phase")
-        values.append(_integer(phase.get(field), f"{name}.{field}"))
-    return values
-
-
 def _record_summary(records: list[dict[str, Any]], name: str) -> dict[str, Any]:
-    phases = [_mapping(_mapping(r["phases"], "record phases")[name], f"{name} phase") for r in records]
-
-    def values(field: str) -> list[int]:
-        return [_integer(phase.get(field), f"{name}.{field}") for phase in phases]
-
-    map_records = [_mapping(phase.get("map"), f"{name} map") for phase in phases]
-    queue = [_mapping(phase.get("queue"), f"{name} queue") for phase in phases]
-    lighting = [_mapping(phase.get("lighting"), f"{name} lighting") for phase in phases]
-    counters = [_mapping(item.get("counters"), f"{name} lighting counters") for item in lighting]
-    sprite = [_mapping(phase.get("sprite_cache"), f"{name} sprite cache") for phase in phases]
-    sprite_counters = [_mapping(item.get("counters"), f"{name} sprite counters") for item in sprite]
-    reasons: dict[str, int] = {}
-    for phase in phases:
-        for key, value in _mapping(phase.get("full_draw_reasons"), "draw reasons").items():
-            reasons[key] = reasons.get(key, 0) + _integer(value, f"draw reason {key}")
+    summary = benchmark_contract.phase_summary(records, name)
+    map_summary = _mapping(summary.get("map"), f"{name} map")
+    queue_summary = _mapping(summary.get("queue"), f"{name} queue")
+    lighting_summary = _mapping(summary.get("lighting"), f"{name} lighting")
+    sprite_counters = [
+        _mapping(
+            _mapping(
+                benchmark_contract.phase(record, name).get("sprite_cache"),
+                f"{name} sprite cache",
+            ).get("counters"),
+            f"{name} sprite counters",
+        )
+        for record in records
+    ]
 
     return {
         "runs": len(records),
-        "work_ms": {short: round(_median(_phase_values(records, name, field)) / 1_000_000, 2)
-                    for short, field in (("p50", "p50_ns"), ("p95", "p95_ns"),
-                                         ("p99", "p99_ns"), ("max", "max_ns"))},
+        "work_ms": {
+            short: _number(summary.get(field), f"{name}.{field}")
+            for short, field in (("p50", "work_p50_ms"), ("p95", "work_p95_ms"),
+                                 ("p99", "work_p99_ms"), ("max", "work_max_ms"))
+        },
         "window_p95_ms": {
-            "first": round(_median(_phase_values(records, name, "first_window_p95_ns")) / 1_000_000, 2),
-            "last": round(_median(_phase_values(records, name, "last_window_p95_ns")) / 1_000_000, 2),
+            "first": _number(summary.get("first_window_p95_ms"), f"{name}.first window"),
+            "last": _number(summary.get("last_window_p95_ms"), f"{name}.last window"),
         },
         "map": {
-            field: _median([
-                _integer(
-                    phase.get(field, item.get(field)),
-                    f"{name}.map.{field}",
-                )
-                for phase, item in zip(phases, map_records)
-            ])
-            for field in ("map_draws", "primary_map_draws", "auxiliary_map_draws", "presents",
-                          "changed_map_packets", "noop_map_packets")
+            field: _integer(map_summary.get(source), f"{name}.map.{source}")
+            for field, source in (("map_draws", "full_map_draws"),
+                                  ("primary_map_draws", "primary_map_draws"),
+                                  ("auxiliary_map_draws", "auxiliary_map_draws"),
+                                  ("presents", "presents"),
+                                  ("changed_map_packets", "changed_map_packets"),
+                                  ("noop_map_packets", "noop_map_packets"))
         },
-        "draw_reasons": reasons,
+        "draw_reasons": _mapping(map_summary.get("draw_reasons"), "draw reasons"),
         "queue": {
-            field: _median([_integer(item.get(field), f"{name}.queue.{field}") for item in queue])
-            for field in ("peak_depth", "peak_bytes", "oldest_age_us", "budget_yields", "recoveries")
+            field: _integer(queue_summary.get(field), f"{name}.queue.{field}")
+            for field in ("peak_depth", "peak_bytes", "budget_yields", "recoveries")
+        } | {
+            "oldest_age_us": int(
+                _number(queue_summary.get("oldest_age_ms"), f"{name}.queue.oldest_age_ms")
+                * 1_000
+            )
         },
         "lighting": {
-            field: _median([_integer(item.get(field), f"{name}.lighting.{field}") for item in counters])
+            field: _integer(lighting_summary.get(field), f"{name}.lighting.{field}")
             for field in ("field_rebuilds", "field_reuses", "field_translations",
                           "field_partial_rebuilds", "field_dirty_pixels", "lit_sprite_lookups",
                           "lit_sprite_hits", "lit_sprite_misses", "lit_sprite_evictions")
@@ -110,31 +124,33 @@ def _record_summary(records: list[dict[str, Any]], name: str) -> dict[str, Any]:
 
 def validate_evidence(evidence: Any) -> dict[str, Any]:
     evidence = _mapping(evidence, "evidence")
-    if evidence.get("schema_version") != EVIDENCE_SCHEMA_VERSION:
-        raise ReportError("unsupported movement evidence schema")
-    if evidence.get("status") not in ("passed", "failed"):
-        raise ReportError("daily report requires complete movement evidence")
-    if type(evidence.get("failed")) is not bool:
-        raise ReportError("movement evidence has an invalid result")
-    records = _mapping(evidence.get("records"), "evidence records")
-    candidate = records.get("candidate_standard")
-    if not isinstance(candidate, list) or not candidate:
-        raise ReportError("evidence has no standard candidate records")
-    if not all(isinstance(record, dict) for record in candidate):
-        raise ReportError("candidate records must be objects")
-    for record in candidate:
-        identity = _mapping(record.get("identity"), "record identity")
-        _mapping(identity.get("instrumentation"), "instrumentation identity")
-        _mapping(identity.get("implementation"), "implementation identity")
-        _mapping(identity.get("run"), "run identity")
-        _mapping(record.get("fixture"), "fixture identity")
-        _mapping(record.get("phases"), "record phases")
+    try:
+        benchmark_contract.validate_complete_evidence(evidence)
+    except (benchmark_contract.BenchmarkError, KeyError, TypeError, ValueError) as error:
+        raise ReportError(f"invalid movement evidence: {error}") from error
+    samples = _mapping(evidence.get("samples"), "evidence samples")
+    contexts = _mapping(samples.get("additional_contexts"), "evidence contexts")
+    if (
+        evidence.get("mode") != "candidate-only"
+        or samples.get("candidate_standard") != 2
+        or samples.get("candidate_large") != 2
+        or set(contexts) != set(REQUIRED_CONTEXTS)
+        or any(contexts[name] != 2 for name in REQUIRED_CONTEXTS)
+    ):
+        raise ReportError("daily report requires the complete candidate full matrix")
     return evidence
 
 
 def build_point(evidence: Any, *, commit: str, run_id: str, recorded_at: str,
                 environment: dict[str, Any]) -> dict[str, Any]:
     evidence = validate_evidence(evidence)
+    if (
+        len(commit) != 40
+        or any(character not in "0123456789abcdefABCDEF" for character in commit)
+    ):
+        raise ReportError("commit must be a full hexadecimal revision")
+    if not run_id.isdigit() or int(run_id) <= 0:
+        raise ReportError("run ID must be a positive integer")
     records = _mapping(evidence["records"], "evidence records")
     candidate = records["candidate_standard"]
     first = candidate[0]
@@ -144,6 +160,17 @@ def build_point(evidence: Any, *, commit: str, run_id: str, recorded_at: str,
     instrumentation = _mapping(identity["instrumentation"], "instrumentation identity")
     viewport = _mapping(run["viewport"], "viewport identity")
     implementation = _mapping(identity["implementation"], "implementation identity")
+    candidate_sets = [records["candidate_standard"], records["candidate_large"]]
+    candidate_sets.extend(records["additional_contexts"].values())
+    for record_set in candidate_sets:
+        for record in record_set:
+            record_implementation = record["identity"]["implementation"]
+            if (
+                record_implementation["revision"].lower() != commit.lower()
+                or record_implementation["dirty_known"] is not True
+                or record_implementation["dirty"] is not False
+            ):
+                raise ReportError("movement evidence does not identify the published commit")
     cohort_material = {
         "instrumentation": instrumentation,
         "fixture": fixture,
@@ -165,7 +192,7 @@ def build_point(evidence: Any, *, commit: str, run_id: str, recorded_at: str,
     large_records = records.get("candidate_large")
     return {
         "schema_version": SCHEMA_VERSION,
-        "id": f"{recorded_at[:10]}-{commit[:12]}",
+        "id": f"run-{run_id}",
         "recorded_at": recorded_at,
         "commit": commit,
         "run_id": run_id,
@@ -194,6 +221,14 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
     cohorts = trend.setdefault("cohorts", {})
     if not isinstance(cohorts, dict):
         raise ReportError("trend cohorts must be an object")
+    for cohort_points in cohorts.values():
+        if not isinstance(cohort_points, list):
+            raise ReportError("trend cohort points must be an array")
+        cohort_points[:] = [
+            item
+            for item in cohort_points
+            if isinstance(item, dict) and item.get("id") != point["id"]
+        ]
     points = cohorts.setdefault(point["cohort"], [])
     if not isinstance(points, list):
         raise ReportError("trend cohort points must be an array")
@@ -204,6 +239,15 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
     alerts = trend.setdefault("alerts", {})
     if not isinstance(alerts, dict):
         raise ReportError("trend alerts must be an object")
+    for state in alerts.values():
+        if not isinstance(state, dict) or not isinstance(state.get("history"), list):
+            raise ReportError("alert state is malformed")
+        state["last_transition"] = "none"
+        state["history"] = [
+            item
+            for item in state["history"]
+            if isinstance(item, dict) and item.get("id") != point["id"]
+        ]
     for metric, check_name in (("standard:sustained_p95", "candidate_sustained_p95"),
                                ("large:sustained_p95", "candidate_large_sustained_p95")):
         check = point["checks"].get(check_name)

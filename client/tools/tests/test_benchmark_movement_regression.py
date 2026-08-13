@@ -92,6 +92,8 @@ def lighting_level(depth: int, draws: int, name: str, mode: str) -> dict[str, ob
                 "field_begins": draws,
                 "field_dirty_marks": rebuilds,
                 "field_dirty_pixels": rebuilds * 1024,
+                "field_translations": rebuilds if name == "sustained" else 0,
+                "field_partial_rebuilds": rebuilds if name == "sustained" else 0,
                 "field_rebuilds": rebuilds,
                 "field_reuses": reuses,
                 "render_calls": draws,
@@ -913,6 +915,8 @@ class EvidenceTests(unittest.TestCase):
         sustained = translated["phases"][1]
         counters = sustained["lighting"]["counters"]
         counters["field_reuses"] = 0
+        counters["field_rebuilds"] = 2_400
+        counters["field_dirty_marks"] = 2_400
         counters["field_translations"] = 2_400
         counters["field_partial_rebuilds"] = 2_400
         counters["field_dirty_pixels"] = 93_765_760
@@ -924,6 +928,32 @@ class EvidenceTests(unittest.TestCase):
         counters["field_dirty_pixels"] = 480 * 5 * 320 * 240
         self.assertFalse(
             benchmark._guard_native_record(translated)["lighting_cache_churn"][
+                "passed"
+            ]
+        )
+
+    def test_incidental_lighting_reuse_does_not_mask_full_rebuilds(self) -> None:
+        regressed = native_record()
+        counters = regressed["phases"][1]["lighting"]["counters"]
+        counters["field_translations"] = 0
+        counters["field_partial_rebuilds"] = 0
+        self.assertFalse(
+            benchmark._guard_native_record(regressed)["lighting_cache_churn"][
+                "passed"
+            ]
+        )
+
+    def test_incidental_partial_rebuild_does_not_mask_full_rebuilds(self) -> None:
+        regressed = native_record()
+        counters = regressed["phases"][1]["lighting"]["counters"]
+        counters["field_reuses"] = 0
+        counters["field_rebuilds"] = 2_400
+        counters["field_dirty_marks"] = 2_400
+        counters["field_translations"] = 1
+        counters["field_partial_rebuilds"] = 1
+        counters["field_dirty_pixels"] = 320 * 240 * 2_400 - 1
+        self.assertFalse(
+            benchmark._guard_native_record(regressed)["lighting_cache_churn"][
                 "passed"
             ]
         )
