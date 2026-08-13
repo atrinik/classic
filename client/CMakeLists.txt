@@ -347,6 +347,43 @@ endif ()
 
 if (BUILD_TESTING)
     find_program(ATRINIK_PYTHON3_EXECUTABLE python3 REQUIRED)
+
+    add_executable(client-audio-log-tests
+        src/tests/audio_log.c
+        src/client/audio_log.c)
+    atrinik_configure_target(client-audio-log-tests)
+    target_compile_definitions(client-audio-log-tests PRIVATE
+        ATRINIK_TEST_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+    target_include_directories(client-audio-log-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-audio-log-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-audio-log COMMAND client-audio-log-tests)
+
+    add_executable(client-sound-playback-tests
+        src/tests/sound_playback.c
+        src/client/audio_log.c
+        src/client/sound_command.c
+        src/client/sound.c)
+    atrinik_configure_target(client-sound-playback-tests)
+    target_compile_definitions(client-sound-playback-tests PRIVATE
+        ATRINIK_SOUND_TESTING
+        ATRINIK_TEST_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}"
+        HAVE_SDL_MIXER
+        SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-sound-playback-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-sound-playback-tests PRIVATE
+        Atrinik::Core
+        SDL3::SDL3
+        SDL3_mixer::SDL3_mixer)
+    add_test(NAME client-sound-playback COMMAND client-sound-playback-tests)
+
     add_test(NAME client-lighting-lut-generated
         COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_lighting_lut.py" --check)

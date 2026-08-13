@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -51,6 +51,7 @@ typedef enum logger_level {
     LOG_DUMPRX,
     LOG_DUMPTX,
     LOG_HTTP,
+    LOG_AUDIO,
 
     LOG_MAX
 } logger_level;

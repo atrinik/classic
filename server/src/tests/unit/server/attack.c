@@ -195,6 +195,70 @@ START_TEST(test_player_hurt_sound_selection_and_damage_gate) {
 }
 END_TEST
 
+START_TEST(test_female_hurt_vocal_survives_player_save_reload) {
+    mapstruct *map = get_empty_map(24, 24);
+    ck_assert_ptr_ne(map, NULL);
+
+    const char *name = "Female Hurt Vocal Roundtrip";
+    char error[MAX_BUF];
+    ck_assert_msg(player_provision_scenario(name,
+                                            "human_female",
+                                            EMERGENCY_MAPPATH,
+                                            EMERGENCY_X,
+                                            EMERGENCY_Y,
+                                            NULL,
+                                            VS(error)),
+                  "%s",
+                  error);
+    char *player_path = player_make_path(name, "player.dat");
+    char *metrics_path = player_make_path(name, "metrics.dat");
+    FILE *fp = fopen(player_path, "rb");
+    ck_assert_ptr_ne(fp, NULL);
+
+    object *placeholder = player_get_dummy("Female Hurt Vocal Restore", NULL);
+    player *state = CONTR(placeholder);
+    object_remove(placeholder, 0);
+    placeholder->custom_attrset = NULL;
+    object_destroy(placeholder);
+    state->ob = object_get();
+    ck_assert(player_load_stream(state, fp));
+    ck_assert_int_eq(fclose(fp), 0);
+
+    object *restored = state->ob;
+    restored->custom_attrset = state;
+    object_weight_sum(restored);
+    living_update_player(restored);
+    link_player_skills(restored);
+    ck_assert(QUERY_FLAG(restored, FLAG_IS_FEMALE));
+    ck_assert(!QUERY_FLAG(restored, FLAG_IS_MALE));
+    ck_assert_int_eq(object_get_gender(restored), GENDER_FEMALE);
+    ck_assert(object_enter_map(restored, NULL, map, 1, 1, true));
+    restored->block = 0;
+    restored->absorb = 0;
+    memset(restored->protection, 0, sizeof(restored->protection));
+
+    object *monster = arch_get("kobold");
+    monster->x = restored->x + 1;
+    monster->y = restored->y;
+    monster = object_insert_map(monster, map, NULL, INS_NO_MERGE);
+    monster_data_init(monster);
+    memset(monster->attack, 0, sizeof(monster->attack));
+    monster->attack[ATNR_IMPACT] = 100;
+    monster->level = restored->level;
+
+    char filename[MAX_BUF];
+    socket_buffer_clear(CONTR(restored)->cs);
+    ck_assert_int_gt(attack_hit(restored, monster, 10), 0);
+    ck_assert_uint_eq(attack_test_hurt_sounds(restored, filename, sizeof(filename)), 1);
+    ck_assert(attack_test_is_female_hurt_sound(filename));
+
+    ck_assert_int_eq(unlink(player_path), 0);
+    ck_assert_int_eq(unlink(metrics_path), 0);
+    free(player_path);
+    free(metrics_path);
+}
+END_TEST
+
 START_TEST(test_attack_is_melee_range) {
     mapstruct *map;
     object *pl, *tmp, *tmp2;
@@ -529,6 +593,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_situational_bonus_excludes_living_pets_and_plugin_damage_api);
     tcase_add_test(tc_core, test_unaware_bonus_does_not_increase_status_effect_strength);
     tcase_add_test(tc_core, test_player_hurt_sound_selection_and_damage_gate);
+    tcase_add_test(tc_core, test_female_hurt_vocal_survives_player_save_reload);
 
     return s;
 }
