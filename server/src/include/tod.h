@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -61,7 +61,11 @@
 /** Months per season. */
 #define MONTHS_PER_SEASON (MONTHS_PER_YEAR / SEASONS_PER_YEAR)
 
-/** Represents the in-game time. */
+/**
+ * Represents the decomposed in-game calendar view of the absolute hour in
+ * ::todtick. All fields are zero-based; presentation APIs add one where their
+ * public contract is one-based.
+ */
 typedef struct _timeofday {
     /** Year */
     int year;
@@ -69,10 +73,10 @@ typedef struct _timeofday {
     /** Month */
     int month;
 
-    /** Day */
+    /** Day of month, in the range 0 through DAYS_PER_MONTH - 1. */
     int day;
 
-    /** Day of week */
+    /** Day of week, in the range 0 through DAYS_PER_WEEK - 1. */
     int dayofweek;
 
     /** Hour */
@@ -81,7 +85,7 @@ typedef struct _timeofday {
     /** Minute */
     int minute;
 
-    /** Week of month */
+    /** Week of month, in the range 0 through WEEKS_PER_MONTH - 1. */
     int weekofmonth;
 
     /** Season */

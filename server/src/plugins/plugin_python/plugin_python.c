@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -1330,10 +1330,10 @@ static const char doc_Atrinik_GetTime[] =
     "  * **year**: Current year.\n"
     "  * **month**: Current month.\n"
     "  * **month_name**: Name of the current month.\n"
-    "  * **day**: Day.\n"
+    "  * **day**: Day of the month, from 1 through 28.\n"
     "  * **hour**: Hour.\n"
     "  * **minute**: Minute.\n"
-    "  * **dayofweek**: Day of the week.\n"
+    "  * **dayofweek**: Day of the week, from 1 through 7.\n"
     "  * **dayofweek_name**: Name of the week day.\n"
     "  * **season**: Season.\n"
     "  * **season_name**: Name of the season.\n"
