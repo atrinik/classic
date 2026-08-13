@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import importlib.util
 import io
 import json
@@ -8,6 +9,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+import urllib.error
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "dependencies.py"
@@ -128,6 +130,130 @@ class DependencyTests(unittest.TestCase):
         )
         loaded = dependencies.load_lock(lock, allow_file_urls=True)
         self.assertEqual(loaded[0]["name"], "sound")
+
+    def test_retries_transient_http_failure_and_removes_partial(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        dependency = self.dependency(archive)
+        body = archive.read_bytes()
+
+        class Response:
+            headers = {"Content-Length": str(len(body))}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def geturl(self):
+                return dependency["url"]
+
+            def read(self, _size):
+                nonlocal body
+                result, body = body, b""
+                return result
+
+        attempts = []
+        failures = []
+
+        def opener(_request, timeout):
+            attempts.append(timeout)
+            if len(attempts) == 1:
+                failure = urllib.error.HTTPError(
+                    str(dependency["url"]), 503, "unavailable", {"Retry-After": "0"}, None
+                )
+                failures.append(failure)
+                raise failure
+            return Response()
+
+        sleeps = []
+        downloaded = dependencies._download(
+            dependency, self.root / "cache", opener=opener,
+            sleeper=sleeps.append, jitter=lambda _low, _high: 1.0,
+        )
+        self.assertEqual(downloaded.read_bytes(), archive.read_bytes())
+        self.assertEqual(attempts, [60, 60])
+        self.assertEqual(sleeps, [0.0])
+        self.assertEqual(list((self.root / "cache").glob("*.part-*")), [])
+        for failure in failures:
+            failure.close()
+
+    def test_retries_connection_reset_until_the_limit(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        dependency = self.dependency(archive)
+        attempts = []
+
+        def opener(_request, timeout):
+            attempts.append(timeout)
+            raise ConnectionResetError("reset")
+
+        with self.assertRaisesRegex(dependencies.DependencyError, "retry limit exhausted"):
+            dependencies._download(
+                dependency, self.root / "cache", opener=opener,
+                sleeper=lambda _delay: None, jitter=lambda _low, _high: 1.0,
+            )
+        self.assertEqual(attempts, [60] * dependencies.DOWNLOAD_ATTEMPTS)
+        self.assertEqual(list((self.root / "cache").glob("*.part-*")), [])
+
+    def test_classifies_eof_as_transient(self) -> None:
+        retryable, category, retry_after = dependencies._retryable(
+            http.client.IncompleteRead(b"", 1)
+        )
+        self.assertTrue(retryable)
+        self.assertEqual(category, "IncompleteRead")
+        self.assertIsNone(retry_after)
+
+    def test_replaces_corrupt_cached_archive(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        dependency = self.dependency(archive)
+        cache = self.root / "cache"
+        cache.mkdir()
+        cached = cache / f"sound-{dependency['sha256']}.tar.gz"
+        cached.write_bytes(b"corrupt")
+        downloaded = dependencies._download(dependency, cache)
+        self.assertEqual(downloaded.read_bytes(), archive.read_bytes())
+
+    def test_does_not_retry_digest_failure_or_keep_partial(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        dependency = self.dependency(archive)
+        dependency["sha256"] = "0" * 64
+        attempts = []
+
+        class Response(io.BytesIO):
+            headers = {"Content-Length": str(archive.stat().st_size)}
+
+            def geturl(self):
+                return dependency["url"]
+
+        def opener(_request, timeout):
+            attempts.append(True)
+            self.assertEqual(timeout, 60)
+            return Response(archive.read_bytes())
+
+        with self.assertRaisesRegex(dependencies.DependencyError, "terminal policy or integrity"):
+            dependencies._download(
+                dependency, self.root / "cache", opener=opener, sleeper=lambda _delay: None
+            )
+        self.assertEqual(attempts, [True])
+        self.assertEqual(list((self.root / "cache").glob("*.part-*")), [])
+
+    def test_source_cache_verifies_tree_before_reuse(self) -> None:
+        archive = self.make_archive([("source/CMakeLists.txt", b"project(source)\n", "file")])
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        tree = hashlib.sha256(
+            f"{hashlib.sha256(b'project(source)\n').hexdigest()}  CMakeLists.txt\n".encode()
+        ).hexdigest()
+        source = dependencies.fetch_source(
+            name="fixture", url=archive.as_uri(), sha256=digest,
+            tree_sha256=tree, cache_dir=self.root / "cache",
+        )
+        self.assertEqual((source / "CMakeLists.txt").read_text(encoding="utf-8"), "project(source)\n")
+        (source / "CMakeLists.txt").write_text("changed\n", encoding="utf-8")
+        with self.assertRaisesRegex(dependencies.DependencyError, "mismatched shared source content"):
+            dependencies.fetch_source(
+                name="fixture", url=archive.as_uri(), sha256=digest,
+                tree_sha256=tree, cache_dir=self.root / "cache",
+            )
 
 
 if __name__ == "__main__":

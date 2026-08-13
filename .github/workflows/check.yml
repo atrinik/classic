@@ -198,17 +198,10 @@ jobs:
             ../build/discord-test-application-id
       - name: Stage pinned Windows server dependency
         run: |
-          archive=build/libpcpnatpmp.tar.gz
-          source=build/libpcpnatpmp-source
-          mkdir -p "${source}"
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            --output "${archive}" \
-            https://github.com/libpcpnatpmp/libpcpnatpmp/archive/866d283da99f5e98eecff702a8df63e2ae57ffca.tar.gz
-          printf '%s  %s\n' \
-            65ab99547ecc8277434527607d24f8a1b02a2344ed4cea475bed751606e60202 \
-            "${archive}" | sha256sum --check --strict
-          tar --extract --gzip --file "${archive}" \
-            --directory "${source}" --strip-components=1
+          source="$(python3 server/tools/dependencies.py source \
+            --source-lock server/cmake/immutable_sources.lock.json \
+            --source-name libpcpnatpmp --cache build/dependency-cache)"
+          printf '%s\n' "${source}" > build/libpcpnatpmp-source-path
       - name: Pull pinned Windows build environment
         run: docker pull ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb
       - name: Cross-build and stage standalone tests
@@ -227,6 +220,10 @@ jobs:
             ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb \
             bash -c '
               set -euo pipefail
+              pcpnatpmp_source="$(cat build/libpcpnatpmp-source-path)"
+              pcpnatpmp_mingw_source=build/libpcpnatpmp-mingw-source
+              test ! -e "${pcpnatpmp_mingw_source}"
+              cmake -E copy_directory "${pcpnatpmp_source}" "${pcpnatpmp_mingw_source}"
               x86_64-w64-mingw32.shared-cmake \
                 -S libatrinik \
                 -B libatrinik/build/windows-tests \
@@ -259,7 +256,7 @@ jobs:
               cd ..
               cmake \
                 -DPATCH_EXECUTABLE="$(command -v patch)" \
-                -DSOURCE_DIR=/workspace/build/libpcpnatpmp-source \
+                -DSOURCE_DIR=/workspace/build/libpcpnatpmp-mingw-source \
                 -DPATCH_FILE=/workspace/server/cmake/patches/libpcpnatpmp-mingw.patch \
                 -P /workspace/server/cmake/apply_patch_idempotent.cmake
               x86_64-w64-mingw32.shared-cmake \
@@ -270,7 +267,7 @@ jobs:
                 -DCMAKE_BUILD_TYPE=Release \
                 -DENABLE_PYTHON_PLUGIN=OFF \
                 -DPACKAGE_TYPE=none \
-                -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-source
+                -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-mingw-source
               cmake --build build/windows-integrated \
                 --target atrinik atrinik-server --parallel "$(nproc)"
               stage=libatrinik/build/windows-test-bundle
@@ -306,11 +303,6 @@ jobs:
             ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb \
             bash -c '
               set -euo pipefail
-              cmake \
-                -DPATCH_EXECUTABLE="$(command -v patch)" \
-                -DSOURCE_DIR=/workspace/build/libpcpnatpmp-source \
-                -DPATCH_FILE=/workspace/server/cmake/patches/libpcpnatpmp-mingw.patch \
-                -P /workspace/server/cmake/apply_patch_idempotent.cmake
               x86_64-w64-mingw32.shared-cmake \
                 -S server \
                 -B server/build/windows-pr-server \
@@ -322,7 +314,7 @@ jobs:
                 -DPACKAGE_VERSION=0.0.0 \
                 -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
                 -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik \
-                -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-source
+                -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-mingw-source
               cmake --build server/build/windows-pr-server \
                 --target atrinik-server --parallel "$(nproc)"
             '
