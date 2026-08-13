@@ -43,6 +43,9 @@ typedef struct sprite_cache {
     SDL_Surface *surface; ///< The sprite's surface.
     size_t estimated_bytes; ///< Entry, key, surface, and pixel storage estimate.
     time_t last_used; ///< Last time the sprite was used.
+    uint64_t use_sequence; ///< Monotonic tie-breaker for deterministic eviction.
+    struct sprite_cache *lru_previous;
+    struct sprite_cache *lru_next;
     UT_hash_handle hh; ///< Hash handle.
 } sprite_cache_t;
 
@@ -56,7 +59,11 @@ static int dark_alpha[DARK_LEVELS] = {0, 44, 80, 117, 153, 190, 226};
  * The sprite cache hash table.
  */
 static sprite_cache_t *sprites_cache = NULL;
+static sprite_cache_t *sprite_cache_lru_oldest;
+static sprite_cache_t *sprite_cache_lru_newest;
 static sprite_cache_statistics_t sprite_cache_statistics;
+static size_t sprite_cache_bytes;
+static uint64_t sprite_cache_use_sequence;
 static bool sprite_cache_clock_overridden;
 static time_t sprite_cache_clock_override;
 
@@ -88,17 +95,33 @@ static size_t sprite_cache_estimated_bytes(const sprite_cache_t *cache) {
     return bytes + pitch * height;
 }
 
-static size_t sprite_cache_total_estimated_bytes(void) {
-    size_t total = 0;
-    sprite_cache_t *cache;
-    sprite_cache_t *temporary;
-    HASH_ITER(hh, sprites_cache, cache, temporary) {
-        if (cache->estimated_bytes > SIZE_MAX - total) {
-            return SIZE_MAX;
-        }
-        total += cache->estimated_bytes;
+static void sprite_cache_free(sprite_cache_t *cache);
+
+static void sprite_cache_lru_append(sprite_cache_t *cache) {
+    cache->lru_previous = sprite_cache_lru_newest;
+    cache->lru_next = NULL;
+    if (sprite_cache_lru_newest != NULL) {
+        sprite_cache_lru_newest->lru_next = cache;
+    } else {
+        sprite_cache_lru_oldest = cache;
     }
-    return total;
+    sprite_cache_lru_newest = cache;
+}
+
+static void sprite_cache_lru_touch(sprite_cache_t *cache) {
+    if (sprite_cache_lru_newest == cache) {
+        return;
+    }
+    if (cache->lru_previous != NULL) {
+        cache->lru_previous->lru_next = cache->lru_next;
+    } else {
+        sprite_cache_lru_oldest = cache->lru_next;
+    }
+    if (cache->lru_next != NULL) {
+        cache->lru_next->lru_previous = cache->lru_previous;
+    }
+    cache->use_sequence = ++sprite_cache_use_sequence;
+    sprite_cache_lru_append(cache);
 }
 
 void sprite_cache_statistics_reset(void) {
@@ -254,6 +277,7 @@ static sprite_cache_t *sprite_cache_find(const char *name) {
     if (cache != NULL) {
         sprite_cache_statistics.hits++;
         cache->last_used = sprite_cache_now();
+        sprite_cache_lru_touch(cache);
     } else {
         sprite_cache_statistics.misses++;
     }
@@ -275,7 +299,40 @@ static sprite_cache_t *sprite_cache_create(const char *name) {
     sprite_cache_t *cache = xcalloc(1, sizeof(*cache));
     cache->name = xstrdup(name);
     cache->last_used = sprite_cache_now();
+    cache->use_sequence = ++sprite_cache_use_sequence;
     return cache;
+}
+
+static void sprite_cache_remove_entry(sprite_cache_t *cache, bool eviction) {
+    HARD_ASSERT(cache != NULL);
+    HASH_DEL(sprites_cache, cache);
+    if (cache->lru_previous != NULL) {
+        cache->lru_previous->lru_next = cache->lru_next;
+    } else {
+        sprite_cache_lru_oldest = cache->lru_next;
+    }
+    if (cache->lru_next != NULL) {
+        cache->lru_next->lru_previous = cache->lru_previous;
+    } else {
+        sprite_cache_lru_newest = cache->lru_previous;
+    }
+    HARD_ASSERT(sprite_cache_statistics.entries != 0);
+    sprite_cache_statistics.entries--;
+    HARD_ASSERT(sprite_cache_bytes >= cache->estimated_bytes);
+    sprite_cache_bytes -= cache->estimated_bytes;
+    sprite_cache_statistics.estimated_bytes = sprite_cache_bytes;
+    if (eviction) {
+        sprite_cache_statistics.evictions++;
+    }
+    sprite_cache_free(cache);
+}
+
+static void sprite_cache_reserve(size_t bytes) {
+    while (sprites_cache != NULL &&
+           (sprite_cache_bytes > SPRITE_CACHE_MAX_BYTES - MIN(bytes, SPRITE_CACHE_MAX_BYTES) ||
+            HASH_COUNT(sprites_cache) >= SPRITE_CACHE_MAX_ENTRIES)) {
+        sprite_cache_remove_entry(sprite_cache_lru_oldest, true);
+    }
 }
 
 /**
@@ -284,22 +341,26 @@ static sprite_cache_t *sprite_cache_create(const char *name) {
  * @param cache
  * Cache entry to add.
  */
-static void sprite_cache_add(sprite_cache_t *cache) {
+static bool sprite_cache_add(sprite_cache_t *cache) {
     HARD_ASSERT(cache != NULL);
     HARD_ASSERT(cache->surface != NULL);
     cache->estimated_bytes = sprite_cache_estimated_bytes(cache);
+    if (cache->estimated_bytes > SPRITE_CACHE_MAX_BYTES) {
+        sprite_cache_statistics.rejections++;
+        return false;
+    }
+    sprite_cache_reserve(cache->estimated_bytes);
     HASH_ADD_KEYPTR(hh, sprites_cache, cache->name, strlen(cache->name), cache);
+    sprite_cache_lru_append(cache);
     sprite_cache_statistics.insertions++;
     sprite_cache_statistics.entries++;
-    if (cache->estimated_bytes > SIZE_MAX - sprite_cache_statistics.estimated_bytes) {
-        sprite_cache_statistics.estimated_bytes = SIZE_MAX;
-    } else {
-        sprite_cache_statistics.estimated_bytes += cache->estimated_bytes;
-    }
+    sprite_cache_bytes += cache->estimated_bytes;
+    sprite_cache_statistics.estimated_bytes = sprite_cache_bytes;
     sprite_cache_statistics.peak_entries =
         MAX(sprite_cache_statistics.peak_entries, sprite_cache_statistics.entries);
     sprite_cache_statistics.peak_estimated_bytes =
         MAX(sprite_cache_statistics.peak_estimated_bytes, sprite_cache_statistics.estimated_bytes);
+    return true;
 }
 
 /**
@@ -310,15 +371,7 @@ static void sprite_cache_add(sprite_cache_t *cache) {
  */
 static void sprite_cache_remove(sprite_cache_t *cache) {
     HARD_ASSERT(cache != NULL);
-    HASH_DEL(sprites_cache, cache);
-    HARD_ASSERT(sprite_cache_statistics.entries != 0);
-    sprite_cache_statistics.entries--;
-    if (sprite_cache_statistics.estimated_bytes == SIZE_MAX) {
-        sprite_cache_statistics.estimated_bytes = sprite_cache_total_estimated_bytes();
-    } else {
-        HARD_ASSERT(sprite_cache_statistics.estimated_bytes >= cache->estimated_bytes);
-        sprite_cache_statistics.estimated_bytes -= cache->estimated_bytes;
-    }
+    sprite_cache_remove_entry(cache, false);
 }
 
 /**
@@ -340,7 +393,6 @@ void sprite_cache_free_all(void) {
     sprite_cache_t *cache, *tmp;
     HASH_ITER(hh, sprites_cache, cache, tmp) {
         sprite_cache_remove(cache);
-        sprite_cache_free(cache);
     }
 
     lighting_clear_sprite_cache();
@@ -350,10 +402,6 @@ void sprite_cache_free_all(void) {
  * Free unused sprite cache entries.
  */
 static void sprite_cache_gc_run(bool force) {
-    if (!force && !rndm_chance(SPRITE_CACHE_GC_CHANCE)) {
-        return;
-    }
-
     sprite_cache_statistics.gc_runs++;
     uint64_t gc_started_ns = SDL_GetTicksNS();
     time_t now = sprite_cache_now();
@@ -366,14 +414,13 @@ static void sprite_cache_gc_run(bool force) {
     HASH_ITER(hh, sprites_cache, cache, tmp) {
         if (now - cache->last_used >= SPRITE_CACHE_GC_FREE_TIME) {
             sprite_cache_remove(cache);
-            sprite_cache_free(cache);
             sprite_cache_statistics.gc_removals++;
             removed = true;
         }
 
         /* Avoid executing this loop for too long. */
         struct timeval tv2;
-        if (gettimeofday(&tv2, NULL) == 0 &&
+        if (!force && gettimeofday(&tv2, NULL) == 0 &&
             tv2.tv_usec - tv1.tv_usec >= SPRITE_CACHE_GC_MAX_TIME) {
             break;
         }
@@ -979,6 +1026,7 @@ void surface_show_effects(SDL_Surface *surface,
                           SDL_Surface *src,
                           const sprite_effects_t *effects) {
     HARD_ASSERT(surface != NULL);
+    bool temporary_effect_surface = false;
 
     if (src == NULL) {
         return;
@@ -1021,7 +1069,11 @@ void surface_show_effects(SDL_Surface *surface,
 
                 cache = sprite_cache_create(name);
                 cache->surface = src;
-                sprite_cache_add(cache);
+                if (!sprite_cache_add(cache)) {
+                    free(cache->name);
+                    free(cache);
+                    temporary_effect_surface = true;
+                }
             }
         }
 
@@ -1052,6 +1104,10 @@ void surface_show_effects(SDL_Surface *surface,
         lighting_show_surface(surface, x, y, srcrect, src, 0, LIGHTING_SURFACE_PROJECTED);
     } else {
         surface_show(surface, x, y, srcrect, src);
+    }
+
+    if (temporary_effect_surface) {
+        SDL_DestroySurface(src);
     }
 }
 

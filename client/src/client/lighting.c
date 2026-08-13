@@ -986,6 +986,38 @@ static uint64_t lighting_signature_uint32(uint64_t signature, uint32_t value) {
     return signature;
 }
 
+/**
+ * Identify a projected sprite by the radiance it consumes, not by its current
+ * viewport position.  The resulting key is stable when the same world sprite
+ * is reached again after scrolling, while still preventing a stale lit image
+ * from being reused when any covered sample changes.
+ */
+static uint64_t lighting_projected_signature(int x, int y, const SDL_Rect *source_rect) {
+    uint64_t signature = UINT64_C(14695981039346656037);
+    signature = lighting_signature_uint32(signature, (uint32_t)source_rect->w);
+    signature = lighting_signature_uint32(signature, (uint32_t)source_rect->h);
+    /* Include every covered sample so a cache hit is valid only when the
+     * complete lit output is equivalent; the fixed work is bounded by the
+     * already bounded source surface dimensions. */
+    for (int source_y = 0; source_y < source_rect->h; source_y++) {
+        int light_y = MAX(0, MIN(lighting_height - 1, y + source_y));
+        for (int source_x = 0; source_x < source_rect->w; source_x++) {
+            int light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
+            const lighting_sample *sample =
+                &light_samples[(size_t)light_y * (size_t)lighting_width + (size_t)light_x];
+            uint64_t sample_value = sample->scalar;
+            sample_value = (sample_value << 16) | sample->red;
+            sample_value = (sample_value << 16) | sample->green;
+            sample_value = (sample_value << 16) | sample->blue;
+            signature ^= sample_value;
+            signature *= UINT64_C(1099511628211);
+            signature ^= sample->present;
+            signature *= UINT64_C(1099511628211);
+        }
+    }
+    return signature;
+}
+
 /** Draw a sprite through the cached continuous light field. */
 void lighting_show_surface(SDL_Surface *destination,
                            int x,
@@ -1021,13 +1053,19 @@ void lighting_show_surface(SDL_Surface *destination,
     Uint8 surface_alpha = SDL_ALPHA_OPAQUE;
     SDL_GetSurfaceAlphaMod(source, &surface_alpha);
     bool has_surface_alpha = surface_alpha != SDL_ALPHA_OPAQUE;
-    /* The field cache key names the complete projected illumination state.
-     * Adding the sample coordinates identifies this sprite's exact profile
-     * without rescanning every covered light sample on cache hits. */
-    uint64_t illumination_signature = lighting_cache_key;
-    illumination_signature = lighting_signature_uint32(illumination_signature, (uint32_t)x);
-    illumination_signature = lighting_signature_uint32(illumination_signature, (uint32_t)y);
-    illumination_signature = lighting_signature_uint32(illumination_signature, (uint32_t)sample_y);
+    /* Projected sprites are keyed by their sampled radiance.  Structure sprites
+     * use a geometry-dependent vertical projection and retain their positional
+     * profile until that path receives the same world-space identity. */
+    uint64_t illumination_signature;
+    if (mode == LIGHTING_SURFACE_PROJECTED) {
+        illumination_signature = lighting_projected_signature(x, y, &source_rect);
+    } else {
+        illumination_signature = lighting_cache_key;
+        illumination_signature = lighting_signature_uint32(illumination_signature, (uint32_t)x);
+        illumination_signature = lighting_signature_uint32(illumination_signature, (uint32_t)y);
+        illumination_signature =
+            lighting_signature_uint32(illumination_signature, (uint32_t)sample_y);
+    }
 
     lighting_sprite_cache_key cache_key;
     memset(&cache_key, 0, sizeof(cache_key));
