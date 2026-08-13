@@ -24,9 +24,40 @@ __attribute__((noinline)) static void trigger_access_violation(void) {
     *invalid = 1;
 }
 #else
+#include <ctype.h>
 #include <dirent.h>
+#include <sys/stat.h>
 
 #define MISSING_HOME_PREFIX "libatrinik-signals-missing-home"
+
+static bool is_traceback(const struct dirent *entry) {
+    static const char prefix[] = MISSING_HOME_PREFIX "-traceback-";
+    const char *timestamp;
+    struct stat status;
+    size_t i;
+
+    if (strncmp(entry->d_name, prefix, sizeof(prefix) - 1) != 0 ||
+        stat(entry->d_name, &status) != 0 || !S_ISREG(status.st_mode)) {
+        return false;
+    }
+
+    timestamp = entry->d_name + sizeof(prefix) - 1;
+    if (strlen(timestamp) != strlen("0000_00_00_00-00-00.txt") ||
+        timestamp[4] != '_' || timestamp[7] != '_' ||
+        timestamp[10] != '_' || timestamp[13] != '-' ||
+        timestamp[16] != '-' || strcmp(timestamp + 19, ".txt") != 0) {
+        return false;
+    }
+
+    for (i = 0; i < 19; i++) {
+        if (i != 4 && i != 7 && i != 10 && i != 13 && i != 16 &&
+            !isdigit((unsigned char)timestamp[i])) {
+            return false;
+        }
+    }
+
+    return true;
+}
 
 static int remove_tracebacks(bool verify) {
     DIR *directory = opendir(".");
@@ -38,9 +69,7 @@ static int remove_tracebacks(bool verify) {
     }
 
     while ((entry = readdir(directory)) != NULL) {
-        if (strncmp(entry->d_name,
-                    MISSING_HOME_PREFIX "-traceback-",
-                    strlen(MISSING_HOME_PREFIX "-traceback-")) != 0) {
+        if (!is_traceback(entry)) {
             continue;
         }
 
