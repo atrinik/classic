@@ -250,6 +250,9 @@ add_library(atrinik-server-core OBJECT
     ${SOURCES_WORLD_MAKER}
     ${LEXERS_OUT})
 atrinik_configure_target(atrinik-server-core)
+if (BUILD_TESTING)
+    target_compile_definitions(atrinik-server-core PRIVATE ATRINIK_TESTING)
+endif ()
 if (ATRINIK_SERVER_ENABLE_PRECOMPILED_HEADERS)
     target_precompile_headers(atrinik-server-core PRIVATE src/include/global.h)
 endif ()
@@ -477,6 +480,14 @@ if (BUILD_TESTING AND NOT MINGW)
                 TIMEOUT 300
                 WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
         endforeach ()
+
+        add_test(NAME server-gameplay-journal-tool
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/tests/test_gameplay_journal.py
+                -v)
+        set_tests_properties(server-gameplay-journal-tool PROPERTIES
+            LABELS "server;unit"
+            TIMEOUT 30)
 
         if (ENABLE_SANITIZERS)
             add_test(NAME server-lsan-smoke

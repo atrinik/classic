@@ -1,0 +1,556 @@
+/*************************************************************************
+ *           Atrinik, a Multiplayer Online Role Playing Game             *
+ *                                                                       *
+ *   Copyright 2026 The Atrinik Project                                  *
+ *                                                                       *
+ * This program is free software; you can redistribute it and/or modify  *
+ * it under the terms of the GNU General Public License as published by  *
+ * the Free Software Foundation; either version 2 of the License, or     *
+ * (at your option) any later version.                                   *
+ ************************************************************************/
+
+/** @file Durable, private gameplay audit journal implementation. */
+
+#include <global.h>
+#include <gameplay_journal.h>
+#include <player.h>
+#include <object.h>
+#include <toolkit/path.h>
+#include <toolkit/string.h>
+#include <toolkit/stringbuffer.h>
+
+#include <openssl/evp.h>
+#include <openssl/rand.h>
+
+#ifdef WIN32
+#include <io.h>
+#endif
+
+#define JOURNAL_DIRECTORY "gameplay-journal"
+#define JOURNAL_FILE_LIMIT (8U * 1024U * 1024U)
+#define JOURNAL_RETENTION_FILES 16U
+#define JOURNAL_PENDING_LIMIT 1024U
+
+typedef struct pending_transaction {
+    char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+} pending_transaction_t;
+
+typedef struct journal_state {
+    FILE *fp;
+    char directory[HUGE_BUF];
+    char server_id[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    char run_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    char previous_hash[EVP_MAX_MD_SIZE * 2U + 1U];
+    gameplay_journal_profile_t profile;
+    char profile_id[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    char profile_digest[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    char profile_axes[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    uint64_t sequence;
+    uint32_t file_index;
+    size_t file_size;
+    pending_transaction_t pending[JOURNAL_PENDING_LIMIT];
+    size_t pending_count;
+    bool failed;
+} journal_state_t;
+
+static journal_state_t journal;
+
+typedef struct retained_file {
+    char path[HUGE_BUF];
+    time_t modified;
+} retained_file_t;
+
+static bool journal_token_valid(const char *value, bool allow_empty) {
+    if (value == NULL) {
+        return allow_empty;
+    }
+    size_t length = strlen(value);
+    if (length == 0 || length > GAMEPLAY_JOURNAL_ID_MAX) {
+        return allow_empty && length == 0;
+    }
+    for (const unsigned char *cp = (const unsigned char *)value; *cp != '\0'; cp++) {
+        bool alphanumeric =
+            (*cp >= 'a' && *cp <= 'z') || (*cp >= 'A' && *cp <= 'Z') || (*cp >= '0' && *cp <= '9');
+        if (!alphanumeric && strchr("_.:/@+-", *cp) == NULL) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool journal_change_valid(const gameplay_journal_change_t *change) {
+    if (change->delta > 0 && change->before > INT64_MAX - change->delta) {
+        return false;
+    }
+    if (change->delta < 0 && change->before < INT64_MIN - change->delta) {
+        return false;
+    }
+    return change->before + change->delta == change->after;
+}
+
+static bool journal_random_id(char output[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    unsigned char random[16];
+    if (RAND_bytes(random, sizeof(random)) != 1 ||
+        string_tohex(random, sizeof(random), output, GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE, false) !=
+            sizeof(random) * 2U) {
+        OPENSSL_cleanse(random, sizeof(random));
+        return false;
+    }
+    OPENSSL_cleanse(random, sizeof(random));
+    string_tolower(output);
+    return true;
+}
+
+static int journal_retained_compare(const void *left, const void *right) {
+    const retained_file_t *a = left;
+    const retained_file_t *b = right;
+    if (a->modified < b->modified) {
+        return -1;
+    }
+    if (a->modified > b->modified) {
+        return 1;
+    }
+    return strcmp(a->path, b->path);
+}
+
+static bool journal_enforce_retention(void) {
+    DIR *dir = opendir(journal.directory);
+    if (dir == NULL) {
+        return false;
+    }
+    retained_file_t *files = NULL;
+    size_t count = 0;
+    bool ok = true;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        size_t length = strlen(entry->d_name);
+        if (length < 15 || strncmp(entry->d_name, "journal-", 8) != 0 ||
+            strcmp(entry->d_name + length - 6, ".jsonl") != 0) {
+            continue;
+        }
+        retained_file_t file;
+        if (snprintf(VS(file.path), "%s/%s", journal.directory, entry->d_name) >=
+            (int)sizeof(file.path)) {
+            ok = false;
+            break;
+        }
+        struct stat metadata;
+#ifdef WIN32
+        int status = stat(file.path, &metadata);
+#else
+        int status = lstat(file.path, &metadata);
+#endif
+        if (status != 0 || !S_ISREG(metadata.st_mode)
+#ifndef WIN32
+            || (metadata.st_mode & 0777) != SAVE_MODE
+#endif
+        ) {
+            ok = false;
+            break;
+        }
+        file.modified = metadata.st_mtime;
+        retained_file_t *grown = realloc(files, (count + 1) * sizeof(*files));
+        if (grown == NULL) {
+            ok = false;
+            break;
+        }
+        files = grown;
+        files[count++] = file;
+    }
+    if (closedir(dir) != 0) {
+        ok = false;
+    }
+    if (ok && count >= JOURNAL_RETENTION_FILES) {
+        qsort(files, count, sizeof(*files), journal_retained_compare);
+        size_t remove_count = count - JOURNAL_RETENTION_FILES + 1;
+        for (size_t i = 0; i < remove_count; i++) {
+            if (unlink(files[i].path) != 0) {
+                ok = false;
+                break;
+            }
+        }
+    }
+    free(files);
+    return ok;
+}
+
+static bool journal_utc(char output[32]) {
+    time_t now = time(NULL);
+    struct tm utc;
+#ifdef WIN32
+    if (gmtime_s(&utc, &now) != 0) {
+        return false;
+    }
+#else
+    if (gmtime_r(&now, &utc) == NULL) {
+        return false;
+    }
+#endif
+    return strftime(output, 32, "%Y-%m-%dT%H:%M:%SZ", &utc) != 0;
+}
+
+static bool journal_digest(const void *data, size_t length, char output[65]) {
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int digest_length = 0;
+    if (EVP_Digest(data, length, digest, &digest_length, EVP_sha256(), NULL) != 1 ||
+        digest_length != 32 ||
+        string_tohex(digest, digest_length, output, 65, false) != digest_length * 2U) {
+        OPENSSL_cleanse(digest, sizeof(digest));
+        return false;
+    }
+    OPENSSL_cleanse(digest, sizeof(digest));
+    string_tolower(output);
+    return true;
+}
+
+static bool journal_sync(void) {
+    if (fflush(journal.fp) != 0) {
+        return false;
+    }
+#ifdef WIN32
+    return _commit(_fileno(journal.fp)) == 0;
+#else
+    return fsync(fileno(journal.fp)) == 0;
+#endif
+}
+
+static bool journal_open_file(void) {
+    if (!journal_enforce_retention()) {
+        return false;
+    }
+    char path[HUGE_BUF];
+    if (snprintf(VS(path),
+                 "%s/journal-%s-%04" PRIu32 ".jsonl",
+                 journal.directory,
+                 journal.run_id,
+                 journal.file_index) >= (int)sizeof(path)) {
+        return false;
+    }
+    int flags = O_WRONLY | O_CREAT | O_EXCL;
+#ifdef WIN32
+    flags |= O_BINARY;
+#endif
+    int fd = open(path, flags, SAVE_MODE);
+    if (fd < 0) {
+        return false;
+    }
+    journal.fp = fdopen(fd, "wb");
+    if (journal.fp == NULL) {
+        close(fd);
+        unlink(path);
+        return false;
+    }
+    journal.file_size = 0;
+    return true;
+}
+
+static bool journal_rotate(size_t next_size) {
+    if (journal.fp != NULL && journal.file_size + next_size <= JOURNAL_FILE_LIMIT) {
+        return true;
+    }
+    if (journal.fp != NULL) {
+        if (!journal_sync() || fclose(journal.fp) != 0) {
+            journal.fp = NULL;
+            return false;
+        }
+        journal.fp = NULL;
+        journal.file_index++;
+    }
+    return journal_open_file();
+}
+
+static const char *journal_kind_name(gameplay_journal_kind_t kind) {
+    switch (kind) {
+        case GAMEPLAY_JOURNAL_ITEM:
+            return "item";
+        case GAMEPLAY_JOURNAL_CURRENCY:
+            return "currency";
+        case GAMEPLAY_JOURNAL_QUEST:
+            return "quest";
+        case GAMEPLAY_JOURNAL_PROGRESSION:
+            return "progression";
+        default:
+            return NULL;
+    }
+}
+
+static bool journal_append(StringBuffer *record) {
+    if (journal.failed || journal.fp == NULL) {
+        return false;
+    }
+    char hash[65];
+    if (!journal_digest(stringbuffer_data(record), stringbuffer_length(record), hash)) {
+        journal.failed = true;
+        return false;
+    }
+    stringbuffer_append_printf(record, ",\"record_hash\":\"%s\"}\n", hash);
+    size_t length = stringbuffer_length(record);
+    bool forced_failure = false;
+#ifdef ATRINIK_TESTING
+    forced_failure = getenv("ATRINIK_TEST_GAMEPLAY_JOURNAL_WRITE_FAILURE") != NULL;
+#endif
+    if (forced_failure || !journal_rotate(length) ||
+        fwrite(stringbuffer_data(record), 1, length, journal.fp) != length || !journal_sync()) {
+        journal.failed = true;
+        LOG(ERROR,
+            "Gameplay journal write failed; refusing further journal-backed gameplay "
+            "transactions.");
+        return false;
+    }
+    journal.file_size += length;
+    memcpy(journal.previous_hash, hash, sizeof(hash));
+    return true;
+}
+
+static StringBuffer *journal_record(const char *phase,
+                                    const char *transaction_id,
+                                    const char *kind,
+                                    const char *reason) {
+    char utc[32];
+    if (!journal_utc(utc)) {
+        journal.failed = true;
+        LOG(ERROR, "Gameplay journal could not obtain a UTC record timestamp.");
+        return NULL;
+    }
+    if (journal.sequence == UINT64_MAX) {
+        journal.failed = true;
+        LOG(ERROR, "Gameplay journal exhausted its per-run sequence.");
+        return NULL;
+    }
+    journal.sequence++;
+    StringBuffer *record = stringbuffer_new();
+    stringbuffer_append_printf(record,
+                               "{\"version\":%d,\"event_id\":\"%s:%s:%" PRIu64
+                               "\",\"transaction_id\":\"%s\",\"sequence\":%" PRIu64
+                               ",\"utc\":\"%s\",\"server_id\":\"%s\",\"run_id\":\"%s\""
+                               ",\"phase\":\"%s\",\"kind\":\"%s\",\"reason\":\"%s\""
+                               ",\"profile\":{\"id\":\"%s\",\"schema\":%" PRIu32
+                               ",\"digest\":\"%s\",\"effective_axes\":\"%s\"}"
+                               ",\"prev_hash\":\"%s\"",
+                               GAMEPLAY_JOURNAL_SCHEMA_VERSION,
+                               journal.server_id,
+                               journal.run_id,
+                               journal.sequence,
+                               transaction_id != NULL ? transaction_id : "",
+                               journal.sequence,
+                               utc,
+                               journal.server_id,
+                               journal.run_id,
+                               phase,
+                               kind,
+                               reason,
+                               journal.profile.id,
+                               journal.profile.schema,
+                               journal.profile.digest,
+                               journal.profile.effective_axes,
+                               journal.previous_hash);
+    return record;
+}
+
+static bool journal_profile_copy(const gameplay_journal_profile_t *profile) {
+    if (profile == NULL || !journal_token_valid(profile->id, false) ||
+        !journal_token_valid(profile->digest, false) ||
+        !journal_token_valid(profile->effective_axes, false)) {
+        return false;
+    }
+    snprintf(VS(journal.profile_id), "%s", profile->id);
+    snprintf(VS(journal.profile_digest), "%s", profile->digest);
+    snprintf(VS(journal.profile_axes), "%s", profile->effective_axes);
+    journal.profile = (gameplay_journal_profile_t){.id = journal.profile_id,
+                                                   .schema = profile->schema,
+                                                   .digest = journal.profile_digest,
+                                                   .effective_axes = journal.profile_axes};
+    return true;
+}
+
+bool gameplay_journal_init(const char *datapath,
+                           const char *server_id,
+                           const gameplay_journal_profile_t *profile) {
+    gameplay_journal_deinit();
+    if (datapath == NULL || !journal_token_valid(server_id, false) ||
+        !journal_profile_copy(profile) ||
+        snprintf(VS(journal.directory), "%s/%s", datapath, JOURNAL_DIRECTORY) >=
+            (int)sizeof(journal.directory) ||
+        path_ensure_real_directory(journal.directory, SAVE_MODE_DIR) != PATH_DIRECTORY_OK ||
+        !journal_random_id(journal.run_id)) {
+        journal.failed = true;
+        return false;
+    }
+#ifndef WIN32
+    struct stat metadata;
+    if (lstat(journal.directory, &metadata) != 0 || (metadata.st_mode & 0777) != SAVE_MODE_DIR) {
+        journal.failed = true;
+        return false;
+    }
+#endif
+    snprintf(VS(journal.server_id), "%s", server_id);
+    if (!journal_open_file()) {
+        journal.failed = true;
+        return false;
+    }
+    StringBuffer *record = journal_record("boundary", NULL, "run", "run.start");
+    if (record == NULL || !journal_append(record)) {
+        if (record != NULL) {
+            stringbuffer_free(record);
+        }
+        return false;
+    }
+    stringbuffer_free(record);
+    return true;
+}
+
+void gameplay_journal_deinit(void) {
+    if (journal.fp != NULL) {
+        if (!journal_sync() || fclose(journal.fp) != 0) {
+            LOG(ERROR, "Gameplay journal could not complete its shutdown flush.");
+        }
+    }
+    memset(&journal, 0, sizeof(journal));
+}
+
+bool gameplay_journal_available(void) {
+    return journal.fp != NULL && !journal.failed;
+}
+
+static ssize_t journal_pending_find(const char *transaction_id) {
+    for (size_t i = 0; i < journal.pending_count; i++) {
+        if (strcmp(journal.pending[i].id, transaction_id) == 0) {
+            return (ssize_t)i;
+        }
+    }
+    return -1;
+}
+
+bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
+                            gameplay_journal_kind_t kind,
+                            const char *reason,
+                            const gameplay_journal_change_t *change,
+                            char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    const char *kind_name = journal_kind_name(kind);
+    if (!gameplay_journal_available() || subject == NULL || change == NULL ||
+        transaction_id == NULL || kind_name == NULL || !journal_token_valid(reason, false) ||
+        !journal_token_valid(subject->account_id, false) ||
+        !journal_token_valid(subject->character_id, false) ||
+        !journal_token_valid(subject->map_id, true) ||
+        !journal_token_valid(change->subject_id, false) ||
+        !journal_token_valid(change->lineage_id, true) || !journal_change_valid(change) ||
+        journal.pending_count == JOURNAL_PENDING_LIMIT || !journal_random_id(transaction_id)) {
+        return false;
+    }
+    StringBuffer *record = journal_record("intent", transaction_id, kind_name, reason);
+    if (record == NULL) {
+        return false;
+    }
+    stringbuffer_append_printf(
+        record,
+        ",\"account_id\":\"%s\",\"character_id\":\"%s\""
+        ",\"context\":{\"map_id\":\"%s\",\"x\":%" PRId32 ",\"y\":%" PRId32 "}"
+        ",\"change\":{\"subject_id\":\"%s\",\"lineage_id\":\"%s\""
+        ",\"before\":%" PRId64 ",\"delta\":%" PRId64 ",\"after\":%" PRId64 "}",
+        subject->account_id,
+        subject->character_id,
+        subject->map_id != NULL ? subject->map_id : "",
+        subject->x,
+        subject->y,
+        change->subject_id,
+        change->lineage_id != NULL ? change->lineage_id : "",
+        change->before,
+        change->delta,
+        change->after);
+    bool ok = journal_append(record);
+    stringbuffer_free(record);
+    if (!ok) {
+        transaction_id[0] = '\0';
+        return false;
+    }
+    snprintf(VS(journal.pending[journal.pending_count].id), "%s", transaction_id);
+    journal.pending_count++;
+    return true;
+}
+
+static bool journal_finish(const char *transaction_id, const char *phase, const char *reason) {
+    if (!gameplay_journal_available() || !journal_token_valid(transaction_id, false) ||
+        !journal_token_valid(reason, false)) {
+        return false;
+    }
+    ssize_t index = journal_pending_find(transaction_id);
+    if (index < 0) {
+        return false;
+    }
+    StringBuffer *record = journal_record(phase, transaction_id, "transaction", reason);
+    if (record == NULL) {
+        return false;
+    }
+    bool ok = journal_append(record);
+    stringbuffer_free(record);
+    if (!ok) {
+        return false;
+    }
+    journal.pending[(size_t)index] = journal.pending[journal.pending_count - 1];
+    journal.pending_count--;
+    return true;
+}
+
+bool gameplay_journal_commit(const char *transaction_id) {
+    return journal_finish(transaction_id, "commit", "transaction.commit");
+}
+
+bool gameplay_journal_abort(const char *transaction_id, const char *reason) {
+    return journal_finish(transaction_id, "abort", reason);
+}
+
+bool gameplay_journal_profile_boundary(const gameplay_journal_profile_t *profile,
+                                       const char *reason) {
+    if (!gameplay_journal_available() || !journal_token_valid(reason, false) ||
+        !journal_profile_copy(profile)) {
+        return false;
+    }
+    StringBuffer *record = journal_record("boundary", NULL, "profile", reason);
+    if (record == NULL) {
+        return false;
+    }
+    bool ok = journal_append(record);
+    stringbuffer_free(record);
+    return ok;
+}
+
+bool gameplay_journal_player_begin(player *pl,
+                                   const char *kind,
+                                   const char *reason,
+                                   const char *subject_id,
+                                   const char *lineage_id,
+                                   int64_t before,
+                                   int64_t delta,
+                                   int64_t after,
+                                   char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    if (pl == NULL || pl->ob == NULL || pl->cs == NULL || pl->cs->account == NULL || kind == NULL) {
+        return false;
+    }
+    gameplay_journal_kind_t journal_kind;
+    if (strcmp(kind, "item") == 0) {
+        journal_kind = GAMEPLAY_JOURNAL_ITEM;
+    } else if (strcmp(kind, "currency") == 0) {
+        journal_kind = GAMEPLAY_JOURNAL_CURRENCY;
+    } else if (strcmp(kind, "quest") == 0) {
+        journal_kind = GAMEPLAY_JOURNAL_QUEST;
+    } else if (strcmp(kind, "progression") == 0) {
+        journal_kind = GAMEPLAY_JOURNAL_PROGRESSION;
+    } else {
+        return false;
+    }
+    gameplay_journal_subject_t subject = {
+        .account_id = pl->cs->account,
+        .character_id = pl->ob->name,
+        .map_id = pl->ob->map != NULL ? pl->ob->map->path : "",
+        .x = pl->ob->x,
+        .y = pl->ob->y,
+    };
+    gameplay_journal_change_t change = {
+        .subject_id = subject_id,
+        .lineage_id = lineage_id,
+        .before = before,
+        .delta = delta,
+        .after = after,
+    };
+    return gameplay_journal_begin(&subject, journal_kind, reason, &change, transaction_id);
+}
