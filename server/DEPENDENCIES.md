@@ -29,10 +29,11 @@ Release rehearsal, candidate packaging, and recovery do not acquire these
 archives from their origin URLs. `dependencies.bundle.json` binds the complete
 client/server lock set plus `libpcpnatpmp` material to an exact OCI manifest
 digest. The trusted default-branch publisher builds that deterministic layout
-through this same fetcher. Release staging verifies the OCI digest, closed
-manifest, source-lock and material digests, provenance, sizes, and all four
-archive hashes before installing the raw archives into their ordinary cache
-locations. Component sync selects those staged download directories and uses
+through this same fetcher. Release staging verifies the GitHub OCI attestation,
+OCI digest, closed manifest and materials statement, source-lock and material
+digests, sizes, and all four archive hashes before installing the raw archives
+into their ordinary cache locations. Component sync selects those staged
+download directories and uses
 the fetcher's explicit `--refresh --offline` boundary; server CMake also uses
 the staged immutable-source cache. A missing or invalid entry fails without
 opening a network connection.

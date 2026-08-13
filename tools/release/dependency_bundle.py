@@ -154,7 +154,7 @@ def acquire_archives(
     ]
 
 
-def provenance_document(material: dict[str, object]) -> dict[str, object]:
+def materials_statement(material: dict[str, object]) -> dict[str, object]:
     dependencies = []
     subjects = []
     inputs = material["inputs"]
@@ -178,23 +178,13 @@ def provenance_document(material: dict[str, object]) -> dict[str, object]:
             }
         )
     return {
-        "_type": "https://in-toto.io/Statement/v1",
+        "schema_version": SCHEMA_VERSION,
+        "type": "atrinik-classic-dependency-materials",
         "subject": subjects,
-        "predicateType": "https://slsa.dev/provenance/v1",
-        "predicate": {
-            "buildDefinition": {
-                "buildType": "https://atrinik.org/buildtypes/classic-dependency-bundle/v1",
-                "externalParameters": {
-                    "source_locks": material["source_locks"],
-                    "material_digest": "sha256:" + sha256_bytes(canonical_json(material)),
-                },
-                "resolvedDependencies": dependencies,
-            },
-            "runDetails": {
-                "builder": {"id": "https://github.com/atrinik/classic/actions"},
-                "metadata": {"invocationId": "deterministic-local-or-trusted-workflow"},
-            },
-        },
+        "source_locks": material["source_locks"],
+        "acquisition_contracts": material["acquisition_contracts"],
+        "material_digest": "sha256:" + sha256_bytes(canonical_json(material)),
+        "resolved_dependencies": dependencies,
     }
 
 
@@ -279,8 +269,8 @@ def build_layout(root: Path, cache: Path, output: Path) -> dict[str, object]:
     }
     bundle_manifest = canonical_json(bundle_document)
     (bundle / "manifest.json").write_bytes(bundle_manifest)
-    (bundle / "provenance.json").write_bytes(
-        canonical_json(provenance_document(material))
+    (bundle / "materials.json").write_bytes(
+        canonical_json(materials_statement(material))
     )
     shutil.rmtree(staged_inputs)
 
@@ -465,7 +455,7 @@ def verify_bundle(
     artifacts = manifest["artifacts"]
     if not isinstance(artifacts, list) or len(artifacts) != 4:
         raise BundleError("dependency bundle must contain exactly four artifacts")
-    expected_files = {"manifest.json", "provenance.json"}
+    expected_files = {"manifest.json", "materials.json"}
     expected_digests = {
         str(record["name"]): str(record["sha256"])
         for record in expected_material["inputs"]
@@ -513,9 +503,11 @@ def verify_bundle(
     }
     if actual_files != expected_files:
         raise BundleError("dependency bundle contains missing or unexpected files")
-    provenance = load_json(bundle / "provenance.json")
-    if provenance != provenance_document(expected_material):
-        raise BundleError("dependency bundle provenance does not match current locked materials")
+    materials = load_json(bundle / "materials.json")
+    if materials != materials_statement(expected_material):
+        raise BundleError(
+            "dependency bundle materials statement does not match current locked materials"
+        )
     return manifest
 
 

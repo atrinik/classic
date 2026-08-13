@@ -44,6 +44,7 @@ on:
 
 permissions:
   actions: read
+  attestations: read
   checks: read
   contents: read
   packages: read
@@ -117,10 +118,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - name: Pull, verify, and install the exact durable bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: tools/release/install_dependency_bundle.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-dependencies-${{ needs.metadata.outputs.tag }}
+          name: candidate-dependencies-${{ needs.metadata.outputs.tag }}
           path: |
             client/build/dependencies/downloads/*.tar.gz
             server/build/dependencies/downloads/*.tar.gz
@@ -203,7 +206,7 @@ jobs:
           ref: ${{ needs.metadata.outputs.commit }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: release-dependencies-${{ needs.metadata.outputs.tag }}
+          name: candidate-dependencies-${{ needs.metadata.outputs.tag }}
           path: .
       - name: Retrieve release-only Discord configuration
         if: inputs.rehearsal != true
@@ -273,7 +276,7 @@ jobs:
           ref: ${{ needs.metadata.outputs.commit }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: release-dependencies-${{ needs.metadata.outputs.tag }}
+          name: candidate-dependencies-${{ needs.metadata.outputs.tag }}
           path: .
       - name: Restore Windows server compiler cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -336,7 +339,7 @@ jobs:
           ref: ${{ needs.metadata.outputs.commit }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: release-dependencies-${{ needs.metadata.outputs.tag }}
+          name: candidate-dependencies-${{ needs.metadata.outputs.tag }}
           path: .
       - id: release-inputs
         name: Record locked server image inputs

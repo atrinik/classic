@@ -5,6 +5,7 @@ on:
 
 permissions:
   actions: read
+  attestations: read
   checks: read
   contents: read
   packages: read

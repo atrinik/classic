@@ -8,6 +8,7 @@ on:
 
 permissions:
   actions: write
+  attestations: read
   checks: read
   contents: write
   packages: read
@@ -68,6 +69,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - name: Require the exact durable dependency bundle before versioning
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           for attempt in {1..10}; do
             if tools/release/install_dependency_bundle.sh; then

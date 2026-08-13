@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import os
+import subprocess
+import tempfile
 import unittest
 
 
@@ -95,17 +98,24 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertRegex(descriptor["digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertRegex(descriptor["material_digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertIn("Verify durable dependency bundle", candidate)
-        self.assertEqual(candidate.count("release-dependencies-${{"), 4)
+        self.assertEqual(candidate.count("candidate-dependencies-${{"), 4)
+        self.assertNotIn("name: release-dependencies-", candidate)
         self.assertEqual(candidate.count("--network none"), 2)
         self.assertEqual(candidate.count("ATRINIK_DEPENDENCY_DOWNLOADS="), 2)
         self.assertEqual(candidate.count("ATRINIK_DEPENDENCY_CACHE_DIR="), 1)
         self.assertIn("tools/release/install_dependency_bundle.sh", candidate)
         self.assertIn("tools/release/install_dependency_bundle.sh", package)
         self.assertNotIn("dependencies.py sync", candidate)
+        client_script = (ROOT / "client/tools/build-windows-package.sh").read_text()
+        self.assertIn('dependency_sync_arguments+=(--cache "${dependency_downloads}" --refresh --offline)', client_script)
+        installer = (ROOT / "tools/release/install_dependency_bundle.sh").read_text()
+        self.assertIn('gh attestation verify "oci://${reference}"', installer)
+        self.assertGreaterEqual(candidate.count("GH_TOKEN: ${{ github.token }}"), 1)
 
     def test_dependency_bundle_publication_is_trusted_and_digest_preserving(self) -> None:
         workflow = self.text("publish-dependency-bundle.yml")
         self.assertIn("branches: [main]", workflow)
+        self.assertNotIn("paths:", workflow)
         self.assertIn("if: github.ref == 'refs/heads/main'", workflow)
         self.assertIn('test "${GITHUB_REF}" = refs/heads/main', workflow)
         self.assertIn("refs/remotes/origin/main", workflow)
@@ -116,6 +126,39 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("immutable dependency material tag exists", workflow)
         self.assertNotIn("pull_request:", workflow)
         self.assertNotIn("contents: write", workflow)
+        self.assertIn("attestations: read", self.text("release.yml"))
+        self.assertIn("attestations: read", self.text("release-rehearsal.yml"))
+
+    def test_dependency_bundle_install_fails_before_pull_without_attestation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            binaries = Path(temporary)
+            (binaries / "gh").write_text(
+                "#!/usr/bin/env sh\nexit 42\n", encoding="utf-8"
+            )
+            docker_marker = binaries / "docker-called"
+            (binaries / "docker").write_text(
+                f"#!/usr/bin/env sh\ntouch '{docker_marker}'\nexit 0\n",
+                encoding="utf-8",
+            )
+            (binaries / "gh").chmod(0o755)
+            (binaries / "docker").chmod(0o755)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "GITHUB_REPOSITORY": "atrinik/classic",
+                    "PATH": f"{binaries}:{environment['PATH']}",
+                }
+            )
+            result = subprocess.run(
+                ["tools/release/install_dependency_bundle.sh"],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 42)
+            self.assertFalse(docker_marker.exists())
 
     def test_package_dispatch_is_bound_to_a_tag_or_current_main_recovery(self) -> None:
         workflow = self.text("package-release.yml")

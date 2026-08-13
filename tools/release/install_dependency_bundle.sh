@@ -13,6 +13,12 @@ digest=$(python3 "${tool}" --root "${repository_root}" \
   --descriptor "${descriptor}" show --field digest)
 reference=${image}@${digest}
 
+if [[ -z ${GITHUB_REPOSITORY:-} ]]; then
+  echo "GITHUB_REPOSITORY is required to verify the dependency bundle attestation" >&2
+  exit 1
+fi
+gh attestation verify "oci://${reference}" --repo "${GITHUB_REPOSITORY}"
+
 docker pull "${reference}"
 docker image inspect "${reference}" >/dev/null
 container=$(docker create "${reference}" true)

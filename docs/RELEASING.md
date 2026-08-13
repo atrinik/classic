@@ -138,6 +138,12 @@ a deterministic material digest, and the exact OCI manifest digest at
 complete material digest and is immutable; release consumers use the manifest
 digest, never the tag, as their trust boundary.
 
+The embedded `materials.json` is a deterministic unsigned statement of the
+closed archive set and acquisition contract; it does not claim a builder
+identity. The authoritative publication provenance is the GitHub-signed OCI
+attestation. Every release, rehearsal, and recovery consumer verifies that
+attestation for the exact digest and repository before accepting the image.
+
 Any reviewed lock or acquisition-contract change must rebuild the descriptor
 before merge:
 
@@ -165,8 +171,9 @@ Dependency Bundle` to publish and attest the checked descriptor before
 dispatching a rehearsal. Semantic Release also waits for and fully verifies
 that exact bundle before it may create a tag or draft. A missing bundle therefore
 blocks versioning rather than allowing a release to race its input publication.
-Build Release Candidate pulls the durable image once, verifies the outer OCI
-digest, closed manifest, provenance, source-lock digests, archive set, sizes,
+Build Release Candidate verifies the GitHub OCI attestation, pulls the durable
+image once, verifies the outer OCI digest, closed materials statement,
+source-lock digests, archive set, sizes,
 and every inner SHA-256, then passes a one-day per-run artifact to the Windows
 and server-image jobs. Those consumers run dependency acquisition and build
 steps with networking disabled; a missing, stale, corrupt, duplicated, or extra

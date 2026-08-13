@@ -3,14 +3,6 @@ name: Publish Dependency Bundle
 on:
   push:
     branches: [main]
-    paths:
-      - .github/workflows/publish-dependency-bundle.yml
-      - client/dependencies.lock.json
-      - dependencies.bundle.json
-      - server/cmake/immutable_sources.lock.json
-      - server/dependencies.lock.json
-      - server/tools/dependencies.py
-      - tools/release/dependency_bundle.py
   workflow_dispatch:
 
 permissions:

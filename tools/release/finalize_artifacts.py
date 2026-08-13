@@ -522,6 +522,29 @@ def build_spdx(
     }
 
 
+def build_release_manifest(
+    paths: list[Path],
+    version: str,
+    revision: str,
+    source_epoch: int,
+    dependency_bundle: dict[str, object],
+    locked_inputs: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "tag": f"v{version}",
+        "version": version,
+        "revision": revision,
+        "source_epoch": source_epoch,
+        "dependency_bundle": dependency_bundle,
+        "locked_inputs": locked_inputs,
+        "artifacts": [
+            {"name": path.name, "sha256": sha256(path), "size": path.stat().st_size}
+            for path in paths
+        ],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
@@ -625,19 +648,14 @@ def main() -> int:
     manifest_path = directory / "release-manifest.json"
     manifest_path.write_text(
         json.dumps(
-            {
-                "schema_version": 1,
-                "tag": f"v{arguments.version}",
-                "version": arguments.version,
-                "revision": arguments.revision,
-                "source_epoch": arguments.source_epoch,
-                "dependency_bundle": dependency_bundle,
-                "locked_inputs": locked_inputs,
-                "artifacts": [
-                    {"name": path.name, "sha256": sha256(path), "size": path.stat().st_size}
-                    for path in indexed_paths
-                ],
-            },
+            build_release_manifest(
+                indexed_paths,
+                arguments.version,
+                arguments.revision,
+                arguments.source_epoch,
+                dependency_bundle,
+                locked_inputs,
+            ),
             indent=2,
         )
         + "\n",
