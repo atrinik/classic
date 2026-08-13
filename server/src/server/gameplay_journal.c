@@ -284,6 +284,12 @@ static bool journal_enforce_retention(void) {
         }
         struct stat metadata;
 #ifdef WIN32
+        DWORD attributes = GetFileAttributesA(file.path);
+        if (attributes == INVALID_FILE_ATTRIBUTES ||
+            (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+            ok = false;
+            break;
+        }
         int status = stat(file.path, &metadata);
 #else
         int status = lstat(file.path, &metadata);

@@ -367,13 +367,11 @@ def query(journal: Journal, **filters: str | None) -> list[dict[str, Any]]:
         ))
     }
     transaction_order = {}
-    for transaction_id in matching_transactions:
-        intent = next((record for record in selected
-                       if record["transaction_id"] == transaction_id
-                       and record["phase"] == "intent"), None)
-        if intent is not None:
+    for record in selected:
+        transaction_id = record["transaction_id"]
+        if record["phase"] == "intent" and transaction_id not in transaction_order:
             transaction_order[transaction_id] = (
-                run_order[(intent["server_id"], intent["run_id"])], intent["sequence"]
+                run_order[(record["server_id"], record["run_id"])], record["sequence"]
             )
     phase_order = {"intent": 0, "commit": 1, "abort": 1}
     return sorted(selected, key=lambda value: (

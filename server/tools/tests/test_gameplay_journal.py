@@ -270,6 +270,20 @@ class JournalTests(unittest.TestCase):
             ["z-transaction", "z-transaction", "a-transaction", "a-transaction"],
         )
 
+    def test_large_entity_query_indexes_transactions_once(self) -> None:
+        records = []
+        for index in range(250):
+            transaction = f"tx-{index:04d}"
+            records.extend([
+                self.record("intent", transaction, utc="2026-08-13T00:00:01Z"),
+                self.record("commit", transaction, utc="2026-08-13T00:00:01Z"),
+            ])
+        self.write(*records)
+        selected = gameplay_journal.query(gameplay_journal.load([self.root]), account="acct")
+        self.assertEqual(len(selected), 500)
+        self.assertEqual(selected[0]["transaction_id"], "tx-0000")
+        self.assertEqual(selected[-1]["transaction_id"], "tx-0249")
+
     def test_cross_run_terminal_follows_replayed_intent(self) -> None:
         self.write(self.record("intent", "tx1", utc="2026-08-13T00:00:10Z"))
         self.sequence = 0
