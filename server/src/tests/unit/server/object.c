@@ -27,6 +27,7 @@
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
+#include <commands.h>
 #include <toolkit/string.h>
 #include <arch.h>
 #include <loader.h>
@@ -398,6 +399,18 @@ START_TEST(test_object_can_merge) {
     ob1 = arch_get("bolt");
     ob2 = arch_get("bolt");
     ck_assert(object_can_merge(ob1, ob2));
+    FREE_AND_COPY_HASH(ob1->custody_lineage, "lineage-1");
+    ck_assert(!object_can_merge(ob1, ob2));
+    FREE_AND_COPY_HASH(ob2->custody_lineage, "lineage-1");
+    ck_assert(object_can_merge(ob1, ob2));
+    FREE_AND_COPY_HASH(ob2->custody_first, "account:character");
+    ck_assert(!object_can_merge(ob1, ob2));
+    FREE_AND_COPY_HASH(ob1->custody_first, "account:character");
+    ck_assert(object_can_merge(ob1, ob2));
+    FREE_AND_CLEAR_HASH(ob1->custody_lineage);
+    FREE_AND_CLEAR_HASH(ob2->custody_lineage);
+    FREE_AND_CLEAR_HASH(ob1->custody_first);
+    FREE_AND_CLEAR_HASH(ob2->custody_first);
     FREE_AND_COPY_HASH(ob2->name, "Not same name");
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob2);
@@ -427,6 +440,48 @@ START_TEST(test_object_can_merge) {
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob1);
     object_destroy(ob2);
+}
+END_TEST
+
+START_TEST(test_object_custody_provenance) {
+    object *player = player_get_dummy("Custody tester", NULL);
+    object *item = arch_get("bolt");
+
+    ck_assert_ptr_eq(item->custody_lineage, NULL);
+    ck_assert_ptr_eq(item->custody_first, NULL);
+    ck_assert_ptr_eq(item->custody_last, NULL);
+
+    object_custody_acquire(item, player);
+    ck_assert_ptr_ne(item->custody_lineage, NULL);
+    ck_assert_ptr_ne(item->custody_first, NULL);
+    ck_assert_ptr_ne(player->custody_actor, NULL);
+    ck_assert_str_eq(item->custody_first, player->custody_actor);
+    ck_assert_msg(strncmp(item->custody_lineage, "item:", 5) == 0,
+                  "custody lineage must use the persistent item prefix");
+
+    shstr *first = add_refcount(item->custody_first);
+    object_custody_acquire(item, player);
+    ck_assert_ptr_eq(item->custody_first, first);
+    free_string_shared(first);
+
+    object_custody_relinquish(item, player);
+    ck_assert_str_eq(item->custody_last, player->custody_actor);
+    object_custody_record(item, player, "custody-test");
+
+    char item_name[] = "bolt";
+    item = object_insert_into(item, player, 0);
+    command_custody(player, "custody", item_name);
+    command_custody(player, "custody", "");
+
+    object *other_player = player_get_dummy("Second custody tester", NULL);
+    object *other_item = arch_get("bolt");
+    object_custody_relinquish(other_item, other_player);
+    ck_assert_ptr_ne(other_player->custody_actor, NULL);
+    ck_assert_str_eq(other_item->custody_last, other_player->custody_actor);
+
+    object_destroy(other_item);
+    object_destroy(other_player);
+    object_destroy(player);
 }
 END_TEST
 
@@ -1031,12 +1086,31 @@ START_TEST(test_object_stable_identity_lookup) {
 END_TEST
 
 START_TEST(test_object_stable_identity_serialization) {
-    object *ob = object_load_str("arch wand\nspell_id spell_firestorm\nend\n");
+    object *ob = object_load_str("arch bolt\ncustody_lineage 42\n"
+                                 "custody_first account:original\n"
+                                 "custody_last account:latest\n"
+                                 "custody_actor account:opaque-character\nend\n");
     ck_assert_ptr_ne(ob, NULL);
-    ck_assert_int_eq(ob->stats.sp, SP_FIRESTORM);
+    ck_assert_str_eq(ob->custody_lineage, "42");
+    ck_assert_str_eq(ob->custody_first, "account:original");
+    ck_assert_str_eq(ob->custody_last, "account:latest");
+    ck_assert_str_eq(ob->custody_actor, "account:opaque-character");
     StringBuffer *sb = stringbuffer_new();
     object_dump_rec(ob, sb);
     char *dump = stringbuffer_finish(sb);
+    ck_assert_ptr_ne(strstr(dump, "custody_lineage 42\n"), NULL);
+    ck_assert_ptr_ne(strstr(dump, "custody_first account:original\n"), NULL);
+    ck_assert_ptr_ne(strstr(dump, "custody_last account:latest\n"), NULL);
+    ck_assert_ptr_ne(strstr(dump, "custody_actor account:opaque-character\n"), NULL);
+    free(dump);
+    object_destroy(ob);
+
+    ob = object_load_str("arch wand\nspell_id spell_firestorm\nend\n");
+    ck_assert_ptr_ne(ob, NULL);
+    ck_assert_int_eq(ob->stats.sp, SP_FIRESTORM);
+    sb = stringbuffer_new();
+    object_dump_rec(ob, sb);
+    dump = stringbuffer_finish(sb);
     ck_assert_ptr_ne(strstr(dump, "spell_id spell_firestorm\n"), NULL);
     ck_assert_ptr_eq(strstr(dump, "\nsp "), NULL);
     free(dump);
@@ -1338,6 +1412,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_exit_tiled_enemy);
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_tiled_enemy);
     tcase_add_test(tc_core, test_object_can_merge);
+    tcase_add_test(tc_core, test_object_custody_provenance);
     tcase_add_test(tc_core, test_object_plural_name_contract);
     tcase_add_test(tc_core, test_object_merge_updates_name_and_count);
     tcase_add_test(tc_core, test_map_stack_operations_increment_update_once);
