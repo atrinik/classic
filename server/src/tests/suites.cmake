@@ -10,6 +10,7 @@ set(ATRINIK_SERVER_TEST_SUITES
     "server.bank|check_server_bank|src/tests/unit/server/bank.c"
     "server.cache|check_server_cache|src/tests/unit/server/cache.c"
     "server.content_benchmark|check_server_content_benchmark|src/tests/unit/server/content_benchmark.c"
+    "server.gameplay_journal|check_server_gameplay_journal|src/tests/unit/server/gameplay_journal.c"
     "server.living|check_server_living|src/tests/unit/server/living.c"
     "server.metrics|check_server_metrics|src/tests/unit/server/metrics.c"
     "server.light|check_server_light|src/tests/unit/server/light.c"

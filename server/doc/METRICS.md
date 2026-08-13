@@ -12,6 +12,15 @@ detail and are never serialized. All gameplay metrics are lifetime values;
 seasonal or monthly views must be derived by a future optional analytics
 export without resetting or mutating authoritative values.
 
+Metrics are checkpointed aggregates, not an ordered recovery log. Selected
+item, currency, quest, progression, and privileged persistent transactions use
+the separate [private gameplay audit journal](GAMEPLAY_JOURNAL.md), whose
+intent/commit protocol and synced records distinguish attempted work from a
+committed success. Startup, networking, configuration, security, and human
+diagnostics remain in operational logs. Movement, attacks, per-hit effects,
+chat, and other high-volume or player-authored data are never promoted to the
+journal merely because an aggregate metric exists.
+
 ## Ownership and persistence
 
 Character metrics belong to exactly one playable character and are stored in
