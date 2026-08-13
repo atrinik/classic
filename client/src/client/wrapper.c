@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -189,63 +189,6 @@ void copy_file(const char *filename, const char *filename_out) {
 
     fclose(fp);
     fclose(fp_out);
-}
-
-/**
- * Copy a file/directory if it exists.
- * @param from
- * Directory where to copy from.
- * @param to
- * Directort to copy to.
- * @param src
- * File/directory to copy.
- * @param dst
- * Where to copy the file/directory to.
- */
-void copy_if_exists(const char *from, const char *to, const char *src, const char *dst) {
-    char src_path[HUGE_BUF], dst_path[HUGE_BUF];
-
-    snprintf(src_path, sizeof(src_path), "%s/%s", from, src);
-    snprintf(dst_path, sizeof(dst_path), "%s/%s", to, dst);
-
-    if (access(src_path, R_OK) == 0) {
-        copy_rec(src_path, dst_path);
-    }
-}
-
-/**
- * Recursively copy a file or directory.
- * @param src
- * Source file/directory to copy.
- * @param dst
- * Where to copy to.
- */
-void copy_rec(const char *src, const char *dst) {
-    /* Copy directory contents. */
-    DIR *dir = opendir(src);
-    if (dir != NULL) {
-        struct dirent *currentfile;
-        char dir_src[HUGE_BUF], dir_dst[HUGE_BUF];
-
-        /* Try to make the new directory. */
-        if (access(dst, R_OK) != 0) {
-            mkdir(dst, 0755);
-        }
-
-        while ((currentfile = readdir(dir))) {
-            if (currentfile->d_name[0] == '.') {
-                continue;
-            }
-
-            snprintf(dir_src, sizeof(dir_src), "%s/%s", src, currentfile->d_name);
-            snprintf(dir_dst, sizeof(dir_dst), "%s/%s", dst, currentfile->d_name);
-            copy_rec(dir_src, dir_dst);
-        }
-
-        closedir(dir);
-    } else {
-        copy_file(src, dst);
-    }
 }
 
 /**
