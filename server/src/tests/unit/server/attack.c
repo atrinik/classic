@@ -138,18 +138,6 @@ START_TEST(test_player_hurt_sound_selection_and_damage_gate) {
     CLEAR_FLAG(pl, FLAG_IS_MALE);
     CLEAR_FLAG(pl, FLAG_IS_FEMALE);
 
-    ck_assert_str_eq(attack_player_hurt_sound(pl), "doh.ogg");
-    SET_FLAG(pl, FLAG_IS_MALE);
-    ck_assert_str_eq(attack_player_hurt_sound(pl), "doh.ogg");
-    SET_FLAG(pl, FLAG_IS_FEMALE);
-    ck_assert_str_eq(attack_player_hurt_sound(pl), "doh.ogg");
-    CLEAR_FLAG(pl, FLAG_IS_MALE);
-    for (size_t i = 0; i < 32; i++) {
-        const char *filename = attack_player_hurt_sound(pl);
-        ck_assert(attack_test_is_female_hurt_sound(filename));
-        ck_assert_str_ne(filename, "player_hurt.ogg");
-    }
-
     object *attacker = arch_get("kobold");
     attacker->x = pl->x + 1;
     attacker->y = pl->y;
@@ -159,21 +147,34 @@ START_TEST(test_player_hurt_sound_selection_and_damage_gate) {
     attacker->attack[ATNR_IMPACT] = 100;
     pl->block = 0;
     pl->absorb = 0;
+    pl->stats.maxhp = 1000;
+    pl->stats.hp = pl->stats.maxhp;
     memset(pl->protection, 0, sizeof(pl->protection));
 
     char filename[MAX_BUF];
     socket_buffer_clear(CONTR(pl)->cs);
     ck_assert_int_gt(attack_hit(pl, attacker, 10), 0);
     ck_assert_uint_eq(attack_test_hurt_sounds(pl, filename, sizeof(filename)), 1);
-    ck_assert(attack_test_is_female_hurt_sound(filename));
-    ck_assert_str_ne(filename, "player_hurt.ogg");
+    ck_assert_str_eq(filename, "doh.ogg");
 
-    CLEAR_FLAG(pl, FLAG_IS_FEMALE);
     SET_FLAG(pl, FLAG_IS_MALE);
     socket_buffer_clear(CONTR(pl)->cs);
     ck_assert_int_gt(attack_hit(pl, attacker, 10), 0);
     ck_assert_uint_eq(attack_test_hurt_sounds(pl, filename, sizeof(filename)), 1);
     ck_assert_str_eq(filename, "doh.ogg");
+
+    SET_FLAG(pl, FLAG_IS_FEMALE);
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, attacker, 10), 0);
+    ck_assert_uint_eq(attack_test_hurt_sounds(pl, filename, sizeof(filename)), 1);
+    ck_assert_str_eq(filename, "doh.ogg");
+
+    CLEAR_FLAG(pl, FLAG_IS_MALE);
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, attacker, 10), 0);
+    ck_assert_uint_eq(attack_test_hurt_sounds(pl, filename, sizeof(filename)), 1);
+    ck_assert(attack_test_is_female_hurt_sound(filename));
+    ck_assert_str_ne(filename, "player_hurt.ogg");
 
     socket_buffer_clear(CONTR(pl)->cs);
     ck_assert_int_eq(attack_hit(pl, attacker, 0), 0);

@@ -394,18 +394,18 @@ if (BUILD_TESTING)
     target_link_libraries(client-setting-value-tests PRIVATE Atrinik::Core)
     add_test(NAME client-setting-value COMMAND client-setting-value-tests)
 
-    add_executable(client-sound-server-effect-tests
-        src/tests/sound_server_effect.c
-        src/client/sound_server_effect.c)
-    atrinik_configure_target(client-sound-server-effect-tests)
-    target_compile_definitions(client-sound-server-effect-tests PRIVATE SDL_DISABLE_OLD_NAMES)
-    target_include_directories(client-sound-server-effect-tests BEFORE PRIVATE
+    add_executable(client-sound-command-tests
+        src/tests/sound_command.c
+        src/client/sound_command.c)
+    atrinik_configure_target(client-sound-command-tests)
+    target_compile_definitions(client-sound-command-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-sound-command-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(client-sound-server-effect-tests PRIVATE Atrinik::Core SDL3::SDL3)
-    add_test(NAME client-sound-server-effect COMMAND client-sound-server-effect-tests)
+    target_link_libraries(client-sound-command-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-sound-command COMMAND client-sound-command-tests)
 
     add_executable(client-metaserver-options-tests
         src/tests/metaserver_options.c

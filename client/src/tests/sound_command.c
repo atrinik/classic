@@ -10,7 +10,6 @@
  ************************************************************************/
 
 #include <global.h>
-
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -24,18 +23,35 @@
 
 Client_Player cpl;
 
-static const char *played_filename;
+static char played_filename[MAX_BUF];
 static int played_volume;
 static int played_loop;
+static int8_t played_x;
+static int8_t played_y;
 
-int sound_play_effect_loop(const char *filename, int volume, int loop) {
-    played_filename = filename;
+void sound_command_play_effect(const char *filename, int volume, int loop, int8_t x, int8_t y) {
+    snprintf(VS(played_filename), "%s", filename);
     played_volume = volume;
     played_loop = loop;
-    return 17;
+    played_x = x;
+    played_y = y;
 }
 
-static void test_server_effect_filename_is_opaque(void) {
+void sound_command_play_background(const char *filename, int volume, int loop) {
+    (void)filename;
+    (void)volume;
+    (void)loop;
+    abort();
+}
+
+void sound_command_play_absolute(const char *filename, int volume, int loop) {
+    (void)filename;
+    (void)volume;
+    (void)loop;
+    abort();
+}
+
+static void test_received_effect_filename_is_opaque(void) {
     static const char *const filenames[] = {
         "doh.ogg",
         "doh_female_1.ogg",
@@ -51,17 +67,30 @@ static void test_server_effect_filename_is_opaque(void) {
     for (int gender = GENDER_NEUTER; gender < GENDER_MAX; gender++) {
         cpl.gender = gender;
         for (size_t i = 0; i < arraysize(filenames); i++) {
-            played_filename = NULL;
-            TEST_CHECK(sound_play_server_effect(filenames[i], 83, -1) == 17);
-            TEST_CHECK(played_filename == filenames[i]);
+            uint8_t packet[MAX_BUF];
+            size_t filename_size = strlen(filenames[i]) + 1;
+            size_t packet_size = 1 + filename_size + 4;
+            TEST_CHECK(packet_size <= sizeof(packet));
+            packet[0] = CMD_SOUND_EFFECT;
+            memcpy(&packet[1], filenames[i], filename_size);
+            packet[1 + filename_size] = (uint8_t)-1;
+            packet[2 + filename_size] = (uint8_t)-17;
+            packet[3 + filename_size] = (uint8_t)-3;
+            packet[4 + filename_size] = 4;
+
+            played_filename[0] = '\0';
+            socket_command_sound(packet, packet_size, 0);
+            TEST_CHECK(played_filename[0] != '\0');
             TEST_CHECK(strcmp(played_filename, filenames[i]) == 0);
-            TEST_CHECK(played_volume == 83);
+            TEST_CHECK(played_volume == -17);
             TEST_CHECK(played_loop == -1);
+            TEST_CHECK(played_x == -3);
+            TEST_CHECK(played_y == 4);
         }
     }
 }
 
 int main(void) {
-    test_server_effect_filename_is_opaque();
+    test_received_effect_filename_is_opaque();
     return 0;
 }

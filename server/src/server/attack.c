@@ -198,7 +198,7 @@ static void attack_bonus_send(object *owner, const attack_bonus_t *bonus) {
 }
 
 /** Select the authoritative hurt vocal for a player. */
-const char *attack_player_hurt_sound(const object *player) {
+static const char *attack_player_hurt_sound(const object *player) {
     static const char *const female_hurt_sounds[] = {
         "doh_female_1.ogg",
         "doh_female_2.ogg",

@@ -95,8 +95,6 @@ extern void sound_play_effect(const char *filename, int volume);
 
 extern int sound_play_effect_loop(const char *filename, int volume, int loop);
 
-extern int sound_play_server_effect(const char *filename, int volume, int loop);
-
 extern void sound_stop_effect(int channel);
 
 extern void sound_start_bg_music(const char *filename, int volume, int loop);
