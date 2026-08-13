@@ -753,7 +753,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     }
 
     mapstat = packet_reader_read_uint8(&reader);
-    map_visible_change = mapstat == MAP_UPDATE_CMD_NEW;
+    map_visible_change = mapstat != MAP_UPDATE_CMD_SAME && mapstat != MAP_UPDATE_CMD_PARTIAL;
 
     if (mapstat != MAP_UPDATE_CMD_SAME && mapstat != MAP_UPDATE_CMD_PARTIAL) {
         char mapname[HUGE_BUF], bg_music[HUGE_BUF], weather[MAX_BUF], region_name[MAX_BUF],
