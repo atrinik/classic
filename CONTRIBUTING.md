@@ -89,6 +89,15 @@ cannot publish. The retired nested component workflow and semantic-release
 files remain available in Git history; never restore them as independent
 release trains.
 
+Release builds consume `sound`, `content`, `resources`, and `libpcpnatpmp`
+through the exact OCI digest in `dependencies.bundle.json`. The descriptor
+also binds the verified CI input-bundle digest and acquisition-tool hashes.
+Lock or acquisition changes must regenerate it with
+`tools/release/dependency_bundle.py`; commit neither downloaded archives nor
+the ignored OCI layout. Only the trusted current-`main` publisher may create a
+material bundle. Release consumers reverify every inner digest and build with
+dependency networking disabled.
+
 Linux Check compiles protocol/libatrinik, server, and client inside the exact
 digest-pinned `ghcr.io/atrinik/classic-build` image declared in
 `.github/workflows/check.yml`. Each job restores only its own ccache directory,

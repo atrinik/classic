@@ -16,6 +16,7 @@ import tarfile
 import zipfile
 
 from locked_inputs import load_locked_inputs
+from dependency_bundle import load_descriptor, verify_descriptor
 
 
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
@@ -521,6 +522,29 @@ def build_spdx(
     }
 
 
+def build_release_manifest(
+    paths: list[Path],
+    version: str,
+    revision: str,
+    source_epoch: int,
+    dependency_bundle: dict[str, object],
+    locked_inputs: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "tag": f"v{version}",
+        "version": version,
+        "revision": revision,
+        "source_epoch": source_epoch,
+        "dependency_bundle": dependency_bundle,
+        "locked_inputs": locked_inputs,
+        "artifacts": [
+            {"name": path.name, "sha256": sha256(path), "size": path.stat().st_size}
+            for path in paths
+        ],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
@@ -547,6 +571,8 @@ def main() -> int:
 
     paths = sorted(path for path in directory.iterdir() if path.is_file())
     locked_inputs = load_locked_inputs(arguments.version)
+    dependency_bundle = load_descriptor(Path("dependencies.bundle.json"))
+    verify_descriptor(Path.cwd(), dependency_bundle)
     names = {path.name for path in paths}
     required = expected_names(arguments.version)
     wheel_name = f"atrinik_classic_protocol-{arguments.version}-py3-none-any.whl"
@@ -622,18 +648,14 @@ def main() -> int:
     manifest_path = directory / "release-manifest.json"
     manifest_path.write_text(
         json.dumps(
-            {
-                "schema_version": 1,
-                "tag": f"v{arguments.version}",
-                "version": arguments.version,
-                "revision": arguments.revision,
-                "source_epoch": arguments.source_epoch,
-                "locked_inputs": locked_inputs,
-                "artifacts": [
-                    {"name": path.name, "sha256": sha256(path), "size": path.stat().st_size}
-                    for path in indexed_paths
-                ],
-            },
+            build_release_manifest(
+                indexed_paths,
+                arguments.version,
+                arguments.revision,
+                arguments.source_epoch,
+                dependency_bundle,
+                locked_inputs,
+            ),
             indent=2,
         )
         + "\n",

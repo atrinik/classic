@@ -11,6 +11,14 @@
 protocol/build/
 libatrinik/build/
 server/build/
+!server/build/
+server/build/*
+!server/build/dependencies/
+!server/build/dependencies/downloads/
+!server/build/dependencies/downloads/*.tar.gz
+!server/build/dependency-cache/
+!server/build/dependency-cache/downloads/
+!server/build/dependency-cache/downloads/*.tar.gz
 server/data/
 server/runtime/
 server/resources/
