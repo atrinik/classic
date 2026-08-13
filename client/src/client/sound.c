@@ -179,6 +179,21 @@ static void sound_free(sound_data_struct *tmp) {
     free(tmp);
 }
 
+static const char *sound_music_duration_key(const char *filename) {
+    const char *key = filename;
+    for (const char *cp = filename; *cp != '\0'; cp++) {
+        if (*cp == '/' || *cp == '\\') {
+            key = cp + 1;
+        }
+    }
+
+    if (*key == '\0' || !strcmp(key, ".") || !strcmp(key, "..")) {
+        return NULL;
+    }
+
+    return key;
+}
+
 /**
  * Get duration of a music file.
  * @param filename
@@ -189,8 +204,13 @@ static void sound_free(sound_data_struct *tmp) {
 static uint32_t sound_music_file_get_duration(const char *filename) {
     char path[HUGE_BUF], *contents, *cp;
     uint32_t duration;
+    const char *key = sound_music_duration_key(filename);
 
-    snprintf(path, sizeof(path), DIRECTORY_MEDIA "/durations/%s", filename);
+    if (key == NULL) {
+        return 0;
+    }
+
+    snprintf(path, sizeof(path), DIRECTORY_MEDIA "/durations/%s", key);
     cp = file_path(path, "r");
     contents = path_file_contents(cp);
     free(cp);
@@ -215,8 +235,13 @@ static uint32_t sound_music_file_get_duration(const char *filename) {
 static void sound_music_file_set_duration(const char *filename, uint32_t duration) {
     char path[HUGE_BUF];
     FILE *fp;
+    const char *key = sound_music_duration_key(filename);
 
-    snprintf(path, sizeof(path), DIRECTORY_MEDIA "/durations/%s", filename);
+    if (key == NULL) {
+        return;
+    }
+
+    snprintf(path, sizeof(path), DIRECTORY_MEDIA "/durations/%s", key);
     fp = path_fopen(path, "w");
 
     if (!fp) {
@@ -445,7 +470,9 @@ void sound_clear_cache(void) {
             return;
         }
         sound_ambient_clear();
-        MIX_StopAllTracks(sound_mixer, 0);
+        if (!MIX_StopAllTracks(sound_mixer, 0)) {
+            return;
+        }
     }
 #else
     sound_ambient_clear();
@@ -1215,6 +1242,10 @@ void sound_test_fail_next_playback(void) {
 
 void sound_test_fail_next_stop(void) {
     sound_test_fail_stop = true;
+}
+
+const char *sound_test_duration_key(const char *filename) {
+    return sound_music_duration_key(filename);
 }
 
 size_t sound_test_cache_size(void) {

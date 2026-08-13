@@ -216,6 +216,12 @@ static void test_channel_exhaustion(void) {
 }
 
 static void test_music_lifecycle(void) {
+    TEST_CHECK(strcmp(sound_test_duration_key("relative/area/fireside.mid"), "fireside.mid") == 0);
+    TEST_CHECK(strcmp(sound_test_duration_key("relative\\area\\fireside.mid"), "fireside.mid") ==
+               0);
+    TEST_CHECK(strcmp(sound_test_duration_key("../private/fireside.mid"), "fireside.mid") == 0);
+    TEST_CHECK(sound_test_duration_key("../..") == NULL);
+
     sound_deinit();
     sound_init();
     reset_capture();
