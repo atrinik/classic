@@ -10,7 +10,9 @@ import re
 import subprocess
 
 
-TAG_RE = re.compile(r"(?:[0-9]+\.[0-9]+\.[0-9]+|latest)")
+TAG_RE = re.compile(
+    r"(?:[0-9]+\.[0-9]+\.[0-9]+|latest|materials-[0-9a-f]{64})"
+)
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 
 
@@ -37,10 +39,16 @@ def find_version(value: object, tag: str) -> str | None:
     for item in value:
         if not isinstance(item, dict):
             raise RuntimeError("GHCR package API returned invalid version metadata")
-        metadata = item.get("metadata", {})
-        container = metadata.get("container", {}) if isinstance(metadata, dict) else {}
-        tags = container.get("tags", []) if isinstance(container, dict) else []
-        if not isinstance(tags, list):
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            raise RuntimeError("GHCR package API returned invalid version metadata")
+        container = metadata.get("container")
+        if not isinstance(container, dict):
+            raise RuntimeError("GHCR package API returned invalid container metadata")
+        tags = container.get("tags")
+        if not isinstance(tags, list) or not all(
+            isinstance(item, str) for item in tags
+        ):
             raise RuntimeError("GHCR package API returned invalid tag metadata")
         if tag in tags:
             digest = item.get("name")
@@ -52,8 +60,11 @@ def find_version(value: object, tag: str) -> str | None:
     return matches[0] if matches else None
 
 
-def write_output(path: Path, exists: bool, digest: str) -> None:
+def write_output(
+    path: Path, package_exists: bool, exists: bool, digest: str
+) -> None:
     with path.open("a", encoding="utf-8") as stream:
+        stream.write(f"package_exists={str(package_exists).lower()}\n")
         stream.write(f"exists={str(exists).lower()}\n")
         stream.write(f"digest={digest}\n")
 
@@ -70,7 +81,9 @@ def main() -> int:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", arguments.package):
         parser.error("invalid package")
     if not TAG_RE.fullmatch(arguments.tag):
-        parser.error("--tag must be MAJOR.MINOR.PATCH or latest")
+        parser.error(
+            "--tag must be MAJOR.MINOR.PATCH, latest, or materials-SHA256"
+        )
 
     page = 1
     while True:
@@ -87,14 +100,14 @@ def main() -> int:
                 and value.get("message") == "Package not found."
             ):
                 if arguments.github_output is not None:
-                    write_output(arguments.github_output, False, "")
+                    write_output(arguments.github_output, False, False, "")
                 print("GHCR package does not exist yet")
                 return 0
             raise RuntimeError(f"cannot audit GHCR package: {detail or value}")
         digest = find_version(value, arguments.tag)
         if digest is not None:
             if arguments.github_output is not None:
-                write_output(arguments.github_output, True, digest)
+                write_output(arguments.github_output, True, True, digest)
             print(
                 f"GHCR tag already exists at {digest}: "
                 f"{arguments.package}:{arguments.tag}"
@@ -104,7 +117,7 @@ def main() -> int:
             break
         page += 1
     if arguments.github_output is not None:
-        write_output(arguments.github_output, False, "")
+        write_output(arguments.github_output, True, False, "")
     print(f"GHCR tag is available: {arguments.package}:{arguments.tag}")
     return 0
 

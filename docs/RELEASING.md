@@ -171,6 +171,17 @@ Dependency Bundle` to publish and attest the checked descriptor before
 dispatching a rehearsal. Semantic Release also waits for and fully verifies
 that exact bundle before it may create a tag or draft. A missing bundle therefore
 blocks versioning rather than allowing a release to race its input publication.
+The initial publisher audits the material tag through GitHub's structured
+package API and treats only its exact package-not-found response as an absent
+repository. Ordinary pushes do not recreate a missing package. For the first
+publication only, manually dispatch `Publish Dependency Bundle` from exact
+current `main` with `bootstrap_missing_package` enabled; that path is bound to
+the initial checked material tag and OCI digest. Once the package exists,
+ordinary current-`main` runs may add new material tags but still refuse any
+existing tag at a different digest. Authentication, transport,
+malformed-response, and other API errors remain terminal and cannot trigger a
+blind tag write. Package deletion or loss is a recovery incident: do not reuse
+the bootstrap input; follow the exact-digest restoration procedure below.
 Build Release Candidate verifies the GitHub OCI attestation, pulls the durable
 image once, verifies the outer OCI digest, closed materials statement,
 source-lock digests, archive set, sizes,
