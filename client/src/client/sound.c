@@ -125,6 +125,7 @@ static void sound_start_bg_music_internal(const char *filename,
                                           int volume_adjustment,
                                           const char *source,
                                           bool log_started);
+static void sound_close_bg_music(const char *reason);
 static bool sound_stop_bg_music_internal(const char *reason);
 
 /**
@@ -404,8 +405,10 @@ static void sound_cache_free(void) {
  * Deinitialize the sound system.
  */
 void sound_deinit(void) {
-    if (enabled) {
-        sound_stop_bg_music_internal("shutdown");
+    if (enabled && sound_background && !sound_stop_bg_music_internal("shutdown")) {
+        /* Mixer destruction below is definitive even when the track-level
+         * stop rejects the request. Close the logical lifecycle exactly once. */
+        sound_close_bg_music("shutdown");
     }
     enabled = 0;
 #ifdef HAVE_SDL_MIXER
@@ -438,7 +441,9 @@ void sound_deinit(void) {
 void sound_clear_cache(void) {
 #ifdef HAVE_SDL_MIXER
     if (enabled) {
-        sound_stop_bg_music();
+        if (sound_background && !sound_stop_bg_music_internal("cache-cleared")) {
+            return;
+        }
         sound_ambient_clear();
         MIX_StopAllTracks(sound_mixer, 0);
     }
@@ -749,6 +754,17 @@ void sound_start_bg_music(const char *filename, int volume, int loop) {
 /**
  * Stop the background music, if there is any.
  */
+static void sound_close_bg_music(const char *reason) {
+    audio_log_music_stopped(sound_background_source, sound_background_logical, reason);
+    free(sound_background);
+    sound_background = NULL;
+    free(sound_background_logical);
+    sound_background_logical = NULL;
+#ifdef HAVE_SDL_MIXER
+    sound_background_hook_execute();
+#endif
+}
+
 static bool sound_stop_bg_music_internal(const char *reason) {
     if (!enabled) {
         return false;
@@ -770,14 +786,7 @@ static bool sound_stop_bg_music_internal(const char *reason) {
             return false;
         }
 #endif
-        audio_log_music_stopped(sound_background_source, sound_background_logical, reason);
-        free(sound_background);
-        sound_background = NULL;
-        free(sound_background_logical);
-        sound_background_logical = NULL;
-#ifdef HAVE_SDL_MIXER
-        sound_background_hook_execute();
-#endif
+        sound_close_bg_music(reason);
         return true;
     }
 

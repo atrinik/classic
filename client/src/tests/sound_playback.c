@@ -301,7 +301,27 @@ static void test_music_lifecycle(void) {
     TEST_CHECK(occurrences("music stopped") == 1);
 
     reset_capture();
+    sound_start_bg_music("cache-retained.ogg", 80, 0);
+    size_t cache_size = sound_test_cache_size();
+    sound_test_fail_next_stop();
+    sound_clear_cache();
+    TEST_CHECK(sound_playing_music());
+    TEST_CHECK(sound_test_cache_size() == cache_size);
+    TEST_CHECK(strstr(captured, "music stopped") == NULL);
+    sound_clear_cache();
+    TEST_CHECK(!sound_playing_music());
+    TEST_CHECK(sound_test_cache_size() == 0);
+    TEST_CHECK(strstr(captured, "reason=cache-cleared") != NULL);
+
+    reset_capture();
+    sound_start_bg_music("shutdown-forced.ogg", 80, 0);
+    sound_test_fail_next_stop();
     sound_deinit();
+    TEST_CHECK(strstr(captured,
+                      "music stopped source=intro-player "
+                      "effective=\"shutdown-forced.ogg\" reason=shutdown") != NULL);
+
+    reset_capture();
     sound_play_effect("disabled.ogg", 100);
     sound_start_bg_music("disabled.ogg", 100, 0);
     TEST_CHECK(strstr(captured, "started") == NULL);
