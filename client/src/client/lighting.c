@@ -996,15 +996,12 @@ static uint64_t lighting_projected_signature(int x, int y, const SDL_Rect *sourc
     uint64_t signature = UINT64_C(14695981039346656037);
     signature = lighting_signature_uint32(signature, (uint32_t)source_rect->w);
     signature = lighting_signature_uint32(signature, (uint32_t)source_rect->h);
-    /* A bounded fingerprint keeps cache hits cheap.  The light field is
-     * bilinearly interpolated, so a fixed 5x5 lattice captures the profile
-     * that distinguishes equivalent world sprites without rescanning every
-     * covered pixel on every painter call. */
-    for (int sample_y = 0; sample_y < 5; sample_y++) {
-        int source_y = source_rect->h == 1 ? 0 : sample_y * (source_rect->h - 1) / 4;
+    /* Include every covered sample so a cache hit is valid only when the
+     * complete lit output is equivalent; the fixed work is bounded by the
+     * already bounded source surface dimensions. */
+    for (int source_y = 0; source_y < source_rect->h; source_y++) {
         int light_y = MAX(0, MIN(lighting_height - 1, y + source_y));
-        for (int sample_x = 0; sample_x < 5; sample_x++) {
-            int source_x = source_rect->w == 1 ? 0 : sample_x * (source_rect->w - 1) / 4;
+        for (int source_x = 0; source_x < source_rect->w; source_x++) {
             int light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
             const lighting_sample *sample =
                 &light_samples[(size_t)light_y * (size_t)lighting_width + (size_t)light_x];
