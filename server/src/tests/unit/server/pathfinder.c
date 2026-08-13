@@ -46,7 +46,7 @@ START_TEST(test_exact_search_returns_owned_route_and_metrics) {
 }
 END_TEST
 
-START_TEST(test_waypoint_retains_explicit_partial_path) {
+START_TEST(test_waypoint_retains_explicit_partial_path_and_best_effort_failures) {
     mapstruct *map;
     object *npc;
     check_setup_env_pl(&map, &npc);
@@ -57,6 +57,10 @@ START_TEST(test_waypoint_retains_explicit_partial_path) {
     ck_assert_ptr_nonnull(waypoint);
     waypoint->stats.hp = 20;
     waypoint->stats.sp = 20;
+    waypoint->stats.Int = 7;
+    waypoint->stats.Str = 4;
+    waypoint->stats.dam = 9;
+    SET_FLAG(waypoint, FLAG_NO_ATTACK);
     char *errmsg = NULL;
     ck_assert_msg(clioptions_load_str("pathfinder_max_nodes = 8", &errmsg),
                   "%s",
@@ -67,11 +71,83 @@ START_TEST(test_waypoint_retains_explicit_partial_path) {
 
     ck_assert_ptr_nonnull(waypoint->msg);
     ck_assert_uint_gt(strlen(waypoint->msg), 0);
+    ck_assert_int_eq(waypoint->stats.Int, 7);
+    ck_assert_int_eq(waypoint->stats.Str, 4);
+    ck_assert_int_eq(waypoint->stats.dam, 9);
     errmsg = NULL;
     ck_assert_msg(clioptions_load_str("pathfinder_max_nodes = 10000", &errmsg),
                   "%s",
                   errmsg != NULL ? errmsg : "");
     free(errmsg);
+}
+END_TEST
+
+static void check_waypoint_abandons_stuck_cross_map_best_effort_target(bool cross_depth) {
+    mapstruct *source;
+    object *npc;
+    check_setup_env_pl(&source, &npc);
+    FREE_AND_COPY_HASH(source->path, "/unit/waypoint-source");
+
+    mapstruct *destination = get_empty_map(24, 24);
+    FREE_AND_COPY_HASH(destination->path, "/unit/waypoint-destination");
+    int source_tile = cross_depth ? TILED_UP : TILED_EAST;
+    int destination_tile = cross_depth ? TILED_DOWN : TILED_WEST;
+    source->tile_map[source_tile] = destination;
+    destination->tile_map[destination_tile] = source;
+
+    object *waypoint = arch_get("waypoint");
+    ck_assert_ptr_nonnull(waypoint);
+    waypoint = object_insert_into(waypoint, npc, 0);
+    ck_assert_ptr_nonnull(waypoint);
+    FREE_AND_COPY_HASH(waypoint->name, "home");
+    FREE_AND_ADD_REF_HASH(waypoint->slaying, destination->path);
+    waypoint->stats.hp = 8;
+    waypoint->stats.sp = 9;
+    waypoint->stats.Int = 11;
+    waypoint->stats.Str = 5;
+    SET_FLAG(waypoint, FLAG_CURSED);
+    SET_FLAG(waypoint, FLAG_NO_ATTACK);
+    SET_FLAG(waypoint, FLAG_WP_PATH_REQUESTED);
+
+    path_node_t local_step = {
+        .map = source,
+        .x = npc->x + 1,
+        .y = npc->y,
+    };
+    waypoint->msg = path_encode(&local_step);
+    waypoint->attacked_by_distance = strlen(waypoint->msg);
+
+    rv_vector rv;
+    ck_assert(get_rangevector_from_mapcoords(source,
+                                             npc->x,
+                                             npc->y,
+                                             destination,
+                                             waypoint->stats.hp,
+                                             waypoint->stats.sp,
+                                             &rv,
+                                             RV_RECURSIVE_SEARCH | RV_DIAGONAL_DISTANCE));
+    ck_assert_int_eq(rv.distance_z != 0, cross_depth);
+    waypoint->stats.dam = 1;
+
+    waypoint_move(waypoint, npc);
+
+    ck_assert_ptr_eq(waypoint->slaying, source->path);
+    ck_assert_int_eq(waypoint->stats.hp, npc->x);
+    ck_assert_int_eq(waypoint->stats.sp, npc->y);
+    ck_assert_int_eq(waypoint->stats.Int, 12);
+
+    CLEAR_FLAG(waypoint, FLAG_WP_PATH_REQUESTED);
+    waypoint_move(waypoint, npc);
+    ck_assert(!QUERY_FLAG(waypoint, FLAG_CURSED));
+}
+
+START_TEST(test_waypoint_abandons_stuck_cross_depth_best_effort_target) {
+    check_waypoint_abandons_stuck_cross_map_best_effort_target(true);
+}
+END_TEST
+
+START_TEST(test_waypoint_abandons_stuck_cross_map_best_effort_target) {
+    check_waypoint_abandons_stuck_cross_map_best_effort_target(false);
 }
 END_TEST
 
@@ -220,7 +296,9 @@ static Suite *suite(void) {
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_exact_search_returns_owned_route_and_metrics);
     tcase_add_test(tc_core, test_budget_partial_is_explicit_and_exact_search_stays_empty);
-    tcase_add_test(tc_core, test_waypoint_retains_explicit_partial_path);
+    tcase_add_test(tc_core, test_waypoint_retains_explicit_partial_path_and_best_effort_failures);
+    tcase_add_test(tc_core, test_waypoint_abandons_stuck_cross_depth_best_effort_target);
+    tcase_add_test(tc_core, test_waypoint_abandons_stuck_cross_map_best_effort_target);
     tcase_add_test(tc_core, test_no_path_is_distinct_from_budget_exhaustion);
     tcase_add_test(tc_core, test_tiled_border_uses_alternate_open_crossing);
     tcase_add_test(tc_core, test_results_remain_isolated_across_searches);
