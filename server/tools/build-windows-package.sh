@@ -19,7 +19,12 @@ done
 
 mxe_cmake=${MXE_TARGET:-x86_64-w64-mingw32.shared}-cmake
 command -v "${mxe_cmake}" >/dev/null
-python3 tools/dependencies.py sync
+dependency_downloads=${ATRINIK_DEPENDENCY_DOWNLOADS:-}
+dependency_sync_arguments=()
+if [[ -n ${dependency_downloads} ]]; then
+  dependency_sync_arguments+=(--cache "${dependency_downloads}" --refresh --offline)
+fi
+python3 tools/dependencies.py sync "${dependency_sync_arguments[@]}"
 python3 tools/dependencies.py verify
 
 dependency_arguments=()
@@ -30,6 +35,15 @@ if [[ -n ${monorepo_root} && -f ${monorepo_root}/protocol/CMakeLists.txt &&
   dependency_arguments+=(
     "-DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=${monorepo_root}/protocol"
     "-DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=${monorepo_root}/libatrinik"
+  )
+fi
+if [[ -n ${ATRINIK_DEPENDENCY_CACHE_DIR:-} ]]; then
+  if [[ ! -d ${ATRINIK_DEPENDENCY_CACHE_DIR} ]]; then
+    echo "ATRINIK_DEPENDENCY_CACHE_DIR does not identify a staged source cache" >&2
+    exit 1
+  fi
+  dependency_arguments+=(
+    "-DATRINIK_DEPENDENCY_CACHE_DIR=${ATRINIK_DEPENDENCY_CACHE_DIR}"
   )
 fi
 if command -v ccache >/dev/null; then
