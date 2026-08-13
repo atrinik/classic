@@ -105,6 +105,31 @@ endif ()
 set(PACKAGE_VERSION_MAJOR "${CMAKE_MATCH_1}")
 set(PACKAGE_VERSION_MINOR "${CMAKE_MATCH_2}")
 set(PACKAGE_VERSION_PATCH "${CMAKE_MATCH_3}")
+set(ATRINIK_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
+if (ATRINIK_BUILD_TYPE STREQUAL "")
+    set(ATRINIK_BUILD_TYPE "multi-config")
+endif ()
+set(ATRINIK_COMPILER_ID "${CMAKE_C_COMPILER_ID}")
+set(ATRINIK_COMPILER_VERSION "${CMAKE_C_COMPILER_VERSION}")
+set(ATRINIK_SYSTEM_NAME "${CMAKE_SYSTEM_NAME}")
+set(ATRINIK_BENCHMARK_REVISION "$ENV{ATRINIK_BENCHMARK_REVISION}")
+if (ATRINIK_BENCHMARK_REVISION STREQUAL "")
+    set(ATRINIK_BENCHMARK_REVISION "unknown")
+endif ()
+string(LENGTH "${ATRINIK_BENCHMARK_REVISION}" ATRINIK_BENCHMARK_REVISION_LENGTH)
+if (NOT ATRINIK_BENCHMARK_REVISION STREQUAL "unknown" AND
+    (NOT ATRINIK_BENCHMARK_REVISION MATCHES "^[0-9A-Fa-f]+$" OR
+     ATRINIK_BENCHMARK_REVISION_LENGTH LESS 7 OR
+     ATRINIK_BENCHMARK_REVISION_LENGTH GREATER 64))
+    message(FATAL_ERROR "ATRINIK_BENCHMARK_REVISION must be unknown or a hexadecimal revision")
+endif ()
+set(ATRINIK_BENCHMARK_DIRTY "$ENV{ATRINIK_BENCHMARK_DIRTY}")
+if (ATRINIK_BENCHMARK_DIRTY STREQUAL "")
+    set(ATRINIK_BENCHMARK_DIRTY "unknown")
+endif ()
+if (NOT ATRINIK_BENCHMARK_DIRTY MATCHES "^(unknown|true|false)$")
+    message(FATAL_ERROR "ATRINIK_BENCHMARK_DIRTY must be unknown, true, or false")
+endif ()
 
 if (MINGW)
     set(PLUGIN_SUFFIX ".dll")
@@ -426,6 +451,19 @@ if (BUILD_TESTING)
     target_link_libraries(client-packet-payload-tests PRIVATE Atrinik::Core)
     add_test(NAME client-packet-payload COMMAND client-packet-payload-tests)
 
+    add_executable(client-command-queue-tests
+        src/tests/client_command_queue.c
+        src/client/client_command_queue.c)
+    atrinik_configure_target(client-command-queue-tests)
+    target_compile_definitions(client-command-queue-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-command-queue-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-command-queue-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-command-queue COMMAND client-command-queue-tests)
+
     add_executable(client-keybind-input-tests
         src/tests/keybind_input.c
         src/client/keybind_event.c
@@ -720,6 +758,51 @@ if (BUILD_TESTING)
     add_test(NAME client-player-view-player-outline-widget-state
         COMMAND atrinik --player-view
             "${player_view_fixtures}/player-outline-widget-state.xml" -)
+    add_test(NAME client-player-view-movement-benchmark-smooth
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
+            "$<TARGET_FILE:atrinik>"
+            "${player_view_fixtures}/movement-colored.xml"
+            standard)
+    add_test(NAME client-player-view-movement-benchmark-discrete
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
+            "$<TARGET_FILE:atrinik>"
+            "${player_view_fixtures}/movement-colored-discrete.xml"
+            standard)
+    add_test(NAME client-player-view-movement-benchmark-smooth-large
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
+            "$<TARGET_FILE:atrinik>"
+            "${player_view_fixtures}/movement-colored.xml"
+            large)
+    add_test(NAME client-player-view-movement-benchmark-discrete-large
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
+            "$<TARGET_FILE:atrinik>"
+            "${player_view_fixtures}/movement-colored-discrete.xml"
+            large)
+    add_test(NAME client-player-view-movement-fault-injection
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_fault_injection.py"
+            "$<TARGET_FILE:atrinik>"
+            "${player_view_fixtures}/colored-smooth.xml"
+            "${player_view_fixtures}/movement-colored.xml")
+    set_tests_properties(
+        client-player-view-movement-benchmark-smooth
+        client-player-view-movement-benchmark-discrete
+        PROPERTIES
+        LABELS "performance;standard-performance"
+        TIMEOUT 420)
+    set_tests_properties(
+        client-player-view-movement-benchmark-smooth-large
+        client-player-view-movement-benchmark-discrete-large
+        PROPERTIES
+        LABELS "performance;long-performance"
+        TIMEOUT 1900)
+    set_tests_properties(client-player-view-movement-fault-injection PROPERTIES
+        LABELS fault-injection
+        TIMEOUT 75)
     add_test(NAME client-player-view-colored-smooth
         COMMAND atrinik --player-view "${player_view_fixtures}/colored-smooth.xml" -)
     add_test(NAME client-player-view-colored-discrete

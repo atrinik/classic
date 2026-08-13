@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -50,6 +50,8 @@ int rng_chance(rng_state_t *rng, uint32_t n);
 double rng_real(rng_state_t *rng);
 unsigned long isqrt(unsigned long n);
 int rndm(int min, int max);
+/** Reseed the mutex-protected process-global gameplay stream for deterministic tests. */
+void rndm_seed(uint64_t seed);
 int rndm_chance(uint32_t n);
 uint64_t rndm_u64(void);
 double rndm_real(void);

@@ -64,15 +64,133 @@ typedef struct lighting_context {
     lighting_sprite_cache_entry *sprite_cache_lru_oldest;
     lighting_sprite_cache_entry *sprite_cache_lru_newest;
     size_t sprite_cache_bytes;
+    lighting_benchmark_counters_t benchmark_counters;
+    size_t benchmark_peak_sprite_entries;
+    size_t benchmark_peak_sprite_bytes;
+    size_t benchmark_peak_retained_field_bytes;
 } lighting_context;
 
 static lighting_context lighting_contexts[MAP2_LEVELS];
 static lighting_context *lighting_context_current = &lighting_contexts[MAP2_DEPTH_INDEX(0)];
+static lighting_benchmark_statistics_t lighting_benchmark_statistics;
 static SDL_Surface *lighting_lit_surface;
 static int *structure_column_bottom;
 static lighting_sample *structure_column_illumination;
 
 static void lighting_sprite_cache_clear(lighting_context *context);
+
+#define LIGHTING_BENCHMARK_INCREMENT(_context_, _field_)  \
+    do {                                                  \
+        (_context_)->benchmark_counters._field_++;        \
+        lighting_benchmark_statistics.counters._field_++; \
+    } while (0)
+
+static size_t lighting_context_retained_field_bytes(const lighting_context *context) {
+    return context->light_samples_num *
+               (sizeof(*context->light_samples) + sizeof(*context->structure_samples)) +
+           (size_t)context->width * sizeof(*context->structure_blur_row) +
+           (size_t)context->height * sizeof(*context->structure_rows_valid);
+}
+
+static bool lighting_context_allocated(const lighting_context *context) {
+    return context->light_samples != NULL;
+}
+
+static size_t lighting_context_sprite_entries(const lighting_context *context) {
+    return (size_t)HASH_COUNT(context->sprite_cache);
+}
+
+/** Hash one integer in a platform-independent byte order. */
+static uint64_t lighting_benchmark_hash_uint64(uint64_t hash, uint64_t value) {
+    for (size_t i = 0; i < sizeof(value); i++) {
+        hash ^= (uint8_t)value;
+        hash *= UINT64_C(1099511628211);
+        value >>= 8;
+    }
+    return hash;
+}
+
+/** Hash stable state only; process-local surface addresses are excluded. */
+static uint64_t lighting_context_state_digest(const lighting_context *context, int depth) {
+    uint64_t hash = UINT64_C(14695981039346656037);
+    hash = lighting_benchmark_hash_uint64(hash, (uint64_t)(int64_t)depth);
+    hash = lighting_benchmark_hash_uint64(hash, lighting_context_allocated(context));
+    hash = lighting_benchmark_hash_uint64(hash, context->active);
+    hash = lighting_benchmark_hash_uint64(hash, context->cache_valid);
+    hash = lighting_benchmark_hash_uint64(hash, context->update_needed);
+    hash = lighting_benchmark_hash_uint64(hash, (uint64_t)(int64_t)context->width);
+    hash = lighting_benchmark_hash_uint64(hash, (uint64_t)(int64_t)context->height);
+    hash = lighting_benchmark_hash_uint64(hash, context->cache_key);
+    hash = lighting_benchmark_hash_uint64(hash, context->pending_cache_key);
+    hash = lighting_benchmark_hash_uint64(hash, lighting_context_sprite_entries(context));
+    hash = lighting_benchmark_hash_uint64(hash, context->sprite_cache_bytes);
+    hash = lighting_benchmark_hash_uint64(hash, lighting_context_retained_field_bytes(context));
+
+    uint64_t cache_xor = 0;
+    uint64_t cache_sum = 0;
+    lighting_sprite_cache_entry *entry, *next;
+    HASH_ITER(hh, context->sprite_cache, entry, next) {
+        uint64_t entry_hash = UINT64_C(14695981039346656037);
+        entry_hash = lighting_benchmark_hash_uint64(entry_hash, (uint32_t)entry->key.source_x);
+        entry_hash = lighting_benchmark_hash_uint64(entry_hash, (uint32_t)entry->key.source_y);
+        entry_hash = lighting_benchmark_hash_uint64(entry_hash, (uint32_t)entry->key.source_w);
+        entry_hash = lighting_benchmark_hash_uint64(entry_hash, (uint32_t)entry->key.source_h);
+        entry_hash = lighting_benchmark_hash_uint64(entry_hash, entry->key.illumination_signature);
+        entry_hash = lighting_benchmark_hash_uint64(entry_hash, entry->key.mode);
+        entry_hash = lighting_benchmark_hash_uint64(entry_hash, entry->key.surface_alpha);
+        entry_hash = lighting_benchmark_hash_uint64(entry_hash, entry->bytes);
+        cache_xor ^= entry_hash;
+        cache_sum += entry_hash;
+    }
+    hash = lighting_benchmark_hash_uint64(hash, cache_xor);
+    hash = lighting_benchmark_hash_uint64(hash, cache_sum);
+    return hash;
+}
+
+/** Refresh current peaks after a cache or field-state transition. */
+static void lighting_benchmark_peaks_update(void) {
+    size_t allocated = 0;
+    size_t active = 0;
+    size_t valid = 0;
+    size_t dirty = 0;
+    size_t sprite_entries = 0;
+    size_t sprite_bytes = 0;
+    size_t retained_bytes = 0;
+
+    for (size_t i = 0; i < arraysize(lighting_contexts); i++) {
+        lighting_context *context = &lighting_contexts[i];
+        size_t context_entries = lighting_context_sprite_entries(context);
+        size_t context_retained = lighting_context_retained_field_bytes(context);
+        context->benchmark_peak_sprite_entries =
+            MAX(context->benchmark_peak_sprite_entries, context_entries);
+        context->benchmark_peak_sprite_bytes =
+            MAX(context->benchmark_peak_sprite_bytes, context->sprite_cache_bytes);
+        context->benchmark_peak_retained_field_bytes =
+            MAX(context->benchmark_peak_retained_field_bytes, context_retained);
+        allocated += lighting_context_allocated(context);
+        active += context->active;
+        valid += context->cache_valid;
+        dirty += context->update_needed;
+        sprite_entries += context_entries;
+        sprite_bytes += context->sprite_cache_bytes;
+        retained_bytes += context_retained;
+    }
+
+    lighting_benchmark_statistics.peak_allocated_levels =
+        MAX(lighting_benchmark_statistics.peak_allocated_levels, allocated);
+    lighting_benchmark_statistics.peak_active_levels =
+        MAX(lighting_benchmark_statistics.peak_active_levels, active);
+    lighting_benchmark_statistics.peak_cache_valid_levels =
+        MAX(lighting_benchmark_statistics.peak_cache_valid_levels, valid);
+    lighting_benchmark_statistics.peak_dirty_levels =
+        MAX(lighting_benchmark_statistics.peak_dirty_levels, dirty);
+    lighting_benchmark_statistics.peak_lit_sprite_entries =
+        MAX(lighting_benchmark_statistics.peak_lit_sprite_entries, sprite_entries);
+    lighting_benchmark_statistics.peak_lit_sprite_bytes =
+        MAX(lighting_benchmark_statistics.peak_lit_sprite_bytes, sprite_bytes);
+    lighting_benchmark_statistics.peak_retained_field_bytes =
+        MAX(lighting_benchmark_statistics.peak_retained_field_bytes, retained_bytes);
+}
 
 static void lighting_context_free(lighting_context *context) {
     free(context->light_samples);
@@ -105,43 +223,45 @@ _Static_assert(sizeof(lighting_sprite_cache_entry) + sizeof(SDL_Surface) <=
 static uint16_t lighting_sample_channel(const lighting_sample *sample, size_t channel) {
     HARD_ASSERT(sample != NULL);
     switch (channel) {
-    case 0:
-        return sample->scalar;
-    case 1:
-        return sample->red;
-    case 2:
-        return sample->green;
-    case 3:
-        return sample->blue;
-    default:
-        HARD_ASSERT(false);
-        return 0;
+        case 0:
+            return sample->scalar;
+        case 1:
+            return sample->red;
+        case 2:
+            return sample->green;
+        case 3:
+            return sample->blue;
+        default:
+            HARD_ASSERT(false);
+            return 0;
     }
 }
 
-static void lighting_sample_channel_set(lighting_sample *sample,
-                                        size_t channel,
-                                        uint16_t value) {
+static void lighting_sample_channel_set(lighting_sample *sample, size_t channel, uint16_t value) {
     HARD_ASSERT(sample != NULL);
     switch (channel) {
-    case 0:
-        sample->scalar = value;
-        break;
-    case 1:
-        sample->red = value;
-        break;
-    case 2:
-        sample->green = value;
-        break;
-    case 3:
-        sample->blue = value;
-        break;
-    default:
-        HARD_ASSERT(false);
+        case 0:
+            sample->scalar = value;
+            break;
+        case 1:
+            sample->red = value;
+            break;
+        case 2:
+            sample->green = value;
+            break;
+        case 3:
+            sample->blue = value;
+            break;
+        default:
+            HARD_ASSERT(false);
     }
 }
 
 static void lighting_sprite_cache_clear(lighting_context *context) {
+    size_t entries = lighting_context_sprite_entries(context);
+    LIGHTING_BENCHMARK_INCREMENT(context, lit_sprite_clears);
+    context->benchmark_counters.lit_sprite_cleared_entries += entries;
+    lighting_benchmark_statistics.counters.lit_sprite_cleared_entries += entries;
     lighting_sprite_cache_entry *entry, *next;
     HASH_ITER(hh, context->sprite_cache, entry, next) {
         HASH_DEL(context->sprite_cache, entry);
@@ -200,6 +320,7 @@ static void lighting_sprite_cache_reserve(lighting_context *context, size_t byte
         }
         HASH_DEL(context->sprite_cache, oldest);
         context->sprite_cache_bytes -= oldest->bytes;
+        LIGHTING_BENCHMARK_INCREMENT(context, lit_sprite_evictions);
         SDL_DestroySurface(oldest->surface);
         free(oldest);
     }
@@ -247,7 +368,6 @@ void lighting_level_scroll(int dz) {
     for (size_t i = 0; i < arraysize(lighting_contexts); i++) {
         lighting_context_free(&lighting_contexts[i]);
         lighting_contexts[i] = shifted[i];
-
     }
 
     lighting_context_current = &lighting_contexts[MAP2_DEPTH_INDEX(0)];
@@ -287,6 +407,7 @@ static bool lighting_surface_create(int width, int height) {
         lighting_height = height;
         lighting_cache_valid = false;
     }
+    lighting_benchmark_peaks_update();
     return true;
 }
 
@@ -301,11 +422,18 @@ bool lighting_begin(int width, int height, uint64_t cache_key) {
 
     lighting_update_needed = !lighting_cache_valid || lighting_cache_key != cache_key;
     lighting_pending_cache_key = cache_key;
+    LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, field_begins);
     if (lighting_update_needed) {
+        LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, field_dirty_marks);
+        lighting_context_current->benchmark_counters.field_dirty_pixels += light_samples_num;
+        lighting_benchmark_statistics.counters.field_dirty_pixels += light_samples_num;
         memset(light_samples, 0, light_samples_num * sizeof(*light_samples));
+    } else {
+        LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, field_reuses);
     }
 
     lighting_active = true;
+    lighting_benchmark_peaks_update();
     return true;
 }
 
@@ -313,6 +441,94 @@ void lighting_clear_sprite_cache(void) {
     for (size_t i = 0; i < arraysize(lighting_contexts); i++) {
         lighting_sprite_cache_clear(&lighting_contexts[i]);
     }
+    lighting_benchmark_peaks_update();
+}
+
+void lighting_benchmark_statistics_reset(void) {
+    memset(&lighting_benchmark_statistics, 0, sizeof(lighting_benchmark_statistics));
+    for (size_t i = 0; i < arraysize(lighting_contexts); i++) {
+        lighting_context *context = &lighting_contexts[i];
+        memset(&context->benchmark_counters, 0, sizeof(context->benchmark_counters));
+        context->benchmark_peak_sprite_entries = lighting_context_sprite_entries(context);
+        context->benchmark_peak_sprite_bytes = context->sprite_cache_bytes;
+        context->benchmark_peak_retained_field_bytes =
+            lighting_context_retained_field_bytes(context);
+    }
+    lighting_benchmark_peaks_update();
+    lighting_benchmark_statistics_t current;
+    lighting_benchmark_statistics_get(&current);
+    lighting_benchmark_statistics.start_allocated_levels = current.allocated_levels;
+    lighting_benchmark_statistics.start_active_levels = current.active_levels;
+    lighting_benchmark_statistics.start_cache_valid_levels = current.cache_valid_levels;
+    lighting_benchmark_statistics.start_dirty_levels = current.dirty_levels;
+    lighting_benchmark_statistics.start_lit_sprite_entries = current.lit_sprite_entries;
+    lighting_benchmark_statistics.start_lit_sprite_bytes = current.lit_sprite_bytes;
+    lighting_benchmark_statistics.start_retained_field_bytes = current.retained_field_bytes;
+    lighting_benchmark_statistics.start_state_digest = current.state_digest;
+}
+
+void lighting_benchmark_statistics_get(lighting_benchmark_statistics_t *statistics) {
+    HARD_ASSERT(statistics != NULL);
+    *statistics = lighting_benchmark_statistics;
+    statistics->field_rebuilds = statistics->counters.field_rebuilds;
+    statistics->field_reuses = statistics->counters.field_reuses;
+    statistics->lit_sprite_lookups = statistics->counters.lit_sprite_lookups;
+    statistics->lit_sprite_hits = statistics->counters.lit_sprite_hits;
+    statistics->lit_sprite_misses = statistics->counters.lit_sprite_misses;
+    statistics->lit_sprite_evictions = statistics->counters.lit_sprite_evictions;
+    statistics->start_allocated_levels = lighting_benchmark_statistics.start_allocated_levels;
+    statistics->start_active_levels = lighting_benchmark_statistics.start_active_levels;
+    statistics->start_cache_valid_levels = lighting_benchmark_statistics.start_cache_valid_levels;
+    statistics->start_dirty_levels = lighting_benchmark_statistics.start_dirty_levels;
+    statistics->start_lit_sprite_entries = lighting_benchmark_statistics.start_lit_sprite_entries;
+    statistics->start_lit_sprite_bytes = lighting_benchmark_statistics.start_lit_sprite_bytes;
+    statistics->start_retained_field_bytes =
+        lighting_benchmark_statistics.start_retained_field_bytes;
+    statistics->start_state_digest = lighting_benchmark_statistics.start_state_digest;
+    uint64_t state_digest = UINT64_C(14695981039346656037);
+    for (size_t i = 0; i < arraysize(lighting_contexts); i++) {
+        lighting_context *context = &lighting_contexts[i];
+        statistics->allocated_levels += lighting_context_allocated(context);
+        statistics->active_levels += context->active;
+        statistics->cache_valid_levels += context->cache_valid;
+        statistics->dirty_levels += context->update_needed;
+        statistics->lit_sprite_entries += lighting_context_sprite_entries(context);
+        statistics->lit_sprite_bytes += context->sprite_cache_bytes;
+        statistics->retained_field_bytes += lighting_context_retained_field_bytes(context);
+        state_digest = lighting_benchmark_hash_uint64(
+            state_digest,
+            lighting_context_state_digest(context, (int)i - MAP2_MAX_DEPTH));
+    }
+    statistics->state_digest = state_digest;
+}
+
+bool lighting_benchmark_level_statistics_get(int depth,
+                                             lighting_benchmark_level_statistics_t *statistics) {
+    if (statistics == NULL || depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH) {
+        return false;
+    }
+
+    lighting_context *context = &lighting_contexts[MAP2_DEPTH_INDEX(depth)];
+    *statistics = (lighting_benchmark_level_statistics_t){
+        .counters = context->benchmark_counters,
+        .depth = depth,
+        .allocated = lighting_context_allocated(context),
+        .active = context->active,
+        .cache_valid = context->cache_valid,
+        .update_needed = context->update_needed,
+        .width = context->width,
+        .height = context->height,
+        .cache_key = context->cache_key,
+        .pending_cache_key = context->pending_cache_key,
+        .lit_sprite_entries = lighting_context_sprite_entries(context),
+        .lit_sprite_bytes = context->sprite_cache_bytes,
+        .retained_field_bytes = lighting_context_retained_field_bytes(context),
+        .peak_lit_sprite_entries = context->benchmark_peak_sprite_entries,
+        .peak_lit_sprite_bytes = context->benchmark_peak_sprite_bytes,
+        .peak_retained_field_bytes = context->benchmark_peak_retained_field_bytes,
+        .state_digest = lighting_context_state_digest(context, depth),
+    };
+    return true;
 }
 
 bool lighting_needs_update(void) {
@@ -373,14 +589,14 @@ static void lighting_draw_triangle(const lighting_vertex_t vertices[4], bool fir
                 int64_t v = first_half ? weight_c : weight_b + weight_c;
                 lighting_sample *sample =
                     &light_samples[(size_t)y * (size_t)lighting_width + (size_t)x];
-#define INTERPOLATE_CHANNEL(_channel_)                                            \
-    lighting_bilinear_channel(vertices[0]._channel_,                              \
-                               vertices[1]._channel_,                              \
-                               vertices[2]._channel_,                              \
-                               vertices[3]._channel_,                              \
-                               (uint64_t)u,                                        \
-                               (uint64_t)v,                                        \
-                               (uint64_t)area)
+#define INTERPOLATE_CHANNEL(_channel_)               \
+    lighting_bilinear_channel(vertices[0]._channel_, \
+                              vertices[1]._channel_, \
+                              vertices[2]._channel_, \
+                              vertices[3]._channel_, \
+                              (uint64_t)u,           \
+                              (uint64_t)v,           \
+                              (uint64_t)area)
                 sample->scalar = INTERPOLATE_CHANNEL(scalar);
                 sample->red = INTERPOLATE_CHANNEL(red);
                 sample->green = INTERPOLATE_CHANNEL(green);
@@ -458,9 +674,8 @@ static void lighting_extrapolate(void) {
                         lighting_sample_channel_set(
                             &samples[fill_x],
                             channel,
-                            (uint16_t)((int32_t)first +
-                                       ((int32_t)last - first) *
-                                           (fill_x - previous_sample) / distance));
+                            (uint16_t)((int32_t)first + ((int32_t)last - first) *
+                                                            (fill_x - previous_sample) / distance));
                     }
                     samples[fill_x].present = 1;
                 }
@@ -500,9 +715,9 @@ static void lighting_extrapolate(void) {
                         lighting_sample_channel_set(
                             &destination[fill_x],
                             channel,
-                            (uint16_t)((int32_t)first_value +
-                                       ((int32_t)last_value - first_value) *
-                                           (fill_y - previous_sampled_row) / distance));
+                            (uint16_t)((int32_t)first_value + ((int32_t)last_value - first_value) *
+                                                                  (fill_y - previous_sampled_row) /
+                                                                  distance));
                     }
                     destination[fill_x].present = 1;
                 }
@@ -542,8 +757,9 @@ static void lighting_blur_row(const lighting_sample *source, lighting_sample *de
 
     for (int x = 0; x < lighting_width; x++) {
         for (size_t channel = 0; channel < 4; channel++) {
-            lighting_sample_channel_set(
-                &destination[x], channel, (uint16_t)((sum[channel] + diameter / 2) / diameter));
+            lighting_sample_channel_set(&destination[x],
+                                        channel,
+                                        (uint16_t)((sum[channel] + diameter / 2) / diameter));
         }
         destination[x].present = 1;
 
@@ -592,8 +808,9 @@ static lighting_sample lighting_structure_illumination(int x, int y) {
 
     lighting_sample result = {.present = 1};
     for (size_t channel = 0; channel < 4; channel++) {
-        lighting_sample_channel_set(
-            &result, channel, (uint16_t)((total[channel] + weights / 2) / weights));
+        lighting_sample_channel_set(&result,
+                                    channel,
+                                    (uint16_t)((total[channel] + weights / 2) / weights));
     }
     return result;
 }
@@ -604,19 +821,26 @@ void lighting_render(SDL_Surface *destination) {
     HARD_ASSERT(lighting_active);
 
     bool samples_updated = lighting_update_needed;
+    LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, render_calls);
     if (samples_updated) {
+        LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, field_rebuilds);
         lighting_extrapolate();
         memset(structure_rows_valid, 0, (size_t)lighting_height * sizeof(*structure_rows_valid));
         lighting_cache_key = lighting_pending_cache_key;
         lighting_cache_valid = true;
+        lighting_update_needed = false;
     }
     lighting_active = false;
+    lighting_benchmark_peaks_update();
     if (destination == NULL) {
         return;
     }
     if (!SDL_LockSurface(destination)) {
         LOG(ERROR, "Could not lock map ground for lighting: %s", SDL_GetError());
         lighting_cache_valid = false;
+        lighting_update_needed = true;
+        LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, render_failures);
+        lighting_benchmark_peaks_update();
         return;
     }
 
@@ -626,7 +850,10 @@ void lighting_render(SDL_Surface *destination) {
     if (format == NULL || format->bytes_per_pixel != sizeof(Uint32)) {
         LOG(ERROR, "Cannot light a map ground surface that is not 32-bit RGBA.");
         lighting_cache_valid = false;
+        lighting_update_needed = true;
+        LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, render_failures);
         SDL_UnlockSurface(destination);
+        lighting_benchmark_peaks_update();
         return;
     }
     SDL_Palette *palette = SDL_GetSurfacePalette(destination);
@@ -769,8 +996,10 @@ void lighting_show_surface(SDL_Surface *destination,
                            lighting_surface_mode_t mode) {
     HARD_ASSERT(destination != NULL);
     HARD_ASSERT(source != NULL);
+    LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_draws);
 
     if (!lighting_cache_valid) {
+        LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_fallbacks);
         surface_show(destination, x, y, srcrect, source);
         return;
     }
@@ -782,6 +1011,7 @@ void lighting_show_surface(SDL_Surface *destination,
         .h = srcrect != NULL ? srcrect->h : source->h,
     };
     if (source_rect.w <= 0 || source_rect.h <= 0) {
+        LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_fallbacks);
         surface_show(destination, x, y, srcrect, source);
         return;
     }
@@ -797,8 +1027,7 @@ void lighting_show_surface(SDL_Surface *destination,
     uint64_t illumination_signature = lighting_cache_key;
     illumination_signature = lighting_signature_uint32(illumination_signature, (uint32_t)x);
     illumination_signature = lighting_signature_uint32(illumination_signature, (uint32_t)y);
-    illumination_signature =
-        lighting_signature_uint32(illumination_signature, (uint32_t)sample_y);
+    illumination_signature = lighting_signature_uint32(illumination_signature, (uint32_t)sample_y);
 
     lighting_sprite_cache_key cache_key;
     memset(&cache_key, 0, sizeof(cache_key));
@@ -812,13 +1041,17 @@ void lighting_show_surface(SDL_Surface *destination,
     cache_key.surface_alpha = surface_alpha;
     lighting_sprite_cache_entry *cached;
     HASH_FIND(hh, lighting_context_current->sprite_cache, &cache_key, sizeof(cache_key), cached);
+    LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_lookups);
     if (cached != NULL) {
+        LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_hits);
         lighting_sprite_cache_touch(lighting_context_current, cached);
         surface_show(destination, x, y, NULL, cached->surface);
         return;
     }
+    LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_misses);
 
     if (!lighting_lit_surface_create(source_rect.w, source_rect.h)) {
+        LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_fallbacks);
         surface_show(destination, x, y, srcrect, source);
         return;
     }
@@ -828,6 +1061,7 @@ void lighting_show_surface(SDL_Surface *destination,
     if (mode == LIGHTING_SURFACE_STRUCTURE) {
         if (!SDL_LockSurface(source)) {
             LOG(ERROR, "Could not lock smoothly lit sprite: %s", SDL_GetError());
+            LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_fallbacks);
             surface_show(destination, x, y, srcrect, source);
             return;
         }
@@ -872,6 +1106,7 @@ void lighting_show_surface(SDL_Surface *destination,
     if (!source_locked) {
         if (!SDL_LockSurface(source)) {
             LOG(ERROR, "Could not lock smoothly lit sprite: %s", SDL_GetError());
+            LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_fallbacks);
             surface_show(destination, x, y, srcrect, source);
             return;
         }
@@ -879,6 +1114,7 @@ void lighting_show_surface(SDL_Surface *destination,
     if (!SDL_LockSurface(lighting_lit_surface)) {
         LOG(ERROR, "Could not lock smoothly lit sprite surface: %s", SDL_GetError());
         SDL_UnlockSurface(source);
+        LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_fallbacks);
         surface_show(destination, x, y, srcrect, source);
         return;
     }
@@ -942,8 +1178,8 @@ void lighting_show_surface(SDL_Surface *destination,
     SDL_UnlockSurface(source);
 
     SDL_Rect lit_rect = {.x = 0, .y = 0, .w = source_rect.w, .h = source_rect.h};
-    size_t cache_bytes = lighting_sprite_cache_charge((size_t)lighting_lit_surface->pitch,
-                                                      (size_t)source_rect.h);
+    size_t cache_bytes =
+        lighting_sprite_cache_charge((size_t)lighting_lit_surface->pitch, (size_t)source_rect.h);
     if (cache_bytes <= LIGHTING_SPRITE_CACHE_MAX_BYTES) {
         lighting_sprite_cache_reserve(lighting_context_current, cache_bytes);
         SDL_Surface *copy = lighting_lit_surface_copy(source_rect.w, source_rect.h);
@@ -955,11 +1191,14 @@ void lighting_show_surface(SDL_Surface *destination,
             HASH_ADD(hh, lighting_context_current->sprite_cache, key, sizeof(entry->key), entry);
             lighting_sprite_cache_append(lighting_context_current, entry);
             lighting_context_current->sprite_cache_bytes += cache_bytes;
+            LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_insertions);
+            lighting_benchmark_peaks_update();
             surface_show(destination, x, y, NULL, copy);
             return;
         }
     }
 
+    LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_fallbacks);
     surface_show(destination, x, y, &lit_rect, lighting_lit_surface);
 }
 
@@ -993,3 +1232,5 @@ void lighting_deinit(void) {
     free(structure_column_illumination);
     structure_column_illumination = NULL;
 }
+
+#undef LIGHTING_BENCHMARK_INCREMENT

@@ -49,6 +49,77 @@ static struct MapCell *level_cells[MAP2_LEVELS];
 static uint64_t level_lighting_revision[MAP2_LEVELS];
 static size_t current_level_index = MAP2_DEPTH_INDEX(0);
 static uint16_t map_level_mask;
+static SDL_Surface *map_level_surfaces[2];
+static map_benchmark_statistics_t map_benchmark_statistics;
+static uint32_t map_pending_redraw_reasons;
+#ifdef ATRINIK_WIDGET_TESTS
+static bool map_benchmark_mutable_rle_fault_armed;
+static map_benchmark_fault_t map_benchmark_fault;
+static map_benchmark_fault_status_t map_benchmark_fault_status;
+#endif
+
+void map_redraw_request(map_redraw_reason_t reason) {
+    HARD_ASSERT(reason != 0);
+    map_pending_redraw_reasons |= (uint32_t)reason;
+    map_redraw_flag = 1;
+}
+
+bool map_redraw_due(void) {
+    return map_redraw_flag != 0;
+}
+
+uint32_t map_redraw_pending_reasons(void) {
+    if (!map_redraw_due()) {
+        return 0;
+    }
+    return map_pending_redraw_reasons != 0 ? map_pending_redraw_reasons
+                                           : MAP_REDRAW_REASON_EXTERNAL;
+}
+
+void map_redraw_consume(void) {
+    map_redraw_flag = 0;
+    map_pending_redraw_reasons = 0;
+}
+
+void map_benchmark_statistics_reset(void) {
+    map_benchmark_statistics = (map_benchmark_statistics_t){
+        /* SDL and sprite-effect helpers own allocations outside this module,
+         * so a partial renderer total would be misleading. */
+        .renderer_allocation_statistics_available = false,
+    };
+}
+
+void map_benchmark_statistics_get(map_benchmark_statistics_t *statistics) {
+    HARD_ASSERT(statistics != NULL);
+    *statistics = map_benchmark_statistics;
+}
+
+void map_benchmark_statistics_present(bool success) {
+    map_benchmark_statistics.presents++;
+    map_benchmark_statistics.present_failures += !success;
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+void map_benchmark_fault_configure(map_benchmark_fault_t fault) {
+    HARD_ASSERT(fault == MAP_BENCHMARK_FAULT_NONE || fault == MAP_BENCHMARK_FAULT_MUTABLE_RLE);
+    map_benchmark_fault_clear();
+    map_benchmark_fault = fault;
+}
+
+void map_benchmark_fault_status_get(map_benchmark_fault_status_t *status) {
+    HARD_ASSERT(status != NULL);
+    *status = map_benchmark_fault_status;
+}
+
+void map_benchmark_fault_clear(void) {
+    if (map_benchmark_mutable_rle_fault_armed && map_level_surfaces[0] != NULL) {
+        SDL_SetSurfaceRLE(map_level_surfaces[0], false);
+    }
+    map_benchmark_mutable_rle_fault_armed = false;
+    map_benchmark_fault = MAP_BENCHMARK_FAULT_NONE;
+    memset(&map_benchmark_fault_status, 0, sizeof(map_benchmark_fault_status));
+}
+#endif
 static int map_width;
 static int map_height;
 static int map_cache_origin_x;
@@ -149,7 +220,6 @@ void map_set_level_mask(uint16_t mask) {
  * Zoomed map.
  */
 static SDL_Surface *zoomed = NULL;
-static SDL_Surface *map_level_surfaces[2];
 /**
  * Map animation queue.
  */
@@ -1295,7 +1365,7 @@ static void map_animate_object(struct MapCell *cell, int layer) {
 
     if (!(cell->flags[layer] & FFLAG_SLEEP) && !(cell->flags[layer] & FFLAG_PARALYZED)) {
         cell->anim_state[layer]++;
-        map_redraw_flag = 1;
+        map_redraw_request(MAP_REDRAW_REASON_ANIMATION);
     }
 
     /* If beyond drawable states, reset */
@@ -1325,7 +1395,7 @@ void map_animate(void) {
                 for (layer = 0; layer < NUM_REAL_LAYERS; layer++) {
                     if (cell->glow_speed[layer] > 1) {
                         cell->glow_state[layer]++;
-                        map_redraw_flag = 1;
+                        map_redraw_request(MAP_REDRAW_REASON_ANIMATION);
 
                         if (cell->glow_state[layer] > cell->glow_speed[layer]) {
                             cell->glow_state[layer] = 0;
@@ -2403,7 +2473,9 @@ static void map_draw_level(SDL_Surface *surface,
     }
 
     if (primary_level && ground_present) {
+        uint64_t profile_composite_started = render_profiler_begin();
         surface_show(surface, 0, 0, NULL, ground_surface);
+        render_profiler_end(RENDER_PROFILE_MAP_GROUND_COMPOSITE, profile_composite_started);
     }
 
     uint8_t floor_layer_pl = GET_MAP_LAYER(LAYER_FLOOR, MapData.player_sub_layer);
@@ -3092,6 +3164,12 @@ void map_draw_map(SDL_Surface *surface) {
     uint64_t profile_map_started = render_profiler_begin();
 
     bool primary_surface = cur_widget[MAP_ID] != NULL && surface == cur_widget[MAP_ID]->surface;
+    map_benchmark_statistics.map_draws++;
+    if (primary_surface) {
+        map_benchmark_statistics.primary_map_draws++;
+    } else {
+        map_benchmark_statistics.auxiliary_map_draws++;
+    }
     size_t surface_index = primary_surface ? 0 : 1;
     SDL_Surface **level_surface = &map_level_surfaces[surface_index];
     map_render_context_t render_context = {0};
@@ -3104,11 +3182,13 @@ void map_draw_map(SDL_Surface *surface) {
 
         *level_surface = SDL_CreateSurface(surface->w, surface->h, surface->format);
         if (*level_surface == NULL) {
+            map_benchmark_statistics.render_failures++;
             LOG(ERROR, "Could not create map level surface: %s", SDL_GetError());
             render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
             return;
         }
         if (!surface_set_transparent_black_mutable(*level_surface)) {
+            map_benchmark_statistics.render_failures++;
             LOG(ERROR, "Could not prepare map level surface: %s", SDL_GetError());
             SDL_DestroySurface(*level_surface);
             *level_surface = NULL;
@@ -3117,13 +3197,39 @@ void map_draw_map(SDL_Surface *surface) {
         }
     }
 
-    if (!surface_clear_transparent_black(*level_surface)) {
+    uint64_t profile_scratch_clear_started = render_profiler_begin();
+    bool scratch_cleared = surface_clear_transparent_black(*level_surface);
+    render_profiler_end(RENDER_PROFILE_MAP_SCRATCH_CLEAR, profile_scratch_clear_started);
+    if (!scratch_cleared) {
+        map_benchmark_statistics.render_failures++;
+#ifdef ATRINIK_WIDGET_TESTS
+        if (map_benchmark_mutable_rle_fault_armed) {
+            map_benchmark_statistics.fault_detections++;
+            map_benchmark_fault_status.detected = true;
+            SDL_SetSurfaceRLE(*level_surface, false);
+            map_benchmark_mutable_rle_fault_armed = false;
+        }
+#endif
         map_select_level(0, true);
         lighting_select_level(0);
         render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
         return;
     }
 
+#ifdef ATRINIK_WIDGET_TESTS
+    if (map_benchmark_fault == MAP_BENCHMARK_FAULT_MUTABLE_RLE &&
+        !map_benchmark_fault_status.injected) {
+        if (SDL_SetSurfaceRLE(*level_surface, true)) {
+            map_benchmark_mutable_rle_fault_armed = true;
+            map_benchmark_fault_status.injected = true;
+            map_benchmark_statistics.fault_injections++;
+        } else {
+            map_benchmark_statistics.render_failures++;
+        }
+    }
+#endif
+
+    uint64_t active_levels = 0;
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         uint16_t bit = UINT16_C(1) << MAP2_DEPTH_INDEX(depth);
         if (!(map_level_mask & bit) || !map_select_level(depth, false) ||
@@ -3131,6 +3237,8 @@ void map_draw_map(SDL_Surface *surface) {
             continue;
         }
 
+        active_levels++;
+        map_benchmark_statistics.level_draws++;
         map_draw_level(surface,
                        *level_surface,
                        depth,
@@ -3138,6 +3246,14 @@ void map_draw_map(SDL_Surface *surface) {
                        primary_surface,
                        &render_context);
     }
+
+    map_benchmark_statistics.render_commands += render_context.commands_num;
+    map_benchmark_statistics.annotations += render_context.annotations_num;
+    map_benchmark_statistics.ui_tiles += render_context.tiles_num;
+    map_benchmark_statistics.peak_render_commands =
+        MAX(map_benchmark_statistics.peak_render_commands, render_context.commands_num);
+    map_benchmark_statistics.peak_active_levels =
+        MAX(map_benchmark_statistics.peak_active_levels, active_levels);
 
     map_render_commands(surface, &render_context, primary_surface);
     map_draw_ui(surface, &render_context);
@@ -3552,7 +3668,7 @@ static void widget_draw(widgetdata *widget) {
         widget->surface->h != widget->h) {
         if (widget->surface != NULL) {
             SDL_DestroySurface(widget->surface);
-            map_redraw_flag = 1;
+            map_redraw_request(MAP_REDRAW_REASON_RESIZE);
         }
 
         widget->surface = surface_create_rgb(get_video_flags(),
@@ -3574,14 +3690,14 @@ static void widget_draw(widgetdata *widget) {
 
     double zoom = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0;
     if (widget_set_zoom(widget, zoom)) {
-        map_redraw_flag = 1;
+        map_redraw_request(MAP_REDRAW_REASON_RESIZE);
     }
 
     /* We re-create the map only when there is a change. */
     if (map_redraw_flag) {
         SDL_FillSurfaceRect(widget->surface, NULL, 0);
         map_draw_map(widget->surface);
-        map_redraw_flag = 0;
+        map_redraw_consume();
         effect_sprites_play();
 
         if (setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) != 100) {
@@ -3821,6 +3937,7 @@ static void widget_background(widgetdata *widget, int draw) {
 
 /** @copydoc widgetdata::deinit_func */
 void map_runtime_deinit(void) {
+    map_anims_clear();
     lighting_deinit();
 
     for (size_t i = 0; i < arraysize(map_level_surfaces); i++) {
@@ -3835,6 +3952,15 @@ void map_runtime_deinit(void) {
         level_cells[i] = NULL;
     }
     cells = NULL;
+    memset(level_lighting_revision, 0, sizeof(level_lighting_revision));
+    current_level_index = MAP2_DEPTH_INDEX(0);
+    map_level_mask = 0;
+    map_width = 0;
+    map_height = 0;
+    map_cache_origin_x = 0;
+    map_cache_origin_y = 0;
+    map_redraw_consume();
+    map_benchmark_statistics_reset();
 
     if (MapData.region_map != NULL) {
         region_map_free(MapData.region_map);
