@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -282,7 +282,7 @@ void set_max_time_multiplier(int t) {
 }
 
 /**
- * Computes the in-game time of the day.
+ * Decomposes the persisted absolute in-game hour into calendar fields.
  * @param tod
  * Where to store information. Must not be NULL.
  */
@@ -290,9 +290,9 @@ void get_tod(timeofday_t *tod) {
     tod->year = todtick / HOURS_PER_YEAR;
     tod->month = (todtick / HOURS_PER_MONTH) % MONTHS_PER_YEAR;
     tod->season = tod->month / MONTHS_PER_SEASON;
-    tod->day = (todtick % HOURS_PER_MONTH) / DAYS_PER_MONTH;
-    tod->dayofweek = tod->day % DAYS_PER_WEEK;
-    tod->weekofmonth = tod->day / WEEKS_PER_MONTH;
+    tod->day = (todtick % HOURS_PER_MONTH) / HOURS_PER_DAY;
+    tod->dayofweek = (todtick / HOURS_PER_DAY) % DAYS_PER_WEEK;
+    tod->weekofmonth = tod->day / DAYS_PER_WEEK;
     tod->hour = todtick % HOURS_PER_DAY;
     tod->periodofday = periodsofday_hours[tod->hour];
     tod->minute = (pticks % PTICKS_PER_CLOCK) / (PTICKS_PER_CLOCK / 58);

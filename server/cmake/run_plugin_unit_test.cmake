@@ -19,6 +19,12 @@ endforeach ()
 # recovers deterministically if an earlier test driver was interrupted.
 configure_file("${content_script}" "${entrypoint}" COPYONLY)
 configure_file("${unit_script}" "${entrypoint}" COPYONLY)
+if (DEFINED ATRINIK_CLOCKDATA)
+    if (NOT ATRINIK_CLOCKDATA MATCHES "^[0-9]+$")
+        message(FATAL_ERROR "Invalid plugin unit-test clockdata")
+    endif ()
+    file(WRITE "${ATRINIK_RUNTIME_DIR}/data/clockdata" "${ATRINIK_CLOCKDATA}")
+endif ()
 execute_process(
     COMMAND "${ATRINIK_SERVER}" --plugin_unit --port_mapping=off
     WORKING_DIRECTORY "${ATRINIK_RUNTIME_DIR}"
