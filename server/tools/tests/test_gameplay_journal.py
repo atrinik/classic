@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 
@@ -31,6 +32,10 @@ class JournalTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_windows_reparse_metadata_is_rejected(self) -> None:
+        metadata = SimpleNamespace(st_file_attributes=0x400)
+        self.assertTrue(gameplay_journal._is_reparse(metadata))
 
     def record(self, record_phase: str, transaction: str = "", **extra: object) -> bytes:
         self.sequence += 1

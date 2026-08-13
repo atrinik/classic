@@ -225,15 +225,36 @@ static bool journal_lock(void) {
     if (snprintf(VS(path), "%s/journal.lock", journal.directory) >= (int)sizeof(path)) {
         return false;
     }
+#ifdef WIN32
+    HANDLE handle = CreateFileA(path,
+                                GENERIC_READ | GENERIC_WRITE,
+                                0,
+                                NULL,
+                                OPEN_ALWAYS,
+                                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                                NULL);
+    BY_HANDLE_FILE_INFORMATION metadata;
+    if (handle == INVALID_HANDLE_VALUE || GetFileType(handle) != FILE_TYPE_DISK ||
+        !GetFileInformationByHandle(handle, &metadata) ||
+        (metadata.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) !=
+            0) {
+        if (handle != INVALID_HANDLE_VALUE) {
+            CloseHandle(handle);
+        }
+        return false;
+    }
+    int fd = _open_osfhandle((intptr_t)handle, _O_RDWR);
+    if (fd < 0) {
+        CloseHandle(handle);
+        return false;
+    }
+#else
     int flags = O_RDWR | O_CREAT;
-#ifndef WIN32
     flags |= O_NOFOLLOW;
-#endif
     int fd = open(path, flags, SAVE_MODE);
     if (fd < 0) {
         return false;
     }
-#ifndef WIN32
     struct stat metadata;
     if (fstat(fd, &metadata) != 0 || !S_ISREG(metadata.st_mode) ||
         (metadata.st_mode & 0777) != SAVE_MODE) {
@@ -243,9 +264,7 @@ static bool journal_lock(void) {
 #endif
 #ifdef WIN32
     OVERLAPPED overlapped = {0};
-    HANDLE handle = (HANDLE)_get_osfhandle(fd);
-    bool ok = handle != INVALID_HANDLE_VALUE &&
-              LockFileEx(handle,
+    bool ok = LockFileEx(handle,
                          LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
                          0,
                          1,

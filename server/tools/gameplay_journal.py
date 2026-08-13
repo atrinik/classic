@@ -31,6 +31,13 @@ class JournalError(ValueError):
     """The journal does not satisfy its integrity or privacy contract."""
 
 
+def _is_reparse(metadata: os.stat_result | Any) -> bool:
+    return bool(
+        getattr(metadata, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    )
+
+
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -44,7 +51,7 @@ def _paths(inputs: Iterable[Path]) -> list[Path]:
     paths: list[Path] = []
     for value in inputs:
         metadata = value.lstat()
-        if stat.S_ISLNK(metadata.st_mode):
+        if stat.S_ISLNK(metadata.st_mode) or _is_reparse(metadata):
             raise JournalError(f"symbolic links are not journal inputs: {value}")
         if stat.S_ISDIR(metadata.st_mode):
             if os.name != "nt" and stat.S_IMODE(metadata.st_mode) != 0o700:
@@ -238,7 +245,7 @@ def load(inputs: Iterable[Path]) -> Journal:
     for path in sorted(paths, key=lambda value: file_coordinates[value]):
         filename_run, file_index = file_coordinates[path]
         metadata = path.lstat()
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        if stat.S_ISLNK(metadata.st_mode) or _is_reparse(metadata) or not stat.S_ISREG(metadata.st_mode):
             raise JournalError(f"journal path is not a direct regular file: {path}")
         if os.name != "nt" and stat.S_IMODE(metadata.st_mode) != 0o600:
             raise JournalError(f"insecure journal file permissions: {path}")
