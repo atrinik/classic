@@ -33,7 +33,6 @@
 #include <light.h>
 #include <object.h>
 
-#define MAX_MASK_SIZE 81
 #define NR_LIGHT_MASK 10
 #define MAX_LIGHT_SOURCE 13
 #define MAX_LIGHT_RADIUS 4
@@ -264,7 +263,6 @@ void light_radiance_from_raw(const MapSpace *space,
 
 typedef struct light_profile {
     int center;
-    int legacy_radius;
     int radial_radius;
     int radial_power;
 } light_profile_t;
@@ -273,84 +271,19 @@ typedef struct light_profile {
  * preserved; radial support gains one cell where the old four-cell cap allows
  * it, giving interpolation enough samples without increasing worst-case work. */
 static const light_profile_t light_profiles[NR_LIGHT_MASK] = {
-    {0, 0, 0, 1},
-    {40, 1, 2, 1},
-    {80, 2, 3, 2},
-    {160, 2, 3, 2},
-    {160, 3, 4, 2},
-    {320, 3, 4, 2},
-    {320, 3, 4, 2},
-    {320, 4, 4, 2},
-    {640, 4, 4, 2},
-    {1280, 4, 4, 2},
+    {0, 0, 1},
+    {40, 2, 1},
+    {80, 3, 2},
+    {160, 3, 2},
+    {160, 4, 2},
+    {320, 4, 2},
+    {320, 4, 2},
+    {320, 4, 2},
+    {640, 4, 2},
+    {1280, 4, 2},
 };
 
 static const int light_mask[MAX_LIGHT_SOURCE + 1] = {0, 1, 2, 3, 4, 5, 6, 6, 7, 7, 8, 8, 8, 9};
-
-/* Kept only for the explicit light_falloff=legacy comparison mode. */
-static const int legacy_light_masks[NR_LIGHT_MASK][MAX_MASK_SIZE] = {
-    {
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    },
-    {
-        40, 20, 20, 20, 20, 20, 20, 20, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    },
-    {
-        80, 40, 40, 40, 40, 40, 40, 40, 40, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20,
-        20, 20, 20, 20, 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-        0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-        0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-    },
-    {
-        160, 80, 80, 80, 80, 80, 80, 80, 80, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40,
-        40,  40, 40, 40, 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-        0,   0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-        0,   0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-    },
-    {
-        160, 80, 80, 80, 80, 80, 80, 80, 80, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40,
-        40,  40, 40, 40, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20,
-        20,  20, 20, 20, 20, 20, 20, 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-        0,   0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-    },
-    {
-        320, 160, 160, 160, 160, 160, 160, 160, 160, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80,
-        80,  80,  80,  80,  40,  40,  40,  40,  40,  40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40,
-        40,  40,  40,  40,  40,  40,  40,  0,   0,   0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0,  0,  0,  0,  0,  0,  0,  0,
-    },
-    {
-        320, 160, 160, 160, 160, 160, 160, 160, 160, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80,
-        80,  80,  80,  80,  40,  40,  40,  40,  40,  40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40,
-        40,  40,  40,  40,  40,  40,  40,  0,   0,   0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0,  0,  0,  0,  0,  0,  0,  0,
-    },
-    {
-        320, 160, 160, 160, 160, 160, 160, 160, 160, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80,
-        80,  80,  80,  80,  40,  40,  40,  40,  40,  40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40,
-        40,  40,  40,  40,  40,  40,  40,  20,  20,  20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20,
-        20,  20,  20,  20,  20,  20,  20,  20,  20,  20, 20, 20, 20, 20, 20, 20, 20, 20,
-    },
-    {
-        640, 320, 320, 320, 320, 320, 320, 320, 320, 160, 160, 160, 160, 160, 160, 160, 160,
-        160, 160, 160, 160, 160, 160, 160, 160, 80,  80,  80,  80,  80,  80,  80,  80,  80,
-        80,  80,  80,  80,  80,  80,  80,  80,  80,  80,  80,  80,  80,  80,  80,  40,  40,
-        40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,
-        40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,
-    },
-    {
-        1280, 640, 640, 640, 640, 640, 640, 640, 640, 160, 160, 160, 160, 160, 160, 160, 160,
-        160,  160, 160, 160, 160, 160, 160, 160, 80,  80,  80,  80,  80,  80,  80,  80,  80,
-        80,   80,  80,  80,  80,  80,  80,  80,  80,  80,  80,  80,  80,  80,  80,  40,  40,
-        40,   40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,
-        40,   40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,  40,
-    }
-
-};
 
 static int get_real_light_source_value(int l) {
     if (l > MAX_LIGHT_SOURCE) {
@@ -565,17 +498,6 @@ static bool light_path_is_clear(mapstruct *map, int x, int y, int dx, int dy, in
     return true;
 }
 
-static int legacy_light_mask_value(int intensity, int distance_squared) {
-    static const int ring_index[MAX_LIGHT_RADIUS + 1] = {0, 1, 9, 25, 49};
-    int radius = 0;
-
-    while (radius * radius < distance_squared) {
-        radius++;
-    }
-
-    return legacy_light_masks[intensity][ring_index[radius]];
-}
-
 /** Calculate the deterministic monotonic radial profile at one distance. */
 static int radial_light_mask_value(int intensity, int distance_squared) {
     static const uint16_t distances[MAX_LIGHT_RADIUS * MAX_LIGHT_RADIUS + 1] = {
@@ -599,15 +521,7 @@ static int radial_light_mask_value(int intensity, int distance_squared) {
     return (int)(((uint64_t)profile->center * numerator + denominator / 2) / denominator);
 }
 
-static bool light_falloff_is_legacy(void) {
-    return strcmp(settings.light_falloff, "legacy") == 0;
-}
-
-static int light_mask_value(int intensity, int distance_squared, bool legacy) {
-    if (legacy) {
-        return legacy_light_mask_value(intensity, distance_squared);
-    }
-
+static int light_mask_value(int intensity, int distance_squared) {
     return radial_light_mask_value(intensity, distance_squared);
 }
 
@@ -632,9 +546,7 @@ static void light_mask_adjust(mapstruct *map,
     }
 
     intensity = abs(intensity);
-    bool legacy = light_falloff_is_legacy();
-    int radius =
-        legacy ? light_profiles[intensity].legacy_radius : light_profiles[intensity].radial_radius;
+    int radius = light_profiles[intensity].radial_radius;
     int vertical_radius = MIN(radius, MAP2_MAX_DEPTH);
 
     for (int dy = -radius; dy <= radius; dy++) {
@@ -645,7 +557,7 @@ static void light_mask_adjust(mapstruct *map,
                 if (distance_squared > radius * radius) {
                     continue;
                 }
-                int value = light_mask_value(intensity, distance_squared, legacy) * mod;
+                int value = light_mask_value(intensity, distance_squared) * mod;
                 if (value == 0) {
                     continue;
                 }

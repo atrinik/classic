@@ -930,18 +930,6 @@ static bool clioptions_option_network_stack(const char *arg, char **errmsg) {
     return true;
 }
 
-static const char *clioptions_option_light_falloff_desc =
-    "Selects radial (default) or legacy light-source falloff geometry.";
-static bool clioptions_option_light_falloff(const char *arg, char **errmsg) {
-    if (strcmp(arg, "radial") != 0 && strcmp(arg, "legacy") != 0) {
-        *errmsg = xstrdup("Expected radial or legacy");
-        return false;
-    }
-
-    snprintf(VS(settings.light_falloff), "%s", arg);
-    return true;
-}
-
 /**
  * It is vital that init_library() is called by any functions using this
  * library.
@@ -1074,7 +1062,6 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, speed_multiplier, "Speed multiplier");
     clioptions_enable_changeable(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, network_stack, "Configure network stack");
-    CLIOPTIONS_CREATE_ARGUMENT(cli, light_falloff, "Configure light-source falloff");
 
     /* Import game APIs that don't need settings */
     toolkit_import(commands);
