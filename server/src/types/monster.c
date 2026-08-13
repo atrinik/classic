@@ -167,8 +167,10 @@ void set_npc_enemy(object *npc, object *enemy, rv_vector *rv) {
             FREE_AND_ADD_REF_HASH(return_wp->slaying, base->slaying);
             /* Activate wp */
             SET_FLAG(return_wp, FLAG_CURSED);
-            /* reset best-effort timer */
+            /* Reset retry progress for this return-home lifecycle. */
             return_wp->stats.Int = 0;
+            return_wp->stats.Str = 0;
+            return_wp->stats.dam = 30000;
 
             /* setup move_type to use waypoints */
             return_wp->move_type = npc->move_type;
@@ -663,6 +665,9 @@ static void process_func(object *op) {
 
     object *part = rv.part != NULL ? rv.part : op;
     int dir = rv.direction;
+    if (!movement_direction_valid(op, dir, true)) {
+        return;
+    }
 
     /* Move the check for scared up here - if the monster was scared,
      * we were not doing any of the logic below, so might as well save
@@ -769,6 +774,10 @@ static void process_func(object *op) {
             return;
         } else {
             int maxdiff = (QUERY_FLAG(op, FLAG_ONLY_ATTACK) || rndm_chance(2)) ? 1 : 2;
+
+            if (!movement_direction_valid(op, dir, false)) {
+                return;
+            }
 
             /* Can the monster move directly toward player? */
             if (move_object(op, dir)) {

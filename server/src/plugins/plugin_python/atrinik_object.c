@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -2735,6 +2735,19 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
         if (PyErr_Occurred() || color > UINT32_C(0xffffff)) {
             PyErr_SetString(PyExc_OverflowError,
                             "light_color must be between 0x000000 and 0xffffff.");
+            return -1;
+        }
+    }
+
+    if (field->offset == offsetof(object, direction) && PyInt_Check(value)) {
+        long direction = PyLong_AsLong(value);
+        if (PyErr_Occurred()) {
+            return -1;
+        }
+        if (direction < 0 || direction > NUM_DIRECTION) {
+            PyErr_Format(PyExc_ValueError,
+                         "direction must be between 0 and %d.",
+                         NUM_DIRECTION);
             return -1;
         }
     }

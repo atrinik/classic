@@ -736,7 +736,6 @@ int main(int argc, char *argv[]) {
         "Direct rendezvous STUN discovery: %s",
         client_stun_source_name(clioption_settings.stun.source));
 
-    upgrader_init();
     settings_init();
     connection_preferences_init();
     init_game_data();

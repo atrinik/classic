@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -197,7 +197,6 @@ void waypoint_compute_path(object *op) {
         LOG(ERROR, "Invalid destination map '%s': %s", op->slaying, object_get_str(op));
         return;
     }
-
     path_search_options_t options;
     path_search_options_init(&options);
     options.return_partial = true;
@@ -230,6 +229,8 @@ void waypoint_compute_path(object *op) {
         return;
     }
 
+    bool partial_best_effort =
+        result.status == PATH_STATUS_PARTIAL && QUERY_FLAG(op, FLAG_NO_ATTACK);
     if (result.status == PATH_STATUS_PARTIAL) {
         LOG(DEBUG,
             "Waypoint path used explicit best effort after %" PRIuMAX " generated states: %s",
@@ -259,12 +260,12 @@ void waypoint_compute_path(object *op) {
     /* Msg boundary */
     op->attacked_by_distance = strlen(op->msg);
 
-    /* Number of fails */
-    op->stats.Int = 0;
-    /* Number of fails */
-    op->stats.Str = 0;
-    /* Best distance */
-    op->stats.dam = 30000;
+    /* A partial best-effort path is another attempt, not a successful reset. */
+    if (!partial_best_effort) {
+        op->stats.Int = 0;
+        op->stats.Str = 0;
+        op->stats.dam = 30000;
+    }
 }
 
 /**
@@ -305,6 +306,7 @@ void waypoint_move(object *op, object *npc) {
             object_get_str(op));
         return;
     }
+    bool destination_on_other_map = destmap != npc->map;
 
     rv_vector global_rv;
     if (!get_rangevector_from_mapcoords(npc->map,
@@ -472,7 +474,8 @@ void waypoint_move(object *op, object *npc) {
         op->stats.dam = dest_rv->distance;
         /* Number of times we failed getting closer to (sub)goal */
         op->stats.Str = 0;
-    } else if (dest_rv->distance_z == 0 && op->stats.Str++ > 4) {
+    } else if ((dest_rv->distance_z == 0 || QUERY_FLAG(op, FLAG_NO_ATTACK)) &&
+               op->stats.Str++ > 4) {
         /* Discard the current path, so that we can get a new one */
         FREE_AND_CLEAR_HASH(op->msg);
 
@@ -486,6 +489,9 @@ void waypoint_move(object *op, object *npc) {
 #endif
             op->stats.hp = npc->x;
             op->stats.sp = npc->y;
+            if (destination_on_other_map) {
+                FREE_AND_ADD_REF_HASH(op->slaying, npc->map->path);
+            }
             return;
         }
     }
@@ -500,6 +506,10 @@ void waypoint_move(object *op, object *npc) {
 
     /* Perform the actual move */
     int dir = dest_rv->direction;
+    if (!movement_direction_valid(npc, dir, true)) {
+        return;
+    }
+
     if (QUERY_FLAG(npc, FLAG_CONFUSED)) {
         dir = get_randomized_dir(dir);
     }

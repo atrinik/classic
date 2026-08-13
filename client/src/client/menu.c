@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -231,8 +231,11 @@ int client_command_check(const char *cmd) {
         }
 
         if (strcasecmp(cmd, "sound") == 0) {
-            sound_clear_cache();
-            draw_info(COLOR_GREEN, "Sound cache cleared.");
+            if (sound_clear_cache()) {
+                draw_info(COLOR_GREEN, "Sound cache cleared.");
+            } else {
+                draw_info(COLOR_RED, "Could not clear sound cache; cached audio retained.");
+            }
         } else if (strcasecmp(cmd, "textures") == 0) {
             texture_reload();
             draw_info(COLOR_GREEN, "Textures reloaded.");

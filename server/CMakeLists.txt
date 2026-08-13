@@ -250,6 +250,9 @@ add_library(atrinik-server-core OBJECT
     ${SOURCES_WORLD_MAKER}
     ${LEXERS_OUT})
 atrinik_configure_target(atrinik-server-core)
+if (BUILD_TESTING)
+    target_compile_definitions(atrinik-server-core PRIVATE ATRINIK_TESTING)
+endif ()
 if (ATRINIK_SERVER_ENABLE_PRECOMPILED_HEADERS)
     target_precompile_headers(atrinik-server-core PRIVATE src/include/global.h)
 endif ()
@@ -395,6 +398,7 @@ if (BUILD_TESTING AND NOT MINGW)
         target_include_directories(atrinik-server-tests BEFORE PRIVATE
             ${ATRINIK_SERVER_INCLUDE_DIRS})
         target_compile_definitions(atrinik-server-tests PRIVATE
+            ATRINIK_TESTING
             ATRINIK_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data")
         target_link_libraries(atrinik-server-tests PRIVATE
             Atrinik::Core
@@ -433,6 +437,7 @@ if (BUILD_TESTING AND NOT MINGW)
             ${CMAKE_CURRENT_SOURCE_DIR}/server.cfg
             ${CMAKE_CURRENT_SOURCE_DIR}/dependencies.lock.json
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/content_benchmark
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_calendar.py
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_fail.py
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_pass.py)
         if (TARGET plugin_python)
@@ -477,6 +482,14 @@ if (BUILD_TESTING AND NOT MINGW)
                 TIMEOUT 300
                 WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
         endforeach ()
+
+        add_test(NAME server-gameplay-journal-tool
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/tests/test_gameplay_journal.py
+                -v)
+        set_tests_properties(server-gameplay-journal-tool PROPERTIES
+            LABELS "server;unit"
+            TIMEOUT 30)
 
         if (ENABLE_SANITIZERS)
             add_test(NAME server-lsan-smoke
@@ -540,6 +553,23 @@ if (BUILD_TESTING AND NOT MINGW)
                     -DATRINIK_EXPECT_FAILURE=true
                     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_plugin_unit_test.cmake)
             set_tests_properties(server-plugin-python-fixture-fail PROPERTIES
+                LABELS "server;plugin;runtime"
+                TIMEOUT 300
+                WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+
+            add_test(NAME server-plugin-python-calendar
+                COMMAND ${ATRINIK_SERVER_TEST_RUNNER}
+                    --name server-plugin-python-calendar
+                    --copy-python-maps
+                    --
+                    ${CMAKE_COMMAND}
+                    -DATRINIK_SERVER=$<TARGET_FILE:${EXECUTABLE}>
+                    -DATRINIK_RUNTIME_DIR=.
+                    -DATRINIK_UNIT_SCRIPT=python_unit_calendar.py
+                    -DATRINIK_EXPECT_FAILURE=false
+                    -DATRINIK_CLOCKDATA=671
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_plugin_unit_test.cmake)
+            set_tests_properties(server-plugin-python-calendar PROPERTIES
                 LABELS "server;plugin;runtime"
                 TIMEOUT 300
                 WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")

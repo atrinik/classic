@@ -20,6 +20,31 @@ deduplication. It is not a duration clock. The authored world time-of-day in
 `src/server/time.c` is also separate: it maps simulation progress to the
 game world's calendar and persists `todtick` in `clockdata`.
 
+#### Game-calendar arithmetic
+
+`todtick` is the authoritative absolute count of elapsed in-game hours. Its
+persisted decimal representation is not migrated when calendar fields are
+decomposed. The frozen calendar has 24 hours per day, seven days per week,
+four weeks (28 days) per month, 12 months per year, and four seasons per year.
+
+`get_tod()` derives zero-based fields from that absolute hour:
+
+- `hour = todtick % HOURS_PER_DAY`;
+- `day = (todtick % HOURS_PER_MONTH) / HOURS_PER_DAY`;
+- `dayofweek = (todtick / HOURS_PER_DAY) % DAYS_PER_WEEK`;
+- `weekofmonth = day / DAYS_PER_WEEK`;
+- `month = (todtick / HOURS_PER_MONTH) % MONTHS_PER_YEAR`;
+- `season = month / MONTHS_PER_SEASON`; and
+- `year = todtick / HOURS_PER_YEAR`.
+
+The 28-day month is an exact multiple of the seven-day week, so a month-local
+`day % DAYS_PER_WEEK` currently gives the same day of week. Use the absolute
+elapsed-day identity above: it remains the authoritative formula if calendar
+dimensions change. Likewise, future lunar or other continuous cycles must use
+absolute-hour arithmetic directly instead of composing decomposed calendar
+fields. `/time` and `Atrinik.GetTime()` publish one-based day and day-of-week
+values; `timeofday_t` keeps them zero-based for internal consumers.
+
 ### Monotonic process time
 
 `server_monotonic_t` is backed by `datetime_monotonic_us()` in production. Use

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -45,7 +45,7 @@ void command_push(object *op, const char *command, char *params) {
     dir = op->direction;
 
     /* We check for all conditions where the player can't push anything. */
-    if (dir <= 0 || QUERY_FLAG(op, FLAG_PARALYZED)) {
+    if (dir <= 0 || !movement_direction_valid(op, dir, false) || QUERY_FLAG(op, FLAG_PARALYZED)) {
         draw_info(COLOR_WHITE, op, "You are unable to push anything.");
         return;
     }

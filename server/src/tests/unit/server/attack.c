@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -24,6 +24,7 @@
 
 #include <global.h>
 #include <server_main.h>
+#include <server.h>
 #include <attack.h>
 #include <check.h>
 #include <checkstd.h>
@@ -79,6 +80,184 @@ static size_t attack_test_messages(object *pl, const char *expected) {
 
     return count;
 }
+
+static size_t attack_test_hurt_sounds(object *pl, char *filename, size_t filename_size) {
+    size_t count = 0;
+
+    for (packet_struct *packet = CONTR(pl)->cs->packets; packet != NULL; packet = packet->next) {
+        if (packet->type != CLIENT_CMD_SOUND) {
+            continue;
+        }
+
+        packet_reader_t reader;
+        char current[MAX_BUF];
+        packet_reader_init(&reader, packet->data, packet->len);
+        ck_assert_uint_eq(packet_reader_read_uint8(&reader), CMD_SOUND_EFFECT);
+        ck_assert(packet_reader_read_string(&reader, VS(current)));
+        ck_assert_int_eq(packet_reader_read_int8(&reader), 0);
+        ck_assert_int_eq(packet_reader_read_int8(&reader), 0);
+        ck_assert_int_eq(packet_reader_read_uint8(&reader), 0);
+        ck_assert_int_eq(packet_reader_read_uint8(&reader), 0);
+        ck_assert(packet_reader_finish(&reader));
+        count++;
+
+        if (filename != NULL) {
+            snprintf(filename, filename_size, "%s", current);
+        }
+    }
+
+    return count;
+}
+
+static bool attack_test_is_female_hurt_sound(const char *filename) {
+    static const char *const filenames[] = {
+        "doh_female_1.ogg",
+        "doh_female_2.ogg",
+        "doh_female_3.ogg",
+        "doh_female_4.ogg",
+        "doh_female_5.ogg",
+        "doh_female_6.ogg",
+        "doh_female_7.ogg",
+    };
+
+    for (size_t i = 0; i < arraysize(filenames); i++) {
+        if (strcmp(filename, filenames[i]) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+START_TEST(test_player_hurt_sound_selection_and_damage_gate) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+    CONTR(pl)->cs->sound = 1;
+    CLEAR_FLAG(pl, FLAG_IS_MALE);
+    CLEAR_FLAG(pl, FLAG_IS_FEMALE);
+
+    object *attacker = arch_get("kobold");
+    attacker->x = pl->x + 1;
+    attacker->y = pl->y;
+    attacker = object_insert_map(attacker, map, NULL, INS_NO_MERGE);
+    monster_data_init(attacker);
+    memset(attacker->attack, 0, sizeof(attacker->attack));
+    attacker->attack[ATNR_IMPACT] = 100;
+    pl->block = 0;
+    pl->absorb = 0;
+    pl->stats.maxhp = 1000;
+    pl->stats.hp = pl->stats.maxhp;
+    memset(pl->protection, 0, sizeof(pl->protection));
+
+    char filename[MAX_BUF];
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, attacker, 10), 0);
+    ck_assert_uint_eq(attack_test_hurt_sounds(pl, filename, sizeof(filename)), 1);
+    ck_assert_str_eq(filename, "doh.ogg");
+
+    SET_FLAG(pl, FLAG_IS_MALE);
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, attacker, 10), 0);
+    ck_assert_uint_eq(attack_test_hurt_sounds(pl, filename, sizeof(filename)), 1);
+    ck_assert_str_eq(filename, "doh.ogg");
+
+    SET_FLAG(pl, FLAG_IS_FEMALE);
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, attacker, 10), 0);
+    ck_assert_uint_eq(attack_test_hurt_sounds(pl, filename, sizeof(filename)), 1);
+    ck_assert_str_eq(filename, "doh.ogg");
+
+    CLEAR_FLAG(pl, FLAG_IS_MALE);
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, attacker, 10), 0);
+    ck_assert_uint_eq(attack_test_hurt_sounds(pl, filename, sizeof(filename)), 1);
+    ck_assert(attack_test_is_female_hurt_sound(filename));
+    ck_assert_str_ne(filename, "player_hurt.ogg");
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_eq(attack_hit(pl, attacker, 0), 0);
+    ck_assert_uint_eq(attack_test_hurt_sounds(pl, NULL, 0), 0);
+
+    pl->block = 100;
+    attack_block_test_override = 1;
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_eq(attack_hit(pl, attacker, 10), 0);
+    attack_block_test_override = -1;
+    ck_assert_uint_eq(attack_test_hurt_sounds(pl, NULL, 0), 0);
+
+    pl->block = 0;
+    pl->stats.hp = 1;
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_eq(attack_hit_nonlethal(pl, attacker, 10), 0);
+    ck_assert_uint_eq(attack_test_hurt_sounds(pl, NULL, 0), 0);
+}
+END_TEST
+
+START_TEST(test_female_hurt_vocal_survives_player_save_reload) {
+    mapstruct *map = get_empty_map(24, 24);
+    ck_assert_ptr_ne(map, NULL);
+
+    const char *name = "Female Hurt Vocal Roundtrip";
+    char error[MAX_BUF];
+    ck_assert_msg(player_provision_scenario(name,
+                                            "human_female",
+                                            EMERGENCY_MAPPATH,
+                                            EMERGENCY_X,
+                                            EMERGENCY_Y,
+                                            NULL,
+                                            VS(error)),
+                  "%s",
+                  error);
+    char *player_path = player_make_path(name, "player.dat");
+    char *metrics_path = player_make_path(name, "metrics.dat");
+    FILE *fp = fopen(player_path, "rb");
+    ck_assert_ptr_ne(fp, NULL);
+
+    object *placeholder = player_get_dummy("Female Hurt Vocal Restore", NULL);
+    player *state = CONTR(placeholder);
+    object_remove(placeholder, 0);
+    placeholder->custom_attrset = NULL;
+    object_destroy(placeholder);
+    state->ob = object_get();
+    ck_assert(player_load_stream(state, fp));
+    ck_assert_int_eq(fclose(fp), 0);
+
+    object *restored = state->ob;
+    restored->custom_attrset = state;
+    object_weight_sum(restored);
+    living_update_player(restored);
+    link_player_skills(restored);
+    ck_assert(QUERY_FLAG(restored, FLAG_IS_FEMALE));
+    ck_assert(!QUERY_FLAG(restored, FLAG_IS_MALE));
+    ck_assert_int_eq(object_get_gender(restored), GENDER_FEMALE);
+    ck_assert(object_enter_map(restored, NULL, map, 1, 1, true));
+    restored->block = 0;
+    restored->absorb = 0;
+    memset(restored->protection, 0, sizeof(restored->protection));
+
+    object *monster = arch_get("kobold");
+    monster->x = restored->x + 1;
+    monster->y = restored->y;
+    monster = object_insert_map(monster, map, NULL, INS_NO_MERGE);
+    monster_data_init(monster);
+    memset(monster->attack, 0, sizeof(monster->attack));
+    monster->attack[ATNR_IMPACT] = 100;
+    monster->level = restored->level;
+
+    char filename[MAX_BUF];
+    socket_buffer_clear(CONTR(restored)->cs);
+    ck_assert_int_gt(attack_hit(restored, monster, 10), 0);
+    ck_assert_uint_eq(attack_test_hurt_sounds(restored, filename, sizeof(filename)), 1);
+    ck_assert(attack_test_is_female_hurt_sound(filename));
+
+    ck_assert_int_eq(unlink(player_path), 0);
+    ck_assert_int_eq(unlink(metrics_path), 0);
+    free(player_path);
+    free(metrics_path);
+}
+END_TEST
 
 START_TEST(test_attack_is_melee_range) {
     mapstruct *map;
@@ -413,6 +592,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_targeted_melee_gets_one_unaware_opening_bonus);
     tcase_add_test(tc_core, test_situational_bonus_excludes_living_pets_and_plugin_damage_api);
     tcase_add_test(tc_core, test_unaware_bonus_does_not_increase_status_effect_strength);
+    tcase_add_test(tc_core, test_player_hurt_sound_selection_and_damage_gate);
+    tcase_add_test(tc_core, test_female_hurt_vocal_survives_player_save_reload);
 
     return s;
 }

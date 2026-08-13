@@ -1,6 +1,7 @@
 set(SOURCES
 	src/client/asset.c
 	src/client/asset_source.c
+	src/client/audio_log.c
 	src/client/face_asset.c
 	src/client/face_cache.c
 	src/client/face_loader.c
@@ -46,13 +47,13 @@ set(SOURCES
 	src/client/settings.c
 	src/client/socket.c
 	src/client/sound.c
+	src/client/sound_command.c
 	src/client/stun_config.c
 	src/client/sprite.c
 	src/client/sprite_pixels.c
 	src/client/texture.c
 	src/client/tilestretcher.c
 	src/client/updates.c
-	src/client/upgrader.c
 	src/client/video.c
 	src/client/window_title.c
 	src/client/wrapper.c

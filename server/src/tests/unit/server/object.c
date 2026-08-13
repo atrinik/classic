@@ -30,16 +30,21 @@
 #include <toolkit/string.h>
 #include <arch.h>
 #include <loader.h>
+#include <living.h>
 #include <monster.h>
 #include <monster_data.h>
+#include <movement.h>
 #include <object.h>
 #include <object_methods.h>
 #include <player.h>
 #include <server.h>
 #include <server_item.h>
+#include <skills.h>
+#include <spells.h>
 #include <swap.h>
 #include <toolkit/packet.h>
 #include <toolkit/path.h>
+#include <waypoint.h>
 
 static bool active_list_contains_at(const object *needle, const char *phase) {
     size_t visited = 0;
@@ -61,6 +66,95 @@ static bool active_list_contains_at(const object *needle, const char *phase) {
 }
 
 #define active_list_contains(needle) active_list_contains_at((needle), __func__)
+
+START_TEST(test_return_home_waypoint_reactivation_resets_retry_progress) {
+    mapstruct *map;
+    object *player;
+    check_setup_env_pl(&map, &player);
+    FREE_AND_COPY_HASH(map->path, "/tests/return-home-reactivation");
+
+    object *monster = arch_get("kobold");
+    ck_assert_ptr_nonnull(monster);
+    monster = object_insert_map(monster, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(monster);
+    monster_data_init(monster);
+    ck_assert_ptr_nonnull(living_get_base_info(monster));
+
+    set_npc_enemy(monster, player, NULL);
+    set_npc_enemy(monster, NULL, NULL);
+    object *waypoint = waypoint_get_home(monster);
+    ck_assert_ptr_nonnull(waypoint);
+
+    CLEAR_FLAG(waypoint, FLAG_CURSED);
+    waypoint->stats.Int = 8;
+    waypoint->stats.Str = 5;
+    waypoint->stats.dam = 1;
+
+    set_npc_enemy(monster, player, NULL);
+    set_npc_enemy(monster, NULL, NULL);
+
+    ck_assert_ptr_eq(waypoint_get_home(monster), waypoint);
+    ck_assert(QUERY_FLAG(waypoint, FLAG_CURSED));
+    ck_assert_int_eq(waypoint->stats.Int, 0);
+    ck_assert_int_eq(waypoint->stats.Str, 0);
+    ck_assert_int_eq(waypoint->stats.dam, 30000);
+
+    object_remove(monster, 0);
+    object_destroy(monster);
+    object_remove(player, 0);
+    object_destroy(player);
+}
+END_TEST
+
+static size_t invalid_direction_log_count;
+
+static void capture_invalid_direction_log(const char *message) {
+    if (strstr(message, "Rejected invalid movement direction") != NULL) {
+        invalid_direction_log_count++;
+    }
+}
+
+START_TEST(test_move_ob_rejects_invalid_directions) {
+    static const int invalid_directions[] = {INT_MIN, 0, NUM_DIRECTION + 1, INT_MAX};
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    int direction = pl->direction;
+    uint32_t anim_flags = pl->anim_flags;
+    long saved_pticks = pticks;
+    pticks = 1;
+    invalid_direction_log_count = 0;
+    logger_set_print_func(capture_invalid_direction_log);
+
+    for (size_t i = 0; i < arraysize(invalid_directions); i++) {
+        ck_assert_int_eq(move_ob(pl, invalid_directions[i], pl), 0);
+        ck_assert_int_eq(pl->direction, direction);
+        ck_assert_uint_eq(pl->anim_flags, anim_flags);
+    }
+
+    ck_assert_uint_eq(invalid_direction_log_count, 1);
+    ck_assert(!movement_direction_valid(pl, INT_MIN, true));
+    ck_assert(movement_direction_valid(pl, 0, true));
+    ck_assert(movement_direction_valid(pl, 1, false));
+    ck_assert(movement_direction_valid(pl, NUM_DIRECTION, false));
+    ck_assert_int_eq(push_ob(pl, INT_MAX, pl), 0);
+    ck_assert_int_eq(cast_spell(pl, pl, INT_MIN, -1, 0, CAST_NORMAL, NULL), 0);
+    object *bow = arch_get("bow_short");
+    ck_assert_ptr_nonnull(bow);
+    ck_assert_int_eq(object_ranged_fire(bow, pl, INT_MAX, NULL), OBJECT_METHOD_UNHANDLED);
+    object_destroy(bow);
+    construction_do(pl, INT_MIN);
+    pticks += 60L * MAX_TICKS;
+    ck_assert_int_eq(move_ob(pl, -1, pl), 0);
+    ck_assert_uint_eq(invalid_direction_log_count, 2);
+
+    logger_set_print_func(logger_do_print);
+    pticks = saved_pticks;
+    object_remove(pl, 0);
+    object_destroy(pl);
+}
+END_TEST
 
 START_TEST(test_find_enemy_returns_valid_direction_for_tiled_exit_enemy) {
     mapstruct *source;
@@ -866,6 +960,17 @@ START_TEST(test_object_load_str) {
     ck_assert_uint_eq(ob->light_color, UINT32_C(0xffffff));
     object_destroy(ob);
 
+    ob = object_load_str("arch sack\ndirection -1\nend\n");
+    ck_assert_ptr_nonnull(ob);
+    ck_assert_int_eq(ob->direction, NUM_DIRECTION);
+    object_destroy(ob);
+
+    ob = object_load_str("arch sack\ndirection -2147483648\nend\n");
+    ck_assert_ptr_nonnull(ob);
+    ck_assert_int_ge(ob->direction, 0);
+    ck_assert_int_le(ob->direction, NUM_DIRECTION);
+    object_destroy(ob);
+
     ob = object_load_str("arch sack\nlight_color 12aBcF\nend\n");
     ck_assert_ptr_ne(ob, NULL);
     ck_assert_uint_eq(ob->light_color, UINT32_C(0x12abcf));
@@ -1218,11 +1323,17 @@ END_TEST
 static Suite *suite(void) {
     Suite *s = suite_create("object");
     TCase *tc_core = tcase_create("Core");
+    TCase *tc_movement = tcase_create("Movement");
 
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
+    tcase_add_unchecked_fixture(tc_movement, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_movement, check_test_setup, check_test_teardown);
 
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_return_home_waypoint_reactivation_resets_retry_progress);
+    suite_add_tcase(s, tc_movement);
+    tcase_add_test(tc_movement, test_move_ob_rejects_invalid_directions);
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_enemy);
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_exit_tiled_enemy);
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_tiled_enemy);

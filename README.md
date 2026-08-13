@@ -110,4 +110,5 @@ Source archives, the protocol wheel, portable Windows packages, SPDX,
 checksums, locked runtime-input evidence, attestations, and
 `ghcr.io/atrinik/classic-server` are built from the same commit. See
 [docs/RELEASING.md](docs/RELEASING.md) for the artifact,
-rehearsal, recovery, and rollback contracts.
+digest-pinned durable dependency bundle, offline rehearsal, recovery, and
+rollback contracts.

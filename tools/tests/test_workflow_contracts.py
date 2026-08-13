@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import os
+import subprocess
+import tempfile
+import textwrap
 import unittest
 
 
@@ -86,6 +90,216 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("contents: write", workflow)
         self.assertNotIn("contents: write", candidate)
         self.assertIn("source_epoch: ${{ needs.preflight.outputs.source_epoch }}", workflow)
+
+    def test_release_consumers_use_the_digest_pinned_bundle_offline(self) -> None:
+        candidate = self.text("build-release-candidate.yml")
+        package = self.text("package-release.yml")
+        descriptor = json.loads((ROOT / "dependencies.bundle.json").read_text())
+        self.assertEqual(descriptor["image"], "ghcr.io/atrinik/classic-dependencies")
+        self.assertRegex(descriptor["digest"], r"^sha256:[0-9a-f]{64}$")
+        self.assertRegex(descriptor["material_digest"], r"^sha256:[0-9a-f]{64}$")
+        self.assertIn("Verify durable dependency bundle", candidate)
+        self.assertEqual(candidate.count("candidate-dependencies-${{"), 4)
+        self.assertNotIn("name: release-dependencies-", candidate)
+        self.assertEqual(candidate.count("--network none"), 2)
+        self.assertEqual(candidate.count("ATRINIK_DEPENDENCY_DOWNLOADS="), 2)
+        self.assertEqual(candidate.count("ATRINIK_DEPENDENCY_CACHE_DIR="), 1)
+        self.assertIn("tools/release/install_dependency_bundle.sh", candidate)
+        self.assertIn("tools/release/install_dependency_bundle.sh", package)
+        self.assertNotIn("dependencies.py sync", candidate)
+        client_script = (ROOT / "client/tools/build-windows-package.sh").read_text()
+        self.assertIn('dependency_sync_arguments+=(--cache "${dependency_downloads}" --refresh --offline)', client_script)
+        installer = (ROOT / "tools/release/install_dependency_bundle.sh").read_text()
+        self.assertIn('gh attestation verify "oci://${reference}"', installer)
+        self.assertGreaterEqual(candidate.count("GH_TOKEN: ${{ github.token }}"), 1)
+
+    def test_dependency_bundle_publication_is_trusted_and_digest_preserving(self) -> None:
+        workflow = self.text("publish-dependency-bundle.yml")
+        self.assertIn("branches: [main]", workflow)
+        self.assertNotIn("paths:", workflow)
+        self.assertIn("if: github.ref == 'refs/heads/main'", workflow)
+        self.assertIn('test "${GITHUB_REF}" = refs/heads/main', workflow)
+        self.assertIn("refs/remotes/origin/main", workflow)
+        self.assertIn("packages: write", workflow)
+        self.assertIn("oras cp --from-oci-layout", workflow)
+        self.assertIn("9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59", workflow)
+        self.assertIn("dependency_bundle.py build", workflow)
+        self.assertIn("immutable dependency material tag exists", workflow)
+        self.assertIn("tools/release/check_registry_version.py", workflow)
+        self.assertIn("steps.material-tag.outputs.package_exists", workflow)
+        self.assertIn("steps.material-tag.outputs.exists", workflow)
+        self.assertIn("steps.material-tag.outputs.digest", workflow)
+        self.assertIn('case "${PACKAGE_EXISTS}:${TAG_EXISTS}" in', workflow)
+        self.assertIn("bootstrap_missing_package:", workflow)
+        self.assertIn("github.event_name == 'workflow_dispatch'", workflow)
+        self.assertIn("materials-428265fcc11e9e3f7fc534659b55008cd26e9da6c74da054074279b7bc4af2e9", workflow)
+        self.assertIn("sha256:ffe1fa8d28a323d502d01400e2260b7b5eec37842e762c439b88bd9ee823923e", workflow)
+        self.assertIn("use the documented recovery path", workflow)
+        self.assertNotIn("oras repo tags", workflow)
+        self.assertNotIn("pull_request:", workflow)
+        self.assertNotIn("contents: write", workflow)
+        self.assertIn("attestations: read", self.text("release.yml"))
+        self.assertIn("attestations: read", self.text("release-rehearsal.yml"))
+        package = self.text("package-release.yml")
+        candidate_job = package.split("\n  candidate:\n", 1)[1].split(
+            "\n  publish:\n", 1
+        )[0]
+        self.assertIn("attestations: read", candidate_job)
+
+    def test_dependency_bundle_publication_bootstrap_is_explicit_and_fail_closed(self) -> None:
+        workflow = self.text("publish-dependency-bundle.yml")
+        step = workflow.index("        name: Publish or verify the immutable material tag")
+        start = workflow.index("        run: |\n", step) + len("        run: |\n")
+        lines = []
+        for line in workflow[start:].splitlines(keepends=True):
+            if line.strip() and not line.startswith("          "):
+                break
+            lines.append(line)
+        script = textwrap.dedent("".join(lines))
+        expected = "sha256:ffe1fa8d28a323d502d01400e2260b7b5eec37842e762c439b88bd9ee823923e"
+
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            fake_oras = directory / "oras"
+            fake_oras.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >>\"${ORAS_LOG}\"\n"
+                "case \"$1\" in\n"
+                "  cp) exit 0 ;;\n"
+                "  resolve) printf '%s\\n' \"${EXPECTED_RESOLVE}\" ;;\n"
+                "  *) exit 2 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_oras.chmod(0o755)
+
+            def run_case(
+                *, package_exists: str, tag_exists: str,
+                allow_missing: str, existing_digest: str = "",
+            ) -> tuple[subprocess.CompletedProcess[str], str]:
+                log = directory / "oras.log"
+                log.unlink(missing_ok=True)
+                output = directory / "github-output"
+                output.unlink(missing_ok=True)
+                environment = os.environ.copy()
+                environment.update(
+                    {
+                        "ALLOW_MISSING_PACKAGE": allow_missing,
+                        "EXISTING_DIGEST": existing_digest,
+                        "EXPECTED_RESOLVE": expected,
+                        "GITHUB_OUTPUT": str(output),
+                        "ORAS_LOG": str(log),
+                        "PACKAGE_EXISTS": package_exists,
+                        "TAG_EXISTS": tag_exists,
+                    }
+                )
+                result = subprocess.run(
+                    [
+                        "bash", "-euo", "pipefail", "-c",
+                        script.replace("build/oras/oras", str(fake_oras)),
+                    ],
+                    cwd=ROOT,
+                    env=environment,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                return result, log.read_text() if log.exists() else ""
+
+            result, log = run_case(
+                package_exists="false", tag_exists="false", allow_missing="false"
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("use the documented recovery path", result.stderr)
+            self.assertEqual(log, "")
+
+            result, log = run_case(
+                package_exists="false", tag_exists="false", allow_missing="true"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("cp --from-oci-layout", log)
+            self.assertIn("resolve ghcr.io/atrinik/classic-dependencies:", log)
+
+            result, log = run_case(
+                package_exists="true", tag_exists="false", allow_missing="false"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(log.count("cp --from-oci-layout"), 1)
+            self.assertEqual(
+                log.count("resolve ghcr.io/atrinik/classic-dependencies:"), 1
+            )
+
+            result, log = run_case(
+                package_exists="true",
+                tag_exists="true",
+                allow_missing="false",
+                existing_digest=expected,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("cp --from-oci-layout", log)
+            self.assertEqual(
+                log.count("resolve ghcr.io/atrinik/classic-dependencies:"), 1
+            )
+
+            result, log = run_case(
+                package_exists="true",
+                tag_exists="true",
+                allow_missing="false",
+                existing_digest="sha256:" + "0" * 64,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("exists at sha256:", result.stderr)
+            self.assertEqual(log, "")
+
+            result, log = run_case(
+                package_exists="false", tag_exists="true", allow_missing="true"
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("invalid material-tag audit result", result.stderr)
+            self.assertEqual(log, "")
+
+    def test_release_rebinds_current_main_after_waiting_for_bundle(self) -> None:
+        workflow = self.text("release.yml")
+        bundle = workflow.index("Require the exact durable dependency bundle")
+        rebind = workflow.index("Rebind release mutation to current main")
+        pending = workflow.index("Detect an incomplete semantic release")
+        self.assertLess(bundle, rebind)
+        self.assertLess(rebind, pending)
+        rebind_step = workflow[rebind:pending]
+        self.assertIn("git fetch --no-tags origin main", rebind_step)
+        self.assertIn('refs/remotes/origin/main', rebind_step)
+        self.assertIn('test "${commit}" = "${RELEASE_TRIGGER_SHA}"', rebind_step)
+
+    def test_dependency_bundle_install_fails_before_pull_without_attestation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            binaries = Path(temporary)
+            (binaries / "gh").write_text(
+                "#!/usr/bin/env sh\nexit 42\n", encoding="utf-8"
+            )
+            docker_marker = binaries / "docker-called"
+            (binaries / "docker").write_text(
+                f"#!/usr/bin/env sh\ntouch '{docker_marker}'\nexit 0\n",
+                encoding="utf-8",
+            )
+            (binaries / "gh").chmod(0o755)
+            (binaries / "docker").chmod(0o755)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "GITHUB_REPOSITORY": "atrinik/classic",
+                    "PATH": f"{binaries}:{environment['PATH']}",
+                }
+            )
+            result = subprocess.run(
+                ["tools/release/install_dependency_bundle.sh"],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 42)
+            self.assertFalse(docker_marker.exists())
 
     def test_package_dispatch_is_bound_to_a_tag_or_current_main_recovery(self) -> None:
         workflow = self.text("package-release.yml")
@@ -677,9 +891,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("not in archive.read(executable)", build)
         self.assertIn(
             "--target libatrinik-path libatrinik-rendezvous "
-            "libatrinik-metaserver-publisher \\",
+            "libatrinik-signals \\",
             build,
         )
+        self.assertIn("libatrinik-metaserver-publisher \\", build)
         self.assertIn(
             "libatrinik-metaserver-url libatrinik-socket-address "
             "libatrinik-socket-quic \\",
@@ -694,6 +909,9 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn(
             "libatrinik/build/windows-tests/libatrinik-stun.exe", build
+        )
+        self.assertIn(
+            "libatrinik/build/windows-tests/libatrinik-signals.exe", build
         )
         self.assertIn("client-rich-presence-tests.exe", build)
         self.assertIn("python3 tools/ci/stage_windows_runtime.py", build)
@@ -717,6 +935,22 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("New-Item -ItemType Junction", run)
         self.assertIn('"libatrinik-path.exe") $junction', run)
         self.assertIn('"libatrinik-rendezvous.exe"', run)
+        self.assertIn('"libatrinik-signals.exe"', run)
+        self.assertIn('"libatrinik-signals-test-traceback-*.txt"', run)
+        self.assertIn('"Expected exactly one traceback block"', run)
+        self.assertIn("Start-Process", run)
+        self.assertIn('"C0000005"', run)
+        self.assertIn("--handled-exception", run)
+        self.assertIn("--exception-guard", run)
+        self.assertIn("$originalAppData", run)
+        self.assertIn("Remove-Item Env:APPDATA -ErrorAction SilentlyContinue", run)
+        self.assertIn("Remove-Item Env:APPDATA", run)
+        self.assertIn('"Exception code: 0xc0000005"', run)
+        self.assertIn('"Access type: write (1)"', run)
+        self.assertIn('"Exception module base:"', run)
+        self.assertIn('"Exception module name:"', run)
+        self.assertIn("libatrinik-signals\\.exe", run)
+        self.assertIn("$orderedFields", run)
         self.assertIn('"libatrinik-metaserver-publisher.exe"', run)
         self.assertIn('"libatrinik-metaserver-url.exe"', run)
         self.assertIn('"libatrinik-socket-address.exe"', run)

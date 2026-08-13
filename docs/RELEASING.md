@@ -128,12 +128,91 @@ normal Classic release both show the new content
 tag, commit, URL, and digest in `release-manifest.json`, the SPDX relationships,
 and the server image labels, and the released runtime starts successfully.
 
+### Durable dependency bundle
+
+`dependencies.bundle.json` binds the complete `sound`, `content`, `resources`,
+and `libpcpnatpmp` raw-archive set to the SHA-256 digests of all three source
+locks and both acquisition tools, issue #203's verified input-bundle digest,
+a deterministic material digest, and the exact OCI manifest digest at
+`ghcr.io/atrinik/classic-dependencies`. The material tag is derived from the
+complete material digest and is immutable; release consumers use the manifest
+digest, never the tag, as their trust boundary.
+
+The embedded `materials.json` is a deterministic unsigned statement of the
+closed archive set and acquisition contract; it does not claim a builder
+identity. The authoritative publication provenance is the GitHub-signed OCI
+attestation. Every release, rehearsal, and recovery consumer verifies that
+attestation for the exact digest and repository before accepting the image.
+
+Any reviewed lock or acquisition-contract change must rebuild the descriptor
+before merge:
+
+```sh
+python3 tools/release/dependency_bundle.py build \
+  --cache build/dependency-bundle-cache \
+  --output build/dependency-bundle-oci \
+  --write-descriptor
+python3 tools/release/dependency_bundle.py show
+```
+
+The build invokes issue #203's canonical staging and closed-bundle verifier,
+reuses only rehashed archives, and otherwise acquires them through the
+authoritative bounded-retry fetcher. Review and commit the descriptor, not the
+ignored OCI layout or archives. A push of the relevant files to current
+`main`, or a manual current-`main` dispatch, runs `Publish Dependency Bundle`.
+That workflow rebuilds the layout, refuses a descriptor mismatch, downloads
+and verifies the exact pinned ORAS client, and publishes the layout with its
+digest preserved. It has package write access only in its publication job.
+Pull-request and other untrusted workflows have no publication trigger or
+credential. An existing material tag at a different digest fails closed.
+
+The first merge containing this contract is the bootstrap: wait for `Publish
+Dependency Bundle` to publish and attest the checked descriptor before
+dispatching a rehearsal. Semantic Release also waits for and fully verifies
+that exact bundle before it may create a tag or draft. A missing bundle therefore
+blocks versioning rather than allowing a release to race its input publication.
+The initial publisher audits the material tag through GitHub's structured
+package API and treats only its exact package-not-found response as an absent
+repository. Ordinary pushes do not recreate a missing package. For the first
+publication only, manually dispatch `Publish Dependency Bundle` from exact
+current `main` with `bootstrap_missing_package` enabled; that path is bound to
+the initial checked material tag and OCI digest. Once the package exists,
+ordinary current-`main` runs may add new material tags but still refuse any
+existing tag at a different digest. Authentication, transport,
+malformed-response, and other API errors remain terminal and cannot trigger a
+blind tag write. Package deletion or loss is a recovery incident: do not reuse
+the bootstrap input; follow the exact-digest restoration procedure below.
+Build Release Candidate verifies the GitHub OCI attestation, pulls the durable
+image once, verifies the outer OCI digest, closed materials statement,
+source-lock digests, archive set, sizes,
+and every inner SHA-256, then passes a one-day per-run artifact to the Windows
+and server-image jobs. Those consumers run dependency acquisition and build
+steps with networking disabled; a missing, stale, corrupt, duplicated, or extra
+input fails before compilation.
+
+Material images and attestations are retained for as long as any supported
+release or recovery path references their digest. No workflow deletes them or
+promotes a mutable alias. A lock update publishes a new material-digest tag;
+rollback selects the descriptor embedded in the exact prior Classic source
+revision and pulls its prior OCI digest. Never repoint an existing material tag.
+
+If publication fails while origins are available, re-run only the failed
+`Publish Dependency Bundle` job or manually dispatch it on exact current
+`main`; the operation is digest-idempotent. If a required digest is absent
+during an origin outage, stop release or recovery. Do not substitute an
+Actions cache, a newer tag, or live downloads. Restore the exact previously
+exported OCI layout with its recorded digest, or wait for the locked origins
+and re-run the trusted publisher. After any emergency restoration, verify the
+registry digest and GitHub attestation, run Release Rehearsal, and audit the
+complete `classic` supply-chain profile before resuming publication.
+
 1. The root Check workflow validates import evidence and every module. Its
    aggregate result is `Classic validation`.
 2. A successful Check run for the current `main` commit triggers Semantic
    Release. Pull-request, merge-group, failed, stale, and non-main Check runs
    cannot publish.
-3. Semantic-release analyzes and formats only exact first-parent commits,
+3. Semantic-release first pulls and verifies the exact checked dependency
+   bundle. It then analyzes and formats only exact first-parent commits,
    creates the unprefixed tag and draft GitHub release notes, then dispatches
    Package Release from that exact immutable tag ref.
 4. Package Release stages the public Discord Application ID from the
@@ -147,9 +226,10 @@ and the server image labels, and the released runtime starts successfully.
    only to tokens with push access, so production grants `contents: write` only
    to its metadata job; that job performs no mutations. Rehearsals remain
    read-only.
-   Independent jobs build every artifact, install/import the wheel, consume the
-   extracted same-version library archive, and build the root-context server
-   image without publishing it.
+   It stages the digest-pinned durable dependency bundle once. Independent jobs
+   build every artifact offline from those verified archives, install/import
+   the wheel, consume the extracted same-version library archive, and build the
+   root-context server image without publishing it.
 6. Package Release rechecks all hashes, attests the candidate, and reconciles
    the draft assets: a matching partial upload is resumed, while any digest,
    size, state, name, or extra-asset mismatch fails without overwrite. It then
@@ -231,13 +311,16 @@ server and server image consume the checksum-pinned classic content and
 resources releases. Their lock path, repository, tag, commit, URL, SHA-256,
 destination, and affected artifacts are recorded in `release-manifest.json`
 and the SPDX relationships; the server image repeats its applicable coordinates
-as machine-readable OCI labels.
+as machine-readable OCI labels. The release manifest also records the exact
+durable dependency-bundle image, manifest digest, material digest, inner
+manifest digest, and source-lock digests used to acquire those inputs.
 
 ## Rehearsal and verification
 
 Release Rehearsal invokes the same source, wheel, Windows, image, and closed-set
 validation jobs with version `0.0.0`, retains the candidate assets for 30 days,
-and has no publishing job or write permissions. Run it before initial
+pulls the exact durable dependency bundle before its build fan-out, and has no
+publishing job or write permissions. Run it before initial
 activation and after material release-pipeline changes. The versioned image
 build uses `push: false`.
 
@@ -275,6 +358,9 @@ sha256sum --check SHA256SUMS
 gh attestation verify atrinik-classic-VERSION.tar.gz \
   --repo atrinik/classic
 gh attestation verify oci://ghcr.io/atrinik/classic-server:VERSION \
+  --repo atrinik/classic
+gh attestation verify \
+  oci://ghcr.io/atrinik/classic-dependencies@BUNDLE_DIGEST \
   --repo atrinik/classic
 ```
 

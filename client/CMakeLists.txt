@@ -347,6 +347,43 @@ endif ()
 
 if (BUILD_TESTING)
     find_program(ATRINIK_PYTHON3_EXECUTABLE python3 REQUIRED)
+
+    add_executable(client-audio-log-tests
+        src/tests/audio_log.c
+        src/client/audio_log.c)
+    atrinik_configure_target(client-audio-log-tests)
+    target_compile_definitions(client-audio-log-tests PRIVATE
+        ATRINIK_TEST_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+    target_include_directories(client-audio-log-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-audio-log-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-audio-log COMMAND client-audio-log-tests)
+
+    add_executable(client-sound-playback-tests
+        src/tests/sound_playback.c
+        src/client/audio_log.c
+        src/client/sound_command.c
+        src/client/sound.c)
+    atrinik_configure_target(client-sound-playback-tests)
+    target_compile_definitions(client-sound-playback-tests PRIVATE
+        ATRINIK_SOUND_TESTING
+        ATRINIK_TEST_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}"
+        HAVE_SDL_MIXER
+        SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-sound-playback-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-sound-playback-tests PRIVATE
+        Atrinik::Core
+        SDL3::SDL3
+        SDL3_mixer::SDL3_mixer)
+    add_test(NAME client-sound-playback COMMAND client-sound-playback-tests)
+
     add_test(NAME client-lighting-lut-generated
         COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_lighting_lut.py" --check)
@@ -408,6 +445,19 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
     target_link_libraries(client-setting-value-tests PRIVATE Atrinik::Core)
     add_test(NAME client-setting-value COMMAND client-setting-value-tests)
+
+    add_executable(client-sound-command-tests
+        src/tests/sound_command.c
+        src/client/sound_command.c)
+    atrinik_configure_target(client-sound-command-tests)
+    target_compile_definitions(client-sound-command-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-sound-command-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-sound-command-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-sound-command COMMAND client-sound-command-tests)
 
     add_executable(client-metaserver-options-tests
         src/tests/metaserver_options.c
@@ -483,8 +533,7 @@ if (BUILD_TESTING)
         src/tests/keybind_input.c
         src/client/keybind_event.c
         src/client/keybind_input.c
-        src/client/keybind_storage.c
-        src/client/upgrader.c)
+        src/client/keybind_storage.c)
     atrinik_configure_target(client-keybind-input-tests)
     target_compile_definitions(client-keybind-input-tests PRIVATE
         ATRINIK_TEST_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}"
@@ -773,6 +822,39 @@ if (BUILD_TESTING)
     add_test(NAME client-player-view-player-outline-widget-state
         COMMAND atrinik --player-view
             "${player_view_fixtures}/player-outline-widget-state.xml" -)
+    add_test(NAME client-player-view-living-outline-unobscured
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-unobscured.xml" -)
+    add_test(NAME client-player-view-living-outline-same-level
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-same-level.xml" -)
+    add_test(NAME client-player-view-living-outline-upper-level
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-upper-level.xml" -)
+    add_test(NAME client-player-view-living-outline-nearby-wall
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-nearby-wall.xml" -)
+    add_test(NAME client-player-view-living-outline-translucent
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-translucent.xml" -)
+    add_test(NAME client-player-view-living-outline-double
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-double.xml" -)
+    add_test(NAME client-player-view-living-outline-dark-actor
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-dark-actor.xml" -)
+    add_test(NAME client-player-view-living-outline-dark-wall
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-dark-wall.xml" -)
+    add_test(NAME client-player-view-living-outline-multiple
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-multiple.xml" -)
+    add_test(NAME client-player-view-living-outline-crowded
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-crowded.xml" -)
+    add_test(NAME client-player-view-living-outline-crowded-unobscured
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-crowded-unobscured.xml" -)
     add_test(NAME client-player-view-movement-benchmark-smooth
         COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"

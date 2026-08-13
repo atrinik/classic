@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "image": "ghcr.io/atrinik/classic-dependencies",
+  "tag": "materials-428265fcc11e9e3f7fc534659b55008cd26e9da6c74da054074279b7bc4af2e9",
+  "digest": "sha256:ffe1fa8d28a323d502d01400e2260b7b5eec37842e762c439b88bd9ee823923e",
+  "material_digest": "sha256:428265fcc11e9e3f7fc534659b55008cd26e9da6c74da054074279b7bc4af2e9",
+  "bundle_manifest_sha256": "sha256:2ca9d3afd4a40a72524713b7c01cc33facd15f8ebb8cc9e73bc0cdd6acda23da",
+  "source_locks": {
+    "client/dependencies.lock.json": "eb4aba9cc1700f9d558d706b216e4c71aa419d568b76691dc870b160996f859d",
+    "server/dependencies.lock.json": "07dba220e375e54e81d1fb8b2bfbafcfb2a4c7aeb20ca4834435f8b3ed788271",
+    "server/cmake/immutable_sources.lock.json": "48ecf2b5037d53ffe6a92613906eeeef67440636c71cb7c9190ad847b67bd254"
+  },
+  "acquisition_contracts": {
+    "server/tools/dependencies.py": "4d2c282760bf2cbbc87d64cdf6560ffed6ff3dda269e428c8b2bdd5e37ccb385",
+    "tools/release/dependency_bundle.py": "05d0594680aaec59f68d79e4bea1df22df367116f4ec74dcdbcb706518f1362c"
+  },
+  "verified_input_bundle_digest": "sha256:957ce4a7a9ccc68863207643e4d8dacb666440cadfb8dc0445d601221921fbec"
+}
