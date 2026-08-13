@@ -89,7 +89,7 @@ extern void sound_deinit(void);
 
 extern void sound_music_finished_handle(void);
 
-extern void sound_clear_cache(void);
+extern bool sound_clear_cache(void);
 
 extern void sound_play_effect(const char *filename, int volume);
 

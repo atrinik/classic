@@ -463,15 +463,15 @@ void sound_deinit(void) {
 /**
  * Hook for clearing the sound API cache.
  */
-void sound_clear_cache(void) {
+bool sound_clear_cache(void) {
 #ifdef HAVE_SDL_MIXER
     if (enabled) {
         if (sound_background && !sound_stop_bg_music_internal("cache-cleared")) {
-            return;
+            return false;
         }
         sound_ambient_clear();
         if (!MIX_StopAllTracks(sound_mixer, 0)) {
-            return;
+            return false;
         }
     }
 #else
@@ -479,6 +479,7 @@ void sound_clear_cache(void) {
 #endif
 
     sound_cache_free();
+    return true;
 }
 
 /**

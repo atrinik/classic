@@ -231,8 +231,11 @@ int client_command_check(const char *cmd) {
         }
 
         if (strcasecmp(cmd, "sound") == 0) {
-            sound_clear_cache();
-            draw_info(COLOR_GREEN, "Sound cache cleared.");
+            if (sound_clear_cache()) {
+                draw_info(COLOR_GREEN, "Sound cache cleared.");
+            } else {
+                draw_info(COLOR_RED, "Could not stop background music; sound cache retained.");
+            }
         } else if (strcasecmp(cmd, "textures") == 0) {
             texture_reload();
             draw_info(COLOR_GREEN, "Textures reloaded.");

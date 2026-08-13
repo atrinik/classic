@@ -310,11 +310,11 @@ static void test_music_lifecycle(void) {
     sound_start_bg_music("cache-retained.ogg", 80, 0);
     size_t cache_size = sound_test_cache_size();
     sound_test_fail_next_stop();
-    sound_clear_cache();
+    TEST_CHECK(!sound_clear_cache());
     TEST_CHECK(sound_playing_music());
     TEST_CHECK(sound_test_cache_size() == cache_size);
     TEST_CHECK(strstr(captured, "music stopped") == NULL);
-    sound_clear_cache();
+    TEST_CHECK(sound_clear_cache());
     TEST_CHECK(!sound_playing_music());
     TEST_CHECK(sound_test_cache_size() == 0);
     TEST_CHECK(strstr(captured, "reason=cache-cleared") != NULL);
