@@ -3,7 +3,7 @@
              renderer="software"
              input-root="../../../.."
              settings="data/settings.txt"
-             settings-sha256="c3ad2bbf5bd19b50c926b0660421e1d8467f011ea012275f25d9449731ffa62d"
+             settings-sha256="2e3a92c41d88219520e3fcbdbc34a53be6a72ca9c2a354c97d73d6fef83339e3"
              archdef="data/archdef.dat"
              archdef-sha256="977ce63e38f4795545f42bd2f4a9c62bd38fcdb4cfde7cb7fe3c2cd9fe73983e"
              snapshot="src/tests/fixtures/player_view/living-outline-nearby-wall.map2.hex"

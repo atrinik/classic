@@ -145,7 +145,7 @@ category Client
 		option Server
 		option Server and zone
 		option Server, zone and character
-		default 1
+		default 4
 		desc Share optional game activity with a running Discord client. Server and zone tiers use only friendly public-directory and map display names; direct servers are always shown as Private server. The highest tier additionally shares the active character name and level while playing.
 	end
 	setting Resolution X

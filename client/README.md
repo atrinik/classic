@@ -74,7 +74,7 @@
 =================================================
 
  Discord Rich Presence is optional, Linux- and Windows-only, and defaults to
- `Game only`. Choose a privacy tier under Client settings:
+ `Server, zone and character`. Choose a privacy tier under Client settings:
 
  - `Off` opens no Discord IPC connection and clears activity published by this
    client run.
