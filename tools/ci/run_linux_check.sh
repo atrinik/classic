@@ -57,7 +57,8 @@ if [[ ${component} == server || ${component} == integrated ]]; then
   pcpnatpmp_source=$(python3 "${source_root}/server/tools/dependencies.py" source \
     --source-lock "${source_root}/server/cmake/immutable_sources.lock.json" \
     --source-name libpcpnatpmp \
-    --cache "${dependency_bundle}" \
+    --cache "${source_root}/build/dependency-source-cache" \
+    --downloads "${dependency_downloads}" \
     --offline)
   sibling_sources+=(
     -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP="${pcpnatpmp_source}"
@@ -105,7 +106,7 @@ case "${component}" in
     pushd "${source_root}/server" >/dev/null
     python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/dependencies.py sync \
-      --cache "${dependency_downloads}" --offline
+      --cache "${dependency_downloads}" --refresh --offline
     python3 tools/dependencies.py verify
     cmake --preset linux-coverage \
       -DENABLE_PRECOMPILED_HEADERS=OFF \
@@ -139,7 +140,7 @@ case "${component}" in
       >"${lighting_evidence}"
     python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/dependencies.py sync \
-      --cache "${dependency_downloads}" --offline
+      --cache "${dependency_downloads}" --refresh --offline
     python3 tools/dependencies.py verify
     cmake --preset linux-coverage \
       -DENABLE_PRECOMPILED_HEADERS=OFF \
@@ -317,7 +318,7 @@ case "${component}" in
       python3 "${source_root}/server/tools/dependencies.py" sync \
         --root "${baseline_root}/client" \
         --lock "${baseline_root}/client/dependencies.lock.json" \
-        --cache "${dependency_downloads}" --offline
+        --cache "${dependency_downloads}" --refresh --offline
       python3 "${source_root}/server/tools/dependencies.py" verify \
         --root "${baseline_root}/client" \
         --lock "${baseline_root}/client/dependencies.lock.json"

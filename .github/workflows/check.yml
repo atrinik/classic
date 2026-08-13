@@ -69,21 +69,28 @@ jobs:
             --server-lock server/dependencies.lock.json \
             --source-lock server/cmake/immutable_sources.lock.json \
             --github-output "${GITHUB_OUTPUT}"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ runner.temp }}/classic-dependency-archives
-          key: >-
-            classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}
           restore-keys: >-
             classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}-
-      - name: Acquire and verify complete immutable input bundle
+      - id: dependency-stage
+        name: Acquire and verify complete immutable input bundle
         run: |
           python3 server/tools/dependencies.py bundle-stage \
             --client-lock client/dependencies.lock.json \
             --server-lock server/dependencies.lock.json \
             --source-lock server/cmake/immutable_sources.lock.json \
             --cache "${RUNNER_TEMP}/classic-dependency-archives" \
-            --output build/dependency-inputs
+            --output build/dependency-inputs \
+            --github-output "${GITHUB_OUTPUT}"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        if: steps.dependency-stage.outputs.cache_changed == 'true'
+        with:
+          path: ${{ runner.temp }}/classic-dependency-archives
+          key: >-
+            classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}-${{ github.run_id }}-${{ github.run_attempt }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: classic-dependency-inputs
@@ -243,12 +250,14 @@ jobs:
             --source-lock server/cmake/immutable_sources.lock.json \
             --bundle build/dependency-inputs
           python3 client/tools/dependencies.py sync --root client \
-            --cache build/dependency-inputs/downloads --offline
+            --cache build/dependency-inputs/downloads --refresh --offline
           python3 server/tools/dependencies.py sync --root server \
-            --cache build/dependency-inputs/downloads --offline
+            --cache build/dependency-inputs/downloads --refresh --offline
           source="$(python3 server/tools/dependencies.py source \
             --source-lock server/cmake/immutable_sources.lock.json \
-            --source-name libpcpnatpmp --cache build/dependency-inputs \
+            --source-name libpcpnatpmp \
+            --cache build/dependency-source-cache \
+            --downloads build/dependency-inputs/downloads \
             --offline)"
           printf '%s\n' "${source}" > build/libpcpnatpmp-source-path
           umask 077
@@ -377,6 +386,8 @@ jobs:
             --user "$(id -u):$(id -g)" \
             --network none \
             --env ATRINIK_PACKAGE_VERSION=0.0.0 \
+            --env ATRINIK_DEPENDENCY_DOWNLOADS=/workspace/build/dependency-inputs/downloads \
+            --env ATRINIK_DEPENDENCY_CACHE_DIR=/workspace/build/dependency-source-cache \
             --env CCACHE_DIR=/workspace/server/build/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env CCACHE_TEMPDIR=/tmp/atrinik-server-package-ccache \

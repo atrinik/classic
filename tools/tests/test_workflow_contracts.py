@@ -700,6 +700,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", build)
         self.assertIn("Build portable Windows server package", build)
         self.assertIn("bash tools/build-windows-package.sh build/windows-pr-package", build)
+        self.assertIn(
+            "--env ATRINIK_DEPENDENCY_DOWNLOADS=/workspace/build/dependency-inputs/downloads",
+            build,
+        )
+        self.assertIn(
+            "--env ATRINIK_DEPENDENCY_CACHE_DIR=/workspace/build/dependency-source-cache",
+            build,
+        )
         self.assertIn("smoke_windows_server_package.ps1", build)
         self.assertIn("server/build/windows-pr-package/*.zip", build)
 
@@ -792,10 +800,13 @@ class WorkflowContractTests(unittest.TestCase):
             "server/cmake/immutable_sources.lock.json",
         ):
             self.assertEqual(staging.count(material), 2)
+        self.assertIn("actions/cache/restore@", staging)
+        self.assertIn("actions/cache/save@", staging)
         self.assertIn("classic-dependency-archives-v1-", staging)
         self.assertIn("steps.dependency-key.outputs.digest", staging)
         self.assertIn("github.run_id", staging)
         self.assertIn("github.run_attempt", staging)
+        self.assertIn("steps.dependency-stage.outputs.cache_changed == 'true'", staging)
         self.assertIn("restore-keys:", staging)
         self.assertIn("name: classic-dependency-inputs", staging)
         self.assertIn("retention-days: 1", staging)
@@ -842,6 +853,8 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("bundle-verify", runner)
         self.assertEqual(runner.count("--offline"), 4)
+        self.assertIn('build/dependency-source-cache', runner)
+        self.assertIn('--downloads "${dependency_downloads}"', runner)
         self.assertIn('"${baseline_root}/client/dependencies.lock.json"', runner)
         self.assertIn("FETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP", runner)
         aggregate = workflow[workflow.index("  classic-validation:") :]
@@ -856,7 +869,9 @@ class WorkflowContractTests(unittest.TestCase):
 
         self.assertEqual(workflow.count(image), 1)
         self.assertEqual(workflow.count(f"sha256:{digest}"), 2)
-        self.assertEqual(workflow.count(cache_action), 5)
+        self.assertEqual(workflow.count(cache_action), 4)
+        self.assertEqual(workflow.count(f"actions/cache/restore@{cache_action.split('@')[1]}"), 1)
+        self.assertEqual(workflow.count(f"actions/cache/save@{cache_action.split('@')[1]}"), 1)
         self.assertEqual(workflow.count("tools/ci/linux_cache_key.py"), 4)
         self.assertEqual(workflow.count("tools/ci/run_linux_check.sh"), 8)
         self.assertEqual(workflow.count("--env CCACHE_DIR=/cache/ccache"), 4)
