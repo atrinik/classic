@@ -1,0 +1,3 @@
+# CPython retains this interpreter setup after Py_Finalize().
+# The plugin releases its module, globals, exception, cache, and setup refs.
+leak:init_plugin

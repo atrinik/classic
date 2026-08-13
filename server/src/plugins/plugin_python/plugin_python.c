@@ -486,6 +486,18 @@ static const char *const constants_colors[][2] = {{"COLOR_WHITE", COLOR_WHITE},
 /** The Python cache. */
 static python_cache_entry *python_cache = NULL;
 
+/** Release every compiled script retained by the Python cache. */
+static void clear_python_cache(void) {
+    python_cache_entry *cache, *next;
+
+    HASH_ITER(hh, python_cache, cache, next) {
+        HASH_DEL(python_cache, cache);
+        Py_DECREF(cache->code);
+        free(cache->file);
+        free(cache);
+    }
+}
+
 /**
  * Initialize the context stack.
  */
@@ -2350,7 +2362,6 @@ static PyModuleDef AtrinikModule =
 
 static PyObject *PyInit_Atrinik(void) {
     PyObject *m = PyModule_Create(&AtrinikModule);
-    Py_INCREF(m);
     return m;
 }
 #endif
@@ -2400,49 +2411,66 @@ static void module_add_constants(PyObject *module,
         PyModule_AddIntConstant(module_tmp, consts[i].name, consts[i].value);
         i++;
     }
+
+    Py_DECREF(module_tmp);
 }
 
 /**
- * Construct a list from C array and add it to the specified module.
+ * Add a list to the specified module and release the caller's reference.
  * @param module
  * Module to add to.
  * @param name
  * Name of the list.
- * @param array
- * Pointer to the C array.
- * @param array_size
- * Number of entries in the C array.
- * @param type
- * Type of the entries in the C array.
+ * @param list
+ * List to add.
  */
-static void module_add_array(PyObject *module,
-                             const char *name,
-                             void *array,
-                             size_t array_size,
-                             field_type type) {
-    size_t i;
-    PyObject *list;
-
-    /* Create a new list. */
-    list = PyList_New(0);
-
-    /* Add entries to the list. */
-    for (i = 0; i < array_size; i++) {
-        if (type == FIELDTYPE_INT32) {
-            PyList_Append(list, Py_BuildValue("i", ((int32_t *)array)[i]));
-        } else if (type == FIELDTYPE_CSTR) {
-            PyList_Append(list, Py_BuildValue("s", ((char **)array)[i]));
-        }
-    }
-
-    /* Add it to the module dictionary. */
+static void module_add_list(PyObject *module, const char *name, PyObject *list) {
     PyDict_SetItemString(PyModule_GetDict(module), name, list);
+    Py_DECREF(list);
+}
+
+/**
+ * Construct an integer list from a C array and add it to the specified module.
+ */
+static void module_add_int32_array(PyObject *module,
+                                   const char *name,
+                                   const int32_t *array,
+                                   size_t array_size) {
+    size_t i;
+    PyObject *list, *value;
+
+    list = PyList_New(0);
+    for (i = 0; i < array_size; i++) {
+        value = Py_BuildValue("i", array[i]);
+        PyList_Append(list, value);
+        Py_DECREF(value);
+    }
+    module_add_list(module, name, list);
+}
+
+/**
+ * Construct a string list from a C array and add it to the specified module.
+ */
+static void module_add_cstr_array(PyObject *module,
+                                  const char *name,
+                                  const char *const *array,
+                                  size_t array_size) {
+    size_t i;
+    PyObject *list, *value;
+
+    list = PyList_New(0);
+    for (i = 0; i < array_size; i++) {
+        value = Py_BuildValue("s", array[i]);
+        PyList_Append(list, value);
+        Py_DECREF(value);
+    }
+    module_add_list(module, name, list);
 }
 
 MODULEAPI void initPlugin(struct plugin_hooklist *hooklist) {
     PyObject *m, *d, *module_tmp;
     int i;
-    PyThreadState *py_tstate = NULL;
+    PyThreadState *py_tstate;
 
     hooks = hooklist;
 
@@ -2471,40 +2499,47 @@ MODULEAPI void initPlugin(struct plugin_hooklist *hooklist) {
     if (!Atrinik_Object_init(module_tmp)) {
         return;
     }
+    Py_DECREF(module_tmp);
 
     module_tmp = module_create(m, "Map");
     if (!Atrinik_Map_init(module_tmp)) {
         return;
     }
+    Py_DECREF(module_tmp);
 
     module_tmp = module_create(m, "Party");
     if (!Atrinik_Party_init(module_tmp)) {
         return;
     }
+    Py_DECREF(module_tmp);
 
     module_tmp = module_create(m, "Region");
     if (!Atrinik_Region_init(module_tmp)) {
         return;
     }
+    Py_DECREF(module_tmp);
 
     module_tmp = module_create(m, "Player");
     if (!Atrinik_Player_init(module_tmp)) {
         return;
     }
+    Py_DECREF(module_tmp);
 
     module_tmp = module_create(m, "Archetype");
     if (!Atrinik_Archetype_init(module_tmp)) {
         return;
     }
+    Py_DECREF(module_tmp);
 
     module_tmp = module_create(m, "AttrList");
     if (!Atrinik_AttrList_init(module_tmp)) {
         return;
     }
+    Py_DECREF(module_tmp);
 
     module_add_constants(m, "Type", constants_types, module_doc_type);
-    module_add_array(m, "freearr_x", hooks->freearr_x, SIZEOFFREE, FIELDTYPE_INT32);
-    module_add_array(m, "freearr_y", hooks->freearr_y, SIZEOFFREE, FIELDTYPE_INT32);
+    module_add_int32_array(m, "freearr_x", hooks->freearr_x, SIZEOFFREE);
+    module_add_int32_array(m, "freearr_y", hooks->freearr_y, SIZEOFFREE);
 
     /* Initialize integer constants */
     for (i = 0; constants[i].name; i++) {
@@ -2518,43 +2553,29 @@ MODULEAPI void initPlugin(struct plugin_hooklist *hooklist) {
 
     module_tmp = module_create(m, "Gender");
     PyModule_AddStringConstant(module_tmp, "__doc__", module_doc_gender);
-    module_add_array(module_tmp, "gender_noun", hooks->gender_noun, GENDER_MAX, FIELDTYPE_CSTR);
-    module_add_array(module_tmp,
-                     "gender_subjective",
-                     hooks->gender_subjective,
-                     GENDER_MAX,
-                     FIELDTYPE_CSTR);
-    module_add_array(module_tmp,
-                     "gender_subjective_upper",
-                     hooks->gender_subjective_upper,
-                     GENDER_MAX,
-                     FIELDTYPE_CSTR);
-    module_add_array(module_tmp,
-                     "gender_objective",
-                     hooks->gender_objective,
-                     GENDER_MAX,
-                     FIELDTYPE_CSTR);
-    module_add_array(module_tmp,
-                     "gender_possessive",
-                     hooks->gender_possessive,
-                     GENDER_MAX,
-                     FIELDTYPE_CSTR);
-    module_add_array(module_tmp,
-                     "gender_reflexive",
-                     hooks->gender_reflexive,
-                     GENDER_MAX,
-                     FIELDTYPE_CSTR);
+    module_add_cstr_array(module_tmp, "gender_noun", hooks->gender_noun, GENDER_MAX);
+    module_add_cstr_array(module_tmp, "gender_subjective", hooks->gender_subjective, GENDER_MAX);
+    module_add_cstr_array(
+        module_tmp, "gender_subjective_upper", hooks->gender_subjective_upper, GENDER_MAX);
+    module_add_cstr_array(module_tmp, "gender_objective", hooks->gender_objective, GENDER_MAX);
+    module_add_cstr_array(module_tmp, "gender_possessive", hooks->gender_possessive, GENDER_MAX);
+    module_add_cstr_array(module_tmp, "gender_reflexive", hooks->gender_reflexive, GENDER_MAX);
 
     for (i = 0; constants_gender[i].name; i++) {
         PyModule_AddIntConstant(module_tmp, constants_gender[i].name, constants_gender[i].value);
     }
+    Py_DECREF(module_tmp);
 
     /* Create the global scope dictionary. */
     py_globals_dict = PyDict_New();
     /* Add the builtings to the global scope. */
     PyDict_SetItemString(py_globals_dict, "__builtins__", PyEval_GetBuiltins());
     /* Add Atrinik module members to the global scope. */
-    PyRun_String("from Atrinik import *", Py_file_input, py_globals_dict, NULL);
+    module_tmp = PyRun_String("from Atrinik import *", Py_file_input, py_globals_dict, NULL);
+    Py_XDECREF(module_tmp);
+#ifdef IS_PY3K
+    Py_DECREF(m);
+#endif
 
     py_tstate = PyGILState_GetThisThreadState();
     PyEval_ReleaseThread(py_tstate);
@@ -2563,6 +2584,9 @@ MODULEAPI void initPlugin(struct plugin_hooklist *hooklist) {
 MODULEAPI void closePlugin(void) {
     hooks->cache_remove_by_flags(CACHE_FLAG_GEVENT);
     PyGILState_Ensure();
+    clear_python_cache();
+    Py_CLEAR(py_globals_dict);
+    Py_CLEAR(AtrinikError);
     Py_Finalize();
 }
 
