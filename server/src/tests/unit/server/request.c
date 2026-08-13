@@ -1594,18 +1594,11 @@ START_TEST(test_map_exit_semantic_accepts_usable_destination_forms_without_loadi
 
     object *shop_mat = arch_get("shop_mat");
     ck_assert_ptr_nonnull(shop_mat);
+    ck_assert_uint_ne(shop_mat->sub_type, 0);
     shop_mat->x = pl->x;
     shop_mat->y = pl->y - 1;
     shop_mat = object_insert_map(shop_mat, map, NULL, 0);
     ck_assert_ptr_nonnull(shop_mat);
-
-    object *paired_shop_mat = arch_get("shop_mat");
-    ck_assert_ptr_nonnull(paired_shop_mat);
-    paired_shop_mat->x = pl->x + 1;
-    paired_shop_mat->y = pl->y - 1;
-    paired_shop_mat->type = SIGN;
-    paired_shop_mat = object_insert_map(paired_shop_mat, map, NULL, 0);
-    ck_assert_ptr_nonnull(paired_shop_mat);
 
     object *decoration = arch_get("hole2");
     ck_assert_ptr_nonnull(decoration);
@@ -1624,27 +1617,9 @@ START_TEST(test_map_exit_semantic_accepts_usable_destination_forms_without_loadi
     rndm_seed(UINT64_C(260));
     draw_client_map2(pl);
     ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
-    ck_assert_uint_eq(map_cache_semantic_count(cs, true), 3);
+    ck_assert_uint_eq(map_cache_semantic_count(cs, true), 4);
     ck_assert_ptr_eq(has_been_loaded_sh(EXIT_PATH(explicit_exit)), NULL);
     ck_assert_uint_eq(rndm_u64(), expected_random);
-
-    /* The supported Python type setter refreshes map spatial flags after an
-     * in-place type change. Mirror that boundary to prove the P_IS_EXIT index
-     * and both directions of auto-link eligibility gain update together. */
-    paired_shop_mat->type = EXIT;
-    object_update(paired_shop_mat, UP_OBJ_ALL);
-    socket_buffer_clear(cs);
-    draw_client_map2(pl);
-    ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
-    ck_assert_uint_eq(map_cache_semantic_count(cs, true), 5);
-
-    object_remove(paired_shop_mat, 0);
-    socket_buffer_clear(cs);
-    draw_client_map2(pl);
-    ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
-    ck_assert_uint_eq(map_cache_semantic_count(cs, true), 3);
-    ck_assert_ptr_eq(has_been_loaded_sh(EXIT_PATH(explicit_exit)), NULL);
-    object_destroy(paired_shop_mat);
 }
 END_TEST
 

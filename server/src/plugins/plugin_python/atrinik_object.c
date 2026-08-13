@@ -2788,7 +2788,9 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
             return -1;
         }
         if (direction < 0 || direction > NUM_DIRECTION) {
-            PyErr_Format(PyExc_ValueError, "direction must be between 0 and %d.", NUM_DIRECTION);
+            PyErr_Format(PyExc_ValueError,
+                         "direction must be between 0 and %d.",
+                         NUM_DIRECTION);
             return -1;
         }
     }
@@ -2799,12 +2801,6 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
     }
 
     ret = generic_field_setter(field, obj->obj, value);
-
-    /* Objects without a player controller cannot become players. Normalize
-     * before map-side bookkeeping can consult player-only state. */
-    if (ret != -1 && field->offset == offsetof(object, type) && obj->obj->type == PLAYER) {
-        obj->obj->type = MONSTER;
-    }
 
     if (field->offset == offsetof(object, layer) || field->offset == offsetof(object, sub_layer)) {
         obj->obj->layer = MIN(NUM_LAYERS, obj->obj->layer);
@@ -2817,13 +2813,6 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
 
     if (ret == -1) {
         return -1;
-    }
-
-    if (obj->obj->map != NULL && field->offset == offsetof(object, type)) {
-        /* Type contributes to spatial map flags such as P_IS_EXIT. Refresh
-         * those flags in place so a metadata assignment cannot replay map
-         * lifecycle callbacks, movement effects, or object merging. */
-        hooks->object_update(obj->obj, UP_OBJ_ALL);
     }
 
     if (obj->obj->map != NULL &&
@@ -2858,6 +2847,10 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
     if (obj->obj->map != NULL && field->offset == offsetof(object, nrof) &&
         old_nrof != obj->obj->nrof) {
         hooks->esrv_update_item(UPD_NAME | UPD_NROF, obj->obj);
+    }
+
+    if (field->offset == offsetof(object, type) && obj->obj->type == PLAYER) {
+        obj->obj->type = MONSTER;
     }
 
     hooks->esrv_send_item(obj->obj);

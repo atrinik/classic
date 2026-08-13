@@ -32,7 +32,7 @@
 
 /* Prototypes */
 
-bool exit_has_usable_destination(object *op);
+bool exit_has_usable_destination(const object *op);
 mapstruct *exit_get_destination(object *op, int *x, int *y, bool do_load);
 
 #endif

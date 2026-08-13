@@ -1934,10 +1934,8 @@ void draw_client_map2(object *pl) {
                                 continue;
                             }
 
-                            /* Destination discovery for pathless subtype exits
-                             * can scan their bounded auto-link neighborhood.
-                             * Defer it until plugin visibility is known so
-                             * hidden objects never pay that cost or disclose a
+                            /* Defer destination eligibility until plugin
+                             * visibility is known so hidden exits disclose no
                              * semantic. */
                             if (head->type == EXIT && level_visibility == MAP_LEVEL_VISIBLE &&
                                 exit_has_usable_destination(head)) {
@@ -2190,9 +2188,9 @@ void draw_client_map2(object *pl) {
 
                     if ((!mp->light_rgb_known[sub_layer] &&
                          (light_rgb_bitmap & (UINT8_C(1) << sub_layer))) ||
-                        (mp->light_rgb_known[sub_layer] &&
-                         memcmp(mp->light_rgb_radiance[sub_layer], resolved_rgb, sizeof(resolved_rgb)) !=
-                             0)) {
+                        (mp->light_rgb_known[sub_layer] && memcmp(mp->light_rgb_radiance[sub_layer],
+                                                                  resolved_rgb,
+                                                                  sizeof(resolved_rgb)) != 0)) {
                         light_rgb_changed = true;
                     }
                 }
@@ -2228,7 +2226,10 @@ void draw_client_map2(object *pl) {
                         continue;
                     }
 
-                    packet_debug_data(packet, 1, "Q5.11 scalar radiance (sub-layer: %d)", sub_layer);
+                    packet_debug_data(packet,
+                                      1,
+                                      "Q5.11 scalar radiance (sub-layer: %d)",
+                                      sub_layer);
                     mp->light_radiance[sub_layer] =
                         light_set[sub_layer] ? light_radiance[sub_layer] : 0;
                     mp->light_known[sub_layer] = 1;

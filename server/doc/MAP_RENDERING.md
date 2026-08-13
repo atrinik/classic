@@ -1794,13 +1794,14 @@ display the complete profile digest used for continuous-link validation.
 - Mark only serialized, visible `EXIT` objects with an established usable
   destination with `MAP2_FLAG2_EXIT`, and cache that semantic per socket layer
   so gaining or losing destination eligibility emits a delta. Explicit-path,
-  same-map coordinate, tiled-direction, and paired auto-linked subtype exits
-  are eligible. Destination checks for rendering neither load maps nor choose
-  randomly among auto-linked exits. The client outlines eligible objects after
-  the complete world pass only at the player's physical depth. This
-  presentation does not broaden line of sight or disclose layer-0/system
-  exits, unexplored transitions, or hidden objects that the server did not
-  serialize.
+  same-map coordinate, and tiled-direction exits are eligible. Pathless exits
+  with a nonzero subtype use the automatic-link contract and are presumed
+  eligible without scanning for a peer. Destination checks for rendering
+  neither load maps nor choose randomly among auto-linked exits. The client
+  outlines eligible objects after the complete world pass only at the player's
+  physical depth. This presentation does not broaden line of sight or disclose
+  layer-0/system exits, unexplored transitions, or hidden objects that the
+  server did not serialize.
 - Upper-level visibility is camera-top-down. A solid floor, gameplay-opaque
   cell, or hidden wall-layer roof limits enclosed storeys below to their
   structural boundary without removing a middle-storey exterior wall. A

@@ -684,7 +684,6 @@ struct plugin_hooklist
                          const char *,
                          const char *,
                          New_Face *)
-    PLUGIN_HOOK_FUNCTION(void, object_update, object *, int)
 
 };
 // clang-format on
