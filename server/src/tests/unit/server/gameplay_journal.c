@@ -207,6 +207,8 @@ START_TEST(test_plugin_journal_hooks_are_append_only) {
                       offsetof(struct plugin_hooklist, gameplay_journal_player_begin));
     ck_assert_uint_gt(offsetof(struct plugin_hooklist, gameplay_journal_abort),
                       offsetof(struct plugin_hooklist, gameplay_journal_commit));
+    ck_assert_uint_gt(offsetof(struct plugin_hooklist, object_update),
+                      offsetof(struct plugin_hooklist, player_status_set));
 }
 END_TEST
 
