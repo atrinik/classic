@@ -182,6 +182,12 @@ static void sound_free(sound_data_struct *tmp) {
 static const char *sound_music_duration_key(const char *filename) {
     const char *key = filename;
     for (const char *cp = filename; *cp != '\0'; cp++) {
+        unsigned char ch = (unsigned char)*cp;
+
+        if (ch < 0x20 || ch == 0x7f) {
+            return NULL;
+        }
+
         if (*cp == '/' || *cp == '\\') {
             key = cp + 1;
         }
