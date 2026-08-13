@@ -25,7 +25,7 @@ class StageWindowsRuntimeTests(unittest.TestCase):
             (runtime / "libcrypto.dll").write_bytes(b"crypto")
             (runtime / "zlib1.dll").write_bytes(b"zlib")
             imports = {
-                "path.exe": {"KERNEL32.dll", "LIBCRYPTO.DLL"},
+                "path.exe": {"imagehlp.dll", "KERNEL32.dll", "LIBCRYPTO.DLL"},
                 "libcrypto.dll": {"zlib1.dll", "api-ms-win-core-file-l1-1-0.dll"},
                 "zlib1.dll": {"msvcrt.dll"},
             }
