@@ -2,19 +2,46 @@
 
 #include <signal.h>
 
+#ifdef WIN32
+#define TEST_EXCEPTION_CODE ((DWORD)0xe0423501)
+
+static LONG WINAPI handled_exception_handler(EXCEPTION_POINTERS *exception_info) {
+    if (exception_info->ExceptionRecord->ExceptionCode == TEST_EXCEPTION_CODE) {
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+__attribute__((noinline)) static void trigger_access_violation(void) {
+    volatile int *invalid = VirtualAlloc(NULL, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_NOACCESS);
+    if (invalid == NULL) {
+        exit(2);
+    }
+
+    *invalid = 1;
+}
+#endif
+
 int main(int argc, char **argv) {
     toolkit_import(signals);
 
 #ifdef WIN32
     if (argc == 2 && strcmp(argv[1], "--crash") == 0) {
-        const ULONG_PTR exception_arguments[] = {1, 1};
-
+        SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS);
         signals_set_traceback_prefix("libatrinik-signals-test");
-        RaiseException(EXCEPTION_ACCESS_VIOLATION,
-                       EXCEPTION_NONCONTINUABLE,
-                       arraysize(exception_arguments),
-                       exception_arguments);
+        trigger_access_violation();
         return 1;
+    }
+    if (argc == 2 && strcmp(argv[1], "--handled-exception") == 0) {
+        PVOID handler = AddVectoredExceptionHandler(0, handled_exception_handler);
+        if (handler == NULL) {
+            return 1;
+        }
+        RaiseException(TEST_EXCEPTION_CODE, 0, 0, NULL);
+        if (RemoveVectoredExceptionHandler(handler) == 0) {
+            return 1;
+        }
     }
 #else
     (void)argc;

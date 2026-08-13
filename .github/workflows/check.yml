@@ -382,13 +382,17 @@ jobs:
           }
 
           Push-Location $bundle
+          $originalAppData = $env:APPDATA
           try {
             $env:APPDATA = Join-Path $bundle "traceback-appdata"
             Remove-Item -Force -ErrorAction SilentlyContinue `
               "libatrinik-signals-test-traceback-*.txt"
-            & (Join-Path $bundle "libatrinik-signals.exe") --crash
-            if ($LASTEXITCODE -eq 0) {
-              throw "libatrinik-signals.exe crash child exited successfully"
+            $process = Start-Process `
+              -FilePath (Join-Path $bundle "libatrinik-signals.exe") `
+              -ArgumentList "--crash" -Wait -PassThru
+            $exitCode = '{0:X8}' -f ($process.ExitCode -band 0xffffffffL)
+            if ($exitCode -ne "C0000005") {
+              throw "libatrinik-signals.exe exited with 0x${exitCode}"
             }
             $tracebacks = @(Get-ChildItem -File `
               -Filter "libatrinik-signals-test-traceback-*.txt")
@@ -412,13 +416,40 @@ jobs:
                 throw "Traceback is missing '$field'"
               }
             }
-            if ($traceback.Contains("Exception module base: (nil)") -or
-                $traceback.Contains("Exception module name: <unknown>")) {
-              throw "Traceback did not resolve the crashing module"
+            if ($traceback -notmatch `
+                '(?im)^Exception module name: .*libatrinik-signals\.exe\r?$') {
+              throw "Traceback did not identify the crashing executable"
+            }
+            $orderedFields = @(
+              "Exception code:",
+              "Exception address:",
+              "Access type:",
+              "Fault address:",
+              "Exception module base:",
+              "Exception module name:",
+              "Stack trace:"
+            )
+            $previousIndex = -1
+            foreach ($field in $orderedFields) {
+              $index = $traceback.IndexOf($field, [StringComparison]::Ordinal)
+              if ($index -le $previousIndex) {
+                throw "Traceback field '$field' is missing or out of order"
+              }
+              $previousIndex = $index
             }
             Remove-Item -Force -LiteralPath $tracebacks[0].FullName
           } finally {
+            if ($null -eq $originalAppData) {
+              Remove-Item Env:APPDATA -ErrorAction SilentlyContinue
+            } else {
+              $env:APPDATA = $originalAppData
+            }
             Pop-Location
+          }
+
+          & (Join-Path $bundle "libatrinik-signals.exe") --handled-exception
+          if ($LASTEXITCODE -ne 0) {
+            throw "libatrinik-signals.exe handled exception test failed with exit code ${LASTEXITCODE}"
           }
 
           $publisher = Join-Path $bundle "fixtures/metaserver-publisher-v1.json"

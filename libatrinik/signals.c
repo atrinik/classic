@@ -154,12 +154,48 @@ static void terminate_after_exception(DWORD code) {
     TerminateProcess(GetCurrentProcess(), code);
 }
 
+/**
+ * Check whether an exception represents a fatal process fault.
+ * @param code
+ * Windows exception code.
+ * @return
+ * True when Atrinik should report and terminate for the exception.
+ */
+static bool exception_is_fatal(DWORD code) {
+    switch (code) {
+        case EXCEPTION_ACCESS_VIOLATION:
+        case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+        case EXCEPTION_DATATYPE_MISALIGNMENT:
+        case EXCEPTION_FLT_DENORMAL_OPERAND:
+        case EXCEPTION_FLT_DIVIDE_BY_ZERO:
+        case EXCEPTION_FLT_INEXACT_RESULT:
+        case EXCEPTION_FLT_INVALID_OPERATION:
+        case EXCEPTION_FLT_OVERFLOW:
+        case EXCEPTION_FLT_STACK_CHECK:
+        case EXCEPTION_FLT_UNDERFLOW:
+        case EXCEPTION_ILLEGAL_INSTRUCTION:
+        case EXCEPTION_IN_PAGE_ERROR:
+        case EXCEPTION_INT_DIVIDE_BY_ZERO:
+        case EXCEPTION_INT_OVERFLOW:
+        case EXCEPTION_INVALID_DISPOSITION:
+        case EXCEPTION_NONCONTINUABLE_EXCEPTION:
+        case EXCEPTION_PRIV_INSTRUCTION:
+        case EXCEPTION_STACK_OVERFLOW:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static LONG WINAPI signal_handler(EXCEPTION_POINTERS *ExceptionInfo)
 #else
 static void signal_handler(int sig, siginfo_t *siginfo, void *context)
 #endif
 {
 #ifdef WIN32
+    if (!exception_is_fatal(ExceptionInfo->ExceptionRecord->ExceptionCode)) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
     if (InterlockedCompareExchange(&exception_handler_active, 1, 0) != 0) {
         terminate_after_exception(ExceptionInfo->ExceptionRecord->ExceptionCode);
         return EXCEPTION_CONTINUE_SEARCH;
@@ -204,15 +240,17 @@ static void signal_handler(int sig, siginfo_t *siginfo, void *context)
     }
 
 #ifdef WIN32
+    /* Preserve the original details even if DbgHelp faults recursively. */
+    setvbuf(fp, NULL, _IONBF, 0);
+#endif
+
+#ifdef WIN32
     switch (ExceptionInfo->ExceptionRecord->ExceptionCode) {
         case EXCEPTION_ACCESS_VIOLATION:
             fputs("Error: EXCEPTION_ACCESS_VIOLATION\n", fp);
             break;
         case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
             fputs("Error: EXCEPTION_ARRAY_BOUNDS_EXCEEDED\n", fp);
-            break;
-        case EXCEPTION_BREAKPOINT:
-            fputs("Error: EXCEPTION_BREAKPOINT\n", fp);
             break;
         case EXCEPTION_DATATYPE_MISALIGNMENT:
             fputs("Error: EXCEPTION_DATATYPE_MISALIGNMENT\n", fp);
@@ -258,9 +296,6 @@ static void signal_handler(int sig, siginfo_t *siginfo, void *context)
             break;
         case EXCEPTION_PRIV_INSTRUCTION:
             fputs("Error: EXCEPTION_PRIV_INSTRUCTION\n", fp);
-            break;
-        case EXCEPTION_SINGLE_STEP:
-            fputs("Error: EXCEPTION_SINGLE_STEP\n", fp);
             break;
         case EXCEPTION_STACK_OVERFLOW:
             fputs("Error: EXCEPTION_STACK_OVERFLOW\n", fp);
