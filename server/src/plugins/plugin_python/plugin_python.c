@@ -2411,6 +2411,8 @@ static void module_add_constants(PyObject *module,
         PyModule_AddIntConstant(module_tmp, consts[i].name, consts[i].value);
         i++;
     }
+
+    Py_DECREF(module_tmp);
 }
 
 /**
@@ -2432,7 +2434,7 @@ static void module_add_array(PyObject *module,
                              size_t array_size,
                              field_type type) {
     size_t i;
-    PyObject *list;
+    PyObject *list, *value;
 
     /* Create a new list. */
     list = PyList_New(0);
@@ -2440,14 +2442,20 @@ static void module_add_array(PyObject *module,
     /* Add entries to the list. */
     for (i = 0; i < array_size; i++) {
         if (type == FIELDTYPE_INT32) {
-            PyList_Append(list, Py_BuildValue("i", ((int32_t *)array)[i]));
+            value = Py_BuildValue("i", ((int32_t *)array)[i]);
         } else if (type == FIELDTYPE_CSTR) {
-            PyList_Append(list, Py_BuildValue("s", ((char **)array)[i]));
+            value = Py_BuildValue("s", ((char **)array)[i]);
+        } else {
+            continue;
         }
+
+        PyList_Append(list, value);
+        Py_DECREF(value);
     }
 
     /* Add it to the module dictionary. */
     PyDict_SetItemString(PyModule_GetDict(module), name, list);
+    Py_DECREF(list);
 }
 
 MODULEAPI void initPlugin(struct plugin_hooklist *hooklist) {
@@ -2482,36 +2490,43 @@ MODULEAPI void initPlugin(struct plugin_hooklist *hooklist) {
     if (!Atrinik_Object_init(module_tmp)) {
         return;
     }
+    Py_DECREF(module_tmp);
 
     module_tmp = module_create(m, "Map");
     if (!Atrinik_Map_init(module_tmp)) {
         return;
     }
+    Py_DECREF(module_tmp);
 
     module_tmp = module_create(m, "Party");
     if (!Atrinik_Party_init(module_tmp)) {
         return;
     }
+    Py_DECREF(module_tmp);
 
     module_tmp = module_create(m, "Region");
     if (!Atrinik_Region_init(module_tmp)) {
         return;
     }
+    Py_DECREF(module_tmp);
 
     module_tmp = module_create(m, "Player");
     if (!Atrinik_Player_init(module_tmp)) {
         return;
     }
+    Py_DECREF(module_tmp);
 
     module_tmp = module_create(m, "Archetype");
     if (!Atrinik_Archetype_init(module_tmp)) {
         return;
     }
+    Py_DECREF(module_tmp);
 
     module_tmp = module_create(m, "AttrList");
     if (!Atrinik_AttrList_init(module_tmp)) {
         return;
     }
+    Py_DECREF(module_tmp);
 
     module_add_constants(m, "Type", constants_types, module_doc_type);
     module_add_array(m, "freearr_x", hooks->freearr_x, SIZEOFFREE, FIELDTYPE_INT32);
@@ -2559,13 +2574,16 @@ MODULEAPI void initPlugin(struct plugin_hooklist *hooklist) {
     for (i = 0; constants_gender[i].name; i++) {
         PyModule_AddIntConstant(module_tmp, constants_gender[i].name, constants_gender[i].value);
     }
+    Py_DECREF(module_tmp);
 
     /* Create the global scope dictionary. */
     py_globals_dict = PyDict_New();
     /* Add the builtings to the global scope. */
     PyDict_SetItemString(py_globals_dict, "__builtins__", PyEval_GetBuiltins());
     /* Add Atrinik module members to the global scope. */
-    PyRun_String("from Atrinik import *", Py_file_input, py_globals_dict, NULL);
+    module_tmp = PyRun_String("from Atrinik import *", Py_file_input, py_globals_dict, NULL);
+    Py_XDECREF(module_tmp);
+    Py_DECREF(m);
 
     py_tstate = PyGILState_GetThisThreadState();
     PyEval_ReleaseThread(py_tstate);
