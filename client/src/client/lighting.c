@@ -17,6 +17,8 @@
 #include <global.h>
 #include <lighting.h>
 
+#define LIGHTING_SCROLL_MARGIN 64
+
 typedef struct lighting_sprite_cache_key {
     SDL_Surface *source;
     int32_t source_x;
@@ -45,14 +47,21 @@ typedef struct lighting_sample {
     uint8_t present;
 } lighting_sample;
 
+typedef struct lighting_dirty_rect {
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+} lighting_dirty_rect_t;
+
 _Static_assert(sizeof(lighting_sample) <= 10U, "high-precision lighting sample budget exceeded");
 
 typedef struct lighting_context {
-    lighting_sample *light_samples;
+    lighting_sample *samples;
     lighting_sample *structure_samples;
     lighting_sample *structure_blur_row;
-    uint8_t *structure_rows_valid;
-    size_t light_samples_num;
+    uint8_t *rows_valid;
+    size_t samples_num;
     int width;
     int height;
     bool active;
@@ -60,6 +69,8 @@ typedef struct lighting_context {
     bool update_needed;
     uint64_t cache_key;
     uint64_t pending_cache_key;
+    lighting_dirty_rect_t dirty[2];
+    size_t dirty_num;
     lighting_sprite_cache_entry *sprite_cache;
     lighting_sprite_cache_entry *sprite_cache_lru_oldest;
     lighting_sprite_cache_entry *sprite_cache_lru_newest;
@@ -86,18 +97,53 @@ static void lighting_sprite_cache_clear(lighting_context *context);
     } while (0)
 
 static size_t lighting_context_retained_field_bytes(const lighting_context *context) {
-    return context->light_samples_num *
-               (sizeof(*context->light_samples) + sizeof(*context->structure_samples)) +
+    return context->samples_num *
+               (sizeof(*context->samples) + sizeof(*context->structure_samples)) +
            (size_t)context->width * sizeof(*context->structure_blur_row) +
-           (size_t)context->height * sizeof(*context->structure_rows_valid);
+           (size_t)context->height * sizeof(*context->rows_valid);
 }
 
 static bool lighting_context_allocated(const lighting_context *context) {
-    return context->light_samples != NULL;
+    return context->samples != NULL;
 }
 
 static size_t lighting_context_sprite_entries(const lighting_context *context) {
     return (size_t)HASH_COUNT(context->sprite_cache);
+}
+
+static size_t lighting_dirty_pixels(const lighting_context *context) {
+    size_t pixels = 0;
+    for (size_t i = 0; i < context->dirty_num; i++) {
+        const lighting_dirty_rect_t *rect = &context->dirty[i];
+        pixels += (size_t)(rect->x1 - rect->x0) * (size_t)(rect->y1 - rect->y0);
+        for (size_t j = 0; j < i; j++) {
+            const lighting_dirty_rect_t *previous = &context->dirty[j];
+            int x0 = MAX(rect->x0, previous->x0);
+            int y0 = MAX(rect->y0, previous->y0);
+            int x1 = MIN(rect->x1, previous->x1);
+            int y1 = MIN(rect->y1, previous->y1);
+            if (x0 < x1 && y0 < y1) {
+                pixels -= (size_t)(x1 - x0) * (size_t)(y1 - y0);
+            }
+        }
+    }
+    return pixels;
+}
+
+static bool
+lighting_rect_intersects(const lighting_context *context, int x0, int y0, int x1, int y1) {
+    for (size_t i = 0; i < context->dirty_num; i++) {
+        const lighting_dirty_rect_t *rect = &context->dirty[i];
+        if (x0 < rect->x1 && x1 > rect->x0 && y0 < rect->y1 && y1 > rect->y0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void lighting_dirty_full(lighting_context *context) {
+    context->dirty[0] = (lighting_dirty_rect_t){0, 0, context->width, context->height};
+    context->dirty_num = 1;
 }
 
 /** Hash one integer in a platform-independent byte order. */
@@ -193,19 +239,19 @@ static void lighting_benchmark_peaks_update(void) {
 }
 
 static void lighting_context_free(lighting_context *context) {
-    free(context->light_samples);
+    free(context->samples);
     free(context->structure_samples);
     free(context->structure_blur_row);
-    free(context->structure_rows_valid);
+    free(context->rows_valid);
     lighting_sprite_cache_clear(context);
     memset(context, 0, sizeof(*context));
 }
 
-#define light_samples (lighting_context_current->light_samples)
+#define light_samples (lighting_context_current->samples)
 #define structure_samples (lighting_context_current->structure_samples)
 #define structure_blur_row (lighting_context_current->structure_blur_row)
-#define structure_rows_valid (lighting_context_current->structure_rows_valid)
-#define light_samples_num (lighting_context_current->light_samples_num)
+#define structure_rows_valid (lighting_context_current->rows_valid)
+#define light_samples_num (lighting_context_current->samples_num)
 #define lighting_width (lighting_context_current->width)
 #define lighting_height (lighting_context_current->height)
 #define lighting_active (lighting_context_current->active)
@@ -406,6 +452,7 @@ static bool lighting_surface_create(int width, int height) {
         lighting_width = width;
         lighting_height = height;
         lighting_cache_valid = false;
+        lighting_dirty_full(lighting_context_current);
     }
     lighting_benchmark_peaks_update();
     return true;
@@ -420,14 +467,27 @@ bool lighting_begin(int width, int height, uint64_t cache_key) {
         return false;
     }
 
-    lighting_update_needed = !lighting_cache_valid || lighting_cache_key != cache_key;
+    lighting_update_needed =
+        lighting_update_needed || !lighting_cache_valid || lighting_cache_key != cache_key;
+    if (!lighting_cache_valid || lighting_cache_key != cache_key) {
+        lighting_clear_sprite_cache();
+        lighting_dirty_full(lighting_context_current);
+    }
     lighting_pending_cache_key = cache_key;
     LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, field_begins);
     if (lighting_update_needed) {
         LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, field_dirty_marks);
-        lighting_context_current->benchmark_counters.field_dirty_pixels += light_samples_num;
-        lighting_benchmark_statistics.counters.field_dirty_pixels += light_samples_num;
-        memset(light_samples, 0, light_samples_num * sizeof(*light_samples));
+        size_t dirty_pixels = lighting_dirty_pixels(lighting_context_current);
+        lighting_context_current->benchmark_counters.field_dirty_pixels += dirty_pixels;
+        lighting_benchmark_statistics.counters.field_dirty_pixels += dirty_pixels;
+        for (size_t i = 0; i < lighting_context_current->dirty_num; i++) {
+            lighting_dirty_rect_t rect = lighting_context_current->dirty[i];
+            for (int y = rect.y0; y < rect.y1; y++) {
+                memset(light_samples + (size_t)y * (size_t)lighting_width + rect.x0,
+                       0,
+                       (size_t)(rect.x1 - rect.x0) * sizeof(*light_samples));
+            }
+        }
     } else {
         LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, field_reuses);
     }
@@ -536,6 +596,102 @@ bool lighting_needs_update(void) {
     return lighting_update_needed;
 }
 
+/** Translate cached screen-space lighting and dirty newly exposed edges. */
+void lighting_scroll(int screen_dx, int screen_dy) {
+    if (screen_dx == 0 && screen_dy == 0) {
+        return;
+    }
+
+    lighting_clear_sprite_cache();
+
+    for (size_t i = 0; i < arraysize(lighting_contexts); i++) {
+        lighting_context *context = &lighting_contexts[i];
+        if (!lighting_context_allocated(context)) {
+            continue;
+        }
+        if (context->active) {
+            lighting_dirty_full(context);
+            context->update_needed = true;
+            continue;
+        }
+        const int width = context->width;
+        const int height = context->height;
+        int source_x0 = MAX(0, -screen_dx);
+        int source_x1 = MIN(width, width - screen_dx);
+        int source_y0 = MAX(0, -screen_dy);
+        int source_y1 = MIN(height, height - screen_dy);
+        if (source_x0 >= source_x1 || source_y0 >= source_y1) {
+            lighting_dirty_full(context);
+            memset(context->samples, 0, context->samples_num * sizeof(*context->samples));
+            memset(context->rows_valid, 0, (size_t)height);
+            context->update_needed = true;
+            continue;
+        }
+
+        int y = screen_dy > 0 ? source_y1 - 1 : source_y0;
+        int end_y = screen_dy > 0 ? source_y0 - 1 : source_y1;
+        int step_y = screen_dy > 0 ? -1 : 1;
+        for (; y != end_y; y += step_y) {
+            lighting_sample *source = context->samples + (size_t)y * (size_t)width;
+            lighting_sample *destination =
+                context->samples + (size_t)(y + screen_dy) * (size_t)width;
+            memmove(destination + source_x0 + screen_dx,
+                    source + source_x0,
+                    (size_t)(source_x1 - source_x0) * sizeof(*source));
+        }
+
+        for (int row = 0; row < height; row++) {
+            lighting_sample *samples = context->samples + (size_t)row * (size_t)width;
+            if (screen_dx > 0) {
+                memset(samples, 0, (size_t)screen_dx * sizeof(*samples));
+            } else if (screen_dx < 0) {
+                memset(samples + width + screen_dx, 0, (size_t)-screen_dx * sizeof(*samples));
+            }
+        }
+        if (screen_dy > 0) {
+            memset(context->samples,
+                   0,
+                   (size_t)screen_dy * (size_t)width * sizeof(*context->samples));
+        } else if (screen_dy < 0) {
+            memset(context->samples + (size_t)(height + screen_dy) * (size_t)width,
+                   0,
+                   (size_t)-screen_dy * (size_t)width * sizeof(*context->samples));
+        }
+
+        context->dirty_num = 0;
+        if (screen_dx > 0) {
+            context->dirty[context->dirty_num++] =
+                (lighting_dirty_rect_t){0,
+                                        0,
+                                        MIN(width, screen_dx + LIGHTING_SCROLL_MARGIN),
+                                        height};
+        } else if (screen_dx < 0) {
+            context->dirty[context->dirty_num++] =
+                (lighting_dirty_rect_t){MAX(0, width + screen_dx - LIGHTING_SCROLL_MARGIN),
+                                        0,
+                                        width,
+                                        height};
+        }
+        if (screen_dy > 0) {
+            context->dirty[context->dirty_num++] =
+                (lighting_dirty_rect_t){0,
+                                        0,
+                                        width,
+                                        MIN(height, screen_dy + LIGHTING_SCROLL_MARGIN)};
+        } else if (screen_dy < 0) {
+            context->dirty[context->dirty_num++] =
+                (lighting_dirty_rect_t){0,
+                                        MAX(0, height + screen_dy - LIGHTING_SCROLL_MARGIN),
+                                        width,
+                                        height};
+        }
+        memset(context->rows_valid, 0, (size_t)context->height);
+        context->update_needed = true;
+        LIGHTING_BENCHMARK_INCREMENT(context, field_translations);
+    }
+    lighting_benchmark_peaks_update();
+}
+
 /** Evaluate an edge at doubled coordinates, preserving pixel-center precision. */
 static int64_t
 lighting_edge(const lighting_vertex_t *a, const lighting_vertex_t *b, int x2, int y2) {
@@ -563,6 +719,9 @@ static void lighting_draw_triangle(const lighting_vertex_t vertices[4], bool fir
     int max_x = MIN(lighting_width - 1, MAX(a->x, MAX(b->x, c->x)));
     int min_y = MAX(0, MIN(a->y, MIN(b->y, c->y)));
     int max_y = MIN(lighting_height - 1, MAX(a->y, MAX(b->y, c->y)));
+    if (!lighting_rect_intersects(lighting_context_current, min_x, min_y, max_x + 1, max_y + 1)) {
+        return;
+    }
 
     int64_t row_weight_a = orientation * lighting_edge(b, c, min_x * 2 + 1, min_y * 2 + 1);
     int64_t row_weight_b = orientation * lighting_edge(c, a, min_x * 2 + 1, min_y * 2 + 1);
@@ -575,20 +734,28 @@ static void lighting_draw_triangle(const lighting_vertex_t vertices[4], bool fir
     int64_t step_y_c = orientation * -2 * (b->x - a->x);
 
     for (int y = min_y; y <= max_y; y++) {
-        int64_t weight_a = row_weight_a;
-        int64_t weight_b = row_weight_b;
-        int64_t weight_c = row_weight_c;
+        for (size_t dirty_index = 0; dirty_index < lighting_context_current->dirty_num;
+             dirty_index++) {
+            const lighting_dirty_rect_t *dirty = &lighting_context_current->dirty[dirty_index];
+            int x_start = MAX(min_x, dirty->x0);
+            int x_end = MIN(max_x, dirty->x1 - 1);
+            if (x_start > x_end || y < dirty->y0 || y >= dirty->y1) {
+                continue;
+            }
 
-        for (int x = min_x; x <= max_x; x++) {
-            if (weight_a >= 0 && weight_b >= 0 && weight_c >= 0) {
-                /* Recover the quad's logical U/V coordinates from this
-                 * triangle's barycentric weights, then blend all four light
-                 * samples. This removes the visible gradient crease created
-                 * by treating the two halves as unrelated planes. */
-                int64_t u = first_half ? weight_b + weight_c : weight_b;
-                int64_t v = first_half ? weight_c : weight_b + weight_c;
-                lighting_sample *sample =
-                    &light_samples[(size_t)y * (size_t)lighting_width + (size_t)x];
+            int64_t weight_a = row_weight_a + step_x_a * (x_start - min_x);
+            int64_t weight_b = row_weight_b + step_x_b * (x_start - min_x);
+            int64_t weight_c = row_weight_c + step_x_c * (x_start - min_x);
+            for (int x = x_start; x <= x_end; x++) {
+                if (weight_a >= 0 && weight_b >= 0 && weight_c >= 0) {
+                    /* Recover the quad's logical U/V coordinates from this
+                     * triangle's barycentric weights, then blend all four light
+                     * samples. This removes the visible gradient crease created
+                     * by treating the two halves as unrelated planes. */
+                    int64_t u = first_half ? weight_b + weight_c : weight_b;
+                    int64_t v = first_half ? weight_c : weight_b + weight_c;
+                    lighting_sample *sample =
+                        &light_samples[(size_t)y * (size_t)lighting_width + (size_t)x];
 #define INTERPOLATE_CHANNEL(_channel_)               \
     lighting_bilinear_channel(vertices[0]._channel_, \
                               vertices[1]._channel_, \
@@ -597,17 +764,18 @@ static void lighting_draw_triangle(const lighting_vertex_t vertices[4], bool fir
                               (uint64_t)u,           \
                               (uint64_t)v,           \
                               (uint64_t)area)
-                sample->scalar = INTERPOLATE_CHANNEL(scalar);
-                sample->red = INTERPOLATE_CHANNEL(red);
-                sample->green = INTERPOLATE_CHANNEL(green);
-                sample->blue = INTERPOLATE_CHANNEL(blue);
-                sample->present = 1;
+                    sample->scalar = INTERPOLATE_CHANNEL(scalar);
+                    sample->red = INTERPOLATE_CHANNEL(red);
+                    sample->green = INTERPOLATE_CHANNEL(green);
+                    sample->blue = INTERPOLATE_CHANNEL(blue);
+                    sample->present = 1;
 #undef INTERPOLATE_CHANNEL
-            }
+                }
 
-            weight_a += step_x_a;
-            weight_b += step_x_b;
-            weight_c += step_x_c;
+                weight_a += step_x_a;
+                weight_b += step_x_b;
+                weight_c += step_x_c;
+            }
         }
 
         row_weight_a += step_y_a;
@@ -742,6 +910,101 @@ static void lighting_extrapolate(void) {
     }
 }
 
+/** Fill only newly exposed field regions from their nearest valid boundary. */
+static void lighting_extrapolate_dirty(void) {
+    for (size_t rect_index = 0; rect_index < lighting_context_current->dirty_num; rect_index++) {
+        const lighting_dirty_rect_t rect = lighting_context_current->dirty[rect_index];
+        for (int y = rect.y0; y < rect.y1; y++) {
+            lighting_sample *row = light_samples + (size_t)y * (size_t)lighting_width;
+            int previous = -1;
+            for (int x = rect.x0; x < rect.x1; x++) {
+                if (!row[x].present) {
+                    continue;
+                }
+                if (previous == -1) {
+                    for (int fill_x = rect.x0; fill_x < MIN(rect.x1, x); fill_x++) {
+                        row[fill_x] = row[x];
+                    }
+                } else if (x > previous + 1) {
+                    int distance = x - previous;
+                    for (int fill_x = MAX(rect.x0, previous + 1); fill_x < MIN(rect.x1, x);
+                         fill_x++) {
+                        for (size_t channel = 0; channel < 4; channel++) {
+                            uint16_t first = lighting_sample_channel(&row[previous], channel);
+                            uint16_t last = lighting_sample_channel(&row[x], channel);
+                            lighting_sample_channel_set(
+                                &row[fill_x],
+                                channel,
+                                (uint16_t)((int32_t)first + ((int32_t)last - first) *
+                                                                (fill_x - previous) / distance));
+                        }
+                        row[fill_x].present = 1;
+                    }
+                }
+                previous = x;
+            }
+            if (previous != -1) {
+                for (int fill_x = MAX(rect.x0, previous + 1); fill_x < rect.x1; fill_x++) {
+                    row[fill_x] = row[previous];
+                }
+            } else {
+                int seed_x = rect.x0 > 0                ? rect.x0 - 1
+                             : rect.x1 < lighting_width ? rect.x1
+                                                        : rect.x0;
+                for (int fill_x = rect.x0; fill_x < rect.x1; fill_x++) {
+                    row[fill_x] = row[seed_x];
+                }
+            }
+        }
+
+        for (int x = rect.x0; x < rect.x1; x++) {
+            int previous = -1;
+            for (int y = rect.y0; y < rect.y1; y++) {
+                lighting_sample *sample =
+                    &light_samples[(size_t)y * (size_t)lighting_width + (size_t)x];
+                if (!sample->present) {
+                    continue;
+                }
+                if (previous != -1 && y > previous + 1) {
+                    int distance = y - previous;
+                    for (int fill_y = MAX(rect.y0, previous + 1); fill_y < MIN(rect.y1, y);
+                         fill_y++) {
+                        lighting_sample *destination =
+                            &light_samples[(size_t)fill_y * (size_t)lighting_width + x];
+                        for (size_t channel = 0; channel < 4; channel++) {
+                            uint16_t first = lighting_sample_channel(
+                                &light_samples[(size_t)previous * (size_t)lighting_width + x],
+                                channel);
+                            uint16_t last = lighting_sample_channel(sample, channel);
+                            lighting_sample_channel_set(
+                                destination,
+                                channel,
+                                (uint16_t)((int32_t)first + ((int32_t)last - first) *
+                                                                (fill_y - previous) / distance));
+                        }
+                        destination->present = 1;
+                    }
+                }
+                previous = y;
+            }
+            if (previous != -1) {
+                for (int fill_y = MAX(rect.y0, previous + 1); fill_y < rect.y1; fill_y++) {
+                    light_samples[(size_t)fill_y * (size_t)lighting_width + x] =
+                        light_samples[(size_t)previous * (size_t)lighting_width + x];
+                }
+            } else {
+                int seed_y = rect.y0 > 0                 ? rect.y0 - 1
+                             : rect.y1 < lighting_height ? rect.y1
+                                                         : rect.y0;
+                for (int fill_y = rect.y0; fill_y < rect.y1; fill_y++) {
+                    light_samples[(size_t)fill_y * (size_t)lighting_width + x] =
+                        light_samples[(size_t)seed_y * (size_t)lighting_width + x];
+                }
+            }
+        }
+    }
+}
+
 /** Apply one horizontal box-blur pass to a light sample row. */
 static void lighting_blur_row(const lighting_sample *source, lighting_sample *destination) {
     const int radius = LIGHT_STRUCTURE_BLUR_RADIUS;
@@ -824,7 +1087,13 @@ void lighting_render(SDL_Surface *destination) {
     LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, render_calls);
     if (samples_updated) {
         LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, field_rebuilds);
-        lighting_extrapolate();
+        size_t dirty_pixels = lighting_dirty_pixels(lighting_context_current);
+        if (dirty_pixels == light_samples_num) {
+            lighting_extrapolate();
+        } else {
+            LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, field_partial_rebuilds);
+            lighting_extrapolate_dirty();
+        }
         memset(structure_rows_valid, 0, (size_t)lighting_height * sizeof(*structure_rows_valid));
         lighting_cache_key = lighting_pending_cache_key;
         lighting_cache_valid = true;
@@ -861,18 +1130,16 @@ void lighting_render(SDL_Surface *destination) {
     for (int y = 0; y < lighting_height; y++) {
         Uint32 *pixels = (Uint32 *)((Uint8 *)destination->pixels + y * destination->pitch);
         const lighting_sample *samples = light_samples + (size_t)y * (size_t)lighting_width;
-
         for (int x = 0; x < lighting_width; x++) {
             if (has_colorkey && pixels[x] == colorkey) {
                 continue;
             }
-
             uint8_t red, green, blue, alpha;
             if (direct_argb) {
-                red = (uint8_t)(pixels[x] >> 16);
-                green = (uint8_t)(pixels[x] >> 8);
-                blue = (uint8_t)pixels[x];
-                alpha = (uint8_t)(pixels[x] >> 24);
+                red = pixels[x] >> 16;
+                green = pixels[x] >> 8;
+                blue = pixels[x];
+                alpha = pixels[x] >> 24;
             } else {
                 SDL_GetRGBA(pixels[x], format, palette, &red, &green, &blue, &alpha);
             }

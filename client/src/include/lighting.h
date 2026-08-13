@@ -24,7 +24,8 @@ typedef struct SDL_Surface SDL_Surface;
 #define LIGHTING_TRANSFER_VERSION UINT8_C(1)
 #define LIGHTING_SPRITE_CACHE_MAX_BYTES (8U * 1024U * 1024U)
 #define LIGHTING_SPRITE_CACHE_ENTRY_OVERHEAD 512U
-#define LIGHTING_SPRITE_CACHE_MAX_ENTRIES 8192U
+/* Keep per-level transformed sprites bounded across viewport translations. */
+#define LIGHTING_SPRITE_CACHE_MAX_ENTRIES 20U
 
 /** Conservatively charge pixels plus retained entry/surface/allocator metadata. */
 static inline size_t lighting_sprite_cache_charge(size_t pitch, size_t height) {
@@ -50,7 +51,7 @@ typedef struct lighting_vertex {
 } lighting_vertex_t;
 
 /** Increment when the statistics-only benchmark API changes. */
-#define LIGHTING_BENCHMARK_STATISTICS_VERSION UINT8_C(3)
+#define LIGHTING_BENCHMARK_STATISTICS_VERSION UINT8_C(4)
 
 /** Event counters accumulated for one logical lighting level. */
 typedef struct lighting_benchmark_counters {
@@ -58,6 +59,8 @@ typedef struct lighting_benchmark_counters {
     uint64_t field_dirty_marks;
     /** Lighting-field pixels invalidated for a subsequent full rebuild. */
     uint64_t field_dirty_pixels;
+    uint64_t field_translations;
+    uint64_t field_partial_rebuilds;
     uint64_t field_rebuilds;
     uint64_t field_reuses;
     uint64_t render_calls;
@@ -161,6 +164,8 @@ bool lighting_select_level(int depth);
 void lighting_set_level_mask(uint16_t mask);
 void lighting_level_scroll(int dz);
 bool lighting_needs_update(void);
+/** Translate cached screen-space lighting and dirty newly exposed pixels. */
+void lighting_scroll(int screen_dx, int screen_dy);
 void lighting_draw_quad(const lighting_vertex_t vertices[4]);
 void lighting_render(SDL_Surface *destination);
 void lighting_show_surface(SDL_Surface *destination,

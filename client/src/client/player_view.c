@@ -1229,7 +1229,8 @@ static void player_view_timing_json(const uint64_t *durations, size_t count) {
 
 static void player_view_lighting_counters_json(const lighting_benchmark_counters_t *counters) {
     printf("{\"field_begins\":%" PRIu64 ",\"field_dirty_marks\":%" PRIu64
-           ",\"field_dirty_pixels\":%" PRIu64 ",\"field_rebuilds\":%" PRIu64
+           ",\"field_dirty_pixels\":%" PRIu64 ",\"field_translations\":%" PRIu64
+           ",\"field_partial_rebuilds\":%" PRIu64 ",\"field_rebuilds\":%" PRIu64
            ",\"field_reuses\":%" PRIu64 ",\"render_calls\":%" PRIu64 ",\"render_failures\":%" PRIu64
            ",\"lit_sprite_draws\":%" PRIu64 ",\"lit_sprite_lookups\":%" PRIu64
            ",\"lit_sprite_hits\":%" PRIu64 ",\"lit_sprite_misses\":%" PRIu64
@@ -1239,6 +1240,8 @@ static void player_view_lighting_counters_json(const lighting_benchmark_counters
            counters->field_begins,
            counters->field_dirty_marks,
            counters->field_dirty_pixels,
+           counters->field_translations,
+           counters->field_partial_rebuilds,
            counters->field_rebuilds,
            counters->field_reuses,
            counters->render_calls,
@@ -2058,7 +2061,7 @@ static void player_view_movement_phase_json(const player_view_movement_phase_t *
     player_view_timing_json(phase->wait_durations, phase->ticks);
     printf(",\"simulated_update_loop_time\":");
     player_view_timing_json(phase->loop_durations, phase->ticks);
-    printf(",\"work_capacity_fps\":{\"p50\":%.3f,\"p95\":%.3f}},\"map_time\":",
+    printf(",\"work_capacity_fps\":{\"p50\":%.6f,\"p95\":%.6f}},\"map_time\":",
            work_p50 == 0 ? 0.0 : 1000000000.0 / work_p50,
            work_p95 == 0 ? 0.0 : 1000000000.0 / work_p95);
     player_view_timing_json(phase->map_durations, phase->map_samples);

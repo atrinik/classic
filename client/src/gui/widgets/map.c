@@ -604,10 +604,10 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
                                    fow_y_end,
                                    width,
                                    height);
-
-                level_lighting_revision[level]++;
             }
         }
+
+        lighting_scroll((dy - dx) * MAP_TILE_YOFF, -(dx + dy) * MAP_TILE_XOFF);
     }
 
     map_select_level(0, true);
@@ -2366,8 +2366,6 @@ static uint64_t map_lighting_cache_key(SDL_Surface *surface,
     hash = map_lighting_hash_value(hash, (uint32_t)surface->h);
     hash = map_lighting_hash_value(hash, (uint32_t)map_width);
     hash = map_lighting_hash_value(hash, (uint32_t)map_height);
-    hash = map_lighting_hash_value(hash, (uint32_t)data->midx);
-    hash = map_lighting_hash_value(hash, (uint32_t)data->midy);
     hash = map_lighting_hash_value(hash, (uint32_t)data->player_height_offset);
     hash = map_lighting_hash_value(hash, (uint8_t)data->depth);
     hash = map_lighting_hash_value(hash, MapData.player_sub_layer);
