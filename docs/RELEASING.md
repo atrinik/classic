@@ -132,7 +132,8 @@ and the server image labels, and the released runtime starts successfully.
 
 `dependencies.bundle.json` binds the complete `sound`, `content`, `resources`,
 and `libpcpnatpmp` raw-archive set to the SHA-256 digests of all three source
-locks, a deterministic material digest, and the exact OCI manifest digest at
+locks and both acquisition tools, issue #203's verified input-bundle digest,
+a deterministic material digest, and the exact OCI manifest digest at
 `ghcr.io/atrinik/classic-dependencies`. The material tag is derived from the
 complete material digest and is immutable; release consumers use the manifest
 digest, never the tag, as their trust boundary.
@@ -148,7 +149,8 @@ python3 tools/release/dependency_bundle.py build \
 python3 tools/release/dependency_bundle.py show
 ```
 
-The build reuses only rehashed archives and otherwise acquires them through the
+The build invokes issue #203's canonical staging and closed-bundle verifier,
+reuses only rehashed archives, and otherwise acquires them through the
 authoritative bounded-retry fetcher. Review and commit the descriptor, not the
 ignored OCI layout or archives. A push of the relevant files to current
 `main`, or a manual current-`main` dispatch, runs `Publish Dependency Bundle`.

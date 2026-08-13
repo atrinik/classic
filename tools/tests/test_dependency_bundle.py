@@ -24,10 +24,12 @@ class DependencyBundleTests(unittest.TestCase):
         self.cache = Path(self.temporary.name) / "cache"
         self.root.mkdir()
         (self.root / "server/tools").mkdir(parents=True)
+        (self.root / "tools/release").mkdir(parents=True)
         shutil.copyfile(
             Path(__file__).resolve().parents[2] / "server/tools/dependencies.py",
             self.root / "server/tools/dependencies.py",
         )
+        shutil.copyfile(MODULE_PATH, self.root / "tools/release/dependency_bundle.py")
         records = {}
         for name in ("content", "libpcpnatpmp", "resources", "sound"):
             archive = Path(self.temporary.name) / f"{name}.tar.gz"
