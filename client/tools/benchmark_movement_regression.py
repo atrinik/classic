@@ -690,19 +690,42 @@ def _guard_native_record(record: dict[str, object]) -> dict[str, dict[str, objec
     dirty_marks = 0
     rebuilds = 0
     reuses = 0
+    translations = 0
+    partial_rebuilds = 0
+    dirty_pixels = 0
     if lighting["available"] and record["identity"]["run"]["mode"] == "smooth":
         counters = lighting["counters"]
         dirty_marks = counters["field_dirty_marks"]
         rebuilds = counters["field_rebuilds"]
         reuses = counters["field_reuses"]
+        translations = counters["field_translations"]
+        partial_rebuilds = counters["field_partial_rebuilds"]
+        dirty_pixels = counters["field_dirty_pixels"]
         maximum_updates = sustained["changed_map_packets"] * max(
             1, sustained["map"]["peak_active_levels"]
         )
-        cache_valid = dirty_marks <= maximum_updates and rebuilds <= maximum_updates and reuses > 0
+        viewport = record["identity"]["run"]["viewport"]
+        maximum_dirty_pixels = maximum_updates * viewport["width"] * viewport["height"]
+        translated = (
+            rebuilds > 0
+            and translations == rebuilds
+            and 0 < partial_rebuilds <= rebuilds
+            and 0 < dirty_pixels
+            and dirty_pixels * 4 <= maximum_dirty_pixels * 3
+        )
+        cache_valid = (
+            dirty_marks <= maximum_updates
+            and rebuilds <= maximum_updates
+            and rebuilds + reuses == maximum_updates
+            and translated
+        )
     guards["lighting_cache_churn"] = {
         "field_dirty_marks": dirty_marks,
         "field_rebuilds": rebuilds,
         "field_reuses": reuses,
+        "field_translations": translations,
+        "field_partial_rebuilds": partial_rebuilds,
+        "field_dirty_pixels": dirty_pixels,
         "passed": cache_valid,
     }
     ordered_phases = [phases[name] for name in REQUIRED_PHASES]
@@ -2004,10 +2027,10 @@ def _render_complete_evidence(
             "",
             "### Candidate lighting activity",
             "",
-            "| Context | Phase | Fields rebuilt/reused | Dirty pixels | "
+            "| Context | Phase | Fields rebuilt/reused | Translated/partial | Dirty pixels | "
             "Sprite hits/lookups (rate) | Misses | Evictions | Entries | Sprite memory | "
             "Field memory |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for viewport, name, summary in summaries:
@@ -2019,7 +2042,8 @@ def _render_complete_evidence(
         hit_rate_text = "n/a" if hit_rate is None else f"{hit_rate:.1f}%"
         lines.append(
             f"| {viewport} | `{name}` | {lighting['field_rebuilds']}/"
-            f"{lighting['field_reuses']} | {lighting['field_dirty_pixels']:,} | "
+            f"{lighting['field_reuses']} | {lighting['field_translations']}/"
+            f"{lighting['field_partial_rebuilds']} | {lighting['field_dirty_pixels']:,} | "
             f"{lighting['lit_sprite_hits']}/"
             f"{lighting['lit_sprite_lookups']} ({hit_rate_text}) | "
             f"{lighting['lit_sprite_misses']} | {lighting['lit_sprite_evictions']} | "
@@ -2149,6 +2173,15 @@ def _render_complete_evidence(
         ]
     )
     return "\n".join(lines)
+
+
+def validate_complete_evidence(
+    evidence: dict[str, object],
+    baseline_validator: RecordValidator = validate_record,
+) -> dict[str, object]:
+    """Validate complete evidence and its raw-record-derived summaries."""
+    _render_complete_evidence(evidence, "success", baseline_validator)
+    return evidence
 
 
 def render_comment(

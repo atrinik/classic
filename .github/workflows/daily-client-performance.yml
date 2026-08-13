@@ -29,15 +29,47 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Bind the benchmark to the triggering main commit
+        run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+      - id: dependency-key
+        name: Resolve complete immutable input key
+        run: |
+          python3 server/tools/dependencies.py bundle-key \
+            --client-lock client/dependencies.lock.json \
+            --server-lock server/dependencies.lock.json \
+            --source-lock server/cmake/immutable_sources.lock.json \
+            --github-output "${GITHUB_OUTPUT}"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/classic-dependency-archives
+          key: classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}
+          restore-keys: >-
+            classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}-
+      - id: dependency-stage
+        name: Acquire and verify complete immutable input bundle
+        run: |
+          python3 server/tools/dependencies.py bundle-stage \
+            --client-lock client/dependencies.lock.json \
+            --server-lock server/dependencies.lock.json \
+            --source-lock server/cmake/immutable_sources.lock.json \
+            --cache "${RUNNER_TEMP}/classic-dependency-archives" \
+            --output build/dependency-inputs \
+            --github-output "${GITHUB_OUTPUT}"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        if: steps.dependency-stage.outputs.cache_changed == 'true'
+        with:
+          path: ${{ runner.temp }}/classic-dependency-archives
+          key: >-
+            classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Prepare isolated compiler cache
         run: |
           mkdir -p "${RUNNER_TEMP}/classic-ccache"
           chmod 1777 "${RUNNER_TEMP}/classic-ccache"
-      - name: Run the pinned full benchmark matrix
-        continue-on-error: true
+      - id: benchmark
+        name: Run the pinned full benchmark matrix
         env:
           ATRINIK_BENCHMARK_REVISION: ${{ github.sha }}
           ATRINIK_BENCHMARK_DIRTY: false
@@ -46,6 +78,7 @@ jobs:
         run: |
           docker run --rm \
             --user "$(id -u):$(id -g)" \
+            --network none \
             --env ATRINIK_BENCHMARK_REVISION \
             --env ATRINIK_BENCHMARK_DIRTY \
             --env ATRINIK_MOVEMENT_EVENT_NAME \
@@ -60,15 +93,18 @@ jobs:
             tools/ci/run_linux_check.sh client /workspace
       - name: Publish job summary and raw evidence
         if: always()
+        env:
+          CLIENT_RESULT: ${{ steps.benchmark.outcome }}
         run: |
           python3 client/tools/benchmark_movement_regression.py render-comment \
             --input build/ci-evidence/movement-frame-time.json \
-            --client-result passed --output build/ci-evidence/benchmark-summary.md
+            --client-result "${CLIENT_RESULT}" \
+            --output build/ci-evidence/benchmark-summary.md
           cat build/ci-evidence/benchmark-summary.md >>"${GITHUB_STEP_SUMMARY}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
-          name: daily-client-performance-${{ github.run_id }}
+          name: daily-client-performance-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/ci-evidence
           if-no-files-found: error
           retention-days: 30
@@ -84,12 +120,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Bind publication to the benchmarked main commit
+        run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: daily-client-performance-${{ github.run_id }}
+          name: daily-client-performance-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/ci-evidence
       - name: Load the dedicated trend ref
         run: |
@@ -131,7 +169,7 @@ jobs:
                 "build/benchmark-data/reports/${GITHUB_RUN_ID}.md"
             elif test "${transition}" = recovered && test -n "${number}"; then
               gh issue close "${number}" --comment \
-                "Two consecutive compatible reports recovered this cohort."
+                "The current compatible trend no longer meets the sustained regression condition."
             fi
           done
       - name: Commit the dedicated trend ref
