@@ -39,6 +39,7 @@
 #include <player.h>
 #include <server.h>
 #include <server_item.h>
+#include <skills.h>
 #include <spells.h>
 #include <swap.h>
 #include <toolkit/packet.h>
@@ -139,6 +140,11 @@ START_TEST(test_move_ob_rejects_invalid_directions) {
     ck_assert(movement_direction_valid(pl, NUM_DIRECTION, false));
     ck_assert_int_eq(push_ob(pl, INT_MAX, pl), 0);
     ck_assert_int_eq(cast_spell(pl, pl, INT_MIN, -1, 0, CAST_NORMAL, NULL), 0);
+    object *bow = arch_get("bow_short");
+    ck_assert_ptr_nonnull(bow);
+    ck_assert_int_eq(object_ranged_fire(bow, pl, INT_MAX, NULL), OBJECT_METHOD_UNHANDLED);
+    object_destroy(bow);
+    construction_do(pl, INT_MIN);
     pticks += 60L * MAX_TICKS;
     ck_assert_int_eq(move_ob(pl, -1, pl), 0);
     ck_assert_uint_eq(invalid_direction_log_count, 2);
