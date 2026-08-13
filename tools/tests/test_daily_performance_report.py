@@ -42,12 +42,25 @@ class DailyReportTests(unittest.TestCase):
         point = report.build_point(evidence(), commit="a" * 40, run_id="7",
                                    recorded_at="2026-08-13T00:00:00+00:00", environment={})
         self.assertEqual(set(point["phases"]), set(report.PHASES))
+        self.assertEqual(set(point["phases"]["sustained"]["render_stages"]),
+                         set(report.RENDER_STAGES))
+        self.assertEqual(point["phases"]["sustained"]["render_stages"]["map"]["avg_ms_per_call"], 0.001)
         self.assertEqual(len(point["cohort"]), 16)
         sustained_map = point["phases"]["sustained"]["map"]
         self.assertEqual(
             sustained_map["map_draws"],
             sustained_map["primary_map_draws"] + sustained_map["auxiliary_map_draws"],
         )
+
+    def test_daily_stage_report_preserves_zero_call_as_na(self) -> None:
+        phase = {
+            "render_stages": {
+                name: {"unit": "us", "elapsed": 0, "calls": 0, "scope": scope}
+                for name, scope in report.RENDER_STAGES.items()
+            }
+        }
+        stages = report._render_stage_summary([phase], "idle")
+        self.assertIsNone(stages["lighting"]["avg_ms_per_call"])
 
     def test_merge_is_idempotent_and_retains_only_latest_points(self) -> None:
         point = report.build_point(evidence(), commit="a" * 40, run_id="7",
@@ -64,6 +77,12 @@ class DailyReportTests(unittest.TestCase):
         points = trend["cohorts"][point["cohort"]]
         self.assertEqual(len(points), report.TREND_RETENTION)
         self.assertEqual(report.merge_trend(trend, points[-1])["cohorts"][point["cohort"]], points)
+
+    def test_merge_migrates_existing_trend_schema(self) -> None:
+        point = report.build_point(evidence(), commit="a" * 40, run_id="7",
+                                   recorded_at="2026-08-13T00:00:00+00:00", environment={})
+        trend = report.merge_trend({"schema_version": 1, "cohorts": {}}, point)
+        self.assertEqual(trend["schema_version"], report.SCHEMA_VERSION)
 
     def test_failed_evidence_is_not_published(self) -> None:
         bad = evidence()

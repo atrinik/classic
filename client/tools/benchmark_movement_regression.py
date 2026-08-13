@@ -16,10 +16,10 @@ import tempfile
 import time
 from typing import NoReturn
 
-from movement_benchmark_schema import validate_record
+from movement_benchmark_schema import RENDER_STAGES, validate_record
 
 
-EVIDENCE_SCHEMA_VERSION = 4
+EVIDENCE_SCHEMA_VERSION = 5
 NATIVE_SCHEMA_VERSION = 5
 SUSTAINED_P95_LIMIT_NS = 33_300_000
 LARGE_SUSTAINED_P95_LIMIT_NS = 125_000_000
@@ -251,6 +251,32 @@ def _nested_medians(
     return result
 
 
+def _render_stage_summary(
+    records: list[dict[str, object]], name: str
+) -> dict[str, dict[str, object | None]]:
+    """Summarize profiler stages as median per-run average invocation times."""
+    if any(
+        not isinstance(phase(record, name).get("render_stages"), dict)
+        or set(phase(record, name)["render_stages"]) != set(RENDER_STAGES)
+        for record in records
+    ):
+        return {
+            stage_name: {"scope": scope, "calls_per_run": 0, "avg_ms_per_call": None}
+            for stage_name, scope in RENDER_STAGES.items()
+        }
+    result: dict[str, dict[str, object | None]] = {}
+    for stage_name, scope in RENDER_STAGES.items():
+        stages = [phase(record, name)["render_stages"][stage_name] for record in records]
+        calls = _median_integer([stage["calls"] for stage in stages])
+        averages = [stage["elapsed"] / stage["calls"] / 1_000 for stage in stages if stage["calls"]]
+        result[stage_name] = {
+            "scope": scope,
+            "calls_per_run": calls,
+            "avg_ms_per_call": round(statistics.median(averages), 3) if averages else None,
+        }
+    return result
+
+
 def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, object]:
     """Summarize per-run telemetry while retaining raw records in the evidence."""
     if not records:
@@ -405,6 +431,7 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
                 for field in draw_reason_fields
             },
         },
+        "render_stages": _render_stage_summary(records, name),
         "queue": {
             **{field: queue[field] for field in ("enqueued", "dequeued", "budget_yields", "recoveries", "peak_depth", "peak_bytes")},
             "oldest_age_ms": round(queue["oldest_age_us"] / 1_000, 2),
@@ -1181,6 +1208,7 @@ def _phase_summary_for_report(summary: object, context: str) -> dict[str, object
         "first_window_p95_ms",
         "last_window_p95_ms",
         "map",
+        "render_stages",
         "queue",
         "lighting",
     }
@@ -1220,6 +1248,24 @@ def _phase_summary_for_report(summary: object, context: str) -> dict[str, object
         or summary["render_reference_budget_ms"] != round(DISPLAY_REFERENCE_BUDGET_MS, 3)
     ):
         raise BenchmarkError(f"invalid phase summary: {context}")
+    stages = _require_exact_fields(
+        summary["render_stages"], set(RENDER_STAGES), f"{context} render stages"
+    )
+    for stage_name, stage in stages.items():
+        stage = _require_exact_fields(
+            stage, {"scope", "calls_per_run", "avg_ms_per_call"},
+            f"{context} render stage {stage_name}",
+        )
+        if stage["scope"] != RENDER_STAGES[stage_name]:
+            raise BenchmarkError(f"invalid render stage scope: {context} {stage_name}")
+        _require_integer(stage["calls_per_run"], f"{context} {stage_name} calls")
+        if stage["avg_ms_per_call"] is not None and (
+            type(stage["avg_ms_per_call"]) not in (int, float)
+            or stage["avg_ms_per_call"] < 0
+        ):
+            raise BenchmarkError(f"invalid render stage timing: {context} {stage_name}")
+        if (stage["calls_per_run"] == 0) != (stage["avg_ms_per_call"] is None):
+            raise BenchmarkError(f"invalid zero-call render stage: {context} {stage_name}")
     return summary
 
 
@@ -1251,6 +1297,50 @@ def _resource_summary_for_report(summary: object, context: str) -> dict[str, obj
     ):
         raise BenchmarkError(f"invalid resource summary: {context}")
     return resource
+
+
+def _stage_text(value: object | None) -> str:
+    return "n/a" if value is None else f"{value:.3f} ms"
+
+
+def _stage_delta(before: object | None, after: object | None) -> str:
+    if before is None or after is None or before == 0:
+        return "n/a"
+    return f"{(after / before - 1) * 100:+.1f}%"
+
+
+def _append_render_stage_table(
+    lines: list[str],
+    title: str,
+    candidate: dict[str, object],
+    baseline: dict[str, object] | None = None,
+) -> None:
+    lines.extend(
+        [
+            title,
+            "",
+            "Timing is the median of each fresh run's average `elapsed / calls`, "
+            "reported as milliseconds per invocation; it is not a p50/p95 distribution. "
+            "Parent and child scopes overlap and are not additive.",
+            "",
+            "| Stage | Scope | Calls/run (base → candidate) | Average ms/call (base → candidate) | Change |",
+            "| --- | --- | ---: | ---: | ---: |",
+        ]
+    )
+    candidate_stages = candidate["render_stages"]
+    baseline_stages = baseline["render_stages"] if baseline is not None else None
+    for stage_name in RENDER_STAGES:
+        after = candidate_stages[stage_name]
+        before = baseline_stages[stage_name] if baseline_stages is not None else None
+        before_calls = "n/a" if before is None else str(before["calls_per_run"])
+        before_time = "n/a" if before is None else _stage_text(before["avg_ms_per_call"])
+        lines.append(
+            f"| `{stage_name}` | `{after['scope']}` | {before_calls} → "
+            f"{after['calls_per_run']} | {before_time} → "
+            f"{_stage_text(after['avg_ms_per_call'])} | "
+            f"{_stage_delta(None if before is None else before['avg_ms_per_call'], after['avg_ms_per_call'])} |"
+        )
+    lines.append("")
 
 
 def _expected_evidence_checks(
@@ -1773,6 +1863,48 @@ def _render_complete_evidence(
                 "",
             ]
         )
+    baseline_sustained_stages = None
+    if evidence["mode"] == "comparison":
+        baseline_sustained_stages = baseline_phases["sustained"]
+    _append_render_stage_table(
+        lines,
+        "### Render-profiler stages (standard smooth sustained)",
+        candidate_sustained,
+        baseline_sustained_stages,
+    )
+    lines.extend(
+        [
+            "<details>",
+            "<summary>Other measured render-stage contexts</summary>",
+            "",
+            "The snapshot may include primary player-view, auxiliary local-minimap, and "
+            "animation passes according to the recorded scope and calls. The offline replay "
+            "does not execute the production main loop, so live profiler buckets such as "
+            "`frame`, `events`, `game`, `widgets`, `overlays`, `maintenance`, `present`, and "
+            "`wait` are unavailable; simulated wait/update values are not substituted.",
+            "",
+        ]
+    )
+    candidate_contexts_for_stages = [
+        ("Standard smooth", phases["candidate_standard"]),
+    ]
+    if samples["candidate_large"] == 2:
+        candidate_contexts_for_stages.append(("Large smooth", phases["candidate_large"]))
+    for context_name, phase_set in candidate_contexts_for_stages:
+        for phase_name in REQUIRED_PHASES:
+            _append_render_stage_table(
+                lines,
+                f"#### {context_name} `{phase_name}`",
+                phase_set[phase_name],
+            )
+    for context_name, phase_set in context_phases.items():
+        for phase_name in REQUIRED_PHASES:
+            _append_render_stage_table(
+                lines,
+                f"#### {context_name} `{phase_name}`",
+                phase_set[phase_name],
+            )
+    lines.extend(["</details>", ""])
     lines.extend(
         [
             "### Candidate hosted baseline timing",
