@@ -55,13 +55,8 @@ static object *add_colored_light(mapstruct *map, int x, int y, int radius, uint3
     return object_insert_map(source, map, NULL, 0);
 }
 
-static void set_light_falloff(const char *falloff) {
-    snprintf(VS(settings.light_falloff), "%s", falloff);
-}
-
 START_TEST(test_radial_light_profile_is_symmetric_monotonic_and_exact) {
     mapstruct *map = get_empty_map(11, 11);
-    set_light_falloff("radial");
     adjust_light_source(map, 5, 5, 3);
 
     ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 5, 5)->light_source_value, 160);
@@ -95,27 +90,9 @@ START_TEST(test_radial_light_profile_is_symmetric_monotonic_and_exact) {
 }
 END_TEST
 
-START_TEST(test_legacy_light_falloff_remains_available) {
-    mapstruct *map = get_empty_map(9, 9);
-    set_light_falloff("legacy");
-    adjust_light_source(map, 4, 4, 3);
-
-    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 4, 4)->light_source_value, 160);
-    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 5, 4)->light_source_value, 80);
-    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 5, 5)->light_source_value, 40);
-    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 6, 4)->light_source_value, 40);
-    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 6, 5)->light_source_value, 0);
-    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 6, 6)->light_source_value, 0);
-
-    adjust_light_source(map, 4, 4, -3);
-    set_light_falloff("radial");
-}
-END_TEST
-
 START_TEST(test_colored_radial_light_removal_restores_whole_field) {
     mapstruct *map = get_empty_map(11, 11);
     int baseline[11 * 11];
-    set_light_falloff("radial");
     adjust_light_source(map, 5, 5, -3);
     for (int y = 0; y < MAP_HEIGHT(map); y++) {
         for (int x = 0; x < MAP_WIDTH(map); x++) {
@@ -556,7 +533,6 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_light_level_anchors);
     tcase_add_test(tc_core, test_light_level_interpolation);
     tcase_add_test(tc_core, test_radial_light_profile_is_symmetric_monotonic_and_exact);
-    tcase_add_test(tc_core, test_legacy_light_falloff_remains_available);
     tcase_add_test(tc_core, test_colored_radial_light_removal_restores_whole_field);
     tcase_add_test(tc_core, test_light_color_parser_is_exact);
     tcase_add_test(tc_core, test_radiance_resolver_preserves_linear_warm_and_cool_daylight);
