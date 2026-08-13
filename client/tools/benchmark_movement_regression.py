@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -18,7 +20,7 @@ from movement_benchmark_schema import validate_record
 
 
 EVIDENCE_SCHEMA_VERSION = 4
-NATIVE_SCHEMA_VERSION = 4
+NATIVE_SCHEMA_VERSION = 5
 SUSTAINED_P95_LIMIT_NS = 33_300_000
 LARGE_SUSTAINED_P95_LIMIT_NS = 125_000_000
 DISPLAY_REFERENCE_FPS = 144
@@ -33,6 +35,8 @@ COMPARISON_NOTES = (
     "performance-calibration-pending-sibling-integration",
 )
 COMPARE_FOUNDATION_NOTE = "performance-calibration-pending-sibling-integration"
+CROSS_CONTRACT_NOTE = "baseline-movement-schema-mismatch"
+INFORMATIONAL_COMPARISON_NOTES = {COMPARE_FOUNDATION_NOTE, CROSS_CONTRACT_NOTE}
 STANDARD_DISCRETE_CONTEXT = "standard_discrete"
 LARGE_DISCRETE_CONTEXT = "large_discrete"
 INITIAL_ERROR_REASONS = ("client-validation-ended-before-movement-evidence",)
@@ -48,9 +52,11 @@ LIGHTING_FIELDS = {
     "bytes",
     "retained_field_bytes",
 }
-V3_GUARD_NAMES = (
+NATIVE_GUARD_NAMES = (
     "full_redraw_accounting",
     "noop_redraw_avoidance",
+    "animation_isolation",
+    "idle_wait_recovery",
     "queue_plateau_recovery",
     "lighting_cache_churn",
     "cache_memory_plateau",
@@ -64,13 +70,15 @@ PERFORMANCE_CHECK_NAMES = {
     "base_candidate_sustained_p95",
 }
 INFORMATIONAL_OPTIMIZATION_SUFFIXES = (
-    "noop_redraw_avoidance",
     "lighting_cache_churn",
 )
 
 
 class BenchmarkError(RuntimeError):
     """A movement benchmark command or its JSON contract failed."""
+
+
+RecordValidator = Callable[[object], dict[str, object]]
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -94,7 +102,25 @@ def _require_integer(value: object, context: str, *, positive: bool = False) -> 
     return value
 
 
-def parse_result(output: str) -> dict[str, object]:
+def load_record_validator(path: Path) -> RecordValidator:
+    """Load the immutable base revision's closed record validator."""
+    spec = importlib.util.spec_from_file_location("movement_benchmark_base_schema", path)
+    if spec is None or spec.loader is None:
+        raise BenchmarkError("cannot load the baseline movement schema")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except (ImportError, OSError, SyntaxError) as error:
+        raise BenchmarkError("cannot load the baseline movement schema") from error
+    validator = getattr(module, "validate_record", None)
+    if not callable(validator):
+        raise BenchmarkError("baseline movement schema has no record validator")
+    return validator
+
+
+def parse_result(
+    output: str, record_validator: RecordValidator = validate_record
+) -> dict[str, object]:
     lines = [line for line in output.splitlines() if line.strip()]
     if len(lines) != 1:
         raise BenchmarkError("movement benchmark must emit exactly one JSON record")
@@ -103,7 +129,7 @@ def parse_result(output: str) -> dict[str, object]:
     except json.JSONDecodeError as error:
         raise BenchmarkError("movement benchmark emitted invalid JSON") from error
     try:
-        return validate_record(result)
+        return record_validator(result)
     except ValueError as error:
         raise BenchmarkError(str(error)) from error
 
@@ -114,6 +140,7 @@ def run_benchmark(
     viewport: str,
     expected_revision: str | None = None,
     checkpoint_directory: Path | None = None,
+    record_validator: RecordValidator = validate_record,
 ) -> dict[str, object]:
     timeout = 900 if viewport == "large" else 180
     environment = os.environ.copy()
@@ -148,8 +175,8 @@ def run_benchmark(
             f"{client.name} {viewport} movement benchmark failed "
             f"({result.returncode}): {detail}"
         )
-    record = parse_result(result.stdout)
-    if record.get("schema_version") == NATIVE_SCHEMA_VERSION and expected_revision is not None:
+    record = parse_result(result.stdout, record_validator)
+    if expected_revision is not None:
         implementation = record["identity"]["implementation"]
         if implementation["revision"].lower() != expected_revision.lower():
             raise BenchmarkError(
@@ -174,7 +201,7 @@ def _phase_median(records: list[dict[str, object]], name: str, field: str) -> in
     values = []
     for record in records:
         phase_record = phase(record, name)
-        if record.get("schema_version") == NATIVE_SCHEMA_VERSION and field in (
+        if "frame_time" in phase_record and field in (
             "p50_ns",
             "p95_ns",
             "p99_ns",
@@ -201,7 +228,7 @@ def _nested_medians(
         values = []
         for record in records:
             nested = phase(record, name)[section]
-            if record.get("schema_version") == NATIVE_SCHEMA_VERSION and section == "lighting":
+            if section == "lighting" and "counters" in nested:
                 if field in nested.get("counters", {}):
                     values.append(nested["counters"][field])
                 elif field == "entries":
@@ -212,9 +239,9 @@ def _nested_medians(
                     values.append(nested["end"][field])
                 else:
                     values.append(0)
-            elif record.get("schema_version") == NATIVE_SCHEMA_VERSION and section == "queue" and field == "depth":
+            elif section == "queue" and field == "depth" and "peak_depth" in nested:
                 values.append(nested["peak_depth"])
-            elif record.get("schema_version") == NATIVE_SCHEMA_VERSION and section == "queue" and field == "bytes":
+            elif section == "queue" and field == "bytes" and "peak_bytes" in nested:
                 values.append(nested["peak_bytes"])
             else:
                 values.append(nested[field])
@@ -234,6 +261,18 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
     )
     map_p95_ns = _median_integer(
         [phase(record, name)["map_time"]["p95"] for record in records]
+    )
+    animation_p50_ns = _median_integer(
+        [
+            phase(record, name).get("animation_time", {"p50": 0})["p50"]
+            for record in records
+        ]
+    )
+    animation_p95_ns = _median_integer(
+        [
+            phase(record, name).get("animation_time", {"p95": 0})["p95"]
+            for record in records
+        ]
     )
     minimap_p50_ns = _median_integer(
         [phase(record, name)["local_minimap"]["map_time"]["p50"] for record in records]
@@ -271,6 +310,15 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
     allocation_available = all(
         item["renderer_allocation_statistics_available"] for item in map_records
     )
+    draw_reason_fields = {
+        "external",
+        "packet",
+        "scroll",
+        "animation",
+        "lighting",
+        "resize",
+        "ui",
+    }
     return {
         "runs": len(records),
         "ticks_per_run": representative["samples"],
@@ -284,6 +332,8 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
         "work_p95_ms": round(p95_ns / 1_000_000, 2),
         "map_p50_ms": round(map_p50_ns / 1_000_000, 2),
         "map_p95_ms": round(map_p95_ns / 1_000_000, 2),
+        "animation_p50_ms": round(animation_p50_ns / 1_000_000, 2),
+        "animation_p95_ms": round(animation_p95_ns / 1_000_000, 2),
         "local_minimap_p50_ms": round(minimap_p50_ns / 1_000_000, 2),
         "local_minimap_p95_ms": round(minimap_p95_ns / 1_000_000, 2),
         "work_p99_ms": round(_phase_median(records, name, "p99_ns") / 1_000_000, 2),
@@ -301,7 +351,7 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
                         (
                             phase(record, name)[field]
                             if field in phase(record, name)
-                            else phase(record, name)["map"][field]
+                            else phase(record, name)["map"].get(field, 0)
                         )
                         for record in records
                     ]
@@ -311,13 +361,15 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
                     "changed_map_packets",
                     "noop_map_packets",
                     "full_map_draws",
+                    "animation_draws",
                 )
             },
             **{
-                field: _median_integer([item[field] for item in map_records])
+                field: _median_integer([item.get(field, 0) for item in map_records])
                 for field in (
                     "primary_map_draws",
                     "auxiliary_map_draws",
+                    "animation_level_draws",
                     "presents",
                 )
             },
@@ -341,6 +393,15 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
                 if allocation_available
                 else 0
             ),
+            "draw_reasons": {
+                field: _median_integer(
+                    [
+                        phase(record, name).get("draw_reasons", {}).get(field, 0)
+                        for record in records
+                    ]
+                )
+                for field in draw_reason_fields
+            },
         },
         "queue": {
             **{field: queue[field] for field in ("enqueued", "dequeued", "budget_yields", "recoveries", "peak_depth", "peak_bytes")},
@@ -478,7 +539,11 @@ def _identity_check(
     baseline: list[dict[str, object]], candidate: list[dict[str, object]]
 ) -> dict[str, object]:
     records = baseline + candidate
-    if not records or records[0].get("schema_version") != NATIVE_SCHEMA_VERSION:
+    if not records:
+        return {"passed": True}
+    if len({record.get("schema_version") for record in records}) != 1:
+        return {"passed": False}
+    if records[0].get("schema_version") != NATIVE_SCHEMA_VERSION:
         return {"passed": True}
     reference = records[0]
     instrumentation = reference["identity"]["instrumentation"]
@@ -510,6 +575,7 @@ def _guard_native_record(record: dict[str, object]) -> dict[str, dict[str, objec
         return {}
     phases = {item["name"]: item for item in record["phases"]}
     sustained = phases["sustained"]
+    idle = phases["idle"]
     resumed = phases["resumed"]
     guards: dict[str, dict[str, object]] = {}
 
@@ -524,20 +590,43 @@ def _guard_native_record(record: dict[str, object]) -> dict[str, dict[str, objec
         and phase_record["map"]["primary_map_draws"] == phase_record["full_map_draws"]
         and phase_record["map"]["auxiliary_map_draws"]
         == phase_record["local_minimap"]["map_draws"]
-        and sum(phase_record["full_draw_reasons"].values()) >= phase_record["full_map_draws"]
+        and phase_record["map"]["animation_draws"] == phase_record["animation_draws"]
+        and sum(phase_record["draw_reasons"].values())
+        >= phase_record["full_map_draws"] + phase_record["animation_draws"]
         for phase_record in phases.values()
     )
-    noop_redraws = sum(
-        phase_record["full_draw_reasons"]["noop_map_packet"]
-        for phase_record in phases.values()
-    )
+    noop_redraws = idle["full_map_draws"]
     guards["full_redraw_accounting"] = {
         "unexpected_or_failed_draws": map_failures,
         "passed": map_failures == 0 and map_draws_match,
     }
     guards["noop_redraw_avoidance"] = {
-        "noop_packet_redraws": noop_redraws,
-        "passed": noop_redraws == 0,
+        "noop_packet_full_redraws": noop_redraws,
+        "passed": noop_redraws == 0 and idle["draw_reasons"]["packet"] == 0,
+    }
+    animation_isolated = (
+        idle["animation_draws"] == idle["samples"]
+        and idle["map"]["animation_level_draws"]
+        == idle["animation_draws"] * idle["map"]["peak_active_levels"]
+        and all(
+            idle["render_stages"][stage]["calls"] == 0
+            for stage in ("map_scratch_clear", "ground", "ground_composite", "lighting")
+        )
+    )
+    guards["animation_isolation"] = {
+        "animation_draws": idle["animation_draws"],
+        "ground_calls": idle["render_stages"]["ground"]["calls"],
+        "lighting_calls": idle["render_stages"]["lighting"]["calls"],
+        "passed": animation_isolated,
+    }
+    idle_wait_recovered = (
+        idle["main_loop"]["work_time"]["max"] < idle["main_loop"]["update_interval_ns"]
+        and idle["main_loop"]["simulated_wait_time"]["p50"] > 0
+    )
+    guards["idle_wait_recovery"] = {
+        "work_max_ns": idle["main_loop"]["work_time"]["max"],
+        "update_interval_ns": idle["main_loop"]["update_interval_ns"],
+        "passed": idle_wait_recovered,
     }
 
     queue_valid = all(
@@ -690,11 +779,11 @@ def _validate_enforcement_policy(
     has_baseline: bool, enforce_performance: bool, comparison_note: str | None
 ) -> None:
     if has_baseline:
-        informational = comparison_note == COMPARE_FOUNDATION_NOTE
-        if informational != (not enforce_performance) or comparison_note not in (
+        informational = comparison_note in INFORMATIONAL_COMPARISON_NOTES
+        if informational != (not enforce_performance) or comparison_note not in {
             None,
-            COMPARE_FOUNDATION_NOTE,
-        ):
+            *INFORMATIONAL_COMPARISON_NOTES,
+        }:
             raise BenchmarkError("movement comparison performance policy is inconsistent")
         return
     candidate_notes = set(COMPARISON_NOTES) - {COMPARE_FOUNDATION_NOTE}
@@ -785,11 +874,17 @@ def _build_evidence(
             checks[f"{context}_determinism"] = _context_consistency(context_records)
             for name, check in _aggregate_native_guards(context_records).items():
                 checks[f"{context}_{name}"] = check
+    cross_contract = comparison_note == CROSS_CONTRACT_NOTE
     for name, check in checks.items():
         policy_follows_performance = name in PERFORMANCE_CHECK_NAMES or name.endswith(
             INFORMATIONAL_OPTIMIZATION_SUFFIXES
         )
-        check["enforced"] = enforce_performance if policy_follows_performance else True
+        base_dependent = name in {"checkpoint", "instrumentation_identity"}
+        check["enforced"] = (
+            False
+            if cross_contract and base_dependent
+            else enforce_performance if policy_follows_performance else True
+        )
     failed = any(check["enforced"] and not check["passed"] for check in checks.values())
     return {
         "schema_version": EVIDENCE_SCHEMA_VERSION,
@@ -858,6 +953,7 @@ def compare(
     enforce_performance: bool = True,
     comparison_note: str | None = None,
     checkpoint_root: Path | None = None,
+    baseline_validator: RecordValidator = validate_record,
 ) -> dict[str, object]:
     if discrete_manifest is None:
         raise BenchmarkError("movement comparison requires a discrete manifest")
@@ -876,6 +972,7 @@ def compare(
                         if checkpoint_root is not None
                         else None
                     ),
+                    baseline_validator if implementation == "baseline" else validate_record,
                 )
             )
     standard_discrete = [
@@ -1050,6 +1147,8 @@ def _phase_summary_for_report(summary: object, context: str) -> dict[str, object
         "work_p95_ms",
         "map_p50_ms",
         "map_p95_ms",
+        "animation_p50_ms",
+        "animation_p95_ms",
         "local_minimap_p50_ms",
         "local_minimap_p95_ms",
         "work_p99_ms",
@@ -1082,6 +1181,8 @@ def _phase_summary_for_report(summary: object, context: str) -> dict[str, object
     for field in (
         "map_p50_ms",
         "map_p95_ms",
+        "animation_p50_ms",
+        "animation_p95_ms",
         "local_minimap_p50_ms",
         "local_minimap_p95_ms",
     ):
@@ -1136,7 +1237,7 @@ def _expected_evidence_checks(
         "checkpoint",
         "instrumentation_identity",
         "candidate_standard_determinism",
-        *V3_GUARD_NAMES,
+        *NATIVE_GUARD_NAMES,
     }
     if comparison:
         expected.add("base_candidate_sustained_p95")
@@ -1151,11 +1252,16 @@ def _expected_evidence_checks(
         )
     for context in contexts:
         expected.add(f"{context}_determinism")
-        expected.update(f"{context}_{name}" for name in V3_GUARD_NAMES)
+        expected.update(f"{context}_{name}" for name in NATIVE_GUARD_NAMES)
     return expected
 
 
-def _validate_evidence_check(name: str, value: object, enforce_performance: bool) -> None:
+def _validate_evidence_check(
+    name: str,
+    value: object,
+    enforce_performance: bool,
+    comparison_note: str | None,
+) -> None:
     common = {"passed", "enforced"}
     if name in ("candidate_sustained_p95", "candidate_large_sustained_p95"):
         expected = common | {"value_ns", "limit_ns"}
@@ -1199,7 +1305,7 @@ def _validate_evidence_check(name: str, value: object, enforce_performance: bool
         }
         integer_fields = expected - common
         boolean_fields = common
-    elif any(name == guard or name.endswith(f"_{guard}") for guard in V3_GUARD_NAMES):
+    elif any(name == guard or name.endswith(f"_{guard}") for guard in NATIVE_GUARD_NAMES):
         expected = common | {"failed_runs", "runs"}
         integer_fields = {"failed_runs", "runs"}
         boolean_fields = common
@@ -1253,12 +1359,21 @@ def _validate_evidence_check(name: str, value: object, enforce_performance: bool
     follows_performance = name in PERFORMANCE_CHECK_NAMES or name.endswith(
         INFORMATIONAL_OPTIMIZATION_SUFFIXES
     )
-    expected_enforced = enforce_performance if follows_performance else True
+    expected_enforced = (
+        False
+        if comparison_note == CROSS_CONTRACT_NOTE
+        and name in {"checkpoint", "instrumentation_identity"}
+        else enforce_performance if follows_performance else True
+    )
     if check["enforced"] != expected_enforced:
         raise BenchmarkError(f"invalid enforcement policy for check: {name}")
 
 
-def _render_complete_evidence(evidence: dict[str, object], client_result: str) -> str:
+def _render_complete_evidence(
+    evidence: dict[str, object],
+    client_result: str,
+    baseline_validator: RecordValidator = validate_record,
+) -> str:
     expected_fields = {
         "schema_version",
         "status",
@@ -1364,7 +1479,9 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
     for context, context_records in additional_contexts.items():
         if not isinstance(context_records, list) or len(context_records) != context_samples[context]:
             raise BenchmarkError("movement regression context records do not match its samples")
-    for field in ("baseline_standard", "candidate_standard", "candidate_large"):
+    for record in records["baseline_standard"]:
+        baseline_validator(record)
+    for field in ("candidate_standard", "candidate_large"):
         for record in records[field]:
             validate_record(record)
     for context_records in additional_contexts.values():
@@ -1438,7 +1555,9 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
     informational_failures = 0
     enforced_failures = 0
     for name, check in checks.items():
-        _validate_evidence_check(name, check, evidence["enforced"])
+        _validate_evidence_check(
+            name, check, evidence["enforced"], evidence["comparison_note"]
+        )
         if not check["passed"]:
             if check["enforced"]:
                 enforced_failures += 1
@@ -1479,6 +1598,12 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             "Base and candidate runs were alternated on the same runner; positive timing deltas "
             "mean the candidate was slower."
         )
+        if evidence["comparison_note"] == CROSS_CONTRACT_NOTE:
+            lines.append(
+                "This is a cross-contract comparison: timing deltas and base-dependent checks "
+                "are informational, while candidate correctness and resource guards remain "
+                "enforced."
+            )
     else:
         lines.append(
             f"Candidate-only validation measured `{samples['candidate_standard']}` candidate "
@@ -1508,8 +1633,9 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             "",
             "The replay injects MAP state at 8 Hz (one 125 ms simulation tick); that update "
             "cadence is not the client display frame rate. Measured replay-work capacity is the "
-            "unslept throughput implied by decode, the main-map draw, production-sized local "
-            "minimap map-core draws when due, and maintenance work. The local minimap uses its "
+            "unslept throughput implied by decode, full-map or animation-only rendering, "
+            "production-sized local minimap map-core draws when due, and maintenance work. "
+            "The local minimap uses its "
             "real 250 ms refresh cadence and 1700×1200 render surface; widget masking/zooming and "
             "the otherwise small UI/widget work are outside this map-focused measurement. The "
             "144 FPS reference (6.944 ms/frame) is informational only and is not an enforced "
@@ -1539,9 +1665,14 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
         baseline_sustained = _phase_summary_for_report(
             baseline_phases["sustained"], "baseline Standard smooth sustained"
         )
+        map_metric_label = (
+            "Map render path p95 (contract-specific)"
+            if evidence["comparison_note"] == CROSS_CONTRACT_NOTE
+            else "Full map p95"
+        )
         summary_metrics = (
             ("Total map-focused update work p95", "work_p95_ms", "ms"),
-            ("Main map p95", "map_p95_ms", "ms"),
+            (map_metric_label, "map_p95_ms", "ms"),
             ("Local minimap map-core p95", "local_minimap_p95_ms", "ms"),
             ("Slow-tail work capacity", "work_capacity_fps_p95", "FPS"),
         )
@@ -1559,11 +1690,21 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
                 "",
             ]
         )
+        if evidence["comparison_note"] == CROSS_CONTRACT_NOTE:
+            lines.extend(
+                [
+                    "The total-work and capacity rows remain end-to-end measurements. "
+                    "Map-component buckets may have changed meaning with the benchmark contract "
+                    "and are shown only as diagnostic context.",
+                    "",
+                ]
+            )
         lines.extend(
             [
                 "### Base → candidate change (standard smooth)",
                 "",
-                "| Phase | Total update work p95 | Change | Main map p95 | Change | "
+                "| Phase | Total update work p95 | Change | "
+                f"{map_metric_label} | Change | "
                 "Local minimap map-core p95 | Change | Work-capacity FPS (slow tail) |",
                 "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
@@ -1595,7 +1736,7 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             [
                 f"| Total map-focused update work p95 | {unavailable} | "
                 f"{candidate_sustained['work_p95_ms']:.2f} ms | Not computed |",
-                f"| Main map p95 | {unavailable} | "
+                f"| Full map p95 | {unavailable} | "
                 f"{candidate_sustained['map_p95_ms']:.2f} ms | Not computed |",
                 f"| Local minimap map-core p95 | {unavailable} | "
                 f"{candidate_sustained['local_minimap_p95_ms']:.2f} ms | Not computed |",
@@ -1613,10 +1754,11 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             "",
             "| Context | Phase | Ticks/run | Runs | MAP update rate | "
             "Measured replay-work capacity FPS (p50/slow-tail) | Display reference | "
-            "Total work p50/p95 | Main map p50/p95 | Local minimap map-core p50/p95 | "
+            "Total work p50/p95 | Full map p50/p95 | Animation pass p50/p95 | "
+            "Local minimap map-core p50/p95 | "
             "Work p95 / 144 FPS budget | "
             "First → last work-window p95 |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     summaries: list[tuple[str, str, dict[str, object]]] = []
@@ -1640,6 +1782,8 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
                 f"({summary['render_reference_budget_ms']:.3f} ms) | "
                 f"{summary['work_p50_ms']:.2f}/{summary['work_p95_ms']:.2f} ms | "
                 f"{summary['map_p50_ms']:.2f}/{summary['map_p95_ms']:.2f} ms | "
+                f"{summary['animation_p50_ms']:.2f}/"
+                f"{summary['animation_p95_ms']:.2f} ms | "
                 f"{summary['local_minimap_p50_ms']:.2f}/"
                 f"{summary['local_minimap_p95_ms']:.2f} ms | "
                 f"{budget_percent:.1f}% | "
@@ -1653,14 +1797,15 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             "### Candidate MAP and queue activity",
             "",
             "Values are medians per run when a viewport has multiple runs.",
+            "Reason columns are packet, scroll, animation, lighting, resize, UI, and external.",
             "",
-            "| Context | Phase | MAP packets (changed/no-op) | Main-map calls | "
-            "Local-minimap calls | Presents | "
+            "| Context | Phase | MAP packets (changed/no-op) | Full-map calls | "
+            "Animation-only calls | Reasons P/S/A/L/R/U/E | Local-minimap calls | Presents | "
             "Queue peak | Peak bytes | Budget yields/recoveries | Oldest queued | "
             "Simulated queue service | Actual drain p50/p95 | Queue order proof | "
             "Renderer allocations |",
             "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | "
-            "---: | ---: | ---: |",
+            "---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for viewport, name, summary in summaries:
@@ -1668,7 +1813,8 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             summary["map"],
             {
                 "map_packets", "changed_map_packets", "noop_map_packets", "full_map_draws",
-                "primary_map_draws", "auxiliary_map_draws", "presents",
+                "animation_draws", "primary_map_draws", "auxiliary_map_draws",
+                "animation_level_draws", "presents", "draw_reasons",
                 "local_minimap_update_interval_ms", "local_minimap_surface_width",
                 "local_minimap_surface_height",
                 "renderer_allocation_statistics_available", "renderer_allocations",
@@ -1698,10 +1844,18 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             if map_stats["renderer_allocation_statistics_available"]
             else "unavailable"
         )
+        reasons = _require_exact_fields(
+            map_stats["draw_reasons"],
+            {"packet", "scroll", "animation", "lighting", "resize", "ui", "external"},
+            f"{viewport} {name} redraw reasons",
+        )
         lines.append(
             f"| {viewport} | `{name}` | {map_stats['map_packets']} "
             f"({map_stats['changed_map_packets']}/{map_stats['noop_map_packets']}) | "
-            f"{map_stats['primary_map_draws']} | {map_stats['auxiliary_map_draws']} | "
+            f"{map_stats['primary_map_draws']} | {map_stats['animation_draws']} | "
+            f"{reasons['packet']}/{reasons['scroll']}/{reasons['animation']}/"
+            f"{reasons['lighting']}/{reasons['resize']}/{reasons['ui']}/"
+            f"{reasons['external']} | {map_stats['auxiliary_map_draws']} | "
             f"{map_stats['presents']} | {queue['peak_depth']} | "
             f"{_human_bytes(queue['peak_bytes'])} | "
             f"{queue['budget_yields']}/{queue['recoveries']} | "
@@ -1840,6 +1994,8 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             for suffix in (
                 "full_redraw_accounting",
                 "noop_redraw_avoidance",
+                "animation_isolation",
+                "idle_wait_recovery",
                 "queue_plateau_recovery",
                 "lighting_cache_churn",
                 "cache_memory_plateau",
@@ -1861,7 +2017,11 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
     return "\n".join(lines)
 
 
-def render_comment(evidence: object, client_result: str) -> str:
+def render_comment(
+    evidence: object,
+    client_result: str,
+    baseline_validator: RecordValidator = validate_record,
+) -> str:
     if evidence is None:
         return _fallback_comment(
             f"Regression evidence is unavailable because client validation finished with "
@@ -1883,7 +2043,7 @@ def render_comment(evidence: object, client_result: str) -> str:
             "the client validation logs and artifact."
         )
     try:
-        return _render_complete_evidence(evidence, client_result)
+        return _render_complete_evidence(evidence, client_result, baseline_validator)
     except (BenchmarkError, KeyError, TypeError, ValueError, ZeroDivisionError):
         return _fallback_comment(
             "Regression evidence has an invalid schema; see the client validation logs."
@@ -1920,6 +2080,7 @@ def main(argv: list[str] | None = None) -> int:
     compare_parser = commands.add_parser("compare")
     compare_parser.add_argument("--baseline-client", required=True, type=regular_file)
     compare_parser.add_argument("--baseline-manifest", required=True, type=regular_file)
+    compare_parser.add_argument("--baseline-schema", required=True, type=regular_file)
     compare_parser.add_argument("--baseline-revision")
     _add_candidate_arguments(compare_parser)
     compare_parser.add_argument("--candidate-revision")
@@ -1946,6 +2107,7 @@ def main(argv: list[str] | None = None) -> int:
     render_parser = commands.add_parser("render-comment")
     render_parser.add_argument("--input", required=True, type=Path)
     render_parser.add_argument("--client-result", required=True)
+    render_parser.add_argument("--baseline-schema", type=Path)
     render_parser.add_argument("--output", required=True, type=Path)
 
     arguments = parser.parse_args(argv)
@@ -1964,12 +2126,19 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except (BenchmarkError, json.JSONDecodeError, OSError):
                 evidence = {}
-        arguments.output.write_text(render_comment(evidence, arguments.client_result))
+        baseline_validator = validate_record
+        if arguments.baseline_schema is not None and arguments.baseline_schema.is_file():
+            baseline_validator = load_record_validator(arguments.baseline_schema.resolve())
+        arguments.output.write_text(
+            render_comment(evidence, arguments.client_result, baseline_validator)
+        )
         return 0
 
     try:
         if arguments.command == "compare":
-            expected_informational = arguments.comparison_note == COMPARE_FOUNDATION_NOTE
+            expected_informational = (
+                arguments.comparison_note in INFORMATIONAL_COMPARISON_NOTES
+            )
             if arguments.informational_performance != expected_informational:
                 raise BenchmarkError(
                     "--informational-performance and its comparison note must be used together"
@@ -1986,6 +2155,7 @@ def main(argv: list[str] | None = None) -> int:
                 enforce_performance=not arguments.informational_performance,
                 comparison_note=arguments.comparison_note,
                 checkpoint_root=arguments.output.parent / "movement-checkpoints",
+                baseline_validator=load_record_validator(arguments.baseline_schema),
             )
         elif arguments.command == "candidate-only":
             evidence = candidate_only(

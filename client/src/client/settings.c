@@ -527,7 +527,7 @@ static void setting_apply_runtime(int cat, int setting) {
                     if (!setting_get_int(cat, setting)) {
                         lighting_deinit();
                     }
-                    map_redraw_flag = 1;
+                    map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
                     break;
 
                     /* Map width/height change. */

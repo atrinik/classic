@@ -107,7 +107,9 @@ case "${component}" in
     pushd "${source_root}/client" >/dev/null
     evidence_dir="${source_root}/build/ci-evidence"
     movement_evidence="${evidence_dir}/movement-frame-time.json"
+    movement_baseline_schema="${evidence_dir}/movement-baseline-schema.py"
     lighting_evidence="${evidence_dir}/lighting-frame-time.json"
+    rm -f "${movement_baseline_schema}"
     python3 tools/benchmark_movement_regression.py error \
       --reason client-validation-ended-before-movement-evidence \
       --output "${movement_evidence}"
@@ -148,29 +150,51 @@ case "${component}" in
       client/src/include/lighting.h
       protocol/schema/game-commands.json
     )
+    movement_rendering_paths=(
+      client/src/client/animations.c
+      client/src/client/image.c
+      client/src/client/image_codec.c
+      client/src/client/lighting.c
+      client/src/client/lighting_transfer.c
+      client/src/client/settings.c
+      client/src/client/sprite.c
+      client/src/client/sprite_pixels.c
+      client/src/client/texture.c
+      client/src/client/tilestretcher.c
+      client/src/client/video.c
+      client/src/gui/misc/effects.c
+      client/src/gui/toolkit/surface_primitives.c
+      client/src/gui/widgets/map.c
+      client/src/gui/widgets/minimap.c
+      client/src/gui/widgets/render_profiler.c
+      client/src/gui/widgets/texture.c
+      client/src/include/effects.h
+      client/src/include/animations.h
+      client/src/include/image.h
+      client/src/include/image_codec.h
+      client/src/include/lighting.h
+      client/src/include/map.h
+      client/src/include/render_profiler.h
+      client/src/include/sprite.h
+      client/src/include/surface_primitives.h
+      client/src/include/texture.h
+      client/src/include/video.h
+    )
     movement_paths=(
+      "${movement_rendering_paths[@]}"
       .github/workflows/check.yml
       client/CMakeLists.txt
       client/src/client/client.c
       client/src/client/client_command_queue.c
       client/src/client/commands.c
-      client/src/client/lighting.c
       client/src/client/main.c
       client/src/client/player_view.c
       client/src/client/socket.c
-      client/src/client/sprite.c
       client/src/cmake.txt
-      client/src/gui/widgets/map.c
-      client/src/gui/widgets/minimap.c
-      client/src/gui/widgets/render_profiler.c
       client/src/include/client.h
       client/src/include/client_command_queue.h
       client/src/include/client_socket.h
-      client/src/include/lighting.h
-      client/src/include/map.h
       client/src/include/player_view.h
-      client/src/include/render_profiler.h
-      client/src/include/sprite.h
       client/src/include/version.h.def
       client/src/tests/client_command_queue.c
       client/src/tests/fixtures/player_view/movement-colored-delta.map2.hex
@@ -243,9 +267,12 @@ case "${component}" in
       elif ! git -C "${source_root}" diff --quiet \
         "${benchmark_base_sha}" HEAD -- "${movement_contract_paths[@]}"; then
         comparison_note=baseline-movement-schema-mismatch
+        movement_action=compare
+        baseline_needed=true
       else
         movement_action=compare
         baseline_needed=true
+        comparison_note=performance-calibration-pending-sibling-integration
       fi
     fi
     if [[ ${movement_matrix} == full && ${movement_action} == compare ]]; then
@@ -278,6 +305,10 @@ case "${component}" in
       if ! git -C "${baseline_root}" diff --quiet HEAD --; then
         echo "benchmark comparison build modified its immutable base source" >&2
         exit 2
+      fi
+      if [[ ${movement_action} == compare ]]; then
+        cp -- "${baseline_root}/client/tools/movement_benchmark_schema.py" \
+          "${movement_baseline_schema}"
       fi
     fi
 
@@ -314,13 +345,14 @@ case "${component}" in
         --baseline-client "${baseline_root}/client/build/linux-release/atrinik" \
         --baseline-manifest \
           "${baseline_root}/client/src/tests/fixtures/player_view/movement-colored.xml" \
+        --baseline-schema "${movement_baseline_schema}" \
         --candidate-client "${source_root}/client/build/linux-release/atrinik" \
         --candidate-manifest \
           "${source_root}/client/src/tests/fixtures/player_view/movement-colored.xml" \
         --discrete-manifest \
           "${source_root}/client/src/tests/fixtures/player_view/movement-colored-discrete.xml" \
         --informational-performance \
-        --comparison-note performance-calibration-pending-sibling-integration \
+        --comparison-note "${comparison_note}" \
         --baseline-revision "${benchmark_base_sha}" \
         --candidate-revision "${ATRINIK_BENCHMARK_REVISION:-unknown}" \
         --samples 3 \

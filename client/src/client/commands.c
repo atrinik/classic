@@ -192,7 +192,7 @@ void socket_command_target(uint8_t *data, size_t len, size_t pos) {
     cpl.combat_force = packet_reader_read_uint8(&reader);
     WIDGET_REDRAW_ALL(TARGET_ID);
 
-    map_redraw_flag = 1;
+    map_redraw_request(MAP_REDRAW_REASON_UI);
 }
 
 /** @copydoc socket_command_struct::handle_func */
@@ -400,7 +400,7 @@ void socket_command_player(uint8_t *data, size_t len, size_t pos) {
     packet_reader_read_string(&reader, cpl.name, sizeof(cpl.name));
 
     new_player(tag, weight, face);
-    map_redraw_flag = 1;
+    map_redraw_request(MAP_REDRAW_REASON_UI);
 
     cur_widget[INPUT_ID]->show = 0;
 
@@ -740,6 +740,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     uint8_t num_layers;
     region_map_def_map_t *def_map;
     bool region_map_fow_need_update;
+    bool map_visible_change;
 
     if (!map_protocol_validate(
             data,
@@ -752,6 +753,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     }
 
     mapstat = packet_reader_read_uint8(&reader);
+    map_visible_change = mapstat != MAP_UPDATE_CMD_SAME && mapstat != MAP_UPDATE_CMD_PARTIAL;
 
     if (mapstat != MAP_UPDATE_CMD_SAME && mapstat != MAP_UPDATE_CMD_PARTIAL) {
         char mapname[HUGE_BUF], bg_music[HUGE_BUF], weather[MAX_BUF], region_name[MAX_BUF],
@@ -809,6 +811,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         if (mapstat == MAP_UPDATE_CMD_SAME && (xpos - mx || ypos - my)) {
             display_mapscroll(xpos - mx, ypos - my, 0, 0);
             map_play_footstep();
+            map_visible_change = true;
         }
 
         if (mapstat == MAP_UPDATE_CMD_SAME) {
@@ -904,9 +907,16 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
 
             /* Clear the whole cell? */
             if (mask & MAP2_MASK_CLEAR) {
+                MapCell before;
+
+                map_cell_snapshot(x, y, &before);
                 map_clear_cell(x, y, (mask & MAP2_MASK_HARD_CLEAR) != 0);
+                map_visible_change |= map_cell_changed(x, y, &before);
                 continue;
             }
+
+            MapCell before;
+            map_cell_snapshot(x, y, &before);
 
             size_t tile_values = 0;
             if (mask & MAP2_MASK_SUPPORT_HEIGHT) {
@@ -1161,6 +1171,8 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
             if (ext_flags & MAP2_FLAG_EXT_ANIM) {
                 uint8_t anim_num = packet_reader_read_uint8(&reader);
 
+                map_visible_change |= anim_num != 0;
+
                 for (uint8_t i = 0; i < anim_num; i++) {
                     uint8_t sub_layer = packet_reader_read_uint8(&reader);
                     uint8_t anim_type = packet_reader_read_uint8(&reader);
@@ -1183,6 +1195,8 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
                     region_map_fow_need_update = true;
                 }
             }
+
+            map_visible_change |= map_cell_changed(x, y, &before);
         }
 
         if (pos != level_end) {
@@ -1217,8 +1231,11 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         }
     }
     map_select_level(0, true);
-    map_redraw_request(MAP_REDRAW_REASON_MAP_PACKET);
-    minimap_redraw_flag = 1;
+    map_visible_change |= region_map_fow_need_update;
+    if (map_visible_change) {
+        map_redraw_request(MAP_REDRAW_REASON_MAP_PACKET);
+        minimap_redraw_flag = 1;
+    }
 
     if (region_map_fow_need_update) {
         region_map_fow_update(MapData.region_map);

@@ -518,7 +518,7 @@ void effect_sprites_play(void) {
             tmp->y += (double)ypos * (60.0 / (double)max_frames);
 
             tmp->delay_ticks = ticks;
-            map_redraw_flag = 1;
+            map_redraw_request(MAP_REDRAW_REASON_ANIMATION);
         }
     }
 
@@ -581,7 +581,7 @@ void effect_sprites_play(void) {
             }
 
             sprite->created_tick = ticks;
-            map_redraw_flag = 1;
+            map_redraw_request(MAP_REDRAW_REASON_ANIMATION);
         }
 
         current_effect->delay_ticks = ticks;
@@ -592,7 +592,7 @@ void effect_frames(int frames) {
     max_frames = frames;
 
     if (current_effect != NULL) {
-        map_redraw_flag = 1;
+        map_redraw_request(MAP_REDRAW_REASON_ANIMATION);
     }
 }
 
