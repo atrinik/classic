@@ -59,7 +59,7 @@ if (DEFINED ATRINIK_PYTHON_PLUGIN)
         "${python_events}/python_unit.py"
         "${python_events}/python_unit_content.py"
         COPYONLY)
-    foreach (fixture IN ITEMS pass fail)
+    foreach (fixture IN ITEMS pass fail calendar)
         configure_file(
             "${ATRINIK_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_${fixture}.py"
             "${python_events}/python_unit_${fixture}.py"
