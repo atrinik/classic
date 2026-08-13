@@ -228,7 +228,7 @@ static void test_music_lifecycle(void) {
     TEST_CHECK(occurrences("music started") == 1);
     TEST_CHECK(strstr(captured, "music stopped") == NULL);
 
-    sound_start_bg_music("finite-loop.ogg", 70, 1);
+    sound_start_bg_music("relative/area/finite-loop.ogg", 70, 1);
     TEST_CHECK(occurrences("music started") == 2);
     TEST_CHECK(occurrences("music stopped") == 1);
     sound_test_finish_music();
@@ -238,6 +238,9 @@ static void test_music_lifecycle(void) {
     TEST_CHECK(occurrences("music started") == 2);
     TEST_CHECK(occurrences("music stopped") == 2);
     TEST_CHECK(strstr(captured, "reason=finished") != NULL);
+    TEST_CHECK(strstr(captured,
+                      "music stopped source=intro-player "
+                      "effective=\"relative/area/finite-loop.ogg\" reason=finished") != NULL);
 
     sound_start_bg_music("replacement.ogg", 60, 0);
     TEST_CHECK(occurrences("music started") == 3);
@@ -266,6 +269,17 @@ static void test_music_lifecycle(void) {
     TEST_CHECK(occurrences("music stopped") == 1);
     TEST_CHECK(strstr(captured, "source=map") != NULL);
     TEST_CHECK(strstr(captured, "reason=stopped") != NULL);
+
+    reset_capture();
+    sound_start_bg_music("relative/area/fireside.mid", 80, 0);
+    sound_start_bg_music("next.ogg", 80, 0);
+    TEST_CHECK(strstr(captured,
+                      "music started source=intro-player "
+                      "requested=\"relative/area/fireside.mid\" "
+                      "effective=\"relative/area/fireside.mid\"") != NULL);
+    TEST_CHECK(strstr(captured,
+                      "music stopped source=intro-player "
+                      "effective=\"relative/area/fireside.mid\" reason=replaced") != NULL);
 
     reset_capture();
     sound_deinit();

@@ -42,6 +42,10 @@
  * Path to the background music file being played.
  */
 static char *sound_background;
+#ifdef HAVE_SDL_MIXER
+/** Logical identifier corresponding to ::sound_background. */
+static char *sound_background_logical;
+#endif
 /**
  * If 1, will not allow music change based on map.
  */
@@ -246,6 +250,7 @@ static void SDLCALL sound_music_finished(void *userdata, MIX_Track *track) {
 static void sound_music_finished_process(void) {
     uint32_t duration;
     char *tmp;
+    char *logical;
     const char *bg_music;
     const char *source;
 
@@ -254,11 +259,13 @@ static void sound_music_finished_process(void) {
     }
 
     tmp = sound_background;
-    bg_music = sound_get_bg_music_basename();
+    logical = sound_background_logical;
+    bg_music = logical;
     source = sound_background_source;
     duration = sound_music_get_offset();
 
     sound_background = NULL;
+    sound_background_logical = NULL;
     sound_background_hook_execute();
 
     if (sound_background_update_duration &&
@@ -282,6 +289,7 @@ static void sound_music_finished_process(void) {
     }
 
     free(tmp);
+    free(logical);
 }
 
 #endif
@@ -319,6 +327,7 @@ void sound_init(void) {
     sound_background = NULL;
 
 #ifdef HAVE_SDL_MIXER
+    sound_background_logical = NULL;
     sound_background_source = NULL;
     sound_background_hook = NULL;
     sound_data = NULL;
@@ -405,6 +414,10 @@ void sound_deinit(void) {
     sound_ambient_clear();
     free(sound_background);
     sound_background = NULL;
+#ifdef HAVE_SDL_MIXER
+    free(sound_background_logical);
+    sound_background_logical = NULL;
+#endif
 
 #ifdef HAVE_SDL_MIXER
     sound_cache_free();
@@ -688,6 +701,7 @@ static void sound_start_bg_music_internal(const char *filename,
     sound_stop_bg_music_internal("replaced");
 
     sound_background = xstrdup(path);
+    sound_background_logical = xstrdup(filename);
     sound_background_hook_execute();
     sound_background_loop = loop;
     sound_background_volume_adjustment = volume_adjustment;
@@ -712,6 +726,8 @@ static void sound_start_bg_music_internal(const char *filename,
         LOG(BUG, "Could not play audio asset '%s'.", asset);
         free(sound_background);
         sound_background = NULL;
+        free(sound_background_logical);
+        sound_background_logical = NULL;
         sound_background_hook_execute();
         return;
     }
@@ -736,9 +752,11 @@ static void sound_stop_bg_music_internal(const char *reason) {
     }
 
     if (sound_background) {
-        audio_log_music_stopped(sound_background_source, sound_get_bg_music_basename(), reason);
+        audio_log_music_stopped(sound_background_source, sound_background_logical, reason);
         free(sound_background);
         sound_background = NULL;
+        free(sound_background_logical);
+        sound_background_logical = NULL;
 #ifdef HAVE_SDL_MIXER
         sound_background_hook_execute();
         MIX_StopTrack(sound_music_track, 0);
