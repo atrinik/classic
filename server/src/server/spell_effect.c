@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -38,6 +38,7 @@
 #include <player.h>
 #include <object.h>
 #include <disease.h>
+#include <player_status.h>
 
 /**
  * This is really used mostly for spell fumbles at the like.
@@ -243,6 +244,14 @@ int cast_wor(object *op, object *caster) {
     object_update_speed(dummy);
     dummy->speed_left = -1;
     dummy->type = WORD_OF_RECALL;
+    SOFT_ASSERT_RC(player_status_set(dummy,
+                                     "spell:word_of_recall",
+                                     spells[SP_WOR].name,
+                                     "A force is building to return you to your save bed.",
+                                     spells[SP_WOR].at->clone.face),
+                   0,
+                   "Failed to publish word of recall status for %s",
+                   object_get_str(op));
 
     FREE_AND_COPY_HASH(EXIT_PATH(dummy), CONTR(op)->savebed_map);
     EXIT_X(dummy) = CONTR(op)->bed_x;

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -38,6 +38,7 @@
 #include <object.h>
 #include <object_methods.h>
 #include <artifact.h>
+#include <player_status.h>
 
 #include "common/process_treasure.h"
 
@@ -186,6 +187,9 @@ static void potion_apply_effects(object *op, object *applier) {
                 "Failed to insert potion effect force into %s",
                 object_get_str(applier));
     SET_FLAG(force, FLAG_APPLIED);
+    SOFT_ASSERT(player_status_set_from_source(force, op, "potion"),
+                "Failed to publish potion status for %s",
+                object_get_str(op));
 
     if (!living_update(applier)) {
         draw_info(COLOR_WHITE, applier, "Nothing happened.");

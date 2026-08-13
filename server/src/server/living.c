@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -41,6 +41,7 @@
 #include <plugin.h>
 #include <player.h>
 #include <object.h>
+#include <player_status.h>
 
 /** When we carry more than this of our weight_limit, we get encumbered. */
 #define ENCUMBRANCE_LIMIT 65.0
@@ -660,6 +661,7 @@ void living_update_player(object *op) {
         return;
     }
 
+    double old_speed = op->speed;
     player *pl = CONTR(op);
 
     pl->digestion = 3;
@@ -1097,6 +1099,9 @@ void living_update_player(object *op) {
     }
 
     object_update_speed(op);
+    if (QUERY_FLAG(op, FLAG_PARALYZED) && !DBL_EQUAL(old_speed, op->speed)) {
+        player_status_update_paralysis(op);
+    }
 
     /* The player is invisible; shouldn't emit any light. */
     if (QUERY_FLAG(op, FLAG_IS_INVISIBLE)) {
