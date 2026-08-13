@@ -44,6 +44,8 @@ LIGHTING_FIELDS = {
     "field_rebuilds",
     "field_reuses",
     "field_dirty_pixels",
+    "field_translations",
+    "field_partial_rebuilds",
     "lit_sprite_lookups",
     "lit_sprite_hits",
     "lit_sprite_misses",
