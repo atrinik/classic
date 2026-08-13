@@ -675,9 +675,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("not in archive.read(executable)", build)
         self.assertIn(
             "--target libatrinik-path libatrinik-rendezvous "
-            "libatrinik-metaserver-publisher \\",
+            "libatrinik-signals \\",
             build,
         )
+        self.assertIn("libatrinik-metaserver-publisher \\", build)
         self.assertIn(
             "libatrinik-metaserver-url libatrinik-socket-address "
             "libatrinik-socket-quic \\",
@@ -693,6 +694,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn(
             "libatrinik/build/windows-tests/libatrinik-stun.exe", build
         )
+        self.assertIn(
+            "libatrinik/build/windows-tests/libatrinik-signals.exe", build
+        )
         self.assertIn("client-rich-presence-tests.exe", build)
         self.assertIn("python3 tools/ci/stage_windows_runtime.py", build)
         self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", build)
@@ -707,6 +711,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("New-Item -ItemType Junction", run)
         self.assertIn('"libatrinik-path.exe") $junction', run)
         self.assertIn('"libatrinik-rendezvous.exe"', run)
+        self.assertIn('"libatrinik-signals.exe"', run)
+        self.assertIn('"libatrinik-signals-test-traceback-*.txt"', run)
+        self.assertIn('"Expected exactly one traceback block"', run)
+        self.assertIn('"Exception code: 0xc0000005"', run)
+        self.assertIn('"Access type: write (1)"', run)
+        self.assertIn('"Exception module base:"', run)
+        self.assertIn('"Exception module name:"', run)
         self.assertIn('"libatrinik-metaserver-publisher.exe"', run)
         self.assertIn('"libatrinik-metaserver-url.exe"', run)
         self.assertIn('"libatrinik-socket-address.exe"', run)

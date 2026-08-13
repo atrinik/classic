@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -83,6 +83,9 @@ static void *alternate_signal_stack;
 #ifdef WIN32
 /** Registered Windows vectored exception handler. */
 static PVOID vectored_exception_handler;
+
+/** Whether the Windows exception handler is already writing a traceback. */
+static volatile LONG exception_handler_active;
 #endif
 
 TOOLKIT_API();
@@ -116,11 +119,53 @@ static void simple_signal_handler(int signum) {
 
 #if defined(WIN32) || defined(HAVE_SIGACTION)
 #ifdef WIN32
+/**
+ * Print the module containing an instruction address.
+ * @param fp
+ * Traceback output stream.
+ * @param label
+ * Prefix for the module fields.
+ * @param address
+ * Instruction address to inspect.
+ */
+static void write_module_details(FILE *fp, const char *label, DWORD64 address) {
+    MEMORY_BASIC_INFORMATION memory;
+    HMODULE module = NULL;
+    char name[MAX_PATH];
+
+    if (VirtualQuery((const void *)(uintptr_t)address, &memory, sizeof(memory)) == sizeof(memory)) {
+        module = (HMODULE)memory.AllocationBase;
+    }
+
+    fprintf(fp, "%s module base: %p\n", label, (void *)module);
+    if (module != NULL && GetModuleFileNameA(module, VS(name)) != 0) {
+        fprintf(fp, "%s module name: %s\n", label, name);
+    } else {
+        fprintf(fp, "%s module name: <unknown>\n", label);
+    }
+}
+
+/**
+ * Terminate after a Windows exception without running signal or CRT handlers.
+ * @param code
+ * Original exception code to preserve as the process exit status.
+ */
+static void terminate_after_exception(DWORD code) {
+    TerminateProcess(GetCurrentProcess(), code);
+}
+
 static LONG WINAPI signal_handler(EXCEPTION_POINTERS *ExceptionInfo)
 #else
 static void signal_handler(int sig, siginfo_t *siginfo, void *context)
 #endif
 {
+#ifdef WIN32
+    if (InterlockedCompareExchange(&exception_handler_active, 1, 0) != 0) {
+        terminate_after_exception(ExceptionInfo->ExceptionRecord->ExceptionCode);
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+#endif
+
     struct tm *tm;
     static time_t t = 0;
     char path[HUGE_BUF], date[MAX_BUF], *homedir;
@@ -303,6 +348,48 @@ static void signal_handler(int sig, siginfo_t *siginfo, void *context)
 #endif
 
 #ifdef WIN32
+    fprintf(fp,
+            "Exception code: 0x%08lx\n"
+            "Exception address: %p\n",
+            (unsigned long)ExceptionInfo->ExceptionRecord->ExceptionCode,
+            ExceptionInfo->ExceptionRecord->ExceptionAddress);
+    if ((ExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION ||
+         ExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_IN_PAGE_ERROR) &&
+        ExceptionInfo->ExceptionRecord->NumberParameters >= 2) {
+        const char *access_type;
+
+        switch (ExceptionInfo->ExceptionRecord->ExceptionInformation[0]) {
+            case 0:
+                access_type = "read";
+                break;
+            case 1:
+                access_type = "write";
+                break;
+            case 8:
+                access_type = "execute";
+                break;
+            default:
+                access_type = "unknown";
+                break;
+        }
+
+        fprintf(fp,
+                "Access type: %s (%llu)\n"
+                "Fault address: %p\n",
+                access_type,
+                (unsigned long long)ExceptionInfo->ExceptionRecord->ExceptionInformation[0],
+                (void *)(uintptr_t)ExceptionInfo->ExceptionRecord->ExceptionInformation[1]);
+        if (ExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_IN_PAGE_ERROR &&
+            ExceptionInfo->ExceptionRecord->NumberParameters >= 3) {
+            fprintf(fp,
+                    "In-page status: 0x%08llx\n",
+                    (unsigned long long)ExceptionInfo->ExceptionRecord->ExceptionInformation[2]);
+        }
+    }
+
+    write_module_details(fp,
+                         "Exception",
+                         (DWORD64)(uintptr_t)ExceptionInfo->ExceptionRecord->ExceptionAddress);
     fputs("Stack trace:\n", fp);
 
     DWORD machine_type;
@@ -319,7 +406,7 @@ static void signal_handler(int sig, siginfo_t *siginfo, void *context)
         STACKFRAME64 frame;
         int i;
 
-        SymInitialize(GetCurrentProcess(), 0, 1);
+        BOOL symbols_initialized = SymInitialize(GetCurrentProcess(), 0, 1);
 
         memset(&frame, 0, sizeof(frame));
         frame.AddrPC.Offset = program_counter;
@@ -346,10 +433,13 @@ static void signal_handler(int sig, siginfo_t *siginfo, void *context)
                            SymGetModuleBase64,
                            0)) {
             fprintf(fp, "%d: %p\n", i, (void *)(uintptr_t)frame.AddrPC.Offset);
+            write_module_details(fp, "  Frame", frame.AddrPC.Offset);
             i++;
         }
 
-        SymCleanup(GetCurrentProcess());
+        if (symbols_initialized) {
+            SymCleanup(GetCurrentProcess());
+        }
     } else {
         fprintf(fp, "%p\n", (void *)(uintptr_t)program_counter);
     }
@@ -377,7 +467,8 @@ static void signal_handler(int sig, siginfo_t *siginfo, void *context)
     }
 
 #ifdef WIN32
-    return EXCEPTION_EXECUTE_HANDLER;
+    terminate_after_exception(ExceptionInfo->ExceptionRecord->ExceptionCode);
+    return EXCEPTION_CONTINUE_SEARCH;
 #else
     simple_signal_handler(sig);
 #endif
@@ -431,6 +522,7 @@ TOOLKIT_INIT_FUNC(signals) {
 #endif
 
 #ifdef WIN32
+    exception_handler_active = 0;
     HARD_ASSERT(vectored_exception_handler == NULL);
     vectored_exception_handler = AddVectoredExceptionHandler(1, signal_handler);
     if (vectored_exception_handler == NULL) {

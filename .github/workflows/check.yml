@@ -234,7 +234,8 @@ jobs:
                 -DCMAKE_BUILD_TYPE=Release \
                 -DATRINIK_PROTOCOL_SOURCE_DIR=/workspace/protocol
               cmake --build libatrinik/build/windows-tests \
-                --target libatrinik-path libatrinik-rendezvous libatrinik-metaserver-publisher \
+                --target libatrinik-path libatrinik-rendezvous libatrinik-signals \
+                  libatrinik-metaserver-publisher \
                   libatrinik-metaserver-url libatrinik-socket-address libatrinik-socket-quic \
                   libatrinik-stun \
                 --parallel "$(nproc)"
@@ -280,6 +281,7 @@ jobs:
                 --output-dir "${stage}" \
                 libatrinik/build/windows-tests/libatrinik-path.exe \
                 libatrinik/build/windows-tests/libatrinik-rendezvous.exe \
+                libatrinik/build/windows-tests/libatrinik-signals.exe \
                 libatrinik/build/windows-tests/libatrinik-metaserver-publisher.exe \
                 libatrinik/build/windows-tests/libatrinik-metaserver-url.exe \
                 libatrinik/build/windows-tests/libatrinik-socket-address.exe \
@@ -377,6 +379,46 @@ jobs:
           & (Join-Path $bundle "libatrinik-rendezvous.exe") $positive $negative
           if ($LASTEXITCODE -ne 0) {
             throw "libatrinik-rendezvous.exe failed with exit code ${LASTEXITCODE}"
+          }
+
+          Push-Location $bundle
+          try {
+            $env:APPDATA = Join-Path $bundle "traceback-appdata"
+            Remove-Item -Force -ErrorAction SilentlyContinue `
+              "libatrinik-signals-test-traceback-*.txt"
+            & (Join-Path $bundle "libatrinik-signals.exe") --crash
+            if ($LASTEXITCODE -eq 0) {
+              throw "libatrinik-signals.exe crash child exited successfully"
+            }
+            $tracebacks = @(Get-ChildItem -File `
+              -Filter "libatrinik-signals-test-traceback-*.txt")
+            if ($tracebacks.Count -ne 1) {
+              throw "Expected one traceback file, found $($tracebacks.Count)"
+            }
+            $traceback = Get-Content -Raw -LiteralPath $tracebacks[0].FullName
+            if ([regex]::Matches($traceback, "(?m)^Error:").Count -ne 1) {
+              throw "Expected exactly one traceback block"
+            }
+            foreach ($field in @(
+              "Exception address:",
+              "Exception code: 0xc0000005",
+              "Access type: write (1)",
+              "Fault address:",
+              "Exception module base:",
+              "Exception module name:",
+              "Stack trace:"
+            )) {
+              if (-not $traceback.Contains($field)) {
+                throw "Traceback is missing '$field'"
+              }
+            }
+            if ($traceback.Contains("Exception module base: (nil)") -or
+                $traceback.Contains("Exception module name: <unknown>")) {
+              throw "Traceback did not resolve the crashing module"
+            }
+            Remove-Item -Force -LiteralPath $tracebacks[0].FullName
+          } finally {
+            Pop-Location
           }
 
           $publisher = Join-Path $bundle "fixtures/metaserver-publisher-v1.json"
