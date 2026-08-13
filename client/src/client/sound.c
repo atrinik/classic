@@ -131,9 +131,7 @@ static char *sound_resolve_path(const char *path) {
             basename = "opus-tone.mid";
         }
 
-        char resolved[HUGE_BUF];
-        snprintf(resolved, sizeof(resolved), "%s/%s", sound_test_fixture_root, basename);
-        return xstrdup(resolved);
+        return path_join(sound_test_fixture_root, basename);
     }
 #endif
 
