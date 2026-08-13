@@ -2416,46 +2416,55 @@ static void module_add_constants(PyObject *module,
 }
 
 /**
- * Construct a list from C array and add it to the specified module.
+ * Add a list to the specified module and release the caller's reference.
  * @param module
  * Module to add to.
  * @param name
  * Name of the list.
- * @param array
- * Pointer to the C array.
- * @param array_size
- * Number of entries in the C array.
- * @param type
- * Type of the entries in the C array.
+ * @param list
+ * List to add.
  */
-static void module_add_array(PyObject *module,
-                             const char *name,
-                             void *array,
-                             size_t array_size,
-                             field_type type) {
+static void module_add_list(PyObject *module, const char *name, PyObject *list) {
+    PyDict_SetItemString(PyModule_GetDict(module), name, list);
+    Py_DECREF(list);
+}
+
+/**
+ * Construct an integer list from a C array and add it to the specified module.
+ */
+static void module_add_int32_array(PyObject *module,
+                                   const char *name,
+                                   const int32_t *array,
+                                   size_t array_size) {
     size_t i;
     PyObject *list, *value;
 
-    /* Create a new list. */
     list = PyList_New(0);
-
-    /* Add entries to the list. */
     for (i = 0; i < array_size; i++) {
-        if (type == FIELDTYPE_INT32) {
-            value = Py_BuildValue("i", ((int32_t *)array)[i]);
-        } else if (type == FIELDTYPE_CSTR) {
-            value = Py_BuildValue("s", ((char **)array)[i]);
-        } else {
-            continue;
-        }
-
+        value = Py_BuildValue("i", array[i]);
         PyList_Append(list, value);
         Py_DECREF(value);
     }
+    module_add_list(module, name, list);
+}
 
-    /* Add it to the module dictionary. */
-    PyDict_SetItemString(PyModule_GetDict(module), name, list);
-    Py_DECREF(list);
+/**
+ * Construct a string list from a C array and add it to the specified module.
+ */
+static void module_add_cstr_array(PyObject *module,
+                                  const char *name,
+                                  const char *const *array,
+                                  size_t array_size) {
+    size_t i;
+    PyObject *list, *value;
+
+    list = PyList_New(0);
+    for (i = 0; i < array_size; i++) {
+        value = Py_BuildValue("s", array[i]);
+        PyList_Append(list, value);
+        Py_DECREF(value);
+    }
+    module_add_list(module, name, list);
 }
 
 MODULEAPI void initPlugin(struct plugin_hooklist *hooklist) {
@@ -2529,8 +2538,8 @@ MODULEAPI void initPlugin(struct plugin_hooklist *hooklist) {
     Py_DECREF(module_tmp);
 
     module_add_constants(m, "Type", constants_types, module_doc_type);
-    module_add_array(m, "freearr_x", hooks->freearr_x, SIZEOFFREE, FIELDTYPE_INT32);
-    module_add_array(m, "freearr_y", hooks->freearr_y, SIZEOFFREE, FIELDTYPE_INT32);
+    module_add_int32_array(m, "freearr_x", hooks->freearr_x, SIZEOFFREE);
+    module_add_int32_array(m, "freearr_y", hooks->freearr_y, SIZEOFFREE);
 
     /* Initialize integer constants */
     for (i = 0; constants[i].name; i++) {
@@ -2544,32 +2553,13 @@ MODULEAPI void initPlugin(struct plugin_hooklist *hooklist) {
 
     module_tmp = module_create(m, "Gender");
     PyModule_AddStringConstant(module_tmp, "__doc__", module_doc_gender);
-    module_add_array(module_tmp, "gender_noun", hooks->gender_noun, GENDER_MAX, FIELDTYPE_CSTR);
-    module_add_array(module_tmp,
-                     "gender_subjective",
-                     hooks->gender_subjective,
-                     GENDER_MAX,
-                     FIELDTYPE_CSTR);
-    module_add_array(module_tmp,
-                     "gender_subjective_upper",
-                     hooks->gender_subjective_upper,
-                     GENDER_MAX,
-                     FIELDTYPE_CSTR);
-    module_add_array(module_tmp,
-                     "gender_objective",
-                     hooks->gender_objective,
-                     GENDER_MAX,
-                     FIELDTYPE_CSTR);
-    module_add_array(module_tmp,
-                     "gender_possessive",
-                     hooks->gender_possessive,
-                     GENDER_MAX,
-                     FIELDTYPE_CSTR);
-    module_add_array(module_tmp,
-                     "gender_reflexive",
-                     hooks->gender_reflexive,
-                     GENDER_MAX,
-                     FIELDTYPE_CSTR);
+    module_add_cstr_array(module_tmp, "gender_noun", hooks->gender_noun, GENDER_MAX);
+    module_add_cstr_array(module_tmp, "gender_subjective", hooks->gender_subjective, GENDER_MAX);
+    module_add_cstr_array(
+        module_tmp, "gender_subjective_upper", hooks->gender_subjective_upper, GENDER_MAX);
+    module_add_cstr_array(module_tmp, "gender_objective", hooks->gender_objective, GENDER_MAX);
+    module_add_cstr_array(module_tmp, "gender_possessive", hooks->gender_possessive, GENDER_MAX);
+    module_add_cstr_array(module_tmp, "gender_reflexive", hooks->gender_reflexive, GENDER_MAX);
 
     for (i = 0; constants_gender[i].name; i++) {
         PyModule_AddIntConstant(module_tmp, constants_gender[i].name, constants_gender[i].value);
