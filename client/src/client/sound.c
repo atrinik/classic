@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -35,6 +35,8 @@
 #include <toolkit/string.h>
 #include <toolkit/path.h>
 
+#include "sound_command_internal.h"
+
 /**
  * Path to the background music file being played.
  */
@@ -51,17 +53,6 @@ static uint8_t enabled = 0;
  * Doubly-linked list of all playing ambient sound effects.
  */
 static sound_ambient_struct *sound_ambient_head = NULL;
-
-/** Female player-hurt variants supplied by the sound submodule. */
-static const char *const sound_female_hurt_effects[] = {
-    "doh_female_1.ogg",
-    "doh_female_2.ogg",
-    "doh_female_3.ogg",
-    "doh_female_4.ogg",
-    "doh_female_5.ogg",
-    "doh_female_6.ogg",
-    "doh_female_7.ogg",
-};
 
 #ifdef HAVE_SDL_MIXER
 
@@ -860,65 +851,34 @@ static void sound_set_effect_position(int channel, int angle, int distance) {
 #endif
 }
 
-/** @copydoc socket_command_struct::handle_func */
-void socket_command_sound(uint8_t *data, size_t len, size_t pos) {
-    packet_reader_t reader;
-    packet_reader_init_cursor(&reader, data, len, &pos);
-    uint8_t type;
-    int loop, volume;
-    char filename[MAX_BUF];
+void sound_command_play_effect(const char *filename, int volume, int loop, int8_t x, int8_t y) {
+    int channel = sound_play_effect_loop(filename, 100 + volume, loop);
 
-    type = packet_reader_read_uint8(&reader);
-    packet_reader_read_string(&reader, filename, sizeof(filename));
-    loop = packet_reader_read_int8(&reader);
-    volume = packet_reader_read_int8(&reader);
+    if (channel != -1) {
+        int angle = 0;
+        int distance = (255 * isqrt(POW2(x) + POW2(y))) / MAX_SOUND_DISTANCE;
 
-    if (type == CMD_SOUND_EFFECT) {
-        int8_t x, y;
-        int channel;
-
-        x = packet_reader_read_uint8(&reader);
-        y = packet_reader_read_uint8(&reader);
-
-        const char *effect = filename;
-        if (strcmp(filename, "player_hurt.ogg") == 0) {
-            if (cpl.gender == GENDER_FEMALE) {
-                effect =
-                    sound_female_hurt_effects[rndm(0, arraysize(sound_female_hurt_effects) - 1)];
-            } else {
-                effect = "doh.ogg";
-            }
+        if (setting_get_int(OPT_CAT_SOUND, OPT_3D_SOUNDS) &&
+            distance >= (255 / MAX_SOUND_DISTANCE) * 2) {
+            angle = atan2(-y, x) * (180 / M_PI);
+            angle = 90 - angle;
         }
 
-        channel = sound_play_effect_loop(effect, 100 + volume, loop);
-
-        if (channel != -1) {
-            int angle, distance;
-
-            angle = 0;
-            distance = (255 * isqrt(POW2(x) + POW2(y))) / MAX_SOUND_DISTANCE;
-
-            if (setting_get_int(OPT_CAT_SOUND, OPT_3D_SOUNDS) &&
-                distance >= (255 / MAX_SOUND_DISTANCE) * 2) {
-                angle = atan2(-y, x) * (180 / M_PI);
-                angle = 90 - angle;
-            }
-
-            sound_set_effect_position(channel, angle, distance);
-        }
-    } else if (type == CMD_SOUND_BACKGROUND) {
-        if (!sound_map_background_disabled) {
-            sound_start_bg_music_internal(filename,
-                                          setting_get_int(OPT_CAT_SOUND, OPT_VOLUME_MUSIC) + volume,
-                                          loop,
-                                          volume);
-        }
-    } else if (type == CMD_SOUND_ABSOLUTE) {
-        sound_add_effect(filename, (uint8_t)volume, loop);
-    } else {
-        LOG(BUG, "Invalid sound type: %d", type);
-        return;
+        sound_set_effect_position(channel, angle, distance);
     }
+}
+
+void sound_command_play_background(const char *filename, int volume, int loop) {
+    if (!sound_map_background_disabled) {
+        sound_start_bg_music_internal(filename,
+                                      setting_get_int(OPT_CAT_SOUND, OPT_VOLUME_MUSIC) + volume,
+                                      loop,
+                                      volume);
+    }
+}
+
+void sound_command_play_absolute(const char *filename, int volume, int loop) {
+    sound_add_effect(filename, (uint8_t)volume, loop);
 }
 
 /**
