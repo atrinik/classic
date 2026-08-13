@@ -573,6 +573,13 @@ if (BUILD_TESTING AND NOT MINGW)
                 LABELS "server;plugin;runtime"
                 TIMEOUT 300
                 WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+
+            if (ENABLE_SANITIZERS)
+                # CI disables leak checks for the general sanitizer suite;
+                # keep the focused embedded-Python fixture leak-checked.
+                set_tests_properties(server-plugin-python-fixture-pass PROPERTIES
+                    ENVIRONMENT "LSAN_OPTIONS=detect_leaks=1:suppressions=${CMAKE_CURRENT_SOURCE_DIR}/cmake/python_plugin_lsan.supp")
+            endif ()
         endif ()
 
         add_test(NAME server-content-benchmark
