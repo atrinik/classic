@@ -314,6 +314,38 @@ class DailyReportTests(unittest.TestCase):
         with self.assertRaisesRegex(report.ReportError, "outside retained history"):
             report.merge_trend(trend, template)
 
+    def test_missing_recent_run_can_be_backfilled_without_discarded_history(self) -> None:
+        template = report.build_point(
+            evidence(), commit="a" * 40, run_id="10",
+            recorded_at="2026-08-10T00:00:00+00:00", environment={}
+        )
+        later = dict(template, id="run-12", run_id="12")
+        trend = report.merge_trend(report.merge_trend(None, template), later)
+        missing = dict(template, id="run-11", run_id="11")
+        trend = report.merge_trend(trend, missing)
+        self.assertEqual(
+            [point["run_id"] for point in trend["cohorts"][template["cohort"]]],
+            ["10", "11", "12"],
+        )
+
+    def test_preminimum_move_is_allowed_without_discarded_history(self) -> None:
+        template = report.build_point(
+            evidence(), commit="a" * 40, run_id="1",
+            recorded_at="2026-08-01T00:00:00+00:00", environment={}
+        )
+        source = dict(template, cohort="source-cohort")
+        target_ten = dict(template, id="run-10", run_id="10", cohort="target-cohort")
+        target_eleven = dict(template, id="run-11", run_id="11", cohort="target-cohort")
+        trend = report.merge_trend(None, source)
+        trend = report.merge_trend(trend, target_ten)
+        trend = report.merge_trend(trend, target_eleven)
+        moved = dict(source, cohort="target-cohort")
+        trend = report.merge_trend(trend, moved)
+        self.assertEqual(
+            [point["run_id"] for point in trend["cohorts"]["target-cohort"]],
+            ["1", "10", "11"],
+        )
+
     def test_active_alert_recovers_when_rerun_moves_cohort(self) -> None:
         first = report.build_point(
             evidence(), commit="a" * 40, run_id="7",
@@ -353,6 +385,10 @@ class DailyReportTests(unittest.TestCase):
             )
             trend = report.merge_trend(trend, item)
         moved = dict(source, cohort="destination-cohort")
+        with self.assertRaisesRegex(report.ReportError, "before retained cohort"):
+            report.merge_trend(trend, moved)
+
+        trend["cohorts"]["destination-cohort"] = []
         with self.assertRaisesRegex(report.ReportError, "before retained cohort"):
             report.merge_trend(trend, moved)
 

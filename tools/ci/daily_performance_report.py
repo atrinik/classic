@@ -262,11 +262,15 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
     cohorts = trend.setdefault("cohorts", {})
     if not isinstance(cohorts, dict):
         raise ReportError("trend cohorts must be an object")
+    retention_watermarks = trend.setdefault("retention_watermarks", {})
+    if not isinstance(retention_watermarks, dict) or any(
+        not isinstance(cohort, str) or type(run_id) is not int or run_id <= 0
+        for cohort, run_id in retention_watermarks.items()
+    ):
+        raise ReportError("trend retention watermarks are malformed")
     point_run_id = int(point["run_id"])
-    retained_run_ids: set[int] = set()
     replacement_retained = False
     replacement_cohort: str | None = None
-    destination_min_run_id: int | None = None
     for cohort, cohort_points in cohorts.items():
         if not isinstance(cohort_points, list):
             raise ReportError("trend cohort points must be an array")
@@ -274,27 +278,16 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(item, dict) or not str(item.get("run_id", "")).isdigit():
                 raise ReportError("trend point has an invalid run ID")
             item_run_id = int(item["run_id"])
-            retained_run_ids.add(item_run_id)
             if item_run_id == point_run_id:
                 replacement_retained = True
                 replacement_cohort = cohort
-            if cohort == point["cohort"]:
-                destination_min_run_id = (
-                    item_run_id
-                    if destination_min_run_id is None
-                    else min(destination_min_run_id, item_run_id)
-                )
-    if (
-        retained_run_ids
-        and not replacement_retained
-        and point_run_id <= max(retained_run_ids)
-    ):
+    global_watermark = max(retention_watermarks.values(), default=0)
+    if not replacement_retained and point_run_id <= global_watermark:
         raise ReportError("cannot replace an observation outside retained history")
     if (
         replacement_retained
         and replacement_cohort != point["cohort"]
-        and destination_min_run_id is not None
-        and point_run_id < destination_min_run_id
+        and point_run_id <= retention_watermarks.get(point["cohort"], 0)
     ):
         raise ReportError("cannot move an observation before retained cohort history")
     for cohort_points in cohorts.values():
@@ -311,6 +304,11 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
     points.sort(key=lambda item: int(item["run_id"]))
     dropped_points = points[:-TREND_RETENTION]
     del points[:-TREND_RETENTION]
+    if dropped_points:
+        retention_watermarks[point["cohort"]] = max(
+            retention_watermarks.get(point["cohort"], 0),
+            *(int(item["run_id"]) for item in dropped_points),
+        )
     alerts = trend.setdefault("alerts", {})
     if not isinstance(alerts, dict):
         raise ReportError("trend alerts must be an object")
