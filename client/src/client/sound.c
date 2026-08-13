@@ -686,10 +686,10 @@ static int sound_add_effect(const char *path,
         return -1;
     }
 
-    int64_t effective_percent = MAX(
-        INT64_C(0),
-        MIN(INT64_C(100),
-            sound_setting_get(OPT_CAT_SOUND, OPT_VOLUME_SOUND) * MAX(0, volume) / 100));
+    int64_t effective_percent =
+        MAX(INT64_C(0),
+            MIN(INT64_C(100),
+                sound_setting_get(OPT_CAT_SOUND, OPT_VOLUME_SOUND) * MAX(0, volume) / 100));
     MIX_Track *track = sound_effect_tracks[channel];
     MIX_StereoGains stereo = {.left = 1.0f, .right = 1.0f};
     SDL_PropertiesID options = 0;
@@ -895,7 +895,7 @@ static void sound_start_bg_music_internal(const char *filename,
     } else
 #endif
 #ifdef ATRINIK_SOUND_TESTING
-    if (sound_test_fail_playback) {
+        if (sound_test_fail_playback) {
         sound_test_fail_playback = false;
         played = false;
     } else
