@@ -167,8 +167,10 @@ void set_npc_enemy(object *npc, object *enemy, rv_vector *rv) {
             FREE_AND_ADD_REF_HASH(return_wp->slaying, base->slaying);
             /* Activate wp */
             SET_FLAG(return_wp, FLAG_CURSED);
-            /* reset best-effort timer */
+            /* Reset retry progress for this return-home lifecycle. */
             return_wp->stats.Int = 0;
+            return_wp->stats.Str = 0;
+            return_wp->stats.dam = 30000;
 
             /* setup move_type to use waypoints */
             return_wp->move_type = npc->move_type;
