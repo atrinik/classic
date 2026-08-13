@@ -1198,9 +1198,9 @@ static void player_view_timing_json(const uint64_t *durations, size_t count) {
     if (count != 0) {
         player_view_timing_summary(durations, count, &p50, &p95, &p99, &maximum);
     }
-    printf("{\"unit\":\"ns\",\"samples\":%zu,\"p50\":%" PRIu64 ",\"p95\":%" PRIu64
+    printf("{\"unit\":\"ns\",\"samples\":%" PRIu64 ",\"p50\":%" PRIu64 ",\"p95\":%" PRIu64
            ",\"p99\":%" PRIu64 ",\"max\":%" PRIu64,
-           count,
+           (uint64_t)count,
            p50,
            p95,
            p99,
@@ -1211,10 +1211,10 @@ static void player_view_timing_json(const uint64_t *durations, size_t count) {
         uint64_t sorted[PLAYER_VIEW_MOVEMENT_WINDOW_TICKS];
         memcpy(sorted, &durations[start], samples * sizeof(*sorted));
         uint64_t window_p95 = player_view_percentile(sorted, samples, 95);
-        printf("%s{\"start_tick\":%zu,\"samples\":%zu,\"p95_ns\":%" PRIu64 "}",
+        printf("%s{\"start_tick\":%" PRIu64 ",\"samples\":%" PRIu64 ",\"p95_ns\":%" PRIu64 "}",
                start == 0 ? "" : ",",
-               start,
-               samples,
+               (uint64_t)start,
+               (uint64_t)samples,
                window_p95);
     }
     printf("]}");
@@ -1249,47 +1249,50 @@ static void player_view_lighting_counters_json(const lighting_benchmark_counters
 
 static void player_view_lighting_state_json(const lighting_benchmark_statistics_t *statistics,
                                             bool start) {
-    printf("{\"allocated_levels\":%zu,\"active_levels\":%zu"
-           ",\"cache_valid_levels\":%zu,\"dirty_levels\":%zu"
-           ",\"lit_sprite_entries\":%zu,\"lit_sprite_bytes\":%zu"
-           ",\"retained_field_bytes\":%zu,\"state_digest\":\"%016" PRIx64 "\"}",
-           start ? statistics->start_allocated_levels : statistics->allocated_levels,
-           start ? statistics->start_active_levels : statistics->active_levels,
-           start ? statistics->start_cache_valid_levels : statistics->cache_valid_levels,
-           start ? statistics->start_dirty_levels : statistics->dirty_levels,
-           start ? statistics->start_lit_sprite_entries : statistics->lit_sprite_entries,
-           start ? statistics->start_lit_sprite_bytes : statistics->lit_sprite_bytes,
-           start ? statistics->start_retained_field_bytes : statistics->retained_field_bytes,
-           start ? statistics->start_state_digest : statistics->state_digest);
+    printf(
+        "{\"allocated_levels\":%" PRIu64 ",\"active_levels\":%" PRIu64
+        ",\"cache_valid_levels\":%" PRIu64 ",\"dirty_levels\":%" PRIu64
+        ",\"lit_sprite_entries\":%" PRIu64 ",\"lit_sprite_bytes\":%" PRIu64
+        ",\"retained_field_bytes\":%" PRIu64 ",\"state_digest\":\"%016" PRIx64 "\"}",
+        (uint64_t)(start ? statistics->start_allocated_levels : statistics->allocated_levels),
+        (uint64_t)(start ? statistics->start_active_levels : statistics->active_levels),
+        (uint64_t)(start ? statistics->start_cache_valid_levels : statistics->cache_valid_levels),
+        (uint64_t)(start ? statistics->start_dirty_levels : statistics->dirty_levels),
+        (uint64_t)(start ? statistics->start_lit_sprite_entries : statistics->lit_sprite_entries),
+        (uint64_t)(start ? statistics->start_lit_sprite_bytes : statistics->lit_sprite_bytes),
+        (uint64_t)(start ? statistics->start_retained_field_bytes
+                         : statistics->retained_field_bytes),
+        start ? statistics->start_state_digest : statistics->state_digest);
 }
 
 static void player_view_lighting_level_json(const lighting_benchmark_level_statistics_t *start,
                                             const lighting_benchmark_level_statistics_t *end) {
     printf("{\"depth\":%d,\"start\":{\"allocated\":%s,\"cache_valid\":%s"
-           ",\"dirty\":%s,\"entries\":%zu,\"bytes\":%zu,\"retained_field_bytes\":%zu"
-           ",\"state_digest\":\"%016" PRIx64 "\"},\"end\":{\"allocated\":%s"
-           ",\"cache_valid\":%s,\"dirty\":%s,\"entries\":%zu,\"bytes\":%zu"
-           ",\"retained_field_bytes\":%zu"
-           ",\"state_digest\":\"%016" PRIx64 "\"},\"peak\":{\"entries\":%zu"
-           ",\"bytes\":%zu,\"retained_field_bytes\":%zu},\"counters\":",
+           ",\"dirty\":%s,\"entries\":%" PRIu64 ",\"bytes\":%" PRIu64
+           ",\"retained_field_bytes\":%" PRIu64 ",\"state_digest\":\"%016" PRIx64
+           "\"},\"end\":{\"allocated\":%s"
+           ",\"cache_valid\":%s,\"dirty\":%s,\"entries\":%" PRIu64 ",\"bytes\":%" PRIu64
+           ",\"retained_field_bytes\":%" PRIu64 ",\"state_digest\":\"%016" PRIx64
+           "\"},\"peak\":{\"entries\":%" PRIu64 ",\"bytes\":%" PRIu64
+           ",\"retained_field_bytes\":%" PRIu64 "},\"counters\":",
            end->depth,
            start->allocated ? "true" : "false",
            start->cache_valid ? "true" : "false",
            start->update_needed ? "true" : "false",
-           start->lit_sprite_entries,
-           start->lit_sprite_bytes,
-           start->retained_field_bytes,
+           (uint64_t)start->lit_sprite_entries,
+           (uint64_t)start->lit_sprite_bytes,
+           (uint64_t)start->retained_field_bytes,
            start->state_digest,
            end->allocated ? "true" : "false",
            end->cache_valid ? "true" : "false",
            end->update_needed ? "true" : "false",
-           end->lit_sprite_entries,
-           end->lit_sprite_bytes,
-           end->retained_field_bytes,
+           (uint64_t)end->lit_sprite_entries,
+           (uint64_t)end->lit_sprite_bytes,
+           (uint64_t)end->retained_field_bytes,
            end->state_digest,
-           end->peak_lit_sprite_entries,
-           end->peak_lit_sprite_bytes,
-           end->peak_retained_field_bytes);
+           (uint64_t)end->peak_lit_sprite_entries,
+           (uint64_t)end->peak_lit_sprite_bytes,
+           (uint64_t)end->peak_retained_field_bytes);
     player_view_lighting_counters_json(&end->counters);
     printf("}");
 }
@@ -1358,9 +1361,9 @@ static void player_view_sprite_cache_json(const sprite_cache_statistics_t *start
     printf("{\"available\":%s,\"counters\":{\"lookups\":%" PRIu64 ",\"hits\":%" PRIu64
            ",\"misses\":%" PRIu64 ",\"insertions\":%" PRIu64 ",\"gc_runs\":%" PRIu64
            ",\"gc_removals\":%" PRIu64 ",\"gc_time_ns\":%" PRIu64
-           "},\"start\":{\"entries\":%zu,\"estimated_bytes\":%zu}"
-           ",\"end\":{\"entries\":%zu,\"estimated_bytes\":%zu}"
-           ",\"peak\":{\"entries\":%zu,\"estimated_bytes\":%zu}}",
+           "},\"start\":{\"entries\":%" PRIu64 ",\"estimated_bytes\":%" PRIu64 "}"
+           ",\"end\":{\"entries\":%" PRIu64 ",\"estimated_bytes\":%" PRIu64 "}"
+           ",\"peak\":{\"entries\":%" PRIu64 ",\"estimated_bytes\":%" PRIu64 "}}",
            SPRITE_CACHE_STATISTICS_VERSION > 0 ? "true" : "false",
            end->lookups,
            end->hits,
@@ -1369,12 +1372,12 @@ static void player_view_sprite_cache_json(const sprite_cache_statistics_t *start
            end->gc_runs,
            end->gc_removals,
            end->gc_time_ns,
-           start->entries,
-           start->estimated_bytes,
-           end->entries,
-           end->estimated_bytes,
-           end->peak_entries,
-           end->peak_estimated_bytes);
+           (uint64_t)start->entries,
+           (uint64_t)start->estimated_bytes,
+           (uint64_t)end->entries,
+           (uint64_t)end->estimated_bytes,
+           (uint64_t)end->peak_entries,
+           (uint64_t)end->peak_estimated_bytes);
 }
 
 static bool player_view_movement_fixture_parse(const uint8_t *data,
@@ -2038,17 +2041,17 @@ static void player_view_movement_phase_json(const player_view_movement_phase_t *
     player_view_lighting_state_json(&phase->lighting, true);
     printf(",\"end\":");
     player_view_lighting_state_json(&phase->lighting, false);
-    printf(",\"peak\":{\"allocated_levels\":%zu,\"active_levels\":%zu,"
-           "\"cache_valid_levels\":%zu,\"dirty_levels\":%zu,"
-           "\"lit_sprite_entries\":%zu,\"lit_sprite_bytes\":%zu,"
-           "\"retained_field_bytes\":%zu},\"counters\":",
-           phase->lighting.peak_allocated_levels,
-           phase->lighting.peak_active_levels,
-           phase->lighting.peak_cache_valid_levels,
-           phase->lighting.peak_dirty_levels,
-           phase->lighting.peak_lit_sprite_entries,
-           phase->lighting.peak_lit_sprite_bytes,
-           phase->lighting.peak_retained_field_bytes);
+    printf(",\"peak\":{\"allocated_levels\":%" PRIu64 ",\"active_levels\":%" PRIu64
+           ",\"cache_valid_levels\":%" PRIu64 ",\"dirty_levels\":%" PRIu64
+           ",\"lit_sprite_entries\":%" PRIu64 ",\"lit_sprite_bytes\":%" PRIu64
+           ",\"retained_field_bytes\":%" PRIu64 "},\"counters\":",
+           (uint64_t)phase->lighting.peak_allocated_levels,
+           (uint64_t)phase->lighting.peak_active_levels,
+           (uint64_t)phase->lighting.peak_cache_valid_levels,
+           (uint64_t)phase->lighting.peak_dirty_levels,
+           (uint64_t)phase->lighting.peak_lit_sprite_entries,
+           (uint64_t)phase->lighting.peak_lit_sprite_bytes,
+           (uint64_t)phase->lighting.peak_retained_field_bytes);
     player_view_lighting_counters_json(&phase->lighting.counters);
     printf(",\"levels\":[");
     for (size_t level = 0; level < arraysize(phase->lighting_levels_end); level++) {
