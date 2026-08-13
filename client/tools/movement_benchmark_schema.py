@@ -11,7 +11,9 @@ import re
 EXPECTED_SAMPLES = {"cold": 1, "sustained": 480, "idle": 16, "resumed": 80}
 EXPECTED_PACKETS = {"cold": 1, "sustained": 480, "idle": 8, "resumed": 80}
 EXPECTED_CHANGED = {"cold": 1, "sustained": 480, "idle": 0, "resumed": 80}
-EXPECTED_LOCAL_MINIMAP_DRAWS = {"cold": 1, "sustained": 240, "idle": 8, "resumed": 40}
+EXPECTED_FULL_MAP_DRAWS = {"cold": 1, "sustained": 480, "idle": 0, "resumed": 80}
+EXPECTED_ANIMATION_DRAWS = {"cold": 0, "sustained": 0, "idle": 16, "resumed": 0}
+EXPECTED_LOCAL_MINIMAP_DRAWS = {"cold": 1, "sustained": 240, "idle": 0, "resumed": 40}
 EXPECTED_CHECKPOINTS = (
     "cold",
     "step_b",
@@ -29,6 +31,15 @@ EXPECTED_CHECKPOINTS = (
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 STATE_DIGEST = re.compile(r"[0-9a-f]{16}\Z")
 DRAW_REASON_FIELDS = {
+    "external",
+    "packet",
+    "scroll",
+    "animation",
+    "lighting",
+    "resize",
+    "ui",
+}
+LIFECYCLE_REASON_FIELDS = {
     "reset_packet",
     "changed_map_packet",
     "noop_map_packet",
@@ -362,7 +373,7 @@ def validate_record(value: object) -> dict[str, object]:
         },
         "record",
     )
-    if record["schema_version"] != 4 or record["benchmark"] != "player-view-movement" \
+    if record["schema_version"] != 5 or record["benchmark"] != "player-view-movement" \
             or record["tick_ms"] != 125 or record["simulated_tick_hz"] != 8:
         raise ValueError("movement benchmark emitted an incompatible schema")
     checkpoint = _digest(record["checkpoint_sha256"], SHA256, "checkpoint")
@@ -380,7 +391,11 @@ def validate_record(value: object) -> dict[str, object]:
     lifecycle = _mapping(record["lifecycle"], {"full_map_draws", "full_draw_reasons"}, "lifecycle")
     if lifecycle["full_map_draws"] != 4:
         raise ValueError("movement benchmark lifecycle draw accounting is invalid")
-    lifecycle_reasons = _draw_reasons(lifecycle["full_draw_reasons"], 4, "lifecycle reasons")
+    lifecycle_reasons = _mapping(
+        lifecycle["full_draw_reasons"], LIFECYCLE_REASON_FIELDS, "lifecycle reasons"
+    )
+    for field, value in lifecycle_reasons.items():
+        _integer(value, f"lifecycle reasons {field}")
     if lifecycle_reasons != {
         "reset_packet": 1,
         "changed_map_packet": 0,
@@ -411,11 +426,11 @@ def validate_record(value: object) -> dict[str, object]:
         "instrumentation identity",
     )
     if instrumentation != {
-        "schema_version": 4,
+        "schema_version": 5,
         "fixture_schema_version": 2,
         "workload": "pvm1-map2-lifecycle-v3",
         "lighting_statistics_version": 3,
-        "map_statistics_version": 2,
+        "map_statistics_version": 3,
         "render_profiler_statistics_version": 3,
         "sprite_cache_statistics_version": 3,
     }:
@@ -550,11 +565,13 @@ def validate_record(value: object) -> dict[str, object]:
                 "changed_map_packets",
                 "noop_map_packets",
                 "full_map_draws",
+                "animation_draws",
                 "animation_ticks",
-                "full_draw_reasons",
+                "draw_reasons",
                 "frame_time",
                 "main_loop",
                 "map_time",
+                "animation_time",
                 "local_minimap",
                 "queue",
                 "map",
@@ -566,7 +583,14 @@ def validate_record(value: object) -> dict[str, object]:
         )
         if phase["name"] != name or phase["samples"] != samples:
             raise ValueError(f"movement benchmark phase {name} is invalid")
-        for field in ("map_packets", "changed_map_packets", "noop_map_packets", "full_map_draws", "animation_ticks"):
+        for field in (
+            "map_packets",
+            "changed_map_packets",
+            "noop_map_packets",
+            "full_map_draws",
+            "animation_draws",
+            "animation_ticks",
+        ):
             _integer(phase[field], f"phase {name} {field}")
         if phase["map_packets"] != EXPECTED_PACKETS[name] \
                 or phase["changed_map_packets"] != EXPECTED_CHANGED[name] \
@@ -574,22 +598,22 @@ def validate_record(value: object) -> dict[str, object]:
                 or phase["animation_ticks"] != samples:
             raise ValueError(f"movement benchmark phase {name} accounting is invalid")
         phase_reasons = _draw_reasons(
-            phase["full_draw_reasons"],
-            phase["full_map_draws"],
+            phase["draw_reasons"],
+            phase["full_map_draws"] + phase["animation_draws"],
             f"phase {name} draw reasons",
         )
         if (
-            phase_reasons["reset_packet"] > (1 if name == "cold" else 0)
-            or phase_reasons["changed_map_packet"] > phase["changed_map_packets"]
-            or phase_reasons["noop_map_packet"] > phase["noop_map_packets"]
-            or phase_reasons["animation_only_tick"] > phase["animation_ticks"]
-            or phase_reasons["resize"] != 0
-            or phase_reasons["map_transition"] != 0
+            phase["full_map_draws"] != EXPECTED_FULL_MAP_DRAWS[name]
+            or phase["animation_draws"] != EXPECTED_ANIMATION_DRAWS[name]
+            or phase_reasons["packet"] != phase["changed_map_packets"]
+            or phase_reasons["scroll"] > phase["changed_map_packets"]
+            or phase_reasons["animation"] != phase["animation_ticks"]
+            or any(phase_reasons[field] != 0 for field in ("external", "lighting", "resize", "ui"))
         ):
             raise ValueError(f"movement benchmark phase {name} draw reason is impossible")
         if name == "cold" and (
             phase["full_map_draws"] != 1
-            or phase_reasons["reset_packet"] != 1
+            or phase_reasons["packet"] != 1
         ):
             raise ValueError("movement benchmark cold phase did not render its reset")
         frame_time = _timing(phase["frame_time"], samples, f"phase {name} frame time")
@@ -600,6 +624,13 @@ def validate_record(value: object) -> dict[str, object]:
             allow_empty=True,
         )
         del map_time
+        animation_time = _timing(
+            phase["animation_time"],
+            phase["animation_draws"],
+            f"phase {name} animation time",
+            allow_empty=True,
+        )
+        del animation_time
         main_loop = _mapping(
             phase["main_loop"],
             {
@@ -675,15 +706,9 @@ def validate_record(value: object) -> dict[str, object]:
             or local_minimap["update_interval_ms"] != 250
             or local_minimap["surface_width"] != 1700
             or local_minimap["surface_height"] != 1200
-            or (
-                name != "idle"
-                and local_minimap["map_draws"] != EXPECTED_LOCAL_MINIMAP_DRAWS[name]
-            )
-            or (
-                name == "idle"
-                and local_minimap["map_draws"] not in range(
-                    EXPECTED_LOCAL_MINIMAP_DRAWS[name] + 1
-                )
+            or local_minimap["map_draws"] not in range(
+                EXPECTED_LOCAL_MINIMAP_DRAWS[name],
+                EXPECTED_LOCAL_MINIMAP_DRAWS[name] + (2 if name == "resumed" else 1),
             )
             or local_minimap["map_draws"] > phase["full_map_draws"]
         ):
@@ -764,6 +789,8 @@ def validate_record(value: object) -> dict[str, object]:
                 "map_draws",
                 "primary_map_draws",
                 "auxiliary_map_draws",
+                "animation_draws",
+                "animation_level_draws",
                 "presents",
                 "present_failures",
                 "render_failures",
@@ -789,6 +816,10 @@ def validate_record(value: object) -> dict[str, object]:
         if map_stats["map_draws"] != total_map_draws \
                 or map_stats["primary_map_draws"] != phase["full_map_draws"] \
                 or map_stats["auxiliary_map_draws"] != local_minimap["map_draws"] \
+                or map_stats["animation_draws"] != phase["animation_draws"] \
+                or map_stats["animation_level_draws"] != (
+                    phase["animation_draws"] * map_stats["peak_active_levels"]
+                ) \
                 or any(map_stats[field] != 0 for field in ("presents", "present_failures", "render_failures", "fault_injections", "fault_detections")) \
                 or (not map_stats["renderer_allocation_statistics_available"] and any(
                     map_stats[field] != 0 for field in ("renderer_allocations", "renderer_allocation_bytes")
@@ -802,13 +833,20 @@ def validate_record(value: object) -> dict[str, object]:
                 raise ValueError(f"movement benchmark phase {name} render metadata is invalid")
             _integer(stage["elapsed"], f"phase {name} render elapsed")
             _integer(stage["calls"], f"phase {name} render calls")
+        total_render_passes = total_map_draws + phase["animation_draws"]
         if any(
+            stages[stage]["calls"] != total_render_passes
+            for stage in ("map", "paint", "command_sort", "sprite_effects", "ui")
+        ) or any(
             stages[stage]["calls"] != total_map_draws
-            for stage in ("map", "map_scratch_clear", "ground_composite", "paint", "ui")
+            for stage in ("map_scratch_clear", "ground_composite")
         ) or any(
-            stages[stage]["calls"] != map_stats["level_draws"]
-            for stage in ("ground", "objects")
-        ) or any(
+            stages[stage]["calls"] != phase["full_map_draws"] + phase["animation_draws"]
+            for stage in ("door_occlusion", "hint_replay")
+        ) or stages["ground"]["calls"] != map_stats["level_draws"] \
+                or stages["objects"]["calls"] != (
+                    map_stats["level_draws"] + map_stats["animation_level_draws"]
+                ) or any(
             stages[stage]["calls"] > map_stats["level_draws"]
             for stage in ("lighting",)
         ):
