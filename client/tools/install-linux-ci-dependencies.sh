@@ -15,15 +15,15 @@ fi
 "${apt_prefix[@]}" apt-get update -qq
 "${apt_prefix[@]}" env DEBIAN_FRONTEND=noninteractive \
   apt-get install -y -qq --no-install-recommends \
-  build-essential ca-certificates cmake curl gcovr libcurl4-openssl-dev libidn2-dev libsdl3-dev \
-  libsdl3-image-dev libsdl3-ttf-dev libssl-dev libxml2-dev ninja-build \
+  build-essential ca-certificates cmake curl gcovr libcurl4-openssl-dev libidn2-dev libopus-dev \
+  libopusfile-dev libsdl3-dev libsdl3-image-dev libsdl3-ttf-dev libssl-dev libxml2-dev ninja-build \
   pkgconf python3 zlib1g-dev
 
 export CMAKE_PREFIX_PATH=${prefix}
 export LD_LIBRARY_PATH=${prefix}/lib
 export PKG_CONFIG_PATH=${prefix}/lib/pkgconfig
 
-if [[ -f ${prefix}/.atrinik-sdl-mixer-1 ]]; then
+if [[ -f ${prefix}/.atrinik-sdl-mixer-2 ]]; then
   exit 0
 fi
 
@@ -66,7 +66,7 @@ build_project SDL3_mixer-3.2.4 \
   -DSDLMIXER_MP3=ON \
   -DSDLMIXER_MP3_DRMP3=ON \
   -DSDLMIXER_MP3_MPG123=OFF \
-  -DSDLMIXER_OPUS=OFF \
+  -DSDLMIXER_OPUS=ON \
   -DSDLMIXER_TESTS=OFF \
   -DSDLMIXER_VORBIS_STB=ON \
   -DSDLMIXER_VORBIS_VORBISFILE=OFF \
@@ -76,4 +76,4 @@ pkg-config --atleast-version=3.4.0 sdl3
 pkg-config --atleast-version=3.2.0 sdl3-image
 pkg-config --atleast-version=3.2.0 sdl3-ttf
 pkg-config --exact-version=3.2.4 sdl3-mixer
-touch "${prefix}/.atrinik-sdl-mixer-1"
+touch "${prefix}/.atrinik-sdl-mixer-2"

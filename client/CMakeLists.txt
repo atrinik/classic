@@ -411,7 +411,22 @@ if (BUILD_TESTING)
     set_tests_properties(client-rich-presence PROPERTIES TIMEOUT 10)
 
     if (NOT MINGW)
-        target_compile_definitions(${EXECUTABLE} PRIVATE ATRINIK_WIDGET_TESTS)
+        target_compile_definitions(${EXECUTABLE} PRIVATE
+            ATRINIK_SOUND_TESTS
+            ATRINIK_WIDGET_TESTS)
+
+        add_test(NAME client-sound
+            COMMAND atrinik --sound-test
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/audio")
+        set_tests_properties(client-sound PROPERTIES
+            ENVIRONMENT "SDL_AUDIO_DRIVER=dummy"
+            TIMEOUT 30)
+
+        add_test(NAME client-sound-fixture
+            COMMAND ${CMAKE_COMMAND}
+                -DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/audio/opus-tone.mid
+                -DCHECKSUM_FILE=${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/audio/opus-tone.sha256
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/audio/verify.cmake)
 
     add_executable(client-stun-config-tests
         src/tests/stun_config.c
