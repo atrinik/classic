@@ -32,7 +32,7 @@ if _BENCHMARK_SPEC is None or _BENCHMARK_SPEC.loader is None:
     raise RuntimeError("cannot load the movement benchmark evidence contract")
 benchmark_contract = importlib.util.module_from_spec(_BENCHMARK_SPEC)
 _BENCHMARK_SPEC.loader.exec_module(benchmark_contract)
-RENDER_STAGES = benchmark_contract.validate_record.__globals__["RENDER_STAGES"]
+RENDER_STAGES = benchmark_contract.RENDER_STAGES
 
 
 class ReportError(ValueError):
