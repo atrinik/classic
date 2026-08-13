@@ -486,6 +486,18 @@ static const char *const constants_colors[][2] = {{"COLOR_WHITE", COLOR_WHITE},
 /** The Python cache. */
 static python_cache_entry *python_cache = NULL;
 
+/** Release every compiled script retained by the Python cache. */
+static void clear_python_cache(void) {
+    python_cache_entry *cache, *next;
+
+    HASH_ITER(hh, python_cache, cache, next) {
+        HASH_DEL(python_cache, cache);
+        Py_DECREF(cache->code);
+        free(cache->file);
+        free(cache);
+    }
+}
+
 /**
  * Initialize the context stack.
  */
@@ -2350,7 +2362,6 @@ static PyModuleDef AtrinikModule =
 
 static PyObject *PyInit_Atrinik(void) {
     PyObject *m = PyModule_Create(&AtrinikModule);
-    Py_INCREF(m);
     return m;
 }
 #endif
@@ -2442,7 +2453,7 @@ static void module_add_array(PyObject *module,
 MODULEAPI void initPlugin(struct plugin_hooklist *hooklist) {
     PyObject *m, *d, *module_tmp;
     int i;
-    PyThreadState *py_tstate = NULL;
+    PyThreadState *py_tstate;
 
     hooks = hooklist;
 
@@ -2563,6 +2574,9 @@ MODULEAPI void initPlugin(struct plugin_hooklist *hooklist) {
 MODULEAPI void closePlugin(void) {
     hooks->cache_remove_by_flags(CACHE_FLAG_GEVENT);
     PyGILState_Ensure();
+    clear_python_cache();
+    Py_CLEAR(py_globals_dict);
+    Py_CLEAR(AtrinikError);
     Py_Finalize();
 }
 
