@@ -232,8 +232,11 @@ static void signal_handler(int sig, siginfo_t *siginfo, void *context)
     tm = localtime(&t);
 
     strftime(VS(date), "%Y_%m_%d_%H-%M-%S", tm);
-    snprintf(VS(path), "%s/.atrinik/%s-traceback-%s.txt", homedir, traceback_prefix, date);
-    fp = fopen(path, "a");
+    fp = NULL;
+    if (homedir != NULL && homedir[0] != '\0') {
+        snprintf(VS(path), "%s/.atrinik/%s-traceback-%s.txt", homedir, traceback_prefix, date);
+        fp = fopen(path, "a");
+    }
 
     if (fp == NULL) {
         snprintf(VS(path), "%s-traceback-%s.txt", traceback_prefix, date);

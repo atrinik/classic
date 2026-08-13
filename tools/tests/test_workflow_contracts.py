@@ -718,6 +718,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"C0000005"', run)
         self.assertIn("--handled-exception", run)
         self.assertIn("$originalAppData", run)
+        self.assertIn("Remove-Item Env:APPDATA -ErrorAction SilentlyContinue", run)
         self.assertIn("Remove-Item Env:APPDATA", run)
         self.assertIn('"Exception code: 0xc0000005"', run)
         self.assertIn('"Access type: write (1)"', run)

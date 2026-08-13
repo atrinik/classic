@@ -384,7 +384,7 @@ jobs:
           Push-Location $bundle
           $originalAppData = $env:APPDATA
           try {
-            $env:APPDATA = Join-Path $bundle "traceback-appdata"
+            Remove-Item Env:APPDATA -ErrorAction SilentlyContinue
             Remove-Item -Force -ErrorAction SilentlyContinue `
               "libatrinik-signals-test-traceback-*.txt"
             $process = Start-Process `
