@@ -277,7 +277,7 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
     if (
         retained_run_ids
         and not replacement_retained
-        and point_run_id < min(retained_run_ids)
+        and point_run_id <= max(retained_run_ids)
     ):
         raise ReportError("cannot replace an observation outside retained history")
     for cohort_points in cohorts.values():

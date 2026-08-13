@@ -296,6 +296,24 @@ class DailyReportTests(unittest.TestCase):
         with self.assertRaisesRegex(report.ReportError, "outside retained history"):
             report.merge_trend(trend, template)
 
+    def test_other_cohort_cannot_hide_outside_retention_rerun(self) -> None:
+        template = report.build_point(
+            evidence(), commit="a" * 40, run_id="2",
+            recorded_at="2026-08-01T00:00:00+00:00", environment={}
+        )
+        other = dict(template, id="run-1", run_id="1", cohort="other-cohort")
+        trend = report.merge_trend(None, other)
+        for run_id in range(2, report.TREND_RETENTION + 4):
+            item = dict(
+                template,
+                id=f"run-{run_id}",
+                run_id=str(run_id),
+                checks={"candidate_sustained_p95": {"passed": run_id % 2 == 0}},
+            )
+            trend = report.merge_trend(trend, item)
+        with self.assertRaisesRegex(report.ReportError, "outside retained history"):
+            report.merge_trend(trend, template)
+
     def test_active_alert_recovers_when_rerun_moves_cohort(self) -> None:
         first = report.build_point(
             evidence(), commit="a" * 40, run_id="7",
