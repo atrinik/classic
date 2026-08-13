@@ -63,6 +63,7 @@
 #include <movement.h>
 #include <object_methods.h>
 #include <party.h>
+#include <player_status.h>
 #include <player.h>
 #include <object.h>
 #include <plugin.h>
@@ -676,6 +677,13 @@ struct plugin_hooklist
                          char *)
     PLUGIN_HOOK_FUNCTION(bool, gameplay_journal_commit, const char *)
     PLUGIN_HOOK_FUNCTION(bool, gameplay_journal_abort, const char *, const char *)
+    PLUGIN_HOOK_FUNCTION(bool,
+                         player_status_set,
+                         object *,
+                         const char *,
+                         const char *,
+                         const char *,
+                         New_Face *)
 
 };
 // clang-format on
