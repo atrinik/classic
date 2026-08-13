@@ -2188,9 +2188,9 @@ void draw_client_map2(object *pl) {
 
                     if ((!mp->light_rgb_known[sub_layer] &&
                          (light_rgb_bitmap & (UINT8_C(1) << sub_layer))) ||
-                        (mp->light_rgb_known[sub_layer] && memcmp(mp->light_rgb_radiance[sub_layer],
-                                                                  resolved_rgb,
-                                                                  sizeof(resolved_rgb)) != 0)) {
+                        (mp->light_rgb_known[sub_layer] &&
+                         memcmp(mp->light_rgb_radiance[sub_layer], resolved_rgb, sizeof(resolved_rgb)) !=
+                             0)) {
                         light_rgb_changed = true;
                     }
                 }
@@ -2226,10 +2226,7 @@ void draw_client_map2(object *pl) {
                         continue;
                     }
 
-                    packet_debug_data(packet,
-                                      1,
-                                      "Q5.11 scalar radiance (sub-layer: %d)",
-                                      sub_layer);
+                    packet_debug_data(packet, 1, "Q5.11 scalar radiance (sub-layer: %d)", sub_layer);
                     mp->light_radiance[sub_layer] =
                         light_set[sub_layer] ? light_radiance[sub_layer] : 0;
                     mp->light_known[sub_layer] = 1;
