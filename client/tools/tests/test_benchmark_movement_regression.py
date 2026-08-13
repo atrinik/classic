@@ -956,6 +956,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertFalse(evidence["checks"]["base_candidate_sustained_p95"]["enforced"])
         self.assertFalse(evidence["checks"]["checkpoint"]["enforced"])
         self.assertFalse(evidence["checks"]["instrumentation_identity"]["enforced"])
+        self.assertFalse(evidence["checks"]["instrumentation_identity"]["passed"])
         self.assertTrue(evidence["checks"]["full_redraw_accounting"]["enforced"])
         report = benchmark._render_complete_evidence(
             evidence, "success", lambda value: value
@@ -963,6 +964,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("cross-contract comparison", report)
         self.assertIn("alternated on the same runner", report)
         self.assertIn("Map render path p95 (contract-specific)", report)
+        self.assertIn("base and candidate identities are not comparable", report)
 
     def test_informational_performance_failure_does_not_hide_or_fail(self) -> None:
         slow = native_record(sustained_p95_ns=50_000_000)

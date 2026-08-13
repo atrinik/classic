@@ -539,7 +539,11 @@ def _identity_check(
     baseline: list[dict[str, object]], candidate: list[dict[str, object]]
 ) -> dict[str, object]:
     records = baseline + candidate
-    if not records or records[0].get("schema_version") != NATIVE_SCHEMA_VERSION:
+    if not records:
+        return {"passed": True}
+    if len({record.get("schema_version") for record in records}) != 1:
+        return {"passed": False}
+    if records[0].get("schema_version") != NATIVE_SCHEMA_VERSION:
         return {"passed": True}
     reference = records[0]
     instrumentation = reference["identity"]["instrumentation"]
