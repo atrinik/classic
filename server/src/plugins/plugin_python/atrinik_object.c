@@ -2739,6 +2739,19 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
         }
     }
 
+    if (field->offset == offsetof(object, direction) && PyInt_Check(value)) {
+        long direction = PyLong_AsLong(value);
+        if (PyErr_Occurred()) {
+            return -1;
+        }
+        if (direction < 0 || direction > NUM_DIRECTION) {
+            PyErr_Format(PyExc_ValueError,
+                         "direction must be between 0 and %d.",
+                         NUM_DIRECTION);
+            return -1;
+        }
+    }
+
     if (obj->obj->map != NULL && (field->offset == offsetof(object, layer) ||
                                   field->offset == offsetof(object, sub_layer))) {
         hooks->object_remove(obj->obj, 0);
@@ -2823,8 +2836,7 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
         /* Direction. */
 
         /* If the object is animated and turnable, update its face. */
-        if (obj->obj->animation_id && QUERY_FLAG(obj->obj, FLAG_IS_TURNABLE) &&
-            obj->obj->direction >= 0 && obj->obj->direction <= NUM_DIRECTION) {
+        if (obj->obj->animation_id && QUERY_FLAG(obj->obj, FLAG_IS_TURNABLE)) {
             SET_ANIMATION(obj->obj,
                           (NUM_ANIMATIONS(obj->obj) / NUM_FACINGS(obj->obj)) * obj->obj->direction +
                               obj->obj->state);
