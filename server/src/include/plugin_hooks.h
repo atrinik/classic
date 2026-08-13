@@ -160,6 +160,7 @@ struct plugin_hooklist
                     int,
                     int,
                     const char *) PLUGIN_HOOK_FUNCTION(void, object_update_speed, object *)
+                    PLUGIN_HOOK_FUNCTION(void, object_update, object *, int)
                     PLUGIN_HOOK_FUNCTION(int, change_skill, object *, int) PLUGIN_HOOK_FUNCTION(
                         void,
                         pick_up,

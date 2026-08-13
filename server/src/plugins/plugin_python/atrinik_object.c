@@ -2793,32 +2793,37 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
         }
     }
 
-    if (obj->obj->map != NULL &&
-        (field->offset == offsetof(object, layer) || field->offset == offsetof(object, sub_layer) ||
-         field->offset == offsetof(object, type))) {
+    if (obj->obj->map != NULL && (field->offset == offsetof(object, layer) ||
+                                  field->offset == offsetof(object, sub_layer))) {
         hooks->object_remove(obj->obj, 0);
     }
 
     ret = generic_field_setter(field, obj->obj, value);
 
-    if (field->offset == offsetof(object, layer) || field->offset == offsetof(object, sub_layer) ||
-        field->offset == offsetof(object, type)) {
-        if (field->offset == offsetof(object, layer) ||
-            field->offset == offsetof(object, sub_layer)) {
-            obj->obj->layer = MIN(NUM_LAYERS, obj->obj->layer);
-            obj->obj->sub_layer = MIN(NUM_SUB_LAYERS - 1, obj->obj->sub_layer);
-        }
+    /* Objects without a player controller cannot become players. Normalize
+     * before map-side bookkeeping can consult player-only state. */
+    if (ret != -1 && field->offset == offsetof(object, type) && obj->obj->type == PLAYER) {
+        obj->obj->type = MONSTER;
+    }
+
+    if (field->offset == offsetof(object, layer) || field->offset == offsetof(object, sub_layer)) {
+        obj->obj->layer = MIN(NUM_LAYERS, obj->obj->layer);
+        obj->obj->sub_layer = MIN(NUM_SUB_LAYERS - 1, obj->obj->sub_layer);
 
         if (obj->obj->map != NULL) {
-            /* Type contributes to the map's spatial flags just like layer
-             * contributes to its object index. Reinsert after either change
-             * so queries observe the new object contract immediately. */
             hooks->object_insert_map(obj->obj, obj->obj->map, NULL, 0);
         }
     }
 
     if (ret == -1) {
         return -1;
+    }
+
+    if (obj->obj->map != NULL && field->offset == offsetof(object, type)) {
+        /* Type contributes to spatial map flags such as P_IS_EXIT. Refresh
+         * those flags in place so a metadata assignment cannot replay map
+         * lifecycle callbacks, movement effects, or object merging. */
+        hooks->object_update(obj->obj, UP_OBJ_ALL);
     }
 
     if (obj->obj->map != NULL &&
@@ -2853,10 +2858,6 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
     if (obj->obj->map != NULL && field->offset == offsetof(object, nrof) &&
         old_nrof != obj->obj->nrof) {
         hooks->esrv_update_item(UPD_NAME | UPD_NROF, obj->obj);
-    }
-
-    if (field->offset == offsetof(object, type) && obj->obj->type == PLAYER) {
-        obj->obj->type = MONSTER;
     }
 
     hooks->esrv_send_item(obj->obj);
