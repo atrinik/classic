@@ -189,7 +189,7 @@ static void widget_draw(widgetdata *widget) {
                      " scratch/draw %4.2f  ground/level %4.2f\n"
                      " composite/draw %4.2f  lighting/level %4.2f\n"
                      " objects/level %4.2f  paint/draw %4.2f\n"
-                     " sort %4.2f  doors %4.2f  sprites %4.2f  hints %4.2f\n"
+                     " sort %4.2f  living %4.2f  sprites %4.2f  hints %4.2f\n"
                      " UI/draw %4.2f",
                      snapshot->interval_us / 1000000.0,
                      render_profile_rate(snapshot, snapshot->frames),
