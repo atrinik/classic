@@ -120,7 +120,17 @@ START_TEST(test_calendar_days_and_weeks_cover_month) {
 END_TEST
 
 START_TEST(test_calendar_minute_and_period_remain_unchanged) {
-    todtick = 23;
+    for (unsigned long hour = 0; hour < HOURS_PER_DAY; hour++) {
+        todtick = hour;
+        pticks = 0;
+        timeofday_t tod;
+        get_tod(&tod);
+
+        ck_assert_int_eq(tod.hour, hour);
+        ck_assert_int_eq(tod.periodofday, periodsofday_hours[hour]);
+    }
+
+    todtick = HOURS_PER_DAY - 1;
     const long minute_tick = PTICKS_PER_CLOCK / 58;
     static const long ticks[] = {
         0,
@@ -138,7 +148,7 @@ START_TEST(test_calendar_minute_and_period_remain_unchanged) {
             expected_minute = 59;
         }
         ck_assert_int_eq(tod.minute, expected_minute);
-        ck_assert_int_eq(tod.periodofday, periodsofday_hours[23]);
+        ck_assert_int_eq(tod.periodofday, periodsofday_hours[HOURS_PER_DAY - 1]);
     }
 }
 END_TEST
