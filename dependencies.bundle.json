@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "image": "ghcr.io/atrinik/classic-dependencies",
+  "tag": "materials-228d176282049daa32c82a568d2fa60eb80d03e560cd920a1c6ef37ff61db816",
+  "digest": "sha256:c6524604f0613cd9d0612befae18bea9a6155612e650fbf3d2cccb67051d031e",
+  "material_digest": "sha256:228d176282049daa32c82a568d2fa60eb80d03e560cd920a1c6ef37ff61db816",
+  "bundle_manifest_sha256": "sha256:6b577aa6c601c5c67b95b321ffa34bf482c54b829114086ba54a9ee3c66a7e32",
+  "source_locks": {
+    "client/dependencies.lock.json": "eb4aba9cc1700f9d558d706b216e4c71aa419d568b76691dc870b160996f859d",
+    "server/dependencies.lock.json": "07dba220e375e54e81d1fb8b2bfbafcfb2a4c7aeb20ca4834435f8b3ed788271",
+    "server/cmake/immutable_sources.lock.json": "48ecf2b5037d53ffe6a92613906eeeef67440636c71cb7c9190ad847b67bd254"
+  }
+}

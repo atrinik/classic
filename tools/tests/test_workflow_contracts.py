@@ -87,6 +87,35 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("contents: write", candidate)
         self.assertIn("source_epoch: ${{ needs.preflight.outputs.source_epoch }}", workflow)
 
+    def test_release_consumers_use_the_digest_pinned_bundle_offline(self) -> None:
+        candidate = self.text("build-release-candidate.yml")
+        package = self.text("package-release.yml")
+        descriptor = json.loads((ROOT / "dependencies.bundle.json").read_text())
+        self.assertEqual(descriptor["image"], "ghcr.io/atrinik/classic-dependencies")
+        self.assertRegex(descriptor["digest"], r"^sha256:[0-9a-f]{64}$")
+        self.assertRegex(descriptor["material_digest"], r"^sha256:[0-9a-f]{64}$")
+        self.assertIn("Verify durable dependency bundle", candidate)
+        self.assertEqual(candidate.count("release-dependencies-${{"), 4)
+        self.assertEqual(candidate.count("--network none"), 2)
+        self.assertEqual(candidate.count("ATRINIK_DEPENDENCY_OFFLINE=1"), 2)
+        self.assertIn("tools/release/install_dependency_bundle.sh", candidate)
+        self.assertIn("tools/release/install_dependency_bundle.sh", package)
+        self.assertNotIn("dependencies.py sync", candidate)
+
+    def test_dependency_bundle_publication_is_trusted_and_digest_preserving(self) -> None:
+        workflow = self.text("publish-dependency-bundle.yml")
+        self.assertIn("branches: [main]", workflow)
+        self.assertIn("if: github.ref == 'refs/heads/main'", workflow)
+        self.assertIn('test "${GITHUB_REF}" = refs/heads/main', workflow)
+        self.assertIn("refs/remotes/origin/main", workflow)
+        self.assertIn("packages: write", workflow)
+        self.assertIn("oras cp --from-oci-layout", workflow)
+        self.assertIn("9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59", workflow)
+        self.assertIn("dependency_bundle.py build", workflow)
+        self.assertIn("immutable dependency material tag exists", workflow)
+        self.assertNotIn("pull_request:", workflow)
+        self.assertNotIn("contents: write", workflow)
+
     def test_package_dispatch_is_bound_to_a_tag_or_current_main_recovery(self) -> None:
         workflow = self.text("package-release.yml")
         self.assertIn('test "${RELEASE_REF_TYPE}" = tag', workflow)

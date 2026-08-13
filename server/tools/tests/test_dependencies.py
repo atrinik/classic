@@ -213,6 +213,26 @@ class DependencyTests(unittest.TestCase):
         downloaded = dependencies._download(dependency, cache)
         self.assertEqual(downloaded.read_bytes(), archive.read_bytes())
 
+    def test_offline_mode_rejects_missing_or_corrupt_cache_without_network(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        dependency = self.dependency(archive)
+        cache = self.root / "cache"
+        cache.mkdir()
+        (cache / f"sound-{dependency['sha256']}.tar.gz").write_bytes(b"corrupt")
+        attempts = []
+
+        with self.assertRaisesRegex(
+            dependencies.DependencyError, "offline dependency bundle cache"
+        ):
+            dependencies._download(
+                dependency,
+                cache,
+                offline=True,
+                opener=lambda *_args, **_kwargs: attempts.append(True),
+            )
+        self.assertEqual(attempts, [])
+        self.assertEqual(list(cache.iterdir()), [])
+
     def test_does_not_retry_digest_failure_or_keep_partial(self) -> None:
         archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
         dependency = self.dependency(archive)

@@ -18,7 +18,8 @@ COPY protocol ./protocol
 COPY libatrinik ./libatrinik
 COPY server ./server
 WORKDIR /src/server
-RUN python3 tools/dependencies.py sync \
+RUN --network=none ATRINIK_DEPENDENCY_OFFLINE=1 \
+    python3 tools/dependencies.py sync \
     && python3 tools/dependencies.py verify \
     && cmake -S . -B build/release -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \

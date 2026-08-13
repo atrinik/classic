@@ -208,6 +208,7 @@ def _download(
     opener: object = urllib.request.urlopen,
     sleeper: object = time.sleep,
     jitter: object = random.uniform,
+    offline: bool | None = None,
 ) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     expected = str(dependency["sha256"])
@@ -220,6 +221,13 @@ def _download(
             )
             return archive
         archive.unlink()
+
+    if offline is None:
+        offline = os.environ.get("ATRINIK_DEPENDENCY_OFFLINE") == "1"
+    if offline:
+        raise DependencyError(
+            f"{dependency['name']}: offline dependency bundle cache is missing or invalid"
+        )
 
     request = urllib.request.Request(
         str(dependency["url"]),
