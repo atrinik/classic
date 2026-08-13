@@ -30,6 +30,7 @@
 #include <toolkit/string.h>
 #include <arch.h>
 #include <loader.h>
+#include <living.h>
 #include <monster.h>
 #include <monster_data.h>
 #include <object.h>
@@ -40,6 +41,7 @@
 #include <swap.h>
 #include <toolkit/packet.h>
 #include <toolkit/path.h>
+#include <waypoint.h>
 
 static bool active_list_contains_at(const object *needle, const char *phase) {
     size_t visited = 0;
@@ -61,6 +63,45 @@ static bool active_list_contains_at(const object *needle, const char *phase) {
 }
 
 #define active_list_contains(needle) active_list_contains_at((needle), __func__)
+
+START_TEST(test_return_home_waypoint_reactivation_resets_retry_progress) {
+    mapstruct *map;
+    object *player;
+    check_setup_env_pl(&map, &player);
+    FREE_AND_COPY_HASH(map->path, "/tests/return-home-reactivation");
+
+    object *monster = arch_get("kobold");
+    ck_assert_ptr_nonnull(monster);
+    monster = object_insert_map(monster, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(monster);
+    monster_data_init(monster);
+    ck_assert_ptr_nonnull(living_get_base_info(monster));
+
+    set_npc_enemy(monster, player, NULL);
+    set_npc_enemy(monster, NULL, NULL);
+    object *waypoint = waypoint_get_home(monster);
+    ck_assert_ptr_nonnull(waypoint);
+
+    CLEAR_FLAG(waypoint, FLAG_CURSED);
+    waypoint->stats.Int = 8;
+    waypoint->stats.Str = 5;
+    waypoint->stats.dam = 1;
+
+    set_npc_enemy(monster, player, NULL);
+    set_npc_enemy(monster, NULL, NULL);
+
+    ck_assert_ptr_eq(waypoint_get_home(monster), waypoint);
+    ck_assert(QUERY_FLAG(waypoint, FLAG_CURSED));
+    ck_assert_int_eq(waypoint->stats.Int, 0);
+    ck_assert_int_eq(waypoint->stats.Str, 0);
+    ck_assert_int_eq(waypoint->stats.dam, 30000);
+
+    object_remove(monster, 0);
+    object_destroy(monster);
+    object_remove(player, 0);
+    object_destroy(player);
+}
+END_TEST
 
 START_TEST(test_find_enemy_returns_valid_direction_for_tiled_exit_enemy) {
     mapstruct *source;
@@ -1223,6 +1264,7 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
 
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_return_home_waypoint_reactivation_resets_retry_progress);
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_enemy);
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_exit_tiled_enemy);
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_tiled_enemy);

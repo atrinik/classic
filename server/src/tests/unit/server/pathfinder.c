@@ -82,7 +82,7 @@ START_TEST(test_waypoint_retains_explicit_partial_path_and_best_effort_failures)
 }
 END_TEST
 
-START_TEST(test_waypoint_abandons_stuck_cross_depth_best_effort_target) {
+static void check_waypoint_abandons_stuck_cross_map_best_effort_target(bool cross_depth) {
     mapstruct *source;
     object *npc;
     check_setup_env_pl(&source, &npc);
@@ -90,8 +90,10 @@ START_TEST(test_waypoint_abandons_stuck_cross_depth_best_effort_target) {
 
     mapstruct *destination = get_empty_map(24, 24);
     FREE_AND_COPY_HASH(destination->path, "/unit/waypoint-destination");
-    source->tile_map[TILED_UP] = destination;
-    destination->tile_map[TILED_DOWN] = source;
+    int source_tile = cross_depth ? TILED_UP : TILED_EAST;
+    int destination_tile = cross_depth ? TILED_DOWN : TILED_WEST;
+    source->tile_map[source_tile] = destination;
+    destination->tile_map[destination_tile] = source;
 
     object *waypoint = arch_get("waypoint");
     ck_assert_ptr_nonnull(waypoint);
@@ -124,7 +126,7 @@ START_TEST(test_waypoint_abandons_stuck_cross_depth_best_effort_target) {
                                              waypoint->stats.sp,
                                              &rv,
                                              RV_RECURSIVE_SEARCH | RV_DIAGONAL_DISTANCE));
-    ck_assert_int_ne(rv.distance_z, 0);
+    ck_assert_int_eq(rv.distance_z != 0, cross_depth);
     waypoint->stats.dam = 1;
 
     waypoint_move(waypoint, npc);
@@ -137,6 +139,15 @@ START_TEST(test_waypoint_abandons_stuck_cross_depth_best_effort_target) {
     CLEAR_FLAG(waypoint, FLAG_WP_PATH_REQUESTED);
     waypoint_move(waypoint, npc);
     ck_assert(!QUERY_FLAG(waypoint, FLAG_CURSED));
+}
+
+START_TEST(test_waypoint_abandons_stuck_cross_depth_best_effort_target) {
+    check_waypoint_abandons_stuck_cross_map_best_effort_target(true);
+}
+END_TEST
+
+START_TEST(test_waypoint_abandons_stuck_cross_map_best_effort_target) {
+    check_waypoint_abandons_stuck_cross_map_best_effort_target(false);
 }
 END_TEST
 
@@ -287,6 +298,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_budget_partial_is_explicit_and_exact_search_stays_empty);
     tcase_add_test(tc_core, test_waypoint_retains_explicit_partial_path_and_best_effort_failures);
     tcase_add_test(tc_core, test_waypoint_abandons_stuck_cross_depth_best_effort_target);
+    tcase_add_test(tc_core, test_waypoint_abandons_stuck_cross_map_best_effort_target);
     tcase_add_test(tc_core, test_no_path_is_distinct_from_budget_exhaustion);
     tcase_add_test(tc_core, test_tiled_border_uses_alternate_open_crossing);
     tcase_add_test(tc_core, test_results_remain_isolated_across_searches);

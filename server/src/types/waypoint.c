@@ -197,7 +197,6 @@ void waypoint_compute_path(object *op) {
         LOG(ERROR, "Invalid destination map '%s': %s", op->slaying, object_get_str(op));
         return;
     }
-
     path_search_options_t options;
     path_search_options_init(&options);
     options.return_partial = true;
@@ -307,6 +306,7 @@ void waypoint_move(object *op, object *npc) {
             object_get_str(op));
         return;
     }
+    bool destination_on_other_map = destmap != npc->map;
 
     rv_vector global_rv;
     if (!get_rangevector_from_mapcoords(npc->map,
@@ -489,7 +489,7 @@ void waypoint_move(object *op, object *npc) {
 #endif
             op->stats.hp = npc->x;
             op->stats.sp = npc->y;
-            if (global_rv.distance_z != 0) {
+            if (destination_on_other_map) {
                 FREE_AND_ADD_REF_HASH(op->slaying, npc->map->path);
             }
             return;
