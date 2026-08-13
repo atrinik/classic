@@ -355,7 +355,7 @@ set(LIBATRINIK_PUBLIC_HEADER_NAMES
     utarray.h
     uthash.h
     utlist.h)
-set(LIBATRINIK_PRIVATE_HEADER_NAMES socket_private.h)
+set(LIBATRINIK_PRIVATE_HEADER_NAMES signals_private.h socket_private.h)
 set(LIBATRINIK_BUILD_HEADERS ${LIBATRINIK_PUBLIC_HEADER_NAMES})
 list(APPEND LIBATRINIK_BUILD_HEADERS ${LIBATRINIK_PRIVATE_HEADER_NAMES})
 list(TRANSFORM LIBATRINIK_BUILD_HEADERS
@@ -529,6 +529,15 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     atrinik_configure_target(libatrinik-signals)
     target_link_libraries(libatrinik-signals PRIVATE Atrinik::Core)
     add_test(NAME libatrinik-signals COMMAND libatrinik-signals)
+    if (UNIX)
+        set(signals_missing_home_dir
+            "${CMAKE_CURRENT_BINARY_DIR}/signals-missing-home-test")
+        file(MAKE_DIRECTORY "${signals_missing_home_dir}")
+        add_test(NAME libatrinik-signals-missing-home
+            COMMAND libatrinik-signals --missing-home)
+        set_tests_properties(libatrinik-signals-missing-home PROPERTIES
+            WORKING_DIRECTORY "${signals_missing_home_dir}")
+    endif ()
 
     add_executable(libatrinik-clioptions tests/clioptions.c)
     atrinik_configure_target(libatrinik-clioptions)

@@ -28,7 +28,10 @@ class CMakeIncrementalContractTests(unittest.TestCase):
         declared = set(match.group("public").split()) | set(match.group("private").split())
         actual = {path.name for path in (ROOT / "libatrinik").glob("*.h")}
         self.assertEqual(declared, actual)
-        self.assertEqual(set(match.group("private").split()), {"socket_private.h"})
+        self.assertEqual(
+            set(match.group("private").split()),
+            {"signals_private.h", "socket_private.h"},
+        )
 
     def test_immutable_source_cache_reuses_verified_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
