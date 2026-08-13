@@ -102,6 +102,9 @@ static const char *sound_test_fixture_root;
 static bool sound_test_fail_next_music_play;
 static MIX_StereoGains sound_test_effect_gains[SOUND_EFFECT_TRACKS];
 static bool sound_test_effect_gains_valid[SOUND_EFFECT_TRACKS];
+static uint32_t sound_test_duration_value;
+static size_t sound_test_duration_write_count;
+static char sound_test_duration_written_name[MAX_BUF];
 #endif
 
 static int sound_setting_get(int category, int setting) {
@@ -286,6 +289,13 @@ static void sound_free(sound_data_struct *tmp) {
  * The duration.
  */
 static uint32_t sound_music_file_get_duration(const char *filename) {
+#ifdef ATRINIK_SOUND_TESTS
+    if (sound_test_fixture_root != NULL) {
+        (void)filename;
+        return sound_test_duration_value;
+    }
+#endif
+
     char path[HUGE_BUF], *contents, *cp;
     uint32_t duration;
 
@@ -312,6 +322,18 @@ static uint32_t sound_music_file_get_duration(const char *filename) {
  * Duration to set.
  */
 static void sound_music_file_set_duration(const char *filename, uint32_t duration) {
+#ifdef ATRINIK_SOUND_TESTS
+    if (sound_test_fixture_root != NULL) {
+        sound_test_duration_value = duration;
+        sound_test_duration_write_count++;
+        snprintf(sound_test_duration_written_name,
+                 sizeof(sound_test_duration_written_name),
+                 "%s",
+                 filename);
+        return;
+    }
+#endif
+
     char path[HUGE_BUF];
     FILE *fp;
 
@@ -1374,6 +1396,7 @@ int sound_test_main(const char *fixture_root) {
     SOUND_TEST_CHECK(sound_decoder_contract_validate(decoders, sizeof(decoders)));
     printf("SDL3_mixer decoder contract: %s\n", decoders);
     SOUND_TEST_CHECK(sound_test_decode_fixture(fixture, &decoded_bytes));
+    SOUND_TEST_CHECK(decoded_bytes == 23040);
     printf("decoded %zu nonzero PCM bytes from Opus content at legacy .mid path\n", decoded_bytes);
     SOUND_TEST_CHECK(MIX_CreateAudioDecoder(malformed, 0) == NULL);
     SOUND_TEST_CHECK(MIX_CreateAudioDecoder(missing, 0) == NULL);
@@ -1458,11 +1481,14 @@ int sound_test_main(const char *fixture_root) {
     SOUND_TEST_CHECK(!sound_test_hook_track_active[hooks_before_failure]);
 
     /* Natural completion clears state; finite and infinite loops restart from cache. */
+    sound_test_duration_value = 7;
     sound_start_bg_music("opus-tone.mid", 80, 0);
-    sound_background_update_duration = 0;
+    SOUND_TEST_CHECK(sound_music_get_duration() == 7);
     SOUND_TEST_CHECK(sound_test_wait_for_music_finished());
     SOUND_TEST_CHECK(sound_get_bg_music() == NULL);
     SOUND_TEST_CHECK(!sound_playing_music());
+    SOUND_TEST_CHECK(sound_test_duration_write_count == 1);
+    SOUND_TEST_CHECK(strcmp(sound_test_duration_written_name, "opus-tone.mid") == 0);
 
     sound_start_bg_music("opus-tone.mid", 80, 1);
     sound_background_update_duration = 0;
