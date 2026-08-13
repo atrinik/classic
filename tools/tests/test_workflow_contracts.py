@@ -124,6 +124,16 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59", workflow)
         self.assertIn("dependency_bundle.py build", workflow)
         self.assertIn("immutable dependency material tag exists", workflow)
+        self.assertIn(
+            'if ! tags=$(build/oras/oras repo tags "${image}" --format json 2>&1); then',
+            workflow,
+        )
+        self.assertIn(
+            "if test \"${tags}\" != 'Error response from registry: name unknown: repository name not known to registry'; then",
+            workflow,
+        )
+        self.assertIn("tags='{\"tags\":[]}'", workflow)
+        self.assertNotIn('repo tags "${image}" --format json || true', workflow)
         self.assertNotIn("pull_request:", workflow)
         self.assertNotIn("contents: write", workflow)
         self.assertIn("attestations: read", self.text("release.yml"))

@@ -68,7 +68,13 @@ jobs:
           image=$(python3 tools/release/dependency_bundle.py show --field image)
           tag=$(python3 tools/release/dependency_bundle.py show --field tag)
           digest=$(python3 tools/release/dependency_bundle.py show --field digest)
-          tags=$(build/oras/oras repo tags "${image}" --format json)
+          if ! tags=$(build/oras/oras repo tags "${image}" --format json 2>&1); then
+            if test "${tags}" != 'Error response from registry: name unknown: repository name not known to registry'; then
+              printf '%s\n' "${tags}" >&2
+              exit 1
+            fi
+            tags='{"tags":[]}'
+          fi
           if jq -e --arg tag "${tag}" '.tags | index($tag)' <<<"${tags}" >/dev/null; then
             existing=$(build/oras/oras resolve "${image}:${tag}")
             if test "${existing}" != "${digest}"; then
