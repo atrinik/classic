@@ -294,7 +294,8 @@ jobs:
                 -DCMAKE_BUILD_TYPE=Release \
                 -DATRINIK_PROTOCOL_SOURCE_DIR=/workspace/protocol
               cmake --build libatrinik/build/windows-tests \
-                --target libatrinik-path libatrinik-rendezvous libatrinik-metaserver-publisher \
+                --target libatrinik-path libatrinik-rendezvous libatrinik-signals \
+                  libatrinik-metaserver-publisher \
                   libatrinik-metaserver-url libatrinik-socket-address libatrinik-socket-quic \
                   libatrinik-stun \
                 --parallel "$(nproc)"
@@ -340,6 +341,7 @@ jobs:
                 --output-dir "${stage}" \
                 libatrinik/build/windows-tests/libatrinik-path.exe \
                 libatrinik/build/windows-tests/libatrinik-rendezvous.exe \
+                libatrinik/build/windows-tests/libatrinik-signals.exe \
                 libatrinik/build/windows-tests/libatrinik-metaserver-publisher.exe \
                 libatrinik/build/windows-tests/libatrinik-metaserver-url.exe \
                 libatrinik/build/windows-tests/libatrinik-socket-address.exe \
@@ -440,6 +442,82 @@ jobs:
           & (Join-Path $bundle "libatrinik-rendezvous.exe") $positive $negative
           if ($LASTEXITCODE -ne 0) {
             throw "libatrinik-rendezvous.exe failed with exit code ${LASTEXITCODE}"
+          }
+
+          Push-Location $bundle
+          $originalAppData = $env:APPDATA
+          try {
+            Remove-Item Env:APPDATA -ErrorAction SilentlyContinue
+            Remove-Item -Force -ErrorAction SilentlyContinue `
+              "libatrinik-signals-test-traceback-*.txt"
+            $process = Start-Process `
+              -FilePath (Join-Path $bundle "libatrinik-signals.exe") `
+              -ArgumentList "--crash" -Wait -PassThru
+            $exitCode = '{0:X8}' -f ($process.ExitCode -band 0xffffffffL)
+            if ($exitCode -ne "C0000005") {
+              throw "libatrinik-signals.exe exited with 0x${exitCode}"
+            }
+            $tracebacks = @(Get-ChildItem -File `
+              -Filter "libatrinik-signals-test-traceback-*.txt")
+            if ($tracebacks.Count -ne 1) {
+              throw "Expected one traceback file, found $($tracebacks.Count)"
+            }
+            $traceback = Get-Content -Raw -LiteralPath $tracebacks[0].FullName
+            if ([regex]::Matches($traceback, "(?m)^Error:").Count -ne 1) {
+              throw "Expected exactly one traceback block"
+            }
+            foreach ($field in @(
+              "Exception address:",
+              "Exception code: 0xc0000005",
+              "Access type: write (1)",
+              "Fault address:",
+              "Exception module base:",
+              "Exception module name:",
+              "Stack trace:"
+            )) {
+              if (-not $traceback.Contains($field)) {
+                throw "Traceback is missing '$field'"
+              }
+            }
+            if ($traceback -notmatch `
+                '(?im)^Exception module name: .*libatrinik-signals\.exe\r?$') {
+              throw "Traceback did not identify the crashing executable"
+            }
+            $orderedFields = @(
+              "Exception code:",
+              "Exception address:",
+              "Access type:",
+              "Fault address:",
+              "Exception module base:",
+              "Exception module name:",
+              "Stack trace:"
+            )
+            $previousIndex = -1
+            foreach ($field in $orderedFields) {
+              $index = $traceback.IndexOf($field, [StringComparison]::Ordinal)
+              if ($index -le $previousIndex) {
+                throw "Traceback field '$field' is missing or out of order"
+              }
+              $previousIndex = $index
+            }
+            Remove-Item -Force -LiteralPath $tracebacks[0].FullName
+          } finally {
+            if ($null -eq $originalAppData) {
+              Remove-Item Env:APPDATA -ErrorAction SilentlyContinue
+            } else {
+              $env:APPDATA = $originalAppData
+            }
+            Pop-Location
+          }
+
+          & (Join-Path $bundle "libatrinik-signals.exe") --handled-exception
+          if ($LASTEXITCODE -ne 0) {
+            throw "libatrinik-signals.exe handled exception test failed with exit code ${LASTEXITCODE}"
+          }
+
+          & (Join-Path $bundle "libatrinik-signals.exe") --exception-guard
+          if ($LASTEXITCODE -ne 0) {
+            throw "libatrinik-signals.exe exception guard test failed with exit code ${LASTEXITCODE}"
           }
 
           $publisher = Join-Path $bundle "fixtures/metaserver-publisher-v1.json"

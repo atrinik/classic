@@ -19,6 +19,7 @@ SYSTEM_DLLS = {
     "crypt32.dll",
     "dnsapi.dll",
     "gdi32.dll",
+    "imagehlp.dll",
     "iphlpapi.dll",
     "kernel32.dll",
     "msvcrt.dll",
