@@ -10,6 +10,7 @@
 #include <arch.h>
 #include <disease.h>
 #include <object.h>
+#include <object_methods.h>
 #include <player.h>
 #include <server.h>
 #include <player_status.h>
@@ -367,6 +368,26 @@ START_TEST(test_player_status_explicit_opt_in_lifecycle) {
     assert_status_entry(&reader, "condition:test", "test condition", -1);
     ck_assert(packet_reader_finish(&reader));
 
+    StringBuffer *serialized = stringbuffer_new();
+    object_dump_rec(effect, serialized);
+    char *serialized_string = stringbuffer_finish(serialized);
+    object *roundtrip = object_load_str(serialized_string);
+    ck_assert_ptr_nonnull(roundtrip);
+    ck_assert_msg(object_get_value(roundtrip, "player_status_key") != NULL,
+                  "%s",
+                  serialized_string);
+    ck_assert_str_eq(object_get_value(roundtrip, "player_status_key"), "condition:test");
+    ck_assert_str_eq(object_get_value(roundtrip, "player_status_name"), "test condition");
+    ck_assert_str_eq(object_get_value(roundtrip, "player_status_tooltip"),
+                     "An explicitly published test condition.");
+    ck_assert_uint_eq(roundtrip->face->number, effect->face->number);
+    ck_assert_uint_gt(roundtrip->face->number, 0);
+    ck_assert_ptr_nonnull(roundtrip->name);
+    roundtrip = object_insert_into(roundtrip, pl, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(roundtrip);
+    ck_assert(player_status_should_publish(roundtrip));
+    free(serialized_string);
+
     socket_buffer_clear(CONTR(pl)->cs);
     player_status_send_snapshot(pl);
     packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
@@ -382,12 +403,22 @@ START_TEST(test_player_status_explicit_opt_in_lifecycle) {
     packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
     ck_assert_ptr_nonnull(packet);
     packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
+    assert_status_entry(&reader, "condition:test", "test condition", -1);
+    ck_assert(packet_reader_finish(&reader));
+    object_destroy(effect);
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    object_remove(roundtrip, 0);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_REMOVE);
     char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
     ck_assert(packet_reader_read_string(&reader, VS(key)));
     ck_assert_str_eq(key, "condition:test");
     ck_assert(packet_reader_finish(&reader));
-    object_destroy(effect);
+    object_destroy(roundtrip);
     object_destroy(pl);
 }
 END_TEST
@@ -404,6 +435,7 @@ START_TEST(test_player_status_source_presentation_and_stable_key) {
     ck_assert_ptr_nonnull(effect);
     set_attr_value(&effect->stats, STR, 2);
     effect->protection[ATNR_FIRE] = 15;
+    effect->attack[ATNR_COLD] = 20;
     effect->stats.food = 10;
     ck_assert(player_status_set_from_source(effect, source, "food"));
     effect = object_insert_into(effect, pl, INS_NO_MERGE);
@@ -425,12 +457,14 @@ START_TEST(test_player_status_source_presentation_and_stable_key) {
     ck_assert(packet_reader_read_string(&reader, VS(tooltip)));
     ck_assert_ptr_nonnull(strstr(tooltip, "Str +2"));
     ck_assert_ptr_nonnull(strstr(tooltip, "fire protection 15%"));
+    ck_assert_ptr_nonnull(strstr(tooltip, "cold attack 20%"));
     (void)packet_reader_read_int32(&reader);
     ck_assert(packet_reader_finish(&reader));
 
     object *same_effect = arch_get("force");
     set_attr_value(&same_effect->stats, STR, 2);
     same_effect->protection[ATNR_FIRE] = 15;
+    same_effect->attack[ATNR_COLD] = 20;
     same_effect->stats.food = 50;
     ck_assert(player_status_set_from_source(same_effect, source, "food"));
     ck_assert_str_eq(object_get_value(effect, "player_status_key"),
@@ -449,14 +483,28 @@ START_TEST(test_player_status_paralysis_refresh_snapshot_and_cure) {
     CONTR(pl)->cs->state = ST_PLAYING;
     socket_buffer_clear(CONTR(pl)->cs);
 
-    SET_FLAG(pl, FLAG_PARALYZED);
     pl->speed = 0.1;
-    pl->speed_left = -0.5;
-    player_status_update_paralysis(pl);
+    pl->speed_left = 0.0;
+    attack_peform_paralyze(pl, 1.0);
+    ck_assert(QUERY_FLAG(pl, FLAG_PARALYZED));
+    ck_assert(pl->speed_left < 0.0);
 
     packet_struct *packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
     ck_assert_ptr_nonnull(packet);
     packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
+    assert_status_entry(&reader,
+                        "condition:paralysis",
+                        "paralysis",
+                        (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
+    ck_assert(packet_reader_finish(&reader));
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    pl->speed = 1.0;
+    living_update_player(pl);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
     packet_reader_init(&reader, packet->data, packet->len);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
     assert_status_entry(&reader,
@@ -479,8 +527,9 @@ START_TEST(test_player_status_paralysis_refresh_snapshot_and_cure) {
     ck_assert(packet_reader_finish(&reader));
 
     socket_buffer_clear(CONTR(pl)->cs);
-    CLEAR_FLAG(pl, FLAG_PARALYZED);
-    player_status_update_paralysis(pl);
+    pl->speed_left = 0.0;
+    ck_assert_int_eq(handle_newcs_player(CONTR(pl)), 0);
+    ck_assert(!QUERY_FLAG(pl, FLAG_PARALYZED));
     packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
     ck_assert_ptr_nonnull(packet);
     packet_reader_init(&reader, packet->data, packet->len);
@@ -489,6 +538,68 @@ START_TEST(test_player_status_paralysis_refresh_snapshot_and_cure) {
     ck_assert(packet_reader_read_string(&reader, VS(key)));
     ck_assert_str_eq(key, "condition:paralysis");
     ck_assert(packet_reader_finish(&reader));
+
+    object_destroy(pl);
+}
+END_TEST
+
+START_TEST(test_player_status_native_consumable_producers) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+
+    object *food = arch_get("apple");
+    ck_assert_ptr_nonnull(food);
+    FREE_AND_COPY_HASH(food->title, "of might");
+    set_attr_value(&food->stats, STR, 2);
+    food->speed_left = 0.1;
+    food = object_insert_into(food, pl, INS_NO_MERGE);
+    socket_buffer_clear(CONTR(pl)->cs);
+    manual_apply(pl, food, 0);
+    packet_struct *packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
+    char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+    char name[ATRINIK_PLAYER_STATUS_NAME_SIZE + 1U];
+    char tooltip[ATRINIK_PLAYER_STATUS_TOOLTIP_SIZE + 1U];
+    ck_assert(packet_reader_read_string(&reader, VS(key)));
+    ck_assert(strncmp(key, "food:", strlen("food:")) == 0);
+    (void)packet_reader_read_uint16(&reader);
+    ck_assert(packet_reader_read_string(&reader, VS(name)));
+    ck_assert_str_eq(name, "red apple");
+    ck_assert(packet_reader_read_string(&reader, VS(tooltip)));
+    ck_assert_ptr_nonnull(strstr(tooltip, "Str +2"));
+    ck_assert_int_gt(packet_reader_read_int32(&reader), 0);
+    ck_assert(packet_reader_finish(&reader));
+
+    object *potion = arch_get("potion_generic");
+    ck_assert_ptr_nonnull(potion);
+    potion->stats.food = 1;
+    set_attr_value(&potion->stats, DEX, 1);
+    potion->attack[ATNR_COLD] = 10;
+    potion = object_insert_into(potion, pl, INS_NO_MERGE);
+    socket_buffer_clear(CONTR(pl)->cs);
+    manual_apply(pl, potion, 0);
+    object *potion_effect = NULL;
+    FOR_INV_PREPARE(pl, tmp) {
+        const char *status_key = object_get_value(tmp, "player_status_key");
+        if (status_key != NULL && strncmp(status_key, "potion:", strlen("potion:")) == 0) {
+            potion_effect = tmp;
+            break;
+        }
+    }
+    FOR_INV_FINISH();
+    ck_assert_ptr_nonnull(potion_effect);
+    ck_assert(QUERY_FLAG(potion_effect, FLAG_IS_USED_UP));
+    ck_assert(FABS(potion_effect->speed) >= 0.000001);
+    ck_assert_int_gt(potion_effect->stats.food, 0);
+    socket_buffer_clear(CONTR(pl)->cs);
+    player_status_update(potion_effect);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
 
     object_destroy(pl);
 }
@@ -510,6 +621,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_player_status_explicit_opt_in_lifecycle);
     tcase_add_test(tc_core, test_player_status_source_presentation_and_stable_key);
     tcase_add_test(tc_core, test_player_status_paralysis_refresh_snapshot_and_cure);
+    tcase_add_test(tc_core, test_player_status_native_consumable_producers);
 
     return s;
 }

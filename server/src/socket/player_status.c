@@ -94,12 +94,13 @@ static uint64_t player_status_hash_int(uint64_t hash, int value) {
     return player_status_hash_bytes(hash, bytes, sizeof(bytes));
 }
 
-static uint64_t player_status_effect_hash(const object *op, const object *source) {
+static uint64_t
+player_status_effect_hash(const object *op, const object *source, const char *display_name) {
     uint64_t hash = UINT64_C(14695981039346656037);
     const char *identity[] = {
         source->arch != NULL ? source->arch->name : NULL,
         source->artifact,
-        source->name,
+        display_name,
         source->title,
     };
     for (size_t i = 0; i < arraysize(identity); i++) {
@@ -117,6 +118,9 @@ static uint64_t player_status_effect_hash(const object *op, const object *source
         hash = player_status_hash_int(hash, op->attack[i]);
         hash = player_status_hash_int(hash, op->protection[i]);
     }
+    hash = player_status_hash_int(hash, source->face != NULL ? source->face->number : 0);
+    hash = player_status_hash_int(hash, QUERY_FLAG(source, FLAG_CURSED));
+    hash = player_status_hash_int(hash, QUERY_FLAG(source, FLAG_DAMNED));
     return hash;
 }
 
@@ -146,17 +150,18 @@ bool player_status_set_from_source(object *op, const object *source, const char 
         return false;
     }
 
+    char *base_name = object_get_base_name_s(source, NULL);
     char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
     int key_length = snprintf(key,
                               sizeof(key),
                               "%s:%016" PRIx64,
                               key_namespace,
-                              player_status_effect_hash(op, source));
+                              player_status_effect_hash(op, source, base_name));
     if (key_length <= 0 || (size_t)key_length >= sizeof(key)) {
+        free(base_name);
         return false;
     }
 
-    char *base_name = object_get_base_name_s(source, NULL);
     StringBuffer *display_name = stringbuffer_new();
     if (QUERY_FLAG(source, FLAG_DAMNED)) {
         stringbuffer_append_string(display_name, "damned ");
@@ -179,6 +184,14 @@ bool player_status_set_from_source(object *op, const object *source, const char 
         have_value = true;
     }
     for (int i = 0; i < NROFATTACKS; i++) {
+        if (op->attack[i] != 0) {
+            stringbuffer_append_printf(tooltip,
+                                       "%s%s attack %" PRIu8 "%%",
+                                       have_value ? ", " : "",
+                                       attack_name[i],
+                                       op->attack[i]);
+            have_value = true;
+        }
         if (op->protection[i] == 0) {
             continue;
         }
@@ -228,7 +241,7 @@ static int32_t player_status_seconds(const object *op) {
     double current = ABS(op->speed_left / op->speed / MAX_TICKS);
     double remaining = ABS((1.0 / op->speed / MAX_TICKS) * (op->stats.food - 1));
     double seconds = current + remaining;
-    return seconds >= INT32_MAX ? INT32_MAX : (int32_t)seconds;
+    return seconds >= INT32_MAX ? INT32_MAX : MAX(1, (int32_t)ceil(seconds));
 }
 
 static void player_status_write_entry(packet_struct *packet, const object *op) {
