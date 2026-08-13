@@ -7,6 +7,7 @@ import argparse
 import datetime
 import email.utils
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -192,7 +193,10 @@ def _retryable(error: BaseException) -> tuple[bool, str, float | None]:
         if isinstance(reason, ssl.SSLError):
             return False, "TLS verification", None
         return True, type(reason).__name__, None
-    if isinstance(error, (ConnectionError, TimeoutError, EOFError, OSError)):
+    if isinstance(error, (
+        ConnectionError, TimeoutError, EOFError, OSError,
+        http.client.IncompleteRead, http.client.RemoteDisconnected,
+    )):
         return True, type(error).__name__, None
     return False, type(error).__name__, None
 

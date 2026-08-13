@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import importlib.util
 import io
 import json
@@ -193,6 +194,14 @@ class DependencyTests(unittest.TestCase):
             )
         self.assertEqual(attempts, [60] * dependencies.DOWNLOAD_ATTEMPTS)
         self.assertEqual(list((self.root / "cache").glob("*.part-*")), [])
+
+    def test_classifies_eof_as_transient(self) -> None:
+        retryable, category, retry_after = dependencies._retryable(
+            http.client.IncompleteRead(b"", 1)
+        )
+        self.assertTrue(retryable)
+        self.assertEqual(category, "IncompleteRead")
+        self.assertIsNone(retry_after)
 
     def test_replaces_corrupt_cached_archive(self) -> None:
         archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
