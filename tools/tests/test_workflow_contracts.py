@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import tempfile
+import textwrap
 import unittest
 
 
@@ -125,9 +126,15 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("dependency_bundle.py build", workflow)
         self.assertIn("immutable dependency material tag exists", workflow)
         self.assertIn("tools/release/check_registry_version.py", workflow)
+        self.assertIn("steps.material-tag.outputs.package_exists", workflow)
         self.assertIn("steps.material-tag.outputs.exists", workflow)
         self.assertIn("steps.material-tag.outputs.digest", workflow)
-        self.assertIn('case "${TAG_EXISTS}" in', workflow)
+        self.assertIn('case "${PACKAGE_EXISTS}:${TAG_EXISTS}" in', workflow)
+        self.assertIn("bootstrap_missing_package:", workflow)
+        self.assertIn("github.event_name == 'workflow_dispatch'", workflow)
+        self.assertIn("materials-428265fcc11e9e3f7fc534659b55008cd26e9da6c74da054074279b7bc4af2e9", workflow)
+        self.assertIn("sha256:ffe1fa8d28a323d502d01400e2260b7b5eec37842e762c439b88bd9ee823923e", workflow)
+        self.assertIn("use the documented recovery path", workflow)
         self.assertNotIn("oras repo tags", workflow)
         self.assertNotIn("pull_request:", workflow)
         self.assertNotIn("contents: write", workflow)
@@ -138,6 +145,97 @@ class WorkflowContractTests(unittest.TestCase):
             "\n  publish:\n", 1
         )[0]
         self.assertIn("attestations: read", candidate_job)
+
+    def test_dependency_bundle_publication_bootstrap_is_explicit_and_fail_closed(self) -> None:
+        workflow = self.text("publish-dependency-bundle.yml")
+        step = workflow.index("        name: Publish or verify the immutable material tag")
+        start = workflow.index("        run: |\n", step) + len("        run: |\n")
+        lines = []
+        for line in workflow[start:].splitlines(keepends=True):
+            if line.strip() and not line.startswith("          "):
+                break
+            lines.append(line)
+        script = textwrap.dedent("".join(lines))
+        expected = "sha256:ffe1fa8d28a323d502d01400e2260b7b5eec37842e762c439b88bd9ee823923e"
+
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            fake_oras = directory / "oras"
+            fake_oras.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >>\"${ORAS_LOG}\"\n"
+                "case \"$1\" in\n"
+                "  cp) exit 0 ;;\n"
+                "  resolve) printf '%s\\n' \"${EXPECTED_RESOLVE}\" ;;\n"
+                "  *) exit 2 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_oras.chmod(0o755)
+
+            def run_case(
+                *, package_exists: str, tag_exists: str,
+                allow_missing: str, existing_digest: str = "",
+            ) -> tuple[subprocess.CompletedProcess[str], str]:
+                log = directory / "oras.log"
+                log.unlink(missing_ok=True)
+                output = directory / "github-output"
+                output.unlink(missing_ok=True)
+                environment = os.environ.copy()
+                environment.update(
+                    {
+                        "ALLOW_MISSING_PACKAGE": allow_missing,
+                        "EXISTING_DIGEST": existing_digest,
+                        "EXPECTED_RESOLVE": expected,
+                        "GITHUB_OUTPUT": str(output),
+                        "ORAS_LOG": str(log),
+                        "PACKAGE_EXISTS": package_exists,
+                        "TAG_EXISTS": tag_exists,
+                    }
+                )
+                result = subprocess.run(
+                    [
+                        "bash", "-euo", "pipefail", "-c",
+                        script.replace("build/oras/oras", str(fake_oras)),
+                    ],
+                    cwd=ROOT,
+                    env=environment,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                return result, log.read_text() if log.exists() else ""
+
+            result, log = run_case(
+                package_exists="false", tag_exists="false", allow_missing="false"
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("use the documented recovery path", result.stderr)
+            self.assertEqual(log, "")
+
+            result, log = run_case(
+                package_exists="false", tag_exists="false", allow_missing="true"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("cp --from-oci-layout", log)
+            self.assertIn("resolve ghcr.io/atrinik/classic-dependencies:", log)
+
+            result, log = run_case(
+                package_exists="true",
+                tag_exists="true",
+                allow_missing="false",
+                existing_digest="sha256:" + "0" * 64,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("exists at sha256:", result.stderr)
+            self.assertEqual(log, "")
+
+            result, log = run_case(
+                package_exists="false", tag_exists="true", allow_missing="true"
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("invalid material-tag audit result", result.stderr)
+            self.assertEqual(log, "")
 
     def test_release_rebinds_current_main_after_waiting_for_bundle(self) -> None:
         workflow = self.text("release.yml")

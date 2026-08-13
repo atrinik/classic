@@ -54,8 +54,11 @@ def find_version(value: object, tag: str) -> str | None:
     return matches[0] if matches else None
 
 
-def write_output(path: Path, exists: bool, digest: str) -> None:
+def write_output(
+    path: Path, package_exists: bool, exists: bool, digest: str
+) -> None:
     with path.open("a", encoding="utf-8") as stream:
+        stream.write(f"package_exists={str(package_exists).lower()}\n")
         stream.write(f"exists={str(exists).lower()}\n")
         stream.write(f"digest={digest}\n")
 
@@ -91,14 +94,14 @@ def main() -> int:
                 and value.get("message") == "Package not found."
             ):
                 if arguments.github_output is not None:
-                    write_output(arguments.github_output, False, "")
+                    write_output(arguments.github_output, False, False, "")
                 print("GHCR package does not exist yet")
                 return 0
             raise RuntimeError(f"cannot audit GHCR package: {detail or value}")
         digest = find_version(value, arguments.tag)
         if digest is not None:
             if arguments.github_output is not None:
-                write_output(arguments.github_output, True, digest)
+                write_output(arguments.github_output, True, True, digest)
             print(
                 f"GHCR tag already exists at {digest}: "
                 f"{arguments.package}:{arguments.tag}"
@@ -108,7 +111,7 @@ def main() -> int:
             break
         page += 1
     if arguments.github_output is not None:
-        write_output(arguments.github_output, False, "")
+        write_output(arguments.github_output, True, False, "")
     print(f"GHCR tag is available: {arguments.package}:{arguments.tag}")
     return 0
 

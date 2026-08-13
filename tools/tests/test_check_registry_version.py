@@ -74,7 +74,34 @@ class CheckRegistryVersionTests(unittest.TestCase):
             with mock.patch.object(check_registry_version, "request", return_value=response):
                 with mock.patch.object(sys, "argv", arguments):
                     self.assertEqual(check_registry_version.main(), 0)
-            self.assertEqual(output.read_text(), "exists=false\ndigest=\n")
+            self.assertEqual(
+                output.read_text(),
+                "package_exists=false\nexists=false\ndigest=\n",
+            )
+
+    def test_absent_material_tag_preserves_package_existence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            arguments = [
+                "check_registry_version.py",
+                "--organization",
+                "atrinik",
+                "--package",
+                "classic-dependencies",
+                "--tag",
+                "materials-" + "a" * 64,
+                "--github-output",
+                str(output),
+            ]
+            with mock.patch.object(
+                check_registry_version, "request", return_value=(0, [], "")
+            ):
+                with mock.patch.object(sys, "argv", arguments):
+                    self.assertEqual(check_registry_version.main(), 0)
+            self.assertEqual(
+                output.read_text(),
+                "package_exists=true\nexists=false\ndigest=\n",
+            )
 
     def test_other_material_package_errors_remain_terminal(self) -> None:
         arguments = [

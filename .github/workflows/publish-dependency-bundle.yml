@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      bootstrap_missing_package:
+        description: Create the exact initial package when it does not exist
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -80,26 +86,39 @@ jobs:
       - id: publish
         name: Publish or verify the immutable material tag
         env:
+          ALLOW_MISSING_PACKAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap_missing_package && 'true' || 'false' }}
           EXISTING_DIGEST: ${{ steps.material-tag.outputs.digest }}
+          PACKAGE_EXISTS: ${{ steps.material-tag.outputs.package_exists }}
           TAG_EXISTS: ${{ steps.material-tag.outputs.exists }}
         run: |
           image=$(python3 tools/release/dependency_bundle.py show --field image)
           tag=$(python3 tools/release/dependency_bundle.py show --field tag)
           digest=$(python3 tools/release/dependency_bundle.py show --field digest)
-          case "${TAG_EXISTS}" in
-            true)
+          case "${PACKAGE_EXISTS}:${TAG_EXISTS}" in
+            true:true)
               if test "${EXISTING_DIGEST}" != "${digest}"; then
                 echo "immutable dependency material tag exists at ${EXISTING_DIGEST}, expected ${digest}" >&2
                 exit 1
               fi
               ;;
-            false)
+            true:false)
               test -z "${EXISTING_DIGEST}"
               build/oras/oras cp --from-oci-layout \
                 "build/dependency-bundle-oci:${tag}" "${image}:${tag}"
               ;;
+            false:false)
+              if test "${ALLOW_MISSING_PACKAGE}" != true; then
+                echo "dependency bundle package is missing; use the documented recovery path" >&2
+                exit 1
+              fi
+              test -z "${EXISTING_DIGEST}"
+              test "${tag}" = materials-428265fcc11e9e3f7fc534659b55008cd26e9da6c74da054074279b7bc4af2e9
+              test "${digest}" = sha256:ffe1fa8d28a323d502d01400e2260b7b5eec37842e762c439b88bd9ee823923e
+              build/oras/oras cp --from-oci-layout \
+                "build/dependency-bundle-oci:${tag}" "${image}:${tag}"
+              ;;
             *)
-              echo "invalid material-tag audit result: ${TAG_EXISTS}" >&2
+              echo "invalid material-tag audit result: package=${PACKAGE_EXISTS} tag=${TAG_EXISTS}" >&2
               exit 1
               ;;
           esac
