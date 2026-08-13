@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <audio_log.h>
 #include <wrapper.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
@@ -75,6 +76,8 @@ static int sound_background_loop;
 static int sound_background_volume;
 /** Per-track adjustment supplied by the current map. */
 static int sound_background_volume_adjustment;
+/** Semantic source of the current background track. */
+static const char *sound_background_source;
 /**
  * Loaded sounds.
  */
@@ -83,6 +86,9 @@ static MIX_Mixer *sound_mixer;
 static MIX_Track *sound_music_track;
 #define SOUND_EFFECT_TRACKS 32
 static MIX_Track *sound_effect_tracks[SOUND_EFFECT_TRACKS];
+#ifdef ATRINIK_SOUND_TESTING
+static bool sound_test_fail_playback;
+#endif
 /**
  * Hook function calle whenever ::sound_background changes its value.
  */
@@ -113,7 +119,9 @@ static void sound_apply_music_volume(int64_t percent) {
 static void sound_start_bg_music_internal(const char *filename,
                                           int64_t volume,
                                           int loop,
-                                          int volume_adjustment);
+                                          int volume_adjustment,
+                                          const char *source);
+static void sound_stop_bg_music_internal(const char *reason);
 
 /**
  * Execute the ::sound_background_hook callback.
@@ -238,6 +246,7 @@ static void sound_music_finished_process(void) {
     uint32_t duration;
     char *tmp;
     const char *bg_music;
+    const char *source;
 
     if (!sound_background) {
         return;
@@ -245,7 +254,10 @@ static void sound_music_finished_process(void) {
 
     tmp = sound_background;
     bg_music = sound_get_bg_music_basename();
+    source = sound_background_source;
     duration = sound_music_get_offset();
+
+    audio_log_music_stopped(source, bg_music, "finished");
 
     sound_background = NULL;
     sound_background_hook_execute();
@@ -263,7 +275,8 @@ static void sound_music_finished_process(void) {
         sound_start_bg_music_internal(bg_music,
                                       sound_background_volume,
                                       sound_background_loop,
-                                      sound_background_volume_adjustment);
+                                      sound_background_volume_adjustment,
+                                      source);
     }
 
     free(tmp);
@@ -304,11 +317,15 @@ void sound_init(void) {
     sound_background = NULL;
 
 #ifdef HAVE_SDL_MIXER
+    sound_background_source = NULL;
     sound_background_hook = NULL;
     sound_data = NULL;
     sound_mixer = NULL;
     sound_music_track = NULL;
     memset(sound_effect_tracks, 0, sizeof(sound_effect_tracks));
+#ifdef ATRINIK_SOUND_TESTING
+    sound_test_fail_playback = false;
+#endif
     enabled = 0;
 
     if (!MIX_Init()) {
@@ -373,6 +390,9 @@ static void sound_cache_free(void) {
  * Deinitialize the sound system.
  */
 void sound_deinit(void) {
+    if (enabled) {
+        sound_stop_bg_music_internal("shutdown");
+    }
     enabled = 0;
 #ifdef HAVE_SDL_MIXER
     if (sound_mixer != NULL) {
@@ -424,7 +444,19 @@ void sound_clear_cache(void) {
  * @return
  * Channel the sound effect is being played on, -1 on failure.
  */
-static int sound_add_effect(const char *filename, int volume, int loop) {
+typedef struct sound_effect_position {
+    bool positioned;
+    int angle;
+    int distance;
+} sound_effect_position_t;
+
+static int sound_add_effect(const char *path,
+                            const char *requested,
+                            const char *effective,
+                            const char *source,
+                            int volume,
+                            int loop,
+                            sound_effect_position_t position) {
 #ifdef HAVE_SDL_MIXER
     sound_data_struct *tmp;
 
@@ -433,18 +465,20 @@ static int sound_add_effect(const char *filename, int volume, int loop) {
     }
 
     /* Try to find the sound first. */
-    HASH_FIND_STR(sound_data, filename, tmp);
+    HASH_FIND_STR(sound_data, path, tmp);
 
     if (!tmp) {
-        MIX_Audio *audio = MIX_LoadAudio(sound_mixer, filename, true);
+        MIX_Audio *audio = MIX_LoadAudio(sound_mixer, path, true);
 
         if (audio == NULL) {
-            LOG(BUG, "Could not load '%s'. Reason: %s.", filename, SDL_GetError());
+            char asset[MAX_BUF * 2];
+            audio_log_asset_escape(effective, VS(asset));
+            LOG(BUG, "Could not load '%s'. Reason: %s.", asset, SDL_GetError());
             return -1;
         }
 
         /* We loaded it now, so add it to the array of loaded sounds. */
-        tmp = sound_new(filename, audio);
+        tmp = sound_new(path, audio);
     }
 
     int channel;
@@ -462,15 +496,18 @@ static int sound_add_effect(const char *filename, int volume, int loop) {
         return -1;
     }
 
-    int64_t effective_percent =
-        setting_get_int(OPT_CAT_SOUND, OPT_VOLUME_SOUND) * MAX(0, volume) / 100;
+    int64_t effective_percent = MAX(
+        INT64_C(0),
+        MIN(INT64_C(100), setting_get_int(OPT_CAT_SOUND, OPT_VOLUME_SOUND) * MAX(0, volume) / 100));
     MIX_Track *track = sound_effect_tracks[channel];
     MIX_StereoGains stereo = {.left = 1.0f, .right = 1.0f};
     SDL_PropertiesID options = 0;
     if (loop != 0) {
         options = SDL_CreateProperties();
         if (options == 0 || !SDL_SetNumberProperty(options, MIX_PROP_PLAY_LOOPS_NUMBER, loop)) {
-            LOG(BUG, "Could not configure loops for '%s'. Reason: %s.", filename, SDL_GetError());
+            char asset[MAX_BUF * 2];
+            audio_log_asset_escape(effective, VS(asset));
+            LOG(BUG, "Could not configure loops for '%s'. Reason: %s.", asset, SDL_GetError());
             if (options != 0) {
                 SDL_DestroyProperties(options);
             }
@@ -478,10 +515,29 @@ static int sound_add_effect(const char *filename, int volume, int loop) {
         }
     }
 
-    if (!MIX_SetTrackAudio(track, tmp->data) ||
-        !MIX_SetTrackGain(track, sound_percent_to_gain(effective_percent)) ||
-        !MIX_SetTrackStereo(track, &stereo) || !MIX_PlayTrack(track, options)) {
-        LOG(BUG, "Could not play '%s'. Reason: %s.", filename, SDL_GetError());
+    if (position.positioned) {
+        float pan = sinf((float)position.angle * (float)M_PI / 180.0f);
+        float attenuation = 1.0f - MIN(255, MAX(0, position.distance)) / 255.0f;
+        stereo.left = attenuation * (pan > 0.0f ? 1.0f - pan : 1.0f);
+        stereo.right = attenuation * (pan < 0.0f ? 1.0f + pan : 1.0f);
+    }
+
+    bool played = MIX_SetTrackAudio(track, tmp->data) &&
+                  MIX_SetTrackGain(track, sound_percent_to_gain(effective_percent)) &&
+                  MIX_SetTrackStereo(track, &stereo);
+#ifdef ATRINIK_SOUND_TESTING
+    if (sound_test_fail_playback) {
+        sound_test_fail_playback = false;
+        played = false;
+    } else
+#endif
+        if (played) {
+        played = MIX_PlayTrack(track, options);
+    }
+    if (!played) {
+        char asset[MAX_BUF * 2];
+        audio_log_asset_escape(effective, VS(asset));
+        LOG(BUG, "Could not play '%s'. Reason: %s.", asset, SDL_GetError());
         MIX_StopTrack(track, 0);
         if (options != 0) {
             SDL_DestroyProperties(options);
@@ -492,10 +548,41 @@ static int sound_add_effect(const char *filename, int volume, int loop) {
         SDL_DestroyProperties(options);
     }
 
+    audio_log_effect_started(source,
+                             requested,
+                             effective,
+                             channel,
+                             (int)effective_percent,
+                             loop,
+                             position.positioned,
+                             position.angle,
+                             position.distance);
+
     return channel;
 #else
+    (void)path;
+    (void)requested;
+    (void)effective;
+    (void)source;
+    (void)volume;
+    (void)loop;
+    (void)position;
     return -1;
 #endif
+}
+
+static int sound_play_effect_loop_source(const char *requested,
+                                         const char *effective,
+                                         int volume,
+                                         int loop,
+                                         const char *source,
+                                         sound_effect_position_t position) {
+    char path[HUGE_BUF];
+    snprintf(path, sizeof(path), DIRECTORY_SFX "/%s", effective);
+    char *resolved = file_path(path, "r");
+    int channel = sound_add_effect(resolved, requested, effective, source, volume, loop, position);
+    free(resolved);
+    return channel;
 }
 
 /**
@@ -506,12 +593,12 @@ static int sound_add_effect(const char *filename, int volume, int loop) {
  * Volume to play at.
  */
 void sound_play_effect(const char *filename, int volume) {
-    char path[HUGE_BUF], *cp;
-
-    snprintf(path, sizeof(path), DIRECTORY_SFX "/%s", filename);
-    cp = file_path(path, "r");
-    sound_add_effect(cp, volume, 0);
-    free(cp);
+    sound_play_effect_loop_source(filename,
+                                  filename,
+                                  volume,
+                                  0,
+                                  "client",
+                                  (sound_effect_position_t){0});
 }
 
 /**
@@ -528,15 +615,12 @@ void sound_play_effect(const char *filename, int volume) {
  * Channel the sound effect will be playing on, -1 on failure.
  */
 int sound_play_effect_loop(const char *filename, int volume, int loop) {
-    char path[HUGE_BUF], *cp;
-    int ret;
-
-    snprintf(path, sizeof(path), DIRECTORY_SFX "/%s", filename);
-    cp = file_path(path, "r");
-    ret = sound_add_effect(cp, volume, loop);
-    free(cp);
-
-    return ret;
+    return sound_play_effect_loop_source(filename,
+                                         filename,
+                                         volume,
+                                         loop,
+                                         "client",
+                                         (sound_effect_position_t){0});
 }
 
 /**
@@ -551,7 +635,8 @@ int sound_play_effect_loop(const char *filename, int volume, int loop) {
 static void sound_start_bg_music_internal(const char *filename,
                                           int64_t volume,
                                           int loop,
-                                          int volume_adjustment) {
+                                          int volume_adjustment,
+                                          const char *source) {
 #ifdef HAVE_SDL_MIXER
     char path[HUGE_BUF];
     sound_data_struct *tmp;
@@ -587,7 +672,9 @@ static void sound_start_bg_music_internal(const char *filename,
         free(cp);
 
         if (music == NULL) {
-            LOG(BUG, "Could not load '%s'. Reason: %s.", path, SDL_GetError());
+            char asset[MAX_BUF * 2];
+            audio_log_asset_escape(filename, VS(asset));
+            LOG(BUG, "Could not load '%s'. Reason: %s.", asset, SDL_GetError());
             return;
         }
 
@@ -595,42 +682,56 @@ static void sound_start_bg_music_internal(const char *filename,
         tmp = sound_new(path, music);
     }
 
-    sound_stop_bg_music();
+    sound_stop_bg_music_internal("replaced");
 
     sound_background = xstrdup(path);
     sound_background_hook_execute();
     sound_background_loop = loop;
     sound_background_volume_adjustment = volume_adjustment;
+    sound_background_source = source;
     sound_background_duration = sound_music_file_get_duration(filename);
     sound_background_update_duration = 1;
 
-    if (!MIX_SetTrackAudio(sound_music_track, tmp->data) ||
-        !MIX_SetTrackGain(sound_music_track, sound_percent_to_gain(volume)) ||
-        !MIX_PlayTrack(sound_music_track, 0)) {
-        LOG(BUG, "Could not play '%s'. Reason: %s.", path, SDL_GetError());
+    bool played = MIX_SetTrackAudio(sound_music_track, tmp->data) &&
+                  MIX_SetTrackGain(sound_music_track, sound_percent_to_gain(volume));
+#ifdef ATRINIK_SOUND_TESTING
+    if (sound_test_fail_playback) {
+        sound_test_fail_playback = false;
+        played = false;
+    } else
+#endif
+        if (played) {
+        played = MIX_PlayTrack(sound_music_track, 0);
+    }
+    if (!played) {
+        char asset[MAX_BUF * 2];
+        audio_log_asset_escape(filename, VS(asset));
+        LOG(BUG, "Could not play '%s'. Reason: %s.", asset, SDL_GetError());
         free(sound_background);
         sound_background = NULL;
         sound_background_hook_execute();
         return;
     }
     sound_apply_music_volume(volume);
+    audio_log_music_started(source, filename, filename, sound_background_volume, loop);
 
 #endif
 }
 
 void sound_start_bg_music(const char *filename, int volume, int loop) {
-    sound_start_bg_music_internal(filename, volume, loop, 0);
+    sound_start_bg_music_internal(filename, volume, loop, 0, "intro-player");
 }
 
 /**
  * Stop the background music, if there is any.
  */
-void sound_stop_bg_music(void) {
+static void sound_stop_bg_music_internal(const char *reason) {
     if (!enabled) {
         return;
     }
 
     if (sound_background) {
+        audio_log_music_stopped(sound_background_source, sound_get_bg_music_basename(), reason);
         free(sound_background);
         sound_background = NULL;
 #ifdef HAVE_SDL_MIXER
@@ -638,6 +739,10 @@ void sound_stop_bg_music(void) {
         MIX_StopTrack(sound_music_track, 0);
 #endif
     }
+}
+
+void sound_stop_bg_music(void) {
+    sound_stop_bg_music_internal("stopped");
 }
 
 /**
@@ -684,14 +789,17 @@ void update_map_bg_music(const char *bg_music) {
         char filename[MAX_BUF];
 
         if (sscanf(bg_music, "%255s %d %d", filename, &loop, &vol) < 1) {
-            LOG(BUG, "Bogus background music: '%s'", bg_music);
+            char asset[MAX_BUF * 2];
+            audio_log_asset_escape(bg_music, VS(asset));
+            LOG(BUG, "Bogus background music: '%s'", asset);
             return;
         }
 
         sound_start_bg_music_internal(filename,
                                       setting_get_int(OPT_CAT_SOUND, OPT_VOLUME_MUSIC) + vol,
                                       loop,
-                                      vol);
+                                      vol,
+                                      "map");
     }
 }
 
@@ -831,41 +939,27 @@ void sound_stop_effect(int channel) {
 #endif
 }
 
-static void sound_set_effect_position(int channel, int angle, int distance) {
-#ifdef HAVE_SDL_MIXER
-    if (channel < 0 || channel >= SOUND_EFFECT_TRACKS || sound_effect_tracks[channel] == NULL) {
-        return;
+static sound_effect_position_t
+sound_position_from_offset(int x, int y, int max_range, int min_3d_distance) {
+    sound_effect_position_t position = {.positioned = true};
+    int range = MAX(1, max_range);
+    position.distance = MIN(255, (255 * isqrt(POW2(x) + POW2(y))) / range);
+    if (setting_get_int(OPT_CAT_SOUND, OPT_3D_SOUNDS) && position.distance >= min_3d_distance) {
+        position.angle = (int)(atan2(-y, x) * (180 / M_PI));
+        position.angle = 90 - position.angle;
     }
-
-    float pan = sinf((float)angle * (float)M_PI / 180.0f);
-    float attenuation = 1.0f - MIN(255, MAX(0, distance)) / 255.0f;
-    MIX_StereoGains gains = {
-        .left = attenuation * (pan > 0.0f ? 1.0f - pan : 1.0f),
-        .right = attenuation * (pan < 0.0f ? 1.0f + pan : 1.0f),
-    };
-    MIX_SetTrackStereo(sound_effect_tracks[channel], &gains);
-#else
-    (void)channel;
-    (void)angle;
-    (void)distance;
-#endif
+    return position;
 }
 
 void sound_command_play_effect(const char *filename, int volume, int loop, int8_t x, int8_t y) {
-    int channel = sound_play_effect_loop(filename, 100 + volume, loop);
-
-    if (channel != -1) {
-        int angle = 0;
-        int distance = (255 * isqrt(POW2(x) + POW2(y))) / MAX_SOUND_DISTANCE;
-
-        if (setting_get_int(OPT_CAT_SOUND, OPT_3D_SOUNDS) &&
-            distance >= (255 / MAX_SOUND_DISTANCE) * 2) {
-            angle = atan2(-y, x) * (180 / M_PI);
-            angle = 90 - angle;
-        }
-
-        sound_set_effect_position(channel, angle, distance);
-    }
+    sound_effect_position_t position =
+        sound_position_from_offset(x, y, MAX_SOUND_DISTANCE, (255 / MAX_SOUND_DISTANCE) * 2);
+    sound_play_effect_loop_source(filename,
+                                  filename,
+                                  100 + volume,
+                                  loop,
+                                  "server-positional",
+                                  position);
 }
 
 void sound_command_play_background(const char *filename, int volume, int loop) {
@@ -873,12 +967,19 @@ void sound_command_play_background(const char *filename, int volume, int loop) {
         sound_start_bg_music_internal(filename,
                                       setting_get_int(OPT_CAT_SOUND, OPT_VOLUME_MUSIC) + volume,
                                       loop,
-                                      volume);
+                                      volume,
+                                      "server-background");
     }
 }
 
 void sound_command_play_absolute(const char *filename, int volume, int loop) {
-    sound_add_effect(filename, (uint8_t)volume, loop);
+    sound_add_effect(filename,
+                     filename,
+                     filename,
+                     "server-absolute",
+                     (uint8_t)volume,
+                     loop,
+                     (sound_effect_position_t){0});
 }
 
 /**
@@ -901,7 +1002,7 @@ static void sound_ambient_free(sound_ambient_struct *tmp) {
  */
 static void sound_ambient_set_position(sound_ambient_struct *tmp) {
 #ifdef HAVE_SDL_MIXER
-    int x, y, angle, distance, cx, cy;
+    int x, y, cx, cy;
 
     cx = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_WIDTH)) / 2;
     cy = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT)) / 2;
@@ -912,18 +1013,9 @@ static void sound_ambient_set_position(sound_ambient_struct *tmp) {
     x = tmp->x - cx;
     y = tmp->y - cy;
 
-    angle = 0;
-    /* Calculate the distance. */
     int range = MAX(1, tmp->max_range + (tmp->max_range / 2));
-    distance = MIN(255, (255 * isqrt(POW2(x) + POW2(y))) / range);
-
-    /* Calculate the angle. */
-    if (setting_get_int(OPT_CAT_SOUND, OPT_3D_SOUNDS) && distance) {
-        angle = atan2(-y, x) * (180 / M_PI);
-        angle = 90 - angle;
-    }
-
-    sound_set_effect_position(tmp->channel, angle, distance);
+    sound_effect_position_t position = sound_position_from_offset(x, y, range, 1);
+    sound_set_effect_position(tmp->channel, position.angle, position.distance);
 #else
     (void)tmp;
 #endif
@@ -1020,7 +1112,13 @@ void socket_command_sound_ambient(uint8_t *data, size_t len, size_t pos) {
             }
 
             /* Try to start playing the sound effect. */
-            channel = sound_play_effect_loop(filename, volume, -1);
+            int cx = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_WIDTH)) / 2;
+            int cy = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT)) / 2;
+            int range = MAX(1, max_range + (max_range / 2));
+            sound_effect_position_t position =
+                sound_position_from_offset((int)x - cx, (int)y - cy, range, 1);
+            channel =
+                sound_play_effect_loop_source(filename, filename, volume, -1, "ambient", position);
 
             /* Successfully started playing the effect, add it to the
              * list of active sound effects. */
@@ -1055,3 +1153,18 @@ int sound_playing_music(void) {
     return 0;
 #endif
 }
+
+#ifdef ATRINIK_SOUND_TESTING
+void sound_test_fail_next_playback(void) {
+    sound_test_fail_playback = true;
+}
+
+size_t sound_test_cache_size(void) {
+    size_t count = 0;
+    sound_data_struct *entry;
+    for (entry = sound_data; entry != NULL; entry = entry->hh.next) {
+        count++;
+    }
+    return count;
+}
+#endif

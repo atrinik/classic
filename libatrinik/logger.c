@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -63,6 +63,7 @@ static const char *const logger_names[LOG_MAX] = {
     "DUMPRX",
     "DUMPTX",
     "HTTP",
+    "AUDIO",
 };
 
 /**
@@ -114,7 +115,7 @@ TOOLKIT_INIT_FUNC(logger) {
 
     logger_filter_stdout = logger_filter_logfile = 0;
 
-    logger_set_filter_stdout("all,-dumptx,-dumprx,-http");
+    logger_set_filter_stdout("all,-dumptx,-dumprx,-http,-audio");
     logger_set_filter_logfile("all,-dumptx,-dumprx");
 
     if (logger_term_has_ansi_colors()) {
