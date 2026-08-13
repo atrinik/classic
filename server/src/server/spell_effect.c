@@ -248,7 +248,7 @@ int cast_wor(object *op, object *caster) {
                                      "spell:word_of_recall",
                                      spells[SP_WOR].name,
                                      "A force is building to return you to your save bed.",
-                                     spellarch[SP_WOR]->clone.face),
+                                     spells[SP_WOR].at->clone.face),
                    0,
                    "Failed to publish word of recall status for %s",
                    object_get_str(op));

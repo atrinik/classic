@@ -13,6 +13,7 @@
 #include <object_methods.h>
 #include <player.h>
 #include <server.h>
+#include <spells.h>
 #include <player_status.h>
 #include <toolkit/packet.h>
 
@@ -309,11 +310,20 @@ START_TEST(test_player_status_capacity_resnapshots_membership_changes) {
     check_setup_env_pl(&map, &pl);
     CONTR(pl)->cs->state = ST_PLAYING;
 
+    pl->speed = 0.1;
+    attack_peform_paralyze(pl, 1.0);
+    ck_assert(QUERY_FLAG(pl, FLAG_PARALYZED));
+
     for (size_t i = 0; i < ATRINIK_PLAYER_STATUS_MAX_STATUSES + 1U; i++) {
         socket_buffer_clear(CONTR(pl)->cs);
         object *effect = arch_get("force_effect");
         ck_assert_ptr_nonnull(effect);
         SET_FLAG(effect, FLAG_APPLIED);
+        if (i % 2U == 0U) {
+            char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+            snprintf(VS(key), "capacity:%zu", i);
+            ck_assert(player_status_set(effect, key, "capacity", "Capacity test.", effect->face));
+        }
         effect = object_insert_into(effect, pl, INS_NO_MERGE);
         ck_assert_ptr_nonnull(effect);
     }
@@ -324,6 +334,24 @@ START_TEST(test_player_status_capacity_resnapshots_membership_changes) {
     packet_reader_init(&reader, packet->data, packet->len);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_SNAPSHOT);
     ck_assert_uint_eq(packet_reader_read_uint16(&reader), ATRINIK_PLAYER_STATUS_MAX_STATUSES);
+    assert_status_entry(&reader,
+                        "condition:paralysis",
+                        "paralysis",
+                        (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
+    char keys[ATRINIK_PLAYER_STATUS_MAX_STATUSES - 1U][ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+    for (size_t i = 0; i < arraysize(keys); i++) {
+        char name[ATRINIK_PLAYER_STATUS_NAME_SIZE + 1U];
+        char tooltip[ATRINIK_PLAYER_STATUS_TOOLTIP_SIZE + 1U];
+        ck_assert(packet_reader_read_string(&reader, VS(keys[i])));
+        ck_assert_uint_gt(packet_reader_read_uint16(&reader), 0);
+        ck_assert(packet_reader_read_string(&reader, VS(name)));
+        ck_assert(packet_reader_read_string(&reader, VS(tooltip)));
+        (void)packet_reader_read_int32(&reader);
+        for (size_t j = 0; j < i; j++) {
+            ck_assert_str_ne(keys[i], keys[j]);
+        }
+    }
+    ck_assert(packet_reader_finish(&reader));
 
     object *removed = pl->inv;
     ck_assert_ptr_nonnull(removed);
@@ -437,6 +465,9 @@ START_TEST(test_player_status_source_presentation_and_stable_key) {
     effect->protection[ATNR_FIRE] = 15;
     effect->attack[ATNR_COLD] = 20;
     effect->stats.food = 10;
+    effect->speed = 0.002;
+    effect->speed_left = -1.0;
+    SET_FLAG(effect, FLAG_IS_USED_UP);
     ck_assert(player_status_set_from_source(effect, source, "food"));
     effect = object_insert_into(effect, pl, INS_NO_MERGE);
     ck_assert_ptr_nonnull(effect);
@@ -458,7 +489,7 @@ START_TEST(test_player_status_source_presentation_and_stable_key) {
     ck_assert_ptr_nonnull(strstr(tooltip, "Str +2"));
     ck_assert_ptr_nonnull(strstr(tooltip, "fire protection 15%"));
     ck_assert_ptr_nonnull(strstr(tooltip, "cold attack 20%"));
-    (void)packet_reader_read_int32(&reader);
+    ck_assert_int_eq(packet_reader_read_int32(&reader), 625);
     ck_assert(packet_reader_finish(&reader));
 
     object *same_effect = arch_get("force");
@@ -470,6 +501,29 @@ START_TEST(test_player_status_source_presentation_and_stable_key) {
     ck_assert_str_eq(object_get_value(effect, "player_status_key"),
                      object_get_value(same_effect, "player_status_key"));
 
+    New_Face same_face = *source->face;
+    same_face.number++;
+    source->face = &same_face;
+    object *renumbered_effect = arch_get("force");
+    set_attr_value(&renumbered_effect->stats, STR, 2);
+    renumbered_effect->protection[ATNR_FIRE] = 15;
+    renumbered_effect->attack[ATNR_COLD] = 20;
+    ck_assert(player_status_set_from_source(renumbered_effect, source, "food"));
+    ck_assert_str_eq(object_get_value(effect, "player_status_key"),
+                     object_get_value(renumbered_effect, "player_status_key"));
+
+    FREE_AND_COPY_HASH(source->title, "hidden title");
+    FREE_AND_COPY_HASH(source->artifact, "hidden_artifact");
+    object *hidden_identity_effect = arch_get("force");
+    set_attr_value(&hidden_identity_effect->stats, STR, 2);
+    hidden_identity_effect->protection[ATNR_FIRE] = 15;
+    hidden_identity_effect->attack[ATNR_COLD] = 20;
+    ck_assert(player_status_set_from_source(hidden_identity_effect, source, "food"));
+    ck_assert_str_eq(object_get_value(effect, "player_status_key"),
+                     object_get_value(hidden_identity_effect, "player_status_key"));
+
+    object_destroy(hidden_identity_effect);
+    object_destroy(renumbered_effect);
     object_destroy(same_effect);
     object_destroy(source);
     object_destroy(pl);
@@ -492,6 +546,20 @@ START_TEST(test_player_status_paralysis_refresh_snapshot_and_cure) {
     packet_struct *packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
     ck_assert_ptr_nonnull(packet);
     packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
+    assert_status_entry(&reader,
+                        "condition:paralysis",
+                        "paralysis",
+                        (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
+    ck_assert(packet_reader_finish(&reader));
+
+    double first_debt = pl->speed_left;
+    socket_buffer_clear(CONTR(pl)->cs);
+    attack_peform_paralyze(pl, 1.0);
+    ck_assert(pl->speed_left < first_debt);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
     packet_reader_init(&reader, packet->data, packet->len);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
     assert_status_entry(&reader,
@@ -543,6 +611,33 @@ START_TEST(test_player_status_paralysis_refresh_snapshot_and_cure) {
 }
 END_TEST
 
+START_TEST(test_player_status_paralysis_pvp_death_clear) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+    pl->speed = 0.1;
+    attack_peform_paralyze(pl, 1.0);
+    ck_assert(QUERY_FLAG(pl, FLAG_PARALYZED));
+
+    map->map_flags |= MAP_FLAG_PVP;
+    socket_buffer_clear(CONTR(pl)->cs);
+    kill_player(pl, true, false);
+    ck_assert(!QUERY_FLAG(pl, FLAG_PARALYZED));
+    packet_struct *packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_REMOVE);
+    char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+    ck_assert(packet_reader_read_string(&reader, VS(key)));
+    ck_assert_str_eq(key, "condition:paralysis");
+    ck_assert(packet_reader_finish(&reader));
+
+    object_destroy(pl);
+}
+END_TEST
+
 START_TEST(test_player_status_native_consumable_producers) {
     mapstruct *map;
     object *pl;
@@ -554,6 +649,7 @@ START_TEST(test_player_status_native_consumable_producers) {
     FREE_AND_COPY_HASH(food->title, "of might");
     set_attr_value(&food->stats, STR, 2);
     food->speed_left = 0.1;
+    SET_FLAG(food, FLAG_CURSED);
     food = object_insert_into(food, pl, INS_NO_MERGE);
     socket_buffer_clear(CONTR(pl)->cs);
     manual_apply(pl, food, 0);
@@ -569,9 +665,9 @@ START_TEST(test_player_status_native_consumable_producers) {
     ck_assert(strncmp(key, "food:", strlen("food:")) == 0);
     (void)packet_reader_read_uint16(&reader);
     ck_assert(packet_reader_read_string(&reader, VS(name)));
-    ck_assert_str_eq(name, "red apple");
+    ck_assert_str_eq(name, "cursed red apple");
     ck_assert(packet_reader_read_string(&reader, VS(tooltip)));
-    ck_assert_ptr_nonnull(strstr(tooltip, "Str +2"));
+    ck_assert_ptr_nonnull(strstr(tooltip, "Str -4"));
     ck_assert_int_gt(packet_reader_read_int32(&reader), 0);
     ck_assert(packet_reader_finish(&reader));
 
@@ -579,7 +675,8 @@ START_TEST(test_player_status_native_consumable_producers) {
     ck_assert_ptr_nonnull(potion);
     potion->stats.food = 1;
     set_attr_value(&potion->stats, DEX, 1);
-    potion->attack[ATNR_COLD] = 10;
+    potion->protection[ATNR_COLD] = 10;
+    SET_FLAG(potion, FLAG_DAMNED);
     potion = object_insert_into(potion, pl, INS_NO_MERGE);
     socket_buffer_clear(CONTR(pl)->cs);
     manual_apply(pl, potion, 0);
@@ -596,11 +693,88 @@ START_TEST(test_player_status_native_consumable_producers) {
     ck_assert(QUERY_FLAG(potion_effect, FLAG_IS_USED_UP));
     ck_assert(FABS(potion_effect->speed) >= 0.000001);
     ck_assert_int_gt(potion_effect->stats.food, 0);
+    ck_assert_int_eq(get_attr_value(&potion_effect->stats, DEX), -2);
+    ck_assert_int_eq(potion_effect->protection[ATNR_COLD], -20);
+    ck_assert_ptr_nonnull(strstr(object_get_value(potion_effect, "player_status_name"), "damned"));
+    ck_assert_ptr_nonnull(strstr(object_get_value(potion_effect, "player_status_tooltip"), "Dex -2"));
+    ck_assert_ptr_nonnull(
+        strstr(object_get_value(potion_effect, "player_status_tooltip"), "cold protection -20%"));
     socket_buffer_clear(CONTR(pl)->cs);
     player_status_update(potion_effect);
     packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
     ck_assert_ptr_nonnull(packet);
 
+    object_destroy(pl);
+}
+END_TEST
+
+START_TEST(test_player_status_word_of_recall_cancel) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+    socket_buffer_clear(CONTR(pl)->cs);
+
+    ck_assert_ptr_nonnull(spells[SP_WOR].at);
+    snprintf(VS(CONTR(pl)->savebed_map), "%s", "/emergency");
+    ck_assert_int_eq(cast_wor(pl, pl), 1);
+    object *recall = NULL;
+    FOR_INV_PREPARE(pl, tmp) {
+        if (tmp->type == WORD_OF_RECALL) {
+            recall = tmp;
+            break;
+        }
+    }
+    FOR_INV_FINISH();
+    ck_assert_ptr_nonnull(recall);
+    ck_assert(player_status_should_publish(recall));
+    packet_struct *packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
+    assert_status_entry(&reader,
+                        "spell:word_of_recall",
+                        "word of recall",
+                        (int32_t)ceil(ABS(recall->speed_left / recall->speed / MAX_TICKS)));
+    ck_assert(packet_reader_finish(&reader));
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    object_remove(recall, 0);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_REMOVE);
+    char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+    ck_assert(packet_reader_read_string(&reader, VS(key)));
+    ck_assert_str_eq(key, "spell:word_of_recall");
+    ck_assert(packet_reader_finish(&reader));
+    object_destroy(recall);
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_eq(cast_wor(pl, pl), 1);
+    FOR_INV_PREPARE(pl, tmp) {
+        if (tmp->type == WORD_OF_RECALL) {
+            recall = tmp;
+            break;
+        }
+    }
+    FOR_INV_FINISH();
+    ck_assert_ptr_nonnull(recall);
+    SET_MAP_FLAGS(map, pl->x, pl->y, GET_MAP_FLAGS(map, pl->x, pl->y) | P_NO_MAGIC);
+    socket_buffer_clear(CONTR(pl)->cs);
+    object_process(recall);
+    packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_REMOVE);
+    ck_assert(packet_reader_read_string(&reader, VS(key)));
+    ck_assert_str_eq(key, "spell:word_of_recall");
+    ck_assert(packet_reader_finish(&reader));
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_eq(cast_wor(pl, pl), 0);
+    ck_assert_ptr_null(queued_command_find(CONTR(pl)->cs, CLIENT_CMD_PLAYER_STATUS));
     object_destroy(pl);
 }
 END_TEST
@@ -621,7 +795,9 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_player_status_explicit_opt_in_lifecycle);
     tcase_add_test(tc_core, test_player_status_source_presentation_and_stable_key);
     tcase_add_test(tc_core, test_player_status_paralysis_refresh_snapshot_and_cure);
+    tcase_add_test(tc_core, test_player_status_paralysis_pvp_death_clear);
     tcase_add_test(tc_core, test_player_status_native_consumable_producers);
+    tcase_add_test(tc_core, test_player_status_word_of_recall_cancel);
 
     return s;
 }

@@ -99,9 +99,8 @@ player_status_effect_hash(const object *op, const object *source, const char *di
     uint64_t hash = UINT64_C(14695981039346656037);
     const char *identity[] = {
         source->arch != NULL ? source->arch->name : NULL,
-        source->artifact,
         display_name,
-        source->title,
+        source->face != NULL ? source->face->name : NULL,
     };
     for (size_t i = 0; i < arraysize(identity); i++) {
         if (identity[i] != NULL) {
@@ -118,7 +117,6 @@ player_status_effect_hash(const object *op, const object *source, const char *di
         hash = player_status_hash_int(hash, op->attack[i]);
         hash = player_status_hash_int(hash, op->protection[i]);
     }
-    hash = player_status_hash_int(hash, source->face != NULL ? source->face->number : 0);
     hash = player_status_hash_int(hash, QUERY_FLAG(source, FLAG_CURSED));
     hash = player_status_hash_int(hash, QUERY_FLAG(source, FLAG_DAMNED));
     return hash;
@@ -239,7 +237,7 @@ static int32_t player_status_seconds(const object *op) {
     }
 
     double current = ABS(op->speed_left / op->speed / MAX_TICKS);
-    double remaining = ABS((1.0 / op->speed / MAX_TICKS) * (op->stats.food - 1));
+    double remaining = ABS(1.0 / op->speed / MAX_TICKS) * MAX(0, op->stats.food - 1);
     double seconds = current + remaining;
     return seconds >= INT32_MAX ? INT32_MAX : MAX(1, (int32_t)ceil(seconds));
 }
