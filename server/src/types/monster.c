@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -115,7 +115,7 @@ void set_npc_enemy(object *npc, object *enemy, rv_vector *rv) {
             rv = &rv2;
         }
 
-        get_rangevector(npc, enemy, rv, RV_DIAGONAL_DISTANCE);
+        get_rangevector(npc, enemy, rv, RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH);
         npc->enemy_count = enemy->count;
 
         /* important: that's our "we lose aggro count" - reset to zero here */

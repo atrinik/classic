@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -311,7 +311,8 @@ static int relative_tile_position_rec(mapstruct *map1,
     if (flags & RV_RECURSIVE_SEARCH) {
         /* Depth-first search for the destination map */
         for (i = 0; i < TILED_NUM; i++) {
-            if (map1->tile_path[i]) {
+            if (map1->tile_path[i] ||
+                (map1->tile_map[i] != NULL && map1->tile_map[i]->in_memory == MAP_IN_MEMORY)) {
                 if (map1->tile_map[i] == NULL || map1->tile_map[i]->in_memory != MAP_IN_MEMORY) {
                     if (flags & RV_NO_LOAD || !load_and_link_tiled_map(map1, i)) {
                         continue;

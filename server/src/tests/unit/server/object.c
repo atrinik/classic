@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -30,6 +30,8 @@
 #include <toolkit/string.h>
 #include <arch.h>
 #include <loader.h>
+#include <monster.h>
+#include <monster_data.h>
 #include <object.h>
 #include <object_methods.h>
 #include <player.h>
@@ -59,6 +61,72 @@ static bool active_list_contains_at(const object *needle, const char *phase) {
 }
 
 #define active_list_contains(needle) active_list_contains_at((needle), __func__)
+
+START_TEST(test_find_enemy_returns_valid_direction_for_tiled_exit_enemy) {
+    mapstruct *source;
+    object *pl;
+    check_setup_env_pl(&source, &pl);
+    FREE_AND_COPY_HASH(source->path, "/tests/stale-rv-source");
+
+    mapstruct *bridge = get_empty_map(24, 24);
+    FREE_AND_COPY_HASH(bridge->path, "/tests/stale-rv-bridge");
+    source->tile_map[TILED_EAST] = bridge;
+    bridge->tile_map[TILED_WEST] = source;
+
+    mapstruct *destination = get_empty_map(24, 24);
+    FREE_AND_COPY_HASH(destination->path, "/tests/stale-rv-destination");
+
+    object_remove(pl, 0);
+    pl->x = 12;
+    pl->y = 12;
+    pl = object_insert_map(pl, destination, NULL, 0);
+    ck_assert_ptr_nonnull(pl);
+
+    object *exit = arch_get("stairs_down");
+    ck_assert_ptr_nonnull(exit);
+    exit->x = 1;
+    exit->y = 1;
+    EXIT_X(exit) = pl->x;
+    EXIT_Y(exit) = pl->y;
+    FREE_AND_ADD_REF_HASH(EXIT_PATH(exit), destination->path);
+    exit = object_insert_map(exit, bridge, NULL, 0);
+    ck_assert_ptr_nonnull(exit);
+
+    object *monster = arch_get("kobold");
+    ck_assert_ptr_nonnull(monster);
+    monster->x = 10;
+    monster->y = 10;
+    monster = object_insert_map(monster, source, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(monster);
+    monster_data_init(monster);
+
+    monster->attacked_by = pl;
+    monster->attacked_by_count = pl->count;
+
+    rv_vector rv = {
+        .distance = 2,
+        .distance_x = 0,
+        .distance_y = 0,
+        .distance_z = 0,
+        .direction = INT_MIN,
+        .part = NULL,
+    };
+
+    ck_assert(on_same_map(monster, pl));
+    ck_assert(!get_rangevector(monster, pl, &rv, RV_DIAGONAL_DISTANCE));
+    rv.direction = INT_MIN;
+
+    ck_assert_ptr_eq(find_enemy(monster, &rv), pl);
+    ck_assert_msg(rv.direction > 0 && rv.direction <= NUM_DIRECTION,
+                  "find_enemy returned an enemy with stale rv.direction %d",
+                  rv.direction);
+
+    object_remove(monster, 0);
+    object_destroy(monster);
+    object_remove(pl, 0);
+    object_destroy(pl);
+}
+END_TEST
 
 START_TEST(test_object_can_merge) {
     object *ob1, *ob2;
@@ -985,6 +1053,7 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
 
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_enemy);
     tcase_add_test(tc_core, test_object_can_merge);
     tcase_add_test(tc_core, test_object_plural_name_contract);
     tcase_add_test(tc_core, test_object_merge_updates_name_and_count);
