@@ -90,6 +90,13 @@ static size_t exit_collect(object *op, bool do_load, object **altern, size_t alt
                 continue;
             }
 
+            /* Map insertion/removal already maintains this spatial index.
+             * Avoid walking arbitrary object piles while resolving the
+             * bounded auto-link neighborhood. */
+            if ((GET_MAP_FLAGS(m, x, y) & P_IS_EXIT) == 0) {
+                continue;
+            }
+
             FOR_MAP_PREPARE(m, x, y, tmp) {
                 if (tmp->type == op->type && tmp->sub_type == op->sub_type) {
                     altern[nrofalt++] = tmp;

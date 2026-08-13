@@ -1882,12 +1882,6 @@ void draw_client_map2(object *pl) {
                                 is_door = 1;
                             }
 
-                            if (head->type == EXIT && level_visibility == MAP_LEVEL_VISIBLE &&
-                                exit_has_usable_destination(head)) {
-                                flags2 |= MAP2_FLAG2_EXIT;
-                                is_exit = 1;
-                            }
-
                             if (head->glow != NULL &&
                                 strlen(head->glow) <= MAP2_PROTOCOL_COLOR_MAX &&
                                 CONTR(pl)->cs->socket_version >= 1060) {
@@ -1897,10 +1891,6 @@ void draw_client_map2(object *pl) {
                             if (layer == LAYER_WALL && QUERY_FLAG(head, FLAG_HIDDEN)) {
                                 flags2 |= MAP2_FLAG2_ROOF;
                                 is_roof = 1;
-                            }
-
-                            if (flags2) {
-                                flags |= MAP2_FLAG_MORE;
                             }
 
                             /* Plugin-controlled visibility is authoritative.
@@ -1942,6 +1932,21 @@ void draw_client_map2(object *pl) {
                                 }
 
                                 continue;
+                            }
+
+                            /* Destination discovery for pathless subtype exits
+                             * can scan their bounded auto-link neighborhood.
+                             * Defer it until plugin visibility is known so
+                             * hidden objects never pay that cost or disclose a
+                             * semantic. */
+                            if (head->type == EXIT && level_visibility == MAP_LEVEL_VISIBLE &&
+                                exit_has_usable_destination(head)) {
+                                flags2 |= MAP2_FLAG2_EXIT;
+                                is_exit = 1;
+                            }
+
+                            if (flags2) {
+                                flags |= MAP2_FLAG_MORE;
                             }
 
                             /* Damage animation? Store it for later. */
