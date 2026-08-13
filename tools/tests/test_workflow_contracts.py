@@ -698,6 +698,27 @@ class WorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn('"maps/regions.reg"', smoke)
+        shutdown_loop = smoke[
+            smoke.index("$shutdownDeadline =") : smoke.index(
+                'if ($process.ExitCode -ne 0)', smoke.index("$shutdownDeadline =")
+            )
+        ]
+        self.assertIn("AddSeconds(30)", shutdown_loop)
+        self.assertIn("while (-not $process.HasExited", shutdown_loop)
+        self.assertIn('$process.StandardInput.WriteLine("shutdown")', shutdown_loop)
+        self.assertIn("$process.StandardInput.Flush()", shutdown_loop)
+        self.assertIn("$process.WaitForExit(1000)", shutdown_loop)
+        self.assertIn("$shutdownAttempts", shutdown_loop)
+        self.assertIn("$shutdownTimedOut", shutdown_loop)
+        self.assertIn("$process.Kill($true)", shutdown_loop)
+        self.assertLess(
+            smoke.index("$process.StandardOutput.ReadToEndAsync()"),
+            smoke.index("$shutdownDeadline ="),
+        )
+        self.assertLess(
+            smoke.index("$remainderTask.Result"),
+            smoke.index('"Packaged server did not shut down after $shutdownAttempts "'),
+        )
         self.assertIn('"--port_mapping=off"', smoke)
         self.assertIn('"--stun_server=off"', smoke)
         self.assertIn('[System.Net.Sockets.UdpClient]::new(0)', smoke)
@@ -722,7 +743,7 @@ class WorkflowContractTests(unittest.TestCase):
             smoke.index('$process.StandardInput.WriteLine("shutdown")'),
         )
         self.assertIn("AddSeconds(60)", smoke)
-        self.assertIn("WaitForExit(30000)", smoke)
+        self.assertNotIn("WaitForExit(30000)", smoke)
         self.assertIn("$remainderTask.Wait(10000)", smoke)
         self.assertIn("WaitForExit(10000)", smoke)
         self.assertIn("$process.Kill($true)", smoke)
