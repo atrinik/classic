@@ -939,6 +939,31 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(evidence["checks"]["candidate_sustained_p95"]["passed"])
         self.assertTrue(evidence["checks"]["full_redraw_accounting"]["passed"])
 
+    def test_cross_contract_comparison_keeps_candidate_guards_enforced(self) -> None:
+        baseline = native_record(sustained_p95_ns=2_000_000)
+        baseline["schema_version"] = 4
+        baseline["identity"]["instrumentation"]["schema_version"] = 4
+        candidate = native_record(sustained_p95_ns=2_300_000)
+        evidence = benchmark._build_evidence(
+            [baseline, copy.deepcopy(baseline), copy.deepcopy(baseline)],
+            [candidate, copy.deepcopy(candidate), copy.deepcopy(candidate)],
+            [],
+            additional_contexts(),
+            enforce_performance=False,
+            comparison_note=benchmark.CROSS_CONTRACT_NOTE,
+        )
+        self.assertEqual(evidence["mode"], "comparison")
+        self.assertFalse(evidence["checks"]["base_candidate_sustained_p95"]["enforced"])
+        self.assertFalse(evidence["checks"]["checkpoint"]["enforced"])
+        self.assertFalse(evidence["checks"]["instrumentation_identity"]["enforced"])
+        self.assertTrue(evidence["checks"]["full_redraw_accounting"]["enforced"])
+        report = benchmark._render_complete_evidence(
+            evidence, "success", lambda value: value
+        )
+        self.assertIn("cross-contract comparison", report)
+        self.assertIn("alternated on the same runner", report)
+        self.assertIn("Map render path p95 (contract-specific)", report)
+
     def test_informational_performance_failure_does_not_hide_or_fail(self) -> None:
         slow = native_record(sustained_p95_ns=50_000_000)
         evidence = benchmark._build_evidence(
@@ -1359,10 +1384,14 @@ class CommentTests(unittest.TestCase):
             root = Path(temporary)
             files = [
                 root / name
-                for name in ("base", "base.xml", "candidate", "candidate.xml", "discrete.xml")
+                for name in (
+                    "base", "base.xml", "base-schema.py", "candidate", "candidate.xml",
+                    "discrete.xml",
+                )
             ]
             for path in files:
                 path.write_text("input")
+            files[2].write_text("def validate_record(value):\n    return value\n")
             output = root / "evidence.json"
             with mock.patch.object(
                 benchmark, "compare", side_effect=benchmark.BenchmarkError("injected failure")
@@ -1371,9 +1400,10 @@ class CommentTests(unittest.TestCase):
                     [
                         "compare", "--baseline-client", str(files[0]),
                         "--baseline-manifest", str(files[1]),
-                        "--candidate-client", str(files[2]),
-                        "--candidate-manifest", str(files[3]),
-                        "--discrete-manifest", str(files[4]), "--output", str(output),
+                        "--baseline-schema", str(files[2]),
+                        "--candidate-client", str(files[3]),
+                        "--candidate-manifest", str(files[4]),
+                        "--discrete-manifest", str(files[5]), "--output", str(output),
                     ]
                 )
             self.assertEqual(result, 2)
@@ -1384,18 +1414,23 @@ class CommentTests(unittest.TestCase):
             root = Path(temporary)
             files = [
                 root / name
-                for name in ("base", "base.xml", "candidate", "candidate.xml", "discrete.xml")
+                for name in (
+                    "base", "base.xml", "base-schema.py", "candidate", "candidate.xml",
+                    "discrete.xml",
+                )
             ]
             for path in files:
                 path.write_text("input")
+            files[2].write_text("def validate_record(value):\n    return value\n")
             output = root / "evidence.json"
             arguments = [
                 "compare",
                 "--baseline-client", str(files[0]),
                 "--baseline-manifest", str(files[1]),
-                "--candidate-client", str(files[2]),
-                "--candidate-manifest", str(files[3]),
-                "--discrete-manifest", str(files[4]),
+                "--baseline-schema", str(files[2]),
+                "--candidate-client", str(files[3]),
+                "--candidate-manifest", str(files[4]),
+                "--discrete-manifest", str(files[5]),
                 "--informational-performance",
                 "--comparison-note", benchmark.COMPARE_FOUNDATION_NOTE,
                 "--output", str(output),
