@@ -1348,7 +1348,7 @@ static void player_view_render_stages_json(const render_profile_snapshot_t *stat
         {"objects", RENDER_PROFILE_MAP_OBJECTS},
         {"paint", RENDER_PROFILE_MAP_PAINT},
         {"command_sort", RENDER_PROFILE_MAP_COMMAND_SORT},
-        {"door_occlusion", RENDER_PROFILE_MAP_DOOR_OCCLUSION},
+        {"living_occlusion", RENDER_PROFILE_MAP_LIVING_OCCLUSION},
         {"sprite_effects", RENDER_PROFILE_MAP_SPRITE_EFFECTS},
         {"hint_replay", RENDER_PROFILE_MAP_HINT_REPLAY},
         {"ui", RENDER_PROFILE_MAP_UI},

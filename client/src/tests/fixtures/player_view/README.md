@@ -151,9 +151,10 @@ and freezes the retained legacy living cue without enabling the new outline.
 The living-outline scenes generalize that exact partial-occlusion contract to
 non-local `LAYER_LIVING` commands. They freeze an unobscured actor, a same-level
 wall, a positive-depth roof, a nearby but non-overlapping wall, a wall below the
-established alpha threshold, and three independently masked actors where only
-one overlaps later structural geometry. The local actor remains yellow while
-an occluded non-local actor receives a cyan outline. A generated crowded scene
+established alpha threshold, a doubled actor, fully dark actors and walls, and
+three independently masked actors where only one overlaps later structural
+geometry. The local actor remains yellow while an occluded non-local actor
+receives a cyan outline. A generated crowded scene
 with 24 non-local actors and 24 later walls supplies bounded Release benchmark
 input. A matching 24-actor scene without walls proves that projected-bounds
 rejection avoids mask allocation when no actor is occluded.

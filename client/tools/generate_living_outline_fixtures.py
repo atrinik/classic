@@ -16,6 +16,7 @@ LAYER_LIVING = 5
 FACE_ACTOR = 4
 FACE_WALL = 8
 FLAG_HEIGHT = 0x08
+FLAG_DOUBLE = 0x40
 FLAG_MORE = 0x80
 FLAG2_ALPHA = 0x00000001
 FLAG2_ROOF = 0x00000100
@@ -28,6 +29,7 @@ def layer(
     height: int | None = None,
     alpha: int | None = None,
     roof: bool = False,
+    draw_double: bool = False,
 ) -> bytes:
     """Encode the small MAP2 layer subset used by these scenes."""
     flags = 0
@@ -36,6 +38,8 @@ def layer(
     if height is not None:
         flags |= FLAG_HEIGHT
         suffix.extend(struct.pack(">h", height))
+    if draw_double:
+        flags |= FLAG_DOUBLE
     if alpha is not None:
         flags2 |= FLAG2_ALPHA
     if roof:
@@ -48,10 +52,10 @@ def layer(
     return struct.pack(">BHBB", socket_layer, face, 0, flags) + suffix
 
 
-def tile(x: int, y: int, *layers: bytes) -> bytes:
+def tile(x: int, y: int, *layers: bytes, radiance: int = SCALAR_RADIANCE) -> bytes:
     """Encode one lit MAP2 tile and its closed extended-flags byte."""
     mask = x << 11 | y << 6 | 0x4
-    return struct.pack(">HHB", mask, SCALAR_RADIANCE, len(layers)) + b"".join(layers) + b"\0"
+    return struct.pack(">HHB", mask, radiance, len(layers)) + b"".join(layers) + b"\0"
 
 
 def packet(levels: tuple[tuple[int, bytes], ...]) -> bytes:
@@ -84,6 +88,10 @@ def scenes() -> dict[str, bytes]:
         layer(LAYER_WALL, FACE_WALL, height=16, alpha=127),
     )
     roof = tile(10, 9, layer(LAYER_WALL, FACE_WALL, height=16, roof=True))
+    double_actor = tile(7, 6, layer(LAYER_LIVING, FACE_ACTOR, draw_double=True))
+    upper_copy_wall = tile(8, 7, layer(LAYER_WALL, FACE_WALL, height=48))
+    dark_actor = tile(7, 6, layer(LAYER_LIVING, FACE_ACTOR), radiance=0)
+    dark_wall = tile(8, 7, layer(LAYER_WALL, FACE_WALL, height=16), radiance=0)
 
     crowded_unobscured = bytearray(tile(ORIGIN, ORIGIN, layer(LAYER_LIVING, FACE_ACTOR)))
     crowded = bytearray(crowded_unobscured)
@@ -107,6 +115,9 @@ def scenes() -> dict[str, bytes]:
         ),
         "living-outline-nearby-wall": base(actor, nearby_wall),
         "living-outline-translucent": base(actor, translucent_wall),
+        "living-outline-double": base(double_actor, upper_copy_wall),
+        "living-outline-dark-actor": base(dark_actor, same_level_wall),
+        "living-outline-dark-wall": base(actor, dark_wall),
         "living-outline-multiple": base(
             tile(5, 6, layer(LAYER_LIVING, FACE_ACTOR)),
             actor,

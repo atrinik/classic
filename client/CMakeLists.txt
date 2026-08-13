@@ -773,6 +773,15 @@ if (BUILD_TESTING)
     add_test(NAME client-player-view-living-outline-translucent
         COMMAND atrinik --player-view
             "${player_view_fixtures}/living-outline-translucent.xml" -)
+    add_test(NAME client-player-view-living-outline-double
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-double.xml" -)
+    add_test(NAME client-player-view-living-outline-dark-actor
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-dark-actor.xml" -)
+    add_test(NAME client-player-view-living-outline-dark-wall
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/living-outline-dark-wall.xml" -)
     add_test(NAME client-player-view-living-outline-multiple
         COMMAND atrinik --player-view
             "${player_view_fixtures}/living-outline-multiple.xml" -)

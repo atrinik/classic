@@ -2899,25 +2899,32 @@ static bool map_render_command_mask_occlusion(map_render_command_t *living,
 
     Uint32 visible =
         pixel_format_map_rgba(living->living_occlusion_mask->format, 255, 255, 255, 255);
+    int living_copies = living->draw_double ? 2 : 1;
     int occluder_copies = occluder->draw_double ? 2 : 1;
-    for (int copy = 0; copy < occluder_copies; copy++) {
-        int occluder_y = occluder->y - copy * 22;
-        int x_start = MAX(living->x, occluder->x);
-        int x_end = MIN(living->x + living_geometry->w, occluder->x + occluder_geometry->w);
-        int y_start = MAX(living->y, occluder_y);
-        int y_end = MIN(living->y + living_geometry->h, occluder_y + occluder_geometry->h);
+    int mask_y = living->y - (living_copies - 1) * 22;
+    for (int living_copy = 0; living_copy < living_copies; living_copy++) {
+        int living_y = living->y - living_copy * 22;
+        for (int occluder_copy = 0; occluder_copy < occluder_copies; occluder_copy++) {
+            int occluder_y = occluder->y - occluder_copy * 22;
+            int x_start = MAX(living->x, occluder->x);
+            int x_end = MIN(living->x + living_geometry->w, occluder->x + occluder_geometry->w);
+            int y_start = MAX(living_y, occluder_y);
+            int y_end = MIN(living_y + living_geometry->h, occluder_y + occluder_geometry->h);
 
-        for (int y = y_start; y < y_end; y++) {
-            for (int x = x_start; x < x_end; x++) {
-                int living_x = x - living->x;
-                int living_y = y - living->y;
-                if (!surface_pixel_visible(living_geometry, living_x, living_y) ||
-                    !surface_pixel_visible(occluder_geometry, x - occluder->x, y - occluder_y)) {
-                    continue;
+            for (int y = y_start; y < y_end; y++) {
+                for (int x = x_start; x < x_end; x++) {
+                    int source_x = x - living->x;
+                    int source_y = y - living_y;
+                    if (!surface_pixel_visible(living_geometry, source_x, source_y) ||
+                        !surface_pixel_visible(occluder_geometry,
+                                               x - occluder->x,
+                                               y - occluder_y)) {
+                        continue;
+                    }
+
+                    putpixel(living->living_occlusion_mask, source_x, y - mask_y, visible);
+                    added = true;
                 }
-
-                putpixel(living->living_occlusion_mask, living_x, living_y, visible);
-                added = true;
             }
         }
     }
@@ -2942,6 +2949,8 @@ done:
 static bool map_render_command_is_living_occluder(const map_render_command_t *living,
                                                   const map_render_command_t *occluder) {
     return occluder->object_layer == LAYER_WALL &&
+           !(BIT_QUERY(occluder->effects.flags, SPRITE_FLAG_DARK) &&
+             occluder->effects.dark_level == DARK_LEVELS) &&
            (occluder->effects.alpha == 0 || occluder->effects.alpha >= 128) &&
            map_render_command_overlaps(living, occluder);
 }
@@ -2950,7 +2959,9 @@ static bool map_render_command_is_living_occluder(const map_render_command_t *li
 static void map_render_commands_find_living_occlusion(map_render_context_t *context) {
     for (size_t living_index = 0; living_index < context->commands_num; living_index++) {
         map_render_command_t *living = &context->commands[living_index];
-        if (living->object_layer != LAYER_LIVING) {
+        if (living->object_layer != LAYER_LIVING ||
+            (BIT_QUERY(living->effects.flags, SPRITE_FLAG_DARK) &&
+             living->effects.dark_level == DARK_LEVELS)) {
             continue;
         }
 
@@ -2968,7 +2979,9 @@ static void map_render_commands_find_living_occlusion(map_render_context_t *cont
             continue;
         }
         living->living_occlusion_mask =
-            SDL_CreateSurface(living_geometry->w, living_geometry->h, FormatHolder->format);
+            SDL_CreateSurface(living_geometry->w,
+                              living_geometry->h + (living->draw_double ? 22 : 0),
+                              FormatHolder->format);
         Uint32 transparent =
             living->living_occlusion_mask != NULL
                 ? pixel_format_map_rgba(living->living_occlusion_mask->format, 0, 0, 0, 0)
@@ -3022,7 +3035,7 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool pr
         render_profiler_end(RENDER_PROFILE_MAP_HINT_REPLAY, profile_hint_started);
         uint64_t profile_occlusion_started = render_profiler_begin();
         map_render_commands_find_living_occlusion(context);
-        render_profiler_end(RENDER_PROFILE_MAP_DOOR_OCCLUSION, profile_occlusion_started);
+        render_profiler_end(RENDER_PROFILE_MAP_LIVING_OCCLUSION, profile_occlusion_started);
     }
 
     uint64_t profile_effects_started = render_profiler_begin();
@@ -3072,7 +3085,8 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool pr
                     if (outline != NULL) {
                         surface_show(surface,
                                      command->x - SPRITE_GLOW_SIZE,
-                                     command->y - SPRITE_GLOW_SIZE,
+                                     command->y - (command->draw_double ? 22 : 0) -
+                                         SPRITE_GLOW_SIZE,
                                      NULL,
                                      outline);
                         SDL_DestroySurface(outline);
