@@ -25,6 +25,19 @@ expected archive digest. A tag is a human-readable release coordinate; the
 digest is the integrity boundary. Git submodules and floating branches are
 intentionally not used.
 
+Release rehearsal, candidate packaging, and recovery do not acquire these
+archives from their origin URLs. `dependencies.bundle.json` binds the complete
+client/server lock set plus `libpcpnatpmp` material to an exact OCI manifest
+digest. The trusted default-branch publisher builds that deterministic layout
+through this same fetcher. Release staging verifies the GitHub OCI attestation,
+OCI digest, closed manifest and materials statement, source-lock and material
+digests, sizes, and all four archive hashes before installing the raw archives
+into their ordinary cache locations. Component sync selects those staged
+download directories and uses
+the fetcher's explicit `--refresh --offline` boundary; server CMake also uses
+the staged immutable-source cache. A missing or invalid entry fails without
+opening a network connection.
+
 The repository-root `Update verified content lock` workflow is the only
 automated writer for the content record. Daily and manual runs enumerate the
 complete published `atrinik/content` release history and accept only the

@@ -17,7 +17,16 @@ done
 
 mxe_cmake=${MXE_TARGET:-x86_64-w64-mingw32.shared}-cmake
 command -v "${mxe_cmake}" >/dev/null
-python3 tools/dependencies.py sync
+dependency_downloads=${ATRINIK_DEPENDENCY_DOWNLOADS:-}
+dependency_sync_arguments=()
+if [[ -n ${dependency_downloads} ]]; then
+  if [[ ! -d ${dependency_downloads} ]]; then
+    echo "ATRINIK_DEPENDENCY_DOWNLOADS does not identify a staged archive bundle" >&2
+    exit 1
+  fi
+  dependency_sync_arguments+=(--cache "${dependency_downloads}" --refresh --offline)
+fi
+python3 tools/dependencies.py sync "${dependency_sync_arguments[@]}"
 python3 tools/dependencies.py verify
 mkdir -p "${output_directory}"
 

@@ -14,6 +14,7 @@ on:
 
 permissions:
   actions: read
+  attestations: read
   checks: read
   contents: read
   packages: read
@@ -29,6 +30,7 @@ jobs:
     timeout-minutes: 2
     permissions:
       actions: read
+      attestations: read
       checks: read
       contents: write
     outputs:
@@ -168,6 +170,7 @@ jobs:
       needs.discord-config.result == 'success'
     permissions:
       actions: read
+      attestations: read
       checks: read
       contents: read
       packages: read
@@ -284,6 +287,13 @@ jobs:
         run: |
           echo "retained candidate has no matching versioned server image" >&2
           exit 1
+      - name: Install the exact durable dependency bundle for the server image
+        if: >-
+          steps.assets.outputs.state == 'draft' &&
+          steps.registry.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: tools/release/install_dependency_bundle.sh
       - name: Build and publish immutable server image
         id: image
         if: >-
