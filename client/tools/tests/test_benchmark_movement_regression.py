@@ -1138,6 +1138,12 @@ class CommentTests(unittest.TestCase):
         report = benchmark.render_comment(evidence, "success")
         self.assertIn("establishes the hosted-runner baseline", report)
         self.assertIn("No before/after delta is claimed", report)
+        self.assertIn("Before/after summary (standard smooth sustained)", report)
+        self.assertIn("Before (base)", report)
+        self.assertIn("After (candidate)", report)
+        self.assertIn("Unavailable (base predates compatible instrumentation)", report)
+        self.assertIn("2.00 ms | Not computed", report)
+        self.assertIn("500.00 FPS | Not computed", report)
         self.assertNotIn("Base → candidate change", report)
 
     def test_report_explicitly_labels_informational_finding(self) -> None:
@@ -1173,6 +1179,12 @@ class CommentTests(unittest.TestCase):
             evidence = json.loads(evidence_path.read_text())
         report = benchmark.render_comment(evidence, "success")
         self.assertIn("Measured replay-work capacity FPS", report)
+        self.assertIn("Before/after summary (standard smooth sustained)", report)
+        self.assertIn("| Total map-focused update work p95 | 2.00 ms | 2.00 ms | +0.0% |", report)
+        self.assertIn("| Main map p95 | 2.00 ms | 2.00 ms | +0.0% |", report)
+        self.assertIn("| Local minimap map-core p95 | 2.00 ms | 2.00 ms | +0.0% |", report)
+        self.assertIn("| Slow-tail work capacity | 500.00 FPS | 500.00 FPS | +0.0% |", report)
+        self.assertIn("Positive timing changes are slower", report)
         self.assertIn("Base → candidate change", report)
         self.assertIn("positive timing deltas mean the candidate was slower", report)
 

@@ -1517,11 +1517,48 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
             "",
         ]
     )
+    candidate_standard = phases["candidate_standard"]
+    if not isinstance(candidate_standard, dict):
+        raise BenchmarkError("candidate standard phase summaries are incomplete")
+    candidate_sustained = _phase_summary_for_report(
+        candidate_standard["sustained"], "candidate Standard smooth sustained"
+    )
+    lines.extend(
+        [
+            "### Before/after summary (standard smooth sustained)",
+            "",
+            "| Metric | Before (base) | After (candidate) | Change |",
+            "| --- | ---: | ---: | ---: |",
+        ]
+    )
     if evidence["mode"] == "comparison":
         baseline_phases = phases["baseline_standard"]
         candidate_phases = phases["candidate_standard"]
         if not isinstance(baseline_phases, dict) or not isinstance(candidate_phases, dict):
             raise BenchmarkError("movement comparison phase summaries are incomplete")
+        baseline_sustained = _phase_summary_for_report(
+            baseline_phases["sustained"], "baseline Standard smooth sustained"
+        )
+        summary_metrics = (
+            ("Total map-focused update work p95", "work_p95_ms", "ms"),
+            ("Main map p95", "map_p95_ms", "ms"),
+            ("Local minimap map-core p95", "local_minimap_p95_ms", "ms"),
+            ("Slow-tail work capacity", "work_capacity_fps_p95", "FPS"),
+        )
+        for label, field, unit in summary_metrics:
+            before = float(baseline_sustained[field])
+            after = float(candidate_sustained[field])
+            lines.append(
+                f"| {label} | {before:.2f} {unit} | {after:.2f} {unit} | "
+                f"{_percent_change(before, after)} |"
+            )
+        lines.extend(
+            [
+                "",
+                "Positive timing changes are slower; positive capacity changes are faster.",
+                "",
+            ]
+        )
         lines.extend(
             [
                 "### Base → candidate change (standard smooth)",
@@ -1552,6 +1589,24 @@ def _render_complete_evidence(evidence: dict[str, object], client_result: str) -
                 f"{candidate_summary['work_capacity_fps_p95']:.2f} |"
             )
         lines.append("")
+    else:
+        unavailable = "Unavailable (base predates compatible instrumentation)"
+        lines.extend(
+            [
+                f"| Total map-focused update work p95 | {unavailable} | "
+                f"{candidate_sustained['work_p95_ms']:.2f} ms | Not computed |",
+                f"| Main map p95 | {unavailable} | "
+                f"{candidate_sustained['map_p95_ms']:.2f} ms | Not computed |",
+                f"| Local minimap map-core p95 | {unavailable} | "
+                f"{candidate_sustained['local_minimap_p95_ms']:.2f} ms | Not computed |",
+                f"| Slow-tail work capacity | {unavailable} | "
+                f"{candidate_sustained['work_capacity_fps_p95']:.2f} FPS | Not computed |",
+                "",
+                "This candidate result becomes the initial hosted-runner baseline; a numeric "
+                "delta requires a base with the same benchmark contract.",
+                "",
+            ]
+        )
     lines.extend(
         [
             "### Candidate hosted baseline timing",
