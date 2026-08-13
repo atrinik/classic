@@ -355,14 +355,30 @@ def query(journal: Journal, **filters: str | None) -> list[dict[str, Any]]:
         for record in journal.records
         if record["transaction_id"] in matching_transactions
     ]
-    transaction_order = {
-        transaction_id: min(record["utc"] for record in selected if record["transaction_id"] == transaction_id)
-        for transaction_id in matching_transactions
-        if any(record["transaction_id"] == transaction_id for record in selected)
+    run_order = {
+        coordinate: index
+        for index, coordinate in enumerate(sorted(
+            {(record["server_id"], record["run_id"]) for record in journal.records},
+            key=lambda coordinate: (
+                min(record["utc"] for record in journal.records
+                    if (record["server_id"], record["run_id"]) == coordinate),
+                coordinate,
+            ),
+        ))
     }
+    transaction_order = {}
+    for transaction_id in matching_transactions:
+        intent = next((record for record in selected
+                       if record["transaction_id"] == transaction_id
+                       and record["phase"] == "intent"), None)
+        if intent is not None:
+            transaction_order[transaction_id] = (
+                run_order[(intent["server_id"], intent["run_id"])], intent["sequence"]
+            )
+    phase_order = {"intent": 0, "commit": 1, "abort": 1}
     return sorted(selected, key=lambda value: (
-        transaction_order[value["transaction_id"]], value["transaction_id"],
-        value["server_id"], value["run_id"], value["sequence"],
+        transaction_order[value["transaction_id"]], phase_order[value["phase"]],
+        run_order[(value["server_id"], value["run_id"])], value["sequence"],
     ))
 
 

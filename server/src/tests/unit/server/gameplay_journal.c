@@ -258,9 +258,17 @@ START_TEST(test_retention_stays_bounded_when_opening_a_file) {
     char journal_directory[MAX_BUF];
     snprintf(VS(journal_directory), "%s/gameplay-journal", directory);
     ck_assert_int_eq(mkdir(journal_directory, 0700), 0);
+    char sentinel[HUGE_BUF];
+    snprintf(VS(sentinel), "%s/journal-investigation.jsonl", journal_directory);
+    int sentinel_fd = open(sentinel, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    ck_assert_int_ge(sentinel_fd, 0);
+    ck_assert_int_eq(close(sentinel_fd), 0);
     for (size_t i = 0; i < 16; i++) {
         char path[HUGE_BUF];
-        snprintf(VS(path), "%s/journal-old-%04zu.jsonl", journal_directory, i);
+        snprintf(VS(path),
+                 "%s/journal-00000000000000000000000000000000-%04zu.jsonl",
+                 journal_directory,
+                 i);
         int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
         ck_assert_int_ge(fd, 0);
         ck_assert_int_eq(close(fd), 0);
@@ -279,12 +287,15 @@ START_TEST(test_retention_stays_bounded_when_opening_a_file) {
     size_t files = 0;
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
-        if (strncmp(entry->d_name, "journal-", 8) == 0) {
+        if (strncmp(entry->d_name, "journal-", 8) == 0 &&
+            strcmp(entry->d_name, "journal-investigation.jsonl") != 0) {
             files++;
         }
     }
     ck_assert_int_eq(closedir(dir), 0);
     ck_assert_uint_eq(files, 16);
+    ck_assert_int_eq(access(sentinel, F_OK), 0);
+    ck_assert_int_eq(unlink(sentinel), 0);
     remove_fixture(directory);
 }
 END_TEST

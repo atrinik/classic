@@ -256,6 +256,34 @@ class JournalTests(unittest.TestCase):
         )
         self.assertEqual([record["phase"] for record in selected], ["intent", "commit"])
 
+    def test_entity_query_preserves_same_second_transaction_order(self) -> None:
+        records = [
+            self.record("intent", "z-transaction", utc="2026-08-13T00:00:01Z"),
+            self.record("commit", "z-transaction", utc="2026-08-13T00:00:01Z"),
+            self.record("intent", "a-transaction", utc="2026-08-13T00:00:01Z"),
+            self.record("commit", "a-transaction", utc="2026-08-13T00:00:01Z"),
+        ]
+        self.write(*records)
+        selected = gameplay_journal.query(gameplay_journal.load([self.root]), account="acct")
+        self.assertEqual(
+            [record["transaction_id"] for record in selected],
+            ["z-transaction", "z-transaction", "a-transaction", "a-transaction"],
+        )
+
+    def test_cross_run_terminal_follows_replayed_intent(self) -> None:
+        self.write(self.record("intent", "tx1", utc="2026-08-13T00:00:10Z"))
+        self.sequence = 0
+        self.previous = ""
+        other = self.root / f"journal-{RUN2}-0000.jsonl"
+        other.write_bytes(self.record(
+            "commit", "tx1", run_id=RUN2, utc="2026-08-13T00:00:09Z"
+        ))
+        other.chmod(0o600)
+        selected = gameplay_journal.query(
+            gameplay_journal.load([self.root]), transaction="tx1"
+        )
+        self.assertEqual([record["phase"] for record in selected], ["intent", "commit"])
+
     def test_character_identity_accepts_configured_name_characters(self) -> None:
         self.write(self.record(
             "intent", "tx1", account_id='acct"quoted', character_id=r"Hero_One\\Two"

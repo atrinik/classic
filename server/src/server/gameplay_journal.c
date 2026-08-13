@@ -175,6 +175,35 @@ static int journal_retained_compare(const void *left, const void *right) {
     return strcmp(a->path, b->path);
 }
 
+static bool journal_filename_valid(const char *name) {
+    static const char prefix[] = "journal-";
+    size_t length = strlen(name);
+    if (length < sizeof(prefix) - 1 + 32 + 1 + 4 + 6 ||
+        strncmp(name, prefix, sizeof(prefix) - 1) != 0 ||
+        strcmp(name + length - 6, ".jsonl") != 0) {
+        return false;
+    }
+    const char *run = name + sizeof(prefix) - 1;
+    for (size_t i = 0; i < 32; i++) {
+        if (!((run[i] >= '0' && run[i] <= '9') || (run[i] >= 'a' && run[i] <= 'f'))) {
+            return false;
+        }
+    }
+    if (run[32] != '-') {
+        return false;
+    }
+    size_t digits = length - (sizeof(prefix) - 1 + 32 + 1 + 6);
+    if (digits < 4) {
+        return false;
+    }
+    for (size_t i = 0; i < digits; i++) {
+        if (run[33 + i] < '0' || run[33 + i] > '9') {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool journal_sync_directory(void) {
 #ifdef WIN32
     return true;
@@ -244,9 +273,7 @@ static bool journal_enforce_retention(void) {
     bool ok = true;
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
-        size_t length = strlen(entry->d_name);
-        if (length < 15 || strncmp(entry->d_name, "journal-", 8) != 0 ||
-            strcmp(entry->d_name + length - 6, ".jsonl") != 0) {
+        if (!journal_filename_valid(entry->d_name)) {
             continue;
         }
         retained_file_t file;
