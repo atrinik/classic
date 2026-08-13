@@ -24,7 +24,7 @@ function(atrinik_source_tree_sha256 source output)
 endfunction()
 
 function(atrinik_extract_immutable_source)
-    set(one_value_args NAME URL SHA256 TREE_SHA256 CACHE_DIR OUTPUT)
+    set(one_value_args NAME SOURCE_LOCK CACHE_DIR OUTPUT)
     cmake_parse_arguments(PARSE_ARGV 0 arg "" "${one_value_args}" "")
     foreach (required IN LISTS one_value_args)
         if (NOT arg_${required})
@@ -43,10 +43,8 @@ function(atrinik_extract_immutable_source)
 
     execute_process(
         COMMAND "${Python3_EXECUTABLE}" "${ATRINIK_IMMUTABLE_FETCHER}" source
-            --name "${arg_NAME}"
-            --url "${arg_URL}"
-            --sha256 "${arg_SHA256}"
-            --tree-sha256 "${arg_TREE_SHA256}"
+            --source-lock "${arg_SOURCE_LOCK}"
+            --source-name "${arg_NAME}"
             --cache "${arg_CACHE_DIR}"
         RESULT_VARIABLE fetch_result
         OUTPUT_VARIABLE fetched_source

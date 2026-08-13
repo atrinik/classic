@@ -52,9 +52,7 @@ function(atrinik_add_pcpnatpmp)
     else ()
         atrinik_extract_immutable_source(
             NAME libpcpnatpmp
-            URL "${ATRINIK_PCPNATPMP_url}"
-            SHA256 "${ATRINIK_PCPNATPMP_sha256}"
-            TREE_SHA256 "${ATRINIK_PCPNATPMP_tree_sha256}"
+            SOURCE_LOCK "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/immutable_sources.lock.json"
             CACHE_DIR "${ATRINIK_DEPENDENCY_CACHE_DIR}"
             OUTPUT pcpnatpmp_shared_source)
         if (MINGW)

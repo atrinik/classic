@@ -348,6 +348,33 @@ def source_tree_sha256(source: Path) -> str:
     return hashlib.sha256(manifest.encode()).hexdigest()
 
 
+def load_source_lock(path: Path, name: str) -> dict[str, str]:
+    try:
+        with path.open(encoding="utf-8") as stream:
+            root = json.load(stream, object_pairs_hook=_reject_duplicate_keys)
+    except (OSError, json.JSONDecodeError) as error:
+        raise DependencyError(f"cannot read {path}: {error}") from error
+    if not isinstance(root, dict):
+        raise DependencyError("immutable source lock root must be an object")
+    _require_keys(root, {"schema_version", "sources"}, "immutable source lock root")
+    if root["schema_version"] != LOCK_SCHEMA_VERSION or not isinstance(root["sources"], dict):
+        raise DependencyError("immutable source lock has an unsupported schema")
+    source = root["sources"].get(name)
+    if not isinstance(source, dict):
+        raise DependencyError(f"immutable source {name} is missing")
+    expected = {"url", "sha256", "tree_sha256", "mingw_tree_sha256"}
+    _require_keys(source, expected, f"immutable source {name}")
+    values = {key: _validate_text(value, f"immutable source {name}.{key}") for key, value in source.items()}
+    parsed = urllib.parse.urlsplit(values["url"])
+    if (parsed.scheme not in {"https", "file"} or parsed.query or parsed.fragment or
+            not parsed.path.endswith(".tar.gz")):
+        raise DependencyError(f"immutable source {name}.url must identify a canonical archive")
+    for key in expected - {"url"}:
+        if len(values[key]) != 64 or any(character not in "0123456789abcdef" for character in values[key]):
+            raise DependencyError(f"immutable source {name}.{key} must be a lowercase SHA-256")
+    return {"name": name, **values}
+
+
 def fetch_source(
     *, name: str, url: str, sha256: str, tree_sha256: str, cache_dir: Path
 ) -> Path:
@@ -468,6 +495,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--url")
     parser.add_argument("--sha256")
     parser.add_argument("--tree-sha256")
+    parser.add_argument("--source-lock", type=Path)
+    parser.add_argument("--source-name")
     return parser.parse_args()
 
 
@@ -478,11 +507,12 @@ def main() -> int:
     cache_dir = args.cache or root / "build" / "dependencies" / "downloads"
     try:
         if args.command == "source":
-            if not all((args.name, args.url, args.sha256, args.tree_sha256, args.cache)):
-                raise DependencyError("source requires --name, --url, --sha256, --tree-sha256, and --cache")
+            if not all((args.source_lock, args.source_name, args.cache)):
+                raise DependencyError("source requires --source-lock, --source-name, and --cache")
+            source = load_source_lock(args.source_lock, args.source_name)
             print(fetch_source(
-                name=args.name, url=args.url, sha256=args.sha256,
-                tree_sha256=args.tree_sha256, cache_dir=args.cache,
+                name=source["name"], url=source["url"], sha256=source["sha256"],
+                tree_sha256=source["tree_sha256"], cache_dir=args.cache,
             ))
             return 0
         dependencies = load_lock(lock_path)
