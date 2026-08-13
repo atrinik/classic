@@ -1279,13 +1279,9 @@ static bool sound_test_wait_for_music_position(Sint64 *position, uint32_t timeou
     return false;
 }
 
-static bool sound_test_finish_music(void) {
+static bool sound_test_wait_for_music_finished(void) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {}
-
-    if (!MIX_StopTrack(sound_music_track, 0)) {
-        return false;
-    }
 
     uint32_t started = SDL_GetTicks();
     do {
@@ -1296,7 +1292,7 @@ static bool sound_test_finish_music(void) {
             }
         }
         SDL_Delay(5);
-    } while (SDL_GetTicks() - started < 1000);
+    } while (SDL_GetTicks() - started < 1500);
 
     return false;
 }
@@ -1438,13 +1434,13 @@ int sound_test_main(const char *fixture_root) {
     /* Natural completion clears state; finite and infinite loops restart from cache. */
     sound_start_bg_music("opus-tone.mid", 80, 0);
     sound_background_update_duration = 0;
-    SOUND_TEST_CHECK(sound_test_finish_music());
+    SOUND_TEST_CHECK(sound_test_wait_for_music_finished());
     SOUND_TEST_CHECK(sound_get_bg_music() == NULL);
     SOUND_TEST_CHECK(!sound_playing_music());
 
     sound_start_bg_music("opus-tone.mid", 80, 1);
     sound_background_update_duration = 0;
-    SOUND_TEST_CHECK(sound_test_finish_music());
+    SOUND_TEST_CHECK(sound_test_wait_for_music_finished());
     SOUND_TEST_CHECK(sound_playing_music());
     SOUND_TEST_CHECK(sound_background_loop == 0);
     SOUND_TEST_CHECK(HASH_COUNT(sound_data) == 2);
@@ -1452,7 +1448,7 @@ int sound_test_main(const char *fixture_root) {
 
     sound_start_bg_music("opus-tone.mid", 80, -1);
     sound_background_update_duration = 0;
-    SOUND_TEST_CHECK(sound_test_finish_music());
+    SOUND_TEST_CHECK(sound_test_wait_for_music_finished());
     SOUND_TEST_CHECK(sound_playing_music());
     SOUND_TEST_CHECK(sound_background_loop == -1);
     sound_stop_bg_music();
