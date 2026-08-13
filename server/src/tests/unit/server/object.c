@@ -39,6 +39,7 @@
 #include <player.h>
 #include <server.h>
 #include <server_item.h>
+#include <spells.h>
 #include <swap.h>
 #include <toolkit/packet.h>
 #include <toolkit/path.h>
@@ -104,6 +105,14 @@ START_TEST(test_return_home_waypoint_reactivation_resets_retry_progress) {
 }
 END_TEST
 
+static size_t invalid_direction_log_count;
+
+static void capture_invalid_direction_log(const char *message) {
+    if (strstr(message, "Rejected invalid movement direction") != NULL) {
+        invalid_direction_log_count++;
+    }
+}
+
 START_TEST(test_move_ob_rejects_invalid_directions) {
     static const int invalid_directions[] = {INT_MIN, 0, NUM_DIRECTION + 1, INT_MAX};
     mapstruct *map;
@@ -112,6 +121,10 @@ START_TEST(test_move_ob_rejects_invalid_directions) {
 
     int direction = pl->direction;
     uint32_t anim_flags = pl->anim_flags;
+    long saved_pticks = pticks;
+    pticks = 1;
+    invalid_direction_log_count = 0;
+    logger_set_print_func(capture_invalid_direction_log);
 
     for (size_t i = 0; i < arraysize(invalid_directions); i++) {
         ck_assert_int_eq(move_ob(pl, invalid_directions[i], pl), 0);
@@ -119,6 +132,19 @@ START_TEST(test_move_ob_rejects_invalid_directions) {
         ck_assert_uint_eq(pl->anim_flags, anim_flags);
     }
 
+    ck_assert_uint_eq(invalid_direction_log_count, 1);
+    ck_assert(!movement_direction_valid(pl, INT_MIN, true));
+    ck_assert(movement_direction_valid(pl, 0, true));
+    ck_assert(movement_direction_valid(pl, 1, false));
+    ck_assert(movement_direction_valid(pl, NUM_DIRECTION, false));
+    ck_assert_int_eq(push_ob(pl, INT_MAX, pl), 0);
+    ck_assert_int_eq(cast_spell(pl, pl, INT_MIN, -1, 0, CAST_NORMAL, NULL), 0);
+    pticks += 60L * MAX_TICKS;
+    ck_assert_int_eq(move_ob(pl, -1, pl), 0);
+    ck_assert_uint_eq(invalid_direction_log_count, 2);
+
+    logger_set_print_func(logger_do_print);
+    pticks = saved_pticks;
     object_remove(pl, 0);
     object_destroy(pl);
 }

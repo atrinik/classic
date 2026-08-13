@@ -665,6 +665,9 @@ static void process_func(object *op) {
 
     object *part = rv.part != NULL ? rv.part : op;
     int dir = rv.direction;
+    if (!movement_direction_valid(op, dir, true)) {
+        return;
+    }
 
     /* Move the check for scared up here - if the monster was scared,
      * we were not doing any of the logic below, so might as well save
@@ -771,6 +774,10 @@ static void process_func(object *op) {
             return;
         } else {
             int maxdiff = (QUERY_FLAG(op, FLAG_ONLY_ATTACK) || rndm_chance(2)) ? 1 : 2;
+
+            if (!movement_direction_valid(op, dir, false)) {
+                return;
+            }
 
             /* Can the monster move directly toward player? */
             if (move_object(op, dir)) {

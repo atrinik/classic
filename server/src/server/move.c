@@ -36,6 +36,40 @@
 #include <object.h>
 #include <door.h>
 
+#define INVALID_DIRECTION_LOG_INTERVAL (60L * MAX_TICKS)
+
+static long invalid_direction_log_after;
+
+/**
+ * Validate a direction received at a runtime boundary.
+ * @param op
+ * Object associated with the direction.
+ * @param dir
+ * Direction to validate.
+ * @param allow_zero
+ * Whether zero is a valid non-direction value.
+ * @return
+ * Whether the direction is valid.
+ */
+bool movement_direction_valid(const object *op, int dir, bool allow_zero) {
+    HARD_ASSERT(op != NULL);
+
+    if ((allow_zero && dir == 0) || (dir > 0 && dir <= NUM_DIRECTION)) {
+        return true;
+    }
+
+    if (pticks >= invalid_direction_log_after) {
+        LOG(BUG,
+            "Rejected invalid movement direction %d for %s; further diagnostics suppressed for "
+            "60 seconds.",
+            dir,
+            object_get_str(op));
+        invalid_direction_log_after = pticks + INVALID_DIRECTION_LOG_INTERVAL;
+    }
+
+    return false;
+}
+
 /**
  * Returns a random direction (1..8).
  * @return
@@ -158,8 +192,7 @@ int move_ob(object *op, int dir, object *originator) {
                    "Trying to move a removed "
                    "object: %s",
                    object_get_str(op));
-    if (unlikely(dir <= 0 || dir > NUM_DIRECTION)) {
-        log_error("Invalid direction: %d", dir);
+    if (unlikely(!movement_direction_valid(op, dir, false))) {
         return 0;
     }
 
@@ -289,6 +322,10 @@ int push_ob(object *op, int dir, object *pusher) {
     object *tmp, *floor_ob;
     mapstruct *m;
     int x, y;
+
+    if (!movement_direction_valid(op, dir, false)) {
+        return 0;
+    }
 
     /* Don't allow pushing multi-arch objects. */
     if (op->head) {

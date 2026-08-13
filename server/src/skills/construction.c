@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -31,6 +31,7 @@
 #include <server_main.h>
 #include <server_item.h>
 #include <server.h>
+#include <movement.h>
 #include <arch.h>
 #include <player.h>
 #include <object.h>
@@ -759,6 +760,10 @@ void construction_do(object *op, int dir) {
     int x, y;
 
     if (op->type != PLAYER) {
+        return;
+    }
+
+    if (!movement_direction_valid(op, dir, true)) {
         return;
     }
 
