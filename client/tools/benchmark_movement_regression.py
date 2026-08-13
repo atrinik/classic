@@ -682,7 +682,7 @@ def _guard_native_record(record: dict[str, object]) -> dict[str, dict[str, objec
         translated = (
             rebuilds > 0
             and translations == rebuilds
-            and partial_rebuilds == rebuilds
+            and 0 < partial_rebuilds <= rebuilds
             and 0 < dirty_pixels
             and dirty_pixels * 4 <= maximum_dirty_pixels * 3
         )

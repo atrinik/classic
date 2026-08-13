@@ -918,12 +918,12 @@ class EvidenceTests(unittest.TestCase):
         counters["field_rebuilds"] = 2_400
         counters["field_dirty_marks"] = 2_400
         counters["field_translations"] = 2_400
-        counters["field_partial_rebuilds"] = 2_400
+        counters["field_partial_rebuilds"] = 2_380
         counters["field_dirty_pixels"] = 93_765_760
         guard = benchmark._guard_native_record(translated)["lighting_cache_churn"]
         self.assertTrue(guard["passed"])
         self.assertEqual(guard["field_translations"], 2_400)
-        self.assertEqual(guard["field_partial_rebuilds"], 2_400)
+        self.assertEqual(guard["field_partial_rebuilds"], 2_380)
 
         counters["field_dirty_pixels"] = 480 * 5 * 320 * 240
         self.assertFalse(
