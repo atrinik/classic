@@ -10,12 +10,46 @@
 #include <arch.h>
 #include <metrics.h>
 #include <monster_data.h>
+#include <movement.h>
 #include <object_methods.h>
 #include <player.h>
 #include <skills.h>
 #include <toolkit/packet.h>
 
 #define TEST_BASE_DAMAGE 24
+
+START_TEST(test_invalid_projectile_directions_stop_before_lookup) {
+    static const int invalid_directions[] = {INT8_MIN, 0, NUM_DIRECTION + 1, INT8_MAX};
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    for (size_t i = 0; i < arraysize(invalid_directions); i++) {
+        object *arrow = arch_get("arrow");
+        arrow->x = pl->x;
+        arrow->y = pl->y;
+        arrow->direction = invalid_directions[i];
+        arrow->last_sp = 2;
+        SET_FLAG(arrow, FLAG_IS_MISSILE);
+        object_owner_set(arrow, pl);
+        arrow = object_insert_map(arrow, map, NULL, INS_NO_MERGE);
+        tag_t count = arrow->count;
+
+        if (i % 2 == 0) {
+            common_object_projectile_process(arrow);
+        } else {
+            ck_assert_ptr_null(common_object_projectile_move(arrow));
+        }
+
+        if (OBJECT_VALID(arrow, count)) {
+            if (arrow->map != NULL || arrow->env != NULL) {
+                object_remove(arrow, 0);
+            }
+            object_destroy(arrow);
+        }
+    }
+}
+END_TEST
 
 static object *projectile_test_target(mapstruct *map, object *pl) {
     if (map->path == NULL) {
@@ -646,6 +680,7 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_invalid_projectile_directions_stop_before_lookup);
     tcase_add_test(tc_core, test_archery_impact_bonuses_and_feedback);
     tcase_add_test(tc_core, test_archery_unaware_state_is_impact_time_and_validated);
     tcase_add_test(tc_core, test_archery_invisibility_and_target_ownership_exclusions);
