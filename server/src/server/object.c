@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -33,6 +33,7 @@
 #include <server.h>
 #include <quest.h>
 #include <los.h>
+#include <shop.h>
 #include <light.h>
 #include <connection.h>
 #include <loader.h>
@@ -576,7 +577,7 @@ bool object_can_merge(object *ob1, object *ob2) {
 
     /* Do not merge objects if nrof would overflow. We use INT32_MAX
      * because int32_t is often used to store nrof instead of uint32_t. */
-    if (ob1->nrof + ob2->nrof > INT32_MAX) {
+    if ((uint64_t)ob1->nrof + ob2->nrof > INT32_MAX) {
         return false;
     }
 
@@ -824,6 +825,141 @@ void object_weight_add(object *op, uint32_t weight) {
 
         op = op->env;
     }
+}
+
+/**
+ * Check whether adding weight can be represented through an inventory chain.
+ *
+ * @param op
+ * First containing object.
+ * @param weight
+ * Unmodified weight to add.
+ * @return
+ * True if every updated 32-bit carrying value can represent the addition.
+ */
+bool object_weight_can_add(const object *op, uint64_t weight) {
+    HARD_ASSERT(op != NULL);
+
+    while (op != NULL) {
+        if (weight > UINT32_MAX) {
+            return false;
+        }
+        if (op->type == CONTAINER && !DBL_EQUAL(op->weapon_speed, 1.0)) {
+            if (weight > UINT32_MAX - op->damage_round_tag) {
+                return false;
+            }
+            uint64_t unmodified = op->damage_round_tag + weight;
+            long double carrying = (long double)unmodified * op->weapon_speed;
+            if (carrying < op->carrying || carrying > UINT32_MAX) {
+                return false;
+            }
+            weight = (uint64_t)carrying - op->carrying;
+        } else {
+            if (weight > UINT32_MAX - op->carrying) {
+                return false;
+            }
+        }
+        op = op->env;
+    }
+    return true;
+}
+
+/**
+ * Check whether moving weight between two inventory chains is representable.
+ *
+ * The object is still present in the source chain while this check runs, so a
+ * plain addition check would count it twice at every shared ancestor.
+ */
+static bool
+object_weight_can_move(const object *source, const object *destination, uint64_t weight) {
+    HARD_ASSERT(destination != NULL);
+
+    if (source == NULL) {
+        return object_weight_can_add(destination, weight);
+    }
+
+    const object *common = destination;
+    while (common != NULL) {
+        const object *candidate = source;
+        while (candidate != NULL && candidate != common) {
+            candidate = candidate->env;
+        }
+        if (candidate == common) {
+            break;
+        }
+        common = common->env;
+    }
+    if (common == NULL) {
+        return object_weight_can_add(destination, weight);
+    }
+
+    uint64_t removed = weight;
+    for (const object *tmp = source; tmp != common; tmp = tmp->env) {
+        if (removed > UINT32_MAX) {
+            return false;
+        }
+        if (tmp->type == CONTAINER && !DBL_EQUAL(tmp->weapon_speed, 1.0)) {
+            if (removed > tmp->damage_round_tag) {
+                return false;
+            }
+            uint64_t unmodified = tmp->damage_round_tag - removed;
+            uint64_t carrying = (long double)unmodified * tmp->weapon_speed;
+            if (carrying > tmp->carrying) {
+                return false;
+            }
+            removed = tmp->carrying - carrying;
+        } else if (removed > tmp->carrying) {
+            return false;
+        }
+    }
+
+    uint64_t added = weight;
+    for (const object *tmp = destination; tmp != common; tmp = tmp->env) {
+        if (added > UINT32_MAX) {
+            return false;
+        }
+        if (tmp->type == CONTAINER && !DBL_EQUAL(tmp->weapon_speed, 1.0)) {
+            if (added > UINT32_MAX - tmp->damage_round_tag) {
+                return false;
+            }
+            uint64_t unmodified = tmp->damage_round_tag + added;
+            uint64_t carrying = (long double)unmodified * tmp->weapon_speed;
+            if (carrying < tmp->carrying || carrying > UINT32_MAX) {
+                return false;
+            }
+            added = carrying - tmp->carrying;
+        } else if (added > UINT32_MAX - tmp->carrying) {
+            return false;
+        }
+    }
+
+    for (const object *tmp = common; tmp != NULL; tmp = tmp->env) {
+        if (removed > UINT32_MAX || added > UINT32_MAX) {
+            return false;
+        }
+        if (tmp->type == CONTAINER && !DBL_EQUAL(tmp->weapon_speed, 1.0)) {
+            if (removed > tmp->damage_round_tag) {
+                return false;
+            }
+            uint64_t interim_unmodified = tmp->damage_round_tag - removed;
+            if (added > UINT32_MAX - interim_unmodified) {
+                return false;
+            }
+            uint64_t final_unmodified = interim_unmodified + added;
+            uint64_t interim_carrying = (long double)interim_unmodified * tmp->weapon_speed;
+            uint64_t final_carrying = (long double)final_unmodified * tmp->weapon_speed;
+            if (interim_carrying > tmp->carrying || final_carrying > UINT32_MAX) {
+                return false;
+            }
+            removed = tmp->carrying - interim_carrying;
+            added = final_carrying - interim_carrying;
+        } else {
+            if (removed > tmp->carrying || added > UINT32_MAX - (tmp->carrying - removed)) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 /**
@@ -2424,6 +2560,539 @@ object *object_insert_into(object *op, object *where, int flag) {
     return op;
 }
 
+static bool object_custody_auditable(const object *op) {
+    return !QUERY_FLAG(op, FLAG_SYS_OBJECT) && op->type != PLAYER && op->type != FORCE &&
+           op->type != POTION_EFFECT && op->type != EVENT_OBJECT && op->type != QUEST_CONTAINER &&
+           (op->arch == NULL ||
+            (strcmp(op->arch->name, "player_info") != 0 && strcmp(op->arch->name, "force") != 0));
+}
+
+static bool object_is_hidden_bank_info(const object *op) {
+    return op->arch != NULL && strcmp(op->arch->name, "player_info") == 0 && op->name != NULL &&
+           strcmp(op->name, "BANK_GENERAL") == 0;
+}
+
+static bool object_contains_hidden_bank_info(const object *op) {
+    if (object_is_hidden_bank_info(op)) {
+        return true;
+    }
+    FOR_INV_PREPARE(op, item) {
+        if (object_contains_hidden_bank_info(item)) {
+            return true;
+        }
+    }
+    FOR_INV_FINISH();
+    return false;
+}
+
+/**
+ * Check whether an object's inventory contains currency at any depth.
+ *
+ * @param op
+ * Object whose descendants to inspect.
+ * @return
+ * True if a descendant is a money object.
+ */
+bool object_contains_money_descendant(const object *op) {
+    HARD_ASSERT(op != NULL);
+
+    FOR_INV_PREPARE(op, item) {
+        if (item->type == MONEY || object_contains_money_descendant(item)) {
+            return true;
+        }
+    }
+    FOR_INV_FINISH();
+    return false;
+}
+
+static bool object_is_persistent_money(const object *op, const object *root) {
+    return op->type == MONEY &&
+           (root->type == PLAYER || root->map != NULL || !QUERY_FLAG(root, FLAG_REMOVED));
+}
+
+static bool object_root_is_persistent(const object *root) {
+    return root->type == PLAYER || root->map != NULL || !QUERY_FLAG(root, FLAG_REMOVED);
+}
+
+static const char *object_custody_location(const object *op, const object *root) {
+    if (root->type == PLAYER) {
+        return "player";
+    }
+    if (op->env != NULL) {
+        return "external-container";
+    }
+    if (op->map != NULL || root->map != NULL) {
+        return "ground";
+    }
+    return "service";
+}
+
+static const char *object_custody_destination(const object *where, const object *root) {
+    if (root->type == PLAYER) {
+        return "player";
+    }
+    if (where->type == CONTAINER) {
+        return "external-container";
+    }
+    return object_custody_location(where, root);
+}
+
+object_semantic_result_t
+object_insert_into_reason(object *op, object *where, const char *reason, object **inserted_out) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(where != NULL);
+    HARD_ASSERT(reason != NULL);
+    HARD_ASSERT(inserted_out != NULL);
+    *inserted_out = NULL;
+
+    if (op == where || object_is_in_inventory(where, op)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+
+    object *source_root = object_get_env(op);
+    object *destination_root = object_get_env(where);
+    object *source_player = source_root->type == PLAYER ? source_root : NULL;
+    object *destination_player = destination_root->type == PLAYER ? destination_root : NULL;
+    if (op->type != PLAYER && object_contains_hidden_bank_info(op)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (op->type == MONEY) {
+        if (source_root == op && destination_player != NULL) {
+            return shop_insert_coin_object_reason(op, where, reason, inserted_out);
+        }
+        if (source_root == op && op->map == NULL && QUERY_FLAG(op, FLAG_REMOVED) &&
+            destination_root->type != PLAYER && destination_root->map == NULL &&
+            QUERY_FLAG(destination_root, FLAG_REMOVED)) {
+            *inserted_out = object_insert_into(op, where, 0);
+            return OBJECT_SEMANTIC_COMMITTED;
+        }
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (source_root != destination_root && object_contains_money_descendant(op) &&
+        (object_root_is_persistent(source_root) || object_root_is_persistent(destination_root))) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (op->nrof > INT32_MAX) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (op->env != where) {
+        if (source_root == op) {
+            object_weight_sum(op);
+        }
+        uint64_t own_weight = (uint64_t)op->weight * MAX(1, op->nrof);
+        if (own_weight > UINT32_MAX - op->carrying ||
+            !object_weight_can_move(op->env, where, own_weight + op->carrying)) {
+            return OBJECT_SEMANTIC_FAILED;
+        }
+    }
+    if (source_player == destination_player || !object_custody_auditable(op)) {
+        if (!QUERY_FLAG(op, FLAG_REMOVED)) {
+            object_remove(op, 0);
+        }
+        *inserted_out = object_insert_into(op, where, 0);
+        return OBJECT_SEMANTIC_COMMITTED;
+    }
+
+    object *actor = source_player != NULL ? source_player : destination_player;
+    object_custody_transaction_t transaction = {0};
+    const char *counterparty = "";
+    if (source_player != NULL && destination_player != NULL) {
+        object *other = actor == source_player ? destination_player : source_player;
+        counterparty = object_custody_actor_id(other);
+        if (counterparty == NULL) {
+            counterparty = "";
+        }
+    }
+    const char *acquirer =
+        destination_player != NULL ? object_custody_actor_id(destination_player) : "";
+    const char *relinquisher = source_player != NULL ? object_custody_actor_id(source_player) : "";
+    int64_t quantity = MAX(1, op->nrof);
+    int64_t delta = actor == source_player ? -quantity : quantity;
+    if (actor != NULL &&
+        (acquirer == NULL || relinquisher == NULL ||
+         !object_custody_begin_parties(op,
+                                       actor,
+                                       reason,
+                                       object_custody_location(op, source_root),
+                                       object_custody_destination(where, destination_root),
+                                       counterparty,
+                                       (uint32_t)quantity,
+                                       acquirer,
+                                       relinquisher,
+                                       delta < 0 ? quantity : 0,
+                                       delta,
+                                       delta < 0 ? 0 : quantity,
+                                       0,
+                                       "",
+                                       "",
+                                       &transaction))) {
+        *inserted_out = NULL;
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (actor != NULL &&
+        ((source_player != NULL && !object_custody_track_player(&transaction, source_player)) ||
+         (destination_player != NULL &&
+          !object_custody_track_player(&transaction, destination_player)) ||
+         (op->map != NULL &&
+          !object_custody_track_map_object(&transaction, op->map, op->x, op->y, op)) ||
+         (source_root->type != PLAYER && source_root->map != NULL &&
+          !object_custody_track_map_object(&transaction,
+                                           source_root->map,
+                                           source_root->x,
+                                           source_root->y,
+                                           source_root)) ||
+         (destination_root->type != PLAYER && destination_root->map != NULL &&
+          !object_custody_track_map_object(&transaction,
+                                           destination_root->map,
+                                           destination_root->x,
+                                           destination_root->y,
+                                           destination_root)))) {
+        object_custody_abort(&transaction, "domain-registration-failed");
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (actor != NULL) {
+        object_custody_apply(op, &transaction);
+    }
+    if (!QUERY_FLAG(op, FLAG_REMOVED)) {
+        object_remove(op, 0);
+    }
+    object *inserted = object_insert_into(op, where, 0);
+    *inserted_out = inserted;
+    if (actor != NULL) {
+        return object_custody_finish(&transaction) ? OBJECT_SEMANTIC_COMMITTED
+                                                   : OBJECT_SEMANTIC_AMBIGUOUS;
+    }
+    return OBJECT_SEMANTIC_COMMITTED;
+}
+
+object_semantic_result_t object_insert_map_reason(object *op,
+                                                  mapstruct *m,
+                                                  int x,
+                                                  int y,
+                                                  const char *reason,
+                                                  object **inserted_out) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(m != NULL);
+    HARD_ASSERT(reason != NULL);
+    HARD_ASSERT(inserted_out != NULL);
+    *inserted_out = NULL;
+
+    object *root = object_get_env(op);
+    if (op->type == MONEY || (op->type != PLAYER && object_contains_money_descendant(op)) ||
+        op->nrof > INT32_MAX || (op->type != PLAYER && object_contains_hidden_bank_info(op))) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (root == op) {
+        object_weight_sum(op);
+    }
+    object_custody_transaction_t transaction = {0};
+    bool journal = root->type == PLAYER && object_custody_auditable(op);
+    if (journal && !object_custody_begin(op,
+                                         root,
+                                         reason,
+                                         "player",
+                                         "ground",
+                                         "",
+                                         MAX(1, op->nrof),
+                                         false,
+                                         true,
+                                         &transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (journal && !object_custody_track_map_object(&transaction, m, x, y, op)) {
+        object_custody_abort(&transaction, "domain-registration-failed");
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (journal) {
+        object_custody_apply(op, &transaction);
+    }
+    if (!QUERY_FLAG(op, FLAG_REMOVED)) {
+        object_remove(op, 0);
+    }
+    op->x = x;
+    op->y = y;
+    *inserted_out = object_insert_map(op, m, NULL, 0);
+    if (*inserted_out == NULL) {
+        /* Map insertion may return NULL after walk-on effects destroyed the
+         * object. Preserve the intent for restart reconciliation. */
+        if (transaction.active) {
+            bool attempted = gameplay_journal_attempt(transaction.transaction_id);
+            HARD_ASSERT(attempted);
+            (void)attempted;
+        }
+        return journal ? OBJECT_SEMANTIC_AMBIGUOUS : OBJECT_SEMANTIC_FAILED;
+    }
+    if (journal && !object_custody_finish(&transaction)) {
+        return OBJECT_SEMANTIC_AMBIGUOUS;
+    }
+    return OBJECT_SEMANTIC_COMMITTED;
+}
+
+object_semantic_result_t object_remove_reason(object *op, const char *reason, bool destroy) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(reason != NULL);
+
+    object *root = object_get_env(op);
+    if (op->type != MONEY && object_contains_money_descendant(op) &&
+        (root->type == PLAYER || root->map != NULL || !QUERY_FLAG(root, FLAG_REMOVED))) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (!object_is_hidden_bank_info(op) && object_contains_hidden_bank_info(op)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (object_is_hidden_bank_info(op) && root->type == PLAYER) {
+        return destroy ? bank_destroy_balance_reason(op, reason) : OBJECT_SEMANTIC_FAILED;
+    }
+    if (object_is_persistent_money(op, root)) {
+        return root->type == PLAYER && destroy ? shop_destroy_coin_reason(op, reason)
+                                                : OBJECT_SEMANTIC_FAILED;
+    }
+    bool journal = root->type == PLAYER && object_custody_auditable(op);
+    object_custody_transaction_t transaction = {0};
+    if (journal && !object_custody_begin(op,
+                                         root,
+                                         reason,
+                                         "player",
+                                         destroy ? "destroyed" : "service",
+                                         "",
+                                         MAX(1, op->nrof),
+                                         false,
+                                         true,
+                                         &transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (journal && !destroy) {
+        object_custody_apply(op, &transaction);
+    }
+    if (!QUERY_FLAG(op, FLAG_REMOVED)) {
+        object_remove(op, 0);
+    }
+    if (destroy) {
+        object_destroy(op);
+    }
+    if (journal) {
+        return object_custody_finish(&transaction) ? OBJECT_SEMANTIC_COMMITTED
+                                                   : OBJECT_SEMANTIC_AMBIGUOUS;
+    }
+    return OBJECT_SEMANTIC_COMMITTED;
+}
+
+object_semantic_result_t
+object_decrease_reason(object *op, uint32_t nrof, const char *reason, object **survivor_out) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(reason != NULL);
+    HARD_ASSERT(survivor_out != NULL);
+    *survivor_out = NULL;
+
+    object *root = object_get_env(op);
+    if (object_contains_hidden_bank_info(op)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (nrof == 0) {
+        *survivor_out = op;
+        return OBJECT_SEMANTIC_COMMITTED;
+    }
+    if (op->type != MONEY && object_contains_money_descendant(op) &&
+        (root->type == PLAYER || root->map != NULL || !QUERY_FLAG(root, FLAG_REMOVED))) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (object_is_persistent_money(op, root)) {
+        if (root->type != PLAYER) {
+            return OBJECT_SEMANTIC_FAILED;
+        }
+        uint32_t before = op->nrof;
+        if (nrof >= before) {
+            return shop_destroy_coin_reason(op, reason);
+        }
+        object_semantic_result_t result = shop_set_coin_nrof_reason(op, before - nrof, reason);
+        if (result != OBJECT_SEMANTIC_FAILED) {
+            *survivor_out = op;
+        }
+        return result;
+    }
+    bool journal = root->type == PLAYER && object_custody_auditable(op) && nrof != 0;
+    if (!journal) {
+        *survivor_out = object_decrease(op, nrof);
+        return OBJECT_SEMANTIC_COMMITTED;
+    }
+
+    uint32_t before = MAX(1, op->nrof);
+    uint32_t quantity = MIN(nrof, before);
+    uint32_t after = before - quantity;
+    object_custody_transaction_t transaction = {0};
+    const char *actor = object_custody_actor_id(root);
+    if (actor == NULL || !object_custody_begin_parties(op,
+                                                       root,
+                                                       reason,
+                                                       "player",
+                                                       after == 0 ? "destroyed" : "service",
+                                                       "",
+                                                       quantity,
+                                                       "",
+                                                       "",
+                                                       before,
+                                                       -(int64_t)quantity,
+                                                       after,
+                                                       0,
+                                                       "",
+                                                       "",
+                                                       &transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (!object_custody_track_player(&transaction, root)) {
+        object_custody_abort(&transaction, "domain-registration-failed");
+        return OBJECT_SEMANTIC_FAILED;
+    }
+
+    if (op->custody_lineage == NULL) {
+        op->custody_lineage = add_string(transaction.lineage);
+    }
+    *survivor_out = object_decrease(op, quantity);
+    return object_custody_finish(&transaction) ? OBJECT_SEMANTIC_COMMITTED
+                                               : OBJECT_SEMANTIC_AMBIGUOUS;
+}
+
+object_semantic_result_t
+object_set_nrof_reason(object *op, uint32_t nrof, const char *reason, object **survivor_out) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(reason != NULL);
+    HARD_ASSERT(survivor_out != NULL);
+    *survivor_out = NULL;
+
+    uint32_t before = MAX(1, op->nrof);
+    uint32_t after = MAX(1, nrof);
+    if (nrof > INT32_MAX ||
+        (!QUERY_FLAG(op, FLAG_REMOVED) && op->env != NULL && after > before &&
+         !object_weight_can_add(op->env, (uint64_t)op->weight * (after - before)))) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    object *root = object_get_env(op);
+    if (object_contains_hidden_bank_info(op)) {
+        *survivor_out = NULL;
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (object_is_persistent_money(op, root)) {
+        if (root->type != PLAYER) {
+            *survivor_out = NULL;
+            return OBJECT_SEMANTIC_FAILED;
+        }
+        object_semantic_result_t result = shop_set_coin_nrof_reason(op, nrof, reason);
+        if (result != OBJECT_SEMANTIC_FAILED) {
+            *survivor_out = op;
+        }
+        return result;
+    }
+    bool journal = root->type == PLAYER && object_custody_auditable(op) && before != after;
+    object_custody_transaction_t transaction = {0};
+    if (journal) {
+        int64_t delta = (int64_t)after - before;
+        if (!object_custody_begin_economy(op,
+                                          root,
+                                          reason,
+                                          "player",
+                                          "player",
+                                          "",
+                                          delta < 0 ? (uint32_t)-delta : (uint32_t)delta,
+                                          false,
+                                          false,
+                                          before,
+                                          delta,
+                                          after,
+                                          0,
+                                          "",
+                                          "",
+                                          &transaction)) {
+            return OBJECT_SEMANTIC_FAILED;
+        }
+        if (!object_custody_track_player(&transaction, root)) {
+            object_custody_abort(&transaction, "domain-registration-failed");
+            return OBJECT_SEMANTIC_FAILED;
+        }
+        if (op->custody_lineage == NULL) {
+            op->custody_lineage = add_string(transaction.lineage);
+        }
+    }
+
+    *survivor_out = op;
+    if (!QUERY_FLAG(op, FLAG_REMOVED) && op->env != NULL) {
+        if (after > before) {
+            object_weight_add(op->env, op->weight * (after - before));
+        } else if (after < before) {
+            object_weight_sub(op->env, op->weight * (before - after));
+        }
+    }
+    op->nrof = nrof;
+    esrv_update_item(UPD_NAME | UPD_NROF, op);
+    if (!journal) {
+        return OBJECT_SEMANTIC_COMMITTED;
+    }
+    return object_custody_finish(&transaction) ? OBJECT_SEMANTIC_COMMITTED
+                                               : OBJECT_SEMANTIC_AMBIGUOUS;
+}
+
+object_semantic_result_t object_set_value_reason(object *op, int64_t value, const char *reason) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(reason != NULL);
+
+    object *root = object_get_env(op);
+    if (object_is_persistent_money(op, root)) {
+        if (root->type != PLAYER) {
+            return value == op->value ? OBJECT_SEMANTIC_COMMITTED : OBJECT_SEMANTIC_FAILED;
+        }
+        return value == op->value ? OBJECT_SEMANTIC_COMMITTED : OBJECT_SEMANTIC_FAILED;
+    }
+    if (object_is_hidden_bank_info(op) && root->type == PLAYER) {
+        return bank_set_balance_reason(op, value, reason);
+    }
+    if (root->type != PLAYER || !object_custody_auditable(op) || value == op->value) {
+        op->value = value;
+        return OBJECT_SEMANTIC_COMMITTED;
+    }
+
+    int64_t delta;
+    if (value >= op->value) {
+        if (op->value < 0 && value > INT64_MAX + op->value) {
+            return OBJECT_SEMANTIC_FAILED;
+        }
+        delta = value - op->value;
+    } else {
+        if (value < 0 && op->value > INT64_MAX + value) {
+            return OBJECT_SEMANTIC_FAILED;
+        }
+        delta = -(op->value - value);
+    }
+    object_custody_transaction_t transaction = {0};
+    if (!object_custody_begin_economy(op,
+                                      root,
+                                      reason,
+                                      "player",
+                                      "player",
+                                      "",
+                                      MAX(1, op->nrof),
+                                      false,
+                                      false,
+                                      op->value,
+                                      delta,
+                                      value,
+                                      0,
+                                      "",
+                                      "",
+                                      &transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (!object_custody_track_player(&transaction, root)) {
+        object_custody_abort(&transaction, "domain-registration-failed");
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (op->custody_lineage == NULL) {
+        op->custody_lineage = add_string(transaction.lineage);
+    }
+    op->value = value;
+    esrv_update_item(UPD_NAME, op);
+    return object_custody_finish(&transaction) ? OBJECT_SEMANTIC_COMMITTED
+                                               : OBJECT_SEMANTIC_AMBIGUOUS;
+}
+
 /**
  * Searches for any object with a matching archetype in the inventory
  * of the given object.
@@ -2814,14 +3483,254 @@ bool object_set_value(object *op, const char *key, const char *value, bool add_k
 
 static bool object_custody_random_id(char output[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
     unsigned char random[16];
-    bool ok = RAND_bytes(random, sizeof(random)) == 1 &&
-              string_tohex(random,
-                           sizeof(random),
-                           output,
-                           GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE,
-                           false) == sizeof(random) * 2U;
+    bool ok =
+        RAND_bytes(random, sizeof(random)) == 1 &&
+        string_tohex(random, sizeof(random), output, GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE, false) ==
+            sizeof(random) * 2U;
     OPENSSL_cleanse(random, sizeof(random));
     return ok;
+}
+
+static bool object_custody_actor(object *actor_ob) {
+    if (actor_ob->type != PLAYER || CONTR(actor_ob) == NULL || CONTR(actor_ob)->cs == NULL ||
+        CONTR(actor_ob)->cs->account == NULL || actor_ob->name == NULL) {
+        return false;
+    }
+    if (actor_ob->custody_actor != NULL) {
+        return true;
+    }
+    char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE], actor[MAX_BUF];
+    if (!object_custody_random_id(id)) {
+        LOG(ERROR, "Could not create durable custody identity for player %s.", actor_ob->name);
+        return false;
+    }
+    snprintf(actor, sizeof(actor), "%s:%s", CONTR(actor_ob)->cs->account, id);
+    actor_ob->custody_actor = add_string(actor);
+    return true;
+}
+
+const char *object_custody_actor_id(object *player_ob) {
+    return object_custody_actor(player_ob) ? player_ob->custody_actor : NULL;
+}
+
+bool object_custody_begin_parties(const object *op,
+                                  object *actor_ob,
+                                  const char *reason,
+                                  const char *source,
+                                  const char *destination,
+                                  const char *counterparty,
+                                  uint32_t quantity,
+                                  const char *acquirer,
+                                  const char *relinquisher,
+                                  int64_t before,
+                                  int64_t delta,
+                                  int64_t after,
+                                  int64_t price,
+                                  const char *currency,
+                                  const char *funding,
+                                  object_custody_transaction_t *transaction) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(actor_ob != NULL);
+    HARD_ASSERT(reason != NULL);
+    HARD_ASSERT(source != NULL);
+    HARD_ASSERT(destination != NULL);
+    HARD_ASSERT(acquirer != NULL);
+    HARD_ASSERT(relinquisher != NULL);
+    HARD_ASSERT(transaction != NULL);
+
+    memset(transaction, 0, sizeof(*transaction));
+    if (op->arch == NULL || !object_custody_actor(actor_ob)) {
+        return false;
+    }
+    snprintf(VS(transaction->actor), "%s", actor_ob->custody_actor);
+    if (op->custody_lineage != NULL) {
+        snprintf(VS(transaction->lineage), "%s", op->custody_lineage);
+    } else {
+        char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+        if (!object_custody_random_id(id)) {
+            return false;
+        }
+        snprintf(VS(transaction->lineage), "item:%s", id);
+    }
+    snprintf(VS(transaction->first_after),
+             "%s",
+             op->custody_first != NULL ? op->custody_first : acquirer);
+    snprintf(VS(transaction->last_after),
+             "%s",
+             relinquisher[0] != '\0' ? relinquisher
+                                     : (op->custody_last != NULL ? op->custody_last : ""));
+    transaction->acquire = acquirer[0] != '\0';
+    transaction->relinquish = relinquisher[0] != '\0';
+
+    char snapshot[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    snprintf(VS(snapshot),
+             "arch=%s;type=%u;nrof=%" PRIu32 ";value=%" PRId64 ";weight=%" PRIu32,
+             op->arch != NULL ? op->arch->name : "unknown",
+             op->type,
+             op->nrof != 0 ? op->nrof : 1,
+             op->value,
+             op->weight);
+    char provenance_before[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    char provenance_after[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    snprintf(VS(provenance_before),
+             "first=%.112s;last=%.112s",
+             op->custody_first != NULL ? op->custody_first : "",
+             op->custody_last != NULL ? op->custody_last : "");
+    snprintf(VS(provenance_after),
+             "first=%.112s;last=%.112s",
+             transaction->first_after,
+             transaction->last_after);
+    gameplay_journal_change_t change = {
+        .subject_id = transaction->lineage,
+        .lineage_id = transaction->lineage,
+        .before = before,
+        .delta = delta,
+        .after = after,
+        .archetype = op->arch != NULL ? op->arch->name : "unknown",
+        .object_type = op->type,
+        .snapshot = snapshot,
+        .quantity = quantity,
+        .source = source,
+        .destination = destination,
+        .actor = transaction->actor,
+        .counterparty = counterparty,
+        .provenance_before = provenance_before,
+        .provenance_after = provenance_after,
+        .price = price,
+        .currency = currency,
+        .funding = funding,
+    };
+    if (!gameplay_journal_required()) {
+        return true;
+    }
+    transaction->active = gameplay_journal_player_begin_change(CONTR(actor_ob),
+                                                               GAMEPLAY_JOURNAL_ITEM,
+                                                               reason,
+                                                               &change,
+                                                               transaction->transaction_id);
+    return transaction->active;
+}
+
+bool object_custody_begin_economy(const object *op,
+                                  object *actor_ob,
+                                  const char *reason,
+                                  const char *source,
+                                  const char *destination,
+                                  const char *counterparty,
+                                  uint32_t quantity,
+                                  bool acquire,
+                                  bool relinquish,
+                                  int64_t before,
+                                  int64_t delta,
+                                  int64_t after,
+                                  int64_t price,
+                                  const char *currency,
+                                  const char *funding,
+                                  object_custody_transaction_t *transaction) {
+    const char *actor = object_custody_actor_id(actor_ob);
+    if (actor == NULL) {
+        return false;
+    }
+    return object_custody_begin_parties(op,
+                                        actor_ob,
+                                        reason,
+                                        source,
+                                        destination,
+                                        counterparty,
+                                        quantity,
+                                        acquire ? actor : "",
+                                        relinquish ? actor : "",
+                                        before,
+                                        delta,
+                                        after,
+                                        price,
+                                        currency,
+                                        funding,
+                                        transaction);
+}
+
+bool object_custody_begin(const object *op,
+                          object *actor_ob,
+                          const char *reason,
+                          const char *source,
+                          const char *destination,
+                          const char *counterparty,
+                          uint32_t quantity,
+                          bool acquire,
+                          bool relinquish,
+                          object_custody_transaction_t *transaction) {
+    return object_custody_begin_economy(op,
+                                        actor_ob,
+                                        reason,
+                                        source,
+                                        destination,
+                                        counterparty,
+                                        quantity,
+                                        acquire,
+                                        relinquish,
+                                        relinquish ? quantity : 0,
+                                        relinquish ? -(int64_t)quantity : (int64_t)quantity,
+                                        relinquish ? 0 : quantity,
+                                        0,
+                                        "",
+                                        "",
+                                        transaction);
+}
+
+void object_custody_apply(object *op, const object_custody_transaction_t *transaction) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(transaction != NULL);
+
+    if (op->custody_lineage == NULL) {
+        op->custody_lineage = add_string(transaction->lineage);
+    }
+    if (transaction->acquire && op->custody_first == NULL) {
+        op->custody_first = add_string(transaction->first_after);
+    }
+    if (transaction->relinquish) {
+        FREE_AND_CLEAR_HASH2(op->custody_last);
+        op->custody_last = add_string(transaction->last_after);
+    }
+}
+
+bool object_custody_track_player(object_custody_transaction_t *transaction, object *player_ob) {
+    HARD_ASSERT(transaction != NULL);
+    return !transaction->active ||
+           gameplay_journal_track_player(transaction->transaction_id, player_ob);
+}
+
+bool object_custody_track_map_object(object_custody_transaction_t *transaction,
+                                     mapstruct *map,
+                                     int x,
+                                     int y,
+                                     const object *op) {
+    HARD_ASSERT(transaction != NULL);
+    return !transaction->active ||
+           gameplay_journal_track_map_object(transaction->transaction_id, map, x, y, op);
+}
+
+bool object_custody_commit(object *op, object_custody_transaction_t *transaction) {
+    object_custody_apply(op, transaction);
+    return object_custody_finish(transaction);
+}
+
+bool object_custody_finish(object_custody_transaction_t *transaction) {
+    HARD_ASSERT(transaction != NULL);
+    if (transaction->active) {
+        bool committed = gameplay_journal_commit(transaction->transaction_id);
+        transaction->active = false;
+        return committed;
+    }
+    return true;
+}
+
+void object_custody_abort(object_custody_transaction_t *transaction, const char *reason) {
+    HARD_ASSERT(transaction != NULL);
+    HARD_ASSERT(reason != NULL);
+    if (transaction->active) {
+        (void)gameplay_journal_abort(transaction->transaction_id, reason);
+        transaction->active = false;
+    }
 }
 
 void object_custody_record(const object *op, object *actor_ob, const char *reason) {
@@ -2833,17 +3742,18 @@ void object_custody_record(const object *op, object *actor_ob, const char *reaso
         return;
     }
 
-    char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
-    if (gameplay_journal_player_begin(CONTR(actor_ob),
-                                      "item",
-                                      reason,
-                                      op->custody_lineage,
-                                      op->custody_lineage,
-                                      0,
-                                      1,
-                                      1,
-                                      transaction_id)) {
-        gameplay_journal_commit(transaction_id);
+    object_custody_transaction_t transaction;
+    if (object_custody_begin(op,
+                             actor_ob,
+                             reason,
+                             "service",
+                             "player",
+                             "",
+                             MAX(1, op->nrof),
+                             true,
+                             false,
+                             &transaction)) {
+        (void)object_custody_finish(&transaction);
     }
 }
 
@@ -2852,20 +3762,14 @@ void object_custody_acquire(object *op, const object *player_ob) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(player_ob != NULL);
 
-    if (player_ob->type != PLAYER || CONTR(player_ob) == NULL ||
-        CONTR(player_ob)->cs == NULL || CONTR(player_ob)->cs->account == NULL || player_ob->name == NULL) {
+    if (player_ob->type != PLAYER || CONTR(player_ob) == NULL || CONTR(player_ob)->cs == NULL ||
+        CONTR(player_ob)->cs->account == NULL || player_ob->name == NULL) {
         return;
     }
 
     object *actor_ob = (object *)player_ob;
-    if (actor_ob->custody_actor == NULL) {
-        char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE], actor[MAX_BUF];
-        if (!object_custody_random_id(id)) {
-            LOG(ERROR, "Could not create durable custody identity for player %s.", actor_ob->name);
-            return;
-        }
-        snprintf(actor, sizeof(actor), "%s:%s", CONTR(actor_ob)->cs->account, id);
-        actor_ob->custody_actor = add_string(actor);
+    if (!object_custody_actor(actor_ob)) {
+        return;
     }
 
     if (op->custody_first == NULL) {
@@ -2881,7 +3785,6 @@ void object_custody_acquire(object *op, const object *player_ob) {
         snprintf(lineage, sizeof(lineage), "item:%s", id);
         op->custody_lineage = add_string(lineage);
     }
-
 }
 
 /** Record the player that successfully relinquished custody of an item. */
@@ -2889,20 +3792,14 @@ void object_custody_relinquish(object *op, const object *player_ob) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(player_ob != NULL);
 
-    if (player_ob->type != PLAYER || CONTR(player_ob) == NULL ||
-        CONTR(player_ob)->cs == NULL || CONTR(player_ob)->cs->account == NULL || player_ob->name == NULL) {
+    if (player_ob->type != PLAYER || CONTR(player_ob) == NULL || CONTR(player_ob)->cs == NULL ||
+        CONTR(player_ob)->cs->account == NULL || player_ob->name == NULL) {
         return;
     }
 
     object *actor_ob = (object *)player_ob;
-    if (actor_ob->custody_actor == NULL) {
-        char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE], actor[MAX_BUF];
-        if (!object_custody_random_id(id)) {
-            LOG(ERROR, "Could not create durable custody identity for player %s.", actor_ob->name);
-            return;
-        }
-        snprintf(actor, sizeof(actor), "%s:%s", CONTR(actor_ob)->cs->account, id);
-        actor_ob->custody_actor = add_string(actor);
+    if (!object_custody_actor(actor_ob)) {
+        return;
     }
     FREE_AND_CLEAR_HASH2(op->custody_last);
     op->custody_last = add_refcount(actor_ob->custody_actor);
@@ -3360,6 +4257,53 @@ bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool
     }
 
     return true;
+}
+
+object_semantic_result_t
+object_enter_map_reason(object *op, mapstruct *m, int x, int y, const char *reason) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(m != NULL);
+    HARD_ASSERT(reason != NULL);
+
+    object *root = object_get_env(op);
+    if (op->type == MONEY || (op->type != PLAYER && object_contains_money_descendant(op)) ||
+        op->nrof > INT32_MAX || (op->type != PLAYER && object_contains_hidden_bank_info(op))) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    object_custody_transaction_t transaction = {0};
+    bool journal = root->type == PLAYER && object_custody_auditable(op);
+    if (journal && !object_custody_begin(op,
+                                         root,
+                                         reason,
+                                         "player",
+                                         "ground",
+                                         "",
+                                         MAX(1, op->nrof),
+                                         false,
+                                         true,
+                                         &transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (journal && !object_custody_track_map_object(&transaction, m, x, y, op)) {
+        object_custody_abort(&transaction, "domain-registration-failed");
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (journal) {
+        object_custody_apply(op, &transaction);
+    }
+    if (!object_enter_map(op, NULL, m, x, y, true)) {
+        /* Entry can fail after removal or a map effect mutated the object. */
+        if (transaction.active) {
+            bool attempted = gameplay_journal_attempt(transaction.transaction_id);
+            HARD_ASSERT(attempted);
+            (void)attempted;
+        }
+        return journal ? OBJECT_SEMANTIC_AMBIGUOUS : OBJECT_SEMANTIC_FAILED;
+    }
+    if (journal && !object_custody_finish(&transaction)) {
+        return OBJECT_SEMANTIC_AMBIGUOUS;
+    }
+    return OBJECT_SEMANTIC_COMMITTED;
 }
 
 /**

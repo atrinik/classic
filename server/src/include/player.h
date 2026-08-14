@@ -496,6 +496,10 @@ struct pl_player {
     player_faction_t *factions;
 
     long item_power_effects; ///< Next time of item power effects.
+
+    /** Latest gameplay-journal commit included by a later player checkpoint. */
+    char journal_run_id[33];
+    uint64_t journal_sequence;
 };
 
 /* Prototypes */
@@ -532,6 +536,9 @@ int sack_can_hold(object *pl, object *sack, object *op, int nrof);
 void pick_up(object *op, object *alt, int no_mevent);
 void put_object_in_sack(object *op, object *sack, object *tmp, long nrof);
 void drop_object(object *op, object *tmp, long nrof, int no_mevent);
+#ifdef ATRINIK_TESTING
+void player_event_veto_for_test(bool pickup, bool drop, bool map_pickup, bool map_drop);
+#endif
 void drop(object *op, object *tmp, int no_mevent);
 char *player_make_path(const char *name, const char *ext);
 int player_exists(const char *name);
