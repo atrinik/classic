@@ -669,6 +669,15 @@ class WorkflowContractTests(unittest.TestCase):
             "github.event_name == 'workflow_dispatch' && github.run_id || github.ref",
             check[: check.index("jobs:")],
         )
+        core = check[
+            check.index("  core:\n    name: Core validation") : check.index(
+                "  server:\n    name: Server validation"
+            )
+        ]
+        self.assertIn(
+            "--release-history-ref \"${{ github.event_name == 'workflow_dispatch' && 'refs/remotes/origin/main' || 'HEAD' }}\"",
+            core,
+        )
 
         workflow = self.text("pr-benchmarks.yml")
         triggers = workflow[: workflow.index("jobs:")]
