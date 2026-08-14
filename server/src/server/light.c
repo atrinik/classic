@@ -205,6 +205,14 @@ static uint16_t light_color_linear_component(uint32_t color, size_t channel) {
     return peak == 0 ? 0 : light_muldiv_round(components[channel], UINT16_MAX, peak);
 }
 
+void light_color_linearize(uint32_t color, uint16_t linear[3]) {
+    HARD_ASSERT(linear != NULL);
+
+    for (size_t channel = 0; channel < 3; channel++) {
+        linear[channel] = light_color_linear_component(color, channel);
+    }
+}
+
 static uint16_t light_raw_to_radiance(int64_t raw_light) {
     if (raw_light <= 0) {
         return 0;
