@@ -122,6 +122,29 @@ START_TEST(test_shop_pay_handles_multi_stack_uint32_change) {
 }
 END_TEST
 
+START_TEST(test_shop_coin_stack_adjustment_rejects_invalid_quantity_and_weight) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object *coin = arch_get("coppercoin");
+    coin->nrof = 1;
+    coin = object_insert_into(coin, pl, 0);
+
+    ck_assert_int_eq(shop_set_coin_nrof_reason(coin, 0, "test.currency-adjust"),
+                     OBJECT_SEMANTIC_FAILED);
+    ck_assert_uint_eq(coin->nrof, 1);
+    ck_assert_int_eq(shop_set_coin_nrof_reason(coin, (uint32_t)INT32_MAX + 1,
+                                               "test.currency-adjust"),
+                     OBJECT_SEMANTIC_FAILED);
+    ck_assert_uint_eq(coin->nrof, 1);
+
+    pl->carrying = UINT32_MAX;
+    ck_assert_int_eq(shop_set_coin_nrof_reason(coin, 2, "test.currency-adjust"),
+                     OBJECT_SEMANTIC_FAILED);
+    ck_assert_uint_eq(coin->nrof, 1);
+}
+END_TEST
+
 START_TEST(test_shop_get_cost_string) {
     ck_assert_str_eq(shop_get_cost_string(0), "nothing");
     ck_assert_str_eq(shop_get_cost_string(1), "1 copper coin");
@@ -493,6 +516,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_shop_pay);
     tcase_add_test(tc_core, test_shop_pay_rejects_mutated_money_without_partial_removal);
     tcase_add_test(tc_core, test_shop_pay_handles_multi_stack_uint32_change);
+    tcase_add_test(tc_core, test_shop_coin_stack_adjustment_rejects_invalid_quantity_and_weight);
     tcase_add_test(tc_core, test_shop_pay_item);
     tcase_add_test(tc_core, test_shop_pay_items);
     tcase_add_test(tc_core, test_shop_sell_item);

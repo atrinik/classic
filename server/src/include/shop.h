@@ -76,6 +76,7 @@ bank_set_balance_reason(object *bank, int64_t value, const char *reason);
 extern void shop_insert_coins(object *op, int64_t value);
 extern bool shop_insert_coins_exact(object *op, int64_t value);
 extern bool shop_insert_coins_exact_tagged(object *op, int64_t value, const char *transaction_id);
+extern bool shop_coin_delivery_on_floor(object *op, int64_t value, bool *on_floor);
 /**
  * Sum canonical held/bank currency plus canonical currency on the current tile.
  * The player must have a map. On failure, the output value is unspecified.
@@ -100,6 +101,7 @@ extern object_semantic_result_t
 shop_insert_coins_reason(object *op, int64_t value, const char *reason);
 extern object_semantic_result_t
 shop_set_coin_nrof_reason(object *coin, uint32_t nrof, const char *reason);
+extern object_semantic_result_t shop_destroy_coin_reason(object *coin, const char *reason);
 extern object_semantic_result_t shop_insert_coin_object_reason(object *coin,
                                                                object *where,
                                                                const char *reason,

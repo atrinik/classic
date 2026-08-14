@@ -3118,7 +3118,8 @@ bool player_load_stream(player *pl, FILE *fp) {
         } else if (strncmp(buf, "journal_run ", 12) == 0) {
             const char *run_id = buf + 12;
             if (string_is_hex_fixed(run_id, 32, true)) {
-                snprintf(VS(pl->journal_run_id), "%s", run_id);
+                memcpy(pl->journal_run_id, run_id, 32);
+                pl->journal_run_id[32] = '\0';
             }
         } else if (strncmp(buf, "journal_sequence ", 17) == 0) {
             char *end;

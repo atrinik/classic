@@ -828,6 +828,43 @@ void object_weight_add(object *op, uint32_t weight) {
 }
 
 /**
+ * Check whether adding weight can be represented through an inventory chain.
+ *
+ * @param op
+ * First containing object.
+ * @param weight
+ * Unmodified weight to add.
+ * @return
+ * True if every updated 32-bit carrying value can represent the addition.
+ */
+bool object_weight_can_add(const object *op, uint64_t weight) {
+    HARD_ASSERT(op != NULL);
+
+    while (op != NULL) {
+        if (weight > UINT32_MAX) {
+            return false;
+        }
+        if (op->type == CONTAINER && !DBL_EQUAL(op->weapon_speed, 1.0)) {
+            if (weight > UINT32_MAX - op->damage_round_tag) {
+                return false;
+            }
+            uint64_t unmodified = op->damage_round_tag + weight;
+            long double carrying = (long double)unmodified * op->weapon_speed;
+            if (carrying < op->carrying || carrying > UINT32_MAX) {
+                return false;
+            }
+            weight = (uint64_t)carrying - op->carrying;
+        } else {
+            if (weight > UINT32_MAX - op->carrying) {
+                return false;
+            }
+        }
+        op = op->env;
+    }
+    return true;
+}
+
+/**
  * Recursively (outwards) subtracts a number from the weight of an object
  * (and what is carried by its environment(s)).
  *
@@ -2594,7 +2631,9 @@ object_semantic_result_t object_insert_map_reason(object *op,
         /* Map insertion may return NULL after walk-on effects destroyed the
          * object. Preserve the intent for restart reconciliation. */
         if (transaction.active) {
-            HARD_ASSERT(gameplay_journal_attempt(transaction.transaction_id));
+            bool attempted = gameplay_journal_attempt(transaction.transaction_id);
+            HARD_ASSERT(attempted);
+            (void)attempted;
         }
         return journal ? OBJECT_SEMANTIC_AMBIGUOUS : OBJECT_SEMANTIC_FAILED;
     }
@@ -2698,6 +2737,11 @@ object_set_nrof_reason(object *op, uint32_t nrof, const char *reason, object **s
 
     uint32_t before = MAX(1, op->nrof);
     uint32_t after = MAX(1, nrof);
+    if (nrof > INT32_MAX ||
+        (!QUERY_FLAG(op, FLAG_REMOVED) && op->env != NULL && after > before &&
+         !object_weight_can_add(op->env, (uint64_t)op->weight * (after - before)))) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
     object *root = object_get_env(op);
     bool journal = root->type == PLAYER && object_custody_auditable(op) && before != after;
     object_custody_transaction_t transaction = {0};
@@ -3997,7 +4041,9 @@ object_enter_map_reason(object *op, mapstruct *m, int x, int y, const char *reas
     if (!object_enter_map(op, NULL, m, x, y, true)) {
         /* Entry can fail after removal or a map effect mutated the object. */
         if (transaction.active) {
-            HARD_ASSERT(gameplay_journal_attempt(transaction.transaction_id));
+            bool attempted = gameplay_journal_attempt(transaction.transaction_id);
+            HARD_ASSERT(attempted);
+            (void)attempted;
         }
         return journal ? OBJECT_SEMANTIC_AMBIGUOUS : OBJECT_SEMANTIC_FAILED;
     }

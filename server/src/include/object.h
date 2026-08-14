@@ -903,6 +903,7 @@ bool object_can_merge(object *ob1, object *ob2);
 object *object_merge(object *op);
 uint32_t object_weight_sum(object *op);
 void object_weight_add(object *op, uint32_t weight);
+bool object_weight_can_add(const object *op, uint64_t weight);
 void object_weight_sub(object *op, uint32_t weight);
 object *object_get_env(object *op);
 bool object_is_in_inventory(const object *op, const object *inv);

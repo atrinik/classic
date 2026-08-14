@@ -606,7 +606,9 @@ int bank_withdraw(object *op, const char *text, int64_t *value) {
 
     bank->value -= *value;
     if (info.mode == BANK_STRING_ALL) {
-        HARD_ASSERT(shop_insert_coins_exact_tagged(op, *value, transaction));
+        bool delivered = shop_insert_coins_exact_tagged(op, *value, transaction);
+        HARD_ASSERT(delivered);
+        (void)delivered;
     } else {
         if (info.amber != 0) {
             bank_insert_coins(op, coins_arch[0], (uint32_t)info.amber, transaction);

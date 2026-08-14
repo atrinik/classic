@@ -323,6 +323,18 @@ START_TEST(test_item_terminal_failures_report_ambiguity) {
     ck_assert(gameplay_journal_player_checkpoint_allowed(pl));
     semantic_failure_journal_deinit(decrease_directory);
 
+    char currency_directory[] = "/tmp/atrinik-currency-destroy-failure-XXXXXX";
+    semantic_failure_journal_init(currency_directory);
+    object *coin = arch_get("coppercoin");
+    coin->nrof = 7;
+    coin = object_insert_into(coin, pl, 0);
+    uint32_t coin_tag = coin->count;
+    ck_assert_int_eq(shop_destroy_coin_reason(coin, "test.currency-destroy-failure"),
+                     OBJECT_SEMANTIC_AMBIGUOUS);
+    ck_assert(!OBJECT_VALID(coin, coin_tag));
+    ck_assert(gameplay_journal_player_checkpoint_allowed(pl));
+    semantic_failure_journal_deinit(currency_directory);
+
     object_destroy(pl);
 }
 END_TEST
@@ -462,7 +474,8 @@ START_TEST(test_party_random_currency_retirement_preserves_message_lifetime) {
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("party.currency-source"), 1);
     gameplay_journal_deinit();
     char *split_contents = read_fixture(split_directory);
-    ck_assert_ptr_ne(strstr(split_contents, "\"before\":22,\"delta\":5,\"after\":27"), NULL);
+    ck_assert_ptr_ne(strstr(split_contents, "\"before\":0,\"delta\":5,\"after\":5"), NULL);
+    ck_assert_ptr_ne(strstr(split_contents, "\"before\":27,\"delta\":5,\"after\":32"), NULL);
     ck_assert_ptr_ne(strstr(split_contents, "\"before\":10,\"delta\":-10,\"after\":0"), NULL);
     char source_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
     ck_assert(crash_intent_field(split_contents,
@@ -845,8 +858,8 @@ START_TEST(test_production_player_and_map_checkpoints_persist_component_watermar
     gameplay_journal_deinit();
 #ifndef WIN32
     char source_root[HUGE_BUF];
-    snprintf(VS(source_root), "%s", __FILE__);
-    char *source_suffix = strstr(source_root, "/src/tests/");
+    snprintf(VS(source_root), "%s", ATRINIK_TEST_DATA_DIR);
+    char *source_suffix = strstr(source_root, "/src/tests/data");
     ck_assert_ptr_ne(source_suffix, NULL);
     *source_suffix = '\0';
     char reconcile_path[HUGE_BUF];

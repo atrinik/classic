@@ -492,6 +492,53 @@ class JournalTests(unittest.TestCase):
         with self.assertRaisesRegex(gameplay_journal.JournalError, "no run identity"):
             gameplay_journal._checkpoint_sequence(invalid_save)
 
+    def test_reconcile_groups_party_source_and_grants_as_one_batch(self) -> None:
+        source_details = self.details(
+            actor="acct:actor", currency="copper-equivalent", funding="party-corpse",
+            source="corpse", destination="party-pool",
+        )
+        child_details = self.details(
+            actor="acct:actor", currency="copper-equivalent", funding="source-tx",
+            source="corpse", destination="player-or-ground",
+        )
+        self.write(
+            self.record(
+                "intent", "source-tx", version=2, kind="currency",
+                reason="party.currency-source", details=source_details,
+            ),
+            self.record(
+                "domain", "source-tx", version=2, reason="domain.add",
+                domain={"kind": "map-runtime", "id": "/world/start"},
+            ),
+            self.record(
+                "intent", "grant-tx", version=2, kind="currency",
+                reason="party.currency-split", details=child_details,
+            ),
+            self.record(
+                "commit", "source-tx", version=2,
+                domains=[
+                    {"kind": "player", "id": "acct/hero"},
+                    {"kind": "map-runtime", "id": "/world/start"},
+                ],
+            ),
+            self.record(
+                "commit", "grant-tx", version=2,
+                domains=[{"kind": "player", "id": "acct/hero"}],
+            ),
+        )
+        plan = gameplay_journal.reconcile(
+            gameplay_journal.load([self.root]),
+            ["player:acct/hero=0", "map-runtime:/world/start=0"],
+        )
+        self.assertEqual(plan["source-tx"]["action"], "replay-party-batch")
+        self.assertEqual(
+            plan["source-tx"]["batch_transactions"], ["source-tx", "grant-tx"],
+        )
+        self.assertEqual(plan["grant-tx"]["action"], "covered-by-party-batch")
+        self.assertEqual(
+            plan["grant-tx"]["domains"][0]["action"], "covered-by-party-batch",
+        )
+
     def test_reconcile_cli_preserves_intent_sequence_order(self) -> None:
         details = self.details(
             actor="acct:actor", currency="copper-equivalent", source="corpse",

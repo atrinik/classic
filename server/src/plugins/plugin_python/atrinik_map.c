@@ -485,6 +485,11 @@ static PyObject *Atrinik_Map_CreateObject(Atrinik_Map *self, PyObject *args) {
         RAISE("Invalid archetype.");
         return NULL;
     }
+    if (arch->clone.type == MONEY) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Map.CreateObject cannot mint currency; use Player.InsertCoins.");
+        return NULL;
+    }
 
     object *newobj = hooks->arch_to_object(arch);
     newobj->x = x;
@@ -559,6 +564,15 @@ static PyObject *Atrinik_Map_Insert(Atrinik_Map *self, PyObject *args) {
     }
 
     OBJEXISTCHECK(obj);
+
+    object *root = hooks->object_get_env(obj->obj);
+    bool bank = obj->obj->arch != NULL && strcmp(obj->obj->arch->name, "player_info") == 0 &&
+                obj->obj->name != NULL && strcmp(obj->obj->name, "BANK_GENERAL") == 0;
+    if (obj->obj->type == MONEY || (bank && root != obj->obj && root->type == PLAYER)) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Map.Insert cannot move persistent currency; use Player.InsertCoins.");
+        return NULL;
+    }
 
     object *inserted = NULL;
     object_semantic_result_t result =

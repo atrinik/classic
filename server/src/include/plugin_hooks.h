@@ -744,6 +744,7 @@ struct plugin_hooklist
                          object *,
                          uint32_t,
                          const char *)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t, shop_destroy_coin_reason, object *, const char *)
     PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
                          bank_set_balance_reason,
                          object *,

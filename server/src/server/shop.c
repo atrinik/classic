@@ -787,7 +787,9 @@ bool shop_sell_item_commit(object *op, object *item, object_custody_transaction_
 
     int64_t value = shop_get_cost(item, COST_SELL);
     char *name = object_get_name_s(item, op);
-    HARD_ASSERT(shop_insert_coins_exact_tagged(op, value, transaction->transaction_id));
+    bool delivered = shop_insert_coins_exact_tagged(op, value, transaction->transaction_id);
+    HARD_ASSERT(delivered);
+    (void)delivered;
 
     SET_FLAG(item, FLAG_UNPAID);
     /* Identify the item. Makes any unidentified item sold to unique shop appear
@@ -853,9 +855,13 @@ static void shop_insert_coin_stacks(object *op,
             SET_FLAG(coin, FLAG_UNIQUE);
             coin->x = op->x;
             coin->y = op->y;
-            HARD_ASSERT(object_insert_map(coin, op->map, NULL, INS_NO_WALK_ON) != NULL);
+            object *inserted = object_insert_map(coin, op->map, NULL, INS_NO_WALK_ON);
+            HARD_ASSERT(inserted != NULL);
+            (void)inserted;
         } else {
-            HARD_ASSERT(object_insert_into(coin, where, 0) != NULL);
+            object *inserted = object_insert_into(coin, where, 0);
+            HARD_ASSERT(inserted != NULL);
+            (void)inserted;
         }
         nrof -= chunk;
     }
@@ -905,8 +911,26 @@ void shop_currency_tag_retire(object *op, const char *transaction_id) {
     }
 }
 
-bool shop_insert_coins_exact_tagged(object *op, int64_t value, const char *transaction_id) {
+static object *shop_currency_tag_retire_one(object *coin, const char *transaction_id) {
+    HARD_ASSERT(coin != NULL);
+    HARD_ASSERT(transaction_id != NULL);
+
+    if (transaction_id[0] == '\0') {
+        return coin;
+    }
+    char lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    snprintf(VS(lineage), "currency:%s", transaction_id);
+    if (coin->custody_lineage == NULL || strcmp(coin->custody_lineage, lineage) != 0) {
+        return NULL;
+    }
+    FREE_AND_CLEAR_HASH(coin->custody_lineage);
+    return object_merge(coin);
+}
+
+static bool shop_coin_delivery_destination(object *op, int64_t value, object **destination_out) {
     HARD_ASSERT(op != NULL);
+    HARD_ASSERT(destination_out != NULL);
+    *destination_out = NULL;
     if (value < 0 || !shop_coins_available()) {
         return false;
     }
@@ -919,7 +943,6 @@ bool shop_insert_coins_exact_tagged(object *op, int64_t value, const char *trans
         total_weight += (long double)nrof * at->clone.weight;
         remainder -= nrof * at->clone.value;
     }
-    object *destination = NULL;
     FOR_INV_PREPARE(op, tmp) {
         if (tmp->type != CONTAINER || !QUERY_FLAG(tmp, FLAG_APPLIED) || tmp->race == NULL ||
             strstr(tmp->race, "gold") == NULL) {
@@ -928,17 +951,36 @@ bool shop_insert_coins_exact_tagged(object *op, int64_t value, const char *trans
         long double weighted = total_weight * tmp->weapon_speed;
         if (tmp->weight_limit == 0 ||
             (tmp->carrying <= tmp->weight_limit && weighted <= tmp->weight_limit - tmp->carrying)) {
-            destination = tmp;
+            *destination_out = tmp;
             break;
         }
     }
     FOR_INV_FINISH();
-    if (destination == NULL) {
+    if (*destination_out == NULL) {
         uint32_t limit = weight_limit[MIN(op->stats.Str, MAX_STAT)];
         if (op->type != PLAYER || op->map == NULL ||
             (op->carrying <= limit && total_weight <= limit - op->carrying)) {
-            destination = op;
+            *destination_out = op;
         }
+    }
+    return true;
+}
+
+bool shop_coin_delivery_on_floor(object *op, int64_t value, bool *on_floor) {
+    HARD_ASSERT(on_floor != NULL);
+    object *destination;
+    if (!shop_coin_delivery_destination(op, value, &destination)) {
+        return false;
+    }
+    *on_floor = destination == NULL;
+    return true;
+}
+
+bool shop_insert_coins_exact_tagged(object *op, int64_t value, const char *transaction_id) {
+    HARD_ASSERT(op != NULL);
+    object *destination;
+    if (!shop_coin_delivery_destination(op, value, &destination)) {
+        return false;
     }
     bool on_floor = destination == NULL;
     if (on_floor && transaction_id != NULL && transaction_id[0] != '\0' &&
@@ -1021,6 +1063,9 @@ shop_set_coin_nrof_reason(object *coin, uint32_t nrof, const char *reason) {
         coin->nrof = nrof;
         return OBJECT_SEMANTIC_COMMITTED;
     }
+    if (nrof == 0 || nrof > INT32_MAX) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
     if (coin->type != MONEY || coin->arch == NULL || coin->value <= 0 ||
         !shop_money_object_counted(root, coin)) {
         return OBJECT_SEMANTIC_FAILED;
@@ -1044,6 +1089,10 @@ shop_set_coin_nrof_reason(object *coin, uint32_t nrof, const char *reason) {
     }
     uint32_t difference = before_nrof > after_nrof ? before_nrof - after_nrof
                                                    : after_nrof - before_nrof;
+    if (!QUERY_FLAG(coin, FLAG_REMOVED) && coin->env != NULL && after_nrof > before_nrof &&
+        !object_weight_can_add(coin->env, (uint64_t)coin->weight * difference)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
     if (coin->value > INT64_MAX / difference) {
         return OBJECT_SEMANTIC_FAILED;
     }
@@ -1083,6 +1132,37 @@ shop_set_coin_nrof_reason(object *coin, uint32_t nrof, const char *reason) {
                                                          : OBJECT_SEMANTIC_AMBIGUOUS;
 }
 
+object_semantic_result_t shop_destroy_coin_reason(object *coin, const char *reason) {
+    HARD_ASSERT(coin != NULL);
+    HARD_ASSERT(reason != NULL);
+
+    object *root = object_get_env(coin);
+    int64_t value;
+    int64_t before;
+    if (root == coin || root->type != PLAYER || !shop_money_object_counted(root, coin) ||
+        !shop_money_object_value(coin, &value) || !shop_get_recovery_money(root, &before) ||
+        before < value) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
+    if (!gameplay_journal_currency_begin(root,
+                                         reason,
+                                         "currency:destruction",
+                                         before,
+                                         -value,
+                                         before - value,
+                                         "player",
+                                         "destroyed",
+                                         "script",
+                                         transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    object_remove(coin, 0);
+    object_destroy(coin);
+    return gameplay_journal_semantic_commit(transaction) ? OBJECT_SEMANTIC_COMMITTED
+                                                         : OBJECT_SEMANTIC_AMBIGUOUS;
+}
+
 static bool shop_currency_destination_counted(const object *root, const object *where) {
     for (const object *cursor = where; cursor != root; cursor = cursor->env) {
         if (cursor == NULL || cursor->type != CONTAINER ||
@@ -1108,7 +1188,7 @@ object_semantic_result_t shop_insert_coin_object_reason(object *coin,
     int64_t value;
     int64_t before;
     if (root->type != PLAYER || !shop_currency_destination_counted(root, where) ||
-        !shop_money_object_value(coin, &value) ||
+        coin->nrof == 0 || coin->nrof > INT32_MAX || !shop_money_object_value(coin, &value) ||
         !shop_get_recovery_money(root, &before) || value > INT64_MAX - before) {
         return OBJECT_SEMANTIC_FAILED;
     }
@@ -1130,8 +1210,6 @@ object_semantic_result_t shop_insert_coin_object_reason(object *coin,
         snprintf(VS(lineage), "currency:%s", transaction);
         FREE_AND_COPY_HASH(coin->custody_lineage, lineage);
     }
-    archetype_t *arch = coin->arch;
-    int64_t unit_value = coin->value;
     *inserted_out = object_insert_into(coin, where, 0);
     if (*inserted_out == NULL) {
         (void)gameplay_journal_attempt(transaction);
@@ -1140,14 +1218,6 @@ object_semantic_result_t shop_insert_coin_object_reason(object *coin,
     if (!gameplay_journal_semantic_commit(transaction)) {
         return OBJECT_SEMANTIC_AMBIGUOUS;
     }
-    shop_currency_tag_retire(root, transaction);
-    FOR_INV_PREPARE(where, tmp) {
-        if (tmp->type == MONEY && tmp->arch == arch && tmp->value == unit_value) {
-            *inserted_out = tmp;
-            return OBJECT_SEMANTIC_COMMITTED;
-        }
-    }
-    FOR_INV_FINISH();
-    *inserted_out = NULL;
-    return OBJECT_SEMANTIC_AMBIGUOUS;
+    *inserted_out = shop_currency_tag_retire_one(*inserted_out, transaction);
+    return *inserted_out != NULL ? OBJECT_SEMANTIC_COMMITTED : OBJECT_SEMANTIC_AMBIGUOUS;
 }

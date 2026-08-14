@@ -32,19 +32,18 @@
 #define JOURNAL_FILE_HARD_LIMIT (9U * 1024U * 1024U)
 #define JOURNAL_RETENTION_FILES 16U
 #define JOURNAL_PENDING_LIMIT 64U
-#define JOURNAL_DOMAIN_LIMIT 4U
 
 typedef struct pending_transaction {
     char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
     char reason[GAMEPLAY_JOURNAL_ID_MAX + 1];
-    char player_ids[JOURNAL_DOMAIN_LIMIT][GAMEPLAY_JOURNAL_ID_MAX + 1];
-    object *players[JOURNAL_DOMAIN_LIMIT];
-    tag_t player_counts[JOURNAL_DOMAIN_LIMIT];
+    char player_ids[GAMEPLAY_JOURNAL_DOMAIN_LIMIT][GAMEPLAY_JOURNAL_ID_MAX + 1];
+    object *players[GAMEPLAY_JOURNAL_DOMAIN_LIMIT];
+    tag_t player_counts[GAMEPLAY_JOURNAL_DOMAIN_LIMIT];
     size_t player_count;
-    char map_ids[JOURNAL_DOMAIN_LIMIT][GAMEPLAY_JOURNAL_ID_MAX + 1];
-    mapstruct *maps[JOURNAL_DOMAIN_LIMIT];
-    tag_t map_counts[JOURNAL_DOMAIN_LIMIT];
-    bool map_unique[JOURNAL_DOMAIN_LIMIT];
+    char map_ids[GAMEPLAY_JOURNAL_DOMAIN_LIMIT][GAMEPLAY_JOURNAL_ID_MAX + 1];
+    mapstruct *maps[GAMEPLAY_JOURNAL_DOMAIN_LIMIT];
+    tag_t map_counts[GAMEPLAY_JOURNAL_DOMAIN_LIMIT];
+    bool map_unique[GAMEPLAY_JOURNAL_DOMAIN_LIMIT];
     size_t map_count;
 } pending_transaction_t;
 
@@ -999,6 +998,9 @@ static bool journal_append_domain(const char *transaction_id, const char *kind, 
     stringbuffer_append_string(record, "\"}");
     bool ok = journal_append(record);
     stringbuffer_free(record);
+    if (!ok && !gameplay_journal_available()) {
+        journal_pending_clear();
+    }
     return ok;
 }
 
@@ -1021,7 +1023,7 @@ bool gameplay_journal_track_player(const char *transaction_id, object *player_ob
             return true;
         }
     }
-    if (pending->player_count == JOURNAL_DOMAIN_LIMIT) {
+    if (pending->player_count == GAMEPLAY_JOURNAL_DOMAIN_LIMIT) {
         return false;
     }
     if (!journal_append_domain(transaction_id, "player", id)) {
@@ -1054,7 +1056,7 @@ static bool journal_track_map(const char *transaction_id, mapstruct *map, bool u
             return true;
         }
     }
-    if (pending->map_count == JOURNAL_DOMAIN_LIMIT) {
+    if (pending->map_count == GAMEPLAY_JOURNAL_DOMAIN_LIMIT) {
         return false;
     }
     if (!journal_append_domain(transaction_id,
@@ -1198,6 +1200,9 @@ bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
     bool ok = journal_append(record);
     stringbuffer_free(record);
     if (!ok) {
+        if (!gameplay_journal_available()) {
+            journal_pending_clear();
+        }
         transaction_id[0] = '\0';
         return false;
     }
@@ -1230,7 +1235,11 @@ static bool journal_finish(const char *transaction_id, const char *phase, const 
     }
     StringBuffer *record = journal_record(phase, transaction_id, "transaction", reason);
     if (record == NULL) {
-        journal_pending_remove((size_t)index);
+        if (gameplay_journal_available()) {
+            journal_pending_remove((size_t)index);
+        } else {
+            journal_pending_clear();
+        }
         return false;
     }
     stringbuffer_append_string(record, ",\"domains\":[");
@@ -1388,8 +1397,6 @@ bool gameplay_journal_player_begin_change(
     if (!gameplay_journal_begin(&subject, kind, reason, change, transaction_id)) {
         return false;
     }
-    ssize_t index = journal_pending_find(transaction_id);
-    HARD_ASSERT(index >= 0);
     if (!gameplay_journal_track_player(transaction_id, pl->ob)) {
         (void)gameplay_journal_abort(transaction_id, "domain-registration-failed");
         transaction_id[0] = '\0';

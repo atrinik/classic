@@ -1572,6 +1572,7 @@ int new_save_map(mapstruct *m, int flag) {
     }
     fp = primary.fp;
 
+    int previous_in_memory = m->in_memory;
     m->in_memory = MAP_SAVING;
 
     save_map_header(m, fp, flag);
@@ -1585,6 +1586,7 @@ int new_save_map(mapstruct *m, int flag) {
         if (!map_atomic_open(&unique, buf)) {
             LOG(BUG, "Can't open unique items file %s", buf);
             map_atomic_cancel(&primary);
+            m->in_memory = previous_in_memory;
             return -1;
         }
         fp2 = unique.fp;
@@ -1602,9 +1604,14 @@ int new_save_map(mapstruct *m, int flag) {
 
     if (!MAP_UNIQUE(m) && !map_atomic_publish(&unique)) {
         map_atomic_cancel(&primary);
+        m->in_memory = previous_in_memory;
         return -1;
     }
-    return map_atomic_publish(&primary) ? 0 : -1;
+    if (!map_atomic_publish(&primary)) {
+        m->in_memory = previous_in_memory;
+        return -1;
+    }
+    return 0;
 }
 
 /**

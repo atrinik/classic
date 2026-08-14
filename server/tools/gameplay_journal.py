@@ -743,6 +743,51 @@ def reconcile(journal: Journal, raw_domains: list[str]) -> dict[str, Any]:
         else:
             entry["action"] = "none"
         result[transaction_id] = entry
+
+    for source_id, source in ordered:
+        if source["intent"]["reason"] != "party.currency-source":
+            continue
+        children = [
+            (transaction_id, transaction)
+            for transaction_id, transaction in ordered
+            if transaction["intent"]["reason"] == "party.currency-split"
+            and transaction["intent"].get("details", {}).get("funding") == source_id
+        ]
+        if not children:
+            continue
+        source_entry = result[source_id]
+        source_domains = {
+            (domain["kind"], domain["id"]) for domain in source["domains"]
+        }
+        for child_id, child in children:
+            child_domains = {
+                (domain["kind"], domain["id"]) for domain in child["domains"]
+            }
+            if not child_domains.issubset(source_domains):
+                raise JournalError(
+                    f"party batch source {source_id} does not cover child {child_id} domains"
+                )
+        source_entry["batch_transactions"] = [source_id] + [
+            child_id for child_id, _child in children
+        ]
+        if source["status"] == "committed":
+            actions = {domain.get("action") for domain in source_entry["domains"]}
+            source_entry["action"] = (
+                "replay-party-batch"
+                if "replay-required" in actions
+                else "inspect-party-batch"
+                if "unknown" in actions
+                else "none"
+            )
+        elif source["status"] == "attempted":
+            source_entry["action"] = "inspect-party-batch"
+        for child_id, _child in children:
+            child_entry = result[child_id]
+            child_entry["batch_parent"] = source_id
+            child_entry["action"] = "covered-by-party-batch"
+            for domain in child_entry["domains"]:
+                if "action" in domain:
+                    domain["action"] = "covered-by-party-batch"
     return result
 
 

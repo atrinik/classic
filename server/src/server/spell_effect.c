@@ -1465,7 +1465,9 @@ int cast_transform_wealth(object *op) {
     object_remove(marked, 0);
     object_destroy(marked);
     /* Now give the player the new money. */
-    HARD_ASSERT(shop_insert_coins_exact_tagged(op, val, transaction));
+    bool delivered = shop_insert_coins_exact_tagged(op, val, transaction);
+    HARD_ASSERT(delivered);
+    (void)delivered;
     if (!gameplay_journal_semantic_commit(transaction)) {
         free(name);
         return 0;

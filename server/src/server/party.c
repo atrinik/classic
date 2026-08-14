@@ -548,12 +548,20 @@ static void party_loot_split(object *pl, object *corpse) {
         }
     }
 
+    if (value > 0 && count > GAMEPLAY_JOURNAL_DOMAIN_LIMIT) {
+        LOG(ERROR,
+            "Party currency split has %" PRIu32 " recipients; the journal supports at most %u.",
+            count,
+            GAMEPLAY_JOURNAL_DOMAIN_LIMIT);
+        return;
+    }
     if (value > 0) {
         typedef struct party_currency_grant {
             object *recipient;
             int64_t value;
             char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
             bool active;
+            bool on_floor;
         } party_currency_grant_t;
         party_currency_grant_t *grants = xcalloc(count, sizeof(*grants));
         uint32_t num = 0;
@@ -565,12 +573,28 @@ static void party_loot_split(object *pl, object *corpse) {
             if (on_same_map(ol->objlink.ob, pl)) {
                 int64_t value_split = value / count;
                 int64_t before;
+                bool on_floor;
 
                 if (num == 0) {
                     value_split += value % count;
                 }
-                if (!shop_get_recovery_money(ol->objlink.ob, &before) ||
-                    value_split > INT64_MAX - before ||
+                if (!shop_coin_delivery_on_floor(ol->objlink.ob, value_split, &on_floor) ||
+                    !shop_get_recovery_money(ol->objlink.ob, &before)) {
+                    prepared = false;
+                    break;
+                }
+                for (uint32_t i = 0; i < num; i++) {
+                    if (grants[i].on_floor && grants[i].recipient->map == ol->objlink.ob->map &&
+                        grants[i].recipient->x == ol->objlink.ob->x &&
+                        grants[i].recipient->y == ol->objlink.ob->y) {
+                        if (grants[i].value > INT64_MAX - before) {
+                            prepared = false;
+                            break;
+                        }
+                        before += grants[i].value;
+                    }
+                }
+                if (!prepared || value_split > INT64_MAX - before ||
                     (source_transaction[0] != '\0' &&
                      (!gameplay_journal_track_player(source_transaction, ol->objlink.ob) ||
                       (ol->objlink.ob->map != NULL &&
@@ -596,6 +620,7 @@ static void party_loot_split(object *pl, object *corpse) {
                 grants[num].recipient = ol->objlink.ob;
                 grants[num].value = value_split;
                 grants[num].active = true;
+                grants[num].on_floor = on_floor;
                 num++;
             }
         }
@@ -621,9 +646,11 @@ static void party_loot_split(object *pl, object *corpse) {
             }
         }
         for (uint32_t i = 0; i < num; i++) {
-            HARD_ASSERT(shop_insert_coins_exact_tagged(grants[i].recipient,
-                                                       grants[i].value,
-                                                       grants[i].transaction));
+            bool delivered = shop_insert_coins_exact_tagged(grants[i].recipient,
+                                                            grants[i].value,
+                                                            grants[i].transaction);
+            HARD_ASSERT(delivered);
+            (void)delivered;
         }
         bool source_committed = gameplay_journal_semantic_commit(source_transaction);
         for (uint32_t i = 0; source_committed && i < num; i++) {
