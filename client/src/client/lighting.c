@@ -655,6 +655,11 @@ void lighting_benchmark_statistics_get(lighting_benchmark_statistics_t *statisti
     statistics->state_digest = state_digest;
 }
 
+void lighting_benchmark_timings_get(lighting_benchmark_timings_t *timings) {
+    HARD_ASSERT(timings != NULL);
+    *timings = lighting_benchmark_statistics.timings;
+}
+
 bool lighting_benchmark_level_statistics_get(int depth,
                                              lighting_benchmark_level_statistics_t *statistics) {
     if (statistics == NULL || depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH) {

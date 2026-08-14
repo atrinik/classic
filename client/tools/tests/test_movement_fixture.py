@@ -316,12 +316,14 @@ class MovementFixtureTests(unittest.TestCase):
     def test_lighting_work_delta_wraps_queue_drain_and_primary_draw(self) -> None:
         source = (CLIENT_ROOT / "src/client/player_view.c").read_text(encoding="utf-8")
         function = source[source.index("player_view_movement_draw(") :]
-        started = function.index("lighting_benchmark_statistics_get(&lighting_before_tick);")
+        started = function.index("lighting_benchmark_timings_get(&lighting_before_tick);")
         drained = function.index("client_commands_drain_with_clock(")
         drawn = function.index("map_draw_map(surface);")
-        finished = function.index("lighting_benchmark_statistics_get(&lighting_after_draw);")
-        elapsed = function.index("player_view_lighting_elapsed(&lighting_after_draw.timings)")
+        finished = function.index("lighting_benchmark_timings_get(&lighting_after_draw);")
+        elapsed = function.index("player_view_lighting_elapsed(&lighting_after_draw)")
         minimap = function.index("map_draw_map(local_minimap_surface);")
+        timed_frame = function[function.index("uint64_t frame_started") : minimap]
+        self.assertNotIn("lighting_benchmark_statistics_get", timed_frame)
         self.assertLess(started, drained)
         self.assertLess(drained, drawn)
         self.assertLess(drawn, finished)

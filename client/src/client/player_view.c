@@ -1722,8 +1722,8 @@ static bool player_view_movement_draw(player_view_movement_replay_t *replay,
         }
         LastTick = (uint32_t)(*tick_us / 1000);
         uint64_t frame_started = SDL_GetTicksNS();
-        lighting_benchmark_statistics_t lighting_before_tick;
-        lighting_benchmark_statistics_get(&lighting_before_tick);
+        lighting_benchmark_timings_t lighting_before_tick;
+        lighting_benchmark_timings_get(&lighting_before_tick);
         player_view_movement_clock_t queue_clock = {.now_us = *tick_us};
         client_command_queue_drain_result_t drain;
         uint64_t queue_started = SDL_GetTicksNS();
@@ -1747,11 +1747,11 @@ static bool player_view_movement_draw(player_view_movement_replay_t *replay,
             uint64_t map_started = SDL_GetTicksNS();
             map_draw_map(surface);
             phase->map_durations[phase->map_samples++] = SDL_GetTicksNS() - map_started;
-            lighting_benchmark_statistics_t lighting_after_draw;
-            lighting_benchmark_statistics_get(&lighting_after_draw);
+            lighting_benchmark_timings_t lighting_after_draw;
+            lighting_benchmark_timings_get(&lighting_after_draw);
             phase->lighting_work_durations[phase->lighting_work_samples++] =
-                player_view_lighting_elapsed(&lighting_after_draw.timings) -
-                player_view_lighting_elapsed(&lighting_before_tick.timings);
+                player_view_lighting_elapsed(&lighting_after_draw) -
+                player_view_lighting_elapsed(&lighting_before_tick);
 #ifdef ATRINIK_WIDGET_TESTS
             if (lighting_benchmark_fault_complete()) {
                 fprintf(stderr,

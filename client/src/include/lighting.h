@@ -220,6 +220,8 @@ void lighting_deinit(void);
 
 void lighting_benchmark_statistics_reset(void);
 void lighting_benchmark_statistics_get(lighting_benchmark_statistics_t *statistics);
+/** Copy cumulative operation timings without traversing benchmark state. */
+void lighting_benchmark_timings_get(lighting_benchmark_timings_t *timings);
 void lighting_benchmark_configure(bool timing_enabled,
                                   lighting_benchmark_reconstruction_t reconstruction);
 #ifdef ATRINIK_WIDGET_TESTS
