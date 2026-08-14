@@ -2641,6 +2641,9 @@ object_insert_into_reason(object *op, object *where, const char *reason, object 
         return OBJECT_SEMANTIC_FAILED;
     }
     if (op->env != where) {
+        if (source_root == op) {
+            object_weight_sum(op);
+        }
         uint64_t own_weight = (uint64_t)op->weight * MAX(1, op->nrof);
         if (own_weight > UINT32_MAX - op->carrying ||
             !object_weight_can_move(op->env, where, own_weight + op->carrying)) {

@@ -806,6 +806,8 @@ START_TEST(test_production_player_and_map_checkpoints_persist_component_watermar
     ck_assert_ptr_ne(ambiguous_coin, NULL);
     ck_assert_ptr_ne(ambiguous_coin->custody_lineage, NULL);
     ck_assert_int_eq(strncmp(ambiguous_coin->custody_lineage, "currency:", 9), 0);
+    char ambiguous_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    snprintf(VS(ambiguous_transaction), "%s", ambiguous_coin->custody_lineage + 9);
     ck_assert(gameplay_journal_player_checkpoint_allowed(pl));
     ck_assert(gameplay_journal_map_checkpoint_allowed(map));
     gameplay_journal_fail_after_writes_for_test(SIZE_MAX);
@@ -850,7 +852,13 @@ START_TEST(test_production_player_and_map_checkpoints_persist_component_watermar
     FOR_INV_FINISH();
     ck_assert_ptr_ne(loaded_coin, NULL);
     ck_assert_ptr_ne(loaded_coin->custody_lineage, NULL);
-    ck_assert_int_eq(strncmp(loaded_coin->custody_lineage, "currency:", 9), 0);
+    char expected_lineage[9 + GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    snprintf(VS(expected_lineage), "currency:%s", ambiguous_transaction);
+    ck_assert_str_eq(loaded_coin->custody_lineage, expected_lineage);
+    int64_t loaded_value;
+    ck_assert(shop_money_object_value(loaded_coin, &loaded_value));
+    ck_assert_int_eq(loaded_value, 3);
+    ck_assert_int_eq(shop_get_money(loaded_player), 3);
     object_destroy(loaded_player);
     char runtime_path[HUGE_BUF];
     snprintf(VS(runtime_path), "%s/runtime.map", directory);
@@ -1355,15 +1363,19 @@ START_TEST(test_semantic_item_shop_and_bank_producers) {
 
     object *loaded = arch_get("sack");
     loaded->weight = 1;
-    loaded->carrying = UINT32_MAX;
+    object *loaded_item = arch_get("sword");
+    loaded_item->weight = 2;
+    loaded_item = object_insert_into(loaded_item, loaded, INS_NO_MERGE);
+    pl->carrying = UINT32_MAX;
     ck_assert_int_eq(object_insert_into_reason(loaded, pl, "test.loaded-grant", &inserted),
                      OBJECT_SEMANTIC_FAILED);
     ck_assert_ptr_eq(inserted, NULL);
     ck_assert(QUERY_FLAG(loaded, FLAG_REMOVED));
-    loaded->carrying = 2;
+    object_weight_sum(pl);
     ck_assert_int_eq(object_insert_into_reason(loaded, pl, "test.loaded-grant", &inserted),
                      OBJECT_SEMANTIC_COMMITTED);
     ck_assert_ptr_eq(inserted, loaded);
+    ck_assert_ptr_eq(loaded_item->env, loaded);
 
     object *source_sack = object_insert_into(arch_get("sack"), pl, INS_NO_MERGE);
     object *full_sack = object_insert_into(arch_get("sack"), pl, INS_NO_MERGE);

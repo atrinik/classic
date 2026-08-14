@@ -979,7 +979,8 @@ class JournalTests(unittest.TestCase):
                 {"script.currency-grant"}, {"object_insert_into_reason"},
             ),
             ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_Load"): (
-                set(), {"python_object_is_persistent", "set_variable"},
+                set(), {"python_object_is_persistent", "python_load_contains_field",
+                        "set_variable"},
             ),
             ("src/plugins/plugin_python/atrinik_object.c", "Object_SetAttribute"): (
                 {"script.item-adjust", "script.item-value-adjust",
@@ -1018,12 +1019,9 @@ class JournalTests(unittest.TestCase):
         python_object_source = (
             server / "src/plugins/plugin_python/atrinik_object.c"
         ).read_text(encoding="utf-8")
-        carrying_field = re.search(
-            r'\{"carrying",.*?FIELDFLAG_READONLY,.*?\}',
-            python_object_source,
-            re.DOTALL,
-        )
-        self.assertIsNotNone(carrying_field)
+        self.assertIn("offsetof(object, carrying) && python_object_is_persistent", python_object_source)
+        self.assertIn("offsetof(object, weapon_speed) && obj->obj->inv != NULL", python_object_source)
+        self.assertIn('python_load_contains_field(lines, "arch")', python_object_source)
 
 
 if __name__ == "__main__":

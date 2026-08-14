@@ -300,8 +300,9 @@ vetoed/failed mutation.
 
 For compatibility, direct `nrof` and `value` assignments on persistent
 player-rooted objects are routed through fixed semantic reasons, including the
-hidden bank object. `Object.Load()` is rejected for persistent player items;
-content must use the explicit reason-aware methods instead. A `RuntimeError`
+hidden bank object. `Object.Load()` only accepts an unloaded, top-level detached
+object and cannot create nested archetypes; content must otherwise use the
+explicit reason-aware methods. A `RuntimeError`
 that says the terminal commit is uncertain means the authoritative mutation
 already happened and must not be retried blindly.
 

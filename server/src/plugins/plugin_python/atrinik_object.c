@@ -137,7 +137,7 @@ static fields_struct fields[] = {
      offsetof(object, weight),
      0,
      0,
-     "Weight of the object in grams.; int"},
+     "Weight of the object in grams.; int (readonly while contained)"},
     {"count",
      FIELDTYPE_UINT32,
      offsetof(object, count),
@@ -154,10 +154,10 @@ static fields_struct fields[] = {
     {"carrying",
      FIELDTYPE_UINT32,
      offsetof(object, carrying),
-     FIELDFLAG_READONLY,
+     0,
      0,
      "Weight the object is currently carrying in its inventory, in "
-     "grams.; int (readonly)"},
+     "grams.; int (persistent objects readonly)"},
     {"path_attuned",
      FIELDTYPE_UINT32,
      offsetof(object, path_attuned),
@@ -811,6 +811,26 @@ static bool python_object_reject_currency_move(object *op) {
                         "Persistent currency cannot be moved as an item; use PayAmount or "
                         "Player.InsertCoins.");
         return true;
+    }
+    return false;
+}
+
+static bool python_load_contains_field(const char *lines, const char *field) {
+    size_t field_length = strlen(field);
+    const char *line = lines;
+    while (*line != '\0') {
+        while (*line == ' ' || *line == '\t') {
+            line++;
+        }
+        if (strncmp(line, field, field_length) == 0 &&
+            (line[field_length] == ' ' || line[field_length] == '\t')) {
+            return true;
+        }
+        const char *next = strchr(line, '\n');
+        if (next == NULL) {
+            break;
+        }
+        line = next + 1;
     }
     return false;
 }
@@ -2740,8 +2760,8 @@ static const char doc_Atrinik_Object_Load[] =
     ":param lines: Lines to load into the object.\n"
     ":type lines: str\n"
     ":raises Atrinik.AtrinikError: If the object attributes are invalid.\n"
-    ":raises RuntimeError: If the object is persistent; prepare detached objects before "
-    "insertion.";
+    ":raises RuntimeError: Unless the object is unloaded, top-level, and detached, or if the "
+    "input creates a nested archetype.";
 
 /**
  * Implements Atrinik.Object.Object.Load() Python method.
@@ -2755,10 +2775,11 @@ static PyObject *Atrinik_Object_Load(Atrinik_Object *self, PyObject *args) {
     }
 
     OBJEXISTCHECK(self);
-    if (python_object_is_persistent(self->obj)) {
+    if (python_object_is_persistent(self->obj) || self->obj->env != NULL ||
+        self->obj->inv != NULL || python_load_contains_field(lines, "arch")) {
         PyErr_SetString(PyExc_RuntimeError,
-                        "Load cannot mutate persistent state; prepare the object before "
-                        "insertion.");
+                        "Load only accepts an unloaded, top-level detached object and cannot "
+                        "create nested archetypes.");
         return NULL;
     }
 
@@ -2766,6 +2787,8 @@ static PyObject *Atrinik_Object_Load(Atrinik_Object *self, PyObject *args) {
         PyErr_SetString(AtrinikError, "Invalid object attributes.");
         return NULL;
     }
+    self->obj->carrying = 0;
+    self->obj->damage_round_tag = 0;
 
     Py_INCREF(Py_None);
     return Py_None;
@@ -3045,9 +3068,15 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
                         "Hidden bank state can only be changed through its balance API.");
         return -1;
     }
-    if (field->offset == offsetof(object, weight) && python_object_is_persistent(obj->obj)) {
+    if (field->offset == offsetof(object, carrying) && python_object_is_persistent(obj->obj)) {
         PyErr_SetString(PyExc_RuntimeError,
-                        "Persistent object weight is derived inventory state and cannot be "
+                        "Persistent carrying weight is derived inventory state and cannot be "
+                        "changed directly.");
+        return -1;
+    }
+    if (field->offset == offsetof(object, weight) && obj->obj->env != NULL) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Contained object weight is derived inventory state and cannot be "
                         "changed directly.");
         return -1;
     }
@@ -3063,6 +3092,17 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
                             "currency API.");
             return -1;
         }
+        if ((obj->obj->type == CONTAINER || requested == CONTAINER) &&
+            (obj->obj->env != NULL || obj->obj->inv != NULL)) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            "Contained or loaded objects cannot change container type.");
+            return -1;
+        }
+    }
+    if (field->offset == offsetof(object, weapon_speed) && obj->obj->inv != NULL) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Loaded container weight reduction cannot be changed directly.");
+        return -1;
     }
     if (field->offset == offsetof(object, name) && obj->obj->arch != NULL &&
         strcmp(obj->obj->arch->name, "player_info") == 0 && PyUnicode_Check(value)) {
@@ -3105,6 +3145,12 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
     if (field->offset == offsetof(object, nrof) && persistent_currency && !player_rooted) {
         PyErr_SetString(PyExc_RuntimeError,
                         "Persistent non-player currency quantity cannot be changed as an item.");
+        return -1;
+    }
+    if (field->offset == offsetof(object, nrof) && obj->obj->env != NULL && !player_rooted) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Contained stack quantity cannot be changed without updating its "
+                        "inventory chain.");
         return -1;
     }
     if (field->offset == offsetof(object, nrof) && player_rooted) {
