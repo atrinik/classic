@@ -202,7 +202,7 @@ def validate_evidence(evidence: Any) -> dict[str, Any]:
 
 
 def build_point(evidence: Any, *, commit: str, run_id: str, recorded_at: str,
-                environment: dict[str, Any]) -> dict[str, Any]:
+                environment: dict[str, Any], run_attempt: str = "1") -> dict[str, Any]:
     evidence = validate_evidence(evidence)
     if (
         len(commit) != 40
@@ -211,6 +211,8 @@ def build_point(evidence: Any, *, commit: str, run_id: str, recorded_at: str,
         raise ReportError("commit must be a full hexadecimal revision")
     if not run_id.isdigit() or int(run_id) <= 0:
         raise ReportError("run ID must be a positive integer")
+    if not run_attempt.isdigit() or int(run_attempt) <= 0:
+        raise ReportError("run attempt must be a positive integer")
     records = _mapping(evidence["records"], "evidence records")
     candidate = records["candidate_standard"]
     first = candidate[0]
@@ -283,6 +285,7 @@ def build_point(evidence: Any, *, commit: str, run_id: str, recorded_at: str,
         "recorded_at": recorded_at,
         "commit": commit,
         "run_id": run_id,
+        "run_attempt": run_attempt,
         "cohort": cohort_id,
         "environment": environment,
         "viewport": viewport,
@@ -297,6 +300,64 @@ def build_point(evidence: Any, *, commit: str, run_id: str, recorded_at: str,
         "checks": checks,
         "resources": evidence["resources"].get("candidate_standard"),
     }
+
+
+def compact_point(point: dict[str, Any]) -> dict[str, Any]:
+    """Return the bounded chart and alert projection for one detailed point."""
+    phases = _mapping(point.get("phases"), "point phases")
+    compact_phases: dict[str, Any] = {}
+    for name in PHASES:
+        phase = _mapping(phases.get(name), f"point {name} phase")
+        compact_phases[name] = {
+            "work_ms": _mapping(phase.get("work_ms"), f"point {name} work"),
+            "window_p95_ms": _mapping(
+                phase.get("window_p95_ms"), f"point {name} windows"
+            ),
+        }
+    large_phases = point.get("large_phases")
+    compact_large = None
+    if large_phases is not None:
+        large_phases = _mapping(large_phases, "point large phases")
+        compact_large = {
+            name: {
+                "work_ms": _mapping(
+                    _mapping(large_phases.get(name), f"point large {name} phase").get(
+                        "work_ms"
+                    ),
+                    f"point large {name} work",
+                ),
+                "window_p95_ms": _mapping(
+                    _mapping(large_phases.get(name), f"point large {name} phase").get(
+                        "window_p95_ms"
+                    ),
+                    f"point large {name} windows",
+                ),
+            }
+            for name in PHASES
+        }
+    result = {
+        key: point.get(key)
+        for key in (
+            "schema_version",
+            "id",
+            "recorded_at",
+            "commit",
+            "run_id",
+            "run_attempt",
+            "cohort",
+            "status",
+        )
+    }
+    result.update(
+        {
+            "phases": compact_phases,
+            "large_phases": compact_large,
+            "checks": _mapping(point.get("checks"), "point checks"),
+            "report_path": f"reports/run-{point['run_id']}/index.html",
+            "point_path": f"points/run-{point['run_id']}.json",
+        }
+    )
+    return result
 
 
 def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
@@ -318,21 +379,32 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
         for cohort, run_id in retention_watermarks.items()
     ):
         raise ReportError("trend retention watermarks are malformed")
+    global_watermark = trend.setdefault("global_retention_watermark", 0)
+    if type(global_watermark) is not int or global_watermark < 0:
+        raise ReportError("trend global retention watermark is malformed")
     point_run_id = int(point["run_id"])
+    raw_attempt = point.get("run_attempt", "1")
+    if not isinstance(raw_attempt, str) or not raw_attempt.isdigit():
+        raise ReportError("point run attempt must be a positive integer")
+    point_attempt = _integer(int(raw_attempt), "point run attempt")
     replacement_retained = False
     replacement_cohort: str | None = None
     for cohort, cohort_points in cohorts.items():
         if not isinstance(cohort_points, list):
             raise ReportError("trend cohort points must be an array")
-        for item in cohort_points:
+        for index, item in enumerate(cohort_points):
             if not isinstance(item, dict) or not str(item.get("run_id", "")).isdigit():
                 raise ReportError("trend point has an invalid run ID")
+            if "point_path" not in item:
+                item = {**item, "run_attempt": str(item.get("run_attempt", "1"))}
+                item = compact_point(item)
+                cohort_points[index] = item
             item_run_id = int(item["run_id"])
             if item_run_id == point_run_id:
                 replacement_retained = True
                 replacement_cohort = cohort
-    global_watermark = max(retention_watermarks.values(), default=0)
-    if not replacement_retained and point_run_id <= global_watermark:
+    retained_watermark = max(global_watermark, *retention_watermarks.values(), 0)
+    if not replacement_retained and point_run_id <= retained_watermark:
         raise ReportError("cannot replace an observation outside retained history")
     if (
         replacement_retained
@@ -341,6 +413,12 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
     ):
         raise ReportError("cannot move an observation before retained cohort history")
     for cohort_points in cohorts.values():
+        for item in cohort_points:
+            if (
+                item.get("id") == point.get("id")
+                and int(item.get("run_attempt", "1")) > point_attempt
+            ):
+                raise ReportError("cannot replace an observation with an older attempt")
         cohort_points[:] = [
             item
             for item in cohort_points
@@ -350,7 +428,7 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(points, list):
         raise ReportError("trend cohort points must be an array")
     points[:] = [item for item in points if isinstance(item, dict) and item.get("id") != point["id"]]
-    points.append(point)
+    points.append(compact_point(point))
     points.sort(key=lambda item: int(item["run_id"]))
     dropped_points = points[:-TREND_RETENTION]
     del points[:-TREND_RETENTION]
@@ -509,6 +587,7 @@ def main() -> int:
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--run-attempt", default="1")
     parser.add_argument("--recorded-at", default=datetime.now(timezone.utc).isoformat())
     parser.add_argument("--environment", type=json.loads, default="{}")
     parser.add_argument("--point", type=Path, required=True)
@@ -517,7 +596,7 @@ def main() -> int:
     args = parser.parse_args()
     point = build_point(json.loads(args.evidence.read_text()), commit=args.commit,
                         run_id=args.run_id, recorded_at=args.recorded_at,
-                        environment=args.environment)
+                        environment=args.environment, run_attempt=args.run_attempt)
     trend = json.loads(args.trend.read_text()) if args.trend.is_file() else None
     trend = merge_trend(trend, point)
     args.point.parent.mkdir(parents=True, exist_ok=True)
