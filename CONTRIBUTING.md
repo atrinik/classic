@@ -120,6 +120,15 @@ Reusable `classic-build` and `windows-build` images are public: pull them
 anonymously in pull-request validation and do not grant `packages: read` or log
 in to GHCR merely to consume either image.
 
+Required Check never launches timed performance probes. A maintainer can add
+the exact `ci: benchmark` pull-request label to request the path-relevant
+client and server comparisons for the current head. Label retention, removal,
+re-application, synchronize behavior, fork permissions, evidence, and rerun
+instructions are documented in
+[Requested pull-request benchmarks](docs/PR_BENCHMARKS.md). Scheduled and
+manual full client monitoring remains separate in
+[Daily Classic client performance](docs/DAILY_CLIENT_PERFORMANCE.md).
+
 ## Module requirements
 
 ### Client

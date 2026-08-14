@@ -40,6 +40,43 @@ WINDOWS_TEST_PREFIXES = (
     "tools/ci/",
 )
 WINDOWS_TEST_PATHS = {"CMakeLists.txt"}
+BENCHMARK_CONTRACT_PATHS = {
+    ".github/workflows/pr-benchmarks.yml",
+    "tools/ci/classify_changes.py",
+    "tools/ci/run_linux_check.sh",
+    "tools/tests/test_classify_changes.py",
+    "tools/tests/test_workflow_contracts.py",
+}
+CLIENT_BENCHMARK_PREFIXES = (
+    "client/src/client/",
+    "client/src/gui/",
+    "client/src/include/",
+    "client/src/tests/fixtures/player_view/",
+)
+CLIENT_BENCHMARK_PATHS = {
+    "client/CMakeLists.txt",
+    "client/CMakePresets.json",
+    "client/src/cmake.txt",
+    "client/tools/benchmark_lighting_regression.py",
+    "client/tools/benchmark_movement_regression.py",
+    "client/tools/generate_movement_delta.py",
+    "client/tools/generate_movement_five_depth.py",
+    "client/tools/movement_benchmark_schema.py",
+    "client/tools/tests/test_benchmark_movement_regression.py",
+    "client/tools/tests/test_movement_fixture.py",
+    "client/tools/tests/test_verify_movement_fault_injection.py",
+    "client/tools/verify_movement_benchmark.py",
+    "client/tools/verify_movement_fault_injection.py",
+    "libatrinik/math.c",
+    "libatrinik/math.h",
+    "libatrinik/tests/smoke.c",
+    "protocol/schema/game-commands.json",
+}
+SERVER_BENCHMARK_PREFIXES = ("server/cmake/", "server/src/")
+SERVER_BENCHMARK_PATHS = {
+    "server/CMakeLists.txt",
+    "server/CMakePresets.json",
+}
 
 
 class ClassificationError(RuntimeError):
@@ -106,6 +143,15 @@ def classify(
         path in WINDOWS_TEST_PATHS or path.startswith(WINDOWS_TEST_PREFIXES)
         for path in checked
     )
+    benchmark_contract = any(path in BENCHMARK_CONTRACT_PATHS for path in checked)
+    benchmark_client = benchmark_contract or any(
+        path in CLIENT_BENCHMARK_PATHS or path.startswith(CLIENT_BENCHMARK_PREFIXES)
+        for path in checked
+    )
+    benchmark_server = benchmark_contract or any(
+        path in SERVER_BENCHMARK_PATHS or path.startswith(SERVER_BENCHMARK_PREFIXES)
+        for path in checked
+    )
 
     codeql_client = full or any(path.startswith("client/") for path in checked)
     codeql_server = full or any(path.startswith("server/") for path in checked)
@@ -158,6 +204,8 @@ def classify(
         "client": client,
         "server": server,
         "windows": windows,
+        "benchmark_client": benchmark_client,
+        "benchmark_server": benchmark_server,
         "codeql_run": bool(languages),
         "codeql_languages": ",".join(languages),
         "codeql_client": codeql_client,
@@ -248,6 +296,8 @@ def write_outputs(path: Path, result: dict[str, object], config: Path) -> None:
         "client": str(result["client"]).lower(),
         "server": str(result["server"]).lower(),
         "windows": str(result["windows"]).lower(),
+        "benchmark_client": str(result["benchmark_client"]).lower(),
+        "benchmark_server": str(result["benchmark_server"]).lower(),
         "codeql_run": str(result["codeql_run"]).lower(),
         "codeql_languages": str(result["codeql_languages"]),
         "codeql_matrix": json.dumps(matrix, separators=(",", ":")),

@@ -112,8 +112,11 @@ jobs:
                 exit 1
               fi
               test -z "${EXISTING_DIGEST}"
-              test "${tag}" = materials-428265fcc11e9e3f7fc534659b55008cd26e9da6c74da054074279b7bc4af2e9
-              test "${digest}" = sha256:ffe1fa8d28a323d502d01400e2260b7b5eec37842e762c439b88bd9ee823923e
+              if test "${tag}" != materials-428265fcc11e9e3f7fc534659b55008cd26e9da6c74da054074279b7bc4af2e9 ||
+                test "${digest}" != sha256:ffe1fa8d28a323d502d01400e2260b7b5eec37842e762c439b88bd9ee823923e; then
+                echo "dependency bundle package is missing after bootstrap; follow the exact-digest restoration procedure" >&2
+                exit 1
+              fi
               build/oras/oras cp --from-oci-layout \
                 "build/dependency-bundle-oci:${tag}" "${image}:${tag}"
               ;;
