@@ -270,6 +270,24 @@
  the raw samples as an artifact, and enforces the 10% standard and 15% large
  viewport regression budgets.
 
+ Release builds additionally expose the stateful movement contract used by the
+ movement regression workflow:
+  $ build/linux-release/atrinik --player-view-movement-benchmark \
+      src/tests/fixtures/player_view/movement-colored.xml standard translated
+
+ The final reconstruction argument is `translated` (the production path) or
+ `full` (the benchmark-only control); omitting it selects `translated`. An
+ optional final `isolated` workload argument suppresses auxiliary local-minimap
+ draws and is paired with `movement-lighting-isolated.xml` by CI. The
+ JSON schema reports isolated lighting work from before queued MAP decode
+ through the primary draw, separately from production-like total update work
+ and local-minimap rendering, with operation and per-depth
+ decisions, dirty/translated pixels and bytes, scroll offsets, fallbacks, and
+ transformed-sprite cache timing. CI alternates translated/full Release runs
+ over the exact same standard and large sustained streams and requires their
+ lifecycle checkpoints and final state to match. The discrete manifest remains
+ a separate correctness control.
+
 =================================================
 = 3.1. Licensing (Atrinik client)               =
 =================================================

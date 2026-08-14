@@ -35,6 +35,19 @@ def timing(samples: int, *, p50_ns: int = 1_000_000, p95_ns: int = 2_000_000,
             "unit": "ns", "samples": 0, "p50": 0, "p95": 0, "p99": 0,
             "max": 0, "windows": [],
         }
+    if p50_ns == p95_ns == first_ns == last_ns == 0:
+        return {
+            "unit": "ns",
+            "samples": samples,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0,
+            "windows": [
+                {"start_tick": start, "samples": min(32, samples - start), "p95_ns": 0}
+                for start in range(0, samples, 32)
+            ],
+        }
     windows = []
     for start in range(0, samples, 32):
         window_p95 = first_ns if start == 0 else last_ns if start + 32 >= samples else p95_ns
@@ -59,6 +72,25 @@ def empty_lighting_counters() -> dict[str, int]:
     }
 
 
+def lighting_timings(counters: dict[str, int]) -> dict[str, dict[str, object]]:
+    calls = {
+        "translation": counters["field_translations"]
+        + counters["field_translation_fallback_bounds"]
+        + counters["field_translation_fallback_control"],
+        "dirty_clear": counters["field_dirty_marks"],
+        "rasterization": counters["field_rebuilds"],
+        "extrapolation": counters["field_rebuilds"],
+        "tone_map_multiply": counters["render_calls"],
+        "sprite_lookup": counters["lit_sprite_lookups"],
+        "sprite_construction": counters["lit_sprite_misses"],
+        "sprite_invalidation": counters["lit_sprite_clears"],
+    }
+    return {
+        name: {"unit": "ns", "calls": count, "elapsed": count * 100}
+        for name, count in calls.items()
+    }
+
+
 def lighting_state(mode: str) -> dict[str, object]:
     active = mode == "smooth"
     return {
@@ -73,7 +105,9 @@ def lighting_state(mode: str) -> dict[str, object]:
     }
 
 
-def lighting_level(depth: int, draws: int, name: str, mode: str) -> dict[str, object]:
+def lighting_level(
+    depth: int, draws: int, name: str, mode: str, reconstruction: str
+) -> dict[str, object]:
     allocated = mode == "smooth" and -2 <= depth <= 2
     state = {
         "cache_valid": allocated,
@@ -85,15 +119,26 @@ def lighting_level(depth: int, draws: int, name: str, mode: str) -> dict[str, ob
     }
     counters = empty_lighting_counters()
     if allocated:
-        reuses = draws if name == "idle" else (1 if depth == -2 else 0)
+        reuses = draws if name == "idle" else 0
         rebuilds = draws - reuses
+        translated = name == "sustained" and reconstruction == "translated"
+        full_control = name == "sustained" and reconstruction == "full"
         counters.update(
             {
                 "field_begins": draws,
                 "field_dirty_marks": rebuilds,
-                "field_dirty_pixels": rebuilds * 1024,
-                "field_translations": rebuilds if name == "sustained" else 0,
-                "field_partial_rebuilds": rebuilds if name == "sustained" else 0,
+                "field_dirty_pixels": rebuilds * (320 * 240 if full_control else 1024),
+                "field_translations": rebuilds if translated else 0,
+                "field_translated_pixels": rebuilds * 512 if translated else 0,
+                "field_translated_bytes": rebuilds * 5120 if translated else 0,
+                "field_scroll_x_pixels": rebuilds * 32 if name == "sustained" else 0,
+                "field_translation_fallback_control": rebuilds if full_control else 0,
+                "field_partial_rebuilds": rebuilds if translated else 0,
+                "field_full_rebuilds": rebuilds if not translated else 0,
+                "field_full_rebuild_cache": rebuilds
+                if not translated and not full_control
+                else 0,
+                "field_full_rebuild_control": rebuilds if full_control else 0,
                 "field_rebuilds": rebuilds,
                 "field_reuses": reuses,
                 "render_calls": draws,
@@ -102,8 +147,13 @@ def lighting_level(depth: int, draws: int, name: str, mode: str) -> dict[str, ob
                 "lit_sprite_hits": 2,
             }
         )
+    timings = lighting_timings(counters)
+    if allocated and depth != 0:
+        timings["tone_map_multiply"] = {"unit": "ns", "calls": 0, "elapsed": 0}
     return {
         "depth": depth,
+        "width": 320 if allocated else 0,
+        "height": 240 if allocated else 0,
         "start": {"allocated": allocated, **copy.deepcopy(state)},
         "end": {"allocated": allocated, **copy.deepcopy(state)},
         "peak": {
@@ -112,6 +162,7 @@ def lighting_level(depth: int, draws: int, name: str, mode: str) -> dict[str, ob
             "retained_field_bytes": 512 if allocated else 0,
         },
         "counters": counters,
+        "timings": timings,
     }
 
 
@@ -154,6 +205,8 @@ def native_record(
     last_window_ns: int = 2_000_000,
     mode: str = "smooth",
     viewport: str = "standard",
+    reconstruction: str = "translated",
+    workload_variant: str = "production",
 ) -> dict[str, object]:
     phases = []
     packet_counts = {"cold": 1, "sustained": 480, "idle": 8, "resumed": 80}
@@ -169,7 +222,9 @@ def native_record(
         changed = changed_counts[name]
         draws = draw_counts[name]
         animation_draws = animation_draw_counts[name]
-        minimap_draws = minimap_draw_counts[name]
+        minimap_draws = (
+            0 if workload_variant == "isolated-lighting" else minimap_draw_counts[name]
+        )
         renderer_draws = draws + minimap_draws
         render_passes = renderer_draws + animation_draws
         reasons = {
@@ -189,13 +244,26 @@ def native_record(
         budget_yields = 8 if name == "resumed" else 0
         queue_digest = f"{list(benchmark.REQUIRED_PHASES).index(name) + 1:016x}"
         lighting_levels = [
-            lighting_level(depth, draws, name, mode) for depth in range(-6, 7)
+            lighting_level(depth, draws, name, mode, reconstruction)
+            for depth in range(-6, 7)
         ]
         lighting_phase_counters = empty_lighting_counters()
         for field in lighting_phase_counters:
             lighting_phase_counters[field] = sum(
                 level["counters"][field] for level in lighting_levels
             )
+        lighting_phase_timings = {
+            timing_name: {
+                "unit": "ns",
+                "calls": sum(
+                    level["timings"][timing_name]["calls"] for level in lighting_levels
+                ),
+                "elapsed": sum(
+                    level["timings"][timing_name]["elapsed"] for level in lighting_levels
+                ),
+            }
+            for timing_name in benchmark.validate_record.__globals__["LIGHTING_TIMING_FIELDS"]
+        }
         lighting_active = mode == "smooth"
         phases.append(
             {
@@ -222,11 +290,18 @@ def native_record(
                 },
                 "map_time": timing(draws),
                 "animation_time": timing(animation_draws),
+                "lighting_work_time": timing(
+                    draws,
+                    p50_ns=500_000 if lighting_active else 0,
+                    p95_ns=600_000 if lighting_active else 0,
+                    first_ns=600_000 if lighting_active else 0,
+                    last_ns=600_000 if lighting_active else 0,
+                ),
                 "local_minimap": {
-                    "enabled": True,
-                    "update_interval_ms": 250,
-                    "surface_width": 1700,
-                    "surface_height": 1200,
+                    "enabled": workload_variant == "production",
+                    "update_interval_ms": 250 if workload_variant == "production" else 0,
+                    "surface_width": 1700 if workload_variant == "production" else 0,
+                    "surface_height": 1200 if workload_variant == "production" else 0,
                     "map_draws": minimap_draws,
                     "map_time": timing(minimap_draws),
                 },
@@ -315,6 +390,7 @@ def native_record(
                         "retained_field_bytes": 2560 if lighting_active else 0,
                     },
                     "counters": lighting_phase_counters,
+                    "timings": lighting_phase_timings,
                     "levels": lighting_levels,
                 },
                 "sprite_cache": {
@@ -347,16 +423,16 @@ def native_record(
     )]
     standard_checkpoint_sha = visual_lifecycle_digest(standard_checkpoints)
     return {
-        "schema_version": 5,
+        "schema_version": 6,
         "benchmark": "player-view-movement",
         "tick_ms": 125,
         "simulated_tick_hz": 8,
         "identity": {
             "instrumentation": {
-                "schema_version": 5,
-                "fixture_schema_version": 2,
-                "workload": "pvm1-map2-lifecycle-v3",
-                "lighting_statistics_version": 4,
+                "schema_version": 6,
+                "fixture_schema_version": 3,
+                "workload": "pvm1-map2-lifecycle-v4",
+                "lighting_statistics_version": 5,
                 "map_statistics_version": 3,
                 "render_profiler_statistics_version": 4,
                 "sprite_cache_statistics_version": 3,
@@ -386,6 +462,8 @@ def native_record(
                     "height": viewport_height,
                 },
                 "mode": mode,
+                "reconstruction": reconstruction,
+                "workload_variant": workload_variant,
             },
         },
         "fixture": {
@@ -454,26 +532,50 @@ def remove_phase_map_draws(phase: dict[str, object]) -> None:
         level["counters"] = empty_lighting_counters()
 
 
-def additional_contexts(*, full: bool = False) -> dict[str, list[dict[str, object]]]:
-    contexts = {benchmark.STANDARD_DISCRETE_CONTEXT: discrete_pair()}
+def additional_contexts(
+    *, full: bool = False, smooth_samples: int = 2
+) -> dict[str, list[dict[str, object]]]:
+    contexts = {
+        benchmark.STANDARD_DISCRETE_CONTEXT: discrete_pair(),
+        benchmark.STANDARD_TRANSLATED_CONTEXT: [
+            native_record(workload_variant="isolated-lighting")
+            for _ in range(smooth_samples)
+        ],
+        benchmark.STANDARD_FULL_CONTEXT: [
+            native_record(reconstruction="full", workload_variant="isolated-lighting")
+            for _ in range(smooth_samples)
+        ],
+    }
     if full:
         contexts[benchmark.LARGE_DISCRETE_CONTEXT] = [
             native_record(mode="discrete", viewport="large"),
             native_record(mode="discrete", viewport="large"),
         ]
+        contexts[benchmark.LARGE_FULL_CONTEXT] = [
+            native_record(
+                viewport="large", reconstruction="full", workload_variant="isolated-lighting"
+            ),
+            native_record(
+                viewport="large", reconstruction="full", workload_variant="isolated-lighting"
+            ),
+        ]
+        contexts[benchmark.LARGE_TRANSLATED_CONTEXT] = [
+            native_record(viewport="large", workload_variant="isolated-lighting"),
+            native_record(viewport="large", workload_variant="isolated-lighting"),
+        ]
     return contexts
 
 
-class NativeV5RecordTests(unittest.TestCase):
+class NativeV6RecordTests(unittest.TestCase):
     def test_parse_accepts_closed_v5_record(self) -> None:
-        self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 5)
+        self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 6)
 
     def test_parse_rejects_extra_output_and_duplicate_fields(self) -> None:
         encoded = json.dumps(native_record())
         with self.assertRaisesRegex(benchmark.BenchmarkError, "exactly one"):
             benchmark.parse_result(encoded + "\nnoise\n")
-        duplicate = encoded.replace('"schema_version": 5,',
-                                    '"schema_version": 5, "schema_version": 5,', 1)
+        duplicate = encoded.replace('"schema_version": 6,',
+                                    '"schema_version": 6, "schema_version": 6,', 1)
         with self.assertRaisesRegex(benchmark.BenchmarkError, "repeated JSON field"):
             benchmark.parse_result(duplicate)
         with self.assertRaisesRegex(ValueError, "repeated JSON field"):
@@ -513,6 +615,16 @@ class NativeV5RecordTests(unittest.TestCase):
         malformed["phases"][1]["map"]["auxiliary_map_draws"] -= 1
         with self.assertRaisesRegex(ValueError, "map accounting is invalid"):
             benchmark.validate_record(malformed)
+
+    def test_isolated_lighting_workload_excludes_local_minimap(self) -> None:
+        isolated = native_record(workload_variant="isolated-lighting")
+        benchmark.validate_record(isolated)
+        self.assertTrue(
+            all(phase["local_minimap"]["map_draws"] == 0 for phase in isolated["phases"])
+        )
+        isolated["phases"][1]["local_minimap"]["enabled"] = True
+        with self.assertRaisesRegex(ValueError, "local minimap is invalid"):
+            benchmark.validate_record(isolated)
 
     def test_rejects_queue_reordering_and_coherently_accepts_unknown_dirty(self) -> None:
         malformed = native_record()
@@ -835,6 +947,51 @@ class NativeV5RecordTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "discrete lighting is active"):
             benchmark.validate_record(discrete)
 
+        discrete = native_record(mode="discrete")
+        timing_value = discrete["phases"][1]["lighting"]["timings"]["translation"]
+        timing_value.update({"calls": 1, "elapsed": 1})
+        level_timing = discrete["phases"][1]["lighting"]["levels"][6]["timings"][
+            "translation"
+        ]
+        level_timing.update({"calls": 1, "elapsed": 1})
+        with self.assertRaisesRegex(ValueError, "discrete lighting is active"):
+            benchmark.validate_record(discrete)
+
+        discrete = native_record(mode="discrete")
+        lighting_work = discrete["phases"][1]["lighting_work_time"]
+        lighting_work.update({"p50": 1, "p95": 1, "p99": 1, "max": 1})
+        for window in lighting_work["windows"]:
+            window["p95_ns"] = 1
+        with self.assertRaisesRegex(ValueError, "discrete lighting is active"):
+            benchmark.validate_record(discrete)
+
+    def test_requires_exhaustive_full_rebuild_causes_and_coherent_timings(self) -> None:
+        malformed = native_record(reconstruction="full", workload_variant="isolated-lighting")
+        malformed["phases"][1]["lighting"]["counters"][
+            "field_full_rebuild_control"
+        ] -= 1
+        with self.assertRaisesRegex(ValueError, "full rebuild cause is incomplete"):
+            benchmark.validate_record(malformed)
+
+        malformed = native_record()
+        malformed["phases"][1]["lighting"]["timings"]["translation"]["elapsed"] = 0
+        with self.assertRaisesRegex(ValueError, "timing is contradictory"):
+            benchmark.validate_record(malformed)
+
+    def test_requires_eviction_work_in_the_invalidation_bucket(self) -> None:
+        malformed = native_record()
+        phase = malformed["phases"][2]["lighting"]
+        phase["counters"]["lit_sprite_evictions"] = 1
+        phase["levels"][6]["counters"]["lit_sprite_evictions"] = 1
+        with self.assertRaisesRegex(ValueError, "lighting timing is incomplete"):
+            benchmark.validate_record(malformed)
+
+        phase["timings"]["sprite_invalidation"].update({"calls": 1, "elapsed": 100})
+        phase["levels"][6]["timings"]["sprite_invalidation"].update(
+            {"calls": 1, "elapsed": 100}
+        )
+        benchmark.validate_record(malformed)
+
 
 class EvidenceTests(unittest.TestCase):
     def test_phase_summary_preserves_real_fps_and_readable_telemetry(self) -> None:
@@ -847,6 +1004,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(summary["work_capacity_fps_p50"], 1000.0)
         self.assertEqual(summary["map_p95_ms"], 2.0)
         self.assertEqual(summary["local_minimap_p95_ms"], 2.0)
+        self.assertEqual(summary["lighting_work_p95_ms"], 0.6)
         self.assertEqual(summary["work_p95_ms"], 2.0)
         self.assertEqual(summary["map"]["primary_map_draws"], 480)
         self.assertEqual(summary["map"]["auxiliary_map_draws"], 240)
@@ -854,7 +1012,12 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(summary["queue"]["processing_ms"], 2400.0)
         self.assertEqual(summary["queue"]["drain_p50_ms"], 1.0)
         self.assertTrue(summary["queue"]["order_digests_comparable"])
-        self.assertEqual(summary["lighting"]["field_dirty_pixels"], 2_456_576)
+        self.assertEqual(summary["lighting"]["field_dirty_pixels"], 2_457_600)
+        self.assertEqual(summary["lighting"]["levels"][6]["depth"], 0)
+        self.assertEqual(summary["lighting"]["levels"][6]["dirty_ratio_percent"], 1.33)
+        self.assertEqual(
+            summary["lighting"]["timings"]["translation"]["calls_per_run"], 2400
+        )
         self.assertEqual(
             summary["render_stages"]["map"],
             {"scope": "per_map_draw", "calls_per_run": 720, "avg_ms_per_call": 0.001},
@@ -931,6 +1094,7 @@ class EvidenceTests(unittest.TestCase):
         counters["field_dirty_marks"] = 2_400
         counters["field_translations"] = 2_400
         counters["field_partial_rebuilds"] = 2_380
+        counters["field_full_rebuilds"] = 20
         counters["field_dirty_pixels"] = 93_765_760
         guard = benchmark._guard_native_record(translated)["lighting_cache_churn"]
         self.assertTrue(guard["passed"])
@@ -943,6 +1107,16 @@ class EvidenceTests(unittest.TestCase):
                 "passed"
             ]
         )
+
+    def test_reconstruction_equivalence_requires_the_same_candidate_contract(self) -> None:
+        translated = native_record(workload_variant="isolated-lighting")
+        full = native_record(reconstruction="full", workload_variant="isolated-lighting")
+        self.assertTrue(benchmark._reconstruction_equivalence([translated], [full, full])["passed"])
+        changed = copy.deepcopy(full)
+        changed["fixture"]["manifest_sha256"] = "f" * 64
+        check = benchmark._reconstruction_equivalence([translated], [full, changed])
+        self.assertFalse(check["identities_match"])
+        self.assertFalse(check["passed"])
 
     def test_incidental_lighting_reuse_does_not_mask_full_rebuilds(self) -> None:
         regressed = native_record()
@@ -1012,7 +1186,7 @@ class EvidenceTests(unittest.TestCase):
             [baseline, copy.deepcopy(baseline), copy.deepcopy(baseline)],
             [candidate, copy.deepcopy(candidate), copy.deepcopy(candidate)],
             [],
-            additional_contexts(),
+            additional_contexts(smooth_samples=3),
             enforce_performance=False,
             comparison_note=benchmark.CROSS_CONTRACT_NOTE,
         )
@@ -1103,16 +1277,25 @@ class EvidenceTests(unittest.TestCase):
         )
 
     def test_candidate_only_retains_raw_records_and_note(self) -> None:
-        records = [native_record(), native_record(), *discrete_pair()]
+        records = [
+            native_record(),
+            native_record(),
+            native_record(workload_variant="isolated-lighting"),
+            native_record(reconstruction="full", workload_variant="isolated-lighting"),
+            native_record(reconstruction="full", workload_variant="isolated-lighting"),
+            native_record(workload_variant="isolated-lighting"),
+            *discrete_pair(),
+        ]
         with mock.patch.object(benchmark, "run_benchmark", side_effect=records) as run:
             evidence = benchmark.candidate_only(
                 Path("client"), Path("manifest"), discrete_manifest=Path("discrete.xml"),
+                lighting_manifest=Path("lighting.xml"),
                 enforce_performance=False,
                 comparison_note="event-has-no-comparison-base",
             )
         self.assertEqual(
             [call.args[2] for call in run.call_args_list],
-            ["standard", "standard", "standard", "standard"],
+            ["standard"] * 8,
         )
         self.assertEqual(evidence["comparison_note"], "event-has-no-comparison-base")
         self.assertEqual(len(evidence["records"]["candidate_standard"]), 2)
@@ -1124,9 +1307,17 @@ class EvidenceTests(unittest.TestCase):
         records = [
             native_record(),
             native_record(),
+            native_record(workload_variant="isolated-lighting"),
+            native_record(reconstruction="full", workload_variant="isolated-lighting"),
+            native_record(reconstruction="full", workload_variant="isolated-lighting"),
+            native_record(workload_variant="isolated-lighting"),
             *discrete_pair(),
             native_record(viewport="large"),
             native_record(viewport="large"),
+            native_record(viewport="large", workload_variant="isolated-lighting"),
+            native_record(viewport="large", reconstruction="full", workload_variant="isolated-lighting"),
+            native_record(viewport="large", reconstruction="full", workload_variant="isolated-lighting"),
+            native_record(viewport="large", workload_variant="isolated-lighting"),
             native_record(mode="discrete", viewport="large"),
             native_record(mode="discrete", viewport="large"),
         ]
@@ -1137,11 +1328,12 @@ class EvidenceTests(unittest.TestCase):
                 Path("client"),
                 Path("smooth.xml"),
                 discrete_manifest=Path("discrete.xml"),
+                lighting_manifest=Path("lighting.xml"),
                 full_matrix=True,
             )
         self.assertEqual(
             [call.args[2] for call in run.call_args_list],
-            ["standard", "standard", "standard", "standard", "large", "large", "large", "large"],
+            ["standard"] * 8 + ["large"] * 8,
         )
         self.assertEqual(evidence["samples"]["candidate_large"], 2)
         self.assertTrue(evidence["checks"]["candidate_large_determinism"]["passed"])
@@ -1156,7 +1348,20 @@ class EvidenceTests(unittest.TestCase):
                     benchmark._build_evidence([], candidate, [], contexts)
         with self.assertRaisesRegex(benchmark.BenchmarkError, "invalid run count"):
             benchmark._build_evidence(
-                [], candidate, [], {benchmark.STANDARD_DISCRETE_CONTEXT: discrete_pair()[:1]}
+                [],
+                candidate,
+                [],
+                {
+                    benchmark.STANDARD_DISCRETE_CONTEXT: discrete_pair()[:1],
+                    benchmark.STANDARD_TRANSLATED_CONTEXT: [
+                        native_record(workload_variant="isolated-lighting"),
+                        native_record(workload_variant="isolated-lighting"),
+                    ],
+                    benchmark.STANDARD_FULL_CONTEXT: [
+                        native_record(reconstruction="full", workload_variant="isolated-lighting"),
+                        native_record(reconstruction="full", workload_variant="isolated-lighting"),
+                    ],
+                },
             )
 
     def test_compare_foundation_policy_requires_exact_note_pairing(self) -> None:
@@ -1184,13 +1389,32 @@ class EvidenceTests(unittest.TestCase):
         )
 
     def test_compare_alternates_runs(self) -> None:
-        records = [native_record()] * 6 + discrete_pair()
+        records = [
+            native_record(),
+            native_record(),
+            native_record(workload_variant="isolated-lighting"),
+            native_record(reconstruction="full", workload_variant="isolated-lighting"),
+            native_record(),
+            native_record(),
+            native_record(reconstruction="full", workload_variant="isolated-lighting"),
+            native_record(workload_variant="isolated-lighting"),
+            native_record(),
+            native_record(),
+            native_record(workload_variant="isolated-lighting"),
+            native_record(reconstruction="full", workload_variant="isolated-lighting"),
+            *discrete_pair(),
+        ]
         with mock.patch.object(benchmark, "run_benchmark", side_effect=records) as run:
             benchmark.compare(Path("base"), Path("base.xml"), Path("candidate"),
-                              Path("candidate.xml"), Path("discrete.xml"), 3)
+                              Path("candidate.xml"), Path("discrete.xml"),
+                              Path("lighting.xml"), 3)
         self.assertEqual(
-            [call.args[0].name for call in run.call_args_list[:6]],
-            ["base", "candidate", "candidate", "base", "base", "candidate"],
+            [call.args[0].name for call in run.call_args_list[:12]],
+            [
+                "base", "candidate", "candidate", "candidate",
+                "candidate", "base", "candidate", "candidate",
+                "base", "candidate", "candidate", "candidate",
+            ],
         )
 
     def test_comparison_accepts_internal_state_digest_changes_when_pixels_match(self) -> None:
@@ -1206,7 +1430,7 @@ class EvidenceTests(unittest.TestCase):
 
     def test_error_evidence_is_bounded_and_versioned(self) -> None:
         evidence = benchmark.error_evidence(benchmark.BenchmarkError("x" * 600))
-        self.assertEqual(evidence["schema_version"], 5)
+        self.assertEqual(evidence["schema_version"], 6)
         self.assertEqual(len(evidence["error"]), 500)
 
 
@@ -1216,7 +1440,7 @@ class CommentTests(unittest.TestCase):
             [native_record(), native_record(), native_record()],
             [native_record(), native_record(), native_record()],
             [],
-            additional_contexts(),
+            additional_contexts(smooth_samples=3),
         )
 
     def test_report_separates_update_cadence_from_display_reference(self) -> None:
@@ -1226,6 +1450,8 @@ class CommentTests(unittest.TestCase):
         self.assertIn("Full map p50/p95", report)
         self.assertIn("Animation pass p50/p95", report)
         self.assertIn("Local minimap map-core p50/p95", report)
+        self.assertIn("Attributable lighting movement A/B", report)
+        self.assertIn("excludes the separately measured local minimap", report)
         self.assertIn("Display reference", report)
         self.assertIn("8 Hz", report)
         self.assertIn("144 FPS (6.944 ms)", report)
@@ -1235,7 +1461,7 @@ class CommentTests(unittest.TestCase):
         self.assertNotIn("Target FPS", report)
         self.assertNotIn("8.00/8.00", report)
         self.assertIn("1.0 KiB", report)
-        self.assertIn("2,456,576", report)
+        self.assertIn("2,457,600", report)
         self.assertIn("unavailable", report)
         self.assertIn("no large-viewport result is claimed", report)
         self.assertIn("Standard discrete", report)
@@ -1250,6 +1476,19 @@ class CommentTests(unittest.TestCase):
         self.assertIn("n/a", report)
         self.assertLessEqual(len(report.encode()), 65_536)
         self.assertNotIn("FPS equivalent", report)
+
+    def test_full_matrix_comment_fits_github_publication_limit(self) -> None:
+        evidence = benchmark._build_evidence(
+            [],
+            [native_record(), native_record()],
+            [native_record(viewport="large"), native_record(viewport="large")],
+            additional_contexts(full=True),
+            enforce_performance=False,
+            comparison_note="event-has-no-comparison-base",
+        )
+        report = benchmark.render_comment(evidence, "success")
+        self.assertLessEqual(len(report.encode()), 65_536)
+        self.assertIn("Large | translated", report)
 
     def test_candidate_only_report_establishes_baseline_without_claiming_delta(self) -> None:
         evidence = benchmark._build_evidence(
@@ -1290,7 +1529,17 @@ class CommentTests(unittest.TestCase):
             [],
             records[:2],
             [],
-            {benchmark.STANDARD_DISCRETE_CONTEXT: records[2:]},
+            {
+                benchmark.STANDARD_DISCRETE_CONTEXT: records[2:],
+                benchmark.STANDARD_TRANSLATED_CONTEXT: [
+                    native_record(workload_variant="isolated-lighting"),
+                    native_record(workload_variant="isolated-lighting"),
+                ],
+                benchmark.STANDARD_FULL_CONTEXT: [
+                    native_record(reconstruction="full", workload_variant="isolated-lighting"),
+                    native_record(reconstruction="full", workload_variant="isolated-lighting"),
+                ],
+            },
         )
         report = benchmark.render_comment(evidence, "success")
         self.assertIn("0.00/0.00 ms", report)
@@ -1320,7 +1569,7 @@ class CommentTests(unittest.TestCase):
         self.assertIn("was skipped", benchmark.render_comment(
             benchmark.skipped_evidence("not selected"), "success"
         ))
-        error = {"schema_version": 5, "status": "error", "error": "untrusted | markdown"}
+        error = {"schema_version": 6, "status": "error", "error": "untrusted | markdown"}
         error_report = benchmark.render_comment(error, "failure")
         self.assertIn("generation failed", error_report)
         self.assertNotIn("untrusted", error_report)
@@ -1434,13 +1683,14 @@ class CommentTests(unittest.TestCase):
             discrete.write_text("x")
             output = root / "evidence.json"
             with mock.patch.object(benchmark, "candidate_only", return_value={
-                "schema_version": 5, "status": "passed", "failed": False
+                "schema_version": 6, "status": "passed", "failed": False
             }) as candidate:
                 result = benchmark.main(
                     [
                         "candidate-only", "--candidate-client", str(client),
                         "--candidate-manifest", str(manifest), "--output", str(output),
                         "--discrete-manifest", str(discrete),
+                        "--lighting-manifest", str(discrete),
                         "--comparison-note", "baseline-movement-schema-mismatch",
                     ]
                 )
@@ -1477,6 +1727,7 @@ class CommentTests(unittest.TestCase):
                         "--candidate-client", str(files[3]),
                         "--candidate-manifest", str(files[4]),
                         "--discrete-manifest", str(files[5]), "--output", str(output),
+                        "--lighting-manifest", str(files[5]),
                     ]
                 )
             self.assertEqual(result, 2)
@@ -1504,6 +1755,7 @@ class CommentTests(unittest.TestCase):
                 "--candidate-client", str(files[3]),
                 "--candidate-manifest", str(files[4]),
                 "--discrete-manifest", str(files[5]),
+                "--lighting-manifest", str(files[5]),
                 "--informational-performance",
                 "--comparison-note", benchmark.COMPARE_FOUNDATION_NOTE,
                 "--output", str(output),
@@ -1511,7 +1763,7 @@ class CommentTests(unittest.TestCase):
             with mock.patch.object(
                 benchmark,
                 "compare",
-                return_value={"schema_version": 5, "status": "passed", "failed": False},
+                return_value={"schema_version": 6, "status": "passed", "failed": False},
             ) as compare:
                 self.assertEqual(benchmark.main(arguments), 0)
             self.assertFalse(compare.call_args.kwargs["enforce_performance"])

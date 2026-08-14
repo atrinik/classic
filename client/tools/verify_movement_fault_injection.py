@@ -16,6 +16,12 @@ CLOCK_FAULT = "sprite-cache-clock"
 CLOCK_FAULT_DIAGNOSTIC = (
     "player-view: movement fault sprite-cache-clock was injected and detected"
 )
+LIGHTING_FAULTS = (
+    "lighting-create",
+    "lighting-structure-lock",
+    "lighting-projected-lock",
+    "lighting-destination-lock",
+)
 
 
 def invoke(
@@ -89,6 +95,13 @@ def main() -> int:
         CLOCK_FAULT,
         CLOCK_FAULT_DIAGNOSTIC,
     )
+    for lighting_fault in LIGHTING_FAULTS:
+        verify_movement_fault(
+            client,
+            movement_manifest,
+            lighting_fault,
+            f"player-view: movement fault {lighting_fault} was injected and detected",
+        )
     return 0
 
 

@@ -17,11 +17,19 @@ runner image. Compare p50/p95/p99 and first-to-last sustained-window values
 only inside one cohort. A toolchain, fixture, schema, runner, or viewport change
 therefore starts a separate history instead of creating a false trend.
 
-The report separates cold, sustained, idle, and resumed phases. Sustained
+The report separates cold, sustained, idle, and resumed phases. Every smooth
+standard and large sample is paired with a same-stream full-reconstruction
+control, while discrete remains a separate correctness control. Sustained
 telemetry includes changed/no-op MAP traffic, queue peak depth and oldest age,
-lighting rebuild/reuse, sprite-cache hits/misses/evictions, memory/resource
+lighting full/partial/reuse decisions, dirty and translated pixels/bytes,
+scroll offsets and fallback reasons, attributable operation timings at each
+physical depth, sprite-cache hits/misses/evictions, memory/resource
 data, redraw reasons, and correctness checks. Large-viewport phases are shown
-separately when present. The 144 FPS value in the benchmark contract is an
+separately when present. The focused lighting-work duration runs from before
+queued MAP decode through the primary draw, excludes the local minimap, and is
+not additive with overlapping parent profiler stages; total
+map-focused update work remains the end-to-end regression guard. The 144 FPS
+value in the benchmark contract is an
 informational display reference. Hosted-runner timing, including the existing
 standard and large sustained p95 limits in
 `client/tools/benchmark_movement_regression.py`, remains informational in this
@@ -45,8 +53,9 @@ commit, so a moving branch cannot mislabel the measured source.
 
 Before publication, the reporter revalidates the closed movement-evidence
 schema and recomputes its summaries and checks from the raw records. It requires
-two clean, commit-matched runs for each standard/large and smooth/discrete
-context. Missing contexts, contradictory status, or a mismatched implementation
+two clean, commit-matched runs for each standard/large translated/full smooth
+pair and discrete control. Missing contexts, contradictory status, or a
+mismatched implementation
 revision fail as infrastructure errors rather than entering the trusted trend.
 The workflow run ID is the durable observation identity, including when an
 attempt crosses a UTC date boundary.

@@ -21,6 +21,7 @@ TRANSITION_MAP_PATH = "/tests/player-view/movement-transition"
 RESIZE_DELTA = (32, 24)
 EXPECTED_STANDARD_CHECKPOINTS = {
     "movement-colored.xml": "d1c37190727b62a0f3f4fe9892dcf5179fc6e98a5ca08ab36bc75ce35f56f185",
+    "movement-lighting-isolated.xml": "0c638194c31685bed8d4394f633aa3399b7f73de2b8a7f5ea9ed04b5ec0d3e78",
     "movement-colored-discrete.xml": "0c24f6c578651f9a674d02734bfb701198edd1d3ebbf81338cce9ca506d62119",
 }
 
@@ -144,6 +145,7 @@ class MovementFixtureTests(unittest.TestCase):
             temporary_path = Path(temporary)
             generated_snapshot = temporary_path / "snapshot.hex"
             generated_delta = temporary_path / "delta.hex"
+            generated_static_delta = temporary_path / "static-delta.hex"
             generated_transition = temporary_path / "transition.hex"
             subprocess.run(
                 [
@@ -172,9 +174,22 @@ class MovementFixtureTests(unittest.TestCase):
                 ],
                 check=True,
             )
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(CLIENT_ROOT / "tools/generate_movement_delta.py"),
+                    str(generated_static_delta),
+                    "--static-radiance",
+                ],
+                check=True,
+            )
             for generated, pinned in (
                 (generated_snapshot, FIXTURES / "movement-colored-five-depth.map2.hex"),
                 (generated_delta, FIXTURES / "movement-colored-delta.map2.hex"),
+                (
+                    generated_static_delta,
+                    FIXTURES / "movement-lighting-static-delta.map2.hex",
+                ),
                 (generated_transition, FIXTURES / "movement-colored-transition.map2.hex"),
             ):
                 self.assertEqual(
@@ -197,11 +212,11 @@ class MovementFixtureTests(unittest.TestCase):
         self.assertEqual(new_packet_geometry(reset), new_packet_geometry(transition))
         self.assertEqual(new_packet_levels(reset), new_packet_levels(transition))
 
-        expected_inputs = {
-            "snapshot": reset_path,
-            "transition-snapshot": transition_path,
-        }
-        for manifest_name in ("movement-colored.xml", "movement-colored-discrete.xml"):
+        for manifest_name in (
+            "movement-colored.xml",
+            "movement-lighting-isolated.xml",
+            "movement-colored-discrete.xml",
+        ):
             root = ElementTree.parse(FIXTURES / manifest_name).getroot()
             self.assertEqual(
                 root.attrib["expected-standard-checkpoint-sha256"],
@@ -219,6 +234,16 @@ class MovementFixtureTests(unittest.TestCase):
                 tuple(a + b for a, b in zip((1920, 1080), resize_delta)),
                 (1952, 1104),
             )
+            expected_inputs = {
+                "snapshot": reset_path,
+                "next-snapshot": FIXTURES
+                / (
+                    "movement-lighting-static-delta.map2.hex"
+                    if manifest_name == "movement-lighting-isolated.xml"
+                    else "movement-colored-delta.map2.hex"
+                ),
+                "transition-snapshot": transition_path,
+            }
             for attribute, path in expected_inputs.items():
                 self.assertEqual(root.attrib[attribute], path.relative_to(CLIENT_ROOT).as_posix())
                 self.assertEqual(
@@ -278,6 +303,15 @@ class MovementFixtureTests(unittest.TestCase):
                 self.assertEqual(payload[7], 0)
                 self.assertEqual(struct.unpack_from(">H", payload, 8)[0], packet_index + 1)
                 self.assertEqual(payload[12:14], b"\x02\x01")
+
+    def test_isolated_active_packets_move_without_changing_radiance(self) -> None:
+        packets = movement_packets(FIXTURES / "movement-lighting-static-delta.map2.hex")
+        coordinates = [(packet[1], packet[2]) for packet in packets]
+        self.assertEqual(coordinates, [(11, 10), (10, 10), (10, 11), (10, 10), (10, 10)])
+        for packet in packets:
+            levels = packet_levels(packet)
+            self.assertEqual([depth for depth, _ in levels], list(DEPTHS))
+            self.assertTrue(all(payload == b"" for _, payload in levels))
 
     def test_snapshot_is_dense_representative_and_sparsely_colored(self) -> None:
         source = bytes.fromhex(

@@ -679,6 +679,9 @@ jobs:
             --material tools/ci/run_linux_check.sh \
             --material client/tools/benchmark_lighting_regression.py \
             --material client/tools/benchmark_movement_regression.py \
+            --material client/tools/movement_benchmark_schema.py \
+            --material client/src/tests/fixtures/player_view/movement-lighting-isolated.xml \
+            --material client/src/tests/fixtures/player_view/movement-lighting-static-delta.map2.hex \
             --material client/CMakeLists.txt \
             --material client/CMakePresets.json \
             --github-output "${GITHUB_OUTPUT}"

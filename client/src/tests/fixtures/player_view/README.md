@@ -52,6 +52,21 @@ is due. Main-map and local-minimap calls and timings remain separate, while the
 complete update-frame work measurement includes both. Minimap zoom/masking and
 the remaining UI/widget work are outside this map-focused measurement.
 
+Fixture schema 3 also defines a same-contract lighting reconstruction A/B over
+the smooth five-depth snapshot and a separately generated movement-only SAME
+stream. Its active packets carry all five depths with empty payloads, preserving
+the snapshot's scalar and colored radiance while the camera alternates one tile
+horizontally and vertically. Each candidate sample alternates the production
+translated-field path with a benchmark-only full-field control. Both modes use
+the same packets, stateful cache lifetime, viewport, checkpoints, Release
+build, and fresh-process rules. Benchmark-only scopes attribute field
+translation and dirty clearing, light rasterization and extrapolation,
+destination tone-map/multiply, and transformed-sprite lookup, construction,
+and invalidation. The isolated lighting-work duration is their non-overlapping
+sum from before queued MAP decode through the primary map draw, so it includes
+the reconstruction selected for that tick and excludes the separately reported
+local minimap; the total update work remains the production-like end-to-end guard.
+
 Each replay injects MAP state at a simulated 125-millisecond (8 Hz) update
 cadence without sleeping. This is not a display-frame-rate target: reports show
 measured replay-work capacity against a separate, informational 144 FPS
@@ -76,7 +91,7 @@ Internal state digests are deliberately excluded, so implementation-only state
 may evolve while any intermediate visual, position, ordering, or resize change
 still fails the golden proof.
 
-From the client directory, recreate all three pinned movement inputs with:
+From the client directory, recreate the pinned movement inputs with:
 
 ```sh
 python3 tools/generate_movement_five_depth.py \
@@ -88,6 +103,9 @@ python3 tools/generate_movement_five_depth.py \
   --transition
 python3 tools/generate_movement_delta.py \
   src/tests/fixtures/player_view/movement-colored-delta.map2.hex
+python3 tools/generate_movement_delta.py \
+  src/tests/fixtures/player_view/movement-lighting-static-delta.map2.hex \
+  --static-radiance
 python3 -m unittest -v tools.tests.test_movement_fixture
 ```
 

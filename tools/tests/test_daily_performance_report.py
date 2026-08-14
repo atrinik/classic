@@ -200,8 +200,11 @@ class DailyReportTests(unittest.TestCase):
         summary = report.render_summary(point, trend)
         self.assertIn("Large viewport", summary)
         self.assertIn("Workflow run", summary)
-        self.assertIn("Lighting translated/partial rebuild: `2399` / `2399`", summary)
-        self.assertIn("Lighting dirty pixels: `2456576`", summary)
+        self.assertIn("Lighting translated/partial rebuild: `2400` / `2400`", summary)
+        self.assertIn("### Lighting reconstruction A/B", summary)
+        self.assertIn("| Standard | Full control |", summary)
+        self.assertIn("| Large | Translated |", summary)
+        self.assertIn("Lighting dirty pixels: `2457600`", summary)
 
     def test_failed_complete_evidence_is_retained_for_alerting(self) -> None:
         item = evidence()
