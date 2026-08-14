@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -37,5 +37,11 @@ typedef struct oblnk objectlink;
 typedef struct player_faction player_faction_t;
 typedef struct pl_player player;
 typedef struct treasure_list treasure_list_t;
+
+typedef enum object_semantic_result {
+    OBJECT_SEMANTIC_FAILED = 0,
+    OBJECT_SEMANTIC_COMMITTED,
+    OBJECT_SEMANTIC_AMBIGUOUS,
+} object_semantic_result_t;
 
 #endif

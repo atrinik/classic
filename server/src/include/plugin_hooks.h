@@ -684,6 +684,77 @@ struct plugin_hooklist
                          const char *,
                          const char *,
                          New_Face *)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         shop_insert_coins_reason,
+                         object *,
+                         int64_t,
+                         const char *)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         shop_pay_reason,
+                         object *,
+                         int64_t,
+                         const char *)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         object_insert_into_reason,
+                         object *,
+                         object *,
+                         const char *,
+                         object **)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         object_remove_reason,
+                         object *,
+                         const char *,
+                         bool)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         object_insert_map_reason,
+                         object *,
+                         mapstruct *,
+                         int,
+                         int,
+                         const char *,
+                         object **)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         object_enter_map_reason,
+                         object *,
+                         mapstruct *,
+                         int,
+                         int,
+                         const char *)
+    PLUGIN_HOOK_FUNCTION(bool, gameplay_journal_player_checkpoint_allowed, const object *)
+    PLUGIN_HOOK_FUNCTION(bool, gameplay_journal_map_checkpoint_allowed, const mapstruct *)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         object_decrease_reason,
+                         object *,
+                         uint32_t,
+                         const char *,
+                         object **)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         object_set_nrof_reason,
+                         object *,
+                         uint32_t,
+                         const char *,
+                         object **)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         object_set_value_reason,
+                         object *,
+                         int64_t,
+                         const char *)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         shop_set_coin_nrof_reason,
+                         object *,
+                         uint32_t,
+                         const char *)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t, shop_destroy_coin_reason, object *, const char *)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         bank_set_balance_reason,
+                         object *,
+                         int64_t,
+                         const char *)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         bank_destroy_balance_reason,
+                         object *,
+                         const char *)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t, bank_name_info_reason, object *, const char *)
 
 };
 // clang-format on
