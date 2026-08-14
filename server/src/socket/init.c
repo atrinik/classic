@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -229,6 +229,48 @@ static void load_srv_file(char *fname, FILE *listing) {
     free(compressed);
 }
 
+/**
+ * Validate an inherited Linux directory descriptor used as the staging root.
+ *
+ * @param path
+ * Exact descriptor path supplied by the wrapper.
+ * @param recognized
+ * Set when the path uses the reserved descriptor prefix, including when the
+ * descriptor itself is malformed or invalid.
+ * @return
+ * Whether the path names an open directory descriptor.
+ */
+static bool asset_staging_inherited_directory(const char *path, bool *recognized) {
+#ifdef __linux__
+    static const char prefix[] = "/proc/self/fd/";
+    const char *value;
+    char *end;
+    unsigned long descriptor;
+    struct stat metadata;
+
+    *recognized = strncmp(path, prefix, sizeof(prefix) - 1U) == 0;
+    if (!*recognized) {
+        return false;
+    }
+
+    value = path + sizeof(prefix) - 1U;
+    if (!isdigit((unsigned char)*value)) {
+        return false;
+    }
+    errno = 0;
+    descriptor = strtoul(value, &end, 10);
+    if (errno != 0 || *end != '\0' || descriptor > INT_MAX) {
+        return false;
+    }
+
+    return fstat((int)descriptor, &metadata) == 0 && S_ISDIR(metadata.st_mode);
+#else
+    (void)path;
+    *recognized = false;
+    return false;
+#endif
+}
+
 /** Ensure one final asset-staging path component is a direct directory. */
 static void asset_staging_directory_prepare(const char *path) {
     path_directory_result_t result = path_ensure_real_directory(path, SAVE_MODE_DIR);
@@ -336,8 +378,17 @@ static void create_server_animations(void) {
 void init_srv_files(void) {
     char buf[HUGE_BUF];
     FILE *fp;
+    bool inherited_descriptor;
 
-    asset_staging_directory_prepare(settings.assetspath);
+    if (!asset_staging_inherited_directory(settings.assetspath, &inherited_descriptor)) {
+        if (inherited_descriptor) {
+            LOG(ERROR,
+                "Asset staging descriptor is invalid or not a directory: %s",
+                settings.assetspath);
+            exit(EXIT_FAILURE);
+        }
+        asset_staging_directory_prepare(settings.assetspath);
+    }
     snprintf(buf, sizeof(buf), "%s/data", settings.assetspath);
     asset_staging_directory_prepare(buf);
     snprintf(buf, sizeof(buf), "%s/client-maps", settings.assetspath);
