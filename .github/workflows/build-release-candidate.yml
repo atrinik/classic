@@ -220,7 +220,7 @@ jobs:
           path: client/build/ccache
           key: >-
             classic-${{ runner.os }}-${{ runner.arch }}-windows-client-ccache-v1-${{ env.WINDOWS_BUILD_CACHE_EPOCH }}-${{ needs.metadata.outputs.version }}-${{
-            hashFiles('client/CMakeLists.txt', 'client/CMakePresets.json',
+            hashFiles('cmake/**', 'client/CMakeLists.txt', 'client/CMakePresets.json',
             'client/cmake/**', 'client/dependencies.lock.json', 'client/src/**',
             'protocol/CMakeLists.txt', 'protocol/cmake/**', 'protocol/generated/c/**',
             'protocol/schema/**', 'libatrinik/CMakeLists.txt', 'libatrinik/cmake/**',
@@ -284,7 +284,7 @@ jobs:
           path: server/build/ccache
           key: >-
             classic-${{ runner.os }}-${{ runner.arch }}-windows-server-ccache-v1-${{ env.WINDOWS_BUILD_CACHE_EPOCH }}-${{ needs.metadata.outputs.version }}-${{
-            hashFiles('server/CMakeLists.txt', 'server/CMakePresets.json',
+            hashFiles('cmake/**', 'server/CMakeLists.txt', 'server/CMakePresets.json',
             'server/cmake/**', 'server/dependencies.lock.json', 'server/src/**',
             'protocol/CMakeLists.txt', 'protocol/cmake/**', 'protocol/generated/c/**',
             'protocol/schema/**', 'libatrinik/CMakeLists.txt', 'libatrinik/cmake/**',

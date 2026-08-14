@@ -25,7 +25,7 @@ RUN --network=none python3 tools/dependencies.py sync \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_TESTING=OFF \
         -DPACKAGE_TYPE=none \
-        -DPACKAGE_VERSION="${ATRINIK_PACKAGE_VERSION}" \
+        -DATRINIK_PACKAGE_VERSION="${ATRINIK_PACKAGE_VERSION}" \
         -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/src/protocol \
         -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/src/libatrinik \
     && cmake --build build/release \

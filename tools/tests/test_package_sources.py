@@ -31,6 +31,7 @@ class PackageSourcesTests(unittest.TestCase):
         files = {
             "LICENSE.md": "license\n",
             "ATTRIBUTIONS.md": "notices\n",
+            "cmake/AtrinikVersion.cmake": "# version contract\n",
             "docs/history/imports.json": "{}\n",
             "client/.releaserc.json": "{}\n",
             "client/main.c": "int main(void) { return 0; }\n",
@@ -85,6 +86,9 @@ class PackageSourcesTests(unittest.TestCase):
             self.assertEqual(libatrinik_version.read(), b"5.6.0\n")
         self.assertIn("atrinik-classic-client-5.6.0/main.c", names)
         self.assertIn("atrinik-classic-client-5.6.0/LICENSE.md", names)
+        self.assertIn(
+            "atrinik-classic-client-5.6.0/cmake/AtrinikVersion.cmake", names
+        )
         self.assertIn(
             "atrinik-classic-client-5.6.0/PROVENANCE/history/imports.json", names
         )

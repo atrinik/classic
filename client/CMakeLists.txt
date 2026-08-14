@@ -1,30 +1,15 @@
 cmake_minimum_required(VERSION 3.21)
 
-set(ATRINIK_SOURCE_VERSION "5.1.0")
-if (DEFINED ENV{ATRINIK_PACKAGE_VERSION})
-    set(ATRINIK_SOURCE_VERSION "$ENV{ATRINIK_PACKAGE_VERSION}")
-elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
-    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
-        ATRINIK_SOURCE_VERSION LIMIT_COUNT 1)
-else ()
-    execute_process(
-        COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}"
-            describe --tags --exact-match --match "v[0-9]*"
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        OUTPUT_VARIABLE ATRINIK_GIT_TAG
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET
-        RESULT_VARIABLE ATRINIK_GIT_TAG_RESULT)
-    if (ATRINIK_GIT_TAG_RESULT EQUAL 0)
-        string(REGEX REPLACE "^v" "" ATRINIK_SOURCE_VERSION
-            "${ATRINIK_GIT_TAG}")
+if (NOT ATRINIK_INTEGRATED_BUILD)
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/AtrinikVersion.cmake")
+        include(cmake/AtrinikVersion.cmake)
+    else ()
+        include(../cmake/AtrinikVersion.cmake)
     endif ()
+    atrinik_resolve_version(ATRINIK_SOURCE_VERSION)
+    project(atrinik-client VERSION "${ATRINIK_SOURCE_VERSION}" LANGUAGES C)
+    atrinik_initialize_version_metadata()
 endif ()
-if (NOT ATRINIK_SOURCE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
-    message(FATAL_ERROR "Atrinik source version must be MAJOR.MINOR.PATCH")
-endif ()
-
-project(atrinik-client VERSION "${ATRINIK_SOURCE_VERSION}" LANGUAGES C)
 
 include(CTest)
 include(FetchContent)
@@ -97,40 +82,6 @@ if (ATRINIK_DISCORD_APPLICATION_ID_FILE)
     unset(ATRINIK_DISCORD_APPLICATION_ID_LINES)
 endif ()
 
-set(PACKAGE_VERSION "${PROJECT_VERSION}" CACHE STRING
-    "Semantic version shown by the client and used for packages")
-if (NOT PACKAGE_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)$")
-    message(FATAL_ERROR "PACKAGE_VERSION must be a three-part semantic version")
-endif ()
-set(PACKAGE_VERSION_MAJOR "${CMAKE_MATCH_1}")
-set(PACKAGE_VERSION_MINOR "${CMAKE_MATCH_2}")
-set(PACKAGE_VERSION_PATCH "${CMAKE_MATCH_3}")
-set(ATRINIK_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
-if (ATRINIK_BUILD_TYPE STREQUAL "")
-    set(ATRINIK_BUILD_TYPE "multi-config")
-endif ()
-set(ATRINIK_COMPILER_ID "${CMAKE_C_COMPILER_ID}")
-set(ATRINIK_COMPILER_VERSION "${CMAKE_C_COMPILER_VERSION}")
-set(ATRINIK_SYSTEM_NAME "${CMAKE_SYSTEM_NAME}")
-set(ATRINIK_BENCHMARK_REVISION "$ENV{ATRINIK_BENCHMARK_REVISION}")
-if (ATRINIK_BENCHMARK_REVISION STREQUAL "")
-    set(ATRINIK_BENCHMARK_REVISION "unknown")
-endif ()
-string(LENGTH "${ATRINIK_BENCHMARK_REVISION}" ATRINIK_BENCHMARK_REVISION_LENGTH)
-if (NOT ATRINIK_BENCHMARK_REVISION STREQUAL "unknown" AND
-    (NOT ATRINIK_BENCHMARK_REVISION MATCHES "^[0-9A-Fa-f]+$" OR
-     ATRINIK_BENCHMARK_REVISION_LENGTH LESS 7 OR
-     ATRINIK_BENCHMARK_REVISION_LENGTH GREATER 64))
-    message(FATAL_ERROR "ATRINIK_BENCHMARK_REVISION must be unknown or a hexadecimal revision")
-endif ()
-set(ATRINIK_BENCHMARK_DIRTY "$ENV{ATRINIK_BENCHMARK_DIRTY}")
-if (ATRINIK_BENCHMARK_DIRTY STREQUAL "")
-    set(ATRINIK_BENCHMARK_DIRTY "unknown")
-endif ()
-if (NOT ATRINIK_BENCHMARK_DIRTY MATCHES "^(unknown|true|false)$")
-    message(FATAL_ERROR "ATRINIK_BENCHMARK_DIRTY must be unknown, true, or false")
-endif ()
-
 if (MINGW)
     set(PLUGIN_SUFFIX ".dll")
     add_compile_definitions(HAVE_STRUCT_TIMESPEC NOCRYPT __USE_MINGW_ANSI_STDIO=0)
@@ -142,6 +93,7 @@ endif ()
 function(atrinik_configure_target target)
     target_compile_features(${target} PRIVATE c_std_17)
     target_compile_definitions(${target} PRIVATE _GNU_SOURCE)
+    atrinik_apply_version_metadata(${target})
     if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${target} PRIVATE
             -Wall -Wextra -Wno-unused-parameter -fno-common)
@@ -1077,4 +1029,3 @@ include(CPack)
 # Configure the .h file with the configuration options (size of long,
 # package version, etc).
 configure_file(src/include/cmake.h.def src/include/cmake.h)
-configure_file(src/include/version.h.def src/include/version.h)

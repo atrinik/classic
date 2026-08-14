@@ -329,6 +329,7 @@ jobs:
                 -G Ninja \
                 -DBUILD_TESTING=OFF \
                 -DCMAKE_BUILD_TYPE=Release \
+                -DATRINIK_PACKAGE_VERSION=0.0.0 \
                 -DENABLE_PYTHON_PLUGIN=OFF \
                 -DPACKAGE_TYPE=none \
                 -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-mingw-source
@@ -376,7 +377,7 @@ jobs:
                 -DCMAKE_BUILD_TYPE=Release \
                 -DENABLE_PYTHON_PLUGIN=OFF \
                 -DPACKAGE_TYPE=none \
-                -DPACKAGE_VERSION=0.0.0 \
+                -DATRINIK_PACKAGE_VERSION=0.0.0 \
                 -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
                 -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik \
                 -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-mingw-source

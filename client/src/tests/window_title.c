@@ -4,8 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <version.h>
-
 #define TEST_CHECK(condition) \
     do {                      \
         if (!(condition)) {   \
