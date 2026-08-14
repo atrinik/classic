@@ -939,9 +939,12 @@ int celestial_structure_inventory_run(void) {
     printf("ATRINIK_CELESTIAL_STRUCTURE\tformat\t1\n");
     printf("ATRINIK_CELESTIAL_STRUCTURE\tlimit\t%u\n", settings.celestial_inventory_limit);
     for (size_t i = 0; i < count; i++) {
-        bool success =
-            celestial_structure_inventory(loaded[i], stdout, settings.celestial_inventory_limit);
-        HARD_ASSERT(success);
+        if (!celestial_structure_inventory(loaded[i], stdout, settings.celestial_inventory_limit)) {
+            for (size_t j = 0; j < count; j++) {
+                delete_map(loaded[j]);
+            }
+            return EXIT_FAILURE;
+        }
     }
     for (size_t i = 0; i < count; i++) {
         delete_map(loaded[i]);
