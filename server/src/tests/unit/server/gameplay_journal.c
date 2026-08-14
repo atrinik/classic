@@ -821,6 +821,10 @@ START_TEST(test_savebed_terminal_failure_retains_change_and_stable_map_context) 
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.savebed-changed"), 0);
     gameplay_journal_fail_after_writes_for_test(SIZE_MAX);
 
+    CONTR(pl)->bed_x = pl->x + 1;
+    ck_assert_int_eq(object_apply(bed, pl, 0), OBJECT_METHOD_OK);
+    ck_assert_int_eq(CONTR(pl)->bed_x, pl->x + 1);
+
     gameplay_journal_deinit();
     char *contents = read_fixture(directory);
     ck_assert_ptr_ne(strstr(contents, "\"subject_id\":\"map:/test/savebed-journal\""), NULL);
