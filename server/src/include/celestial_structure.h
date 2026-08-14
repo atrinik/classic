@@ -36,6 +36,7 @@ typedef enum celestial_transmission {
 } celestial_transmission_t;
 
 bool celestial_structure_finalize_map(mapstruct *map, char *error, size_t error_size);
+bool celestial_structure_validate_header(mapstruct *map, char *error, size_t error_size);
 bool celestial_structure_validate_topology(mapstruct *map, char *error, size_t error_size);
 bool celestial_structure_cell_exposed(const mapstruct *map, int x, int y);
 uint8_t celestial_structure_faces(const object *op);
@@ -45,5 +46,6 @@ bool celestial_structure_inventory_maps_valid(const char *input);
 int celestial_structure_inventory_run(void);
 void celestial_structure_save_metadata(const mapstruct *map, FILE *fp);
 void celestial_structure_free(mapstruct *map);
+void celestial_structure_reset_parse_state(mapstruct *map);
 
 #endif

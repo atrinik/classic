@@ -1177,6 +1177,15 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
         fclose(fp);
         return NULL;
     }
+    if (fp != NULL && m->celestial_v1_header_seen) {
+        char error[HUGE_BUF];
+        if (!celestial_structure_validate_header(m, VS(error))) {
+            LOG(ERROR, "Celestial structural header validation failed: %s", error);
+            delete_map(m);
+            fclose(fp);
+            return NULL;
+        }
+    }
 
     basename = strrchr(filename, flags & MAP_PLAYER_UNIQUE ? '$' : '/');
     if (basename == NULL) {
@@ -1336,6 +1345,8 @@ static mapstruct *load_temporary_map(mapstruct *m) {
         return m;
     }
 
+    celestial_structure_reset_parse_state(m);
+
     if (!load_map_header(m, fp)) {
         LOG(BUG,
             "Error loading map header for %s (%s)! Fallback to original!",
@@ -1346,6 +1357,21 @@ static mapstruct *load_temporary_map(mapstruct *m) {
         m = load_original_map(buf, NULL, 0);
         fclose(fp);
         return m;
+    }
+    if (m->celestial_v1_header_seen) {
+        char error[HUGE_BUF];
+        if (!celestial_structure_validate_header(m, VS(error))) {
+            LOG(BUG,
+                "Invalid celestial map header for %s (%s): %s. Falling back to original!",
+                m->path,
+                m->tmpname,
+                error);
+            snprintf(VS(buf), "%s", m->path);
+            delete_map(m);
+            m = load_original_map(buf, NULL, 0);
+            fclose(fp);
+            return m;
+        }
     }
 
     allocate_map(m);

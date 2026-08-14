@@ -610,10 +610,14 @@ typedef struct mapdef {
     /** Header parse-state used to reject duplicate/contradictory records. */
     bool celestial_schema_seen;
     bool celestial_sky_seen;
+    bool celestial_v1_header_seen;
     bool celestial_header_invalid;
     bool celestial_legacy_darkness_seen;
     bool celestial_legacy_outdoor_seen;
     bool celestial_light_seen;
+    bool celestial_width_seen;
+    bool celestial_height_seen;
+    bool celestial_region_seen;
 
     /** Immutable, canonicalized system metadata consumed during map loading. */
     celestial_rectangle_t *celestial_rectangles;

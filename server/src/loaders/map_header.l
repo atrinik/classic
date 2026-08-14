@@ -82,11 +82,38 @@ lex_error = 0;
 ^name{S}             FREE_AND_COPY_HASH(m->name, yval());
 ^bg_music{S}         FREE_AND_COPY_HASH(m->bg_music, yval());
 ^weather{S}          FREE_AND_COPY_HASH(m->weather, yval());
-^region{S}           m->region = region_find_by_name(yval());
+^region{S}           {
+    if (m->celestial_region_seen) {
+        m->celestial_header_invalid = true;
+    }
+    m->celestial_region_seen = true;
+    m->region = region_find_by_name(yval());
+    if (m->region == NULL) {
+        m->celestial_header_invalid = true;
+    }
+}
 ^enter_x{S}          m->enter_x = IVAL;
 ^enter_y{S}          m->enter_y = IVAL;
-^width{S}            m->width = IVAL;
-^height{S}           m->height = IVAL;
+^width{S}            {
+    uint64_t value;
+    if (m->celestial_width_seen || !string_parse_uint64(yval(), 10, 1, 64, &value)) {
+        m->celestial_header_invalid = true;
+        m->width = 0;
+    } else {
+        m->width = (int)value;
+    }
+    m->celestial_width_seen = true;
+}
+^height{S}           {
+    uint64_t value;
+    if (m->celestial_height_seen || !string_parse_uint64(yval(), 10, 1, 64, &value)) {
+        m->celestial_header_invalid = true;
+        m->height = 0;
+    } else {
+        m->height = (int)value;
+    }
+    m->celestial_height_seen = true;
+}
 ^reset_timeout{S}    m->reset_timeout = IVAL;
 ^swap_time{S}        m->swap_time = IVAL;
 ^difficulty{S}       m->difficulty = IVAL;
@@ -106,12 +133,15 @@ lex_error = 0;
         m->celestial_header_invalid = true;
     }
     m->celestial_light_seen = true;
-    m->light_value = IVAL;
     if (!string_parse_uint64(yval(), 10, 0, 40959, &value)) {
         m->celestial_header_invalid = true;
+        m->light_value = 0;
+    } else {
+        m->light_value = (int)value;
     }
 }
 ^celestial_schema{S} {
+    m->celestial_v1_header_seen = true;
     if (m->celestial_schema_seen || strcmp(yval(), "1") != 0) {
         m->celestial_header_invalid = true;
     }
@@ -119,6 +149,7 @@ lex_error = 0;
     m->celestial_schema = strcmp(yval(), "1") == 0 ? 1 : 0;
 }
 ^sky_above{S}        {
+    m->celestial_v1_header_seen = true;
     const char *value = yval();
     if (m->celestial_sky_seen) {
         m->celestial_header_invalid = true;
@@ -135,6 +166,7 @@ lex_error = 0;
     }
 }
 ^celestial_boundary_[0-9]{1,2}{S} {
+    m->celestial_v1_header_seen = true;
     int tile = atoi(yytext + 19);
     if (yytext[19] == '0') {
         m->celestial_header_invalid = true;
@@ -163,6 +195,7 @@ lex_error = 0;
     }
     if (tile < 1 || tile > TILED_NUM) {
         LOG(BUG, "Tile location %d out of bounds (%s)", tile, m->path);
+        m->celestial_header_invalid = true;
     } else {
         if (m->celestial_tile_path_seen[tile - 1]) {
             m->celestial_header_invalid = true;
@@ -198,8 +231,9 @@ lex_error = 0;
 
 .*                   {
     LOG(BUG, "Got unknown value in map header: %s", yytext);
+    m->celestial_header_invalid = true;
     if (strncmp(yytext, "celestial_", 10) == 0 || strncmp(yytext, "sky_above", 9) == 0) {
-        m->celestial_header_invalid = true;
+        m->celestial_v1_header_seen = true;
     }
     return LL_NORMAL;
 }

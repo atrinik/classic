@@ -401,6 +401,13 @@ struct obj {
     /** PLAYER, BULLET, etc. See define.h */
     uint8_t type;
 
+    /** Loader-only identity for consumed celestial system metadata records. */
+    uint8_t celestial_metadata_kind;
+
+    /** Loader-only authored-field presence required by celestial-v1 maps. */
+    bool celestial_outdoor_authored;
+    bool celestial_aperture_id_authored;
+
     /** Sub type definition - this will be sent to client too */
     uint8_t sub_type;
 

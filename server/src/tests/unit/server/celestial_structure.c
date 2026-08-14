@@ -19,6 +19,7 @@
 #include <loader.h>
 #include <map.h>
 #include <object.h>
+#include <swap.h>
 
 static mapstruct *new_v1_map(const char *path, int width, int height, int sky) {
     mapstruct *map = get_empty_map(width, height);
@@ -27,6 +28,8 @@ static mapstruct *new_v1_map(const char *path, int width, int height, int sky) {
     map->celestial_schema = 1;
     map->celestial_sky_seen = true;
     map->celestial_sky_above = sky;
+    map->celestial_width_seen = true;
+    map->celestial_height_seen = true;
     return map;
 }
 
@@ -36,6 +39,11 @@ static object *new_object(mapstruct *map, int x, int y) {
     op->x = x;
     op->y = y;
     return object_insert_map(op, map, op, INS_NO_MERGE | INS_NO_WALK_ON);
+}
+
+static void make_metadata(object *op, uint8_t kind) {
+    op->celestial_metadata_kind = kind;
+    op->layer = LAYER_SYS;
 }
 
 START_TEST(test_header_round_trip_is_canonical_and_rejects_legacy_fields) {
@@ -72,6 +80,17 @@ START_TEST(test_header_round_trip_is_canonical_and_rejects_legacy_fields) {
     ck_assert_ptr_ne(strstr(saved, "tile_path_9 /upper\ncelestial_boundary_9 continuous\n"), NULL);
     ck_assert_ptr_eq(strstr(saved, "darkness "), NULL);
     ck_assert_ptr_eq(strstr(saved, "outdoor "), NULL);
+
+    FREE_AND_CLEAR_HASH(map->tile_path[TILED_UP]);
+    celestial_structure_reset_parse_state(map);
+    input = fmemopen(saved, saved_size, "r");
+    ck_assert_ptr_ne(input, NULL);
+    ck_assert_int_eq(load_map_header(map, input), 1);
+    fclose(input);
+    ck_assert_msg(celestial_structure_validate_header(map, VS(error)), "%s", error);
+    ck_assert_uint_eq(map->celestial_schema, 1);
+    ck_assert_uint_eq(map->celestial_sky_above, CELESTIAL_SKY_LINKED);
+    ck_assert_str_eq(map->tile_path[TILED_UP], "/upper");
     free(saved);
     delete_map(map);
 
@@ -100,19 +119,90 @@ START_TEST(test_header_round_trip_is_canonical_and_rejects_legacy_fields) {
     fclose(input);
     ck_assert(!celestial_structure_finalize_map(map, VS(error)));
     delete_map(map);
+
+    input = tmpfile();
+    ck_assert_ptr_ne(input, NULL);
+    ck_assert_int_ne(fputs("arch map\ncelestial_schema 1\nsky_above open\n"
+                           "width 5junk\nheight 5\nend\n",
+                           input),
+                     EOF);
+    rewind(input);
+    map = get_empty_map(5, 5);
+    FREE_AND_COPY_HASH(map->path, "/malformed-width");
+    ck_assert_int_eq(load_map_header(map, input), 1);
+    fclose(input);
+    ck_assert(!celestial_structure_finalize_map(map, VS(error)));
+    delete_map(map);
+
+    const char *malformed_headers[] = {
+        "width +5\nheight 5\n",
+        "width 999999999999999999999999\nheight 5\n",
+        "width 5\nwidth 5\nheight 5\n",
+        "width 5\nheight 5\ntile_path_11 /outside\n",
+        "width 5\nheight 5\ntile_path_9\n",
+        "width 5\nheight 5\ntile_pat_9 /upper\n",
+        "width 5\nheight 5\nlight\n",
+    };
+    for (size_t i = 0; i < arraysize(malformed_headers); i++) {
+        char contents[HUGE_BUF];
+        snprintf(contents,
+                 sizeof(contents),
+                 "arch map\ncelestial_schema 1\nsky_above open\n%send\n",
+                 malformed_headers[i]);
+        input = fmemopen(contents, strlen(contents), "r");
+        ck_assert_ptr_ne(input, NULL);
+        map = get_empty_map(5, 5);
+        FREE_AND_COPY_HASH(map->path, "/malformed-header");
+        ck_assert_int_eq(load_map_header(map, input), 1);
+        fclose(input);
+        ck_assert(!celestial_structure_finalize_map(map, VS(error)));
+        delete_map(map);
+    }
+
+    map = get_empty_map(5, 5);
+    FREE_AND_COPY_HASH(map->path, "/partial-schema");
+    map->celestial_v1_header_seen = true;
+    map->celestial_sky_seen = true;
+    map->celestial_sky_above = CELESTIAL_SKY_OPEN;
+    ck_assert(!celestial_structure_finalize_map(map, VS(error)));
+    ck_assert_ptr_ne(strstr(error, "without a schema"), NULL);
+    delete_map(map);
+}
+END_TEST
+
+START_TEST(test_saved_v1_map_swaps_and_reloads_mutable_state) {
+    mapstruct *map = new_v1_map("/test/celestial-swap", 5, 5, CELESTIAL_SKY_OPEN);
+    object *marker = new_object(map, 2, 3);
+    FREE_AND_COPY_HASH(marker->name, "saved celestial marker");
+    FREE_AND_COPY_HASH(marker->name_pl, "saved celestial markers");
+    map->reset_time = seconds() + 3600;
+
+    char error[HUGE_BUF];
+    ck_assert_msg(celestial_structure_finalize_map(map, VS(error)), "%s", error);
+    swap_map(map, 1);
+    ck_assert_int_eq(map->in_memory, MAP_SWAPPED);
+
+    map = ready_map_name("/test/celestial-swap", NULL, 0);
+    ck_assert_ptr_ne(map, NULL);
+    ck_assert_uint_eq(map->celestial_schema, 1);
+    ck_assert_uint_eq(map->celestial_sky_above, CELESTIAL_SKY_OPEN);
+    marker = GET_MAP_OB(map, 2, 3);
+    ck_assert_ptr_ne(marker, NULL);
+    ck_assert_str_eq(marker->name, "saved celestial marker");
+    delete_map(map);
 }
 END_TEST
 
 START_TEST(test_metadata_is_validated_consumed_sorted_and_saved) {
     mapstruct *map = new_v1_map("/metadata", 8, 8, CELESTIAL_SKY_SEALED);
     object *right = new_object(map, 4, 3);
-    object_set_value(right, "_celestial_metadata_kind", "ambient_light_zone", 1);
+    make_metadata(right, CELESTIAL_RECT_AMBIENT);
     object_set_value(right, "ambient_strength", "320", 1);
     right->stats.hp = 1;
     right->stats.sp = 0;
 
     object *left = new_object(map, 1, 1);
-    object_set_value(left, "_celestial_metadata_kind", "sky_exposure", 1);
+    make_metadata(left, CELESTIAL_RECT_SKY_COVERED);
     object_set_value(left, "sky_state", "open", 1);
     left->stats.hp = 0;
     left->stats.sp = 1;
@@ -120,6 +210,7 @@ START_TEST(test_metadata_is_validated_consumed_sorted_and_saved) {
     object *map_info = new_object(map, 0, 0);
     map_info->type = MAP_INFO;
     FREE_AND_COPY_HASH(map_info->race, "Unchanged name");
+    object_set_value(map_info, "_celestial_metadata_kind", "ambient_light_zone", 1);
 
     char error[HUGE_BUF];
     ck_assert_msg(celestial_structure_finalize_map(map, VS(error)), "%s", error);
@@ -128,6 +219,7 @@ START_TEST(test_metadata_is_validated_consumed_sorted_and_saved) {
     ck_assert_ptr_eq(GET_MAP_OB(map, 4, 3), NULL);
     ck_assert_ptr_eq(GET_MAP_OB(map, 0, 0), map_info);
     ck_assert_str_eq(map_info->race, "Unchanged name");
+    ck_assert_str_eq(object_get_value(map_info, "_celestial_metadata_kind"), "ambient_light_zone");
     ck_assert_uint_eq(map->celestial_rectangles[0].type, CELESTIAL_RECT_SKY_OPEN);
     ck_assert_uint_eq(map->celestial_rectangles[1].type, CELESTIAL_RECT_AMBIENT);
 
@@ -149,7 +241,7 @@ END_TEST
 START_TEST(test_rectangles_fail_closed_with_coordinates) {
     mapstruct *map = new_v1_map("/rectangles", 4, 4, CELESTIAL_SKY_OPEN);
     object *covered = new_object(map, 3, 3);
-    object_set_value(covered, "_celestial_metadata_kind", "sky_exposure", 1);
+    make_metadata(covered, CELESTIAL_RECT_SKY_COVERED);
     object_set_value(covered, "sky_state", "covered", 1);
     covered->stats.hp = 1;
 
@@ -160,10 +252,28 @@ START_TEST(test_rectangles_fail_closed_with_coordinates) {
 
     map = new_v1_map("/covered", 4, 4, CELESTIAL_SKY_SEALED);
     covered = new_object(map, 1, 1);
-    object_set_value(covered, "_celestial_metadata_kind", "sky_exposure", 1);
+    make_metadata(covered, CELESTIAL_RECT_SKY_COVERED);
     object_set_value(covered, "sky_state", "covered", 1);
     ck_assert(!celestial_structure_finalize_map(map, VS(error)));
     ck_assert_ptr_ne(strstr(error, "no open upper boundary"), NULL);
+    delete_map(map);
+
+    map = new_v1_map("/conflicting-metadata", 4, 4, CELESTIAL_SKY_OPEN);
+    covered = new_object(map, 1, 1);
+    make_metadata(covered, CELESTIAL_RECT_SKY_COVERED);
+    object_set_value(covered, "sky_state", "covered", 1);
+    object_set_value(covered, "celestial_transmission", "glass", 1);
+    ck_assert(!celestial_structure_finalize_map(map, VS(error)));
+    ck_assert_ptr_ne(strstr(error, "conflicting object fields"), NULL);
+    delete_map(map);
+
+    map = new_v1_map("/nested-metadata", 4, 4, CELESTIAL_SKY_OPEN);
+    covered = new_object(map, 1, 1);
+    make_metadata(covered, CELESTIAL_RECT_SKY_COVERED);
+    object_set_value(covered, "sky_state", "covered", 1);
+    object_insert_into(arch_get("empty_archetype"), covered, 0);
+    ck_assert(!celestial_structure_finalize_map(map, VS(error)));
+    ck_assert_ptr_ne(strstr(error, "conflicting object fields"), NULL);
     delete_map(map);
 }
 END_TEST
@@ -183,6 +293,7 @@ START_TEST(test_transmission_faces_and_aperture_identity) {
     object_set_value(door, "celestial_transmission_closed", "opaque", 1);
     object_set_value(door, "celestial_transmission_open", "open", 1);
     object_set_value(door, "celestial_aperture_id", "00000000000000ba", 1);
+    door->celestial_aperture_id_authored = true;
     ck_assert_uint_eq(celestial_structure_faces(door), CELESTIAL_FACE_NORTH | CELESTIAL_FACE_EAST);
 
     char error[HUGE_BUF];
@@ -202,9 +313,58 @@ START_TEST(test_transmission_faces_and_aperture_identity) {
         object_set_value(door, "celestial_transmission_closed", "opaque", 1);
         object_set_value(door, "celestial_transmission_open", "open", 1);
         object_set_value(door, "celestial_aperture_id", "00000000000000ba", 1);
+        door->celestial_aperture_id_authored = true;
     }
     ck_assert(!celestial_structure_finalize_map(map, VS(error)));
     ck_assert_ptr_ne(strstr(error, "/duplicate (2,2)"), NULL);
+    delete_map(map);
+
+    map = new_v1_map("/inherited-id", 5, 5, CELESTIAL_SKY_OPEN);
+    door = new_object(map, 2, 2);
+    door->type = DOOR;
+    object_set_value(door, "celestial_transmission_closed", "opaque", 1);
+    object_set_value(door, "celestial_transmission_open", "open", 1);
+    object_set_value(door, "celestial_aperture_id", "00000000000000bc", 1);
+    ck_assert(!celestial_structure_finalize_map(map, VS(error)));
+    ck_assert_ptr_ne(strstr(error, "malformed dynamic transmission"), NULL);
+    delete_map(map);
+
+    map = new_v1_map("/outdoor-zero", 5, 5, CELESTIAL_SKY_OPEN);
+    object *authored_outdoor = new_object(map, 1, 1);
+    authored_outdoor->celestial_outdoor_authored = true;
+    ck_assert(!celestial_structure_finalize_map(map, VS(error)));
+    ck_assert_ptr_ne(strstr(error, "legacy outdoor toggle"), NULL);
+    delete_map(map);
+
+    map = new_v1_map("/dynamic-roof", 5, 5, CELESTIAL_SKY_OPEN);
+    door = new_object(map, 2, 2);
+    door->type = DOOR;
+    door->layer = LAYER_WALL;
+    SET_FLAG(door, FLAG_HIDDEN);
+    object_set_value(door, "sky_boundary", "1", 1);
+    object_set_value(door, "celestial_transmission_closed", "opaque", 1);
+    object_set_value(door, "celestial_transmission_open", "open", 1);
+    object_set_value(door, "celestial_aperture_id", "00000000000000bd", 1);
+    door->celestial_aperture_id_authored = true;
+    ck_assert(!celestial_structure_finalize_map(map, VS(error)));
+    ck_assert_ptr_ne(strstr(error, "invalid sky_boundary"), NULL);
+    delete_map(map);
+
+    map = new_v1_map("/physical-edge", 5, 5, CELESTIAL_SKY_OPEN);
+    for (int i = 0; i < 5; i++) {
+        int x = i < 3 ? 1 : 2;
+        door = new_object(map, x, 2);
+        door->type = DOOR;
+        object_set_value(door, "celestial_faces", i < 3 ? "E" : "W", 1);
+        object_set_value(door, "celestial_transmission_closed", "opaque", 1);
+        object_set_value(door, "celestial_transmission_open", "open", 1);
+        char id[17];
+        snprintf(id, sizeof(id), "%016x", i + 1);
+        object_set_value(door, "celestial_aperture_id", id, 1);
+        door->celestial_aperture_id_authored = true;
+    }
+    ck_assert(!celestial_structure_finalize_map(map, VS(error)));
+    ck_assert_ptr_ne(strstr(error, "physical edge"), NULL);
     delete_map(map);
 
     FILE *input = tmpfile();
@@ -284,7 +444,7 @@ START_TEST(test_stack_derives_cover_and_rejects_redundant_exceptions) {
     ck_assert(celestial_structure_cell_exposed(upper, 1, 1));
 
     object *house_cover = new_object(lower, 4, 4);
-    object_set_value(house_cover, "_celestial_metadata_kind", "sky_exposure", 1);
+    make_metadata(house_cover, CELESTIAL_RECT_SKY_COVERED);
     object_set_value(house_cover, "sky_state", "covered", 1);
     ck_assert_msg(celestial_structure_finalize_map(lower, VS(error)), "%s", error);
     ck_assert_msg(celestial_structure_validate_topology(lower, VS(error)), "%s", error);
@@ -292,7 +452,7 @@ START_TEST(test_stack_derives_cover_and_rejects_redundant_exceptions) {
     ck_assert(celestial_structure_cell_exposed(lower, 4, 3));
 
     object *covered = new_object(lower, 1, 1);
-    object_set_value(covered, "_celestial_metadata_kind", "sky_exposure", 1);
+    make_metadata(covered, CELESTIAL_RECT_SKY_COVERED);
     object_set_value(covered, "sky_state", "covered", 1);
     ck_assert_msg(celestial_structure_finalize_map(lower, VS(error)), "%s", error);
     ck_assert(!celestial_structure_validate_topology(lower, VS(error)));
@@ -350,6 +510,7 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_header_round_trip_is_canonical_and_rejects_legacy_fields);
+    tcase_add_test(tc_core, test_saved_v1_map_swaps_and_reloads_mutable_state);
     tcase_add_test(tc_core, test_metadata_is_validated_consumed_sorted_and_saved);
     tcase_add_test(tc_core, test_rectangles_fail_closed_with_coordinates);
     tcase_add_test(tc_core, test_transmission_faces_and_aperture_identity);

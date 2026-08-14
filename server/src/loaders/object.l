@@ -50,6 +50,8 @@ typedef struct stable_identity_state {
     int spell_index;
     bool saw_skill_id;
     int skill_index;
+    bool saw_outdoor;
+    bool saw_celestial_aperture_id;
     uint16_t celestial_fields_seen;
 } stable_identity_state;
 
@@ -217,18 +219,21 @@ stable_identity_state *identity = &identities[*depth];
 
     const char *archname = yval();
     tmp->arch = arch_find(archname);
+    bool synthetic_celestial_metadata = false;
     if (tmp->arch == NULL &&
         (strcmp(archname, "sky_exposure") == 0 ||
          strcmp(archname, "ambient_light_zone") == 0) &&
         arches[ARCH_EMPTY_ARCHETYPE] != NULL) {
         tmp->arch = arches[ARCH_EMPTY_ARCHETYPE];
         object_copy(tmp, &tmp->arch->clone, true);
-        object_set_value(tmp, "_celestial_metadata_kind", archname, 1);
+        tmp->celestial_metadata_kind = strcmp(archname, "sky_exposure") == 0
+                                           ? CELESTIAL_RECT_SKY_COVERED
+                                           : CELESTIAL_RECT_AMBIENT;
+        tmp->layer = LAYER_SYS;
+        synthetic_celestial_metadata = true;
     }
-    if (tmp->arch != NULL) {
-        if (object_get_value(tmp, "_celestial_metadata_kind") == NULL) {
-            object_copy(tmp, &tmp->arch->clone, true);
-        }
+    if (tmp->arch != NULL && !synthetic_celestial_metadata) {
+        object_copy(tmp, &tmp->arch->clone, true);
     }
 
     if (tmp != op) {
@@ -766,7 +771,10 @@ stable_identity_state *identity = &identities[*depth];
         }
     }
 }
-^outdoor{S}          CHANGE_FLAG(op, FLAG_OUTDOOR, IVAL);
+^outdoor{S}          {
+    identity->saw_outdoor = true;
+    CHANGE_FLAG(op, FLAG_OUTDOOR, IVAL);
+}
 ^sky_boundary{S}     SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_SKY_BOUNDARY, "sky_boundary");
 ^sky_state{S}        SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_SKY_STATE, "sky_state");
 ^ambient_strength{S} SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_AMBIENT_STRENGTH, "ambient_strength");
@@ -774,7 +782,10 @@ stable_identity_state *identity = &identities[*depth];
 ^celestial_transmission{S} SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_TRANSMISSION, "celestial_transmission");
 ^celestial_transmission_closed{S} SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_TRANSMISSION_CLOSED, "celestial_transmission_closed");
 ^celestial_transmission_open{S} SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_TRANSMISSION_OPEN, "celestial_transmission_open");
-^celestial_aperture_id{S} SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_APERTURE_ID, "celestial_aperture_id");
+^celestial_aperture_id{S} {
+    identity->saw_celestial_aperture_id = true;
+    SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_APERTURE_ID, "celestial_aperture_id");
+}
 ^unique{S}           CHANGE_FLAG(op, FLAG_UNIQUE, IVAL);
 ^inv_locked{S}       CHANGE_FLAG(op, FLAG_INV_LOCKED, IVAL);
 ^is_wooded{S}        {/* DEPRECATED */}
@@ -905,6 +916,8 @@ finalize_object_record (object *op, const stable_identity_state *identity)
     if (identity->saw_name && !identity->saw_name_pl) {
         FREE_AND_CLEAR_HASH(op->name_pl);
     }
+    op->celestial_outdoor_authored = identity->saw_outdoor;
+    op->celestial_aperture_id_authored = identity->saw_celestial_aperture_id;
 
     return validate_stable_identity(op, identity);
 }
