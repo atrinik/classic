@@ -52,7 +52,7 @@ fi
   -DCMAKE_TOOLCHAIN_FILE="${MXE_TOOLCHAIN_FILE}" \
   -DBUILD_TESTING=ON \
   -DPACKAGE_TYPE=zip \
-  -DPACKAGE_VERSION="${version}" \
+  -DATRINIK_PACKAGE_VERSION="${version}" \
   -DATRINIK_WINDOWS_RUNTIME_DIR="${MXE_RUNTIME_DIR}" \
   -DATRINIK_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
   "-DATRINIK_DISCORD_APPLICATION_ID_FILE=${discord_config_file}" \

@@ -10,6 +10,12 @@ cmake --build --preset linux-debug
 ctest --preset linux-debug
 ```
 
+Release builds use the same configure-time interface as the integrated and
+client builds: `-DATRINIK_PACKAGE_VERSION=MAJOR.MINOR.PATCH`. Without it,
+CMake uses the packaged `VERSION` file, an exact release tag, or the shared
+deterministic developer fallback, in that order. The resolved version is
+embedded in the server executable and package metadata.
+
 The Classic protocol must be available from the sibling `protocol/` tree, the
 packaged `dependencies/protocol` tree, or CMake's
 `FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL` override. This keeps the server and
