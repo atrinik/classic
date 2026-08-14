@@ -1437,7 +1437,11 @@ int cast_transform_wealth(object *op) {
     }
     int64_t sacrificed = marked->value * nrof;
     val = sacrificed * TRANSFORM_WEALTH_SACRIFICE;
-    int64_t before = shop_get_money(op);
+    int64_t before;
+    if (!shop_get_recovery_money(op, &before)) {
+        free(name);
+        return 0;
+    }
     if (before < sacrificed || val > INT64_MAX - (before - sacrificed)) {
         free(name);
         return 0;
@@ -1446,9 +1450,9 @@ int cast_transform_wealth(object *op) {
     if (!gameplay_journal_currency_begin(op,
                                          "spell.alchemy",
                                          "currency:transformation",
-                                         sacrificed,
+                                         before,
                                          val - sacrificed,
-                                         val,
+                                         before - sacrificed + val,
                                          "carried-cash",
                                          "player-or-ground",
                                          "alchemy",

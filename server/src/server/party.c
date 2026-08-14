@@ -318,13 +318,18 @@ static void party_loot_random(object *pl, object *corpse) {
                                 break;
                             }
                             int64_t value = tmp->value * nrof;
+                            int64_t before;
+                            if (!shop_get_recovery_money(ol->objlink.ob, &before) ||
+                                value > INT64_MAX - before) {
+                                break;
+                            }
                             char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
                             if (!gameplay_journal_currency_begin(ol->objlink.ob,
                                                                  "party.currency-loot",
                                                                  "currency:party-loot",
-                                                                 0,
+                                                                 before,
                                                                  value,
-                                                                 value,
+                                                                 before + value,
                                                                  "corpse",
                                                                  "carried-cash",
                                                                  "party-corpse",
@@ -482,12 +487,18 @@ static void party_loot_split(object *pl, object *corpse) {
                 if (num == 0) {
                     value_split += value % count;
                 }
+                int64_t before;
+                if (!shop_get_recovery_money(ol->objlink.ob, &before) ||
+                    value_split > INT64_MAX - before) {
+                    prepared = false;
+                    break;
+                }
                 if (!gameplay_journal_currency_begin(ol->objlink.ob,
                                                      "party.currency-split",
                                                      "currency:party-loot",
-                                                     0,
+                                                     before,
                                                      value_split,
-                                                     value_split,
+                                                     before + value_split,
                                                      "corpse",
                                                      "player-or-ground",
                                                      "party-corpse",

@@ -309,6 +309,38 @@ int64_t shop_get_money(object *op) {
     return total;
 }
 
+bool shop_get_recovery_money(object *op, int64_t *total) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(total != NULL);
+    *total = 0;
+    if (!shop_get_money_checked(op, total)) {
+        return false;
+    }
+    if (op->map == NULL) {
+        return true;
+    }
+    FOR_MAP_PREPARE(op->map, op->x, op->y, tmp) {
+        if (tmp->type != MONEY || tmp->arch == NULL || tmp->nrof == 0) {
+            continue;
+        }
+        bool canonical = false;
+        for (int i = 0; i < NUM_COINS; i++) {
+            if (strcmp(coins[i], tmp->arch->name) == 0 && tmp->value == tmp->arch->clone.value) {
+                canonical = true;
+                break;
+            }
+        }
+        int64_t nrof = tmp->nrof;
+        if (!canonical || tmp->value <= 0 || tmp->value > INT64_MAX / nrof ||
+            *total > INT64_MAX - tmp->value * nrof) {
+            return false;
+        }
+        *total += tmp->value * nrof;
+    }
+    FOR_MAP_FINISH();
+    return true;
+}
+
 /**
  * Pays the specified amount, taking the proper amount of money from the
  * object's inventory.
@@ -692,6 +724,10 @@ bool shop_sell_item_begin(object *op,
     if (value < 0 || !shop_coins_available()) {
         return false;
     }
+    int64_t before;
+    if (!shop_get_recovery_money(op, &before) || value > INT64_MAX - before) {
+        return false;
+    }
     return object_custody_begin_economy(item,
                                         op,
                                         "shop.sale",
@@ -701,9 +737,9 @@ bool shop_sell_item_begin(object *op,
                                         quantity,
                                         false,
                                         true,
-                                        0,
+                                        before,
                                         value,
-                                        value,
+                                        before + value,
                                         value,
                                         "copper-equivalent",
                                         "shop-service",
@@ -932,17 +968,21 @@ object_semantic_result_t shop_insert_coins_reason(object *op, int64_t value, con
         return OBJECT_SEMANTIC_COMMITTED;
     }
     char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
-    if (op->type == PLAYER && !gameplay_journal_currency_begin(op,
-                                                               reason,
-                                                               "currency:grant",
-                                                               0,
-                                                               value,
-                                                               value,
-                                                               "service",
-                                                               "player-or-ground",
-                                                               "generated",
-                                                               transaction)) {
-        return OBJECT_SEMANTIC_FAILED;
+    if (op->type == PLAYER) {
+        int64_t before;
+        if (!shop_get_recovery_money(op, &before) || value > INT64_MAX - before ||
+            !gameplay_journal_currency_begin(op,
+                                             reason,
+                                             "currency:grant",
+                                             before,
+                                             value,
+                                             before + value,
+                                             "service",
+                                             "player-or-ground",
+                                             "generated",
+                                             transaction)) {
+            return OBJECT_SEMANTIC_FAILED;
+        }
     }
     if (!shop_insert_coins_exact_tagged(op, value, transaction)) {
         if (op->type == PLAYER) {

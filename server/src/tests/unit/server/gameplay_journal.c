@@ -22,6 +22,8 @@
 #include <metrics.h>
 #include <arch.h>
 #include <party.h>
+#include <quest.h>
+#include <spells.h>
 
 #ifndef WIN32
 #include <sys/wait.h>
@@ -365,6 +367,7 @@ START_TEST(test_party_random_currency_retirement_preserves_message_lifetime) {
 
     coins = object_insert_into(arch_get("coppercoin"), corpse, 0);
     coins->nrof = 10;
+    object_insert_into(arch_get("sword"), corpse, INS_NO_MERGE);
 
     char directory[] = "/tmp/atrinik-party-random-loot-XXXXXX";
     ck_assert_ptr_ne(mkdtemp(directory), NULL);
@@ -379,12 +382,105 @@ START_TEST(test_party_random_currency_retirement_preserves_message_lifetime) {
     ck_assert_ptr_eq(corpse->inv, NULL);
     ck_assert_int_eq(shop_get_money(pl), 22);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("party.currency-loot"), 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("item.party-loot"), 1);
     gameplay_journal_deinit();
     remove_fixture(directory);
+
+    CONTR(pl)->party->loot = PARTY_LOOT_SPLIT;
+    coins = object_insert_into(arch_get("coppercoin"), corpse, 0);
+    coins->nrof = 5;
+    char split_directory[] = "/tmp/atrinik-party-split-loot-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(split_directory), NULL);
+    ck_assert(gameplay_journal_init(split_directory, "server", &profile));
+    party_handle_corpse(pl, corpse);
+    ck_assert_int_eq(shop_get_money(pl), 27);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("party.currency-split"), 1);
+    gameplay_journal_deinit();
+    remove_fixture(split_directory);
 
     remove_party_member(CONTR(pl)->party, pl);
     object_destroy(corpse);
     object_destroy(pl);
+}
+END_TEST
+
+START_TEST(test_currency_recovery_aggregate_includes_floor_delivery) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object *held = object_insert_into(arch_get("coppercoin"), pl, 0);
+    held->nrof = 100;
+    object *floor = arch_get("coppercoin");
+    floor->nrof = 7;
+    floor->x = pl->x;
+    floor->y = pl->y;
+    object_insert_map(floor, map, NULL, INS_NO_MERGE);
+    pl->carrying = weight_limit[MIN(pl->stats.Str, MAX_STAT)];
+
+    int64_t before;
+    ck_assert(shop_get_recovery_money(pl, &before));
+    ck_assert_int_eq(before, 107);
+    char directory[] = "/tmp/atrinik-currency-floor-recovery-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    ck_assert_int_eq(shop_insert_coins_reason(pl, 3, "test.floor-currency"),
+                     OBJECT_SEMANTIC_COMMITTED);
+    int64_t after;
+    ck_assert(shop_get_recovery_money(pl, &after));
+    ck_assert_int_eq(after, 110);
+    ck_assert_int_eq(shop_get_money(pl), 100);
+    gameplay_journal_deinit();
+    char *contents = read_fixture(directory);
+    ck_assert_ptr_ne(strstr(contents, "\"before\":107,\"delta\":3,\"after\":110"), NULL);
+    free(contents);
+    remove_fixture(directory);
+    object_destroy(pl);
+}
+END_TEST
+
+START_TEST(test_one_drop_quest_grant_commits_item_and_marker_together) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    ck_assert_ptr_ne(CONTR(pl)->quest_container, NULL);
+    object *quest = arch_get(QUEST_CONTAINER_ARCHETYPE);
+    quest->sub_type = QUEST_TYPE_ITEM_DROP;
+    FREE_AND_COPY_HASH(quest->name, "journal-one-drop-quest");
+    object *reward = object_insert_into(arch_get("sword"), quest, INS_NO_MERGE);
+    SET_FLAG(reward, FLAG_ONE_DROP);
+
+    char directory[] = "/tmp/atrinik-quest-one-drop-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    quest_handle(pl, quest);
+    ck_assert_ptr_ne(object_find_arch(pl, arch_find("sword")), NULL);
+    bool marker = false;
+    FOR_INV_PREPARE(CONTR(pl)->quest_container, tmp) {
+        if (tmp->name != NULL && strcmp(tmp->name, "journal-one-drop-quest") == 0 &&
+            tmp->magic == QUEST_STATUS_COMPLETED) {
+            marker = true;
+            break;
+        }
+    }
+    FOR_INV_FINISH();
+    ck_assert(marker);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("quest.item-grant"), 1);
+    gameplay_journal_deinit();
+    object_destroy(quest);
+    object_destroy(pl);
+    remove_fixture(directory);
 }
 END_TEST
 
@@ -545,6 +641,12 @@ START_TEST(test_semantic_item_shop_and_bank_producers) {
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("test.currency-grant"), 1);
     shop_insert_coins(pl, 2);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("script.currency-grant"), 1);
+
+    object *alchemy_source = object_insert_into(arch_get("coppercoin"), pl, INS_NO_MERGE);
+    CONTR(pl)->mark = alchemy_source;
+    CONTR(pl)->mark_count = alchemy_source->count;
+    ck_assert_int_eq(cast_transform_wealth(pl), 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("spell.alchemy"), 1);
     FOR_INV_PREPARE(pl, candidate) {
         if (candidate->type == MONEY) {
             ck_assert_ptr_eq(candidate->custody_lineage, NULL);
@@ -562,6 +664,13 @@ START_TEST(test_semantic_item_shop_and_bank_producers) {
     ck_assert_int_eq(object_remove_reason(grant, "test.item-destroy", true),
                      OBJECT_SEMANTIC_COMMITTED);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("test.item-destroy"), 1);
+
+    object *startequip = object_insert_into(arch_get("sword"), pl, INS_NO_MERGE);
+    SET_FLAG(startequip, FLAG_STARTEQUIP);
+    uint32_t startequip_tag = startequip->count;
+    drop_object(pl, startequip, 1, 1);
+    ck_assert(!OBJECT_VALID(startequip, startequip_tag));
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("item.startequip-destroy"), 1);
 
     object *other_player = player_get_dummy("Journal transfer recipient", NULL);
     object *transferred = NULL;
@@ -986,9 +1095,9 @@ START_TEST(test_abrupt_process_crash_preserves_synced_phases) {
 }
 END_TEST
 
-static void write_crash_state(const char *directory, const char *state) {
+static void write_crash_file(const char *directory, const char *name, const char *state) {
     char path[HUGE_BUF];
-    snprintf(VS(path), "%s/authoritative.state", directory);
+    snprintf(VS(path), "%s/%s", directory, name);
     FILE *fp = fopen(path, "wb");
     ck_assert_ptr_ne(fp, NULL);
     ck_assert_uint_eq(fwrite(state, 1, strlen(state), fp), strlen(state));
@@ -997,9 +1106,26 @@ static void write_crash_state(const char *directory, const char *state) {
     ck_assert_int_eq(fclose(fp), 0);
 }
 
+static void write_crash_state(const char *directory, const char *state) {
+    write_crash_file(directory, "authoritative.state", state);
+}
+
+static void write_crash_ground(const char *directory, const object *ground) {
+    if (ground == NULL) {
+        write_crash_file(directory, "ground.state", "");
+        return;
+    }
+    StringBuffer *serialized = stringbuffer_new();
+    object_dump_rec(ground, serialized);
+    char *state = stringbuffer_finish(serialized);
+    write_crash_file(directory, "ground.state", state);
+    free(state);
+}
+
 typedef enum crash_operation {
     CRASH_ITEM_GRANT,
     CRASH_ITEM_ACQUIRE,
+    CRASH_ITEM_DROP,
     CRASH_ITEM_DESTROY,
     CRASH_CURRENCY_GRANT,
     CRASH_BANK_DEPOSIT,
@@ -1013,6 +1139,7 @@ static const char *crash_operation_reason(crash_operation_t operation) {
     static const char *reasons[CRASH_OPERATION_COUNT] = {
         "test.crash-item",
         "item.acquire",
+        "item.drop",
         "test.crash-destroy",
         "test.crash-currency",
         "bank.deposit",
@@ -1051,7 +1178,12 @@ static void crash_semantic_writer(const char *directory,
         SET_FLAG(seed, FLAG_UNPAID);
         seed->value = 75;
         seed = object_insert_into(seed, pl, INS_NO_MERGE);
-    } else if (operation == CRASH_ITEM_DESTROY || operation == CRASH_SHOP_SALE) {
+    } else if (operation == CRASH_CURRENCY_GRANT) {
+        object *money = arch_get("coppercoin");
+        money->nrof = 100;
+        object_insert_into(money, pl, 0);
+    } else if (operation == CRASH_ITEM_DROP || operation == CRASH_ITEM_DESTROY ||
+               operation == CRASH_SHOP_SALE) {
         seed = arch_get("sword");
         SET_FLAG(seed, FLAG_IDENTIFIED);
         seed->value = 100;
@@ -1067,20 +1199,35 @@ static void crash_semantic_writer(const char *directory,
     char *state = stringbuffer_finish(serialized);
     write_crash_state(directory, state);
     free(state);
+    if (operation == CRASH_ITEM_ACQUIRE) {
+        write_crash_ground(directory, seed);
+    } else if (operation == CRASH_ITEM_DROP) {
+        write_crash_ground(directory, NULL);
+    }
 
     ck_assert(gameplay_journal_init(directory, "server", &profile));
     if (fail_terminal) {
         gameplay_journal_fail_after_writes_for_test(1);
     }
-    if (operation == CRASH_ITEM_GRANT || operation == CRASH_ITEM_ACQUIRE) {
+    if (operation == CRASH_ITEM_GRANT) {
         object *inserted = NULL;
-        object *item = operation == CRASH_ITEM_GRANT ? arch_get("sword") : seed;
         object_semantic_result_t result =
-            object_insert_into_reason(item, pl, crash_operation_reason(operation), &inserted);
+            object_insert_into_reason(arch_get("sword"),
+                                      pl,
+                                      crash_operation_reason(operation),
+                                      &inserted);
         ck_assert_int_eq(result,
                          fail_terminal ? OBJECT_SEMANTIC_AMBIGUOUS : OBJECT_SEMANTIC_COMMITTED);
         ck_assert_ptr_ne(inserted, NULL);
         ck_assert_ptr_ne(inserted->custody_lineage, NULL);
+    } else if (operation == CRASH_ITEM_ACQUIRE) {
+        pick_up(pl, seed, 1);
+        object *inserted = object_find_arch(pl, arch_find("sword"));
+        ck_assert_ptr_ne(inserted, NULL);
+        ck_assert_ptr_ne(inserted->custody_lineage, NULL);
+    } else if (operation == CRASH_ITEM_DROP) {
+        drop_object(pl, seed, 1, 1);
+        ck_assert_ptr_eq(object_find_arch(pl, arch_find("sword")), NULL);
     } else if (operation == CRASH_ITEM_DESTROY) {
         object_semantic_result_t result =
             object_remove_reason(seed, crash_operation_reason(operation), true);
@@ -1127,6 +1274,20 @@ static void crash_semantic_writer(const char *directory,
         state = stringbuffer_finish(serialized);
         write_crash_state(directory, state);
         free(state);
+        if (operation == CRASH_ITEM_ACQUIRE) {
+            write_crash_ground(directory, NULL);
+        } else if (operation == CRASH_ITEM_DROP) {
+            object *ground = NULL;
+            FOR_MAP_PREPARE(pl->map, pl->x, pl->y, tmp) {
+                if (tmp->arch == arch_find("sword")) {
+                    ground = tmp;
+                    break;
+                }
+            }
+            FOR_MAP_FINISH();
+            ck_assert_ptr_ne(ground, NULL);
+            write_crash_ground(directory, ground);
+        }
     }
     _exit(EXIT_SUCCESS);
 }
@@ -1162,6 +1323,24 @@ START_TEST(test_abrupt_semantic_operations_leave_reconcilable_authoritative_stat
                          "\"reason\":\"%s\"",
                          crash_operation_reason((crash_operation_t)operation));
                 ck_assert_ptr_ne(strstr(contents, reason), NULL);
+                static const int64_t expected_arithmetic[CRASH_OPERATION_COUNT][3] = {
+                    {0, 1, 1},
+                    {0, 1, 1},
+                    {1, -1, 0},
+                    {1, -1, 0},
+                    {100, 3, 103},
+                    {0, 1, 1},
+                    {1, -1, 0},
+                    {100, -75, 25},
+                    {0, 20, 20},
+                };
+                char arithmetic[160];
+                snprintf(VS(arithmetic),
+                         "\"before\":%" PRId64 ",\"delta\":%" PRId64 ",\"after\":%" PRId64,
+                         expected_arithmetic[operation][0],
+                         expected_arithmetic[operation][1],
+                         expected_arithmetic[operation][2]);
+                ck_assert_ptr_ne(strstr(contents, arithmetic), NULL);
                 free(contents);
 
                 char state_path[HUGE_BUF];
@@ -1184,11 +1363,11 @@ START_TEST(test_abrupt_semantic_operations_leave_reconcilable_authoritative_stat
                     if (item != NULL) {
                         ck_assert_ptr_ne(item->custody_lineage, NULL);
                     }
-                } else if (operation == CRASH_ITEM_DESTROY) {
+                } else if (operation == CRASH_ITEM_DROP || operation == CRASH_ITEM_DESTROY) {
                     ck_assert_int_eq(object_find_arch(reloaded, arch_find("sword")) == NULL,
                                      checkpoint_after);
                 } else if (operation == CRASH_CURRENCY_GRANT) {
-                    ck_assert_int_eq(shop_get_money(reloaded), checkpoint_after ? 3 : 0);
+                    ck_assert_int_eq(shop_get_money(reloaded), checkpoint_after ? 103 : 100);
                 } else if (operation == CRASH_BANK_DEPOSIT) {
                     ck_assert_int_eq(bank_get_balance(reloaded), checkpoint_after ? 1 : 0);
                     ck_assert_int_eq(object_find_type(reloaded, MONEY) == NULL, checkpoint_after);
@@ -1222,6 +1401,29 @@ START_TEST(test_abrupt_semantic_operations_leave_reconcilable_authoritative_stat
                 object_destroy(reloaded);
                 free(state_text);
                 ck_assert_int_eq(unlink(state_path), 0);
+                if (operation == CRASH_ITEM_ACQUIRE || operation == CRASH_ITEM_DROP) {
+                    snprintf(VS(state_path), "%s/ground.state", directory);
+                    ck_assert_int_eq(stat(state_path, &metadata), 0);
+                    bool ground_expected =
+                        operation == CRASH_ITEM_ACQUIRE ? !checkpoint_after : checkpoint_after;
+                    ck_assert_int_eq(metadata.st_size != 0, ground_expected);
+                    if (ground_expected) {
+                        state_text = malloc((size_t)metadata.st_size + 1);
+                        ck_assert_ptr_ne(state_text, NULL);
+                        state = fopen(state_path, "rb");
+                        ck_assert_ptr_ne(state, NULL);
+                        ck_assert_uint_eq(fread(state_text, 1, (size_t)metadata.st_size, state),
+                                          (size_t)metadata.st_size);
+                        state_text[metadata.st_size] = '\0';
+                        ck_assert_int_eq(fclose(state), 0);
+                        object *ground = object_load_str(state_text);
+                        ck_assert_ptr_ne(ground, NULL);
+                        ck_assert_ptr_eq(ground->arch, arch_find("sword"));
+                        object_destroy(ground);
+                        free(state_text);
+                    }
+                    ck_assert_int_eq(unlink(state_path), 0);
+                }
                 remove_fixture(directory);
             }
         }
@@ -1316,6 +1518,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_shop_purchase_terminal_failure_keeps_authoritative_state);
     tcase_add_test(tc_core, test_party_loot_preparation_failure_preserves_corpse);
     tcase_add_test(tc_core, test_party_random_currency_retirement_preserves_message_lifetime);
+    tcase_add_test(tc_core, test_currency_recovery_aggregate_includes_floor_delivery);
+    tcase_add_test(tc_core, test_one_drop_quest_grant_commits_item_and_marker_together);
 #ifndef WIN32
     tcase_add_test(tc_core, test_abrupt_process_crash_preserves_synced_phases);
     tcase_add_test(tc_core, test_abrupt_semantic_operations_leave_reconcilable_authoritative_state);

@@ -174,13 +174,13 @@ verifies each concrete reason and business-state call site.
 The item transaction's top-level arithmetic is quantity for ordinary custody.
 For purchases it represents the balance actually mutated (the hidden bank
 slice for bank or mixed funding), while `details.price` always holds the
-complete copper-equivalent price. Shop sales and generated currency use the
-logical amount delivered across inventory and floor (`0`, `+amount`, `amount`),
-because the carried-cash balance alone does not include floor delivery. Alchemy
-uses the sacrificed value, net change, and replacement value across its carried
-source and inventory/floor output. Bank records remain exact hidden-balance
-arithmetic. These conventions keep recovery arithmetic authoritative without
-double-counting correlated writes.
+complete copper-equivalent price. Shop sales, generated/party currency, and
+alchemy use a recovery aggregate spanning player-held/bank currency plus
+canonical currency on the player's current delivery tile. Their before/after
+values therefore remain comparable when output is carried, spilled, or split
+across the two, including a partially checkpointed delivery. Bank records
+remain exact hidden-balance arithmetic. These conventions keep recovery
+arithmetic authoritative without double-counting correlated writes.
 
 Journal-backed currency output is materialized in non-merging stacks carrying
 `currency:<transaction_id>` as durable lineage. During recovery, the hidden

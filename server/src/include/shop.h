@@ -75,6 +75,11 @@ extern void shop_insert_coins(object *op, int64_t value);
 extern bool shop_insert_coins_exact(object *op, int64_t value);
 extern bool shop_insert_coins_exact_tagged(object *op, int64_t value, const char *transaction_id);
 /**
+ * Get the recovery aggregate spanning player-held/bank currency and canonical
+ * currency on the player's current delivery tile.
+ */
+extern bool shop_get_recovery_money(object *op, int64_t *total);
+/**
  * Retire transaction lineage only after its terminal commit is durable.
  * Matching coin stacks may merge, so all pointers to them are invalid afterward.
  */
