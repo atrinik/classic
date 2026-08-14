@@ -153,6 +153,19 @@ endforeach()
         ):
             self.assertNotIn("#include <version.h>", path.read_text(encoding="utf-8"))
 
+    def test_component_version_module_resolution_supports_symlinked_views(self) -> None:
+        for component in ("client", "server"):
+            cmake = (ROOT / component / "CMakeLists.txt").read_text(encoding="utf-8")
+            self.assertIn(
+                'file(REAL_PATH "${CMAKE_CURRENT_LIST_FILE}" ATRINIK_COMPONENT_CMAKE_FILE)',
+                cmake,
+            )
+            self.assertIn(
+                '"${ATRINIK_COMPONENT_SOURCE_DIR}/../cmake/AtrinikVersion.cmake"',
+                cmake,
+            )
+            self.assertIn('include("${ATRINIK_VERSION_MODULE}")', cmake)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,10 +2,19 @@ cmake_minimum_required(VERSION 3.21)
 
 if (NOT ATRINIK_INTEGRATED_BUILD)
     if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/AtrinikVersion.cmake")
-        include(cmake/AtrinikVersion.cmake)
+        set(ATRINIK_VERSION_MODULE
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/AtrinikVersion.cmake")
     else ()
-        include(../cmake/AtrinikVersion.cmake)
+        file(REAL_PATH "${CMAKE_CURRENT_LIST_FILE}" ATRINIK_COMPONENT_CMAKE_FILE)
+        get_filename_component(ATRINIK_COMPONENT_SOURCE_DIR
+            "${ATRINIK_COMPONENT_CMAKE_FILE}" DIRECTORY)
+        set(ATRINIK_VERSION_MODULE
+            "${ATRINIK_COMPONENT_SOURCE_DIR}/../cmake/AtrinikVersion.cmake")
     endif ()
+    include("${ATRINIK_VERSION_MODULE}")
+    unset(ATRINIK_VERSION_MODULE)
+    unset(ATRINIK_COMPONENT_CMAKE_FILE)
+    unset(ATRINIK_COMPONENT_SOURCE_DIR)
     atrinik_resolve_version(ATRINIK_SOURCE_VERSION)
     project(atrinik-client VERSION "${ATRINIK_SOURCE_VERSION}" LANGUAGES C)
     atrinik_initialize_version_metadata()
