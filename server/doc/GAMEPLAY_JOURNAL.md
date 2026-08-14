@@ -172,8 +172,9 @@ Journal-backed currency output is materialized in non-merging stacks carrying
 `currency:<transaction_id>` as durable lineage. During recovery, the hidden
 bank balance (where applicable) and those tagged survivors distinguish an
 unapplied intent, an interrupted delivery, and a fully applied operation. The
-tag applies equally to inventory and floor output and remains after commit as
-the transaction correlation key.
+tag applies equally to inventory and floor output. After the terminal commit is
+durable, the producer retires it and permits ordinary merging; intent-only
+output keeps the tag for reconciliation without permanent fragmentation.
 
 Existing aggregate metrics remain at the same semantic boundaries. Covered
 positive-value bank/shop action counts and pickup/drop unit counts advance only
@@ -205,10 +206,17 @@ else:
 ```
 
 Item and currency mutations use `InsertInto`, `Remove`, `Destroy`, `Map.Insert`,
-`TeleportTo`, `InsertCoins`, and `Pay` so schema-v2 semantic details cannot be
+`TeleportTo`, `InsertCoins`, and `PayAmount` so schema-v2 semantic details cannot be
 omitted. Quest and progression intents use stable authored subject IDs.
 Producers must not catch and ignore a journal exception or emit a commit for a
 vetoed/failed mutation.
+
+`JournalIntent` retains its released C/Python signature, but schema-v2
+hardening intentionally rejects its legacy `item` and `currency` kinds because
+that signature cannot supply mandatory custody/economy details. Existing
+content must migrate those calls to the reason-aware methods above; `quest` and
+`progression` remain source compatible. Retained schema-v1 files remain
+readable, but the server never writes new incomplete schema-v1 intents.
 
 ## Choosing the right record
 

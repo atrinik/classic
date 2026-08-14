@@ -105,6 +105,23 @@ START_TEST(test_shop_pay_rejects_mutated_money_without_partial_removal) {
 }
 END_TEST
 
+START_TEST(test_shop_pay_handles_multi_stack_uint32_change) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object *copper = arch_get("coppercoin");
+    copper->nrof = UINT32_MAX;
+    copper->custody_lineage = add_string("currency:first");
+    object_insert_into(copper, pl, 0);
+    object *silver = arch_get("silvercoin");
+    silver->custody_lineage = add_string("currency:second");
+    object_insert_into(silver, pl, 0);
+
+    ck_assert(shop_pay(pl, (int64_t)UINT32_MAX + 1));
+    ck_assert_int_eq(shop_get_money(pl), 99);
+}
+END_TEST
+
 START_TEST(test_shop_get_cost_string) {
     ck_assert_str_eq(shop_get_cost_string(0), "nothing");
     ck_assert_str_eq(shop_get_cost_string(1), "1 copper coin");
@@ -475,6 +492,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_shop_get_money);
     tcase_add_test(tc_core, test_shop_pay);
     tcase_add_test(tc_core, test_shop_pay_rejects_mutated_money_without_partial_removal);
+    tcase_add_test(tc_core, test_shop_pay_handles_multi_stack_uint32_change);
     tcase_add_test(tc_core, test_shop_pay_item);
     tcase_add_test(tc_core, test_shop_pay_items);
     tcase_add_test(tc_core, test_shop_sell_item);

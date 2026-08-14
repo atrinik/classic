@@ -43,6 +43,16 @@
 #include <monster_data.h>
 #include <arch.h>
 #include <ban.h>
+
+#ifdef ATRINIK_TESTING
+static bool test_pickup_event_veto;
+static bool test_drop_event_veto;
+
+void player_event_veto_for_test(bool pickup, bool drop) {
+    test_pickup_event_veto = pickup;
+    test_drop_event_veto = drop;
+}
+#endif
 #include <player_status.h>
 #include <player.h>
 #include <object.h>
@@ -2354,7 +2364,11 @@ static void pick_up_object(object *pl, object *op, object *tmp, int nrof, int no
     }
 
     /* Trigger the PICKUP event */
-    if (trigger_event(EVENT_PICKUP, pl, tmp, op, NULL, nrof, 0, 0, 0)) {
+    if (trigger_event(EVENT_PICKUP, pl, tmp, op, NULL, nrof, 0, 0, 0)
+#ifdef ATRINIK_TESTING
+        || test_pickup_event_veto
+#endif
+    ) {
         return;
     }
 
@@ -2672,7 +2686,11 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
     }
 
     /* Trigger the DROP event */
-    if (trigger_event(EVENT_DROP, op, tmp, NULL, NULL, nrof, 0, 0, 0)) {
+    if (trigger_event(EVENT_DROP, op, tmp, NULL, NULL, nrof, 0, 0, 0)
+#ifdef ATRINIK_TESTING
+        || test_drop_event_veto
+#endif
+    ) {
         return;
     }
 

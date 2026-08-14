@@ -257,7 +257,6 @@ const char *shop_get_cost_string_item(object *op, int mode) {
  */
 static bool shop_get_money_checked(object *op, int64_t *total) {
     HARD_ASSERT(op != NULL);
-    uint64_t coin_counts[NUM_COINS] = {0};
     FOR_INV_PREPARE(op, tmp) {
         if (tmp->type == MONEY) {
             int denomination = -1;
@@ -272,12 +271,10 @@ static bool shop_get_money_checked(object *op, int64_t *total) {
             if (denomination < 0 || nrof == 0) {
                 continue;
             }
-            if (coin_counts[denomination] > UINT32_MAX - (uint64_t)nrof || tmp->value <= 0 ||
-                tmp->value > INT64_MAX / nrof ||
+            if (tmp->value <= 0 || tmp->value > INT64_MAX / nrof ||
                 *total > INT64_MAX - tmp->value * nrof) {
                 return false;
             }
-            coin_counts[denomination] += (uint64_t)nrof;
             *total += tmp->value * nrof;
         } else if (tmp->type == CONTAINER && (QUERY_FLAG(tmp, FLAG_APPLIED) || tmp->race == NULL ||
                                               strstr(tmp->race, "gold") != NULL)) {
@@ -344,18 +341,9 @@ static int64_t shop_pay_inventory(object *obj, int64_t to_pay) {
                 continue;
             }
 
-            /* This should not happen, but if it does, just merge them. */
-            if (coins_objects[i] != NULL) {
-                log_error("Two money entries of %s in object: %s",
-                          coins[NUM_COINS - 1 - i],
-                          object_get_str(obj));
-                coins_objects[i]->nrof += tmp->nrof;
-                object_remove(tmp, 0);
-                object_destroy(tmp);
-            } else {
-                object_remove(tmp, 0);
-                coins_objects[i] = tmp;
-            }
+            object_remove(tmp, 0);
+            tmp->below = coins_objects[i];
+            coins_objects[i] = tmp;
 
             found = true;
             break;
@@ -368,60 +356,54 @@ static int64_t shop_pay_inventory(object *obj, int64_t to_pay) {
     FOR_INV_FINISH();
 
     for (int i = 0; i < NUM_COINS; i++) {
-        if (coins_objects[i] == NULL) {
-            continue;
-        }
-
-        int64_t num_coins;
-        if ((int64_t)coins_objects[i]->nrof * coins_objects[i]->value > remain) {
-            num_coins = remain / coins_objects[i]->value;
-
-            if (num_coins * coins_objects[i]->value < remain) {
-                num_coins++;
+        while (coins_objects[i] != NULL && remain > 0) {
+            object *coin = coins_objects[i];
+            coins_objects[i] = coin->below;
+            coin->below = NULL;
+            int64_t stack_value = (int64_t)coin->nrof * coin->value;
+            uint32_t num_coins = coin->nrof;
+            if (stack_value > remain) {
+                int64_t needed = remain / coin->value;
+                if (needed * coin->value < remain) {
+                    needed++;
+                }
+                num_coins = (uint32_t)needed;
             }
-        } else {
-            num_coins = coins_objects[i]->nrof;
-        }
-
-        if (num_coins > UINT32_MAX) {
-            LOG(ERROR,
-                "Money overflow value->nrof: number of coins > "
-                "UINT32_MAX (type coin %d)",
-                i);
-            num_coins = UINT32_MAX;
-        }
-
-        remain -= num_coins * coins_objects[i]->value;
-        coins_objects[i]->nrof -= (uint32_t)num_coins;
-
-        /* Now start making change.  Start at the coin value
-         * below the one we just did, and work down to
-         * the lowest value. */
-        int count = i - 1;
-        while (remain < 0 && count >= 0) {
-            if (coins_objects[count] == NULL) {
-                coins_objects[count] = arch_get(coins[NUM_COINS - 1 - count]);
-                coins_objects[count]->nrof = 0;
+            remain -= (int64_t)num_coins * coin->value;
+            coin->nrof -= num_coins;
+            if (coin->nrof == 0) {
+                object_destroy(coin);
+            } else {
+                coin->below = coins_objects[i];
+                coins_objects[i] = coin;
             }
 
-            num_coins = -remain / coins_objects[count]->value;
-            coins_objects[count]->nrof += (uint32_t)num_coins;
-            remain += num_coins * coins_objects[count]->value;
-            count--;
+            int count = i - 1;
+            while (remain < 0 && count >= 0) {
+                archetype_t *at = arch_find(coins[NUM_COINS - 1 - count]);
+                HARD_ASSERT(at != NULL && at->clone.value > 0);
+                int64_t change = -remain / at->clone.value;
+                while (change > 0) {
+                    uint32_t chunk = (uint32_t)MIN(change, UINT32_MAX);
+                    object *replacement = arch_get(coins[NUM_COINS - 1 - count]);
+                    replacement->nrof = chunk;
+                    replacement->below = coins_objects[count];
+                    coins_objects[count] = replacement;
+                    change -= chunk;
+                    remain += (int64_t)chunk * replacement->value;
+                }
+                count--;
+            }
         }
     }
 
     for (int i = 0; i < NUM_COINS; i++) {
-        if (coins_objects[i] == NULL) {
-            continue;
+        while (coins_objects[i] != NULL) {
+            object *coin = coins_objects[i];
+            coins_objects[i] = coin->below;
+            coin->below = NULL;
+            object_insert_into(coin, obj, 0);
         }
-
-        if (coins_objects[i]->nrof == 0) {
-            object_destroy(coins_objects[i]);
-            continue;
-        }
-
-        object_insert_into(coins_objects[i], obj, 0);
     }
 
     return remain;
@@ -747,6 +729,7 @@ bool shop_sell_item_commit(object *op, object *item, object_custody_transaction_
         free(name);
         return false;
     }
+    shop_currency_tag_retire(op, transaction->transaction_id);
     if (value == 0) {
         draw_info_format(COLOR_WHITE, op, "We're not interested in %s.", name);
     } else {
@@ -819,6 +802,39 @@ bool shop_coins_available(void) {
         }
     }
     return true;
+}
+
+static void shop_currency_tag_retire_inventory(object *where, const char *lineage) {
+    FOR_INV_PREPARE(where, tmp) {
+        if (tmp->type == CONTAINER) {
+            shop_currency_tag_retire_inventory(tmp, lineage);
+        }
+        if (tmp->type == MONEY && tmp->custody_lineage != NULL &&
+            strcmp(tmp->custody_lineage, lineage) == 0) {
+            FREE_AND_CLEAR_HASH(tmp->custody_lineage);
+            (void)object_merge(tmp);
+        }
+    }
+    FOR_INV_FINISH();
+}
+
+void shop_currency_tag_retire(object *op, const char *transaction_id) {
+    if (op == NULL || transaction_id == NULL || transaction_id[0] == '\0') {
+        return;
+    }
+    char lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    snprintf(VS(lineage), "currency:%s", transaction_id);
+    shop_currency_tag_retire_inventory(op, lineage);
+    if (op->map != NULL) {
+        FOR_MAP_PREPARE(op->map, op->x, op->y, tmp) {
+            if (tmp->type == MONEY && tmp->custody_lineage != NULL &&
+                strcmp(tmp->custody_lineage, lineage) == 0) {
+                FREE_AND_CLEAR_HASH(tmp->custody_lineage);
+                (void)object_merge(tmp);
+            }
+        }
+        FOR_MAP_FINISH();
+    }
 }
 
 bool shop_insert_coins_exact_tagged(object *op, int64_t value, const char *transaction_id) {
@@ -913,7 +929,7 @@ object_semantic_result_t shop_insert_coins_reason(object *op, int64_t value, con
     if (value == 0) {
         return OBJECT_SEMANTIC_COMMITTED;
     }
-    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
     if (op->type == PLAYER && !gameplay_journal_currency_begin(op,
                                                                reason,
                                                                "currency:grant",
@@ -935,5 +951,6 @@ object_semantic_result_t shop_insert_coins_reason(object *op, int64_t value, con
     if (op->type == PLAYER && !gameplay_journal_semantic_commit(transaction)) {
         return OBJECT_SEMANTIC_AMBIGUOUS;
     }
+    shop_currency_tag_retire(op, transaction);
     return OBJECT_SEMANTIC_COMMITTED;
 }

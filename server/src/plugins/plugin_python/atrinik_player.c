@@ -514,6 +514,8 @@ static const char doc_Atrinik_Player_BankDeposit[] =
     ":returns: Tuple containing the status code (one of the BANK_xxx constants, "
     "eg, :attr:`~Atrinik.BANK_SUCCESS`) and amount of money deposited as "
     "integer.\n"
+    "BANK_JOURNAL_ERROR means no mutation; BANK_JOURNAL_AMBIGUOUS means the amount was "
+    "applied and must not be retried automatically.\n"
     ":rtype: tuple";
 
 /**
@@ -542,6 +544,8 @@ static const char doc_Atrinik_Player_BankWithdraw[] =
     ":returns: Tuple containing the status code (one of the BANK_xxx constants, "
     "eg, :attr:`~Atrinik.BANK_SUCCESS`) and amount of money withdrawn as "
     "integer.\n"
+    "BANK_JOURNAL_ERROR means no mutation; BANK_JOURNAL_AMBIGUOUS means the amount was "
+    "applied and must not be retried automatically.\n"
     ":rtype: tuple";
 
 /**

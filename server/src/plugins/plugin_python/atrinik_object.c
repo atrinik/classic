@@ -784,7 +784,9 @@ static const char doc_Atrinik_Object_TeleportTo[] =
     ":param x: X coordinate on the map.\n"
     ":type x: int\n"
     ":param y: Y coordinate on the map.\n"
-    ":type y: int";
+    ":type y: int\n"
+    ":param reason: Bounded semantic reason code for the private journal.\n"
+    ":type reason: str";
 
 /**
  * Implements Atrinik.Object.Object.TeleportTo() Python method.
@@ -1578,7 +1580,9 @@ static PyObject *Atrinik_Object_Remove(Atrinik_Object *self, PyObject *args) {
 /** Documentation for Atrinik_Object_Destroy(). */
 static const char doc_Atrinik_Object_Destroy[] =
     ".. method:: Destroy(reason='script.item-destroy').\n\n"
-    "Frees all data associated with the object.";
+    "Frees all data associated with the object.\n\n"
+    ":param reason: Bounded semantic reason code for the private journal.\n"
+    ":type reason: str";
 
 /**
  * Implements Atrinik.Object.Object.Destroy() Python method.

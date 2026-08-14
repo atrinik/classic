@@ -61,22 +61,22 @@ typedef struct bank_info {
     int mode;
 
     /** Number of amber coins. */
-    uint32_t amber;
+    uint64_t amber;
 
     /** Number of mithril coins. */
-    uint32_t mithril;
+    uint64_t mithril;
 
     /** Number of jade coins. */
-    uint32_t jade;
+    uint64_t jade;
 
     /** Number of gold coins. */
-    uint32_t gold;
+    uint64_t gold;
 
     /** Number of silver coins. */
-    uint32_t silver;
+    uint64_t silver;
 
     /** Number of copper coins. */
-    uint32_t copper;
+    uint64_t copper;
 } bank_info_t;
 
 /**
@@ -108,33 +108,61 @@ static void bank_parse_string(const char *str, bank_info_t *info) {
             continue;
         }
 
-        unsigned long value = strtoul(word, NULL, 10);
+        errno = 0;
+        char *end;
+        uintmax_t parsed = strtoumax(word, &end, 10);
+        if (errno != 0 || *end != '\0') {
+            memset(info, 0, sizeof(*info));
+            info->mode = BANK_STRING_NONE;
+            return;
+        }
+        uint64_t value = (uint64_t)parsed;
 
         if (!string_get_word(str, &pos, ' ', VS(word), 0)) {
             continue;
         }
 
         size_t len = strlen(word);
+        uint64_t *amount = NULL;
         if (strncasecmp("amber", word, len) == 0) {
-            info->mode = BANK_STRING_AMOUNT;
-            info->amber += value;
+            amount = &info->amber;
         } else if (strncasecmp("mithril", word, len) == 0) {
-            info->mode = BANK_STRING_AMOUNT;
-            info->mithril += value;
+            amount = &info->mithril;
         } else if (strncasecmp("jade", word, len) == 0) {
-            info->mode = BANK_STRING_AMOUNT;
-            info->jade += value;
+            amount = &info->jade;
         } else if (strncasecmp("gold", word, len) == 0) {
-            info->mode = BANK_STRING_AMOUNT;
-            info->gold += value;
+            amount = &info->gold;
         } else if (strncasecmp("silver", word, len) == 0) {
-            info->mode = BANK_STRING_AMOUNT;
-            info->silver += value;
+            amount = &info->silver;
         } else if (strncasecmp("copper", word, len) == 0) {
+            amount = &info->copper;
+        }
+        if (amount != NULL) {
+            if (*amount > UINT64_MAX - value) {
+                memset(info, 0, sizeof(*info));
+                info->mode = BANK_STRING_NONE;
+                return;
+            }
             info->mode = BANK_STRING_AMOUNT;
-            info->copper += value;
+            *amount += value;
         }
     }
+}
+
+static bool bank_info_value(const bank_info_t *info, int64_t *value) {
+    const uint64_t counts[NUM_COINS] = {
+        info->amber, info->mithril, info->jade, info->gold, info->silver, info->copper};
+    *value = 0;
+    for (int i = 0; i < NUM_COINS; i++) {
+        int64_t coin_value = coins_arch[i]->clone.value;
+        if (coin_value <= 0 || counts[i] > (uint64_t)(INT64_MAX / coin_value) ||
+            *value > INT64_MAX - (int64_t)counts[i] * coin_value) {
+            *value = 0;
+            return false;
+        }
+        *value += (int64_t)counts[i] * coin_value;
+    }
+    return true;
 }
 
 /**
@@ -146,19 +174,35 @@ static void bank_parse_string(const char *str, bank_info_t *info) {
  * @return
  * Number of coins in the object's inventory.
  */
-static uint32_t bank_get_coins_num(object *op, archetype_t *at) {
-    uint32_t num = 0;
+static uint64_t bank_get_coins_num(object *op, archetype_t *at) {
+    uint64_t num = 0;
     FOR_INV_PREPARE(op, tmp) {
         if (tmp->type == MONEY && tmp->arch == at && tmp->value == at->clone.value) {
+            if (num > UINT64_MAX - tmp->nrof) {
+                return UINT64_MAX;
+            }
             num += tmp->nrof;
         } else if (tmp->type == CONTAINER &&
                    (tmp->race == NULL || strstr(tmp->race, "gold") != NULL)) {
-            num += bank_get_coins_num(tmp, at);
+            uint64_t nested = bank_get_coins_num(tmp, at);
+            if (num > UINT64_MAX - nested) {
+                return UINT64_MAX;
+            }
+            num += nested;
         }
     }
     FOR_INV_FINISH();
 
     return num;
+}
+
+static bool bank_coin_canonical(const object *coin) {
+    for (int i = 0; i < NUM_COINS; i++) {
+        if (coin->arch == coins_arch[i] && coin->value == coins_arch[i]->clone.value) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /** Sum exactly the coin locations accepted by bank_remove_coins_internal(). */
@@ -169,7 +213,7 @@ static bool bank_get_deposit_value(object *op, int64_t *value) {
             if (nrof == 0) {
                 continue;
             }
-            if (tmp->value < 0 || tmp->value > INT64_MAX / nrof ||
+            if (!bank_coin_canonical(tmp) || tmp->value <= 0 || tmp->value > INT64_MAX / nrof ||
                 *value > INT64_MAX - tmp->value * nrof) {
                 return false;
             }
@@ -195,7 +239,7 @@ static bool bank_get_deposit_value(object *op, int64_t *value) {
  * @return
  * Removed amount.
  */
-static int64_t bank_remove_coins_internal(object *op, archetype_t *at, uint32_t *remaining) {
+static int64_t bank_remove_coins_internal(object *op, archetype_t *at, uint64_t *remaining) {
     int64_t amount = 0;
 
     FOR_INV_PREPARE(op, tmp) {
@@ -204,7 +248,8 @@ static int64_t bank_remove_coins_internal(object *op, archetype_t *at, uint32_t 
         }
 
         if (tmp->type == MONEY && tmp->nrof != 0 &&
-            (at == NULL || (tmp->arch == at && tmp->value == at->clone.value))) {
+            (at == NULL ? bank_coin_canonical(tmp)
+                        : (tmp->arch == at && tmp->value == at->clone.value))) {
             if (at == NULL || tmp->nrof <= *remaining) {
                 if (at != NULL) {
                     *remaining -= tmp->nrof;
@@ -229,8 +274,8 @@ static int64_t bank_remove_coins_internal(object *op, archetype_t *at, uint32_t 
     return amount;
 }
 
-static int64_t bank_remove_coins(object *op, archetype_t *at, uint32_t nrof) {
-    uint32_t remaining = nrof;
+static int64_t bank_remove_coins(object *op, archetype_t *at, uint64_t nrof) {
+    uint64_t remaining = nrof;
     return bank_remove_coins_internal(op, at, &remaining);
 }
 
@@ -387,17 +432,16 @@ int bank_deposit(object *op, const char *text, int64_t *value) {
             }
         }
 
-        *value =
-            info.amber * coins_arch[0]->clone.value + info.mithril * coins_arch[1]->clone.value +
-            info.jade * coins_arch[2]->clone.value + info.gold * coins_arch[3]->clone.value +
-            info.silver * coins_arch[4]->clone.value + info.copper * coins_arch[5]->clone.value;
+        if (!bank_info_value(&info, value)) {
+            return BANK_JOURNAL_ERROR;
+        }
     }
 
     if (*value == 0) {
         return BANK_SUCCESS;
     }
     int64_t before = bank_get_balance(op);
-    if (*value > INT64_MAX - before) {
+    if (before < 0 || *value > INT64_MAX - before) {
         *value = 0;
         return BANK_JOURNAL_ERROR;
     }
@@ -439,7 +483,7 @@ int bank_deposit(object *op, const char *text, int64_t *value) {
     object *bank = bank_get_info(op);
     bank->value = before + *value;
     if (!gameplay_journal_semantic_commit(transaction)) {
-        return BANK_JOURNAL_ERROR;
+        return BANK_JOURNAL_AMBIGUOUS;
     }
 
     if (op->type == PLAYER && *value > 0) {
@@ -477,6 +521,9 @@ int bank_withdraw(object *op, const char *text, int64_t *value) {
     if (bank == NULL || bank->value == 0) {
         return BANK_WITHDRAW_MISSING;
     }
+    if (bank->value < 0) {
+        return BANK_JOURNAL_ERROR;
+    }
 
     if (info.mode == BANK_STRING_NONE) {
         return BANK_SYNTAX_ERROR;
@@ -488,10 +535,10 @@ int bank_withdraw(object *op, const char *text, int64_t *value) {
             return BANK_WITHDRAW_HIGH;
         }
 
-        int64_t big_value =
-            info.amber * coins_arch[0]->clone.value + info.mithril * coins_arch[1]->clone.value +
-            info.jade * coins_arch[2]->clone.value + info.gold * coins_arch[3]->clone.value +
-            info.silver * coins_arch[4]->clone.value + info.copper * coins_arch[5]->clone.value;
+        int64_t big_value;
+        if (!bank_info_value(&info, &big_value)) {
+            return BANK_WITHDRAW_HIGH;
+        }
 
         if (big_value > bank->value) {
             return BANK_WITHDRAW_MISSING;
@@ -531,27 +578,28 @@ int bank_withdraw(object *op, const char *text, int64_t *value) {
         HARD_ASSERT(shop_insert_coins_exact_tagged(op, *value, transaction));
     } else {
         if (info.amber != 0) {
-            bank_insert_coins(op, coins_arch[0], info.amber, transaction);
+            bank_insert_coins(op, coins_arch[0], (uint32_t)info.amber, transaction);
         }
         if (info.mithril != 0) {
-            bank_insert_coins(op, coins_arch[1], info.mithril, transaction);
+            bank_insert_coins(op, coins_arch[1], (uint32_t)info.mithril, transaction);
         }
         if (info.jade != 0) {
-            bank_insert_coins(op, coins_arch[2], info.jade, transaction);
+            bank_insert_coins(op, coins_arch[2], (uint32_t)info.jade, transaction);
         }
         if (info.gold != 0) {
-            bank_insert_coins(op, coins_arch[3], info.gold, transaction);
+            bank_insert_coins(op, coins_arch[3], (uint32_t)info.gold, transaction);
         }
         if (info.silver != 0) {
-            bank_insert_coins(op, coins_arch[4], info.silver, transaction);
+            bank_insert_coins(op, coins_arch[4], (uint32_t)info.silver, transaction);
         }
         if (info.copper != 0) {
-            bank_insert_coins(op, coins_arch[5], info.copper, transaction);
+            bank_insert_coins(op, coins_arch[5], (uint32_t)info.copper, transaction);
         }
     }
     if (!gameplay_journal_semantic_commit(transaction)) {
-        return BANK_JOURNAL_ERROR;
+        return BANK_JOURNAL_AMBIGUOUS;
     }
+    shop_currency_tag_retire(op, transaction);
 
     if (op->type == PLAYER && *value > 0) {
         metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_BANK_WITHDRAWALS, 1);

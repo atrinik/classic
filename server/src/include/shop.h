@@ -74,6 +74,7 @@ extern int bank_withdraw(object *op, const char *text, int64_t *value);
 extern void shop_insert_coins(object *op, int64_t value);
 extern bool shop_insert_coins_exact(object *op, int64_t value);
 extern bool shop_insert_coins_exact_tagged(object *op, int64_t value, const char *transaction_id);
+extern void shop_currency_tag_retire(object *op, const char *transaction_id);
 extern bool shop_coins_available(void);
 
 extern object_semantic_result_t

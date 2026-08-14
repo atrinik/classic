@@ -1466,6 +1466,7 @@ int cast_transform_wealth(object *op) {
         free(name);
         return 0;
     }
+    shop_currency_tag_retire(op, transaction);
     draw_info_format(COLOR_WHITE, op, "You transform %s into %s.", name, shop_get_cost_string(val));
     free(name);
     return 1;

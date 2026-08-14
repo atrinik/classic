@@ -88,10 +88,51 @@ START_TEST(test_bank_deposit_rejects_ineligible_or_malformed_money_without_loss)
     zero = object_insert_into(zero, pl, 0);
     zero->nrof = 0;
     tag_t zero_tag = zero->count;
-    ck_assert_int_eq(bank_deposit(pl, "all", &value), BANK_SUCCESS);
-    ck_assert_int_eq(value, 2);
+    ck_assert_int_eq(bank_deposit(pl, "all", &value), BANK_JOURNAL_ERROR);
+    ck_assert_int_eq(value, 0);
+    ck_assert(OBJECT_VALID(malformed, malformed_tag));
     ck_assert(OBJECT_VALID(zero, zero_tag));
     ck_assert_uint_eq(zero->nrof, 0);
+}
+END_TEST
+
+START_TEST(test_bank_deposit_parses_and_counts_above_uint32_without_wrap) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object *first = arch_get("coppercoin");
+    first->nrof = UINT32_MAX;
+    first->custody_lineage = add_string("currency:first");
+    object_insert_into(first, pl, 0);
+    object *second = arch_get("coppercoin");
+    second->custody_lineage = add_string("currency:second");
+    object_insert_into(second, pl, 0);
+
+    int64_t value;
+    ck_assert_int_eq(bank_deposit(pl, "4294967297 copper", &value), BANK_DEPOSIT_COPPER);
+    ck_assert_int_eq(value, 0);
+    ck_assert_int_eq(bank_deposit(pl, "4294967296 copper", &value), BANK_SUCCESS);
+    ck_assert_int_eq(value, (int64_t)UINT32_MAX + 1);
+    ck_assert_int_eq(bank_get_balance(pl), (int64_t)UINT32_MAX + 1);
+}
+END_TEST
+
+START_TEST(test_bank_rejects_negative_persisted_balance) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object *coin = object_insert_into(arch_get("coppercoin"), pl, 0);
+    int64_t value;
+    ck_assert_int_eq(bank_deposit(pl, "1 copper", &value), BANK_SUCCESS);
+    object *bank = bank_find_info(pl);
+    ck_assert_ptr_ne(bank, NULL);
+    bank->value = -1;
+    coin = object_insert_into(arch_get("coppercoin"), pl, 0);
+    tag_t coin_tag = coin->count;
+    ck_assert_int_eq(bank_deposit(pl, "1 copper", &value), BANK_JOURNAL_ERROR);
+    ck_assert(OBJECT_VALID(coin, coin_tag));
+    ck_assert_int_eq(bank_withdraw(pl, "all", &value), BANK_JOURNAL_ERROR);
+    ck_assert_int_eq(bank->value, -1);
 }
 END_TEST
 
@@ -274,6 +315,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_bank_find_info);
     tcase_add_test(tc_core, test_bank_deposit);
     tcase_add_test(tc_core, test_bank_deposit_rejects_ineligible_or_malformed_money_without_loss);
+    tcase_add_test(tc_core, test_bank_deposit_parses_and_counts_above_uint32_without_wrap);
+    tcase_add_test(tc_core, test_bank_rejects_negative_persisted_balance);
     tcase_add_test(tc_core, test_bank_withdraw);
 
     return s;

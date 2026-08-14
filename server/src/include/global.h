@@ -51,8 +51,10 @@
 #define BANK_SYNTAX_ERROR -1
 /** Successfully withdrawn/deposited money. */
 #define BANK_SUCCESS 0
-/** Durable audit failed before mutation, or its terminal state is ambiguous. */
+/** Durable audit failed before mutation; no semantic state changed. */
 #define BANK_JOURNAL_ERROR 5
+/** Semantic state changed, but the durable terminal write is ambiguous. */
+#define BANK_JOURNAL_AMBIGUOUS 6
 
 /** Withdraw value was too high. */
 #define BANK_WITHDRAW_HIGH 1

@@ -149,18 +149,38 @@ static void quest_check_item_drop(object *op, object *quest, object *quest_pl, o
     object_copy_full(clone, item);
     SET_FLAG(clone, FLAG_IDENTIFIED);
 
-    /* Insert the quest item inside the player. */
     object *inserted = NULL;
-    object_semantic_result_t result =
-        object_insert_into_reason(clone, op, "quest.item-grant", &inserted);
-    if (result != OBJECT_SEMANTIC_COMMITTED) {
-        if (result == OBJECT_SEMANTIC_FAILED) {
+    object_custody_transaction_t transaction = {0};
+    bool one_drop = QUERY_FLAG(item, FLAG_ONE_DROP);
+    if (one_drop) {
+        if (!object_custody_begin(clone,
+                                  op,
+                                  "quest.item-grant",
+                                  "service",
+                                  "player",
+                                  quest->name,
+                                  MAX(1, clone->nrof),
+                                  true,
+                                  false,
+                                  &transaction)) {
             object_destroy(clone);
+            return;
         }
-        return;
+        object_custody_apply(clone, &transaction);
+        inserted = object_insert_into(clone, op, 0);
+    } else {
+        object_semantic_result_t result =
+            object_insert_into_reason(clone, op, "quest.item-grant", &inserted);
+        if (result != OBJECT_SEMANTIC_COMMITTED) {
+            if (result == OBJECT_SEMANTIC_FAILED) {
+                object_destroy(clone);
+            }
+            return;
+        }
     }
+    clone = inserted;
 
-    if (QUERY_FLAG(item, FLAG_ONE_DROP)) {
+    if (one_drop) {
         /* Create a quest object in the player's container, so that the item
          * will never drop for them again. */
         quest_pl = arch_get(QUEST_CONTAINER_ARCHETYPE);
@@ -172,6 +192,10 @@ static void quest_check_item_drop(object *op, object *quest, object *quest_pl, o
         FREE_AND_COPY_HASH(quest_pl->race, QUEST_NAME(quest));
         /* Insert it inside player's quest container. */
         object_insert_into(quest_pl, CONTR(op)->quest_container, 0);
+
+        if (!object_custody_finish(&transaction)) {
+            return;
+        }
 
         metrics_character_quest_status(CONTR(op), quest->name, QUEST_STATUS_COMPLETED);
 

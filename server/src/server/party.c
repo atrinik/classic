@@ -338,6 +338,9 @@ static void party_loot_random(object *pl, object *corpse) {
                             result = gameplay_journal_semantic_commit(transaction)
                                          ? OBJECT_SEMANTIC_COMMITTED
                                          : OBJECT_SEMANTIC_AMBIGUOUS;
+                            if (result == OBJECT_SEMANTIC_COMMITTED) {
+                                shop_currency_tag_retire(ol->objlink.ob, transaction);
+                            }
                         } else {
                             result = object_insert_into_reason(tmp,
                                                                ol->objlink.ob,
@@ -518,6 +521,7 @@ static void party_loot_split(object *pl, object *corpse) {
         for (uint32_t i = 0; i < num; i++) {
             grants[i].active = false;
             if (gameplay_journal_semantic_commit(grants[i].transaction)) {
+                shop_currency_tag_retire(grants[i].recipient, grants[i].transaction);
                 draw_info_format(COLOR_BLUE,
                                  grants[i].recipient,
                                  "You receive %s.",
