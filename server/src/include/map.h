@@ -36,6 +36,41 @@
 /** Number of darkness level. Add +1 for "total dark" */
 #define MAX_DARKNESS 7
 
+/** Maximum authored celestial metadata rectangles retained by one map. */
+#define CELESTIAL_MAX_RECTANGLES 256
+
+/** Celestial-v1 sky anchor. */
+typedef enum celestial_sky_above {
+    CELESTIAL_SKY_UNSET = 0,
+    CELESTIAL_SKY_OPEN,
+    CELESTIAL_SKY_LINKED,
+    CELESTIAL_SKY_SEALED,
+} celestial_sky_above_t;
+
+/** Policy for one explicitly authored map link. */
+typedef enum celestial_boundary_policy {
+    CELESTIAL_BOUNDARY_UNSET = 0,
+    CELESTIAL_BOUNDARY_CONTINUOUS,
+    CELESTIAL_BOUNDARY_DISCONTINUOUS,
+} celestial_boundary_policy_t;
+
+/** Type of immutable rectangular map metadata. */
+typedef enum celestial_rectangle_type {
+    CELESTIAL_RECT_SKY_OPEN = 1,
+    CELESTIAL_RECT_SKY_COVERED,
+    CELESTIAL_RECT_AMBIENT,
+} celestial_rectangle_type_t;
+
+/** Canonical inclusive rectangle consumed from a system metadata object. */
+typedef struct celestial_rectangle {
+    uint8_t type;
+    uint8_t x;
+    uint8_t y;
+    uint8_t width;
+    uint8_t height;
+    uint16_t value;
+} celestial_rectangle_t;
+
 /** For exit objects: this is a player unique map */
 #define MAP_PLAYER_MAP 1
 
@@ -616,6 +651,37 @@ typedef struct mapdef {
 
     /** Path to adjoining maps (shared strings) */
     shstr *tile_path[TILED_NUM];
+
+    /** Celestial-v1 policy paired with each explicitly authored tile path. */
+    uint8_t celestial_boundary[TILED_NUM];
+
+    /** Whether each tile path suffix appeared explicitly in the header. */
+    bool celestial_tile_path_seen[TILED_NUM];
+
+    /** Whether an authored tile target is not a canonical logical map ID. */
+    bool celestial_tile_path_invalid;
+
+    /** Parsed celestial-v1 schema number (zero means legacy content). */
+    uint8_t celestial_schema;
+
+    /** Parsed celestial-v1 sky anchor. */
+    uint8_t celestial_sky_above;
+
+    /** Header parse-state used to reject duplicate/contradictory records. */
+    bool celestial_schema_seen;
+    bool celestial_sky_seen;
+    bool celestial_v1_header_seen;
+    bool celestial_header_invalid;
+    bool celestial_legacy_darkness_seen;
+    bool celestial_legacy_outdoor_seen;
+    bool celestial_light_seen;
+    bool celestial_width_seen;
+    bool celestial_height_seen;
+    bool celestial_region_seen;
+
+    /** Immutable, canonicalized system metadata consumed during map loading. */
+    celestial_rectangle_t *celestial_rectangles;
+    uint16_t celestial_rectangle_count;
 
     /** Array of spaces on this map */
     MapSpace *spaces;

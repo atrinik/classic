@@ -58,6 +58,7 @@
 #include <toolkit/path.h>
 #include <resources.h>
 #include <content_benchmark.h>
+#include <celestial_structure.h>
 #include <toolkit/signals.h>
 #include <toolkit/console.h>
 #include <gameplay_journal.h>
@@ -300,6 +301,10 @@ static bool clioptions_option_provision_password_file(const char *arg, char **er
 static const char *clioptions_option_content_benchmark_desc =
     "Runs the offline authored-content benchmark for comma-separated logical map IDs, then exits.";
 static bool clioptions_option_content_benchmark(const char *arg, char **errmsg) {
+    if (settings.celestial_inventory) {
+        string_fmt(*errmsg, "%s", "--content_benchmark and --celestial_inventory are exclusive");
+        return false;
+    }
     if (!content_benchmark_maps_valid(arg)) {
         string_fmt(*errmsg,
                    "%s",
@@ -322,6 +327,36 @@ static bool clioptions_option_content_benchmark_iterations(const char *arg, char
     }
 
     settings.content_benchmark_iterations = (uint16_t)value;
+    return true;
+}
+
+static const char *clioptions_option_celestial_inventory_desc =
+    "Prints a bounded read-only celestial-v1 inventory for comma-separated logical map IDs.";
+static bool clioptions_option_celestial_inventory(const char *arg, char **errmsg) {
+    if (settings.content_benchmark) {
+        string_fmt(*errmsg, "%s", "--celestial_inventory and --content_benchmark are exclusive");
+        return false;
+    }
+    if (!celestial_structure_inventory_maps_valid(arg)) {
+        string_fmt(*errmsg,
+                   "%s",
+                   "Expected 1-16 unique canonical logical map IDs separated by commas");
+        return false;
+    }
+    settings.celestial_inventory = true;
+    snprintf(VS(settings.celestial_inventory_maps), "%s", arg);
+    return true;
+}
+
+static const char *clioptions_option_celestial_inventory_limit_desc =
+    "Maximum records per map for --celestial_inventory (1-65535).";
+static bool clioptions_option_celestial_inventory_limit(const char *arg, char **errmsg) {
+    uint64_t value;
+    if (!string_parse_uint64(arg, 10, 1, UINT16_MAX, &value)) {
+        string_fmt(*errmsg, "%s is an invalid celestial inventory limit, must be 1-65535", arg);
+        return false;
+    }
+    settings.celestial_inventory_limit = (uint16_t)value;
     return true;
 }
 
@@ -1039,6 +1074,10 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli,
                                content_benchmark_iterations,
                                "Authored-content benchmark samples");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, celestial_inventory, "Celestial-v1 map inventory");
+    CLIOPTIONS_CREATE_ARGUMENT(cli,
+                               celestial_inventory_limit,
+                               "Celestial-v1 inventory record limit");
 
     /* Changeable options */
     CLIOPTIONS_CREATE_ARGUMENT(cli, magic_devices_level, "Magic devices level");
@@ -1069,6 +1108,7 @@ static void init_library(int argc, char *argv[]) {
 
     memset(&settings, 0, sizeof(settings));
     settings.content_benchmark_iterations = 9;
+    settings.celestial_inventory_limit = 8192;
 
     clioptions_load("server.cfg", NULL);
     clioptions_load("server-custom.cfg", NULL);
@@ -1122,7 +1162,13 @@ static void init_library(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    if ((statbuf.st_mode & 0777) != SAVE_MODE_DIR) {
+    if ((statbuf.st_mode & 0777) != SAVE_MODE_DIR && settings.celestial_inventory) {
+        LOG(INFO,
+            "Read-only celestial inventory is leaving data directory %s permissions unchanged "
+            "at %o.",
+            settings.datapath,
+            statbuf.st_mode & 0777);
+    } else if ((statbuf.st_mode & 0777) != SAVE_MODE_DIR) {
         LOG(INFO,
             "Data directory %s has insecure permissions (%o), setting to %o...",
             settings.datapath,
@@ -1148,11 +1194,14 @@ static void init_library(int argc, char *argv[]) {
     /* Import game APIs that need settings. The world maker and test modes do
      * not serve clients; starting listeners for them adds an unnecessary
      * network dependency and can collide with a running server. */
-    toolkit_import(ban);
-    toolkit_import(faction);
+    if (!settings.celestial_inventory) {
+        toolkit_import(ban);
+        toolkit_import(faction);
+    }
 
     if (!settings.world_maker && !settings.unit_tests && !settings.plugin_unit_tests &&
-        !settings.provision_scenario && !settings.content_benchmark) {
+        !settings.provision_scenario && !settings.content_benchmark &&
+        !settings.celestial_inventory) {
         toolkit_import(socket_server);
     }
 
@@ -1172,7 +1221,9 @@ static void init_library(int argc, char *argv[]) {
     arch_init();
     content_benchmark_arch_end();
     init_dynamic();
-    init_clocks();
+    if (!settings.celestial_inventory) {
+        init_clocks();
+    }
     account_init();
     resources_init();
 }
@@ -1373,6 +1424,12 @@ void init(int argc, char **argv) {
     init_library(argc, argv);
     init_world_darkness();
 
+    if (settings.celestial_inventory) {
+        regions_init();
+        init_beforeplay();
+        return;
+    }
+
     /* Load up the old temp map files */
     read_map_log();
     regions_init();
@@ -1386,14 +1443,17 @@ void init(int argc, char **argv) {
      * over QUIC. Cache the complete immutable asset snapshot only after those
      * generated files exist. */
     if (!settings.world_maker && !settings.unit_tests && !settings.plugin_unit_tests &&
-        !settings.provision_scenario && !settings.content_benchmark) {
+        !settings.provision_scenario && !settings.content_benchmark &&
+        !settings.celestial_inventory) {
         socket_assets_init();
     }
-    if (!settings.provision_scenario && !settings.content_benchmark) {
+    if (!settings.provision_scenario && !settings.content_benchmark &&
+        !settings.celestial_inventory) {
         metaserver_init();
     }
     reset_sleep();
-    if (!settings.unit_tests && !settings.provision_scenario && !settings.content_benchmark) {
+    if (!settings.unit_tests && !settings.provision_scenario && !settings.content_benchmark &&
+        !settings.celestial_inventory) {
         init_plugins();
     }
 }

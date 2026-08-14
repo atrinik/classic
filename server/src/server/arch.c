@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -31,6 +31,7 @@
 #include <server_main.h>
 #include <initialization.h>
 #include <arch.h>
+#include <celestial_structure.h>
 #include <artifact.h>
 #include <loader.h>
 #include <toolkit/string.h>
@@ -98,6 +99,12 @@ void arch_init(void) {
             LOG(ERROR, "Could not find required archetype %s.", arch_names[i]);
             exit(1);
         }
+    }
+
+    char celestial_error[HUGE_BUF];
+    if (!celestial_structure_validate_archetypes(VS(celestial_error))) {
+        LOG(ERROR, "Invalid celestial archetype schema: %s", celestial_error);
+        exit(1);
     }
 }
 
@@ -172,7 +179,7 @@ static void arch_pass_first(FILE *fp) {
     archetype_t *prev = NULL, *last_more = NULL;
 
     for (int rc = load_object_fp(fp, &at->clone, MAP_STYLE); rc != LL_EOF;
-         rc = load_object_buffer(buffer, &at->clone, MAP_STYLE)) {
+         rc = load_object_buffer(buffer, &at->clone, MAP_STYLE, true)) {
         switch (rc) {
             /* A new archetype, add it to the arch table. */
             case LL_NORMAL:
