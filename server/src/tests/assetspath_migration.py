@@ -168,12 +168,6 @@ def main() -> int:
             )
             descriptor_path = Path(f"/proc/self/fd/{descriptor}")
             try:
-                require_descriptor_rejection(
-                    executable,
-                    Path(f"/proc/self/fd/0{descriptor}"),
-                    (descriptor,),
-                    "noncanonical",
-                )
                 result = run_server(executable, descriptor_path, (descriptor,))
                 if result.returncode != 0:
                     raise RuntimeError(
@@ -184,6 +178,12 @@ def main() -> int:
                     raise RuntimeError(
                         "inherited directory descriptor lacks generated core data"
                     )
+                require_descriptor_rejection(
+                    executable,
+                    Path(f"/proc/self/fd/0{descriptor}"),
+                    (descriptor,),
+                    "noncanonical",
+                )
             finally:
                 os.close(descriptor)
 
