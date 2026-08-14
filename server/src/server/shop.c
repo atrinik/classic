@@ -1186,7 +1186,8 @@ object_semantic_result_t shop_insert_coin_object_reason(object *coin,
     object *root = object_get_env(where);
     int64_t value;
     int64_t before;
-    if (!QUERY_FLAG(coin, FLAG_REMOVED) || coin->map != NULL || root->type != PLAYER ||
+    if (!QUERY_FLAG(coin, FLAG_REMOVED) || coin->map != NULL || coin->carrying != 0 ||
+        coin->inv != NULL || root->type != PLAYER ||
         !shop_currency_destination_counted(root, where) ||
         !object_weight_can_add(where, (uint64_t)coin->weight * MAX(1, coin->nrof)) ||
         coin->nrof == 0 || coin->nrof > INT32_MAX || !shop_money_object_value(coin, &value) ||

@@ -966,8 +966,18 @@ class JournalTests(unittest.TestCase):
             ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_SetPosition"): (
                 set(), {"python_object_reject_currency_move", "transfer_ob"},
             ),
+            ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_Move"): (
+                set(), {"python_object_reject_currency_move", "move_ob"},
+            ),
+            ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_CreateTreasure"): (
+                set(), {"treasure_generate"},
+            ),
             ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_CreateObject"): (
                 {"script.currency-grant"}, {"object_insert_into_reason"},
+            ),
+            ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_Load"): (
+                set(), {"python_object_is_persistent", "python_load_contains_field",
+                        "set_variable"},
             ),
             ("src/plugins/plugin_python/atrinik_object.c", "Object_SetAttribute"): (
                 {"script.item-adjust", "script.item-value-adjust",
@@ -992,6 +1002,10 @@ class JournalTests(unittest.TestCase):
                     self.assertIn(f'"{reason}"', body)
                 for call in calls:
                     self.assertIn(f"{call}(", structural_body)
+                if function == "Atrinik_Object_CreateTreasure":
+                    self.assertIn("flags & GT_ENVIRONMENT", structural_body)
+                if function == "Object_SetAttribute":
+                    self.assertIn("requested == MONEY", structural_body)
 
 
 if __name__ == "__main__":

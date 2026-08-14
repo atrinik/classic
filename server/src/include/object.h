@@ -945,13 +945,16 @@ object *object_decrease(object *op, uint32_t i);
 /**
  * Reason-aware stack decrease. On COMMITTED or AMBIGUOUS, survivor is the
  * remaining live stack or NULL when the requested quantity destroyed op. On
- * FAILED, no mutation occurred and survivor is NULL.
+ * FAILED, no mutation occurred and survivor is NULL. Persistent MONEY is
+ * supported only in player custody and uses currency semantics; other
+ * persistent MONEY and protected hidden-bank state fail closed.
  */
 object_semantic_result_t
 object_decrease_reason(object *op, uint32_t nrof, const char *reason, object **survivor);
 /**
  * Reason-aware stack assignment. On COMMITTED or AMBIGUOUS, survivor is the
  * mutated live stack. On FAILED, no mutation occurred and survivor is NULL.
+ * Persistent MONEY is supported only in player custody.
  */
 object_semantic_result_t
 object_set_nrof_reason(object *op, uint32_t nrof, const char *reason, object **survivor);
@@ -960,11 +963,16 @@ object *object_insert_into(object *op, object *where, int flag);
 /**
  * Reason-aware insertion. On COMMITTED or AMBIGUOUS, inserted is the live
  * survivor and op may already have been destroyed by merging. On FAILED, no
- * semantic mutation occurred and inserted is NULL.
+ * semantic mutation occurred and inserted is NULL. MONEY may be generated
+ * into player custody or used wholly within detached non-persistent state;
+ * persistent item-style MONEY moves and hidden-bank ancestors fail closed.
  */
 object_semantic_result_t
 object_insert_into_reason(object *op, object *where, const char *reason, object **inserted);
-/** On AMBIGUOUS, removal/destruction already occurred. */
+/**
+ * On AMBIGUOUS, removal/destruction already occurred. Persistent MONEY and
+ * hidden-bank destruction are accepted only for canonical direct player state.
+ */
 object_semantic_result_t object_remove_reason(object *op, const char *reason, bool destroy);
 object *object_find_arch(object *op, archetype_t *at);
 object *object_find_type(object *op, uint8_t type);

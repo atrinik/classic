@@ -815,6 +815,26 @@ static bool python_object_reject_currency_move(object *op) {
     return false;
 }
 
+static bool python_load_contains_field(const char *lines, const char *field) {
+    size_t field_length = strlen(field);
+    const char *line = lines;
+    while (*line != '\0') {
+        while (*line == ' ' || *line == '\t') {
+            line++;
+        }
+        if (strncmp(line, field, field_length) == 0 &&
+            (line[field_length] == ' ' || line[field_length] == '\t')) {
+            return true;
+        }
+        const char *next = strchr(line, '\n');
+        if (next == NULL) {
+            break;
+        }
+        line = next + 1;
+    }
+    return false;
+}
+
 /**
  * Implements Atrinik.Object.Object.TeleportTo() Python method.
  * @copydoc PyMethod_VARARGS_KEYWORDS
@@ -2523,7 +2543,8 @@ static const char doc_Atrinik_Object_CreateTreasure[] =
     ":param a_chance: Chance for the treasure to become artifact, if possible. A "
     "value of 0 will disable any chance for artifacts.\n"
     ":type a_chance: int\n"
-    ":raises ValueError: If treasure is not valid.";
+    ":raises ValueError: If treasure is not valid.\n"
+    ":raises RuntimeError: If GT_ENVIRONMENT requests persistent map generation.";
 
 /**
  * Implements Atrinik.Object.Object.CreateTreasure() Python method.
@@ -2548,6 +2569,13 @@ Atrinik_Object_CreateTreasure(Atrinik_Object *self, PyObject *args, PyObject *ke
     }
 
     OBJEXISTCHECK(self);
+
+    if ((flags & GT_ENVIRONMENT) != 0) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "CreateTreasure cannot generate persistent map state; use explicit "
+                        "reason-aware item or currency APIs.");
+        return NULL;
+    }
 
     /* Figure out the treasure list. */
     if (treasure_name != NULL) {
@@ -2600,7 +2628,8 @@ static const char doc_Atrinik_Object_Move[] =
     "object was not able to move there yet but some sort of action was performed "
     "that might allow us to move there (door opening for example), direction "
     "number that the object ended up moving in otherwise.\n"
-    ":rtype: int";
+    ":rtype: int\n"
+    ":raises RuntimeError: If persistent currency is targeted.";
 
 /**
  * Implements Atrinik.Object.Object.Move() Python method.
@@ -2614,6 +2643,10 @@ static PyObject *Atrinik_Object_Move(Atrinik_Object *self, PyObject *args) {
     }
 
     OBJEXISTCHECK(self);
+
+    if (python_object_reject_currency_move(self->obj)) {
+        return NULL;
+    }
 
     if (self->obj->map == NULL) {
         PyErr_SetString(AtrinikError, "Object not on map.");
@@ -2717,7 +2750,8 @@ static const char doc_Atrinik_Object_Load[] =
     ":param lines: Lines to load into the object.\n"
     ":type lines: str\n"
     ":raises Atrinik.AtrinikError: If the object attributes are invalid.\n"
-    ":raises RuntimeError: If the object is persistent player or bank state.";
+    ":raises RuntimeError: If the object is persistent player/bank/currency state or attempts "
+    "to change persistent object type.";
 
 /**
  * Implements Atrinik.Object.Object.Load() Python method.
@@ -2741,7 +2775,8 @@ static PyObject *Atrinik_Object_Load(Atrinik_Object *self, PyObject *args) {
                            self->obj->type != QUEST_CONTAINER;
     bool persistent_money = self->obj->type == MONEY && python_object_is_persistent(self->obj);
     if ((root != self->obj && root->type == PLAYER && (bank || player_info || persistent_item)) ||
-        persistent_money) {
+        persistent_money ||
+        (python_object_is_persistent(self->obj) && python_load_contains_field(lines, "type"))) {
         PyErr_SetString(PyExc_RuntimeError,
                         "Load cannot mutate persistent item or currency state; use a "
                         "reason-aware API.");
@@ -3030,6 +3065,19 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
         PyErr_SetString(PyExc_RuntimeError,
                         "Hidden bank state can only be changed through its balance API.");
         return -1;
+    }
+    if (field->offset == offsetof(object, type) && python_object_is_persistent(obj->obj) &&
+        PyInt_Check(value)) {
+        long requested = PyLong_AsLong(value);
+        if (PyErr_Occurred()) {
+            return -1;
+        }
+        if (requested == MONEY && obj->obj->type != MONEY) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            "Persistent objects cannot be converted into currency; use a "
+                            "currency API.");
+            return -1;
+        }
     }
     if (field->offset == offsetof(object, name) && obj->obj->arch != NULL &&
         strcmp(obj->obj->arch->name, "player_info") == 0 && PyUnicode_Check(value)) {

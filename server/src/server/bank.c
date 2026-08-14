@@ -310,7 +310,8 @@ bank_insert_coins(object *op, archetype_t *at, uint32_t nrof, const char *transa
  */
 object *bank_find_info(object *op) {
     FOR_INV_PREPARE(op, tmp) {
-        if (tmp->arch->name == shstr_cons.player_info && tmp->name == shstr_cons.BANK_GENERAL) {
+        if (tmp->type == MISC_OBJECT && QUERY_FLAG(tmp, FLAG_SYS_OBJECT) && tmp->arch != NULL &&
+            tmp->arch->name == shstr_cons.player_info && tmp->name == shstr_cons.BANK_GENERAL) {
             return tmp;
         }
     }
@@ -373,7 +374,8 @@ bank_set_balance_reason(object *bank, int64_t value, const char *reason) {
     HARD_ASSERT(reason != NULL);
 
     object *root = object_get_env(bank);
-    if (root->type != PLAYER || bank->env != root || bank->arch == NULL ||
+    if (root->type != PLAYER || bank->env != root || bank->type != MISC_OBJECT ||
+        !QUERY_FLAG(bank, FLAG_SYS_OBJECT) || bank->arch == NULL ||
         bank->arch->name != shstr_cons.player_info ||
         bank->name != shstr_cons.BANK_GENERAL || bank->value < 0 || value < 0) {
         return OBJECT_SEMANTIC_FAILED;
@@ -406,7 +408,8 @@ object_semantic_result_t bank_destroy_balance_reason(object *bank, const char *r
     HARD_ASSERT(reason != NULL);
 
     object *root = object_get_env(bank);
-    if (root->type != PLAYER || bank->env != root || bank->arch == NULL ||
+    if (root->type != PLAYER || bank->env != root || bank->type != MISC_OBJECT ||
+        !QUERY_FLAG(bank, FLAG_SYS_OBJECT) || bank->arch == NULL ||
         bank->arch->name != shstr_cons.player_info ||
         bank->name != shstr_cons.BANK_GENERAL || bank->value < 0) {
         return OBJECT_SEMANTIC_FAILED;
@@ -436,7 +439,8 @@ object_semantic_result_t bank_name_info_reason(object *bank, const char *reason)
     HARD_ASSERT(reason != NULL);
 
     object *root = object_get_env(bank);
-    if (root->type != PLAYER || bank->env != root || bank->arch == NULL ||
+    if (root->type != PLAYER || bank->env != root || bank->type != MISC_OBJECT ||
+        !QUERY_FLAG(bank, FLAG_SYS_OBJECT) || bank->arch == NULL ||
         bank->arch->name != shstr_cons.player_info ||
         bank->name == shstr_cons.BANK_GENERAL || bank->value != 0 || bank_find_info(root) != NULL) {
         return OBJECT_SEMANTIC_FAILED;

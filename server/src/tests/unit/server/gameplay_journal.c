@@ -1340,6 +1340,17 @@ START_TEST(test_semantic_item_shop_and_bank_producers) {
                      OBJECT_SEMANTIC_COMMITTED);
     ck_assert_ptr_eq(inserted, loaded);
 
+    object *source_sack = object_insert_into(arch_get("sack"), pl, INS_NO_MERGE);
+    object *full_sack = object_insert_into(arch_get("sack"), pl, INS_NO_MERGE);
+    object *same_root_item = object_insert_into(arch_get("sword"), source_sack, INS_NO_MERGE);
+    full_sack->carrying = UINT32_MAX;
+    ck_assert_int_eq(
+        object_insert_into_reason(same_root_item, full_sack, "test.same-root-overflow", &inserted),
+        OBJECT_SEMANTIC_FAILED);
+    ck_assert_ptr_eq(inserted, NULL);
+    ck_assert_ptr_eq(same_root_item->env, source_sack);
+    full_sack->carrying = 0;
+
     object *detached_sack = arch_get("sack");
     object *map_coin = arch_get("coppercoin");
     map_coin->x = pl->x;
@@ -1353,6 +1364,14 @@ START_TEST(test_semantic_item_shop_and_bank_producers) {
     object_remove(map_coin, 0);
     object_destroy(map_coin);
     object_destroy(detached_sack);
+
+    object *loaded_coin = arch_get("coppercoin");
+    loaded_coin->carrying = 1;
+    ck_assert_int_eq(
+        object_insert_into_reason(loaded_coin, pl, "test.loaded-currency", &inserted),
+        OBJECT_SEMANTIC_FAILED);
+    ck_assert_ptr_eq(inserted, NULL);
+    object_destroy(loaded_coin);
 
     object *ground_chest = arch_get("sack");
     ground_chest->x = pl->x;
