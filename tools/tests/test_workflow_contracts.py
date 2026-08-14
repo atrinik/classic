@@ -514,6 +514,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("cmake --build --preset linux-release --parallel", server)
         for preset in ("linux-coverage", "linux-release", "linux-sanitizers"):
             self.assertIn(f"ctest --preset {preset} --parallel 4", server)
+            self.assertIn(f"ctest --preset {preset} --parallel 4 -LE performance", server)
 
         presets = json.loads((ROOT / "server/CMakePresets.json").read_text())
         self.assertEqual(
@@ -566,7 +567,7 @@ class WorkflowContractTests(unittest.TestCase):
         )
         server = runner[runner.index("  server)") : runner.index("  client)")]
         client_start = runner.index("  client)")
-        client = runner[client_start : runner.index("esac", client_start)]
+        client = runner[client_start : runner.index("  client-benchmark)", client_start)]
         for name, component in (("server", server), ("client", client)):
             with self.subTest(component=name):
                 coverage = component.index("cmake --preset linux-coverage")
@@ -586,7 +587,7 @@ class WorkflowContractTests(unittest.TestCase):
         runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
             encoding="utf-8"
         )
-        client_start = runner.index("  client)")
+        client_start = runner.index("  client-benchmark)")
         client = runner[client_start : runner.index("esac", client_start)]
 
         self.assertIn("movement_contract_paths=(", client)
@@ -633,7 +634,6 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("the full movement matrix is candidate-only", client)
         self.assertEqual(client.count("--discrete-manifest"), 2)
         self.assertIn("movement_matrix_arguments+=(--full-matrix)", client)
-        self.assertIn("client-validation-ended-before-movement-evidence", client)
         self.assertIn("lighting-regression-generation-failed", client)
         self.assertIn(
             "lighting-base-missing-benchmark-instrumentation",
@@ -647,56 +647,49 @@ class WorkflowContractTests(unittest.TestCase):
             client,
         )
 
-    def test_client_regression_evidence_is_initialized_and_always_uploaded(self) -> None:
-        workflow = self.text("check.yml")
-        client = workflow[
-            workflow.index("  client:\n    name: Client validation") : workflow.index(
-                "  movement-regression-comment:"
-            )
-        ]
-        initialization = client.index("Initialize client benchmark evidence")
-        validation = client.index("Validate, build, and test")
-        coverage = client.index("Upload coverage")
-        rendering = client.index("Render movement regression comment")
-        upload = client.index("linux-client-evidence-${{ github.run_attempt }}")
-        upload_action = client.rindex("uses: actions/upload-artifact", 0, upload)
-        self.assertLess(initialization, validation)
-        self.assertLess(validation, coverage)
-        self.assertLess(coverage, rendering)
-        self.assertLess(rendering, upload)
-        self.assertIn("client-validation-ended-before-movement-evidence", client)
-        self.assertIn("if: always()", client[rendering:upload_action])
-        self.assertIn("if: always()", client[upload_action:upload])
-        self.assertIn("path: build/ci-evidence", client[upload:])
-        self.assertIn("if-no-files-found: error", client[upload:])
-        self.assertIn(
-            "github.event_name == 'workflow_dispatch' && 'full' || 'fast'",
-            client,
-        )
-        self.assertIn(
-            "timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 120 || 30 }}",
-            client,
-        )
-        self.assertIn(
-            "github.event.pull_request.base.sha || github.event.merge_group.base_sha",
-            client,
-        )
-        for runner_identity in ("CI", "ImageOS", "ImageVersion", "RUNNER_ARCH", "RUNNER_OS"):
-            self.assertIn(f"--env {runner_identity} \\", client)
-        self.assertNotIn("schedule", workflow[: workflow.index("jobs:")])
-        self.assertIn("  workflow_dispatch:\n", workflow[: workflow.index("jobs:")])
-        self.assertIn(
-            "github.event_name == 'workflow_dispatch' && github.run_id || github.ref",
-            workflow[: workflow.index("jobs:")],
-        )
-
-        comment = workflow[
-            workflow.index("  movement-regression-comment:") : workflow.index(
+    def test_timed_pr_benchmarks_are_explicit_isolated_and_fork_safe(self) -> None:
+        check = self.text("check.yml")
+        client = check[
+            check.index("  client:\n    name: Client validation") : check.index(
                 "  integrated:"
             )
         ]
-        self.assertNotIn("actions/checkout", comment)
-        self.assertNotIn("python3 ", comment)
+        self.assertNotIn("ATRINIK_BENCHMARK", client)
+        self.assertNotIn("movement-comment.md", check)
+        self.assertNotIn("movement-regression-comment", check)
+        self.assertIn("linux-client-ccache-${{ github.run_attempt }}", client)
+        self.assertIn("path: build/ci-evidence/ccache-client.tsv", client)
+        for runner_identity in ("CI", "ImageOS", "ImageVersion", "RUNNER_ARCH", "RUNNER_OS"):
+            self.assertIn(f"--env {runner_identity} \\", client)
+        self.assertNotIn("schedule", check[: check.index("jobs:")])
+        self.assertIn("  workflow_dispatch:\n", check[: check.index("jobs:")])
+        self.assertIn(
+            "github.event_name == 'workflow_dispatch' && github.run_id || github.ref",
+            check[: check.index("jobs:")],
+        )
+
+        workflow = self.text("pr-benchmarks.yml")
+        triggers = workflow[: workflow.index("jobs:")]
+        for action in ("opened", "reopened", "synchronize", "labeled", "unlabeled"):
+            self.assertIn(action, triggers)
+        self.assertNotIn("pull_request_target", workflow)
+        self.assertIn("contains(github.event.pull_request.labels.*.name, 'ci: benchmark')", workflow)
+        self.assertIn("benchmark_client=false", workflow)
+        self.assertIn("benchmark_server=false", workflow)
+        self.assertIn("no benchmark-sensitive path changed", workflow)
+        self.assertIn("tools/ci/run_linux_check.sh client-benchmark", workflow)
+        self.assertIn("tools/ci/run_linux_check.sh server-benchmark", workflow)
+        self.assertIn("github.event.pull_request.base.sha", workflow)
+        self.assertIn("github.event.pull_request.head.sha", workflow)
+        self.assertIn("--network none", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("if: always()", workflow)
+        aggregate = check[check.index("  classic-validation:") :]
+        self.assertNotIn("benchmark", aggregate.lower())
+        self.assertIn("name: Classic validation", aggregate)
+        self.assertIn("CHANGES_RESULT: ${{ needs.changes.result }}", workflow)
+        self.assertIn("classification finished with", workflow)
+        comment = workflow[workflow.index("  movement-comment:") :]
         self.assertIn(
             "github.event.pull_request.head.repo.full_name == github.repository",
             comment,
@@ -705,7 +698,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("contents: write", comment)
         self.assertNotIn("id-token: write", comment)
         self.assertIn("continue-on-error: true", comment)
-        self.assertIn("Publish one pre-rendered summary comment", comment)
+        self.assertIn("Publish one bounded pre-rendered summary comment", comment)
         self.assertIn("evidence/movement-comment.md", comment)
         self.assertIn("test \"$(wc -c <evidence/movement-comment.md)\" -le 65536", comment)
         self.assertIn("--paginate", comment)
@@ -1065,7 +1058,7 @@ class WorkflowContractTests(unittest.TestCase):
             ],
             "client": workflow[
                 workflow.index("  client:\n    name: Client validation") : workflow.index(
-                    "  movement-regression-comment:"
+                    "  integrated:\n    name: Integrated client/server graph"
                 )
             ],
             "integrated": workflow[
@@ -1086,7 +1079,7 @@ class WorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("bundle-verify", runner)
-        self.assertEqual(runner.count("--offline"), 4)
+        self.assertEqual(runner.count("--offline"), 8)
         self.assertIn('build/dependency-source-cache', runner)
         self.assertIn('--downloads "${dependency_downloads}"', runner)
         self.assertIn('"${baseline_root}/client/dependencies.lock.json"', runner)
