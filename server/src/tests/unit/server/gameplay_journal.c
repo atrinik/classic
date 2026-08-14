@@ -413,8 +413,7 @@ START_TEST(test_party_random_currency_retirement_preserves_message_lifetime) {
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("party.currency-split"), 2);
     gameplay_journal_deinit();
     char *split_contents = read_fixture(split_directory);
-    ck_assert_ptr_ne(strstr(split_contents, "\"before\":22,\"delta\":5,\"after\":27"), NULL);
-    ck_assert_ptr_ne(strstr(split_contents, "\"before\":27,\"delta\":5,\"after\":32"), NULL);
+    ck_assert_ptr_ne(strstr(split_contents, "\"before\":0,\"delta\":5,\"after\":5"), NULL);
     free(split_contents);
     remove_fixture(split_directory);
 
@@ -569,7 +568,36 @@ START_TEST(test_checkpoint_watermark_resolves_inverse_currency_aba) {
     ck_assert_int_eq(shop_pay_reason(pl, 3, "test.aba-payment"), OBJECT_SEMANTIC_COMMITTED);
     ck_assert_int_eq(shop_get_money(pl), 100);
     ck_assert_uint_gt(CONTR(pl)->journal_sequence, grant_sequence);
-    ck_assert_uint_eq(map->journal_sequence, CONTR(pl)->journal_sequence);
+    ck_assert_uint_eq(map->journal_sequence, 0);
+    gameplay_journal_deinit();
+    remove_fixture(directory);
+    object_destroy(pl);
+}
+END_TEST
+
+START_TEST(test_checkpoint_sequence_remains_ordered_across_runs) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    char directory[] = "/tmp/atrinik-journal-watermark-runs-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    ck_assert_int_eq(shop_insert_coins_reason(pl, 3, "test.run-a"), OBJECT_SEMANTIC_COMMITTED);
+    uint64_t first = CONTR(pl)->journal_sequence;
+    char first_run[33];
+    snprintf(VS(first_run), "%s", CONTR(pl)->journal_run_id);
+    gameplay_journal_deinit();
+
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    ck_assert_int_eq(shop_pay_reason(pl, 3, "test.run-b"), OBJECT_SEMANTIC_COMMITTED);
+    ck_assert_uint_gt(CONTR(pl)->journal_sequence, first);
+    ck_assert_str_ne(CONTR(pl)->journal_run_id, first_run);
     gameplay_journal_deinit();
     remove_fixture(directory);
     object_destroy(pl);
@@ -600,9 +628,13 @@ START_TEST(test_floor_withdrawal_watermarks_player_and_map_domains) {
     ck_assert_ptr_eq(object_find_type(pl, MONEY), NULL);
     ck_assert_ptr_ne(map_find_type(map, pl->x, pl->y, MONEY), NULL);
     ck_assert_uint_gt(CONTR(pl)->journal_sequence, before_sequence);
-    ck_assert_uint_eq(map->journal_sequence, CONTR(pl)->journal_sequence);
-    ck_assert_str_eq(map->journal_run_id, CONTR(pl)->journal_run_id);
+    ck_assert_uint_eq(map->journal_unique_sequence, CONTR(pl)->journal_sequence);
+    ck_assert_str_eq(map->journal_unique_run_id, CONTR(pl)->journal_run_id);
     gameplay_journal_deinit();
+    char *contents = read_fixture(directory);
+    ck_assert_ptr_ne(strstr(contents, "\"kind\":\"player\""), NULL);
+    ck_assert_ptr_ne(strstr(contents, "\"kind\":\"map-unique\""), NULL);
+    free(contents);
     remove_fixture(directory);
     object_destroy(pl);
 }
@@ -827,6 +859,8 @@ START_TEST(test_semantic_item_shop_and_bank_producers) {
         object_insert_into_reason(transferred, other_player, "item.player-transfer", &transferred),
         OBJECT_SEMANTIC_COMMITTED);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("item.player-transfer"), 1);
+    ck_assert_uint_eq(CONTR(other_player)->journal_sequence, CONTR(pl)->journal_sequence);
+    ck_assert_str_eq(CONTR(other_player)->journal_run_id, CONTR(pl)->journal_run_id);
     object_destroy(other_player);
 
     object *temporary = arch_get("force");
@@ -1735,6 +1769,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_one_drop_quest_grant_commits_item_and_marker_together);
     tcase_add_test(tc_core, test_checkpoint_watermarks_persist_player_and_map);
     tcase_add_test(tc_core, test_checkpoint_watermark_resolves_inverse_currency_aba);
+    tcase_add_test(tc_core, test_checkpoint_sequence_remains_ordered_across_runs);
     tcase_add_test(tc_core, test_floor_withdrawal_watermarks_player_and_map_domains);
 #ifndef WIN32
     tcase_add_test(tc_core, test_abrupt_process_crash_preserves_synced_phases);

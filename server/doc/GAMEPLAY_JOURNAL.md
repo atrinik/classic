@@ -11,7 +11,8 @@ Every line is one UTF-8 JSON object. New records use schema version 2; the
 offline tool continues to validate retained version-1 files. Records contain:
 
 - a globally unambiguous `event_id` composed from the stable server identity,
-  random 128-bit run ID, and monotonic per-run sequence;
+  random 128-bit run ID, and a sequence reserved durably from the journal
+  directory's monotonic counter across restarts;
 - a random 128-bit `transaction_id` shared by one intent and its terminal
   commit or abort, plus UTC time, server/run identity, phase, kind, and semantic
   reason code;
@@ -22,6 +23,8 @@ offline tool continues to validate retained version-1 files. Records contain:
 - for version-2 intents, bounded semantic `details`: item archetype/type and an
   immutable snapshot, quantity, source/destination, actor/counterparty,
   provenance before/after, total price, currency, and funding source;
+- for version-2 terminal records, the complete set of affected player,
+  runtime-map, and independently saved unique-map-component identities;
 - immutable world-profile ID, schema, digest, and effective-axis identity; and
 - `prev_hash` and `record_hash`, where `record_hash` is SHA-256 over the exact
   bytes preceding the final `,"record_hash":"..."}` field.
@@ -101,7 +104,10 @@ Classic checkout:
 python3 server/tools/gameplay_journal.py \
   DATAPATH/gameplay-journal validate
 python3 server/tools/gameplay_journal.py \
-  DATAPATH/gameplay-journal reconcile
+  DATAPATH/gameplay-journal reconcile \
+  --player-save DATAPATH/players/PLAYER/PLAYER.pl \
+  --map-save /world/map=MAP_CHECKPOINT \
+  --map-save /world/map=DATAPATH/unique-items/world/map.v00
 python3 server/tools/gameplay_journal.py \
   DATAPATH/gameplay-journal query --transaction TRANSACTION_ID
 python3 server/tools/gameplay_journal.py \
@@ -114,9 +120,17 @@ python3 server/tools/gameplay_journal.py \
   DATAPATH/gameplay-journal query --lineage LINEAGE_ID
 ```
 
+Repeat `--player-save` and `--map-save MAP_ID=PATH` for every affected
+component. The tool recognizes main map headers as `map-runtime` and
+unique-object marker headers as `map-unique`, matching terminal domain kinds
+without conflating independently durable files. `--domain
+KIND:ID=SEQUENCE` is available for operator-managed save domains that are not
+ordinary Classic files.
+
 Validation checks schema, filenames, duplicate JSON fields, permissions,
-redaction, size bounds, event-ID uniqueness, per-run sequence, and every hash
-chain across rotated files. Only an unterminated record in the highest retained
+redaction, size bounds, event-ID uniqueness, globally ordered sequence, and
+every per-run hash chain across rotated files. Only an unterminated record in
+the highest retained
 file for its run is classified as a torn tail and ignored; malformed interior
 records, a torn rotated predecessor followed by more records, conflicting
 duplicate intents, commit-without-intent, and commit/abort conflicts fail
@@ -125,12 +139,17 @@ validation.
 Reconciliation is idempotent: identical repeated intents and terminal records
 do not themselves apply a mutation. Player and runtime-map save headers persist
 `journal_run` and `journal_sequence`, the latest successful terminal commit
-whose in-memory state that domain includes. Compare each committed record's run
-and sequence with every affected saved domain: a matching watermark at or
-beyond the terminal sequence proves that domain already includes the mutation;
-an older/different watermark requires replay for that domain. This remains
-unambiguous when player and map checkpoints occur independently and when later
-transactions return a balance to an earlier value.
+whose in-memory state that domain includes. Compare each committed record's
+globally ordered sequence with every affected saved domain listed by its
+terminal record: a watermark at or beyond the terminal sequence proves that
+domain already includes the mutation; an older watermark requires replay for
+that domain. `journal_run` remains trace context rather than the ordering key.
+This remains unambiguous across process restarts, independent player/map
+checkpoints, and later transactions that return a balance to an earlier value.
+Runtime map files and unique-object files are written through synced temporary
+files and atomically replaced. Each carries its own checkpoint watermark, so a
+crash between component publications leaves the older component visibly older
+instead of producing a false all-map checkpoint.
 
 Both `attempted` and `committed` transactions also carry typed before/after
 values, lineage, and a bounded snapshot for validation and partial completion.
@@ -183,11 +202,14 @@ For purchases it represents the balance actually mutated (the hidden bank
 slice for bank or mixed funding), while `details.price` always holds the
 complete copper-equivalent price. Shop sales, generated/random-party currency,
 and alchemy use a recovery aggregate spanning player-held/bank currency plus
-canonical currency on the player's current delivery tile. Party split uses one
-ordered party-wide aggregate: every member's held/bank currency plus each
-occupied delivery tile counted once. Their before/after values therefore remain
-comparable when output is carried, spilled, or split across domains. Bank
-records remain exact hidden-balance arithmetic. These conventions keep recovery
+canonical currency on the player's current delivery tile. Exact generated
+coin materialization selects one eligible carried destination for the whole
+payout or places the whole payout on the unique-object map component; it never
+creates an unrecorded cross-domain partial split. Party split records
+each recipient's generated share as a transaction-local `0/+share/share`
+delivery quantity; its terminal save-domain list and global sequence decide
+which recipient/map checkpoint needs replay. Bank records remain exact
+hidden-balance arithmetic. These conventions keep recovery
 arithmetic authoritative without double-counting correlated writes.
 
 Journal-backed currency output is materialized in non-merging stacks carrying

@@ -247,14 +247,6 @@ const char *shop_get_cost_string_item(object *op, int mode) {
     return shop_get_cost_string(shop_get_cost(op, mode));
 }
 
-/**
- * Finds out how much money the player is carrying, including what is in
- * containers and in bank.
- * @param op
- * Item to get money for. Must be a player or a container.
- * @return
- * Total money the player is carrying.
- */
 bool shop_money_object_value(const object *money, int64_t *value) {
     HARD_ASSERT(money != NULL);
     HARD_ASSERT(value != NULL);
@@ -858,6 +850,7 @@ static void shop_insert_coin_stacks(object *op,
             coin->custody_lineage = add_string(lineage);
         }
         if (on_floor) {
+            SET_FLAG(coin, FLAG_UNIQUE);
             coin->x = op->x;
             coin->y = op->y;
             HARD_ASSERT(object_insert_map(coin, op->map, NULL, INS_NO_WALK_ON) != NULL);
@@ -918,65 +911,46 @@ bool shop_insert_coins_exact_tagged(object *op, int64_t value, const char *trans
         return false;
     }
 
+    long double total_weight = 0.0L;
+    int64_t remainder = value;
     for (int i = 0; coins[i] != NULL; i++) {
         archetype_t *at = arch_find(coins[i]);
-
-        if (value / at->clone.value <= 0) {
+        int64_t nrof = remainder / at->clone.value;
+        total_weight += (long double)nrof * at->clone.weight;
+        remainder -= nrof * at->clone.value;
+    }
+    object *destination = NULL;
+    FOR_INV_PREPARE(op, tmp) {
+        if (tmp->type != CONTAINER || !QUERY_FLAG(tmp, FLAG_APPLIED) || tmp->race == NULL ||
+            strstr(tmp->race, "gold") == NULL) {
             continue;
         }
-
-        FOR_INV_PREPARE(op, tmp) {
-            if (tmp->type != CONTAINER) {
-                continue;
-            }
-
-            if (!QUERY_FLAG(tmp, FLAG_APPLIED)) {
-                continue;
-            }
-
-            if (tmp->race == NULL || strstr(tmp->race, "gold") == NULL) {
-                continue;
-            }
-
-            int64_t nrof = value / at->clone.value;
-
-            double weight = at->clone.weight * tmp->weapon_speed;
-            if (tmp->weight_limit != 0 && tmp->carrying + weight > tmp->weight_limit) {
-                continue;
-            }
-
-            if (weight > 0.0 && tmp->weight_limit != 0 &&
-                (tmp->weight_limit - tmp->carrying) / weight < nrof) {
-                nrof = MIN(nrof, (int64_t)((tmp->weight_limit - tmp->carrying) / weight));
-            }
-
-            shop_insert_coin_stacks(op, tmp, at, nrof, false, transaction_id);
-            value -= nrof * at->clone.value;
+        long double weighted = total_weight * tmp->weapon_speed;
+        if (tmp->weight_limit == 0 ||
+            (tmp->carrying <= tmp->weight_limit && weighted <= tmp->weight_limit - tmp->carrying)) {
+            destination = tmp;
+            break;
         }
-        FOR_INV_FINISH();
-
-        if (value / at->clone.value > 0) {
-            int64_t nrof = value / at->clone.value;
-            uint32_t weight_max = weight_limit[MIN(op->stats.Str, MAX_STAT)];
-
-            if (nrof > 0 && op->carrying <= weight_max &&
-                at->clone.weight <= weight_max - op->carrying) {
-                if (at->clone.weight > 0 && (weight_max - op->carrying) / at->clone.weight < nrof) {
-                    nrof = MIN(nrof, (int64_t)((weight_max - op->carrying) / at->clone.weight));
-                }
-
-                shop_insert_coin_stacks(op, op, at, nrof, false, transaction_id);
-                value -= nrof * at->clone.value;
-            }
+    }
+    FOR_INV_FINISH();
+    if (destination == NULL) {
+        uint32_t limit = weight_limit[MIN(op->stats.Str, MAX_STAT)];
+        if (op->type != PLAYER || op->map == NULL ||
+            (op->carrying <= limit && total_weight <= limit - op->carrying)) {
+            destination = op;
         }
+    }
+    bool on_floor = destination == NULL;
+    if (on_floor && transaction_id != NULL && transaction_id[0] != '\0' &&
+        !gameplay_journal_track_map_unique(transaction_id, op->map)) {
+        return false;
+    }
 
-        if (value / at->clone.value > 0) {
-            int64_t nrof = value / at->clone.value;
-            if (op->map != NULL) {
-                shop_insert_coin_stacks(op, NULL, at, nrof, true, transaction_id);
-            } else {
-                shop_insert_coin_stacks(op, op, at, nrof, false, transaction_id);
-            }
+    for (int i = 0; coins[i] != NULL; i++) {
+        archetype_t *at = arch_find(coins[i]);
+        int64_t nrof = value / at->clone.value;
+        if (nrof > 0) {
+            shop_insert_coin_stacks(op, destination, at, nrof, on_floor, transaction_id);
             value -= nrof * at->clone.value;
         }
     }

@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -225,16 +226,15 @@ class JournalTests(unittest.TestCase):
         journal = gameplay_journal.load([self.root])
         self.assertEqual(journal.transactions["tx1"]["status"], "aborted")
 
-    def test_restart_resets_sequence_in_a_new_run(self) -> None:
+    def test_restart_continues_global_sequence_in_a_new_run(self) -> None:
         first = self.record("boundary")
         self.write(first)
-        self.sequence = 0
         self.previous = ""
         other = self.root / f"journal-{RUN2}-0000.jsonl"
         other.write_bytes(self.record("boundary", run_id=RUN2))
         other.chmod(0o600)
         journal = gameplay_journal.load([self.root])
-        self.assertEqual([record["sequence"] for record in journal.records], [1, 1])
+        self.assertEqual([record["sequence"] for record in journal.records], [1, 2])
 
     def test_retained_mid_chain_segment_is_a_valid_anchor(self) -> None:
         for _ in range(3):
@@ -374,12 +374,70 @@ class JournalTests(unittest.TestCase):
                 "intent", committed, version=2, kind=kind, reason=reason, details=details,
                 change=change,
             ))
-            records.append(self.record("commit", committed, version=2))
+            records.append(self.record(
+                "commit",
+                committed,
+                version=2,
+                domains=[{"kind": "player", "id": "acct/Hero"}],
+            ))
         self.write(*records)
         journal = gameplay_journal.load([self.root])
         for index, _family in enumerate(families):
             self.assertEqual(journal.transactions[f"attempted-{index}"]["status"], "attempted")
             self.assertEqual(journal.transactions[f"committed-{index}"]["status"], "committed")
+
+    def test_reconcile_compares_each_terminal_save_domain(self) -> None:
+        details = self.details(
+            actor="acct:actor",
+            currency="copper-equivalent",
+            funding="generated",
+            source="service",
+            destination="player-or-ground",
+        )
+        intent = self.record(
+            "intent",
+            "tx1",
+            version=2,
+            kind="currency",
+            reason="script.currency-grant",
+            details=details,
+        )
+        commit = self.record(
+            "commit",
+            "tx1",
+            version=2,
+            domains=[
+                {"kind": "player", "id": "acct:actor"},
+                {"kind": "map-unique", "id": "/world/start"},
+            ],
+        )
+        self.write(intent, commit)
+        journal = gameplay_journal.load([self.root])
+        player_save = self.root / "player.save"
+        player_save.write_text("custody_actor acct:actor\njournal_sequence 2\n")
+        map_save = self.root / "map.save"
+        map_save.write_text("journal_sequence 2\n")
+        unique_save = self.root / "map.v00"
+        unique_save.write_text(
+            "# gameplay-journal aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1\n"
+        )
+        plan = gameplay_journal.reconcile(
+            journal,
+            gameplay_journal._saved_domain_arguments(SimpleNamespace(
+                domain=[],
+                player_save=[player_save],
+                map_save=[
+                    f"/world/start={map_save}",
+                    f"/world/start={unique_save}",
+                ],
+            )),
+        )
+        actions = {
+            (domain["kind"], domain["id"]): domain["action"]
+            for domain in plan["tx1"]["domains"]
+        }
+        self.assertEqual(actions[("player", "acct:actor")], "checkpointed")
+        self.assertEqual(actions[("map-unique", "/world/start")], "replay-required")
 
     def test_rejects_corruption_permissions_and_redaction(self) -> None:
         record = bytearray(self.record("boundary"))
@@ -502,6 +560,20 @@ class JournalTests(unittest.TestCase):
 
     def test_native_action_matrix_reasons_remain_wired_to_semantic_producers(self) -> None:
         server = Path(__file__).resolve().parents[2]
+        def function_body(source: str, name: str) -> str:
+            match = re.search(rf"\b{re.escape(name)}\s*\([^;]*?\)\s*\{{", source, re.S)
+            self.assertIsNotNone(match, name)
+            start = match.end() - 1
+            depth = 0
+            for index in range(start, len(source)):
+                if source[index] == "{":
+                    depth += 1
+                elif source[index] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return source[start:index + 1]
+            self.fail(f"unterminated function body: {name}")
+
         expected = {
             "src/types/player.c": {
                 "item.acquire", "item.drop", "item.external-transfer",
@@ -542,6 +614,20 @@ class JournalTests(unittest.TestCase):
             for call in calls:
                 with self.subTest(source=relative, call=call):
                     self.assertIn(f"{call}(", source)
+
+        exact_sites = {
+            ("src/server/treasure.c", "treasure_insert"): {
+                "item.starting-grant", "item.treasure-grant",
+            },
+            ("src/server/quest.c", "quest_check_item_drop"): {"quest.item-grant"},
+            ("src/server/quest.c", "quest_check_item"): {"quest.objective-grant"},
+        }
+        for (relative, function), reasons in exact_sites.items():
+            body = function_body((server / relative).read_text(encoding="utf-8"), function)
+            with self.subTest(source=relative, function=function):
+                self.assertIn("object_insert_into_reason(", body)
+                for reason in reasons:
+                    self.assertIn(f'"{reason}"', body)
 
 
 if __name__ == "__main__":

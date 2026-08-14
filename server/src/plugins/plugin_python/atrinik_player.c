@@ -1153,13 +1153,12 @@ static PyObject *Atrinik_Player_InsertCoins(Atrinik_Player *self, PyObject *args
         return NULL;
     }
 
-    object_semantic_result_t result =
-        hooks->shop_insert_coins_reason(self->pl->ob, value, reason);
+    object_semantic_result_t result = hooks->shop_insert_coins_reason(self->pl->ob, value, reason);
     if (result != OBJECT_SEMANTIC_COMMITTED) {
         PyErr_SetString(PyExc_RuntimeError,
-                       result == OBJECT_SEMANTIC_FAILED
-                           ? "Currency grant could not be journaled."
-                           : "Currency granted, but its durable journal commit is uncertain.");
+                        result == OBJECT_SEMANTIC_FAILED
+                            ? "Currency grant could not be journaled."
+                            : "Currency granted, but its durable journal commit is uncertain.");
         return NULL;
     }
 

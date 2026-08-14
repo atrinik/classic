@@ -2413,6 +2413,14 @@ static void pick_up_object(object *pl, object *op, object *tmp, int nrof, int no
         draw_info(COLOR_WHITE, pl, "The item transfer could not be journaled.");
         return;
     }
+    if (custody_transfer &&
+        ((source_player != NULL && !object_custody_track_player(&custody, source_player)) ||
+         (tmp->map != NULL &&
+          !object_custody_track_map_object(&custody, tmp->map, tmp->x, tmp->y, tmp)))) {
+        object_custody_abort(&custody, "domain-registration-failed");
+        draw_info(COLOR_WHITE, pl, "The item transfer could not be journaled.");
+        return;
+    }
 
     tmp = get_pickup_object(pl, tmp, nrof);
     if (custody_transfer) {
@@ -2636,6 +2644,24 @@ void put_object_in_sack(object *op, object *sack, object *tmp, long nrof) {
         draw_info(COLOR_WHITE, op, "The item transfer could not be journaled.");
         return;
     }
+    if (custody_transfer &&
+        ((source_player != NULL && !object_custody_track_player(&custody, source_player)) ||
+         (destination_player != NULL &&
+          !object_custody_track_player(&custody, destination_player)) ||
+         (source_root->map != NULL && !object_custody_track_map_object(&custody,
+                                                                       source_root->map,
+                                                                       source_root->x,
+                                                                       source_root->y,
+                                                                       source_root)) ||
+         (destination_root->map != NULL && !object_custody_track_map_object(&custody,
+                                                                            destination_root->map,
+                                                                            destination_root->x,
+                                                                            destination_root->y,
+                                                                            destination_root)))) {
+        object_custody_abort(&custody, "domain-registration-failed");
+        draw_info(COLOR_WHITE, op, "The item transfer could not be journaled.");
+        return;
+    }
 
     if (QUERY_FLAG(tmp, FLAG_APPLIED) &&
         object_apply_item(tmp, op, APPLY_ALWAYS_UNAPPLY | APPLY_NO_MERGE) != OBJECT_METHOD_OK) {
@@ -2730,6 +2756,12 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
                 &custody);
         }
         if (!journal_ok) {
+            draw_info(COLOR_WHITE, op, "The item transfer could not be journaled.");
+            return;
+        }
+        if (!QUERY_FLAG(tmp, FLAG_STARTEQUIP) &&
+            !object_custody_track_map_object(&custody, op->map, op->x, op->y, tmp)) {
+            object_custody_abort(&custody, "domain-registration-failed");
             draw_info(COLOR_WHITE, op, "The item transfer could not be journaled.");
             return;
         }

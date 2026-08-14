@@ -335,6 +335,16 @@ static void party_loot_random(object *pl, object *corpse) {
                                                                  transaction)) {
                                 break;
                             }
+                            if (transaction[0] != '\0' && corpse->map != NULL &&
+                                !gameplay_journal_track_map_object(transaction,
+                                                                   corpse->map,
+                                                                   corpse->x,
+                                                                   corpse->y,
+                                                                   corpse)) {
+                                (void)gameplay_journal_abort(transaction,
+                                                             "domain-registration-failed");
+                                break;
+                            }
                             if (transaction[0] != '\0') {
                                 char lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
                                 snprintf(VS(lineage), "currency:%s", transaction);
@@ -374,39 +384,6 @@ static void party_loot_random(object *pl, object *corpse) {
             }
         }
     }
-}
-
-static bool party_currency_recovery_total(party_struct *party, object *reference, int64_t *total) {
-    *total = 0;
-    for (objectlink *member = party->members; member != NULL; member = member->next) {
-        object *recipient = member->objlink.ob;
-        if (!on_same_map(recipient, reference)) {
-            continue;
-        }
-        int64_t held;
-        if (!shop_get_held_money(recipient, &held) || *total > INT64_MAX - held) {
-            return false;
-        }
-        *total += held;
-
-        bool first_on_tile = true;
-        for (objectlink *prior = party->members; prior != member; prior = prior->next) {
-            object *other = prior->objlink.ob;
-            if (other->map == recipient->map && other->x == recipient->x &&
-                other->y == recipient->y) {
-                first_on_tile = false;
-                break;
-            }
-        }
-        if (first_on_tile) {
-            int64_t tile;
-            if (!shop_get_tile_money(recipient, &tile) || *total > INT64_MAX - tile) {
-                return false;
-            }
-            *total += tile;
-        }
-    }
-    return true;
 }
 
 /**
@@ -457,13 +434,15 @@ static void party_loot_split(object *pl, object *corpse) {
         }
 
         if (tmp->type == MONEY) {
-            int64_t nrof = MAX(1, tmp->nrof);
-            if (tmp->value < 0 || tmp->value > INT64_MAX / nrof ||
-                value > INT64_MAX - tmp->value * nrof) {
+            int64_t coin_value;
+            if (!shop_money_object_value(tmp, &coin_value)) {
+                continue;
+            }
+            if (value > INT64_MAX - coin_value) {
                 LOG(ERROR, "Party corpse currency value overflow for %s", object_get_str(tmp));
                 return;
             }
-            value += tmp->value * nrof;
+            value += coin_value;
             continue;
         }
 
@@ -511,11 +490,6 @@ static void party_loot_split(object *pl, object *corpse) {
         party_currency_grant_t *grants = xcalloc(count, sizeof(*grants));
         uint32_t num = 0;
         bool prepared = shop_coins_available();
-        int64_t party_before = 0;
-        int64_t planned = 0;
-        if (prepared && !party_currency_recovery_total(party, pl, &party_before)) {
-            prepared = false;
-        }
 
         for (ol = party->members; prepared && ol != NULL; ol = ol->next) {
             if (on_same_map(ol->objlink.ob, pl)) {
@@ -524,17 +498,12 @@ static void party_loot_split(object *pl, object *corpse) {
                 if (num == 0) {
                     value_split += value % count;
                 }
-                if (value_split > INT64_MAX - party_before - planned) {
-                    prepared = false;
-                    break;
-                }
-                int64_t before = party_before + planned;
                 if (!gameplay_journal_currency_begin(ol->objlink.ob,
                                                      "party.currency-split",
                                                      "currency:party-loot",
-                                                     before,
+                                                     0,
                                                      value_split,
-                                                     before + value_split,
+                                                     value_split,
                                                      "corpse",
                                                      "player-or-ground",
                                                      "party-corpse",
@@ -542,11 +511,21 @@ static void party_loot_split(object *pl, object *corpse) {
                     prepared = false;
                     break;
                 }
+                if (grants[num].transaction[0] != '\0' && corpse->map != NULL &&
+                    !gameplay_journal_track_map_object(grants[num].transaction,
+                                                       corpse->map,
+                                                       corpse->x,
+                                                       corpse->y,
+                                                       corpse)) {
+                    (void)gameplay_journal_abort(grants[num].transaction,
+                                                 "domain-registration-failed");
+                    prepared = false;
+                    break;
+                }
                 grants[num].recipient = ol->objlink.ob;
                 grants[num].value = value_split;
                 grants[num].active = true;
                 num++;
-                planned += value_split;
             }
         }
 
@@ -562,7 +541,9 @@ static void party_loot_split(object *pl, object *corpse) {
 
         for (tmp = corpse->inv; tmp != NULL; tmp = next) {
             next = tmp->below;
-            if (tmp->type == MONEY && object_can_pick(pl, tmp)) {
+            int64_t ignored;
+            if (tmp->type == MONEY && object_can_pick(pl, tmp) &&
+                shop_money_object_value(tmp, &ignored)) {
                 object_remove(tmp, 0);
                 object_destroy(tmp);
             }

@@ -93,6 +93,18 @@ bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
                             const gameplay_journal_change_t *change,
                             char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]);
 
+/** Add a player save domain affected by a pending transaction. */
+bool gameplay_journal_track_player(const char *transaction_id, object *player_ob);
+
+/** Add a runtime-map save domain affected by a pending transaction. */
+bool gameplay_journal_track_map(const char *transaction_id, mapstruct *map);
+bool gameplay_journal_track_map_unique(const char *transaction_id, mapstruct *map);
+bool gameplay_journal_track_map_object(const char *transaction_id,
+                                       mapstruct *map,
+                                       int x,
+                                       int y,
+                                       const object *op);
+
 /** Durably mark a previously written intent as committed. */
 bool gameplay_journal_commit(const char *transaction_id);
 

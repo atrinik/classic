@@ -1020,6 +1020,12 @@ bool object_custody_begin_parties(const object *op,
                                   const char *funding,
                                   object_custody_transaction_t *transaction);
 void object_custody_apply(object *op, const object_custody_transaction_t *transaction);
+bool object_custody_track_player(object_custody_transaction_t *transaction, object *player_ob);
+bool object_custody_track_map_object(object_custody_transaction_t *transaction,
+                                     mapstruct *map,
+                                     int x,
+                                     int y,
+                                     const object *op);
 bool object_custody_commit(object *op, object_custody_transaction_t *transaction);
 bool object_custody_finish(object_custody_transaction_t *transaction);
 void object_custody_abort(object_custody_transaction_t *transaction, const char *reason);

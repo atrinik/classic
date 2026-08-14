@@ -2427,8 +2427,8 @@ object *object_insert_into(object *op, object *where, int flag) {
 static bool object_custody_auditable(const object *op) {
     return !QUERY_FLAG(op, FLAG_SYS_OBJECT) && op->type != PLAYER && op->type != FORCE &&
            op->type != POTION_EFFECT && op->type != EVENT_OBJECT && op->type != QUEST_CONTAINER &&
-           (op->arch == NULL || (strcmp(op->arch->name, "player_info") != 0 &&
-                                 strcmp(op->arch->name, "force") != 0));
+           (op->arch == NULL ||
+            (strcmp(op->arch->name, "player_info") != 0 && strcmp(op->arch->name, "force") != 0));
 }
 
 static const char *object_custody_location(const object *op, const object *root) {
@@ -2510,6 +2510,25 @@ object_insert_into_reason(object *op, object *where, const char *reason, object 
         *inserted_out = NULL;
         return OBJECT_SEMANTIC_FAILED;
     }
+    if (actor != NULL &&
+        ((source_player != NULL && !object_custody_track_player(&transaction, source_player)) ||
+         (destination_player != NULL &&
+          !object_custody_track_player(&transaction, destination_player)) ||
+         (op->map != NULL &&
+          !object_custody_track_map_object(&transaction, op->map, op->x, op->y, op)) ||
+         (source_root->map != NULL && !object_custody_track_map_object(&transaction,
+                                                                       source_root->map,
+                                                                       source_root->x,
+                                                                       source_root->y,
+                                                                       source_root)) ||
+         (destination_root->map != NULL && !object_custody_track_map_object(&transaction,
+                                                                            destination_root->map,
+                                                                            destination_root->x,
+                                                                            destination_root->y,
+                                                                            destination_root)))) {
+        object_custody_abort(&transaction, "domain-registration-failed");
+        return OBJECT_SEMANTIC_FAILED;
+    }
     if (actor != NULL) {
         object_custody_apply(op, &transaction);
     }
@@ -2550,6 +2569,10 @@ object_semantic_result_t object_insert_map_reason(object *op,
                                          false,
                                          true,
                                          &transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (journal && !object_custody_track_map_object(&transaction, m, x, y, op)) {
+        object_custody_abort(&transaction, "domain-registration-failed");
         return OBJECT_SEMANTIC_FAILED;
     }
     if (journal) {
@@ -2997,12 +3020,10 @@ bool object_set_value(object *op, const char *key, const char *value, bool add_k
 
 static bool object_custody_random_id(char output[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
     unsigned char random[16];
-    bool ok = RAND_bytes(random, sizeof(random)) == 1 &&
-              string_tohex(random,
-                           sizeof(random),
-                           output,
-                           GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE,
-                           false) == sizeof(random) * 2U;
+    bool ok =
+        RAND_bytes(random, sizeof(random)) == 1 &&
+        string_tohex(random, sizeof(random), output, GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE, false) ==
+            sizeof(random) * 2U;
     OPENSSL_cleanse(random, sizeof(random));
     return ok;
 }
@@ -3209,6 +3230,22 @@ void object_custody_apply(object *op, const object_custody_transaction_t *transa
     }
 }
 
+bool object_custody_track_player(object_custody_transaction_t *transaction, object *player_ob) {
+    HARD_ASSERT(transaction != NULL);
+    return !transaction->active ||
+           gameplay_journal_track_player(transaction->transaction_id, player_ob);
+}
+
+bool object_custody_track_map_object(object_custody_transaction_t *transaction,
+                                     mapstruct *map,
+                                     int x,
+                                     int y,
+                                     const object *op) {
+    HARD_ASSERT(transaction != NULL);
+    return !transaction->active ||
+           gameplay_journal_track_map_object(transaction->transaction_id, map, x, y, op);
+}
+
 bool object_custody_commit(object *op, object_custody_transaction_t *transaction) {
     object_custody_apply(op, transaction);
     return object_custody_finish(transaction);
@@ -3262,8 +3299,8 @@ void object_custody_acquire(object *op, const object *player_ob) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(player_ob != NULL);
 
-    if (player_ob->type != PLAYER || CONTR(player_ob) == NULL ||
-        CONTR(player_ob)->cs == NULL || CONTR(player_ob)->cs->account == NULL || player_ob->name == NULL) {
+    if (player_ob->type != PLAYER || CONTR(player_ob) == NULL || CONTR(player_ob)->cs == NULL ||
+        CONTR(player_ob)->cs->account == NULL || player_ob->name == NULL) {
         return;
     }
 
@@ -3285,7 +3322,6 @@ void object_custody_acquire(object *op, const object *player_ob) {
         snprintf(lineage, sizeof(lineage), "item:%s", id);
         op->custody_lineage = add_string(lineage);
     }
-
 }
 
 /** Record the player that successfully relinquished custody of an item. */
@@ -3293,8 +3329,8 @@ void object_custody_relinquish(object *op, const object *player_ob) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(player_ob != NULL);
 
-    if (player_ob->type != PLAYER || CONTR(player_ob) == NULL ||
-        CONTR(player_ob)->cs == NULL || CONTR(player_ob)->cs->account == NULL || player_ob->name == NULL) {
+    if (player_ob->type != PLAYER || CONTR(player_ob) == NULL || CONTR(player_ob)->cs == NULL ||
+        CONTR(player_ob)->cs->account == NULL || player_ob->name == NULL) {
         return;
     }
 
@@ -3779,6 +3815,10 @@ object_enter_map_reason(object *op, mapstruct *m, int x, int y, const char *reas
                                          false,
                                          true,
                                          &transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (journal && !object_custody_track_map_object(&transaction, m, x, y, op)) {
+        object_custody_abort(&transaction, "domain-registration-failed");
         return OBJECT_SEMANTIC_FAILED;
     }
     if (journal) {

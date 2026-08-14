@@ -75,13 +75,17 @@ extern void shop_insert_coins(object *op, int64_t value);
 extern bool shop_insert_coins_exact(object *op, int64_t value);
 extern bool shop_insert_coins_exact_tagged(object *op, int64_t value, const char *transaction_id);
 /**
- * Get the recovery aggregate spanning player-held/bank currency and canonical
- * currency on the player's current delivery tile.
+ * Sum canonical held/bank currency plus canonical currency on the current tile.
+ * The player must have a map. On failure, the output value is unspecified.
  */
 extern bool shop_get_recovery_money(object *op, int64_t *total);
+/** Sum canonical currency in eligible held containers and the hidden bank. */
 extern bool shop_get_held_money(object *op, int64_t *total);
+/** Sum canonical currency on a player's current map tile. */
 extern bool shop_get_tile_money(object *op, int64_t *total);
+/** Return one canonical, positive money stack's checked copper-equivalent value. */
 extern bool shop_money_object_value(const object *money, int64_t *value);
+/** Whether a money object belongs to the root's eligible held-currency traversal. */
 extern bool shop_money_object_counted(const object *root, const object *money);
 /**
  * Retire transaction lineage only after its terminal commit is durable.

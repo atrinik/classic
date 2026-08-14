@@ -1792,7 +1792,7 @@ static PyObject *Atrinik_Object_PayAmount(Atrinik_Object *self, PyObject *args) 
     object_semantic_result_t result = hooks->shop_pay_reason(self->obj, value, reason);
     if (result == OBJECT_SEMANTIC_AMBIGUOUS) {
         PyErr_SetString(PyExc_RuntimeError,
-                       "Payment completed, but its durable journal commit is uncertain.");
+                        "Payment completed, but its durable journal commit is uncertain.");
         return NULL;
     }
     return Py_BuildBoolean(result == OBJECT_SEMANTIC_COMMITTED);
@@ -2851,9 +2851,7 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
             return -1;
         }
         if (direction < 0 || direction > NUM_DIRECTION) {
-            PyErr_Format(PyExc_ValueError,
-                         "direction must be between 0 and %d.",
-                         NUM_DIRECTION);
+            PyErr_Format(PyExc_ValueError, "direction must be between 0 and %d.", NUM_DIRECTION);
             return -1;
         }
     }

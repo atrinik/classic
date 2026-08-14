@@ -150,8 +150,8 @@ static void bank_parse_string(const char *str, bank_info_t *info) {
 }
 
 static bool bank_info_value(const bank_info_t *info, int64_t *value) {
-    const uint64_t counts[NUM_COINS] = {
-        info->amber, info->mithril, info->jade, info->gold, info->silver, info->copper};
+    const uint64_t counts[NUM_COINS] =
+        {info->amber, info->mithril, info->jade, info->gold, info->silver, info->copper};
     *value = 0;
     for (int i = 0; i < NUM_COINS; i++) {
         int64_t coin_value = coins_arch[i]->clone.value;
@@ -288,10 +288,8 @@ static int64_t bank_remove_coins(object *op, archetype_t *at, uint64_t nrof) {
  * @param nrof
  * Number of coins.
  */
-static void bank_insert_coins(object *op,
-                              archetype_t *at,
-                              uint32_t nrof,
-                              const char *transaction_id) {
+static void
+bank_insert_coins(object *op, archetype_t *at, uint32_t nrof, const char *transaction_id) {
     object *tmp = object_get();
     object_copy(tmp, &at->clone, false);
     tmp->nrof = nrof;
