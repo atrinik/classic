@@ -596,10 +596,10 @@ bool celestial_structure_validate_header(mapstruct *map, char *error, size_t err
             (map->celestial_boundary[i] != CELESTIAL_BOUNDARY_UNSET)) {
             return set_error(error,
                              error_size,
-                             "%s tile_path_%zu and celestial_boundary_%zu disagree",
+                             "%s tile_path_%u and celestial_boundary_%u disagree",
                              map_path(map),
-                             i + 1,
-                             i + 1);
+                             (unsigned)(i + 1),
+                             (unsigned)(i + 1));
         }
     }
     return true;
@@ -854,9 +854,9 @@ static bool validate_cardinal_seam_apertures(const mapstruct *map,
                 4) {
             return set_error(error,
                              error_size,
-                             "%s tile_path_%zu corner has more than four apertures on its seam",
+                             "%s tile_path_%u corner has more than four apertures on its seam",
                              map_path(map),
-                             tile + 1);
+                             (unsigned)(tile + 1));
         }
         return true;
     }
@@ -883,9 +883,9 @@ static bool validate_cardinal_seam_apertures(const mapstruct *map,
             4) {
             return set_error(error,
                              error_size,
-                             "%s tile_path_%zu cell %d has more than four apertures on its seam",
+                             "%s tile_path_%u cell %d has more than four apertures on its seam",
                              map_path(map),
-                             tile + 1,
+                             (unsigned)(tile + 1),
                              cell);
         }
     }
@@ -931,17 +931,17 @@ bool celestial_structure_validate_topology(mapstruct *map, char *error, size_t e
                 return set_error(
                     error,
                     error_size,
-                    "%s tile_path_%zu has unresolved or disagreeing reciprocal coordinates",
+                    "%s tile_path_%u has unresolved or disagreeing reciprocal coordinates",
                     map_path(cursor),
-                    i + 1);
+                    (unsigned)(i + 1));
             }
             if ((i == TILED_UP || i == TILED_DOWN) &&
                 (cursor->width != other->width || cursor->height != other->height)) {
                 return set_error(error,
                                  error_size,
-                                 "%s tile_path_%zu has non-identity dimensions",
+                                 "%s tile_path_%u has non-identity dimensions",
                                  map_path(cursor),
-                                 i + 1);
+                                 (unsigned)(i + 1));
             }
             if (!validate_cardinal_seam_apertures(cursor, i, error, error_size)) {
                 return false;
@@ -1074,9 +1074,9 @@ bool celestial_structure_inventory(const mapstruct *map, FILE *fp, size_t max_re
     for (size_t i = 0; i < TILED_NUM; i++) {
         if (map->tile_path[i] != NULL &&
             fprintf(fp,
-                    "ATRINIK_CELESTIAL_STRUCTURE\tlink\t%s\t%zu\t%s\t%s\n",
+                    "ATRINIK_CELESTIAL_STRUCTURE\tlink\t%s\t%u\t%s\t%s\n",
                     map_path(map),
-                    i + 1,
+                    (unsigned)(i + 1),
                     map->tile_path[i],
                     map->celestial_boundary[i] == CELESTIAL_BOUNDARY_CONTINUOUS
                         ? "continuous"
