@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -37,6 +37,26 @@
 #include <player.h>
 #include <object.h>
 #include <object_methods.h>
+#include <gameplay_journal.h>
+
+static bool spell_milestone_begin(object *applier,
+                                  int spell_index,
+                                  const char *reason,
+                                  int before,
+                                  int after,
+                                  char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    const char *spell_id = spell_id_from_index(spell_index);
+    char subject[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    return spell_id != NULL && metrics_format_content_id(VS(subject), "spell", spell_id) &&
+           gameplay_journal_milestone_begin(applier,
+                                            GAMEPLAY_JOURNAL_PROGRESSION,
+                                            reason,
+                                            subject,
+                                            "",
+                                            before,
+                                            after,
+                                            transaction);
+}
 
 #include "common/process_treasure.h"
 
@@ -102,6 +122,15 @@ static int apply_func(object *op, object *applier, int aflags) {
         if (QUERY_FLAG(op, FLAG_DAMNED) && rndm_chance(15)) {
             object *tmp = player_find_spell(applier, spell);
             if (tmp != NULL) {
+                char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+                if (!spell_milestone_begin(applier,
+                                           op->stats.sp,
+                                           "progression.spell-forgotten",
+                                           1,
+                                           0,
+                                           transaction)) {
+                    return OBJECT_METHOD_OK;
+                }
                 draw_info_format(COLOR_RED,
                                  applier,
                                  "The wild magic burns the spell %s out of "
@@ -111,6 +140,7 @@ static int apply_func(object *op, object *applier, int aflags) {
                 object_destroy(tmp);
                 metrics_add(&pl->metrics, METRIC_CHARACTER_SPELLS_FORGOTTEN, 1);
                 metrics_character_spells_changed(pl);
+                (void)gameplay_journal_semantic_commit(transaction);
             }
         }
 
@@ -160,8 +190,18 @@ static int apply_func(object *op, object *applier, int aflags) {
         spell_failure(applier,
                       (spell->at->clone.level + pl->skill_ptr[SK_WIZARDRY_SPELLS]->level) / 2);
     } else {
+        char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+        if (!spell_milestone_begin(applier,
+                                   op->stats.sp,
+                                   "progression.spell-learned",
+                                   0,
+                                   1,
+                                   transaction)) {
+            return OBJECT_METHOD_OK;
+        }
         object *tmp = object_insert_into(arch_to_object(spell->at), applier, 0);
         if (tmp == NULL) {
+            (void)gameplay_journal_semantic_abort(transaction, "spell-insert-failed");
             LOG(ERROR,
                 "Failed to insert spell, op: %s, applier: %s",
                 object_get_str(op),
@@ -175,6 +215,7 @@ static int apply_func(object *op, object *applier, int aflags) {
                          spell->at->clone.name);
         metrics_add(&pl->metrics, METRIC_CHARACTER_SPELLS_LEARNED, 1);
         metrics_character_spells_changed(pl);
+        (void)gameplay_journal_semantic_commit(transaction);
     }
 
     object_decrease(op, 1);

@@ -39,6 +39,32 @@
 #include <arch.h>
 #include <player.h>
 #include <object.h>
+#include <gameplay_journal.h>
+
+static bool quest_identity(object *quest, char subject[GAMEPLAY_JOURNAL_ID_MAX + 1]) {
+    return metrics_format_content_id(subject, GAMEPLAY_JOURNAL_ID_MAX + 1, "quest", quest->name);
+}
+
+static bool quest_milestone_begin(object *op,
+                                  object *quest,
+                                  const char *reason,
+                                  const char *objective,
+                                  int64_t before,
+                                  int64_t after,
+                                  char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    char subject[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    if (!quest_identity(quest, subject)) {
+        return false;
+    }
+    return gameplay_journal_milestone_begin(op,
+                                            GAMEPLAY_JOURNAL_QUEST,
+                                            reason,
+                                            subject,
+                                            objective,
+                                            before,
+                                            after,
+                                            transaction);
+}
 
 /**
  * Find a quest inside the specified quest object.
@@ -151,8 +177,19 @@ static void quest_check_item_drop(object *op, object *quest, object *quest_pl, o
 
     object *inserted = NULL;
     object_custody_transaction_t transaction = {0};
+    char quest_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
     bool one_drop = QUERY_FLAG(item, FLAG_ONE_DROP);
     if (one_drop) {
+        if (!quest_milestone_begin(op,
+                                   quest,
+                                   "quest.completed",
+                                   "objective:item-drop",
+                                   QUEST_STATUS_INVALID,
+                                   QUEST_STATUS_COMPLETED,
+                                   quest_transaction)) {
+            object_destroy(clone);
+            return;
+        }
         if (!object_custody_begin(clone,
                                   op,
                                   "quest.item-grant",
@@ -163,6 +200,7 @@ static void quest_check_item_drop(object *op, object *quest, object *quest_pl, o
                                   true,
                                   false,
                                   &transaction)) {
+            (void)gameplay_journal_semantic_abort(quest_transaction, "quest.item-grant-failed");
             object_destroy(clone);
             return;
         }
@@ -194,8 +232,11 @@ static void quest_check_item_drop(object *op, object *quest, object *quest_pl, o
         object_insert_into(quest_pl, CONTR(op)->quest_container, 0);
 
         if (!object_custody_finish(&transaction)) {
+            (void)gameplay_journal_attempt(quest_transaction);
             return;
         }
+
+        (void)gameplay_journal_semantic_commit(quest_transaction);
 
         metrics_character_quest_status(CONTR(op), quest->name, QUEST_STATUS_COMPLETED);
 
@@ -233,10 +274,26 @@ static void quest_check_kill(object *op, object *quest, object *quest_pl, object
         return;
     }
 
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
+    if (quest_pl->last_sp == quest_pl->last_grace - 1 &&
+        !quest_milestone_begin(op,
+                               quest,
+                               "quest.kill-threshold",
+                               "objective:kill",
+                               quest_pl->last_sp,
+                               quest_pl->last_grace,
+                               transaction)) {
+        return;
+    }
+
     /* The +1 makes it so no messages are displayed when player
      * kills more same monsters. */
     if (quest_pl->last_sp <= quest_pl->last_grace + 1) {
         quest_pl->last_sp++;
+    }
+
+    if (!gameplay_journal_semantic_commit(transaction)) {
+        return;
     }
 
     /* Display an informative message about the quest status. */
@@ -315,13 +372,54 @@ static void quest_check_item(object *op, object *quest, object *quest_pl, object
     snprintfcat(VS(buf), "!\n");
 
     /* Insert the quest item inside the player. */
-    object *inserted = NULL;
-    object_semantic_result_t result =
-        object_insert_into_reason(clone, op, "quest.objective-grant", &inserted);
-    if (result != OBJECT_SEMANTIC_COMMITTED) {
-        if (result == OBJECT_SEMANTIC_FAILED) {
+    int64_t before = quest_pl->last_grace > 1 ? num : 0;
+    int64_t after = before + MAX(1, clone->nrof);
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
+    if (before == 0 || after >= quest_pl->last_grace) {
+        char objective[GAMEPLAY_JOURNAL_ID_MAX + 1];
+        int written = snprintf(VS(objective), "objective:item:%s", clone->arch->name);
+        if (written < 0 || (size_t)written >= sizeof(objective) ||
+            !quest_milestone_begin(op,
+                                   quest,
+                                   after >= quest_pl->last_grace ? "quest.item-threshold"
+                                                                 : "quest.item-acquired",
+                                   objective,
+                                   before,
+                                   after,
+                                   transaction)) {
             object_destroy(clone);
+            return;
         }
+    }
+    object_custody_transaction_t custody = {0};
+    if (!object_custody_begin(clone,
+                              op,
+                              "quest.objective-grant",
+                              "service",
+                              "player",
+                              quest->name,
+                              MAX(1, clone->nrof),
+                              true,
+                              false,
+                              &custody)) {
+        (void)gameplay_journal_semantic_abort(transaction, "quest.objective-grant-failed");
+        object_destroy(clone);
+        return;
+    }
+    object_custody_apply(clone, &custody);
+    object *inserted = NULL;
+    inserted = object_insert_into(clone, op, 0);
+    if (inserted == NULL) {
+        object_custody_abort(&custody, "quest.objective-grant-failed");
+        (void)gameplay_journal_semantic_abort(transaction, "quest.objective-grant-failed");
+        object_destroy(clone);
+        return;
+    }
+    if (!object_custody_finish(&custody)) {
+        (void)gameplay_journal_attempt(transaction);
+        return;
+    }
+    if (!gameplay_journal_semantic_commit(transaction)) {
         return;
     }
     draw_map_text_anim(op, COLOR_NAVY, buf);

@@ -709,7 +709,7 @@ static void player_do_some_living(object *op) {
  * @param op
  * Player.
  */
-static void player_death_deplete_stats(object *op) {
+static void player_death_deplete_stats(object *op, const char *correlation) {
     HARD_ASSERT(op != NULL);
 
     int num_lose = 1 + op->level / BALSL_NUMBER_LOSSES_RATIO;
@@ -761,9 +761,23 @@ static void player_death_deplete_stats(object *op) {
             }
         }
 
+        char subject[GAMEPLAY_JOURNAL_ID_MAX + 1];
+        snprintf(VS(subject), "stat:%d", stat);
+        char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+        if (!gameplay_journal_milestone_begin(op,
+                                              GAMEPLAY_JOURNAL_PROGRESSION,
+                                              "progression.death-stat-loss",
+                                              subject,
+                                              correlation,
+                                              value,
+                                              value - 1,
+                                              transaction)) {
+            return;
+        }
         change_attr_value(&depletion->stats, stat, -1);
         SET_FLAG(depletion, FLAG_APPLIED);
         lost_stat = true;
+        (void)gameplay_journal_semantic_commit(transaction);
         draw_info(COLOR_GRAY, op, lose_msg[stat]);
     }
 
@@ -776,6 +790,42 @@ static void player_death_deplete_stats(object *op) {
                   "For a brief moment you feel a holy presence "
                   "protecting you.");
     }
+}
+
+static bool survival_milestone_begin(object *op,
+                                     const char *reason,
+                                     const char *subject,
+                                     const char *correlation,
+                                     int64_t before,
+                                     int64_t after,
+                                     char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    return gameplay_journal_milestone_begin(op,
+                                            GAMEPLAY_JOURNAL_PROGRESSION,
+                                            reason,
+                                            subject,
+                                            correlation,
+                                            before,
+                                            after,
+                                            transaction);
+}
+
+static bool
+survival_metric_milestone_begin(object *op,
+                                const char *reason,
+                                const char *subject,
+                                const char *correlation,
+                                uint64_t before,
+                                char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    if (before >= INT64_MAX) {
+        return false;
+    }
+    return survival_milestone_begin(op,
+                                    reason,
+                                    subject,
+                                    correlation,
+                                    (int64_t)before,
+                                    (int64_t)before + 1,
+                                    transaction);
 }
 
 /** Remove paralysis when a player death is accepted. */
@@ -799,6 +849,21 @@ void kill_player(object *op, bool pvp, bool environmental) {
     object *tmp;
 
     if (pvp_area(NULL, op)) {
+        uint64_t deaths = metrics_get(&CONTR(op)->metrics, METRIC_CHARACTER_DEATHS);
+        char correlation[GAMEPLAY_JOURNAL_ID_MAX + 1];
+        if (deaths >= INT64_MAX) {
+            return;
+        }
+        snprintf(VS(correlation), "survival-death:%" PRIu64, deaths + 1);
+        char death_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+        if (!survival_metric_milestone_begin(op,
+                                             "survival.defeat-pvp",
+                                             "survival:defeat",
+                                             correlation,
+                                             deaths,
+                                             death_transaction)) {
+            return;
+        }
         metrics_character_death(CONTR(op), pvp, environmental);
         player_death_clear_paralysis(op);
         draw_info(COLOR_NAVY, op, "You have been defeated in combat!");
@@ -847,19 +912,72 @@ void kill_player(object *op, bool pvp, bool environmental) {
         player_clear_killer(CONTR(op));
 
         /* Teleport defeated player to new destination */
+        uint64_t respawns = metrics_get(&CONTR(op)->metrics, METRIC_CHARACTER_RESPAWNS);
+        char respawn_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+        if (!survival_metric_milestone_begin(op,
+                                             "survival.respawn",
+                                             "survival:respawn",
+                                             correlation,
+                                             respawns,
+                                             respawn_transaction)) {
+            (void)gameplay_journal_attempt(death_transaction);
+            return;
+        }
         if (transfer_ob(op, MAP_ENTER_X(op->map), MAP_ENTER_Y(op->map), 0, NULL, NULL)) {
             metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_RESPAWNS, 1);
+            (void)gameplay_journal_semantic_commit(respawn_transaction);
+        } else {
+            (void)gameplay_journal_semantic_abort(respawn_transaction, "respawn-transfer-failed");
         }
+        (void)gameplay_journal_semantic_commit(death_transaction);
         return;
     }
 
-    if (save_life(op)) {
-        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_DEATHS_AVOIDED, 1);
-        return;
+    if (QUERY_FLAG(op, FLAG_LIFESAVE)) {
+        uint64_t lifesaves = metrics_get(&CONTR(op)->metrics, METRIC_CHARACTER_DEATHS_AVOIDED);
+        char correlation[GAMEPLAY_JOURNAL_ID_MAX + 1];
+        if (lifesaves >= INT64_MAX) {
+            return;
+        }
+        snprintf(VS(correlation), "survival-lifesave:%" PRIu64, lifesaves + 1);
+        char lifesave_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+        if (!survival_metric_milestone_begin(op,
+                                             "survival.lifesave",
+                                             "survival:lifesave",
+                                             correlation,
+                                             lifesaves,
+                                             lifesave_transaction)) {
+            return;
+        }
+        if (save_life(op)) {
+            metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_DEATHS_AVOIDED, 1);
+            (void)gameplay_journal_semantic_commit(lifesave_transaction);
+            return;
+        }
+        (void)gameplay_journal_semantic_abort(lifesave_transaction, "lifesave-invalid");
     }
 
     /* Trigger the DEATH event */
     if (trigger_event(EVENT_DEATH, NULL, op, NULL, NULL, 0, 0, 0, 0) != 0) {
+        return;
+    }
+
+    uint64_t deaths = metrics_get(&CONTR(op)->metrics, METRIC_CHARACTER_DEATHS);
+    char correlation[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    if (deaths >= INT64_MAX) {
+        return;
+    }
+    snprintf(VS(correlation), "survival-death:%" PRIu64, deaths + 1);
+    char death_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    const char *death_reason = pvp             ? "survival.death-pvp"
+                               : environmental ? "survival.death-environment"
+                                               : "survival.death-pve";
+    if (!survival_metric_milestone_begin(op,
+                                         death_reason,
+                                         "survival:death",
+                                         correlation,
+                                         deaths,
+                                         death_transaction)) {
         return;
     }
 
@@ -895,7 +1013,7 @@ void kill_player(object *op, bool pvp, bool environmental) {
     tmp->y = op->y;
     object_insert_map(tmp, op->map, NULL, 0);
 
-    player_death_deplete_stats(op);
+    player_death_deplete_stats(op, correlation);
 
     /* Remove any poisoning the character may be suffering. */
     cast_heal(op, op, MAXLEVEL, op, SP_CURE_POISON);
@@ -928,6 +1046,17 @@ void kill_player(object *op, bool pvp, bool environmental) {
     }
 
     /* Move player to his current respawn position (last savebed). */
+    uint64_t respawns = metrics_get(&CONTR(op)->metrics, METRIC_CHARACTER_RESPAWNS);
+    char respawn_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    if (!survival_metric_milestone_begin(op,
+                                         "survival.respawn",
+                                         "survival:respawn",
+                                         correlation,
+                                         respawns,
+                                         respawn_transaction)) {
+        (void)gameplay_journal_attempt(death_transaction);
+        return;
+    }
     if (object_enter_map(op,
                          NULL,
                          ready_map_name(CONTR(op)->savebed_map, NULL, 0),
@@ -935,7 +1064,12 @@ void kill_player(object *op, bool pvp, bool environmental) {
                          CONTR(op)->bed_y,
                          true)) {
         metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_RESPAWNS, 1);
+        (void)gameplay_journal_semantic_commit(respawn_transaction);
+    } else {
+        (void)gameplay_journal_semantic_abort(respawn_transaction, "respawn-transfer-failed");
     }
+
+    (void)gameplay_journal_semantic_commit(death_transaction);
 
     /* Show a nasty message */
     draw_info(COLOR_WHITE, op, "YOU HAVE DIED.");

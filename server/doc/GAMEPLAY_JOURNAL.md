@@ -234,6 +234,30 @@ party, alchemy, and trusted-script producers delegate to the corresponding
 tested reason-aware item or currency boundary. The action-matrix source audit
 verifies each concrete reason and business-state call site.
 
+## Quest, progression, and survival action matrix
+
+Milestones use stable `quest:`, `quest-part:`, `skill:`, `spell:`, `map:`,
+`level:`, `stat:`, and `survival:` subjects. The sole producer begins an intent
+before the persistent mutation and commits only after the semantic operation
+succeeds. An uncertain scripted operation deliberately leaves its intent
+pending for recovery instead of claiming an abort.
+
+| Entry point or action | Producer | Reason code | Transaction boundary |
+| --- | --- | --- | --- |
+| Top-level quest start/completion/failure | shared authored `QuestManager` | `quest.started`, `quest.completed`, `quest.failed` | Intent before the quest object's status change; commit after quest-point and metric updates |
+| Nested part start/completion/failure | shared authored `QuestManager` | `quest.part-started`, `quest.part-completed`, `quest.part-failed` | One qualified part-path transaction; an already-started or terminal part is a no-op |
+| Repeatable quest reset | shared authored `QuestManager` | `quest.repeat-reset` | Intent around removal of the prior terminal quest object, retaining its before/invalid-after state |
+| Native one-drop completion | `quest_check_item_drop()` | `quest.completed` | The item transaction carries the stable quest-UID counterparty matching the qualified quest subject; both the item and completion marker must succeed |
+| Native objective item acquisition | `quest_check_item()` | `quest.item-acquired`, `quest.item-threshold` | First discovery and configured-threshold before/after surround an item grant with the stable quest-UID counterparty; intermediate counts remain aggregate-only |
+| Objective item removal | shared authored `QuestManager` | `quest.objective-remove` | Required units use the reason-aware item-decrease transaction; kept items produce no false removal |
+| Native kill objective threshold | `quest_check_kill()` | `quest.kill-threshold` | The sole threshold-crossing increment; ordinary kills remain aggregate-only |
+| Character or skill level transition | `exp_lvl_adj()` | `progression.level-gained`, `progression.level-lost`, `progression.skill-level-gained`, `progression.skill-level-lost` | One transaction per crossed level; routine XP ticks remain aggregate-only |
+| Exceptional XP loss or trusted exact adjustment | `add_exp()` | `progression.exceptional-xp-loss`, `progression.exp-adjustment` | Exact stable skill XP before/after; capped/vetoed zero changes emit nothing |
+| Spell learning/forgetting | `book_spell` application | `progression.spell-learned`, `progression.spell-forgotten` | Stable spell identity around successful inventory mutation |
+| Savebed binding | savebed application | `survival.savebed-changed` | A changed map/coordinate emits a stable canonical new-map subject and previous map/coordinate lineage; rebinding the same location emits no duplicate |
+| PvP defeat, PvP/PvE/environment death, lifesave, and respawn | `kill_player()` | `survival.defeat-pvp`, `survival.death-pvp`, `survival.death-pve`, `survival.death-environment`, `survival.lifesave`, `survival.respawn` | A bounded death- or avoidance-sequence lineage correlates each outcome and successful death respawn without per-hit records |
+| Material death stat loss | `player_death_deplete_stats()` | `progression.death-stat-loss` | One stable stat-index before/after transaction correlated to the death sequence |
+
 The item transaction's top-level arithmetic is quantity for ordinary custody.
 For purchases it represents the balance actually mutated (the hidden bank
 slice for bank or mixed funding), while `details.price` always holds the
