@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -720,6 +720,15 @@ int widget_h(const widgetdata *widget) {
     return widget->h * widget->zoom;
 }
 
+/** Synchronize the cached origin of a zoomed widget with its geometry. */
+static void widget_sync_zoom_origin(widgetdata *widget) {
+    int width, height;
+
+    zoomSurfaceSize(widget->w, widget->h, widget->zoom, widget->zoom, &width, &height);
+    widget->zoom_x = widget->x - (width - widget->w) / 2;
+    widget->zoom_y = widget->y - (height - widget->h) / 2;
+}
+
 /**
  * Set the widget's zoom value.
  *
@@ -737,12 +746,7 @@ bool widget_set_zoom(widgetdata *widget, double zoom) {
     }
 
     widget->zoom = zoom;
-
-    int w, h;
-    zoomSurfaceSize(widget->w, widget->h, zoom, zoom, &w, &h);
-
-    widget->zoom_x = widget->x - (w - widget->w) / 2;
-    widget->zoom_y = widget->y - (h - widget->h) / 2;
+    widget_sync_zoom_origin(widget);
 
     return true;
 }
@@ -1339,6 +1343,25 @@ int widget_priority_integration_test(const char *fixture, const char *saved) {
     WIDGET_TEST_CHECK(map->env == NULL);
     WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
 
+    static const double zooms[] = {0.5, 0.75, 1.25, 4.0};
+    for (size_t i = 0; i < arraysize(zooms); i++) {
+        WIDGET_TEST_CHECK(widget_set_zoom(map, zooms[i]));
+        int x = map->x;
+        int y = map->y;
+        int zoom_x = widget_x(map);
+        int zoom_y = widget_y(map);
+        move_widget(map, 17, -9);
+        WIDGET_TEST_CHECK(map->x == x + 17 && map->y == y - 9);
+        WIDGET_TEST_CHECK(widget_x(map) == zoom_x + 17 && widget_y(map) == zoom_y - 9);
+        WIDGET_TEST_CHECK(widget_mouse_over(map,
+                                            widget_x(map) + widget_w(map) / 2,
+                                            widget_y(map) + widget_h(map) / 2));
+        move_widget(map, -17, 9);
+        WIDGET_TEST_CHECK(map->x == x && map->y == y);
+        WIDGET_TEST_CHECK(widget_x(map) == zoom_x && widget_y(map) == zoom_y);
+    }
+    WIDGET_TEST_CHECK(widget_set_zoom(map, 1.0));
+
     menu_container_attach(map, NULL, NULL);
     widgetdata *attached = map->env;
     WIDGET_TEST_CHECK(attached != NULL && attached->type == CONTAINER_ID);
@@ -1367,17 +1390,37 @@ int widget_priority_integration_test(const char *fixture, const char *saved) {
     WIDGET_TEST_CHECK(drop_target->env == nested);
     WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
 
+    for (size_t i = 0; i < arraysize(zooms); i++) {
+        WIDGET_TEST_CHECK(widget_set_zoom(map, zooms[i]));
+        int x = map->x;
+        int y = map->y;
+        int zoom_x = widget_x(map);
+        int zoom_y = widget_y(map);
+        move_widget(nested, 17, -9);
+        WIDGET_TEST_CHECK(map->x == x + 17 && map->y == y - 9);
+        WIDGET_TEST_CHECK(widget_x(map) == zoom_x + 17 && widget_y(map) == zoom_y - 9);
+        WIDGET_TEST_CHECK(widget_mouse_over(map,
+                                            widget_x(map) + widget_w(map) / 2,
+                                            widget_y(map) + widget_h(map) / 2));
+        move_widget(nested, -17, 9);
+        WIDGET_TEST_CHECK(map->x == x && map->y == y);
+        WIDGET_TEST_CHECK(widget_x(map) == zoom_x && widget_y(map) == zoom_y);
+    }
+
+    for (size_t i = 0; i < arraysize(zooms); i++) {
+        WIDGET_TEST_CHECK(widget_set_zoom(map, zooms[i]));
+        resize_widget(map, RESIZE_RIGHT, map->w + 11);
+        resize_widget(map, RESIZE_BOTTOM, map->h + 7);
+        int width, height;
+        zoomSurfaceSize(map->w, map->h, map->zoom, map->zoom, &width, &height);
+        WIDGET_TEST_CHECK(widget_x(map) == map->x - (width - map->w) / 2);
+        WIDGET_TEST_CHECK(widget_y(map) == map->y - (height - map->h) / 2);
+    }
+
     int map_x = map->x;
     int map_y = map->y;
-    move_widget(map, 17, -9);
-    WIDGET_TEST_CHECK(map->x == map_x + 17 && map->y == map_y - 9);
-    WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
-
-    int map_w = map->w + 11;
-    int map_h = map->h + 7;
-    resize_widget(map, RESIZE_RIGHT, map_w);
-    resize_widget(map, RESIZE_BOTTOM, map_h);
-    WIDGET_TEST_CHECK(map->w == map_w && map->h == map_h);
+    int map_w = map->w;
+    int map_h = map->h;
     WIDGET_TEST_CHECK(widget_test_map_path_is_backmost(map));
 
     SetPriorityWidget(nested);
@@ -1395,6 +1438,9 @@ int widget_priority_integration_test(const char *fixture, const char *saved) {
     widgetdata *textwin = cur_widget[CHATWIN_ID];
     WIDGET_TEST_CHECK(textwin != NULL);
     widget_test_geometry textwin_geometry = widget_test_geometry_get(textwin);
+    WIDGET_TEST_CHECK(widget_set_zoom(map, 1.25));
+    int map_zoom_x = widget_x(map);
+    int map_zoom_y = widget_y(map);
 
     toolkit_widget_deinit();
     toolkit_widget_init();
@@ -1408,11 +1454,13 @@ int widget_priority_integration_test(const char *fixture, const char *saved) {
     WIDGET_TEST_CHECK(drop_target != NULL && drop_target->type == CONTAINER_ID);
     WIDGET_TEST_CHECK(nested != NULL && nested->type == CONTAINER_ID);
     WIDGET_TEST_CHECK(nested->env == NULL);
+    WIDGET_TEST_CHECK(widget_set_zoom(map, 1.25));
     WIDGET_TEST_CHECK(widget_test_geometry_equal(attached, attached_geometry));
     WIDGET_TEST_CHECK(widget_test_geometry_equal(drop_target, drop_target_geometry));
     WIDGET_TEST_CHECK(widget_test_geometry_equal(nested, nested_geometry));
-    WIDGET_TEST_CHECK(map->x == map_x + 17 && map->y == map_y - 9);
+    WIDGET_TEST_CHECK(map->x == map_x && map->y == map_y);
     WIDGET_TEST_CHECK(map->w == map_w && map->h == map_h);
+    WIDGET_TEST_CHECK(widget_x(map) == map_zoom_x && widget_y(map) == map_zoom_y);
     WIDGET_TEST_CHECK(map->event_func != NULL);
     stats = cur_widget[STAT_ID];
     WIDGET_TEST_CHECK(stats != NULL);
@@ -2417,6 +2465,8 @@ void move_widget_rec(widgetdata *widget, int x, int y) {
     /* move the widget */
     widget->x += x;
     widget->y += y;
+    widget->zoom_x += x;
+    widget->zoom_y += y;
 
     /* here, we want to walk through the inventory of the widget, if it exists.
      * when we come across a widget, we move it like we did with the container.
@@ -2461,6 +2511,7 @@ void resize_widget_rec(widgetdata *widget, int x, int width, int y, int height) 
     widget->y = y;
     widget->w = width;
     widget->h = height;
+    widget_sync_zoom_origin(widget);
 
     WIDGET_REDRAW(widget);
 
