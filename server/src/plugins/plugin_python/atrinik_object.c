@@ -786,7 +786,8 @@ static const char doc_Atrinik_Object_TeleportTo[] =
     ":param y: Y coordinate on the map.\n"
     ":type y: int\n"
     ":param reason: Bounded semantic reason code for the private journal.\n"
-    ":type reason: str";
+    ":type reason: str\n"
+    ":raises RuntimeError: If persistent currency is targeted or the journal outcome is uncertain.";
 
 static bool python_object_is_hidden_bank(const object *op) {
     return op->arch != NULL && strcmp(op->arch->name, "player_info") == 0 && op->name != NULL &&
@@ -800,7 +801,7 @@ static bool python_object_is_player_rooted(object *op) {
 
 static bool python_object_reject_currency_move(object *op) {
     if (python_object_is_hidden_bank(op) ||
-        (op->type == MONEY && python_object_is_player_rooted(op))) {
+        (op->type == MONEY && (op->map != NULL || python_object_is_player_rooted(op)))) {
         PyErr_SetString(PyExc_RuntimeError,
                         "Persistent currency cannot be moved as an item; use PayAmount or "
                         "Player.InsertCoins.");
@@ -859,7 +860,8 @@ static const char doc_Atrinik_Object_InsertInto[] =
     ":type reason: str\n"
     ":returns: The inserted object, which may be different from the original (due"
     "to merging, for example). None is returned on failure.\n"
-    ":rtype: class:`Atrinik.Object.Object` or None";
+    ":rtype: class:`Atrinik.Object.Object` or None\n"
+    ":raises RuntimeError: If persistent currency is moved as an item or the journal outcome is uncertain.";
 
 /**
  * Implements Atrinik.Object.Object.InsertInto() Python method.
@@ -1292,7 +1294,8 @@ static const char doc_Atrinik_Object_CreateObject[] =
     "reason='script.item-grant').\n\n"
     "Creates a new object from archname and inserts it into the object.\n\n"
     "Canonical money archetypes use the currency schema and default to "
-    "``script.currency-grant``.\n\n"
+    "``script.currency-grant`` when inserted into a player. They may also be "
+    "created inside a detached, non-persistent object.\n\n"
     ":param archname: Name of the arch to create.\n"
     ":type archname: str\n"
     ":param nrof: Number of objects to create.\n"
@@ -1305,8 +1308,10 @@ static const char doc_Atrinik_Object_CreateObject[] =
     ":type reason: str\n"
     ":returns: The created (and inserted) object, None on failure.\n"
     ":rtype: :class:`Atrinik.Object.Object` or None\n"
-    ":raises Atrinik.AtrinikError: If archname references an invalid "
-    "archetype.";
+    ":raises Atrinik.AtrinikError: If archname references an invalid archetype.\n"
+    ":raises ValueError: If nrof is outside 1..INT32_MAX.\n"
+    ":raises RuntimeError: If MONEY targets a persistent non-player destination or journaling "
+    "fails.";
 
 /**
  * Implements Atrinik.Object.Object.CreateObject() Python method.
@@ -1346,6 +1351,15 @@ Atrinik_Object_CreateObject(Atrinik_Object *self, PyObject *args, PyObject *keyw
     if (nrof == 0 || nrof > INT32_MAX) {
         PyErr_SetString(PyExc_ValueError,
                         "Persistent object quantities must be between one and INT32_MAX.");
+        return NULL;
+    }
+    object *destination_root = hooks->object_get_env(self->obj);
+    bool detached_destination = destination_root->type != PLAYER && destination_root->map == NULL &&
+                                QUERY_FLAG(destination_root, FLAG_REMOVED);
+    if (at->clone.type == MONEY && destination_root->type != PLAYER && !detached_destination) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "CreateObject cannot mint currency into persistent non-player state; use "
+                        "Player.InsertCoins for player currency.");
         return NULL;
     }
 
@@ -1585,7 +1599,8 @@ static const char doc_Atrinik_Object_Remove[] =
     "(such as the activator/event/etc). It is recommended you use :meth:"
     "`Atrinik.SetReturnValue(1)` or similar before the script exits if doing "
     "so.\n\n"
-    ":raises Atrinik.AtrinikError: If the object is already removed.";
+    ":raises Atrinik.AtrinikError: If the object is already removed.\n"
+    ":raises RuntimeError: If persistent currency is targeted or journaling is uncertain.";
 
 /**
  * Implements Atrinik.Object.Object.Remove() Python method.
@@ -1624,7 +1639,8 @@ static const char doc_Atrinik_Object_Destroy[] =
     ".. method:: Destroy(reason='script.item-destroy').\n\n"
     "Frees all data associated with the object.\n\n"
     ":param reason: Bounded semantic reason code for the private journal.\n"
-    ":type reason: str";
+    ":type reason: str\n"
+    ":raises RuntimeError: If destruction cannot be journaled or its terminal sync is uncertain.";
 
 /**
  * Implements Atrinik.Object.Object.Destroy() Python method.
@@ -1637,8 +1653,8 @@ static PyObject *Atrinik_Object_Destroy(Atrinik_Object *self, PyObject *args) {
     }
     OBJEXISTCHECK(self);
     if (python_object_is_hidden_bank(self->obj) && python_object_is_player_rooted(self->obj)) {
-        object_semantic_result_t result = hooks->bank_set_balance_reason(
-            self->obj, 0, "script.bank-destroy");
+        object_semantic_result_t result = hooks->bank_destroy_balance_reason(
+            self->obj, reason);
         if (result != OBJECT_SEMANTIC_COMMITTED) {
             PyErr_SetString(PyExc_RuntimeError,
                             result == OBJECT_SEMANTIC_FAILED
@@ -1646,8 +1662,6 @@ static PyObject *Atrinik_Object_Destroy(Atrinik_Object *self, PyObject *args) {
                                 : "Bank reset, but its durable journal commit is uncertain.");
             return NULL;
         }
-        hooks->object_remove(self->obj, 0);
-        hooks->object_destroy(self->obj);
         Py_RETURN_NONE;
     }
     if (self->obj->type == MONEY && python_object_is_player_rooted(self->obj)) {
@@ -1894,6 +1908,11 @@ static PyObject *Atrinik_Object_Clone(Atrinik_Object *self, PyObject *args) {
     }
 
     OBJEXISTCHECK(self);
+
+    if (python_object_is_hidden_bank(self->obj)) {
+        PyErr_SetString(PyExc_RuntimeError, "Hidden bank state cannot be cloned.");
+        return NULL;
+    }
 
     object *clone;
     if (inventory) {
@@ -2208,7 +2227,8 @@ static const char doc_Atrinik_Object_Decrease[] =
     ":param reason: Bounded semantic reason code for the private journal.\n"
     ":type reason: str\n"
     ":returns: The object if something is left, None otherwise.\n"
-    ":rtype: :class:`Atrinik.Object.Object` or None";
+    ":rtype: :class:`Atrinik.Object.Object` or None\n"
+    ":raises RuntimeError: If the decrease cannot be journaled or its terminal sync is uncertain.";
 
 /**
  * Implements Atrinik.Object.Object.Decrease() Python method.
@@ -2682,7 +2702,8 @@ static const char doc_Atrinik_Object_Load[] =
     "\n\n"
     ":param lines: Lines to load into the object.\n"
     ":type lines: str\n"
-    ":raises Atrinik.AtrinikError: If the object attributes are invalid.";
+    ":raises Atrinik.AtrinikError: If the object attributes are invalid.\n"
+    ":raises RuntimeError: If the object is persistent player or bank state.";
 
 /**
  * Implements Atrinik.Object.Object.Load() Python method.
@@ -2699,10 +2720,12 @@ static PyObject *Atrinik_Object_Load(Atrinik_Object *self, PyObject *args) {
     object *root = hooks->object_get_env(self->obj);
     bool bank = self->obj->arch != NULL && strcmp(self->obj->arch->name, "player_info") == 0 &&
                 self->obj->name != NULL && strcmp(self->obj->name, "BANK_GENERAL") == 0;
+    bool player_info = self->obj->arch != NULL &&
+                       strcmp(self->obj->arch->name, "player_info") == 0;
     bool persistent_item = !QUERY_FLAG(self->obj, FLAG_SYS_OBJECT) && self->obj->type != FORCE &&
                            self->obj->type != POTION_EFFECT && self->obj->type != EVENT_OBJECT &&
                            self->obj->type != QUEST_CONTAINER;
-    if (root != self->obj && root->type == PLAYER && (bank || persistent_item)) {
+    if (root != self->obj && root->type == PLAYER && (bank || player_info || persistent_item)) {
         PyErr_SetString(PyExc_RuntimeError,
                         "Load cannot mutate a persistent player item; use a reason-aware API.");
         return NULL;
@@ -2989,6 +3012,30 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
         PyErr_SetString(PyExc_RuntimeError,
                         "Hidden bank state can only be changed through its balance API.");
         return -1;
+    }
+    if (field->offset == offsetof(object, name) && obj->obj->arch != NULL &&
+        strcmp(obj->obj->arch->name, "player_info") == 0 && PyUnicode_Check(value)) {
+        const char *requested = PyUnicode_AsUTF8(value);
+        if (requested == NULL) {
+            return -1;
+        }
+        if (strcmp(requested, "BANK_GENERAL") == 0) {
+            if (!player_rooted) {
+                PyErr_SetString(PyExc_RuntimeError,
+                                "BANK_GENERAL can only be established for a player.");
+                return -1;
+            }
+            object_semantic_result_t result = hooks->bank_name_info_reason(
+                obj->obj, "script.bank-create");
+            if (result != OBJECT_SEMANTIC_COMMITTED) {
+                PyErr_SetString(PyExc_RuntimeError,
+                                result == OBJECT_SEMANTIC_FAILED
+                                    ? "Bank creation could not be journaled or is not unique."
+                                    : "Bank created, but its durable journal commit is uncertain.");
+                return -1;
+            }
+            return 0;
+        }
     }
     if (player_rooted && obj->obj->type == MONEY &&
         (field->offset == offsetof(object, value) || field->offset == offsetof(object, type))) {

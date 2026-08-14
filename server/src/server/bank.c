@@ -400,6 +400,62 @@ bank_set_balance_reason(object *bank, int64_t value, const char *reason) {
                                                          : OBJECT_SEMANTIC_AMBIGUOUS;
 }
 
+object_semantic_result_t bank_destroy_balance_reason(object *bank, const char *reason) {
+    HARD_ASSERT(bank != NULL);
+    HARD_ASSERT(reason != NULL);
+
+    object *root = object_get_env(bank);
+    if (root->type != PLAYER || bank->arch == NULL || bank->arch->name != shstr_cons.player_info ||
+        bank->name != shstr_cons.BANK_GENERAL || bank->value < 0) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    int64_t before = bank->value;
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
+    if (!gameplay_journal_currency_begin(root,
+                                         reason,
+                                         "currency:bank",
+                                         before,
+                                         -before,
+                                         0,
+                                         "hidden-bank",
+                                         "destroyed",
+                                         "script",
+                                         transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    object_remove(bank, 0);
+    object_destroy(bank);
+    return gameplay_journal_semantic_commit(transaction) ? OBJECT_SEMANTIC_COMMITTED
+                                                         : OBJECT_SEMANTIC_AMBIGUOUS;
+}
+
+object_semantic_result_t bank_name_info_reason(object *bank, const char *reason) {
+    HARD_ASSERT(bank != NULL);
+    HARD_ASSERT(reason != NULL);
+
+    object *root = object_get_env(bank);
+    if (root->type != PLAYER || bank->arch == NULL || bank->arch->name != shstr_cons.player_info ||
+        bank->name == shstr_cons.BANK_GENERAL || bank->value != 0 || bank_find_info(root) != NULL) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
+    if (!gameplay_journal_currency_begin(root,
+                                         reason,
+                                         "currency:bank",
+                                         0,
+                                         0,
+                                         0,
+                                         "service",
+                                         "hidden-bank",
+                                         "script",
+                                         transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    FREE_AND_COPY_HASH(bank->name, "BANK_GENERAL");
+    return gameplay_journal_semantic_commit(transaction) ? OBJECT_SEMANTIC_COMMITTED
+                                                         : OBJECT_SEMANTIC_AMBIGUOUS;
+}
+
 /**
  * Deposit money to player's bank object.
  * @param op

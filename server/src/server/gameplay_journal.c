@@ -989,6 +989,9 @@ static bool journal_append_domain(const char *transaction_id, const char *kind, 
     }
     StringBuffer *record = journal_record("domain", transaction_id, "transaction", "domain.add");
     if (record == NULL) {
+        if (!gameplay_journal_available()) {
+            journal_pending_clear();
+        }
         return false;
     }
     stringbuffer_append_string(record, ",\"domain\":{\"kind\":\"");
@@ -1148,6 +1151,9 @@ bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
     }
     StringBuffer *record = journal_record("intent", transaction_id, kind_name, reason);
     if (record == NULL) {
+        if (!gameplay_journal_available()) {
+            journal_pending_clear();
+        }
         return false;
     }
     stringbuffer_append_string(record, ",\"account_id\":\"");
@@ -1318,7 +1324,11 @@ bool gameplay_journal_abort(const char *transaction_id, const char *reason) {
 }
 
 bool gameplay_journal_attempt(const char *transaction_id) {
-    if (!gameplay_journal_available() || !journal_token_valid(transaction_id, false)) {
+    if (!gameplay_journal_available()) {
+        journal_pending_clear();
+        return false;
+    }
+    if (!journal_token_valid(transaction_id, false)) {
         return false;
     }
     ssize_t index = journal_pending_find(transaction_id);

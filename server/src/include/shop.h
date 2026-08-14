@@ -72,6 +72,8 @@ extern int bank_deposit(object *op, const char *text, int64_t *value);
 extern int bank_withdraw(object *op, const char *text, int64_t *value);
 extern object_semantic_result_t
 bank_set_balance_reason(object *bank, int64_t value, const char *reason);
+extern object_semantic_result_t bank_destroy_balance_reason(object *bank, const char *reason);
+extern object_semantic_result_t bank_name_info_reason(object *bank, const char *reason);
 
 extern void shop_insert_coins(object *op, int64_t value);
 extern bool shop_insert_coins_exact(object *op, int64_t value);

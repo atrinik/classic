@@ -1058,12 +1058,11 @@ shop_set_coin_nrof_reason(object *coin, uint32_t nrof, const char *reason) {
     HARD_ASSERT(coin != NULL);
     HARD_ASSERT(reason != NULL);
 
+    if (nrof == 0 || nrof > INT32_MAX) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
     object *root = object_get_env(coin);
     if (root->type != PLAYER) {
-        coin->nrof = nrof;
-        return OBJECT_SEMANTIC_COMMITTED;
-    }
-    if (nrof == 0 || nrof > INT32_MAX) {
         return OBJECT_SEMANTIC_FAILED;
     }
     if (coin->type != MONEY || coin->arch == NULL || coin->value <= 0 ||
@@ -1187,7 +1186,9 @@ object_semantic_result_t shop_insert_coin_object_reason(object *coin,
     object *root = object_get_env(where);
     int64_t value;
     int64_t before;
-    if (root->type != PLAYER || !shop_currency_destination_counted(root, where) ||
+    if (!QUERY_FLAG(coin, FLAG_REMOVED) || coin->map != NULL || root->type != PLAYER ||
+        !shop_currency_destination_counted(root, where) ||
+        !object_weight_can_add(where, (uint64_t)coin->weight * MAX(1, coin->nrof)) ||
         coin->nrof == 0 || coin->nrof > INT32_MAX || !shop_money_object_value(coin, &value) ||
         !shop_get_recovery_money(root, &before) || value > INT64_MAX - before) {
         return OBJECT_SEMANTIC_FAILED;

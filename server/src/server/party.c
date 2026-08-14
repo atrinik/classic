@@ -548,11 +548,11 @@ static void party_loot_split(object *pl, object *corpse) {
         }
     }
 
-    if (value > 0 && count > GAMEPLAY_JOURNAL_DOMAIN_LIMIT) {
+    if (value > 0 && count >= GAMEPLAY_JOURNAL_DOMAIN_LIMIT) {
         LOG(ERROR,
             "Party currency split has %" PRIu32 " recipients; the journal supports at most %u.",
             count,
-            GAMEPLAY_JOURNAL_DOMAIN_LIMIT);
+            GAMEPLAY_JOURNAL_DOMAIN_LIMIT - 1);
         return;
     }
     if (value > 0) {
@@ -597,7 +597,7 @@ static void party_loot_split(object *pl, object *corpse) {
                 if (!prepared || value_split > INT64_MAX - before ||
                     (source_transaction[0] != '\0' &&
                      (!gameplay_journal_track_player(source_transaction, ol->objlink.ob) ||
-                      (ol->objlink.ob->map != NULL &&
+                      (on_floor && ol->objlink.ob->map != NULL &&
                        !gameplay_journal_track_map_unique(source_transaction,
                                                           ol->objlink.ob->map))))) {
                     prepared = false;

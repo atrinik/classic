@@ -466,7 +466,8 @@ static const char doc_Atrinik_Map_CreateObject[] =
     ":type y: int\n"
     ":returns: The created object.\n"
     ":rtype: :class:`Atrinik.Object.Object`\n"
-    ":raises Atrinik.AtrinikError: If *archname* is not a valid archetype.";
+    ":raises Atrinik.AtrinikError: If *archname* is not a valid archetype.\n"
+    ":raises RuntimeError: If *archname* is MONEY; use Player.InsertCoins.";
 
 /**
  * Implements Atrinik.Map.Map.CreateObject() Python method.
@@ -548,7 +549,8 @@ static const char doc_Atrinik_Map_Insert[] =
     ":type reason: str\n"
     ":returns: The inserted object. Can be None on failure, or different from "
     "*obj* in case of merging.\n"
-    ":rtype: :class:`Atrinik.Object.Object` or None";
+    ":rtype: :class:`Atrinik.Object.Object` or None\n"
+    ":raises RuntimeError: If persistent currency is targeted or journaling is uncertain.";
 
 /**
  * Implements Atrinik.Map.Map.CreateObject() Python method.
@@ -565,10 +567,9 @@ static PyObject *Atrinik_Map_Insert(Atrinik_Map *self, PyObject *args) {
 
     OBJEXISTCHECK(obj);
 
-    object *root = hooks->object_get_env(obj->obj);
     bool bank = obj->obj->arch != NULL && strcmp(obj->obj->arch->name, "player_info") == 0 &&
                 obj->obj->name != NULL && strcmp(obj->obj->name, "BANK_GENERAL") == 0;
-    if (obj->obj->type == MONEY || (bank && root != obj->obj && root->type == PLAYER)) {
+    if (obj->obj->type == MONEY || bank) {
         PyErr_SetString(PyExc_RuntimeError,
                         "Map.Insert cannot move persistent currency; use Player.InsertCoins.");
         return NULL;

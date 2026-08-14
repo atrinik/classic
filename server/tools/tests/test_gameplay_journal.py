@@ -505,6 +505,10 @@ class JournalTests(unittest.TestCase):
             self.record(
                 "intent", "source-tx", version=2, kind="currency",
                 reason="party.currency-source", details=source_details,
+                change={
+                    "subject_id": "currency:party-corpse", "lineage_id": "",
+                    "before": 5, "delta": -5, "after": 0,
+                },
             ),
             self.record(
                 "domain", "source-tx", version=2, reason="domain.add",
@@ -513,6 +517,10 @@ class JournalTests(unittest.TestCase):
             self.record(
                 "intent", "grant-tx", version=2, kind="currency",
                 reason="party.currency-split", details=child_details,
+                change={
+                    "subject_id": "currency:party-loot", "lineage_id": "",
+                    "before": 10, "delta": 5, "after": 15,
+                },
             ),
             self.record(
                 "commit", "source-tx", version=2,
@@ -538,6 +546,22 @@ class JournalTests(unittest.TestCase):
         self.assertEqual(
             plan["grant-tx"]["domains"][0]["action"], "covered-by-party-batch",
         )
+        incomplete_plan = gameplay_journal.reconcile(
+            gameplay_journal.load([self.root]),
+            ["player:acct/hero=0"],
+        )
+        self.assertEqual(
+            incomplete_plan["source-tx"]["action"], "inspect-party-batch",
+        )
+        malformed = gameplay_journal.load([self.root])
+        malformed.transactions["grant-tx"]["intent"]["change"]["delta"] = 4
+        with self.assertRaisesRegex(
+            gameplay_journal.JournalError, "do not conserve source value",
+        ):
+            gameplay_journal.reconcile(
+                malformed,
+                ["player:acct/hero=0", "map-runtime:/world/start=0"],
+            )
 
     def test_reconcile_cli_preserves_intent_sequence_order(self) -> None:
         details = self.details(

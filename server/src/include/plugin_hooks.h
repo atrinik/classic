@@ -750,6 +750,11 @@ struct plugin_hooklist
                          object *,
                          int64_t,
                          const char *)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         bank_destroy_balance_reason,
+                         object *,
+                         const char *)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t, bank_name_info_reason, object *, const char *)
 
 };
 // clang-format on

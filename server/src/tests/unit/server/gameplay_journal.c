@@ -335,6 +335,19 @@ START_TEST(test_item_terminal_failures_report_ambiguity) {
     ck_assert(gameplay_journal_player_checkpoint_allowed(pl));
     semantic_failure_journal_deinit(currency_directory);
 
+    object *bank = arch_get("player_info");
+    FREE_AND_COPY_HASH(bank->name, "BANK_GENERAL");
+    bank->value = 9;
+    bank = object_insert_into(bank, pl, 0);
+    char bank_directory[] = "/tmp/atrinik-bank-destroy-failure-XXXXXX";
+    semantic_failure_journal_init(bank_directory);
+    uint32_t bank_tag = bank->count;
+    ck_assert_int_eq(bank_destroy_balance_reason(bank, "test.bank-destroy-failure"),
+                     OBJECT_SEMANTIC_AMBIGUOUS);
+    ck_assert(!OBJECT_VALID(bank, bank_tag));
+    ck_assert(gameplay_journal_player_checkpoint_allowed(pl));
+    semantic_failure_journal_deinit(bank_directory);
+
     object_destroy(pl);
 }
 END_TEST

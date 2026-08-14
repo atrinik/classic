@@ -744,17 +744,68 @@ def reconcile(journal: Journal, raw_domains: list[str]) -> dict[str, Any]:
             entry["action"] = "none"
         result[transaction_id] = entry
 
-    for source_id, source in ordered:
-        if source["intent"]["reason"] != "party.currency-source":
+    party_sources = {
+        transaction_id: transaction
+        for transaction_id, transaction in ordered
+        if transaction["intent"]["reason"] == "party.currency-source"
+    }
+    party_children: dict[str, list[tuple[str, dict[str, Any]]]] = {
+        source_id: [] for source_id in party_sources
+    }
+    for child_id, child in ordered:
+        if child["intent"]["reason"] != "party.currency-split":
             continue
-        children = [
-            (transaction_id, transaction)
-            for transaction_id, transaction in ordered
-            if transaction["intent"]["reason"] == "party.currency-split"
-            and transaction["intent"].get("details", {}).get("funding") == source_id
-        ]
+        source_id = child["intent"].get("details", {}).get("funding")
+        if source_id not in party_sources:
+            raise JournalError(f"party split {child_id} has no matching source transaction")
+        party_children[source_id].append((child_id, child))
+
+    for source_id, source in party_sources.items():
+        children = party_children[source_id]
         if not children:
-            continue
+            raise JournalError(f"party batch source {source_id} has no recipient grants")
+        source_change = source["intent"]["change"]
+        source_details = source["intent"].get("details", {})
+        if (
+            source_change["subject_id"] != "currency:party-corpse"
+            or source_change["before"] < 0
+            or source_change["delta"] != -source_change["before"]
+            or source_change["after"] != 0
+            or source_details.get("source") != "corpse"
+            or source_details.get("destination") != "party-pool"
+            or source_details.get("funding") != "party-corpse"
+        ):
+            raise JournalError(f"invalid party batch source arithmetic for {source_id}")
+        source_terminal = next(
+            (event for event in source["events"] if event["phase"] in {"commit", "abort"}),
+            None,
+        )
+        child_total = 0
+        for child_id, child in children:
+            child_change = child["intent"]["change"]
+            child_details = child["intent"].get("details", {})
+            if (
+                child_change["subject_id"] != "currency:party-loot"
+                or child_change["delta"] < 0
+                or child_details.get("source") != "corpse"
+                or child_details.get("destination") != "player-or-ground"
+            ):
+                raise JournalError(f"invalid party batch grant arithmetic for {child_id}")
+            child_total += child_change["delta"]
+            if source["status"] == "committed" and child["status"] not in {
+                "committed", "attempted",
+            }:
+                raise JournalError(f"invalid terminal state for party batch grant {child_id}")
+            if source["status"] != "committed" and child["status"] != source["status"]:
+                raise JournalError(f"party batch terminal states differ for {child_id}")
+            if child["status"] == "committed":
+                child_terminal = next(
+                    event for event in child["events"] if event["phase"] == "commit"
+                )
+                if source_terminal is None or child_terminal["sequence"] <= source_terminal["sequence"]:
+                    raise JournalError(f"party batch grant precedes source terminal for {child_id}")
+        if child_total != source_change["before"]:
+            raise JournalError(f"party batch grants do not conserve source value for {source_id}")
         source_entry = result[source_id]
         source_domains = {
             (domain["kind"], domain["id"]) for domain in source["domains"]
@@ -773,10 +824,10 @@ def reconcile(journal: Journal, raw_domains: list[str]) -> dict[str, Any]:
         if source["status"] == "committed":
             actions = {domain.get("action") for domain in source_entry["domains"]}
             source_entry["action"] = (
-                "replay-party-batch"
-                if "replay-required" in actions
-                else "inspect-party-batch"
+                "inspect-party-batch"
                 if "unknown" in actions
+                else "replay-party-batch"
+                if "replay-required" in actions
                 else "none"
             )
         elif source["status"] == "attempted":
