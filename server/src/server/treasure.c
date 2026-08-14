@@ -938,7 +938,9 @@ static void treasure_insert(object *op, object *creator, int flags) {
             CONTR(root)->cs->account != NULL) {
             const char *reason =
                 (flags & GT_STARTEQUIP) != 0 ? "item.starting-grant" : "item.treasure-grant";
-            if (object_insert_into_reason(op, creator, reason) == NULL) {
+            object *inserted = NULL;
+            if (object_insert_into_reason(op, creator, reason, &inserted) ==
+                OBJECT_SEMANTIC_FAILED) {
                 object_destroy(op);
             }
         } else {

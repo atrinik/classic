@@ -25,6 +25,10 @@ HASH = re.compile(r"[0-9a-f]{64}\Z")
 KINDS = {"item", "currency", "quest", "progression"}
 FILE_LIMIT = 9 * 1024 * 1024
 JOURNAL_FILE = re.compile(r"journal-([0-9a-f]{32})-(\d{4,})\.jsonl\Z")
+ITEM_SNAPSHOT = re.compile(
+    r"arch=([^;]+);type=([0-9]+);nrof=([0-9]+);value=(-?[0-9]+);weight=([0-9]+)\Z"
+)
+ITEM_PROVENANCE = re.compile(r"first=([^;]{0,112});last=([^;]{0,112})\Z")
 
 
 class JournalError(ValueError):
@@ -193,6 +197,60 @@ def _validate_schema(value: dict[str, Any], source: str) -> None:
         ) or not _integer(details["price"], 0, (1 << 63) - 1
         ):
             raise JournalError(f"invalid semantic detail value at {source}")
+        if value["kind"] == "item" and (
+            not change["lineage_id"]
+            or not details["archetype"]
+            or not details["snapshot"]
+            or details["quantity"] == 0
+            or not details["source"]
+            or not details["destination"]
+            or not details["actor"]
+            or not details["provenance_before"]
+            or not details["provenance_after"]
+        ):
+            raise JournalError(f"item semantic details are incomplete at {source}")
+        if value["kind"] == "item":
+            snapshot = ITEM_SNAPSHOT.fullmatch(details["snapshot"])
+            provenance = (
+                ITEM_PROVENANCE.fullmatch(details["provenance_before"]),
+                ITEM_PROVENANCE.fullmatch(details["provenance_after"]),
+            )
+            if (
+                snapshot is None
+                or snapshot.group(1) != details["archetype"]
+                or details["object_type"] < 0
+                or not all(
+                    _integer(int(snapshot.group(index)), 0, (1 << 32) - 1)
+                    for index in (2, 3, 5)
+                )
+                or not _integer(int(snapshot.group(4)), -(1 << 63), (1 << 63) - 1)
+                or int(snapshot.group(2)) != details["object_type"]
+                or int(snapshot.group(3)) == 0
+                or details["snapshot"]
+                != (
+                    f"arch={snapshot.group(1)};type={int(snapshot.group(2))};"
+                    f"nrof={int(snapshot.group(3))};value={int(snapshot.group(4))};"
+                    f"weight={int(snapshot.group(5))}"
+                )
+            ):
+                raise JournalError(f"invalid item snapshot at {source}")
+            if any(
+                item is None
+                or any(
+                    identity != "" and IDENTITY.fullmatch(identity) is None
+                    for identity in item.groups()
+                )
+                for item in provenance
+            ):
+                raise JournalError(f"invalid item provenance at {source}")
+        if value["kind"] == "currency" and (
+            not details["source"]
+            or not details["destination"]
+            or not details["actor"]
+            or not details["currency"]
+            or not details["funding"]
+        ):
+            raise JournalError(f"currency semantic details are incomplete at {source}")
 
 
 def _record(raw: bytes, source: str) -> dict[str, Any]:

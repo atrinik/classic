@@ -46,7 +46,8 @@ extern int64_t shop_get_money(object *op);
 
 extern bool shop_pay(object *op, int64_t to_pay);
 
-extern bool shop_pay_reason(object *op, int64_t to_pay, const char *reason);
+/** Reason-aware payment; AMBIGUOUS means funds changed but terminal sync failed. */
+extern object_semantic_result_t shop_pay_reason(object *op, int64_t to_pay, const char *reason);
 
 extern bool shop_pay_item(object *op, object *item);
 
@@ -71,7 +72,11 @@ extern int bank_deposit(object *op, const char *text, int64_t *value);
 extern int bank_withdraw(object *op, const char *text, int64_t *value);
 
 extern void shop_insert_coins(object *op, int64_t value);
+extern bool shop_insert_coins_exact(object *op, int64_t value);
+extern bool shop_insert_coins_exact_tagged(object *op, int64_t value, const char *transaction_id);
+extern bool shop_coins_available(void);
 
-extern bool shop_insert_coins_reason(object *op, int64_t value, const char *reason);
+extern object_semantic_result_t
+shop_insert_coins_reason(object *op, int64_t value, const char *reason);
 
 #endif

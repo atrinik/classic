@@ -2424,20 +2424,54 @@ object *object_insert_into(object *op, object *where, int flag) {
     return op;
 }
 
-object *object_insert_into_reason(object *op, object *where, const char *reason) {
+static bool object_custody_auditable(const object *op) {
+    return !QUERY_FLAG(op, FLAG_SYS_OBJECT) && op->type != PLAYER && op->type != FORCE &&
+           op->type != POTION_EFFECT && op->type != EVENT_OBJECT && op->type != QUEST_CONTAINER &&
+           (op->arch == NULL || (strcmp(op->arch->name, "player_info") != 0 &&
+                                 strcmp(op->arch->name, "force") != 0));
+}
+
+static const char *object_custody_location(const object *op, const object *root) {
+    if (root->type == PLAYER) {
+        return "player";
+    }
+    if (op->env != NULL) {
+        return "external-container";
+    }
+    if (op->map != NULL || root->map != NULL) {
+        return "ground";
+    }
+    return "service";
+}
+
+static const char *object_custody_destination(const object *where, const object *root) {
+    if (root->type == PLAYER) {
+        return "player";
+    }
+    if (where->type == CONTAINER) {
+        return "external-container";
+    }
+    return object_custody_location(where, root);
+}
+
+object_semantic_result_t
+object_insert_into_reason(object *op, object *where, const char *reason, object **inserted_out) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(where != NULL);
     HARD_ASSERT(reason != NULL);
+    HARD_ASSERT(inserted_out != NULL);
+    *inserted_out = NULL;
 
     object *source_root = object_get_env(op);
     object *destination_root = object_get_env(where);
     object *source_player = source_root->type == PLAYER ? source_root : NULL;
     object *destination_player = destination_root->type == PLAYER ? destination_root : NULL;
-    if (source_player == destination_player) {
+    if (source_player == destination_player || !object_custody_auditable(op)) {
         if (!QUERY_FLAG(op, FLAG_REMOVED)) {
             object_remove(op, 0);
         }
-        return object_insert_into(op, where, 0);
+        *inserted_out = object_insert_into(op, where, 0);
+        return OBJECT_SEMANTIC_COMMITTED;
     }
 
     object *actor = source_player != NULL ? source_player : destination_player;
@@ -2450,45 +2484,115 @@ object *object_insert_into_reason(object *op, object *where, const char *reason)
             counterparty = "";
         }
     }
-    if (actor != NULL && !object_custody_begin(op,
-                                               actor,
-                                               reason,
-                                               source_player != NULL ? "player" : "service",
-                                               destination_player != NULL ? "player" : "service",
-                                               counterparty,
-                                               MAX(1, op->nrof),
-                                               destination_player != NULL,
-                                               source_player != NULL,
-                                               &transaction)) {
-        return NULL;
+    const char *acquirer =
+        destination_player != NULL ? object_custody_actor_id(destination_player) : "";
+    const char *relinquisher = source_player != NULL ? object_custody_actor_id(source_player) : "";
+    int64_t quantity = MAX(1, op->nrof);
+    int64_t delta = actor == source_player ? -quantity : quantity;
+    if (actor != NULL &&
+        (acquirer == NULL || relinquisher == NULL ||
+         !object_custody_begin_parties(op,
+                                       actor,
+                                       reason,
+                                       object_custody_location(op, source_root),
+                                       object_custody_destination(where, destination_root),
+                                       counterparty,
+                                       (uint32_t)quantity,
+                                       acquirer,
+                                       relinquisher,
+                                       delta < 0 ? quantity : 0,
+                                       delta,
+                                       delta < 0 ? 0 : quantity,
+                                       0,
+                                       "",
+                                       "",
+                                       &transaction))) {
+        *inserted_out = NULL;
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (actor != NULL) {
+        object_custody_apply(op, &transaction);
     }
     if (!QUERY_FLAG(op, FLAG_REMOVED)) {
         object_remove(op, 0);
     }
     object *inserted = object_insert_into(op, where, 0);
+    *inserted_out = inserted;
     if (actor != NULL) {
-        (void)object_custody_commit(inserted, &transaction);
+        return object_custody_finish(&transaction) ? OBJECT_SEMANTIC_COMMITTED
+                                                   : OBJECT_SEMANTIC_AMBIGUOUS;
     }
-    return inserted;
+    return OBJECT_SEMANTIC_COMMITTED;
 }
 
-bool object_remove_reason(object *op, const char *reason, bool destroy) {
+object_semantic_result_t object_insert_map_reason(object *op,
+                                                  mapstruct *m,
+                                                  int x,
+                                                  int y,
+                                                  const char *reason,
+                                                  object **inserted_out) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(m != NULL);
+    HARD_ASSERT(reason != NULL);
+    HARD_ASSERT(inserted_out != NULL);
+    *inserted_out = NULL;
+
+    object *root = object_get_env(op);
+    object_custody_transaction_t transaction = {0};
+    bool journal = root->type == PLAYER && object_custody_auditable(op);
+    if (journal && !object_custody_begin(op,
+                                         root,
+                                         reason,
+                                         "player",
+                                         "ground",
+                                         "",
+                                         MAX(1, op->nrof),
+                                         false,
+                                         true,
+                                         &transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (journal) {
+        object_custody_apply(op, &transaction);
+    }
+    if (!QUERY_FLAG(op, FLAG_REMOVED)) {
+        object_remove(op, 0);
+    }
+    op->x = x;
+    op->y = y;
+    *inserted_out = object_insert_map(op, m, NULL, 0);
+    if (*inserted_out == NULL) {
+        /* Map insertion may return NULL after walk-on effects destroyed the
+         * object. Preserve the intent for restart reconciliation. */
+        return journal ? OBJECT_SEMANTIC_AMBIGUOUS : OBJECT_SEMANTIC_FAILED;
+    }
+    if (journal && !object_custody_finish(&transaction)) {
+        return OBJECT_SEMANTIC_AMBIGUOUS;
+    }
+    return OBJECT_SEMANTIC_COMMITTED;
+}
+
+object_semantic_result_t object_remove_reason(object *op, const char *reason, bool destroy) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(reason != NULL);
 
     object *root = object_get_env(op);
+    bool journal = root->type == PLAYER && object_custody_auditable(op);
     object_custody_transaction_t transaction = {0};
-    if (root->type == PLAYER && !object_custody_begin(op,
-                                                      root,
-                                                      reason,
-                                                      "player",
-                                                      destroy ? "destroyed" : "service",
-                                                      "",
-                                                      MAX(1, op->nrof),
-                                                      false,
-                                                      true,
-                                                      &transaction)) {
-        return false;
+    if (journal && !object_custody_begin(op,
+                                         root,
+                                         reason,
+                                         "player",
+                                         destroy ? "destroyed" : "service",
+                                         "",
+                                         MAX(1, op->nrof),
+                                         false,
+                                         true,
+                                         &transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (journal && !destroy) {
+        object_custody_apply(op, &transaction);
     }
     if (!QUERY_FLAG(op, FLAG_REMOVED)) {
         object_remove(op, 0);
@@ -2496,10 +2600,11 @@ bool object_remove_reason(object *op, const char *reason, bool destroy) {
     if (destroy) {
         object_destroy(op);
     }
-    if (root->type == PLAYER) {
-        (void)object_custody_finish(&transaction);
+    if (journal) {
+        return object_custody_finish(&transaction) ? OBJECT_SEMANTIC_COMMITTED
+                                                   : OBJECT_SEMANTIC_AMBIGUOUS;
     }
-    return true;
+    return OBJECT_SEMANTIC_COMMITTED;
 }
 
 /**
@@ -2924,15 +3029,15 @@ const char *object_custody_actor_id(object *player_ob) {
     return object_custody_actor(player_ob) ? player_ob->custody_actor : NULL;
 }
 
-bool object_custody_begin_economy(const object *op,
+bool object_custody_begin_parties(const object *op,
                                   object *actor_ob,
                                   const char *reason,
                                   const char *source,
                                   const char *destination,
                                   const char *counterparty,
                                   uint32_t quantity,
-                                  bool acquire,
-                                  bool relinquish,
+                                  const char *acquirer,
+                                  const char *relinquisher,
                                   int64_t before,
                                   int64_t delta,
                                   int64_t after,
@@ -2945,10 +3050,12 @@ bool object_custody_begin_economy(const object *op,
     HARD_ASSERT(reason != NULL);
     HARD_ASSERT(source != NULL);
     HARD_ASSERT(destination != NULL);
+    HARD_ASSERT(acquirer != NULL);
+    HARD_ASSERT(relinquisher != NULL);
     HARD_ASSERT(transaction != NULL);
 
     memset(transaction, 0, sizeof(*transaction));
-    if (!object_custody_actor(actor_ob)) {
+    if (op->arch == NULL || !object_custody_actor(actor_ob)) {
         return false;
     }
     snprintf(VS(transaction->actor), "%s", actor_ob->custody_actor);
@@ -2963,12 +3070,13 @@ bool object_custody_begin_economy(const object *op,
     }
     snprintf(VS(transaction->first_after),
              "%s",
-             op->custody_first != NULL ? op->custody_first : (acquire ? transaction->actor : ""));
+             op->custody_first != NULL ? op->custody_first : acquirer);
     snprintf(VS(transaction->last_after),
              "%s",
-             relinquish ? transaction->actor : (op->custody_last != NULL ? op->custody_last : ""));
-    transaction->acquire = acquire;
-    transaction->relinquish = relinquish;
+             relinquisher[0] != '\0' ? relinquisher
+                                     : (op->custody_last != NULL ? op->custody_last : ""));
+    transaction->acquire = acquirer[0] != '\0';
+    transaction->relinquish = relinquisher[0] != '\0';
 
     char snapshot[GAMEPLAY_JOURNAL_ID_MAX + 1];
     snprintf(VS(snapshot),
@@ -3019,6 +3127,44 @@ bool object_custody_begin_economy(const object *op,
     return transaction->active;
 }
 
+bool object_custody_begin_economy(const object *op,
+                                  object *actor_ob,
+                                  const char *reason,
+                                  const char *source,
+                                  const char *destination,
+                                  const char *counterparty,
+                                  uint32_t quantity,
+                                  bool acquire,
+                                  bool relinquish,
+                                  int64_t before,
+                                  int64_t delta,
+                                  int64_t after,
+                                  int64_t price,
+                                  const char *currency,
+                                  const char *funding,
+                                  object_custody_transaction_t *transaction) {
+    const char *actor = object_custody_actor_id(actor_ob);
+    if (actor == NULL) {
+        return false;
+    }
+    return object_custody_begin_parties(op,
+                                        actor_ob,
+                                        reason,
+                                        source,
+                                        destination,
+                                        counterparty,
+                                        quantity,
+                                        acquire ? actor : "",
+                                        relinquish ? actor : "",
+                                        before,
+                                        delta,
+                                        after,
+                                        price,
+                                        currency,
+                                        funding,
+                                        transaction);
+}
+
 bool object_custody_begin(const object *op,
                           object *actor_ob,
                           const char *reason,
@@ -3047,7 +3193,7 @@ bool object_custody_begin(const object *op,
                                         transaction);
 }
 
-bool object_custody_commit(object *op, object_custody_transaction_t *transaction) {
+void object_custody_apply(object *op, const object_custody_transaction_t *transaction) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(transaction != NULL);
 
@@ -3061,6 +3207,10 @@ bool object_custody_commit(object *op, object_custody_transaction_t *transaction
         FREE_AND_CLEAR_HASH2(op->custody_last);
         op->custody_last = add_string(transaction->last_after);
     }
+}
+
+bool object_custody_commit(object *op, object_custody_transaction_t *transaction) {
+    object_custody_apply(op, transaction);
     return object_custody_finish(transaction);
 }
 
@@ -3092,17 +3242,18 @@ void object_custody_record(const object *op, object *actor_ob, const char *reaso
         return;
     }
 
-    char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
-    if (gameplay_journal_player_begin(CONTR(actor_ob),
-                                      "item",
-                                      reason,
-                                      op->custody_lineage,
-                                      op->custody_lineage,
-                                      0,
-                                      1,
-                                      1,
-                                      transaction_id)) {
-        gameplay_journal_commit(transaction_id);
+    object_custody_transaction_t transaction;
+    if (object_custody_begin(op,
+                             actor_ob,
+                             reason,
+                             "service",
+                             "player",
+                             "",
+                             MAX(1, op->nrof),
+                             true,
+                             false,
+                             &transaction)) {
+        (void)object_custody_finish(&transaction);
     }
 }
 
@@ -3607,6 +3758,40 @@ bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool
     }
 
     return true;
+}
+
+object_semantic_result_t
+object_enter_map_reason(object *op, mapstruct *m, int x, int y, const char *reason) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(m != NULL);
+    HARD_ASSERT(reason != NULL);
+
+    object *root = object_get_env(op);
+    object_custody_transaction_t transaction = {0};
+    bool journal = root->type == PLAYER && object_custody_auditable(op);
+    if (journal && !object_custody_begin(op,
+                                         root,
+                                         reason,
+                                         "player",
+                                         "ground",
+                                         "",
+                                         MAX(1, op->nrof),
+                                         false,
+                                         true,
+                                         &transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (journal) {
+        object_custody_apply(op, &transaction);
+    }
+    if (!object_enter_map(op, NULL, m, x, y, true)) {
+        /* Entry can fail after removal or a map effect mutated the object. */
+        return journal ? OBJECT_SEMANTIC_AMBIGUOUS : OBJECT_SEMANTIC_FAILED;
+    }
+    if (journal && !object_custody_finish(&transaction)) {
+        return OBJECT_SEMANTIC_AMBIGUOUS;
+    }
+    return OBJECT_SEMANTIC_COMMITTED;
 }
 
 /**

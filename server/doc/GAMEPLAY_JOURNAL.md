@@ -17,8 +17,8 @@ offline tool continues to validate retained version-1 files. Records contain:
   reason code;
 - stable canonical account and character identities and, for intents, typed
   map coordinates and `before`/`delta`/`after` values;
-- a stable subject ID and optional item-lineage ID rather than a display name or
-  serialized object description;
+- a stable subject ID and kind-required item-lineage ID rather than a display
+  name or serialized object description;
 - for version-2 intents, bounded semantic `details`: item archetype/type and an
   immutable snapshot, quantity, source/destination, actor/counterparty,
   provenance before/after, total price, currency, and funding source;
@@ -145,20 +145,35 @@ operation. Helpers below that producer do not emit another transaction.
 | Player to external container/player | `put_object_in_sack()` | `item.external-transfer` / `item.player-transfer` | Intent before split; commit after destination insertion |
 | Starting/treasure/quest grant | `treasure_insert()` / quest grant site | `item.starting-grant`, `item.treasure-grant`, `quest.item-grant`, `quest.objective-grant` | One reason-aware insertion transaction |
 | Trusted Python item grant/transfer/removal/destruction | `object_insert_into_reason()` / `object_remove_reason()` | Caller-supplied bounded reason; documented `script.item-*` defaults | Intent before insertion, removal, or destruction; one terminal record |
+| Trusted Python player-inventory to map transfer | `object_insert_map_reason()` / `object_enter_map_reason()` | Caller-supplied reason; `script.item-drop` / `script.item-teleport` defaults | Intent before removal; provenance before map merge; terminal result exposed as committed, failed, or ambiguous |
+| Party item loot | `party_loot_random()` / `party_loot_split()` | `item.party-loot` | Reason-aware grant; source remains in the corpse if intent preparation fails |
+| Party currency loot | `party_loot_random()` / `party_loot_split()` | `party.currency-loot` / `party.currency-split` | Random transfer journals before moving the source stack; split mode stages every recipient intent before source removal and commits after exact delivery |
 | Shop checkout | `shop_pay_internal()` | `shop.purchase` | One item transaction containing quantity, total price, and carried/bank/mixed funding; no generic payment or bank duplicate |
 | Shop sale | `shop_sell_item_begin()` / `shop_sell_item_commit()` | `shop.sale` | Intent before split; commit after coins, unpaid state, and provenance change |
 | Bank deposit/withdrawal | `bank_deposit()` / `bank_withdraw()` | `bank.deposit` / `bank.withdraw` | Exact hidden balance before/delta/after around the mutation |
 | Bank-funded checkout | `shop_pay_internal()` | `shop.purchase` | The correlated purchase transaction is also the sole hidden-bank write record |
-| Generated currency | `shop_insert_coins_reason()` | `script.currency-grant`, `party.currency-split`, or caller reason | Intent before coin insertion; commit after inventory/floor delivery |
+| Generated currency | `shop_insert_coins_reason()` | `script.currency-grant` or caller reason | Intent before coin insertion; commit only after exact inventory/floor delivery |
 | Alchemy currency replacement | `cast_transform_wealth()` | `spell.alchemy` | One before/delta/after transaction around source removal and replacement delivery |
 | Trusted Python payment | `shop_pay_reason()` | Caller reason; `script.payment` by default | One currency transaction around carried/bank payment |
 | Start-equipment destruction | `drop_object()` | `item.startequip-destroy` | Item captured before destruction; commit afterward |
 
 The item transaction's top-level arithmetic is quantity for ordinary custody.
-For purchases and sales it represents the balance actually mutated (the hidden
-bank slice for bank or mixed funding), while `details.price` always holds the
-complete copper-equivalent price. This lets one correlated transaction prove
-both the business action and its bank write without double-counting.
+For purchases it represents the balance actually mutated (the hidden bank
+slice for bank or mixed funding), while `details.price` always holds the
+complete copper-equivalent price. Shop sales and generated currency use the
+logical amount delivered across inventory and floor (`0`, `+amount`, `amount`),
+because the carried-cash balance alone does not include floor delivery. Alchemy
+uses the sacrificed value, net change, and replacement value across its carried
+source and inventory/floor output. Bank records remain exact hidden-balance
+arithmetic. These conventions keep recovery arithmetic authoritative without
+double-counting correlated writes.
+
+Journal-backed currency output is materialized in non-merging stacks carrying
+`currency:<transaction_id>` as durable lineage. During recovery, the hidden
+bank balance (where applicable) and those tagged survivors distinguish an
+unapplied intent, an interrupted delivery, and a fully applied operation. The
+tag applies equally to inventory and floor output and remains after commit as
+the transaction correlation key.
 
 Existing aggregate metrics remain at the same semantic boundaries. Covered
 positive-value bank/shop action counts and pickup/drop unit counts advance only
@@ -178,7 +193,7 @@ Trusted content uses the typed player methods rather than formatting records:
 
 ```python
 transaction = player.JournalIntent(
-    "currency", "quest.reward", "currency:gold", before, delta, after
+    "quest", "quest.advance", "quest:example", before, delta, after
 )
 try:
     perform_mutation()
@@ -189,9 +204,11 @@ else:
     player.JournalCommit(transaction)
 ```
 
-Item intents additionally pass a stable lineage ID. Quest and progression
-intents use stable authored subject IDs. Producers must not catch and ignore a
-journal exception or emit a commit for a vetoed/failed mutation.
+Item and currency mutations use `InsertInto`, `Remove`, `Destroy`, `Map.Insert`,
+`TeleportTo`, `InsertCoins`, and `Pay` so schema-v2 semantic details cannot be
+omitted. Quest and progression intents use stable authored subject IDs.
+Producers must not catch and ignore a journal exception or emit a commit for a
+vetoed/failed mutation.
 
 ## Choosing the right record
 

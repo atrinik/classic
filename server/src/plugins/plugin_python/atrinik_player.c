@@ -430,7 +430,8 @@ static PyObject *Atrinik_Player_QuestStatus(Atrinik_Player *self, PyObject *args
 static const char doc_Atrinik_Player_JournalIntent[] =
     ".. method:: JournalIntent(kind, reason, subject, before, delta, after, lineage='').\n\n"
     "Durably records a typed gameplay transaction intent before trusted content mutates state. "
-    "Kinds are item, currency, quest, and progression. Values and identifiers are structured; "
+    "Kinds are quest and progression; item and currency mutations must use the reason-aware "
+    "object and coin APIs. Values and identifiers are structured; "
     "free-form record text is not accepted.\n\n"
     ":returns: Opaque transaction identifier to commit or abort.\n:rtype: str\n"
     ":raises RuntimeError: If a typed field is invalid or the journal cannot durably write the "
@@ -1148,8 +1149,13 @@ static PyObject *Atrinik_Player_InsertCoins(Atrinik_Player *self, PyObject *args
         return NULL;
     }
 
-    if (!hooks->shop_insert_coins_reason(self->pl->ob, value, reason)) {
-        PyErr_SetString(PyExc_RuntimeError, "Currency grant could not be journaled.");
+    object_semantic_result_t result =
+        hooks->shop_insert_coins_reason(self->pl->ob, value, reason);
+    if (result != OBJECT_SEMANTIC_COMMITTED) {
+        PyErr_SetString(PyExc_RuntimeError,
+                       result == OBJECT_SEMANTIC_FAILED
+                           ? "Currency grant could not be journaled."
+                           : "Currency granted, but its durable journal commit is uncertain.");
         return NULL;
     }
 

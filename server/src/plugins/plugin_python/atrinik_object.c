@@ -777,7 +777,7 @@ static PyObject *Atrinik_Object_ActivateRune(Atrinik_Object *self, PyObject *arg
 
 /** Documentation for Atrinik_Object_TeleportTo(). */
 static const char doc_Atrinik_Object_TeleportTo[] =
-    ".. method:: TeleportTo(path, x=0, y=0).\n\n"
+    ".. method:: TeleportTo(path, x=0, y=0, reason='script.item-teleport').\n\n"
     "Teleports the object to the specified coordinates on a map.\n\n"
     ":param path: The map path.\n"
     ":type path: str\n"
@@ -791,14 +791,14 @@ static const char doc_Atrinik_Object_TeleportTo[] =
  * @copydoc PyMethod_VARARGS_KEYWORDS
  */
 static PyObject *Atrinik_Object_TeleportTo(Atrinik_Object *self, PyObject *args, PyObject *keywds) {
-    static char *kwlist[] = {"path", "x", "y", NULL};
-    const char *path;
+    static char *kwlist[] = {"path", "x", "y", "reason", NULL};
+    const char *path, *reason = "script.item-teleport";
     int x, y;
     mapstruct *m;
 
     x = y = 0;
 
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|ii", kwlist, &path, &x, &y)) {
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|iis", kwlist, &path, &x, &y, &reason)) {
         return NULL;
     }
 
@@ -810,7 +810,14 @@ static PyObject *Atrinik_Object_TeleportTo(Atrinik_Object *self, PyObject *args,
         return NULL;
     }
 
-    hooks->object_enter_map(self->obj, NULL, m, x, y, 1);
+    object_semantic_result_t result = hooks->object_enter_map_reason(self->obj, m, x, y, reason);
+    if (result != OBJECT_SEMANTIC_COMMITTED) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        result == OBJECT_SEMANTIC_FAILED
+                            ? "Object teleport failed."
+                            : "Object teleported, but its durable journal commit is uncertain.");
+        return NULL;
+    }
 
     Py_INCREF(Py_None);
     return Py_None;
@@ -843,10 +850,17 @@ static PyObject *Atrinik_Object_InsertInto(Atrinik_Object *self, PyObject *args)
     OBJEXISTCHECK(self);
     OBJEXISTCHECK(where);
 
-    object *ret = hooks->object_insert_into_reason(self->obj, where->obj, reason);
-    if (ret == NULL) {
+    object *ret = NULL;
+    object_semantic_result_t result =
+        hooks->object_insert_into_reason(self->obj, where->obj, reason, &ret);
+    if (result == OBJECT_SEMANTIC_FAILED) {
         Py_INCREF(Py_None);
         return Py_None;
+    }
+    if (result == OBJECT_SEMANTIC_AMBIGUOUS) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Item moved, but its durable journal commit is uncertain.");
+        return NULL;
     }
 
     return wrap_object(ret);
@@ -1313,8 +1327,21 @@ Atrinik_Object_CreateObject(Atrinik_Object *self, PyObject *args, PyObject *keyw
         SET_FLAG(tmp, FLAG_IDENTIFIED);
     }
 
-    tmp = hooks->object_insert_into_reason(tmp, self->obj, reason);
-    if (tmp != NULL && self->obj->type == PLAYER && tmp->type == SPELL) {
+    object *inserted = NULL;
+    object_semantic_result_t result =
+        hooks->object_insert_into_reason(tmp, self->obj, reason, &inserted);
+    if (result == OBJECT_SEMANTIC_FAILED) {
+        hooks->object_destroy(tmp);
+        PyErr_SetString(PyExc_RuntimeError, "Item grant could not be journaled.");
+        return NULL;
+    }
+    if (result == OBJECT_SEMANTIC_AMBIGUOUS) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Item granted, but its durable journal commit is uncertain.");
+        return NULL;
+    }
+    tmp = inserted;
+    if (self->obj->type == PLAYER && tmp->type == SPELL) {
         hooks->metrics_character_add_by_name(CONTR(self->obj), "magic.spells_learned", 1);
         hooks->metrics_character_spells_changed(CONTR(self->obj));
     }
@@ -1535,8 +1562,12 @@ static PyObject *Atrinik_Object_Remove(Atrinik_Object *self, PyObject *args) {
         RAISE("Object has been removed already.");
     }
 
-    if (!hooks->object_remove_reason(self->obj, reason, false)) {
-        PyErr_SetString(PyExc_RuntimeError, "Item removal could not be journaled.");
+    object_semantic_result_t result = hooks->object_remove_reason(self->obj, reason, false);
+    if (result != OBJECT_SEMANTIC_COMMITTED) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        result == OBJECT_SEMANTIC_FAILED
+                            ? "Item removal could not be journaled."
+                            : "Item removed, but its durable journal commit is uncertain.");
         return NULL;
     }
 
@@ -1560,8 +1591,12 @@ static PyObject *Atrinik_Object_Destroy(Atrinik_Object *self, PyObject *args) {
     }
     OBJEXISTCHECK(self);
 
-    if (!hooks->object_remove_reason(self->obj, reason, true)) {
-        PyErr_SetString(PyExc_RuntimeError, "Item destruction could not be journaled.");
+    object_semantic_result_t result = hooks->object_remove_reason(self->obj, reason, true);
+    if (result != OBJECT_SEMANTIC_COMMITTED) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        result == OBJECT_SEMANTIC_FAILED
+                            ? "Item destruction could not be journaled."
+                            : "Item destroyed, but its durable journal commit is uncertain.");
         return NULL;
     }
 
@@ -1750,7 +1785,13 @@ static PyObject *Atrinik_Object_PayAmount(Atrinik_Object *self, PyObject *args) 
 
     OBJEXISTCHECK(self);
 
-    return Py_BuildBoolean(hooks->shop_pay_reason(self->obj, value, reason));
+    object_semantic_result_t result = hooks->shop_pay_reason(self->obj, value, reason);
+    if (result == OBJECT_SEMANTIC_AMBIGUOUS) {
+        PyErr_SetString(PyExc_RuntimeError,
+                       "Payment completed, but its durable journal commit is uncertain.");
+        return NULL;
+    }
+    return Py_BuildBoolean(result == OBJECT_SEMANTIC_COMMITTED);
 }
 
 /** Documentation for Atrinik_Object_Clone(). */

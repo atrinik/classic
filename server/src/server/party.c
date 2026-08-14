@@ -36,6 +36,7 @@
 #include <toolkit/packet.h>
 #include <player.h>
 #include <object.h>
+#include <gameplay_journal.h>
 
 /**
  * String representations of the party looting modes.
@@ -308,11 +309,49 @@ static void party_loot_random(object *pl, object *corpse) {
             if (on_same_map(ol->objlink.ob, pl)) {
                 if (num == pl_id) {
                     if (player_can_carry(ol->objlink.ob, WEIGHT_NROF(tmp, tmp->nrof))) {
-                        char *name = object_get_name_s(tmp, NULL);
-                        draw_info_format(COLOR_BLUE, ol->objlink.ob, "You receive the %s.", name);
-                        free(name);
-                        object_remove(tmp, 0);
-                        object_insert_into(tmp, ol->objlink.ob, 0);
+                        object *inserted = NULL;
+                        object_semantic_result_t result;
+                        if (tmp->type == MONEY) {
+                            int64_t nrof = MAX(1, tmp->nrof);
+                            if (tmp->value < 0 || tmp->value > INT64_MAX / nrof) {
+                                break;
+                            }
+                            int64_t value = tmp->value * nrof;
+                            char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+                            if (!gameplay_journal_currency_begin(ol->objlink.ob,
+                                                                 "party.currency-loot",
+                                                                 "currency:party-loot",
+                                                                 0,
+                                                                 value,
+                                                                 value,
+                                                                 "corpse",
+                                                                 "carried-cash",
+                                                                 "party-corpse",
+                                                                 transaction)) {
+                                break;
+                            }
+                            char lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
+                            snprintf(VS(lineage), "currency:%s", transaction);
+                            FREE_AND_COPY_HASH(tmp->custody_lineage, lineage);
+                            object_remove(tmp, 0);
+                            inserted = object_insert_into(tmp, ol->objlink.ob, 0);
+                            result = gameplay_journal_semantic_commit(transaction)
+                                         ? OBJECT_SEMANTIC_COMMITTED
+                                         : OBJECT_SEMANTIC_AMBIGUOUS;
+                        } else {
+                            result = object_insert_into_reason(tmp,
+                                                               ol->objlink.ob,
+                                                               "item.party-loot",
+                                                               &inserted);
+                        }
+                        if (result == OBJECT_SEMANTIC_COMMITTED) {
+                            char *name = object_get_name_s(inserted, NULL);
+                            draw_info_format(COLOR_BLUE,
+                                             ol->objlink.ob,
+                                             "You receive the %s.",
+                                             name);
+                            free(name);
+                        }
                     }
 
                     break;
@@ -372,8 +411,13 @@ static void party_loot_split(object *pl, object *corpse) {
         }
 
         if (tmp->type == MONEY) {
-            value += tmp->value * tmp->nrof;
-            object_remove(tmp, 0);
+            int64_t nrof = MAX(1, tmp->nrof);
+            if (tmp->value < 0 || tmp->value > INT64_MAX / nrof ||
+                value > INT64_MAX - tmp->value * nrof) {
+                LOG(ERROR, "Party corpse currency value overflow for %s", object_get_str(tmp));
+                return;
+            }
+            value += tmp->value * nrof;
             continue;
         }
 
@@ -386,15 +430,14 @@ static void party_loot_split(object *pl, object *corpse) {
 
             if (on_same_map(ol->objlink.ob, pl) &&
                 player_can_carry(ol->objlink.ob, WEIGHT_NROF(tmp, tmp->nrof))) {
-                char *name = object_get_name_s(tmp, NULL);
-                draw_info_format(COLOR_BLUE,
-                                 ol->objlink.ob,
-                                 "You receive the "
-                                 "%s.",
-                                 name);
-                free(name);
-                object_remove(tmp, 0);
-                object_insert_into(tmp, ol->objlink.ob, 0);
+                object *inserted = NULL;
+                object_semantic_result_t result =
+                    object_insert_into_reason(tmp, ol->objlink.ob, "item.party-loot", &inserted);
+                if (result == OBJECT_SEMANTIC_COMMITTED) {
+                    char *name = object_get_name_s(inserted, NULL);
+                    draw_info_format(COLOR_BLUE, ol->objlink.ob, "You receive the %s.", name);
+                    free(name);
+                }
                 break;
             }
 
@@ -413,27 +456,75 @@ static void party_loot_split(object *pl, object *corpse) {
     }
 
     if (value > 0) {
-        int64_t value_split;
-        uint32_t num;
+        typedef struct party_currency_grant {
+            object *recipient;
+            int64_t value;
+            char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+            bool active;
+        } party_currency_grant_t;
+        party_currency_grant_t *grants = xcalloc(count, sizeof(*grants));
+        uint32_t num = 0;
+        bool prepared = shop_coins_available();
 
-        for (num = 0, ol = party->members; ol; ol = ol->next) {
+        for (ol = party->members; prepared && ol != NULL; ol = ol->next) {
             if (on_same_map(ol->objlink.ob, pl)) {
-                value_split = value / count;
+                int64_t value_split = value / count;
 
                 if (num == 0) {
                     value_split += value % count;
                 }
-
-                if (shop_insert_coins_reason(ol->objlink.ob, value_split, "party.currency-split")) {
-                    draw_info_format(COLOR_BLUE,
-                                     ol->objlink.ob,
-                                     "You receive %s.",
-                                     shop_get_cost_string(value_split));
+                if (!gameplay_journal_currency_begin(ol->objlink.ob,
+                                                     "party.currency-split",
+                                                     "currency:party-loot",
+                                                     0,
+                                                     value_split,
+                                                     value_split,
+                                                     "corpse",
+                                                     "player-or-ground",
+                                                     "party-corpse",
+                                                     grants[num].transaction)) {
+                    prepared = false;
+                    break;
                 }
-
+                grants[num].recipient = ol->objlink.ob;
+                grants[num].value = value_split;
+                grants[num].active = true;
                 num++;
             }
         }
+
+        if (!prepared) {
+            for (uint32_t i = 0; i < num; i++) {
+                if (grants[i].active) {
+                    (void)gameplay_journal_abort(grants[i].transaction, "party-grant-not-prepared");
+                }
+            }
+            free(grants);
+            return;
+        }
+
+        for (tmp = corpse->inv; tmp != NULL; tmp = next) {
+            next = tmp->below;
+            if (tmp->type == MONEY && object_can_pick(pl, tmp)) {
+                object_remove(tmp, 0);
+                object_destroy(tmp);
+            }
+        }
+        for (uint32_t i = 0; i < num; i++) {
+            HARD_ASSERT(shop_insert_coins_exact_tagged(grants[i].recipient,
+                                                       grants[i].value,
+                                                       grants[i].transaction));
+        }
+        for (uint32_t i = 0; i < num; i++) {
+            grants[i].active = false;
+            if (gameplay_journal_semantic_commit(grants[i].transaction)) {
+                draw_info_format(COLOR_BLUE,
+                                 grants[i].recipient,
+                                 "You receive %s.",
+                                 shop_get_cost_string(grants[i].value));
+            }
+        }
+        free(grants);
     }
 }
 

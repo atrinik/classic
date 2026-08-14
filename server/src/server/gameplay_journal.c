@@ -162,6 +162,79 @@ static bool journal_identity_valid_optional(const char *value) {
     return value == NULL || value[0] == '\0' || journal_identity_valid(value);
 }
 
+static bool journal_item_snapshot_valid(const gameplay_journal_change_t *change) {
+    if (change->snapshot == NULL || change->archetype == NULL || change->object_type < 0) {
+        return false;
+    }
+    char prefix[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    int prefix_length = snprintf(VS(prefix),
+                                 "arch=%s;type=%" PRId32 ";nrof=",
+                                 change->archetype,
+                                 change->object_type);
+    if (prefix_length < 0 || prefix_length >= (int)sizeof(prefix) ||
+        strncmp(change->snapshot, prefix, (size_t)prefix_length) != 0) {
+        return false;
+    }
+    const char *cp = change->snapshot + prefix_length;
+    char *end;
+    errno = 0;
+    uintmax_t nrof = strtoumax(cp, &end, 10);
+    if (errno != 0 || end == cp || *end != ';' || nrof == 0 || nrof > UINT32_MAX) {
+        return false;
+    }
+    cp = end;
+    if (strncmp(cp, ";value=", 7) != 0) {
+        return false;
+    }
+    cp += 7;
+    errno = 0;
+    intmax_t value = strtoimax(cp, &end, 10);
+    if (errno != 0 || end == cp || strncmp(end, ";weight=", 8) != 0) {
+        return false;
+    }
+    cp = end + 8;
+    errno = 0;
+    uintmax_t weight = strtoumax(cp, &end, 10);
+    if (errno != 0 || end == cp || *end != '\0' || weight > UINT32_MAX) {
+        return false;
+    }
+    char expected[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    int expected_length = snprintf(VS(expected),
+                                   "%s%" PRIuMAX ";value=%" PRIdMAX ";weight=%" PRIuMAX,
+                                   prefix,
+                                   nrof,
+                                   value,
+                                   weight);
+    return expected_length >= 0 && expected_length < (int)sizeof(expected) &&
+           strcmp(change->snapshot, expected) == 0;
+}
+
+static bool journal_item_provenance_valid(const char *value) {
+    static const char prefix[] = "first=";
+    static const char separator[] = ";last=";
+    if (value == NULL || strncmp(value, prefix, sizeof(prefix) - 1) != 0) {
+        return false;
+    }
+    const char *first = value + sizeof(prefix) - 1;
+    const char *last = strstr(first, separator);
+    if (last == NULL || strstr(last + sizeof(separator) - 1, separator) != NULL) {
+        return false;
+    }
+    size_t first_length = (size_t)(last - first);
+    const char *last_value = last + sizeof(separator) - 1;
+    size_t last_length = strlen(last_value);
+    if (first_length > 112 || last_length > 112 || memchr(first, ';', first_length) != NULL ||
+        strchr(last_value, ';') != NULL) {
+        return false;
+    }
+    char first_identity[113], last_identity[113];
+    memcpy(first_identity, first, first_length);
+    first_identity[first_length] = '\0';
+    memcpy(last_identity, last_value, last_length + 1);
+    return journal_identity_valid_optional(first_identity) &&
+           journal_identity_valid_optional(last_identity);
+}
+
 static void journal_append_json_string(StringBuffer *record, const char *value) {
     for (const unsigned char *cp = (const unsigned char *)value; *cp != '\0'; cp++) {
         if (*cp == '"' || *cp == '\\') {
@@ -171,7 +244,8 @@ static void journal_append_json_string(StringBuffer *record, const char *value) 
     }
 }
 
-static bool journal_change_valid(const gameplay_journal_change_t *change) {
+static bool journal_change_valid(gameplay_journal_kind_t kind,
+                                 const gameplay_journal_change_t *change) {
     if (change->delta > 0 && change->before > INT64_MAX - change->delta) {
         return false;
     }
@@ -189,6 +263,25 @@ static bool journal_change_valid(const gameplay_journal_change_t *change) {
         !journal_identity_valid_optional(change->provenance_after) ||
         !journal_token_valid(change->currency, true) ||
         !journal_token_valid(change->funding, true)) {
+        return false;
+    }
+    if (kind == GAMEPLAY_JOURNAL_ITEM &&
+        (!journal_token_valid(change->lineage_id, false) ||
+         !journal_token_valid(change->archetype, false) || !journal_item_snapshot_valid(change) ||
+         change->quantity == 0 ||
+         !journal_token_valid(change->source, false) ||
+         !journal_token_valid(change->destination, false) || change->actor == NULL ||
+         change->actor[0] == '\0' || change->provenance_before == NULL ||
+         !journal_item_provenance_valid(change->provenance_before) ||
+         change->provenance_after == NULL ||
+         !journal_item_provenance_valid(change->provenance_after))) {
+        return false;
+    }
+    if (kind == GAMEPLAY_JOURNAL_CURRENCY &&
+        (!journal_token_valid(change->source, false) ||
+         !journal_token_valid(change->destination, false) || change->actor == NULL ||
+         change->actor[0] == '\0' || !journal_token_valid(change->currency, false) ||
+         !journal_token_valid(change->funding, false))) {
         return false;
     }
     return true;
@@ -690,7 +783,7 @@ bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
         !journal_identity_valid(subject->character_id) ||
         !journal_token_valid(subject->map_id, true) ||
         !journal_token_valid(change->subject_id, false) ||
-        !journal_token_valid(change->lineage_id, true) || !journal_change_valid(change) ||
+        !journal_token_valid(change->lineage_id, true) || !journal_change_valid(kind, change) ||
         journal.pending_count == JOURNAL_PENDING_LIMIT || !journal_random_id(transaction_id)) {
         return false;
     }
@@ -827,11 +920,7 @@ bool gameplay_journal_player_begin(player *pl,
         return false;
     }
     gameplay_journal_kind_t journal_kind;
-    if (strcmp(kind, "item") == 0) {
-        journal_kind = GAMEPLAY_JOURNAL_ITEM;
-    } else if (strcmp(kind, "currency") == 0) {
-        journal_kind = GAMEPLAY_JOURNAL_CURRENCY;
-    } else if (strcmp(kind, "quest") == 0) {
+    if (strcmp(kind, "quest") == 0) {
         journal_kind = GAMEPLAY_JOURNAL_QUEST;
     } else if (strcmp(kind, "progression") == 0) {
         journal_kind = GAMEPLAY_JOURNAL_PROGRESSION;
@@ -877,6 +966,31 @@ bool gameplay_journal_currency_begin(object *player_ob,
                                      const char *destination,
                                      const char *funding,
                                      char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    return gameplay_journal_currency_begin_economy(player_ob,
+                                                    reason,
+                                                    subject_id,
+                                                    before,
+                                                    delta,
+                                                    after,
+                                                    source,
+                                                    destination,
+                                                    funding,
+                                                    0,
+                                                    transaction_id);
+}
+
+bool gameplay_journal_currency_begin_economy(
+    object *player_ob,
+    const char *reason,
+    const char *subject_id,
+    int64_t before,
+    int64_t delta,
+    int64_t after,
+    const char *source,
+    const char *destination,
+    const char *funding,
+    int64_t price,
+    char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
     HARD_ASSERT(transaction_id != NULL);
     transaction_id[0] = '\0';
     if (player_ob == NULL || player_ob->type != PLAYER || CONTR(player_ob) == NULL) {
@@ -902,6 +1016,7 @@ bool gameplay_journal_currency_begin(object *player_ob,
         .counterparty = "",
         .provenance_before = "",
         .provenance_after = "",
+        .price = price,
         .currency = "copper-equivalent",
         .funding = funding,
     };

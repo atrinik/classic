@@ -150,8 +150,13 @@ static void quest_check_item_drop(object *op, object *quest, object *quest_pl, o
     SET_FLAG(clone, FLAG_IDENTIFIED);
 
     /* Insert the quest item inside the player. */
-    if (object_insert_into_reason(clone, op, "quest.item-grant") == NULL) {
-        object_destroy(clone);
+    object *inserted = NULL;
+    object_semantic_result_t result =
+        object_insert_into_reason(clone, op, "quest.item-grant", &inserted);
+    if (result != OBJECT_SEMANTIC_COMMITTED) {
+        if (result == OBJECT_SEMANTIC_FAILED) {
+            object_destroy(clone);
+        }
         return;
     }
 
@@ -285,14 +290,18 @@ static void quest_check_item(object *op, object *quest, object *quest_pl, object
 
     snprintfcat(VS(buf), "!\n");
 
-    draw_map_text_anim(op, COLOR_NAVY, buf);
-    draw_info(COLOR_NAVY, op, buf);
-
     /* Insert the quest item inside the player. */
-    if (object_insert_into_reason(clone, op, "quest.objective-grant") == NULL) {
-        object_destroy(clone);
+    object *inserted = NULL;
+    object_semantic_result_t result =
+        object_insert_into_reason(clone, op, "quest.objective-grant", &inserted);
+    if (result != OBJECT_SEMANTIC_COMMITTED) {
+        if (result == OBJECT_SEMANTIC_FAILED) {
+            object_destroy(clone);
+        }
         return;
     }
+    draw_map_text_anim(op, COLOR_NAVY, buf);
+    draw_info(COLOR_NAVY, op, buf);
     play_sound_player_only(CONTR(op), CMD_SOUND_EFFECT, "event01.ogg", 0, 0, 0, 0);
 }
 

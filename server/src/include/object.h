@@ -926,13 +926,31 @@ void object_destroy(object *ob);
 void object_destruct(object *op);
 void object_remove(object *op, int flags);
 object *object_insert_map(object *op, mapstruct *m, object *originator, int flag);
+/**
+ * Reason-aware player-inventory transfer to a map. COMMITTED returns the live
+ * survivor. AMBIGUOUS may return a survivor or NULL when a map effect destroyed
+ * op; callers must not dereference op after either post-mutation result.
+ */
+object_semantic_result_t object_insert_map_reason(object *op,
+                                                  mapstruct *m,
+                                                  int x,
+                                                  int y,
+                                                  const char *reason,
+                                                  object **inserted);
 object *object_stack_get(object *op, uint32_t nrof);
 object *object_stack_get_reinsert(object *op, uint32_t nrof);
 object *object_stack_get_removed(object *op, uint32_t nrof);
 object *object_decrease(object *op, uint32_t i);
 object *object_insert_into(object *op, object *where, int flag);
-object *object_insert_into_reason(object *op, object *where, const char *reason);
-bool object_remove_reason(object *op, const char *reason, bool destroy);
+/**
+ * Reason-aware insertion. On COMMITTED or AMBIGUOUS, inserted is the live
+ * survivor and op may already have been destroyed by merging. On FAILED, no
+ * semantic mutation occurred and inserted is NULL.
+ */
+object_semantic_result_t
+object_insert_into_reason(object *op, object *where, const char *reason, object **inserted);
+/** On AMBIGUOUS, removal/destruction already occurred. */
+object_semantic_result_t object_remove_reason(object *op, const char *reason, bool destroy);
 object *object_find_arch(object *op, archetype_t *at);
 object *object_find_type(object *op, uint8_t type);
 int object_dir_to_target(object *op, object *target);
@@ -985,6 +1003,23 @@ bool object_custody_begin_economy(const object *op,
                                   const char *currency,
                                   const char *funding,
                                   object_custody_transaction_t *transaction);
+bool object_custody_begin_parties(const object *op,
+                                  object *actor_ob,
+                                  const char *reason,
+                                  const char *source,
+                                  const char *destination,
+                                  const char *counterparty,
+                                  uint32_t quantity,
+                                  const char *acquirer,
+                                  const char *relinquisher,
+                                  int64_t before,
+                                  int64_t delta,
+                                  int64_t after,
+                                  int64_t price,
+                                  const char *currency,
+                                  const char *funding,
+                                  object_custody_transaction_t *transaction);
+void object_custody_apply(object *op, const object_custody_transaction_t *transaction);
 bool object_custody_commit(object *op, object_custody_transaction_t *transaction);
 bool object_custody_finish(object_custody_transaction_t *transaction);
 void object_custody_abort(object_custody_transaction_t *transaction, const char *reason);
@@ -992,6 +1027,9 @@ int object_matches_string(object *op, object *caller, const char *str);
 int object_get_gender(const object *op);
 void object_reverse_inventory(object *op);
 bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool fixed_pos);
+/** Reason-aware map entry; AMBIGUOUS means the object may have moved or been destroyed. */
+object_semantic_result_t
+object_enter_map_reason(object *op, mapstruct *m, int x, int y, const char *reason);
 const char *object_get_str(const object *op);
 char *object_get_str_r(const object *op, char *buf, size_t bufsize);
 int object_blocked(object *op, mapstruct *m, int x, int y);

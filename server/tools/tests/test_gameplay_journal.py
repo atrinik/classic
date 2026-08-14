@@ -348,20 +348,31 @@ class JournalTests(unittest.TestCase):
             details = self.details(
                 archetype="sword" if kind == "item" else "",
                 object_type=15 if kind == "item" else 0,
-                snapshot="arch=sword;type=15;nrof=1" if kind == "item" else "",
+                snapshot="arch=sword;type=15;nrof=1;value=0;weight=0" if kind == "item" else "",
                 quantity=1 if kind == "item" else 0,
                 source="ground" if kind == "item" else "carried-cash",
                 destination="player" if kind == "item" else "bank",
                 actor="acct:actor",
+                provenance_before="first=;last=" if kind == "item" else "",
+                provenance_after="first=acct:actor;last=" if kind == "item" else "",
                 price=75 if reason == "shop.purchase" else 0,
                 currency="" if kind == "item" else "copper-equivalent",
                 funding="" if kind == "item" else "carried-cash",
             )
+            change = {
+                "subject_id": f"item:lineage-{index}" if kind == "item" else "currency:gold",
+                "lineage_id": f"item:lineage-{index}" if kind == "item" else "",
+                "before": 0 if kind == "item" else 1,
+                "delta": 1 if kind == "item" else 2,
+                "after": 1 if kind == "item" else 3,
+            }
             records.append(self.record(
-                "intent", attempted, version=2, kind=kind, reason=reason, details=details
+                "intent", attempted, version=2, kind=kind, reason=reason, details=details,
+                change=change,
             ))
             records.append(self.record(
-                "intent", committed, version=2, kind=kind, reason=reason, details=details
+                "intent", committed, version=2, kind=kind, reason=reason, details=details,
+                change=change,
             ))
             records.append(self.record("commit", committed, version=2))
         self.write(*records)
@@ -406,6 +417,65 @@ class JournalTests(unittest.TestCase):
             )
         )
         with self.assertRaisesRegex(gameplay_journal.JournalError, "arithmetic mismatch"):
+            gameplay_journal.load([self.root])
+
+        self.sequence = 0
+        self.previous = ""
+        self.write(self.record(
+            "intent",
+            "tx1",
+            version=2,
+            kind="item",
+            change={
+                "subject_id": "item:lineage",
+                "lineage_id": "item:lineage",
+                "before": 0,
+                "delta": 1,
+                "after": 1,
+            },
+            details=self.details(),
+        ))
+        with self.assertRaisesRegex(gameplay_journal.JournalError, "item semantic details"):
+            gameplay_journal.load([self.root])
+
+        item_change = {
+            "subject_id": "item:lineage",
+            "lineage_id": "item:lineage",
+            "before": 0,
+            "delta": 1,
+            "after": 1,
+        }
+        valid_details = self.details(
+            archetype="sword",
+            object_type=15,
+            snapshot="arch=sword;type=15;nrof=1;value=0;weight=0",
+            quantity=1,
+            source="service",
+            destination="player",
+            actor="acct:actor",
+            provenance_before="first=;last=",
+            provenance_after="first=acct:actor;last=",
+        )
+        self.sequence = 0
+        self.previous = ""
+        noncanonical_snapshot = dict(valid_details)
+        noncanonical_snapshot["snapshot"] = "arch=sword;type=015;nrof=1;value=0;weight=0"
+        self.write(self.record(
+            "intent", "tx1", version=2, kind="item", change=item_change,
+            details=noncanonical_snapshot,
+        ))
+        with self.assertRaisesRegex(gameplay_journal.JournalError, "item snapshot"):
+            gameplay_journal.load([self.root])
+
+        self.sequence = 0
+        self.previous = ""
+        noncanonical_provenance = dict(valid_details)
+        noncanonical_provenance["provenance_before"] = "password=secret"
+        self.write(self.record(
+            "intent", "tx1", version=2, kind="item", change=item_change,
+            details=noncanonical_provenance,
+        ))
+        with self.assertRaisesRegex(gameplay_journal.JournalError, "item provenance"):
             gameplay_journal.load([self.root])
 
         self.sequence = 0

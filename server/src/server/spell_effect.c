@@ -1429,16 +1429,26 @@ int cast_transform_wealth(object *op) {
     }
 
     /* Figure out our value of money to give to player. */
-    int64_t sacrificed = marked->value * (marked->nrof ? marked->nrof : 1);
+    int64_t nrof = marked->nrof != 0 ? marked->nrof : 1;
+    if (marked->value < 0 || marked->value > INT64_MAX / nrof ||
+        marked->value * nrof > INT64_MAX / TRANSFORM_WEALTH_SACRIFICE || !shop_coins_available()) {
+        free(name);
+        return 0;
+    }
+    int64_t sacrificed = marked->value * nrof;
     val = sacrificed * TRANSFORM_WEALTH_SACRIFICE;
     int64_t before = shop_get_money(op);
+    if (before < sacrificed || val > INT64_MAX - (before - sacrificed)) {
+        free(name);
+        return 0;
+    }
     char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
     if (!gameplay_journal_currency_begin(op,
                                          "spell.alchemy",
                                          "currency:transformation",
-                                         before,
+                                         sacrificed,
                                          val - sacrificed,
-                                         before - sacrificed + val,
+                                         val,
                                          "carried-cash",
                                          "player-or-ground",
                                          "alchemy",
@@ -1449,8 +1459,9 @@ int cast_transform_wealth(object *op) {
     }
     /* We remove the money. */
     object_remove(marked, 0);
+    object_destroy(marked);
     /* Now give the player the new money. */
-    shop_insert_coins(op, val);
+    HARD_ASSERT(shop_insert_coins_exact_tagged(op, val, transaction));
     if (!gameplay_journal_semantic_commit(transaction)) {
         free(name);
         return 0;

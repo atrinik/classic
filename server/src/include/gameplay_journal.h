@@ -49,7 +49,7 @@ typedef struct gameplay_journal_change {
     int64_t delta;
     int64_t after;
 
-    /** Optional bounded semantic detail (empty fields are omitted by producers). */
+    /** Bounded semantic detail; item/currency kinds require their authoritative fields. */
     const char *archetype;
     int32_t object_type;
     const char *snapshot;
@@ -133,6 +133,18 @@ bool gameplay_journal_currency_begin(object *player_ob,
                                      const char *destination,
                                      const char *funding,
                                      char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]);
+bool gameplay_journal_currency_begin_economy(
+    object *player_ob,
+    const char *reason,
+    const char *subject_id,
+    int64_t before,
+    int64_t delta,
+    int64_t after,
+    const char *source,
+    const char *destination,
+    const char *funding,
+    int64_t price,
+    char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]);
 
 /** Commit/abort helpers accept an empty ID for unit-test/non-runtime bypass. */
 bool gameplay_journal_semantic_commit(const char *transaction_id);

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -48,6 +48,50 @@ START_TEST(test_bank_find_info) {
     ck_assert_uint_eq(shop_get_money(pl), money->value);
     ck_assert_ptr_ne(bank_find_info(pl), NULL);
     ck_assert_uint_eq(bank_find_info(pl)->value, money->value);
+}
+END_TEST
+
+START_TEST(test_bank_deposit_rejects_ineligible_or_malformed_money_without_loss) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    object *container = arch_get("sack");
+    FREE_AND_COPY_HASH(container->race, "wood");
+    SET_FLAG(container, FLAG_APPLIED);
+    object *hidden = arch_get("coppercoin");
+    hidden->nrof = 7;
+    hidden = object_insert_into(hidden, container, 0);
+    container = object_insert_into(container, pl, 0);
+    object *loose = arch_get("coppercoin");
+    loose->nrof = 5;
+    loose = object_insert_into(loose, pl, 0);
+
+    int64_t value;
+    ck_assert_int_eq(bank_deposit(pl, "all", &value), BANK_SUCCESS);
+    ck_assert_int_eq(value, 5);
+    ck_assert_int_eq(bank_get_balance(pl), 5);
+    ck_assert_ptr_eq(object_get_env(hidden), pl);
+    ck_assert_ptr_eq(hidden->env, container);
+    ck_assert_uint_eq(hidden->nrof, 7);
+
+    object *malformed = arch_get("coppercoin");
+    malformed->value = 2;
+    malformed = object_insert_into(malformed, pl, 0);
+    tag_t malformed_tag = malformed->count;
+    ck_assert_int_eq(bank_deposit(pl, "1 copper", &value), BANK_DEPOSIT_COPPER);
+    ck_assert_int_eq(value, 0);
+    ck_assert(OBJECT_VALID(malformed, malformed_tag));
+    ck_assert_int_eq(malformed->value, 2);
+
+    object *zero = arch_get("coppercoin");
+    zero = object_insert_into(zero, pl, 0);
+    zero->nrof = 0;
+    tag_t zero_tag = zero->count;
+    ck_assert_int_eq(bank_deposit(pl, "all", &value), BANK_SUCCESS);
+    ck_assert_int_eq(value, 2);
+    ck_assert(OBJECT_VALID(zero, zero_tag));
+    ck_assert_uint_eq(zero->nrof, 0);
 }
 END_TEST
 
@@ -229,6 +273,7 @@ static Suite *suite(void) {
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_bank_find_info);
     tcase_add_test(tc_core, test_bank_deposit);
+    tcase_add_test(tc_core, test_bank_deposit_rejects_ineligible_or_malformed_money_without_loss);
     tcase_add_test(tc_core, test_bank_withdraw);
 
     return s;

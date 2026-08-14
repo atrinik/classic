@@ -149,7 +149,7 @@ static void bank_parse_string(const char *str, bank_info_t *info) {
 static uint32_t bank_get_coins_num(object *op, archetype_t *at) {
     uint32_t num = 0;
     FOR_INV_PREPARE(op, tmp) {
-        if (tmp->type == MONEY && tmp->arch == at) {
+        if (tmp->type == MONEY && tmp->arch == at && tmp->value == at->clone.value) {
             num += tmp->nrof;
         } else if (tmp->type == CONTAINER &&
                    (tmp->race == NULL || strstr(tmp->race, "gold") != NULL)) {
@@ -159,6 +159,29 @@ static uint32_t bank_get_coins_num(object *op, archetype_t *at) {
     FOR_INV_FINISH();
 
     return num;
+}
+
+/** Sum exactly the coin locations accepted by bank_remove_coins_internal(). */
+static bool bank_get_deposit_value(object *op, int64_t *value) {
+    FOR_INV_PREPARE(op, tmp) {
+        if (tmp->type == MONEY) {
+            int64_t nrof = tmp->nrof;
+            if (nrof == 0) {
+                continue;
+            }
+            if (tmp->value < 0 || tmp->value > INT64_MAX / nrof ||
+                *value > INT64_MAX - tmp->value * nrof) {
+                return false;
+            }
+            *value += tmp->value * nrof;
+        } else if (tmp->type == CONTAINER &&
+                   (tmp->race == NULL || strstr(tmp->race, "gold") != NULL) &&
+                   !bank_get_deposit_value(tmp, value)) {
+            return false;
+        }
+    }
+    FOR_INV_FINISH();
+    return true;
 }
 
 /**
@@ -180,7 +203,8 @@ static int64_t bank_remove_coins_internal(object *op, archetype_t *at, uint32_t 
             return amount;
         }
 
-        if (tmp->type == MONEY && (at == NULL || tmp->arch == at)) {
+        if (tmp->type == MONEY && tmp->nrof != 0 &&
+            (at == NULL || (tmp->arch == at && tmp->value == at->clone.value))) {
             if (at == NULL || tmp->nrof <= *remaining) {
                 if (at != NULL) {
                     *remaining -= tmp->nrof;
@@ -219,10 +243,18 @@ static int64_t bank_remove_coins(object *op, archetype_t *at, uint32_t nrof) {
  * @param nrof
  * Number of coins.
  */
-static void bank_insert_coins(object *op, archetype_t *at, uint32_t nrof) {
+static void bank_insert_coins(object *op,
+                              archetype_t *at,
+                              uint32_t nrof,
+                              const char *transaction_id) {
     object *tmp = object_get();
     object_copy(tmp, &at->clone, false);
     tmp->nrof = nrof;
+    if (transaction_id != NULL && transaction_id[0] != '\0') {
+        char lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
+        snprintf(VS(lineage), "currency:%s", transaction_id);
+        tmp->custody_lineage = add_string(lineage);
+    }
     object_insert_into(tmp, op, 0);
 }
 
@@ -314,7 +346,10 @@ int bank_deposit(object *op, const char *text, int64_t *value) {
     if (info.mode == BANK_STRING_NONE) {
         return BANK_SYNTAX_ERROR;
     } else if (info.mode == BANK_STRING_ALL) {
-        *value = shop_get_money(op) - bank_get_balance(op);
+        if (!bank_get_deposit_value(op, value)) {
+            *value = 0;
+            return BANK_JOURNAL_ERROR;
+        }
     } else {
         if (info.amber != 0) {
             if (bank_get_coins_num(op, coins_arch[0]) < info.amber) {
@@ -363,6 +398,10 @@ int bank_deposit(object *op, const char *text, int64_t *value) {
     }
     int64_t before = bank_get_balance(op);
     if (*value > INT64_MAX - before) {
+        *value = 0;
+        return BANK_JOURNAL_ERROR;
+    }
+    if (info.mode == BANK_STRING_ALL && !shop_coins_available()) {
         *value = 0;
         return BANK_JOURNAL_ERROR;
     }
@@ -487,29 +526,29 @@ int bank_withdraw(object *op, const char *text, int64_t *value) {
         return BANK_JOURNAL_ERROR;
     }
 
+    bank->value -= *value;
     if (info.mode == BANK_STRING_ALL) {
-        shop_insert_coins(op, *value);
+        HARD_ASSERT(shop_insert_coins_exact_tagged(op, *value, transaction));
     } else {
         if (info.amber != 0) {
-            bank_insert_coins(op, coins_arch[0], info.amber);
+            bank_insert_coins(op, coins_arch[0], info.amber, transaction);
         }
         if (info.mithril != 0) {
-            bank_insert_coins(op, coins_arch[1], info.mithril);
+            bank_insert_coins(op, coins_arch[1], info.mithril, transaction);
         }
         if (info.jade != 0) {
-            bank_insert_coins(op, coins_arch[2], info.jade);
+            bank_insert_coins(op, coins_arch[2], info.jade, transaction);
         }
         if (info.gold != 0) {
-            bank_insert_coins(op, coins_arch[3], info.gold);
+            bank_insert_coins(op, coins_arch[3], info.gold, transaction);
         }
         if (info.silver != 0) {
-            bank_insert_coins(op, coins_arch[4], info.silver);
+            bank_insert_coins(op, coins_arch[4], info.silver, transaction);
         }
         if (info.copper != 0) {
-            bank_insert_coins(op, coins_arch[5], info.copper);
+            bank_insert_coins(op, coins_arch[5], info.copper, transaction);
         }
     }
-    bank->value -= *value;
     if (!gameplay_journal_semantic_commit(transaction)) {
         return BANK_JOURNAL_ERROR;
     }
