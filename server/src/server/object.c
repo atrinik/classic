@@ -2883,12 +2883,13 @@ object_decrease_reason(object *op, uint32_t nrof, const char *reason, object **s
     if (object_contains_hidden_bank_info(op)) {
         return OBJECT_SEMANTIC_FAILED;
     }
-    if (op->nrof == 0) {
-        if (object_is_persistent_money(op, root)) {
-            return OBJECT_SEMANTIC_FAILED;
-        }
-        *survivor_out = object_decrease(op, nrof);
+    if (nrof == 0) {
+        *survivor_out = op;
         return OBJECT_SEMANTIC_COMMITTED;
+    }
+    if (op->type != MONEY && object_contains_money_descendant(op) &&
+        (root->type == PLAYER || root->map != NULL || !QUERY_FLAG(root, FLAG_REMOVED))) {
+        return OBJECT_SEMANTIC_FAILED;
     }
     if (object_is_persistent_money(op, root)) {
         if (root->type != PLAYER) {

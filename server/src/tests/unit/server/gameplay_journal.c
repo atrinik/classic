@@ -1329,6 +1329,16 @@ START_TEST(test_semantic_item_shop_and_bank_producers) {
                      OBJECT_SEMANTIC_COMMITTED);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("test.item-destroy"), 1);
 
+    object *singular = NULL;
+    ck_assert_int_eq(
+        object_insert_into_reason(arch_get("sword"), pl, "test.singular-grant", &singular),
+        OBJECT_SEMANTIC_COMMITTED);
+    ck_assert_uint_eq(singular->nrof, 0);
+    ck_assert_int_eq(object_decrease_reason(singular, 1, "test.singular-destroy", &inserted),
+                     OBJECT_SEMANTIC_COMMITTED);
+    ck_assert_ptr_eq(inserted, NULL);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("test.singular-destroy"), 1);
+
     object *startequip = object_insert_into(arch_get("sword"), pl, INS_NO_MERGE);
     SET_FLAG(startequip, FLAG_STARTEQUIP);
     uint32_t startequip_tag = startequip->count;
@@ -1447,6 +1457,10 @@ START_TEST(test_semantic_item_shop_and_bank_producers) {
                      OBJECT_SEMANTIC_FAILED);
     ck_assert_int_eq(object_remove_reason(player_money_sack, "test.nested-currency-destroy", true),
                      OBJECT_SEMANTIC_FAILED);
+    ck_assert_int_eq(
+        object_decrease_reason(player_money_sack, 1, "test.nested-currency-decrease", &inserted),
+        OBJECT_SEMANTIC_FAILED);
+    ck_assert_ptr_eq(inserted, NULL);
     drop_object(pl, player_money_sack, 1, 1);
     ck_assert_ptr_eq(object_get_env(player_money_sack), pl);
 
