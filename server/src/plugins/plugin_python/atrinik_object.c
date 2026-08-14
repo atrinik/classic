@@ -137,7 +137,7 @@ static fields_struct fields[] = {
      offsetof(object, weight),
      0,
      0,
-     "Weight of the object in grams.; int"},
+     "Weight of the object in grams.; int (readonly while contained)"},
     {"count",
      FIELDTYPE_UINT32,
      offsetof(object, count),
@@ -157,7 +157,7 @@ static fields_struct fields[] = {
      0,
      0,
      "Weight the object is currently carrying in its inventory, in "
-     "grams.; int"},
+     "grams.; int (persistent objects readonly)"},
     {"path_attuned",
      FIELDTYPE_UINT32,
      offsetof(object, path_attuned),
@@ -777,32 +777,84 @@ static PyObject *Atrinik_Object_ActivateRune(Atrinik_Object *self, PyObject *arg
 
 /** Documentation for Atrinik_Object_TeleportTo(). */
 static const char doc_Atrinik_Object_TeleportTo[] =
-    ".. method:: TeleportTo(path, x=0, y=0).\n\n"
+    ".. method:: TeleportTo(path, x=0, y=0, reason='script.item-teleport').\n\n"
     "Teleports the object to the specified coordinates on a map.\n\n"
     ":param path: The map path.\n"
     ":type path: str\n"
     ":param x: X coordinate on the map.\n"
     ":type x: int\n"
     ":param y: Y coordinate on the map.\n"
-    ":type y: int";
+    ":type y: int\n"
+    ":param reason: Bounded semantic reason code for the private journal.\n"
+    ":type reason: str\n"
+    ":raises RuntimeError: If persistent currency is targeted or the journal outcome is uncertain.";
+
+static bool python_object_is_hidden_bank(const object *op) {
+    return op->arch != NULL && strcmp(op->arch->name, "player_info") == 0 && op->name != NULL &&
+           strcmp(op->name, "BANK_GENERAL") == 0;
+}
+
+static bool python_object_is_player_rooted(object *op) {
+    object *root = hooks->object_get_env(op);
+    return root != op && root->type == PLAYER;
+}
+
+static bool python_object_is_persistent(object *op) {
+    object *root = hooks->object_get_env(op);
+    return root->type == PLAYER || root->map != NULL || !QUERY_FLAG(root, FLAG_REMOVED);
+}
+
+static bool python_object_reject_currency_move(object *op) {
+    if (python_object_is_hidden_bank(op) ||
+        (op->type == MONEY && python_object_is_persistent(op))) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Persistent currency cannot be moved as an item; use PayAmount or "
+                        "Player.InsertCoins.");
+        return true;
+    }
+    return false;
+}
+
+static bool python_load_contains_field(const char *lines, const char *field) {
+    size_t field_length = strlen(field);
+    const char *line = lines;
+    while (*line != '\0') {
+        while (*line == ' ' || *line == '\t') {
+            line++;
+        }
+        if (strncmp(line, field, field_length) == 0 &&
+            (line[field_length] == ' ' || line[field_length] == '\t')) {
+            return true;
+        }
+        const char *next = strchr(line, '\n');
+        if (next == NULL) {
+            break;
+        }
+        line = next + 1;
+    }
+    return false;
+}
 
 /**
  * Implements Atrinik.Object.Object.TeleportTo() Python method.
  * @copydoc PyMethod_VARARGS_KEYWORDS
  */
 static PyObject *Atrinik_Object_TeleportTo(Atrinik_Object *self, PyObject *args, PyObject *keywds) {
-    static char *kwlist[] = {"path", "x", "y", NULL};
-    const char *path;
+    static char *kwlist[] = {"path", "x", "y", "reason", NULL};
+    const char *path, *reason = "script.item-teleport";
     int x, y;
     mapstruct *m;
 
     x = y = 0;
 
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|ii", kwlist, &path, &x, &y)) {
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|iis", kwlist, &path, &x, &y, &reason)) {
         return NULL;
     }
 
     OBJEXISTCHECK(self);
+    if (python_object_reject_currency_move(self->obj)) {
+        return NULL;
+    }
     m = hooks->ready_map_name(path, NULL, 0);
 
     if (!m) {
@@ -810,7 +862,14 @@ static PyObject *Atrinik_Object_TeleportTo(Atrinik_Object *self, PyObject *args,
         return NULL;
     }
 
-    hooks->object_enter_map(self->obj, NULL, m, x, y, 1);
+    object_semantic_result_t result = hooks->object_enter_map_reason(self->obj, m, x, y, reason);
+    if (result != OBJECT_SEMANTIC_COMMITTED) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        result == OBJECT_SEMANTIC_FAILED
+                            ? "Object teleport failed."
+                            : "Object teleported, but its durable journal commit is uncertain.");
+        return NULL;
+    }
 
     Py_INCREF(Py_None);
     return Py_None;
@@ -818,13 +877,16 @@ static PyObject *Atrinik_Object_TeleportTo(Atrinik_Object *self, PyObject *args,
 
 /** Documentation for Atrinik_Object_InsertInto(). */
 static const char doc_Atrinik_Object_InsertInto[] =
-    ".. method:: InsertInto(where).\n\n"
+    ".. method:: InsertInto(where, reason='script.item-transfer').\n\n"
     "Inserts the object into some other object.\n\n"
     ":param where: Where to insert the object.\n"
     ":type where: :class:`Atrinik.Object.Object`\n"
+    ":param reason: Bounded semantic reason code for the private journal.\n"
+    ":type reason: str\n"
     ":returns: The inserted object, which may be different from the original (due"
     "to merging, for example). None is returned on failure.\n"
-    ":rtype: class:`Atrinik.Object.Object` or None";
+    ":rtype: class:`Atrinik.Object.Object` or None\n"
+    ":raises RuntimeError: If persistent currency is moved as an item or the journal outcome is uncertain.";
 
 /**
  * Implements Atrinik.Object.Object.InsertInto() Python method.
@@ -832,22 +894,37 @@ static const char doc_Atrinik_Object_InsertInto[] =
  */
 static PyObject *Atrinik_Object_InsertInto(Atrinik_Object *self, PyObject *args) {
     Atrinik_Object *where;
+    const char *reason = "script.item-transfer";
 
-    if (!PyArg_ParseTuple(args, "O!", &Atrinik_ObjectType, &where)) {
+    if (!PyArg_ParseTuple(args, "O!|s", &Atrinik_ObjectType, &where, &reason)) {
         return NULL;
     }
 
     OBJEXISTCHECK(self);
     OBJEXISTCHECK(where);
-
-    if (!QUERY_FLAG(self->obj, FLAG_REMOVED)) {
-        hooks->object_remove(self->obj, 0);
+    if (python_object_reject_currency_move(self->obj)) {
+        return NULL;
+    }
+    object *where_root = hooks->object_get_env(where->obj);
+    if (self->obj->type == MONEY && where_root->type != PLAYER &&
+        python_object_is_persistent(where->obj)) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Currency cannot be inserted into persistent non-player state; use a "
+                        "currency API.");
+        return NULL;
     }
 
-    object *ret = hooks->object_insert_into(self->obj, where->obj, 0);
-    if (ret == NULL) {
+    object *ret = NULL;
+    object_semantic_result_t result =
+        hooks->object_insert_into_reason(self->obj, where->obj, reason, &ret);
+    if (result == OBJECT_SEMANTIC_FAILED) {
         Py_INCREF(Py_None);
         return Py_None;
+    }
+    if (result == OBJECT_SEMANTIC_AMBIGUOUS) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Item moved, but its durable journal commit is uncertain.");
+        return NULL;
     }
 
     return wrap_object(ret);
@@ -1246,8 +1323,12 @@ Atrinik_Object_CreateForce(Atrinik_Object *self, PyObject *args, PyObject *keywd
 
 /** Documentation for Atrinik_Object_CreateObject(). */
 static const char doc_Atrinik_Object_CreateObject[] =
-    ".. method:: CreateObject(archname, nrof=1, value=-1, identified=True).\n\n"
+    ".. method:: CreateObject(archname, nrof=1, value=-1, identified=True, "
+    "reason='script.item-grant').\n\n"
     "Creates a new object from archname and inserts it into the object.\n\n"
+    "Canonical money archetypes use the currency schema and default to "
+    "``script.currency-grant`` when inserted into a player. They may also be "
+    "created inside a detached, non-persistent object.\n\n"
     ":param archname: Name of the arch to create.\n"
     ":type archname: str\n"
     ":param nrof: Number of objects to create.\n"
@@ -1256,10 +1337,14 @@ static const char doc_Atrinik_Object_CreateObject[] =
     ":type value: int\n"
     ":param identified: If False, the object will not be identified.\n"
     ":type identified: bool\n"
+    ":param reason: Bounded semantic reason code for the private journal.\n"
+    ":type reason: str\n"
     ":returns: The created (and inserted) object, None on failure.\n"
     ":rtype: :class:`Atrinik.Object.Object` or None\n"
-    ":raises Atrinik.AtrinikError: If archname references an invalid "
-    "archetype.";
+    ":raises Atrinik.AtrinikError: If archname references an invalid archetype.\n"
+    ":raises ValueError: If nrof is outside 1..INT32_MAX.\n"
+    ":raises RuntimeError: If MONEY targets a persistent non-player destination or journaling "
+    "fails.";
 
 /**
  * Implements Atrinik.Object.Object.CreateObject() Python method.
@@ -1267,8 +1352,9 @@ static const char doc_Atrinik_Object_CreateObject[] =
  */
 static PyObject *
 Atrinik_Object_CreateObject(Atrinik_Object *self, PyObject *args, PyObject *keywds) {
-    static char *kwlist[] = {"archname", "nrof", "value", "identified", NULL};
+    static char *kwlist[] = {"archname", "nrof", "value", "identified", "reason", NULL};
     const char *archname;
+    const char *reason = "script.item-grant";
     uint32_t nrof = 1;
     int64_t value = -1;
     int identified = 1;
@@ -1277,12 +1363,13 @@ Atrinik_Object_CreateObject(Atrinik_Object *self, PyObject *args, PyObject *keyw
 
     if (!PyArg_ParseTupleAndKeywords(args,
                                      keywds,
-                                     "s|ILi",
+                                     "s|ILis",
                                      kwlist,
                                      &archname,
                                      &nrof,
                                      &value,
-                                     &identified)) {
+                                     &identified,
+                                     &reason)) {
         return NULL;
     }
 
@@ -1292,6 +1379,20 @@ Atrinik_Object_CreateObject(Atrinik_Object *self, PyObject *args, PyObject *keyw
 
     if (at == NULL) {
         PyErr_Format(AtrinikError, "The archetype '%s' doesn't exist.", archname);
+        return NULL;
+    }
+    if (nrof == 0 || nrof > INT32_MAX) {
+        PyErr_SetString(PyExc_ValueError,
+                        "Persistent object quantities must be between one and INT32_MAX.");
+        return NULL;
+    }
+    object *destination_root = hooks->object_get_env(self->obj);
+    bool detached_destination = destination_root->type != PLAYER && destination_root->map == NULL &&
+                                QUERY_FLAG(destination_root, FLAG_REMOVED);
+    if (at->clone.type == MONEY && destination_root->type != PLAYER && !detached_destination) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "CreateObject cannot mint currency into persistent non-player state; use "
+                        "Player.InsertCoins for player currency.");
         return NULL;
     }
 
@@ -1309,8 +1410,25 @@ Atrinik_Object_CreateObject(Atrinik_Object *self, PyObject *args, PyObject *keyw
         SET_FLAG(tmp, FLAG_IDENTIFIED);
     }
 
-    tmp = hooks->object_insert_into(tmp, self->obj, 0);
-    if (tmp != NULL && self->obj->type == PLAYER && tmp->type == SPELL) {
+    object *inserted = NULL;
+    const char *semantic_reason =
+        tmp->type == MONEY && strcmp(reason, "script.item-grant") == 0
+            ? "script.currency-grant"
+            : reason;
+    object_semantic_result_t result =
+        hooks->object_insert_into_reason(tmp, self->obj, semantic_reason, &inserted);
+    if (result == OBJECT_SEMANTIC_FAILED) {
+        hooks->object_destroy(tmp);
+        PyErr_SetString(PyExc_RuntimeError, "Item grant could not be journaled.");
+        return NULL;
+    }
+    if (result == OBJECT_SEMANTIC_AMBIGUOUS) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Item granted, but its durable journal commit is uncertain.");
+        return NULL;
+    }
+    tmp = inserted;
+    if (self->obj->type == PLAYER && tmp->type == SPELL) {
         hooks->metrics_character_add_by_name(CONTR(self->obj), "magic.spells_learned", 1);
         hooks->metrics_character_spells_changed(CONTR(self->obj));
     }
@@ -1507,48 +1625,101 @@ Atrinik_Object_FindObjects(Atrinik_Object *self, PyObject *args, PyObject *keywd
 
 /** Documentation for Atrinik_Object_Remove(). */
 static const char doc_Atrinik_Object_Remove[] =
-    ".. method:: Remove().\n\n"
+    ".. method:: Remove(reason='script.item-remove').\n\n"
     "Takes the object out of whatever map or inventory it is in. The object can "
     "then be inserted or teleported somewhere else.\n\n"
     "Be careful when removing one of the objects involved in the event activation "
     "(such as the activator/event/etc). It is recommended you use :meth:"
     "`Atrinik.SetReturnValue(1)` or similar before the script exits if doing "
     "so.\n\n"
-    ":raises Atrinik.AtrinikError: If the object is already removed.";
+    ":raises Atrinik.AtrinikError: If the object is already removed.\n"
+    ":raises RuntimeError: If persistent currency is targeted or journaling is uncertain.";
 
 /**
  * Implements Atrinik.Object.Object.Remove() Python method.
  * @copydoc PyMethod_NOARGS
  */
-static PyObject *Atrinik_Object_Remove(Atrinik_Object *self, PyObject *ignored) {
+static PyObject *Atrinik_Object_Remove(Atrinik_Object *self, PyObject *args) {
+    const char *reason = "script.item-remove";
+    if (!PyArg_ParseTuple(args, "|s", &reason)) {
+        return NULL;
+    }
     OBJEXISTCHECK(self);
+
+    if (python_object_reject_currency_move(self->obj)) {
+        return NULL;
+    }
 
     if (QUERY_FLAG(self->obj, FLAG_REMOVED)) {
         RAISE("Object has been removed already.");
     }
 
-    hooks->object_remove(self->obj, 0);
+    object_semantic_result_t result = hooks->object_remove_reason(self->obj, reason, false);
+    if (result != OBJECT_SEMANTIC_COMMITTED) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        result == OBJECT_SEMANTIC_FAILED
+                            ? "Item removal could not be journaled."
+                            : "Item removed, but its durable journal commit is uncertain.");
+        return NULL;
+    }
 
     Py_INCREF(Py_None);
     return Py_None;
 }
 
 /** Documentation for Atrinik_Object_Destroy(). */
-static const char doc_Atrinik_Object_Destroy[] = ".. method:: Destroy().\n\n"
-                                                 "Frees all data associated with the object.";
+static const char doc_Atrinik_Object_Destroy[] =
+    ".. method:: Destroy(reason='script.item-destroy').\n\n"
+    "Frees all data associated with the object.\n\n"
+    ":param reason: Bounded semantic reason code for the private journal.\n"
+    ":type reason: str\n"
+    ":raises RuntimeError: If destruction cannot be journaled or its terminal sync is uncertain.";
 
 /**
  * Implements Atrinik.Object.Object.Destroy() Python method.
  * @copydoc PyMethod_NOARGS
  */
-static PyObject *Atrinik_Object_Destroy(Atrinik_Object *self, PyObject *ignored) {
+static PyObject *Atrinik_Object_Destroy(Atrinik_Object *self, PyObject *args) {
+    const char *reason = "script.item-destroy";
+    if (!PyArg_ParseTuple(args, "|s", &reason)) {
+        return NULL;
+    }
     OBJEXISTCHECK(self);
-
-    if (!QUERY_FLAG(self->obj, FLAG_REMOVED)) {
-        hooks->object_remove(self->obj, 0);
+    if (python_object_is_hidden_bank(self->obj) && python_object_is_player_rooted(self->obj)) {
+        object_semantic_result_t result = hooks->bank_destroy_balance_reason(
+            self->obj, reason);
+        if (result != OBJECT_SEMANTIC_COMMITTED) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            result == OBJECT_SEMANTIC_FAILED
+                                ? "Bank reset could not be journaled."
+                                : "Bank reset, but its durable journal commit is uncertain.");
+            return NULL;
+        }
+        Py_RETURN_NONE;
+    }
+    if (self->obj->type == MONEY && python_object_is_player_rooted(self->obj)) {
+        object_semantic_result_t result = hooks->shop_destroy_coin_reason(self->obj, reason);
+        if (result != OBJECT_SEMANTIC_COMMITTED) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            result == OBJECT_SEMANTIC_FAILED
+                                ? "Currency destruction could not be journaled."
+                                : "Currency destroyed, but its durable journal commit is uncertain.");
+            return NULL;
+        }
+        Py_RETURN_NONE;
+    }
+    if (python_object_reject_currency_move(self->obj)) {
+        return NULL;
     }
 
-    hooks->object_destroy(self->obj);
+    object_semantic_result_t result = hooks->object_remove_reason(self->obj, reason, true);
+    if (result != OBJECT_SEMANTIC_COMMITTED) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        result == OBJECT_SEMANTIC_FAILED
+                            ? "Item destruction could not be journaled."
+                            : "Item destroyed, but its durable journal commit is uncertain.");
+        return NULL;
+    }
 
     Py_INCREF(Py_None);
     return Py_None;
@@ -1577,6 +1748,9 @@ static PyObject *Atrinik_Object_SetPosition(Atrinik_Object *self, PyObject *args
     }
 
     OBJEXISTCHECK(self);
+    if (python_object_reject_currency_move(self->obj)) {
+        return NULL;
+    }
 
     hooks->transfer_ob(self->obj, x, y, 0, NULL, NULL);
 
@@ -1712,10 +1886,12 @@ static PyObject *Atrinik_Object_GetMoney(Atrinik_Object *self, PyObject *ignored
 
 /** Documentation for Atrinik_Object_PayAmount(). */
 static const char doc_Atrinik_Object_PayAmount[] =
-    ".. method:: PayAmount(value).\n\n"
+    ".. method:: PayAmount(value, reason='script.payment').\n\n"
     "Makes the object pay a specified amount of money.\n\n"
     ":param value: The amount of money to pay.\n"
-    ":type value: int"
+    ":type value: int\n"
+    ":param reason: Bounded semantic reason code for the private journal.\n"
+    ":type reason: str\n"
     ":returns: Whether the value was paid successfully (had enough money).\n"
     ":rtype: bool";
 
@@ -1725,14 +1901,21 @@ static const char doc_Atrinik_Object_PayAmount[] =
  */
 static PyObject *Atrinik_Object_PayAmount(Atrinik_Object *self, PyObject *args) {
     int64_t value;
+    const char *reason = "script.payment";
 
-    if (!PyArg_ParseTuple(args, "L", &value)) {
+    if (!PyArg_ParseTuple(args, "L|s", &value, &reason)) {
         return NULL;
     }
 
     OBJEXISTCHECK(self);
 
-    return Py_BuildBoolean(hooks->shop_pay(self->obj, value));
+    object_semantic_result_t result = hooks->shop_pay_reason(self->obj, value, reason);
+    if (result == OBJECT_SEMANTIC_AMBIGUOUS) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Payment completed, but its durable journal commit is uncertain.");
+        return NULL;
+    }
+    return Py_BuildBoolean(result == OBJECT_SEMANTIC_COMMITTED);
 }
 
 /** Documentation for Atrinik_Object_Clone(). */
@@ -1744,7 +1927,8 @@ static const char doc_Atrinik_Object_Clone[] =
     ":param inventory: Whether to clone the inventory of the object.\n"
     ":type inventory: bool\n"
     ":returns: Cloned object.\n"
-    ":rtype: :class:`Atrinik.Object.Object`";
+    ":rtype: :class:`Atrinik.Object.Object`\n"
+    ":raises RuntimeError: If the object is hidden bank state.";
 
 /**
  * Implements Atrinik.Object.Object.Clone() Python method.
@@ -1758,6 +1942,11 @@ static PyObject *Atrinik_Object_Clone(Atrinik_Object *self, PyObject *args) {
     }
 
     OBJEXISTCHECK(self);
+
+    if (python_object_is_hidden_bank(self->obj)) {
+        PyErr_SetString(PyExc_RuntimeError, "Hidden bank state cannot be cloned.");
+        return NULL;
+    }
 
     object *clone;
     if (inventory) {
@@ -2065,27 +2254,65 @@ static PyObject *Atrinik_Object_SetAttack(Atrinik_Object *self, PyObject *args) 
 
 /** Documentation for Atrinik_Object_Decrease(). */
 static const char doc_Atrinik_Object_Decrease[] =
-    ".. method:: Decrease(num=1).\n\n"
+    ".. method:: Decrease(num=1, *, reason='script.item-decrease').\n\n"
     "Decreases an object, removing it if there's nothing left to decrease.\n\n"
     ":param num: How much to decrease the object by.\n"
     ":type num: int\n"
+    ":param reason: Bounded semantic reason code for the private journal.\n"
+    ":type reason: str\n"
     ":returns: The object if something is left, None otherwise.\n"
-    ":rtype: :class:`Atrinik.Object.Object` or None";
+    ":rtype: :class:`Atrinik.Object.Object` or None\n"
+    ":raises RuntimeError: If the decrease cannot be journaled or its terminal sync is uncertain.";
 
 /**
  * Implements Atrinik.Object.Object.Decrease() Python method.
  * @copydoc PyMethod_VARARGS
  */
-static PyObject *Atrinik_Object_Decrease(Atrinik_Object *self, PyObject *args) {
+static PyObject *
+Atrinik_Object_Decrease(Atrinik_Object *self, PyObject *args, PyObject *keywds) {
+    static char *kwlist[] = {"num", "reason", NULL};
     uint32_t num = 1;
+    const char *reason = "script.item-decrease";
 
-    if (!PyArg_ParseTuple(args, "|I", &num)) {
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "|I$s", kwlist, &num, &reason)) {
         return NULL;
     }
 
     OBJEXISTCHECK(self);
 
-    return wrap_object(hooks->object_decrease(self->obj, num));
+    if (self->obj->type == MONEY && python_object_is_player_rooted(self->obj)) {
+        uint32_t before = MAX(1, self->obj->nrof);
+        object_semantic_result_t result;
+        if (num < before) {
+            result = hooks->shop_set_coin_nrof_reason(self->obj, before - num, reason);
+            if (result == OBJECT_SEMANTIC_COMMITTED) {
+                return wrap_object(self->obj);
+            }
+        } else {
+            result = hooks->shop_destroy_coin_reason(self->obj, reason);
+            if (result == OBJECT_SEMANTIC_COMMITTED) {
+                Py_RETURN_NONE;
+            }
+        }
+        PyErr_SetString(PyExc_RuntimeError,
+                        result == OBJECT_SEMANTIC_FAILED
+                            ? "Currency decrease could not be journaled."
+                            : "Currency decreased, but its durable journal commit is uncertain.");
+        return NULL;
+    }
+
+    object *survivor = NULL;
+    object_semantic_result_t result =
+        hooks->object_decrease_reason(self->obj, num, reason, &survivor);
+    if (result != OBJECT_SEMANTIC_COMMITTED) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        result == OBJECT_SEMANTIC_FAILED
+                            ? "Item decrease could not be journaled."
+                            : "Item decreased, but its durable journal commit is uncertain.");
+        return NULL;
+    }
+
+    return wrap_object(survivor);
 }
 
 /** Documentation for Atrinik_Object_SquaresAround(). */
@@ -2316,7 +2543,8 @@ static const char doc_Atrinik_Object_CreateTreasure[] =
     ":param a_chance: Chance for the treasure to become artifact, if possible. A "
     "value of 0 will disable any chance for artifacts.\n"
     ":type a_chance: int\n"
-    ":raises ValueError: If treasure is not valid.";
+    ":raises ValueError: If treasure is not valid.\n"
+    ":raises RuntimeError: If generation would mutate persistent non-player state.";
 
 /**
  * Implements Atrinik.Object.Object.CreateTreasure() Python method.
@@ -2341,6 +2569,15 @@ Atrinik_Object_CreateTreasure(Atrinik_Object *self, PyObject *args, PyObject *ke
     }
 
     OBJEXISTCHECK(self);
+
+    object *root = hooks->object_get_env(self->obj);
+    if ((flags & GT_ENVIRONMENT) != 0 ||
+        (python_object_is_persistent(self->obj) && root->type != PLAYER)) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "CreateTreasure cannot generate persistent non-player state; use explicit "
+                        "reason-aware item or currency APIs.");
+        return NULL;
+    }
 
     /* Figure out the treasure list. */
     if (treasure_name != NULL) {
@@ -2393,7 +2630,8 @@ static const char doc_Atrinik_Object_Move[] =
     "object was not able to move there yet but some sort of action was performed "
     "that might allow us to move there (door opening for example), direction "
     "number that the object ended up moving in otherwise.\n"
-    ":rtype: int";
+    ":rtype: int\n"
+    ":raises RuntimeError: If persistent currency is targeted.";
 
 /**
  * Implements Atrinik.Object.Object.Move() Python method.
@@ -2407,6 +2645,10 @@ static PyObject *Atrinik_Object_Move(Atrinik_Object *self, PyObject *args) {
     }
 
     OBJEXISTCHECK(self);
+
+    if (python_object_reject_currency_move(self->obj)) {
+        return NULL;
+    }
 
     if (self->obj->map == NULL) {
         PyErr_SetString(AtrinikError, "Object not on map.");
@@ -2460,7 +2702,8 @@ static const char doc_Atrinik_Object_Artificate[] =
     "abilities.\n"
     ":raises Atrinik.AtrinikError: If the object's type doesn't match "
     "any artifact list.\n"
-    ":raises Atrinik.AtrinikError: If the artifact name is invalid.";
+    ":raises Atrinik.AtrinikError: If the artifact name is invalid.\n"
+    ":raises RuntimeError: If the object is persistent.";
 
 /**
  * Implements Atrinik.Object.Object.Artificate() Python method.
@@ -2474,6 +2717,13 @@ static PyObject *Atrinik_Object_Artificate(Atrinik_Object *self, PyObject *args)
     }
 
     OBJEXISTCHECK(self);
+
+    if (python_object_is_persistent(self->obj)) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Persistent objects cannot be artified; prepare the object before "
+                        "insertion.");
+        return NULL;
+    }
 
     if (self->obj->artifact) {
         PyErr_SetString(AtrinikError, "Object already has artifact abilities.");
@@ -2509,7 +2759,9 @@ static const char doc_Atrinik_Object_Load[] =
     "\n\n"
     ":param lines: Lines to load into the object.\n"
     ":type lines: str\n"
-    ":raises Atrinik.AtrinikError: If the object attributes are invalid.";
+    ":raises Atrinik.AtrinikError: If the object attributes are invalid.\n"
+    ":raises RuntimeError: Unless the object is unloaded, top-level, and detached, or if the "
+    "input creates a nested archetype.";
 
 /**
  * Implements Atrinik.Object.Object.Load() Python method.
@@ -2522,10 +2774,21 @@ static PyObject *Atrinik_Object_Load(Atrinik_Object *self, PyObject *args) {
         return NULL;
     }
 
+    OBJEXISTCHECK(self);
+    if (python_object_is_persistent(self->obj) || self->obj->env != NULL ||
+        self->obj->inv != NULL || python_load_contains_field(lines, "arch")) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Load only accepts an unloaded, top-level detached object and cannot "
+                        "create nested archetypes.");
+        return NULL;
+    }
+
     if (hooks->set_variable(self->obj, lines) == LL_ERROR) {
         PyErr_SetString(AtrinikError, "Invalid object attributes.");
         return NULL;
     }
+    self->obj->carrying = 0;
+    self->obj->damage_round_tag = 0;
 
     Py_INCREF(Py_None);
     return Py_None;
@@ -2651,8 +2914,8 @@ static PyMethodDef methods[] = {
      PY_METHOD(Atrinik_Object_FindObjects),
      METH_VARARGS | METH_KEYWORDS,
      doc_Atrinik_Object_FindObjects},
-    {"Remove", PY_METHOD(Atrinik_Object_Remove), METH_NOARGS, doc_Atrinik_Object_Remove},
-    {"Destroy", PY_METHOD(Atrinik_Object_Destroy), METH_NOARGS, doc_Atrinik_Object_Destroy},
+    {"Remove", PY_METHOD(Atrinik_Object_Remove), METH_VARARGS, doc_Atrinik_Object_Remove},
+    {"Destroy", PY_METHOD(Atrinik_Object_Destroy), METH_VARARGS, doc_Atrinik_Object_Destroy},
     {"SetPosition",
      PY_METHOD(Atrinik_Object_SetPosition),
      METH_VARARGS,
@@ -2687,7 +2950,10 @@ static PyMethodDef methods[] = {
      doc_Atrinik_Object_SetProtection},
     {"Attack", PY_METHOD(Atrinik_Object_Attack), METH_VARARGS, doc_Atrinik_Object_Attack},
     {"SetAttack", PY_METHOD(Atrinik_Object_SetAttack), METH_VARARGS, doc_Atrinik_Object_SetAttack},
-    {"Decrease", PY_METHOD(Atrinik_Object_Decrease), METH_VARARGS, doc_Atrinik_Object_Decrease},
+    {"Decrease",
+     PY_METHOD(Atrinik_Object_Decrease),
+     METH_VARARGS | METH_KEYWORDS,
+     doc_Atrinik_Object_Decrease},
     {"SquaresAround",
      PY_METHOD(Atrinik_Object_SquaresAround),
      METH_VARARGS | METH_KEYWORDS,
@@ -2788,11 +3054,180 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
             return -1;
         }
         if (direction < 0 || direction > NUM_DIRECTION) {
-            PyErr_Format(PyExc_ValueError,
-                         "direction must be between 0 and %d.",
-                         NUM_DIRECTION);
+            PyErr_Format(PyExc_ValueError, "direction must be between 0 and %d.", NUM_DIRECTION);
             return -1;
         }
+    }
+
+    object *root = hooks->object_get_env(obj->obj);
+    bool player_rooted = root != obj->obj && root->type == PLAYER;
+    bool persistent_currency = obj->obj->type == MONEY && python_object_is_persistent(obj->obj);
+    bool hidden_bank = python_object_is_hidden_bank(obj->obj) && player_rooted;
+    if (hidden_bank && field->offset != offsetof(object, value)) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Hidden bank state can only be changed through its balance API.");
+        return -1;
+    }
+    if (field->offset == offsetof(object, carrying) &&
+        (python_object_is_persistent(obj->obj) || obj->obj->env != NULL || obj->obj->inv != NULL)) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Persistent carrying weight is derived inventory state and cannot be "
+                        "changed directly.");
+        return -1;
+    }
+    if (field->offset == offsetof(object, weight) && obj->obj->env != NULL) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Contained object weight is derived inventory state and cannot be "
+                        "changed directly.");
+        return -1;
+    }
+    if (field->offset == offsetof(object, type) && python_object_is_persistent(obj->obj) &&
+        PyInt_Check(value)) {
+        long requested = PyLong_AsLong(value);
+        if (PyErr_Occurred()) {
+            return -1;
+        }
+        if (requested == MONEY && obj->obj->type != MONEY) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            "Persistent objects cannot be converted into currency; use a "
+                            "currency API.");
+            return -1;
+        }
+        if ((obj->obj->type == CONTAINER || requested == CONTAINER) &&
+            (obj->obj->env != NULL || obj->obj->inv != NULL)) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            "Contained or loaded objects cannot change container type.");
+            return -1;
+        }
+    }
+    if (field->offset == offsetof(object, weapon_speed) && obj->obj->inv != NULL) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Loaded container weight reduction cannot be changed directly.");
+        return -1;
+    }
+    if (field->offset == offsetof(object, name) && obj->obj->arch != NULL &&
+        strcmp(obj->obj->arch->name, "player_info") == 0 && PyUnicode_Check(value)) {
+        const char *requested = PyUnicode_AsUTF8(value);
+        if (requested == NULL) {
+            return -1;
+        }
+        if (strcmp(requested, "BANK_GENERAL") == 0) {
+            if (!player_rooted) {
+                PyErr_SetString(PyExc_RuntimeError,
+                                "BANK_GENERAL can only be established for a player.");
+                return -1;
+            }
+            object_semantic_result_t result = hooks->bank_name_info_reason(
+                obj->obj, "script.bank-create");
+            if (result != OBJECT_SEMANTIC_COMMITTED) {
+                PyErr_SetString(PyExc_RuntimeError,
+                                result == OBJECT_SEMANTIC_FAILED
+                                    ? "Bank creation could not be journaled or is not unique."
+                                    : "Bank created, but its durable journal commit is uncertain.");
+                return -1;
+            }
+            return 0;
+        }
+    }
+    if (persistent_currency &&
+        (field->offset == offsetof(object, value) || field->offset == offsetof(object, type))) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Persistent coin identity cannot be changed; use currency APIs.");
+        return -1;
+    }
+    if (player_rooted && field->offset == offsetof(object, type) &&
+        !QUERY_FLAG(obj->obj, FLAG_SYS_OBJECT) && obj->obj->type != FORCE &&
+        obj->obj->type != POTION_EFFECT && obj->obj->type != EVENT_OBJECT &&
+        obj->obj->type != QUEST_CONTAINER) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Persistent item type cannot be changed after insertion.");
+        return -1;
+    }
+    if (field->offset == offsetof(object, nrof) && persistent_currency && !player_rooted) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Persistent non-player currency quantity cannot be changed as an item.");
+        return -1;
+    }
+    if (field->offset == offsetof(object, nrof) && obj->obj->env != NULL && !player_rooted) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Contained stack quantity cannot be changed without updating its "
+                        "inventory chain.");
+        return -1;
+    }
+    if (field->offset == offsetof(object, nrof) && player_rooted) {
+        if (!PyInt_Check(value)) {
+            INTRAISE("Illegal value for nrof field.");
+        }
+        unsigned long requested = PyLong_AsUnsignedLong(value);
+        if (PyErr_Occurred() || requested > INT32_MAX) {
+            PyErr_SetString(PyExc_OverflowError,
+                            "Persistent nrof must be between 0 and INT32_MAX.");
+            return -1;
+        }
+        object_semantic_result_t result;
+        object *survivor = NULL;
+        if (obj->obj->type == MONEY) {
+            if (requested == 0) {
+                PyErr_SetString(PyExc_ValueError, "Persistent coin nrof must be at least one.");
+                return -1;
+            }
+            result = hooks->shop_set_coin_nrof_reason(obj->obj,
+                                                      (uint32_t)requested,
+                                                      "script.currency-adjust");
+        } else {
+            result = hooks->object_set_nrof_reason(obj->obj,
+                                                   (uint32_t)requested,
+                                                   "script.item-adjust",
+                                                   &survivor);
+        }
+        if (result != OBJECT_SEMANTIC_COMMITTED) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            result == OBJECT_SEMANTIC_FAILED
+                                ? "Stack quantity adjustment could not be journaled."
+                                : "Stack quantity changed, but its durable journal commit is uncertain.");
+            return -1;
+        }
+        return 0;
+    }
+    if (field->offset == offsetof(object, value) && root != obj->obj && root->type == PLAYER &&
+        obj->obj->arch != NULL && strcmp(obj->obj->arch->name, "player_info") == 0 &&
+        obj->obj->name != NULL && strcmp(obj->obj->name, "BANK_GENERAL") == 0) {
+        if (!PyInt_Check(value)) {
+            INTRAISE("Illegal value for bank balance.");
+        }
+        long long requested = PyLong_AsLongLong(value);
+        if (PyErr_Occurred()) {
+            return -1;
+        }
+        object_semantic_result_t result = hooks->bank_set_balance_reason(
+            obj->obj, (int64_t)requested, "script.bank-adjust");
+        if (result != OBJECT_SEMANTIC_COMMITTED) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            result == OBJECT_SEMANTIC_FAILED
+                                ? "Bank balance adjustment could not be journaled."
+                                : "Bank balance changed, but its durable journal commit is uncertain.");
+            return -1;
+        }
+        return 0;
+    }
+    if (field->offset == offsetof(object, value) && root != obj->obj && root->type == PLAYER) {
+        if (!PyInt_Check(value)) {
+            INTRAISE("Illegal value for value field.");
+        }
+        long long requested = PyLong_AsLongLong(value);
+        if (PyErr_Occurred()) {
+            return -1;
+        }
+        object_semantic_result_t result = hooks->object_set_value_reason(
+            obj->obj, (int64_t)requested, "script.item-value-adjust");
+        if (result != OBJECT_SEMANTIC_COMMITTED) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            result == OBJECT_SEMANTIC_FAILED
+                                ? "Item value adjustment could not be journaled."
+                                : "Item value changed, but its durable journal commit is uncertain.");
+            return -1;
+        }
+        return 0;
     }
 
     if (obj->obj->map != NULL && (field->offset == offsetof(object, layer) ||

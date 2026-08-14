@@ -37,6 +37,7 @@
 #include <arch.h>
 #include <player.h>
 #include <object.h>
+#include <gameplay_journal.h>
 #include <disease.h>
 #include <player_status.h>
 
@@ -1428,11 +1429,50 @@ int cast_transform_wealth(object *op) {
     }
 
     /* Figure out our value of money to give to player. */
-    val = (marked->value * (marked->nrof ? marked->nrof : 1)) * TRANSFORM_WEALTH_SACRIFICE;
+    int64_t source_value;
+    if (!shop_money_object_counted(op, marked) || !shop_money_object_value(marked, &source_value) ||
+        source_value > INT64_MAX / TRANSFORM_WEALTH_SACRIFICE || !shop_coins_available()) {
+        free(name);
+        return 0;
+    }
+    int64_t sacrificed = source_value;
+    val = sacrificed * TRANSFORM_WEALTH_SACRIFICE;
+    int64_t before;
+    if (!shop_get_recovery_money(op, &before)) {
+        free(name);
+        return 0;
+    }
+    if (before < sacrificed || val > INT64_MAX - (before - sacrificed)) {
+        free(name);
+        return 0;
+    }
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    if (!gameplay_journal_currency_begin(op,
+                                         "spell.alchemy",
+                                         "currency:transformation",
+                                         before,
+                                         val - sacrificed,
+                                         before - sacrificed + val,
+                                         "carried-cash",
+                                         "player-or-ground",
+                                         "alchemy",
+                                         transaction)) {
+        draw_info(COLOR_WHITE, op, "The transformation could not be journaled.");
+        free(name);
+        return 0;
+    }
     /* We remove the money. */
     object_remove(marked, 0);
+    object_destroy(marked);
     /* Now give the player the new money. */
-    shop_insert_coins(op, val);
+    bool delivered = shop_insert_coins_exact_tagged(op, val, transaction);
+    HARD_ASSERT(delivered);
+    (void)delivered;
+    if (!gameplay_journal_semantic_commit(transaction)) {
+        free(name);
+        return 0;
+    }
+    shop_currency_tag_retire(op, transaction);
     draw_info_format(COLOR_WHITE, op, "You transform %s into %s.", name, shop_get_cost_string(val));
     free(name);
     return 1;

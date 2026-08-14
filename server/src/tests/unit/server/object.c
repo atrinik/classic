@@ -757,6 +757,22 @@ START_TEST(test_object_weight_add) {
 }
 END_TEST
 
+START_TEST(test_object_weight_can_add_rejects_uint32_overflow) {
+    object *container = arch_get("sack");
+    container->carrying = UINT32_MAX - 5;
+    ck_assert(object_weight_can_add(container, 5));
+    ck_assert(!object_weight_can_add(container, 6));
+    ck_assert(!object_weight_can_add(container, (uint64_t)UINT32_MAX + 1));
+
+    container->weapon_speed = 0.5;
+    container->damage_round_tag = UINT32_MAX - 2;
+    container->carrying = container->damage_round_tag * container->weapon_speed;
+    ck_assert(object_weight_can_add(container, 2));
+    ck_assert(!object_weight_can_add(container, 3));
+    object_destroy(container);
+}
+END_TEST
+
 START_TEST(test_object_weight_sub) {
     object *ob1, *ob2, *ob3, *ob4;
     unsigned long sum;
@@ -1418,6 +1434,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_map_stack_operations_increment_update_once);
     tcase_add_test(tc_core, test_object_weight_sum);
     tcase_add_test(tc_core, test_object_weight_add);
+    tcase_add_test(tc_core, test_object_weight_can_add_rejects_uint32_overflow);
     tcase_add_test(tc_core, test_object_weight_sub);
     tcase_add_test(tc_core, test_object_get_env);
     tcase_add_test(tc_core, test_object_is_in_inventory);

@@ -317,8 +317,12 @@ void clean_tmp_files(void) {
             if (settings.recycle_tmp_maps) {
                 swap_map(m, 0);
             } else {
-                new_save_map(m, 0);
-                clean_tmp_map(m);
+                if (new_save_map(m, 0) == 0) {
+                    clean_tmp_map(m);
+                } else {
+                    LOG(BUG, "Keeping unsaved map %s resident during temporary-file cleanup.",
+                        m->path != NULL ? m->path : "<runtime>");
+                }
             }
         }
     }
@@ -478,7 +482,10 @@ int swap_apartments(const char *mapold, const char *mapnew, int x, int y, object
     }
 
     /* Save the map */
-    new_save_map(newmap, 0);
+    if (new_save_map(newmap, 0) != 0) {
+        LOG(BUG, "Could not save swapped apartment map %s.", newmap->path);
+        return 0;
+    }
 
     /* Check for old save bed */
     if (strcmp(oldmap->path, CONTR(op)->savebed_map) == 0) {
