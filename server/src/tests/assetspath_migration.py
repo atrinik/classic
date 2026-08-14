@@ -168,6 +168,12 @@ def main() -> int:
             )
             descriptor_path = Path(f"/proc/self/fd/{descriptor}")
             try:
+                require_descriptor_rejection(
+                    executable,
+                    Path(f"/proc/self/fd/0{descriptor}"),
+                    (descriptor,),
+                    "noncanonical",
+                )
                 result = run_server(executable, descriptor_path, (descriptor,))
                 if result.returncode != 0:
                     raise RuntimeError(
@@ -192,13 +198,6 @@ def main() -> int:
                 (),
                 "closed",
             )
-            require_descriptor_rejection(
-                executable,
-                Path(f"/proc/self/fd/0{invalid_descriptor}"),
-                (),
-                "noncanonical",
-            )
-
             descriptor_file = root / "descriptor-file"
             descriptor_file.write_text("invalid\n", encoding="utf-8")
             file_descriptor = os.open(descriptor_file, os.O_RDONLY | os.O_CLOEXEC)
