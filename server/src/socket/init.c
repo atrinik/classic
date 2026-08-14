@@ -246,6 +246,7 @@ static bool asset_staging_inherited_directory(const char *path, bool *recognized
     const char *value;
     char *end;
     unsigned long descriptor;
+    char canonical[32];
     struct stat metadata;
 
     *recognized = strncmp(path, prefix, sizeof(prefix) - 1U) == 0;
@@ -259,7 +260,8 @@ static bool asset_staging_inherited_directory(const char *path, bool *recognized
     }
     errno = 0;
     descriptor = strtoul(value, &end, 10);
-    if (errno != 0 || *end != '\0' || descriptor > INT_MAX) {
+    if (errno != 0 || *end != '\0' || descriptor > INT_MAX ||
+        snprintf(VS(canonical), "%lu", descriptor) < 0 || strcmp(value, canonical) != 0) {
         return false;
     }
 

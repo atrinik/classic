@@ -192,6 +192,12 @@ def main() -> int:
                 (),
                 "closed",
             )
+            require_descriptor_rejection(
+                executable,
+                Path(f"/proc/self/fd/0{invalid_descriptor}"),
+                (),
+                "noncanonical",
+            )
 
             descriptor_file = root / "descriptor-file"
             descriptor_file.write_text("invalid\n", encoding="utf-8")
