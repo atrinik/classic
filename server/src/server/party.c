@@ -310,6 +310,7 @@ static void party_loot_random(object *pl, object *corpse) {
                 if (num == pl_id) {
                     if (player_can_carry(ol->objlink.ob, WEIGHT_NROF(tmp, tmp->nrof))) {
                         object *inserted = NULL;
+                        char *received_name = NULL;
                         object_semantic_result_t result;
                         if (tmp->type == MONEY) {
                             int64_t nrof = MAX(1, tmp->nrof);
@@ -339,6 +340,7 @@ static void party_loot_random(object *pl, object *corpse) {
                                          ? OBJECT_SEMANTIC_COMMITTED
                                          : OBJECT_SEMANTIC_AMBIGUOUS;
                             if (result == OBJECT_SEMANTIC_COMMITTED) {
+                                received_name = object_get_name_s(inserted, NULL);
                                 shop_currency_tag_retire(ol->objlink.ob, transaction);
                             }
                         } else {
@@ -348,12 +350,14 @@ static void party_loot_random(object *pl, object *corpse) {
                                                                &inserted);
                         }
                         if (result == OBJECT_SEMANTIC_COMMITTED) {
-                            char *name = object_get_name_s(inserted, NULL);
+                            if (received_name == NULL) {
+                                received_name = object_get_name_s(inserted, NULL);
+                            }
                             draw_info_format(COLOR_BLUE,
                                              ol->objlink.ob,
                                              "You receive the %s.",
-                                             name);
-                            free(name);
+                                             received_name);
+                            free(received_name);
                         }
                     }
 

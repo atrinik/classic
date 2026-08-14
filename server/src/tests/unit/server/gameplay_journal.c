@@ -345,6 +345,42 @@ START_TEST(test_party_loot_preparation_failure_preserves_corpse) {
 }
 END_TEST
 
+START_TEST(test_party_random_currency_retirement_preserves_message_lifetime) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    form_party(pl, "journal-random-loot-party");
+    ck_assert_ptr_ne(CONTR(pl)->party, NULL);
+    CONTR(pl)->party->loot = PARTY_LOOT_RANDOM;
+
+    object *existing = object_insert_into(arch_get("coppercoin"), pl, 0);
+    existing->nrof = 2;
+    object *corpse = arch_get("corpse");
+    object *coins = object_insert_into(arch_get("coppercoin"), corpse, 0);
+    coins->nrof = 10;
+
+    char directory[] = "/tmp/atrinik-party-random-loot-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    party_handle_corpse(pl, corpse);
+    ck_assert_ptr_eq(corpse->inv, NULL);
+    ck_assert_int_eq(shop_get_money(pl), 12);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("party.currency-loot"), 1);
+    gameplay_journal_deinit();
+    remove_fixture(directory);
+
+    remove_party_member(CONTR(pl)->party, pl);
+    object_destroy(corpse);
+    object_destroy(pl);
+}
+END_TEST
+
 START_TEST(test_semantic_item_shop_and_bank_producers) {
     mapstruct *map;
     object *pl;
@@ -1246,6 +1282,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_item_terminal_failures_report_ambiguity);
     tcase_add_test(tc_core, test_shop_purchase_terminal_failure_keeps_authoritative_state);
     tcase_add_test(tc_core, test_party_loot_preparation_failure_preserves_corpse);
+    tcase_add_test(tc_core,
+                   test_party_random_currency_retirement_preserves_message_lifetime);
 #ifndef WIN32
     tcase_add_test(tc_core, test_abrupt_process_crash_preserves_synced_phases);
     tcase_add_test(tc_core,
