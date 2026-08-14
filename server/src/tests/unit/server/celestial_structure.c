@@ -269,6 +269,18 @@ START_TEST(test_saved_v1_map_swaps_and_reloads_mutable_state) {
     object *marker = new_object(map, 2, 3);
     FREE_AND_COPY_HASH(marker->name, "saved celestial marker");
     FREE_AND_COPY_HASH(marker->name_pl, "saved celestial markers");
+    archetype_t *door_arch = arch_find("door_wood1");
+    ck_assert_ptr_ne(door_arch, NULL);
+    object_set_value(&door_arch->clone, "celestial_transmission_closed", "opaque", 1);
+    object_set_value(&door_arch->clone, "celestial_transmission_open", "open", 1);
+    object *door = arch_get("door_wood1");
+    ck_assert_ptr_ne(door, NULL);
+    door->x = 1;
+    door->y = 1;
+    door = object_insert_map(door, map, door, INS_NO_MERGE | INS_NO_WALK_ON);
+    make_aperture(door, "E", "00000000000000d0");
+    CLEAR_FLAG(door, FLAG_BLOCKSVIEW);
+    CLEAR_FLAG(door, FLAG_DOOR_CLOSED);
     map->reset_time = seconds() + 3600;
 
     char error[HUGE_BUF];
@@ -283,7 +295,49 @@ START_TEST(test_saved_v1_map_swaps_and_reloads_mutable_state) {
     marker = GET_MAP_OB(map, 2, 3);
     ck_assert_ptr_ne(marker, NULL);
     ck_assert_str_eq(marker->name, "saved celestial marker");
+    door = GET_MAP_OB(map, 1, 1);
+    ck_assert_ptr_ne(door, NULL);
+    ck_assert_int_eq(door->type, DOOR);
+    ck_assert(!QUERY_FLAG(door, FLAG_BLOCKSVIEW));
+    ck_assert(!QUERY_FLAG(door, FLAG_DOOR_CLOSED));
     delete_map(map);
+
+    object_set_value(&door_arch->clone, "celestial_transmission_closed", NULL, 1);
+    object_set_value(&door_arch->clone, "celestial_transmission_open", NULL, 1);
+
+    map = new_v1_map("/test/celestial-gate-swap", 5, 5, CELESTIAL_SKY_OPEN);
+    archetype_t *gate_arch = arch_find("gate_closed");
+    ck_assert_ptr_ne(gate_arch, NULL);
+    object_set_value(&gate_arch->clone, "celestial_transmission_closed", "opaque", 1);
+    object_set_value(&gate_arch->clone, "celestial_transmission_open", "open", 1);
+    object *gate = arch_get("gate_closed");
+    ck_assert_ptr_ne(gate, NULL);
+    gate->x = 1;
+    gate->y = 1;
+    gate = object_insert_map(gate, map, gate, INS_NO_MERGE | INS_NO_WALK_ON);
+    object_set_value(gate, "celestial_faces", "E", 1);
+    object_set_value(gate, "celestial_transmission_closed", "opaque", 1);
+    object_set_value(gate, "celestial_transmission_open", "open", 1);
+    object_set_value(gate, "celestial_aperture_id", "00000000000000d1", 1);
+    gate->celestial_aperture_id_authored = true;
+    CLEAR_FLAG(gate, FLAG_BLOCKSVIEW);
+    CLEAR_FLAG(gate, FLAG_NO_PASS);
+    map->reset_time = seconds() + 3600;
+
+    ck_assert_msg(celestial_structure_finalize_map(map, VS(error)), "%s", error);
+    swap_map(map, 1);
+    ck_assert_int_eq(map->in_memory, MAP_SWAPPED);
+    map = ready_map_name("/test/celestial-gate-swap", NULL, 0);
+    ck_assert_ptr_ne(map, NULL);
+    gate = GET_MAP_OB(map, 1, 1);
+    ck_assert_ptr_ne(gate, NULL);
+    ck_assert_int_eq(gate->type, GATE);
+    ck_assert(!QUERY_FLAG(gate, FLAG_BLOCKSVIEW));
+    ck_assert(!QUERY_FLAG(gate, FLAG_NO_PASS));
+    delete_map(map);
+
+    object_set_value(&gate_arch->clone, "celestial_transmission_closed", NULL, 1);
+    object_set_value(&gate_arch->clone, "celestial_transmission_open", NULL, 1);
 }
 END_TEST
 

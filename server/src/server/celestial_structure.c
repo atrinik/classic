@@ -231,7 +231,7 @@ static bool validate_object(const mapstruct *map,
     if (op->arch == NULL || dynamic != archetype_dynamic ||
         (dynamic && op->type != op->arch->clone.type) ||
         floor != QUERY_FLAG(&op->arch->clone, FLAG_IS_FLOOR) ||
-        opaque != QUERY_FLAG(&op->arch->clone, FLAG_BLOCKSVIEW)) {
+        (!dynamic && opaque != QUERY_FLAG(&op->arch->clone, FLAG_BLOCKSVIEW))) {
         return set_error(error,
                          error_size,
                          "%s (%d,%d) object %s overrides its archetype structural role",
