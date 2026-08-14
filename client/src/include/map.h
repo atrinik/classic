@@ -584,6 +584,19 @@ extern bool widget_map_mouse_origin_test(int mx, int my, int expected_mx, int ex
 extern void widget_map_draw_test(widgetdata *widget);
 extern void widget_map_ui_test_begin(void);
 extern bool widget_map_ui_test_end(void);
+extern void widget_map_animation_test_begin(void);
+extern bool widget_map_animation_test_end(bool expect_damage,
+                                          bool expect_kill,
+                                          bool expect_elevated,
+                                          bool expect_layer_content);
+extern void widget_map_animation_test_death_texture_set(SDL_Surface *texture);
+extern void widget_map_animation_test_add(int type,
+                                          int x_offset,
+                                          int y_offset,
+                                          int sub_layer,
+                                          int depth,
+                                          int value,
+                                          uint32_t elapsed_ms);
 #endif
 
 /** Public API implemented in src/gui/widgets/minimap.c. */
