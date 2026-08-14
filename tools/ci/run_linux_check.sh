@@ -235,6 +235,8 @@ case "${component}" in
       client/src/tests/fixtures/player_view/movement-colored-transition.map2.hex
       client/src/tests/fixtures/player_view/movement-colored-discrete.xml
       client/src/tests/fixtures/player_view/movement-colored.xml
+      client/src/tests/fixtures/player_view/movement-lighting-isolated.xml
+      client/src/tests/fixtures/player_view/movement-lighting-static-delta.map2.hex
       client/src/tests/fixtures/player_view/README.md
       client/tools/benchmark_movement_regression.py
       client/tools/generate_movement_delta.py
@@ -260,6 +262,8 @@ case "${component}" in
       client/src/tests/fixtures/player_view/movement-colored-transition.map2.hex
       client/src/tests/fixtures/player_view/movement-colored-discrete.xml
       client/src/tests/fixtures/player_view/movement-colored.xml
+      client/src/tests/fixtures/player_view/movement-lighting-isolated.xml
+      client/src/tests/fixtures/player_view/movement-lighting-static-delta.map2.hex
       client/tools/benchmark_movement_regression.py
       client/tools/generate_movement_delta.py
       client/tools/generate_movement_five_depth.py
@@ -391,6 +395,8 @@ case "${component}" in
           "${source_root}/client/src/tests/fixtures/player_view/movement-colored.xml" \
         --discrete-manifest \
           "${source_root}/client/src/tests/fixtures/player_view/movement-colored-discrete.xml" \
+          --lighting-manifest \
+          "${source_root}/client/src/tests/fixtures/player_view/movement-lighting-isolated.xml" \
         --informational-performance \
         --comparison-note "${comparison_note}" \
         --baseline-revision "${benchmark_base_sha}" \
@@ -412,6 +418,8 @@ case "${component}" in
         --candidate-revision "${ATRINIK_BENCHMARK_REVISION:-unknown}" \
         --comparison-note "${comparison_note}" \
         "${movement_matrix_arguments[@]}" \
+        --lighting-manifest \
+          "${source_root}/client/src/tests/fixtures/player_view/movement-lighting-isolated.xml" \
         --output "${movement_evidence}" || command_status=$?
     else
       python3 "${source_root}/client/tools/benchmark_movement_regression.py" skip \

@@ -13,6 +13,7 @@ EXPECTED_PACKETS = {"cold": 1, "sustained": 480, "idle": 8, "resumed": 80}
 EXPECTED_CHANGED = {"cold": 1, "sustained": 480, "idle": 0, "resumed": 80}
 EXPECTED_FULL_MAP_DRAWS = {"cold": 1, "sustained": 480, "idle": 0, "resumed": 80}
 EXPECTED_ANIMATION_DRAWS = {"cold": 0, "sustained": 0, "idle": 16, "resumed": 0}
+LIGHTING_SAMPLE_BYTES = 10
 EXPECTED_LOCAL_MINIMAP_DRAWS = {"cold": 1, "sustained": 240, "idle": 0, "resumed": 40}
 EXPECTED_CHECKPOINTS = (
     "cold",
@@ -51,8 +52,22 @@ LIGHTING_COUNTER_FIELDS = {
     "field_begins",
     "field_dirty_marks",
     "field_dirty_pixels",
+    "field_rasterized_quads",
     "field_translations",
+    "field_translated_pixels",
+    "field_translated_bytes",
+    "field_scroll_x_pixels",
+    "field_scroll_y_pixels",
+    "field_translation_fallback_active",
+    "field_translation_fallback_bounds",
+    "field_translation_fallback_control",
     "field_partial_rebuilds",
+    "field_full_rebuilds",
+    "field_full_rebuild_cache",
+    "field_full_rebuild_active",
+    "field_full_rebuild_bounds",
+    "field_full_rebuild_control",
+    "field_full_rebuild_other",
     "field_rebuilds",
     "field_reuses",
     "render_calls",
@@ -66,6 +81,16 @@ LIGHTING_COUNTER_FIELDS = {
     "lit_sprite_fallbacks",
     "lit_sprite_clears",
     "lit_sprite_cleared_entries",
+}
+LIGHTING_TIMING_FIELDS = {
+    "translation",
+    "dirty_clear",
+    "rasterization",
+    "extrapolation",
+    "tone_map_multiply",
+    "sprite_lookup",
+    "sprite_construction",
+    "sprite_invalidation",
 }
 LIGHTING_STATE_FIELDS = {
     "allocated_levels",
@@ -184,7 +209,9 @@ def _draw_reasons(value: object, draws: int, context: str) -> dict[str, object]:
 
 def _lighting(value: object, context: str) -> None:
     lighting = _mapping(
-        value, {"available", "start", "end", "peak", "counters", "levels"}, context
+        value,
+        {"available", "start", "end", "peak", "counters", "timings", "levels"},
+        context,
     )
     if lighting["available"] is not True:
         raise ValueError(f"movement benchmark {context} availability is invalid")
@@ -214,6 +241,15 @@ def _lighting(value: object, context: str) -> None:
         raise ValueError(f"movement benchmark {context} lit-sprite accounting is invalid")
     if counters["render_failures"] != 0 or counters["lit_sprite_fallbacks"] != 0:
         raise ValueError(f"movement benchmark {context} rendering failed")
+    timings = _mapping(lighting["timings"], LIGHTING_TIMING_FIELDS, f"{context} timings")
+    for name, timing in timings.items():
+        timing = _mapping(timing, {"unit", "calls", "elapsed"}, f"{context} {name} timing")
+        if timing["unit"] != "ns":
+            raise ValueError(f"movement benchmark {context} timing unit is invalid")
+        _integer(timing["calls"], f"{context} {name} timing calls")
+        _integer(timing["elapsed"], f"{context} {name} timing elapsed")
+        if (timing["calls"] == 0) != (timing["elapsed"] == 0):
+            raise ValueError(f"movement benchmark {context} {name} timing is contradictory")
     levels = lighting["levels"]
     if not isinstance(levels, list) or len(levels) != 13:
         raise ValueError(f"movement benchmark {context} levels are incomplete")
@@ -221,11 +257,13 @@ def _lighting(value: object, context: str) -> None:
     for expected_depth, item in zip(range(-6, 7), levels, strict=True):
         level = _mapping(
             item,
-            {"depth", "start", "end", "peak", "counters"},
+            {"depth", "width", "height", "start", "end", "peak", "counters", "timings"},
             f"{context} level {expected_depth}",
         )
         if level["depth"] != expected_depth:
             raise ValueError(f"movement benchmark {context} level order is invalid")
+        for dimension in ("width", "height"):
+            _integer(level[dimension], f"{context} level {expected_depth} {dimension}")
         for boundary in ("start", "end"):
             state = _mapping(
                 level[boundary],
@@ -261,6 +299,23 @@ def _lighting(value: object, context: str) -> None:
         )
         for field, item in level_counters.items():
             _integer(item, f"{context} level counter {field}")
+        level_timings = _mapping(
+            level["timings"], LIGHTING_TIMING_FIELDS, f"{context} level timings"
+        )
+        for name, timing in level_timings.items():
+            timing = _mapping(
+                timing,
+                {"unit", "calls", "elapsed"},
+                f"{context} level {expected_depth} {name} timing",
+            )
+            if timing["unit"] != "ns":
+                raise ValueError(f"movement benchmark {context} level timing is invalid")
+            _integer(timing["calls"], f"{context} level timing calls")
+            _integer(timing["elapsed"], f"{context} level timing elapsed")
+            if (timing["calls"] == 0) != (timing["elapsed"] == 0):
+                raise ValueError(
+                    f"movement benchmark {context} level {name} timing is contradictory"
+                )
         if level_counters["render_failures"] != 0 \
                 or level_counters["lit_sprite_fallbacks"] != 0:
             raise ValueError(f"movement benchmark {context} level rendering failed")
@@ -274,7 +329,32 @@ def _lighting(value: object, context: str) -> None:
                 )
             ):
                 raise ValueError(f"movement benchmark {context} unallocated level has state")
+        if level["end"]["allocated"] != (level["width"] > 0 and level["height"] > 0):
+            raise ValueError(f"movement benchmark {context} level dimensions are invalid")
         parsed_levels.append(level)
+
+    full_cause_fields = (
+        "field_full_rebuild_cache",
+        "field_full_rebuild_active",
+        "field_full_rebuild_bounds",
+        "field_full_rebuild_control",
+        "field_full_rebuild_other",
+    )
+    for item_context, item_counters in (
+        (context, counters),
+        *(
+            (f"{context} level {level['depth']}", level["counters"])
+            for level in parsed_levels
+        ),
+    ):
+        if (
+            sum(item_counters[field] for field in full_cause_fields)
+            != item_counters["field_full_rebuilds"]
+            or item_counters["field_full_rebuild_other"] != 0
+        ):
+            raise ValueError(
+                f"movement benchmark {item_context} full rebuild cause is incomplete"
+            )
 
     stable_counter_fields = LIGHTING_COUNTER_FIELDS - {
         "lit_sprite_clears",
@@ -285,6 +365,14 @@ def _lighting(value: object, context: str) -> None:
         for field in stable_counter_fields
     ):
         raise ValueError(f"movement benchmark {context} per-level counters are inconsistent")
+    for name in LIGHTING_TIMING_FIELDS:
+        for field in ("calls", "elapsed"):
+            level_total = sum(level["timings"][name][field] for level in parsed_levels)
+            if timings[name][field] != level_total:
+                raise ValueError(
+                    f"movement benchmark {context} per-level {name} {field} "
+                    f"is inconsistent ({timings[name][field]} != {level_total})"
+                )
     for aggregate_field, level_field in (
         ("lit_sprite_entries", "entries"),
         ("lit_sprite_bytes", "bytes"),
@@ -352,7 +440,7 @@ def _visual_lifecycle_digest(checkpoints: list[dict[str, object]]) -> str:
 
 
 def validate_record(value: object) -> dict[str, object]:
-    """Validate and return one complete version-four native record."""
+    """Validate and return one complete version-six native record."""
     record = _mapping(
         value,
         {
@@ -375,7 +463,7 @@ def validate_record(value: object) -> dict[str, object]:
         },
         "record",
     )
-    if record["schema_version"] != 5 or record["benchmark"] != "player-view-movement" \
+    if record["schema_version"] != 6 or record["benchmark"] != "player-view-movement" \
             or record["tick_ms"] != 125 or record["simulated_tick_hz"] != 8:
         raise ValueError("movement benchmark emitted an incompatible schema")
     checkpoint = _digest(record["checkpoint_sha256"], SHA256, "checkpoint")
@@ -428,10 +516,10 @@ def validate_record(value: object) -> dict[str, object]:
         "instrumentation identity",
     )
     if instrumentation != {
-        "schema_version": 5,
-        "fixture_schema_version": 2,
-        "workload": "pvm1-map2-lifecycle-v3",
-        "lighting_statistics_version": 4,
+        "schema_version": 6,
+        "fixture_schema_version": 3,
+        "workload": "pvm1-map2-lifecycle-v4",
+        "lighting_statistics_version": 5,
         "map_statistics_version": 3,
         "render_profiler_statistics_version": 4,
         "sprite_cache_statistics_version": 3,
@@ -471,12 +559,18 @@ def validate_record(value: object) -> dict[str, object]:
             "runner_image_version",
             "viewport",
             "mode",
+            "reconstruction",
+            "workload_variant",
         },
         "run identity",
     )
-    for field in ("runner_os", "runner_arch", "ci", "cpu_model", "runner_image_os", "runner_image_version", "mode"):
+    for field in ("runner_os", "runner_arch", "ci", "cpu_model", "runner_image_os", "runner_image_version", "mode", "reconstruction", "workload_variant"):
         if not isinstance(run[field], str) or not run[field]:
             raise ValueError("movement benchmark run identity is invalid")
+    if run["reconstruction"] not in ("translated", "full"):
+        raise ValueError("movement benchmark reconstruction identity is invalid")
+    if run["workload_variant"] not in ("production", "isolated-lighting"):
+        raise ValueError("movement benchmark workload identity is invalid")
     if run["mode"] not in ("smooth", "discrete"):
         raise ValueError("movement benchmark run mode is invalid")
     _integer(run["cpu_count"], "run identity CPU count", positive=True)
@@ -574,6 +668,7 @@ def validate_record(value: object) -> dict[str, object]:
                 "main_loop",
                 "map_time",
                 "animation_time",
+                "lighting_work_time",
                 "local_minimap",
                 "queue",
                 "map",
@@ -633,6 +728,13 @@ def validate_record(value: object) -> dict[str, object]:
             allow_empty=True,
         )
         del animation_time
+        lighting_work_time = _timing(
+            phase["lighting_work_time"],
+            phase["full_map_draws"],
+            f"phase {name} isolated lighting work time",
+            allow_empty=True,
+            allow_zero=run["mode"] == "discrete",
+        )
         main_loop = _mapping(
             phase["main_loop"],
             {
@@ -703,17 +805,25 @@ def validate_record(value: object) -> dict[str, object]:
             },
             f"phase {name} local minimap",
         )
-        if (
-            local_minimap["enabled"] is not True
-            or local_minimap["update_interval_ms"] != 250
-            or local_minimap["surface_width"] != 1700
-            or local_minimap["surface_height"] != 1200
-            or local_minimap["map_draws"] not in range(
+        isolated = run["workload_variant"] == "isolated-lighting"
+        expected_minimap = (
+            local_minimap["enabled"] is False
+            and local_minimap["update_interval_ms"] == 0
+            and local_minimap["surface_width"] == 0
+            and local_minimap["surface_height"] == 0
+            and local_minimap["map_draws"] == 0
+            if isolated
+            else local_minimap["enabled"] is True
+            and local_minimap["update_interval_ms"] == 250
+            and local_minimap["surface_width"] == 1700
+            and local_minimap["surface_height"] == 1200
+            and local_minimap["map_draws"] in range(
                 EXPECTED_LOCAL_MINIMAP_DRAWS[name],
                 EXPECTED_LOCAL_MINIMAP_DRAWS[name] + (2 if name == "resumed" else 1),
             )
-            or local_minimap["map_draws"] > phase["full_map_draws"]
-        ):
+            and local_minimap["map_draws"] <= phase["full_map_draws"]
+        )
+        if not expected_minimap:
             raise ValueError(f"movement benchmark phase {name} local minimap is invalid")
         _timing(
             local_minimap["map_time"],
@@ -871,6 +981,98 @@ def validate_record(value: object) -> dict[str, object]:
                 raise ValueError(
                     f"movement benchmark phase {name} smooth lighting is incomplete"
                 )
+            if lighting_counters["field_full_rebuilds"] \
+                    + lighting_counters["field_partial_rebuilds"] \
+                    != lighting_counters["field_rebuilds"]:
+                raise ValueError(
+                    f"movement benchmark phase {name} rebuild decisions overlap"
+                )
+            timing_calls = {
+                timing_name: timing["calls"]
+                for timing_name, timing in lighting["timings"].items()
+            }
+            if (
+                timing_calls["translation"]
+                != lighting_counters["field_translations"]
+                + lighting_counters["field_translation_fallback_bounds"]
+                + lighting_counters["field_translation_fallback_control"]
+                or timing_calls["dirty_clear"]
+                != lighting_counters["field_dirty_marks"]
+                or timing_calls["rasterization"]
+                != lighting_counters["field_rasterized_quads"]
+                or lighting_counters["field_rasterized_quads"]
+                < lighting_counters["field_rebuilds"]
+                or timing_calls["extrapolation"]
+                != lighting_counters["field_rebuilds"]
+                or timing_calls["tone_map_multiply"]
+                != phase["full_map_draws"]
+                or timing_calls["sprite_lookup"]
+                != lighting_counters["lit_sprite_lookups"]
+                or timing_calls["sprite_construction"]
+                != lighting_counters["lit_sprite_misses"]
+                or timing_calls["sprite_invalidation"]
+                < lighting_counters["lit_sprite_clears"]
+                + (1 if lighting_counters["lit_sprite_evictions"] else 0)
+                or timing_calls["sprite_invalidation"]
+                > lighting_counters["lit_sprite_clears"]
+                + lighting_counters["lit_sprite_evictions"]
+            ):
+                raise ValueError(
+                    f"movement benchmark phase {name} lighting timing is incomplete"
+                )
+            if name == "sustained":
+                eligible = lighting_counters["field_begins"]
+                eligible_pixels = sum(
+                    level["counters"]["field_begins"]
+                    * level["width"]
+                    * level["height"]
+                    for level in lighting["levels"]
+                )
+                if run["reconstruction"] == "translated" and (
+                    lighting_counters["field_translations"] != eligible
+                    or lighting_counters["field_partial_rebuilds"]
+                    + lighting_counters["field_full_rebuilds"]
+                    != eligible
+                    or lighting_counters["field_full_rebuilds"]
+                    > 4 * lighting["peak"]["allocated_levels"]
+                    or lighting_counters["field_translation_fallback_active"] != 0
+                    or lighting_counters["field_translation_fallback_bounds"] != 0
+                    or lighting_counters["field_translation_fallback_control"] != 0
+                    or lighting_counters["field_full_rebuild_active"] != 0
+                    or lighting_counters["field_full_rebuild_bounds"] != 0
+                    or lighting_counters["field_full_rebuild_control"] != 0
+                    or lighting_counters["field_translated_pixels"] == 0
+                    or lighting_counters["field_translated_bytes"]
+                    != lighting_counters["field_translated_pixels"]
+                    * LIGHTING_SAMPLE_BYTES
+                    or lighting_counters["field_dirty_pixels"] >= eligible_pixels
+                ):
+                    raise ValueError(
+                        "movement benchmark did not exercise every eligible translation"
+                    )
+                if run["reconstruction"] == "full" and (
+                    lighting_counters["field_translations"] != 0
+                    or lighting_counters["field_partial_rebuilds"] != 0
+                    or lighting_counters["field_full_rebuilds"] != eligible
+                    or lighting_counters["field_translation_fallback_control"] != eligible
+                    or lighting_counters["field_full_rebuild_cache"] != 0
+                    or lighting_counters["field_full_rebuild_active"] != 0
+                    or lighting_counters["field_full_rebuild_bounds"] != 0
+                    or lighting_counters["field_full_rebuild_control"] != eligible
+                    or lighting_counters["field_translated_pixels"] != 0
+                    or lighting_counters["field_translated_bytes"] != 0
+                    or lighting_counters["field_dirty_pixels"] != eligible_pixels
+                ):
+                    raise ValueError(
+                        "movement benchmark full-rebuild control is incomplete"
+                    )
+                if isolated and (
+                    lighting_counters["field_scroll_x_pixels"] != eligible * 24
+                    or lighting_counters["field_scroll_y_pixels"] != eligible * 12
+                ):
+                    raise ValueError(
+                        "movement benchmark isolated scroll offsets are incomplete"
+                    )
         else:
             meaningful_counters = LIGHTING_COUNTER_FIELDS - {
                 "lit_sprite_clears",
@@ -887,10 +1089,25 @@ def validate_record(value: object) -> dict[str, object]:
                     for field in state_fields
                 )
                 or any(lighting["peak"][field] != 0 for field in state_fields)
+                or any(
+                    timing[field] != 0
+                    for timing in lighting["timings"].values()
+                    for field in ("calls", "elapsed")
+                )
+                or any(
+                    lighting_work_time[field] != 0
+                    for field in ("p50", "p95", "p99", "max")
+                )
+                or any(
+                    window["p95_ns"] != 0
+                    for window in lighting_work_time["windows"]
+                )
             ):
                 raise ValueError(
                     f"movement benchmark phase {name} discrete lighting is active"
                 )
+            if run["reconstruction"] != "translated":
+                raise ValueError("movement benchmark discrete control is invalid")
 
         sprite = _mapping(phase["sprite_cache"], {"available", "limits", "counters", "start", "end", "peak"}, f"phase {name} sprite cache")
         if sprite["available"] is not True:
