@@ -42,6 +42,7 @@
 #include <light.h>
 
 typedef struct stable_identity_state {
+    bool record_started;
     bool saw_name;
     bool saw_name_pl;
     bool saw_numeric_sp;
@@ -50,7 +51,29 @@ typedef struct stable_identity_state {
     int spell_index;
     bool saw_skill_id;
     int skill_index;
+    bool saw_outdoor;
+    bool saw_celestial_aperture_id;
+    uint16_t celestial_fields_seen;
 } stable_identity_state;
+
+enum {
+    CELESTIAL_FIELD_SKY_BOUNDARY = 1U << 0,
+    CELESTIAL_FIELD_SKY_STATE = 1U << 1,
+    CELESTIAL_FIELD_AMBIENT_STRENGTH = 1U << 2,
+    CELESTIAL_FIELD_FACES = 1U << 3,
+    CELESTIAL_FIELD_TRANSMISSION = 1U << 4,
+    CELESTIAL_FIELD_TRANSMISSION_CLOSED = 1U << 5,
+    CELESTIAL_FIELD_TRANSMISSION_OPEN = 1U << 6,
+    CELESTIAL_FIELD_APERTURE_ID = 1U << 7,
+    CELESTIAL_FIELD_METADATA_X = 1U << 8,
+    CELESTIAL_FIELD_METADATA_Y = 1U << 9,
+    CELESTIAL_FIELD_METADATA_HP = 1U << 10,
+    CELESTIAL_FIELD_METADATA_SP = 1U << 11,
+};
+
+#define CELESTIAL_METADATA_REQUIRED_FIELDS                                               \
+    (CELESTIAL_FIELD_METADATA_X | CELESTIAL_FIELD_METADATA_Y |                          \
+     CELESTIAL_FIELD_METADATA_HP | CELESTIAL_FIELD_METADATA_SP)
 
 #define YY_DECL                 \
 static int                      \
@@ -59,6 +82,8 @@ lex_load (int     *depth,       \
           int      maxdepth,    \
           int      map_flags,   \
           int      linemode,    \
+          bool     require_arch,\
+          bool     require_end, \
           stable_identity_state *identities)
 #define MAXDEPTH 10
 
@@ -66,6 +91,7 @@ static const char *yval(void);
 static stable_identity_state stable_identity_state_init(void);
 static int finalize_object_record(object *op, const stable_identity_state *identity);
 static int validate_stable_identity(object *op, const stable_identity_state *identity);
+static bool celestial_metadata_token_allowed(const object *op, const char *text);
 
 /* that's needed to track the used buffers for recursive ccalling */
 static void *cur_buffer;
@@ -80,6 +106,40 @@ static artifact_t *art_amask;
 #define IVAL atoi(yval())
 /** Next value as float. */
 #define FVAL atof(yval())
+#define SET_UNIQUE_CELESTIAL_FIELD(bit, key)                                              \
+    do {                                                                                  \
+        if ((identity->celestial_fields_seen & (bit)) != 0) {                             \
+            LOG(ERROR, "Duplicate %s for object %s.", (key), object_get_str(op));         \
+            lex_error = 1;                                                                \
+        } else {                                                                          \
+            identity->celestial_fields_seen |= (bit);                                     \
+            object_set_value(op, (key), yval(), 1);                                       \
+        }                                                                                 \
+    } while (0)
+
+#define YY_USER_ACTION                                                                   \
+    do {                                                                                 \
+        object *metadata_op = items[*depth];                                              \
+        const char *record_text = yytext;                                                \
+        while (isspace((unsigned char)*record_text)) {                                   \
+            record_text++;                                                               \
+        }                                                                                \
+        if (require_arch && !arch_in_init && !identity->record_started &&                \
+            *record_text != '\0' &&                                                      \
+            *yytext != '#' &&                                                            \
+            (record_text != yytext || strncmp(record_text, "arch", 4) != 0 ||            \
+             !isspace((unsigned char)record_text[4]))) {                                 \
+            LOG(ERROR, "Object field appears before its mandatory arch record: %s", yytext); \
+            lex_error = 1;                                                               \
+        }                                                                                \
+        if (metadata_op->celestial_metadata_kind != 0 &&                                 \
+            !celestial_metadata_token_allowed(metadata_op, yytext)) {                    \
+            LOG(ERROR,                                                                   \
+                "Field is outside the exact celestial metadata schema: %s",            \
+                yytext);                                                                 \
+            lex_error = 1;                                                               \
+        }                                                                                \
+    } while (0);
 
 #define YY_NO_INPUT
 
@@ -187,6 +247,7 @@ stable_identity_state *identity = &identities[*depth];
 %}
 
 ^arch{S}             {
+    identity->record_started = true;
     object *tmp = op;
 
     if (tmp->arch != NULL) {
@@ -194,8 +255,25 @@ stable_identity_state *identity = &identities[*depth];
     }
 
     const char *archname = yval();
-    tmp->arch = arch_find(archname);
-    if (tmp->arch != NULL) {
+    bool synthetic_celestial_metadata = false;
+    if ((strcmp(archname, "sky_exposure") == 0 ||
+         strcmp(archname, "ambient_light_zone") == 0) &&
+        arches[ARCH_EMPTY_ARCHETYPE] != NULL) {
+        if (arch_find(archname) != NULL) {
+            LOG(ERROR, "Reserved celestial metadata archetype name collision: %s.", archname);
+            lex_error = 1;
+        }
+        tmp->arch = arches[ARCH_EMPTY_ARCHETYPE];
+        object_copy(tmp, &tmp->arch->clone, true);
+        tmp->celestial_metadata_kind = strcmp(archname, "sky_exposure") == 0
+                                           ? CELESTIAL_RECT_SKY_COVERED
+                                           : CELESTIAL_RECT_AMBIENT;
+        tmp->layer = LAYER_SYS;
+        synthetic_celestial_metadata = true;
+    } else {
+        tmp->arch = arch_find(archname);
+    }
+    if (tmp->arch != NULL && !synthetic_celestial_metadata) {
         object_copy(tmp, &tmp->arch->clone, true);
     }
 
@@ -212,17 +290,21 @@ stable_identity_state *identity = &identities[*depth];
             }
 
             identities[*depth] = stable_identity_state_init();
+            identities[*depth].record_started = true;
         }
 
         items[*depth] = tmp;
 
         if (linemode == 0) {
             stable_identity_state nested_identity = stable_identity_state_init();
+            nested_identity.record_started = true;
             if (lex_load(depth,
                          items,
                          maxdepth,
                          map_flags,
                          linemode,
+                         require_arch,
+                         require_end,
                          &nested_identity) == LL_ERROR) {
                 lex_error = 1;
             }
@@ -458,11 +540,43 @@ stable_identity_state *identity = &identities[*depth];
 ^con{S}              op->stats.Con = IVAL;
 ^int{S}              op->stats.Int = IVAL;
 ^pow{S}              op->stats.Pow = IVAL;
-^hp{S}               op->stats.hp = IVAL;
+^hp{S}               {
+    uint64_t value;
+    if (op->celestial_metadata_kind != 0 &&
+        (identity->celestial_fields_seen & CELESTIAL_FIELD_METADATA_HP) != 0) {
+        LOG(ERROR, "Duplicate celestial metadata hp for object %s.", object_get_str(op));
+        lex_error = 1;
+    }
+    if (op->celestial_metadata_kind != 0) {
+        identity->celestial_fields_seen |= CELESTIAL_FIELD_METADATA_HP;
+    }
+    if (op->celestial_metadata_kind != 0 &&
+        !string_parse_uint64(yval(), 10, 0, 63, &value)) {
+        LOG(ERROR, "Invalid celestial metadata hp for object %s.", object_get_str(op));
+        lex_error = 1;
+    } else {
+        op->stats.hp = op->celestial_metadata_kind != 0 ? (int)value : IVAL;
+    }
+}
 ^maxhp{S}            op->stats.maxhp = IVAL;
 ^sp{S}               {
-    identity->numeric_sp = IVAL;
-    identity->saw_numeric_sp = true;
+    uint64_t value;
+    if (op->celestial_metadata_kind != 0) {
+        if ((identity->celestial_fields_seen & CELESTIAL_FIELD_METADATA_SP) != 0) {
+            LOG(ERROR, "Duplicate celestial metadata sp for object %s.", object_get_str(op));
+            lex_error = 1;
+        }
+        identity->celestial_fields_seen |= CELESTIAL_FIELD_METADATA_SP;
+        if (!string_parse_uint64(yval(), 10, 0, 63, &value)) {
+            LOG(ERROR, "Invalid celestial metadata sp for object %s.", object_get_str(op));
+            lex_error = 1;
+        } else {
+            op->stats.sp = (int)value;
+        }
+    } else {
+        identity->numeric_sp = IVAL;
+        identity->saw_numeric_sp = true;
+    }
 }
 ^spell_id{S}         {
     if (identity->saw_spell_id) {
@@ -505,8 +619,46 @@ stable_identity_state *identity = &identities[*depth];
 ^wc_range_add{S}     op->stats.wc_range += IVAL;
 ^ac{S}               op->stats.ac = IVAL;
 ^ac_add{S}           op->stats.ac += IVAL;
-^x{S}                op->x = IVAL;
-^y{S}                op->y = IVAL;
+^x{S}                {
+    uint64_t value;
+    if (op->celestial_metadata_kind != 0) {
+        if ((identity->celestial_fields_seen & CELESTIAL_FIELD_METADATA_X) != 0) {
+            LOG(ERROR, "Duplicate celestial metadata x for object %s.", object_get_str(op));
+            lex_error = 1;
+        }
+        identity->celestial_fields_seen |= CELESTIAL_FIELD_METADATA_X;
+    }
+    if (op->map != NULL && op->map->celestial_schema == 1) {
+        if (!string_parse_uint64(yval(), 10, 0, 63, &value)) {
+            LOG(ERROR, "Invalid celestial-v1 x coordinate for object %s.", object_get_str(op));
+            lex_error = 1;
+        } else {
+            op->x = (int)value;
+        }
+    } else {
+        op->x = IVAL;
+    }
+}
+^y{S}                {
+    uint64_t value;
+    if (op->celestial_metadata_kind != 0) {
+        if ((identity->celestial_fields_seen & CELESTIAL_FIELD_METADATA_Y) != 0) {
+            LOG(ERROR, "Duplicate celestial metadata y for object %s.", object_get_str(op));
+            lex_error = 1;
+        }
+        identity->celestial_fields_seen |= CELESTIAL_FIELD_METADATA_Y;
+    }
+    if (op->map != NULL && op->map->celestial_schema == 1) {
+        if (!string_parse_uint64(yval(), 10, 0, 63, &value)) {
+            LOG(ERROR, "Invalid celestial-v1 y coordinate for object %s.", object_get_str(op));
+            lex_error = 1;
+        } else {
+            op->y = (int)value;
+        }
+    } else {
+        op->y = IVAL;
+    }
+}
 ^z{S}                op->z = IVAL;
 ^zoom{S}             op->zoom_x = op->zoom_y = IVAL;
 ^zoom_x{S}           op->zoom_x = IVAL;
@@ -734,7 +886,27 @@ stable_identity_state *identity = &identities[*depth];
         }
     }
 }
-^outdoor{S}          CHANGE_FLAG(op, FLAG_OUTDOOR, IVAL);
+^outdoor{S}          {
+    uint64_t value;
+    identity->saw_outdoor = true;
+    if (!string_parse_uint64(yval(), 10, 0, 1, &value)) {
+        LOG(ERROR, "Invalid outdoor value for object %s.", object_get_str(op));
+        lex_error = 1;
+    } else {
+        CHANGE_FLAG(op, FLAG_OUTDOOR, value);
+    }
+}
+^sky_boundary{S}     SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_SKY_BOUNDARY, "sky_boundary");
+^sky_state{S}        SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_SKY_STATE, "sky_state");
+^ambient_strength{S} SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_AMBIENT_STRENGTH, "ambient_strength");
+^celestial_faces{S}  SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_FACES, "celestial_faces");
+^celestial_transmission{S} SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_TRANSMISSION, "celestial_transmission");
+^celestial_transmission_closed{S} SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_TRANSMISSION_CLOSED, "celestial_transmission_closed");
+^celestial_transmission_open{S} SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_TRANSMISSION_OPEN, "celestial_transmission_open");
+^celestial_aperture_id{S} {
+    identity->saw_celestial_aperture_id = true;
+    SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_APERTURE_ID, "celestial_aperture_id");
+}
 ^unique{S}           CHANGE_FLAG(op, FLAG_UNIQUE, IVAL);
 ^inv_locked{S}       CHANGE_FLAG(op, FLAG_INV_LOCKED, IVAL);
 ^is_wooded{S}        {/* DEPRECATED */}
@@ -818,6 +990,10 @@ stable_identity_state *identity = &identities[*depth];
 #.*{NL}              {}
 
 <<EOF>>              {
+    if (require_end && identity->record_started) {
+        LOG(ERROR, "Got EOF before object end for %s.", object_get_str(op));
+        return LL_ERROR;
+    }
     if (!linemode && lex_error == 0 && finalize_object_record(op, identity) != 0) {
         lex_error = 1;
     }
@@ -831,7 +1007,15 @@ stable_identity_state *identity = &identities[*depth];
         return LL_EOF;
     }
 }
-.*                   add_key_value(op);
+.*                   {
+    if (strncmp(yytext, "celestial_", 10) == 0 || strncmp(yytext, "sky_", 4) == 0 ||
+        strncmp(yytext, "ambient_", 8) == 0) {
+        LOG(ERROR, "Unknown or malformed reserved celestial object field: %s", yytext);
+        lex_error = 1;
+    } else {
+        add_key_value(op);
+    }
+}
 %%
 
 #pragma GCC diagnostic pop
@@ -844,6 +1028,33 @@ stable_identity_state_init (void)
         .spell_index = SP_NO_SPELL,
         .skill_index = -1,
     };
+}
+
+static bool celestial_metadata_token_allowed(const object *op, const char *text)
+{
+    while (isspace((unsigned char)*text)) {
+        text++;
+    }
+    if (*text == '\0' || *text == '#') {
+        return true;
+    }
+
+    const char *end = text;
+    while (*end != '\0' && !isspace((unsigned char)*end)) {
+        end++;
+    }
+    size_t length = (size_t)(end - text);
+#define METADATA_KEY(name) (length == sizeof(name) - 1 && strncmp(text, (name), length) == 0)
+    if (METADATA_KEY("end") || METADATA_KEY("x") || METADATA_KEY("y") || METADATA_KEY("hp") ||
+        METADATA_KEY("sp")) {
+        return true;
+    }
+    if (op->celestial_metadata_kind == CELESTIAL_RECT_SKY_COVERED) {
+        return METADATA_KEY("sky_state");
+    }
+    return op->celestial_metadata_kind == CELESTIAL_RECT_AMBIENT &&
+           METADATA_KEY("ambient_strength");
+#undef METADATA_KEY
 }
 
 /**
@@ -864,6 +1075,15 @@ finalize_object_record (object *op, const stable_identity_state *identity)
 
     if (identity->saw_name && !identity->saw_name_pl) {
         FREE_AND_CLEAR_HASH(op->name_pl);
+    }
+    op->celestial_outdoor_authored = identity->saw_outdoor;
+    op->celestial_aperture_id_authored = identity->saw_celestial_aperture_id;
+
+    if (op->celestial_metadata_kind != 0 &&
+        (identity->celestial_fields_seen & CELESTIAL_METADATA_REQUIRED_FIELDS) !=
+            CELESTIAL_METADATA_REQUIRED_FIELDS) {
+        LOG(ERROR, "Celestial metadata object %s is missing x, y, hp, or sp.", object_get_str(op));
+        return 1;
     }
 
     return validate_stable_identity(op, identity);
@@ -1081,7 +1301,7 @@ load_object (const char *str, object *op, int map_flags)
         str += lcount;
         lcount = strlen(str) + 1;
         YY_BUFFER_STATE yybufstate = yy_scan_string(str);
-        int retval = lex_load(&depth, items, MAXDEPTH, map_flags, 0, &identity);
+        int retval = lex_load(&depth, items, MAXDEPTH, map_flags, 0, false, false, &identity);
         yy_delete_buffer(yybufstate);
 
         if (retval == LL_NORMAL) {
@@ -1132,10 +1352,18 @@ load_object_fp (FILE *fp, object *op, int map_flags)
     static char buf[HUGE_BUF * 16];
     stable_identity_state identities[MAXDEPTH] = {0};
     identities[0] = stable_identity_state_init();
+    bool saw_record_token = false;
     int retval = LL_EOF;
     while (fgets(VS(buf), fp)) {
+        const char *token = buf;
+        while (isspace((unsigned char)*token)) {
+            token++;
+        }
+        if (*token != '\0' && *token != '#') {
+            saw_record_token = true;
+        }
         YY_BUFFER_STATE yybufstate = yy_scan_string(buf);
-        retval = lex_load(&depth, items, MAXDEPTH, map_flags, 1, identities);
+        retval = lex_load(&depth, items, MAXDEPTH, map_flags, 1, true, false, identities);
         yy_delete_buffer(yybufstate);
 
         if (retval == LL_ERROR) {
@@ -1166,7 +1394,7 @@ load_object_fp (FILE *fp, object *op, int map_flags)
         yy_switch_to_buffer(cur_buffer);
     }
 
-    return LL_EOF;
+    return saw_record_token ? LL_ERROR : LL_EOF;
 }
 
 /**
@@ -1181,11 +1409,13 @@ load_object_fp (FILE *fp, object *op, int map_flags)
  * Object to load into.
  * @param map_flags
  * Load flags.
+ * @param require_end
+ * Whether EOF before the top-level object's end record is an error.
  * @return
  * One of @ref LL_xxx.
  */
 int
-load_object_buffer (void *buffer, object *op, int map_flags)
+load_object_buffer (void *buffer, object *op, int map_flags, bool require_end)
 {
     HARD_ASSERT(buffer != NULL);
     HARD_ASSERT(op != NULL);
@@ -1201,7 +1431,14 @@ load_object_buffer (void *buffer, object *op, int map_flags)
 
     int depth = 0;
     stable_identity_state identity = stable_identity_state_init();
-    int retval = lex_load(&depth, items, MAXDEPTH, map_flags, 0, &identity);
+    int retval = lex_load(&depth,
+                          items,
+                          MAXDEPTH,
+                          map_flags,
+                          0,
+                          true,
+                          require_end,
+                          &identity);
     if (retval != LL_ERROR) {
         load_object_finish(op, map_flags);
     }
@@ -1228,7 +1465,7 @@ set_variable (object *op, const char *buf)
     items[0] = op;
     int depth = 0;
     stable_identity_state identity = stable_identity_state_init();
-    int retval = lex_load(&depth, items, MAXDEPTH, 0, 0, &identity);
+    int retval = lex_load(&depth, items, MAXDEPTH, 0, 0, false, false, &identity);
 
     if (yycurbuf != NULL) {
         yy_switch_to_buffer(yycurbuf);

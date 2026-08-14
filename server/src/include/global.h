@@ -427,6 +427,15 @@ typedef struct settings_struct {
     /** Number of samples collected for every benchmark map. */
     uint16_t content_benchmark_iterations;
 
+    /** Run the bounded celestial-v1 structural inventory and exit. */
+    bool celestial_inventory;
+
+    /** Comma-delimited canonical logical map IDs to inventory. */
+    char celestial_inventory_maps[HUGE_BUF];
+
+    /** Maximum inventory records emitted for each requested map. */
+    uint16_t celestial_inventory_limit;
+
     /**
      * Running unit tests?
      */
