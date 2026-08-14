@@ -1030,6 +1030,22 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("Map render path p95 (contract-specific)", report)
         self.assertIn("base and candidate identities are not comparable", report)
         self.assertIn("n/a → 0.001 ms", report)
+        for heading, candidate_calls in (
+            ("### Render-profiler stages (standard smooth sustained)", 720),
+            ("#### Standard smooth `cold`", 2),
+            ("#### Standard smooth `sustained`", 720),
+            ("#### Standard smooth `idle`", 16),
+            ("#### Standard smooth `resumed`", 120),
+        ):
+            with self.subTest(heading=heading):
+                start = report.index(heading)
+                end = report.find("\n###", start + len(heading))
+                section = report[start : end if end != -1 else len(report)]
+                self.assertIn(
+                    f"| `map` | `per_map_draw` | n/a → {candidate_calls} | "
+                    "n/a → 0.001 ms | n/a |",
+                    section,
+                )
 
     def test_informational_performance_failure_does_not_hide_or_fail(self) -> None:
         slow = native_record(sustained_p95_ns=50_000_000)
@@ -1252,14 +1268,27 @@ class CommentTests(unittest.TestCase):
         self.assertNotIn("FPS equivalent", report)
 
     def test_detailed_standard_smooth_stages_use_matching_baselines(self) -> None:
-        report = benchmark.render_comment(self.valid_evidence(), "success")
-        expected_map_calls = {
-            "cold": 2,
-            "sustained": 720,
-            "idle": 16,
-            "resumed": 120,
+        baseline = [native_record(), native_record(), native_record()]
+        candidate = [native_record(), native_record(), native_record()]
+        expected_map_stages = {
+            "cold": (2, 1_000, 1_500, "+50.0%"),
+            "sustained": (720, 2_000, 2_500, "+25.0%"),
+            "idle": (16, 3_000, 3_500, "+16.7%"),
+            "resumed": (120, 4_000, 4_500, "+12.5%"),
         }
-        for phase, calls in expected_map_calls.items():
+        for records, elapsed_index in ((baseline, 1), (candidate, 2)):
+            for record in records:
+                for phase in record["phases"]:
+                    calls, baseline_us, candidate_us, _ = expected_map_stages[phase["name"]]
+                    phase["render_stages"]["map"]["calls"] = calls
+                    phase["render_stages"]["map"]["elapsed"] = (
+                        baseline_us if elapsed_index == 1 else candidate_us
+                    ) * calls
+        evidence = benchmark._build_evidence(
+            baseline, candidate, [], additional_contexts()
+        )
+        report = benchmark.render_comment(evidence, "success")
+        for phase, (calls, baseline_us, candidate_us, delta) in expected_map_stages.items():
             with self.subTest(phase=phase):
                 heading = f"#### Standard smooth `{phase}`"
                 start = report.index(heading)
@@ -1267,7 +1296,8 @@ class CommentTests(unittest.TestCase):
                 section = report[start : end if end != -1 else report.index("</details>", start)]
                 self.assertIn(
                     f"| `map` | `per_map_draw` | {calls} → {calls} | "
-                    "0.001 ms → 0.001 ms | +0.0% |",
+                    f"{baseline_us / 1_000:.3f} ms → {candidate_us / 1_000:.3f} ms | "
+                    f"{delta} |",
                     section,
                 )
 
@@ -1306,6 +1336,20 @@ class CommentTests(unittest.TestCase):
             "| `map` | `per_map_draw` | n/a → 2 | n/a → 0.001 ms | n/a |",
             cold_section,
         )
+
+    def test_full_matrix_comment_fits_github_publication_limit(self) -> None:
+        evidence = benchmark._build_evidence(
+            [],
+            [native_record(), native_record()],
+            [native_record(viewport="large"), native_record(viewport="large")],
+            additional_contexts(full=True),
+            enforce_performance=False,
+            comparison_note="event-has-no-comparison-base",
+        )
+        report = benchmark.render_comment(evidence, "success")
+        self.assertLessEqual(len(report.encode()), 65_536)
+        self.assertIn("#### Large smooth `resumed`", report)
+        self.assertIn(f"#### {benchmark.LARGE_DISCRETE_CONTEXT} `resumed`", report)
 
     def test_candidate_only_report_establishes_baseline_without_claiming_delta(self) -> None:
         evidence = benchmark._build_evidence(

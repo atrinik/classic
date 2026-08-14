@@ -251,15 +251,19 @@ def _nested_medians(
     return result
 
 
+def _render_stages_available(records: list[dict[str, object]], name: str) -> bool:
+    return all(
+        isinstance(phase(record, name).get("render_stages"), dict)
+        and set(phase(record, name)["render_stages"]) == set(RENDER_STAGES)
+        for record in records
+    )
+
+
 def _render_stage_summary(
     records: list[dict[str, object]], name: str
 ) -> dict[str, dict[str, object | None]]:
     """Summarize profiler stages as median per-run average invocation times."""
-    if any(
-        not isinstance(phase(record, name).get("render_stages"), dict)
-        or set(phase(record, name)["render_stages"]) != set(RENDER_STAGES)
-        for record in records
-    ):
+    if not _render_stages_available(records, name):
         return {
             stage_name: {"scope": scope, "calls_per_run": 0, "avg_ms_per_call": None}
             for stage_name, scope in RENDER_STAGES.items()
@@ -1864,7 +1868,9 @@ def _render_complete_evidence(
             ]
         )
     baseline_sustained_stages = None
-    if evidence["mode"] == "comparison":
+    if evidence["mode"] == "comparison" and _render_stages_available(
+        records["baseline_standard"], "sustained"
+    ):
         baseline_sustained_stages = baseline_phases["sustained"]
     _append_render_stage_table(
         lines,
@@ -1891,17 +1897,19 @@ def _render_complete_evidence(
     if samples["candidate_large"] == 2:
         candidate_contexts_for_stages.append(("Large smooth", phases["candidate_large"]))
     for context_name, phase_set in candidate_contexts_for_stages:
-        baseline_phase_set = (
-            baseline_phases
-            if evidence["mode"] == "comparison" and context_name == "Standard smooth"
-            else None
-        )
         for phase_name in REQUIRED_PHASES:
+            baseline_phase = None
+            if (
+                evidence["mode"] == "comparison"
+                and context_name == "Standard smooth"
+                and _render_stages_available(records["baseline_standard"], phase_name)
+            ):
+                baseline_phase = baseline_phases[phase_name]
             _append_render_stage_table(
                 lines,
                 f"#### {context_name} `{phase_name}`",
                 phase_set[phase_name],
-                baseline_phase_set[phase_name] if baseline_phase_set is not None else None,
+                baseline_phase,
             )
     for context_name, phase_set in context_phases.items():
         for phase_name in REQUIRED_PHASES:
