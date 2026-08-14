@@ -44,10 +44,28 @@ class ReleaseTagPolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             verify_import_history.parse_args(
-                ["--release-history-ref", "origin/main"]
+                ["--release-history-ref", "refs/remotes/origin/main"]
             ).release_history_ref,
-            "origin/main",
+            "refs/remotes/origin/main",
         )
+
+    def test_main_forwards_release_history_ref(self) -> None:
+        manifest = {"components": []}
+        history_ref = "refs/remotes/origin/main"
+        with (
+            mock.patch.object(
+                verify_import_history, "load_manifest", return_value=manifest
+            ),
+            mock.patch.object(verify_import_history, "verify_component_release_map"),
+            mock.patch.object(verify_import_history, "verify_release_tags") as verify,
+        ):
+            self.assertEqual(
+                verify_import_history.main(
+                    ["--release-history-ref", history_ref]
+                ),
+                0,
+            )
+        verify.assert_called_once_with(manifest, history_ref)
 
     def test_main_first_parent_survives_feature_merge_topology(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -72,15 +90,26 @@ class ReleaseTagPolicyTests(unittest.TestCase):
             self.git(root, "add", "feature")
             self.git(root, "commit", "-m", "feature change")
             self.git(root, "merge", "--no-ff", "main", "-m", "merge main")
+            exact_main = "refs/remotes/origin/main"
+            self.git(root, "update-ref", exact_main, main_release)
+            self.git(root, "tag", "origin/main", base)
 
             with mock.patch.object(verify_import_history, "ROOT", root):
-                self.assertNotIn(
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "v5.99.0: target is not on HEAD's first-parent line",
+                ):
+                    verify_import_history.verify_release_target(
+                        "v5.99.0",
+                        main_release,
+                        "HEAD",
+                        verify_import_history.first_parent_commits("HEAD"),
+                    )
+                verify_import_history.verify_release_target(
+                    "v5.99.0",
                     main_release,
-                    verify_import_history.first_parent_commits("HEAD"),
-                )
-                self.assertIn(
-                    main_release,
-                    verify_import_history.first_parent_commits("main"),
+                    exact_main,
+                    verify_import_history.first_parent_commits(exact_main),
                 )
 
 

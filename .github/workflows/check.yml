@@ -123,7 +123,7 @@ jobs:
         run: |
           python3 -m coverage run --branch --source=tools \
             tools/verify_import_history.py \
-            --release-history-ref "${{ github.event_name == 'workflow_dispatch' && 'origin/main' || 'HEAD' }}"
+            --release-history-ref "${{ github.event_name == 'workflow_dispatch' && 'refs/remotes/origin/main' || 'HEAD' }}"
           python3 -m coverage run --append --branch --source=tools \
             -m unittest discover -s tools/tests -p 'test_*.py'
           python3 -m coverage xml --omit='tools/tests/*' \

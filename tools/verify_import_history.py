@@ -95,6 +95,22 @@ def first_parent_commits(revision: str) -> set[str]:
     return set(git("rev-list", "--first-parent", revision).splitlines())
 
 
+def verify_release_target(
+    tag: str,
+    commit: str,
+    release_history_ref: str,
+    release_first_parent_commits: set[str],
+) -> None:
+    require(
+        commit in release_first_parent_commits,
+        f"{tag}: target is not on {release_history_ref}'s first-parent line",
+    )
+    require(
+        is_ancestor(commit, release_history_ref),
+        f"{tag}: target is not in {release_history_ref}",
+    )
+
+
 def verify_commits(name: str, commits: list[str]) -> None:
     result = subprocess.run(
         ["git", "-C", str(ROOT), "cat-file", "--batch-check=%(objectname) %(objecttype)"],
@@ -495,15 +511,13 @@ def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> N
         )
         commit = git("rev-parse", f"{tag}^{{commit}}")
         require(commit not in targets, f"{tag}: release tag target is not unique")
-        require(
-            commit in release_first_parent_commits,
-            f"{tag}: target is not on {release_history_ref}'s first-parent line",
+        verify_release_target(
+            tag,
+            commit,
+            release_history_ref,
+            release_first_parent_commits,
         )
         require(is_ancestor(previous_commit, commit), f"{tag}: versions are not ancestry ordered")
-        require(
-            is_ancestor(commit, release_history_ref),
-            f"{tag}: target is not in {release_history_ref}",
-        )
         targets.add(commit)
         previous_commit = commit
 

@@ -695,7 +695,7 @@ class WorkflowContractTests(unittest.TestCase):
             )
         ]
         self.assertIn(
-            "--release-history-ref \"${{ github.event_name == 'workflow_dispatch' && 'origin/main' || 'HEAD' }}\"",
+            "--release-history-ref \"${{ github.event_name == 'workflow_dispatch' && 'refs/remotes/origin/main' || 'HEAD' }}\"",
             core,
         )
 
