@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -20,12 +21,15 @@ def require_rejection(result: subprocess.CompletedProcess[str], surface: str) ->
         )
 
 
-def run_server(executable: Path, assetspath: Path) -> subprocess.CompletedProcess[str]:
+def run_server(
+    executable: Path, assetspath: Path, pass_fds: tuple[int, ...] = ()
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [executable, "--worldmaker", f"--assetspath={assetspath}"],
         capture_output=True,
         text=True,
         check=False,
+        pass_fds=pass_fds,
         timeout=SERVER_TIMEOUT_SECONDS,
     )
 
@@ -49,6 +53,18 @@ def require_staging_error(
         or "Could not inspect or create asset staging directory" not in output
     ):
         raise RuntimeError(f"uninspectable {surface} staging was not rejected: {output}")
+
+
+def require_descriptor_rejection(
+    executable: Path, assetspath: Path, pass_fds: tuple[int, ...], surface: str
+) -> None:
+    result = run_server(executable, assetspath, pass_fds)
+    output = result.stdout + result.stderr
+    if (
+        result.returncode == 0
+        or "Asset staging descriptor is invalid or not a directory" not in output
+    ):
+        raise RuntimeError(f"invalid {surface} descriptor was not rejected: {output}")
 
 
 def main() -> int:
@@ -142,6 +158,87 @@ def main() -> int:
         )
         if sentinel.read_text(encoding="utf-8") != "unchanged\n":
             raise RuntimeError("client-maps symlink rejection modified its target")
+
+        if sys.platform == "linux":
+            descriptor_root = root / "descriptor-root"
+            descriptor_root.mkdir()
+            descriptor = os.open(
+                descriptor_root,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+            descriptor_path = Path(f"/proc/self/fd/{descriptor}")
+            try:
+                result = run_server(executable, descriptor_path, (descriptor,))
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        "inherited directory descriptor staging failed: "
+                        f"{result.stdout}{result.stderr}"
+                    )
+                if not (descriptor_root / "data" / "listing.txt").is_file():
+                    raise RuntimeError(
+                        "inherited directory descriptor lacks generated core data"
+                    )
+                require_descriptor_rejection(
+                    executable,
+                    Path(f"/proc/self/fd/0{descriptor}"),
+                    (descriptor,),
+                    "noncanonical",
+                )
+            finally:
+                os.close(descriptor)
+
+            invalid_descriptor = os.open(
+                descriptor_root,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+            os.close(invalid_descriptor)
+            require_descriptor_rejection(
+                executable,
+                Path(f"/proc/self/fd/{invalid_descriptor}"),
+                (),
+                "closed",
+            )
+            descriptor_file = root / "descriptor-file"
+            descriptor_file.write_text("invalid\n", encoding="utf-8")
+            file_descriptor = os.open(descriptor_file, os.O_RDONLY | os.O_CLOEXEC)
+            try:
+                require_descriptor_rejection(
+                    executable,
+                    Path(f"/proc/self/fd/{file_descriptor}"),
+                    (file_descriptor,),
+                    "non-directory",
+                )
+            finally:
+                os.close(file_descriptor)
+
+            replaceable = root / "descriptor-replaced"
+            replaceable.mkdir()
+            replaced_descriptor = os.open(
+                replaceable,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+            displaced = root / "descriptor-displaced"
+            replaceable.rename(displaced)
+            replaceable.mkdir()
+            replacement_sentinel = replaceable / "sentinel"
+            replacement_sentinel.write_text("unchanged\n", encoding="utf-8")
+            try:
+                result = run_server(
+                    executable,
+                    Path(f"/proc/self/fd/{replaced_descriptor}"),
+                    (replaced_descriptor,),
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        "replaced-path directory descriptor staging failed: "
+                        f"{result.stdout}{result.stderr}"
+                    )
+            finally:
+                os.close(replaced_descriptor)
+            if not (displaced / "data" / "listing.txt").is_file():
+                raise RuntimeError("descriptor staging followed the replaced path")
+            if replacement_sentinel.read_text(encoding="utf-8") != "unchanged\n":
+                raise RuntimeError("descriptor staging modified the replacement path")
     return 0
 
 
