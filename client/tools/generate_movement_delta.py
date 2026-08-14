@@ -46,15 +46,24 @@ def packet(
     return bytes(result)
 
 
-def stream(x: int, y: int) -> bytes:
+def stream(x: int, y: int, static_radiance: bool = False) -> bytes:
     """A→B→A→C→A movement followed by an unchanged idle packet."""
-    packets = (
-        packet(x + 1, y, 20, y, 20, y + 1, 1, 0x0255, (0x02D7, 0x0036, 0x0036)),
-        packet(x, y, 0, y, 0, y - 1, 2, 0x01B3, (0x0031, 0x0291, 0x0031)),
-        packet(x, y + 1, x, 20, x + 1, 20, 3, 0x014D, (0x0030, 0x0080, 0x0080)),
-        packet(x, y, x, 0, x - 1, 0, 4, 0x01F5, (0x01F5, 0x002F, 0x01F5)),
-        packet(x, y),
-    )
+    if static_radiance:
+        packets = (
+            packet(x + 1, y),
+            packet(x, y),
+            packet(x, y + 1),
+            packet(x, y),
+            packet(x, y),
+        )
+    else:
+        packets = (
+            packet(x + 1, y, 20, y, 20, y + 1, 1, 0x0255, (0x02D7, 0x0036, 0x0036)),
+            packet(x, y, 0, y, 0, y - 1, 2, 0x01B3, (0x0031, 0x0291, 0x0031)),
+            packet(x, y + 1, x, 20, x + 1, 20, 3, 0x014D, (0x0030, 0x0080, 0x0080)),
+            packet(x, y, x, 0, x - 1, 0, 4, 0x01F5, (0x01F5, 0x002F, 0x01F5)),
+            packet(x, y),
+        )
     result = bytearray(STREAM_MAGIC)
     result.append(len(packets))
     for movement_packet in packets:
@@ -68,10 +77,15 @@ def main() -> int:
     parser.add_argument("output", type=Path)
     parser.add_argument("--x", type=int, default=10)
     parser.add_argument("--y", type=int, default=10)
+    parser.add_argument(
+        "--static-radiance",
+        action="store_true",
+        help="emit movement-only SAME packets with no tile or radiance deltas",
+    )
     arguments = parser.parse_args()
     if not 1 <= arguments.x <= 11 or not 1 <= arguments.y <= 11:
         parser.error("origin coordinates must be in [1, 11]")
-    arguments.output.write_text(stream(arguments.x, arguments.y).hex() + "\n",
+    arguments.output.write_text(stream(arguments.x, arguments.y, arguments.static_radiance).hex() + "\n",
                                 encoding="ascii")
     return 0
 
