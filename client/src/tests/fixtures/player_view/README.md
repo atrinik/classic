@@ -168,6 +168,15 @@ hashes the UI-enabled pixels, including the name, target label, health bar,
 placement, and ordering. It then disables the UI and hashes a second
 deterministic reference for the moved, zoomed player without an outline.
 
+The map-overlay widget scene uses the same linked-depth/living fixture with a
+nonzero `(17, 23)` widget origin and 125% zoom. It keeps damage and kill
+animations active across the validated MAP scroll while names and target UI are
+drawn through the map surface. Overlay anchors follow the map-local transform;
+their font/icon dimensions and 25-pixel rise over 850 ms remain screen-sized.
+Health/food warnings and MAPSTATS text are instead widget-centered screen UI,
+so moving the widget moves them while map zoom does not scale their placement
+or presentation.
+
 `expected-pixels-sha256` and the widget scene's
 `expected-ui-pixels-sha256` hash the viewport width and height as big-endian
 32-bit integers followed by canonical RGBA bytes in row-major order. Except for

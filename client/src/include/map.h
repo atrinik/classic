@@ -583,6 +583,8 @@ extern bool widget_map_interaction_test(widgetdata *widget);
 extern void widget_map_draw_test(widgetdata *widget);
 extern void widget_map_ui_test_begin(void);
 extern bool widget_map_ui_test_end(void);
+extern void
+widget_map_animation_test_add(int type, int x_offset, int y_offset, int value, uint32_t elapsed_ms);
 #endif
 
 /** Public API implemented in src/gui/widgets/minimap.c. */

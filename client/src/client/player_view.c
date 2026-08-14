@@ -17,6 +17,7 @@
 #include <animations.h>
 #include <commands.h>
 #include <lighting.h>
+#include <map_transform.h>
 #include <toolkit/map_protocol.h>
 #include <toolkit/packet.h>
 #include <openssl/evp.h>
@@ -127,12 +128,16 @@ typedef struct player_view_manifest {
     uint32_t clock_ms;
     uint32_t resize_width_delta;
     uint32_t resize_height_delta;
+    uint32_t widget_x;
+    uint32_t widget_y;
     bool smooth_lighting;
     bool zoom_smoothing;
     bool primary_surface;
     bool widget_render;
     bool player_names;
     bool target_ui;
+    bool damage_animation;
+    bool kill_animation;
 } player_view_manifest_t;
 
 static void player_view_manifest_free(player_view_manifest_t *manifest) {
@@ -471,8 +476,12 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "zoom-smoothing",
                                            "primary-surface",
                                            "widget-render",
+                                           "widget-x",
+                                           "widget-y",
                                            "player-names",
                                            "target-ui",
+                                           "damage-animation",
+                                           "kill-animation",
                                            "clock-ms",
                                            "expected-ui-pixels-sha256",
                                            "expected-standard-checkpoint-sha256",
@@ -512,8 +521,12 @@ static bool player_view_manifest_parse(const char *manifest_path,
     char *zoom_smoothing = success ? player_view_xml_property(root, "zoom-smoothing") : NULL;
     char *primary_surface = success ? player_view_xml_property(root, "primary-surface") : NULL;
     char *widget_render = success ? player_view_xml_property(root, "widget-render") : NULL;
+    char *widget_x = success ? player_view_xml_property(root, "widget-x") : NULL;
+    char *widget_y = success ? player_view_xml_property(root, "widget-y") : NULL;
     char *player_names = success ? player_view_xml_property(root, "player-names") : NULL;
     char *target_ui = success ? player_view_xml_property(root, "target-ui") : NULL;
+    char *damage_animation = success ? player_view_xml_property(root, "damage-animation") : NULL;
+    char *kill_animation = success ? player_view_xml_property(root, "kill-animation") : NULL;
     char *clock_ms = success ? player_view_xml_property(root, "clock-ms") : NULL;
     char *expected_ui =
         success ? player_view_xml_property(root, "expected-ui-pixels-sha256") : NULL;
@@ -549,15 +562,26 @@ static bool player_view_manifest_parse(const char *manifest_path,
           manifest->resize_height_delta <= 4096 - manifest->viewport_height)) &&
         player_view_parse_uint(look_width, 9, 17, &manifest->look_width) &&
         player_view_parse_uint(look_height, 9, 17, &manifest->look_height) &&
-        player_view_parse_uint(map_zoom, 50, 400, &manifest->map_zoom) &&
+        player_view_parse_uint(map_zoom,
+                               MAP_DISPLAY_ZOOM_MIN,
+                               MAP_DISPLAY_ZOOM_MAX,
+                               &manifest->map_zoom) &&
         player_view_parse_bool(smooth_lighting, &manifest->smooth_lighting) &&
         player_view_parse_bool(zoom_smoothing, &manifest->zoom_smoothing) &&
         (primary_surface == NULL ||
          player_view_parse_bool(primary_surface, &manifest->primary_surface)) &&
         (widget_render == NULL ||
          player_view_parse_bool(widget_render, &manifest->widget_render)) &&
+        (widget_x == NULL ||
+         player_view_parse_uint(widget_x, 0, manifest->viewport_width - 1, &manifest->widget_x)) &&
+        (widget_y == NULL ||
+         player_view_parse_uint(widget_y, 0, manifest->viewport_height - 1, &manifest->widget_y)) &&
         (player_names == NULL || player_view_parse_bool(player_names, &manifest->player_names)) &&
         (target_ui == NULL || player_view_parse_bool(target_ui, &manifest->target_ui)) &&
+        (damage_animation == NULL ||
+         player_view_parse_bool(damage_animation, &manifest->damage_animation)) &&
+        (kill_animation == NULL ||
+         player_view_parse_bool(kill_animation, &manifest->kill_animation)) &&
         player_view_parse_uint(clock_ms, 0, UINT32_MAX, &manifest->clock_ms) &&
         (expected_standard_checkpoint == NULL ||
          player_view_sha256_text_valid(expected_standard_checkpoint)) &&
@@ -566,11 +590,15 @@ static bool player_view_manifest_parse(const char *manifest_path,
         manifest->primary_surface = true;
     }
     bool ui_test = manifest->player_names && manifest->target_ui;
+    bool overlay_test = manifest->damage_animation || manifest->kill_animation;
+    bool needs_font = ui_test || overlay_test;
     success = success && (!manifest->widget_render || manifest->primary_surface) &&
+              ((manifest->widget_x == 0 && manifest->widget_y == 0) || manifest->widget_render) &&
               manifest->player_names == manifest->target_ui &&
-              ((ui_test && manifest->widget_render && font != NULL &&
-                player_view_sha256_text_valid(expected_ui)) ||
-               (!ui_test && font == NULL && expected_ui == NULL));
+              ((needs_font && manifest->widget_render && font != NULL) ||
+               (!needs_font && font == NULL)) &&
+              ((ui_test && player_view_sha256_text_valid(expected_ui)) ||
+               (!ui_test && expected_ui == NULL));
 #ifndef ATRINIK_WIDGET_TESTS
     success = success && !manifest->widget_render && font == NULL;
 #endif
@@ -768,8 +796,12 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(zoom_smoothing);
     free(primary_surface);
     free(widget_render);
+    free(widget_x);
+    free(widget_y);
     free(player_names);
     free(target_ui);
+    free(damage_animation);
+    free(kill_animation);
     free(clock_ms);
     free(expected_ui);
     free(expected_standard_checkpoint);
@@ -2787,6 +2819,8 @@ int player_view_main(int argc, char *argv[]) {
     }
     widgetdata map_widget = {
         .surface = map_widget_surface,
+        .x = (int)manifest.widget_x,
+        .y = (int)manifest.widget_y,
         .w = (int)manifest.viewport_width,
         .h = (int)manifest.viewport_height,
     };
@@ -2805,6 +2839,14 @@ int player_view_main(int argc, char *argv[]) {
             fprintf(stderr, "player-view: snapshot references an unavailable face\n");
             goto cleanup;
         }
+#ifdef ATRINIK_WIDGET_TESTS
+        if (mode == PLAYER_VIEW_RENDER && manifest.damage_animation) {
+            widget_map_animation_test_add(ANIM_DAMAGE, 0, 0, 37, 425);
+        }
+        if (mode == PLAYER_VIEW_RENDER && manifest.kill_animation) {
+            widget_map_animation_test_add(ANIM_KILL, 1, 0, 1, 425);
+        }
+#endif
     }
     uint64_t benchmark_median_ns = 0;
     if (mode == PLAYER_VIEW_BENCHMARK_STANDARD || mode == PLAYER_VIEW_BENCHMARK_LARGE) {

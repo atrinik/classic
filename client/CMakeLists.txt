@@ -767,6 +767,14 @@ if (BUILD_TESTING)
     target_link_libraries(client-map-light-state-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-map-light-state COMMAND client-map-light-state-tests)
 
+    add_executable(client-map-transform-tests
+        src/tests/map_transform.c
+        src/client/map_transform.c)
+    atrinik_configure_target(client-map-transform-tests)
+    target_include_directories(client-map-transform-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    add_test(NAME client-map-transform COMMAND client-map-transform-tests)
+
     add_executable(client-playerdoll-equipment-tests
         src/tests/playerdoll_equipment.c
         src/gui/widgets/playerdoll_equipment.c)
@@ -822,6 +830,9 @@ if (BUILD_TESTING)
     add_test(NAME client-player-view-player-outline-widget-state
         COMMAND atrinik --player-view
             "${player_view_fixtures}/player-outline-widget-state.xml" -)
+    add_test(NAME client-player-view-map-overlay-widget-state
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/map-overlay-widget-state.xml" -)
     add_test(NAME client-player-view-living-outline-unobscured
         COMMAND atrinik --player-view
             "${player_view_fixtures}/living-outline-unobscured.xml" -)

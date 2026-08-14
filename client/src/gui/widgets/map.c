@@ -34,6 +34,7 @@
 #include <surface_primitives.h>
 #include <client_socket.h>
 #include <animations.h>
+#include <map_transform.h>
 #include <region_map.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
@@ -3492,9 +3493,16 @@ void map_draw_one(int x, int y, SDL_Surface *surface) {
         data.ypos += data.player_height_offset;
     }
 
-    double zoom = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0;
-    data.xpos *= zoom;
-    data.ypos *= zoom;
+    int zoom_percent = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM);
+    double zoom = zoom_percent / 100.0;
+    map_screen_point_t screen;
+    SOFT_ASSERT(map_local_anchor_to_screen(widget_x(cur_widget[MAP_ID]),
+                                           widget_y(cur_widget[MAP_ID]),
+                                           zoom_percent,
+                                           data.xpos,
+                                           data.ypos,
+                                           &screen),
+                "Map highlight coordinate overflow");
 
     sprite_effects_t effects = {0};
     effects.zoom_x = 100.0 * zoom;
@@ -3507,12 +3515,7 @@ void map_draw_one(int x, int y, SDL_Surface *surface) {
         BIT_SET(effects.flags, SPRITE_FLAG_FOW);
     }
 
-    surface_show_effects(ScreenSurface,
-                         widget_x(cur_widget[MAP_ID]) + data.xpos,
-                         widget_y(cur_widget[MAP_ID]) + data.ypos,
-                         NULL,
-                         surface,
-                         &effects);
+    surface_show_effects(ScreenSurface, screen.x, screen.y, NULL, surface, &effects);
 }
 
 /**
@@ -3963,6 +3966,8 @@ static void widget_draw(widgetdata *widget) {
     map_render_data_t data = {0};
     map_setup_render_data(widget->surface, &data, NULL, NULL, NULL, NULL);
 
+    /* Health and food warnings are widget-centered alerts. Their anchor,
+     * texture size, and offset intentionally remain in screen pixels. */
     int xpos = widget_x(widget) + widget_w(widget) / 2;
     int ypos = widget_y(widget) + widget_h(widget) / 2;
     ypos -= MAP_TILE_POS_YOFF * 1.5 + 7;
@@ -3992,7 +3997,8 @@ static void widget_draw(widgetdata *widget) {
         }
     }
 
-    /* Process message animations */
+    /* MAPSTATS message animations are widget-centered UI: their anchor,
+     * font size, and trajectory intentionally remain in screen pixels. */
     if (msg_anim.message[0] != '\0') {
         if ((LastTick - msg_anim.tick) < 3000) {
             int bmoff, y_offset;
@@ -4112,6 +4118,24 @@ void widget_map_ui_test_begin(void) {
 bool widget_map_ui_test_end(void) {
     map_ui_test_active = false;
     return map_ui_test_names > 0 && map_ui_test_targets > 0;
+}
+
+void widget_map_animation_test_add(int type,
+                                   int x_offset,
+                                   int y_offset,
+                                   int value,
+                                   uint32_t elapsed_ms) {
+    HARD_ASSERT(type == ANIM_DAMAGE || type == ANIM_KILL);
+    HARD_ASSERT(elapsed_ms <= 850 && elapsed_ms <= LastTick);
+
+    map_anim_t *anim = map_anims_add(type,
+                                     map_width * (MAP_FOW_SIZE / 2) + x_offset,
+                                     map_height * (MAP_FOW_SIZE / 2) + y_offset,
+                                     MapData.player_sub_layer,
+                                     0,
+                                     value);
+    anim->start_tick -= elapsed_ms;
+    anim->last_tick -= elapsed_ms;
 }
 
 bool widget_map_interaction_test(widgetdata *widget) {
@@ -4355,9 +4379,21 @@ void map_anims_play(void) {
         data.xpos += MAP_TILE_POS_XOFF / 2;
         data.ypos -= MAP_TILE_POS_YOFF;
 
+        map_screen_point_t screen;
+        SOFT_ASSERT(map_local_anchor_to_screen(widget_x(cur_widget[MAP_ID]),
+                                               widget_y(cur_widget[MAP_ID]),
+                                               setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM),
+                                               data.xpos,
+                                               data.ypos,
+                                               &screen),
+                    "Map animation coordinate overflow");
+
         uint32_t num_ticks = LastTick - anim->start_tick;
-        data.ypos += num_ticks * anim->yoff;
-        data.xpos += num_ticks * anim->xoff;
+        /* Font/icon dimensions and the historical 25-pixel rise over 850 ms
+         * are screen-space presentation, so apply them after the anchor has
+         * followed the map widget origin and zoom. */
+        screen.y += map_screen_motion_offset(num_ticks, anim->yoff);
+        screen.x += map_screen_motion_offset(num_ticks, anim->xoff);
 
         char buf[32];
         switch (anim->type) {
@@ -4369,8 +4405,8 @@ void map_anims_play(void) {
                 text_show(ScreenSurface,
                           FONT_MONO10,
                           buf,
-                          data.xpos - wd / 2,
-                          data.ypos,
+                          screen.x - wd / 2,
+                          screen.y,
                           color,
                           TEXT_OUTLINE,
                           NULL);
@@ -4383,16 +4419,16 @@ void map_anims_play(void) {
                 int ht = text_get_height(FONT_MONO10, buf, 0);
                 SDL_Surface *texture = TEXTURE_CLIENT("death");
                 surface_show(ScreenSurface,
-                             data.xpos - texture->w / 2,
-                             data.ypos - ht / 2 + 2,
+                             screen.x - texture->w / 2,
+                             screen.y - ht / 2 + 2,
                              NULL,
                              texture);
 
                 text_show(ScreenSurface,
                           FONT_MONO10,
                           buf,
-                          data.xpos - wd / 2,
-                          data.ypos,
+                          screen.x - wd / 2,
+                          screen.y,
                           COLOR_ORANGE,
                           TEXT_OUTLINE,
                           NULL);
