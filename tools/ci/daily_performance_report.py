@@ -455,9 +455,10 @@ def render_summary(point: dict[str, Any], trend: dict[str, Any]) -> str:
         "",
         "### Lighting reconstruction A/B",
         "",
-        "The translated and full-control rows use the same sustained stream. Lighting work "
-        "runs from before queued MAP decode through the primary draw, excludes local-minimap "
-        "rendering, and is not additive with parent profiler stages.",
+        "The translated and full-control rows use the same sustained stream. Lighting work sums "
+        "the non-overlapping instrumented lighting scopes accumulated from before queued MAP "
+        "decode through the primary draw, excludes local-minimap rendering, and is not additive "
+        "with parent profiler stages.",
         "",
         "| Viewport | Mode | Lighting work p50/p95 | Full/partial/reuse | Dirty pixels | "
         "Translated bytes | Full causes cache/active/bounds/control/other |",
