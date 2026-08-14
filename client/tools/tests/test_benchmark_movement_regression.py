@@ -1032,10 +1032,9 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("n/a → 0.001 ms", report)
         for heading, candidate_calls in (
             ("### Render-profiler stages (standard smooth sustained)", 720),
-            ("#### Standard smooth `cold`", 2),
-            ("#### Standard smooth `sustained`", 720),
-            ("#### Standard smooth `idle`", 16),
-            ("#### Standard smooth `resumed`", 120),
+            ("### Render-profiler stages (standard smooth cold)", 2),
+            ("### Render-profiler stages (standard smooth idle)", 16),
+            ("### Render-profiler stages (standard smooth resumed)", 120),
         ):
             with self.subTest(heading=heading):
                 start = report.index(heading)
@@ -1290,10 +1289,10 @@ class CommentTests(unittest.TestCase):
         report = benchmark.render_comment(evidence, "success")
         for phase, (calls, baseline_us, candidate_us, delta) in expected_map_stages.items():
             with self.subTest(phase=phase):
-                heading = f"#### Standard smooth `{phase}`"
+                heading = f"### Render-profiler stages (standard smooth {phase})"
                 start = report.index(heading)
-                end = report.find("\n#### ", start + len(heading))
-                section = report[start : end if end != -1 else report.index("</details>", start)]
+                end = report.find("\n### ", start + len(heading))
+                section = report[start : end if end != -1 else len(report)]
                 self.assertIn(
                     f"| `map` | `per_map_draw` | {calls} → {calls} | "
                     f"{baseline_us / 1_000:.3f} ms → {candidate_us / 1_000:.3f} ms | "
@@ -1301,20 +1300,11 @@ class CommentTests(unittest.TestCase):
                     section,
                 )
 
-        discrete_heading = f"#### {benchmark.STANDARD_DISCRETE_CONTEXT} `sustained`"
-        discrete_start = report.index(discrete_heading)
-        discrete_end = report.find("\n#### ", discrete_start + len(discrete_heading))
-        discrete_section = report[
-            discrete_start : (
-                discrete_end
-                if discrete_end != -1
-                else report.index("</details>", discrete_start)
-            )
-        ]
         self.assertIn(
-            "| `map` | `per_map_draw` | n/a → 720 | n/a → 0.001 ms | n/a |",
-            discrete_section,
+            "Those candidate-only contexts do not collect a baseline",
+            report,
         )
+        self.assertNotIn(f"#### {benchmark.STANDARD_DISCRETE_CONTEXT}", report)
 
     def test_candidate_only_detailed_stages_remain_unavailable(self) -> None:
         evidence = benchmark._build_evidence(
@@ -1326,11 +1316,11 @@ class CommentTests(unittest.TestCase):
             comparison_note="bootstrap-base-missing-movement-instrumentation",
         )
         report = benchmark.render_comment(evidence, "success")
-        cold_heading = "#### Standard smooth `cold`"
+        cold_heading = "### Render-profiler stages (standard smooth cold)"
         cold_start = report.index(cold_heading)
-        cold_end = report.find("\n#### ", cold_start + len(cold_heading))
+        cold_end = report.find("\n### ", cold_start + len(cold_heading))
         cold_section = report[
-            cold_start : cold_end if cold_end != -1 else report.index("</details>", cold_start)
+            cold_start : cold_end if cold_end != -1 else len(report)
         ]
         self.assertIn(
             "| `map` | `per_map_draw` | n/a → 2 | n/a → 0.001 ms | n/a |",
@@ -1348,8 +1338,9 @@ class CommentTests(unittest.TestCase):
         )
         report = benchmark.render_comment(evidence, "success")
         self.assertLessEqual(len(report.encode()), 65_536)
-        self.assertIn("#### Large smooth `resumed`", report)
-        self.assertIn(f"#### {benchmark.LARGE_DISCRETE_CONTEXT} `resumed`", report)
+        self.assertIn("uploaded JSON artifact", report)
+        self.assertNotIn("### Render-profiler stages (large smooth", report)
+        self.assertNotIn(f"#### {benchmark.LARGE_DISCRETE_CONTEXT}", report)
 
     def test_candidate_only_report_establishes_baseline_without_claiming_delta(self) -> None:
         evidence = benchmark._build_evidence(

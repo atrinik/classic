@@ -1878,47 +1878,30 @@ def _render_complete_evidence(
         candidate_sustained,
         baseline_sustained_stages,
     )
+    for phase_name in REQUIRED_PHASES:
+        if phase_name == "sustained":
+            continue
+        baseline_phase = None
+        if evidence["mode"] == "comparison" and _render_stages_available(
+            records["baseline_standard"], phase_name
+        ):
+            baseline_phase = baseline_phases[phase_name]
+        _append_render_stage_table(
+            lines,
+            f"### Render-profiler stages (standard smooth {phase_name})",
+            candidate_standard[phase_name],
+            baseline_phase,
+        )
     lines.extend(
         [
-            "<details>",
-            "<summary>Other measured render-stage contexts</summary>",
-            "",
-            "The snapshot may include primary player-view, auxiliary local-minimap, and "
-            "animation passes according to the recorded scope and calls. The offline replay "
-            "does not execute the production main loop, so live profiler buckets such as "
-            "`frame`, `events`, `game`, `widgets`, `overlays`, `maintenance`, `present`, and "
-            "`wait` are unavailable; simulated wait/update values are not substituted.",
+            "Other viewport, discrete-control, and additional-context render-stage detail "
+            "remains available in the uploaded JSON artifact so the GitHub comment stays "
+            "within its publication limit. Those candidate-only contexts do not collect a "
+            "baseline, and live profiler buckets unavailable to the offline replay are never "
+            "fabricated.",
             "",
         ]
     )
-    candidate_contexts_for_stages = [
-        ("Standard smooth", phases["candidate_standard"]),
-    ]
-    if samples["candidate_large"] == 2:
-        candidate_contexts_for_stages.append(("Large smooth", phases["candidate_large"]))
-    for context_name, phase_set in candidate_contexts_for_stages:
-        for phase_name in REQUIRED_PHASES:
-            baseline_phase = None
-            if (
-                evidence["mode"] == "comparison"
-                and context_name == "Standard smooth"
-                and _render_stages_available(records["baseline_standard"], phase_name)
-            ):
-                baseline_phase = baseline_phases[phase_name]
-            _append_render_stage_table(
-                lines,
-                f"#### {context_name} `{phase_name}`",
-                phase_set[phase_name],
-                baseline_phase,
-            )
-    for context_name, phase_set in context_phases.items():
-        for phase_name in REQUIRED_PHASES:
-            _append_render_stage_table(
-                lines,
-                f"#### {context_name} `{phase_name}`",
-                phase_set[phase_name],
-            )
-    lines.extend(["</details>", ""])
     lines.extend(
         [
             "### Candidate hosted baseline timing",
