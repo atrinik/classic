@@ -440,6 +440,57 @@ typedef struct MapSpace_s {
  * Each map is in a given region of the game world and links to a region
  * definition.
  */
+typedef enum region_celestial_mode {
+    REGION_CELESTIAL_MODE_UNSET,
+    REGION_CELESTIAL_MODE_GLOBAL,
+    REGION_CELESTIAL_MODE_SCALED,
+    REGION_CELESTIAL_MODE_FIXED,
+} region_celestial_mode_t;
+
+typedef struct region_celestial_cycle {
+    /** Pure mapping mode from the authoritative absolute game-time tick. */
+    region_celestial_mode_t mode;
+    /** Reduced authored rate. Global is 1/1 and fixed is 0/1. */
+    uint8_t rate_numerator;
+    uint8_t rate_denominator;
+    /** Unsigned authored origin used only by scaled mappings. */
+    uint64_t epoch;
+    /** Authored phase offset, bounded by the cycle's effective period. */
+    uint16_t phase;
+} region_celestial_cycle_t;
+
+/** Resolved immutable regional environment owned by the region registry. */
+typedef struct region_celestial_profile {
+    uint8_t schema;
+    region_celestial_cycle_t solar;
+    region_celestial_cycle_t season;
+    region_celestial_cycle_t lunar;
+    uint16_t lunar_period;
+    uint32_t day_color;
+    uint32_t night_color;
+    uint16_t day_brightness;
+    uint16_t night_brightness;
+    uint32_t moon_color;
+    uint8_t moon_max;
+    uint32_t starlight_color;
+    uint8_t starlight_strength;
+    uint16_t day_linear[3];
+    uint16_t night_linear[3];
+    uint16_t moon_linear[3];
+    uint16_t starlight_linear[3];
+    /** Complete binary and canonical lowercase SHA-256 profile identity. */
+    uint8_t digest[32];
+    char digest_hex[65];
+    /** Stable diagnostic prefix of the complete digest; keys use digest. */
+    uint64_t revision;
+} region_celestial_profile_t;
+
+typedef struct region_celestial_phases {
+    uint16_t solar;
+    uint16_t season;
+    uint16_t lunar;
+} region_celestial_phases_t;
+
 typedef struct region_struct {
     /** Pointer to next region, NULL for the last one */
     struct region_struct *next;
@@ -486,6 +537,12 @@ typedef struct region_struct {
 
     /** Y coodinate in jailmap to which the player should be sent. */
     int16_t jaily;
+
+    /** Authored celestial fields and the resolved immutable effective profile. */
+    region_celestial_profile_t celestial_authored;
+    region_celestial_profile_t celestial;
+    uint32_t celestial_fields;
+    uint8_t celestial_state;
 
     bool child_maps : 1; ///< If true, map of this region has all the children.
 } region_struct;
