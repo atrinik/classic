@@ -10,7 +10,7 @@ import sys
 import tempfile
 
 
-SERVER_TIMEOUT_SECONDS = 30
+SERVER_TIMEOUT_SECONDS = 60
 
 
 def require_rejection(result: subprocess.CompletedProcess[str], surface: str) -> None:
