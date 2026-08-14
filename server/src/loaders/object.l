@@ -928,6 +928,9 @@ stable_identity_state *identity = &identities[*depth];
         LOG(ERROR, "Got EOF before object end for %s.", object_get_str(op));
         return LL_ERROR;
     }
+    if (!linemode && lex_error == 0 && finalize_object_record(op, identity) != 0) {
+        lex_error = 1;
+    }
 
     /* If we got an error, return the error. Otherwise, return that we got
      * EOF. */
