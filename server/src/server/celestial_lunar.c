@@ -55,9 +55,9 @@ static uint64_t divide_round_half_up(uint64_t numerator, uint64_t denominator) {
     return numerator / denominator + (numerator % denominator >= (denominator + 1) / 2 ? 1 : 0);
 }
 
-static bool normalized_color_valid(const uint16_t color[3]) {
+static bool normalized_color_valid(const uint16_t color[3], uint8_t strength) {
     uint16_t peak = MAX(color[0], MAX(color[1], color[2]));
-    return peak == 0 || peak == UINT16_MAX;
+    return peak == UINT16_MAX || (peak == 0 && strength == 0);
 }
 
 static int32_t seasonal_solar_elevation(uint16_t solar_hour, uint16_t season_phase) {
@@ -83,36 +83,49 @@ static void project_color(uint8_t strength, const uint16_t color[3], uint16_t ou
 void celestial_lunar_root_input(uint64_t absolute_hour, celestial_lunar_input *input) {
     HARD_ASSERT(input != NULL);
 
-    *input = (celestial_lunar_input){
-        .absolute_hour = absolute_hour,
-        .solar_hour = absolute_hour % HOURS_PER_DAY,
-        .season_phase = absolute_hour % HOURS_PER_YEAR,
-        .lunar_age = absolute_hour % HOURS_PER_MONTH,
-        .lunar_period = HOURS_PER_MONTH,
-        .moon_color = {34544, 41337, 65535},
-        .moon_max = 20,
-        .starlight_color = {14544, 26837, 65535},
-        .starlight_strength = 2,
-    };
+    memset(input, 0, sizeof(*input));
+    input->solar_hour = absolute_hour % HOURS_PER_DAY;
+    input->season_phase = absolute_hour % HOURS_PER_YEAR;
+    input->lunar_age = absolute_hour % HOURS_PER_MONTH;
+    input->lunar_period = HOURS_PER_MONTH;
+    input->moon_color[0] = 34544;
+    input->moon_color[1] = 41337;
+    input->moon_color[2] = 65535;
+    input->starlight_color[0] = 14544;
+    input->starlight_color[1] = 26837;
+    input->starlight_color[2] = 65535;
+    input->moon_max = 20;
+    input->starlight_strength = 2;
+}
+
+static void copy_revision(const celestial_lunar_input *input, celestial_lunar_input *revision) {
+    revision->solar_hour = input->solar_hour;
+    revision->season_phase = input->season_phase;
+    revision->lunar_age = input->lunar_age;
+    revision->lunar_period = input->lunar_period;
+    memcpy(revision->moon_color, input->moon_color, sizeof(revision->moon_color));
+    memcpy(revision->starlight_color, input->starlight_color, sizeof(revision->starlight_color));
+    revision->moon_max = input->moon_max;
+    revision->starlight_strength = input->starlight_strength;
 }
 
 bool celestial_lunar_evaluate(const celestial_lunar_input *input, celestial_lunar_sample *sample) {
     if (sample == NULL) {
         return false;
     }
-    *sample = (celestial_lunar_sample){0};
+    memset(sample, 0, sizeof(*sample));
     if (input == NULL || input->solar_hour >= HOURS_PER_DAY ||
         input->season_phase >= HOURS_PER_YEAR || input->lunar_period < CELESTIAL_LUNAR_PERIOD_MIN ||
         input->lunar_period > CELESTIAL_LUNAR_PERIOD_MAX ||
         input->lunar_period % HOURS_PER_DAY != 0 || input->lunar_period % 8 != 0 ||
         input->lunar_age >= input->lunar_period || input->moon_max > CELESTIAL_MOON_MAX ||
         input->starlight_strength > CELESTIAL_STARLIGHT_MAX ||
-        !normalized_color_valid(input->moon_color) ||
-        !normalized_color_valid(input->starlight_color)) {
+        !normalized_color_valid(input->moon_color, input->moon_max) ||
+        !normalized_color_valid(input->starlight_color, input->starlight_strength)) {
         return false;
     }
 
-    sample->revision = *input;
+    copy_revision(input, &sample->revision);
     sample->phase = (celestial_lunar_phase)(((uint64_t)input->lunar_age * 8) / input->lunar_period);
 
     uint16_t half_period = input->lunar_period / 2;

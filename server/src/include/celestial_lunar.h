@@ -29,8 +29,6 @@ typedef enum celestial_lunar_phase {
 
 /** Effective celestial inputs resolved by the regional profile owner. */
 typedef struct celestial_lunar_input {
-    /** Absolute gameplay hour retained for field revision identity. */
-    uint64_t absolute_hour;
     /** Effective solar phase in the range 0..23. */
     uint16_t solar_hour;
     /** Effective seasonal phase in the range 0..8063. */
@@ -41,10 +39,10 @@ typedef struct celestial_lunar_input {
     uint16_t lunar_period;
     /** Normalized scene-linear Q0.16 moon color. */
     uint16_t moon_color[3];
-    /** Maximum raw moon strength in the range 0..20. */
-    uint8_t moon_max;
     /** Normalized scene-linear Q0.16 starlight color. */
     uint16_t starlight_color[3];
+    /** Maximum raw moon strength in the range 0..20. */
+    uint8_t moon_max;
     /** Raw starlight strength in the range 0..2. */
     uint8_t starlight_strength;
 } celestial_lunar_input;
@@ -52,8 +50,11 @@ typedef struct celestial_lunar_input {
 /**
  * Immutable result published to the structural field evaluator.
  *
- * The copied revision inputs make cache identity independent of mutable global
- * clock or profile state. RGB values are raw pre-transport radiance.
+ * The copied effective inputs make cache identity independent of mutable
+ * global clock or profile state. Absolute gameplay time is deliberately not
+ * retained: fixed profiles remain cache-stable while it advances. Consumers
+ * compare fields, not C object representations. RGB values are raw
+ * pre-transport radiance.
  */
 typedef struct celestial_lunar_sample {
     celestial_lunar_input revision;
