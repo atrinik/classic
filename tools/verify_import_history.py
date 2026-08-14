@@ -111,6 +111,19 @@ def verify_release_target(
     )
 
 
+def verify_release_targets(
+    targets: list[tuple[str, str]], release_history_ref: str
+) -> None:
+    release_first_parent_commits = first_parent_commits(release_history_ref)
+    for tag, commit in targets:
+        verify_release_target(
+            tag,
+            commit,
+            release_history_ref,
+            release_first_parent_commits,
+        )
+
+
 def verify_commits(name: str, commits: list[str]) -> None:
     result = subprocess.run(
         ["git", "-C", str(ROOT), "cat-file", "--batch-check=%(objectname) %(objecttype)"],
@@ -376,7 +389,6 @@ def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> N
         )
 
     head_first_parent_commits = first_parent_commits("HEAD")
-    release_first_parent_commits = first_parent_commits(release_history_ref)
     release_config = load_release_config()
     require(
         release_config.get("branches") == ["main"],
@@ -500,6 +512,7 @@ def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> N
         )
     previous_commit = floor
     targets = set(historical_tags.values())
+    future_release_targets: list[tuple[str, str]] = []
     for tag in future_tags:
         require(
             semantic_version(tag) >= minimum_version,
@@ -511,15 +524,11 @@ def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> N
         )
         commit = git("rev-parse", f"{tag}^{{commit}}")
         require(commit not in targets, f"{tag}: release tag target is not unique")
-        verify_release_target(
-            tag,
-            commit,
-            release_history_ref,
-            release_first_parent_commits,
-        )
+        future_release_targets.append((tag, commit))
         require(is_ancestor(previous_commit, commit), f"{tag}: versions are not ancestry ordered")
         targets.add(commit)
         previous_commit = commit
+    verify_release_targets(future_release_targets, release_history_ref)
 
 
 def parse_args(arguments: list[str] | None = None) -> argparse.Namespace:

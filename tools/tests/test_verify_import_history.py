@@ -99,17 +99,13 @@ class ReleaseTagPolicyTests(unittest.TestCase):
                     RuntimeError,
                     "v5.99.0: target is not on HEAD's first-parent line",
                 ):
-                    verify_import_history.verify_release_target(
-                        "v5.99.0",
-                        main_release,
+                    verify_import_history.verify_release_targets(
+                        [("v5.99.0", main_release)],
                         "HEAD",
-                        verify_import_history.first_parent_commits("HEAD"),
                     )
-                verify_import_history.verify_release_target(
-                    "v5.99.0",
-                    main_release,
+                verify_import_history.verify_release_targets(
+                    [("v5.99.0", main_release)],
                     exact_main,
-                    verify_import_history.first_parent_commits(exact_main),
                 )
 
 
