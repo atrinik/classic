@@ -472,6 +472,21 @@ class JournalTests(unittest.TestCase):
             gameplay_journal._saved_domain_arguments(SimpleNamespace(
                 domain=[], player_save=[f"acct/hero={map_save}"], map_save=[],
             ))
+        legacy_unique = self.root / "legacy.v00"
+        legacy_unique.write_text(
+            "arch coppercoin\nmsg\njournal_sequence 999\nendmsg\nend\n"
+        )
+        self.assertEqual(
+            gameplay_journal._checkpoint_sequence(legacy_unique),
+            (0, "map-unique"),
+        )
+        self.assertEqual(
+            gameplay_journal._saved_domain_arguments(SimpleNamespace(
+                domain=[], player_save=[],
+                map_save=[f"/world/start={legacy_unique}"],
+            )),
+            ["map-unique:/world/start=0"],
+        )
         invalid_save = self.root / "invalid-player.save"
         invalid_save.write_text("journal_sequence 3\nendplst\n")
         with self.assertRaisesRegex(gameplay_journal.JournalError, "no run identity"):
@@ -659,8 +674,9 @@ class JournalTests(unittest.TestCase):
 
     def test_native_action_matrix_reasons_remain_wired_to_semantic_producers(self) -> None:
         server = Path(__file__).resolve().parents[2]
-        def function_body(source: str, name: str) -> str:
+        def function_body(source: str, name: str) -> tuple[str, str]:
             masked = list(source)
+            comments_masked = list(source)
             index = 0
             while index < len(source):
                 if source.startswith("/*", index):
@@ -669,12 +685,14 @@ class JournalTests(unittest.TestCase):
                     for offset in range(index, end + 2):
                         if masked[offset] != "\n":
                             masked[offset] = " "
+                            comments_masked[offset] = " "
                     index = end + 2
                 elif source.startswith("//", index):
                     end = source.find("\n", index + 2)
                     end = len(source) if end == -1 else end
                     for offset in range(index, end):
                         masked[offset] = " "
+                        comments_masked[offset] = " "
                     index = end
                 elif source[index] in {'"', "'"}:
                     quote = source[index]
@@ -691,7 +709,7 @@ class JournalTests(unittest.TestCase):
                     index += 1
             structural = "".join(masked)
             match = re.search(
-                rf"(?m)^[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*[ \t*]+)+"
+                rf"(?m)^[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*[ \t\n*]+)+"
                 rf"{re.escape(name)}[ \t]*\([^;{{}}]*?\)[ \t\n]*\{{",
                 structural,
                 re.S,
@@ -705,7 +723,10 @@ class JournalTests(unittest.TestCase):
                 elif structural[index] == "}":
                     depth -= 1
                     if depth == 0:
-                        return source[start:index + 1]
+                        return (
+                            "".join(comments_masked[start:index + 1]),
+                            structural[start:index + 1],
+                        )
             self.fail(f"unterminated function body: {name}")
 
         expected = {
@@ -802,14 +823,25 @@ class JournalTests(unittest.TestCase):
             ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_Decrease"): (
                 {"script.item-decrease"}, {"object_decrease_reason"},
             ),
+            ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_CreateObject"): (
+                {"script.currency-grant"}, {"object_insert_into_reason"},
+            ),
+            ("src/plugins/plugin_python/atrinik_object.c", "Object_SetAttribute"): (
+                {"script.item-adjust", "script.item-value-adjust",
+                 "script.currency-adjust", "script.bank-adjust"},
+                {"object_set_nrof_reason", "object_set_value_reason",
+                 "shop_set_coin_nrof_reason", "bank_set_balance_reason"},
+            ),
         }
         for (relative, function), (reasons, calls) in exact_sites.items():
-            body = function_body((server / relative).read_text(encoding="utf-8"), function)
+            body, structural_body = function_body(
+                (server / relative).read_text(encoding="utf-8"), function,
+            )
             with self.subTest(source=relative, function=function):
                 for reason in reasons:
                     self.assertIn(f'"{reason}"', body)
                 for call in calls:
-                    self.assertIn(f"{call}(", body)
+                    self.assertIn(f"{call}(", structural_body)
 
 
 if __name__ == "__main__":

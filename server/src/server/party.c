@@ -298,10 +298,14 @@ static bool party_currency_begin_at_corpse(object *pl,
         return false;
     }
     mapstruct *source_map = corpse->map != NULL ? corpse->map : pl->map;
+    char map_id[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    if (!gameplay_journal_map_identity(source_map, map_id)) {
+        return false;
+    }
     gameplay_journal_subject_t subject = {
         .account_id = CONTR(pl)->cs->account,
         .character_id = pl->name,
-        .map_id = source_map->path != NULL ? source_map->path : "",
+        .map_id = map_id,
         .x = corpse->map != NULL ? corpse->x : pl->x,
         .y = corpse->map != NULL ? corpse->y : pl->y,
     };
@@ -560,17 +564,28 @@ static void party_loot_split(object *pl, object *corpse) {
         for (ol = party->members; prepared && ol != NULL; ol = ol->next) {
             if (on_same_map(ol->objlink.ob, pl)) {
                 int64_t value_split = value / count;
+                int64_t before;
 
                 if (num == 0) {
                     value_split += value % count;
+                }
+                if (!shop_get_recovery_money(ol->objlink.ob, &before) ||
+                    value_split > INT64_MAX - before ||
+                    (source_transaction[0] != '\0' &&
+                     (!gameplay_journal_track_player(source_transaction, ol->objlink.ob) ||
+                      (ol->objlink.ob->map != NULL &&
+                       !gameplay_journal_track_map_unique(source_transaction,
+                                                          ol->objlink.ob->map))))) {
+                    prepared = false;
+                    break;
                 }
                 if (!gameplay_journal_currency_begin(
                         ol->objlink.ob,
                         "party.currency-split",
                         "currency:party-loot",
-                        0,
+                        before,
                         value_split,
-                        value_split,
+                        before + value_split,
                         "corpse",
                         "player-or-ground",
                         source_transaction[0] != '\0' ? source_transaction : "party-corpse",
@@ -610,9 +625,10 @@ static void party_loot_split(object *pl, object *corpse) {
                                                        grants[i].value,
                                                        grants[i].transaction));
         }
-        for (uint32_t i = 0; i < num; i++) {
-            grants[i].active = false;
+        bool source_committed = gameplay_journal_semantic_commit(source_transaction);
+        for (uint32_t i = 0; source_committed && i < num; i++) {
             if (gameplay_journal_semantic_commit(grants[i].transaction)) {
+                grants[i].active = false;
                 shop_currency_tag_retire(grants[i].recipient, grants[i].transaction);
                 draw_info_format(COLOR_BLUE,
                                  grants[i].recipient,
@@ -620,7 +636,6 @@ static void party_loot_split(object *pl, object *corpse) {
                                  shop_get_cost_string(grants[i].value));
             }
         }
-        (void)gameplay_journal_semantic_commit(source_transaction);
         free(grants);
     }
 }

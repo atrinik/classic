@@ -419,6 +419,8 @@ START_TEST(test_party_random_currency_retirement_preserves_message_lifetime) {
     object_insert_into(arch_get("sword"), corpse, INS_NO_MERGE);
 
     char directory[] = "/tmp/atrinik-party-random-loot-XXXXXX";
+    const char *old_map_path = map->path;
+    map->path = add_string("/test/party apartment\\owner");
     ck_assert_ptr_ne(mkdtemp(directory), NULL);
     const gameplay_journal_profile_t profile = {
         .id = "legacy-unknown",
@@ -433,6 +435,9 @@ START_TEST(test_party_random_currency_retirement_preserves_message_lifetime) {
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("party.currency-loot"), 1);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("item.party-loot"), 1);
     gameplay_journal_deinit();
+    char *random_contents = read_fixture(directory);
+    ck_assert_ptr_ne(strstr(random_contents, "/test/party%20apartment%5Cowner"), NULL);
+    free(random_contents);
     remove_fixture(directory);
 
     CONTR(pl)->party->loot = PARTY_LOOT_SPLIT;
@@ -457,7 +462,7 @@ START_TEST(test_party_random_currency_retirement_preserves_message_lifetime) {
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("party.currency-source"), 1);
     gameplay_journal_deinit();
     char *split_contents = read_fixture(split_directory);
-    ck_assert_ptr_ne(strstr(split_contents, "\"before\":0,\"delta\":5,\"after\":5"), NULL);
+    ck_assert_ptr_ne(strstr(split_contents, "\"before\":22,\"delta\":5,\"after\":27"), NULL);
     ck_assert_ptr_ne(strstr(split_contents, "\"before\":10,\"delta\":-10,\"after\":0"), NULL);
     char source_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
     ck_assert(crash_intent_field(split_contents,
@@ -470,6 +475,37 @@ START_TEST(test_party_random_currency_retirement_preserves_message_lifetime) {
     char source_terminal[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE + 64];
     snprintf(VS(source_terminal), "\"transaction_id\":\"%s\",\"sequence\"", source_transaction);
     ck_assert_uint_ge(count_substring(split_contents, source_terminal), 2);
+    char grant_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    ck_assert(crash_intent_field(split_contents,
+                                 "party.currency-split",
+                                 "transaction_id",
+                                 VS(grant_transaction)));
+    char source_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE + 32];
+    char grant_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE + 32];
+    snprintf(VS(source_id), "\"transaction_id\":\"%s\"", source_transaction);
+    snprintf(VS(grant_id), "\"transaction_id\":\"%s\"", grant_transaction);
+    const char *source_commit_pos = strstr(split_contents, source_id);
+    while (source_commit_pos != NULL) {
+        const char *line_end = strchr(source_commit_pos, '\n');
+        const char *phase = strstr(source_commit_pos, "\"phase\":\"commit\"");
+        if (phase != NULL && (line_end == NULL || phase < line_end)) {
+            break;
+        }
+        source_commit_pos = strstr(source_commit_pos + 1, source_id);
+    }
+    const char *grant_commit_pos = strstr(split_contents, grant_id);
+    while (grant_commit_pos != NULL) {
+        const char *line_end = strchr(grant_commit_pos, '\n');
+        const char *phase = strstr(grant_commit_pos, "\"phase\":\"commit\"");
+        if (phase != NULL && (line_end == NULL || phase < line_end)) {
+            break;
+        }
+        grant_commit_pos = strstr(grant_commit_pos + 1, grant_id);
+    }
+    ck_assert_ptr_ne(source_commit_pos, NULL);
+    ck_assert_ptr_ne(grant_commit_pos, NULL);
+    ck_assert_msg(source_commit_pos < grant_commit_pos,
+                  "party source terminal must precede recipient terminals");
     ck_assert_ptr_ne(strstr(split_contents, "\"kind\":\"map-runtime\""), NULL);
     free(split_contents);
     remove_fixture(split_directory);
@@ -479,6 +515,8 @@ START_TEST(test_party_random_currency_retirement_preserves_message_lifetime) {
     remove_party_member(CONTR(pl)->party, pl);
     corpse->map = NULL;
     object_destroy(corpse);
+    free_string_shared(map->path);
+    map->path = old_map_path;
     object_destroy(pl);
 }
 END_TEST
@@ -608,6 +646,51 @@ START_TEST(test_pending_domains_block_checkpoints_and_unique_maps_use_primary_co
     ck_assert(gameplay_journal_map_checkpoint_allowed(map));
     ck_assert_uint_eq(map->journal_sequence, CONTR(pl)->journal_sequence);
     ck_assert_uint_eq(map->journal_unique_sequence, 0);
+    ck_assert(gameplay_journal_currency_begin(pl,
+                                              "test.pending-attempted",
+                                              "currency:test",
+                                              1,
+                                              1,
+                                              2,
+                                              "service",
+                                              "ground",
+                                              "generated",
+                                              transaction));
+    ck_assert(gameplay_journal_track_map_object(transaction, map, pl->x, pl->y, probe));
+    ck_assert(!gameplay_journal_player_checkpoint_allowed(pl));
+    ck_assert(!gameplay_journal_map_checkpoint_allowed(map));
+    ck_assert(gameplay_journal_attempt(transaction));
+    ck_assert(gameplay_journal_player_checkpoint_allowed(pl));
+    ck_assert(gameplay_journal_map_checkpoint_allowed(map));
+
+    char other[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    ck_assert(gameplay_journal_currency_begin(pl,
+                                              "test.pending-failure-a",
+                                              "currency:test",
+                                              1,
+                                              1,
+                                              2,
+                                              "service",
+                                              "ground",
+                                              "generated",
+                                              transaction));
+    ck_assert(gameplay_journal_currency_begin(pl,
+                                              "test.pending-failure-b",
+                                              "currency:test",
+                                              2,
+                                              1,
+                                              3,
+                                              "service",
+                                              "ground",
+                                              "generated",
+                                              other));
+    ck_assert(gameplay_journal_track_map_object(transaction, map, pl->x, pl->y, probe));
+    ck_assert(gameplay_journal_track_map_object(other, map, pl->x, pl->y, probe));
+    gameplay_journal_fail_writes_for_test(true);
+    ck_assert(!gameplay_journal_commit(transaction));
+    ck_assert(gameplay_journal_player_checkpoint_allowed(pl));
+    ck_assert(gameplay_journal_map_checkpoint_allowed(map));
+    gameplay_journal_fail_writes_for_test(false);
     gameplay_journal_deinit();
 
     char *contents = read_fixture(directory);

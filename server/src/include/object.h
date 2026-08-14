@@ -948,6 +948,9 @@ object *object_decrease(object *op, uint32_t i);
  */
 object_semantic_result_t
 object_decrease_reason(object *op, uint32_t nrof, const char *reason, object **survivor);
+object_semantic_result_t
+object_set_nrof_reason(object *op, uint32_t nrof, const char *reason, object **survivor);
+object_semantic_result_t object_set_value_reason(object *op, int64_t value, const char *reason);
 object *object_insert_into(object *op, object *where, int flag);
 /**
  * Reason-aware insertion. On COMMITTED or AMBIGUOUS, inserted is the live

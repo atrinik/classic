@@ -128,6 +128,8 @@ unique-object marker headers as `map-unique`, matching terminal domain kinds
 without conflating independently durable files. `--domain
 KIND:ID=SEQUENCE` is available for operator-managed save domains that are not
 ordinary Classic files.
+Markerless pre-upgrade `.vNN` unique-object components are structurally
+validated and classified as sequence-zero `map-unique` saves.
 The reconciliation command emits an ordered JSON array in intent-sequence
 order; each entry includes its `transaction_id`, so correlated source debits
 precede their recipient grants.
@@ -173,6 +175,8 @@ portable identity alphabet, so apartment paths remain stable under spaces,
 backslashes, and other platform path characters. If a terminal sync fails, the
 transaction becomes an attempted record and releases its in-memory checkpoint
 pins; the already-mutated domains can then be saved and inspected by recovery.
+Map insertion/entry outcomes that cannot safely claim a terminal phase use the
+same attempted-state release rather than stranding a live checkpoint pin.
 
 Both `attempted` and `committed` transactions also carry typed before/after
 values, lineage, and a bounded snapshot for validation and partial completion.
@@ -200,10 +204,12 @@ operation. Helpers below that producer do not emit another transaction.
 | Same-player nested-container move | none | aggregate-only | Provenance and custody do not change |
 | Player to external container/player | `put_object_in_sack()` | `item.external-transfer` / `item.player-transfer` | Intent before split; commit after destination insertion |
 | Starting/treasure/quest grant | `treasure_insert()` / quest grant site | `item.starting-grant`, `item.treasure-grant`, `quest.item-grant`, `quest.objective-grant` | One reason-aware insertion transaction |
-| Trusted Python item grant/transfer/removal/destruction | `object_insert_into_reason()` / `object_remove_reason()` | Caller-supplied bounded reason; documented `script.item-*` defaults | Intent before insertion, removal, or destruction; one terminal record |
+| Trusted Python item grant/transfer/removal/destruction | `object_insert_into_reason()` / `object_remove_reason()` | Caller-supplied bounded reason; documented `script.item-*` defaults | Intent before insertion, removal, or destruction; generated `MONEY` is routed through the currency schema |
+| Trusted Python item stack/value compatibility setters | `object_set_nrof_reason()` / `object_set_value_reason()` | `script.item-adjust` / `script.item-value-adjust` | Legacy rooted field writes are wrapped in a typed item transaction; `Decrease(reason=...)` remains the preferred explicit API |
+| Trusted Python coin stack/bank compatibility setters | `shop_set_coin_nrof_reason()` / `bank_set_balance_reason()` | `script.currency-adjust` / `script.bank-adjust` | Legacy rooted field writes are wrapped in exact currency before/delta/after transactions |
 | Trusted Python player-inventory to map transfer | `object_insert_map_reason()` / `object_enter_map_reason()` | Caller-supplied reason; `script.item-drop` / `script.item-teleport` defaults | Intent before removal; provenance before map merge; terminal result exposed as committed, failed, or ambiguous |
 | Party item loot | `party_loot_random()` / `party_loot_split()` | `item.party-loot` | Reason-aware grant; source remains in the corpse if intent preparation fails |
-| Party currency loot | `party_loot_random()` / `party_loot_split()` | `party.currency-loot` / `party.currency-source` / `party.currency-split` | Random transfer journals before moving the source stack; split mode records one source-map debit at the corpse coordinates plus correlated recipient grants before source removal and exact delivery |
+| Party currency loot | `party_loot_random()` / `party_loot_split()` | `party.currency-loot` / `party.currency-source` / `party.currency-split` | Random transfer journals before moving the source stack; split mode prepares exact recipient aggregates, removes/delivers once, commits the correlated source transaction before recipient terminals, then retires tags |
 | Shop checkout | `shop_pay_internal()` | `shop.purchase` | One item transaction containing quantity, total price, and carried/bank/mixed funding; no generic payment or bank duplicate |
 | Shop sale | `shop_sell_item_begin()` / `shop_sell_item_commit()` | `shop.sale` | Intent before split; commit after coins, unpaid state, and provenance change |
 | Bank deposit/withdrawal | `bank_deposit()` / `bank_withdraw()` | `bank.deposit` / `bank.withdraw` | Exact hidden balance before/delta/after around the mutation |
@@ -283,6 +289,13 @@ Item and currency mutations use `InsertInto`, `Decrease`, `Remove`, `Destroy`, `
 cannot be omitted. Quest and progression intents use stable authored subject IDs.
 Producers must not catch and ignore a journal exception or emit a commit for a
 vetoed/failed mutation.
+
+For compatibility, direct `nrof` and `value` assignments on persistent
+player-rooted objects are routed through fixed semantic reasons, including the
+hidden bank object. `Object.Load()` is rejected for persistent player items;
+content must use the explicit reason-aware methods instead. A `RuntimeError`
+that says the terminal commit is uncertain means the authoritative mutation
+already happened and must not be retried blindly.
 
 `JournalIntent` retains its released C/Python signature, but schema-v2
 hardening intentionally rejects its legacy `item` and `currency` kinds because

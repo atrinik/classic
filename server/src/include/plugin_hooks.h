@@ -728,6 +728,27 @@ struct plugin_hooklist
                          uint32_t,
                          const char *,
                          object **)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         object_set_nrof_reason,
+                         object *,
+                         uint32_t,
+                         const char *,
+                         object **)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         object_set_value_reason,
+                         object *,
+                         int64_t,
+                         const char *)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         shop_set_coin_nrof_reason,
+                         object *,
+                         uint32_t,
+                         const char *)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         bank_set_balance_reason,
+                         object *,
+                         int64_t,
+                         const char *)
 
 };
 // clang-format on

@@ -105,6 +105,10 @@ bool gameplay_journal_track_map_object(const char *transaction_id,
                                        int y,
                                        const object *op);
 
+/** Build the canonical portable identity used for a map context/domain. */
+bool gameplay_journal_map_identity(const mapstruct *map,
+                                   char output[GAMEPLAY_JOURNAL_ID_MAX + 1]);
+
 /** Whether a save domain is free of journal transactions awaiting a terminal record. */
 bool gameplay_journal_player_checkpoint_allowed(const object *player_ob);
 bool gameplay_journal_map_checkpoint_allowed(const mapstruct *map);
@@ -114,6 +118,9 @@ bool gameplay_journal_commit(const char *transaction_id);
 
 /** Durably mark a vetoed or rolled-back intent as aborted. */
 bool gameplay_journal_abort(const char *transaction_id, const char *reason);
+
+/** Release an intent whose post-mutation outcome has no safe terminal claim. */
+bool gameplay_journal_attempt(const char *transaction_id);
 
 /** Record an immutable profile fork or migration boundary. */
 bool gameplay_journal_profile_boundary(const gameplay_journal_profile_t *profile,

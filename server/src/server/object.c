@@ -33,6 +33,7 @@
 #include <server.h>
 #include <quest.h>
 #include <los.h>
+#include <shop.h>
 #include <light.h>
 #include <connection.h>
 #include <loader.h>
@@ -2466,6 +2467,9 @@ object_insert_into_reason(object *op, object *where, const char *reason, object 
     object *destination_root = object_get_env(where);
     object *source_player = source_root->type == PLAYER ? source_root : NULL;
     object *destination_player = destination_root->type == PLAYER ? destination_root : NULL;
+    if (op->type == MONEY && source_root == op && destination_player != NULL) {
+        return shop_insert_coin_object_reason(op, where, reason, inserted_out);
+    }
     if (source_player == destination_player || !object_custody_auditable(op)) {
         if (!QUERY_FLAG(op, FLAG_REMOVED)) {
             object_remove(op, 0);
@@ -2589,6 +2593,9 @@ object_semantic_result_t object_insert_map_reason(object *op,
     if (*inserted_out == NULL) {
         /* Map insertion may return NULL after walk-on effects destroyed the
          * object. Preserve the intent for restart reconciliation. */
+        if (transaction.active) {
+            HARD_ASSERT(gameplay_journal_attempt(transaction.transaction_id));
+        }
         return journal ? OBJECT_SEMANTIC_AMBIGUOUS : OBJECT_SEMANTIC_FAILED;
     }
     if (journal && !object_custody_finish(&transaction)) {
@@ -2678,6 +2685,117 @@ object_decrease_reason(object *op, uint32_t nrof, const char *reason, object **s
         op->custody_lineage = add_string(transaction.lineage);
     }
     *survivor_out = object_decrease(op, quantity);
+    return object_custody_finish(&transaction) ? OBJECT_SEMANTIC_COMMITTED
+                                               : OBJECT_SEMANTIC_AMBIGUOUS;
+}
+
+object_semantic_result_t
+object_set_nrof_reason(object *op, uint32_t nrof, const char *reason, object **survivor_out) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(reason != NULL);
+    HARD_ASSERT(survivor_out != NULL);
+    *survivor_out = op;
+
+    uint32_t before = MAX(1, op->nrof);
+    uint32_t after = MAX(1, nrof);
+    object *root = object_get_env(op);
+    bool journal = root->type == PLAYER && object_custody_auditable(op) && before != after;
+    object_custody_transaction_t transaction = {0};
+    if (journal) {
+        int64_t delta = (int64_t)after - before;
+        if (!object_custody_begin_economy(op,
+                                          root,
+                                          reason,
+                                          "player",
+                                          "player",
+                                          "",
+                                          delta < 0 ? (uint32_t)-delta : (uint32_t)delta,
+                                          false,
+                                          false,
+                                          before,
+                                          delta,
+                                          after,
+                                          0,
+                                          "",
+                                          "",
+                                          &transaction)) {
+            return OBJECT_SEMANTIC_FAILED;
+        }
+        if (!object_custody_track_player(&transaction, root)) {
+            object_custody_abort(&transaction, "domain-registration-failed");
+            return OBJECT_SEMANTIC_FAILED;
+        }
+        if (op->custody_lineage == NULL) {
+            op->custody_lineage = add_string(transaction.lineage);
+        }
+    }
+
+    if (!QUERY_FLAG(op, FLAG_REMOVED) && op->env != NULL) {
+        if (after > before) {
+            object_weight_add(op->env, op->weight * (after - before));
+        } else if (after < before) {
+            object_weight_sub(op->env, op->weight * (before - after));
+        }
+    }
+    op->nrof = nrof;
+    esrv_update_item(UPD_NAME | UPD_NROF, op);
+    if (!journal) {
+        return OBJECT_SEMANTIC_COMMITTED;
+    }
+    return object_custody_finish(&transaction) ? OBJECT_SEMANTIC_COMMITTED
+                                               : OBJECT_SEMANTIC_AMBIGUOUS;
+}
+
+object_semantic_result_t object_set_value_reason(object *op, int64_t value, const char *reason) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(reason != NULL);
+
+    object *root = object_get_env(op);
+    if (root->type != PLAYER || !object_custody_auditable(op) || value == op->value) {
+        op->value = value;
+        return OBJECT_SEMANTIC_COMMITTED;
+    }
+
+    int64_t delta;
+    if (value >= op->value) {
+        if (op->value < 0 && value > INT64_MAX + op->value) {
+            return OBJECT_SEMANTIC_FAILED;
+        }
+        delta = value - op->value;
+    } else {
+        if (value < 0 && op->value > INT64_MAX + value) {
+            return OBJECT_SEMANTIC_FAILED;
+        }
+        delta = -(op->value - value);
+    }
+    object_custody_transaction_t transaction = {0};
+    if (!object_custody_begin_economy(op,
+                                      root,
+                                      reason,
+                                      "player",
+                                      "player",
+                                      "",
+                                      MAX(1, op->nrof),
+                                      false,
+                                      false,
+                                      op->value,
+                                      delta,
+                                      value,
+                                      0,
+                                      "",
+                                      "",
+                                      &transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (!object_custody_track_player(&transaction, root)) {
+        object_custody_abort(&transaction, "domain-registration-failed");
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (op->custody_lineage == NULL) {
+        op->custody_lineage = add_string(transaction.lineage);
+    }
+    op->value = value;
+    esrv_update_item(UPD_NAME, op);
     return object_custody_finish(&transaction) ? OBJECT_SEMANTIC_COMMITTED
                                                : OBJECT_SEMANTIC_AMBIGUOUS;
 }
@@ -3878,6 +3996,9 @@ object_enter_map_reason(object *op, mapstruct *m, int x, int y, const char *reas
     }
     if (!object_enter_map(op, NULL, m, x, y, true)) {
         /* Entry can fail after removal or a map effect mutated the object. */
+        if (transaction.active) {
+            HARD_ASSERT(gameplay_journal_attempt(transaction.transaction_id));
+        }
         return journal ? OBJECT_SEMANTIC_AMBIGUOUS : OBJECT_SEMANTIC_FAILED;
     }
     if (journal && !object_custody_finish(&transaction)) {

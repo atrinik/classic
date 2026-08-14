@@ -166,7 +166,8 @@ static bool journal_map_id_valid(const char *value) {
     return true;
 }
 
-static bool journal_map_identity(const mapstruct *map, char output[GAMEPLAY_JOURNAL_ID_MAX + 1]) {
+bool gameplay_journal_map_identity(const mapstruct *map,
+                                   char output[GAMEPLAY_JOURNAL_ID_MAX + 1]) {
     if (map == NULL) {
         output[0] = '\0';
         return true;
@@ -963,6 +964,18 @@ static ssize_t journal_pending_find(const char *transaction_id) {
     return -1;
 }
 
+static void journal_pending_remove(size_t index) {
+    HARD_ASSERT(index < journal.pending_count);
+    journal.pending[index] = journal.pending[journal.pending_count - 1];
+    memset(&journal.pending[journal.pending_count - 1], 0, sizeof(journal.pending[0]));
+    journal.pending_count--;
+}
+
+static void journal_pending_clear(void) {
+    memset(journal.pending, 0, sizeof(journal.pending));
+    journal.pending_count = 0;
+}
+
 static bool journal_player_domain_id(const char *account,
                                      const char *character,
                                      char id[GAMEPLAY_JOURNAL_ID_MAX + 1]) {
@@ -1031,7 +1044,7 @@ static bool journal_track_map(const char *transaction_id, mapstruct *map, bool u
     }
     pending_transaction_t *pending = &journal.pending[(size_t)index];
     char id[GAMEPLAY_JOURNAL_ID_MAX + 1];
-    if (!journal_map_identity(map, id)) {
+    if (!gameplay_journal_map_identity(map, id)) {
         return false;
     }
     for (size_t i = 0; i < pending->map_count; i++) {
@@ -1199,8 +1212,11 @@ bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
 }
 
 static bool journal_finish(const char *transaction_id, const char *phase, const char *reason) {
-    if (!gameplay_journal_available() || !journal_token_valid(transaction_id, false) ||
-        !journal_token_valid(reason, false)) {
+    if (!gameplay_journal_available()) {
+        journal_pending_clear();
+        return false;
+    }
+    if (!journal_token_valid(transaction_id, false) || !journal_token_valid(reason, false)) {
         return false;
     }
     ssize_t index = journal_pending_find(transaction_id);
@@ -1209,14 +1225,12 @@ static bool journal_finish(const char *transaction_id, const char *phase, const 
     }
     pending_transaction_t *pending = &journal.pending[(size_t)index];
     if (strcmp(phase, "commit") == 0 && pending->player_count == 0 && pending->map_count == 0) {
-        journal.pending[(size_t)index] = journal.pending[journal.pending_count - 1];
-        journal.pending_count--;
+        journal_pending_remove((size_t)index);
         return false;
     }
     StringBuffer *record = journal_record(phase, transaction_id, "transaction", reason);
     if (record == NULL) {
-        journal.pending[(size_t)index] = journal.pending[journal.pending_count - 1];
-        journal.pending_count--;
+        journal_pending_remove((size_t)index);
         return false;
     }
     stringbuffer_append_string(record, ",\"domains\":[");
@@ -1245,8 +1259,7 @@ static bool journal_finish(const char *transaction_id, const char *phase, const 
     bool ok = journal_append(record);
     stringbuffer_free(record);
     if (!ok) {
-        journal.pending[(size_t)index] = journal.pending[journal.pending_count - 1];
-        journal.pending_count--;
+        journal_pending_clear();
         return false;
     }
     if (strcmp(phase, "commit") == 0) {
@@ -1283,8 +1296,7 @@ static bool journal_finish(const char *transaction_id, const char *phase, const 
         }
     }
 #endif
-    journal.pending[(size_t)index] = journal.pending[journal.pending_count - 1];
-    journal.pending_count--;
+    journal_pending_remove((size_t)index);
     return true;
 }
 
@@ -1294,6 +1306,18 @@ bool gameplay_journal_commit(const char *transaction_id) {
 
 bool gameplay_journal_abort(const char *transaction_id, const char *reason) {
     return journal_finish(transaction_id, "abort", reason);
+}
+
+bool gameplay_journal_attempt(const char *transaction_id) {
+    if (!gameplay_journal_available() || !journal_token_valid(transaction_id, false)) {
+        return false;
+    }
+    ssize_t index = journal_pending_find(transaction_id);
+    if (index < 0) {
+        return false;
+    }
+    journal_pending_remove((size_t)index);
+    return true;
 }
 
 bool gameplay_journal_profile_boundary(const gameplay_journal_profile_t *profile,
@@ -1357,7 +1381,7 @@ bool gameplay_journal_player_begin_change(
         .y = pl->ob->y,
     };
     char map_id[GAMEPLAY_JOURNAL_ID_MAX + 1];
-    if (!journal_map_identity(pl->ob->map, map_id)) {
+    if (!gameplay_journal_map_identity(pl->ob->map, map_id)) {
         return false;
     }
     subject.map_id = map_id;

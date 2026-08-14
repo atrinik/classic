@@ -367,6 +367,39 @@ int64_t bank_get_balance(object *op) {
     return bank->value;
 }
 
+object_semantic_result_t
+bank_set_balance_reason(object *bank, int64_t value, const char *reason) {
+    HARD_ASSERT(bank != NULL);
+    HARD_ASSERT(reason != NULL);
+
+    object *root = object_get_env(bank);
+    if (root->type != PLAYER || bank->arch == NULL || bank->arch->name != shstr_cons.player_info ||
+        bank->name != shstr_cons.BANK_GENERAL || bank->value < 0 || value < 0) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    int64_t before = bank->value;
+    if (before == value) {
+        return OBJECT_SEMANTIC_COMMITTED;
+    }
+    int64_t delta = value >= before ? value - before : -(before - value);
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
+    if (!gameplay_journal_currency_begin(root,
+                                         reason,
+                                         "currency:bank",
+                                         before,
+                                         delta,
+                                         value,
+                                         "hidden-bank",
+                                         "hidden-bank",
+                                         "script",
+                                         transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    bank->value = value;
+    return gameplay_journal_semantic_commit(transaction) ? OBJECT_SEMANTIC_COMMITTED
+                                                         : OBJECT_SEMANTIC_AMBIGUOUS;
+}
+
 /**
  * Deposit money to player's bank object.
  * @param op

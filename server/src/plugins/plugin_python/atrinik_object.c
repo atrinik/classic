@@ -1264,6 +1264,8 @@ static const char doc_Atrinik_Object_CreateObject[] =
     ".. method:: CreateObject(archname, nrof=1, value=-1, identified=True, "
     "reason='script.item-grant').\n\n"
     "Creates a new object from archname and inserts it into the object.\n\n"
+    "Canonical money archetypes use the currency schema and default to "
+    "``script.currency-grant``.\n\n"
     ":param archname: Name of the arch to create.\n"
     ":type archname: str\n"
     ":param nrof: Number of objects to create.\n"
@@ -1330,8 +1332,12 @@ Atrinik_Object_CreateObject(Atrinik_Object *self, PyObject *args, PyObject *keyw
     }
 
     object *inserted = NULL;
+    const char *semantic_reason =
+        tmp->type == MONEY && strcmp(reason, "script.item-grant") == 0
+            ? "script.currency-grant"
+            : reason;
     object_semantic_result_t result =
-        hooks->object_insert_into_reason(tmp, self->obj, reason, &inserted);
+        hooks->object_insert_into_reason(tmp, self->obj, semantic_reason, &inserted);
     if (result == OBJECT_SEMANTIC_FAILED) {
         hooks->object_destroy(tmp);
         PyErr_SetString(PyExc_RuntimeError, "Item grant could not be journaled.");
@@ -2128,10 +2134,12 @@ static PyObject *Atrinik_Object_SetAttack(Atrinik_Object *self, PyObject *args) 
 
 /** Documentation for Atrinik_Object_Decrease(). */
 static const char doc_Atrinik_Object_Decrease[] =
-    ".. method:: Decrease(num=1).\n\n"
+    ".. method:: Decrease(num=1, *, reason='script.item-decrease').\n\n"
     "Decreases an object, removing it if there's nothing left to decrease.\n\n"
     ":param num: How much to decrease the object by.\n"
     ":type num: int\n"
+    ":param reason: Bounded semantic reason code for the private journal.\n"
+    ":type reason: str\n"
     ":returns: The object if something is left, None otherwise.\n"
     ":rtype: :class:`Atrinik.Object.Object` or None";
 
@@ -2139,10 +2147,13 @@ static const char doc_Atrinik_Object_Decrease[] =
  * Implements Atrinik.Object.Object.Decrease() Python method.
  * @copydoc PyMethod_VARARGS
  */
-static PyObject *Atrinik_Object_Decrease(Atrinik_Object *self, PyObject *args) {
+static PyObject *
+Atrinik_Object_Decrease(Atrinik_Object *self, PyObject *args, PyObject *keywds) {
+    static char *kwlist[] = {"num", "reason", NULL};
     uint32_t num = 1;
+    const char *reason = "script.item-decrease";
 
-    if (!PyArg_ParseTuple(args, "|I", &num)) {
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "|I$s", kwlist, &num, &reason)) {
         return NULL;
     }
 
@@ -2150,7 +2161,7 @@ static PyObject *Atrinik_Object_Decrease(Atrinik_Object *self, PyObject *args) {
 
     object *survivor = NULL;
     object_semantic_result_t result =
-        hooks->object_decrease_reason(self->obj, num, "script.item-decrease", &survivor);
+        hooks->object_decrease_reason(self->obj, num, reason, &survivor);
     if (result != OBJECT_SEMANTIC_COMMITTED) {
         PyErr_SetString(PyExc_RuntimeError,
                         result == OBJECT_SEMANTIC_FAILED
@@ -2596,6 +2607,19 @@ static PyObject *Atrinik_Object_Load(Atrinik_Object *self, PyObject *args) {
         return NULL;
     }
 
+    OBJEXISTCHECK(self);
+    object *root = hooks->object_get_env(self->obj);
+    bool bank = self->obj->arch != NULL && strcmp(self->obj->arch->name, "player_info") == 0 &&
+                self->obj->name != NULL && strcmp(self->obj->name, "BANK_GENERAL") == 0;
+    bool persistent_item = !QUERY_FLAG(self->obj, FLAG_SYS_OBJECT) && self->obj->type != FORCE &&
+                           self->obj->type != POTION_EFFECT && self->obj->type != EVENT_OBJECT &&
+                           self->obj->type != QUEST_CONTAINER;
+    if (root != self->obj && root->type == PLAYER && (bank || persistent_item)) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Load cannot mutate a persistent player item; use a reason-aware API.");
+        return NULL;
+    }
+
     if (hooks->set_variable(self->obj, lines) == LL_ERROR) {
         PyErr_SetString(AtrinikError, "Invalid object attributes.");
         return NULL;
@@ -2761,7 +2785,10 @@ static PyMethodDef methods[] = {
      doc_Atrinik_Object_SetProtection},
     {"Attack", PY_METHOD(Atrinik_Object_Attack), METH_VARARGS, doc_Atrinik_Object_Attack},
     {"SetAttack", PY_METHOD(Atrinik_Object_SetAttack), METH_VARARGS, doc_Atrinik_Object_SetAttack},
-    {"Decrease", PY_METHOD(Atrinik_Object_Decrease), METH_VARARGS, doc_Atrinik_Object_Decrease},
+    {"Decrease",
+     PY_METHOD(Atrinik_Object_Decrease),
+     METH_VARARGS | METH_KEYWORDS,
+     doc_Atrinik_Object_Decrease},
     {"SquaresAround",
      PY_METHOD(Atrinik_Object_SquaresAround),
      METH_VARARGS | METH_KEYWORDS,
@@ -2865,6 +2892,78 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
             PyErr_Format(PyExc_ValueError, "direction must be between 0 and %d.", NUM_DIRECTION);
             return -1;
         }
+    }
+
+    object *root = hooks->object_get_env(obj->obj);
+    if (field->offset == offsetof(object, nrof) && root != obj->obj && root->type == PLAYER) {
+        if (!PyInt_Check(value)) {
+            INTRAISE("Illegal value for nrof field.");
+        }
+        unsigned long requested = PyLong_AsUnsignedLong(value);
+        if (PyErr_Occurred() || requested > UINT32_MAX) {
+            PyErr_SetString(PyExc_OverflowError, "nrof must fit in an unsigned 32-bit integer.");
+            return -1;
+        }
+        object_semantic_result_t result;
+        object *survivor = NULL;
+        if (obj->obj->type == MONEY) {
+            result = hooks->shop_set_coin_nrof_reason(obj->obj,
+                                                      (uint32_t)requested,
+                                                      "script.currency-adjust");
+        } else {
+            result = hooks->object_set_nrof_reason(obj->obj,
+                                                   (uint32_t)requested,
+                                                   "script.item-adjust",
+                                                   &survivor);
+        }
+        if (result != OBJECT_SEMANTIC_COMMITTED) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            result == OBJECT_SEMANTIC_FAILED
+                                ? "Stack quantity adjustment could not be journaled."
+                                : "Stack quantity changed, but its durable journal commit is uncertain.");
+            return -1;
+        }
+        return 0;
+    }
+    if (field->offset == offsetof(object, value) && root != obj->obj && root->type == PLAYER &&
+        obj->obj->arch != NULL && strcmp(obj->obj->arch->name, "player_info") == 0 &&
+        obj->obj->name != NULL && strcmp(obj->obj->name, "BANK_GENERAL") == 0) {
+        if (!PyInt_Check(value)) {
+            INTRAISE("Illegal value for bank balance.");
+        }
+        long long requested = PyLong_AsLongLong(value);
+        if (PyErr_Occurred()) {
+            return -1;
+        }
+        object_semantic_result_t result = hooks->bank_set_balance_reason(
+            obj->obj, (int64_t)requested, "script.bank-adjust");
+        if (result != OBJECT_SEMANTIC_COMMITTED) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            result == OBJECT_SEMANTIC_FAILED
+                                ? "Bank balance adjustment could not be journaled."
+                                : "Bank balance changed, but its durable journal commit is uncertain.");
+            return -1;
+        }
+        return 0;
+    }
+    if (field->offset == offsetof(object, value) && root != obj->obj && root->type == PLAYER) {
+        if (!PyInt_Check(value)) {
+            INTRAISE("Illegal value for value field.");
+        }
+        long long requested = PyLong_AsLongLong(value);
+        if (PyErr_Occurred()) {
+            return -1;
+        }
+        object_semantic_result_t result = hooks->object_set_value_reason(
+            obj->obj, (int64_t)requested, "script.item-value-adjust");
+        if (result != OBJECT_SEMANTIC_COMMITTED) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            result == OBJECT_SEMANTIC_FAILED
+                                ? "Item value adjustment could not be journaled."
+                                : "Item value changed, but its durable journal commit is uncertain.");
+            return -1;
+        }
+        return 0;
     }
 
     if (obj->obj->map != NULL && (field->offset == offsetof(object, layer) ||

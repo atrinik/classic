@@ -444,6 +444,8 @@ def load(inputs: Iterable[Path]) -> Journal:
                 key: value for key, value in record.items() if key not in variable
             }
             if state["intent"] is not None:
+                if any(event["phase"] == "domain" for event in state["events"][:-1]):
+                    raise JournalError(f"duplicate intent after save domain for {transaction_id}")
                 existing = {
                     key: value
                     for key, value in state["intent"].items()
@@ -581,6 +583,27 @@ def _checkpoint_sequence(path: Path) -> tuple[int, str]:
             raise JournalError(f"invalid save-domain sequence: {path}") from error
         component = "map-unique"
         run_id = fields[2]
+    elif re.search(r"\.v[0-9]{2}\Z", path.name) is not None:
+        component = "map-unique"
+        in_message = False
+        depth = 0
+        for raw_line in lines:
+            if in_message:
+                if raw_line == b"endmsg":
+                    in_message = False
+                continue
+            if raw_line == b"msg":
+                in_message = True
+            elif raw_line.startswith(b"arch "):
+                depth += 1
+            elif raw_line == b"end":
+                depth -= 1
+                if depth < 0:
+                    raise JournalError(f"invalid legacy map-unique save structure: {path}")
+            elif raw_line.startswith((b"journal_run ", b"journal_sequence ")):
+                raise JournalError(f"unmarked map-unique save has journal metadata: {path}")
+        if in_message or depth != 0 or (lines and not lines[0].startswith(b"arch ")):
+            raise JournalError(f"invalid legacy map-unique save structure: {path}")
     else:
         component = "map-runtime" if lines and lines[0] == b"arch map" else "player"
         terminator = b"end" if component == "map-runtime" else b"endplst"

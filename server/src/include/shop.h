@@ -70,6 +70,8 @@ extern object *bank_find_info(object *op);
 extern int bank_deposit(object *op, const char *text, int64_t *value);
 
 extern int bank_withdraw(object *op, const char *text, int64_t *value);
+extern object_semantic_result_t
+bank_set_balance_reason(object *bank, int64_t value, const char *reason);
 
 extern void shop_insert_coins(object *op, int64_t value);
 extern bool shop_insert_coins_exact(object *op, int64_t value);
@@ -96,5 +98,11 @@ extern bool shop_coins_available(void);
 
 extern object_semantic_result_t
 shop_insert_coins_reason(object *op, int64_t value, const char *reason);
+extern object_semantic_result_t
+shop_set_coin_nrof_reason(object *coin, uint32_t nrof, const char *reason);
+extern object_semantic_result_t shop_insert_coin_object_reason(object *coin,
+                                                               object *where,
+                                                               const char *reason,
+                                                               object **inserted);
 
 #endif

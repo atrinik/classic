@@ -3602,6 +3602,12 @@ void player_logout(player *pl) {
     if (pl->ob->type == DEAD_OBJECT) {
         return;
     }
+    if (!gameplay_journal_player_checkpoint_allowed(pl->ob)) {
+        LOG(INFO,
+            "Deferring logout of %s while a gameplay journal transaction is pending.",
+            pl->ob->name != NULL ? pl->ob->name : "<unnamed>");
+        return;
+    }
 
     /* Trigger the global LOGOUT event */
     char connection_id[SOCKET_CONNECTION_ID_SIZE];

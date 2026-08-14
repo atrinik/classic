@@ -1010,3 +1010,144 @@ object_semantic_result_t shop_insert_coins_reason(object *op, int64_t value, con
     shop_currency_tag_retire(op, transaction);
     return OBJECT_SEMANTIC_COMMITTED;
 }
+
+object_semantic_result_t
+shop_set_coin_nrof_reason(object *coin, uint32_t nrof, const char *reason) {
+    HARD_ASSERT(coin != NULL);
+    HARD_ASSERT(reason != NULL);
+
+    object *root = object_get_env(coin);
+    if (root->type != PLAYER) {
+        coin->nrof = nrof;
+        return OBJECT_SEMANTIC_COMMITTED;
+    }
+    if (coin->type != MONEY || coin->arch == NULL || coin->value <= 0 ||
+        !shop_money_object_counted(root, coin)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    bool canonical = false;
+    for (int i = 0; i < NUM_COINS; i++) {
+        if (strcmp(coins[i], coin->arch->name) == 0 && coin->value == coin->arch->clone.value) {
+            canonical = true;
+            break;
+        }
+    }
+    if (!canonical) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+
+    uint32_t before_nrof = MAX(1, coin->nrof);
+    uint32_t after_nrof = MAX(1, nrof);
+    if (before_nrof == after_nrof) {
+        coin->nrof = nrof;
+        return OBJECT_SEMANTIC_COMMITTED;
+    }
+    uint32_t difference = before_nrof > after_nrof ? before_nrof - after_nrof
+                                                   : after_nrof - before_nrof;
+    if (coin->value > INT64_MAX / difference) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    int64_t delta = coin->value * difference;
+    if (after_nrof < before_nrof) {
+        delta = -delta;
+    }
+    int64_t before;
+    if (!shop_get_recovery_money(root, &before) ||
+        (delta > 0 && delta > INT64_MAX - before) || (delta < 0 && before < -delta)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
+    if (!gameplay_journal_currency_begin(root,
+                                         reason,
+                                         "currency:stack-adjust",
+                                         before,
+                                         delta,
+                                         before + delta,
+                                         "player",
+                                         "player",
+                                         "script",
+                                         transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+
+    if (!QUERY_FLAG(coin, FLAG_REMOVED) && coin->env != NULL) {
+        if (after_nrof > before_nrof) {
+            object_weight_add(coin->env, coin->weight * difference);
+        } else {
+            object_weight_sub(coin->env, coin->weight * difference);
+        }
+    }
+    coin->nrof = nrof;
+    esrv_update_item(UPD_NAME | UPD_NROF, coin);
+    return gameplay_journal_semantic_commit(transaction) ? OBJECT_SEMANTIC_COMMITTED
+                                                         : OBJECT_SEMANTIC_AMBIGUOUS;
+}
+
+static bool shop_currency_destination_counted(const object *root, const object *where) {
+    for (const object *cursor = where; cursor != root; cursor = cursor->env) {
+        if (cursor == NULL || cursor->type != CONTAINER ||
+            (!QUERY_FLAG(cursor, FLAG_APPLIED) && cursor->race != NULL &&
+             strstr(cursor->race, "gold") == NULL)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+object_semantic_result_t shop_insert_coin_object_reason(object *coin,
+                                                        object *where,
+                                                        const char *reason,
+                                                        object **inserted_out) {
+    HARD_ASSERT(coin != NULL);
+    HARD_ASSERT(where != NULL);
+    HARD_ASSERT(reason != NULL);
+    HARD_ASSERT(inserted_out != NULL);
+    *inserted_out = NULL;
+
+    object *root = object_get_env(where);
+    int64_t value;
+    int64_t before;
+    if (root->type != PLAYER || !shop_currency_destination_counted(root, where) ||
+        !shop_money_object_value(coin, &value) ||
+        !shop_get_recovery_money(root, &before) || value > INT64_MAX - before) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
+    if (!gameplay_journal_currency_begin(root,
+                                         reason,
+                                         "currency:grant",
+                                         before,
+                                         value,
+                                         before + value,
+                                         "service",
+                                         "player",
+                                         "generated",
+                                         transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (transaction[0] != '\0') {
+        char lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
+        snprintf(VS(lineage), "currency:%s", transaction);
+        FREE_AND_COPY_HASH(coin->custody_lineage, lineage);
+    }
+    archetype_t *arch = coin->arch;
+    int64_t unit_value = coin->value;
+    *inserted_out = object_insert_into(coin, where, 0);
+    if (*inserted_out == NULL) {
+        (void)gameplay_journal_attempt(transaction);
+        return OBJECT_SEMANTIC_AMBIGUOUS;
+    }
+    if (!gameplay_journal_semantic_commit(transaction)) {
+        return OBJECT_SEMANTIC_AMBIGUOUS;
+    }
+    shop_currency_tag_retire(root, transaction);
+    FOR_INV_PREPARE(where, tmp) {
+        if (tmp->type == MONEY && tmp->arch == arch && tmp->value == unit_value) {
+            *inserted_out = tmp;
+            return OBJECT_SEMANTIC_COMMITTED;
+        }
+    }
+    FOR_INV_FINISH();
+    *inserted_out = NULL;
+    return OBJECT_SEMANTIC_AMBIGUOUS;
+}
