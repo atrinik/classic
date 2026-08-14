@@ -42,6 +42,7 @@
 #include <light.h>
 
 typedef struct stable_identity_state {
+    bool record_started;
     bool saw_name;
     bool saw_name_pl;
     bool saw_numeric_sp;
@@ -211,6 +212,7 @@ stable_identity_state *identity = &identities[*depth];
 %}
 
 ^arch{S}             {
+    identity->record_started = true;
     object *tmp = op;
 
     if (tmp->arch != NULL) {
@@ -218,12 +220,14 @@ stable_identity_state *identity = &identities[*depth];
     }
 
     const char *archname = yval();
-    tmp->arch = arch_find(archname);
     bool synthetic_celestial_metadata = false;
-    if (tmp->arch == NULL &&
-        (strcmp(archname, "sky_exposure") == 0 ||
+    if ((strcmp(archname, "sky_exposure") == 0 ||
          strcmp(archname, "ambient_light_zone") == 0) &&
         arches[ARCH_EMPTY_ARCHETYPE] != NULL) {
+        if (arch_find(archname) != NULL) {
+            LOG(ERROR, "Reserved celestial metadata archetype name collision: %s.", archname);
+            lex_error = 1;
+        }
         tmp->arch = arches[ARCH_EMPTY_ARCHETYPE];
         object_copy(tmp, &tmp->arch->clone, true);
         tmp->celestial_metadata_kind = strcmp(archname, "sky_exposure") == 0
@@ -231,6 +235,8 @@ stable_identity_state *identity = &identities[*depth];
                                            : CELESTIAL_RECT_AMBIENT;
         tmp->layer = LAYER_SYS;
         synthetic_celestial_metadata = true;
+    } else {
+        tmp->arch = arch_find(archname);
     }
     if (tmp->arch != NULL && !synthetic_celestial_metadata) {
         object_copy(tmp, &tmp->arch->clone, true);
@@ -495,11 +501,30 @@ stable_identity_state *identity = &identities[*depth];
 ^con{S}              op->stats.Con = IVAL;
 ^int{S}              op->stats.Int = IVAL;
 ^pow{S}              op->stats.Pow = IVAL;
-^hp{S}               op->stats.hp = IVAL;
+^hp{S}               {
+    uint64_t value;
+    if (op->celestial_metadata_kind != 0 &&
+        !string_parse_uint64(yval(), 10, 0, 63, &value)) {
+        LOG(ERROR, "Invalid celestial metadata hp for object %s.", object_get_str(op));
+        lex_error = 1;
+    } else {
+        op->stats.hp = op->celestial_metadata_kind != 0 ? (int)value : IVAL;
+    }
+}
 ^maxhp{S}            op->stats.maxhp = IVAL;
 ^sp{S}               {
-    identity->numeric_sp = IVAL;
-    identity->saw_numeric_sp = true;
+    uint64_t value;
+    if (op->celestial_metadata_kind != 0) {
+        if (!string_parse_uint64(yval(), 10, 0, 63, &value)) {
+            LOG(ERROR, "Invalid celestial metadata sp for object %s.", object_get_str(op));
+            lex_error = 1;
+        } else {
+            op->stats.sp = (int)value;
+        }
+    } else {
+        identity->numeric_sp = IVAL;
+        identity->saw_numeric_sp = true;
+    }
 }
 ^spell_id{S}         {
     if (identity->saw_spell_id) {
@@ -542,8 +567,32 @@ stable_identity_state *identity = &identities[*depth];
 ^wc_range_add{S}     op->stats.wc_range += IVAL;
 ^ac{S}               op->stats.ac = IVAL;
 ^ac_add{S}           op->stats.ac += IVAL;
-^x{S}                op->x = IVAL;
-^y{S}                op->y = IVAL;
+^x{S}                {
+    uint64_t value;
+    if (op->map != NULL && op->map->celestial_schema == 1) {
+        if (!string_parse_uint64(yval(), 10, 0, 63, &value)) {
+            LOG(ERROR, "Invalid celestial-v1 x coordinate for object %s.", object_get_str(op));
+            lex_error = 1;
+        } else {
+            op->x = (int)value;
+        }
+    } else {
+        op->x = IVAL;
+    }
+}
+^y{S}                {
+    uint64_t value;
+    if (op->map != NULL && op->map->celestial_schema == 1) {
+        if (!string_parse_uint64(yval(), 10, 0, 63, &value)) {
+            LOG(ERROR, "Invalid celestial-v1 y coordinate for object %s.", object_get_str(op));
+            lex_error = 1;
+        } else {
+            op->y = (int)value;
+        }
+    } else {
+        op->y = IVAL;
+    }
+}
 ^z{S}                op->z = IVAL;
 ^zoom{S}             op->zoom_x = op->zoom_y = IVAL;
 ^zoom_x{S}           op->zoom_x = IVAL;
@@ -772,8 +821,14 @@ stable_identity_state *identity = &identities[*depth];
     }
 }
 ^outdoor{S}          {
+    uint64_t value;
     identity->saw_outdoor = true;
-    CHANGE_FLAG(op, FLAG_OUTDOOR, IVAL);
+    if (!string_parse_uint64(yval(), 10, 0, 1, &value)) {
+        LOG(ERROR, "Invalid outdoor value for object %s.", object_get_str(op));
+        lex_error = 1;
+    } else {
+        CHANGE_FLAG(op, FLAG_OUTDOOR, value);
+    }
 }
 ^sky_boundary{S}     SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_SKY_BOUNDARY, "sky_boundary");
 ^sky_state{S}        SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_SKY_STATE, "sky_state");
@@ -869,8 +924,9 @@ stable_identity_state *identity = &identities[*depth];
 #.*{NL}              {}
 
 <<EOF>>              {
-    if (!linemode && lex_error == 0 && finalize_object_record(op, identity) != 0) {
-        lex_error = 1;
+    if (!linemode && identity->record_started) {
+        LOG(ERROR, "Got EOF before object end for %s.", object_get_str(op));
+        return LL_ERROR;
     }
 
     /* If we got an error, return the error. Otherwise, return that we got
@@ -882,7 +938,15 @@ stable_identity_state *identity = &identities[*depth];
         return LL_EOF;
     }
 }
-.*                   add_key_value(op);
+.*                   {
+    if (strncmp(yytext, "celestial_", 10) == 0 || strncmp(yytext, "sky_", 4) == 0 ||
+        strncmp(yytext, "ambient_", 8) == 0) {
+        LOG(ERROR, "Unknown or malformed reserved celestial object field: %s", yytext);
+        lex_error = 1;
+    } else {
+        add_key_value(op);
+    }
+}
 %%
 
 #pragma GCC diagnostic pop
@@ -1219,7 +1283,7 @@ load_object_fp (FILE *fp, object *op, int map_flags)
         yy_switch_to_buffer(cur_buffer);
     }
 
-    return LL_EOF;
+    return identities[0].record_started ? LL_ERROR : LL_EOF;
 }
 
 /**

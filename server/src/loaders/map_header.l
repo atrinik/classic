@@ -26,11 +26,13 @@
 #include <global.h>
 #include <loader.h>
 #include <region.h>
+#include <toolkit/path.h>
 #include <toolkit/string.h>
 
 #define YY_DECL int map_lex_load(mapstruct *m)
 
 static const char *yval(void);
+static bool parse_int(const char *value, int minimum, int maximum, int *result);
 
 static char msgbuf[HUGE_BUF];
 static int lex_error, msg_flag;
@@ -119,10 +121,11 @@ lex_error = 0;
 ^difficulty{S}       m->difficulty = IVAL;
 ^darkness{S}         {
     m->celestial_legacy_darkness_seen = true;
-    int v = IVAL;
+    int v;
 
-    if (v < -1 || v > MAX_DARKNESS) {
-        LOG(BUG, "Illegal map darkness %d (must be -1 to %d, defaulting to -1): %s", v, MAX_DARKNESS, m->path);
+    if (!parse_int(yval(), -1, MAX_DARKNESS, &v)) {
+        m->celestial_header_invalid = true;
+        LOG(BUG, "Illegal map darkness (must be -1 to %d): %s", MAX_DARKNESS, m->path);
     } else {
         set_map_darkness(m, v);
     }
@@ -182,8 +185,13 @@ lex_error = 0;
 ^player_no_save{S}   SET_OR_CLEAR_MAP_FLAG(m, MAP_FLAG_PLAYER_NO_SAVE, IVAL);
 ^pvp{S}              SET_OR_CLEAR_MAP_FLAG(m, MAP_FLAG_PVP, IVAL);
 ^outdoor{S}          {
+    uint64_t value;
     m->celestial_legacy_outdoor_seen = true;
-    SET_OR_CLEAR_MAP_FLAG(m, MAP_FLAG_OUTDOOR, IVAL);
+    if (!string_parse_uint64(yval(), 10, 0, 1, &value)) {
+        m->celestial_header_invalid = true;
+    } else {
+        SET_OR_CLEAR_MAP_FLAG(m, MAP_FLAG_OUTDOOR, value);
+    }
 }
 ^unique{S}           SET_OR_CLEAR_MAP_FLAG(m, MAP_FLAG_UNIQUE, IVAL);
 ^fixed_resettime{S}  SET_OR_CLEAR_MAP_FLAG(m, MAP_FLAG_FIXED_RTIME, IVAL);
@@ -201,7 +209,14 @@ lex_error = 0;
             m->celestial_header_invalid = true;
         }
         m->celestial_tile_path_seen[tile - 1] = true;
-        map_set_tile(m, tile - 1, yval());
+        const char *value = yval();
+        size_t length = strlen(value);
+        if (length < 2 || length >= MAX_BUF || value[0] != '/' ||
+            !path_is_safe_relative(value + 1)) {
+            m->celestial_header_invalid = true;
+        } else {
+            map_set_tile(m, tile - 1, value);
+        }
     }
 }
 ^msg{WS}             {
@@ -347,7 +362,22 @@ int load_map_header(mapstruct *m, FILE *fp)
         }
     }
 
-    return 1;
+    return m->celestial_v1_header_seen ? 0 : 1;
+}
+
+static bool parse_int(const char *value, int minimum, int maximum, int *result)
+{
+    HARD_ASSERT(value != NULL);
+    HARD_ASSERT(result != NULL);
+    errno = 0;
+    char *end;
+    long parsed = strtol(value, &end, 10);
+    if (errno == ERANGE || *value == '\0' || *end != '\0' || parsed < minimum ||
+        parsed > maximum) {
+        return false;
+    }
+    *result = (int)parsed;
+    return true;
 }
 
 void map_set_celestial_boundary(mapstruct *m, int tile, const char *value)

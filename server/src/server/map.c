@@ -860,6 +860,16 @@ static bool load_objects(mapstruct *m, FILE *fp, int mapflags) {
             continue;
         }
 
+        if (m->celestial_schema == 1 &&
+            (op->x < 0 || op->y < 0 || op->x >= m->width || op->y >= m->height)) {
+            LOG(ERROR, "Celestial-v1 object is outside map %s at (%d,%d).", m->path, op->x, op->y);
+            object_errors = true;
+            object_destroy(op);
+            op = object_get();
+            op->map = m;
+            continue;
+        }
+
         /* Do some safety for containers */
         if (op->type == CONTAINER) {
             /* Used for containers as link to players viewing it */

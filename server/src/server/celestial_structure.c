@@ -15,6 +15,7 @@
 
 #include <arch.h>
 #include <celestial_structure.h>
+#include <loader.h>
 #include <map.h>
 #include <object.h>
 #include <initialization.h>
@@ -24,7 +25,7 @@
 
 #include <stdarg.h>
 
-#define CELESTIAL_INVENTORY_MAX_MAPS 16
+#define CELESTIAL_INVENTORY_MAX_MAPS 256
 
 static bool set_error(char *error, size_t error_size, const char *format, ...) {
     if (error != NULL && error_size != 0) {
@@ -124,6 +125,14 @@ static bool valid_aperture_id(const char *value) {
     return true;
 }
 
+static bool archetype_value_matches(const object *op, const char *key, const char *value) {
+    if (op->arch == NULL || value == NULL) {
+        return false;
+    }
+    const char *archetype_value = object_get_value(&op->arch->clone, key);
+    return archetype_value != NULL && strcmp(archetype_value, value) == 0;
+}
+
 static bool validate_object(const mapstruct *map,
                             const object *op,
                             const char *aperture_ids[CELESTIAL_MAX_RECTANGLES],
@@ -136,12 +145,24 @@ static bool validate_object(const mapstruct *map,
     const char *closed = object_get_value(op, "celestial_transmission_closed");
     const char *open = object_get_value(op, "celestial_transmission_open");
     const char *aperture_id = object_get_value(op, "celestial_aperture_id");
+    const char *sky_state = object_get_value(op, "sky_state");
+    const char *ambient_strength = object_get_value(op, "ambient_strength");
     bool dynamic = op->type == DOOR || op->type == GATE;
     bool floor = QUERY_FLAG(op, FLAG_IS_FLOOR);
     bool opaque = QUERY_FLAG(op, FLAG_BLOCKSVIEW);
     celestial_transmission_t static_transmission = celestial_structure_transmission(transmission);
     bool vertical = dynamic || opaque || static_transmission == CELESTIAL_TRANSMISSION_GLASS ||
                     static_transmission == CELESTIAL_TRANSMISSION_GRATE;
+
+    if (sky_state != NULL || ambient_strength != NULL) {
+        return set_error(error,
+                         error_size,
+                         "%s (%d,%d) object %s uses metadata-only celestial fields",
+                         map_path(map),
+                         op->x,
+                         op->y,
+                         STRING_SAFE(op->name));
+    }
 
     if (op->celestial_outdoor_authored || QUERY_FLAG(op, FLAG_OUTDOOR)) {
         return set_error(error,
@@ -152,8 +173,12 @@ static bool validate_object(const mapstruct *map,
                          op->y,
                          STRING_SAFE(op->name));
     }
-    if (sky_boundary != NULL && (strcmp(sky_boundary, "1") != 0 || op->layer != LAYER_WALL ||
-                                 !QUERY_FLAG(op, FLAG_HIDDEN) || op->speed != 0.0 || dynamic)) {
+    if (sky_boundary != NULL &&
+        (strcmp(sky_boundary, "1") != 0 || op->layer != LAYER_WALL ||
+         !QUERY_FLAG(op, FLAG_HIDDEN) || op->speed != 0.0 || dynamic ||
+         !archetype_value_matches(op, "sky_boundary", sky_boundary) ||
+         op->arch->clone.layer != LAYER_WALL || !QUERY_FLAG(&op->arch->clone, FLAG_HIDDEN) ||
+         op->arch->clone.speed != 0.0)) {
         return set_error(error,
                          error_size,
                          "%s (%d,%d) object %s has invalid sky_boundary",
@@ -179,6 +204,8 @@ static bool validate_object(const mapstruct *map,
             closed_value == CELESTIAL_TRANSMISSION_OPEN ||
             open_value != CELESTIAL_TRANSMISSION_OPEN || !valid_aperture_id(aperture_id) ||
             !op->celestial_aperture_id_authored ||
+            !archetype_value_matches(op, "celestial_transmission_closed", closed) ||
+            !archetype_value_matches(op, "celestial_transmission_open", open) ||
             (op->arch != NULL &&
              object_get_value(&op->arch->clone, "celestial_aperture_id") != NULL)) {
             return set_error(error,
@@ -220,7 +247,8 @@ static bool validate_object(const mapstruct *map,
                           static_transmission == CELESTIAL_TRANSMISSION_GLASS ||
                           static_transmission == CELESTIAL_TRANSMISSION_GRATE;
         if (static_transmission == CELESTIAL_TRANSMISSION_INVALID || !structural ||
-            static_transmission == CELESTIAL_TRANSMISSION_OPEN) {
+            static_transmission == CELESTIAL_TRANSMISSION_OPEN ||
+            !archetype_value_matches(op, "celestial_transmission", transmission)) {
             return set_error(error,
                              error_size,
                              "%s (%d,%d) object %s has unsupported celestial transmission",
@@ -249,6 +277,42 @@ static bool rectangles_overlap(const celestial_rectangle_t *a, const celestial_r
            a->y < b->y + b->height && b->y < a->y + a->height;
 }
 
+static bool metadata_has_exact_shape(const object *op, bool sky) {
+    object *expected = arch_get("empty_archetype");
+    if (expected == NULL) {
+        return false;
+    }
+    expected->x = op->x;
+    expected->y = op->y;
+    expected->stats.hp = op->stats.hp;
+    expected->stats.sp = op->stats.sp;
+    expected->layer = LAYER_SYS;
+    expected->celestial_metadata_kind = op->celestial_metadata_kind;
+    CLEAR_FLAG(expected, FLAG_HIDDEN);
+    const char *structural_keys[] = {"sky_boundary",
+                                     "celestial_faces",
+                                     "celestial_transmission",
+                                     "celestial_transmission_closed",
+                                     "celestial_transmission_open",
+                                     "celestial_aperture_id"};
+    for (size_t i = 0; i < arraysize(structural_keys); i++) {
+        object_set_value(expected, structural_keys[i], NULL, 0);
+    }
+    const char *key = sky ? "sky_state" : "ambient_strength";
+    const char *value = object_get_value(op, key);
+    if (value != NULL) {
+        object_set_value(expected, key, value, 1);
+    }
+
+    StringBuffer *difference = stringbuffer_new();
+    get_ob_diff(difference, op, expected);
+    bool exact = stringbuffer_length(difference) == 0;
+    char *contents = stringbuffer_finish(difference);
+    free(contents);
+    object_destroy(expected);
+    return exact;
+}
+
 static bool
 add_metadata(mapstruct *map, const object *op, const char *kind, char *error, size_t error_size) {
     bool sky = strcmp(kind, "sky_exposure") == 0;
@@ -265,6 +329,15 @@ add_metadata(mapstruct *map, const object *op, const char *kind, char *error, si
         return set_error(error,
                          error_size,
                          "%s (%d,%d) %s record has conflicting object fields",
+                         map_path(map),
+                         op->x,
+                         op->y,
+                         kind);
+    }
+    if (!metadata_has_exact_shape(op, sky)) {
+        return set_error(error,
+                         error_size,
+                         "%s (%d,%d) %s record has fields outside its exact schema",
                          map_path(map),
                          op->x,
                          op->y,
@@ -617,6 +690,53 @@ static bool validate_exceptions(mapstruct *map, char *error, size_t error_size) 
     return true;
 }
 
+static size_t count_dynamic_face(const mapstruct *map, int x, int y, uint8_t face) {
+    size_t count = 0;
+    for (const object *op = GET_MAP_OB(map, x, y); op != NULL; op = op->above) {
+        if ((op->type == DOOR || op->type == GATE) && (cardinal_faces(op) & face) != 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static bool validate_cardinal_seam_apertures(const mapstruct *map,
+                                             size_t tile,
+                                             char *error,
+                                             size_t error_size) {
+    const mapstruct *other = map->tile_map[tile];
+    if (other == NULL || tile > TILED_WEST) {
+        return true;
+    }
+    int cells = (tile == TILED_NORTH || tile == TILED_SOUTH) ? MIN(map->width, other->width)
+                                                             : MIN(map->height, other->height);
+    for (int cell = 0; cell < cells; cell++) {
+        int x = tile == TILED_EAST ? map->width - 1 : tile == TILED_WEST ? 0 : cell;
+        int y = tile == TILED_SOUTH ? map->height - 1 : tile == TILED_NORTH ? 0 : cell;
+        int other_x = tile == TILED_WEST ? other->width - 1 : tile == TILED_EAST ? 0 : cell;
+        int other_y = tile == TILED_NORTH ? other->height - 1 : tile == TILED_SOUTH ? 0 : cell;
+        uint8_t face = tile == TILED_NORTH   ? CELESTIAL_FACE_NORTH
+                       : tile == TILED_EAST  ? CELESTIAL_FACE_EAST
+                       : tile == TILED_SOUTH ? CELESTIAL_FACE_SOUTH
+                                             : CELESTIAL_FACE_WEST;
+        uint8_t reverse_face = tile == TILED_NORTH   ? CELESTIAL_FACE_SOUTH
+                               : tile == TILED_EAST  ? CELESTIAL_FACE_WEST
+                               : tile == TILED_SOUTH ? CELESTIAL_FACE_NORTH
+                                                     : CELESTIAL_FACE_EAST;
+        if (count_dynamic_face(map, x, y, face) +
+                count_dynamic_face(other, other_x, other_y, reverse_face) >
+            4) {
+            return set_error(error,
+                             error_size,
+                             "%s tile_path_%zu cell %d has more than four apertures on its seam",
+                             map_path(map),
+                             tile + 1,
+                             cell);
+        }
+    }
+    return true;
+}
+
 bool celestial_structure_validate_topology(mapstruct *map, char *error, size_t error_size) {
     HARD_ASSERT(map != NULL);
     if (!celestial_structure_validate_header(map, error, error_size)) {
@@ -668,6 +788,12 @@ bool celestial_structure_validate_topology(mapstruct *map, char *error, size_t e
                                  map_path(cursor),
                                  i + 1);
             }
+            if (!validate_cardinal_seam_apertures(cursor, i, error, error_size)) {
+                return false;
+            }
+        }
+        if (!validate_exceptions(cursor, error, error_size)) {
+            return false;
         }
         if (cursor->tile_path[TILED_UP] == NULL) {
             break;
@@ -680,7 +806,7 @@ bool celestial_structure_validate_topology(mapstruct *map, char *error, size_t e
                              map_path(map));
         }
     }
-    return validate_exceptions(map, error, error_size);
+    return true;
 }
 
 void celestial_structure_save_metadata(const mapstruct *map, FILE *fp) {
@@ -749,6 +875,11 @@ bool celestial_structure_inventory(const mapstruct *map, FILE *fp, size_t max_re
     }
 
     size_t records = 1 + map->celestial_rectangle_count;
+    for (size_t i = 0; i < TILED_NUM; i++) {
+        if (map->tile_path[i] != NULL) {
+            records++;
+        }
+    }
     for (int y = 0; y < map->height; y++) {
         for (int x = 0; x < map->width; x++) {
             for (const object *op = GET_MAP_OB(map, x, y); op != NULL; op = op->above) {
@@ -778,42 +909,59 @@ bool celestial_structure_inventory(const mapstruct *map, FILE *fp, size_t max_re
     }
     qsort(objects, object_count, sizeof(*objects), compare_inventory_objects);
 
-    fprintf(fp,
-            "ATRINIK_CELESTIAL_STRUCTURE\tmap\t%s\t%dx%d\t%u\t%u\n",
-            map_path(map),
-            map->width,
-            map->height,
-            map->celestial_sky_above,
-            map->celestial_rectangle_count);
+    bool written = fprintf(fp,
+                           "ATRINIK_CELESTIAL_STRUCTURE\tmap\t%s\t%dx%d\t%u\t%u\n",
+                           map_path(map),
+                           map->width,
+                           map->height,
+                           map->celestial_sky_above,
+                           map->celestial_rectangle_count) >= 0;
+    for (size_t i = 0; i < TILED_NUM; i++) {
+        if (map->tile_path[i] != NULL &&
+            fprintf(fp,
+                    "ATRINIK_CELESTIAL_STRUCTURE\tlink\t%s\t%zu\t%s\t%s\n",
+                    map_path(map),
+                    i + 1,
+                    map->tile_path[i],
+                    map->celestial_boundary[i] == CELESTIAL_BOUNDARY_CONTINUOUS
+                        ? "continuous"
+                        : "discontinuous") < 0) {
+            written = false;
+        }
+    }
     for (size_t i = 0; i < map->celestial_rectangle_count; i++) {
         const celestial_rectangle_t *r = &map->celestial_rectangles[i];
-        fprintf(fp,
-                "ATRINIK_CELESTIAL_STRUCTURE\trect\t%s\t%u\t%u\t%u\t%u\t%u\t%u\n",
-                map_path(map),
-                r->y,
-                r->x,
-                r->type,
-                r->width,
-                r->height,
-                r->value);
+        if (fprintf(fp,
+                    "ATRINIK_CELESTIAL_STRUCTURE\trect\t%s\t%u\t%u\t%u\t%u\t%u\t%u\n",
+                    map_path(map),
+                    r->y,
+                    r->x,
+                    r->type,
+                    r->width,
+                    r->height,
+                    r->value) < 0) {
+            written = false;
+        }
     }
     for (size_t i = 0; i < object_count; i++) {
         const object *op = objects[i];
         const char *aperture_id = object_get_value(op, "celestial_aperture_id");
-        fprintf(fp,
-                "ATRINIK_CELESTIAL_STRUCTURE\tobject\t%s\t%d\t%d\t%s\t%u\t%s\t%s\t%s\t%s\n",
-                map_path(map),
-                op->x,
-                op->y,
-                op->arch != NULL ? op->arch->name : "<none>",
-                celestial_structure_faces(op),
-                inventory_value(op, "celestial_transmission"),
-                inventory_value(op, "celestial_transmission_closed"),
-                inventory_value(op, "celestial_transmission_open"),
-                aperture_id != NULL ? aperture_id : "");
+        if (fprintf(fp,
+                    "ATRINIK_CELESTIAL_STRUCTURE\tobject\t%s\t%d\t%d\t%s\t%u\t%s\t%s\t%s\t%s\n",
+                    map_path(map),
+                    op->x,
+                    op->y,
+                    op->arch != NULL ? op->arch->name : "<none>",
+                    celestial_structure_faces(op),
+                    inventory_value(op, "celestial_transmission"),
+                    inventory_value(op, "celestial_transmission_closed"),
+                    inventory_value(op, "celestial_transmission_open"),
+                    aperture_id != NULL ? aperture_id : "") < 0) {
+            written = false;
+        }
     }
     free(objects);
-    return true;
+    return written && !ferror(fp);
 }
 
 void celestial_structure_free(mapstruct *map) {
@@ -899,7 +1047,9 @@ int celestial_structure_inventory_run(void) {
     char maps[CELESTIAL_INVENTORY_MAX_MAPS][MAX_BUF];
     size_t count = parse_inventory_map_ids(settings.celestial_inventory_maps, maps);
     if (count == 0) {
-        LOG(ERROR, "Celestial inventory requires 1-16 unique canonical logical map IDs.");
+        LOG(ERROR,
+            "Celestial inventory requires 1-%d unique canonical logical map IDs.",
+            CELESTIAL_INVENTORY_MAX_MAPS);
         return EXIT_FAILURE;
     }
 
@@ -949,6 +1099,9 @@ int celestial_structure_inventory_run(void) {
     for (size_t i = 0; i < count; i++) {
         delete_map(loaded[i]);
     }
-    fflush(stdout);
+    if (fflush(stdout) == EOF || ferror(stdout)) {
+        LOG(ERROR, "Celestial inventory output failed: %s", strerror(errno));
+        return EXIT_FAILURE;
+    }
     return EXIT_SUCCESS;
 }
