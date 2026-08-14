@@ -3159,7 +3159,7 @@ bool player_load_stream(player *pl, FILE *fp) {
 
     SET_FLAG(pl->ob, FLAG_NO_FIX_PLAYER);
     void *buffer = create_loader_buffer(fp);
-    int result = load_object_buffer(buffer, pl->ob, 0);
+    int result = load_object_buffer(buffer, pl->ob, 0, false);
     delete_loader_buffer(buffer);
     CLEAR_FLAG(pl->ob, FLAG_NO_FIX_PLAYER);
     if (result == LL_ERROR) {
