@@ -130,6 +130,8 @@ typedef struct player_view_manifest {
     uint32_t resize_height_delta;
     uint32_t widget_x;
     uint32_t widget_y;
+    uint32_t animation_depth;
+    uint32_t animation_sub_layer;
     bool smooth_lighting;
     bool zoom_smoothing;
     bool primary_surface;
@@ -138,6 +140,7 @@ typedef struct player_view_manifest {
     bool target_ui;
     bool damage_animation;
     bool kill_animation;
+    bool animation_coordinates_set;
 } player_view_manifest_t;
 
 static void player_view_manifest_free(player_view_manifest_t *manifest) {
@@ -482,6 +485,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "target-ui",
                                            "damage-animation",
                                            "kill-animation",
+                                           "animation-depth",
+                                           "animation-sub-layer",
                                            "clock-ms",
                                            "expected-ui-pixels-sha256",
                                            "expected-standard-checkpoint-sha256",
@@ -527,6 +532,9 @@ static bool player_view_manifest_parse(const char *manifest_path,
     char *target_ui = success ? player_view_xml_property(root, "target-ui") : NULL;
     char *damage_animation = success ? player_view_xml_property(root, "damage-animation") : NULL;
     char *kill_animation = success ? player_view_xml_property(root, "kill-animation") : NULL;
+    char *animation_depth = success ? player_view_xml_property(root, "animation-depth") : NULL;
+    char *animation_sub_layer =
+        success ? player_view_xml_property(root, "animation-sub-layer") : NULL;
     char *clock_ms = success ? player_view_xml_property(root, "clock-ms") : NULL;
     char *expected_ui =
         success ? player_view_xml_property(root, "expected-ui-pixels-sha256") : NULL;
@@ -582,6 +590,13 @@ static bool player_view_manifest_parse(const char *manifest_path,
          player_view_parse_bool(damage_animation, &manifest->damage_animation)) &&
         (kill_animation == NULL ||
          player_view_parse_bool(kill_animation, &manifest->kill_animation)) &&
+        ((animation_depth == NULL && animation_sub_layer == NULL) ||
+         (animation_depth != NULL && animation_sub_layer != NULL &&
+          player_view_parse_uint(animation_depth, 0, INT8_MAX, &manifest->animation_depth) &&
+          player_view_parse_uint(animation_sub_layer,
+                                 0,
+                                 NUM_SUB_LAYERS - 1,
+                                 &manifest->animation_sub_layer))) &&
         player_view_parse_uint(clock_ms, 0, UINT32_MAX, &manifest->clock_ms) &&
         (expected_standard_checkpoint == NULL ||
          player_view_sha256_text_valid(expected_standard_checkpoint)) &&
@@ -591,6 +606,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
     }
     bool ui_test = manifest->player_names && manifest->target_ui;
     bool overlay_test = manifest->damage_animation || manifest->kill_animation;
+    manifest->animation_coordinates_set = animation_depth != NULL;
     bool needs_font = ui_test || overlay_test;
     success = success && (!manifest->widget_render || manifest->primary_surface) &&
               ((manifest->widget_x == 0 && manifest->widget_y == 0) || manifest->widget_render) &&
@@ -802,6 +818,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(target_ui);
     free(damage_animation);
     free(kill_animation);
+    free(animation_depth);
+    free(animation_sub_layer);
     free(clock_ms);
     free(expected_ui);
     free(expected_standard_checkpoint);
@@ -2841,10 +2859,26 @@ int player_view_main(int argc, char *argv[]) {
         }
 #ifdef ATRINIK_WIDGET_TESTS
         if (mode == PLAYER_VIEW_RENDER && manifest.damage_animation) {
-            widget_map_animation_test_add(ANIM_DAMAGE, 0, 0, 37, 425);
+            widget_map_animation_test_add(
+                ANIM_DAMAGE,
+                0,
+                0,
+                manifest.animation_coordinates_set ? (int)manifest.animation_sub_layer
+                                                   : MapData.player_sub_layer,
+                manifest.animation_coordinates_set ? (int)manifest.animation_depth : 0,
+                37,
+                425);
         }
         if (mode == PLAYER_VIEW_RENDER && manifest.kill_animation) {
-            widget_map_animation_test_add(ANIM_KILL, 1, 0, 1, 425);
+            widget_map_animation_test_add(
+                ANIM_KILL,
+                1,
+                0,
+                manifest.animation_coordinates_set ? (int)manifest.animation_sub_layer
+                                                   : MapData.player_sub_layer,
+                manifest.animation_coordinates_set ? (int)manifest.animation_depth : 0,
+                1,
+                425);
         }
 #endif
     }

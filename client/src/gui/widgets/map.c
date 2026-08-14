@@ -3474,6 +3474,14 @@ bool map_draw_animation(SDL_Surface *surface) {
  * @param surface
  * What to draw.
  */
+static SDL_Surface *map_displayed_surface(widgetdata *widget) {
+    if (setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) != 100 && zoomed != NULL) {
+        return zoomed;
+    }
+
+    return widget->surface;
+}
+
 void map_draw_one(int x, int y, SDL_Surface *surface) {
     map_render_data_t data = {.world_surface = true};
 
@@ -3493,20 +3501,22 @@ void map_draw_one(int x, int y, SDL_Surface *surface) {
         data.ypos += data.player_height_offset;
     }
 
-    int zoom_percent = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM);
-    double zoom = zoom_percent / 100.0;
+    SDL_Surface *displayed = map_displayed_surface(cur_widget[MAP_ID]);
     map_screen_point_t screen;
     SOFT_ASSERT(map_local_anchor_to_screen(widget_x(cur_widget[MAP_ID]),
                                            widget_y(cur_widget[MAP_ID]),
-                                           zoom_percent,
+                                           cur_widget[MAP_ID]->surface->w,
+                                           cur_widget[MAP_ID]->surface->h,
+                                           displayed->w,
+                                           displayed->h,
                                            data.xpos,
                                            data.ypos,
                                            &screen),
                 "Map highlight coordinate overflow");
 
     sprite_effects_t effects = {0};
-    effects.zoom_x = 100.0 * zoom;
-    effects.zoom_y = 100.0 * zoom;
+    effects.zoom_x = 100.0 * displayed->w / cur_widget[MAP_ID]->surface->w;
+    effects.zoom_y = 100.0 * displayed->h / cur_widget[MAP_ID]->surface->h;
 
     /* Outside of the "visible" area; always render as fog of war
      * (grayscale). */
@@ -3945,11 +3955,8 @@ static void widget_draw(widgetdata *widget) {
     box.x = widget_x(widget);
     box.y = widget_y(widget);
 
-    if (setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) == 100) {
-        SDL_BlitSurface(widget->surface, NULL, ScreenSurface, &box);
-    } else {
-        SDL_BlitSurface(zoomed != NULL ? zoomed : widget->surface, NULL, ScreenSurface, &box);
-    }
+    SDL_Surface *displayed = map_displayed_surface(widget);
+    SDL_BlitSurface(displayed, NULL, ScreenSurface, &box);
 
     if (map_show_mouse && widget_mouse_event.owner == cur_widget[MAP_ID]) {
         int tx, ty;
@@ -3968,8 +3975,8 @@ static void widget_draw(widgetdata *widget) {
 
     /* Health and food warnings are widget-centered alerts. Their anchor,
      * texture size, and offset intentionally remain in screen pixels. */
-    int xpos = widget_x(widget) + widget_w(widget) / 2;
-    int ypos = widget_y(widget) + widget_h(widget) / 2;
+    int xpos = widget_x(widget) + displayed->w / 2;
+    int ypos = widget_y(widget) + displayed->h / 2;
     ypos -= MAP_TILE_POS_YOFF * 1.5 + 7;
 
     /* Draw warning icons above player */
@@ -3997,8 +4004,10 @@ static void widget_draw(widgetdata *widget) {
         }
     }
 
-    /* MAPSTATS message animations are widget-centered UI: their anchor,
-     * font size, and trajectory intentionally remain in screen pixels. */
+    /* MAPSTATS messages are screen-space UI. They are horizontally centered
+     * on the exact displayed map surface, while their historical vertical
+     * anchor follows its effective top edge at a fixed 300-pixel offset.
+     * Font size and trajectory also remain fixed in screen pixels. */
     if (msg_anim.message[0] != '\0') {
         if ((LastTick - msg_anim.tick) < 3000) {
             int bmoff, y_offset;
@@ -4016,7 +4025,7 @@ static void widget_draw(widgetdata *widget) {
                 text_show(ScreenSurface,
                           FONT_SERIF16,
                           cp,
-                          widget_x(widget) + widget_w(widget) / 2 -
+                          widget_x(widget) + displayed->w / 2 -
                               text_get_width(FONT_SERIF16, cp, TEXT_OUTLINE) / 2,
                           widget_y(widget) + 300 - bmoff + y_offset,
                           msg_anim.color,
@@ -4123,16 +4132,20 @@ bool widget_map_ui_test_end(void) {
 void widget_map_animation_test_add(int type,
                                    int x_offset,
                                    int y_offset,
+                                   int sub_layer,
+                                   int depth,
                                    int value,
                                    uint32_t elapsed_ms) {
     HARD_ASSERT(type == ANIM_DAMAGE || type == ANIM_KILL);
     HARD_ASSERT(elapsed_ms <= 850 && elapsed_ms <= LastTick);
+    HARD_ASSERT(sub_layer >= 0 && sub_layer < NUM_SUB_LAYERS);
+    HARD_ASSERT(depth >= 0 && depth <= INT8_MAX);
 
     map_anim_t *anim = map_anims_add(type,
                                      map_width * (MAP_FOW_SIZE / 2) + x_offset,
                                      map_height * (MAP_FOW_SIZE / 2) + y_offset,
-                                     MapData.player_sub_layer,
-                                     0,
+                                     sub_layer,
+                                     depth,
                                      value);
     anim->start_tick -= elapsed_ms;
     anim->last_tick -= elapsed_ms;
@@ -4370,19 +4383,25 @@ void map_anims_play(void) {
         }
 
         data.depth = anim->depth;
+        data.sub_layer = anim->sub_layer;
         data.x = anim->mapx;
         data.y = anim->mapy;
         if (!map_should_draw(cur_widget[MAP_ID]->surface, &data)) {
             continue;
         }
 
+        data.ypos -= get_top_floor_height(data.cell, data.sub_layer);
         data.xpos += MAP_TILE_POS_XOFF / 2;
         data.ypos -= MAP_TILE_POS_YOFF;
 
         map_screen_point_t screen;
+        SDL_Surface *displayed = map_displayed_surface(cur_widget[MAP_ID]);
         SOFT_ASSERT(map_local_anchor_to_screen(widget_x(cur_widget[MAP_ID]),
                                                widget_y(cur_widget[MAP_ID]),
-                                               setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM),
+                                               cur_widget[MAP_ID]->surface->w,
+                                               cur_widget[MAP_ID]->surface->h,
+                                               displayed->w,
+                                               displayed->h,
                                                data.xpos,
                                                data.ypos,
                                                &screen),

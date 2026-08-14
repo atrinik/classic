@@ -833,6 +833,9 @@ if (BUILD_TESTING)
     add_test(NAME client-player-view-map-overlay-widget-state
         COMMAND atrinik --player-view
             "${player_view_fixtures}/map-overlay-widget-state.xml" -)
+    add_test(NAME client-player-view-map-overlay-linked-depth
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/map-overlay-linked-depth.xml" -)
     add_test(NAME client-player-view-living-outline-unobscured
         COMMAND atrinik --player-view
             "${player_view_fixtures}/living-outline-unobscured.xml" -)

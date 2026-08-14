@@ -18,17 +18,20 @@
 
 bool map_local_anchor_to_screen(int origin_x,
                                 int origin_y,
-                                uint32_t zoom_percent,
+                                int source_width,
+                                int source_height,
+                                int displayed_width,
+                                int displayed_height,
                                 int local_x,
                                 int local_y,
                                 map_screen_point_t *screen) {
-    if (screen == NULL || zoom_percent < MAP_DISPLAY_ZOOM_MIN ||
-        zoom_percent > MAP_DISPLAY_ZOOM_MAX) {
+    if (screen == NULL || source_width <= 0 || source_height <= 0 || displayed_width <= 0 ||
+        displayed_height <= 0) {
         return false;
     }
 
-    int64_t x = (int64_t)origin_x + (int64_t)local_x * zoom_percent / 100;
-    int64_t y = (int64_t)origin_y + (int64_t)local_y * zoom_percent / 100;
+    int64_t x = (int64_t)origin_x + (int64_t)local_x * displayed_width / source_width;
+    int64_t y = (int64_t)origin_y + (int64_t)local_y * displayed_height / source_height;
     if (x < INT_MIN || x > INT_MAX || y < INT_MIN || y > INT_MAX) {
         return false;
     }

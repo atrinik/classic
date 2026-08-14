@@ -27,7 +27,7 @@
 
 static bool verify_zoom(int zoom, int expected_x, int expected_y) {
     map_screen_point_t screen = {0};
-    return map_local_anchor_to_screen(17, 23, (uint32_t)zoom, 48, 24, &screen) &&
+    return map_local_anchor_to_screen(17, 23, 100, 100, zoom, zoom, 48, 24, &screen) &&
            screen.x == expected_x && screen.y == expected_y;
 }
 
@@ -38,12 +38,12 @@ int main(void) {
     CHECK(verify_zoom(400, 209, 119));
 
     map_screen_point_t screen = {0};
-    CHECK(map_local_anchor_to_screen(17, 23, 125, -3, -3, &screen));
+    CHECK(map_local_anchor_to_screen(17, 23, 100, 100, 125, 125, -3, -3, &screen));
     CHECK(screen.x == 14);
     CHECK(screen.y == 20);
 
     map_screen_point_t moved_screen = {0};
-    CHECK(map_local_anchor_to_screen(89, 101, 125, 48, 24, &moved_screen));
+    CHECK(map_local_anchor_to_screen(89, 101, 100, 100, 125, 125, 48, 24, &moved_screen));
     CHECK(moved_screen.x - 77 == 72);
     CHECK(moved_screen.y - 53 == 78);
 
@@ -52,16 +52,28 @@ int main(void) {
     CHECK(map_screen_motion_offset(0, rise_per_ms) == 0);
     CHECK(map_screen_motion_offset(425, rise_per_ms) == -12);
     CHECK(map_screen_motion_offset(850, rise_per_ms) == -25);
-    CHECK(map_local_anchor_to_screen(17, 23, 50, 48, 24, &screen));
+    CHECK(map_local_anchor_to_screen(17, 23, 100, 100, 50, 50, 48, 24, &screen));
     int risen_y_50 = screen.y + map_screen_motion_offset(850, rise_per_ms);
-    CHECK(map_local_anchor_to_screen(17, 23, 400, 48, 24, &screen));
+    CHECK(map_local_anchor_to_screen(17, 23, 100, 100, 400, 400, 48, 24, &screen));
     int risen_y_400 = screen.y + map_screen_motion_offset(850, rise_per_ms);
     CHECK((35 - risen_y_50) == 25);
     CHECK((119 - risen_y_400) == 25);
 
-    CHECK(!map_local_anchor_to_screen(0, 0, MAP_DISPLAY_ZOOM_MIN - 1, 1, 1, &screen));
-    CHECK(!map_local_anchor_to_screen(0, 0, MAP_DISPLAY_ZOOM_MAX + 1, 1, 1, &screen));
-    CHECK(!map_local_anchor_to_screen(0, 0, 100, 1, 1, NULL));
-    CHECK(!map_local_anchor_to_screen(INT_MAX, 0, 400, INT_MAX, 0, &screen));
+    /* 321x241 at 125% rounds independently to the actual 401x301 blit. */
+    CHECK(map_local_anchor_to_screen(13, 7, 321, 241, 401, 301, 160, 120, &screen));
+    CHECK(screen.x == 212);
+    CHECK(screen.y == 156);
+
+    /* A failed scaling operation blits the unscaled source. */
+    CHECK(map_local_anchor_to_screen(13, 7, 321, 241, 321, 241, 160, 120, &screen));
+    CHECK(screen.x == 173);
+    CHECK(screen.y == 127);
+
+    CHECK(!map_local_anchor_to_screen(0, 0, 0, 100, 100, 100, 1, 1, &screen));
+    CHECK(!map_local_anchor_to_screen(0, 0, 100, 0, 100, 100, 1, 1, &screen));
+    CHECK(!map_local_anchor_to_screen(0, 0, 100, 100, 0, 100, 1, 1, &screen));
+    CHECK(!map_local_anchor_to_screen(0, 0, 100, 100, 100, 0, 1, 1, &screen));
+    CHECK(!map_local_anchor_to_screen(0, 0, 100, 100, 100, 100, 1, 1, NULL));
+    CHECK(!map_local_anchor_to_screen(INT_MAX, 0, 1, 1, INT_MAX, 1, INT_MAX, 0, &screen));
     return EXIT_SUCCESS;
 }

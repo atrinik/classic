@@ -29,13 +29,18 @@ typedef struct map_screen_point {
 /**
  * Convert a map-surface-local anchor to the displayed screen coordinate.
  *
- * The widget origin and integer zoom percentage must be the same values used
- * to blit the map surface. Presentation offsets such as damage-number rise are
- * deliberately applied after this conversion so they remain screen-sized.
+ * The widget origin, source dimensions, and displayed dimensions must describe
+ * the exact surfaces used by the map blit. This preserves alignment when
+ * scaled dimensions round independently or scaling falls back to the source
+ * surface. Presentation offsets such as damage-number rise are deliberately
+ * applied after this conversion so they remain screen-sized.
  */
 bool map_local_anchor_to_screen(int origin_x,
                                 int origin_y,
-                                uint32_t zoom_percent,
+                                int source_width,
+                                int source_height,
+                                int displayed_width,
+                                int displayed_height,
                                 int local_x,
                                 int local_y,
                                 map_screen_point_t *screen);
