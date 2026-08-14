@@ -1891,11 +1891,17 @@ def _render_complete_evidence(
     if samples["candidate_large"] == 2:
         candidate_contexts_for_stages.append(("Large smooth", phases["candidate_large"]))
     for context_name, phase_set in candidate_contexts_for_stages:
+        baseline_phase_set = (
+            baseline_phases
+            if evidence["mode"] == "comparison" and context_name == "Standard smooth"
+            else None
+        )
         for phase_name in REQUIRED_PHASES:
             _append_render_stage_table(
                 lines,
                 f"#### {context_name} `{phase_name}`",
                 phase_set[phase_name],
+                baseline_phase_set[phase_name] if baseline_phase_set is not None else None,
             )
     for context_name, phase_set in context_phases.items():
         for phase_name in REQUIRED_PHASES:

@@ -1251,6 +1251,62 @@ class CommentTests(unittest.TestCase):
         self.assertLessEqual(len(report.encode()), 65_536)
         self.assertNotIn("FPS equivalent", report)
 
+    def test_detailed_standard_smooth_stages_use_matching_baselines(self) -> None:
+        report = benchmark.render_comment(self.valid_evidence(), "success")
+        expected_map_calls = {
+            "cold": 2,
+            "sustained": 720,
+            "idle": 16,
+            "resumed": 120,
+        }
+        for phase, calls in expected_map_calls.items():
+            with self.subTest(phase=phase):
+                heading = f"#### Standard smooth `{phase}`"
+                start = report.index(heading)
+                end = report.find("\n#### ", start + len(heading))
+                section = report[start : end if end != -1 else report.index("</details>", start)]
+                self.assertIn(
+                    f"| `map` | `per_map_draw` | {calls} → {calls} | "
+                    "0.001 ms → 0.001 ms | +0.0% |",
+                    section,
+                )
+
+        discrete_heading = f"#### {benchmark.STANDARD_DISCRETE_CONTEXT} `sustained`"
+        discrete_start = report.index(discrete_heading)
+        discrete_end = report.find("\n#### ", discrete_start + len(discrete_heading))
+        discrete_section = report[
+            discrete_start : (
+                discrete_end
+                if discrete_end != -1
+                else report.index("</details>", discrete_start)
+            )
+        ]
+        self.assertIn(
+            "| `map` | `per_map_draw` | n/a → 720 | n/a → 0.001 ms | n/a |",
+            discrete_section,
+        )
+
+    def test_candidate_only_detailed_stages_remain_unavailable(self) -> None:
+        evidence = benchmark._build_evidence(
+            [],
+            [native_record(), native_record()],
+            [],
+            additional_contexts(),
+            enforce_performance=False,
+            comparison_note="bootstrap-base-missing-movement-instrumentation",
+        )
+        report = benchmark.render_comment(evidence, "success")
+        cold_heading = "#### Standard smooth `cold`"
+        cold_start = report.index(cold_heading)
+        cold_end = report.find("\n#### ", cold_start + len(cold_heading))
+        cold_section = report[
+            cold_start : cold_end if cold_end != -1 else report.index("</details>", cold_start)
+        ]
+        self.assertIn(
+            "| `map` | `per_map_draw` | n/a → 2 | n/a → 0.001 ms | n/a |",
+            cold_section,
+        )
+
     def test_candidate_only_report_establishes_baseline_without_claiming_delta(self) -> None:
         evidence = benchmark._build_evidence(
             [],
