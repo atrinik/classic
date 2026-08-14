@@ -1430,6 +1430,15 @@ START_TEST(test_semantic_item_shop_and_bank_producers) {
     ground_money_sack = object_insert_map(ground_money_sack, map, NULL, INS_NO_MERGE);
     pick_up(pl, ground_money_sack, 1);
     ck_assert_ptr_eq(ground_money_sack->map, map);
+    object *detached_destination = arch_get("sack");
+    ck_assert_int_eq(object_insert_into_reason(ground_money_sack,
+                                               detached_destination,
+                                               "test.nested-currency-service",
+                                               &inserted),
+                     OBJECT_SEMANTIC_FAILED);
+    ck_assert_ptr_eq(inserted, NULL);
+    ck_assert_ptr_eq(ground_money_sack->map, map);
+    object_destroy(detached_destination);
     object_remove(ground_money_sack, 0);
     object_destroy(ground_money_sack);
 

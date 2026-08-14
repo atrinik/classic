@@ -2610,6 +2610,10 @@ static bool object_is_persistent_money(const object *op, const object *root) {
            (root->type == PLAYER || root->map != NULL || !QUERY_FLAG(root, FLAG_REMOVED));
 }
 
+static bool object_root_is_persistent(const object *root) {
+    return root->type == PLAYER || root->map != NULL || !QUERY_FLAG(root, FLAG_REMOVED);
+}
+
 static const char *object_custody_location(const object *op, const object *root) {
     if (root->type == PLAYER) {
         return "player";
@@ -2664,7 +2668,8 @@ object_insert_into_reason(object *op, object *where, const char *reason, object 
         }
         return OBJECT_SEMANTIC_FAILED;
     }
-    if (source_player != destination_player && object_contains_money_descendant(op)) {
+    if (source_root != destination_root && object_contains_money_descendant(op) &&
+        (object_root_is_persistent(source_root) || object_root_is_persistent(destination_root))) {
         return OBJECT_SEMANTIC_FAILED;
     }
     if (op->nrof > INT32_MAX) {
