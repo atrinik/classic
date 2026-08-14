@@ -156,7 +156,9 @@ class WorkflowContractTests(unittest.TestCase):
                 break
             lines.append(line)
         script = textwrap.dedent("".join(lines))
-        expected = "sha256:ffe1fa8d28a323d502d01400e2260b7b5eec37842e762c439b88bd9ee823923e"
+        expected = json.loads(
+            (ROOT / "dependencies.bundle.json").read_text(encoding="utf-8")
+        )["digest"]
 
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -216,9 +218,9 @@ class WorkflowContractTests(unittest.TestCase):
             result, log = run_case(
                 package_exists="false", tag_exists="false", allow_missing="true"
             )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("cp --from-oci-layout", log)
-            self.assertIn("resolve ghcr.io/atrinik/classic-dependencies:", log)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("package is missing after bootstrap", result.stderr)
+            self.assertEqual(log, "")
 
             result, log = run_case(
                 package_exists="true", tag_exists="false", allow_missing="false"
