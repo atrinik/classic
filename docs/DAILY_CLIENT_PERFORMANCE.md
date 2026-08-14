@@ -6,6 +6,10 @@ and the full movement matrix on the pinned Classic Linux image. The job summary
 is the quickest human view; the run artifact contains the complete versioned
 movement JSON and any checkpoint images.
 
+This trusted `main` monitor is separate from the explicitly labeled
+[pull-request benchmark workflow](PR_BENCHMARKS.md). Required pull-request,
+push, and merge-queue validation does not run timed probes.
+
 ## Trend history and cohorts
 
 The publisher keeps generated data on the dedicated `benchmark-data` ref, not
