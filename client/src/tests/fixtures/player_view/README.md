@@ -181,6 +181,13 @@ textures. MAPSTATS text is horizontally centered there but retains its
 historical fixed 300-pixel offset from the effective top edge; its font and
 trajectory are also screen-sized.
 
+The elevated-overlay companion gives both the player floor and the animation's
+source sub-layer a pinned 24-pixel elevation. Test-only draw counters require
+both damage and kill branches to execute in every final overlay frame, so a
+digest without the overlays cannot be accepted. The manifests also pin the
+production mono font and death texture used by those branches; out-of-domain
+linked depths are rejected before replay.
+
 `expected-pixels-sha256` and the widget scene's
 `expected-ui-pixels-sha256` hash the viewport width and height as big-endian
 32-bit integers followed by canonical RGBA bytes in row-major order. Except for

@@ -836,6 +836,9 @@ if (BUILD_TESTING)
     add_test(NAME client-player-view-map-overlay-linked-depth
         COMMAND atrinik --player-view
             "${player_view_fixtures}/map-overlay-linked-depth.xml" -)
+    add_test(NAME client-player-view-map-overlay-elevated
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/map-overlay-elevated.xml" -)
     add_test(NAME client-player-view-living-outline-unobscured
         COMMAND atrinik --player-view
             "${player_view_fixtures}/living-outline-unobscured.xml" -)
@@ -935,11 +938,15 @@ if (BUILD_TESTING)
         COMMAND atrinik --player-view "${player_view_fixtures}/missing-face.xml" -)
     add_test(NAME client-player-view-unknown-field
         COMMAND atrinik --player-view "${player_view_fixtures}/unknown-field.xml" -)
+    add_test(NAME client-player-view-invalid-animation-depth
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/invalid-animation-depth.xml" -)
     set_tests_properties(
         client-player-view-malformed-snapshot
         client-player-view-mismatched-asset
         client-player-view-missing-face
         client-player-view-unknown-field
+        client-player-view-invalid-animation-depth
         PROPERTIES WILL_FAIL TRUE)
     endif ()
 endif ()

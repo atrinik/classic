@@ -281,6 +281,13 @@ static int map_interaction_test_talks;
 static bool map_ui_test_active;
 static int map_ui_test_names;
 static int map_ui_test_targets;
+static bool map_animation_test_active;
+static int map_animation_test_damage_draws;
+static int map_animation_test_kill_draws;
+static int map_animation_test_elevated_draws;
+static int map_animation_test_source_floor_height;
+static int map_animation_test_player_floor_height;
+static SDL_Surface *map_animation_test_death_texture;
 #endif
 
 static int get_top_floor_height(struct MapCell *cell, int sub_layer);
@@ -3465,6 +3472,15 @@ bool map_draw_animation(SDL_Surface *surface) {
     return true;
 }
 
+/** Return the exact source or scaled surface selected by the map blit. */
+static SDL_Surface *map_displayed_surface(widgetdata *widget) {
+    if (setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) != 100 && zoomed != NULL) {
+        return zoomed;
+    }
+
+    return widget->surface;
+}
+
 /**
  * Draw one sprite on map.
  * @param x
@@ -3474,14 +3490,6 @@ bool map_draw_animation(SDL_Surface *surface) {
  * @param surface
  * What to draw.
  */
-static SDL_Surface *map_displayed_surface(widgetdata *widget) {
-    if (setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) != 100 && zoomed != NULL) {
-        return zoomed;
-    }
-
-    return widget->surface;
-}
-
 void map_draw_one(int x, int y, SDL_Surface *surface) {
     map_render_data_t data = {.world_surface = true};
 
@@ -4129,6 +4137,37 @@ bool widget_map_ui_test_end(void) {
     return map_ui_test_names > 0 && map_ui_test_targets > 0;
 }
 
+void widget_map_animation_test_begin(void) {
+    map_animation_test_damage_draws = 0;
+    map_animation_test_kill_draws = 0;
+    map_animation_test_elevated_draws = 0;
+    map_animation_test_source_floor_height = 0;
+    map_animation_test_player_floor_height = 0;
+    map_animation_test_active = true;
+}
+
+bool widget_map_animation_test_end(bool expect_damage, bool expect_kill, bool expect_elevated) {
+    map_animation_test_active = false;
+    bool success = (!expect_damage || map_animation_test_damage_draws > 0) &&
+                   (!expect_kill || map_animation_test_kill_draws > 0) &&
+                   (!expect_elevated || map_animation_test_elevated_draws > 0);
+    if (!success) {
+        fprintf(stderr,
+                "map animation test: damage=%d kill=%d elevated=%d source-floor=%d "
+                "player-floor=%d\n",
+                map_animation_test_damage_draws,
+                map_animation_test_kill_draws,
+                map_animation_test_elevated_draws,
+                map_animation_test_source_floor_height,
+                map_animation_test_player_floor_height);
+    }
+    return success;
+}
+
+void widget_map_animation_test_death_texture_set(SDL_Surface *texture) {
+    map_animation_test_death_texture = texture;
+}
+
 void widget_map_animation_test_add(int type,
                                    int x_offset,
                                    int y_offset,
@@ -4139,11 +4178,11 @@ void widget_map_animation_test_add(int type,
     HARD_ASSERT(type == ANIM_DAMAGE || type == ANIM_KILL);
     HARD_ASSERT(elapsed_ms <= 850 && elapsed_ms <= LastTick);
     HARD_ASSERT(sub_layer >= 0 && sub_layer < NUM_SUB_LAYERS);
-    HARD_ASSERT(depth >= 0 && depth <= INT8_MAX);
+    HARD_ASSERT(depth >= -MAP2_MAX_DEPTH && depth <= MAP2_MAX_DEPTH);
 
     map_anim_t *anim = map_anims_add(type,
-                                     map_width * (MAP_FOW_SIZE / 2) + x_offset,
-                                     map_height * (MAP_FOW_SIZE / 2) + y_offset,
+                                     map_width / 2 + x_offset,
+                                     map_height / 2 + y_offset,
                                      sub_layer,
                                      depth,
                                      value);
@@ -4390,7 +4429,19 @@ void map_anims_play(void) {
             continue;
         }
 
-        data.ypos -= get_top_floor_height(data.cell, data.sub_layer);
+        int source_floor_height = get_top_floor_height(data.cell, data.sub_layer);
+        data.ypos -= source_floor_height;
+        data.ypos += data.player_height_offset;
+#ifdef ATRINIK_WIDGET_TESTS
+        if (map_animation_test_active && source_floor_height != 0 &&
+            data.player_height_offset != 0) {
+            map_animation_test_elevated_draws++;
+        }
+        if (map_animation_test_active) {
+            map_animation_test_source_floor_height = source_floor_height;
+            map_animation_test_player_floor_height = data.player_height_offset;
+        }
+#endif
         data.xpos += MAP_TILE_POS_XOFF / 2;
         data.ypos -= MAP_TILE_POS_YOFF;
 
@@ -4417,6 +4468,11 @@ void map_anims_play(void) {
         char buf[32];
         switch (anim->type) {
             case ANIM_DAMAGE: {
+#ifdef ATRINIK_WIDGET_TESTS
+                if (map_animation_test_active) {
+                    map_animation_test_damage_draws++;
+                }
+#endif
                 snprintf(VS(buf), "%d", abs(anim->value));
                 int wd = text_get_width(FONT_MONO10, buf, TEXT_OUTLINE);
                 const char *color = anim->value < 0 ? COLOR_GREEN : COLOR_ORANGE;
@@ -4433,10 +4489,20 @@ void map_anims_play(void) {
             }
 
             case ANIM_KILL: {
+#ifdef ATRINIK_WIDGET_TESTS
+                if (map_animation_test_active) {
+                    map_animation_test_kill_draws++;
+                }
+#endif
                 snprintf(VS(buf), "%d", anim->value);
                 int wd = text_get_width(FONT_MONO10, buf, TEXT_OUTLINE);
                 int ht = text_get_height(FONT_MONO10, buf, 0);
+#ifdef ATRINIK_WIDGET_TESTS
+                SDL_Surface *texture = map_animation_test_death_texture;
+                HARD_ASSERT(texture != NULL);
+#else
                 SDL_Surface *texture = TEXTURE_CLIENT("death");
+#endif
                 surface_show(ScreenSurface,
                              screen.x - texture->w / 2,
                              screen.y - ht / 2 + 2,

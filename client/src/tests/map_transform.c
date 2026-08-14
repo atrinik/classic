@@ -39,8 +39,8 @@ int main(void) {
 
     map_screen_point_t screen = {0};
     CHECK(map_local_anchor_to_screen(17, 23, 100, 100, 125, 125, -3, -3, &screen));
-    CHECK(screen.x == 14);
-    CHECK(screen.y == 20);
+    CHECK(screen.x == 13);
+    CHECK(screen.y == 19);
 
     map_screen_point_t moved_screen = {0};
     CHECK(map_local_anchor_to_screen(89, 101, 100, 100, 125, 125, 48, 24, &moved_screen));
@@ -61,8 +61,8 @@ int main(void) {
 
     /* 321x241 at 125% rounds independently to the actual 401x301 blit. */
     CHECK(map_local_anchor_to_screen(13, 7, 321, 241, 401, 301, 160, 120, &screen));
-    CHECK(screen.x == 212);
-    CHECK(screen.y == 156);
+    CHECK(screen.x == 213);
+    CHECK(screen.y == 157);
 
     /* A failed scaling operation blits the unscaled source. */
     CHECK(map_local_anchor_to_screen(13, 7, 321, 241, 321, 241, 160, 120, &screen));

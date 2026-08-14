@@ -16,6 +16,12 @@
 
 #include <map_transform.h>
 
+static int64_t map_scale_coordinate(int coordinate, int source_size, int displayed_size) {
+    int64_t numerator = (int64_t)coordinate * displayed_size;
+    int64_t half_source = source_size / 2;
+    return (numerator >= 0 ? numerator + half_source : numerator - half_source) / source_size;
+}
+
 bool map_local_anchor_to_screen(int origin_x,
                                 int origin_y,
                                 int source_width,
@@ -30,8 +36,8 @@ bool map_local_anchor_to_screen(int origin_x,
         return false;
     }
 
-    int64_t x = (int64_t)origin_x + (int64_t)local_x * displayed_width / source_width;
-    int64_t y = (int64_t)origin_y + (int64_t)local_y * displayed_height / source_height;
+    int64_t x = (int64_t)origin_x + map_scale_coordinate(local_x, source_width, displayed_width);
+    int64_t y = (int64_t)origin_y + map_scale_coordinate(local_y, source_height, displayed_height);
     if (x < INT_MIN || x > INT_MAX || y < INT_MIN || y > INT_MAX) {
         return false;
     }
