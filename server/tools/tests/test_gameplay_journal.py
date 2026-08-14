@@ -500,6 +500,49 @@ class JournalTests(unittest.TestCase):
             with self.assertRaisesRegex(gameplay_journal.JournalError, "symbolic links"):
                 gameplay_journal.load([link])
 
+    def test_native_action_matrix_reasons_remain_wired_to_semantic_producers(self) -> None:
+        server = Path(__file__).resolve().parents[2]
+        expected = {
+            "src/types/player.c": {
+                "item.acquire", "item.drop", "item.external-transfer",
+                "item.player-transfer", "item.startequip-destroy",
+            },
+            "src/server/treasure.c": {"item.starting-grant", "item.treasure-grant"},
+            "src/server/quest.c": {"quest.item-grant", "quest.objective-grant"},
+            "src/server/party.c": {
+                "item.party-loot", "party.currency-loot", "party.currency-split",
+            },
+            "src/server/shop.c": {
+                "shop.purchase", "shop.sale", "script.currency-grant",
+            },
+            "src/server/bank.c": {"bank.deposit", "bank.withdraw"},
+            "src/server/spell_effect.c": {"spell.alchemy"},
+        }
+        for relative, reasons in expected.items():
+            source = (server / relative).read_text(encoding="utf-8")
+            for reason in reasons:
+                with self.subTest(source=relative, reason=reason):
+                    self.assertIn(f'"{reason}"', source)
+
+        semantic_calls = {
+            "src/types/player.c": ("object_custody_begin", "object_custody_finish"),
+            "src/server/treasure.c": ("object_insert_into_reason",),
+            "src/server/quest.c": ("object_custody_begin", "object_insert_into_reason"),
+            "src/server/party.c": (
+                "gameplay_journal_currency_begin", "object_insert_into_reason",
+            ),
+            "src/server/shop.c": (
+                "object_custody_begin_economy", "gameplay_journal_currency_begin",
+            ),
+            "src/server/bank.c": ("gameplay_journal_currency_begin",),
+            "src/server/spell_effect.c": ("gameplay_journal_currency_begin",),
+        }
+        for relative, calls in semantic_calls.items():
+            source = (server / relative).read_text(encoding="utf-8")
+            for call in calls:
+                with self.subTest(source=relative, call=call):
+                    self.assertIn(f"{call}(", source)
+
 
 if __name__ == "__main__":
     unittest.main()
