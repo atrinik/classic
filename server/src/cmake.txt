@@ -76,6 +76,7 @@ set(SERVER_CORE_SOURCES
 	src/server/commands.c
 	src/server/connection.c
 	src/server/content_benchmark.c
+	src/server/celestial_structure.c
 	src/server/exp.c
 	src/server/faction.c
 	src/server/gameplay_journal.c

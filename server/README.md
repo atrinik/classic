@@ -321,6 +321,31 @@ to isolate authored map parsing and instantiation from unique-item overlays,
 and the harness deletes each reloaded instance after timing so the next sample
 cannot take the server's early warm-map return.
 
+Offline celestial-structure inventory
+--------------------------------------
+
+`--celestial_inventory` loads one to sixteen unique canonical logical map IDs
+without listeners, plugins, asset serving, or metaserver registration. It
+validates celestial-v1 headers and object metadata, consumes system rectangles,
+and emits deterministic tab-separated `ATRINIK_CELESTIAL_STRUCTURE` records in
+map, `(y,x,type)` rectangle, and stable object order. The operation is read-only
+and refuses a legacy or invalid map. It also fails before emitting a map when
+the default 8,192-record bound would be exceeded; use
+`--celestial_inventory_limit=1..65535` to select a different explicit bound.
+
+Run it through a dedicated Classic-derived wrapper profile and isolated state:
+
+```
+./atrinik run server --profile PROFILE --state STATE -- \
+  --celestial_inventory=/maps/annotated,/maps/annotated_upper \
+  --celestial_inventory_limit=8192
+```
+
+The inventory never rewrites authored maps, `map_info` objects, or mutable
+state. A linked topology must be supplied as an explicitly requested,
+reciprocal set for downstream graph validation; filenames never synthesize
+celestial-v1 neighbours.
+
 Authoritative gameplay metrics
 ------------------------------
 

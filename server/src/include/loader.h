@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -69,5 +69,8 @@ extern void free_map_header_loader(void);
 extern int load_map_header(mapstruct *m, FILE *fp);
 
 extern void save_map_header(mapstruct *m, FILE *fp, int flag);
+
+/** Parse one celestial boundary policy line after its numeric suffix. */
+extern void map_set_celestial_boundary(mapstruct *m, int tile, const char *value);
 
 #endif

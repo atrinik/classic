@@ -47,6 +47,7 @@
 #include <world_maker.h>
 #include <account.h>
 #include <content_benchmark.h>
+#include <celestial_structure.h>
 #include <gameplay_journal.h>
 #include <toolkit/console.h>
 
@@ -633,6 +634,12 @@ int server_run(int argc, char **argv) {
 
     if (settings.content_benchmark) {
         int result = content_benchmark_run();
+        cleanup();
+        return result;
+    }
+
+    if (settings.celestial_inventory) {
+        int result = celestial_structure_inventory_run();
         cleanup();
         return result;
     }

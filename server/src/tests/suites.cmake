@@ -9,6 +9,7 @@ set(ATRINIK_SERVER_TEST_SUITES
     "server.ban|check_server_ban|src/tests/unit/server/ban.c"
     "server.bank|check_server_bank|src/tests/unit/server/bank.c"
     "server.cache|check_server_cache|src/tests/unit/server/cache.c"
+    "server.celestial_structure|check_server_celestial_structure|src/tests/unit/server/celestial_structure.c"
     "server.content_benchmark|check_server_content_benchmark|src/tests/unit/server/content_benchmark.c"
     "server.gameplay_journal|check_server_gameplay_journal|src/tests/unit/server/gameplay_journal.c"
     "server.living|check_server_living|src/tests/unit/server/living.c"

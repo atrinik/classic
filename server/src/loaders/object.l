@@ -50,7 +50,19 @@ typedef struct stable_identity_state {
     int spell_index;
     bool saw_skill_id;
     int skill_index;
+    uint16_t celestial_fields_seen;
 } stable_identity_state;
+
+enum {
+    CELESTIAL_FIELD_SKY_BOUNDARY = 1U << 0,
+    CELESTIAL_FIELD_SKY_STATE = 1U << 1,
+    CELESTIAL_FIELD_AMBIENT_STRENGTH = 1U << 2,
+    CELESTIAL_FIELD_FACES = 1U << 3,
+    CELESTIAL_FIELD_TRANSMISSION = 1U << 4,
+    CELESTIAL_FIELD_TRANSMISSION_CLOSED = 1U << 5,
+    CELESTIAL_FIELD_TRANSMISSION_OPEN = 1U << 6,
+    CELESTIAL_FIELD_APERTURE_ID = 1U << 7,
+};
 
 #define YY_DECL                 \
 static int                      \
@@ -80,6 +92,16 @@ static artifact_t *art_amask;
 #define IVAL atoi(yval())
 /** Next value as float. */
 #define FVAL atof(yval())
+#define SET_UNIQUE_CELESTIAL_FIELD(bit, key)                                              \
+    do {                                                                                  \
+        if ((identity->celestial_fields_seen & (bit)) != 0) {                             \
+            LOG(ERROR, "Duplicate %s for object %s.", (key), object_get_str(op));         \
+            lex_error = 1;                                                                \
+        } else {                                                                          \
+            identity->celestial_fields_seen |= (bit);                                     \
+            object_set_value(op, (key), yval(), 1);                                       \
+        }                                                                                 \
+    } while (0)
 
 #define YY_NO_INPUT
 
@@ -195,8 +217,18 @@ stable_identity_state *identity = &identities[*depth];
 
     const char *archname = yval();
     tmp->arch = arch_find(archname);
-    if (tmp->arch != NULL) {
+    if (tmp->arch == NULL &&
+        (strcmp(archname, "sky_exposure") == 0 ||
+         strcmp(archname, "ambient_light_zone") == 0) &&
+        arches[ARCH_EMPTY_ARCHETYPE] != NULL) {
+        tmp->arch = arches[ARCH_EMPTY_ARCHETYPE];
         object_copy(tmp, &tmp->arch->clone, true);
+        object_set_value(tmp, "_celestial_metadata_kind", archname, 1);
+    }
+    if (tmp->arch != NULL) {
+        if (object_get_value(tmp, "_celestial_metadata_kind") == NULL) {
+            object_copy(tmp, &tmp->arch->clone, true);
+        }
     }
 
     if (tmp != op) {
@@ -735,6 +767,14 @@ stable_identity_state *identity = &identities[*depth];
     }
 }
 ^outdoor{S}          CHANGE_FLAG(op, FLAG_OUTDOOR, IVAL);
+^sky_boundary{S}     SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_SKY_BOUNDARY, "sky_boundary");
+^sky_state{S}        SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_SKY_STATE, "sky_state");
+^ambient_strength{S} SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_AMBIENT_STRENGTH, "ambient_strength");
+^celestial_faces{S}  SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_FACES, "celestial_faces");
+^celestial_transmission{S} SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_TRANSMISSION, "celestial_transmission");
+^celestial_transmission_closed{S} SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_TRANSMISSION_CLOSED, "celestial_transmission_closed");
+^celestial_transmission_open{S} SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_TRANSMISSION_OPEN, "celestial_transmission_open");
+^celestial_aperture_id{S} SET_UNIQUE_CELESTIAL_FIELD(CELESTIAL_FIELD_APERTURE_ID, "celestial_aperture_id");
 ^unique{S}           CHANGE_FLAG(op, FLAG_UNIQUE, IVAL);
 ^inv_locked{S}       CHANGE_FLAG(op, FLAG_INV_LOCKED, IVAL);
 ^is_wooded{S}        {/* DEPRECATED */}

@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <celestial_structure.h>
 #include <swap.h>
 #include <server_main.h>
 #include <plugin.h>
@@ -121,7 +122,7 @@ static uint32_t map_count;
 
 #define DEBUG_OLDFLAGS 0
 
-static void load_objects(mapstruct *m, FILE *fp, int mapflags);
+static bool load_objects(mapstruct *m, FILE *fp, int mapflags);
 static void save_objects(mapstruct *m, FILE *fp, FILE *fp2);
 static void allocate_map(mapstruct *m);
 static void free_all_objects(mapstruct *m);
@@ -825,8 +826,9 @@ int arch_blocked(struct archetype *at, object *op, mapstruct *m, int x, int y) {
  * @param mapflags
  * The same as we get with load_original_map().
  */
-static void load_objects(mapstruct *m, FILE *fp, int mapflags) {
+static bool load_objects(mapstruct *m, FILE *fp, int mapflags) {
     object *op = object_get();
+    bool object_errors = false;
     /* To handle buttons correctly */
     op->map = m;
 
@@ -836,6 +838,7 @@ static void load_objects(mapstruct *m, FILE *fp, int mapflags) {
     while ((rc = load_object_buffer(buffer, op, mapflags)) != LL_EOF) {
         if (rc == LL_ERROR) {
             LOG(ERROR, "Discarding invalid object while loading map %s.", m->path);
+            object_errors = true;
             object_destroy(op);
             op = object_get();
             op->map = m;
@@ -844,6 +847,7 @@ static void load_objects(mapstruct *m, FILE *fp, int mapflags) {
 
         if (rc == LL_MORE) {
             LOG(ERROR, "Encountered tail object: %s", object_get_str(op));
+            object_errors = true;
             continue;
         }
 
@@ -852,6 +856,7 @@ static void load_objects(mapstruct *m, FILE *fp, int mapflags) {
          * will not be able to do anything with it either. */
         if (op->arch == NULL) {
             LOG(ERROR, "Object without an archetype: %s", object_get_str(op));
+            object_errors = true;
             continue;
         }
 
@@ -893,6 +898,18 @@ static void load_objects(mapstruct *m, FILE *fp, int mapflags) {
 
     m->in_memory = MAP_IN_MEMORY;
     check_light_source_list(m);
+
+    if (m->celestial_schema == 1 && object_errors) {
+        LOG(ERROR, "Celestial-v1 map %s contains malformed object records.", m->path);
+        return false;
+    }
+
+    char error[HUGE_BUF];
+    if (!celestial_structure_finalize_map(m, VS(error))) {
+        LOG(ERROR, "Celestial structural validation failed: %s", error);
+        return false;
+    }
+    return true;
 }
 
 /**
@@ -1203,7 +1220,7 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
         cp = string_sub(path_cp, 0, -coords_len);
 
         for (i = 0; i < TILED_NUM; i++) {
-            if (m->tile_path[i] != NULL) {
+            if (m->celestial_schema == 1 || m->tile_path[i] != NULL) {
                 continue;
             }
 
@@ -1262,8 +1279,13 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
     m->in_memory = MAP_LOADING;
 
     if (fp != NULL) {
-        load_objects(m, fp, (flags & (MAP_BLOCK | MAP_STYLE)) | MAP_ORIGINAL);
+        bool objects_valid = load_objects(m, fp, (flags & (MAP_BLOCK | MAP_STYLE)) | MAP_ORIGINAL);
         fclose(fp);
+        if (!objects_valid) {
+            delete_map(m);
+            free(real_path);
+            return NULL;
+        }
     } else {
         m->in_memory = MAP_IN_MEMORY;
     }
@@ -1329,8 +1351,16 @@ static mapstruct *load_temporary_map(mapstruct *m) {
     allocate_map(m);
 
     m->in_memory = MAP_LOADING;
-    load_objects(m, fp, 0);
+    bool objects_valid = load_objects(m, fp, 0);
     fclose(fp);
+    if (!objects_valid) {
+        LOG(BUG,
+            "Invalid celestial structure in temporary map %s; falling back to original.",
+            m->path);
+        snprintf(VS(buf), "%s", m->path);
+        delete_map(m);
+        return load_original_map(buf, NULL, 0);
+    }
     return m;
 }
 
@@ -1372,7 +1402,7 @@ static void delete_unique_items(mapstruct *m) {
  * @param m
  * The map to load unique items into.
  */
-static void load_unique_objects(mapstruct *m) {
+static bool load_unique_objects(mapstruct *m) {
     FILE *fp;
     int count;
     char firstname[HUGE_BUF];
@@ -1388,7 +1418,7 @@ static void load_unique_objects(mapstruct *m) {
 
     /* If we get here, we did not find any map. */
     if (fp == NULL) {
-        return;
+        return true;
     }
 
     m->in_memory = MAP_LOADING;
@@ -1398,8 +1428,13 @@ static void load_unique_objects(mapstruct *m) {
         delete_unique_items(m);
     }
 
-    load_objects(m, fp, 0);
+    if (!load_objects(m, fp, 0)) {
+        LOG(ERROR, "Unique objects make celestial structure invalid for %s.", m->path);
+        fclose(fp);
+        return false;
+    }
     fclose(fp);
+    return true;
 }
 
 /**
@@ -1480,6 +1515,9 @@ int new_save_map(mapstruct *m, int flag) {
     m->in_memory = MAP_SAVING;
 
     save_map_header(m, fp, flag);
+    if (m->celestial_schema == 1) {
+        celestial_structure_save_metadata(m, fp);
+    }
 
     /* Save unique items into fp2 */
     fp2 = fp;
@@ -1568,6 +1606,7 @@ void free_map(mapstruct *m, int flag) {
     FREE_AND_CLEAR_HASH(m->weather);
     FREE_AND_NULL_PTR(m->spaces);
     FREE_AND_NULL_PTR(m->msg);
+    celestial_structure_free(m);
     m->first_light = NULL;
 
     for (i = 0; i < TILED_NUM; i++) {
@@ -1690,7 +1729,10 @@ mapstruct *ready_map_name(const char *name, mapstruct *originator, int flags) {
         /* If a player unique map, no extra unique object file to load.
          * if from the editor, likewise. */
         if (!(flags & (MAP_FLUSH | MAP_PLAYER_UNIQUE))) {
-            load_unique_objects(m);
+            if (!load_unique_objects(m)) {
+                delete_map(m);
+                return NULL;
+            }
         }
     } else {
         /* If in this loop, we found a temporary map, so load it up. */
@@ -1700,7 +1742,10 @@ mapstruct *ready_map_name(const char *name, mapstruct *originator, int flags) {
             return NULL;
         }
 
-        load_unique_objects(m);
+        if (!load_unique_objects(m)) {
+            delete_map(m);
+            return NULL;
+        }
 
         clean_tmp_map(m);
         m->in_memory = MAP_IN_MEMORY;
