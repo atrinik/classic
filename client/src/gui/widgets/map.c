@@ -34,6 +34,7 @@
 #include <surface_primitives.h>
 #include <client_socket.h>
 #include <animations.h>
+#include <map_transform.h>
 #include <region_map.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
@@ -280,6 +281,16 @@ static int map_interaction_test_talks;
 static bool map_ui_test_active;
 static int map_ui_test_names;
 static int map_ui_test_targets;
+static bool map_animation_test_active;
+static int map_animation_test_damage_draws;
+static int map_animation_test_kill_draws;
+static int map_animation_test_elevated_draws;
+static int map_animation_test_source_floor_height;
+static int map_animation_test_player_floor_height;
+static int map_animation_test_layer_content_draws;
+static int map_animation_test_expected_depth;
+static int map_animation_test_expected_sub_layer;
+static SDL_Surface *map_animation_test_death_texture;
 #endif
 
 static int get_top_floor_height(struct MapCell *cell, int sub_layer);
@@ -3464,6 +3475,15 @@ bool map_draw_animation(SDL_Surface *surface) {
     return true;
 }
 
+/** Return the exact source or scaled surface selected by the map blit. */
+static SDL_Surface *map_displayed_surface(widgetdata *widget) {
+    if (setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) != 100 && zoomed != NULL) {
+        return zoomed;
+    }
+
+    return widget->surface;
+}
+
 /**
  * Draw one sprite on map.
  * @param x
@@ -3492,13 +3512,22 @@ void map_draw_one(int x, int y, SDL_Surface *surface) {
         data.ypos += data.player_height_offset;
     }
 
-    double zoom = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0;
-    data.xpos *= zoom;
-    data.ypos *= zoom;
+    SDL_Surface *displayed = map_displayed_surface(cur_widget[MAP_ID]);
+    map_screen_point_t screen;
+    SOFT_ASSERT(map_local_anchor_to_screen(widget_x(cur_widget[MAP_ID]),
+                                           widget_y(cur_widget[MAP_ID]),
+                                           cur_widget[MAP_ID]->surface->w,
+                                           cur_widget[MAP_ID]->surface->h,
+                                           displayed->w,
+                                           displayed->h,
+                                           data.xpos,
+                                           data.ypos,
+                                           &screen),
+                "Map highlight coordinate overflow");
 
     sprite_effects_t effects = {0};
-    effects.zoom_x = 100.0 * zoom;
-    effects.zoom_y = 100.0 * zoom;
+    effects.zoom_x = 100.0 * displayed->w / cur_widget[MAP_ID]->surface->w;
+    effects.zoom_y = 100.0 * displayed->h / cur_widget[MAP_ID]->surface->h;
 
     /* Outside of the "visible" area; always render as fog of war
      * (grayscale). */
@@ -3507,12 +3536,7 @@ void map_draw_one(int x, int y, SDL_Surface *surface) {
         BIT_SET(effects.flags, SPRITE_FLAG_FOW);
     }
 
-    surface_show_effects(ScreenSurface,
-                         widget_x(cur_widget[MAP_ID]) + data.xpos,
-                         widget_y(cur_widget[MAP_ID]) + data.ypos,
-                         NULL,
-                         surface,
-                         &effects);
+    surface_show_effects(ScreenSurface, screen.x, screen.y, NULL, surface, &effects);
 }
 
 /**
@@ -3947,11 +3971,8 @@ static void widget_draw(widgetdata *widget) {
     box.x = widget_x(widget);
     box.y = widget_y(widget);
 
-    if (setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) == 100) {
-        SDL_BlitSurface(widget->surface, NULL, ScreenSurface, &box);
-    } else {
-        SDL_BlitSurface(zoomed != NULL ? zoomed : widget->surface, NULL, ScreenSurface, &box);
-    }
+    SDL_Surface *displayed = map_displayed_surface(widget);
+    SDL_BlitSurface(displayed, NULL, ScreenSurface, &box);
 
     if (map_show_mouse && widget_mouse_event.owner == cur_widget[MAP_ID]) {
         int tx, ty;
@@ -3968,8 +3989,10 @@ static void widget_draw(widgetdata *widget) {
     map_render_data_t data = {0};
     map_setup_render_data(widget->surface, &data, NULL, NULL, NULL, NULL);
 
-    int xpos = widget_x(widget) + widget_w(widget) / 2;
-    int ypos = widget_y(widget) + widget_h(widget) / 2;
+    /* Health and food warnings are widget-centered alerts. Their anchor,
+     * texture size, and offset intentionally remain in screen pixels. */
+    int xpos = widget_x(widget) + displayed->w / 2;
+    int ypos = widget_y(widget) + displayed->h / 2;
     ypos -= MAP_TILE_POS_YOFF * 1.5 + 7;
 
     /* Draw warning icons above player */
@@ -3997,7 +4020,10 @@ static void widget_draw(widgetdata *widget) {
         }
     }
 
-    /* Process message animations */
+    /* MAPSTATS messages are screen-space UI. They are horizontally centered
+     * on the exact displayed map surface, while their historical vertical
+     * anchor follows its effective top edge at a fixed 300-pixel offset.
+     * Font size and trajectory also remain fixed in screen pixels. */
     if (msg_anim.message[0] != '\0') {
         if ((LastTick - msg_anim.tick) < 3000) {
             int bmoff, y_offset;
@@ -4015,7 +4041,7 @@ static void widget_draw(widgetdata *widget) {
                 text_show(ScreenSurface,
                           FONT_SERIF16,
                           cp,
-                          widget_x(widget) + widget_w(widget) / 2 -
+                          widget_x(widget) + displayed->w / 2 -
                               text_get_width(FONT_SERIF16, cp, TEXT_OUTLINE) / 2,
                           widget_y(widget) + 300 - bmoff + y_offset,
                           msg_anim.color,
@@ -4117,6 +4143,67 @@ void widget_map_ui_test_begin(void) {
 bool widget_map_ui_test_end(void) {
     map_ui_test_active = false;
     return map_ui_test_names > 0 && map_ui_test_targets > 0;
+}
+
+void widget_map_animation_test_begin(void) {
+    map_animation_test_damage_draws = 0;
+    map_animation_test_kill_draws = 0;
+    map_animation_test_elevated_draws = 0;
+    map_animation_test_source_floor_height = 0;
+    map_animation_test_player_floor_height = 0;
+    map_animation_test_layer_content_draws = 0;
+    map_animation_test_active = true;
+}
+
+bool widget_map_animation_test_end(bool expect_damage,
+                                   bool expect_kill,
+                                   bool expect_elevated,
+                                   bool expect_layer_content) {
+    map_animation_test_active = false;
+    bool success = (!expect_damage || map_animation_test_damage_draws > 0) &&
+                   (!expect_kill || map_animation_test_kill_draws > 0) &&
+                   (!expect_elevated || map_animation_test_elevated_draws > 0) &&
+                   (!expect_layer_content || map_animation_test_layer_content_draws > 0);
+    if (!success) {
+        fprintf(stderr,
+                "map animation test: damage=%d kill=%d elevated=%d source-floor=%d "
+                "player-floor=%d layer-content=%d\n",
+                map_animation_test_damage_draws,
+                map_animation_test_kill_draws,
+                map_animation_test_elevated_draws,
+                map_animation_test_source_floor_height,
+                map_animation_test_player_floor_height,
+                map_animation_test_layer_content_draws);
+    }
+    return success;
+}
+
+void widget_map_animation_test_death_texture_set(SDL_Surface *texture) {
+    map_animation_test_death_texture = texture;
+}
+
+void widget_map_animation_test_add(int type,
+                                   int x_offset,
+                                   int y_offset,
+                                   int sub_layer,
+                                   int depth,
+                                   int value,
+                                   uint32_t elapsed_ms) {
+    HARD_ASSERT(type == ANIM_DAMAGE || type == ANIM_KILL);
+    HARD_ASSERT(elapsed_ms <= 850 && elapsed_ms <= LastTick);
+    HARD_ASSERT(sub_layer >= 0 && sub_layer < NUM_SUB_LAYERS);
+    HARD_ASSERT(depth >= -MAP2_MAX_DEPTH && depth <= MAP2_MAX_DEPTH);
+    map_animation_test_expected_depth = depth;
+    map_animation_test_expected_sub_layer = sub_layer;
+
+    map_anim_t *anim = map_anims_add(type,
+                                     map_width / 2 + x_offset,
+                                     map_height / 2 + y_offset,
+                                     sub_layer,
+                                     depth,
+                                     value);
+    anim->start_tick -= elapsed_ms;
+    anim->last_tick -= elapsed_ms;
 }
 
 bool widget_map_interaction_test(widgetdata *widget) {
@@ -4356,22 +4443,63 @@ void map_anims_play(void) {
         }
 
         data.depth = anim->depth;
+        data.sub_layer = anim->sub_layer;
         data.x = anim->mapx;
         data.y = anim->mapy;
         if (!map_should_draw(cur_widget[MAP_ID]->surface, &data)) {
             continue;
         }
 
+        int source_floor_height = get_top_floor_height(data.cell, data.sub_layer);
+        data.ypos -= source_floor_height;
+        data.ypos += data.player_height_offset;
+#ifdef ATRINIK_WIDGET_TESTS
+        if (map_animation_test_active && source_floor_height != 0 &&
+            data.player_height_offset != 0) {
+            map_animation_test_elevated_draws++;
+        }
+        if (map_animation_test_active) {
+            map_animation_test_source_floor_height = source_floor_height;
+            map_animation_test_player_floor_height = data.player_height_offset;
+            if (anim->depth == map_animation_test_expected_depth &&
+                data.sub_layer == map_animation_test_expected_sub_layer &&
+                source_floor_height != 0 &&
+                data.cell->faces[GET_MAP_LAYER(LAYER_LIVING, data.sub_layer)] != 0) {
+                map_animation_test_layer_content_draws++;
+            }
+        }
+#endif
         data.xpos += MAP_TILE_POS_XOFF / 2;
         data.ypos -= MAP_TILE_POS_YOFF;
 
+        map_screen_point_t screen;
+        SDL_Surface *displayed = map_displayed_surface(cur_widget[MAP_ID]);
+        SOFT_ASSERT(map_local_anchor_to_screen(widget_x(cur_widget[MAP_ID]),
+                                               widget_y(cur_widget[MAP_ID]),
+                                               cur_widget[MAP_ID]->surface->w,
+                                               cur_widget[MAP_ID]->surface->h,
+                                               displayed->w,
+                                               displayed->h,
+                                               data.xpos,
+                                               data.ypos,
+                                               &screen),
+                    "Map animation coordinate overflow");
+
         uint32_t num_ticks = LastTick - anim->start_tick;
-        data.ypos += num_ticks * anim->yoff;
-        data.xpos += num_ticks * anim->xoff;
+        /* Font/icon dimensions and the historical 25-pixel rise over 850 ms
+         * are screen-space presentation, so apply them after the anchor has
+         * followed the map widget origin and zoom. */
+        screen.y += map_screen_motion_offset(num_ticks, anim->yoff);
+        screen.x += map_screen_motion_offset(num_ticks, anim->xoff);
 
         char buf[32];
         switch (anim->type) {
             case ANIM_DAMAGE: {
+#ifdef ATRINIK_WIDGET_TESTS
+                if (map_animation_test_active) {
+                    map_animation_test_damage_draws++;
+                }
+#endif
                 snprintf(VS(buf), "%d", abs(anim->value));
                 int wd = text_get_width(FONT_MONO10, buf, TEXT_OUTLINE);
                 const char *color = anim->value < 0 ? COLOR_GREEN : COLOR_ORANGE;
@@ -4379,8 +4507,8 @@ void map_anims_play(void) {
                 text_show(ScreenSurface,
                           FONT_MONO10,
                           buf,
-                          data.xpos - wd / 2,
-                          data.ypos,
+                          screen.x - wd / 2,
+                          screen.y,
                           color,
                           TEXT_OUTLINE,
                           NULL);
@@ -4388,21 +4516,32 @@ void map_anims_play(void) {
             }
 
             case ANIM_KILL: {
+#ifdef ATRINIK_WIDGET_TESTS
+                if (map_animation_test_active) {
+                    map_animation_test_kill_draws++;
+                }
+#endif
                 snprintf(VS(buf), "%d", anim->value);
                 int wd = text_get_width(FONT_MONO10, buf, TEXT_OUTLINE);
                 int ht = text_get_height(FONT_MONO10, buf, 0);
+#ifdef ATRINIK_WIDGET_TESTS
+                SDL_Surface *texture = map_animation_test_active ? map_animation_test_death_texture
+                                                                 : TEXTURE_CLIENT("death");
+#else
                 SDL_Surface *texture = TEXTURE_CLIENT("death");
+#endif
+                HARD_ASSERT(texture != NULL);
                 surface_show(ScreenSurface,
-                             data.xpos - texture->w / 2,
-                             data.ypos - ht / 2 + 2,
+                             screen.x - texture->w / 2,
+                             screen.y - ht / 2 + 2,
                              NULL,
                              texture);
 
                 text_show(ScreenSurface,
                           FONT_MONO10,
                           buf,
-                          data.xpos - wd / 2,
-                          data.ypos,
+                          screen.x - wd / 2,
+                          screen.y,
                           COLOR_ORANGE,
                           TEXT_OUTLINE,
                           NULL);
