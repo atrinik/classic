@@ -73,6 +73,7 @@ set(SERVER_CORE_SOURCES
 	src/server/ban.c
 	src/server/bank.c
 	src/server/cache.c
+	src/server/celestial_lunar.c
 	src/server/commands.c
 	src/server/connection.c
 	src/server/content_benchmark.c
