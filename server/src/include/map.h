@@ -666,6 +666,14 @@ typedef struct mapdef {
     bool global_removed; ///< If true, the map was removed from the global list.
 
     tag_t count; ///< Unique identifier for the map.
+
+    /** Latest gameplay-journal commit included by a later map checkpoint. */
+    char journal_run_id[33];
+    uint64_t journal_sequence;
+
+    /** Latest commit included by the independently saved unique-object component. */
+    char journal_unique_run_id[33];
+    uint64_t journal_unique_sequence;
 } mapstruct;
 
 /**
