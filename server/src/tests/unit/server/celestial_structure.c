@@ -409,6 +409,10 @@ START_TEST(test_transmission_faces_and_aperture_identity) {
     object_set_value(empty_clone, "ambient_strength", NULL, 0);
     ck_assert(celestial_structure_validate_archetypes(VS(error)));
 
+    object_set_value(&arches[ARCH_EMPTY_ARCHETYPE]->clone, "celestial_transmission", "glass", 1);
+    ck_assert(celestial_structure_validate_archetypes(VS(error)));
+    object_set_value(&arches[ARCH_EMPTY_ARCHETYPE]->clone, "celestial_transmission", "grate", 1);
+    ck_assert(celestial_structure_validate_archetypes(VS(error)));
     object_set_value(&arches[ARCH_EMPTY_ARCHETYPE]->clone, "celestial_transmission", "opaque", 1);
     ck_assert(!celestial_structure_validate_archetypes(VS(error)));
     ck_assert_ptr_ne(strstr(error, "unsupported celestial transmission"), NULL);

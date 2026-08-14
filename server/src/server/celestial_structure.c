@@ -180,10 +180,10 @@ static bool validate_archetype_clone(const archetype_t *at, char *error, size_t 
                          error_size,
                          "archetype %s mixes static and dynamic transmission",
                          at->name);
-    } else if (transmission != NULL &&
-               (static_value == CELESTIAL_TRANSMISSION_INVALID ||
-                static_value == CELESTIAL_TRANSMISSION_OPEN ||
-                (!floor && !opaque && sky_boundary == NULL && faces == NULL))) {
+    } else if (transmission != NULL && (static_value == CELESTIAL_TRANSMISSION_INVALID ||
+                                        static_value == CELESTIAL_TRANSMISSION_OPEN ||
+                                        (static_value == CELESTIAL_TRANSMISSION_OPAQUE && !floor &&
+                                         !opaque && sky_boundary == NULL))) {
         return set_error(error,
                          error_size,
                          "archetype %s has unsupported celestial transmission",
