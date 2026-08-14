@@ -1145,7 +1145,7 @@ class WorkflowContractTests(unittest.TestCase):
     ) -> None:
         workflow = self.text("daily-client-performance.yml")
         benchmark = workflow[
-            workflow.index("  benchmark:") : workflow.index("  publish:")
+            workflow.index("  benchmark:") : workflow.index("  project:")
         ]
         self.assertIn("ref: ${{ github.sha }}", benchmark)
         self.assertIn(
@@ -1160,6 +1160,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("--network none", benchmark)
         self.assertIn("ATRINIK_MOVEMENT_EVENT_NAME: schedule", benchmark)
         self.assertIn("ATRINIK_MOVEMENT_MATRIX: full", benchmark)
+        self.assertIn("tools/ci/run_linux_check.sh client-benchmark /workspace", benchmark)
         self.assertNotIn("continue-on-error: true", benchmark)
         self.assertIn("id: benchmark", benchmark)
         self.assertIn("CLIENT_RESULT: ${{ steps.benchmark.outcome }}", benchmark)
@@ -1169,6 +1170,10 @@ class WorkflowContractTests(unittest.TestCase):
             "daily-client-performance-${{ github.run_id }}-${{ github.run_attempt }}",
             benchmark,
         )
+        self.assertIn("retention-days: 90", benchmark)
+        self.assertIn("missing-movement-evidence.json", benchmark)
+        self.assertIn("steps.evidence.outputs.present == 'true'", benchmark)
+        self.assertNotIn("contents: write", benchmark)
 
         runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
             encoding="utf-8"
@@ -1178,22 +1183,47 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('--comparison-note "${comparison_note}"', candidate_only)
         self.assertIn("movement_matrix_arguments+=(--full-matrix)", candidate_only)
 
-        publish = workflow[workflow.index("  publish:") :]
-        self.assertIn("if: always() && github.ref == 'refs/heads/main'", publish)
-        self.assertIn("contents: write", publish)
-        self.assertIn("ref: ${{ github.sha }}", publish)
+        project = workflow[
+            workflow.index("  project:") : workflow.index("  deploy:")
+        ]
+        self.assertIn("needs.benchmark.result == 'success'", project)
+        self.assertIn("actions: read", project)
+        self.assertIn("contents: read", project)
+        self.assertNotIn("contents: write", project)
+        self.assertNotIn("issues: write", project)
+        self.assertNotIn("pages: write", project)
+        self.assertIn("ref: ${{ github.sha }}", project)
         self.assertIn(
-            'test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"', publish
+            'test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"', project
         )
-        self.assertIn(
-            "daily-client-performance-${{ github.run_id }}-${{ github.run_attempt }}",
-            publish,
-        )
+        self.assertIn("bab40ecefefa5b6052d42eab6390c504b9482e81", workflow)
+        self.assertIn("daily_performance_site.py fetch", project)
+        self.assertIn("status=success&per_page=20", project)
+        self.assertIn("successful-performance-runs.json", project)
+        self.assertIn("performance-checkpoint/v1/manifest.json", project)
+        self.assertIn("--legacy-final-ref", project)
+        self.assertIn("daily_performance_site.py build", project)
+        self.assertIn("daily_performance_site.py validate", project)
+        self.assertIn("actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b", project)
+        self.assertNotIn("benchmark-data:refs", workflow)
+        self.assertNotIn("HEAD:benchmark-data", workflow)
+        self.assertNotIn("contents: write", workflow)
+
+        deploy = workflow[
+            workflow.index("  deploy:") : workflow.index("  alerts:")
+        ]
+        self.assertIn("pages: write", deploy)
+        self.assertIn("id-token: write", deploy)
+        self.assertNotIn("issues: write", deploy)
+        self.assertIn("environment:\n      name: github-pages", deploy)
+        self.assertIn("actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e", deploy)
+
+        alerts = workflow[workflow.index("  alerts:") :]
+        self.assertIn("needs: [project, deploy]", alerts)
+        self.assertIn("issues: write", alerts)
+        self.assertNotIn("pages: write", alerts)
+        self.assertIn("reconcile_performance_alerts.py", alerts)
         self.assertNotIn("pull_request:", workflow[: workflow.index("jobs:")])
-        self.assertIn(
-            "The current compatible trend no longer meets the sustained regression condition.",
-            publish,
-        )
 
     def test_linux_checks_pin_image_and_isolate_compiler_caches(self) -> None:
         workflow = self.text("check.yml")

@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      checkpoint_source:
+        description: Source of the predecessor checkpoint
+        type: choice
+        options:
+          - pages
+          - final-benchmark-data
+        default: pages
+        required: true
 
 permissions:
   contents: read
@@ -17,6 +26,8 @@ env:
   CLASSIC_LINUX_IMAGE_DIGEST: sha256:d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f
   CLASSIC_LINUX_CCACHE_COMPILER: gcc-15.2.0
   CLASSIC_LINUX_CCACHE_EPOCH: "1"
+  FINAL_BENCHMARK_DATA_COMMIT: bab40ecefefa5b6052d42eab6390c504b9482e81
+  PAGES_URL: https://atrinik.github.io/classic/
 
 jobs:
   benchmark:
@@ -33,7 +44,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Bind the benchmark to the triggering main commit
-        run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+        run: |
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          mkdir -p build/ci-evidence
+          jq -n \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg sha "${GITHUB_SHA}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --arg workflow "${GITHUB_WORKFLOW}" \
+            '{repository: $repository, source_sha: $sha, run_id: $run_id,
+              run_attempt: $run_attempt, workflow: $workflow}' \
+            >build/ci-evidence/run-identity.json
       - id: dependency-key
         name: Resolve complete immutable input key
         run: |
@@ -69,7 +91,7 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/classic-ccache"
           chmod 1777 "${RUNNER_TEMP}/classic-ccache"
       - id: benchmark
-        name: Run the pinned full benchmark matrix
+        name: Run the pinned complete client benchmark matrix
         env:
           ATRINIK_BENCHMARK_REVISION: ${{ github.sha }}
           ATRINIK_BENCHMARK_DIRTY: false
@@ -90,9 +112,35 @@ jobs:
             --volume "${RUNNER_TEMP}/classic-ccache:/cache/ccache" \
             --workdir /workspace \
             "${CLASSIC_LINUX_IMAGE}" \
-            tools/ci/run_linux_check.sh client /workspace
-      - name: Publish job summary and raw evidence
+            tools/ci/run_linux_check.sh client-benchmark /workspace
+      - id: evidence
+        name: Require explicit movement evidence or preserve a diagnostic
         if: always()
+        env:
+          BENCHMARK_OUTCOME: ${{ steps.benchmark.outcome }}
+        run: |
+          if test -s build/ci-evidence/movement-frame-time.json; then
+            echo 'present=true' >>"${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo 'present=false' >>"${GITHUB_OUTPUT}"
+          # shellcheck disable=SC2016
+          jq -n \
+            --arg outcome "${BENCHMARK_OUTCOME}" \
+            --arg sha "${GITHUB_SHA}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            '{error: "movement-frame-time.json was not produced", benchmark_outcome: $outcome,
+              source_sha: $sha, run_id: $run_id, run_attempt: $run_attempt}' \
+            >build/ci-evidence/missing-movement-evidence.json
+          {
+            echo '## Classic client performance infrastructure failure'
+            echo
+            echo 'movement-frame-time.json was not produced. Inspect the attempt-qualified raw artifact.'
+          } >>"${GITHUB_STEP_SUMMARY}"
+          test "${BENCHMARK_OUTCOME}" != success
+      - name: Publish job summary
+        if: always() && steps.evidence.outputs.present == 'true'
         env:
           CLIENT_RESULT: ${{ steps.benchmark.outcome }}
         run: |
@@ -107,78 +155,156 @@ jobs:
           name: daily-client-performance-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/ci-evidence
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90
 
-  publish:
-    name: Persist compatible trend and alert state
+  project:
+    name: Validate and project the bounded static checkpoint
     needs: benchmark
-    if: always() && github.ref == 'refs/heads/main'
+    if: needs.benchmark.result == 'success' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
-      contents: write
-      issues: write
+      actions: read
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Bind publication to the benchmarked main commit
-        run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+      - name: Bind publication to the successful benchmark attempt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            >build/run.json
+          test "$(jq -r .head_sha build/run.json)" = "${GITHUB_SHA}"
+          test "$(jq -r .head_branch build/run.json)" = main
+          test "$(jq -r .event build/run.json)" = schedule -o \
+            "$(jq -r .event build/run.json)" = workflow_dispatch
+          test "$(jq -r .run_attempt build/run.json)" = "${GITHUB_RUN_ATTEMPT}"
+          echo "RUN_RECORDED_AT=$(jq -r .created_at build/run.json)" >>"${GITHUB_ENV}"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: daily-client-performance-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/ci-evidence
-      - name: Load the dedicated trend ref
+      - name: Load the exact predecessor checkpoint
+        env:
+          CHECKPOINT_SOURCE: ${{ inputs.checkpoint_source || 'pages' }}
         run: |
-          git fetch origin benchmark-data:refs/remotes/origin/benchmark-data || true
-          if git show-ref --verify --quiet refs/remotes/origin/benchmark-data; then
-            git worktree add --detach build/benchmark-data origin/benchmark-data
+          if test "${CHECKPOINT_SOURCE}" = pages; then
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/daily-client-performance.yml/runs?branch=main&status=success&per_page=20" \
+              >build/successful-performance-runs.json
+            # shellcheck disable=SC2016
+            expected_run=$(jq -c '
+              [.workflow_runs[] |
+                select(.event == "schedule" or .event == "workflow_dispatch")][0] // empty
+            ' build/successful-performance-runs.json)
+            test -n "${expected_run}"
+            python3 tools/ci/daily_performance_site.py fetch \
+              --base-url "${PAGES_URL}" \
+              --output build/performance-checkpoint
+            test "$(jq -r .run_id build/performance-checkpoint/v1/manifest.json)" = \
+              "$(jq -r .id <<<"${expected_run}")"
+            test "$(jq -r .run_attempt build/performance-checkpoint/v1/manifest.json)" = \
+              "$(jq -r .run_attempt <<<"${expected_run}")"
+          elif test "${CHECKPOINT_SOURCE}" = final-benchmark-data && \
+            test "${GITHUB_EVENT_NAME}" = workflow_dispatch; then
+            git cat-file -e "${FINAL_BENCHMARK_DATA_COMMIT}^{commit}" || \
+              git fetch origin "${FINAL_BENCHMARK_DATA_COMMIT}"
+            mkdir -p build/performance-legacy
+            git archive "${FINAL_BENCHMARK_DATA_COMMIT}" | \
+              tar -x -C build/performance-legacy
           else
-            git init build/benchmark-data
-            git -C build/benchmark-data checkout --orphan benchmark-data
-            git -C build/benchmark-data remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+            echo "invalid checkpoint source: ${CHECKPOINT_SOURCE}" >&2
+            exit 2
           fi
-      - name: Build the versioned point and report
+      - name: Build and validate the complete static deployment
+        env:
+          CHECKPOINT_SOURCE: ${{ inputs.checkpoint_source || 'pages' }}
         run: |
-          python3 tools/ci/daily_performance_report.py \
+          # shellcheck disable=SC2016
+          environment=$(jq -cn \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg workflow_url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg artifact_url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}#artifacts" \
+            --arg runner_image "${ImageOS:-ubuntu24}" \
+            '{repository: $repository, workflow_url: $workflow_url,
+              artifact_url: $artifact_url, runner_image: $runner_image}')
+          source_arguments=(--checkpoint build/performance-checkpoint)
+          if test "${CHECKPOINT_SOURCE}" = final-benchmark-data; then
+            source_arguments=(
+              --legacy-checkpoint build/performance-legacy
+              --legacy-final-ref "${FINAL_BENCHMARK_DATA_COMMIT}"
+            )
+          fi
+          python3 tools/ci/daily_performance_site.py build \
             --evidence build/ci-evidence/movement-frame-time.json \
-            --commit "${GITHUB_SHA}" --run-id "${GITHUB_RUN_ID}" \
-            --environment "{\"repository\":\"${GITHUB_REPOSITORY}\",\"workflow_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\",\"runner_image\":\"${ImageOS:-ubuntu24}\"}" \
-            --point "build/benchmark-data/points/${GITHUB_RUN_ID}.json" \
-            --trend "build/benchmark-data/trend.json" \
-            --summary "build/benchmark-data/reports/${GITHUB_RUN_ID}.md"
-          cat "build/benchmark-data/reports/${GITHUB_RUN_ID}.md" >>"${GITHUB_STEP_SUMMARY}"
-      - name: Reconcile sustained regression alerts
+            --output build/performance-site \
+            --commit "${GITHUB_SHA}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --recorded-at "${RUN_RECORDED_AT}" \
+            --environment "${environment}" \
+            --summary build/ci-evidence/site-summary.md \
+            "${source_arguments[@]}"
+          python3 tools/ci/daily_performance_site.py validate \
+            --site build/performance-site
+          cat build/ci-evidence/site-summary.md >>"${GITHUB_STEP_SUMMARY}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: daily-client-performance-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/performance-site/v1/alerts.json
+            build/performance-site/v1/manifest.json
+            build/performance-site/v1/state.json
+            build/performance-site/points/run-${{ github.run_id }}.json
+          if-no-files-found: error
+          retention-days: 90
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: build/performance-site
+
+  deploy:
+    name: Deploy the validated performance site
+    needs: project
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      pages: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        name: Deploy the immutable Pages artifact
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+
+  alerts:
+    name: Reconcile deployed regression alert state
+    needs: [project, deploy]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: daily-client-performance-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/performance-checkpoint-artifact
+      - name: Reconcile complete desired alert state once
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh auth setup-git
-          jq -r '.alerts | to_entries[] | select(.value.last_transition != "none") |
-            [.key, .value.last_transition] | @tsv' build/benchmark-data/trend.json |
-          while IFS=$'\t' read -r key transition; do
-            title="[perf-alert] ${key}"
-            number=$(gh issue list --state open --search "in:title ${title}" \
-              --json number,title --jq ".[] | select(.title == \"${title}\") | .number" | head -n 1)
-            if test "${transition}" = regressed && test -z "${number}"; then
-              gh issue create --title "${title}" --body-file \
-                "build/benchmark-data/reports/${GITHUB_RUN_ID}.md" \
-                --label "component: client"
-            elif test "${transition}" = regressed; then
-              gh issue comment "${number}" --body-file \
-                "build/benchmark-data/reports/${GITHUB_RUN_ID}.md"
-            elif test "${transition}" = recovered && test -n "${number}"; then
-              gh issue close "${number}" --comment \
-                "The current compatible trend no longer meets the sustained regression condition."
-            fi
-          done
-      - name: Commit the dedicated trend ref
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          cd build/benchmark-data
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add points trend.json reports
-          git diff --cached --quiet || git commit -m "chore(perf): record daily client report"
-          git push origin HEAD:benchmark-data
+          python3 tools/ci/reconcile_performance_alerts.py \
+            --alerts build/performance-checkpoint-artifact/v1/alerts.json \
+            --workflow-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
