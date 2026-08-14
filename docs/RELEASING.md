@@ -281,6 +281,11 @@ issue numbers must not affect its version or appear in its notes.
 
 Every downloadable file has one source revision and version.
 
+Release candidate and final packaging pass that version to every integrated,
+standalone, Windows, and server-image CMake configuration through the single
+`-DATRINIK_PACKAGE_VERSION=MAJOR.MINOR.PATCH` interface. Source archives retain
+their generated `VERSION` file as the deterministic offline fallback.
+
 | Artifact | Purpose |
 | --- | --- |
 | `atrinik-classic-VERSION.tar.gz` | Complete source, governance, and provenance |

@@ -83,6 +83,13 @@ remains scoped to its target. The component presets in `client/`, `server/`,
 and `libatrinik/` remain the supported standalone, packaging, and
 installed-consumer paths.
 
+Client, server, and integrated builds accept one optional immutable release
+input, `-DATRINIK_PACKAGE_VERSION=MAJOR.MINOR.PATCH`. When it is omitted,
+CMake uses a packaged `VERSION` file, then an exact `vMAJOR.MINOR.PATCH` tag,
+then the deterministic developer version recorded by the shared CMake module.
+The resolved value and client provenance fields are compiled into their
+targets; configuration never writes a version header into authored source.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
 and the nearest component `AGENTS.md` before editing.
 

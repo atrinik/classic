@@ -14,8 +14,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <version.h>
-
 static char window_title[sizeof(PACKAGE_NAME) + sizeof(" — ") + CLIENT_LAUNCH_LABEL_MAX_SIZE] =
     PACKAGE_NAME;
 

@@ -23,7 +23,11 @@ PACKAGED_DEPENDENCIES = {
     "server": ("protocol", "libatrinik"),
     "libatrinik": ("protocol",),
 }
-SHARED_PATHS = ("LICENSE.md", "ATTRIBUTIONS.md")
+SHARED_PATHS = (
+    "LICENSE.md",
+    "ATTRIBUTIONS.md",
+    "cmake/AtrinikVersion.cmake",
+)
 PROVENANCE_PREFIX = "docs/history/"
 
 

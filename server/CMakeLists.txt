@@ -1,30 +1,15 @@
 cmake_minimum_required(VERSION 3.21)
 
-set(ATRINIK_SOURCE_VERSION "5.1.0")
-if (DEFINED ENV{ATRINIK_PACKAGE_VERSION})
-    set(ATRINIK_SOURCE_VERSION "$ENV{ATRINIK_PACKAGE_VERSION}")
-elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
-    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
-        ATRINIK_SOURCE_VERSION LIMIT_COUNT 1)
-else ()
-    execute_process(
-        COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}"
-            describe --tags --exact-match --match "v[0-9]*"
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        OUTPUT_VARIABLE ATRINIK_GIT_TAG
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET
-        RESULT_VARIABLE ATRINIK_GIT_TAG_RESULT)
-    if (ATRINIK_GIT_TAG_RESULT EQUAL 0)
-        string(REGEX REPLACE "^v" "" ATRINIK_SOURCE_VERSION
-            "${ATRINIK_GIT_TAG}")
+if (NOT ATRINIK_INTEGRATED_BUILD)
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/AtrinikVersion.cmake")
+        include(cmake/AtrinikVersion.cmake)
+    else ()
+        include(../cmake/AtrinikVersion.cmake)
     endif ()
+    atrinik_resolve_version(ATRINIK_SOURCE_VERSION)
+    project(atrinik-server VERSION "${ATRINIK_SOURCE_VERSION}" LANGUAGES C)
+    atrinik_initialize_version_metadata()
 endif ()
-if (NOT ATRINIK_SOURCE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
-    message(FATAL_ERROR "Atrinik source version must be MAJOR.MINOR.PATCH")
-endif ()
-
-project(atrinik-server VERSION "${ATRINIK_SOURCE_VERSION}" LANGUAGES C)
 
 include(CTest)
 include(FetchContent)
@@ -65,15 +50,6 @@ endif ()
 option(ENABLE_PYTHON_PLUGIN "Build the Python plugin" ON)
 set(PACKAGE_TYPE "none" CACHE STRING "Package type (none or zip)")
 
-set(PACKAGE_VERSION "${PROJECT_VERSION}" CACHE STRING
-    "Semantic version shown by the server and used for packages")
-if (NOT PACKAGE_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)$")
-    message(FATAL_ERROR "PACKAGE_VERSION must be a three-part semantic version")
-endif ()
-set(PACKAGE_VERSION_MAJOR "${CMAKE_MATCH_1}")
-set(PACKAGE_VERSION_MINOR "${CMAKE_MATCH_2}")
-set(PACKAGE_VERSION_PATCH "${CMAKE_MATCH_3}")
-
 if (MINGW)
     set(PLUGIN_SUFFIX ".dll")
     add_compile_definitions(HAVE_STRUCT_TIMESPEC NOCRYPT __USE_MINGW_ANSI_STDIO=0)
@@ -85,6 +61,7 @@ endif ()
 function(atrinik_configure_target target)
     target_compile_features(${target} PRIVATE c_std_17)
     target_compile_definitions(${target} PRIVATE _GNU_SOURCE)
+    atrinik_apply_version_metadata(${target})
     if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${target} PRIVATE
             -Wall -Wextra -Wno-unused-parameter -fno-common)
@@ -243,7 +220,6 @@ else ()
 endif ()
 
 configure_file(src/include/cmake.h.def src/include/cmake.h)
-configure_file(src/include/version.h.def src/include/version.h)
 
 add_library(atrinik-server-core OBJECT
     ${SERVER_CORE_SOURCES}
