@@ -106,6 +106,35 @@ startup cost and duplicate data without exposing useful tags. When content intro
 authored tag domain, the catalog and runtime collector should publish a compact runtime index
 for that domain; the existing bounded metric collections can consume those stable tags.
 
+## Journal taxonomy and noise budget
+
+The following review covers every current registry prefix. A named selected
+subset is `gameplay-journal`; the remaining wildcard in that row is
+`aggregate-only`. Rates are conservative per active character and explain why
+the journal admits only bounded recovery milestones. Authentication failures,
+operator commands, and security decisions are `operational/security-log` and
+are intentionally absent from this gameplay registry. Chat text and ordinary
+combat/movement detail are `not-recorded`; their exclusion is not a missing
+metric hook.
+
+| Registry names | Classification | Estimated rate and rationale |
+| --- | --- | --- |
+| `lifecycle.*` and `roster.*` | aggregate-only | From one per account lifetime to one per session. Character creation/deletion is recovery-relevant, but remains aggregate-only until the account-file transaction can correlate the roster and character-directory domains without a false commit. |
+| `progression.current_level`, `progression.highest_level`, `progression.levels_gained`, `progression.last_level_gained_at`, `progression.skill_current_level`, `progression.skill_highest_level`, `progression.skill_levels_gained` | gameplay-journal | Usually fewer than ten per long session; level boundaries are recovery-relevant. `progression.experience_gained` and per-skill gains can occur on every credited action and remain aggregate-only; losses and explicit exact adjustments journal their actual skill before/after value. |
+| `magic.spells_learned`, `magic.spells_forgotten`, `magic.known_spells`, `magic.highest_known_spells`, `magic.spells_learned_ids` | gameplay-journal | Normally zero or a handful per session; stable spell-set transitions. Cast/failure/mana families can occur every combat turn and remain aggregate-only. |
+| `quests.started`, `quests.completed`, `quests.failed`, `quests.repeatable_completed`, keyed quest outcomes, and completed quest/part sets | gameplay-journal | Bounded authored milestones, normally fewer than twenty per session. Active/highest-active snapshots remain aggregate-only; intermediate state-key writes are not recorded. |
+| `survival.deaths*`, `survival.respawns`, `survival.deaths_avoided`, `survival.savebeds_bound`, and `survival.savebed_regions` | gameplay-journal | Rare support/recovery transitions, generally fewer than five per session. Regeneration, poison/disease ticks, food, healing, and time-since-death values are aggregate-only. |
+| Selected `items.*` custody and `economy.*` bank/shop transaction counters | gameplay-journal | Transaction-level producers are bounded by successful player actions and documented in the item/economy matrix. Consumption, ammunition, internal reordering, and generated helper objects remain aggregate-only or not-recorded. |
+| `exploration.*`, `discoveries.*`, and `lore.*` | aggregate-only | First-ID sets are bounded and statistically useful, but current producers do not carry a complete authored milestone/recovery contract. Routine map transitions and repeated visits can occur many times per minute. |
+| `skills.*` and `social.*` | aggregate-only | Construction, rename, guild, jail, and bounty counters are low-volume candidates, but remain aggregates until each semantic producer supplies stable identity and before/after context. Skill uses and chat-like actions can occur every turn and are reconstructively weak. |
+| `sessions.*`, remaining `lifecycle.*`, and remaining `roster.*` | aggregate-only | Checkpoint/session facts from one per login to periodic duration updates; reconstructively useful as totals, not ordered recovery actions. |
+| `combat.*`, `pvp.*`, `ranged.*`, `movement.*`, `support.*`, and remaining `survival.*` | aggregate-only | From several per minute to several per second during play. Per-attack, hit, damage, heal, regeneration, ordinary kill, step, and traversal journals would be high-volume and reconstructively weak. |
+| Remaining `items.*`, `economy.*`, `skills.*`, `social.*`, `magic.*`, and all successful `authentication.*` | aggregate-only | Useful lifetime totals but frequent, privacy-sensitive, internally repetitive, or already represented by a selected transaction producer. Failed credentials and privileged security actions stay only in protected operational logs. |
+
+Every current scalar, bounded collection, and keyed series matches one row by
+its registry prefix. New registry families must extend this table and name an
+estimated rate before any journal producer is accepted.
+
 ## Event semantics
 
 - A successful account authentication is a verified password followed by a

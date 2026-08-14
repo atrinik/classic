@@ -110,6 +110,9 @@ bool gameplay_journal_track_map_object(const char *transaction_id,
 bool gameplay_journal_map_identity(const mapstruct *map,
                                    char output[GAMEPLAY_JOURNAL_ID_MAX + 1]);
 
+/** Encode a persisted map path as the same stable journal identity. */
+bool gameplay_journal_map_path_identity(const char *path, char output[GAMEPLAY_JOURNAL_ID_MAX + 1]);
+
 /** Whether a save domain is free of journal transactions awaiting a terminal record. */
 bool gameplay_journal_player_checkpoint_allowed(const object *player_ob);
 bool gameplay_journal_map_checkpoint_allowed(const mapstruct *map);
@@ -145,6 +148,16 @@ bool gameplay_journal_player_begin_change(
     const char *reason,
     const gameplay_journal_change_t *change,
     char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]);
+
+/** Begin one bounded quest, progression, or survival milestone. */
+bool gameplay_journal_milestone_begin(object *player_ob,
+                                      gameplay_journal_kind_t kind,
+                                      const char *reason,
+                                      const char *subject_id,
+                                      const char *lineage_id,
+                                      int64_t before,
+                                      int64_t after,
+                                      char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]);
 
 /** Begin one reason-aware player currency mutation. */
 bool gameplay_journal_currency_begin(object *player_ob,
