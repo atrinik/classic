@@ -41,6 +41,9 @@ extern uint8_t light_level_from_raw(int raw_light);
 
 extern bool light_color_parse(const char *value, uint32_t *color);
 
+/** Convert an authored sRGB color to normalized scene-linear Q0.16 channels. */
+extern void light_color_linearize(uint32_t color, uint16_t linear[3]);
+
 /** Resolve aggregate pre-tone Q5.11 radiance for one authorized map sample. */
 extern void light_radiance_from_raw(const MapSpace *space,
                                     int raw_light,
