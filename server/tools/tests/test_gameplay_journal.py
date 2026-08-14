@@ -913,7 +913,7 @@ class JournalTests(unittest.TestCase):
                 {"quest.item-grant"}, {"object_custody_begin", "object_insert_into_reason"},
             ),
             ("src/server/quest.c", "quest_check_item"): (
-                {"quest.objective-grant"}, {"object_insert_into_reason"},
+                {"quest.objective-grant"}, {"object_custody_begin", "object_insert_into"},
             ),
             ("src/server/party.c", "party_loot_random"): (
                 {"item.party-loot", "party.currency-loot"},

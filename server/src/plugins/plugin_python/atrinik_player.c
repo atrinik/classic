@@ -433,7 +433,8 @@ static const char doc_Atrinik_Player_JournalIntent[] =
     "Kinds are quest and progression; item and currency mutations must use the reason-aware "
     "object and coin APIs. Values and identifiers are structured; "
     "free-form record text is not accepted.\n\n"
-    ":returns: Opaque transaction identifier to commit or abort.\n:rtype: str\n"
+    ":returns: Opaque transaction identifier to commit or abort, or an empty string when "
+    "journaling is disabled.\n:rtype: str\n"
     ":raises RuntimeError: If a typed field is invalid or the journal cannot durably write the "
     "intent.";
 
@@ -450,6 +451,9 @@ static PyObject *Atrinik_Player_JournalIntent(Atrinik_Player *self, PyObject *ar
                           &after,
                           &lineage)) {
         return NULL;
+    }
+    if (!hooks->gameplay_journal_required()) {
+        return PyUnicode_FromString("");
     }
     char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
     if (!hooks->gameplay_journal_player_begin(self->pl,
@@ -471,7 +475,7 @@ static PyObject *Atrinik_Player_JournalIntent(Atrinik_Player *self, PyObject *ar
 static const char doc_Atrinik_Player_JournalCommit[] =
     ".. method:: JournalCommit(transaction_id).\n\n"
     "Durably commits a previously written gameplay transaction intent. The gameplay mutation "
-    "must already have succeeded.\n\n"
+    "must already have succeeded. This is a no-op when journaling is disabled.\n\n"
     ":raises RuntimeError: If the transaction is unknown or the commit cannot be durable.";
 
 static PyObject *Atrinik_Player_JournalCommit(Atrinik_Player *self, PyObject *args) {
@@ -479,6 +483,9 @@ static PyObject *Atrinik_Player_JournalCommit(Atrinik_Player *self, PyObject *ar
     const char *transaction_id;
     if (!PyArg_ParseTuple(args, "s", &transaction_id)) {
         return NULL;
+    }
+    if (!hooks->gameplay_journal_required()) {
+        Py_RETURN_NONE;
     }
     if (!hooks->gameplay_journal_commit(transaction_id)) {
         PyErr_SetString(PyExc_RuntimeError, "Gameplay journal could not commit the transaction.");
@@ -490,6 +497,7 @@ static PyObject *Atrinik_Player_JournalCommit(Atrinik_Player *self, PyObject *ar
 static const char doc_Atrinik_Player_JournalAbort[] =
     ".. method:: JournalAbort(transaction_id, reason).\n\n"
     "Durably records that a vetoed or rolled-back gameplay transaction did not commit.\n\n"
+    "This is a no-op when journaling is disabled.\n\n"
     ":raises RuntimeError: If the transaction is unknown or the abort cannot be durable.";
 
 static PyObject *Atrinik_Player_JournalAbort(Atrinik_Player *self, PyObject *args) {
@@ -497,6 +505,9 @@ static PyObject *Atrinik_Player_JournalAbort(Atrinik_Player *self, PyObject *arg
     const char *transaction_id, *reason;
     if (!PyArg_ParseTuple(args, "ss", &transaction_id, &reason)) {
         return NULL;
+    }
+    if (!hooks->gameplay_journal_required()) {
+        Py_RETURN_NONE;
     }
     if (!hooks->gameplay_journal_abort(transaction_id, reason)) {
         PyErr_SetString(PyExc_RuntimeError, "Gameplay journal could not abort the transaction.");
