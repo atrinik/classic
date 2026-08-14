@@ -19,8 +19,8 @@ from typing import NoReturn
 from movement_benchmark_schema import RENDER_STAGES, validate_record
 
 
-EVIDENCE_SCHEMA_VERSION = 5
-NATIVE_SCHEMA_VERSION = 5
+EVIDENCE_SCHEMA_VERSION = 6
+NATIVE_SCHEMA_VERSION = 6
 SUSTAINED_P95_LIMIT_NS = 33_300_000
 LARGE_SUSTAINED_P95_LIMIT_NS = 125_000_000
 DISPLAY_REFERENCE_FPS = 144
@@ -39,13 +39,30 @@ CROSS_CONTRACT_NOTE = "baseline-movement-schema-mismatch"
 INFORMATIONAL_COMPARISON_NOTES = {COMPARE_FOUNDATION_NOTE, CROSS_CONTRACT_NOTE}
 STANDARD_DISCRETE_CONTEXT = "standard_discrete"
 LARGE_DISCRETE_CONTEXT = "large_discrete"
+STANDARD_TRANSLATED_CONTEXT = "standard_lighting_translated"
+LARGE_TRANSLATED_CONTEXT = "large_lighting_translated"
+STANDARD_FULL_CONTEXT = "standard_full"
+LARGE_FULL_CONTEXT = "large_full"
 INITIAL_ERROR_REASONS = ("client-validation-ended-before-movement-evidence",)
 LIGHTING_FIELDS = {
     "field_rebuilds",
     "field_reuses",
     "field_dirty_pixels",
     "field_translations",
+    "field_translated_pixels",
+    "field_translated_bytes",
+    "field_scroll_x_pixels",
+    "field_scroll_y_pixels",
+    "field_translation_fallback_active",
+    "field_translation_fallback_bounds",
+    "field_translation_fallback_control",
     "field_partial_rebuilds",
+    "field_full_rebuilds",
+    "field_full_rebuild_cache",
+    "field_full_rebuild_active",
+    "field_full_rebuild_bounds",
+    "field_full_rebuild_control",
+    "field_full_rebuild_other",
     "lit_sprite_lookups",
     "lit_sprite_hits",
     "lit_sprite_misses",
@@ -54,6 +71,16 @@ LIGHTING_FIELDS = {
     "bytes",
     "retained_field_bytes",
 }
+LIGHTING_TIMING_FIELDS = (
+    "translation",
+    "dirty_clear",
+    "rasterization",
+    "extrapolation",
+    "tone_map_multiply",
+    "sprite_lookup",
+    "sprite_construction",
+    "sprite_invalidation",
+)
 NATIVE_GUARD_NAMES = (
     "full_redraw_accounting",
     "noop_redraw_avoidance",
@@ -143,6 +170,8 @@ def run_benchmark(
     expected_revision: str | None = None,
     checkpoint_directory: Path | None = None,
     record_validator: RecordValidator = validate_record,
+    reconstruction: str | None = None,
+    workload_variant: str | None = None,
 ) -> dict[str, object]:
     timeout = 900 if viewport == "large" else 180
     environment = os.environ.copy()
@@ -157,8 +186,15 @@ def run_benchmark(
         environment["ATRINIK_MOVEMENT_CHECKPOINT_DIR"] = str(unique_directory)
     started = time.monotonic()
     print(f"movement benchmark: starting {client.name} ({viewport})", file=sys.stderr, flush=True)
+    command = [str(client), "--player-view-movement-benchmark", str(manifest), viewport]
+    if reconstruction is not None:
+        command.append(reconstruction)
+    if workload_variant is not None:
+        if reconstruction is None:
+            raise BenchmarkError("movement workload variant requires a reconstruction mode")
+        command.append(workload_variant)
     result = subprocess.run(
-        [str(client), "--player-view-movement-benchmark", str(manifest), viewport],
+        command,
         check=False,
         capture_output=True,
         text=True,
@@ -281,6 +317,62 @@ def _render_stage_summary(
     return result
 
 
+def _lighting_timing_summary(
+    records: list[dict[str, object]], name: str, level_index: int | None = None
+) -> dict[str, dict[str, int | float | None]]:
+    """Summarize attributable lighting scopes without discarding raw evidence."""
+    result: dict[str, dict[str, int | float | None]] = {}
+    for timing_name in LIGHTING_TIMING_FIELDS:
+        values = []
+        for record in records:
+            lighting = phase(record, name)["lighting"]
+            source = (
+                lighting["timings"]
+                if level_index is None
+                else lighting["levels"][level_index]["timings"]
+            )
+            values.append(source[timing_name])
+        calls = _median_integer([value["calls"] for value in values])
+        elapsed_ns = _median_integer([value["elapsed"] for value in values])
+        result[timing_name] = {
+            "calls_per_run": calls,
+            "elapsed_ms_per_run": round(elapsed_ns / 1_000_000, 3),
+            "avg_us_per_call": round(elapsed_ns / calls / 1_000, 3) if calls else None,
+        }
+    return result
+
+
+def _lighting_level_summary(
+    records: list[dict[str, object]], name: str
+) -> list[dict[str, object]]:
+    result = []
+    for index, depth in enumerate(range(-6, 7)):
+        levels = [phase(record, name)["lighting"]["levels"][index] for record in records]
+        counters = {
+            field: _median_integer([level["counters"][field] for level in levels])
+            for field in LIGHTING_FIELDS | {"field_begins"}
+            if field not in {"entries", "bytes", "retained_field_bytes"}
+        }
+        width = _median_integer([level["width"] for level in levels])
+        height = _median_integer([level["height"] for level in levels])
+        eligible_pixels = counters["field_begins"] * width * height
+        result.append(
+            {
+                "depth": depth,
+                "width": width,
+                "height": height,
+                "counters": counters,
+                "dirty_ratio_percent": (
+                    round(counters["field_dirty_pixels"] / eligible_pixels * 100, 2)
+                    if eligible_pixels
+                    else None
+                ),
+                "timings": _lighting_timing_summary(records, name, index),
+            }
+        )
+    return result
+
+
 def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, object]:
     """Summarize per-run telemetry while retaining raw records in the evidence."""
     if not records:
@@ -311,6 +403,25 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
     )
     minimap_p95_ns = _median_integer(
         [phase(record, name)["local_minimap"]["map_time"]["p95"] for record in records]
+    )
+    attribution_available = all(
+        "lighting_work_time" in phase(record, name)
+        and "timings" in phase(record, name)["lighting"]
+        for record in records
+    )
+    lighting_work_p50_ns = (
+        _median_integer(
+            [phase(record, name)["lighting_work_time"]["p50"] for record in records]
+        )
+        if attribution_available
+        else 0
+    )
+    lighting_work_p95_ns = (
+        _median_integer(
+            [phase(record, name)["lighting_work_time"]["p95"] for record in records]
+        )
+        if attribution_available
+        else 0
     )
     lighting = _nested_medians(records, name, "lighting", LIGHTING_FIELDS)
     lookups = lighting["lit_sprite_lookups"]
@@ -368,6 +479,9 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
         "animation_p95_ms": round(animation_p95_ns / 1_000_000, 2),
         "local_minimap_p50_ms": round(minimap_p50_ns / 1_000_000, 2),
         "local_minimap_p95_ms": round(minimap_p95_ns / 1_000_000, 2),
+        "lighting_work_available": attribution_available,
+        "lighting_work_p50_ms": round(lighting_work_p50_ns / 1_000_000, 3),
+        "lighting_work_p95_ms": round(lighting_work_p95_ns / 1_000_000, 3),
         "work_p99_ms": round(_phase_median(records, name, "p99_ns") / 1_000_000, 2),
         "work_max_ms": round(_phase_median(records, name, "max_ns") / 1_000_000, 2),
         "first_window_p95_ms": round(
@@ -446,7 +560,18 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
             "simulated_command_us": 5_000,
             "order_digests_comparable": order_digests_comparable,
         },
-        "lighting": {**lighting, "hit_rate_percent": hit_rate},
+        "lighting": {
+            **lighting,
+            "hit_rate_percent": hit_rate,
+            **(
+                {
+                    "timings": _lighting_timing_summary(records, name),
+                    "levels": _lighting_level_summary(records, name),
+                }
+                if attribution_available
+                else {}
+            ),
+        },
     }
 
 
@@ -710,18 +835,33 @@ def _guard_native_record(record: dict[str, object]) -> dict[str, dict[str, objec
         )
         viewport = record["identity"]["run"]["viewport"]
         maximum_dirty_pixels = maximum_updates * viewport["width"] * viewport["height"]
-        translated = (
-            rebuilds > 0
-            and translations == rebuilds
-            and 0 < partial_rebuilds <= rebuilds
-            and 0 < dirty_pixels
-            and dirty_pixels * 4 <= maximum_dirty_pixels * 3
-        )
+        if record["identity"]["run"]["reconstruction"] == "full":
+            reconstruction_valid = (
+                rebuilds == maximum_updates
+                and counters["field_full_rebuilds"] == maximum_updates
+                and counters["field_translation_fallback_control"] == maximum_updates
+                and translations == partial_rebuilds == 0
+                and dirty_pixels > 0
+            )
+        else:
+            reconstruction_valid = (
+                rebuilds > 0
+                and translations == rebuilds
+                and 0 < partial_rebuilds <= rebuilds
+                and partial_rebuilds + counters["field_full_rebuilds"] == rebuilds
+                and counters["field_full_rebuilds"]
+                <= 4 * lighting["peak"]["allocated_levels"]
+                and counters["field_translation_fallback_active"] == 0
+                and counters["field_translation_fallback_bounds"] == 0
+                and counters["field_translation_fallback_control"] == 0
+                and 0 < dirty_pixels
+                and dirty_pixels * 4 <= maximum_dirty_pixels * 3
+            )
         cache_valid = (
             dirty_marks <= maximum_updates
             and rebuilds <= maximum_updates
             and rebuilds + reuses == maximum_updates
-            and translated
+            and reconstruction_valid
         )
     guards["lighting_cache_churn"] = {
         "field_dirty_marks": dirty_marks,
@@ -810,6 +950,76 @@ def _context_consistency(records: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
+def _reconstruction_equivalence(
+    translated: list[dict[str, object]], full: list[dict[str, object]]
+) -> dict[str, object]:
+    translated_checkpoints = {record["checkpoint_sha256"] for record in translated}
+    full_checkpoints = {record["checkpoint_sha256"] for record in full}
+    translated_states = {record["final_state_digest"] for record in translated}
+    full_states = {record["final_state_digest"] for record in full}
+    translated_offsets = {
+        (
+            record["phases"][1]["lighting"]["counters"]["field_scroll_x_pixels"],
+            record["phases"][1]["lighting"]["counters"]["field_scroll_y_pixels"],
+        )
+        for record in translated
+    }
+    full_offsets = {
+        (
+            record["phases"][1]["lighting"]["counters"]["field_scroll_x_pixels"],
+            record["phases"][1]["lighting"]["counters"]["field_scroll_y_pixels"],
+        )
+        for record in full
+    }
+
+    def contract_identity(record: dict[str, object]) -> str:
+        run = dict(record["identity"]["run"])
+        del run["reconstruction"]
+        return json.dumps(
+            {
+                "instrumentation": record["identity"]["instrumentation"],
+                "implementation": record["identity"]["implementation"],
+                "run": run,
+                "fixture": record["fixture"],
+            },
+            sort_keys=True,
+        )
+
+    translated_identities = {contract_identity(record) for record in translated}
+    full_identities = {contract_identity(record) for record in full}
+    identities_match = (
+        len(translated_identities) == len(full_identities) == 1
+        and translated_identities == full_identities
+    )
+    checkpoints_match = (
+        len(translated_checkpoints) == len(full_checkpoints) == 1
+        and translated_checkpoints == full_checkpoints
+    )
+    final_states_match = (
+        len(translated_states) == len(full_states) == 1
+        and translated_states == full_states
+    )
+    offsets_match = (
+        len(translated_offsets) == len(full_offsets) == 1
+        and translated_offsets == full_offsets
+    )
+    return {
+        "translated_runs": len(translated),
+        "full_runs": len(full),
+        "checkpoint_sha256": next(iter(translated_checkpoints), None),
+        "identities_match": identities_match,
+        "checkpoints_match": checkpoints_match,
+        "final_states_match": final_states_match,
+        "scroll_offsets_match": offsets_match,
+        "passed": len(translated) >= 1
+        and len(full) >= 2
+        and checkpoints_match
+        and final_states_match
+        and offsets_match
+        and identities_match,
+    }
+
+
 def _require_native_context(
     records: list[dict[str, object]],
     context: str,
@@ -817,6 +1027,8 @@ def _require_native_context(
     lighting_mode: str,
     *,
     exact_runs: int | None = None,
+    reconstruction: str | None = "translated",
+    workload_variant: str | None = "production",
 ) -> None:
     if not records or (exact_runs is not None and len(records) != exact_runs):
         raise BenchmarkError(f"movement regression {context} has an invalid run count")
@@ -825,9 +1037,15 @@ def _require_native_context(
             run = record["identity"]["run"]
             actual_viewport = run["viewport"]["name"]
             actual_mode = run["mode"]
+            actual_reconstruction = run.get("reconstruction")
+            actual_workload = run.get("workload_variant")
         except (KeyError, TypeError) as error:
             raise BenchmarkError(f"movement regression {context} has an invalid identity") from error
-        if actual_viewport != viewport or actual_mode != lighting_mode:
+        if actual_viewport != viewport or actual_mode != lighting_mode or (
+            reconstruction is not None and actual_reconstruction != reconstruction
+        ) or (
+            workload_variant is not None and actual_workload != workload_variant
+        ):
             raise BenchmarkError(f"movement regression {context} has an invalid identity")
 
 
@@ -861,15 +1079,28 @@ def _build_evidence(
     _validate_enforcement_policy(bool(baseline), enforce_performance, comparison_note)
     _require_native_context(candidate, "candidate standard", "standard", "smooth")
     if baseline:
-        _require_native_context(baseline, "baseline standard", "standard", "smooth")
+        _require_native_context(
+            baseline,
+            "baseline standard",
+            "standard",
+            "smooth",
+            reconstruction=None,
+            workload_variant=None,
+        )
     if candidate_large:
         _require_native_context(
             candidate_large, "candidate large", "large", "smooth", exact_runs=2
         )
     contexts = additional_contexts or {}
-    expected_contexts = {STANDARD_DISCRETE_CONTEXT}
+    expected_contexts = {
+        STANDARD_DISCRETE_CONTEXT,
+        STANDARD_TRANSLATED_CONTEXT,
+        STANDARD_FULL_CONTEXT,
+    }
     if candidate_large:
         expected_contexts.add(LARGE_DISCRETE_CONTEXT)
+        expected_contexts.add(LARGE_TRANSLATED_CONTEXT)
+        expected_contexts.add(LARGE_FULL_CONTEXT)
     if set(contexts) != expected_contexts:
         raise BenchmarkError("movement regression has an incomplete context matrix")
     _require_native_context(
@@ -879,6 +1110,21 @@ def _build_evidence(
         "discrete",
         exact_runs=2,
     )
+    _require_native_context(
+        contexts[STANDARD_TRANSLATED_CONTEXT],
+        "candidate standard isolated translated reconstruction",
+        "standard",
+        "smooth",
+        workload_variant="isolated-lighting",
+    )
+    _require_native_context(
+        contexts[STANDARD_FULL_CONTEXT],
+        "candidate standard full reconstruction",
+        "standard",
+        "smooth",
+        reconstruction="full",
+        workload_variant="isolated-lighting",
+    )
     if candidate_large:
         _require_native_context(
             contexts[LARGE_DISCRETE_CONTEXT],
@@ -886,6 +1132,23 @@ def _build_evidence(
             "large",
             "discrete",
             exact_runs=2,
+        )
+        _require_native_context(
+            contexts[LARGE_TRANSLATED_CONTEXT],
+            "candidate large isolated translated reconstruction",
+            "large",
+            "smooth",
+            exact_runs=2,
+            workload_variant="isolated-lighting",
+        )
+        _require_native_context(
+            contexts[LARGE_FULL_CONTEXT],
+            "candidate large full reconstruction",
+            "large",
+            "smooth",
+            exact_runs=2,
+            reconstruction="full",
+            workload_variant="isolated-lighting",
         )
 
     candidate_p95 = _median_phase_value(candidate, "sustained", "p95_ns")
@@ -922,9 +1185,15 @@ def _build_evidence(
     checks["instrumentation_identity"] = _identity_check(baseline, candidate)
     checks.update(_aggregate_native_guards(candidate + candidate_large))
     checks["candidate_standard_determinism"] = _context_consistency(candidate)
+    checks["candidate_standard_reconstruction_equivalence"] = _reconstruction_equivalence(
+        contexts[STANDARD_TRANSLATED_CONTEXT], contexts[STANDARD_FULL_CONTEXT]
+    )
     if candidate_large:
         checks["large_instrumentation_identity"] = _identity_check([], candidate_large)
         checks["candidate_large_determinism"] = _context_consistency(candidate_large)
+        checks["candidate_large_reconstruction_equivalence"] = _reconstruction_equivalence(
+            contexts[LARGE_TRANSLATED_CONTEXT], contexts[LARGE_FULL_CONTEXT]
+        )
     if contexts:
         for context, context_records in contexts.items():
             checks[f"{context}_determinism"] = _context_consistency(context_records)
@@ -1003,6 +1272,7 @@ def compare(
     candidate_client: Path,
     candidate_manifest: Path,
     discrete_manifest: Path | None,
+    lighting_manifest: Path | None,
     samples: int,
     baseline_revision: str | None = None,
     candidate_revision: str | None = None,
@@ -1011,9 +1281,14 @@ def compare(
     checkpoint_root: Path | None = None,
     baseline_validator: RecordValidator = validate_record,
 ) -> dict[str, object]:
-    if discrete_manifest is None:
-        raise BenchmarkError("movement comparison requires a discrete manifest")
-    records: dict[str, list[dict[str, object]]] = {"baseline": [], "candidate": []}
+    if discrete_manifest is None or lighting_manifest is None:
+        raise BenchmarkError("movement comparison requires discrete and lighting manifests")
+    records: dict[str, list[dict[str, object]]] = {
+        "baseline": [],
+        "candidate": [],
+        "candidate_lighting_translated": [],
+        "candidate_full": [],
+    }
     for sample in range(samples):
         order = ("baseline", "candidate") if sample % 2 == 0 else ("candidate", "baseline")
         for implementation in order:
@@ -1029,6 +1304,27 @@ def compare(
                         else None
                     ),
                     baseline_validator if implementation == "baseline" else validate_record,
+                    reconstruction=None if implementation == "baseline" else "translated",
+                )
+            )
+        modes = ("translated", "full") if sample % 2 == 0 else ("full", "translated")
+        for reconstruction in modes:
+            target = (
+                records["candidate_lighting_translated"]
+                if reconstruction == "translated"
+                else records["candidate_full"]
+            )
+            target.append(
+                run_benchmark(
+                    candidate_client,
+                    lighting_manifest,
+                    "standard",
+                    candidate_revision,
+                    checkpoint_root / f"candidate-standard-lighting-{reconstruction}-{sample + 1}"
+                    if checkpoint_root is not None
+                    else None,
+                    reconstruction=reconstruction,
+                    workload_variant="isolated",
                 )
             )
     standard_discrete = [
@@ -1040,6 +1336,7 @@ def compare(
             checkpoint_root / f"candidate-standard-discrete-{sample + 1}"
             if checkpoint_root is not None
             else None,
+            reconstruction="translated",
         )
         for sample in range(2)
     ]
@@ -1047,7 +1344,11 @@ def compare(
         records["baseline"],
         records["candidate"],
         [],
-        {STANDARD_DISCRETE_CONTEXT: standard_discrete},
+        {
+            STANDARD_DISCRETE_CONTEXT: standard_discrete,
+            STANDARD_TRANSLATED_CONTEXT: records["candidate_lighting_translated"],
+            STANDARD_FULL_CONTEXT: records["candidate_full"],
+        },
         enforce_performance=enforce_performance,
         comparison_note=comparison_note,
     )
@@ -1058,25 +1359,53 @@ def candidate_only(
     candidate_manifest: Path,
     candidate_revision: str | None = None,
     discrete_manifest: Path | None = None,
+    lighting_manifest: Path | None = None,
     full_matrix: bool = False,
     enforce_performance: bool = True,
     comparison_note: str | None = None,
     checkpoint_root: Path | None = None,
 ) -> dict[str, object]:
-    if discrete_manifest is None:
-        raise BenchmarkError("candidate-only movement validation requires a discrete manifest")
+    if discrete_manifest is None or lighting_manifest is None:
+        raise BenchmarkError(
+            "candidate-only movement validation requires discrete and lighting manifests"
+        )
     standard = [
         run_benchmark(
             candidate_client,
             candidate_manifest,
             "standard",
             candidate_revision,
-            checkpoint_root / f"candidate-standard-{sample + 1}"
+            checkpoint_root / f"candidate-standard-production-{sample + 1}"
             if checkpoint_root is not None
             else None,
+            reconstruction="translated",
+            workload_variant="production",
         )
         for sample in range(2)
     ]
+    standard_lighting_translated: list[dict[str, object]] = []
+    standard_full: list[dict[str, object]] = []
+    for sample in range(2):
+        modes = ("translated", "full") if sample % 2 == 0 else ("full", "translated")
+        for reconstruction in modes:
+            target = (
+                standard_lighting_translated
+                if reconstruction == "translated"
+                else standard_full
+            )
+            target.append(
+                run_benchmark(
+                    candidate_client,
+                    lighting_manifest,
+                    "standard",
+                    candidate_revision,
+                    checkpoint_root / f"candidate-standard-lighting-{reconstruction}-{sample + 1}"
+                    if checkpoint_root is not None
+                    else None,
+                    reconstruction=reconstruction,
+                    workload_variant="isolated",
+                )
+            )
     standard_discrete = [
         run_benchmark(
             candidate_client,
@@ -1086,12 +1415,15 @@ def candidate_only(
             checkpoint_root / f"candidate-standard-discrete-{sample + 1}"
             if checkpoint_root is not None
             else None,
+            reconstruction="translated",
         )
         for sample in range(2)
     ]
     large: list[dict[str, object]] = []
     additional_contexts: dict[str, list[dict[str, object]]] = {
         STANDARD_DISCRETE_CONTEXT: standard_discrete,
+        STANDARD_TRANSLATED_CONTEXT: standard_lighting_translated,
+        STANDARD_FULL_CONTEXT: standard_full,
     }
     if full_matrix:
         large = [
@@ -1100,12 +1432,39 @@ def candidate_only(
                 candidate_manifest,
                 "large",
                 candidate_revision,
-                checkpoint_root / f"candidate-large-smooth-{sample + 1}"
+                checkpoint_root / f"candidate-large-production-{sample + 1}"
                 if checkpoint_root is not None
                 else None,
+                reconstruction="translated",
+                workload_variant="production",
             )
             for sample in range(2)
         ]
+        large_lighting_translated: list[dict[str, object]] = []
+        large_full: list[dict[str, object]] = []
+        for sample in range(2):
+            modes = ("translated", "full") if sample % 2 == 0 else ("full", "translated")
+            for reconstruction in modes:
+                target = (
+                    large_lighting_translated
+                    if reconstruction == "translated"
+                    else large_full
+                )
+                target.append(
+                    run_benchmark(
+                        candidate_client,
+                        lighting_manifest,
+                        "large",
+                        candidate_revision,
+                        checkpoint_root / f"candidate-large-lighting-{reconstruction}-{sample + 1}"
+                        if checkpoint_root is not None
+                        else None,
+                        reconstruction=reconstruction,
+                        workload_variant="isolated",
+                    )
+                )
+        additional_contexts[LARGE_FULL_CONTEXT] = large_full
+        additional_contexts[LARGE_TRANSLATED_CONTEXT] = large_lighting_translated
         additional_contexts[LARGE_DISCRETE_CONTEXT] = [
             run_benchmark(
                 candidate_client,
@@ -1115,6 +1474,7 @@ def candidate_only(
                 checkpoint_root / f"candidate-large-discrete-{sample + 1}"
                 if checkpoint_root is not None
                 else None,
+                reconstruction="translated",
             )
             for sample in range(2)
         ]
@@ -1189,6 +1549,115 @@ def _fallback_comment(message: str) -> str:
     )
 
 
+def _append_lighting_ab_report(
+    lines: list[str],
+    contexts: list[tuple[str, dict[str, object], dict[str, object]]],
+) -> None:
+    """Render the focused same-contract lighting reconstruction comparison."""
+    lines.extend(
+        [
+            "### Attributable lighting movement A/B",
+            "",
+            "Translated and full reconstruction replay the same sustained movement stream. "
+            "`Lighting work` sums the non-overlapping instrumented lighting scopes accumulated "
+            "from before queued MAP decode through the primary map draw; it excludes the "
+            "separately measured local minimap. The broader "
+            "total-work and render-profiler rows remain production-like parent measurements and "
+            "must not be added to these operation timings.",
+            "",
+            "| Viewport | Mode | Lighting work p50/p95 | Total work p95 | "
+            "Full/partial/reuse decisions | Dirty pixels (ratio) | Translated pixels/bytes | "
+            "Full causes cache/active/bounds/control/other | Scroll offset X/Y |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for viewport, translated, full in contexts:
+        for mode, summary in (("translated", translated), ("full control", full)):
+            lighting = summary["lighting"]
+            active_levels = [level for level in lighting["levels"] if level["width"] > 0]
+            dirty_pixels = sum(level["counters"]["field_dirty_pixels"] for level in active_levels)
+            eligible_pixels = sum(
+                level["counters"]["field_begins"] * level["width"] * level["height"]
+                for level in active_levels
+            )
+            dirty_ratio = dirty_pixels / eligible_pixels * 100 if eligible_pixels else 0.0
+            lines.append(
+                f"| {viewport} | {mode} | {summary['lighting_work_p50_ms']:.3f}/"
+                f"{summary['lighting_work_p95_ms']:.3f} ms | {summary['work_p95_ms']:.2f} ms | "
+                f"{lighting['field_full_rebuilds']}/{lighting['field_partial_rebuilds']}/"
+                f"{lighting['field_reuses']} | {dirty_pixels:,} ({dirty_ratio:.2f}%) | "
+                f"{lighting['field_translated_pixels']:,}/"
+                f"{_human_bytes(lighting['field_translated_bytes'])} | "
+                f"{lighting['field_full_rebuild_cache']}/"
+                f"{lighting['field_full_rebuild_active']}/"
+                f"{lighting['field_full_rebuild_bounds']}/"
+                f"{lighting['field_full_rebuild_control']}/"
+                f"{lighting['field_full_rebuild_other']} | "
+                f"{lighting['field_scroll_x_pixels']}/{lighting['field_scroll_y_pixels']} px |"
+            )
+
+    standard_translated = contexts[0][1]["lighting"]
+    standard_full = contexts[0][2]["lighting"]
+    lines.extend(
+        [
+            "",
+            "#### Standard sustained operation attribution",
+            "",
+            "| Operation | Translated calls / total / average | Full calls / total / average |",
+            "| --- | ---: | ---: |",
+        ]
+    )
+    for timing_name in LIGHTING_TIMING_FIELDS:
+        translated_timing = standard_translated["timings"][timing_name]
+        full_timing = standard_full["timings"][timing_name]
+
+        def timing_text(value: dict[str, object]) -> str:
+            average = value["avg_us_per_call"]
+            return (
+                f"{value['calls_per_run']} / {value['elapsed_ms_per_run']:.3f} ms / "
+                f"{average:.3f} µs" if average is not None else "0 / 0.000 ms / n/a"
+            )
+
+        lines.append(
+            f"| `{timing_name}` | {timing_text(translated_timing)} | "
+            f"{timing_text(full_timing)} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "<details>",
+            "<summary>Standard sustained per-depth attribution</summary>",
+            "",
+            "Offsets are cumulative absolute translated pixels. Dirty ratio is dirty pixels "
+            "divided by eligible field pixels across field-begin decisions.",
+            "",
+            "| Depth | Mode | Field | Full/partial/reuse | Dirty ratio | Translated bytes | "
+            "Offset X/Y | Full causes cache/active/bounds/control/other |",
+            "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for mode, lighting in (("translated", standard_translated), ("full", standard_full)):
+        for level in lighting["levels"]:
+            if level["width"] == 0:
+                continue
+            counters = level["counters"]
+            ratio = level["dirty_ratio_percent"]
+            lines.append(
+                f"| {level['depth']} | {mode} | {level['width']}×{level['height']} | "
+                f"{counters['field_full_rebuilds']}/{counters['field_partial_rebuilds']}/"
+                f"{counters['field_reuses']} | {ratio:.2f}% | "
+                f"{_human_bytes(counters['field_translated_bytes'])} | "
+                f"{counters['field_scroll_x_pixels']}/{counters['field_scroll_y_pixels']} px | "
+                f"{counters['field_full_rebuild_cache']}/"
+                f"{counters['field_full_rebuild_active']}/"
+                f"{counters['field_full_rebuild_bounds']}/"
+                f"{counters['field_full_rebuild_control']}/"
+                f"{counters['field_full_rebuild_other']} |"
+            )
+    lines.extend(["", "</details>", ""])
+
+
 def _phase_summary_for_report(summary: object, context: str) -> dict[str, object]:
     expected = {
         "runs",
@@ -1207,6 +1676,9 @@ def _phase_summary_for_report(summary: object, context: str) -> dict[str, object
         "animation_p95_ms",
         "local_minimap_p50_ms",
         "local_minimap_p95_ms",
+        "lighting_work_available",
+        "lighting_work_p50_ms",
+        "lighting_work_p95_ms",
         "work_p99_ms",
         "work_max_ms",
         "first_window_p95_ms",
@@ -1242,9 +1714,16 @@ def _phase_summary_for_report(summary: object, context: str) -> dict[str, object
         "animation_p95_ms",
         "local_minimap_p50_ms",
         "local_minimap_p95_ms",
+        "lighting_work_p50_ms",
+        "lighting_work_p95_ms",
     ):
         if type(summary[field]) not in (int, float) or summary[field] < 0:
             raise BenchmarkError(f"invalid phase summary: {context}")
+    if type(summary["lighting_work_available"]) is not bool or (
+        not summary["lighting_work_available"]
+        and (summary["lighting_work_p50_ms"] != 0 or summary["lighting_work_p95_ms"] != 0)
+    ):
+        raise BenchmarkError(f"invalid phase summary: {context}")
     if (
         summary["update_cadence_hz"] != 8
         or summary["update_interval_ms"] != 125
@@ -1356,6 +1835,7 @@ def _expected_evidence_checks(
         "checkpoint",
         "instrumentation_identity",
         "candidate_standard_determinism",
+        "candidate_standard_reconstruction_equivalence",
         *NATIVE_GUARD_NAMES,
     }
     if comparison:
@@ -1367,6 +1847,7 @@ def _expected_evidence_checks(
                 "candidate_large_sustained_window_p95",
                 "large_instrumentation_identity",
                 "candidate_large_determinism",
+                "candidate_large_reconstruction_equivalence",
             }
         )
     for context in contexts:
@@ -1424,6 +1905,23 @@ def _validate_evidence_check(
         }
         integer_fields = expected - common
         boolean_fields = common
+    elif name.endswith("_reconstruction_equivalence"):
+        expected = common | {
+            "translated_runs",
+            "full_runs",
+            "checkpoint_sha256",
+            "identities_match",
+            "checkpoints_match",
+            "final_states_match",
+            "scroll_offsets_match",
+        }
+        integer_fields = {"translated_runs", "full_runs"}
+        boolean_fields = common | {
+            "identities_match",
+            "checkpoints_match",
+            "final_states_match",
+            "scroll_offsets_match",
+        }
     elif any(name == guard or name.endswith(f"_{guard}") for guard in NATIVE_GUARD_NAMES):
         expected = common | {"failed_runs", "runs"}
         integer_fields = {"failed_runs", "runs"}
@@ -1445,6 +1943,12 @@ def _validate_evidence_check(
                 or any(character not in "0123456789abcdef" for character in digest)
             ):
                 raise BenchmarkError(f"invalid check: {name}")
+    if name.endswith("_reconstruction_equivalence"):
+        digest = check["checkpoint_sha256"]
+        if not isinstance(digest, str) or len(digest) != 64 or any(
+            character not in "0123456789abcdef" for character in digest
+        ):
+            raise BenchmarkError(f"invalid check: {name}")
     if "runs" in check and check["failed_runs"] > check["runs"]:
         raise BenchmarkError(f"invalid check: {name}")
     if "failed_runs" in check and check["passed"] != (check["failed_runs"] == 0):
@@ -1473,6 +1977,14 @@ def _validate_evidence_check(
         == check["lifecycle_checkpoints"]
         == 1
         and check["fresh_process_runs"] >= 2
+    ):
+        raise BenchmarkError(f"inconsistent check result: {name}")
+    if name.endswith("_reconstruction_equivalence") and check["passed"] != (
+        check["translated_runs"] >= 1
+        and check["full_runs"] >= 2
+        and check["identities_match"]
+        and check["checkpoints_match"]
+        and check["final_states_match"]
     ):
         raise BenchmarkError(f"inconsistent check result: {name}")
     follows_performance = name in PERFORMANCE_CHECK_NAMES or name.endswith(
@@ -1541,13 +2053,26 @@ def _render_complete_evidence(
             raise BenchmarkError("movement regression evidence has invalid comparison samples")
     elif samples["baseline_standard"] != 0 or samples["candidate_standard"] != 2:
         raise BenchmarkError("movement regression evidence has invalid candidate-only samples")
-    expected_contexts = {STANDARD_DISCRETE_CONTEXT}
+    expected_contexts = {
+        STANDARD_DISCRETE_CONTEXT,
+        STANDARD_TRANSLATED_CONTEXT,
+        STANDARD_FULL_CONTEXT,
+    }
     if samples["candidate_large"] == 2:
         expected_contexts.add(LARGE_DISCRETE_CONTEXT)
+        expected_contexts.add(LARGE_TRANSLATED_CONTEXT)
+        expected_contexts.add(LARGE_FULL_CONTEXT)
     context_samples = _require_exact_fields(
         samples["additional_contexts"], expected_contexts, "evidence context samples"
     )
-    if any(value != 2 for value in context_samples.values()):
+    if context_samples[STANDARD_DISCRETE_CONTEXT] != 2 \
+            or context_samples[STANDARD_TRANSLATED_CONTEXT] != samples["candidate_standard"] \
+            or context_samples[STANDARD_FULL_CONTEXT] != samples["candidate_standard"] \
+            or (samples["candidate_large"] == 2 and (
+                context_samples[LARGE_DISCRETE_CONTEXT] != 2
+                or context_samples[LARGE_TRANSLATED_CONTEXT] != 2
+                or context_samples[LARGE_FULL_CONTEXT] != 2
+            )):
         raise BenchmarkError("movement regression evidence has invalid context samples")
 
     phases = _require_exact_fields(
@@ -1569,17 +2094,45 @@ def _render_complete_evidence(
     )
     candidate_sets.append(
         (
+            "Standard isolated smooth translated reconstruction",
+            context_phases[STANDARD_TRANSLATED_CONTEXT],
+            context_samples[STANDARD_TRANSLATED_CONTEXT],
+        )
+    )
+    candidate_sets.append(
+        (
             "Standard discrete",
             context_phases[STANDARD_DISCRETE_CONTEXT],
             context_samples[STANDARD_DISCRETE_CONTEXT],
         )
     )
+    candidate_sets.append(
+        (
+            "Standard smooth full reconstruction",
+            context_phases[STANDARD_FULL_CONTEXT],
+            context_samples[STANDARD_FULL_CONTEXT],
+        )
+    )
     if samples["candidate_large"] == 2:
+        candidate_sets.append(
+            (
+                "Large isolated smooth translated reconstruction",
+                context_phases[LARGE_TRANSLATED_CONTEXT],
+                context_samples[LARGE_TRANSLATED_CONTEXT],
+            )
+        )
         candidate_sets.append(
             (
                 "Large discrete",
                 context_phases[LARGE_DISCRETE_CONTEXT],
                 context_samples[LARGE_DISCRETE_CONTEXT],
+            )
+        )
+        candidate_sets.append(
+            (
+                "Large smooth full reconstruction",
+                context_phases[LARGE_FULL_CONTEXT],
+                context_samples[LARGE_FULL_CONTEXT],
             )
         )
     records = evidence["records"]
@@ -1649,17 +2202,45 @@ def _render_complete_evidence(
     )
     candidate_resources.append(
         (
+            "Standard isolated smooth translated reconstruction",
+            context_resources[STANDARD_TRANSLATED_CONTEXT],
+            context_samples[STANDARD_TRANSLATED_CONTEXT],
+        )
+    )
+    candidate_resources.append(
+        (
             "Standard discrete",
             context_resources[STANDARD_DISCRETE_CONTEXT],
             context_samples[STANDARD_DISCRETE_CONTEXT],
         )
     )
+    candidate_resources.append(
+        (
+            "Standard smooth full reconstruction",
+            context_resources[STANDARD_FULL_CONTEXT],
+            context_samples[STANDARD_FULL_CONTEXT],
+        )
+    )
     if samples["candidate_large"] == 2:
+        candidate_resources.append(
+            (
+                "Large isolated smooth translated reconstruction",
+                context_resources[LARGE_TRANSLATED_CONTEXT],
+                context_samples[LARGE_TRANSLATED_CONTEXT],
+            )
+        )
         candidate_resources.append(
             (
                 "Large discrete",
                 context_resources[LARGE_DISCRETE_CONTEXT],
                 context_samples[LARGE_DISCRETE_CONTEXT],
+            )
+        )
+        candidate_resources.append(
+            (
+                "Large smooth full reconstruction",
+                context_resources[LARGE_FULL_CONTEXT],
+                context_samples[LARGE_FULL_CONTEXT],
             )
         )
     checks = _require_exact_fields(
@@ -1768,6 +2349,34 @@ def _render_complete_evidence(
     candidate_sustained = _phase_summary_for_report(
         candidate_standard["sustained"], "candidate Standard smooth sustained"
     )
+    lighting_ab_contexts = [
+        (
+            "Standard",
+            _phase_summary_for_report(
+                context_phases[STANDARD_TRANSLATED_CONTEXT]["sustained"],
+                "candidate Standard isolated translated reconstruction sustained",
+            ),
+            _phase_summary_for_report(
+                context_phases[STANDARD_FULL_CONTEXT]["sustained"],
+                "candidate Standard full reconstruction sustained",
+            ),
+        )
+    ]
+    if samples["candidate_large"] == 2:
+        lighting_ab_contexts.append(
+            (
+                "Large",
+                _phase_summary_for_report(
+                    context_phases[LARGE_TRANSLATED_CONTEXT]["sustained"],
+                    "candidate Large isolated translated reconstruction sustained",
+                ),
+                _phase_summary_for_report(
+                    context_phases[LARGE_FULL_CONTEXT]["sustained"],
+                    "candidate Large full reconstruction sustained",
+                ),
+            )
+        )
+    _append_lighting_ab_report(lines, lighting_ab_contexts)
     lines.extend(
         [
             "### Before/after summary (standard smooth sustained)",
@@ -2032,7 +2641,7 @@ def _render_complete_evidence(
     )
     for viewport, name, summary in summaries:
         lighting = _require_exact_fields(
-            summary["lighting"], LIGHTING_FIELDS | {"hit_rate_percent"},
+            summary["lighting"], LIGHTING_FIELDS | {"hit_rate_percent", "timings", "levels"},
             f"{viewport} {name} lighting summary",
         )
         hit_rate = lighting["hit_rate_percent"]
@@ -2144,6 +2753,16 @@ def _render_complete_evidence(
                 )
         elif name.endswith("_determinism"):
             detail = "checkpoint, final state, fixture, and run identity are repeatable"
+        elif name.endswith("_reconstruction_equivalence"):
+            detail = (
+                f"{check['translated_runs']} translated and {check['full_runs']} full runs "
+                + (
+                    "used one candidate contract and produced identical ordered checkpoints "
+                    "and final state"
+                    if check["passed"]
+                    else "did not preserve the same candidate contract, checkpoints, and final state"
+                )
+            )
         elif any(
             name == suffix or name.endswith(f"_{suffix}")
             for suffix in (
@@ -2249,6 +2868,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_candidate_arguments(compare_parser)
     compare_parser.add_argument("--candidate-revision")
     compare_parser.add_argument("--discrete-manifest", required=True, type=regular_file)
+    compare_parser.add_argument("--lighting-manifest", required=True, type=regular_file)
     compare_parser.add_argument("--samples", type=int, default=3, choices=range(3, 10, 2))
     compare_parser.add_argument("--informational-performance", action="store_true")
     compare_parser.add_argument("--comparison-note", choices=COMPARISON_NOTES)
@@ -2257,6 +2877,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_candidate_arguments(candidate_parser)
     candidate_parser.add_argument("--candidate-revision")
     candidate_parser.add_argument("--discrete-manifest", required=True, type=regular_file)
+    candidate_parser.add_argument("--lighting-manifest", required=True, type=regular_file)
     candidate_parser.add_argument("--full-matrix", action="store_true")
     candidate_parser.add_argument("--comparison-note", choices=COMPARISON_NOTES)
 
@@ -2313,6 +2934,7 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.candidate_client,
                 arguments.candidate_manifest,
                 arguments.discrete_manifest,
+                arguments.lighting_manifest,
                 arguments.samples,
                 arguments.baseline_revision,
                 arguments.candidate_revision,
@@ -2327,6 +2949,7 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.candidate_manifest,
                 arguments.candidate_revision,
                 arguments.discrete_manifest,
+                arguments.lighting_manifest,
                 arguments.full_matrix,
                 enforce_performance=arguments.comparison_note is None,
                 comparison_note=arguments.comparison_note,
