@@ -656,7 +656,16 @@ class WorkflowContractTests(unittest.TestCase):
                 "  integrated:"
             )
         ]
+        benchmark_materials = (
+            "client/tools/benchmark_lighting_regression.py",
+            "client/tools/benchmark_movement_regression.py",
+            "client/tools/movement_benchmark_schema.py",
+            "client/src/tests/fixtures/player_view/movement-lighting-isolated.xml",
+            "client/src/tests/fixtures/player_view/movement-lighting-static-delta.map2.hex",
+        )
         self.assertNotIn("ATRINIK_BENCHMARK", client)
+        for material in benchmark_materials:
+            self.assertNotIn(f"--material {material}", client)
         self.assertNotIn("movement-comment.md", check)
         self.assertNotIn("movement-regression-comment", check)
         self.assertIn("linux-client-ccache-${{ github.run_attempt }}", client)
@@ -692,6 +701,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("github.run_id || github.event.pull_request.number", workflow)
         self.assertIn("no benchmark-sensitive path changed", workflow)
         self.assertIn("tools/ci/run_linux_check.sh client-benchmark", workflow)
+        client_benchmark = workflow[
+            workflow.index("  client:\n    name: Requested client benchmarks") : workflow.index(
+                "  server:\n    name: Requested server content benchmark"
+            )
+        ]
+        for material in benchmark_materials:
+            self.assertEqual(client_benchmark.count(f"--material {material}"), 1)
         self.assertIn("tools/ci/run_linux_check.sh server-benchmark", workflow)
         self.assertIn("github.event.pull_request.base.sha", workflow)
         self.assertIn("github.event.pull_request.head.sha", workflow)

@@ -83,6 +83,7 @@ lex_load (int     *depth,       \
           int      map_flags,   \
           int      linemode,    \
           bool     require_arch,\
+          bool     require_end, \
           stable_identity_state *identities)
 #define MAXDEPTH 10
 
@@ -303,6 +304,7 @@ stable_identity_state *identity = &identities[*depth];
                          map_flags,
                          linemode,
                          require_arch,
+                         require_end,
                          &nested_identity) == LL_ERROR) {
                 lex_error = 1;
             }
@@ -988,7 +990,7 @@ stable_identity_state *identity = &identities[*depth];
 #.*{NL}              {}
 
 <<EOF>>              {
-    if (!linemode && identity->record_started) {
+    if (require_end && identity->record_started) {
         LOG(ERROR, "Got EOF before object end for %s.", object_get_str(op));
         return LL_ERROR;
     }
@@ -1299,7 +1301,7 @@ load_object (const char *str, object *op, int map_flags)
         str += lcount;
         lcount = strlen(str) + 1;
         YY_BUFFER_STATE yybufstate = yy_scan_string(str);
-        int retval = lex_load(&depth, items, MAXDEPTH, map_flags, 0, false, &identity);
+        int retval = lex_load(&depth, items, MAXDEPTH, map_flags, 0, false, false, &identity);
         yy_delete_buffer(yybufstate);
 
         if (retval == LL_NORMAL) {
@@ -1361,7 +1363,7 @@ load_object_fp (FILE *fp, object *op, int map_flags)
             saw_record_token = true;
         }
         YY_BUFFER_STATE yybufstate = yy_scan_string(buf);
-        retval = lex_load(&depth, items, MAXDEPTH, map_flags, 1, true, identities);
+        retval = lex_load(&depth, items, MAXDEPTH, map_flags, 1, true, false, identities);
         yy_delete_buffer(yybufstate);
 
         if (retval == LL_ERROR) {
@@ -1407,11 +1409,13 @@ load_object_fp (FILE *fp, object *op, int map_flags)
  * Object to load into.
  * @param map_flags
  * Load flags.
+ * @param require_end
+ * Whether EOF before the top-level object's end record is an error.
  * @return
  * One of @ref LL_xxx.
  */
 int
-load_object_buffer (void *buffer, object *op, int map_flags)
+load_object_buffer (void *buffer, object *op, int map_flags, bool require_end)
 {
     HARD_ASSERT(buffer != NULL);
     HARD_ASSERT(op != NULL);
@@ -1427,7 +1431,14 @@ load_object_buffer (void *buffer, object *op, int map_flags)
 
     int depth = 0;
     stable_identity_state identity = stable_identity_state_init();
-    int retval = lex_load(&depth, items, MAXDEPTH, map_flags, 0, true, &identity);
+    int retval = lex_load(&depth,
+                          items,
+                          MAXDEPTH,
+                          map_flags,
+                          0,
+                          true,
+                          require_end,
+                          &identity);
     if (retval != LL_ERROR) {
         load_object_finish(op, map_flags);
     }
@@ -1454,7 +1465,7 @@ set_variable (object *op, const char *buf)
     items[0] = op;
     int depth = 0;
     stable_identity_state identity = stable_identity_state_init();
-    int retval = lex_load(&depth, items, MAXDEPTH, 0, 0, false, &identity);
+    int retval = lex_load(&depth, items, MAXDEPTH, 0, 0, false, false, &identity);
 
     if (yycurbuf != NULL) {
         yy_switch_to_buffer(yycurbuf);

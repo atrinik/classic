@@ -27,7 +27,8 @@ typedef struct SDL_Surface SDL_Surface;
 /* Keep per-level transformed sprites bounded across viewport translations. */
 #define LIGHTING_SPRITE_CACHE_MAX_ENTRIES 20U
 
-/** Conservatively charge pixels plus retained entry/surface/allocator metadata. */
+/** Conservatively charge pixels plus retained entry/surface/allocator metadata.
+ */
 static inline size_t lighting_sprite_cache_charge(size_t pitch, size_t height) {
     if (height != 0 && pitch > (SIZE_MAX - LIGHTING_SPRITE_CACHE_ENTRY_OVERHEAD) / height) {
         return SIZE_MAX;
@@ -51,7 +52,29 @@ typedef struct lighting_vertex {
 } lighting_vertex_t;
 
 /** Increment when the statistics-only benchmark API changes. */
-#define LIGHTING_BENCHMARK_STATISTICS_VERSION UINT8_C(4)
+#define LIGHTING_BENCHMARK_STATISTICS_VERSION UINT8_C(5)
+
+typedef enum lighting_benchmark_reconstruction {
+    LIGHTING_BENCHMARK_RECONSTRUCTION_TRANSLATED,
+    LIGHTING_BENCHMARK_RECONSTRUCTION_FULL,
+} lighting_benchmark_reconstruction_t;
+
+typedef struct lighting_benchmark_timing {
+    uint64_t calls;
+    uint64_t elapsed_ns;
+} lighting_benchmark_timing_t;
+
+/** Non-overlapping pipeline timings. Clock reads are benchmark-only. */
+typedef struct lighting_benchmark_timings {
+    lighting_benchmark_timing_t translation;
+    lighting_benchmark_timing_t dirty_clear;
+    lighting_benchmark_timing_t rasterization;
+    lighting_benchmark_timing_t extrapolation;
+    lighting_benchmark_timing_t tone_map_multiply;
+    lighting_benchmark_timing_t sprite_lookup;
+    lighting_benchmark_timing_t sprite_construction;
+    lighting_benchmark_timing_t sprite_invalidation;
+} lighting_benchmark_timings_t;
 
 /** Event counters accumulated for one logical lighting level. */
 typedef struct lighting_benchmark_counters {
@@ -59,8 +82,23 @@ typedef struct lighting_benchmark_counters {
     uint64_t field_dirty_marks;
     /** Lighting-field pixels invalidated for a subsequent full rebuild. */
     uint64_t field_dirty_pixels;
+    /** Quads accepted by the lighting rasterizer. */
+    uint64_t field_rasterized_quads;
     uint64_t field_translations;
+    uint64_t field_translated_pixels;
+    uint64_t field_translated_bytes;
+    uint64_t field_scroll_x_pixels;
+    uint64_t field_scroll_y_pixels;
+    uint64_t field_translation_fallback_active;
+    uint64_t field_translation_fallback_bounds;
+    uint64_t field_translation_fallback_control;
     uint64_t field_partial_rebuilds;
+    uint64_t field_full_rebuilds;
+    uint64_t field_full_rebuild_cache;
+    uint64_t field_full_rebuild_active;
+    uint64_t field_full_rebuild_bounds;
+    uint64_t field_full_rebuild_control;
+    uint64_t field_full_rebuild_other;
     uint64_t field_rebuilds;
     uint64_t field_reuses;
     uint64_t render_calls;
@@ -79,6 +117,7 @@ typedef struct lighting_benchmark_counters {
 /** Current and peak cache state for one protocol depth. */
 typedef struct lighting_benchmark_level_statistics {
     lighting_benchmark_counters_t counters;
+    lighting_benchmark_timings_t timings;
     int depth;
     bool allocated;
     bool active;
@@ -100,6 +139,7 @@ typedef struct lighting_benchmark_level_statistics {
 /** Observable software-lighting cache state for deterministic benchmarks. */
 typedef struct lighting_benchmark_statistics {
     lighting_benchmark_counters_t counters;
+    lighting_benchmark_timings_t timings;
     /* Version-one aliases retained for baseline overlay consumers. */
     uint64_t field_rebuilds;
     uint64_t field_reuses;
@@ -180,6 +220,15 @@ void lighting_deinit(void);
 
 void lighting_benchmark_statistics_reset(void);
 void lighting_benchmark_statistics_get(lighting_benchmark_statistics_t *statistics);
+/** Copy cumulative operation timings without traversing benchmark state. */
+void lighting_benchmark_timings_get(lighting_benchmark_timings_t *timings);
+void lighting_benchmark_configure(bool timing_enabled,
+                                  lighting_benchmark_reconstruction_t reconstruction);
+#ifdef ATRINIK_WIDGET_TESTS
+/** Configure and query the movement-only construction fallback seam. */
+void lighting_benchmark_fault_configure(unsigned int fault);
+bool lighting_benchmark_fault_complete(void);
+#endif
 /** Copy the benchmark state for one protocol depth. */
 bool lighting_benchmark_level_statistics_get(int depth,
                                              lighting_benchmark_level_statistics_t *statistics);

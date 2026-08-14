@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -36,6 +36,7 @@
 #include <toolkit/packet.h>
 #include <player.h>
 #include <object.h>
+#include <gameplay_journal.h>
 
 /**
  * String representations of the party looting modes.
@@ -278,6 +279,68 @@ int party_can_open_corpse(object *pl, object *corpse) {
  * @param corpse
  * The corpse.
  */
+static bool party_currency_begin_at_corpse(object *pl,
+                                           object *corpse,
+                                           const char *reason,
+                                           const char *subject_id,
+                                           int64_t before,
+                                           int64_t delta,
+                                           int64_t after,
+                                           const char *destination,
+                                           const char *funding,
+                                           char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    transaction[0] = '\0';
+    if (!gameplay_journal_required()) {
+        return true;
+    }
+    const char *actor = object_custody_actor_id(pl);
+    if (actor == NULL || pl->map == NULL) {
+        return false;
+    }
+    mapstruct *source_map = corpse->map != NULL ? corpse->map : pl->map;
+    char map_id[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    if (!gameplay_journal_map_identity(source_map, map_id)) {
+        return false;
+    }
+    gameplay_journal_subject_t subject = {
+        .account_id = CONTR(pl)->cs->account,
+        .character_id = pl->name,
+        .map_id = map_id,
+        .x = corpse->map != NULL ? corpse->x : pl->x,
+        .y = corpse->map != NULL ? corpse->y : pl->y,
+    };
+    gameplay_journal_change_t change = {
+        .subject_id = subject_id,
+        .lineage_id = "",
+        .before = before,
+        .delta = delta,
+        .after = after,
+        .source = "corpse",
+        .destination = destination,
+        .actor = actor,
+        .currency = "copper-equivalent",
+        .funding = funding,
+    };
+    if (!gameplay_journal_begin(&subject,
+                                GAMEPLAY_JOURNAL_CURRENCY,
+                                reason,
+                                &change,
+                                transaction)) {
+        return false;
+    }
+    if (!gameplay_journal_track_player(transaction, pl) ||
+        (corpse->map != NULL && !gameplay_journal_track_map_object(transaction,
+                                                                   corpse->map,
+                                                                   corpse->x,
+                                                                   corpse->y,
+                                                                   corpse))) {
+        (void)gameplay_journal_abort(transaction, "domain-registration-failed");
+        transaction[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
 static void party_loot_random(object *pl, object *corpse) {
     int count = 0, pl_id;
     party_struct *party;
@@ -308,11 +371,62 @@ static void party_loot_random(object *pl, object *corpse) {
             if (on_same_map(ol->objlink.ob, pl)) {
                 if (num == pl_id) {
                     if (player_can_carry(ol->objlink.ob, WEIGHT_NROF(tmp, tmp->nrof))) {
-                        char *name = object_get_name_s(tmp, NULL);
-                        draw_info_format(COLOR_BLUE, ol->objlink.ob, "You receive the %s.", name);
-                        free(name);
-                        object_remove(tmp, 0);
-                        object_insert_into(tmp, ol->objlink.ob, 0);
+                        object *inserted = NULL;
+                        char *received_name = NULL;
+                        object_semantic_result_t result;
+                        if (tmp->type == MONEY) {
+                            int64_t value;
+                            if (!shop_money_object_value(tmp, &value)) {
+                                break;
+                            }
+                            int64_t before;
+                            if (!shop_get_recovery_money(ol->objlink.ob, &before) ||
+                                value > INT64_MAX - before) {
+                                break;
+                            }
+                            char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+                            if (!party_currency_begin_at_corpse(ol->objlink.ob,
+                                                                corpse,
+                                                                "party.currency-loot",
+                                                                "currency:party-loot",
+                                                                before,
+                                                                value,
+                                                                before + value,
+                                                                "carried-cash",
+                                                                "party-corpse",
+                                                                transaction)) {
+                                break;
+                            }
+                            if (transaction[0] != '\0') {
+                                char lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
+                                snprintf(VS(lineage), "currency:%s", transaction);
+                                FREE_AND_COPY_HASH(tmp->custody_lineage, lineage);
+                            }
+                            object_remove(tmp, 0);
+                            inserted = object_insert_into(tmp, ol->objlink.ob, 0);
+                            result = gameplay_journal_semantic_commit(transaction)
+                                         ? OBJECT_SEMANTIC_COMMITTED
+                                         : OBJECT_SEMANTIC_AMBIGUOUS;
+                            if (result == OBJECT_SEMANTIC_COMMITTED) {
+                                received_name = object_get_name_s(inserted, NULL);
+                                shop_currency_tag_retire(ol->objlink.ob, transaction);
+                            }
+                        } else {
+                            result = object_insert_into_reason(tmp,
+                                                               ol->objlink.ob,
+                                                               "item.party-loot",
+                                                               &inserted);
+                        }
+                        if (result == OBJECT_SEMANTIC_COMMITTED) {
+                            if (received_name == NULL) {
+                                received_name = object_get_name_s(inserted, NULL);
+                            }
+                            draw_info_format(COLOR_BLUE,
+                                             ol->objlink.ob,
+                                             "You receive the %s.",
+                                             received_name);
+                            free(received_name);
+                        }
                     }
 
                     break;
@@ -322,6 +436,22 @@ static void party_loot_random(object *pl, object *corpse) {
             }
         }
     }
+}
+
+static bool party_currency_source_begin(object *pl,
+                                        object *corpse,
+                                        int64_t value,
+                                        char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    return party_currency_begin_at_corpse(pl,
+                                          corpse,
+                                          "party.currency-source",
+                                          "currency:party-corpse",
+                                          value,
+                                          -value,
+                                          0,
+                                          "party-pool",
+                                          "party-corpse",
+                                          transaction);
 }
 
 /**
@@ -372,8 +502,15 @@ static void party_loot_split(object *pl, object *corpse) {
         }
 
         if (tmp->type == MONEY) {
-            value += tmp->value * tmp->nrof;
-            object_remove(tmp, 0);
+            int64_t coin_value;
+            if (!shop_money_object_value(tmp, &coin_value)) {
+                continue;
+            }
+            if (value > INT64_MAX - coin_value) {
+                LOG(ERROR, "Party corpse currency value overflow for %s", object_get_str(tmp));
+                return;
+            }
+            value += coin_value;
             continue;
         }
 
@@ -386,15 +523,14 @@ static void party_loot_split(object *pl, object *corpse) {
 
             if (on_same_map(ol->objlink.ob, pl) &&
                 player_can_carry(ol->objlink.ob, WEIGHT_NROF(tmp, tmp->nrof))) {
-                char *name = object_get_name_s(tmp, NULL);
-                draw_info_format(COLOR_BLUE,
-                                 ol->objlink.ob,
-                                 "You receive the "
-                                 "%s.",
-                                 name);
-                free(name);
-                object_remove(tmp, 0);
-                object_insert_into(tmp, ol->objlink.ob, 0);
+                object *inserted = NULL;
+                object_semantic_result_t result =
+                    object_insert_into_reason(tmp, ol->objlink.ob, "item.party-loot", &inserted);
+                if (result == OBJECT_SEMANTIC_COMMITTED) {
+                    char *name = object_get_name_s(inserted, NULL);
+                    draw_info_format(COLOR_BLUE, ol->objlink.ob, "You receive the %s.", name);
+                    free(name);
+                }
                 break;
             }
 
@@ -412,27 +548,122 @@ static void party_loot_split(object *pl, object *corpse) {
         }
     }
 
+    if (value > 0 && count >= GAMEPLAY_JOURNAL_DOMAIN_LIMIT) {
+        LOG(ERROR,
+            "Party currency split has %" PRIu32 " recipients; the journal supports at most %u.",
+            count,
+            GAMEPLAY_JOURNAL_DOMAIN_LIMIT - 1);
+        return;
+    }
     if (value > 0) {
-        int64_t value_split;
-        uint32_t num;
+        typedef struct party_currency_grant {
+            object *recipient;
+            int64_t value;
+            char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+            bool active;
+            bool on_floor;
+        } party_currency_grant_t;
+        party_currency_grant_t *grants = xcalloc(count, sizeof(*grants));
+        uint32_t num = 0;
+        char source_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
+        bool prepared = shop_coins_available() &&
+                        party_currency_source_begin(pl, corpse, value, source_transaction);
 
-        for (num = 0, ol = party->members; ol; ol = ol->next) {
+        for (ol = party->members; prepared && ol != NULL; ol = ol->next) {
             if (on_same_map(ol->objlink.ob, pl)) {
-                value_split = value / count;
+                int64_t value_split = value / count;
+                int64_t before;
+                bool on_floor;
 
                 if (num == 0) {
                     value_split += value % count;
                 }
-
-                draw_info_format(COLOR_BLUE,
-                                 ol->objlink.ob,
-                                 "You receive %s.",
-                                 shop_get_cost_string(value_split));
-                shop_insert_coins(ol->objlink.ob, value_split);
-
+                if (!shop_coin_delivery_on_floor(ol->objlink.ob, value_split, &on_floor) ||
+                    !shop_get_recovery_money(ol->objlink.ob, &before)) {
+                    prepared = false;
+                    break;
+                }
+                for (uint32_t i = 0; i < num; i++) {
+                    if (grants[i].on_floor && grants[i].recipient->map == ol->objlink.ob->map &&
+                        grants[i].recipient->x == ol->objlink.ob->x &&
+                        grants[i].recipient->y == ol->objlink.ob->y) {
+                        if (grants[i].value > INT64_MAX - before) {
+                            prepared = false;
+                            break;
+                        }
+                        before += grants[i].value;
+                    }
+                }
+                if (!prepared || value_split > INT64_MAX - before ||
+                    (source_transaction[0] != '\0' &&
+                     (!gameplay_journal_track_player(source_transaction, ol->objlink.ob) ||
+                      (on_floor && ol->objlink.ob->map != NULL &&
+                       !gameplay_journal_track_map_unique(source_transaction,
+                                                          ol->objlink.ob->map))))) {
+                    prepared = false;
+                    break;
+                }
+                if (!gameplay_journal_currency_begin(
+                        ol->objlink.ob,
+                        "party.currency-split",
+                        "currency:party-loot",
+                        before,
+                        value_split,
+                        before + value_split,
+                        "corpse",
+                        "player-or-ground",
+                        source_transaction[0] != '\0' ? source_transaction : "party-corpse",
+                        grants[num].transaction)) {
+                    prepared = false;
+                    break;
+                }
+                grants[num].recipient = ol->objlink.ob;
+                grants[num].value = value_split;
+                grants[num].active = true;
+                grants[num].on_floor = on_floor;
                 num++;
             }
         }
+
+        if (!prepared) {
+            for (uint32_t i = 0; i < num; i++) {
+                if (grants[i].active) {
+                    (void)gameplay_journal_abort(grants[i].transaction, "party-grant-not-prepared");
+                }
+            }
+            (void)gameplay_journal_semantic_abort(source_transaction, "party-grant-not-prepared");
+            free(grants);
+            return;
+        }
+
+        for (tmp = corpse->inv; tmp != NULL; tmp = next) {
+            next = tmp->below;
+            int64_t ignored;
+            if (tmp->type == MONEY && object_can_pick(pl, tmp) &&
+                shop_money_object_value(tmp, &ignored)) {
+                object_remove(tmp, 0);
+                object_destroy(tmp);
+            }
+        }
+        for (uint32_t i = 0; i < num; i++) {
+            bool delivered = shop_insert_coins_exact_tagged(grants[i].recipient,
+                                                            grants[i].value,
+                                                            grants[i].transaction);
+            HARD_ASSERT(delivered);
+            (void)delivered;
+        }
+        bool source_committed = gameplay_journal_semantic_commit(source_transaction);
+        for (uint32_t i = 0; source_committed && i < num; i++) {
+            if (gameplay_journal_semantic_commit(grants[i].transaction)) {
+                grants[i].active = false;
+                shop_currency_tag_retire(grants[i].recipient, grants[i].transaction);
+                draw_info_format(COLOR_BLUE,
+                                 grants[i].recipient,
+                                 "You receive %s.",
+                                 shop_get_cost_string(grants[i].value));
+            }
+        }
+        free(grants);
     }
 }
 

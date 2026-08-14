@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -33,6 +33,7 @@
 #include <loader.h>
 #include <arch.h>
 #include <artifact.h>
+#include <player.h>
 #include "object_methods.h"
 #include <toolkit/string.h>
 
@@ -932,7 +933,19 @@ static void treasure_insert(object *op, object *creator, int flags) {
         op->y = creator->y;
         object_insert_map(op, creator->map, op, INS_NO_MERGE | INS_NO_WALK_ON);
     } else {
-        object_insert_into(op, creator, 0);
+        object *root = object_get_env(creator);
+        if (root->type == PLAYER && CONTR(root) != NULL && CONTR(root)->cs != NULL &&
+            CONTR(root)->cs->account != NULL) {
+            const char *reason =
+                (flags & GT_STARTEQUIP) != 0 ? "item.starting-grant" : "item.treasure-grant";
+            object *inserted = NULL;
+            if (object_insert_into_reason(op, creator, reason, &inserted) ==
+                OBJECT_SEMANTIC_FAILED) {
+                object_destroy(op);
+            }
+        } else {
+            object_insert_into(op, creator, 0);
+        }
     }
 }
 

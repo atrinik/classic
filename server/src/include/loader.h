@@ -54,7 +54,7 @@ void delete_loader_buffer(void *buffer);
 void *create_loader_buffer(FILE *fp);
 int load_object(const char *str, object *op, int map_flags);
 int load_object_fp(FILE *fp, object *op, int map_flags);
-int load_object_buffer(void *buffer, object *op, int map_flags);
+int load_object_buffer(void *buffer, object *op, int map_flags, bool require_end);
 int set_variable(object *op, const char *buf);
 void get_ob_diff(StringBuffer *sb, const object *op, const object *op2);
 

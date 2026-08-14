@@ -17,10 +17,17 @@ import statistics
 import sys
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 TREND_RETENTION = 90
 PHASES = ("cold", "sustained", "idle", "resumed")
-REQUIRED_CONTEXTS = ("standard_discrete", "large_discrete")
+REQUIRED_CONTEXTS = (
+    "standard_discrete",
+    "standard_lighting_translated",
+    "standard_full",
+    "large_discrete",
+    "large_lighting_translated",
+    "large_full",
+)
 
 CLIENT_TOOLS = Path(__file__).resolve().parents[2] / "client" / "tools"
 sys.path.insert(0, str(CLIENT_TOOLS))
@@ -116,6 +123,13 @@ def _record_summary(records: list[dict[str, Any]], name: str) -> dict[str, Any]:
             for short, field in (("p50", "work_p50_ms"), ("p95", "work_p95_ms"),
                                  ("p99", "work_p99_ms"), ("max", "work_max_ms"))
         },
+        "lighting_work_ms": {
+            short: _number(summary.get(field), f"{name}.{field}")
+            for short, field in (
+                ("p50", "lighting_work_p50_ms"),
+                ("p95", "lighting_work_p95_ms"),
+            )
+        },
         "window_p95_ms": {
             "first": _number(summary.get("first_window_p95_ms"), f"{name}.first window"),
             "last": _number(summary.get("last_window_p95_ms"), f"{name}.last window"),
@@ -147,8 +161,19 @@ def _record_summary(records: list[dict[str, Any]], name: str) -> dict[str, Any]:
         "lighting": {
             field: _integer(lighting_summary.get(field), f"{name}.lighting.{field}")
             for field in ("field_rebuilds", "field_reuses", "field_translations",
-                          "field_partial_rebuilds", "field_dirty_pixels", "lit_sprite_lookups",
+                          "field_partial_rebuilds", "field_full_rebuilds",
+                          "field_dirty_pixels", "field_translated_pixels",
+                          "field_translated_bytes", "field_scroll_x_pixels",
+                          "field_scroll_y_pixels", "field_translation_fallback_active",
+                          "field_translation_fallback_bounds",
+                          "field_translation_fallback_control", "field_full_rebuild_cache",
+                          "field_full_rebuild_active", "field_full_rebuild_bounds",
+                          "field_full_rebuild_control", "field_full_rebuild_other",
+                          "lit_sprite_lookups",
                           "lit_sprite_hits", "lit_sprite_misses", "lit_sprite_evictions")
+        } | {
+            "timings": lighting_summary.get("timings"),
+            "levels": lighting_summary.get("levels"),
         },
         "sprite_cache": {
             field: _median([_integer(item.get(field), f"{name}.sprite.{field}") for item in sprite_counters])
@@ -278,7 +303,7 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
     if trend is None:
         trend = {"schema_version": SCHEMA_VERSION, "cohorts": {}}
     trend = _mapping(trend, "trend")
-    if trend.get("schema_version") == 1:
+    if trend.get("schema_version") in (1, 2):
         # Existing benchmark-data history has no stage summaries, but remains
         # valid historical context when the point contract gains new fields.
         trend["schema_version"] = SCHEMA_VERSION
@@ -426,6 +451,41 @@ def render_summary(point: dict[str, Any], trend: dict[str, Any]) -> str:
                   f"- Sprite cache hits/misses/evictions: `{sprite['hits']}` / `{sprite['misses']}` / `{sprite['gc_removals']}`",
                   "", "### Retention", "",
                   f"This cohort retains `{len(trend['cohorts'][point['cohort']])}` points (up to {TREND_RETENTION})."])
+    lines.extend([
+        "",
+        "### Lighting reconstruction A/B",
+        "",
+        "The translated and full-control rows use the same sustained stream. Lighting work sums "
+        "the non-overlapping instrumented lighting scopes accumulated from before queued MAP "
+        "decode through the primary draw, excludes local-minimap rendering, and is not additive "
+        "with parent profiler stages.",
+        "",
+        "| Viewport | Mode | Lighting work p50/p95 | Full/partial/reuse | Dirty pixels | "
+        "Translated bytes | Full causes cache/active/bounds/control/other |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ])
+    for viewport, translated_name, full_name in (
+        ("Standard", "standard_lighting_translated", "standard_full"),
+        ("Large", "large_lighting_translated", "large_full"),
+    ):
+        for mode, context_name in (("Translated", translated_name), ("Full control", full_name)):
+            context = point["contexts"][context_name]
+            context_lighting = context["lighting"]
+            context_work = context["lighting_work_ms"]
+            lines.append(
+                f"| {viewport} | {mode} | {context_work['p50']:.3f}/"
+                f"{context_work['p95']:.3f} ms | "
+                f"{context_lighting['field_full_rebuilds']}/"
+                f"{context_lighting['field_partial_rebuilds']}/"
+                f"{context_lighting['field_reuses']} | "
+                f"{context_lighting['field_dirty_pixels']:,} | "
+                f"{context_lighting['field_translated_bytes']:,} | "
+                f"{context_lighting['field_full_rebuild_cache']}/"
+                f"{context_lighting['field_full_rebuild_active']}/"
+                f"{context_lighting['field_full_rebuild_bounds']}/"
+                f"{context_lighting['field_full_rebuild_control']}/"
+                f"{context_lighting['field_full_rebuild_other']} |"
+            )
     lines.extend(["", "### Sustained render-profiler stages", "",
                   "Timing is the median of each fresh run's average `elapsed / calls` in "
                   "milliseconds per invocation, not a p50/p95 distribution. Parent and child "

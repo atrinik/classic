@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <gameplay_journal.h>
 #include <movement.h>
 #include <shop.h>
 #include <server_main.h>
@@ -43,6 +44,20 @@
 #include <monster_data.h>
 #include <arch.h>
 #include <ban.h>
+
+#ifdef ATRINIK_TESTING
+static bool test_pickup_event_veto;
+static bool test_drop_event_veto;
+static bool test_map_pickup_event_veto;
+static bool test_map_drop_event_veto;
+
+void player_event_veto_for_test(bool pickup, bool drop, bool map_pickup, bool map_drop) {
+    test_pickup_event_veto = pickup;
+    test_drop_event_veto = drop;
+    test_map_pickup_event_veto = map_pickup;
+    test_map_drop_event_veto = map_drop;
+}
+#endif
 #include <player_status.h>
 #include <player.h>
 #include <object.h>
@@ -2289,6 +2304,34 @@ static object *get_pickup_object(object *pl, object *op, int nrof) {
     return op;
 }
 
+static const char *item_location(const object *item, const object *player_ob) {
+    if (item->map != NULL) {
+        return "ground";
+    }
+    object *root = object_get_env((object *)item);
+    if (root == player_ob) {
+        return "player";
+    }
+    return root->type == PLAYER ? "other-player" : "external-container";
+}
+
+static const char *item_counterparty(const object *item, const object *player_ob) {
+    object *root = object_get_env((object *)item);
+    if (root != player_ob && root->type == PLAYER) {
+        const char *identity = object_custody_actor_id(root);
+        return identity != NULL ? identity : "";
+    }
+    return "";
+}
+
+static bool item_custody_auditable(const object *item) {
+    return !QUERY_FLAG(item, FLAG_SYS_OBJECT) && item->type != PLAYER && item->type != FORCE &&
+           item->type != POTION_EFFECT && item->type != EVENT_OBJECT &&
+           item->type != QUEST_CONTAINER &&
+           (item->arch == NULL ||
+            (item->arch->name != shstr_cons.player_info && strcmp(item->arch->name, "force") != 0));
+}
+
 /**
  * Pick up object.
  * @param pl
@@ -2320,35 +2363,90 @@ static void pick_up_object(object *pl, object *op, object *tmp, int nrof, int no
         draw_info(COLOR_WHITE, pl, "That item is too heavy for you to pick up.");
         return;
     }
+    if (object_contains_money_descendant(tmp) && object_get_env(tmp) != pl) {
+        draw_info(COLOR_WHITE, pl, "Remove the coins before moving that container.");
+        return;
+    }
 
     if (tmp->type == ARROW) {
         object_projectile_stop(tmp, OBJECT_PROJECTILE_PICKUP);
     }
 
     /* Trigger the PICKUP event */
-    if (trigger_event(EVENT_PICKUP, pl, tmp, op, NULL, nrof, 0, 0, 0)) {
+    if (trigger_event(EVENT_PICKUP, pl, tmp, op, NULL, nrof, 0, 0, 0)
+#ifdef ATRINIK_TESTING
+        || test_pickup_event_veto
+#endif
+    ) {
         return;
     }
 
     /* Trigger the map-wide pick up event. */
-    if (!no_mevent && pl->map && pl->map->events &&
-        trigger_map_event(MEVENT_PICK, pl->map, pl, tmp, op, NULL, nrof)) {
+    if (!no_mevent && pl->map &&
+        ((pl->map->events && trigger_map_event(MEVENT_PICK, pl->map, pl, tmp, op, NULL, nrof))
+#ifdef ATRINIK_TESTING
+         || test_map_pickup_event_veto
+#endif
+         )) {
         return;
     }
 
-    if (pl->type == PLAYER) {
-        metrics_add(&CONTR(pl)->metrics,
-                    METRIC_CHARACTER_ITEM_UNITS_PICKED_UP,
-                    (uint64_t)MAX(1, nrof));
+    bool custody_transfer = pl->type == PLAYER && item_custody_auditable(tmp) &&
+                            !QUERY_FLAG(tmp, FLAG_UNPAID) && object_get_env(tmp) != pl;
+    object_custody_transaction_t custody = {0};
+    object *source_root = object_get_env(tmp);
+    object *source_player = source_root->type == PLAYER ? source_root : NULL;
+    const char *acquirer = custody_transfer ? object_custody_actor_id(pl) : "";
+    const char *relinquisher = source_player != NULL ? object_custody_actor_id(source_player) : "";
+    if (custody_transfer && (acquirer == NULL || relinquisher == NULL ||
+                             !object_custody_begin_parties(
+                                 tmp,
+                                 pl,
+                                 source_player != NULL ? "item.player-transfer" : "item.acquire",
+                                 item_location(tmp, pl),
+                                 "player",
+                                 item_counterparty(tmp, pl),
+                                 (uint32_t)nrof,
+                                 acquirer,
+                                 relinquisher,
+                                 0,
+                                 nrof,
+                                 nrof,
+                                 0,
+                                 "",
+                                 "",
+                                 &custody))) {
+        draw_info(COLOR_WHITE, pl, "The item transfer could not be journaled.");
+        return;
+    }
+    if (custody_transfer &&
+        ((source_player != NULL && !object_custody_track_player(&custody, source_player)) ||
+         (tmp->map != NULL &&
+          !object_custody_track_map_object(&custody, tmp->map, tmp->x, tmp->y, tmp)) ||
+         (source_root->type != PLAYER && source_root->map != NULL &&
+          !object_custody_track_map_object(&custody,
+                                           source_root->map,
+                                           source_root->x,
+                                           source_root->y,
+                                           source_root)))) {
+        object_custody_abort(&custody, "domain-registration-failed");
+        draw_info(COLOR_WHITE, pl, "The item transfer could not be journaled.");
+        return;
     }
 
     tmp = get_pickup_object(pl, tmp, nrof);
-    if (pl->type == PLAYER) {
-        object_custody_acquire(tmp, pl);
+    if (custody_transfer) {
+        object_custody_apply(tmp, &custody);
     }
     object *inserted = object_insert_into(tmp, op, 0);
-    if (pl->type == PLAYER) {
-        object_custody_record(inserted, pl, "custody-acquired");
+    bool committed = true;
+    if (custody_transfer) {
+        committed = object_custody_commit(inserted, &custody);
+    }
+    if (pl->type == PLAYER && committed) {
+        metrics_add(&CONTR(pl)->metrics,
+                    METRIC_CHARACTER_ITEM_UNITS_PICKED_UP,
+                    (uint64_t)MAX(1, nrof));
     }
 }
 
@@ -2513,21 +2611,101 @@ void put_object_in_sack(object *op, object *sack, object *tmp, long nrof) {
         return;
     }
 
-    if (QUERY_FLAG(tmp, FLAG_APPLIED)) {
-        if (object_apply_item(tmp, op, APPLY_ALWAYS_UNAPPLY | APPLY_NO_MERGE) != OBJECT_METHOD_OK) {
-            return;
+    object *source_root = object_get_env(tmp);
+    object *destination_root = object_get_env(sack);
+    object *source_player = source_root->type == PLAYER ? source_root : NULL;
+    object *destination_player = destination_root->type == PLAYER ? destination_root : NULL;
+    if (source_player != destination_player && object_contains_money_descendant(tmp)) {
+        draw_info(COLOR_WHITE, op, "Remove the coins before moving that container.");
+        return;
+    }
+    bool custody_transfer = item_custody_auditable(tmp) && source_player != destination_player &&
+                            (source_player != NULL || destination_player != NULL);
+    object_custody_transaction_t custody = {0};
+    const char *counterparty = "";
+    object *actor = source_player != NULL ? source_player : destination_player;
+    if (source_player != NULL && destination_player != NULL) {
+        object *other = actor == source_player ? destination_player : source_player;
+        counterparty = object_custody_actor_id(other);
+        if (counterparty == NULL) {
+            counterparty = "";
         }
+    }
+    const char *relinquisher = source_player != NULL ? object_custody_actor_id(source_player) : "";
+    const char *acquirer =
+        destination_player != NULL ? object_custody_actor_id(destination_player) : "";
+    int64_t delta = actor == source_player ? -(int64_t)nrof : nrof;
+    const char *reason = source_player != NULL && destination_player != NULL
+                             ? "item.player-transfer"
+                         : destination_player != NULL ? "item.acquire"
+                                                      : "item.external-transfer";
+    if (custody_transfer &&
+        (relinquisher == NULL || acquirer == NULL ||
+         !object_custody_begin_parties(tmp,
+                                       actor,
+                                       reason,
+                                       item_location(tmp, actor),
+                                       destination_player != NULL ? "player" : "external-container",
+                                       counterparty,
+                                       (uint32_t)nrof,
+                                       acquirer,
+                                       relinquisher,
+                                       delta < 0 ? nrof : 0,
+                                       delta,
+                                       delta < 0 ? 0 : nrof,
+                                       0,
+                                       "",
+                                       "",
+                                       &custody))) {
+        draw_info(COLOR_WHITE, op, "The item transfer could not be journaled.");
+        return;
+    }
+    if (custody_transfer &&
+        ((source_player != NULL && !object_custody_track_player(&custody, source_player)) ||
+         (destination_player != NULL &&
+          !object_custody_track_player(&custody, destination_player)) ||
+         (source_root->type != PLAYER && source_root->map != NULL &&
+          !object_custody_track_map_object(&custody,
+                                           source_root->map,
+                                           source_root->x,
+                                           source_root->y,
+                                           source_root)) ||
+         (destination_root->type != PLAYER && destination_root->map != NULL &&
+          !object_custody_track_map_object(&custody,
+                                           destination_root->map,
+                                           destination_root->x,
+                                           destination_root->y,
+                                           destination_root)))) {
+        object_custody_abort(&custody, "domain-registration-failed");
+        draw_info(COLOR_WHITE, op, "The item transfer could not be journaled.");
+        return;
+    }
+
+    if (QUERY_FLAG(tmp, FLAG_APPLIED) &&
+        object_apply_item(tmp, op, APPLY_ALWAYS_UNAPPLY | APPLY_NO_MERGE) != OBJECT_METHOD_OK) {
+        if (custody_transfer) {
+            object_custody_abort(&custody, "unapply-failed");
+        }
+        return;
     }
 
     tmp = get_pickup_object(op, tmp, nrof);
+    if (custody_transfer) {
+        object_custody_apply(tmp, &custody);
+    }
 
     char *name = object_get_name_s(sack, op);
     char *tmp_name = object_get_name_s(tmp, op);
-    draw_info_format(COLOR_WHITE, op, "You put the %s in %s.", tmp_name, name);
+
+    object *inserted = object_insert_into(tmp, sack, 0);
+    bool committed = !custody_transfer || object_custody_commit(inserted, &custody);
+    if (committed) {
+        draw_info_format(COLOR_WHITE, op, "You put the %s in %s.", tmp_name, name);
+    } else {
+        draw_info(COLOR_WHITE, op, "The item moved, but its durable journal commit is uncertain.");
+    }
     free(name);
     free(tmp_name);
-
-    object_insert_into(tmp, sack, 0);
 }
 
 /**
@@ -2548,43 +2726,91 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
         draw_info(COLOR_WHITE, op, "You can't drop that item.");
         return;
     }
-
-    /* Trigger the map-wide drop event. */
-    if (!no_mevent && op->map && op->map->events &&
-        trigger_map_event(MEVENT_DROP, op->map, op, tmp, NULL, NULL, nrof)) {
+    if (object_contains_money_descendant(tmp)) {
+        draw_info(COLOR_WHITE, op, "Remove the coins before moving that container.");
         return;
     }
 
-    if (QUERY_FLAG(tmp, FLAG_APPLIED)) {
-        /* Can't unapply it */
-        if (object_apply_item(tmp, op, APPLY_ALWAYS_UNAPPLY | APPLY_NO_MERGE) != OBJECT_METHOD_OK) {
+    /* Trigger the map-wide drop event. */
+    if (!no_mevent && op->map &&
+        ((op->map->events && trigger_map_event(MEVENT_DROP, op->map, op, tmp, NULL, NULL, nrof))
+#ifdef ATRINIK_TESTING
+         || test_map_drop_event_veto
+#endif
+         )) {
+        return;
+    }
+
+    /* Trigger the DROP event */
+    if (trigger_event(EVENT_DROP, op, tmp, NULL, NULL, nrof, 0, 0, 0)
+#ifdef ATRINIK_TESTING
+        || test_drop_event_veto
+#endif
+    ) {
+        return;
+    }
+
+    int tmp_nrof = tmp->nrof != 0 ? (int)tmp->nrof : 1;
+    if (nrof <= 0 || nrof > tmp_nrof) {
+        nrof = tmp_nrof;
+    }
+    floor_ob = GET_MAP_OB_LAYER(op->map, op->x, op->y, LAYER_FLOOR, 0);
+    bool shop_sale = floor_ob != NULL && floor_ob->type == SHOP_FLOOR &&
+                     !QUERY_FLAG(tmp, FLAG_UNPAID) && tmp->type != MONEY;
+    bool journal_drop =
+        op->type == PLAYER && item_custody_auditable(tmp) && !QUERY_FLAG(tmp, FLAG_UNPAID);
+    object_custody_transaction_t custody = {0};
+    if (journal_drop) {
+        bool journal_ok;
+        if (shop_sale) {
+            journal_ok = shop_sell_item_begin(op, tmp, (uint32_t)nrof, &custody);
+        } else {
+            journal_ok = object_custody_begin(
+                tmp,
+                op,
+                QUERY_FLAG(tmp, FLAG_STARTEQUIP) ? "item.startequip-destroy" : "item.drop",
+                "player",
+                QUERY_FLAG(tmp, FLAG_STARTEQUIP) ? "destroyed" : "ground",
+                "",
+                (uint32_t)nrof,
+                false,
+                true,
+                &custody);
+        }
+        if (!journal_ok) {
+            draw_info(COLOR_WHITE, op, "The item transfer could not be journaled.");
+            return;
+        }
+        if (!QUERY_FLAG(tmp, FLAG_STARTEQUIP) &&
+            !object_custody_track_map_object(&custody, op->map, op->x, op->y, tmp)) {
+            object_custody_abort(&custody, "domain-registration-failed");
+            draw_info(COLOR_WHITE, op, "The item transfer could not be journaled.");
             return;
         }
     }
 
-    /* Trigger the DROP event */
-    if (trigger_event(EVENT_DROP, op, tmp, NULL, NULL, nrof, 0, 0, 0)) {
+    if (QUERY_FLAG(tmp, FLAG_APPLIED) &&
+        object_apply_item(tmp, op, APPLY_ALWAYS_UNAPPLY | APPLY_NO_MERGE) != OBJECT_METHOD_OK) {
+        if (journal_drop) {
+            object_custody_abort(&custody, "unapply-failed");
+        }
         return;
     }
 
     tmp = object_stack_get_removed(tmp, nrof);
-
-    if (op->type == PLAYER) {
-        metrics_add(&CONTR(op)->metrics,
-                    METRIC_CHARACTER_ITEM_UNITS_DROPPED,
-                    (uint64_t)MAX(1, tmp->nrof));
+    if (journal_drop) {
+        object_custody_apply(tmp, &custody);
     }
 
+    uint64_t dropped_quantity = (uint64_t)MAX(1, tmp->nrof);
+
     if (QUERY_FLAG(tmp, FLAG_STARTEQUIP) || QUERY_FLAG(tmp, FLAG_UNPAID)) {
-        if (op->type == PLAYER) {
-            char *name = object_get_name_s(tmp, op);
-            draw_info_format(COLOR_WHITE, op, "You drop the %s.", name);
-            free(name);
-
-            if (QUERY_FLAG(tmp, FLAG_UNPAID)) {
+        if (QUERY_FLAG(tmp, FLAG_UNPAID)) {
+            if (op->type == PLAYER) {
+                char *name = object_get_name_s(tmp, op);
+                draw_info_format(COLOR_WHITE, op, "You drop the %s.", name);
+                free(name);
                 draw_info(COLOR_WHITE, op, "The shop magic put it back to the storage.");
-
-                floor_ob = GET_MAP_OB_LAYER(op->map, op->x, op->y, LAYER_FLOOR, 0);
 
                 /* If the player is standing on a unique shop floor or unique
                  * randomitems shop floor, drop the object back to the floor */
@@ -2593,23 +2819,33 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
                      (floor_ob->randomitems && QUERY_FLAG(floor_ob, FLAG_CURSED)))) {
                     tmp->x = op->x;
                     tmp->y = op->y;
-                    if (op->type == PLAYER) {
-                        object_custody_relinquish(tmp, op);
-                    }
                     tmp = object_insert_map(tmp, op->map, op, 0);
-                    if (op->type == PLAYER) {
-                        object_custody_record(tmp, op, "custody-relinquished");
-                    }
+                    metrics_add(&CONTR(op)->metrics,
+                                METRIC_CHARACTER_ITEM_UNITS_DROPPED,
+                                dropped_quantity);
                     return;
                 }
-            } else {
-                draw_info(COLOR_WHITE,
-                          op,
-                          "The god-given item vanishes to nowhere as you drop it!");
             }
+            object_destroy(tmp);
+            return;
         }
 
+        char *name = NULL;
+        if (op->type == PLAYER) {
+            name = object_get_name_s(tmp, op);
+        }
         object_destroy(tmp);
+        bool committed = !journal_drop || object_custody_finish(&custody);
+        if (op->type == PLAYER && committed) {
+            draw_info_format(COLOR_WHITE, op, "You drop the %s.", name);
+            draw_info(COLOR_WHITE, op, "The god-given item vanishes to nowhere as you drop it!");
+            metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_ITEM_UNITS_DROPPED, dropped_quantity);
+        } else if (op->type == PLAYER) {
+            draw_info(COLOR_WHITE,
+                      op,
+                      "The item vanished, but its durable journal commit is uncertain.");
+        }
+        free(name);
         return;
     }
 
@@ -2625,24 +2861,23 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
     }
 #endif
 
-    floor_ob = GET_MAP_OB_LAYER(op->map, op->x, op->y, LAYER_FLOOR, 0);
-
-    if (floor_ob && floor_ob->type == SHOP_FLOOR && !QUERY_FLAG(tmp, FLAG_UNPAID) &&
-        tmp->type != MONEY) {
-        shop_sell_item(op, tmp);
+    bool committed = true;
+    if (shop_sale) {
+        committed = shop_sell_item_commit(op, tmp, &custody);
 
         /* Ok, we have really sold it - not only dropped. Run this only
          * if the floor is not magical (i.e., unique shop) */
         if (QUERY_FLAG(tmp, FLAG_UNPAID) && !QUERY_FLAG(floor_ob, FLAG_IS_MAGICAL)) {
             if (op->type == PLAYER) {
-                object_custody_relinquish(tmp, op);
-                object_custody_record(tmp, op, "custody-sold");
-            }
-            if (op->type == PLAYER) {
                 draw_info(COLOR_WHITE, op, "The shop magic put it to the storage.");
             }
 
             object_destroy(tmp);
+            if (op->type == PLAYER && committed) {
+                metrics_add(&CONTR(op)->metrics,
+                            METRIC_CHARACTER_ITEM_UNITS_DROPPED,
+                            dropped_quantity);
+            }
             return;
         }
     }
@@ -2651,12 +2886,12 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
     tmp->y = op->y;
     tmp->sub_layer = op->sub_layer;
 
-    if (op->type == PLAYER) {
-        object_custody_relinquish(tmp, op);
-    }
     tmp = object_insert_map(tmp, op->map, op, 0);
-    if (op->type == PLAYER) {
-        object_custody_record(tmp, op, "custody-relinquished");
+    if (journal_drop && !shop_sale) {
+        committed = object_custody_finish(&custody);
+    }
+    if (op->type == PLAYER && committed) {
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_ITEM_UNITS_DROPPED, dropped_quantity);
     }
 
     SET_FLAG(op, FLAG_NO_APPLY);
@@ -2747,6 +2982,13 @@ int player_exists(const char *name) {
 void player_save(object *op) {
     HARD_ASSERT(op != NULL);
 
+    if (!gameplay_journal_player_checkpoint_allowed(op)) {
+        LOG(INFO,
+            "Deferring save of player %s while a gameplay journal transaction is pending.",
+            op->name != NULL ? op->name : "<unnamed>");
+        return;
+    }
+
     /* Is this a map players can't save on? */
     if (op->map != NULL && MAP_PLAYER_NO_SAVE(op->map)) {
         if (!metrics_character_save(CONTR(op))) {
@@ -2788,6 +3030,11 @@ void player_save(object *op) {
     player_faction_t *faction, *tmp;
     HASH_ITER(hh, pl->factions, faction, tmp) {
         fprintf(fp, "faction %s %e\n", faction->name, faction->reputation);
+    }
+
+    if (pl->journal_run_id[0] != '\0') {
+        fprintf(fp, "journal_run %s\n", pl->journal_run_id);
+        fprintf(fp, "journal_sequence %" PRIu64 "\n", pl->journal_sequence);
     }
 
     fprintf(fp, "fame %" PRId64 "\n", pl->fame);
@@ -2880,6 +3127,19 @@ bool player_load_stream(player *pl, FILE *fp) {
             pl->bed_x = atoi(buf + 5);
         } else if (strncmp(buf, "bed_y ", 5) == 0) {
             pl->bed_y = atoi(buf + 5);
+        } else if (strncmp(buf, "journal_run ", 12) == 0) {
+            const char *run_id = buf + 12;
+            if (string_is_hex_fixed(run_id, 32, true)) {
+                memcpy(pl->journal_run_id, run_id, 32);
+                pl->journal_run_id[32] = '\0';
+            }
+        } else if (strncmp(buf, "journal_sequence ", 17) == 0) {
+            char *end;
+            errno = 0;
+            uintmax_t sequence = strtoumax(buf + 17, &end, 10);
+            if (errno == 0 && end != buf + 17 && *end == '\0' && sequence <= UINT64_MAX) {
+                pl->journal_sequence = (uint64_t)sequence;
+            }
         } else if (strncmp(buf, "cmd_permission ", 15) == 0) {
             pl->cmd_permissions =
                 xreallocarray(pl->cmd_permissions, (pl->num_cmd_permissions + 1), sizeof(char *));
@@ -2899,7 +3159,7 @@ bool player_load_stream(player *pl, FILE *fp) {
 
     SET_FLAG(pl->ob, FLAG_NO_FIX_PLAYER);
     void *buffer = create_loader_buffer(fp);
-    int result = load_object_buffer(buffer, pl->ob, 0);
+    int result = load_object_buffer(buffer, pl->ob, 0, false);
     delete_loader_buffer(buffer);
     CLEAR_FLAG(pl->ob, FLAG_NO_FIX_PLAYER);
     if (result == LL_ERROR) {
@@ -3353,6 +3613,12 @@ void player_logout(player *pl) {
     SOFT_ASSERT(pl->cs->state == ST_DEAD, "Player socket state is: %d", pl->cs->state);
 
     if (pl->ob->type == DEAD_OBJECT) {
+        return;
+    }
+    if (!gameplay_journal_player_checkpoint_allowed(pl->ob)) {
+        LOG(INFO,
+            "Deferring logout of %s while a gameplay journal transaction is pending.",
+            pl->ob->name != NULL ? pl->ob->name : "<unnamed>");
         return;
     }
 

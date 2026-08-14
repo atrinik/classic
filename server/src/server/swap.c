@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 The Atrinik Project                         *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -162,12 +162,8 @@ void swap_map(mapstruct *map, int force_flag) {
         return;
     }
 
-    if (new_save_map(map, 0) == -1) {
+    if (new_save_map(map, 0) != 0) {
         LOG(BUG, "Failed to swap map %s.", map->path);
-        /* Need to reset the in_memory flag so that delete map will also
-         * free the objects with it. */
-        map->in_memory = MAP_IN_MEMORY;
-        delete_map(map);
     } else {
         free_map(map, 1);
     }

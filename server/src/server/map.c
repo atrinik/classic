@@ -29,6 +29,7 @@
 
 #include <global.h>
 #include <celestial_structure.h>
+#include <gameplay_journal.h>
 #include <swap.h>
 #include <server_main.h>
 #include <plugin.h>
@@ -835,7 +836,7 @@ static bool load_objects(mapstruct *m, FILE *fp, int mapflags) {
     void *buffer = create_loader_buffer(fp);
 
     int rc;
-    while ((rc = load_object_buffer(buffer, op, mapflags)) != LL_EOF) {
+    while ((rc = load_object_buffer(buffer, op, mapflags, true)) != LL_EOF) {
         if (rc == LL_ERROR) {
             LOG(ERROR, "Discarding invalid object while loading map %s.", m->path);
             object_errors = true;
@@ -1457,6 +1458,24 @@ static bool load_unique_objects(mapstruct *m) {
         return true;
     }
 
+    char checkpoint[256];
+    long position = ftell(fp);
+    if (fgets(checkpoint, sizeof(checkpoint), fp) != NULL) {
+        char run[33], raw_sequence[32], extra;
+        errno = 0;
+        char *end = NULL;
+        int parsed =
+            sscanf(checkpoint, "# gameplay-journal %32s %31s %c", run, raw_sequence, &extra);
+        uintmax_t sequence = parsed == 2 ? strtoumax(raw_sequence, &end, 10) : 0;
+        if (parsed == 2 && string_is_hex_fixed(run, 32, true) && errno == 0 &&
+            end != raw_sequence && *end == '\0' && sequence <= UINT64_MAX) {
+            snprintf(VS(m->journal_unique_run_id), "%s", run);
+            m->journal_unique_sequence = (uint64_t)sequence;
+        } else {
+            (void)fseek(fp, position, SEEK_SET);
+        }
+    }
+
     m->in_memory = MAP_LOADING;
 
     /* If we have loaded unique items from */
@@ -1471,6 +1490,85 @@ static bool load_unique_objects(mapstruct *m) {
     }
     fclose(fp);
     return true;
+}
+
+typedef struct map_atomic_file {
+    FILE *fp;
+    char target[HUGE_BUF];
+    char temporary[HUGE_BUF];
+} map_atomic_file_t;
+
+static bool map_atomic_open(map_atomic_file_t *file, const char *target) {
+    memset(file, 0, sizeof(*file));
+    if (snprintf(VS(file->target), "%s", target) >= (int)sizeof(file->target) ||
+        snprintf(VS(file->temporary), "%s.new.XXXXXX", target) >= (int)sizeof(file->temporary)) {
+        return false;
+    }
+    int fd = mkstemp(file->temporary);
+    if (fd < 0) {
+        return false;
+    }
+    file->fp = fdopen(fd, "w");
+    if (file->fp == NULL) {
+        close(fd);
+        unlink(file->temporary);
+        return false;
+    }
+    return true;
+}
+
+static bool map_atomic_publish(map_atomic_file_t *file) {
+    bool ok = fflush(file->fp) == 0;
+#ifdef WIN32
+    if (ok) {
+        ok = _commit(_fileno(file->fp)) == 0;
+    }
+#else
+    if (ok) {
+        ok = fsync(fileno(file->fp)) == 0;
+    }
+#endif
+    if (fclose(file->fp) != 0) {
+        ok = false;
+    }
+    file->fp = NULL;
+    if (ok) {
+        ok = chmod(file->temporary, SAVE_MODE) == 0;
+    }
+#ifdef WIN32
+    if (ok) {
+        ok = MoveFileExA(file->temporary,
+                         file->target,
+                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+    }
+#else
+    if (ok) {
+        ok = rename(file->temporary, file->target) == 0;
+    }
+    if (ok) {
+        char *directory = path_dirname(file->target);
+        int directory_fd = directory != NULL ? open(directory, O_RDONLY | O_DIRECTORY) : -1;
+        ok = directory_fd >= 0 && fsync(directory_fd) == 0;
+        if (directory_fd >= 0 && close(directory_fd) != 0) {
+            ok = false;
+        }
+        free(directory);
+    }
+#endif
+    if (!ok) {
+        unlink(file->temporary);
+    }
+    return ok;
+}
+
+static void map_atomic_cancel(map_atomic_file_t *file) {
+    if (file->fp != NULL) {
+        (void)fclose(file->fp);
+        file->fp = NULL;
+    }
+    if (file->temporary[0] != '\0') {
+        (void)unlink(file->temporary);
+    }
 }
 
 /**
@@ -1490,6 +1588,16 @@ static bool load_unique_objects(mapstruct *m) {
 int new_save_map(mapstruct *m, int flag) {
     FILE *fp, *fp2;
     char filename[HUGE_BUF], buf[MAX_BUF];
+    map_atomic_file_t primary, unique;
+    memset(&primary, 0, sizeof(primary));
+    memset(&unique, 0, sizeof(unique));
+
+    if (!flag && !gameplay_journal_map_checkpoint_allowed(m)) {
+        LOG(INFO,
+            "Deferring save of map %s while a gameplay journal transaction is pending.",
+            m->path != NULL ? m->path : "<runtime>");
+        return -1;
+    }
 
     if (flag && !*m->path) {
         return -1;
@@ -1508,8 +1616,6 @@ int new_save_map(mapstruct *m, int flag) {
         }
 
         path_ensure_directories(filename);
-
-        fp = fopen(filename, "w");
     } else {
         if (m->tmpname == NULL) {
             char path[HUGE_BUF];
@@ -1525,29 +1631,19 @@ int new_save_map(mapstruct *m, int flag) {
                 return -1;
             }
 
-            fp = fdopen(fd, "w");
-
-            if (fp == NULL) {
-                LOG(ERROR,
-                    "Can't open file %s for saving: %d (%s)",
-                    filename,
-                    errno,
-                    strerror(errno));
-                close(fd);
-                return -1;
-            }
-        } else {
-            fp = fopen(m->tmpname, "w");
+            close(fd);
         }
 
         snprintf(VS(filename), "%s", m->tmpname);
     }
 
-    if (fp == NULL) {
+    if (!map_atomic_open(&primary, filename)) {
         LOG(ERROR, "Can't open file %s for saving: %d (%s)", filename, errno, strerror(errno));
         return -1;
     }
+    fp = primary.fp;
 
+    int previous_in_memory = m->in_memory;
     m->in_memory = MAP_SAVING;
 
     save_map_header(m, fp, flag);
@@ -1561,31 +1657,34 @@ int new_save_map(mapstruct *m, int flag) {
     if (!MAP_UNIQUE(m)) {
         snprintf(buf, sizeof(buf), "%s.v00", create_items_path(m->path));
 
-        if ((fp2 = fopen(buf, "w")) == NULL) {
+        if (!map_atomic_open(&unique, buf)) {
             LOG(BUG, "Can't open unique items file %s", buf);
+            map_atomic_cancel(&primary);
+            m->in_memory = previous_in_memory;
+            return -1;
         }
+        fp2 = unique.fp;
+        fprintf(fp2,
+                "# gameplay-journal %s %" PRIu64 "\n",
+                !flag && m->journal_unique_run_id[0] != '\0' ? m->journal_unique_run_id
+                                                             : "00000000000000000000000000000000",
+                !flag ? m->journal_unique_sequence : 0);
 
         save_objects(m, fp, fp2);
-
-        if (fp2) {
-            if (ftell(fp2) == 0) {
-                fclose(fp2);
-                unlink(buf);
-            } else {
-                fclose(fp2);
-                chmod(buf, SAVE_MODE);
-            }
-        }
     } else {
         /* Otherwise to the same file, like apartments */
         save_objects(m, fp, fp);
     }
 
-    if (fp) {
-        fclose(fp);
+    if (!MAP_UNIQUE(m) && !map_atomic_publish(&unique)) {
+        map_atomic_cancel(&primary);
+        m->in_memory = previous_in_memory;
+        return -1;
     }
-
-    chmod(filename, SAVE_MODE);
+    if (!map_atomic_publish(&primary)) {
+        m->in_memory = previous_in_memory;
+        return -1;
+    }
     return 0;
 }
 

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -466,7 +466,8 @@ static const char doc_Atrinik_Map_CreateObject[] =
     ":type y: int\n"
     ":returns: The created object.\n"
     ":rtype: :class:`Atrinik.Object.Object`\n"
-    ":raises Atrinik.AtrinikError: If *archname* is not a valid archetype.";
+    ":raises Atrinik.AtrinikError: If *archname* is not a valid archetype.\n"
+    ":raises RuntimeError: If *archname* is MONEY; use Player.InsertCoins.";
 
 /**
  * Implements Atrinik.Map.Map.CreateObject() Python method.
@@ -483,6 +484,11 @@ static PyObject *Atrinik_Map_CreateObject(Atrinik_Map *self, PyObject *args) {
     archetype_t *arch = hooks->arch_find(archname);
     if (arch == NULL) {
         RAISE("Invalid archetype.");
+        return NULL;
+    }
+    if (arch->clone.type == MONEY) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Map.CreateObject cannot mint currency; use Player.InsertCoins.");
         return NULL;
     }
 
@@ -531,7 +537,7 @@ static PyObject *Atrinik_Map_GetPlayers(Atrinik_Map *self, PyObject *ignored) {
 
 /** Documentation for Atrinik_Map_Insert(). */
 static const char doc_Atrinik_Map_Insert[] =
-    ".. method:: Insert(obj, x, y).\n\n"
+    ".. method:: Insert(obj, x, y, reason='script.item-drop').\n\n"
     "Insert the specified object on map, removing it first if necessary.\n\n"
     ":param obj: Object to insert.\n"
     ":type obj: :class:`Atrinik.Object.Object`\n"
@@ -539,9 +545,12 @@ static const char doc_Atrinik_Map_Insert[] =
     ":type x: int\n"
     ":param y: Y position on the map.\n"
     ":type y: int\n"
+    ":param reason: Bounded semantic reason code for the private journal.\n"
+    ":type reason: str\n"
     ":returns: The inserted object. Can be None on failure, or different from "
     "*obj* in case of merging.\n"
-    ":rtype: :class:`Atrinik.Object.Object` or None";
+    ":rtype: :class:`Atrinik.Object.Object` or None\n"
+    ":raises RuntimeError: If persistent currency is targeted or journaling is uncertain.";
 
 /**
  * Implements Atrinik.Map.Map.CreateObject() Python method.
@@ -550,20 +559,34 @@ static const char doc_Atrinik_Map_Insert[] =
 static PyObject *Atrinik_Map_Insert(Atrinik_Map *self, PyObject *args) {
     Atrinik_Object *obj;
     int16_t x, y;
+    const char *reason = "script.item-drop";
 
-    if (!PyArg_ParseTuple(args, "O!hh", &Atrinik_ObjectType, &obj, &x, &y)) {
+    if (!PyArg_ParseTuple(args, "O!hh|s", &Atrinik_ObjectType, &obj, &x, &y, &reason)) {
         return NULL;
     }
 
     OBJEXISTCHECK(obj);
 
-    if (!QUERY_FLAG(obj->obj, FLAG_REMOVED)) {
-        hooks->object_remove(obj->obj, 0);
+    bool bank = obj->obj->arch != NULL && strcmp(obj->obj->arch->name, "player_info") == 0 &&
+                obj->obj->name != NULL && strcmp(obj->obj->name, "BANK_GENERAL") == 0;
+    if (obj->obj->type == MONEY || bank) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Map.Insert cannot move persistent currency; use Player.InsertCoins.");
+        return NULL;
     }
 
-    obj->obj->x = x;
-    obj->obj->y = y;
-    return wrap_object(hooks->object_insert_map(obj->obj, self->map, NULL, 0));
+    object *inserted = NULL;
+    object_semantic_result_t result =
+        hooks->object_insert_map_reason(obj->obj, self->map, x, y, reason, &inserted);
+    if (result == OBJECT_SEMANTIC_FAILED) {
+        Py_RETURN_NONE;
+    }
+    if (result == OBJECT_SEMANTIC_AMBIGUOUS) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Item moved to the map, but its durable journal commit is uncertain.");
+        return NULL;
+    }
+    return wrap_object(inserted);
 }
 
 /** Documentation for Atrinik_Map_Wall(). */
@@ -868,7 +891,12 @@ static const char doc_Atrinik_Map_Save[] = ".. method:: Save().\n\n"
  * @copydoc PyMethod_NOARGS
  */
 static PyObject *Atrinik_Map_Save(Atrinik_Map *self, PyObject *ignored) {
-    hooks->new_save_map(self->map, 0);
+    if (!hooks->gameplay_journal_map_checkpoint_allowed(self->map)) {
+        RAISE("Map save is deferred while a gameplay journal transaction is pending.");
+    }
+    if (hooks->new_save_map(self->map, 0) != 0) {
+        RAISE("Map save failed.");
+    }
 
     Py_INCREF(Py_None);
     return Py_None;

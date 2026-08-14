@@ -179,7 +179,7 @@ static void arch_pass_first(FILE *fp) {
     archetype_t *prev = NULL, *last_more = NULL;
 
     for (int rc = load_object_fp(fp, &at->clone, MAP_STYLE); rc != LL_EOF;
-         rc = load_object_buffer(buffer, &at->clone, MAP_STYLE)) {
+         rc = load_object_buffer(buffer, &at->clone, MAP_STYLE, true)) {
         switch (rc) {
             /* A new archetype, add it to the arch table. */
             case LL_NORMAL:

@@ -2,7 +2,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 The Atrinik Project                         *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -92,6 +92,7 @@ lex_error = 0;
     m->region = region_find_by_name(yval());
     if (m->region == NULL) {
         m->celestial_header_invalid = true;
+        return LL_ERROR;
     }
 }
 ^enter_x{S}          m->enter_x = IVAL;
@@ -119,6 +120,21 @@ lex_error = 0;
 ^reset_timeout{S}    m->reset_timeout = IVAL;
 ^swap_time{S}        m->swap_time = IVAL;
 ^difficulty{S}       m->difficulty = IVAL;
+^journal_run{S}      {
+    const char *run_id = yval();
+    if (string_is_hex_fixed(run_id, 32, true)) {
+        snprintf(VS(m->journal_run_id), "%s", run_id);
+    }
+}
+^journal_sequence{S} {
+    const char *value = yval();
+    char *end;
+    errno = 0;
+    uintmax_t sequence = strtoumax(value, &end, 10);
+    if (errno == 0 && end != value && *end == '\0' && sequence <= UINT64_MAX) {
+        m->journal_sequence = (uint64_t) sequence;
+    }
+}
 ^darkness{S}         {
     m->celestial_legacy_darkness_seen = true;
     int v;
@@ -237,7 +253,16 @@ lex_error = 0;
 
 <*>(^{WS}$)|\n       {}
 #.*\n                {}
-^end\n               return LL_EOF;
+^end\n               {
+    if (m->region == NULL) {
+        m->region = region_world();
+        if (m->region == NULL) {
+            LOG(BUG, "Cannot resolve world region for map: %s", m->path);
+            return LL_ERROR;
+        }
+    }
+    return LL_EOF;
+}
 
 <<EOF>>              return LL_MORE;
 
@@ -428,6 +453,11 @@ void save_map_header(mapstruct *m, FILE *fp, int flag)
 
     if (m->difficulty) {
         fprintf(fp, "difficulty %d\n", m->difficulty);
+    }
+
+    if (!flag && m->journal_run_id[0] != '\0') {
+        fprintf(fp, "journal_run %s\n", m->journal_run_id);
+        fprintf(fp, "journal_sequence %" PRIu64 "\n", m->journal_sequence);
     }
 
     if (m->celestial_schema == 1) {

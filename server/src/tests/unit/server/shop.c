@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -80,6 +80,68 @@ START_TEST(test_shop_get_cost) {
     ck_assert_int_eq(0, shop_get_cost(sword, COST_SELL));
     ck_assert_int_eq(0, shop_get_cost(sword, COST_TRUE));
     object_destroy(sword);
+}
+END_TEST
+
+START_TEST(test_shop_pay_rejects_mutated_money_without_partial_removal) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object *canonical = arch_get("coppercoin");
+    canonical->nrof = 50;
+    canonical = object_insert_into(canonical, pl, 0);
+    object *mutated = arch_get("coppercoin");
+    mutated->value = 100;
+    mutated = object_insert_into(mutated, pl, 0);
+    tag_t canonical_tag = canonical->count;
+    tag_t mutated_tag = mutated->count;
+
+    ck_assert_int_eq(shop_get_money(pl), 50);
+    ck_assert(!shop_pay(pl, 100));
+    ck_assert(OBJECT_VALID(canonical, canonical_tag));
+    ck_assert_uint_eq(canonical->nrof, 50);
+    ck_assert(OBJECT_VALID(mutated, mutated_tag));
+    ck_assert_int_eq(mutated->value, 100);
+}
+END_TEST
+
+START_TEST(test_shop_pay_handles_multi_stack_uint32_change) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object *copper = arch_get("coppercoin");
+    copper->nrof = UINT32_MAX;
+    copper->custody_lineage = add_string("currency:first");
+    object_insert_into(copper, pl, 0);
+    object *silver = arch_get("silvercoin");
+    silver->custody_lineage = add_string("currency:second");
+    object_insert_into(silver, pl, 0);
+
+    ck_assert(shop_pay(pl, (int64_t)UINT32_MAX + 1));
+    ck_assert_int_eq(shop_get_money(pl), 99);
+}
+END_TEST
+
+START_TEST(test_shop_coin_stack_adjustment_rejects_invalid_quantity_and_weight) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object *coin = arch_get("coppercoin");
+    coin->nrof = 1;
+    coin = object_insert_into(coin, pl, 0);
+
+    ck_assert_int_eq(shop_set_coin_nrof_reason(coin, 0, "test.currency-adjust"),
+                     OBJECT_SEMANTIC_FAILED);
+    ck_assert_uint_eq(coin->nrof, 1);
+    ck_assert_int_eq(shop_set_coin_nrof_reason(coin, (uint32_t)INT32_MAX + 1,
+                                               "test.currency-adjust"),
+                     OBJECT_SEMANTIC_FAILED);
+    ck_assert_uint_eq(coin->nrof, 1);
+
+    pl->carrying = UINT32_MAX;
+    ck_assert_int_eq(shop_set_coin_nrof_reason(coin, 2, "test.currency-adjust"),
+                     OBJECT_SEMANTIC_FAILED);
+    ck_assert_uint_eq(coin->nrof, 1);
 }
 END_TEST
 
@@ -420,6 +482,22 @@ START_TEST(test_shop_insert_coins) {
 
     ck_assert_ptr_ne(GET_MAP_OB(pl->map, pl->x, pl->y), NULL);
     ck_assert_str_eq(GET_MAP_OB(pl->map, pl->x, pl->y)->arch->name, "coppercoin");
+
+    archetype_t *amber = arch_find("ambercoin");
+    ck_assert_ptr_ne(amber, NULL);
+    ck_assert_int_le(amber->clone.value, INT64_MAX / ((int64_t)UINT32_MAX + 1));
+    int64_t overflow_nrof = (int64_t)UINT32_MAX + 1;
+    int64_t overflow_value = overflow_nrof * amber->clone.value;
+    pl->carrying = weight_limit[MIN(pl->stats.Str, MAX_STAT)];
+    ck_assert(shop_insert_coins_exact(pl, overflow_value));
+    int64_t floor_nrof = 0;
+    FOR_MAP_PREPARE(pl->map, pl->x, pl->y, tmp) {
+        if (tmp->arch == amber) {
+            floor_nrof += tmp->nrof;
+        }
+    }
+    FOR_MAP_FINISH();
+    ck_assert_int_eq(floor_nrof, overflow_nrof);
 }
 END_TEST
 
@@ -436,6 +514,9 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_shop_get_cost_string_item);
     tcase_add_test(tc_core, test_shop_get_money);
     tcase_add_test(tc_core, test_shop_pay);
+    tcase_add_test(tc_core, test_shop_pay_rejects_mutated_money_without_partial_removal);
+    tcase_add_test(tc_core, test_shop_pay_handles_multi_stack_uint32_change);
+    tcase_add_test(tc_core, test_shop_coin_stack_adjustment_rejects_invalid_quantity_and_weight);
     tcase_add_test(tc_core, test_shop_pay_item);
     tcase_add_test(tc_core, test_shop_pay_items);
     tcase_add_test(tc_core, test_shop_sell_item);
