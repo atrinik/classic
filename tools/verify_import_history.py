@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -88,6 +89,10 @@ def is_ancestor(older: str, newer: str) -> bool:
         ).returncode
         == 0
     )
+
+
+def first_parent_commits(revision: str) -> set[str]:
+    return set(git("rev-list", "--first-parent", revision).splitlines())
 
 
 def verify_commits(name: str, commits: list[str]) -> None:
@@ -258,7 +263,7 @@ def verify_component_release_map(manifest: dict[str, Any]) -> None:
         )
 
 
-def verify_release_tags(manifest: dict[str, Any]) -> None:
+def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> None:
     policy_path = ROOT / manifest["active_release_tags"]
     policy = json.loads(policy_path.read_text(encoding="utf-8"))
     require(policy.get("schema_version") == 2, "unsupported release-tag policy")
@@ -318,7 +323,10 @@ def verify_release_tags(manifest: dict[str, Any]) -> None:
         "first version exceeds the major-version cap",
     )
     floor = future_policy["ancestry_floor"]
-    require(is_ancestor(floor, "HEAD"), "future-tag ancestry floor is not in HEAD")
+    require(
+        is_ancestor(floor, release_history_ref),
+        f"future-tag ancestry floor is not in {release_history_ref}",
+    )
 
     failed_releases = policy.get("failed_releases")
     require(
@@ -346,9 +354,13 @@ def verify_release_tags(manifest: dict[str, Any]) -> None:
             git("rev-parse", f"{tag}^{{commit}}") == record["commit"],
             f"{tag}: failed release target changed",
         )
-        require(is_ancestor(record["commit"], "HEAD"), f"{tag}: target is not in HEAD")
+        require(
+            is_ancestor(record["commit"], release_history_ref),
+            f"{tag}: target is not in {release_history_ref}",
+        )
 
-    first_parent_commits = set(git("rev-list", "--first-parent", "HEAD").splitlines())
+    head_first_parent_commits = first_parent_commits("HEAD")
+    release_first_parent_commits = first_parent_commits(release_history_ref)
     release_config = load_release_config()
     require(
         release_config.get("branches") == ["main"],
@@ -394,8 +406,8 @@ def verify_release_tags(manifest: dict[str, Any]) -> None:
             {key: value for key, value in rule.items() if key != "hash"}
         )
     require(
-        set(rules_by_hash) == first_parent_commits,
-        "release rules do not select exactly main's first-parent history",
+        set(rules_by_hash) == head_first_parent_commits,
+        "release rules do not select exactly HEAD's first-parent history",
     )
     require(
         all(rules == expected_rules for rules in rules_by_hash.values()),
@@ -459,7 +471,10 @@ def verify_release_tags(manifest: dict[str, Any]) -> None:
     require(historical <= actual, "an immutable historical release tag is missing")
     for tag, commit in historical_tags.items():
         require(git("rev-parse", f"{tag}^{{commit}}") == commit, f"{tag}: target changed")
-        require(is_ancestor(commit, "HEAD"), f"{tag}: target is not in HEAD")
+        require(
+            is_ancestor(commit, release_history_ref),
+            f"{tag}: target is not in {release_history_ref}",
+        )
 
     future_tags = sorted(actual - historical, key=semantic_version)
     if future_tags:
@@ -481,22 +496,36 @@ def verify_release_tags(manifest: dict[str, Any]) -> None:
         commit = git("rev-parse", f"{tag}^{{commit}}")
         require(commit not in targets, f"{tag}: release tag target is not unique")
         require(
-            commit in first_parent_commits,
-            f"{tag}: target is not on main's first-parent line",
+            commit in release_first_parent_commits,
+            f"{tag}: target is not on {release_history_ref}'s first-parent line",
         )
         require(is_ancestor(previous_commit, commit), f"{tag}: versions are not ancestry ordered")
-        require(is_ancestor(commit, "HEAD"), f"{tag}: target is not in HEAD")
+        require(
+            is_ancestor(commit, release_history_ref),
+            f"{tag}: target is not in {release_history_ref}",
+        )
         targets.add(commit)
         previous_commit = commit
 
 
-def main() -> int:
+def parse_args(arguments: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--release-history-ref",
+        default="HEAD",
+        help="trusted branch topology used to validate release-tag ancestry",
+    )
+    return parser.parse_args(arguments)
+
+
+def main(arguments: list[str] | None = None) -> int:
+    args = parse_args(arguments)
     try:
         manifest = load_manifest()
         for component in manifest["components"]:
             verify_component(component, manifest["retired_history_refs"])
         verify_component_release_map(manifest)
-        verify_release_tags(manifest)
+        verify_release_tags(manifest, args.release_history_ref)
     except (OSError, KeyError, ValueError, RuntimeError) as error:
         print(f"history verification failed: {error}", file=sys.stderr)
         return 1

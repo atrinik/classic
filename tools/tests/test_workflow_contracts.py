@@ -689,6 +689,15 @@ class WorkflowContractTests(unittest.TestCase):
             "github.event_name == 'workflow_dispatch' && github.run_id || github.ref",
             workflow[: workflow.index("jobs:")],
         )
+        core = workflow[
+            workflow.index("  core:\n    name: Core validation") : workflow.index(
+                "  server:\n    name: Server validation"
+            )
+        ]
+        self.assertIn(
+            "--release-history-ref \"${{ github.event_name == 'workflow_dispatch' && 'origin/main' || 'HEAD' }}\"",
+            core,
+        )
 
         comment = workflow[
             workflow.index("  movement-regression-comment:") : workflow.index(
