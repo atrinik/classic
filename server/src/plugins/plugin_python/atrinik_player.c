@@ -430,7 +430,8 @@ static PyObject *Atrinik_Player_QuestStatus(Atrinik_Player *self, PyObject *args
 static const char doc_Atrinik_Player_JournalIntent[] =
     ".. method:: JournalIntent(kind, reason, subject, before, delta, after, lineage='').\n\n"
     "Durably records a typed gameplay transaction intent before trusted content mutates state. "
-    "Kinds are item, currency, quest, and progression. Values and identifiers are structured; "
+    "Kinds are quest and progression; item and currency mutations must use the reason-aware "
+    "object and coin APIs. Values and identifiers are structured; "
     "free-form record text is not accepted.\n\n"
     ":returns: Opaque transaction identifier to commit or abort.\n:rtype: str\n"
     ":raises RuntimeError: If a typed field is invalid or the journal cannot durably write the "
@@ -513,6 +514,8 @@ static const char doc_Atrinik_Player_BankDeposit[] =
     ":returns: Tuple containing the status code (one of the BANK_xxx constants, "
     "eg, :attr:`~Atrinik.BANK_SUCCESS`) and amount of money deposited as "
     "integer.\n"
+    "BANK_JOURNAL_ERROR means no mutation; BANK_JOURNAL_AMBIGUOUS means the amount was "
+    "applied and must not be retried automatically.\n"
     ":rtype: tuple";
 
 /**
@@ -541,6 +544,8 @@ static const char doc_Atrinik_Player_BankWithdraw[] =
     ":returns: Tuple containing the status code (one of the BANK_xxx constants, "
     "eg, :attr:`~Atrinik.BANK_SUCCESS`) and amount of money withdrawn as "
     "integer.\n"
+    "BANK_JOURNAL_ERROR means no mutation; BANK_JOURNAL_AMBIGUOUS means the amount was "
+    "applied and must not be retried automatically.\n"
     ":rtype: tuple";
 
 /**
@@ -1129,10 +1134,12 @@ static PyObject *Atrinik_Player_FactionClearBounty(Atrinik_Player *self, PyObjec
 
 /** Documentation for Atrinik_Player_InsertCoins(). */
 static const char doc_Atrinik_Player_InsertCoins[] =
-    ".. method:: InsertCoins(value).\n\n"
+    ".. method:: InsertCoins(value, reason='script.currency-grant').\n\n"
     "Gives coins of the specified value to the player.\n\n"
     ":param value: The value.\n"
-    ":type value: int";
+    ":type value: int\n"
+    ":param reason: Bounded semantic reason code for the private journal.\n"
+    ":type reason: str";
 
 /**
  * Implements Atrinik.Player.Player.InsertCoins() Python method.
@@ -1140,12 +1147,20 @@ static const char doc_Atrinik_Player_InsertCoins[] =
  */
 static PyObject *Atrinik_Player_InsertCoins(Atrinik_Player *self, PyObject *args) {
     int64_t value;
+    const char *reason = "script.currency-grant";
 
-    if (!PyArg_ParseTuple(args, "L", &value)) {
+    if (!PyArg_ParseTuple(args, "L|s", &value, &reason)) {
         return NULL;
     }
 
-    hooks->shop_insert_coins(self->pl->ob, value);
+    object_semantic_result_t result = hooks->shop_insert_coins_reason(self->pl->ob, value, reason);
+    if (result != OBJECT_SEMANTIC_COMMITTED) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        result == OBJECT_SEMANTIC_FAILED
+                            ? "Currency grant could not be journaled."
+                            : "Currency granted, but its durable journal commit is uncertain.");
+        return NULL;
+    }
 
     Py_INCREF(Py_None);
     return Py_None;
@@ -1160,6 +1175,9 @@ static const char doc_Atrinik_Player_Save[] = ".. method:: Save().\n\n"
  * @copydoc PyMethod_NOARGS
  */
 static PyObject *Atrinik_Player_Save(Atrinik_Player *self, PyObject *ignored) {
+    if (!hooks->gameplay_journal_player_checkpoint_allowed(self->pl->ob)) {
+        RAISE("Player save is deferred while a gameplay journal transaction is pending.");
+    }
     hooks->player_save(self->pl->ob);
 
     Py_INCREF(Py_None);
