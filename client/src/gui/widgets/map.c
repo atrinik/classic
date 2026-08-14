@@ -3684,6 +3684,12 @@ void map_target_handle(uint8_t is_friend) {
     utarray_free(targets);
 }
 
+/** Convert screen mouse coordinates to map-local coordinates. */
+static void map_mouse_to_local_coords(int *mx, int *my) {
+    *mx -= widget_x(cur_widget[MAP_ID]);
+    *my -= widget_y(cur_widget[MAP_ID]);
+}
+
 /**
  * Transform mouse coordinates to tile coordinates on map.
  *
@@ -3718,8 +3724,7 @@ bool mouse_to_tile_coords(int mx, int my, int *tx, int *ty) {
 
     double zoom = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0;
 
-    mx -= widget_x(cur_widget[MAP_ID]);
-    my -= widget_y(cur_widget[MAP_ID]);
+    map_mouse_to_local_coords(&mx, &my);
 
     for (data.x = w - 1; data.x >= x; data.x--) {
         for (data.y = h - 1; data.y >= y; data.y--) {
@@ -4148,6 +4153,11 @@ bool widget_map_interaction_test(widgetdata *widget) {
     map_width = old_map_width;
     map_height = old_map_height;
     return success;
+}
+
+bool widget_map_mouse_origin_test(int mx, int my, int expected_mx, int expected_my) {
+    map_mouse_to_local_coords(&mx, &my);
+    return mx == expected_mx && my == expected_my;
 }
 
 #endif
