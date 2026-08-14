@@ -1253,6 +1253,21 @@ class EvidenceTests(unittest.TestCase):
             "timings",
             evidence["phases"]["baseline_standard"]["sustained"]["lighting"],
         )
+        for heading, candidate_calls in (
+            ("### Render-profiler stages (standard smooth sustained)", 720),
+            ("### Render-profiler stages (standard smooth cold)", 2),
+            ("### Render-profiler stages (standard smooth idle)", 16),
+            ("### Render-profiler stages (standard smooth resumed)", 120),
+        ):
+            with self.subTest(heading=heading):
+                start = report.index(heading)
+                end = report.find("\n###", start + len(heading))
+                section = report[start : end if end != -1 else len(report)]
+                self.assertIn(
+                    f"| `map` | `per_map_draw` | n/a → {candidate_calls} | "
+                    "n/a → 0.001 ms | n/a |",
+                    section,
+                )
 
     def test_informational_performance_failure_does_not_hide_or_fail(self) -> None:
         slow = native_record(sustained_p95_ns=50_000_000)
@@ -1526,6 +1541,67 @@ class CommentTests(unittest.TestCase):
         self.assertLessEqual(len(report.encode()), 65_536)
         self.assertNotIn("FPS equivalent", report)
 
+    def test_detailed_standard_smooth_stages_use_matching_baselines(self) -> None:
+        baseline = [native_record(), native_record(), native_record()]
+        candidate = [native_record(), native_record(), native_record()]
+        expected_map_stages = {
+            "cold": (2, 1_000, 1_500, "+50.0%"),
+            "sustained": (720, 2_000, 2_500, "+25.0%"),
+            "idle": (16, 3_000, 3_500, "+16.7%"),
+            "resumed": (120, 4_000, 4_500, "+12.5%"),
+        }
+        for records, elapsed_index in ((baseline, 1), (candidate, 2)):
+            for record in records:
+                for phase in record["phases"]:
+                    calls, baseline_us, candidate_us, _ = expected_map_stages[phase["name"]]
+                    phase["render_stages"]["map"]["calls"] = calls
+                    phase["render_stages"]["map"]["elapsed"] = (
+                        baseline_us if elapsed_index == 1 else candidate_us
+                    ) * calls
+        evidence = benchmark._build_evidence(
+            baseline, candidate, [], additional_contexts(smooth_samples=3)
+        )
+        report = benchmark.render_comment(evidence, "success")
+        for phase, (calls, baseline_us, candidate_us, delta) in expected_map_stages.items():
+            with self.subTest(phase=phase):
+                heading = f"### Render-profiler stages (standard smooth {phase})"
+                start = report.index(heading)
+                end = report.find("\n### ", start + len(heading))
+                section = report[start : end if end != -1 else len(report)]
+                self.assertIn(
+                    f"| `map` | `per_map_draw` | {calls} → {calls} | "
+                    f"{baseline_us / 1_000:.3f} ms → {candidate_us / 1_000:.3f} ms | "
+                    f"{delta} |",
+                    section,
+                )
+
+        self.assertIn(
+            "Those candidate-only contexts do not collect a baseline",
+            report,
+        )
+        self.assertNotIn(f"#### {benchmark.STANDARD_DISCRETE_CONTEXT}", report)
+
+    def test_candidate_only_detailed_stages_remain_unavailable(self) -> None:
+        evidence = benchmark._build_evidence(
+            [],
+            [native_record(), native_record()],
+            [],
+            additional_contexts(),
+            enforce_performance=False,
+            comparison_note="bootstrap-base-missing-movement-instrumentation",
+        )
+        report = benchmark.render_comment(evidence, "success")
+        cold_heading = "### Render-profiler stages (standard smooth cold)"
+        cold_start = report.index(cold_heading)
+        cold_end = report.find("\n### ", cold_start + len(cold_heading))
+        cold_section = report[
+            cold_start : cold_end if cold_end != -1 else len(report)
+        ]
+        self.assertIn(
+            "| `map` | `per_map_draw` | n/a → 2 | n/a → 0.001 ms | n/a |",
+            cold_section,
+        )
+
     def test_full_matrix_comment_fits_github_publication_limit(self) -> None:
         evidence = benchmark._build_evidence(
             [],
@@ -1538,6 +1614,9 @@ class CommentTests(unittest.TestCase):
         report = benchmark.render_comment(evidence, "success")
         self.assertLessEqual(len(report.encode()), 65_536)
         self.assertIn("Large | translated", report)
+        self.assertIn("uploaded JSON artifact", report)
+        self.assertNotIn("### Render-profiler stages (large smooth", report)
+        self.assertNotIn(f"#### {benchmark.LARGE_DISCRETE_CONTEXT}", report)
 
     def test_candidate_only_report_establishes_baseline_without_claiming_delta(self) -> None:
         evidence = benchmark._build_evidence(

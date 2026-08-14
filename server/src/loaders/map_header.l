@@ -82,7 +82,12 @@ lex_error = 0;
 ^name{S}             FREE_AND_COPY_HASH(m->name, yval());
 ^bg_music{S}         FREE_AND_COPY_HASH(m->bg_music, yval());
 ^weather{S}          FREE_AND_COPY_HASH(m->weather, yval());
-^region{S}           m->region = region_find_by_name(yval());
+^region{S}           {
+    m->region = region_find_by_name(yval());
+    if (m->region == NULL) {
+        return LL_ERROR;
+    }
+}
 ^enter_x{S}          m->enter_x = IVAL;
 ^enter_y{S}          m->enter_y = IVAL;
 ^width{S}            m->width = IVAL;
@@ -156,7 +161,16 @@ lex_error = 0;
 
 <*>(^{WS}$)|\n       {}
 #.*\n                {}
-^end\n               return LL_EOF;
+^end\n               {
+    if (m->region == NULL) {
+        m->region = region_world();
+        if (m->region == NULL) {
+            LOG(BUG, "Cannot resolve world region for map: %s", m->path);
+            return LL_ERROR;
+        }
+    }
+    return LL_EOF;
+}
 
 <<EOF>>              return LL_MORE;
 

@@ -287,15 +287,19 @@ def _nested_medians(
     return result
 
 
+def _render_stages_available(records: list[dict[str, object]], name: str) -> bool:
+    return all(
+        isinstance(phase(record, name).get("render_stages"), dict)
+        and set(phase(record, name)["render_stages"]) == set(RENDER_STAGES)
+        for record in records
+    )
+
+
 def _render_stage_summary(
     records: list[dict[str, object]], name: str
 ) -> dict[str, dict[str, object | None]]:
     """Summarize profiler stages as median per-run average invocation times."""
-    if any(
-        not isinstance(phase(record, name).get("render_stages"), dict)
-        or set(phase(record, name)["render_stages"]) != set(RENDER_STAGES)
-        for record in records
-    ):
+    if not _render_stages_available(records, name):
         return {
             stage_name: {"scope": scope, "calls_per_run": 0, "avg_ms_per_call": None}
             for stage_name, scope in RENDER_STAGES.items()
@@ -2473,7 +2477,9 @@ def _render_complete_evidence(
             ]
         )
     baseline_sustained_stages = None
-    if evidence["mode"] == "comparison":
+    if evidence["mode"] == "comparison" and _render_stages_available(
+        records["baseline_standard"], "sustained"
+    ):
         baseline_sustained_stages = baseline_phases["sustained"]
     _append_render_stage_table(
         lines,
@@ -2481,11 +2487,27 @@ def _render_complete_evidence(
         candidate_sustained,
         baseline_sustained_stages,
     )
+    for phase_name in REQUIRED_PHASES:
+        if phase_name == "sustained":
+            continue
+        baseline_phase = None
+        if evidence["mode"] == "comparison" and _render_stages_available(
+            records["baseline_standard"], phase_name
+        ):
+            baseline_phase = baseline_phases[phase_name]
+        _append_render_stage_table(
+            lines,
+            f"### Render-profiler stages (standard smooth {phase_name})",
+            candidate_standard[phase_name],
+            baseline_phase,
+        )
     lines.extend(
         [
-            "Other phase/context render-stage detail remains available in the uploaded JSON "
-            "artifact so the GitHub comment stays within its publication limit; live profiler "
-            "buckets unavailable to the offline replay are never fabricated.",
+            "Other viewport, discrete-control, and additional-context render-stage detail "
+            "remains available in the uploaded JSON artifact so the GitHub comment stays "
+            "within its publication limit. Those candidate-only contexts do not collect a "
+            "baseline, and live profiler buckets unavailable to the offline replay are never "
+            "fabricated.",
             "",
         ]
     )
