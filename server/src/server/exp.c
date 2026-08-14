@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -32,6 +32,7 @@
 #include <server.h>
 #include <arch.h>
 #include <exp.h>
+#include <gameplay_journal.h>
 #include <player.h>
 
 /**
@@ -420,6 +421,7 @@ int64_t skill_exp_to_character_exp(const object *skill, int skill_nr) {
  */
 int64_t add_exp(object *op, int64_t exp_gain, int skill_nr, int exact) {
     object *exp_skill;
+    char experience_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
 
     /* Sanity check */
     if (!op) {
@@ -469,15 +471,33 @@ int64_t add_exp(object *op, int64_t exp_gain, int skill_nr, int exact) {
         }
     }
 
-    exp_skill->stats.exp += exp_gain;
-
-    if (exp_skill->stats.exp > (int64_t)MAX_EXPERIENCE) {
-        exp_gain = exp_gain - (exp_skill->stats.exp - MAX_EXPERIENCE);
-        exp_skill->stats.exp = MAX_EXPERIENCE;
-    } else if (exp_skill->stats.exp < 0) {
-        exp_gain += exp_skill->stats.exp;
-        exp_skill->stats.exp = 0;
+    if (exp_gain > (int64_t)MAX_EXPERIENCE - exp_skill->stats.exp) {
+        exp_gain = (int64_t)MAX_EXPERIENCE - exp_skill->stats.exp;
+    } else if (exp_gain < -exp_skill->stats.exp) {
+        exp_gain = -exp_skill->stats.exp;
     }
+    if (exp_gain == 0) {
+        return 0;
+    }
+
+    if (exact || exp_gain < 0) {
+        const char *skill_id = skill_id_from_index(skill_nr);
+        char subject[GAMEPLAY_JOURNAL_ID_MAX + 1];
+        if (skill_id == NULL || !metrics_format_content_id(VS(subject), "skill", skill_id) ||
+            !gameplay_journal_milestone_begin(
+                op,
+                GAMEPLAY_JOURNAL_PROGRESSION,
+                exact ? "progression.exp-adjustment" : "progression.exceptional-xp-loss",
+                subject,
+                exact ? "actor:trusted-content" : "cause:gameplay-loss",
+                exp_skill->stats.exp,
+                exp_skill->stats.exp + exp_gain,
+                experience_transaction)) {
+            return 0;
+        }
+    }
+
+    exp_skill->stats.exp += exp_gain;
 
     if (exp_gain > 0) {
         int64_t character_exp = skill_exp_to_character_exp(exp_skill, skill_nr);
@@ -548,7 +568,34 @@ int64_t add_exp(object *op, int64_t exp_gain, int skill_nr, int exact) {
 
     esrv_update_item(UPD_EXTRA, exp_skill);
 
+    (void)gameplay_journal_semantic_commit(experience_transaction);
+
     return exp_gain;
+}
+
+static bool progression_level_begin(object *who,
+                                    object *op,
+                                    const char *reason,
+                                    int before,
+                                    int after,
+                                    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    char subject[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    if (op->type == PLAYER) {
+        snprintf(VS(subject), "level:character");
+    } else {
+        const char *skill_id = skill_id_from_index(op->stats.sp);
+        if (skill_id == NULL || !metrics_format_content_id(VS(subject), "skill", skill_id)) {
+            return false;
+        }
+    }
+    return gameplay_journal_milestone_begin(who,
+                                            GAMEPLAY_JOURNAL_PROGRESSION,
+                                            reason,
+                                            subject,
+                                            "",
+                                            before,
+                                            after,
+                                            transaction);
 }
 
 /**
@@ -578,6 +625,16 @@ int exp_lvl_adj(object *who, object *op) {
     }
 
     if (op->level < MAXLEVEL && op->stats.exp >= (int64_t)level_exp(op->level + 1, 1.0)) {
+        char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+        if (!progression_level_begin(who,
+                                     op,
+                                     op->type == PLAYER ? "progression.level-gained"
+                                                        : "progression.skill-level-gained",
+                                     op->level,
+                                     op->level + 1,
+                                     transaction)) {
+            return 0;
+        }
         op->level++;
 
         if (op->type == PLAYER) {
@@ -617,9 +674,23 @@ int exp_lvl_adj(object *who, object *op) {
             draw_info_format(COLOR_RED, who, "You are now level %d.", op->level);
         }
 
+        if (!gameplay_journal_semantic_commit(transaction)) {
+            return 1;
+        }
+
         /* To increase more levels. */
         return exp_lvl_adj(who, op) + 1;
     } else if (op->level > 1 && op->stats.exp < (int64_t)level_exp(op->level, 1.0)) {
+        char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+        if (!progression_level_begin(who,
+                                     op,
+                                     op->type == PLAYER ? "progression.level-lost"
+                                                        : "progression.skill-level-lost",
+                                     op->level,
+                                     op->level - 1,
+                                     transaction)) {
+            return 0;
+        }
         op->level--;
 
         if (op->type == PLAYER) {
@@ -643,6 +714,10 @@ int exp_lvl_adj(object *who, object *op) {
                              op->name);
         } else {
             draw_info_format(COLOR_RED, who, "-You are now level %d.", op->level);
+        }
+
+        if (!gameplay_journal_semantic_commit(transaction)) {
+            return 1;
         }
 
         /* To decrease more levels. */

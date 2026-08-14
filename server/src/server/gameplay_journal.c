@@ -165,19 +165,16 @@ static bool journal_map_id_valid(const char *value) {
     return true;
 }
 
-bool gameplay_journal_map_identity(const mapstruct *map,
-                                   char output[GAMEPLAY_JOURNAL_ID_MAX + 1]) {
-    if (map == NULL) {
+bool gameplay_journal_map_path_identity(const char *path,
+                                        char output[GAMEPLAY_JOURNAL_ID_MAX + 1]) {
+    if (path == NULL || path[0] == '\0') {
         output[0] = '\0';
         return true;
-    }
-    if (map->path == NULL || map->path[0] == '\0') {
-        return snprintf(output, GAMEPLAY_JOURNAL_ID_MAX + 1, "runtime:%" PRIu32, map->count) > 0;
     }
 
     static const char hex[] = "0123456789ABCDEF";
     size_t used = 0;
-    for (const unsigned char *cp = (const unsigned char *)map->path; *cp != '\0'; cp++) {
+    for (const unsigned char *cp = (const unsigned char *)path; *cp != '\0'; cp++) {
         bool alphanumeric =
             (*cp >= 'a' && *cp <= 'z') || (*cp >= 'A' && *cp <= 'Z') || (*cp >= '0' && *cp <= '9');
         if (alphanumeric || strchr("_.:/@+$-", *cp) != NULL) {
@@ -196,6 +193,17 @@ bool gameplay_journal_map_identity(const mapstruct *map,
     }
     output[used] = '\0';
     return used != 0;
+}
+
+bool gameplay_journal_map_identity(const mapstruct *map, char output[GAMEPLAY_JOURNAL_ID_MAX + 1]) {
+    if (map == NULL) {
+        output[0] = '\0';
+        return true;
+    }
+    if (map->path == NULL || map->path[0] == '\0') {
+        return snprintf(output, GAMEPLAY_JOURNAL_ID_MAX + 1, "runtime:%" PRIu32, map->count) > 0;
+    }
+    return gameplay_journal_map_path_identity(map->path, output);
 }
 
 static bool journal_identity_valid(const char *value) {
@@ -1142,9 +1150,15 @@ bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
         transaction_id == NULL || kind_name == NULL || !journal_token_valid(reason, false) ||
         !journal_identity_valid(subject->account_id) ||
         !journal_identity_valid(subject->character_id) || !journal_map_id_valid(subject->map_id) ||
-        !journal_token_valid(change->subject_id, false) ||
-        !journal_token_valid(change->lineage_id, true) || !journal_change_valid(kind, change) ||
-        journal.pending_count == JOURNAL_PENDING_LIMIT ||
+        !((kind == GAMEPLAY_JOURNAL_QUEST || kind == GAMEPLAY_JOURNAL_PROGRESSION)
+              ? (change->subject_id != NULL && change->subject_id[0] != '\0' &&
+                 journal_map_id_valid(change->subject_id))
+              : journal_token_valid(change->subject_id, false)) ||
+        !((kind == GAMEPLAY_JOURNAL_QUEST || kind == GAMEPLAY_JOURNAL_PROGRESSION)
+              ? (change->lineage_id == NULL || change->lineage_id[0] == '\0' ||
+                 journal_map_id_valid(change->lineage_id))
+              : journal_token_valid(change->lineage_id, true)) ||
+        !journal_change_valid(kind, change) || journal.pending_count == JOURNAL_PENDING_LIMIT ||
         !journal_player_domain_id(subject->account_id, subject->character_id, player_domain) ||
         !journal_random_id(transaction_id)) {
         return false;
@@ -1436,6 +1450,35 @@ bool gameplay_journal_currency_begin(object *player_ob,
                                                    funding,
                                                    0,
                                                    transaction_id);
+}
+
+bool gameplay_journal_milestone_begin(object *player_ob,
+                                      gameplay_journal_kind_t kind,
+                                      const char *reason,
+                                      const char *subject_id,
+                                      const char *lineage_id,
+                                      int64_t before,
+                                      int64_t after,
+                                      char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    HARD_ASSERT(transaction_id != NULL);
+    transaction_id[0] = '\0';
+    if (player_ob == NULL || player_ob->type != PLAYER || CONTR(player_ob) == NULL ||
+        (kind != GAMEPLAY_JOURNAL_QUEST && kind != GAMEPLAY_JOURNAL_PROGRESSION) ||
+        (before < 0 && after > INT64_MAX + before) || (before > 0 && after < INT64_MIN + before)) {
+        return false;
+    }
+    gameplay_journal_change_t change = {
+        .subject_id = subject_id,
+        .lineage_id = lineage_id,
+        .before = before,
+        .delta = after - before,
+        .after = after,
+    };
+    return !gameplay_journal_required() || gameplay_journal_player_begin_change(CONTR(player_ob),
+                                                                                kind,
+                                                                                reason,
+                                                                                &change,
+                                                                                transaction_id);
 }
 
 bool gameplay_journal_currency_begin_economy(

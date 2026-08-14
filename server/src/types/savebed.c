@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -35,6 +35,7 @@
 #include <object.h>
 #include <object_methods.h>
 #include <region.h>
+#include <gameplay_journal.h>
 
 /** @copydoc object_methods_t::apply_func */
 static int apply_func(object *op, object *applier, int aflags) {
@@ -43,6 +44,38 @@ static int apply_func(object *op, object *applier, int aflags) {
 
     if (applier->type != PLAYER) {
         return OBJECT_METHOD_OK;
+    }
+
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
+    bool changed = strcmp(CONTR(applier)->savebed_map, applier->map->path) != 0 ||
+                   CONTR(applier)->bed_x != applier->x || CONTR(applier)->bed_y != applier->y;
+    if (changed) {
+        char map_identity[GAMEPLAY_JOURNAL_ID_MAX + 1];
+        char previous_identity[GAMEPLAY_JOURNAL_ID_MAX + 1];
+        char subject[GAMEPLAY_JOURNAL_ID_MAX + 1];
+        char lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
+        int subject_length;
+        int lineage_length;
+        if (!gameplay_journal_map_identity(applier->map, map_identity) ||
+            !gameplay_journal_map_path_identity(CONTR(applier)->savebed_map, previous_identity) ||
+            (subject_length = snprintf(VS(subject), "map:%s", map_identity)) < 0 ||
+            (size_t)subject_length >= sizeof(subject) ||
+            (lineage_length = snprintf(VS(lineage),
+                                       "previous-map:%s@%d+%d",
+                                       previous_identity[0] != '\0' ? previous_identity : "unset",
+                                       CONTR(applier)->bed_x,
+                                       CONTR(applier)->bed_y)) < 0 ||
+            (size_t)lineage_length >= sizeof(lineage) ||
+            !gameplay_journal_milestone_begin(applier,
+                                              GAMEPLAY_JOURNAL_PROGRESSION,
+                                              "survival.savebed-changed",
+                                              subject,
+                                              lineage,
+                                              0,
+                                              1,
+                                              transaction)) {
+            return OBJECT_METHOD_OK;
+        }
     }
 
     /* Update respawn position. */
@@ -57,6 +90,10 @@ static int apply_func(object *op, object *applier, int aflags) {
                                 METRIC_COLLECTION_CHARACTER_SAVEBED_REGIONS,
                                 id);
         }
+    }
+
+    if (!gameplay_journal_semantic_commit(transaction)) {
+        return OBJECT_METHOD_OK;
     }
 
     draw_info(COLOR_WHITE, applier, "You save and your save bed location is updated.");

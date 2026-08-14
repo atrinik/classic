@@ -19,6 +19,7 @@
 #include <shop.h>
 #include <player.h>
 #include <object.h>
+#include <object_methods.h>
 #include <metrics.h>
 #include <arch.h>
 #include <party.h>
@@ -26,6 +27,7 @@
 #include <spells.h>
 #include <loader.h>
 #include <initialization.h>
+#include <exp.h>
 
 #ifndef WIN32
 #include <sys/wait.h>
@@ -637,9 +639,266 @@ START_TEST(test_one_drop_quest_grant_commits_item_and_marker_together) {
     FOR_INV_FINISH();
     ck_assert(marker);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("quest.item-grant"), 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("quest.completed"), 1);
     gameplay_journal_deinit();
+    char *contents = read_fixture(directory);
+    ck_assert_ptr_ne(strstr(contents, "\"counterparty\":\"journal-one-drop-quest\""), NULL);
+    free(contents);
     object_destroy(quest);
     object_destroy(pl);
+    remove_fixture(directory);
+}
+END_TEST
+
+START_TEST(test_objective_item_milestones_emit_only_on_discovery_and_threshold) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object *quest = arch_get(QUEST_CONTAINER_ARCHETYPE);
+    quest->sub_type = QUEST_TYPE_ITEM;
+    FREE_AND_COPY_HASH(quest->name, "journal-item-objective");
+    object_insert_into(arch_get("sword"), quest, INS_NO_MERGE);
+    object *quest_pl = arch_get(QUEST_CONTAINER_ARCHETYPE);
+    quest_pl->magic = QUEST_STATUS_STARTED;
+    quest_pl->sub_type = QUEST_TYPE_ITEM;
+    quest_pl->last_grace = 3;
+    FREE_AND_COPY_HASH(quest_pl->name, quest->name);
+    object_insert_into(quest_pl, CONTR(pl)->quest_container, INS_NO_MERGE);
+
+    char directory[] = "/tmp/atrinik-quest-objective-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    quest_handle(pl, quest);
+    quest_handle(pl, quest);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("quest.item-acquired"), 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("quest.item-threshold"), 0);
+    quest_handle(pl, quest);
+    quest_handle(pl, quest);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("quest.item-acquired"), 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("quest.item-threshold"), 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("quest.objective-grant"), 3);
+
+    gameplay_journal_deinit();
+    char *contents = read_fixture(directory);
+    ck_assert_uint_eq(count_substring(contents, "\"counterparty\":\"journal-item-objective\""), 3);
+    free(contents);
+    object_destroy(quest);
+    object_destroy(pl);
+    remove_fixture(directory);
+}
+END_TEST
+
+START_TEST(test_progression_adjustments_and_level_boundaries_are_journaled) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object *skill = CONTR(pl)->skill_ptr[SK_UNARMED];
+    ck_assert_ptr_ne(skill, NULL);
+    skill->level = 1;
+    skill->stats.exp = 0;
+
+    char directory[] = "/tmp/atrinik-progression-journal-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+
+    ck_assert_int_eq(add_exp(pl, 10, SK_UNARMED, 1), 10);
+    ck_assert_int_eq(add_exp(pl, -5, SK_UNARMED, 0), -5);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("progression.exp-adjustment"), 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("progression.exceptional-xp-loss"),
+                      1);
+
+    skill->stats.exp = (int64_t)level_exp(2, 1.0);
+    ck_assert_int_eq(exp_lvl_adj(pl, skill), 1);
+    ck_assert_int_eq(skill->level, 2);
+    skill->stats.exp = 0;
+    ck_assert_int_eq(exp_lvl_adj(pl, skill), 1);
+    ck_assert_int_eq(skill->level, 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("progression.skill-level-gained"),
+                      1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("progression.skill-level-lost"), 1);
+
+    pl->level = 1;
+    pl->stats.exp = (int64_t)level_exp(2, 1.0);
+    ck_assert_int_eq(exp_lvl_adj(pl, NULL), 1);
+    ck_assert_int_eq(pl->level, 2);
+    pl->stats.exp = 0;
+    ck_assert_int_eq(exp_lvl_adj(pl, NULL), 1);
+    ck_assert_int_eq(pl->level, 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("progression.level-gained"), 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("progression.level-lost"), 1);
+
+    gameplay_journal_deinit();
+    char *contents = read_fixture(directory);
+    char subject_pattern[GAMEPLAY_JOURNAL_ID_MAX + 32];
+    snprintf(VS(subject_pattern), "\"subject_id\":\"skill:%s\"", skill_id_from_index(SK_UNARMED));
+    ck_assert_ptr_ne(strstr(contents, subject_pattern), NULL);
+    ck_assert_ptr_ne(strstr(contents, "\"lineage_id\":\"actor:trusted-content\""), NULL);
+    free(contents);
+    object_destroy(pl);
+    remove_fixture(directory);
+}
+END_TEST
+
+START_TEST(test_spell_learning_commits_stable_progression_milestone) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    ck_assert_ptr_ne(CONTR(pl)->skill_ptr[SK_LITERACY], NULL);
+    ck_assert_ptr_ne(CONTR(pl)->skill_ptr[SK_WIZARDRY_SPELLS], NULL);
+    CONTR(pl)->skill_ptr[SK_LITERACY]->level = MAXLEVEL;
+    CONTR(pl)->skill_ptr[SK_WIZARDRY_SPELLS]->level = MAXLEVEL;
+    ck_assert_ptr_eq(player_find_spell(pl, &spells[SP_MAGIC_MISSILE]), NULL);
+
+    char directory[] = "/tmp/atrinik-spell-journal-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+
+    object *book = arch_get("book_spell");
+    book->stats.sp = SP_MAGIC_MISSILE;
+    SET_FLAG(book, FLAG_IDENTIFIED);
+    book = object_insert_into(book, pl, INS_NO_MERGE);
+    ck_assert_ptr_ne(book, NULL);
+    ck_assert_int_eq(object_apply(book, pl, 0), OBJECT_METHOD_OK);
+    ck_assert_ptr_ne(player_find_spell(pl, &spells[SP_MAGIC_MISSILE]), NULL);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("progression.spell-learned"), 1);
+
+    gameplay_journal_deinit();
+    char *contents = read_fixture(directory);
+    char subject_pattern[GAMEPLAY_JOURNAL_ID_MAX + 32];
+    snprintf(VS(subject_pattern),
+             "\"subject_id\":\"spell:%s\"",
+             spell_id_from_index(SP_MAGIC_MISSILE));
+    ck_assert_ptr_ne(strstr(contents, subject_pattern), NULL);
+    free(contents);
+    object_destroy(pl);
+    remove_fixture(directory);
+}
+END_TEST
+
+START_TEST(test_savebed_terminal_failure_retains_change_and_stable_map_context) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    const char *old_map_path = map->path;
+    map->path = add_string("/test/savebed-journal");
+
+    char directory[] = "/tmp/atrinik-savebed-journal-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+
+    object *bed = arch_get("sword");
+    ck_assert_ptr_ne(bed, NULL);
+    bed->type = SAVEBED;
+    gameplay_journal_fail_after_writes_for_test(1);
+    ck_assert_int_eq(object_apply(bed, pl, 0), OBJECT_METHOD_OK);
+    ck_assert_str_eq(CONTR(pl)->savebed_map, map->path);
+    ck_assert_int_eq(CONTR(pl)->bed_x, pl->x);
+    ck_assert_int_eq(CONTR(pl)->bed_y, pl->y);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.savebed-changed"), 0);
+    gameplay_journal_fail_after_writes_for_test(SIZE_MAX);
+
+    CONTR(pl)->bed_x = pl->x + 1;
+    ck_assert_int_eq(object_apply(bed, pl, 0), OBJECT_METHOD_OK);
+    ck_assert_int_eq(CONTR(pl)->bed_x, pl->x + 1);
+
+    gameplay_journal_deinit();
+    char *contents = read_fixture(directory);
+    ck_assert_ptr_ne(strstr(contents, "\"subject_id\":\"map:/test/savebed-journal\""), NULL);
+    ck_assert_ptr_ne(strstr(contents, "\"lineage_id\":\"previous-map:/emergency@0+0\""), NULL);
+    free(contents);
+    object_destroy(bed);
+    free_string_shared(map->path);
+    map->path = old_map_path;
+    object_destroy(pl);
+    remove_fixture(directory);
+}
+END_TEST
+
+START_TEST(test_survival_outcomes_preserve_exclusive_attribution) {
+    char directory[] = "/tmp/atrinik-survival-journal-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    map->map_flags |= MAP_FLAG_PVP;
+    kill_player(pl, true, false);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.defeat-pvp"), 1);
+    object_destroy(pl);
+
+    check_setup_env_pl(&map, &pl);
+    map->map_flags &= ~MAP_FLAG_PVP;
+    snprintf(VS(CONTR(pl)->savebed_map), "%s", "/emergency");
+    kill_player(pl, true, false);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.death-pvp"), 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.respawn"), 1);
+    object_destroy(pl);
+
+    check_setup_env_pl(&map, &pl);
+    map->map_flags &= ~MAP_FLAG_PVP;
+    snprintf(VS(CONTR(pl)->savebed_map), "%s", "/emergency");
+    kill_player(pl, false, false);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.death-pve"), 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.respawn"), 2);
+    object_destroy(pl);
+
+    check_setup_env_pl(&map, &pl);
+    map->map_flags &= ~MAP_FLAG_PVP;
+    snprintf(VS(CONTR(pl)->savebed_map), "%s", "/emergency");
+    kill_player(pl, false, true);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.death-environment"), 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.respawn"), 3);
+    object_destroy(pl);
+
+    check_setup_env_pl(&map, &pl);
+    map->map_flags &= ~MAP_FLAG_PVP;
+    snprintf(VS(CONTR(pl)->savebed_map), "%s", "/emergency");
+    object *lifesave = object_insert_into(arch_get("sword"), pl, INS_NO_MERGE);
+    SET_FLAG(lifesave, FLAG_APPLIED);
+    SET_FLAG(lifesave, FLAG_LIFESAVE);
+    SET_FLAG(pl, FLAG_LIFESAVE);
+    pl->stats.hp = -1;
+    kill_player(pl, false, false);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.lifesave"), 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.death-pve"), 1);
+    object_destroy(pl);
+
+    gameplay_journal_deinit();
+    char *contents = read_fixture(directory);
+    ck_assert_ptr_ne(strstr(contents, "\"lineage_id\":\"survival-death:1\""), NULL);
+    ck_assert_ptr_ne(strstr(contents, "\"lineage_id\":\"survival-lifesave:1\""), NULL);
+    free(contents);
     remove_fixture(directory);
 }
 END_TEST
@@ -1705,6 +1964,8 @@ START_TEST(test_plugin_journal_hooks_are_append_only) {
                       offsetof(struct plugin_hooklist, object_insert_map_reason));
     ck_assert_uint_gt(offsetof(struct plugin_hooklist, object_decrease_reason),
                       offsetof(struct plugin_hooklist, gameplay_journal_map_checkpoint_allowed));
+    ck_assert_uint_gt(offsetof(struct plugin_hooklist, gameplay_journal_required),
+                      offsetof(struct plugin_hooklist, bank_name_info_reason));
 }
 END_TEST
 
@@ -2432,6 +2693,11 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_party_random_currency_retirement_preserves_message_lifetime);
     tcase_add_test(tc_core, test_currency_recovery_aggregate_includes_floor_delivery);
     tcase_add_test(tc_core, test_one_drop_quest_grant_commits_item_and_marker_together);
+    tcase_add_test(tc_core, test_objective_item_milestones_emit_only_on_discovery_and_threshold);
+    tcase_add_test(tc_core, test_progression_adjustments_and_level_boundaries_are_journaled);
+    tcase_add_test(tc_core, test_spell_learning_commits_stable_progression_milestone);
+    tcase_add_test(tc_core, test_savebed_terminal_failure_retains_change_and_stable_map_context);
+    tcase_add_test(tc_core, test_survival_outcomes_preserve_exclusive_attribution);
     tcase_add_test(tc_core,
                    test_pending_domains_block_checkpoints_and_unique_maps_use_primary_component);
     tcase_add_test(tc_core,
