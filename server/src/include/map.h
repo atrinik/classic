@@ -601,6 +601,9 @@ typedef struct mapdef {
     /** Whether each tile path suffix appeared explicitly in the header. */
     bool celestial_tile_path_seen[TILED_NUM];
 
+    /** Whether an authored tile target is not a canonical logical map ID. */
+    bool celestial_tile_path_invalid;
+
     /** Parsed celestial-v1 schema number (zero means legacy content). */
     uint8_t celestial_schema;
 

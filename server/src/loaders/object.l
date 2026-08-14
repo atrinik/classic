@@ -81,6 +81,7 @@ static const char *yval(void);
 static stable_identity_state stable_identity_state_init(void);
 static int finalize_object_record(object *op, const stable_identity_state *identity);
 static int validate_stable_identity(object *op, const stable_identity_state *identity);
+static bool celestial_metadata_token_allowed(const object *op, const char *text);
 
 /* that's needed to track the used buffers for recursive ccalling */
 static void *cur_buffer;
@@ -105,6 +106,30 @@ static artifact_t *art_amask;
             object_set_value(op, (key), yval(), 1);                                       \
         }                                                                                 \
     } while (0)
+
+#define YY_USER_ACTION                                                                   \
+    do {                                                                                 \
+        object *metadata_op = items[*depth];                                              \
+        const char *record_text = yytext;                                                \
+        while (isspace((unsigned char)*record_text)) {                                   \
+            record_text++;                                                               \
+        }                                                                                \
+        if (linemode && !arch_in_init && !identity->record_started &&                    \
+            *record_text != '\0' &&                                                      \
+            *record_text != '#' &&                                                       \
+            (strncmp(record_text, "arch", 4) != 0 ||                                    \
+             !isspace((unsigned char)record_text[4]))) {                                 \
+            LOG(ERROR, "Object field appears before its mandatory arch record: %s", yytext); \
+            lex_error = 1;                                                               \
+        }                                                                                \
+        if (metadata_op->celestial_metadata_kind != 0 &&                                 \
+            !celestial_metadata_token_allowed(metadata_op, yytext)) {                    \
+            LOG(ERROR,                                                                   \
+                "Field is outside the exact celestial metadata schema: %s",            \
+                yytext);                                                                 \
+            lex_error = 1;                                                               \
+        }                                                                                \
+    } while (0);
 
 #define YY_NO_INPUT
 
@@ -255,12 +280,14 @@ stable_identity_state *identity = &identities[*depth];
             }
 
             identities[*depth] = stable_identity_state_init();
+            identities[*depth].record_started = true;
         }
 
         items[*depth] = tmp;
 
         if (linemode == 0) {
             stable_identity_state nested_identity = stable_identity_state_init();
+            nested_identity.record_started = true;
             if (lex_load(depth,
                          items,
                          maxdepth,
@@ -964,6 +991,33 @@ stable_identity_state_init (void)
     };
 }
 
+static bool celestial_metadata_token_allowed(const object *op, const char *text)
+{
+    while (isspace((unsigned char)*text)) {
+        text++;
+    }
+    if (*text == '\0' || *text == '#') {
+        return true;
+    }
+
+    const char *end = text;
+    while (*end != '\0' && !isspace((unsigned char)*end)) {
+        end++;
+    }
+    size_t length = (size_t)(end - text);
+#define METADATA_KEY(name) (length == sizeof(name) - 1 && strncmp(text, (name), length) == 0)
+    if (METADATA_KEY("end") || METADATA_KEY("x") || METADATA_KEY("y") || METADATA_KEY("hp") ||
+        METADATA_KEY("sp")) {
+        return true;
+    }
+    if (op->celestial_metadata_kind == CELESTIAL_RECT_SKY_COVERED) {
+        return METADATA_KEY("sky_state");
+    }
+    return op->celestial_metadata_kind == CELESTIAL_RECT_AMBIENT &&
+           METADATA_KEY("ambient_strength");
+#undef METADATA_KEY
+}
+
 /**
  * Finalize fields whose meaning depends on the complete object record.
  *
@@ -1252,8 +1306,16 @@ load_object_fp (FILE *fp, object *op, int map_flags)
     static char buf[HUGE_BUF * 16];
     stable_identity_state identities[MAXDEPTH] = {0};
     identities[0] = stable_identity_state_init();
+    bool saw_record_token = false;
     int retval = LL_EOF;
     while (fgets(VS(buf), fp)) {
+        const char *token = buf;
+        while (isspace((unsigned char)*token)) {
+            token++;
+        }
+        if (*token != '\0' && *token != '#') {
+            saw_record_token = true;
+        }
         YY_BUFFER_STATE yybufstate = yy_scan_string(buf);
         retval = lex_load(&depth, items, MAXDEPTH, map_flags, 1, identities);
         yy_delete_buffer(yybufstate);
@@ -1286,7 +1348,7 @@ load_object_fp (FILE *fp, object *op, int map_flags)
         yy_switch_to_buffer(cur_buffer);
     }
 
-    return identities[0].record_started ? LL_ERROR : LL_EOF;
+    return saw_record_token ? LL_ERROR : LL_EOF;
 }
 
 /**

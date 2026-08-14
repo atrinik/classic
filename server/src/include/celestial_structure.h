@@ -43,6 +43,8 @@ uint8_t celestial_structure_faces(const object *op);
 celestial_transmission_t celestial_structure_transmission(const char *value);
 bool celestial_structure_inventory(const mapstruct *map, FILE *fp, size_t max_records);
 bool celestial_structure_inventory_maps_valid(const char *input);
+bool celestial_structure_logical_map_id_valid(const char *path);
+bool celestial_structure_validate_archetypes(char *error, size_t error_size);
 int celestial_structure_inventory_run(void);
 void celestial_structure_save_metadata(const mapstruct *map, FILE *fp);
 void celestial_structure_free(mapstruct *map);

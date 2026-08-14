@@ -16,6 +16,7 @@
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
+#include <initialization.h>
 #include <loader.h>
 #include <map.h>
 #include <object.h>
@@ -28,6 +29,31 @@ static ssize_t fail_inventory_write(void *cookie, const char *buffer, size_t siz
     (void)size;
     errno = ENOSPC;
     return -1;
+}
+
+static char *run_inventory_capture(const char *map_ids, size_t *size) {
+    snprintf(VS(settings.celestial_inventory_maps), "%s", map_ids);
+    settings.celestial_inventory_limit = 32;
+    FILE *capture = tmpfile();
+    ck_assert_ptr_ne(capture, NULL);
+    int saved_stdout = dup(STDOUT_FILENO);
+    ck_assert_int_ge(saved_stdout, 0);
+    ck_assert_int_eq(fflush(stdout), 0);
+    ck_assert_int_ge(dup2(fileno(capture), STDOUT_FILENO), 0);
+    ck_assert_int_eq(celestial_structure_inventory_run(), EXIT_SUCCESS);
+    ck_assert_int_eq(fflush(stdout), 0);
+    ck_assert_int_ge(dup2(saved_stdout, STDOUT_FILENO), 0);
+    close(saved_stdout);
+    ck_assert_int_eq(fseek(capture, 0, SEEK_END), 0);
+    long length = ftell(capture);
+    ck_assert_int_ge(length, 0);
+    rewind(capture);
+    char *output = xmalloc((size_t)length + 1);
+    ck_assert_uint_eq(fread(output, 1, (size_t)length, capture), (size_t)length);
+    output[length] = '\0';
+    ck_assert_int_eq(fclose(capture), 0);
+    *size = (size_t)length;
+    return output;
 }
 #endif
 
@@ -69,6 +95,7 @@ static void make_aperture(object *op, const char *faces, const char *id) {
 
 static void set_empty_aperture_contract(bool enabled) {
     object *clone = &arches[ARCH_EMPTY_ARCHETYPE]->clone;
+    clone->type = enabled ? DOOR : 0;
     object_set_value(clone, "celestial_transmission_closed", enabled ? "opaque" : NULL, enabled);
     object_set_value(clone, "celestial_transmission_open", enabled ? "open" : NULL, enabled);
 }
@@ -79,8 +106,10 @@ static void set_empty_roof_contract(bool enabled) {
     clone->layer = enabled ? LAYER_WALL : 0;
     if (enabled) {
         SET_FLAG(clone, FLAG_HIDDEN);
+        SET_FLAG(clone, FLAG_IS_FLOOR);
     } else {
         CLEAR_FLAG(clone, FLAG_HIDDEN);
+        CLEAR_FLAG(clone, FLAG_IS_FLOOR);
     }
 }
 
@@ -182,6 +211,8 @@ START_TEST(test_header_round_trip_is_canonical_and_rejects_legacy_fields) {
         "width 5\nheight 5\ntile_path_9 upper\n",
         "width 5\nheight 5\ntile_path_9 /a/../b\n",
         "width 5\nheight 5\ntile_path_9 /a\\b\n",
+        "width 5\nheight 5\ntile_path_9 /a,b\n",
+        "width 5\nheight 5\ntile_path_9 /a\tb\n",
         "width 5\nheight 5\nlight\n",
         "width 5\nheight 5\ndarkness 999999999999999999999999\n",
         "width 5\nheight 5\noutdoor 999999999999999999999999\n",
@@ -201,6 +232,17 @@ START_TEST(test_header_round_trip_is_canonical_and_rejects_legacy_fields) {
         ck_assert(!celestial_structure_finalize_map(map, VS(error)));
         delete_map(map);
     }
+
+    char legacy_relative[] = "arch map\nwidth 5\nheight 5\ntile_path_9 upper\nend\n";
+    input = fmemopen(legacy_relative, strlen(legacy_relative), "r");
+    ck_assert_ptr_ne(input, NULL);
+    map = get_empty_map(5, 5);
+    FREE_AND_COPY_HASH(map->path, "/legacy/map");
+    ck_assert_int_eq(load_map_header(map, input), 1);
+    fclose(input);
+    ck_assert_str_eq(map->tile_path[TILED_UP], "/legacy/upper");
+    ck_assert(celestial_structure_finalize_map(map, VS(error)));
+    delete_map(map);
 
     map = get_empty_map(5, 5);
     FREE_AND_COPY_HASH(map->path, "/partial-schema");
@@ -336,14 +378,43 @@ START_TEST(test_rectangles_fail_closed_with_coordinates) {
     ck_assert(!celestial_structure_finalize_map(map, VS(error)));
     ck_assert_ptr_ne(strstr(error, "conflicting object fields"), NULL);
     delete_map(map);
+
+    map = new_v1_map("/nested-celestial", 4, 4, CELESTIAL_SKY_OPEN);
+    object *container = new_object(map, 1, 1);
+    object *nested = arch_get("empty_archetype");
+    object_set_value(nested, "celestial_transmission", "glass", 1);
+    object_insert_into(nested, container, 0);
+    ck_assert(!celestial_structure_finalize_map(map, VS(error)));
+    ck_assert_ptr_ne(strstr(error, "nested object"), NULL);
+    delete_map(map);
+
+    map = get_empty_map(4, 4);
+    FREE_AND_COPY_HASH(map->path, "/legacy-nested-celestial");
+    container = new_object(map, 1, 1);
+    nested = arch_get("empty_archetype");
+    object_set_value(nested, "sky_state", "covered", 1);
+    object_insert_into(nested, container, 0);
+    ck_assert(!celestial_structure_finalize_map(map, VS(error)));
+    ck_assert_ptr_ne(strstr(error, "nested object"), NULL);
+    delete_map(map);
 }
 END_TEST
 
 START_TEST(test_transmission_faces_and_aperture_identity) {
+    char error[HUGE_BUF];
+    object *empty_clone = &arches[ARCH_EMPTY_ARCHETYPE]->clone;
+    object_set_value(empty_clone, "ambient_strength", "0", 1);
+    ck_assert(!celestial_structure_validate_archetypes(VS(error)));
+    ck_assert_ptr_ne(strstr(error, "reserved celestial metadata"), NULL);
+    object_set_value(empty_clone, "ambient_strength", NULL, 0);
+    ck_assert(celestial_structure_validate_archetypes(VS(error)));
+
     mapstruct *map = new_v1_map("/objects", 5, 5, CELESTIAL_SKY_OPEN);
     object *floor = new_object(map, 1, 1);
     SET_FLAG(floor, FLAG_IS_FLOOR);
     ck_assert_uint_eq(celestial_structure_faces(floor), CELESTIAL_FACE_DOWN);
+    object_remove(floor, REMOVE_NO_WALK_OFF);
+    object_destroy(floor);
 
     object *irrelevant = new_object(map, 0, 0);
     object_set_value(irrelevant, "celestial_faces", "N", 1);
@@ -357,12 +428,11 @@ START_TEST(test_transmission_faces_and_aperture_identity) {
     door->celestial_aperture_id_authored = true;
     ck_assert_uint_eq(celestial_structure_faces(door), CELESTIAL_FACE_NORTH | CELESTIAL_FACE_EAST);
 
-    char error[HUGE_BUF];
-    set_empty_aperture_contract(true);
     ck_assert(!celestial_structure_finalize_map(map, VS(error)));
     ck_assert_ptr_ne(strstr(error, "invalid celestial_faces"), NULL);
     object_remove(irrelevant, REMOVE_NO_WALK_OFF);
     object_destroy(irrelevant);
+    set_empty_aperture_contract(true);
     ck_assert_msg(celestial_structure_finalize_map(map, VS(error)), "%s", error);
     ck_assert_int_eq(celestial_structure_transmission("glass"), 192);
     ck_assert_int_eq(celestial_structure_transmission("grate"), 224);
@@ -407,7 +477,7 @@ START_TEST(test_transmission_faces_and_aperture_identity) {
     door = new_object(map, 2, 2);
     make_aperture(door, "N", "00000000000000be");
     ck_assert(!celestial_structure_finalize_map(map, VS(error)));
-    ck_assert_ptr_ne(strstr(error, "malformed dynamic transmission"), NULL);
+    ck_assert_ptr_ne(strstr(error, "overrides its archetype structural role"), NULL);
     delete_map(map);
 
     map = new_v1_map("/placement-only-transmission", 5, 5, CELESTIAL_SKY_OPEN);
@@ -415,6 +485,13 @@ START_TEST(test_transmission_faces_and_aperture_identity) {
     object_set_value(window, "celestial_transmission", "glass", 1);
     ck_assert(!celestial_structure_finalize_map(map, VS(error)));
     ck_assert_ptr_ne(strstr(error, "unsupported celestial transmission"), NULL);
+    delete_map(map);
+
+    map = new_v1_map("/placement-only-floor", 5, 5, CELESTIAL_SKY_OPEN);
+    object *placed_floor = new_object(map, 2, 2);
+    SET_FLAG(placed_floor, FLAG_IS_FLOOR);
+    ck_assert(!celestial_structure_finalize_map(map, VS(error)));
+    ck_assert_ptr_ne(strstr(error, "overrides its archetype structural role"), NULL);
     delete_map(map);
 
     map = new_v1_map("/outdoor-zero", 5, 5, CELESTIAL_SKY_OPEN);
@@ -476,6 +553,36 @@ START_TEST(test_transmission_faces_and_aperture_identity) {
     ck_assert_int_ne(
         fputs("arch empty_archetype\noutdoor 999999999999999999999999999999999999\nend\n", input),
         EOF);
+    rewind(input);
+    parsed = object_get();
+    ck_assert_int_eq(load_object_fp(input, parsed, 0), LL_ERROR);
+    fclose(input);
+    object_destroy(parsed);
+
+    input = tmpfile();
+    ck_assert_ptr_ne(input, NULL);
+    ck_assert_int_ne(fputs("sky_state covered\narch empty_archetype\nend\n", input), EOF);
+    rewind(input);
+    parsed = object_get();
+    ck_assert_int_eq(load_object_fp(input, parsed, 0), LL_ERROR);
+    fclose(input);
+    object_destroy(parsed);
+
+    input = tmpfile();
+    ck_assert_ptr_ne(input, NULL);
+    ck_assert_int_ne(fputs("sky_state covered\n", input), EOF);
+    rewind(input);
+    parsed = object_get();
+    ck_assert_int_eq(load_object_fp(input, parsed, 0), LL_ERROR);
+    fclose(input);
+    object_destroy(parsed);
+
+    input = tmpfile();
+    ck_assert_ptr_ne(input, NULL);
+    ck_assert_int_ne(fputs("arch sky_exposure\nx 0\ny 0\nhp 0\nsp 0\n"
+                           "sky_state covered\nspeed 0\nend\n",
+                           input),
+                     EOF);
     rewind(input);
     parsed = object_get();
     ck_assert_int_eq(load_object_fp(input, parsed, 0), LL_ERROR);
@@ -560,6 +667,29 @@ START_TEST(test_reciprocal_vertical_topology_fails_closed) {
     set_empty_aperture_contract(false);
     delete_map(west);
     delete_map(east);
+
+    mapstruct *southwest = new_v1_map("/southwest", 5, 5, CELESTIAL_SKY_OPEN);
+    mapstruct *northeast = new_v1_map("/northeast", 5, 5, CELESTIAL_SKY_OPEN);
+    FREE_AND_COPY_HASH(southwest->tile_path[TILED_NORTHEAST], northeast->path);
+    FREE_AND_COPY_HASH(northeast->tile_path[TILED_SOUTHWEST], southwest->path);
+    southwest->tile_map[TILED_NORTHEAST] = northeast;
+    northeast->tile_map[TILED_SOUTHWEST] = southwest;
+    southwest->celestial_boundary[TILED_NORTHEAST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    northeast->celestial_boundary[TILED_SOUTHWEST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    set_empty_aperture_contract(true);
+    for (int i = 0; i < 5; i++) {
+        char id[17];
+        snprintf(id, sizeof(id), "%016x", 200 + i);
+        object *door = new_object(i < 2 ? southwest : northeast, i < 2 ? 4 : 0, i < 2 ? 0 : 4);
+        make_aperture(door, i < 2 ? "N" : "S", id);
+    }
+    ck_assert_msg(celestial_structure_finalize_map(southwest, VS(error)), "%s", error);
+    ck_assert_msg(celestial_structure_finalize_map(northeast, VS(error)), "%s", error);
+    ck_assert(!celestial_structure_validate_topology(southwest, VS(error)));
+    ck_assert_ptr_ne(strstr(error, "corner"), NULL);
+    set_empty_aperture_contract(false);
+    delete_map(southwest);
+    delete_map(northeast);
 }
 END_TEST
 
@@ -585,6 +715,7 @@ START_TEST(test_stack_derives_cover_and_rejects_redundant_exceptions) {
     object *roof = new_object(upper, 2, 1);
     roof->layer = LAYER_WALL;
     SET_FLAG(roof, FLAG_HIDDEN);
+    SET_FLAG(roof, FLAG_IS_FLOOR);
     object_set_value(roof, "sky_boundary", "1", 1);
     object *storey = new_object(top, 3, 1);
     SET_FLAG(storey, FLAG_IS_FLOOR);
@@ -642,8 +773,10 @@ START_TEST(test_inventory_is_bounded_deterministic_and_read_only) {
     mapstruct *map = new_v1_map("/inventory", 3, 3, CELESTIAL_SKY_OPEN);
     object *wall = new_object(map, 1, 1);
     SET_FLAG(wall, FLAG_BLOCKSVIEW);
+    SET_FLAG(&arches[ARCH_EMPTY_ARCHETYPE]->clone, FLAG_BLOCKSVIEW);
     char error[HUGE_BUF];
     ck_assert_msg(celestial_structure_finalize_map(map, VS(error)), "%s", error);
+    CLEAR_FLAG(&arches[ARCH_EMPTY_ARCHETYPE]->clone, FLAG_BLOCKSVIEW);
 
     char *first = NULL;
     char *second = NULL;
@@ -690,6 +823,56 @@ START_TEST(test_inventory_is_bounded_deterministic_and_read_only) {
                      NULL);
     free(links);
     delete_map(map);
+
+#ifndef WIN32
+    char temporary_maps[] = "/tmp/atrinik-celestial-inventory-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(temporary_maps), NULL);
+    char west_path[HUGE_BUF];
+    char east_path[HUGE_BUF];
+    snprintf(VS(west_path), "%s/west", temporary_maps);
+    snprintf(VS(east_path), "%s/east", temporary_maps);
+    FILE *west = fopen(west_path, "w");
+    FILE *east = fopen(east_path, "w");
+    ck_assert_ptr_ne(west, NULL);
+    ck_assert_ptr_ne(east, NULL);
+    ck_assert_int_ne(
+        fputs("arch map\ncelestial_schema 1\nsky_above open\ndifficulty 1\nwidth 3\nheight 3\n"
+              "tile_path_2 /east\ncelestial_boundary_2 continuous\nend\n",
+              west),
+        EOF);
+    ck_assert_int_ne(
+        fputs("arch map\ncelestial_schema 1\nsky_above open\ndifficulty 1\nwidth 3\nheight 3\n"
+              "tile_path_4 /west\ncelestial_boundary_4 continuous\nend\n",
+              east),
+        EOF);
+    ck_assert_int_eq(fclose(west), 0);
+    ck_assert_int_eq(fclose(east), 0);
+    char saved_mapspath[MAX_BUF];
+    char saved_inventory_maps[HUGE_BUF];
+    snprintf(VS(saved_mapspath), "%s", settings.mapspath);
+    snprintf(VS(saved_inventory_maps), "%s", settings.celestial_inventory_maps);
+    uint16_t saved_inventory_limit = settings.celestial_inventory_limit;
+    snprintf(VS(settings.mapspath), "%s", temporary_maps);
+    size_t forward_size;
+    size_t reverse_size;
+    char *forward = run_inventory_capture("/west,/east", &forward_size);
+    char *reverse = run_inventory_capture("/east,/west", &reverse_size);
+    ck_assert_uint_eq(forward_size, reverse_size);
+    ck_assert_msg(memcmp(forward, reverse, forward_size) == 0,
+                  "forward:\n%s\nreverse:\n%s",
+                  forward,
+                  reverse);
+    ck_assert_ptr_ne(strstr(forward, "\tmap\t/east\t"), NULL);
+    ck_assert_ptr_ne(strstr(forward, "\tmap\t/west\t"), NULL);
+    free(forward);
+    free(reverse);
+    snprintf(VS(settings.mapspath), "%s", saved_mapspath);
+    snprintf(VS(settings.celestial_inventory_maps), "%s", saved_inventory_maps);
+    settings.celestial_inventory_limit = saved_inventory_limit;
+    ck_assert_int_eq(unlink(west_path), 0);
+    ck_assert_int_eq(unlink(east_path), 0);
+    ck_assert_int_eq(rmdir(temporary_maps), 0);
+#endif
 }
 END_TEST
 

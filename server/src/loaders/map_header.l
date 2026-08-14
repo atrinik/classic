@@ -24,9 +24,9 @@
  ************************************************************************/
 
 #include <global.h>
+#include <celestial_structure.h>
 #include <loader.h>
 #include <region.h>
-#include <toolkit/path.h>
 #include <toolkit/string.h>
 
 #define YY_DECL int map_lex_load(mapstruct *m)
@@ -210,13 +210,10 @@ lex_error = 0;
         }
         m->celestial_tile_path_seen[tile - 1] = true;
         const char *value = yval();
-        size_t length = strlen(value);
-        if (length < 2 || length >= MAX_BUF || value[0] != '/' ||
-            !path_is_safe_relative(value + 1)) {
-            m->celestial_header_invalid = true;
-        } else {
-            map_set_tile(m, tile - 1, value);
+        if (!celestial_structure_logical_map_id_valid(value)) {
+            m->celestial_tile_path_invalid = true;
         }
+        map_set_tile(m, tile - 1, value);
     }
 }
 ^msg{WS}             {
