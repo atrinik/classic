@@ -60,6 +60,10 @@ class DailyPerformanceSiteTests(unittest.TestCase):
             evidence(), commit="a" * 40, run_id="1", run_attempt="1",
             recorded_at="2026-08-13T00:00:00Z", environment=environment("1"),
         )
+        point["schema_version"] = 2
+        del point["environment"]["artifact_url"]
+        for context in point["contexts"].values():
+            context.pop("lighting_work_ms", None)
         (self.legacy / "points" / "1.json").write_text(json.dumps(point))
         (self.legacy / "trend.json").write_text(json.dumps(report.merge_trend(None, point)))
 
@@ -148,12 +152,95 @@ class DailyPerformanceSiteTests(unittest.TestCase):
         self.assertEqual(len(trend["cohorts"]), site.MAX_COHORTS)
         self.assertGreater(trend["global_retention_watermark"], 0)
 
+    def test_global_cohort_bound_always_retains_a_backfilled_current_cohort(self) -> None:
+        template = report.build_point(
+            evidence(), commit="a" * 40, run_id="1", recorded_at="2026-08-01T00:00:00Z",
+            environment=environment("1"),
+        )
+        trend = None
+        current = "backfilled-current"
+        for run_id in range(10, 10 + site.MAX_COHORTS):
+            point = dict(template, id=f"run-{run_id}", run_id=str(run_id),
+                         cohort=f"cohort-{run_id}")
+            trend = report.merge_trend(trend, point)
+        backfill = dict(template, cohort=current)
+        trend = report.merge_trend(trend, backfill)
+        site._prune_global_history(trend, current, "1")
+        self.assertEqual(len(trend["cohorts"]), site.MAX_COHORTS)
+        self.assertIn(current, trend["cohorts"])
+
     def test_manifest_tampering_fails_closed(self) -> None:
         output = self.root / "site"
         self.build(output)
         (output / "index.html").write_text("tampered")
         with self.assertRaisesRegex(site.SiteError, "digests"):
             site.validate_site(output)
+
+    def test_digest_bound_but_stale_history_path_fails_closed(self) -> None:
+        output = self.root / "site"
+        self.build(output)
+        stale = output / "points" / "run-999.json"
+        stale.write_text("{}\n")
+        manifest = json.loads((output / site.MANIFEST_PATH).read_text())
+        manifest["files"] = site._manifest_files(output)
+        (output / site.MANIFEST_PATH).write_bytes(site._json_bytes(manifest))
+        with self.assertRaisesRegex(site.SiteError, "unapproved or stale"):
+            site.validate_site(output)
+
+    def test_digest_bound_but_mismatched_report_fails_closed(self) -> None:
+        output = self.root / "site"
+        self.build(output)
+        manifest = json.loads((output / site.MANIFEST_PATH).read_text())
+        report_path = f"reports/run-{manifest['run_id']}/index.html"
+        (output / report_path).write_text("<!doctype html><p>stale</p>\n")
+        manifest["files"] = site._manifest_files(output)
+        (output / site.MANIFEST_PATH).write_bytes(site._json_bytes(manifest))
+        with self.assertRaisesRegex(site.SiteError, "does not match"):
+            site.validate_site(output)
+
+    def test_attempt_qualified_checkpoint_artifact_is_digest_validated(self) -> None:
+        output = self.root / "site"
+        artifact = self.root / "artifact"
+        self.build(output)
+        manifest = json.loads((output / site.MANIFEST_PATH).read_text())
+        paths = (
+            site.MANIFEST_PATH,
+            site.STATE_PATH,
+            site.ALERTS_PATH,
+            f"points/run-{manifest['run_id']}.json",
+        )
+        for relative in paths:
+            destination = artifact / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((output / relative).read_bytes())
+        self.assertEqual(site.validate_checkpoint_artifact(artifact), manifest)
+        (artifact / site.ALERTS_PATH).write_text("{}\n")
+        with self.assertRaisesRegex(site.SiteError, "digest mismatch"):
+            site.validate_checkpoint_artifact(artifact)
+
+    def test_checkpoint_artifact_point_is_bound_to_manifest_identity(self) -> None:
+        output = self.root / "site"
+        artifact = self.root / "artifact"
+        self.build(output)
+        manifest = json.loads((output / site.MANIFEST_PATH).read_text())
+        point_path = f"points/run-{manifest['run_id']}.json"
+        paths = (site.MANIFEST_PATH, site.STATE_PATH, site.ALERTS_PATH, point_path)
+        for relative in paths:
+            destination = artifact / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((output / relative).read_bytes())
+        detailed = json.loads((artifact / point_path).read_text())
+        detailed["commit"] = "f" * 40
+        data = site._json_bytes(detailed)
+        (artifact / point_path).write_bytes(data)
+        artifact_manifest = json.loads((artifact / site.MANIFEST_PATH).read_text())
+        artifact_manifest["files"][point_path] = {
+            "sha256": site._sha256(data),
+            "size": len(data),
+        }
+        (artifact / site.MANIFEST_PATH).write_bytes(site._json_bytes(artifact_manifest))
+        with self.assertRaisesRegex(site.SiteError, "not bound"):
+            site.validate_checkpoint_artifact(artifact)
 
     def test_artifact_derived_labels_are_escaped_and_no_javascript_is_emitted(self) -> None:
         point = report.build_point(

@@ -1196,11 +1196,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn(
             'test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"', project
         )
+        self.assertIn("mkdir -p build", project)
         self.assertIn("bab40ecefefa5b6052d42eab6390c504b9482e81", workflow)
         self.assertIn("daily_performance_site.py fetch", project)
         self.assertIn("status=success&per_page=20", project)
         self.assertIn("successful-performance-runs.json", project)
         self.assertIn("performance-checkpoint/v1/manifest.json", project)
+        self.assertIn(".source_sha build/performance-checkpoint/v1/manifest.json", project)
         self.assertIn("--legacy-final-ref", project)
         self.assertIn("daily_performance_site.py build", project)
         self.assertIn("daily_performance_site.py validate", project)
@@ -1223,6 +1225,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("issues: write", alerts)
         self.assertNotIn("pages: write", alerts)
         self.assertIn("reconcile_performance_alerts.py", alerts)
+        self.assertIn("daily_performance_site.py validate-artifact", alerts)
         self.assertNotIn("pull_request:", workflow[: workflow.index("jobs:")])
 
     def test_linux_checks_pin_image_and_isolate_compiler_caches(self) -> None:

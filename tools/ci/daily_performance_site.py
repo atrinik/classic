@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import hashlib
 import html
 import importlib.util
 import json
 from pathlib import Path, PurePosixPath
-import shutil
 import sys
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -114,6 +114,15 @@ def _validate_environment(environment: Any) -> dict[str, Any]:
 
 
 def _retained_points(trend: dict[str, Any]) -> list[dict[str, Any]]:
+    if (
+        not isinstance(trend, dict)
+        or trend.get("schema_version") != report.SCHEMA_VERSION
+        or type(trend.get("global_retention_watermark")) is not int
+        or trend["global_retention_watermark"] < 0
+        or not isinstance(trend.get("retention_watermarks"), dict)
+        or not isinstance(trend.get("alerts"), dict)
+    ):
+        raise SiteError("trend state is malformed")
     cohorts = trend.get("cohorts")
     if not isinstance(cohorts, dict):
         raise SiteError("trend cohorts are malformed")
@@ -126,7 +135,9 @@ def _retained_points(trend: dict[str, Any]) -> list[dict[str, Any]]:
                 not isinstance(point, dict)
                 or point.get("cohort") != cohort
                 or not str(point.get("run_id", "")).isdigit()
+                or int(point["run_id"]) <= 0
                 or not str(point.get("run_attempt", "")).isdigit()
+                or int(point["run_attempt"]) <= 0
                 or point.get("id") != f"run-{point.get('run_id')}"
                 or point.get("point_path") != f"points/run-{point.get('run_id')}.json"
                 or point.get("report_path")
@@ -134,6 +145,8 @@ def _retained_points(trend: dict[str, Any]) -> list[dict[str, Any]]:
             ):
                 raise SiteError("trend point cohort is malformed")
             points.append(point)
+        if len(values) > report.TREND_RETENTION:
+            raise SiteError("trend cohort exceeds detailed retention")
     return sorted(points, key=lambda item: int(item["run_id"]))
 
 
@@ -148,7 +161,12 @@ def _prune_global_history(
         ),
         reverse=True,
     )
-    retained = set(ranked[:MAX_COHORTS]) | {current_cohort}
+    retained = set(
+        [current_cohort]
+        + [cohort for cohort in ranked if cohort != current_cohort][
+            : MAX_COHORTS - 1
+        ]
+    )
     removed = [cohort for cohort in cohorts if cohort not in retained]
     dropped_run_ids = [
         int(point["run_id"])
@@ -164,9 +182,12 @@ def _prune_global_history(
         trend.get("retention_watermarks", {}).pop(cohort, None)
     for key in list(trend.get("alerts", {})):
         state = trend["alerts"][key]
-        if state.get("retired_at_run") not in (None, current_run_id):
+        alert_cohort = key.split(":", 1)[0]
+        if alert_cohort in retained:
+            state.pop("retired_at_run", None)
+        elif state.get("retired_at_run") not in (None, current_run_id):
             del trend["alerts"][key]
-        elif key.split(":", 1)[0] in removed:
+        elif alert_cohort in removed:
             if state.get("active") is True:
                 state.update(
                     active=False,
@@ -210,7 +231,8 @@ def _page(title: str, body: str) -> bytes:
 
 def _phase_table(point: dict[str, Any], key: str = "phases") -> str:
     rows = []
-    for name, phase in point[key].items():
+    for name in report.PHASES:
+        phase = point[key][name]
         work = phase["work_ms"]
         window = phase["window_p95_ms"]
         rows.append(
@@ -237,12 +259,17 @@ def render_report(point: dict[str, Any]) -> bytes:
     for name in sorted(contexts):
         context = contexts[name]
         work = context["work_ms"]
-        lighting = context["lighting_work_ms"]
+        lighting = context.get("lighting_work_ms")
+        lighting_p95 = (
+            _metric(lighting["p95"])
+            if isinstance(lighting, dict) and lighting.get("p95") is not None
+            else "n/a"
+        )
         context_rows.append(
             "<tr>"
             f"<th scope=\"row\">{html.escape(name)}</th>"
             f"<td>{_metric(work['p50'])}</td><td>{_metric(work['p95'])}</td>"
-            f"<td>{_metric(work['p99'])}</td><td>{_metric(lighting['p95'])}</td>"
+            f"<td>{_metric(work['p99'])}</td><td>{lighting_p95}</td>"
             "</tr>"
         )
     checks = point.get("checks", {})
@@ -378,6 +405,10 @@ def validate_site(root: Path, *, expected_repository: str = REPOSITORY) -> dict[
                 and set(predecessor) == {"legacy_final_ref"}
                 and isinstance(predecessor["legacy_final_ref"], str)
                 and len(predecessor["legacy_final_ref"]) == 40
+                and all(
+                    character in "0123456789abcdef"
+                    for character in predecessor["legacy_final_ref"]
+                )
             )
             or (
                 generation > 1
@@ -387,11 +418,25 @@ def validate_site(root: Path, *, expected_repository: str = REPOSITORY) -> dict[
                 and predecessor["generation"] == generation - 1
                 and isinstance(predecessor["digest"], str)
                 and len(predecessor["digest"]) == 64
+                and all(
+                    character in "0123456789abcdef"
+                    for character in predecessor["digest"]
+                )
                 and str(predecessor["run_id"]).isdigit()
+                and int(predecessor["run_id"]) > 0
                 and str(predecessor["run_attempt"]).isdigit()
+                and int(predecessor["run_attempt"]) > 0
             )
         )
     )
+    try:
+        recorded_at = datetime.fromisoformat(
+            str(manifest.get("recorded_at", "")).replace("Z", "+00:00")
+        )
+    except ValueError as error:
+        raise SiteError("site recorded timestamp is invalid") from error
+    if recorded_at.tzinfo is None:
+        raise SiteError("site recorded timestamp must include a timezone")
     if (
         state.get("retention_version") != RETENTION_VERSION
         or manifest.get("retention_version") != RETENTION_VERSION
@@ -402,7 +447,9 @@ def validate_site(root: Path, *, expected_repository: str = REPOSITORY) -> dict[
         or len(manifest["source_sha"]) != 40
         or any(character not in "0123456789abcdef" for character in manifest["source_sha"])
         or not str(manifest.get("run_id", "")).isdigit()
+        or int(manifest["run_id"]) <= 0
         or not str(manifest.get("run_attempt", "")).isdigit()
+        or int(manifest["run_attempt"]) <= 0
         or not isinstance(manifest.get("recorded_at"), str)
         or not valid_predecessor
     ):
@@ -418,14 +465,29 @@ def validate_site(root: Path, *, expected_repository: str = REPOSITORY) -> dict[
     }
     if not expected_paths.issubset(files):
         raise SiteError("site is missing a retained point or report")
+    expected_files = expected_paths | {
+        "index.html",
+        STATE_PATH,
+        ALERTS_PATH,
+        *TREND_PATHS,
+    }
+    if set(files) != expected_files:
+        raise SiteError("site contains an unapproved or stale static path")
+    details: dict[str, dict[str, Any]] = {}
     for compact in points:
         detailed = _read_json(root / compact["point_path"], "retained detailed point")
         if report.compact_point(detailed) != compact:
             raise SiteError("retained detailed point does not match compact state")
+        if (root / compact["point_path"]).read_bytes() != _json_bytes(detailed):
+            raise SiteError("retained detailed point is not canonical JSON")
+        if (root / compact["report_path"]).read_bytes() != render_report(detailed):
+            raise SiteError("retained report does not match its detailed point")
+        details[compact["id"]] = detailed
     if _read_json(root / TREND_PATHS[0], "public trend") != trend:
         raise SiteError("public trend does not match durable state")
-    if (root / TREND_PATHS[0]).read_bytes() != (root / TREND_PATHS[1]).read_bytes():
-        raise SiteError("versioned and stable trend endpoints differ")
+    canonical_trend = _json_bytes(trend)
+    if any((root / path).read_bytes() != canonical_trend for path in TREND_PATHS):
+        raise SiteError("versioned and stable trend endpoints are not canonical")
     alerts = _read_json(root / ALERTS_PATH, "desired alerts")
     if alerts != {
         "schema_version": SITE_SCHEMA_VERSION,
@@ -436,6 +498,15 @@ def validate_site(root: Path, *, expected_repository: str = REPOSITORY) -> dict[
         "alerts": trend.get("alerts", {}),
     }:
         raise SiteError("desired alerts do not match durable state")
+    if (root / STATE_PATH).read_bytes() != _json_bytes(state):
+        raise SiteError("durable state is not canonical JSON")
+    if (root / ALERTS_PATH).read_bytes() != _json_bytes(alerts):
+        raise SiteError("desired alerts are not canonical JSON")
+    current = details.get(f"run-{manifest['run_id']}")
+    if current is None or (root / "index.html").read_bytes() != render_index(trend, current):
+        raise SiteError("site index does not match the current detailed point")
+    if (root / MANIFEST_PATH).read_bytes() != _json_bytes(manifest):
+        raise SiteError("site manifest is not canonical JSON")
     for required in ("<!doctype html>", "<html lang=\"en\">", "<main>", "<table"):
         if required not in (root / "index.html").read_text():
             raise SiteError(f"site index is missing accessibility structure: {required}")
@@ -453,6 +524,80 @@ def load_checkpoint(root: Path) -> tuple[dict[str, Any], dict[str, Any], str]:
     return manifest, state, _manifest_digest(root)
 
 
+def validate_checkpoint_artifact(root: Path) -> dict[str, Any]:
+    """Validate the attempt-qualified recovery and alert artifact subset."""
+    manifest = _read_json(root / MANIFEST_PATH, "checkpoint artifact manifest")
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version") != SITE_SCHEMA_VERSION
+        or manifest.get("repository") != REPOSITORY
+        or manifest.get("workflow") != WORKFLOW
+        or not str(manifest.get("run_id", "")).isdigit()
+        or int(manifest["run_id"]) <= 0
+        or not str(manifest.get("run_attempt", "")).isdigit()
+        or int(manifest["run_attempt"]) <= 0
+        or not isinstance(manifest.get("source_sha"), str)
+        or len(manifest["source_sha"]) != 40
+        or any(character not in "0123456789abcdef" for character in manifest["source_sha"])
+        or not isinstance(manifest.get("files"), dict)
+    ):
+        raise SiteError("checkpoint artifact manifest identity is invalid")
+    point_path = f"points/run-{manifest['run_id']}.json"
+    expected = {STATE_PATH, ALERTS_PATH, point_path}
+    paths = list(root.rglob("*"))
+    if any(path.is_symlink() for path in paths):
+        raise SiteError("checkpoint artifact must not contain symbolic links")
+    actual = {
+        path.relative_to(root).as_posix()
+        for path in paths
+        if path.is_file() and path.relative_to(root).as_posix() != MANIFEST_PATH
+    }
+    if actual != expected:
+        raise SiteError("checkpoint artifact paths are incomplete or unexpected")
+    for relative in expected:
+        metadata = manifest["files"].get(relative)
+        data = root.joinpath(*_safe_relative_path(relative).parts).read_bytes()
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("size") != len(data)
+            or metadata.get("sha256") != _sha256(data)
+        ):
+            raise SiteError(f"checkpoint artifact digest mismatch: {relative}")
+    state = _read_json(root / STATE_PATH, "checkpoint artifact state")
+    alerts = _read_json(root / ALERTS_PATH, "checkpoint artifact alerts")
+    detailed = _read_json(root / point_path, "checkpoint artifact detailed point")
+    if (
+        not isinstance(state, dict)
+        or state.get("repository") != REPOSITORY
+        or state.get("workflow") != WORKFLOW
+        or state.get("published", {}).get("run_id") != manifest["run_id"]
+        or state.get("published", {}).get("run_attempt") != manifest["run_attempt"]
+        or state.get("published", {}).get("source_sha") != manifest.get("source_sha")
+        or alerts
+        != {
+            "schema_version": SITE_SCHEMA_VERSION,
+            "observation": {
+                "run_id": manifest["run_id"],
+                "run_attempt": manifest["run_attempt"],
+            },
+            "alerts": state.get("trend", {}).get("alerts", {}),
+        }
+    ):
+        raise SiteError("checkpoint artifact state identity is invalid")
+    compact = report.compact_point(detailed)
+    retained = _retained_points(state["trend"])
+    if (
+        detailed.get("run_id") != manifest["run_id"]
+        or detailed.get("run_attempt") != manifest["run_attempt"]
+        or detailed.get("commit") != manifest["source_sha"]
+        or detailed.get("recorded_at") != manifest.get("recorded_at")
+        or detailed.get("cohort") != manifest.get("cohort")
+        or compact not in retained
+    ):
+        raise SiteError("checkpoint artifact current point is not bound to durable state")
+    return manifest
+
+
 def _legacy_checkpoint(root: Path, final_ref: str) -> tuple[dict[str, Any], dict[str, Any]]:
     if len(final_ref) != 40 or any(character not in "0123456789abcdef" for character in final_ref):
         raise SiteError("legacy final ref must be a lowercase full commit SHA")
@@ -468,6 +613,19 @@ def _legacy_checkpoint(root: Path, final_ref: str) -> tuple[dict[str, Any], dict
         point_path = root / "points" / f"{old_point['run_id']}.json"
         point = _read_json(point_path, "legacy detailed point") if point_path.is_file() else old_point
         point.setdefault("run_attempt", "1")
+        environment = point.get("environment")
+        if (
+            not isinstance(environment, dict)
+            or set(environment) != ALLOWED_ENVIRONMENT_KEYS - {"artifact_url"}
+        ):
+            raise SiteError("legacy point environment identity is malformed")
+        _validate_url(
+            environment.get("workflow_url"), "legacy workflow URL", expected_host="github.com"
+        )
+        point["environment"] = {
+            **environment,
+            "artifact_url": f"{environment['workflow_url']}#artifacts",
+        }
         trend = report.merge_trend(trend, point)
         details[point["id"]] = point
     if trend is None:
@@ -673,6 +831,8 @@ def main() -> int:
     build.add_argument("--legacy-final-ref")
     validate = subparsers.add_parser("validate")
     validate.add_argument("--site", type=Path, required=True)
+    validate_artifact = subparsers.add_parser("validate-artifact")
+    validate_artifact.add_argument("--artifact", type=Path, required=True)
     fetch = subparsers.add_parser("fetch")
     fetch.add_argument("--base-url", required=True)
     fetch.add_argument("--output", type=Path, required=True)
@@ -690,6 +850,8 @@ def main() -> int:
             )
         elif args.command == "validate":
             validate_site(args.site)
+        elif args.command == "validate-artifact":
+            validate_checkpoint_artifact(args.artifact)
         else:
             fetch_checkpoint(args.base_url, args.output)
     except (OSError, report.ReportError, SiteError, ValueError) as error:

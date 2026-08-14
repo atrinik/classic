@@ -103,7 +103,7 @@ class ReconcilePerformanceAlertTests(unittest.TestCase):
         with mock.patch.object(reconcile, "_run_gh", side_effect=github):
             reconcile.reconcile(desired(False, "recovered"), URL)
             reconcile.reconcile(desired(False, "recovered"), URL)
-        self.assertEqual(github.mutations, ["close"])
+        self.assertEqual(github.mutations, ["comment", "close"])
 
     def test_ambiguous_owned_issues_fail_closed(self) -> None:
         duplicate = {

@@ -392,9 +392,13 @@ def merge_trend(trend: Any, point: dict[str, Any]) -> dict[str, Any]:
     for cohort, cohort_points in cohorts.items():
         if not isinstance(cohort_points, list):
             raise ReportError("trend cohort points must be an array")
-        for item in cohort_points:
+        for index, item in enumerate(cohort_points):
             if not isinstance(item, dict) or not str(item.get("run_id", "")).isdigit():
                 raise ReportError("trend point has an invalid run ID")
+            if "point_path" not in item:
+                item = {**item, "run_attempt": str(item.get("run_attempt", "1"))}
+                item = compact_point(item)
+                cohort_points[index] = item
             item_run_id = int(item["run_id"])
             if item_run_id == point_run_id:
                 replacement_retained = True

@@ -68,6 +68,17 @@ def _json_output(arguments: list[str]) -> Any:
         raise ReconcileError("GitHub returned malformed JSON") from error
 
 
+def _issue_text(number: str, body: str) -> str:
+    comments = _json_output(
+        ["issue", "view", number, "--repo", REPOSITORY, "--json", "comments"]
+    ).get("comments", [])
+    if not isinstance(comments, list):
+        raise ReconcileError("GitHub issue comments are malformed")
+    return "\n".join(
+        [body] + [str(comment.get("body", "")) for comment in comments]
+    )
+
+
 def reconcile(desired: Any, workflow_url: str) -> None:
     if not isinstance(desired, dict) or desired.get("schema_version") != 1:
         raise ReconcileError("unsupported desired alert schema")
@@ -127,24 +138,17 @@ def reconcile(desired: Any, workflow_url: str) -> None:
             _run_gh(["issue", "reopen", number, "--repo", REPOSITORY])
             _run_gh(["issue", "comment", number, "--repo", REPOSITORY, "--body", body])
         elif active and state.get("last_transition") == "regressed":
-            comments = _json_output(
-                ["issue", "view", number, "--repo", REPOSITORY, "--json", "comments"]
-            ).get("comments", [])
-            transition_text = "\n".join(
-                [str(issue.get("body", ""))]
-                + [str(comment.get("body", "")) for comment in comments]
-            )
+            transition_text = _issue_text(number, str(issue.get("body", "")))
             if transition not in transition_text:
                 _run_gh(
                     ["issue", "comment", number, "--repo", REPOSITORY, "--body", body]
                 )
         elif not active and issue_state == "OPEN":
-            _run_gh(
-                [
-                    "issue", "close", number, "--repo", REPOSITORY,
-                    "--comment", body,
-                ]
-            )
+            if transition not in _issue_text(number, str(issue.get("body", ""))):
+                _run_gh(
+                    ["issue", "comment", number, "--repo", REPOSITORY, "--body", body]
+                )
+            _run_gh(["issue", "close", number, "--repo", REPOSITORY])
 
 
 def main() -> int:

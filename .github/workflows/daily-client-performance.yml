@@ -177,6 +177,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          mkdir -p build
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             >build/run.json
           test "$(jq -r .head_sha build/run.json)" = "${GITHUB_SHA}"
@@ -210,6 +211,8 @@ jobs:
               "$(jq -r .id <<<"${expected_run}")"
             test "$(jq -r .run_attempt build/performance-checkpoint/v1/manifest.json)" = \
               "$(jq -r .run_attempt <<<"${expected_run}")"
+            test "$(jq -r .source_sha build/performance-checkpoint/v1/manifest.json)" = \
+              "$(jq -r .head_sha <<<"${expected_run}")"
           elif test "${CHECKPOINT_SOURCE}" = final-benchmark-data && \
             test "${GITHUB_EVENT_NAME}" = workflow_dispatch; then
             git cat-file -e "${FINAL_BENCHMARK_DATA_COMMIT}^{commit}" || \
@@ -305,6 +308,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          python3 tools/ci/daily_performance_site.py validate-artifact \
+            --artifact build/performance-checkpoint-artifact
           python3 tools/ci/reconcile_performance_alerts.py \
             --alerts build/performance-checkpoint-artifact/v1/alerts.json \
             --workflow-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
