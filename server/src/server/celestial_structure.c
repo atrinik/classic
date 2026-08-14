@@ -180,8 +180,10 @@ static bool validate_archetype_clone(const archetype_t *at, char *error, size_t 
                          error_size,
                          "archetype %s mixes static and dynamic transmission",
                          at->name);
-    } else if (transmission != NULL && (static_value == CELESTIAL_TRANSMISSION_INVALID ||
-                                        static_value == CELESTIAL_TRANSMISSION_OPEN)) {
+    } else if (transmission != NULL &&
+               (static_value == CELESTIAL_TRANSMISSION_INVALID ||
+                static_value == CELESTIAL_TRANSMISSION_OPEN ||
+                (!floor && !opaque && sky_boundary == NULL && faces == NULL))) {
         return set_error(error,
                          error_size,
                          "archetype %s has unsupported celestial transmission",
@@ -218,14 +220,16 @@ static bool validate_object(const mapstruct *map,
     const char *sky_state = object_get_value(op, "sky_state");
     const char *ambient_strength = object_get_value(op, "ambient_strength");
     bool dynamic = op->type == DOOR || op->type == GATE;
+    bool archetype_dynamic =
+        op->arch != NULL && (op->arch->clone.type == DOOR || op->arch->clone.type == GATE);
     bool floor = QUERY_FLAG(op, FLAG_IS_FLOOR);
     bool opaque = QUERY_FLAG(op, FLAG_BLOCKSVIEW);
     celestial_transmission_t static_transmission = celestial_structure_transmission(transmission);
     bool vertical = dynamic || opaque || static_transmission == CELESTIAL_TRANSMISSION_GLASS ||
                     static_transmission == CELESTIAL_TRANSMISSION_GRATE;
 
-    if (op->arch == NULL ||
-        dynamic != (op->arch->clone.type == DOOR || op->arch->clone.type == GATE) ||
+    if (op->arch == NULL || dynamic != archetype_dynamic ||
+        (dynamic && op->type != op->arch->clone.type) ||
         floor != QUERY_FLAG(&op->arch->clone, FLAG_IS_FLOOR) ||
         opaque != QUERY_FLAG(&op->arch->clone, FLAG_BLOCKSVIEW)) {
         return set_error(error,
@@ -302,8 +306,11 @@ static bool validate_object(const mapstruct *map,
         if (*aperture_count >= 256) {
             return set_error(error,
                              error_size,
-                             "%s has more than 256 dynamic apertures",
-                             map_path(map));
+                             "%s (%d,%d) object %s exceeds 256 dynamic apertures",
+                             map_path(map),
+                             op->x,
+                             op->y,
+                             STRING_SAFE(op->name));
         }
         for (size_t i = 0; i < *aperture_count; i++) {
             if (strcmp(aperture_ids[i], aperture_id) == 0) {

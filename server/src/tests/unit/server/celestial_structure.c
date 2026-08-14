@@ -409,6 +409,12 @@ START_TEST(test_transmission_faces_and_aperture_identity) {
     object_set_value(empty_clone, "ambient_strength", NULL, 0);
     ck_assert(celestial_structure_validate_archetypes(VS(error)));
 
+    object_set_value(&arches[ARCH_EMPTY_ARCHETYPE]->clone, "celestial_transmission", "opaque", 1);
+    ck_assert(!celestial_structure_validate_archetypes(VS(error)));
+    ck_assert_ptr_ne(strstr(error, "unsupported celestial transmission"), NULL);
+    object_set_value(&arches[ARCH_EMPTY_ARCHETYPE]->clone, "celestial_transmission", NULL, 1);
+    ck_assert(celestial_structure_validate_archetypes(VS(error)));
+
     mapstruct *map = new_v1_map("/objects", 5, 5, CELESTIAL_SKY_OPEN);
     object *floor = new_object(map, 1, 1);
     SET_FLAG(floor, FLAG_IS_FLOOR);
@@ -480,6 +486,16 @@ START_TEST(test_transmission_faces_and_aperture_identity) {
     ck_assert_ptr_ne(strstr(error, "overrides its archetype structural role"), NULL);
     delete_map(map);
 
+    map = new_v1_map("/door-gate-override", 5, 5, CELESTIAL_SKY_OPEN);
+    door = new_object(map, 2, 2);
+    set_empty_aperture_contract(true);
+    make_aperture(door, "N", "00000000000000bf");
+    door->type = GATE;
+    ck_assert(!celestial_structure_finalize_map(map, VS(error)));
+    ck_assert_ptr_ne(strstr(error, "overrides its archetype structural role"), NULL);
+    set_empty_aperture_contract(false);
+    delete_map(map);
+
     map = new_v1_map("/placement-only-transmission", 5, 5, CELESTIAL_SKY_OPEN);
     object *window = new_object(map, 2, 2);
     object_set_value(window, "celestial_transmission", "glass", 1);
@@ -544,6 +560,15 @@ START_TEST(test_transmission_faces_and_aperture_identity) {
                      EOF);
     rewind(input);
     object *parsed = object_get();
+    ck_assert_int_eq(load_object_fp(input, parsed, 0), LL_ERROR);
+    fclose(input);
+    object_destroy(parsed);
+
+    input = tmpfile();
+    ck_assert_ptr_ne(input, NULL);
+    ck_assert_int_ne(fputs(" arch empty_archetype\nend\n", input), EOF);
+    rewind(input);
+    parsed = object_get();
     ck_assert_int_eq(load_object_fp(input, parsed, 0), LL_ERROR);
     fclose(input);
     object_destroy(parsed);
@@ -829,12 +854,24 @@ START_TEST(test_inventory_is_bounded_deterministic_and_read_only) {
     ck_assert_ptr_ne(mkdtemp(temporary_maps), NULL);
     char west_path[HUGE_BUF];
     char east_path[HUGE_BUF];
+    char prearch_path[HUGE_BUF];
+    char missing_metadata_path[HUGE_BUF];
+    char duplicate_metadata_path[HUGE_BUF];
     snprintf(VS(west_path), "%s/west", temporary_maps);
     snprintf(VS(east_path), "%s/east", temporary_maps);
+    snprintf(VS(prearch_path), "%s/prearch", temporary_maps);
+    snprintf(VS(missing_metadata_path), "%s/missing-metadata", temporary_maps);
+    snprintf(VS(duplicate_metadata_path), "%s/duplicate-metadata", temporary_maps);
     FILE *west = fopen(west_path, "w");
     FILE *east = fopen(east_path, "w");
+    FILE *prearch = fopen(prearch_path, "w");
+    FILE *missing_metadata = fopen(missing_metadata_path, "w");
+    FILE *duplicate_metadata = fopen(duplicate_metadata_path, "w");
     ck_assert_ptr_ne(west, NULL);
     ck_assert_ptr_ne(east, NULL);
+    ck_assert_ptr_ne(prearch, NULL);
+    ck_assert_ptr_ne(missing_metadata, NULL);
+    ck_assert_ptr_ne(duplicate_metadata, NULL);
     ck_assert_int_ne(
         fputs("arch map\ncelestial_schema 1\nsky_above open\ndifficulty 1\nwidth 3\nheight 3\n"
               "tile_path_2 /east\ncelestial_boundary_2 continuous\nend\n",
@@ -845,14 +882,34 @@ START_TEST(test_inventory_is_bounded_deterministic_and_read_only) {
               "tile_path_4 /west\ncelestial_boundary_4 continuous\nend\n",
               east),
         EOF);
+    const char *v1_header = "arch map\ncelestial_schema 1\nsky_above open\ndifficulty 1\n"
+                            "width 3\nheight 3\nend\n";
+    ck_assert_int_ne(fputs(v1_header, prearch), EOF);
+    ck_assert_int_ne(fputs("x 1\narch empty_archetype\ny 1\nend\n", prearch), EOF);
+    ck_assert_int_ne(fputs(v1_header, missing_metadata), EOF);
+    ck_assert_int_ne(fputs("arch sky_exposure\nx 0\ny 0\nhp 0\n"
+                           "sky_state covered\nend\n",
+                           missing_metadata),
+                     EOF);
+    ck_assert_int_ne(fputs(v1_header, duplicate_metadata), EOF);
+    ck_assert_int_ne(fputs("arch sky_exposure\nx 0\nx 1\ny 0\nhp 0\nsp 0\n"
+                           "sky_state covered\nend\n",
+                           duplicate_metadata),
+                     EOF);
     ck_assert_int_eq(fclose(west), 0);
     ck_assert_int_eq(fclose(east), 0);
+    ck_assert_int_eq(fclose(prearch), 0);
+    ck_assert_int_eq(fclose(missing_metadata), 0);
+    ck_assert_int_eq(fclose(duplicate_metadata), 0);
     char saved_mapspath[MAX_BUF];
     char saved_inventory_maps[HUGE_BUF];
     snprintf(VS(saved_mapspath), "%s", settings.mapspath);
     snprintf(VS(saved_inventory_maps), "%s", settings.celestial_inventory_maps);
     uint16_t saved_inventory_limit = settings.celestial_inventory_limit;
     snprintf(VS(settings.mapspath), "%s", temporary_maps);
+    ck_assert_ptr_eq(ready_map_name("/prearch", NULL, MAP_FLUSH | MAP_NO_DYNAMIC), NULL);
+    ck_assert_ptr_eq(ready_map_name("/missing-metadata", NULL, MAP_FLUSH | MAP_NO_DYNAMIC), NULL);
+    ck_assert_ptr_eq(ready_map_name("/duplicate-metadata", NULL, MAP_FLUSH | MAP_NO_DYNAMIC), NULL);
     size_t forward_size;
     size_t reverse_size;
     char *forward = run_inventory_capture("/west,/east", &forward_size);
@@ -871,6 +928,9 @@ START_TEST(test_inventory_is_bounded_deterministic_and_read_only) {
     settings.celestial_inventory_limit = saved_inventory_limit;
     ck_assert_int_eq(unlink(west_path), 0);
     ck_assert_int_eq(unlink(east_path), 0);
+    ck_assert_int_eq(unlink(prearch_path), 0);
+    ck_assert_int_eq(unlink(missing_metadata_path), 0);
+    ck_assert_int_eq(unlink(duplicate_metadata_path), 0);
     ck_assert_int_eq(rmdir(temporary_maps), 0);
 #endif
 }
