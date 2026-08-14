@@ -870,8 +870,8 @@ bool object_weight_can_add(const object *op, uint64_t weight) {
  * The object is still present in the source chain while this check runs, so a
  * plain addition check would count it twice at every shared ancestor.
  */
-static bool object_weight_can_move(const object *source, const object *destination,
-                                   uint64_t weight) {
+static bool
+object_weight_can_move(const object *source, const object *destination, uint64_t weight) {
     HARD_ASSERT(destination != NULL);
 
     if (source == NULL) {
@@ -946,8 +946,7 @@ static bool object_weight_can_move(const object *source, const object *destinati
                 return false;
             }
             uint64_t final_unmodified = interim_unmodified + added;
-            uint64_t interim_carrying =
-                (long double)interim_unmodified * tmp->weapon_speed;
+            uint64_t interim_carrying = (long double)interim_unmodified * tmp->weapon_speed;
             uint64_t final_carrying = (long double)final_unmodified * tmp->weapon_speed;
             if (interim_carrying > tmp->carrying || final_carrying > UINT32_MAX) {
                 return false;
