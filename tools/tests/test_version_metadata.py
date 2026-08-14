@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -81,6 +82,36 @@ endforeach()
             outputs.append(result.stdout.strip())
         return outputs[0], outputs[1]
 
+    def assert_component_version_probe(self, source: Path, build: Path) -> None:
+        probe = self.root / "component-version-probe.cmake"
+        probe.write_text(
+            """
+if (NOT PROJECT_VERSION STREQUAL "9.8.7")
+    message(FATAL_ERROR "Unexpected project version: ${PROJECT_VERSION}")
+endif ()
+message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
+""".lstrip(),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                "cmake",
+                "-S",
+                str(source),
+                "-B",
+                str(build),
+                "-DATRINIK_PACKAGE_VERSION=9.8.7",
+                f"-DCMAKE_PROJECT_INCLUDE={probe}",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "ATRINIK_VERSION_PROBE_COMPLETED", result.stdout + result.stderr
+        )
+
     def test_explicit_version_is_embedded_identically_for_both_consumers(self) -> None:
         result = self.configure(
             "-DATRINIK_PACKAGE_VERSION=6.7.8",
@@ -155,16 +186,40 @@ endforeach()
 
     def test_component_version_module_resolution_supports_symlinked_views(self) -> None:
         for component in ("client", "server"):
-            cmake = (ROOT / component / "CMakeLists.txt").read_text(encoding="utf-8")
-            self.assertIn(
-                'file(REAL_PATH "${CMAKE_CURRENT_LIST_FILE}" ATRINIK_COMPONENT_CMAKE_FILE)',
-                cmake,
+            source = ROOT / component
+            view = self.root / f"{component}-view"
+            view.mkdir()
+            for entry in source.iterdir():
+                (view / entry.name).symlink_to(
+                    entry, target_is_directory=entry.is_dir()
+                )
+            self.assert_component_version_probe(
+                view, self.root / f"{component}-build"
             )
-            self.assertIn(
-                '"${ATRINIK_COMPONENT_SOURCE_DIR}/../cmake/AtrinikVersion.cmake"',
-                cmake,
+
+    def test_component_version_module_resolution_supports_scoped_packages(self) -> None:
+        for component in ("client", "server"):
+            source = ROOT / component
+            package = self.root / f"{component}-package"
+            package.mkdir()
+            for entry in source.iterdir():
+                if entry.name in {"CMakeLists.txt", "cmake"}:
+                    continue
+                (package / entry.name).symlink_to(
+                    entry, target_is_directory=entry.is_dir()
+                )
+            shutil.copy2(source / "CMakeLists.txt", package / "CMakeLists.txt")
+            for document in ("LICENSE.md", "ATTRIBUTIONS.md"):
+                shutil.copy2(ROOT / document, package / document)
+            (package / "cmake").mkdir()
+            for entry in (source / "cmake").iterdir():
+                (package / "cmake" / entry.name).symlink_to(
+                    entry, target_is_directory=entry.is_dir()
+                )
+            shutil.copy2(MODULE, package / "cmake" / MODULE.name)
+            self.assert_component_version_probe(
+                package, self.root / f"{component}-package-build"
             )
-            self.assertIn('include("${ATRINIK_VERSION_MODULE}")', cmake)
 
 
 if __name__ == "__main__":
