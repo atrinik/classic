@@ -279,9 +279,9 @@
  `full` (the benchmark-only control); omitting it selects `translated`. An
  optional final `isolated` workload argument suppresses auxiliary local-minimap
  draws and is paired with `movement-lighting-isolated.xml` by CI. The
- JSON schema reports isolated lighting work from before queued MAP decode
- through the primary draw, separately from production-like total update work
- and local-minimap rendering, with operation and per-depth
+ JSON schema reports the sum of isolated lighting scopes accumulated from
+ before queued MAP decode through the primary draw, separately from
+ production-like total update work and local-minimap rendering, with operation and per-depth
  decisions, dirty/translated pixels and bytes, scroll offsets, fallbacks, and
  transformed-sprite cache timing. CI alternates translated/full Release runs
  over the exact same standard and large sustained streams and requires their

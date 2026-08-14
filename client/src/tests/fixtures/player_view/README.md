@@ -63,9 +63,10 @@ build, and fresh-process rules. Benchmark-only scopes attribute field
 translation and dirty clearing, light rasterization and extrapolation,
 destination tone-map/multiply, and transformed-sprite lookup, construction,
 and invalidation. The isolated lighting-work duration is their non-overlapping
-sum from before queued MAP decode through the primary map draw, so it includes
-the reconstruction selected for that tick and excludes the separately reported
-local minimap; the total update work remains the production-like end-to-end guard.
+sum accumulated from before queued MAP decode through the primary map draw, so
+it includes the reconstruction selected for that tick and excludes the
+separately reported local minimap; total update work remains the production-like
+end-to-end guard.
 
 Each replay injects MAP state at a simulated 125-millisecond (8 Hz) update
 cadence without sleeping. This is not a display-frame-rate target: reports show
@@ -124,6 +125,7 @@ python3 tools/benchmark_movement_regression.py candidate-only \
   --candidate-client build/linux-release/atrinik \
   --candidate-manifest src/tests/fixtures/player_view/movement-colored.xml \
   --discrete-manifest src/tests/fixtures/player_view/movement-colored-discrete.xml \
+  --lighting-manifest src/tests/fixtures/player_view/movement-lighting-isolated.xml \
   --full-matrix --output build/movement-full-matrix.json
 ```
 

@@ -1535,9 +1535,9 @@ def _append_lighting_ab_report(
             "### Attributable lighting movement A/B",
             "",
             "Translated and full reconstruction replay the same sustained movement stream. "
-            "`Lighting work` is wall-clock time from before queued MAP decode through the primary "
-            "map draw; it excludes the separately measured local minimap. The operation rows are "
-            "the non-overlapping instrumented lighting scopes within that interval. The broader "
+            "`Lighting work` sums the non-overlapping instrumented lighting scopes accumulated "
+            "from before queued MAP decode through the primary map draw; it excludes the "
+            "separately measured local minimap. The broader "
             "total-work and render-profiler rows remain production-like parent measurements and "
             "must not be added to these operation timings.",
             "",

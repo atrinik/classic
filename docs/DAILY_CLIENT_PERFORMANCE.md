@@ -25,9 +25,10 @@ lighting full/partial/reuse decisions, dirty and translated pixels/bytes,
 scroll offsets and fallback reasons, attributable operation timings at each
 physical depth, sprite-cache hits/misses/evictions, memory/resource
 data, redraw reasons, and correctness checks. Large-viewport phases are shown
-separately when present. The focused lighting-work duration runs from before
-queued MAP decode through the primary draw, excludes the local minimap, and is
-not additive with overlapping parent profiler stages; total
+separately when present. The focused lighting-work duration sums the
+non-overlapping lighting scopes accumulated from before queued MAP decode
+through the primary draw, excludes the local minimap, and is not additive with
+overlapping parent profiler stages; total
 map-focused update work remains the end-to-end regression guard. The 144 FPS
 value in the benchmark contract is an
 informational display reference. Hosted-runner timing, including the existing
