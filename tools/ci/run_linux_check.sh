@@ -13,7 +13,7 @@ jobs=$(nproc)
 validation_exit=0
 
 case "${component}" in
-  client | core | integrated | server) ;;
+  client | client-benchmark | core | integrated | server | server-benchmark) ;;
   *)
     echo "unsupported Linux Check component: ${component}" >&2
     exit 2
@@ -53,7 +53,7 @@ if [[ ${component} != core ]]; then
     --source-lock "${source_root}/server/cmake/immutable_sources.lock.json" \
     --bundle "${dependency_bundle}"
 fi
-if [[ ${component} == server || ${component} == integrated ]]; then
+if [[ ${component} == server || ${component} == server-benchmark || ${component} == integrated ]]; then
   pcpnatpmp_source=$(python3 "${source_root}/server/tools/dependencies.py" source \
     --source-lock "${source_root}/server/cmake/immutable_sources.lock.json" \
     --source-name libpcpnatpmp \
@@ -112,32 +112,21 @@ case "${component}" in
       -DENABLE_PRECOMPILED_HEADERS=OFF \
       "${launcher[@]}" "${sibling_sources[@]}"
     cmake --build --preset linux-coverage --parallel "${jobs}"
-    ctest --preset linux-coverage --parallel 4
+    ctest --preset linux-coverage --parallel 4 -LE performance
     gcovr --root . --filter 'src/' --exclude 'src/tests/' \
       --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
       --print-summary --xml coverage.xml
     cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
     cmake --build --preset linux-release --parallel "${jobs}"
-    ctest --preset linux-release --parallel 4
+    ctest --preset linux-release --parallel 4 -LE performance
     cmake --preset linux-sanitizers "${launcher[@]}" "${sibling_sources[@]}"
     cmake --build --preset linux-sanitizers --parallel "${jobs}"
     env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
-      ctest --preset linux-sanitizers --parallel 4
+      ctest --preset linux-sanitizers --parallel 4 -LE performance
     popd >/dev/null
     ;;
   client)
     pushd "${source_root}/client" >/dev/null
-    evidence_dir="${source_root}/build/ci-evidence"
-    movement_evidence="${evidence_dir}/movement-frame-time.json"
-    movement_baseline_schema="${evidence_dir}/movement-baseline-schema.py"
-    lighting_evidence="${evidence_dir}/lighting-frame-time.json"
-    rm -f "${movement_baseline_schema}"
-    python3 tools/benchmark_movement_regression.py error \
-      --reason client-validation-ended-before-movement-evidence \
-      --output "${movement_evidence}"
-    printf '%s\n' \
-      '{"schema_version":1,"skipped":true,"reason":"client-validation-ended-before-lighting-evidence"}' \
-      >"${lighting_evidence}"
     python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/dependencies.py sync \
       --cache "${dependency_downloads}" --refresh --offline
@@ -150,13 +139,29 @@ case "${component}" in
     gcovr --root . --filter 'src/' --exclude 'src/tests/' \
       --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
       --print-summary --xml coverage.xml
-    env ATRINIK_BENCHMARK_REVISION="${ATRINIK_BENCHMARK_REVISION:-unknown}" \
-      ATRINIK_BENCHMARK_DIRTY="${ATRINIK_BENCHMARK_DIRTY:-unknown}" \
-      cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
+    cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
     cmake --build --preset linux-release --parallel "${jobs}"
-    # The sustained replay is invoked below by its controlled base/candidate
-    # regression gate. Do not duplicate those fresh-process probes here.
     ctest --preset linux-release -LE performance
+    cmake --preset linux-sanitizers "${launcher[@]}" "${sibling_sources[@]}"
+    cmake --build --preset linux-sanitizers --parallel "${jobs}"
+    env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
+      ctest --preset linux-sanitizers -LE performance
+    popd >/dev/null
+    ;;
+  client-benchmark)
+    pushd "${source_root}/client" >/dev/null
+    evidence_dir="${source_root}/build/ci-evidence"
+    movement_evidence="${evidence_dir}/movement-frame-time.json"
+    movement_baseline_schema="${evidence_dir}/movement-baseline-schema.py"
+    lighting_evidence="${evidence_dir}/lighting-frame-time.json"
+    rm -f "${movement_baseline_schema}"
+    python3 tools/dependencies.py sync \
+      --cache "${dependency_downloads}" --refresh --offline
+    python3 tools/dependencies.py verify
+    env ATRINIK_BENCHMARK_REVISION="${ATRINIK_BENCHMARK_REVISION:-unknown}" \
+      ATRINIK_BENCHMARK_DIRTY=false \
+      cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
+    cmake --build --preset linux-release --target atrinik --parallel "${jobs}"
     benchmark_base_sha=${ATRINIK_BENCHMARK_BASE_SHA:-${ATRINIK_LIGHTING_BASE_SHA:-}}
     movement_event_name=${ATRINIK_MOVEMENT_EVENT_NAME:-unknown}
     movement_matrix=${ATRINIK_MOVEMENT_MATRIX:-fast}
@@ -206,7 +211,12 @@ case "${component}" in
     movement_paths=(
       "${movement_rendering_paths[@]}"
       .github/workflows/check.yml
+      .github/workflows/pr-benchmarks.yml
       client/CMakeLists.txt
+      client/src/client
+      client/src/gui
+      client/src/include
+      client/src/tests/fixtures/player_view
       client/src/client/client.c
       client/src/client/client_command_queue.c
       client/src/client/commands.c
@@ -239,7 +249,9 @@ case "${component}" in
       libatrinik/math.c
       libatrinik/math.h
       protocol/schema/game-commands.json
+      tools/ci/classify_changes.py
       tools/ci/run_linux_check.sh
+      tools/tests/test_classify_changes.py
       tools/tests/test_workflow_contracts.py
     )
     movement_contract_paths=(
@@ -414,11 +426,78 @@ case "${component}" in
       git -C "${source_root}" worktree remove --force "${baseline_root}"
       trap - EXIT
     fi
-    cmake --preset linux-sanitizers "${launcher[@]}" "${sibling_sources[@]}"
-    cmake --build --preset linux-sanitizers --parallel "${jobs}"
-    env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
-      ctest --preset linux-sanitizers -LE performance
     popd >/dev/null
+    ;;
+  server-benchmark)
+    benchmark_base_sha=${ATRINIK_BENCHMARK_BASE_SHA:-}
+    if [[ ! ${benchmark_base_sha} =~ ^[0-9a-f]{40}$ ]] ||
+      ! git -C "${source_root}" cat-file -e "${benchmark_base_sha}^{commit}"; then
+      echo "server benchmark requires a fetched full base commit ID" >&2
+      exit 2
+    fi
+
+    pushd "${source_root}/server" >/dev/null
+    python3 tools/dependencies.py sync \
+      --cache "${dependency_downloads}" --refresh --offline
+    python3 tools/dependencies.py verify
+    cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
+    cmake --build --preset linux-release --parallel "${jobs}"
+    popd >/dev/null
+
+    baseline_root="${source_root}/build/ci-server-benchmark-baseline"
+    # Invoked indirectly by the EXIT trap below.
+    # shellcheck disable=SC2329
+    cleanup_server_benchmark_baseline() {
+      git -C "${source_root}" worktree remove --force "${baseline_root}" >/dev/null 2>&1 || true
+    }
+    trap cleanup_server_benchmark_baseline EXIT
+    git -C "${source_root}" worktree add --detach \
+      "${baseline_root}" "${benchmark_base_sha}"
+    python3 "${source_root}/server/tools/dependencies.py" sync \
+      --root "${baseline_root}/server" \
+      --lock "${baseline_root}/server/dependencies.lock.json" \
+      --cache "${dependency_downloads}" --refresh --offline
+    python3 "${source_root}/server/tools/dependencies.py" verify \
+      --root "${baseline_root}/server" \
+      --lock "${baseline_root}/server/dependencies.lock.json"
+    baseline_pcpnatpmp_source=$(python3 "${source_root}/server/tools/dependencies.py" source \
+      --source-lock "${baseline_root}/server/cmake/immutable_sources.lock.json" \
+      --source-name libpcpnatpmp \
+      --cache "${source_root}/build/dependency-source-cache" \
+      --downloads "${dependency_downloads}" \
+      --offline)
+    pushd "${baseline_root}/server" >/dev/null
+    cmake --preset linux-release \
+      "${launcher[@]}" \
+      -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL="${baseline_root}/protocol" \
+      -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK="${baseline_root}/libatrinik" \
+      -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP="${baseline_pcpnatpmp_source}"
+    cmake --build --preset linux-release --parallel "${jobs}"
+    popd >/dev/null
+    if ! git -C "${baseline_root}" diff --quiet HEAD --; then
+      echo "server benchmark build modified its immutable base source" >&2
+      exit 2
+    fi
+
+    ctest --test-dir "${baseline_root}/server/build/linux-release" \
+      --verbose -R '^server-content-benchmark$' 2>&1 | \
+      tee "${source_root}/build/ci-evidence/server-content-benchmark-base.log"
+    ctest --test-dir "${source_root}/server/build/linux-release" \
+      --verbose -R '^server-content-benchmark$' 2>&1 | \
+      tee "${source_root}/build/ci-evidence/server-content-benchmark-head.log"
+    # Markdown code spans are intentionally literal.
+    # shellcheck disable=SC2016
+    printf '%s\n' \
+      '## Server content benchmark' \
+      '' \
+      "- Base: \`${benchmark_base_sha}\`" \
+      "- Head: \`${ATRINIK_BENCHMARK_REVISION:-unknown}\`" \
+      '- Result: both isolated content-loader probes completed successfully.' \
+      '- Evidence: `server-content-benchmark-base.log` and `server-content-benchmark-head.log`.' \
+      >"${source_root}/build/ci-evidence/server-content-benchmark-summary.md"
+
+    git -C "${source_root}" worktree remove --force "${baseline_root}"
+    trap - EXIT
     ;;
   integrated)
     pushd "${source_root}" >/dev/null

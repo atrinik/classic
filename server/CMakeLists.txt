@@ -591,7 +591,7 @@ if (BUILD_TESTING AND NOT MINGW)
                 --content_benchmark_iterations=2
                 --port_mapping=off)
         set_tests_properties(server-content-benchmark PROPERTIES
-            LABELS "server;runtime;benchmark"
+            LABELS "server;runtime;benchmark;performance"
             TIMEOUT 300
             WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 

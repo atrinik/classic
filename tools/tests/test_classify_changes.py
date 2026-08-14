@@ -30,6 +30,36 @@ class ClassifyChangesTests(unittest.TestCase):
         self.assertFalse(result["server"])
         self.assertFalse(result["windows"])
         self.assertFalse(result["codeql_run"])
+        self.assertFalse(result["benchmark_client"])
+        self.assertFalse(result["benchmark_server"])
+
+    def test_benchmark_paths_select_only_relevant_suites(self) -> None:
+        client = classify_changes.classify(["client/src/gui/widgets/map.c"])
+        self.assertTrue(client["benchmark_client"])
+        self.assertFalse(client["benchmark_server"])
+
+        server = classify_changes.classify(["server/src/server/map.c"])
+        self.assertFalse(server["benchmark_client"])
+        self.assertTrue(server["benchmark_server"])
+
+        unrelated_tool = classify_changes.classify(["client/tools/dependencies.py"])
+        self.assertFalse(unrelated_tool["benchmark_client"])
+        benchmark_tool = classify_changes.classify(
+            ["client/tools/benchmark_movement_regression.py"]
+        )
+        self.assertTrue(benchmark_tool["benchmark_client"])
+
+    def test_benchmark_contract_change_selects_both_suites(self) -> None:
+        for path in (
+            ".github/workflows/pr-benchmarks.yml",
+            "tools/ci/classify_changes.py",
+            "tools/ci/run_linux_check.sh",
+            "tools/tests/test_workflow_contracts.py",
+        ):
+            with self.subTest(path=path):
+                result = classify_changes.classify([path])
+                self.assertTrue(result["benchmark_client"])
+                self.assertTrue(result["benchmark_server"])
 
     def test_component_change_selects_only_its_native_closure(self) -> None:
         result = classify_changes.classify(["client/src/client/main.c"])
