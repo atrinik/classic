@@ -652,15 +652,6 @@ jobs:
         with:
           name: classic-dependency-inputs
           path: build/dependency-inputs
-      - name: Initialize client benchmark evidence
-        run: |
-          mkdir -p build/ci-evidence
-          printf '%s\n' \
-            '{"schema_version":1,"skipped":true,"reason":"client-validation-ended-before-lighting-evidence"}' \
-            >build/ci-evidence/lighting-frame-time.json
-          python3 client/tools/benchmark_movement_regression.py error \
-            --reason client-validation-ended-before-movement-evidence \
-            --output build/ci-evidence/movement-frame-time.json
       - id: linux-cache
         name: Resolve isolated client compiler cache key
         env:
@@ -706,11 +697,6 @@ jobs:
             --env ImageVersion \
             --env RUNNER_ARCH \
             --env RUNNER_OS \
-            --env ATRINIK_BENCHMARK_BASE_SHA="${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}" \
-            --env ATRINIK_BENCHMARK_REVISION="${GITHUB_SHA}" \
-            --env ATRINIK_BENCHMARK_DIRTY=false \
-            --env ATRINIK_MOVEMENT_EVENT_NAME="${GITHUB_EVENT_NAME}" \
-            --env ATRINIK_MOVEMENT_MATRIX="${{ github.event_name == 'workflow_dispatch' && 'full' || 'fast' }}" \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --volume "${RUNNER_TEMP}/classic-ccache/client:/cache/ccache" \
             --workdir /workspace \
@@ -724,78 +710,12 @@ jobs:
           files: client/coverage.xml
           flags: client
           use_oidc: true
-      - name: Render movement regression comment
-        if: always()
-        env:
-          CLIENT_RESULT: ${{ job.status }}
-        run: |
-          python3 client/tools/benchmark_movement_regression.py render-comment \
-            --input build/ci-evidence/movement-frame-time.json \
-            --client-result "${CLIENT_RESULT}" \
-            --baseline-schema build/ci-evidence/movement-baseline-schema.py \
-            --output build/ci-evidence/movement-comment.md
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        if: always()
         with:
-          name: linux-client-evidence-${{ github.run_attempt }}
-          path: build/ci-evidence
+          name: linux-client-ccache-${{ github.run_attempt }}
+          path: build/ci-evidence/ccache-client.tsv
           if-no-files-found: error
           retention-days: 14
-
-  movement-regression-comment:
-    name: Movement regression summary
-    needs: [changes, client]
-    if: >-
-      always() && github.event_name == 'pull_request' &&
-      needs.changes.outputs.client == 'true' &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      actions: read
-      pull-requests: write
-    steps:
-      - name: Download regression evidence
-        id: evidence
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh run download "${GITHUB_RUN_ID}"
-          --repo "${GITHUB_REPOSITORY}"
-          --name "linux-client-evidence-${GITHUB_RUN_ATTEMPT}"
-          --dir evidence
-      - name: Publish one pre-rendered summary comment
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPOSITORY: ${{ github.repository }}
-          CLIENT_RESULT: ${{ needs.client.result }}
-        run: |
-          marker='<!-- atrinik-movement-regression-summary -->'
-          if test -f evidence/movement-comment.md &&
-            test "$(head -n 1 evidence/movement-comment.md)" = "${marker}" &&
-            test "$(wc -c <evidence/movement-comment.md)" -le 65536; then
-            cp evidence/movement-comment.md comment.md
-          else
-            printf '%s\n' \
-              "${marker}" \
-              '## Movement regression summary' \
-              '' \
-              "Regression evidence is unavailable because client validation finished with \`${CLIENT_RESULT}\`." \
-              >comment.md
-          fi
-          comment_id=$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-            --paginate \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"${marker}\"))) | .id" |
-            sed -n '1p')
-          if test -n "${comment_id}"; then
-            gh api --method PATCH "repos/${REPOSITORY}/issues/comments/${comment_id}" \
-              --raw-field body="$(<comment.md)" >/dev/null
-          else
-            gh api --method POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              --raw-field body="$(<comment.md)" >/dev/null
-          fi
 
   integrated:
     name: Integrated client/server graph
