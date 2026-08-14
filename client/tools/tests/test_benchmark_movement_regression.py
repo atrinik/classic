@@ -1205,10 +1205,16 @@ class EvidenceTests(unittest.TestCase):
 
     def test_cross_contract_comparison_keeps_candidate_guards_enforced(self) -> None:
         baseline = native_record(sustained_p95_ns=2_000_000)
-        baseline["schema_version"] = 4
-        baseline["identity"]["instrumentation"]["schema_version"] = 4
+        baseline["schema_version"] = 5
+        baseline["identity"]["instrumentation"]["schema_version"] = 5
         for phase in baseline["phases"]:
             del phase["render_stages"]
+            del phase["lighting_work_time"]
+            del phase["lighting"]["timings"]
+            for level in phase["lighting"]["levels"]:
+                del level["timings"]
+                del level["width"]
+                del level["height"]
         candidate = native_record(sustained_p95_ns=2_300_000)
         evidence = benchmark._build_evidence(
             [baseline, copy.deepcopy(baseline), copy.deepcopy(baseline)],
@@ -1232,6 +1238,21 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("Map render path p95 (contract-specific)", report)
         self.assertIn("base and candidate identities are not comparable", report)
         self.assertIn("n/a → 0.001 ms", report)
+        self.assertEqual(
+            evidence["phases"]["baseline_standard"]["sustained"][
+                "lighting_work_p95_ms"
+            ],
+            0,
+        )
+        self.assertFalse(
+            evidence["phases"]["baseline_standard"]["sustained"][
+                "lighting_work_available"
+            ]
+        )
+        self.assertNotIn(
+            "timings",
+            evidence["phases"]["baseline_standard"]["sustained"]["lighting"],
+        )
 
     def test_informational_performance_failure_does_not_hide_or_fail(self) -> None:
         slow = native_record(sustained_p95_ns=50_000_000)

@@ -400,11 +400,24 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
     minimap_p95_ns = _median_integer(
         [phase(record, name)["local_minimap"]["map_time"]["p95"] for record in records]
     )
-    lighting_work_p50_ns = _median_integer(
-        [phase(record, name)["lighting_work_time"]["p50"] for record in records]
+    attribution_available = all(
+        "lighting_work_time" in phase(record, name)
+        and "timings" in phase(record, name)["lighting"]
+        for record in records
     )
-    lighting_work_p95_ns = _median_integer(
-        [phase(record, name)["lighting_work_time"]["p95"] for record in records]
+    lighting_work_p50_ns = (
+        _median_integer(
+            [phase(record, name)["lighting_work_time"]["p50"] for record in records]
+        )
+        if attribution_available
+        else 0
+    )
+    lighting_work_p95_ns = (
+        _median_integer(
+            [phase(record, name)["lighting_work_time"]["p95"] for record in records]
+        )
+        if attribution_available
+        else 0
     )
     lighting = _nested_medians(records, name, "lighting", LIGHTING_FIELDS)
     lookups = lighting["lit_sprite_lookups"]
@@ -462,6 +475,7 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
         "animation_p95_ms": round(animation_p95_ns / 1_000_000, 2),
         "local_minimap_p50_ms": round(minimap_p50_ns / 1_000_000, 2),
         "local_minimap_p95_ms": round(minimap_p95_ns / 1_000_000, 2),
+        "lighting_work_available": attribution_available,
         "lighting_work_p50_ms": round(lighting_work_p50_ns / 1_000_000, 3),
         "lighting_work_p95_ms": round(lighting_work_p95_ns / 1_000_000, 3),
         "work_p99_ms": round(_phase_median(records, name, "p99_ns") / 1_000_000, 2),
@@ -545,8 +559,14 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
         "lighting": {
             **lighting,
             "hit_rate_percent": hit_rate,
-            "timings": _lighting_timing_summary(records, name),
-            "levels": _lighting_level_summary(records, name),
+            **(
+                {
+                    "timings": _lighting_timing_summary(records, name),
+                    "levels": _lighting_level_summary(records, name),
+                }
+                if attribution_available
+                else {}
+            ),
         },
     }
 
@@ -1652,6 +1672,7 @@ def _phase_summary_for_report(summary: object, context: str) -> dict[str, object
         "animation_p95_ms",
         "local_minimap_p50_ms",
         "local_minimap_p95_ms",
+        "lighting_work_available",
         "lighting_work_p50_ms",
         "lighting_work_p95_ms",
         "work_p99_ms",
@@ -1694,6 +1715,11 @@ def _phase_summary_for_report(summary: object, context: str) -> dict[str, object
     ):
         if type(summary[field]) not in (int, float) or summary[field] < 0:
             raise BenchmarkError(f"invalid phase summary: {context}")
+    if type(summary["lighting_work_available"]) is not bool or (
+        not summary["lighting_work_available"]
+        and (summary["lighting_work_p50_ms"] != 0 or summary["lighting_work_p95_ms"] != 0)
+    ):
+        raise BenchmarkError(f"invalid phase summary: {context}")
     if (
         summary["update_cadence_hz"] != 8
         or summary["update_interval_ms"] != 125
