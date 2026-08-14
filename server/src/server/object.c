@@ -865,6 +865,105 @@ bool object_weight_can_add(const object *op, uint64_t weight) {
 }
 
 /**
+ * Check whether moving weight between two inventory chains is representable.
+ *
+ * The object is still present in the source chain while this check runs, so a
+ * plain addition check would count it twice at every shared ancestor.
+ */
+static bool object_weight_can_move(const object *source, const object *destination,
+                                   uint64_t weight) {
+    HARD_ASSERT(destination != NULL);
+
+    if (source == NULL) {
+        return object_weight_can_add(destination, weight);
+    }
+
+    const object *common = destination;
+    while (common != NULL) {
+        const object *candidate = source;
+        while (candidate != NULL && candidate != common) {
+            candidate = candidate->env;
+        }
+        if (candidate == common) {
+            break;
+        }
+        common = common->env;
+    }
+    if (common == NULL) {
+        return object_weight_can_add(destination, weight);
+    }
+
+    uint64_t removed = weight;
+    for (const object *tmp = source; tmp != common; tmp = tmp->env) {
+        if (removed > UINT32_MAX) {
+            return false;
+        }
+        if (tmp->type == CONTAINER && !DBL_EQUAL(tmp->weapon_speed, 1.0)) {
+            if (removed > tmp->damage_round_tag) {
+                return false;
+            }
+            uint64_t unmodified = tmp->damage_round_tag - removed;
+            uint64_t carrying = (long double)unmodified * tmp->weapon_speed;
+            if (carrying > tmp->carrying) {
+                return false;
+            }
+            removed = tmp->carrying - carrying;
+        } else if (removed > tmp->carrying) {
+            return false;
+        }
+    }
+
+    uint64_t added = weight;
+    for (const object *tmp = destination; tmp != common; tmp = tmp->env) {
+        if (added > UINT32_MAX) {
+            return false;
+        }
+        if (tmp->type == CONTAINER && !DBL_EQUAL(tmp->weapon_speed, 1.0)) {
+            if (added > UINT32_MAX - tmp->damage_round_tag) {
+                return false;
+            }
+            uint64_t unmodified = tmp->damage_round_tag + added;
+            uint64_t carrying = (long double)unmodified * tmp->weapon_speed;
+            if (carrying < tmp->carrying || carrying > UINT32_MAX) {
+                return false;
+            }
+            added = carrying - tmp->carrying;
+        } else if (added > UINT32_MAX - tmp->carrying) {
+            return false;
+        }
+    }
+
+    for (const object *tmp = common; tmp != NULL; tmp = tmp->env) {
+        if (removed > UINT32_MAX || added > UINT32_MAX) {
+            return false;
+        }
+        if (tmp->type == CONTAINER && !DBL_EQUAL(tmp->weapon_speed, 1.0)) {
+            if (removed > tmp->damage_round_tag) {
+                return false;
+            }
+            uint64_t interim_unmodified = tmp->damage_round_tag - removed;
+            if (added > UINT32_MAX - interim_unmodified) {
+                return false;
+            }
+            uint64_t final_unmodified = interim_unmodified + added;
+            uint64_t interim_carrying =
+                (long double)interim_unmodified * tmp->weapon_speed;
+            uint64_t final_carrying = (long double)final_unmodified * tmp->weapon_speed;
+            if (interim_carrying > tmp->carrying || final_carrying > UINT32_MAX) {
+                return false;
+            }
+            removed = tmp->carrying - interim_carrying;
+            added = final_carrying - interim_carrying;
+        } else {
+            if (removed > tmp->carrying || added > UINT32_MAX - (tmp->carrying - removed)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/**
  * Recursively (outwards) subtracts a number from the weight of an object
  * (and what is carried by its environment(s)).
  *
@@ -2545,7 +2644,7 @@ object_insert_into_reason(object *op, object *where, const char *reason, object 
     if (op->env != where) {
         uint64_t own_weight = (uint64_t)op->weight * MAX(1, op->nrof);
         if (own_weight > UINT32_MAX - op->carrying ||
-            !object_weight_can_add(where, own_weight + op->carrying)) {
+            !object_weight_can_move(op->env, where, own_weight + op->carrying)) {
             return OBJECT_SEMANTIC_FAILED;
         }
     }

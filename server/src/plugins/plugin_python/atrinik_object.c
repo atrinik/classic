@@ -154,10 +154,10 @@ static fields_struct fields[] = {
     {"carrying",
      FIELDTYPE_UINT32,
      offsetof(object, carrying),
-     0,
+     FIELDFLAG_READONLY,
      0,
      "Weight the object is currently carrying in its inventory, in "
-     "grams.; int"},
+     "grams.; int (readonly)"},
     {"path_attuned",
      FIELDTYPE_UINT32,
      offsetof(object, path_attuned),
@@ -811,26 +811,6 @@ static bool python_object_reject_currency_move(object *op) {
                         "Persistent currency cannot be moved as an item; use PayAmount or "
                         "Player.InsertCoins.");
         return true;
-    }
-    return false;
-}
-
-static bool python_load_contains_field(const char *lines, const char *field) {
-    size_t field_length = strlen(field);
-    const char *line = lines;
-    while (*line != '\0') {
-        while (*line == ' ' || *line == '\t') {
-            line++;
-        }
-        if (strncmp(line, field, field_length) == 0 &&
-            (line[field_length] == ' ' || line[field_length] == '\t')) {
-            return true;
-        }
-        const char *next = strchr(line, '\n');
-        if (next == NULL) {
-            break;
-        }
-        line = next + 1;
     }
     return false;
 }
@@ -2544,7 +2524,7 @@ static const char doc_Atrinik_Object_CreateTreasure[] =
     "value of 0 will disable any chance for artifacts.\n"
     ":type a_chance: int\n"
     ":raises ValueError: If treasure is not valid.\n"
-    ":raises RuntimeError: If GT_ENVIRONMENT requests persistent map generation.";
+    ":raises RuntimeError: If generation would mutate persistent non-player state.";
 
 /**
  * Implements Atrinik.Object.Object.CreateTreasure() Python method.
@@ -2570,9 +2550,11 @@ Atrinik_Object_CreateTreasure(Atrinik_Object *self, PyObject *args, PyObject *ke
 
     OBJEXISTCHECK(self);
 
-    if ((flags & GT_ENVIRONMENT) != 0) {
+    object *root = hooks->object_get_env(self->obj);
+    if ((flags & GT_ENVIRONMENT) != 0 ||
+        (python_object_is_persistent(self->obj) && root->type != PLAYER)) {
         PyErr_SetString(PyExc_RuntimeError,
-                        "CreateTreasure cannot generate persistent map state; use explicit "
+                        "CreateTreasure cannot generate persistent non-player state; use explicit "
                         "reason-aware item or currency APIs.");
         return NULL;
     }
@@ -2700,7 +2682,8 @@ static const char doc_Atrinik_Object_Artificate[] =
     "abilities.\n"
     ":raises Atrinik.AtrinikError: If the object's type doesn't match "
     "any artifact list.\n"
-    ":raises Atrinik.AtrinikError: If the artifact name is invalid.";
+    ":raises Atrinik.AtrinikError: If the artifact name is invalid.\n"
+    ":raises RuntimeError: If the object is persistent.";
 
 /**
  * Implements Atrinik.Object.Object.Artificate() Python method.
@@ -2714,6 +2697,13 @@ static PyObject *Atrinik_Object_Artificate(Atrinik_Object *self, PyObject *args)
     }
 
     OBJEXISTCHECK(self);
+
+    if (python_object_is_persistent(self->obj)) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Persistent objects cannot be artified; prepare the object before "
+                        "insertion.");
+        return NULL;
+    }
 
     if (self->obj->artifact) {
         PyErr_SetString(AtrinikError, "Object already has artifact abilities.");
@@ -2750,8 +2740,8 @@ static const char doc_Atrinik_Object_Load[] =
     ":param lines: Lines to load into the object.\n"
     ":type lines: str\n"
     ":raises Atrinik.AtrinikError: If the object attributes are invalid.\n"
-    ":raises RuntimeError: If the object is persistent player/bank/currency state or attempts "
-    "to change persistent object type.";
+    ":raises RuntimeError: If the object is persistent; prepare detached objects before "
+    "insertion.";
 
 /**
  * Implements Atrinik.Object.Object.Load() Python method.
@@ -2765,21 +2755,10 @@ static PyObject *Atrinik_Object_Load(Atrinik_Object *self, PyObject *args) {
     }
 
     OBJEXISTCHECK(self);
-    object *root = hooks->object_get_env(self->obj);
-    bool bank = self->obj->arch != NULL && strcmp(self->obj->arch->name, "player_info") == 0 &&
-                self->obj->name != NULL && strcmp(self->obj->name, "BANK_GENERAL") == 0;
-    bool player_info = self->obj->arch != NULL &&
-                       strcmp(self->obj->arch->name, "player_info") == 0;
-    bool persistent_item = !QUERY_FLAG(self->obj, FLAG_SYS_OBJECT) && self->obj->type != FORCE &&
-                           self->obj->type != POTION_EFFECT && self->obj->type != EVENT_OBJECT &&
-                           self->obj->type != QUEST_CONTAINER;
-    bool persistent_money = self->obj->type == MONEY && python_object_is_persistent(self->obj);
-    if ((root != self->obj && root->type == PLAYER && (bank || player_info || persistent_item)) ||
-        persistent_money ||
-        (python_object_is_persistent(self->obj) && python_load_contains_field(lines, "type"))) {
+    if (python_object_is_persistent(self->obj)) {
         PyErr_SetString(PyExc_RuntimeError,
-                        "Load cannot mutate persistent item or currency state; use a "
-                        "reason-aware API.");
+                        "Load cannot mutate persistent state; prepare the object before "
+                        "insertion.");
         return NULL;
     }
 
@@ -3064,6 +3043,12 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
     if (hidden_bank && field->offset != offsetof(object, value)) {
         PyErr_SetString(PyExc_RuntimeError,
                         "Hidden bank state can only be changed through its balance API.");
+        return -1;
+    }
+    if (field->offset == offsetof(object, weight) && python_object_is_persistent(obj->obj)) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Persistent object weight is derived inventory state and cannot be "
+                        "changed directly.");
         return -1;
     }
     if (field->offset == offsetof(object, type) && python_object_is_persistent(obj->obj) &&

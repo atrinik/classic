@@ -827,6 +827,31 @@ START_TEST(test_production_player_and_map_checkpoints_persist_component_watermar
                   "saved player sequence=%" PRIu64 ", unique sequence=%" PRIu64,
                   saved_player_sequence,
                   unique_sequence);
+    fp = fopen(player_path, "rb");
+    ck_assert_ptr_ne(fp, NULL);
+    object *placeholder = player_get_dummy("Journal production reload", NULL);
+    player *loaded_state = CONTR(placeholder);
+    object_remove(placeholder, 0);
+    placeholder->custom_attrset = NULL;
+    object_destroy(placeholder);
+    loaded_state->ob = object_get();
+    ck_assert(player_load_stream(loaded_state, fp));
+    ck_assert_int_eq(fclose(fp), 0);
+    object *loaded_player = loaded_state->ob;
+    loaded_player->custom_attrset = loaded_state;
+    ck_assert_uint_eq(loaded_state->journal_sequence, unique_sequence);
+    object *loaded_coin = NULL;
+    FOR_INV_PREPARE(loaded_player, candidate) {
+        if (candidate->custody_lineage != NULL &&
+            strncmp(candidate->custody_lineage, "currency:", 9) == 0) {
+            loaded_coin = candidate;
+        }
+    }
+    FOR_INV_FINISH();
+    ck_assert_ptr_ne(loaded_coin, NULL);
+    ck_assert_ptr_ne(loaded_coin->custody_lineage, NULL);
+    ck_assert_int_eq(strncmp(loaded_coin->custody_lineage, "currency:", 9), 0);
+    object_destroy(loaded_player);
     char runtime_path[HUGE_BUF];
     snprintf(VS(runtime_path), "%s/runtime.map", directory);
     char unique_directory[HUGE_BUF];
@@ -1350,6 +1375,14 @@ START_TEST(test_semantic_item_shop_and_bank_producers) {
     ck_assert_ptr_eq(inserted, NULL);
     ck_assert_ptr_eq(same_root_item->env, source_sack);
     full_sack->carrying = 0;
+    pl->carrying = UINT32_MAX;
+    ck_assert_int_eq(
+        object_insert_into_reason(same_root_item, full_sack, "test.same-root-move", &inserted),
+        OBJECT_SEMANTIC_COMMITTED);
+    ck_assert_ptr_eq(inserted, same_root_item);
+    ck_assert_ptr_eq(same_root_item->env, full_sack);
+    ck_assert_uint_eq(pl->carrying, UINT32_MAX);
+    object_weight_sum(pl);
 
     object *detached_sack = arch_get("sack");
     object *map_coin = arch_get("coppercoin");

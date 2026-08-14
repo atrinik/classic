@@ -970,14 +970,16 @@ class JournalTests(unittest.TestCase):
                 set(), {"python_object_reject_currency_move", "move_ob"},
             ),
             ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_CreateTreasure"): (
-                set(), {"treasure_generate"},
+                set(), {"python_object_is_persistent", "treasure_generate"},
+            ),
+            ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_Artificate"): (
+                set(), {"python_object_is_persistent", "artifact_change_object"},
             ),
             ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_CreateObject"): (
                 {"script.currency-grant"}, {"object_insert_into_reason"},
             ),
             ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_Load"): (
-                set(), {"python_object_is_persistent", "python_load_contains_field",
-                        "set_variable"},
+                set(), {"python_object_is_persistent", "set_variable"},
             ),
             ("src/plugins/plugin_python/atrinik_object.c", "Object_SetAttribute"): (
                 {"script.item-adjust", "script.item-value-adjust",
@@ -1004,8 +1006,24 @@ class JournalTests(unittest.TestCase):
                     self.assertIn(f"{call}(", structural_body)
                 if function == "Atrinik_Object_CreateTreasure":
                     self.assertIn("flags & GT_ENVIRONMENT", structural_body)
+                    self.assertIn("root->type != PLAYER", structural_body)
+                if function == "Atrinik_Object_Artificate":
+                    self.assertIn("python_object_is_persistent(self->obj)", structural_body)
+                if function == "Atrinik_Object_Load":
+                    self.assertIn("python_object_is_persistent(self->obj)", structural_body)
                 if function == "Object_SetAttribute":
                     self.assertIn("requested == MONEY", structural_body)
+                    self.assertIn("offsetof(object, weight)", structural_body)
+
+        python_object_source = (
+            server / "src/plugins/plugin_python/atrinik_object.c"
+        ).read_text(encoding="utf-8")
+        carrying_field = re.search(
+            r'\{"carrying",.*?FIELDFLAG_READONLY,.*?\}',
+            python_object_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(carrying_field)
 
 
 if __name__ == "__main__":
