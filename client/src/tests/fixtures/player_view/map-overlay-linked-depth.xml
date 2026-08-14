@@ -6,10 +6,10 @@
              settings-sha256="2e3a92c41d88219520e3fcbdbc34a53be6a72ca9c2a354c97d73d6fef83339e3"
              archdef="data/archdef.dat"
              archdef-sha256="977ce63e38f4795545f42bd2f4a9c62bd38fcdb4cfde7cb7fe3c2cd9fe73983e"
-             snapshot="src/tests/fixtures/player_view/player-outline-upper-level.map2.hex"
-             snapshot-sha256="88a8b460365694fba6ab52c244cb9988470f441e5b2bfc835fa7c101e8a377dc"
+             snapshot="src/tests/fixtures/player_view/map-overlay-linked-depth.map2.hex"
+             snapshot-sha256="a81cc4505981b42702322c60b432a0d45ec70d08bb70e2586c62ac3f136f0524"
              next-snapshot="src/tests/fixtures/player_view/map-overlay-linked-depth-move.map2.hex"
-             next-snapshot-sha256="fbe3c35d1ced1ed2439a9eecf11913090d0b23bb6030213ba3bbc36113741317"
+             next-snapshot-sha256="da63012061c0042b6d0aa272961406ffbcf2b9d468bd2b993c8a077e46ea0a1b"
              mono-font="fonts/mono.ttf"
              mono-font-sha256="da4281dc7db17a3dfce64a62ced92875c5895340055ec8ba24a3914eb97b349d"
              viewport-width="321"
@@ -26,8 +26,9 @@
              kill-animation="true"
              animation-depth="1"
              animation-sub-layer="1"
+             animation-layer-content="true"
              clock-ms="1200"
-             expected-pixels-sha256="959c88f6d346d0c6ef4575f92bdda8daf67953855733de2d53605c1ff78d4e10">
+             expected-pixels-sha256="4dfb6ea7d5eb9ca25c303104b053c79527418e0cc21f3fea92c8838dcdedf32b">
   <asset face="1" path="textures/square_highlight.png" sha256="fecfd2da236702bc874c58a767d0d237f5425e423e6699742accb26215c9676b"/>
   <asset face="2" path="textures/target_attack.png" sha256="6924dbe0a7ed3bd7b71577b0d00c91c70855cba39102c20ba3270452c2d4d806"/>
   <asset face="3" path="textures/icon_map.png" sha256="314b2212e2bf2ecf69a88d872ec504b794ec52d680402e23ca78679ad1c66435"/>

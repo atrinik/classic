@@ -287,6 +287,9 @@ static int map_animation_test_kill_draws;
 static int map_animation_test_elevated_draws;
 static int map_animation_test_source_floor_height;
 static int map_animation_test_player_floor_height;
+static int map_animation_test_layer_content_draws;
+static int map_animation_test_expected_depth;
+static int map_animation_test_expected_sub_layer;
 static SDL_Surface *map_animation_test_death_texture;
 #endif
 
@@ -4143,23 +4146,29 @@ void widget_map_animation_test_begin(void) {
     map_animation_test_elevated_draws = 0;
     map_animation_test_source_floor_height = 0;
     map_animation_test_player_floor_height = 0;
+    map_animation_test_layer_content_draws = 0;
     map_animation_test_active = true;
 }
 
-bool widget_map_animation_test_end(bool expect_damage, bool expect_kill, bool expect_elevated) {
+bool widget_map_animation_test_end(bool expect_damage,
+                                   bool expect_kill,
+                                   bool expect_elevated,
+                                   bool expect_layer_content) {
     map_animation_test_active = false;
     bool success = (!expect_damage || map_animation_test_damage_draws > 0) &&
                    (!expect_kill || map_animation_test_kill_draws > 0) &&
-                   (!expect_elevated || map_animation_test_elevated_draws > 0);
+                   (!expect_elevated || map_animation_test_elevated_draws > 0) &&
+                   (!expect_layer_content || map_animation_test_layer_content_draws > 0);
     if (!success) {
         fprintf(stderr,
                 "map animation test: damage=%d kill=%d elevated=%d source-floor=%d "
-                "player-floor=%d\n",
+                "player-floor=%d layer-content=%d\n",
                 map_animation_test_damage_draws,
                 map_animation_test_kill_draws,
                 map_animation_test_elevated_draws,
                 map_animation_test_source_floor_height,
-                map_animation_test_player_floor_height);
+                map_animation_test_player_floor_height,
+                map_animation_test_layer_content_draws);
     }
     return success;
 }
@@ -4179,6 +4188,8 @@ void widget_map_animation_test_add(int type,
     HARD_ASSERT(elapsed_ms <= 850 && elapsed_ms <= LastTick);
     HARD_ASSERT(sub_layer >= 0 && sub_layer < NUM_SUB_LAYERS);
     HARD_ASSERT(depth >= -MAP2_MAX_DEPTH && depth <= MAP2_MAX_DEPTH);
+    map_animation_test_expected_depth = depth;
+    map_animation_test_expected_sub_layer = sub_layer;
 
     map_anim_t *anim = map_anims_add(type,
                                      map_width / 2 + x_offset,
@@ -4440,6 +4451,12 @@ void map_anims_play(void) {
         if (map_animation_test_active) {
             map_animation_test_source_floor_height = source_floor_height;
             map_animation_test_player_floor_height = data.player_height_offset;
+            if (anim->depth == map_animation_test_expected_depth &&
+                data.sub_layer == map_animation_test_expected_sub_layer &&
+                source_floor_height != 0 &&
+                data.cell->faces[GET_MAP_LAYER(LAYER_LIVING, data.sub_layer)] != 0) {
+                map_animation_test_layer_content_draws++;
+            }
         }
 #endif
         data.xpos += MAP_TILE_POS_XOFF / 2;
@@ -4498,11 +4515,12 @@ void map_anims_play(void) {
                 int wd = text_get_width(FONT_MONO10, buf, TEXT_OUTLINE);
                 int ht = text_get_height(FONT_MONO10, buf, 0);
 #ifdef ATRINIK_WIDGET_TESTS
-                SDL_Surface *texture = map_animation_test_death_texture;
-                HARD_ASSERT(texture != NULL);
+                SDL_Surface *texture = map_animation_test_active ? map_animation_test_death_texture
+                                                                 : TEXTURE_CLIENT("death");
 #else
                 SDL_Surface *texture = TEXTURE_CLIENT("death");
 #endif
+                HARD_ASSERT(texture != NULL);
                 surface_show(ScreenSurface,
                              screen.x - texture->w / 2,
                              screen.y - ht / 2 + 2,

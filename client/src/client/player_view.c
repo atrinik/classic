@@ -146,6 +146,7 @@ typedef struct player_view_manifest {
     bool damage_animation;
     bool kill_animation;
     bool animation_elevated;
+    bool animation_layer_content;
     bool animation_coordinates_set;
 } player_view_manifest_t;
 
@@ -514,6 +515,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "animation-x-offset",
                                            "animation-y-offset",
                                            "animation-elevated",
+                                           "animation-layer-content",
                                            "clock-ms",
                                            "expected-ui-pixels-sha256",
                                            "expected-standard-checkpoint-sha256",
@@ -570,6 +572,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
         success ? player_view_xml_property(root, "animation-y-offset") : NULL;
     char *animation_elevated =
         success ? player_view_xml_property(root, "animation-elevated") : NULL;
+    char *animation_layer_content =
+        success ? player_view_xml_property(root, "animation-layer-content") : NULL;
     char *clock_ms = success ? player_view_xml_property(root, "clock-ms") : NULL;
     char *expected_ui =
         success ? player_view_xml_property(root, "expected-ui-pixels-sha256") : NULL;
@@ -639,6 +643,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                  &manifest->animation_sub_layer))) &&
         (animation_elevated == NULL ||
          player_view_parse_bool(animation_elevated, &manifest->animation_elevated)) &&
+        (animation_layer_content == NULL ||
+         player_view_parse_bool(animation_layer_content, &manifest->animation_layer_content)) &&
         (animation_x_offset == NULL || player_view_parse_int(animation_x_offset,
                                                              -(int32_t)(manifest->look_width / 2),
                                                              (int32_t)(manifest->look_width / 2),
@@ -667,6 +673,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
         (!manifest->animation_coordinates_set || overlay_test) &&
         ((animation_x_offset == NULL && animation_y_offset == NULL) || overlay_test) &&
         (!manifest->animation_elevated || overlay_test) &&
+        (!manifest->animation_layer_content || overlay_test) &&
         ((ui_test && player_view_sha256_text_valid(expected_ui)) ||
          (!ui_test && expected_ui == NULL));
 #ifndef ATRINIK_WIDGET_TESTS
@@ -887,6 +894,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(animation_x_offset);
     free(animation_y_offset);
     free(animation_elevated);
+    free(animation_layer_content);
     free(clock_ms);
     free(expected_ui);
     free(expected_standard_checkpoint);
@@ -3058,7 +3066,8 @@ int player_view_main(int argc, char *argv[]) {
     if (mode == PLAYER_VIEW_RENDER && (manifest.damage_animation || manifest.kill_animation) &&
         !widget_map_animation_test_end(manifest.damage_animation,
                                        manifest.kill_animation,
-                                       manifest.animation_elevated)) {
+                                       manifest.animation_elevated,
+                                       manifest.animation_layer_content)) {
         fprintf(stderr, "player-view: damage or kill animation was not rendered\n");
         goto cleanup;
     }

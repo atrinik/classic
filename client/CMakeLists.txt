@@ -939,14 +939,15 @@ if (BUILD_TESTING)
     add_test(NAME client-player-view-unknown-field
         COMMAND atrinik --player-view "${player_view_fixtures}/unknown-field.xml" -)
     add_test(NAME client-player-view-invalid-animation-depth
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/invalid-animation-depth.xml" -)
+        COMMAND ${CMAKE_COMMAND}
+            "-DATRINIK_CLIENT=$<TARGET_FILE:atrinik>"
+            "-DPLAYER_VIEW_MANIFEST=${player_view_fixtures}/invalid-animation-depth.xml"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_player_view_manifest_rejected.cmake")
     set_tests_properties(
         client-player-view-malformed-snapshot
         client-player-view-mismatched-asset
         client-player-view-missing-face
         client-player-view-unknown-field
-        client-player-view-invalid-animation-depth
         PROPERTIES WILL_FAIL TRUE)
     endif ()
 endif ()
