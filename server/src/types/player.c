@@ -47,10 +47,14 @@
 #ifdef ATRINIK_TESTING
 static bool test_pickup_event_veto;
 static bool test_drop_event_veto;
+static bool test_map_pickup_event_veto;
+static bool test_map_drop_event_veto;
 
-void player_event_veto_for_test(bool pickup, bool drop) {
+void player_event_veto_for_test(bool pickup, bool drop, bool map_pickup, bool map_drop) {
     test_pickup_event_veto = pickup;
     test_drop_event_veto = drop;
+    test_map_pickup_event_veto = map_pickup;
+    test_map_drop_event_veto = map_drop;
 }
 #endif
 #include <player_status.h>
@@ -2323,8 +2327,8 @@ static bool item_custody_auditable(const object *item) {
     return !QUERY_FLAG(item, FLAG_SYS_OBJECT) && item->type != PLAYER && item->type != FORCE &&
            item->type != POTION_EFFECT && item->type != EVENT_OBJECT &&
            item->type != QUEST_CONTAINER &&
-           (item->arch == NULL || (item->arch->name != shstr_cons.player_info &&
-                                   strcmp(item->arch->name, "force") != 0));
+           (item->arch == NULL ||
+            (item->arch->name != shstr_cons.player_info && strcmp(item->arch->name, "force") != 0));
 }
 
 /**
@@ -2373,8 +2377,12 @@ static void pick_up_object(object *pl, object *op, object *tmp, int nrof, int no
     }
 
     /* Trigger the map-wide pick up event. */
-    if (!no_mevent && pl->map && pl->map->events &&
-        trigger_map_event(MEVENT_PICK, pl->map, pl, tmp, op, NULL, nrof)) {
+    if (!no_mevent && pl->map &&
+        ((pl->map->events && trigger_map_event(MEVENT_PICK, pl->map, pl, tmp, op, NULL, nrof))
+#ifdef ATRINIK_TESTING
+         || test_map_pickup_event_veto
+#endif
+         )) {
         return;
     }
 
@@ -2599,8 +2607,7 @@ void put_object_in_sack(object *op, object *sack, object *tmp, long nrof) {
             counterparty = "";
         }
     }
-    const char *relinquisher =
-        source_player != NULL ? object_custody_actor_id(source_player) : "";
+    const char *relinquisher = source_player != NULL ? object_custody_actor_id(source_player) : "";
     const char *acquirer =
         destination_player != NULL ? object_custody_actor_id(destination_player) : "";
     int64_t delta = actor == source_player ? -(int64_t)nrof : nrof;
@@ -2610,23 +2617,22 @@ void put_object_in_sack(object *op, object *sack, object *tmp, long nrof) {
                                                       : "item.external-transfer";
     if (custody_transfer &&
         (relinquisher == NULL || acquirer == NULL ||
-         !object_custody_begin_parties(
-             tmp,
-             actor,
-             reason,
-             item_location(tmp, actor),
-             destination_player != NULL ? "player" : "external-container",
-             counterparty,
-             (uint32_t)nrof,
-             acquirer,
-             relinquisher,
-             delta < 0 ? nrof : 0,
-             delta,
-             delta < 0 ? 0 : nrof,
-             0,
-             "",
-             "",
-             &custody))) {
+         !object_custody_begin_parties(tmp,
+                                       actor,
+                                       reason,
+                                       item_location(tmp, actor),
+                                       destination_player != NULL ? "player" : "external-container",
+                                       counterparty,
+                                       (uint32_t)nrof,
+                                       acquirer,
+                                       relinquisher,
+                                       delta < 0 ? nrof : 0,
+                                       delta,
+                                       delta < 0 ? 0 : nrof,
+                                       0,
+                                       "",
+                                       "",
+                                       &custody))) {
         draw_info(COLOR_WHITE, op, "The item transfer could not be journaled.");
         return;
     }
@@ -2652,9 +2658,7 @@ void put_object_in_sack(object *op, object *sack, object *tmp, long nrof) {
     if (committed) {
         draw_info_format(COLOR_WHITE, op, "You put the %s in %s.", tmp_name, name);
     } else {
-        draw_info(COLOR_WHITE,
-                  op,
-                  "The item moved, but its durable journal commit is uncertain.");
+        draw_info(COLOR_WHITE, op, "The item moved, but its durable journal commit is uncertain.");
     }
     free(name);
     free(tmp_name);
@@ -2680,8 +2684,12 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
     }
 
     /* Trigger the map-wide drop event. */
-    if (!no_mevent && op->map && op->map->events &&
-        trigger_map_event(MEVENT_DROP, op->map, op, tmp, NULL, NULL, nrof)) {
+    if (!no_mevent && op->map &&
+        ((op->map->events && trigger_map_event(MEVENT_DROP, op->map, op, tmp, NULL, NULL, nrof))
+#ifdef ATRINIK_TESTING
+         || test_map_drop_event_veto
+#endif
+         )) {
         return;
     }
 
@@ -2776,9 +2784,7 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
         bool committed = !journal_drop || object_custody_finish(&custody);
         if (op->type == PLAYER && committed) {
             draw_info_format(COLOR_WHITE, op, "You drop the %s.", name);
-            draw_info(COLOR_WHITE,
-                      op,
-                      "The god-given item vanishes to nowhere as you drop it!");
+            draw_info(COLOR_WHITE, op, "The god-given item vanishes to nowhere as you drop it!");
             metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_ITEM_UNITS_DROPPED, dropped_quantity);
         } else if (op->type == PLAYER) {
             draw_info(COLOR_WHITE,

@@ -331,9 +331,11 @@ static void party_loot_random(object *pl, object *corpse) {
                                                                  transaction)) {
                                 break;
                             }
-                            char lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
-                            snprintf(VS(lineage), "currency:%s", transaction);
-                            FREE_AND_COPY_HASH(tmp->custody_lineage, lineage);
+                            if (transaction[0] != '\0') {
+                                char lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
+                                snprintf(VS(lineage), "currency:%s", transaction);
+                                FREE_AND_COPY_HASH(tmp->custody_lineage, lineage);
+                            }
                             object_remove(tmp, 0);
                             inserted = object_insert_into(tmp, ol->objlink.ob, 0);
                             result = gameplay_journal_semantic_commit(transaction)

@@ -61,7 +61,7 @@ sync. A fully synced commit survives that model. The exact phase outcomes are:
 | Before intent sync | none | action did not begin through this API |
 | After intent, before mutation | intent only | attempted; reconcile with authoritative state |
 | During/after mutation, before commit | intent only | ambiguous; never claim committed success |
-| After commit sync | intent plus commit | committed success |
+| After commit sync | intent plus commit | operation completed in memory; compare/replay against the last saved state |
 | After abort sync | intent plus abort | did not commit |
 
 Host power loss, a filesystem or storage device that violates durable-flush
@@ -123,10 +123,17 @@ duplicate intents, commit-without-intent, and commit/abort conflicts fail
 validation.
 
 Reconciliation is idempotent: identical repeated intents and terminal records
-do not apply a mutation. A transaction ending at `attempted` requires the
-operator to compare its typed before/after values with authoritative saved
-state. `committed` is applied at most once by transaction ID; `aborted` is
-never applied. The tool reports evidence and does not edit game state.
+do not themselves apply a mutation. Both `attempted` and `committed`
+transactions require the operator to compare their typed before/after values,
+lineage, and bounded snapshot with authoritative saved state. A terminal commit
+proves that the in-memory operation completed before the crash; it does not
+claim that a later periodic player/map checkpoint was already durable. Replay a
+committed transaction only when saved state still matches its `before` side;
+when saved state matches `after`, do not apply it again. For an attempted
+transaction, either side may be authoritative because the crash may have
+occurred during the mutation. An `aborted` transaction is never replayed. The
+tool reports the complete evidence needed for this comparison and deliberately
+does not edit game state.
 Account, character, subject, and lineage queries first select matching intents,
 then return each selected transaction's complete ordered intent/terminal
 timeline so an attempted action cannot be mistaken for a committed change.
@@ -156,6 +163,13 @@ operation. Helpers below that producer do not emit another transaction.
 | Alchemy currency replacement | `cast_transform_wealth()` | `spell.alchemy` | One before/delta/after transaction around source removal and replacement delivery |
 | Trusted Python payment | `shop_pay_reason()` | Caller reason; `script.payment` by default | One currency transaction around carried/bank payment |
 | Start-equipment destruction | `drop_object()` | `item.startequip-destroy` | Item captured before destruction; commit afterward |
+
+Crash/restart coverage groups those entry points by their authoritative state
+shape: item grant/acquisition, item removal/destruction, generated currency,
+bank deposit/withdrawal, and shop purchase/sale. Starting, treasure, quest,
+party, alchemy, and trusted-script producers delegate to the corresponding
+tested reason-aware item or currency boundary. The action-matrix source audit
+verifies each concrete reason and business-state call site.
 
 The item transaction's top-level arithmetic is quantity for ordinary custody.
 For purchases it represents the balance actually mutated (the hidden bank
@@ -206,8 +220,8 @@ else:
 ```
 
 Item and currency mutations use `InsertInto`, `Remove`, `Destroy`, `Map.Insert`,
-`TeleportTo`, `InsertCoins`, and `PayAmount` so schema-v2 semantic details cannot be
-omitted. Quest and progression intents use stable authored subject IDs.
+`TeleportTo`, `InsertCoins`, and `PayAmount` so schema-v2 semantic details
+cannot be omitted. Quest and progression intents use stable authored subject IDs.
 Producers must not catch and ignore a journal exception or emit a commit for a
 vetoed/failed mutation.
 

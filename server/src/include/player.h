@@ -533,7 +533,7 @@ void pick_up(object *op, object *alt, int no_mevent);
 void put_object_in_sack(object *op, object *sack, object *tmp, long nrof);
 void drop_object(object *op, object *tmp, long nrof, int no_mevent);
 #ifdef ATRINIK_TESTING
-void player_event_veto_for_test(bool pickup, bool drop);
+void player_event_veto_for_test(bool pickup, bool drop, bool map_pickup, bool map_drop);
 #endif
 void drop(object *op, object *tmp, int no_mevent);
 char *player_make_path(const char *name, const char *ext);

@@ -497,18 +497,18 @@ shop_pay_internal(object *op, int64_t to_pay, const char *reason, object *item, 
             return OBJECT_SEMANTIC_FAILED;
         }
     } else if (journal_payment &&
-               !gameplay_journal_currency_begin_economy(
-                   op,
-                   reason,
-                   "currency:payment",
-                   bank_used != 0 ? bank_before : total_before,
-                   -(bank_used != 0 ? bank_used : amount),
-                   bank_used != 0 ? bank_before - bank_used : total_before - amount,
-                   funding,
-                   "service",
-                   funding,
-                   amount,
-                   transaction)) {
+               !gameplay_journal_currency_begin_economy(op,
+                                                        reason,
+                                                        "currency:payment",
+                                                        bank_used != 0 ? bank_before : total_before,
+                                                        -(bank_used != 0 ? bank_used : amount),
+                                                        bank_used != 0 ? bank_before - bank_used
+                                                                       : total_before - amount,
+                                                        funding,
+                                                        "service",
+                                                        funding,
+                                                        amount,
+                                                        transaction)) {
         return OBJECT_SEMANTIC_FAILED;
     }
     to_pay = shop_pay_amount(op, to_pay);
@@ -763,13 +763,12 @@ void shop_sell_item(object *op, object *item) {
  * Value of coins to insert (for example, 120 for 1 silver and 20
  * copper).
  */
-static void
-shop_insert_coin_stacks(object *op,
-                        object *where,
-                        archetype_t *at,
-                        int64_t nrof,
-                        bool on_floor,
-                        const char *transaction_id) {
+static void shop_insert_coin_stacks(object *op,
+                                    object *where,
+                                    archetype_t *at,
+                                    int64_t nrof,
+                                    bool on_floor,
+                                    const char *transaction_id) {
     while (nrof > 0) {
         /* Object counts are unsigned in memory, but serializers and merge
          * guards deliberately cap persistent stacks at INT32_MAX. */
@@ -914,7 +913,10 @@ bool shop_insert_coins_exact(object *op, int64_t value) {
 }
 
 void shop_insert_coins(object *op, int64_t value) {
-    SOFT_ASSERT(shop_insert_coins_exact(op, value),
+    object_semantic_result_t result = shop_insert_coins_reason(op, value, "script.currency-grant");
+    /* The legacy void API cannot expose a post-mutation ambiguous result. */
+    HARD_ASSERT(result != OBJECT_SEMANTIC_AMBIGUOUS);
+    SOFT_ASSERT(result != OBJECT_SEMANTIC_FAILED,
                 "Could not insert exact value %" PRId64 " for object: %s",
                 value,
                 object_get_str(op));
