@@ -16,6 +16,28 @@ class WorkflowContractTests(unittest.TestCase):
     def text(self, name: str) -> str:
         return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
+    def test_release_builds_use_one_cmake_version_interface(self) -> None:
+        check = self.text("check.yml")
+        candidate = self.text("build-release-candidate.yml")
+        package = self.text("package-release.yml")
+        client_script = (ROOT / "client/tools/build-windows-package.sh").read_text(
+            encoding="utf-8"
+        )
+        server_script = (ROOT / "server/tools/build-windows-package.sh").read_text(
+            encoding="utf-8"
+        )
+        dockerfile = (ROOT / "server/Dockerfile").read_text(encoding="utf-8")
+
+        for text in (check, candidate, package, client_script, server_script, dockerfile):
+            self.assertNotIn("-DPACKAGE_VERSION", text)
+        self.assertGreaterEqual(check.count("-DATRINIK_PACKAGE_VERSION=0.0.0"), 2)
+        self.assertEqual(client_script.count("-DATRINIK_PACKAGE_VERSION="), 1)
+        self.assertEqual(server_script.count("-DATRINIK_PACKAGE_VERSION="), 2)
+        self.assertEqual(dockerfile.count("-DATRINIK_PACKAGE_VERSION="), 1)
+        self.assertEqual(candidate.count("build-args: ATRINIK_PACKAGE_VERSION="), 1)
+        self.assertEqual(package.count("build-args: ATRINIK_PACKAGE_VERSION="), 1)
+        self.assertEqual(candidate.count("hashFiles('cmake/**'"), 2)
+
     def test_content_updater_has_a_narrow_human_reviewed_mutation_boundary(self) -> None:
         workflow = self.text("update-content.yml")
         self.assertIn("  schedule:\n", workflow)

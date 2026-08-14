@@ -228,7 +228,7 @@ case "${component}" in
       client/src/include/client_command_queue.h
       client/src/include/client_socket.h
       client/src/include/player_view.h
-      client/src/include/version.h.def
+      cmake/AtrinikVersion.cmake
       client/src/tests/client_command_queue.c
       client/src/tests/fixtures/player_view/movement-colored-delta.map2.hex
       client/src/tests/fixtures/player_view/movement-colored-five-depth.map2.hex

@@ -66,7 +66,7 @@ cmake -S . -B "${region_build}" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_TESTING=OFF \
   -DPACKAGE_TYPE=none \
-  -DPACKAGE_VERSION="${version}" \
+  -DATRINIK_PACKAGE_VERSION="${version}" \
   "${native_compiler_arguments[@]}" \
   "${dependency_arguments[@]}"
 cmake --build "${region_build}" \
@@ -103,7 +103,7 @@ cmake -E remove_directory "${region_assets}"
   -DCMAKE_TOOLCHAIN_FILE="${MXE_TOOLCHAIN_FILE}" \
   -DBUILD_TESTING=OFF \
   -DPACKAGE_TYPE=zip \
-  -DPACKAGE_VERSION="${version}" \
+  -DATRINIK_PACKAGE_VERSION="${version}" \
   -DATRINIK_WINDOWS_RUNTIME_DIR="${MXE_RUNTIME_DIR}" \
   -DATRINIK_WINDOWS_PYTHON_INCLUDE_DIR="${ATRINIK_WINDOWS_PYTHON_INCLUDE_DIR}" \
   -DATRINIK_WINDOWS_PYTHON_LIBRARY="${ATRINIK_WINDOWS_PYTHON_LIBRARY}" \
