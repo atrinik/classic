@@ -895,14 +895,16 @@ class JournalTests(unittest.TestCase):
 
         exact_sites = {
             ("src/types/player.c", "pick_up_object"): (
-                {"item.acquire", "item.player-transfer"}, {"object_custody_begin_parties"},
+                {"item.acquire", "item.player-transfer"},
+                {"object_contains_money_descendant", "object_custody_begin_parties"},
             ),
             ("src/types/player.c", "put_object_in_sack"): (
                 {"item.acquire", "item.external-transfer", "item.player-transfer"},
-                {"object_custody_begin_parties"},
+                {"object_contains_money_descendant", "object_custody_begin_parties"},
             ),
             ("src/types/player.c", "drop_object"): (
-                {"item.drop", "item.startequip-destroy"}, {"object_custody_begin"},
+                {"item.drop", "item.startequip-destroy"},
+                {"object_contains_money_descendant", "object_custody_begin"},
             ),
             ("src/server/treasure.c", "treasure_insert"): (
                 {"item.starting-grant", "item.treasure-grant"}, {"object_insert_into_reason"},
@@ -1019,7 +1021,8 @@ class JournalTests(unittest.TestCase):
         python_object_source = (
             server / "src/plugins/plugin_python/atrinik_object.c"
         ).read_text(encoding="utf-8")
-        self.assertIn("offsetof(object, carrying) && python_object_is_persistent", python_object_source)
+        self.assertIn("offsetof(object, carrying) &&", python_object_source)
+        self.assertIn("obj->obj->env != NULL || obj->obj->inv != NULL", python_object_source)
         self.assertIn("offsetof(object, weapon_speed) && obj->obj->inv != NULL", python_object_source)
         self.assertIn('python_load_contains_field(lines, "arch")', python_object_source)
 

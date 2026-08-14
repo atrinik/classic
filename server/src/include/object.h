@@ -907,6 +907,7 @@ bool object_weight_can_add(const object *op, uint64_t weight);
 void object_weight_sub(object *op, uint32_t weight);
 object *object_get_env(object *op);
 bool object_is_in_inventory(const object *op, const object *inv);
+bool object_contains_money_descendant(const object *op);
 void object_dump(const object *op, StringBuffer *sb);
 void object_dump_rec(const object *op, StringBuffer *sb);
 void object_owner_clear(object *op);

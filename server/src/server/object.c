@@ -577,7 +577,7 @@ bool object_can_merge(object *ob1, object *ob2) {
 
     /* Do not merge objects if nrof would overflow. We use INT32_MAX
      * because int32_t is often used to store nrof instead of uint32_t. */
-    if (ob1->nrof + ob2->nrof > INT32_MAX) {
+    if ((uint64_t)ob1->nrof + ob2->nrof > INT32_MAX) {
         return false;
     }
 
@@ -2585,6 +2585,26 @@ static bool object_contains_hidden_bank_info(const object *op) {
     return false;
 }
 
+/**
+ * Check whether an object's inventory contains currency at any depth.
+ *
+ * @param op
+ * Object whose descendants to inspect.
+ * @return
+ * True if a descendant is a money object.
+ */
+bool object_contains_money_descendant(const object *op) {
+    HARD_ASSERT(op != NULL);
+
+    FOR_INV_PREPARE(op, item) {
+        if (item->type == MONEY || object_contains_money_descendant(item)) {
+            return true;
+        }
+    }
+    FOR_INV_FINISH();
+    return false;
+}
+
 static bool object_is_persistent_money(const object *op, const object *root) {
     return op->type == MONEY &&
            (root->type == PLAYER || root->map != NULL || !QUERY_FLAG(root, FLAG_REMOVED));
@@ -2621,6 +2641,10 @@ object_insert_into_reason(object *op, object *where, const char *reason, object 
     HARD_ASSERT(inserted_out != NULL);
     *inserted_out = NULL;
 
+    if (op == where || object_is_in_inventory(where, op)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+
     object *source_root = object_get_env(op);
     object *destination_root = object_get_env(where);
     object *source_player = source_root->type == PLAYER ? source_root : NULL;
@@ -2638,6 +2662,12 @@ object_insert_into_reason(object *op, object *where, const char *reason, object 
             *inserted_out = object_insert_into(op, where, 0);
             return OBJECT_SEMANTIC_COMMITTED;
         }
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (source_player != destination_player && object_contains_money_descendant(op)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (op->nrof > INT32_MAX) {
         return OBJECT_SEMANTIC_FAILED;
     }
     if (op->env != where) {
@@ -2743,9 +2773,12 @@ object_semantic_result_t object_insert_map_reason(object *op,
     *inserted_out = NULL;
 
     object *root = object_get_env(op);
-    if (op->type == MONEY ||
-        (op->type != PLAYER && object_contains_hidden_bank_info(op))) {
+    if (op->type == MONEY || (op->type != PLAYER && object_contains_money_descendant(op)) ||
+        op->nrof > INT32_MAX || (op->type != PLAYER && object_contains_hidden_bank_info(op))) {
         return OBJECT_SEMANTIC_FAILED;
+    }
+    if (root == op) {
+        object_weight_sum(op);
     }
     object_custody_transaction_t transaction = {0};
     bool journal = root->type == PLAYER && object_custody_auditable(op);
@@ -2795,6 +2828,10 @@ object_semantic_result_t object_remove_reason(object *op, const char *reason, bo
     HARD_ASSERT(reason != NULL);
 
     object *root = object_get_env(op);
+    if (op->type != MONEY && object_contains_money_descendant(op) &&
+        (root->type == PLAYER || root->map != NULL || !QUERY_FLAG(root, FLAG_REMOVED))) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
     if (!object_is_hidden_bank_info(op) && object_contains_hidden_bank_info(op)) {
         return OBJECT_SEMANTIC_FAILED;
     }
@@ -4223,8 +4260,8 @@ object_enter_map_reason(object *op, mapstruct *m, int x, int y, const char *reas
     HARD_ASSERT(reason != NULL);
 
     object *root = object_get_env(op);
-    if (op->type == MONEY ||
-        (op->type != PLAYER && object_contains_hidden_bank_info(op))) {
+    if (op->type == MONEY || (op->type != PLAYER && object_contains_money_descendant(op)) ||
+        op->nrof > INT32_MAX || (op->type != PLAYER && object_contains_hidden_bank_info(op))) {
         return OBJECT_SEMANTIC_FAILED;
     }
     object_custody_transaction_t transaction = {0};

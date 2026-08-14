@@ -1377,6 +1377,79 @@ START_TEST(test_semantic_item_shop_and_bank_producers) {
     ck_assert_ptr_eq(inserted, loaded);
     ck_assert_ptr_eq(loaded_item->env, loaded);
 
+    object *cycle_parent = arch_get("sack");
+    object *cycle_child = object_insert_into(arch_get("sack"), cycle_parent, INS_NO_MERGE);
+    ck_assert_int_eq(
+        object_insert_into_reason(cycle_parent, cycle_parent, "test.self-cycle", &inserted),
+        OBJECT_SEMANTIC_FAILED);
+    ck_assert_int_eq(
+        object_insert_into_reason(cycle_parent, cycle_child, "test.descendant-cycle", &inserted),
+        OBJECT_SEMANTIC_FAILED);
+    ck_assert_ptr_eq(cycle_child->env, cycle_parent);
+    object_destroy(cycle_parent);
+
+    object *oversized = arch_get("bolt");
+    oversized->nrof = UINT32_MAX;
+    ck_assert_int_eq(object_insert_into_reason(oversized, pl, "test.oversized-stack", &inserted),
+                     OBJECT_SEMANTIC_FAILED);
+    ck_assert_ptr_eq(inserted, NULL);
+    object_destroy(oversized);
+
+    object *detached_map_sack = arch_get("sack");
+    object *detached_map_item = arch_get("sword");
+    detached_map_item->weight = 4;
+    detached_map_item = object_insert_into(detached_map_item, detached_map_sack, INS_NO_MERGE);
+    detached_map_sack->carrying = 0;
+    ck_assert_int_eq(object_insert_map_reason(detached_map_sack,
+                                              map,
+                                              pl->x,
+                                              pl->y,
+                                              "test.map-loaded-container",
+                                              &inserted),
+                     OBJECT_SEMANTIC_COMMITTED);
+    ck_assert_ptr_eq(inserted, detached_map_sack);
+    ck_assert_uint_eq(detached_map_sack->carrying, 4);
+    ck_assert_ptr_eq(detached_map_item->env, detached_map_sack);
+    object_remove(detached_map_sack, 0);
+    object_destroy(detached_map_sack);
+
+    object *ground_money_sack = arch_get("sack");
+    object_insert_into(arch_get("coppercoin"), ground_money_sack, INS_NO_MERGE);
+    ground_money_sack->x = pl->x;
+    ground_money_sack->y = pl->y;
+    ground_money_sack = object_insert_map(ground_money_sack, map, NULL, INS_NO_MERGE);
+    pick_up(pl, ground_money_sack, 1);
+    ck_assert_ptr_eq(ground_money_sack->map, map);
+    object_remove(ground_money_sack, 0);
+    object_destroy(ground_money_sack);
+
+    object *detached_money_sack = arch_get("sack");
+    object_insert_into(arch_get("coppercoin"), detached_money_sack, INS_NO_MERGE);
+    ck_assert_int_eq(
+        object_insert_into_reason(detached_money_sack, pl, "test.nested-currency-grant", &inserted),
+        OBJECT_SEMANTIC_FAILED);
+    ck_assert_ptr_eq(inserted, NULL);
+    object_destroy(detached_money_sack);
+
+    object *player_money_sack = NULL;
+    ck_assert_int_eq(object_insert_into_reason(arch_get("sack"),
+                                               pl,
+                                               "test.money-sack-stock",
+                                               &player_money_sack),
+                     OBJECT_SEMANTIC_COMMITTED);
+    object_insert_into(arch_get("coppercoin"), player_money_sack, INS_NO_MERGE);
+    ck_assert_int_eq(object_insert_map_reason(player_money_sack,
+                                              map,
+                                              pl->x,
+                                              pl->y,
+                                              "test.nested-currency-drop",
+                                              &inserted),
+                     OBJECT_SEMANTIC_FAILED);
+    ck_assert_int_eq(object_remove_reason(player_money_sack, "test.nested-currency-destroy", true),
+                     OBJECT_SEMANTIC_FAILED);
+    drop_object(pl, player_money_sack, 1, 1);
+    ck_assert_ptr_eq(object_get_env(player_money_sack), pl);
+
     object *source_sack = object_insert_into(arch_get("sack"), pl, INS_NO_MERGE);
     object *full_sack = object_insert_into(arch_get("sack"), pl, INS_NO_MERGE);
     object *same_root_item = object_insert_into(arch_get("sword"), source_sack, INS_NO_MERGE);

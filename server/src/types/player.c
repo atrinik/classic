@@ -2363,6 +2363,10 @@ static void pick_up_object(object *pl, object *op, object *tmp, int nrof, int no
         draw_info(COLOR_WHITE, pl, "That item is too heavy for you to pick up.");
         return;
     }
+    if (object_contains_money_descendant(tmp) && object_get_env(tmp) != pl) {
+        draw_info(COLOR_WHITE, pl, "Remove the coins before moving that container.");
+        return;
+    }
 
     if (tmp->type == ARROW) {
         object_projectile_stop(tmp, OBJECT_PROJECTILE_PICKUP);
@@ -2611,6 +2615,10 @@ void put_object_in_sack(object *op, object *sack, object *tmp, long nrof) {
     object *destination_root = object_get_env(sack);
     object *source_player = source_root->type == PLAYER ? source_root : NULL;
     object *destination_player = destination_root->type == PLAYER ? destination_root : NULL;
+    if (source_player != destination_player && object_contains_money_descendant(tmp)) {
+        draw_info(COLOR_WHITE, op, "Remove the coins before moving that container.");
+        return;
+    }
     bool custody_transfer = item_custody_auditable(tmp) && source_player != destination_player &&
                             (source_player != NULL || destination_player != NULL);
     object_custody_transaction_t custody = {0};
@@ -2716,6 +2724,10 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
 
     if (QUERY_FLAG(tmp, FLAG_NO_DROP)) {
         draw_info(COLOR_WHITE, op, "You can't drop that item.");
+        return;
+    }
+    if (object_contains_money_descendant(tmp)) {
+        draw_info(COLOR_WHITE, op, "Remove the coins before moving that container.");
         return;
     }
 

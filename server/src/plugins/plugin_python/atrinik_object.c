@@ -3068,7 +3068,8 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
                         "Hidden bank state can only be changed through its balance API.");
         return -1;
     }
-    if (field->offset == offsetof(object, carrying) && python_object_is_persistent(obj->obj)) {
+    if (field->offset == offsetof(object, carrying) &&
+        (python_object_is_persistent(obj->obj) || obj->obj->env != NULL || obj->obj->inv != NULL)) {
         PyErr_SetString(PyExc_RuntimeError,
                         "Persistent carrying weight is derived inventory state and cannot be "
                         "changed directly.");
