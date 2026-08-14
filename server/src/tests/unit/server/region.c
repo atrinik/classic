@@ -89,6 +89,22 @@ START_TEST(test_root_and_per_field_inheritance_match_frozen_vectors) {
                                    "celestial_lunar_rate 0/1\n"
                                    "celestial_lunar_phase 336\n"
                                    "end\n"
+                                   "region fixed_new_noon\n"
+                                   "parent world\n"
+                                   "celestial_solar_mode fixed\n"
+                                   "celestial_solar_rate 0/1\n"
+                                   "celestial_solar_phase 12\n"
+                                   "celestial_season_mode fixed\n"
+                                   "celestial_season_rate 0/1\n"
+                                   "celestial_season_phase 3360\n"
+                                   "celestial_lunar_mode fixed\n"
+                                   "celestial_lunar_rate 0/1\n"
+                                   "celestial_lunar_phase 0\n"
+                                   "end\n"
+                                   "region fixed_new_hour7\n"
+                                   "parent fixed_new_noon\n"
+                                   "celestial_solar_phase 7\n"
+                                   "end\n"
                                    "region warm\n"
                                    "parent world\n"
                                    "celestial_day_color ffe0c0\n"
@@ -137,6 +153,10 @@ START_TEST(test_root_and_per_field_inheritance_match_frozen_vectors) {
                      "b3cff5f335d829e7b729f31b39f5fce686e0748aab3cab2b879abc4d6f143669");
     ck_assert_str_eq(fixed->celestial.digest_hex,
                      "6b5ebba1b3516c9df5395905442e202b3543a108f10a6a0aeca6af49911179cd");
+    ck_assert_str_eq(region_find_by_name("fixed_new_noon")->celestial.digest_hex,
+                     "ae488fbaa2e0393fb925e13f56e36307f6261d34aff251c9da5b41f0b4d0d304");
+    ck_assert_str_eq(region_find_by_name("fixed_new_hour7")->celestial.digest_hex,
+                     "239885416be9b22d32f2b1e83a64fb39612bd11dcbbbb3fc9d7e1d9e44708045");
     ck_assert_str_eq(region_find_by_name("warm")->celestial.digest_hex,
                      "a957a66106a014e8ec9bd8a4c00e054289b7c2b0a8ca667f1c69d4b07438ef23");
     ck_assert_str_eq(region_find_by_name("dark")->celestial.digest_hex,
@@ -179,6 +199,72 @@ START_TEST(test_root_and_per_field_inheritance_match_frozen_vectors) {
 }
 END_TEST
 
+START_TEST(test_every_control_inherits_independently) {
+    static const char children[] = "region controls\n"
+                                   "parent world\n"
+                                   "celestial_schema 1\n"
+                                   "celestial_solar_mode scaled\n"
+                                   "celestial_solar_rate 1/2\n"
+                                   "celestial_solar_epoch 5\n"
+                                   "celestial_solar_phase 3\n"
+                                   "celestial_season_mode scaled\n"
+                                   "celestial_season_rate 2/1\n"
+                                   "celestial_season_epoch 7\n"
+                                   "celestial_season_phase 11\n"
+                                   "celestial_lunar_mode scaled\n"
+                                   "celestial_lunar_rate 1/2\n"
+                                   "celestial_lunar_epoch 9\n"
+                                   "celestial_lunar_phase 13\n"
+                                   "celestial_lunar_period 840\n"
+                                   "celestial_day_color ffe0c0\n"
+                                   "celestial_night_color 112233\n"
+                                   "celestial_day_brightness 512\n"
+                                   "celestial_night_brightness 128\n"
+                                   "celestial_moon_color abcdef\n"
+                                   "celestial_moon_max 19\n"
+                                   "celestial_starlight_color 010203\n"
+                                   "celestial_starlight_strength 1\n"
+                                   "end\n"
+                                   "region inherited\n"
+                                   "parent controls\n"
+                                   "celestial_night_brightness 7\n"
+                                   "end\n";
+    char error[HUGE_BUF];
+    ck_assert_msg(load_with_child(children, VS(error)), "%s", error);
+    const region_celestial_profile_t *parent = &region_find_by_name("controls")->celestial;
+    const region_celestial_profile_t *child = &region_find_by_name("inherited")->celestial;
+
+    ck_assert_uint_eq(child->schema, parent->schema);
+    ck_assert_mem_eq(&child->solar, &parent->solar, sizeof(child->solar));
+    ck_assert_mem_eq(&child->season, &parent->season, sizeof(child->season));
+    ck_assert_mem_eq(&child->lunar, &parent->lunar, sizeof(child->lunar));
+    ck_assert_uint_eq(child->lunar_period, parent->lunar_period);
+    ck_assert_uint_eq(child->day_color, parent->day_color);
+    ck_assert_uint_eq(child->night_color, parent->night_color);
+    ck_assert_uint_eq(child->day_brightness, parent->day_brightness);
+    ck_assert_uint_eq(child->night_brightness, 7);
+    ck_assert_uint_eq(child->moon_color, parent->moon_color);
+    ck_assert_uint_eq(child->moon_max, parent->moon_max);
+    ck_assert_uint_eq(child->starlight_color, parent->starlight_color);
+    ck_assert_uint_eq(child->starlight_strength, parent->starlight_strength);
+    ck_assert_mem_eq(child->day_linear, parent->day_linear, sizeof(child->day_linear));
+    ck_assert_mem_eq(child->moon_linear, parent->moon_linear, sizeof(child->moon_linear));
+    ck_assert_mem_eq(child->starlight_linear,
+                     parent->starlight_linear,
+                     sizeof(child->starlight_linear));
+
+    region_celestial_phases_t phases;
+    region_celestial_phases(parent, 18, &phases);
+    ck_assert_uint_eq(phases.solar, 9);
+    ck_assert_uint_eq(phases.season, 33);
+    ck_assert_uint_eq(phases.lunar, 17);
+    region_celestial_phases(parent, UINT64_MAX, &phases);
+    ck_assert_uint_eq(phases.solar, 8);
+    ck_assert_uint_eq(phases.season, 2043);
+    ck_assert_uint_eq(phases.lunar, 16);
+}
+END_TEST
+
 START_TEST(test_scaled_epoch_wrap_and_lunar_mapping_are_independent) {
     static const char child[] = "region epoch_ahead\n"
                                 "parent world\n"
@@ -200,9 +286,19 @@ START_TEST(test_scaled_epoch_wrap_and_lunar_mapping_are_independent) {
     ck_assert_uint_eq(phases.lunar, 11);
 
     region_celestial_phases(&region->celestial, UINT64_MAX, &phases);
-    ck_assert_uint_lt(phases.solar, 24);
-    ck_assert_uint_lt(phases.season, 8064);
-    ck_assert_uint_lt(phases.lunar, 672);
+    ck_assert_uint_eq(phases.solar, 5);
+    ck_assert_uint_eq(phases.season, 1023);
+    ck_assert_uint_eq(phases.lunar, 35);
+
+    const region_celestial_profile_t *world = &region_world()->celestial;
+    region_celestial_phases(world, 8063, &phases);
+    ck_assert_uint_eq(phases.solar, 23);
+    ck_assert_uint_eq(phases.season, 8063);
+    ck_assert_uint_eq(phases.lunar, 671);
+    region_celestial_phases(world, 8064, &phases);
+    ck_assert_uint_eq(phases.solar, 0);
+    ck_assert_uint_eq(phases.season, 0);
+    ck_assert_uint_eq(phases.lunar, 0);
 }
 END_TEST
 
@@ -220,6 +316,13 @@ START_TEST(test_parser_rejects_invalid_fields_and_graphs) {
         "0/1\ncelestial_solar_epoch 1\nend\n",
         "region child\nparent world\ncelestial_solar_mode fixed\ncelestial_solar_rate "
         "0/1\ncelestial_solar_phase 24\nend\n",
+        "region child\nparent world\ncelestial_solar_mode scaled\ncelestial_solar_rate "
+        "1/2\ncelestial_solar_epoch 18446744073709551616\nend\n",
+        "region child\nparent world\ncelestial_season_mode fixed\nend\n",
+        "region child\nparent world\ncelestial_season_mode scaled\ncelestial_season_rate "
+        "17/1\nend\n",
+        "region child\nparent world\ncelestial_lunar_mode fixed\ncelestial_lunar_rate "
+        "0/1\ncelestial_lunar_epoch 1\nend\n",
         "region child\nparent world\ncelestial_day_color #ffffff\nend\n",
         "region child\nparent world\ncelestial_night_brightness 1025\nend\n",
         "region child\nparent world\ncelestial_moon_max 21\nend\n",
@@ -295,6 +398,8 @@ END_TEST
 START_TEST(test_reload_load_order_and_map_transitions_are_deterministic) {
     static const char fixture[] = "region child\n"
                                   "parent world\n"
+                                  "celestial_solar_mode scaled\n"
+                                  "celestial_solar_rate 1/2\n"
                                   "celestial_night_brightness 0\n"
                                   "end\n"
                                   "region world\n" ROOT_FIELDS "end\n";
@@ -316,13 +421,27 @@ START_TEST(test_reload_load_order_and_map_transitions_are_deterministic) {
     lower->tile_map[TILED_UP] = upper;
     ck_assert_ptr_ne(region_celestial_for_map(upper), region_celestial_for_map(lower));
     ck_assert_str_eq(region_celestial_for_map(lower)->digest_hex, digest);
+    region_celestial_phases_t upper_phases, lower_phases;
+    region_celestial_phases(region_celestial_for_map(upper), 18, &upper_phases);
+    region_celestial_phases(region_celestial_for_map(lower), 18, &lower_phases);
+    ck_assert_uint_eq(upper_phases.solar, 18);
+    ck_assert_uint_eq(lower_phases.solar, 9);
+    ck_assert_uint_eq(upper_phases.season, lower_phases.season);
+    ck_assert_uint_eq(upper_phases.lunar, lower_phases.lunar);
 
-    MapSpace local = {.light_source_value = -40};
+    MapSpace local = {
+        .light_source_value = 40,
+        .light_source_positive_value = 80,
+        .light_source_color = {INT64_C(80) * UINT16_MAX, INT64_C(80) * 7666, INT64_C(80) * 1937},
+        .light_source_color_weight = INT64_C(80) * UINT16_MAX,
+    };
+    MapSpace local_before = local;
     uint16_t scalar_before, rgb_before[3], scalar_after, rgb_after[3];
     light_radiance_from_raw(&local, 80, &scalar_before, rgb_before);
     (void)region_celestial_for_map(upper);
     (void)region_celestial_for_map(lower);
     light_radiance_from_raw(&local, 80, &scalar_after, rgb_after);
+    ck_assert_mem_eq(&local, &local_before, sizeof(local));
     ck_assert_uint_eq(scalar_before, scalar_after);
     ck_assert_mem_eq(rgb_before, rgb_after, sizeof(rgb_before));
     delete_map(upper);
@@ -344,6 +463,7 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_root_and_per_field_inheritance_match_frozen_vectors);
+    tcase_add_test(tc_core, test_every_control_inherits_independently);
     tcase_add_test(tc_core, test_scaled_epoch_wrap_and_lunar_mapping_are_independent);
     tcase_add_test(tc_core, test_parser_rejects_invalid_fields_and_graphs);
     tcase_add_test(tc_core, test_map_lookup_defaults_to_world_and_unknown_fails);
