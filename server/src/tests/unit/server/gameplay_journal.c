@@ -793,6 +793,47 @@ START_TEST(test_spell_learning_commits_stable_progression_milestone) {
 }
 END_TEST
 
+START_TEST(test_savebed_terminal_failure_retains_change_and_stable_map_context) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    const char *old_map_path = map->path;
+    map->path = add_string("/test/savebed-journal");
+
+    char directory[] = "/tmp/atrinik-savebed-journal-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+
+    object *bed = arch_get("sword");
+    ck_assert_ptr_ne(bed, NULL);
+    bed->type = SAVEBED;
+    gameplay_journal_fail_after_writes_for_test(1);
+    ck_assert_int_eq(object_apply(bed, pl, 0), OBJECT_METHOD_OK);
+    ck_assert_str_eq(CONTR(pl)->savebed_map, map->path);
+    ck_assert_int_eq(CONTR(pl)->bed_x, pl->x);
+    ck_assert_int_eq(CONTR(pl)->bed_y, pl->y);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.savebed-changed"), 0);
+    gameplay_journal_fail_after_writes_for_test(SIZE_MAX);
+
+    gameplay_journal_deinit();
+    char *contents = read_fixture(directory);
+    ck_assert_ptr_ne(strstr(contents, "\"subject_id\":\"map:/test/savebed-journal\""), NULL);
+    ck_assert_ptr_ne(strstr(contents, "\"lineage_id\":\"previous-map:/emergency@0+0\""), NULL);
+    free(contents);
+    object_destroy(bed);
+    free_string_shared(map->path);
+    map->path = old_map_path;
+    object_destroy(pl);
+    remove_fixture(directory);
+}
+END_TEST
+
 START_TEST(test_survival_outcomes_preserve_exclusive_attribution) {
     char directory[] = "/tmp/atrinik-survival-journal-XXXXXX";
     ck_assert_ptr_ne(mkdtemp(directory), NULL);
@@ -2651,6 +2692,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_objective_item_milestones_emit_only_on_discovery_and_threshold);
     tcase_add_test(tc_core, test_progression_adjustments_and_level_boundaries_are_journaled);
     tcase_add_test(tc_core, test_spell_learning_commits_stable_progression_milestone);
+    tcase_add_test(tc_core, test_savebed_terminal_failure_retains_change_and_stable_map_context);
     tcase_add_test(tc_core, test_survival_outcomes_preserve_exclusive_attribution);
     tcase_add_test(tc_core,
                    test_pending_domains_block_checkpoints_and_unique_maps_use_primary_component);
