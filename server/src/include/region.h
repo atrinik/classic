@@ -25,6 +25,7 @@
 #ifndef REGION_H
 #define REGION_H
 
+#include <celestial_lunar.h>
 #include <decls.h>
 
 /**
@@ -54,6 +55,11 @@ extern const region_celestial_profile_t *region_celestial_for_map(const mapstruc
 extern void region_celestial_phases(const region_celestial_profile_t *profile,
                                     uint64_t absolute_tick,
                                     region_celestial_phases_t *phases);
+
+/** Adapt one resolved profile to the immutable lunar evaluator input. */
+extern void region_celestial_lunar_input(const region_celestial_profile_t *profile,
+                                         uint64_t absolute_tick,
+                                         celestial_lunar_input *input);
 
 /** Format one bounded deterministic diagnostic including authored overrides. */
 extern bool region_celestial_diagnostic(const region_struct *region,

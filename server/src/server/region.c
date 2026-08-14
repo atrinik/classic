@@ -493,6 +493,20 @@ static bool profile_digest(region_celestial_profile_t *profile, char *error, siz
     return true;
 }
 
+static void profile_lunar_input(const region_celestial_profile_t *profile,
+                                const region_celestial_phases_t *phases,
+                                celestial_lunar_input *input) {
+    memset(input, 0, sizeof(*input));
+    input->solar_hour = phases->solar;
+    input->season_phase = phases->season;
+    input->lunar_age = phases->lunar;
+    input->lunar_period = profile->lunar_period;
+    memcpy(input->moon_color, profile->moon_linear, sizeof(input->moon_color));
+    memcpy(input->starlight_color, profile->starlight_linear, sizeof(input->starlight_color));
+    input->moon_max = profile->moon_max;
+    input->starlight_strength = profile->starlight_strength;
+}
+
 static bool profile_finalize(region_celestial_profile_t *profile, char *error, size_t error_size) {
     if (profile->schema != 1) {
         return region_error(error, error_size, "celestial schema must be 1");
@@ -515,6 +529,13 @@ static bool profile_finalize(region_celestial_profile_t *profile, char *error, s
     light_color_linearize(profile->night_color, profile->night_linear);
     light_color_linearize(profile->moon_color, profile->moon_linear);
     light_color_linearize(profile->starlight_color, profile->starlight_linear);
+    celestial_lunar_input lunar_input;
+    celestial_lunar_sample lunar_sample;
+    const region_celestial_phases_t phases = {0};
+    profile_lunar_input(profile, &phases, &lunar_input);
+    if (!celestial_lunar_evaluate(&lunar_input, &lunar_sample)) {
+        return region_error(error, error_size, "invalid effective lunar environment");
+    }
     return profile_digest(profile, error, error_size);
 }
 
@@ -828,6 +849,16 @@ void region_celestial_phases(const region_celestial_profile_t *profile,
     phases->solar = cycle_phase(&profile->solar, absolute_tick, 24);
     phases->season = cycle_phase(&profile->season, absolute_tick, 8064);
     phases->lunar = cycle_phase(&profile->lunar, absolute_tick, profile->lunar_period);
+}
+
+void region_celestial_lunar_input(const region_celestial_profile_t *profile,
+                                  uint64_t absolute_tick,
+                                  celestial_lunar_input *input) {
+    HARD_ASSERT(profile != NULL);
+    HARD_ASSERT(input != NULL);
+    region_celestial_phases_t phases;
+    region_celestial_phases(profile, absolute_tick, &phases);
+    profile_lunar_input(profile, &phases, input);
 }
 
 bool region_celestial_diagnostic(const region_struct *region,
