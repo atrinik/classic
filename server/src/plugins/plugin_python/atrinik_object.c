@@ -799,9 +799,14 @@ static bool python_object_is_player_rooted(object *op) {
     return root != op && root->type == PLAYER;
 }
 
+static bool python_object_is_persistent(object *op) {
+    object *root = hooks->object_get_env(op);
+    return root->type == PLAYER || root->map != NULL || !QUERY_FLAG(root, FLAG_REMOVED);
+}
+
 static bool python_object_reject_currency_move(object *op) {
     if (python_object_is_hidden_bank(op) ||
-        (op->type == MONEY && (op->map != NULL || python_object_is_player_rooted(op)))) {
+        (op->type == MONEY && python_object_is_persistent(op))) {
         PyErr_SetString(PyExc_RuntimeError,
                         "Persistent currency cannot be moved as an item; use PayAmount or "
                         "Player.InsertCoins.");
@@ -878,6 +883,14 @@ static PyObject *Atrinik_Object_InsertInto(Atrinik_Object *self, PyObject *args)
     OBJEXISTCHECK(self);
     OBJEXISTCHECK(where);
     if (python_object_reject_currency_move(self->obj)) {
+        return NULL;
+    }
+    object *where_root = hooks->object_get_env(where->obj);
+    if (self->obj->type == MONEY && where_root->type != PLAYER &&
+        python_object_is_persistent(where->obj)) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Currency cannot be inserted into persistent non-player state; use a "
+                        "currency API.");
         return NULL;
     }
 
@@ -1894,7 +1907,8 @@ static const char doc_Atrinik_Object_Clone[] =
     ":param inventory: Whether to clone the inventory of the object.\n"
     ":type inventory: bool\n"
     ":returns: Cloned object.\n"
-    ":rtype: :class:`Atrinik.Object.Object`";
+    ":rtype: :class:`Atrinik.Object.Object`\n"
+    ":raises RuntimeError: If the object is hidden bank state.";
 
 /**
  * Implements Atrinik.Object.Object.Clone() Python method.
@@ -2725,9 +2739,12 @@ static PyObject *Atrinik_Object_Load(Atrinik_Object *self, PyObject *args) {
     bool persistent_item = !QUERY_FLAG(self->obj, FLAG_SYS_OBJECT) && self->obj->type != FORCE &&
                            self->obj->type != POTION_EFFECT && self->obj->type != EVENT_OBJECT &&
                            self->obj->type != QUEST_CONTAINER;
-    if (root != self->obj && root->type == PLAYER && (bank || player_info || persistent_item)) {
+    bool persistent_money = self->obj->type == MONEY && python_object_is_persistent(self->obj);
+    if ((root != self->obj && root->type == PLAYER && (bank || player_info || persistent_item)) ||
+        persistent_money) {
         PyErr_SetString(PyExc_RuntimeError,
-                        "Load cannot mutate a persistent player item; use a reason-aware API.");
+                        "Load cannot mutate persistent item or currency state; use a "
+                        "reason-aware API.");
         return NULL;
     }
 
@@ -3007,6 +3024,7 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
 
     object *root = hooks->object_get_env(obj->obj);
     bool player_rooted = root != obj->obj && root->type == PLAYER;
+    bool persistent_currency = obj->obj->type == MONEY && python_object_is_persistent(obj->obj);
     bool hidden_bank = python_object_is_hidden_bank(obj->obj) && player_rooted;
     if (hidden_bank && field->offset != offsetof(object, value)) {
         PyErr_SetString(PyExc_RuntimeError,
@@ -3037,7 +3055,7 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
             return 0;
         }
     }
-    if (player_rooted && obj->obj->type == MONEY &&
+    if (persistent_currency &&
         (field->offset == offsetof(object, value) || field->offset == offsetof(object, type))) {
         PyErr_SetString(PyExc_RuntimeError,
                         "Persistent coin identity cannot be changed; use currency APIs.");
@@ -3051,7 +3069,12 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
                         "Persistent item type cannot be changed after insertion.");
         return -1;
     }
-    if (field->offset == offsetof(object, nrof) && root != obj->obj && root->type == PLAYER) {
+    if (field->offset == offsetof(object, nrof) && persistent_currency && !player_rooted) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Persistent non-player currency quantity cannot be changed as an item.");
+        return -1;
+    }
+    if (field->offset == offsetof(object, nrof) && player_rooted) {
         if (!PyInt_Check(value)) {
             INTRAISE("Illegal value for nrof field.");
         }

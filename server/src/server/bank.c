@@ -373,7 +373,8 @@ bank_set_balance_reason(object *bank, int64_t value, const char *reason) {
     HARD_ASSERT(reason != NULL);
 
     object *root = object_get_env(bank);
-    if (root->type != PLAYER || bank->arch == NULL || bank->arch->name != shstr_cons.player_info ||
+    if (root->type != PLAYER || bank->env != root || bank->arch == NULL ||
+        bank->arch->name != shstr_cons.player_info ||
         bank->name != shstr_cons.BANK_GENERAL || bank->value < 0 || value < 0) {
         return OBJECT_SEMANTIC_FAILED;
     }
@@ -405,7 +406,8 @@ object_semantic_result_t bank_destroy_balance_reason(object *bank, const char *r
     HARD_ASSERT(reason != NULL);
 
     object *root = object_get_env(bank);
-    if (root->type != PLAYER || bank->arch == NULL || bank->arch->name != shstr_cons.player_info ||
+    if (root->type != PLAYER || bank->env != root || bank->arch == NULL ||
+        bank->arch->name != shstr_cons.player_info ||
         bank->name != shstr_cons.BANK_GENERAL || bank->value < 0) {
         return OBJECT_SEMANTIC_FAILED;
     }
@@ -434,7 +436,8 @@ object_semantic_result_t bank_name_info_reason(object *bank, const char *reason)
     HARD_ASSERT(reason != NULL);
 
     object *root = object_get_env(bank);
-    if (root->type != PLAYER || bank->arch == NULL || bank->arch->name != shstr_cons.player_info ||
+    if (root->type != PLAYER || bank->env != root || bank->arch == NULL ||
+        bank->arch->name != shstr_cons.player_info ||
         bank->name == shstr_cons.BANK_GENERAL || bank->value != 0 || bank_find_info(root) != NULL) {
         return OBJECT_SEMANTIC_FAILED;
     }

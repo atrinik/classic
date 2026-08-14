@@ -72,6 +72,7 @@ extern int bank_deposit(object *op, const char *text, int64_t *value);
 extern int bank_withdraw(object *op, const char *text, int64_t *value);
 extern object_semantic_result_t
 bank_set_balance_reason(object *bank, int64_t value, const char *reason);
+/** Destroys bank on COMMITTED or AMBIGUOUS; the pointer must not be reused. */
 extern object_semantic_result_t bank_destroy_balance_reason(object *bank, const char *reason);
 extern object_semantic_result_t bank_name_info_reason(object *bank, const char *reason);
 
@@ -103,6 +104,7 @@ extern object_semantic_result_t
 shop_insert_coins_reason(object *op, int64_t value, const char *reason);
 extern object_semantic_result_t
 shop_set_coin_nrof_reason(object *coin, uint32_t nrof, const char *reason);
+/** Destroys coin on COMMITTED or AMBIGUOUS; the pointer must not be reused. */
 extern object_semantic_result_t shop_destroy_coin_reason(object *coin, const char *reason);
 extern object_semantic_result_t shop_insert_coin_object_reason(object *coin,
                                                                object *where,

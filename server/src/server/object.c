@@ -2474,6 +2474,24 @@ static bool object_is_hidden_bank_info(const object *op) {
            strcmp(op->name, "BANK_GENERAL") == 0;
 }
 
+static bool object_contains_hidden_bank_info(const object *op) {
+    if (object_is_hidden_bank_info(op)) {
+        return true;
+    }
+    FOR_INV_PREPARE(op, item) {
+        if (object_contains_hidden_bank_info(item)) {
+            return true;
+        }
+    }
+    FOR_INV_FINISH();
+    return false;
+}
+
+static bool object_is_persistent_money(const object *op, const object *root) {
+    return op->type == MONEY &&
+           (root->type == PLAYER || root->map != NULL || !QUERY_FLAG(root, FLAG_REMOVED));
+}
+
 static const char *object_custody_location(const object *op, const object *root) {
     if (root->type == PLAYER) {
         return "player";
@@ -2509,23 +2527,27 @@ object_insert_into_reason(object *op, object *where, const char *reason, object 
     object *destination_root = object_get_env(where);
     object *source_player = source_root->type == PLAYER ? source_root : NULL;
     object *destination_player = destination_root->type == PLAYER ? destination_root : NULL;
-    if (object_is_hidden_bank_info(op)) {
+    if (op->type != PLAYER && object_contains_hidden_bank_info(op)) {
         return OBJECT_SEMANTIC_FAILED;
     }
     if (op->type == MONEY) {
         if (source_root == op && destination_player != NULL) {
             return shop_insert_coin_object_reason(op, where, reason, inserted_out);
         }
-        if (source_root == op && destination_root->type != PLAYER && destination_root->map == NULL &&
+        if (source_root == op && op->map == NULL && QUERY_FLAG(op, FLAG_REMOVED) &&
+            destination_root->type != PLAYER && destination_root->map == NULL &&
             QUERY_FLAG(destination_root, FLAG_REMOVED)) {
             *inserted_out = object_insert_into(op, where, 0);
             return OBJECT_SEMANTIC_COMMITTED;
         }
         return OBJECT_SEMANTIC_FAILED;
     }
-    if (source_root != destination_root && destination_player != NULL &&
-        !object_weight_can_add(where, (uint64_t)op->weight * MAX(1, op->nrof))) {
-        return OBJECT_SEMANTIC_FAILED;
+    if (source_root != destination_root) {
+        uint64_t own_weight = (uint64_t)op->weight * MAX(1, op->nrof);
+        if (own_weight > UINT32_MAX - op->carrying ||
+            !object_weight_can_add(where, own_weight + op->carrying)) {
+            return OBJECT_SEMANTIC_FAILED;
+        }
     }
     if (source_player == destination_player || !object_custody_auditable(op)) {
         if (!QUERY_FLAG(op, FLAG_REMOVED)) {
@@ -2620,7 +2642,8 @@ object_semantic_result_t object_insert_map_reason(object *op,
     *inserted_out = NULL;
 
     object *root = object_get_env(op);
-    if (op->type == MONEY || object_is_hidden_bank_info(op)) {
+    if (op->type == MONEY ||
+        (op->type != PLAYER && object_contains_hidden_bank_info(op))) {
         return OBJECT_SEMANTIC_FAILED;
     }
     object_custody_transaction_t transaction = {0};
@@ -2671,11 +2694,15 @@ object_semantic_result_t object_remove_reason(object *op, const char *reason, bo
     HARD_ASSERT(reason != NULL);
 
     object *root = object_get_env(op);
+    if (!object_is_hidden_bank_info(op) && object_contains_hidden_bank_info(op)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
     if (object_is_hidden_bank_info(op) && root->type == PLAYER) {
         return destroy ? bank_destroy_balance_reason(op, reason) : OBJECT_SEMANTIC_FAILED;
     }
-    if (op->type == MONEY && root->type == PLAYER) {
-        return destroy ? shop_destroy_coin_reason(op, reason) : OBJECT_SEMANTIC_FAILED;
+    if (object_is_persistent_money(op, root)) {
+        return root->type == PLAYER && destroy ? shop_destroy_coin_reason(op, reason)
+                                                : OBJECT_SEMANTIC_FAILED;
     }
     bool journal = root->type == PLAYER && object_custody_auditable(op);
     object_custody_transaction_t transaction = {0};
@@ -2715,20 +2742,26 @@ object_decrease_reason(object *op, uint32_t nrof, const char *reason, object **s
     *survivor_out = NULL;
 
     object *root = object_get_env(op);
+    if (object_contains_hidden_bank_info(op)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
     if (op->nrof == 0) {
-        if (op->type == MONEY && root->type == PLAYER) {
+        if (object_is_persistent_money(op, root)) {
             return OBJECT_SEMANTIC_FAILED;
         }
         *survivor_out = object_decrease(op, nrof);
         return OBJECT_SEMANTIC_COMMITTED;
     }
-    if (op->type == MONEY && root->type == PLAYER) {
+    if (object_is_persistent_money(op, root)) {
+        if (root->type != PLAYER) {
+            return OBJECT_SEMANTIC_FAILED;
+        }
         uint32_t before = op->nrof;
         if (nrof >= before) {
             return shop_destroy_coin_reason(op, reason);
         }
         object_semantic_result_t result = shop_set_coin_nrof_reason(op, before - nrof, reason);
-        if (result == OBJECT_SEMANTIC_COMMITTED) {
+        if (result != OBJECT_SEMANTIC_FAILED) {
             *survivor_out = op;
         }
         return result;
@@ -2780,7 +2813,7 @@ object_set_nrof_reason(object *op, uint32_t nrof, const char *reason, object **s
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(reason != NULL);
     HARD_ASSERT(survivor_out != NULL);
-    *survivor_out = op;
+    *survivor_out = NULL;
 
     uint32_t before = MAX(1, op->nrof);
     uint32_t after = MAX(1, nrof);
@@ -2790,10 +2823,18 @@ object_set_nrof_reason(object *op, uint32_t nrof, const char *reason, object **s
         return OBJECT_SEMANTIC_FAILED;
     }
     object *root = object_get_env(op);
-    if (op->type == MONEY && root->type == PLAYER) {
-        object_semantic_result_t result = shop_set_coin_nrof_reason(op, nrof, reason);
-        if (result != OBJECT_SEMANTIC_COMMITTED) {
+    if (object_contains_hidden_bank_info(op)) {
+        *survivor_out = NULL;
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (object_is_persistent_money(op, root)) {
+        if (root->type != PLAYER) {
             *survivor_out = NULL;
+            return OBJECT_SEMANTIC_FAILED;
+        }
+        object_semantic_result_t result = shop_set_coin_nrof_reason(op, nrof, reason);
+        if (result != OBJECT_SEMANTIC_FAILED) {
+            *survivor_out = op;
         }
         return result;
     }
@@ -2828,6 +2869,7 @@ object_set_nrof_reason(object *op, uint32_t nrof, const char *reason, object **s
         }
     }
 
+    *survivor_out = op;
     if (!QUERY_FLAG(op, FLAG_REMOVED) && op->env != NULL) {
         if (after > before) {
             object_weight_add(op->env, op->weight * (after - before));
@@ -2849,7 +2891,10 @@ object_semantic_result_t object_set_value_reason(object *op, int64_t value, cons
     HARD_ASSERT(reason != NULL);
 
     object *root = object_get_env(op);
-    if (op->type == MONEY && root->type == PLAYER) {
+    if (object_is_persistent_money(op, root)) {
+        if (root->type != PLAYER) {
+            return value == op->value ? OBJECT_SEMANTIC_COMMITTED : OBJECT_SEMANTIC_FAILED;
+        }
         return value == op->value ? OBJECT_SEMANTIC_COMMITTED : OBJECT_SEMANTIC_FAILED;
     }
     if (object_is_hidden_bank_info(op) && root->type == PLAYER) {
@@ -4077,7 +4122,8 @@ object_enter_map_reason(object *op, mapstruct *m, int x, int y, const char *reas
     HARD_ASSERT(reason != NULL);
 
     object *root = object_get_env(op);
-    if (op->type == MONEY || object_is_hidden_bank_info(op)) {
+    if (op->type == MONEY ||
+        (op->type != PLAYER && object_contains_hidden_bank_info(op))) {
         return OBJECT_SEMANTIC_FAILED;
     }
     object_custody_transaction_t transaction = {0};

@@ -335,6 +335,18 @@ START_TEST(test_item_terminal_failures_report_ambiguity) {
     ck_assert(gameplay_journal_player_checkpoint_allowed(pl));
     semantic_failure_journal_deinit(currency_directory);
 
+    char currency_decrease_directory[] = "/tmp/atrinik-currency-decrease-failure-XXXXXX";
+    semantic_failure_journal_init(currency_decrease_directory);
+    coin = arch_get("coppercoin");
+    coin->nrof = 7;
+    coin = object_insert_into(coin, pl, 0);
+    survivor = NULL;
+    ck_assert_int_eq(object_decrease_reason(coin, 2, "test.currency-decrease-failure", &survivor),
+                     OBJECT_SEMANTIC_AMBIGUOUS);
+    ck_assert_ptr_eq(survivor, coin);
+    ck_assert_uint_eq(coin->nrof, 5);
+    semantic_failure_journal_deinit(currency_decrease_directory);
+
     object *bank = arch_get("player_info");
     FREE_AND_COPY_HASH(bank->name, "BANK_GENERAL");
     bank->value = 9;
@@ -787,6 +799,17 @@ START_TEST(test_production_player_and_map_checkpoints_persist_component_watermar
     uint64_t unique_sequence = map->journal_unique_sequence;
     ck_assert_uint_gt(unique_sequence, runtime_sequence);
 
+    gameplay_journal_fail_after_writes_for_test(1);
+    ck_assert_int_eq(shop_insert_coins_reason(pl, 3, "test.production-terminal-failure"),
+                     OBJECT_SEMANTIC_AMBIGUOUS);
+    object *ambiguous_coin = object_find_type(pl, MONEY);
+    ck_assert_ptr_ne(ambiguous_coin, NULL);
+    ck_assert_ptr_ne(ambiguous_coin->custody_lineage, NULL);
+    ck_assert_int_eq(strncmp(ambiguous_coin->custody_lineage, "currency:", 9), 0);
+    ck_assert(gameplay_journal_player_checkpoint_allowed(pl));
+    ck_assert(gameplay_journal_map_checkpoint_allowed(map));
+    gameplay_journal_fail_after_writes_for_test(SIZE_MAX);
+
     player_save(pl);
     char *player_path = player_make_path(pl->name, "player.dat");
     char *metrics_path = player_make_path(pl->name, "metrics.dat");
@@ -908,6 +931,7 @@ START_TEST(test_production_player_and_map_checkpoints_persist_component_watermar
     ck_assert_int_eq(fclose(fp), 0);
     ck_assert_int_eq(reconcile[0], '[');
     ck_assert_uint_eq(count_substring(reconcile, "\"action\": \"checkpointed\""), 4);
+    ck_assert_uint_eq(count_substring(reconcile, "\"action\": \"inspect-typed-state\""), 1);
     free(reconcile);
     ck_assert_int_eq(unlink(reconcile_path), 0);
 #endif
@@ -1303,6 +1327,53 @@ START_TEST(test_semantic_item_shop_and_bank_producers) {
     ck_assert_int_eq(object_remove_reason(temporary, "test.temporary-destroy", true),
                      OBJECT_SEMANTIC_COMMITTED);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("test.temporary-destroy"), 0);
+
+    object *loaded = arch_get("sack");
+    loaded->weight = 1;
+    loaded->carrying = UINT32_MAX;
+    ck_assert_int_eq(object_insert_into_reason(loaded, pl, "test.loaded-grant", &inserted),
+                     OBJECT_SEMANTIC_FAILED);
+    ck_assert_ptr_eq(inserted, NULL);
+    ck_assert(QUERY_FLAG(loaded, FLAG_REMOVED));
+    loaded->carrying = 2;
+    ck_assert_int_eq(object_insert_into_reason(loaded, pl, "test.loaded-grant", &inserted),
+                     OBJECT_SEMANTIC_COMMITTED);
+    ck_assert_ptr_eq(inserted, loaded);
+
+    object *detached_sack = arch_get("sack");
+    object *map_coin = arch_get("coppercoin");
+    map_coin->x = pl->x;
+    map_coin->y = pl->y;
+    map_coin = object_insert_map(map_coin, map, NULL, INS_NO_MERGE);
+    ck_assert_int_eq(
+        object_insert_into_reason(map_coin, detached_sack, "test.detached-currency", &inserted),
+        OBJECT_SEMANTIC_FAILED);
+    ck_assert_ptr_eq(inserted, NULL);
+    ck_assert_ptr_eq(map_coin->map, map);
+    object_remove(map_coin, 0);
+    object_destroy(map_coin);
+    object_destroy(detached_sack);
+
+    object *ground_chest = arch_get("sack");
+    ground_chest->x = pl->x;
+    ground_chest->y = pl->y;
+    ground_chest = object_insert_map(ground_chest, map, NULL, INS_NO_MERGE);
+    object *nested_coin = object_insert_into(arch_get("coppercoin"), ground_chest, 0);
+    ck_assert_int_eq(object_remove_reason(nested_coin, "test.nested-currency", true),
+                     OBJECT_SEMANTIC_FAILED);
+    ck_assert_ptr_eq(object_get_env(nested_coin), ground_chest);
+    object *nested_survivor = nested_coin;
+    ck_assert_int_eq(object_set_nrof_reason(nested_coin,
+                                            2,
+                                            "test.nested-currency",
+                                            &nested_survivor),
+                     OBJECT_SEMANTIC_FAILED);
+    ck_assert_ptr_eq(nested_survivor, NULL);
+
+    object *bank_sack = object_insert_into(arch_get("sack"), pl, INS_NO_MERGE);
+    object *nested_bank = object_insert_into(arch_get("player_info"), bank_sack, INS_NO_MERGE);
+    ck_assert_int_eq(bank_name_info_reason(nested_bank, "test.nested-bank"),
+                     OBJECT_SEMANTIC_FAILED);
 
     object *sold = arch_get("sword");
     SET_FLAG(sold, FLAG_IDENTIFIED);

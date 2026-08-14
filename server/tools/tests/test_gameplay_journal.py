@@ -946,6 +946,26 @@ class JournalTests(unittest.TestCase):
             ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_Decrease"): (
                 {"script.item-decrease"}, {"object_decrease_reason"},
             ),
+            ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_TeleportTo"): (
+                {"script.item-teleport"},
+                {"python_object_reject_currency_move", "object_enter_map_reason"},
+            ),
+            ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_InsertInto"): (
+                {"script.item-transfer"},
+                {"python_object_reject_currency_move", "object_insert_into_reason"},
+            ),
+            ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_Remove"): (
+                {"script.item-remove"},
+                {"python_object_reject_currency_move", "object_remove_reason"},
+            ),
+            ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_Destroy"): (
+                {"script.item-destroy"},
+                {"bank_destroy_balance_reason", "shop_destroy_coin_reason",
+                 "object_remove_reason"},
+            ),
+            ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_SetPosition"): (
+                set(), {"python_object_reject_currency_move", "transfer_ob"},
+            ),
             ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_CreateObject"): (
                 {"script.currency-grant"}, {"object_insert_into_reason"},
             ),
@@ -953,7 +973,14 @@ class JournalTests(unittest.TestCase):
                 {"script.item-adjust", "script.item-value-adjust",
                  "script.currency-adjust", "script.bank-adjust"},
                 {"object_set_nrof_reason", "object_set_value_reason",
-                 "shop_set_coin_nrof_reason", "bank_set_balance_reason"},
+                 "shop_set_coin_nrof_reason", "bank_set_balance_reason",
+                 "bank_name_info_reason"},
+            ),
+            ("src/plugins/plugin_python/atrinik_map.c", "Atrinik_Map_CreateObject"): (
+                set(), {"arch_to_object"},
+            ),
+            ("src/plugins/plugin_python/atrinik_map.c", "Atrinik_Map_Insert"): (
+                {"script.item-drop"}, {"object_insert_map_reason"},
             ),
         }
         for (relative, function), (reasons, calls) in exact_sites.items():
