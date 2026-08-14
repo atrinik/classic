@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: classic-pr-benchmarks-${{ github.event.pull_request.number }}
+  group: "classic-pr-benchmarks-${{ ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci: benchmark') && github.run_id || github.event.pull_request.number }}"
   cancel-in-progress: true
 
 env:
@@ -24,6 +24,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
+      event_relevant: ${{ steps.classify.outputs.event_relevant }}
       requested: ${{ steps.classify.outputs.requested }}
       client: ${{ steps.classify.outputs.benchmark_client }}
       server: ${{ steps.classify.outputs.benchmark_server }}
@@ -36,11 +37,22 @@ jobs:
         name: Honor the current request label and select benchmark suites
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_RELEVANT: "${{ !((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci: benchmark') }}"
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REQUESTED: "${{ contains(github.event.pull_request.labels.*.name, 'ci: benchmark') }}"
         run: |
-          if test "${REQUESTED}" = true; then
-            printf 'requested=true\n' >>"${GITHUB_OUTPUT}"
+          if test "${EVENT_RELEVANT}" = false; then
+            printf '%s\n' \
+              'event_relevant=false' \
+              'requested=false' \
+              'benchmark_client=false' \
+              'benchmark_server=false' \
+              >>"${GITHUB_OUTPUT}"
+          elif test "${EVENT_RELEVANT}" != true; then
+            echo "invalid benchmark event relevance: ${EVENT_RELEVANT}" >&2
+            exit 2
+          elif test "${REQUESTED}" = true; then
+            printf '%s\n' 'event_relevant=true' 'requested=true' >>"${GITHUB_OUTPUT}"
             python3 tools/ci/classify_changes.py \
               --event pull_request \
               --base "${BASE_SHA}" \
@@ -49,6 +61,7 @@ jobs:
               --codeql-config build/codeql-unused.yml
           elif test "${REQUESTED}" = false; then
             printf '%s\n' \
+              'event_relevant=true' \
               'requested=false' \
               'benchmark_client=false' \
               'benchmark_server=false' \
@@ -287,6 +300,7 @@ jobs:
       - name: Explain the request disposition
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
+          EVENT_RELEVANT: ${{ needs.changes.outputs.event_relevant }}
           REQUESTED: ${{ needs.changes.outputs.requested }}
           CLIENT_SELECTED: ${{ needs.changes.outputs.client }}
           CLIENT_RESULT: ${{ needs.client.result }}
@@ -297,6 +311,10 @@ jobs:
           if test "${CHANGES_RESULT}" != success; then
             printf '%s\n' \
               "Benchmark request classification finished with \`${CHANGES_RESULT}\`." \
+              >>"${GITHUB_STEP_SUMMARY}"
+          elif test "${EVENT_RELEVANT}" = false; then
+            printf '%s\n' \
+              'An unrelated label transition was ignored without restarting benchmarks.' \
               >>"${GITHUB_STEP_SUMMARY}"
           elif test "${REQUESTED}" != true; then
             printf '%s\n' \

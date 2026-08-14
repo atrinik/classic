@@ -16,6 +16,8 @@ deterministic:
   while the label remains;
 - removing the label cancels an older run and prevents later commits from
   launching timed probes;
+- adding or removing any other label neither cancels nor restarts an active
+  benchmark request;
 - after opt-in, benchmark-sensitive paths select the client comparisons, the
   server content-loader comparison, both, or a clear not-applicable summary.
 
