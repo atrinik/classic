@@ -105,6 +105,10 @@ bool gameplay_journal_track_map_object(const char *transaction_id,
                                        int y,
                                        const object *op);
 
+/** Whether a save domain is free of journal transactions awaiting a terminal record. */
+bool gameplay_journal_player_checkpoint_allowed(const object *player_ob);
+bool gameplay_journal_map_checkpoint_allowed(const mapstruct *map);
+
 /** Durably mark a previously written intent as committed. */
 bool gameplay_journal_commit(const char *transaction_id);
 

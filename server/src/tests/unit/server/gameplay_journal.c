@@ -25,6 +25,7 @@
 #include <quest.h>
 #include <spells.h>
 #include <loader.h>
+#include <initialization.h>
 
 #ifndef WIN32
 #include <sys/wait.h>
@@ -170,6 +171,15 @@ START_TEST(test_intent_commit_abort_and_private_storage) {
     change.after = 13;
     ck_assert(
         gameplay_journal_begin(&subject, GAMEPLAY_JOURNAL_QUEST, "quest.reward", &change, aborted));
+    ck_assert(gameplay_journal_abort(aborted, "quest.vetoed"));
+
+    gameplay_journal_subject_t apartment_subject = subject;
+    apartment_subject.map_id = "$account/apartment";
+    ck_assert(gameplay_journal_begin(&apartment_subject,
+                                     GAMEPLAY_JOURNAL_QUEST,
+                                     "quest.apartment",
+                                     &change,
+                                     aborted));
     ck_assert(gameplay_journal_abort(aborted, "quest.vetoed"));
 
     char rejected[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
@@ -506,6 +516,190 @@ START_TEST(test_one_drop_quest_grant_commits_item_and_marker_together) {
     gameplay_journal_deinit();
     object_destroy(quest);
     object_destroy(pl);
+    remove_fixture(directory);
+}
+END_TEST
+
+START_TEST(test_pending_domains_block_checkpoints_and_unique_maps_use_primary_component) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    map->map_flags |= MAP_FLAG_UNIQUE;
+    object *probe = arch_get("sword");
+    SET_FLAG(probe, FLAG_UNIQUE);
+
+    char directory[] = "/tmp/atrinik-journal-pending-domain-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    ck_assert(gameplay_journal_currency_begin(pl,
+                                              "test.pending-domain",
+                                              "currency:test",
+                                              0,
+                                              1,
+                                              1,
+                                              "service",
+                                              "ground",
+                                              "generated",
+                                              transaction));
+    ck_assert(!gameplay_journal_player_checkpoint_allowed(pl));
+    ck_assert(gameplay_journal_map_checkpoint_allowed(map));
+    ck_assert(!gameplay_journal_track_map_object(transaction, map, -100, -100, probe));
+    ck_assert(gameplay_journal_track_map_object(transaction, map, pl->x, pl->y, probe));
+    ck_assert(!gameplay_journal_map_checkpoint_allowed(map));
+    ck_assert(gameplay_journal_commit(transaction));
+    ck_assert(gameplay_journal_player_checkpoint_allowed(pl));
+    ck_assert(gameplay_journal_map_checkpoint_allowed(map));
+    ck_assert_uint_eq(map->journal_sequence, CONTR(pl)->journal_sequence);
+    ck_assert_uint_eq(map->journal_unique_sequence, 0);
+    gameplay_journal_deinit();
+
+    char *contents = read_fixture(directory);
+    ck_assert_ptr_ne(strstr(contents, "\"phase\":\"domain\""), NULL);
+    ck_assert_ptr_ne(strstr(contents, "\"kind\":\"map-runtime\""), NULL);
+    ck_assert_ptr_eq(strstr(contents, "\"kind\":\"map-unique\""), NULL);
+    free(contents);
+    remove_fixture(directory);
+    object_destroy(probe);
+    object_destroy(pl);
+}
+END_TEST
+
+START_TEST(test_production_player_and_map_checkpoints_persist_component_watermarks) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    char directory[] = "/tmp/atrinik-journal-production-checkpoint-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    char old_datapath[MAX_BUF];
+    snprintf(VS(old_datapath), "%s", settings.datapath);
+    snprintf(VS(settings.datapath), "%s", directory);
+
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    object *runtime_probe = arch_get("sword");
+    ck_assert(gameplay_journal_currency_begin(pl,
+                                              "test.runtime-checkpoint",
+                                              "currency:test",
+                                              0,
+                                              1,
+                                              1,
+                                              "service",
+                                              "ground",
+                                              "generated",
+                                              transaction));
+    ck_assert(gameplay_journal_track_map_object(transaction, map, pl->x, pl->y, runtime_probe));
+    ck_assert(gameplay_journal_commit(transaction));
+    uint64_t runtime_sequence = map->journal_sequence;
+
+    object *unique_probe = arch_get("sword");
+    SET_FLAG(unique_probe, FLAG_UNIQUE);
+    ck_assert(gameplay_journal_currency_begin(pl,
+                                              "test.unique-checkpoint",
+                                              "currency:test",
+                                              1,
+                                              1,
+                                              2,
+                                              "service",
+                                              "ground",
+                                              "generated",
+                                              transaction));
+    ck_assert(gameplay_journal_track_map_object(transaction, map, pl->x, pl->y, unique_probe));
+    ck_assert(gameplay_journal_commit(transaction));
+    uint64_t unique_sequence = map->journal_unique_sequence;
+    ck_assert_uint_gt(unique_sequence, runtime_sequence);
+
+    player_save(pl);
+    char *player_path = player_make_path(pl->name, "player.dat");
+    char *metrics_path = player_make_path(pl->name, "metrics.dat");
+    FILE *fp = fopen(player_path, "rb");
+    ck_assert_ptr_ne(fp, NULL);
+    char line[MAX_BUF];
+    uint64_t saved_player_sequence = 0;
+    while (fgets(VS(line), fp) != NULL && strcmp(line, "endplst\n") != 0) {
+        if (sscanf(line, "journal_sequence %" SCNu64, &saved_player_sequence) == 1) {
+            break;
+        }
+    }
+    ck_assert_int_eq(fclose(fp), 0);
+    ck_assert_msg(saved_player_sequence == unique_sequence,
+                  "saved player sequence=%" PRIu64 ", unique sequence=%" PRIu64,
+                  saved_player_sequence,
+                  unique_sequence);
+    mapstruct saved_map = {0};
+    saved_map.count = 1;
+    saved_map.path = add_string("/test/journal-checkpoint");
+    snprintf(VS(saved_map.journal_run_id), "%s", map->journal_run_id);
+    saved_map.journal_sequence = runtime_sequence;
+    snprintf(VS(saved_map.journal_unique_run_id), "%s", map->journal_unique_run_id);
+    saved_map.journal_unique_sequence = unique_sequence;
+    char runtime_path[HUGE_BUF];
+    snprintf(VS(runtime_path), "%s/runtime.map", directory);
+    char unique_directory[HUGE_BUF];
+    snprintf(VS(unique_directory), "%s/unique-items", directory);
+    ck_assert_int_eq(mkdir(unique_directory, 0700), 0);
+    saved_map.tmpname = xstrdup(runtime_path);
+    ck_assert_int_eq(new_save_map(&saved_map, 0), 0);
+    fp = fopen(runtime_path, "rb");
+    ck_assert_ptr_ne(fp, NULL);
+    mapstruct loaded_map = {0};
+    ck_assert_int_eq(load_map_header(&loaded_map, fp), 1);
+    ck_assert_int_eq(fclose(fp), 0);
+    ck_assert_uint_eq(loaded_map.journal_sequence, runtime_sequence);
+
+    char unique_path[HUGE_BUF];
+    snprintf(VS(unique_path), "%s/unique-items/", directory);
+    size_t offset = strlen(unique_path);
+    const char *map_path = saved_map.path + 1;
+    for (; *map_path != '\0' && offset + 5 < sizeof(unique_path); map_path++) {
+        unique_path[offset++] = *map_path == '/' ? '@' : *map_path;
+    }
+    snprintf(unique_path + offset, sizeof(unique_path) - offset, ".v00");
+    fp = fopen(unique_path, "rb");
+    ck_assert_ptr_ne(fp, NULL);
+    char marker[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    uint64_t saved_unique_sequence;
+    ck_assert_int_eq(
+        fscanf(fp, "# gameplay-journal %32[0-9a-f] %" SCNu64, marker, &saved_unique_sequence),
+        2);
+    ck_assert_int_eq(fclose(fp), 0);
+    ck_assert_uint_eq(saved_unique_sequence, unique_sequence);
+
+    gameplay_journal_deinit();
+    free(saved_map.tmpname);
+    free_string_shared(saved_map.path);
+    snprintf(VS(settings.datapath), "%s", old_datapath);
+    object_destroy(runtime_probe);
+    object_destroy(unique_probe);
+    object_destroy(pl);
+    ck_assert_int_eq(unlink(runtime_path), 0);
+    ck_assert_int_eq(unlink(unique_path), 0);
+    ck_assert_int_eq(rmdir(unique_directory), 0);
+    ck_assert_int_eq(unlink(metrics_path), 0);
+    free(metrics_path);
+    ck_assert_int_eq(unlink(player_path), 0);
+    char *slash = strrchr(player_path, '/');
+    ck_assert_ptr_ne(slash, NULL);
+    *slash = '\0';
+    for (int i = 0; i < 5; i++) {
+        ck_assert_int_eq(rmdir(player_path), 0);
+        slash = strrchr(player_path, '/');
+        ck_assert_ptr_ne(slash, NULL);
+        *slash = '\0';
+    }
+    free(player_path);
     remove_fixture(directory);
 }
 END_TEST
@@ -1420,7 +1614,8 @@ static void crash_semantic_writer(const char *directory,
 
     ck_assert(gameplay_journal_init(directory, "server", &profile));
     if (fail_terminal) {
-        gameplay_journal_fail_after_writes_for_test(1);
+        gameplay_journal_fail_after_writes_for_test(
+            operation == CRASH_ITEM_ACQUIRE || operation == CRASH_ITEM_DROP ? 2 : 1);
     }
     if (operation == CRASH_ITEM_GRANT) {
         object *inserted = NULL;
@@ -1767,6 +1962,10 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_party_random_currency_retirement_preserves_message_lifetime);
     tcase_add_test(tc_core, test_currency_recovery_aggregate_includes_floor_delivery);
     tcase_add_test(tc_core, test_one_drop_quest_grant_commits_item_and_marker_together);
+    tcase_add_test(tc_core,
+                   test_pending_domains_block_checkpoints_and_unique_maps_use_primary_component);
+    tcase_add_test(tc_core,
+                   test_production_player_and_map_checkpoints_persist_component_watermarks);
     tcase_add_test(tc_core, test_checkpoint_watermarks_persist_player_and_map);
     tcase_add_test(tc_core, test_checkpoint_watermark_resolves_inverse_currency_aba);
     tcase_add_test(tc_core, test_checkpoint_sequence_remains_ordered_across_runs);

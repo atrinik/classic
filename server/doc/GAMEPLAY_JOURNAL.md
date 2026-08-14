@@ -105,7 +105,7 @@ python3 server/tools/gameplay_journal.py \
   DATAPATH/gameplay-journal validate
 python3 server/tools/gameplay_journal.py \
   DATAPATH/gameplay-journal reconcile \
-  --player-save DATAPATH/players/PLAYER/PLAYER.pl \
+  --player-save ACCOUNT/CHARACTER=DATAPATH/players/PLAYER/player.dat \
   --map-save /world/map=MAP_CHECKPOINT \
   --map-save /world/map=DATAPATH/unique-items/world/map.v00
 python3 server/tools/gameplay_journal.py \
@@ -120,8 +120,10 @@ python3 server/tools/gameplay_journal.py \
   DATAPATH/gameplay-journal query --lineage LINEAGE_ID
 ```
 
-Repeat `--player-save` and `--map-save MAP_ID=PATH` for every affected
-component. The tool recognizes main map headers as `map-runtime` and
+Repeat `--player-save ACCOUNT/CHARACTER=PATH` and `--map-save MAP_ID=PATH`
+for every affected component. A legacy save with no journal watermark is
+sequence zero, so the first post-upgrade transaction remains classifiable.
+The tool recognizes main map headers as `map-runtime` and
 unique-object marker headers as `map-unique`, matching terminal domain kinds
 without conflating independently durable files. `--domain
 KIND:ID=SEQUENCE` is available for operator-managed save domains that are not
@@ -150,6 +152,16 @@ Runtime map files and unique-object files are written through synced temporary
 files and atomically replaced. Each carries its own checkpoint watermark, so a
 crash between component publications leaves the older component visibly older
 instead of producing a false all-map checkpoint.
+
+Every version-2 intent durably names its actor player domain. Additional player
+and map domains are appended as synced `domain` records before the first
+authoritative mutation; the terminal domain set must match that plan. Player
+and map checkpoints are deferred while their domain participates in an open
+transaction. This prevents a callback or trusted script from saving mutated
+state under the preceding watermark. Player-unique/apartment maps persist all
+objects in their primary file, so their objects are consistently tracked as
+`map-runtime`; ordinary maps retain independent runtime and `.v00`
+`map-unique` coordinates.
 
 Both `attempted` and `committed` transactions also carry typed before/after
 values, lineage, and a bounded snapshot for validation and partial completion.
@@ -180,7 +192,7 @@ operation. Helpers below that producer do not emit another transaction.
 | Trusted Python item grant/transfer/removal/destruction | `object_insert_into_reason()` / `object_remove_reason()` | Caller-supplied bounded reason; documented `script.item-*` defaults | Intent before insertion, removal, or destruction; one terminal record |
 | Trusted Python player-inventory to map transfer | `object_insert_map_reason()` / `object_enter_map_reason()` | Caller-supplied reason; `script.item-drop` / `script.item-teleport` defaults | Intent before removal; provenance before map merge; terminal result exposed as committed, failed, or ambiguous |
 | Party item loot | `party_loot_random()` / `party_loot_split()` | `item.party-loot` | Reason-aware grant; source remains in the corpse if intent preparation fails |
-| Party currency loot | `party_loot_random()` / `party_loot_split()` | `party.currency-loot` / `party.currency-split` | Random transfer journals before moving the source stack; split mode stages every recipient intent before source removal and commits after exact delivery |
+| Party currency loot | `party_loot_random()` / `party_loot_split()` | `party.currency-loot` / `party.currency-source` / `party.currency-split` | Random transfer journals before moving the source stack; split mode records one source-map debit at the corpse coordinates plus correlated recipient grants before source removal and exact delivery |
 | Shop checkout | `shop_pay_internal()` | `shop.purchase` | One item transaction containing quantity, total price, and carried/bank/mixed funding; no generic payment or bank duplicate |
 | Shop sale | `shop_sell_item_begin()` / `shop_sell_item_commit()` | `shop.sale` | Intent before split; commit after coins, unpaid state, and provenance change |
 | Bank deposit/withdrawal | `bank_deposit()` / `bank_withdraw()` | `bank.deposit` / `bank.withdraw` | Exact hidden balance before/delta/after around the mutation |
@@ -205,10 +217,12 @@ and alchemy use a recovery aggregate spanning player-held/bank currency plus
 canonical currency on the player's current delivery tile. Exact generated
 coin materialization selects one eligible carried destination for the whole
 payout or places the whole payout on the unique-object map component; it never
-creates an unrecorded cross-domain partial split. Party split records
-each recipient's generated share as a transaction-local `0/+share/share`
-delivery quantity; its terminal save-domain list and global sequence decide
-which recipient/map checkpoint needs replay. Bank records remain exact
+creates an unrecorded cross-domain partial split. Party split records one
+coordinate-bound `value/-value/0` corpse-source transaction and correlates each
+recipient's transaction-local `0/+share/share` grant through its funding ID.
+This prevents one shared source removal from appearing independently in every
+recipient transaction; terminal domain lists and global sequence identify the
+exact checkpoint that needs inspection or replay. Bank records remain exact
 hidden-balance arithmetic. These conventions keep recovery
 arithmetic authoritative without double-counting correlated writes.
 
@@ -231,8 +245,12 @@ metric.
 Native semantic code uses the reason-aware custody/currency adapters, which
 write an intent before mutation and a terminal commit or abort afterward. New
 producers may use `gameplay_journal_begin()` directly only when they preserve
-that order. The API validates kind, identifiers, bounds, non-negative price,
-and the exact arithmetic invariant `before + delta == after`.
+that order and register every live affected player/map with the tracking APIs
+before mutation. The raw intent's `ACCOUNT/CHARACTER` player domain is an
+operator-managed fallback; only `gameplay_journal_track_player()` attaches it
+to the in-memory checkpoint watermark. The API validates kind, identifiers,
+bounds, non-negative price, and the exact arithmetic invariant
+`before + delta == after`.
 
 Trusted content uses the typed player methods rather than formatting records:
 

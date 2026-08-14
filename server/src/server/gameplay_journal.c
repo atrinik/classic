@@ -152,6 +152,20 @@ static bool journal_token_valid(const char *value, bool allow_empty) {
     return true;
 }
 
+static bool journal_map_id_valid(const char *value) {
+    if (value == NULL || strlen(value) > GAMEPLAY_JOURNAL_ID_MAX) {
+        return false;
+    }
+    for (const unsigned char *cp = (const unsigned char *)value; *cp != '\0'; cp++) {
+        bool alphanumeric =
+            (*cp >= 'a' && *cp <= 'z') || (*cp >= 'A' && *cp <= 'Z') || (*cp >= '0' && *cp <= '9');
+        if (!alphanumeric && strchr("_.:/@+$-", *cp) == NULL) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool journal_identity_valid(const char *value) {
     if (value == NULL) {
         return false;
@@ -924,6 +938,21 @@ static bool journal_player_domain_id(const char *account,
     return length >= 0 && length <= GAMEPLAY_JOURNAL_ID_MAX;
 }
 
+static bool journal_append_domain(const char *transaction_id, const char *kind, const char *id) {
+    StringBuffer *record = journal_record("domain", transaction_id, "transaction", "domain.add");
+    if (record == NULL) {
+        return false;
+    }
+    stringbuffer_append_string(record, ",\"domain\":{\"kind\":\"");
+    journal_append_json_string(record, kind);
+    stringbuffer_append_string(record, "\",\"id\":\"");
+    journal_append_json_string(record, id);
+    stringbuffer_append_string(record, "\"}");
+    bool ok = journal_append(record);
+    stringbuffer_free(record);
+    return ok;
+}
+
 bool gameplay_journal_track_player(const char *transaction_id, object *player_ob) {
     ssize_t index = journal_pending_find(transaction_id);
     if (index < 0 || player_ob == NULL || player_ob->type != PLAYER || CONTR(player_ob) == NULL ||
@@ -935,15 +964,9 @@ bool gameplay_journal_track_player(const char *transaction_id, object *player_ob
     if (!journal_player_domain_id(CONTR(player_ob)->cs->account, player_ob->name, id)) {
         return false;
     }
-    const char *actor_id = object_custody_actor_id(player_ob);
-    if (actor_id == NULL || !journal_identity_valid(actor_id)) {
-        return false;
-    }
     pending_transaction_t *pending = &journal.pending[(size_t)index];
     for (size_t i = 0; i < pending->player_count; i++) {
-        if (strcmp(pending->player_ids[i], id) == 0 ||
-            strcmp(pending->player_ids[i], actor_id) == 0) {
-            snprintf(VS(pending->player_ids[i]), "%s", actor_id);
+        if (strcmp(pending->player_ids[i], id) == 0) {
             pending->players[i] = player_ob;
             pending->player_counts[i] = player_ob->count;
             return true;
@@ -952,7 +975,10 @@ bool gameplay_journal_track_player(const char *transaction_id, object *player_ob
     if (pending->player_count == JOURNAL_DOMAIN_LIMIT) {
         return false;
     }
-    snprintf(VS(pending->player_ids[pending->player_count]), "%s", actor_id);
+    if (!journal_append_domain(transaction_id, "player", id)) {
+        return false;
+    }
+    snprintf(VS(pending->player_ids[pending->player_count]), "%s", id);
     pending->players[pending->player_count] = player_ob;
     pending->player_counts[pending->player_count] = player_ob->count;
     pending->player_count++;
@@ -963,6 +989,9 @@ static bool journal_track_map(const char *transaction_id, mapstruct *map, bool u
     ssize_t index = journal_pending_find(transaction_id);
     if (index < 0 || map == NULL || map->count == 0) {
         return false;
+    }
+    if (MAP_UNIQUE(map)) {
+        unique_component = false;
     }
     pending_transaction_t *pending = &journal.pending[(size_t)index];
     char id[GAMEPLAY_JOURNAL_ID_MAX + 1];
@@ -980,6 +1009,11 @@ static bool journal_track_map(const char *transaction_id, mapstruct *map, bool u
         }
     }
     if (pending->map_count == JOURNAL_DOMAIN_LIMIT) {
+        return false;
+    }
+    if (!journal_append_domain(transaction_id,
+                               unique_component ? "map-unique" : "map-runtime",
+                               id)) {
         return false;
     }
     snprintf(VS(pending->map_ids[pending->map_count]), "%s", id);
@@ -1006,9 +1040,44 @@ bool gameplay_journal_track_map_object(const char *transaction_id,
     if (map == NULL || op == NULL) {
         return false;
     }
+    map = get_map_from_coord(map, &x, &y);
+    if (map == NULL) {
+        return false;
+    }
     object *floor = GET_MAP_OB_LAYER(map, x, y, LAYER_FLOOR, 0);
     bool unique = QUERY_FLAG(op, FLAG_UNIQUE) || (floor != NULL && QUERY_FLAG(floor, FLAG_UNIQUE));
     return journal_track_map(transaction_id, map, unique);
+}
+
+bool gameplay_journal_player_checkpoint_allowed(const object *player_ob) {
+    if (player_ob == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < journal.pending_count; i++) {
+        const pending_transaction_t *pending = &journal.pending[i];
+        for (size_t j = 0; j < pending->player_count; j++) {
+            if (pending->players[j] == player_ob &&
+                OBJECT_VALID(player_ob, pending->player_counts[j])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool gameplay_journal_map_checkpoint_allowed(const mapstruct *map) {
+    if (map == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < journal.pending_count; i++) {
+        const pending_transaction_t *pending = &journal.pending[i];
+        for (size_t j = 0; j < pending->map_count; j++) {
+            if (pending->maps[j] == map && map->count == pending->map_counts[j]) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
@@ -1021,8 +1090,7 @@ bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
     if (!gameplay_journal_available() || subject == NULL || change == NULL ||
         transaction_id == NULL || kind_name == NULL || !journal_token_valid(reason, false) ||
         !journal_identity_valid(subject->account_id) ||
-        !journal_identity_valid(subject->character_id) ||
-        !journal_token_valid(subject->map_id, true) ||
+        !journal_identity_valid(subject->character_id) || !journal_map_id_valid(subject->map_id) ||
         !journal_token_valid(change->subject_id, false) ||
         !journal_token_valid(change->lineage_id, true) || !journal_change_valid(kind, change) ||
         journal.pending_count == JOURNAL_PENDING_LIMIT ||
@@ -1038,20 +1106,21 @@ bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
     journal_append_json_string(record, subject->account_id);
     stringbuffer_append_string(record, "\",\"character_id\":\"");
     journal_append_json_string(record, subject->character_id);
-    stringbuffer_append_printf(
-        record,
-        "\",\"context\":{\"map_id\":\"%s\",\"x\":%" PRId32 ",\"y\":%" PRId32 "}"
-        ",\"change\":{\"subject_id\":\"%s\",\"lineage_id\":\"%s\""
-        ",\"before\":%" PRId64 ",\"delta\":%" PRId64 ",\"after\":%" PRId64 "}"
-        ",\"details\":{\"archetype\":\"",
-        subject->map_id != NULL ? subject->map_id : "",
-        subject->x,
-        subject->y,
-        change->subject_id,
-        change->lineage_id != NULL ? change->lineage_id : "",
-        change->before,
-        change->delta,
-        change->after);
+    stringbuffer_append_string(record, "\",\"context\":{\"map_id\":\"");
+    journal_append_json_string(record, subject->map_id != NULL ? subject->map_id : "");
+    stringbuffer_append_printf(record,
+                               "\",\"x\":%" PRId32 ",\"y\":%" PRId32 "}"
+                               ",\"change\":{\"subject_id\":\"%s\",\"lineage_id\":\"%s\""
+                               ",\"before\":%" PRId64 ",\"delta\":%" PRId64 ",\"after\":%" PRId64
+                               "}"
+                               ",\"details\":{\"archetype\":\"",
+                               subject->x,
+                               subject->y,
+                               change->subject_id,
+                               change->lineage_id != NULL ? change->lineage_id : "",
+                               change->before,
+                               change->delta,
+                               change->after);
     journal_append_json_string(record, change->archetype != NULL ? change->archetype : "");
     stringbuffer_append_printf(record,
                                "\",\"object_type\":%" PRId32 ",\"snapshot\":\"",
@@ -1077,7 +1146,9 @@ bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
     journal_append_json_string(record, change->currency != NULL ? change->currency : "");
     stringbuffer_append_string(record, "\",\"funding\":\"");
     journal_append_json_string(record, change->funding != NULL ? change->funding : "");
-    stringbuffer_append_string(record, "\"}");
+    stringbuffer_append_string(record, "\"},\"domains\":[{\"kind\":\"player\",\"id\":\"");
+    journal_append_json_string(record, player_domain);
+    stringbuffer_append_string(record, "\"}]");
     bool ok = journal_append(record);
     stringbuffer_free(record);
     if (!ok) {
@@ -1243,7 +1314,7 @@ bool gameplay_journal_player_begin_change(
     gameplay_journal_subject_t subject = {
         .account_id = pl->cs->account,
         .character_id = pl->ob->name,
-        .map_id = pl->ob->map != NULL ? pl->ob->map->path : "",
+        .map_id = pl->ob->map != NULL && pl->ob->map->path != NULL ? pl->ob->map->path : "",
         .x = pl->ob->x,
         .y = pl->ob->y,
     };

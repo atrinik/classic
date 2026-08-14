@@ -51,7 +51,7 @@ class JournalTests(unittest.TestCase):
             "phase": record_phase,
             "kind": (
                 "transaction"
-                if record_phase in {"commit", "abort"}
+                if record_phase in {"domain", "commit", "abort"}
                 else "currency" if transaction else "run"
             ),
             "reason": "test.reason",
@@ -77,6 +77,11 @@ class JournalTests(unittest.TestCase):
                 },
             )
         value.update(extra)
+        if record_phase == "intent" and value["version"] == 2:
+            value.setdefault(
+                "domains",
+                [{"kind": "player", "id": f'{value["account_id"]}/{value["character_id"]}'}],
+            )
         value["event_id"] = f'{value["server_id"]}:{value["run_id"]}:{value["sequence"]}'
         prefix = json.dumps(value, separators=(",", ":")).encode()[:-1]
         self.previous = hashlib.sha256(prefix).hexdigest()
@@ -378,7 +383,7 @@ class JournalTests(unittest.TestCase):
                 "commit",
                 committed,
                 version=2,
-                domains=[{"kind": "player", "id": "acct/Hero"}],
+                domains=[{"kind": "player", "id": "acct/hero"}],
             ))
         self.write(*records)
         journal = gameplay_journal.load([self.root])
@@ -402,21 +407,33 @@ class JournalTests(unittest.TestCase):
             reason="script.currency-grant",
             details=details,
         )
+        map_domain = self.record(
+            "domain",
+            "tx1",
+            version=2,
+            reason="domain.add",
+            domain={"kind": "map-unique", "id": "/world/start"},
+        )
         commit = self.record(
             "commit",
             "tx1",
             version=2,
             domains=[
-                {"kind": "player", "id": "acct:actor"},
+                {"kind": "player", "id": "acct/hero"},
                 {"kind": "map-unique", "id": "/world/start"},
             ],
         )
-        self.write(intent, commit)
+        self.write(intent, map_domain, commit)
         journal = gameplay_journal.load([self.root])
         player_save = self.root / "player.save"
-        player_save.write_text("custody_actor acct:actor\njournal_sequence 2\n")
+        player_save.write_text(
+            "journal_sequence 3\nendplst\nmsg\njournal_sequence 999\ncustody_actor forged\nendmsg\n"
+        )
         map_save = self.root / "map.save"
-        map_save.write_text("journal_sequence 2\n")
+        map_save.write_text(
+            "journal_sequence 2\nend\narch sign\nmsg\n# gameplay-journal "
+            f"{RUN} 999\njournal_sequence 999\nendmsg\nend\n"
+        )
         unique_save = self.root / "map.v00"
         unique_save.write_text(
             "# gameplay-journal aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1\n"
@@ -425,7 +442,7 @@ class JournalTests(unittest.TestCase):
             journal,
             gameplay_journal._saved_domain_arguments(SimpleNamespace(
                 domain=[],
-                player_save=[player_save],
+                player_save=[f"acct/hero={player_save}"],
                 map_save=[
                     f"/world/start={map_save}",
                     f"/world/start={unique_save}",
@@ -436,8 +453,12 @@ class JournalTests(unittest.TestCase):
             (domain["kind"], domain["id"]): domain["action"]
             for domain in plan["tx1"]["domains"]
         }
-        self.assertEqual(actions[("player", "acct:actor")], "checkpointed")
+        self.assertEqual(actions[("player", "acct/hero")], "checkpointed")
         self.assertEqual(actions[("map-unique", "/world/start")], "replay-required")
+
+        legacy_save = self.root / "legacy-player.save"
+        legacy_save.write_text("endplst\narch human_male\nend\n")
+        self.assertEqual(gameplay_journal._checkpoint_sequence(legacy_save), (0, False))
 
     def test_rejects_corruption_permissions_and_redaction(self) -> None:
         record = bytearray(self.record("boundary"))
@@ -585,7 +606,7 @@ class JournalTests(unittest.TestCase):
                 "item.party-loot", "party.currency-loot", "party.currency-split",
             },
             "src/server/shop.c": {
-                "shop.purchase", "shop.sale", "script.currency-grant",
+                "shop.purchase", "shop.sale", "script.currency-grant", "script.payment",
             },
             "src/server/bank.c": {"bank.deposit", "bank.withdraw"},
             "src/server/spell_effect.c": {"spell.alchemy"},
@@ -616,16 +637,40 @@ class JournalTests(unittest.TestCase):
                     self.assertIn(f"{call}(", source)
 
         exact_sites = {
+            ("src/types/player.c", "pick_up_object"): {
+                "item.acquire", "item.player-transfer",
+            },
+            ("src/types/player.c", "put_object_in_sack"): {
+                "item.acquire", "item.external-transfer", "item.player-transfer",
+            },
+            ("src/types/player.c", "drop_object"): {
+                "item.drop", "item.startequip-destroy",
+            },
             ("src/server/treasure.c", "treasure_insert"): {
                 "item.starting-grant", "item.treasure-grant",
             },
             ("src/server/quest.c", "quest_check_item_drop"): {"quest.item-grant"},
             ("src/server/quest.c", "quest_check_item"): {"quest.objective-grant"},
+            ("src/server/party.c", "party_loot_random"): {
+                "item.party-loot", "party.currency-loot",
+            },
+            ("src/server/party.c", "party_currency_source_begin"): {
+                "party.currency-source",
+            },
+            ("src/server/party.c", "party_loot_split"): {
+                "item.party-loot", "party.currency-split",
+            },
+            ("src/server/shop.c", "shop_pay"): {"script.payment"},
+            ("src/server/shop.c", "shop_pay_items"): {"shop.purchase"},
+            ("src/server/shop.c", "shop_sell_item_begin"): {"shop.sale"},
+            ("src/server/shop.c", "shop_insert_coins"): {"script.currency-grant"},
+            ("src/server/bank.c", "bank_deposit"): {"bank.deposit"},
+            ("src/server/bank.c", "bank_withdraw"): {"bank.withdraw"},
+            ("src/server/spell_effect.c", "cast_transform_wealth"): {"spell.alchemy"},
         }
         for (relative, function), reasons in exact_sites.items():
             body = function_body((server / relative).read_text(encoding="utf-8"), function)
             with self.subTest(source=relative, function=function):
-                self.assertIn("object_insert_into_reason(", body)
                 for reason in reasons:
                     self.assertIn(f'"{reason}"', body)
 

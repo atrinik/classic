@@ -876,7 +876,12 @@ static const char doc_Atrinik_Map_Save[] = ".. method:: Save().\n\n"
  * @copydoc PyMethod_NOARGS
  */
 static PyObject *Atrinik_Map_Save(Atrinik_Map *self, PyObject *ignored) {
-    hooks->new_save_map(self->map, 0);
+    if (!hooks->gameplay_journal_map_checkpoint_allowed(self->map)) {
+        RAISE("Map save is deferred while a gameplay journal transaction is pending.");
+    }
+    if (hooks->new_save_map(self->map, 0) != 0) {
+        RAISE("Map save failed.");
+    }
 
     Py_INCREF(Py_None);
     return Py_None;

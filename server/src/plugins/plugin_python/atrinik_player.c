@@ -1175,6 +1175,9 @@ static const char doc_Atrinik_Player_Save[] = ".. method:: Save().\n\n"
  * @copydoc PyMethod_NOARGS
  */
 static PyObject *Atrinik_Player_Save(Atrinik_Player *self, PyObject *ignored) {
+    if (!hooks->gameplay_journal_player_checkpoint_allowed(self->pl->ob)) {
+        RAISE("Player save is deferred while a gameplay journal transaction is pending.");
+    }
     hooks->player_save(self->pl->ob);
 
     Py_INCREF(Py_None);

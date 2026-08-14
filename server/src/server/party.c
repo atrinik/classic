@@ -279,6 +279,64 @@ int party_can_open_corpse(object *pl, object *corpse) {
  * @param corpse
  * The corpse.
  */
+static bool party_currency_begin_at_corpse(object *pl,
+                                           object *corpse,
+                                           const char *reason,
+                                           const char *subject_id,
+                                           int64_t before,
+                                           int64_t delta,
+                                           int64_t after,
+                                           const char *destination,
+                                           const char *funding,
+                                           char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    transaction[0] = '\0';
+    if (!gameplay_journal_required()) {
+        return true;
+    }
+    const char *actor = object_custody_actor_id(pl);
+    if (actor == NULL || pl->map == NULL) {
+        return false;
+    }
+    mapstruct *source_map = corpse->map != NULL ? corpse->map : pl->map;
+    gameplay_journal_subject_t subject = {
+        .account_id = CONTR(pl)->cs->account,
+        .character_id = pl->name,
+        .map_id = source_map->path != NULL ? source_map->path : "",
+        .x = corpse->map != NULL ? corpse->x : pl->x,
+        .y = corpse->map != NULL ? corpse->y : pl->y,
+    };
+    gameplay_journal_change_t change = {
+        .subject_id = subject_id,
+        .lineage_id = "",
+        .before = before,
+        .delta = delta,
+        .after = after,
+        .source = "corpse",
+        .destination = destination,
+        .actor = actor,
+        .currency = "copper-equivalent",
+        .funding = funding,
+    };
+    if (!gameplay_journal_begin(&subject,
+                                GAMEPLAY_JOURNAL_CURRENCY,
+                                reason,
+                                &change,
+                                transaction)) {
+        return false;
+    }
+    if (!gameplay_journal_track_player(transaction, pl) ||
+        (corpse->map != NULL && !gameplay_journal_track_map_object(transaction,
+                                                                   corpse->map,
+                                                                   corpse->x,
+                                                                   corpse->y,
+                                                                   corpse))) {
+        (void)gameplay_journal_abort(transaction, "domain-registration-failed");
+        transaction[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
 static void party_loot_random(object *pl, object *corpse) {
     int count = 0, pl_id;
     party_struct *party;
@@ -323,26 +381,16 @@ static void party_loot_random(object *pl, object *corpse) {
                                 break;
                             }
                             char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
-                            if (!gameplay_journal_currency_begin(ol->objlink.ob,
-                                                                 "party.currency-loot",
-                                                                 "currency:party-loot",
-                                                                 before,
-                                                                 value,
-                                                                 before + value,
-                                                                 "corpse",
-                                                                 "carried-cash",
-                                                                 "party-corpse",
-                                                                 transaction)) {
-                                break;
-                            }
-                            if (transaction[0] != '\0' && corpse->map != NULL &&
-                                !gameplay_journal_track_map_object(transaction,
-                                                                   corpse->map,
-                                                                   corpse->x,
-                                                                   corpse->y,
-                                                                   corpse)) {
-                                (void)gameplay_journal_abort(transaction,
-                                                             "domain-registration-failed");
+                            if (!party_currency_begin_at_corpse(ol->objlink.ob,
+                                                                corpse,
+                                                                "party.currency-loot",
+                                                                "currency:party-loot",
+                                                                before,
+                                                                value,
+                                                                before + value,
+                                                                "carried-cash",
+                                                                "party-corpse",
+                                                                transaction)) {
                                 break;
                             }
                             if (transaction[0] != '\0') {
@@ -384,6 +432,22 @@ static void party_loot_random(object *pl, object *corpse) {
             }
         }
     }
+}
+
+static bool party_currency_source_begin(object *pl,
+                                        object *corpse,
+                                        int64_t value,
+                                        char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    return party_currency_begin_at_corpse(pl,
+                                          corpse,
+                                          "party.currency-source",
+                                          "currency:party-corpse",
+                                          value,
+                                          -value,
+                                          0,
+                                          "party-pool",
+                                          "party-corpse",
+                                          transaction);
 }
 
 /**
@@ -489,7 +553,9 @@ static void party_loot_split(object *pl, object *corpse) {
         } party_currency_grant_t;
         party_currency_grant_t *grants = xcalloc(count, sizeof(*grants));
         uint32_t num = 0;
-        bool prepared = shop_coins_available();
+        char source_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
+        bool prepared = shop_coins_available() &&
+                        party_currency_source_begin(pl, corpse, value, source_transaction);
 
         for (ol = party->members; prepared && ol != NULL; ol = ol->next) {
             if (on_same_map(ol->objlink.ob, pl)) {
@@ -498,27 +564,17 @@ static void party_loot_split(object *pl, object *corpse) {
                 if (num == 0) {
                     value_split += value % count;
                 }
-                if (!gameplay_journal_currency_begin(ol->objlink.ob,
-                                                     "party.currency-split",
-                                                     "currency:party-loot",
-                                                     0,
-                                                     value_split,
-                                                     value_split,
-                                                     "corpse",
-                                                     "player-or-ground",
-                                                     "party-corpse",
-                                                     grants[num].transaction)) {
-                    prepared = false;
-                    break;
-                }
-                if (grants[num].transaction[0] != '\0' && corpse->map != NULL &&
-                    !gameplay_journal_track_map_object(grants[num].transaction,
-                                                       corpse->map,
-                                                       corpse->x,
-                                                       corpse->y,
-                                                       corpse)) {
-                    (void)gameplay_journal_abort(grants[num].transaction,
-                                                 "domain-registration-failed");
+                if (!gameplay_journal_currency_begin(
+                        ol->objlink.ob,
+                        "party.currency-split",
+                        "currency:party-loot",
+                        0,
+                        value_split,
+                        value_split,
+                        "corpse",
+                        "player-or-ground",
+                        source_transaction[0] != '\0' ? source_transaction : "party-corpse",
+                        grants[num].transaction)) {
                     prepared = false;
                     break;
                 }
@@ -535,6 +591,7 @@ static void party_loot_split(object *pl, object *corpse) {
                     (void)gameplay_journal_abort(grants[i].transaction, "party-grant-not-prepared");
                 }
             }
+            (void)gameplay_journal_semantic_abort(source_transaction, "party-grant-not-prepared");
             free(grants);
             return;
         }
@@ -563,6 +620,7 @@ static void party_loot_split(object *pl, object *corpse) {
                                  shop_get_cost_string(grants[i].value));
             }
         }
+        (void)gameplay_journal_semantic_commit(source_transaction);
         free(grants);
     }
 }

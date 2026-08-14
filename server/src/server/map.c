@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <gameplay_journal.h>
 #include <swap.h>
 #include <server_main.h>
 #include <plugin.h>
@@ -1519,6 +1520,13 @@ int new_save_map(mapstruct *m, int flag) {
     map_atomic_file_t primary, unique;
     memset(&primary, 0, sizeof(primary));
     memset(&unique, 0, sizeof(unique));
+
+    if (!flag && !gameplay_journal_map_checkpoint_allowed(m)) {
+        LOG(INFO,
+            "Deferring save of map %s while a gameplay journal transaction is pending.",
+            m->path != NULL ? m->path : "<runtime>");
+        return -1;
+    }
 
     if (flag && !*m->path) {
         return -1;

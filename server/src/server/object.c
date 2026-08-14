@@ -2516,16 +2516,18 @@ object_insert_into_reason(object *op, object *where, const char *reason, object 
           !object_custody_track_player(&transaction, destination_player)) ||
          (op->map != NULL &&
           !object_custody_track_map_object(&transaction, op->map, op->x, op->y, op)) ||
-         (source_root->map != NULL && !object_custody_track_map_object(&transaction,
-                                                                       source_root->map,
-                                                                       source_root->x,
-                                                                       source_root->y,
-                                                                       source_root)) ||
-         (destination_root->map != NULL && !object_custody_track_map_object(&transaction,
-                                                                            destination_root->map,
-                                                                            destination_root->x,
-                                                                            destination_root->y,
-                                                                            destination_root)))) {
+         (source_root->type != PLAYER && source_root->map != NULL &&
+          !object_custody_track_map_object(&transaction,
+                                           source_root->map,
+                                           source_root->x,
+                                           source_root->y,
+                                           source_root)) ||
+         (destination_root->type != PLAYER && destination_root->map != NULL &&
+          !object_custody_track_map_object(&transaction,
+                                           destination_root->map,
+                                           destination_root->x,
+                                           destination_root->y,
+                                           destination_root)))) {
         object_custody_abort(&transaction, "domain-registration-failed");
         return OBJECT_SEMANTIC_FAILED;
     }

@@ -20,6 +20,7 @@ SCHEMA_VERSIONS = {1, 2}
 HASH_MARKER = b',"record_hash":"'
 FORBIDDEN_FIELDS = {"password", "session_secret", "chat", "inscription", "text"}
 TOKEN = re.compile(r"[A-Za-z0-9_.:/@+\-]{1,255}\Z")
+MAP_ID = re.compile(r"[A-Za-z0-9_.:/@+$\-]{1,255}\Z")
 IDENTITY = re.compile(r"[ -~]{1,255}\Z")
 HASH = re.compile(r"[0-9a-f]{64}\Z")
 KINDS = {"item", "currency", "quest", "progression"}
@@ -99,15 +100,18 @@ def _validate_schema(value: dict[str, Any], source: str) -> None:
         "run_id", "phase", "kind", "reason", "profile", "prev_hash", "record_hash",
     }
     phase = value["phase"]
-    if not isinstance(phase, str) or phase not in {"boundary", "intent", "commit", "abort"}:
+    if not isinstance(phase, str) or phase not in {
+        "boundary", "intent", "domain", "commit", "abort"
+    }:
         raise JournalError(f"invalid record phase at {source}")
     if not isinstance(value["kind"], str):
         raise JournalError(f"invalid record kind at {source}")
     intent = {"account_id", "character_id", "context", "change"}
     terminal = {"domains"} if phase in {"commit", "abort"} and value["version"] == 2 else set()
-    expected = common | (intent if phase == "intent" else terminal)
+    domain = {"domain"} if phase == "domain" else set()
+    expected = common | (intent if phase == "intent" else terminal | domain)
     if phase == "intent" and value["version"] == 2:
-        expected.add("details")
+        expected.update({"details", "domains"})
     if set(value) != expected:
         raise JournalError(f"unexpected fields for {phase!r} record at {source}")
     if not all(_token(value[name]) for name in ("server_id", "run_id", "reason")):
@@ -144,6 +148,20 @@ def _validate_schema(value: dict[str, Any], source: str) -> None:
         if transaction != "" or value["kind"] not in {"run", "profile"}:
             raise JournalError(f"invalid boundary record at {source}")
         return
+    if phase == "domain":
+        domain = value["domain"]
+        if (
+            value["version"] != 2
+            or not _token(transaction)
+            or value["kind"] != "transaction"
+            or not isinstance(domain, dict)
+            or set(domain) != {"kind", "id"}
+            or domain["kind"] not in {"player", "map-runtime", "map-unique"}
+            or not isinstance(domain["id"], str)
+            or IDENTITY.fullmatch(domain["id"]) is None
+        ):
+            raise JournalError(f"invalid save-domain record at {source}")
+        return
     if phase in {"commit", "abort"}:
         if not _token(transaction) or value["kind"] != "transaction":
             raise JournalError(f"invalid terminal record at {source}")
@@ -174,8 +192,9 @@ def _validate_schema(value: dict[str, Any], source: str) -> None:
     ):
         raise JournalError(f"invalid player identity at {source}")
     context = value["context"]
-    if not isinstance(context, dict) or set(context) != {"map_id", "x", "y"} or not _token(
-        context["map_id"], empty=True
+    if not isinstance(context, dict) or set(context) != {"map_id", "x", "y"} or not (
+        isinstance(context["map_id"], str)
+        and (context["map_id"] == "" or MAP_ID.fullmatch(context["map_id"]) is not None)
     ) or not _integer(context["x"], -(1 << 31), (1 << 31) - 1) or not _integer(
         context["y"], -(1 << 31), (1 << 31) - 1
     ):
@@ -194,6 +213,17 @@ def _validate_schema(value: dict[str, Any], source: str) -> None:
     if change["before"] + change["delta"] != change["after"]:
         raise JournalError(f"typed change arithmetic mismatch at {source}")
     if value["version"] == 2:
+        domains = value["domains"]
+        if (
+            not isinstance(domains, list)
+            or len(domains) != 1
+            or not isinstance(domains[0], dict)
+            or set(domains[0]) != {"kind", "id"}
+            or domains[0]["kind"] != "player"
+            or not isinstance(domains[0]["id"], str)
+            or IDENTITY.fullmatch(domains[0]["id"]) is None
+        ):
+            raise JournalError(f"invalid intent save domains at {source}")
         details = value.get("details")
         expected_details = {
             "archetype", "object_type", "snapshot", "quantity", "source",
@@ -393,7 +423,13 @@ def load(inputs: Iterable[Path]) -> Journal:
             continue
         state = transactions.setdefault(
             transaction_id,
-            {"status": "missing-intent", "intent": None, "events": [], "terminal": None},
+            {
+                "status": "missing-intent",
+                "intent": None,
+                "events": [],
+                "terminal": None,
+                "domains": [],
+            },
         )
         state["events"].append(record)
         phase = record["phase"]
@@ -415,6 +451,14 @@ def load(inputs: Iterable[Path]) -> Journal:
                     raise JournalError(f"conflicting duplicate intent for {transaction_id}")
             else:
                 state["intent"] = record
+                state["domains"] = list(record.get("domains", []))
+        elif phase == "domain":
+            if state["intent"] is None:
+                raise JournalError(f"save domain without intent for {transaction_id}")
+            domain = record["domain"]
+            if domain in state["domains"]:
+                raise JournalError(f"duplicate save domain for {transaction_id}")
+            state["domains"].append(domain)
         else:
             variable = {
                 "_source", "event_id", "sequence", "utc", "server_id", "run_id",
@@ -438,6 +482,10 @@ def load(inputs: Iterable[Path]) -> Journal:
         if state["intent"] is None:
             raise JournalError(f"terminal record without intent for {transaction_id}")
         terminal = state.pop("terminal")
+        if terminal is not None and {
+            (domain["kind"], domain["id"]) for domain in terminal.get("domains", [])
+        } != {(domain["kind"], domain["id"]) for domain in state["domains"]}:
+            raise JournalError(f"terminal save domains differ from intent plan for {transaction_id}")
         if terminal is not None and terminal["phase"] == "commit":
             state["status"] = "committed"
         elif terminal is not None and terminal["phase"] == "abort":
@@ -471,28 +519,9 @@ def query(journal: Journal, **filters: str | None) -> list[dict[str, Any]]:
         for record in journal.records
         if record["transaction_id"] in matching_transactions
     ]
-    run_order = {
-        coordinate: index
-        for index, coordinate in enumerate(sorted(
-            {(record["server_id"], record["run_id"]) for record in journal.records},
-            key=lambda coordinate: (
-                min(record["utc"] for record in journal.records
-                    if (record["server_id"], record["run_id"]) == coordinate),
-                coordinate,
-            ),
-        ))
-    }
-    transaction_order = {}
-    for record in selected:
-        transaction_id = record["transaction_id"]
-        if record["phase"] == "intent" and transaction_id not in transaction_order:
-            transaction_order[transaction_id] = (
-                run_order[(record["server_id"], record["run_id"])], record["sequence"]
-            )
-    phase_order = {"intent": 0, "commit": 1, "abort": 1}
+    phase_order = {"intent": 0, "domain": 1, "commit": 2, "abort": 2}
     return sorted(selected, key=lambda value: (
-        transaction_order[value["transaction_id"]], phase_order[value["phase"]],
-        run_order[(value["server_id"], value["run_id"])], value["sequence"],
+        value["sequence"], phase_order[value["phase"]],
     ))
 
 
@@ -516,8 +545,8 @@ def _parser() -> argparse.ArgumentParser:
         "--player-save",
         action="append",
         default=[],
-        type=Path,
-        help="saved player file; derives custody identity and checkpoint sequence",
+        metavar="ACCOUNT/CHARACTER=PATH",
+        help="saved player file and its journal domain identity",
     )
     reconcile_parser.add_argument(
         "--map-save",
@@ -529,49 +558,54 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _checkpoint_sequence(path: Path) -> tuple[str | None, int, bool]:
+def _checkpoint_sequence(path: Path) -> tuple[int, bool]:
     metadata = path.lstat()
     if stat.S_ISLNK(metadata.st_mode) or _is_reparse(metadata) or not stat.S_ISREG(metadata.st_mode):
         raise JournalError(f"save domain is not a direct regular file: {path}")
-    identity: str | None = None
     sequence: int | None = None
     unique_component = False
-    for raw_line in path.read_bytes().splitlines():
-        if raw_line.startswith(b"custody_actor "):
-            try:
-                identity = raw_line.removeprefix(b"custody_actor ").decode("ascii")
-            except UnicodeDecodeError as error:
-                raise JournalError(f"invalid player custody identity: {path}") from error
-        elif raw_line.startswith(b"journal_sequence "):
+    lines = path.read_bytes().splitlines()
+    if lines and lines[0].startswith(b"# gameplay-journal "):
+        fields = lines[0].split()
+        if len(fields) != 4 or re.fullmatch(b"[0-9a-f]{32}", fields[2]) is None:
+            raise JournalError(f"invalid unique save-domain marker: {path}")
+        try:
+            sequence = int(fields[3])
+        except ValueError as error:
+            raise JournalError(f"invalid save-domain sequence: {path}") from error
+        unique_component = True
+    else:
+        for raw_line in lines:
+            if raw_line in {b"end", b"endplst"}:
+                break
+            if not raw_line.startswith(b"journal_sequence "):
+                continue
+            if sequence is not None:
+                raise JournalError(f"duplicate save-domain sequence: {path}")
             try:
                 sequence = int(raw_line.removeprefix(b"journal_sequence "))
             except ValueError as error:
                 raise JournalError(f"invalid save-domain sequence: {path}") from error
-        elif raw_line.startswith(b"# gameplay-journal "):
-            unique_component = True
-            fields = raw_line.split()
-            if len(fields) == 4:
-                try:
-                    sequence = int(fields[3])
-                except ValueError as error:
-                    raise JournalError(f"invalid save-domain sequence: {path}") from error
-    if sequence is None or not _integer(sequence, 0, (1 << 64) - 1):
+    if sequence is None:
+        sequence = 0
+    if not _integer(sequence, 0, (1 << 64) - 1):
         raise JournalError(f"save domain has no valid journal sequence: {path}")
-    return identity, sequence, unique_component
+    return sequence, unique_component
 
 
 def _saved_domain_arguments(options: argparse.Namespace) -> list[str]:
     domains = list(options.domain)
-    for path in options.player_save:
-        identity, sequence, _unique_component = _checkpoint_sequence(path)
-        if identity is None or IDENTITY.fullmatch(identity) is None:
-            raise JournalError(f"player save has no valid custody identity: {path}")
+    for value in options.player_save:
+        identity, separator, raw_path = value.partition("=")
+        if not separator or not identity or not raw_path or IDENTITY.fullmatch(identity) is None:
+            raise JournalError(f"invalid player save argument: {value}")
+        sequence, _unique_component = _checkpoint_sequence(Path(raw_path))
         domains.append(f"player:{identity}={sequence}")
     for value in options.map_save:
         identity, separator, raw_path = value.partition("=")
         if not separator or not identity or not raw_path:
             raise JournalError(f"invalid map save argument: {value}")
-        _unused, sequence, unique_component = _checkpoint_sequence(Path(raw_path))
+        sequence, unique_component = _checkpoint_sequence(Path(raw_path))
         kind = "map-unique" if unique_component else "map-runtime"
         domains.append(f"{kind}:{identity}={sequence}")
     return domains
@@ -599,7 +633,11 @@ def reconcile(journal: Journal, raw_domains: list[str]) -> dict[str, Any]:
         watermarks[coordinate_key] = min(watermarks.get(coordinate_key, sequence), sequence)
 
     result: dict[str, Any] = {}
-    for transaction_id, transaction in sorted(journal.transactions.items()):
+    ordered = sorted(
+        journal.transactions.items(),
+        key=lambda item: item[1]["intent"]["sequence"],
+    )
+    for transaction_id, transaction in ordered:
         status = transaction["status"]
         terminal = next(
             (
@@ -609,7 +647,12 @@ def reconcile(journal: Journal, raw_domains: list[str]) -> dict[str, Any]:
             ),
             None,
         )
-        entry: dict[str, Any] = {"status": status, "domains": []}
+        entry: dict[str, Any] = {
+            "status": status,
+            "intent_sequence": transaction["intent"]["sequence"],
+            "terminal_sequence": terminal["sequence"] if terminal is not None else None,
+            "domains": [],
+        }
         if transaction["intent"] is not None:
             entry["change"] = transaction["intent"]["change"]
             if "details" in transaction["intent"]:
@@ -635,6 +678,10 @@ def reconcile(journal: Journal, raw_domains: list[str]) -> dict[str, Any]:
                     }
                 )
         elif status == "attempted":
+            entry["domains"] = [
+                {**domain, "saved_sequence": watermarks.get((domain["kind"], domain["id"]))}
+                for domain in transaction["domains"]
+            ]
             entry["action"] = "inspect-typed-state"
         else:
             entry["action"] = "none"

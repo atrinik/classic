@@ -720,6 +720,8 @@ struct plugin_hooklist
                          int,
                          int,
                          const char *)
+    PLUGIN_HOOK_FUNCTION(bool, gameplay_journal_player_checkpoint_allowed, const object *)
+    PLUGIN_HOOK_FUNCTION(bool, gameplay_journal_map_checkpoint_allowed, const mapstruct *)
 
 };
 // clang-format on

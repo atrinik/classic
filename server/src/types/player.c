@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <gameplay_journal.h>
 #include <movement.h>
 #include <shop.h>
 #include <server_main.h>
@@ -2389,7 +2390,8 @@ static void pick_up_object(object *pl, object *op, object *tmp, int nrof, int no
     bool custody_transfer = pl->type == PLAYER && item_custody_auditable(tmp) &&
                             !QUERY_FLAG(tmp, FLAG_UNPAID) && object_get_env(tmp) != pl;
     object_custody_transaction_t custody = {0};
-    object *source_player = object_get_env(tmp)->type == PLAYER ? object_get_env(tmp) : NULL;
+    object *source_root = object_get_env(tmp);
+    object *source_player = source_root->type == PLAYER ? source_root : NULL;
     const char *acquirer = custody_transfer ? object_custody_actor_id(pl) : "";
     const char *relinquisher = source_player != NULL ? object_custody_actor_id(source_player) : "";
     if (custody_transfer && (acquirer == NULL || relinquisher == NULL ||
@@ -2416,7 +2418,13 @@ static void pick_up_object(object *pl, object *op, object *tmp, int nrof, int no
     if (custody_transfer &&
         ((source_player != NULL && !object_custody_track_player(&custody, source_player)) ||
          (tmp->map != NULL &&
-          !object_custody_track_map_object(&custody, tmp->map, tmp->x, tmp->y, tmp)))) {
+          !object_custody_track_map_object(&custody, tmp->map, tmp->x, tmp->y, tmp)) ||
+         (source_root->type != PLAYER && source_root->map != NULL &&
+          !object_custody_track_map_object(&custody,
+                                           source_root->map,
+                                           source_root->x,
+                                           source_root->y,
+                                           source_root)))) {
         object_custody_abort(&custody, "domain-registration-failed");
         draw_info(COLOR_WHITE, pl, "The item transfer could not be journaled.");
         return;
@@ -2648,16 +2656,18 @@ void put_object_in_sack(object *op, object *sack, object *tmp, long nrof) {
         ((source_player != NULL && !object_custody_track_player(&custody, source_player)) ||
          (destination_player != NULL &&
           !object_custody_track_player(&custody, destination_player)) ||
-         (source_root->map != NULL && !object_custody_track_map_object(&custody,
-                                                                       source_root->map,
-                                                                       source_root->x,
-                                                                       source_root->y,
-                                                                       source_root)) ||
-         (destination_root->map != NULL && !object_custody_track_map_object(&custody,
-                                                                            destination_root->map,
-                                                                            destination_root->x,
-                                                                            destination_root->y,
-                                                                            destination_root)))) {
+         (source_root->type != PLAYER && source_root->map != NULL &&
+          !object_custody_track_map_object(&custody,
+                                           source_root->map,
+                                           source_root->x,
+                                           source_root->y,
+                                           source_root)) ||
+         (destination_root->type != PLAYER && destination_root->map != NULL &&
+          !object_custody_track_map_object(&custody,
+                                           destination_root->map,
+                                           destination_root->x,
+                                           destination_root->y,
+                                           destination_root)))) {
         object_custody_abort(&custody, "domain-registration-failed");
         draw_info(COLOR_WHITE, op, "The item transfer could not be journaled.");
         return;
@@ -2959,6 +2969,13 @@ int player_exists(const char *name) {
  */
 void player_save(object *op) {
     HARD_ASSERT(op != NULL);
+
+    if (!gameplay_journal_player_checkpoint_allowed(op)) {
+        LOG(INFO,
+            "Deferring save of player %s while a gameplay journal transaction is pending.",
+            op->name != NULL ? op->name : "<unnamed>");
+        return;
+    }
 
     /* Is this a map players can't save on? */
     if (op->map != NULL && MAP_PLAYER_NO_SAVE(op->map)) {
