@@ -1,0 +1,1463 @@
+{
+  "alerts": {
+    "c90a95131081e333:large:sustained_p95": {
+      "active": false,
+      "history": [
+        {
+          "id": "run-31755454661",
+          "state": "failed"
+        }
+      ],
+      "last_transition": "none",
+      "retained_initial_active": false,
+      "retained_previous_state": null
+    },
+    "c90a95131081e333:standard:sustained_p95": {
+      "active": false,
+      "history": [
+        {
+          "id": "run-31755454661",
+          "state": "failed"
+        }
+      ],
+      "last_transition": "none",
+      "retained_initial_active": false,
+      "retained_previous_state": null
+    }
+  },
+  "cohorts": {
+    "c90a95131081e333": [
+      {
+        "checks": {
+          "animation_isolation": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 4
+          },
+          "cache_memory_plateau": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 4
+          },
+          "candidate_large_determinism": {
+            "checkpoints": 1,
+            "enforced": true,
+            "final_states": 1,
+            "fresh_process_runs": 2,
+            "identities": 1,
+            "lifecycle_checkpoints": 1,
+            "passed": true
+          },
+          "candidate_large_sustained_p95": {
+            "enforced": false,
+            "limit_ns": 125000000,
+            "passed": false,
+            "value_ns": 186299699
+          },
+          "candidate_large_sustained_window_p95": {
+            "enforced": false,
+            "first_window_ns": 430082143,
+            "last_window_ns": 183237577,
+            "limit_ns": 473090357,
+            "passed": true
+          },
+          "candidate_standard_determinism": {
+            "checkpoints": 1,
+            "enforced": true,
+            "final_states": 1,
+            "fresh_process_runs": 2,
+            "identities": 1,
+            "lifecycle_checkpoints": 1,
+            "passed": true
+          },
+          "candidate_sustained_p95": {
+            "enforced": false,
+            "limit_ns": 33300000,
+            "passed": false,
+            "value_ns": 69765154
+          },
+          "candidate_sustained_window_p95": {
+            "enforced": false,
+            "first_window_ns": 70256170,
+            "last_window_ns": 70117566,
+            "limit_ns": 77281787,
+            "passed": true
+          },
+          "checkpoint": {
+            "base_candidate_match": true,
+            "base_candidate_visual_lifecycle_match": true,
+            "baseline_consistent": true,
+            "baseline_sha256": null,
+            "baseline_state_consistent": true,
+            "candidate_consistent": true,
+            "candidate_sha256": "d1c37190727b62a0f3f4fe9892dcf5179fc6e98a5ca08ab36bc75ce35f56f185",
+            "candidate_state_consistent": true,
+            "enforced": true,
+            "passed": true
+          },
+          "full_redraw_accounting": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 4
+          },
+          "idle_wait_recovery": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 4
+          },
+          "instrumentation_identity": {
+            "enforced": true,
+            "passed": true
+          },
+          "large_discrete_animation_isolation": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 2
+          },
+          "large_discrete_cache_memory_plateau": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 2
+          },
+          "large_discrete_determinism": {
+            "checkpoints": 1,
+            "enforced": true,
+            "final_states": 1,
+            "fresh_process_runs": 2,
+            "identities": 1,
+            "lifecycle_checkpoints": 1,
+            "passed": true
+          },
+          "large_discrete_full_redraw_accounting": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 2
+          },
+          "large_discrete_idle_wait_recovery": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 2
+          },
+          "large_discrete_lighting_cache_churn": {
+            "enforced": false,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 2
+          },
+          "large_discrete_noop_redraw_avoidance": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 2
+          },
+          "large_discrete_ordered_final_state": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 2
+          },
+          "large_discrete_queue_plateau_recovery": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 2
+          },
+          "large_instrumentation_identity": {
+            "enforced": true,
+            "passed": true
+          },
+          "lighting_cache_churn": {
+            "enforced": false,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 4
+          },
+          "noop_redraw_avoidance": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 4
+          },
+          "ordered_final_state": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 4
+          },
+          "queue_plateau_recovery": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 4
+          },
+          "standard_discrete_animation_isolation": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 2
+          },
+          "standard_discrete_cache_memory_plateau": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 2
+          },
+          "standard_discrete_determinism": {
+            "checkpoints": 1,
+            "enforced": true,
+            "final_states": 1,
+            "fresh_process_runs": 2,
+            "identities": 1,
+            "lifecycle_checkpoints": 1,
+            "passed": true
+          },
+          "standard_discrete_full_redraw_accounting": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 2
+          },
+          "standard_discrete_idle_wait_recovery": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 2
+          },
+          "standard_discrete_lighting_cache_churn": {
+            "enforced": false,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 2
+          },
+          "standard_discrete_noop_redraw_avoidance": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 2
+          },
+          "standard_discrete_ordered_final_state": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 2
+          },
+          "standard_discrete_queue_plateau_recovery": {
+            "enforced": true,
+            "failed_runs": 0,
+            "passed": true,
+            "runs": 2
+          }
+        },
+        "cohort": "c90a95131081e333",
+        "commit": "bd66d68fe8b6757f406877943abdcbb074180318",
+        "contexts": {
+          "large_discrete": {
+            "draw_reasons": {
+              "animation": 480,
+              "external": 0,
+              "lighting": 0,
+              "packet": 480,
+              "resize": 0,
+              "scroll": 480,
+              "ui": 0
+            },
+            "lighting": {
+              "field_dirty_pixels": 0,
+              "field_partial_rebuilds": 0,
+              "field_rebuilds": 0,
+              "field_reuses": 0,
+              "field_translations": 0,
+              "lit_sprite_evictions": 0,
+              "lit_sprite_hits": 0,
+              "lit_sprite_lookups": 0,
+              "lit_sprite_misses": 0
+            },
+            "map": {
+              "auxiliary_map_draws": 240,
+              "changed_map_packets": 480,
+              "map_draws": 720,
+              "noop_map_packets": 0,
+              "presents": 0,
+              "primary_map_draws": 480
+            },
+            "queue": {
+              "budget_yields": 0,
+              "oldest_age_us": 0,
+              "peak_bytes": 133,
+              "peak_depth": 1,
+              "recoveries": 0
+            },
+            "render_stages": {
+              "command_sort": {
+                "avg_ms_per_call": 0.007,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "ground": {
+                "avg_ms_per_call": 0.258,
+                "calls_per_run": 3600,
+                "scope": "per_level"
+              },
+              "ground_composite": {
+                "avg_ms_per_call": 11.293,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "hint_replay": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 480,
+                "scope": "per_map_draw"
+              },
+              "lighting": {
+                "avg_ms_per_call": null,
+                "calls_per_run": 0,
+                "scope": "per_level"
+              },
+              "living_occlusion": {
+                "avg_ms_per_call": 0.291,
+                "calls_per_run": 480,
+                "scope": "per_map_draw"
+              },
+              "map": {
+                "avg_ms_per_call": 22.384,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "map_scratch_clear": {
+                "avg_ms_per_call": 0.36,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "objects": {
+                "avg_ms_per_call": 1.594,
+                "calls_per_run": 3600,
+                "scope": "per_level"
+              },
+              "paint": {
+                "avg_ms_per_call": 1.186,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "sprite_effects": {
+                "avg_ms_per_call": 0.464,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "ui": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              }
+            },
+            "runs": 2,
+            "sprite_cache": {
+              "gc_removals": 0,
+              "hits": 237545,
+              "lookups": 237560,
+              "misses": 15
+            },
+            "window_p95_ms": {
+              "first": 45.31,
+              "last": 45.3
+            },
+            "work_ms": {
+              "max": 56.34,
+              "p50": 27.96,
+              "p95": 45.55,
+              "p99": 46.2
+            }
+          },
+          "standard_discrete": {
+            "draw_reasons": {
+              "animation": 480,
+              "external": 0,
+              "lighting": 0,
+              "packet": 480,
+              "resize": 0,
+              "scroll": 480,
+              "ui": 0
+            },
+            "lighting": {
+              "field_dirty_pixels": 0,
+              "field_partial_rebuilds": 0,
+              "field_rebuilds": 0,
+              "field_reuses": 0,
+              "field_translations": 0,
+              "lit_sprite_evictions": 0,
+              "lit_sprite_hits": 0,
+              "lit_sprite_lookups": 0,
+              "lit_sprite_misses": 0
+            },
+            "map": {
+              "auxiliary_map_draws": 240,
+              "changed_map_packets": 480,
+              "map_draws": 720,
+              "noop_map_packets": 0,
+              "presents": 0,
+              "primary_map_draws": 480
+            },
+            "queue": {
+              "budget_yields": 0,
+              "oldest_age_us": 0,
+              "peak_bytes": 133,
+              "peak_depth": 1,
+              "recoveries": 0
+            },
+            "render_stages": {
+              "command_sort": {
+                "avg_ms_per_call": 0.004,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "ground": {
+                "avg_ms_per_call": 0.092,
+                "calls_per_run": 3600,
+                "scope": "per_level"
+              },
+              "ground_composite": {
+                "avg_ms_per_call": 4.105,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "hint_replay": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 480,
+                "scope": "per_map_draw"
+              },
+              "lighting": {
+                "avg_ms_per_call": null,
+                "calls_per_run": 0,
+                "scope": "per_level"
+              },
+              "living_occlusion": {
+                "avg_ms_per_call": 0.11,
+                "calls_per_run": 480,
+                "scope": "per_map_draw"
+              },
+              "map": {
+                "avg_ms_per_call": 7.77,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "map_scratch_clear": {
+                "avg_ms_per_call": 0.127,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "objects": {
+                "avg_ms_per_call": 0.502,
+                "calls_per_run": 3600,
+                "scope": "per_level"
+              },
+              "paint": {
+                "avg_ms_per_call": 0.561,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "sprite_effects": {
+                "avg_ms_per_call": 0.225,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "ui": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              }
+            },
+            "runs": 2,
+            "sprite_cache": {
+              "gc_removals": 0,
+              "hits": 162818,
+              "lookups": 162830,
+              "misses": 12
+            },
+            "window_p95_ms": {
+              "first": 22.73,
+              "last": 22.1
+            },
+            "work_ms": {
+              "max": 26.09,
+              "p50": 6.73,
+              "p95": 22.57,
+              "p99": 23.37
+            }
+          }
+        },
+        "environment": {
+          "repository": "atrinik/classic",
+          "runner_image": "ubuntu24",
+          "workflow_url": "https://github.com/atrinik/classic/actions/runs/31755454661"
+        },
+        "fixture": {
+          "manifest_sha256": "68cc550cb41b08f1f944dd3a0f04801424ce122d13d17c04b4e47af82be68d5f",
+          "snapshot_sha256": "1a8786a5ad458a44063ac6b68a9cce33f6f9496116367350f4c350ff21581b01"
+        },
+        "id": "run-31755454661",
+        "large_phases": {
+          "cold": {
+            "draw_reasons": {
+              "animation": 1,
+              "external": 0,
+              "lighting": 0,
+              "packet": 1,
+              "resize": 0,
+              "scroll": 0,
+              "ui": 0
+            },
+            "lighting": {
+              "field_dirty_pixels": 10368000,
+              "field_partial_rebuilds": 0,
+              "field_rebuilds": 5,
+              "field_reuses": 0,
+              "field_translations": 0,
+              "lit_sprite_evictions": 31,
+              "lit_sprite_hits": 0,
+              "lit_sprite_lookups": 116,
+              "lit_sprite_misses": 116
+            },
+            "map": {
+              "auxiliary_map_draws": 1,
+              "changed_map_packets": 1,
+              "map_draws": 2,
+              "noop_map_packets": 0,
+              "presents": 0,
+              "primary_map_draws": 1
+            },
+            "queue": {
+              "budget_yields": 0,
+              "oldest_age_us": 0,
+              "peak_bytes": 11611,
+              "peak_depth": 1,
+              "recoveries": 0
+            },
+            "render_stages": {
+              "command_sort": {
+                "avg_ms_per_call": 0.011,
+                "calls_per_run": 2,
+                "scope": "per_map_draw"
+              },
+              "ground": {
+                "avg_ms_per_call": 0.3,
+                "calls_per_run": 10,
+                "scope": "per_level"
+              },
+              "ground_composite": {
+                "avg_ms_per_call": 11.209,
+                "calls_per_run": 2,
+                "scope": "per_map_draw"
+              },
+              "hint_replay": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 1,
+                "scope": "per_map_draw"
+              },
+              "lighting": {
+                "avg_ms_per_call": 62.0,
+                "calls_per_run": 5,
+                "scope": "per_level"
+              },
+              "living_occlusion": {
+                "avg_ms_per_call": 0.277,
+                "calls_per_run": 1,
+                "scope": "per_map_draw"
+              },
+              "map": {
+                "avg_ms_per_call": 226.283,
+                "calls_per_run": 2,
+                "scope": "per_map_draw"
+              },
+              "map_scratch_clear": {
+                "avg_ms_per_call": 0.359,
+                "calls_per_run": 2,
+                "scope": "per_map_draw"
+              },
+              "objects": {
+                "avg_ms_per_call": 1.561,
+                "calls_per_run": 10,
+                "scope": "per_level"
+              },
+              "paint": {
+                "avg_ms_per_call": 42.61,
+                "calls_per_run": 2,
+                "scope": "per_map_draw"
+              },
+              "sprite_effects": {
+                "avg_ms_per_call": 42.108,
+                "calls_per_run": 2,
+                "scope": "per_map_draw"
+              },
+              "ui": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 2,
+                "scope": "per_map_draw"
+              }
+            },
+            "runs": 2,
+            "sprite_cache": {
+              "gc_removals": 0,
+              "hits": 297,
+              "lookups": 325,
+              "misses": 28
+            },
+            "window_p95_ms": {
+              "first": 455.08,
+              "last": 455.08
+            },
+            "work_ms": {
+              "max": 455.08,
+              "p50": 455.08,
+              "p95": 455.08,
+              "p99": 455.08
+            }
+          },
+          "idle": {
+            "draw_reasons": {
+              "animation": 16,
+              "external": 0,
+              "lighting": 0,
+              "packet": 0,
+              "resize": 0,
+              "scroll": 0,
+              "ui": 0
+            },
+            "lighting": {
+              "field_dirty_pixels": 0,
+              "field_partial_rebuilds": 0,
+              "field_rebuilds": 0,
+              "field_reuses": 0,
+              "field_translations": 0,
+              "lit_sprite_evictions": 1552,
+              "lit_sprite_hits": 432,
+              "lit_sprite_lookups": 1984,
+              "lit_sprite_misses": 1552
+            },
+            "map": {
+              "auxiliary_map_draws": 0,
+              "changed_map_packets": 0,
+              "map_draws": 0,
+              "noop_map_packets": 8,
+              "presents": 0,
+              "primary_map_draws": 0
+            },
+            "queue": {
+              "budget_yields": 0,
+              "oldest_age_us": 0,
+              "peak_bytes": 33,
+              "peak_depth": 1,
+              "recoveries": 0
+            },
+            "render_stages": {
+              "command_sort": {
+                "avg_ms_per_call": 0.008,
+                "calls_per_run": 16,
+                "scope": "per_map_draw"
+              },
+              "ground": {
+                "avg_ms_per_call": null,
+                "calls_per_run": 0,
+                "scope": "per_level"
+              },
+              "ground_composite": {
+                "avg_ms_per_call": null,
+                "calls_per_run": 0,
+                "scope": "per_map_draw"
+              },
+              "hint_replay": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 16,
+                "scope": "per_map_draw"
+              },
+              "lighting": {
+                "avg_ms_per_call": null,
+                "calls_per_run": 0,
+                "scope": "per_level"
+              },
+              "living_occlusion": {
+                "avg_ms_per_call": 0.288,
+                "calls_per_run": 16,
+                "scope": "per_map_draw"
+              },
+              "map": {
+                "avg_ms_per_call": 45.482,
+                "calls_per_run": 16,
+                "scope": "per_map_draw"
+              },
+              "map_scratch_clear": {
+                "avg_ms_per_call": null,
+                "calls_per_run": 0,
+                "scope": "per_map_draw"
+              },
+              "objects": {
+                "avg_ms_per_call": 1.651,
+                "calls_per_run": 80,
+                "scope": "per_level"
+              },
+              "paint": {
+                "avg_ms_per_call": 36.806,
+                "calls_per_run": 16,
+                "scope": "per_map_draw"
+              },
+              "sprite_effects": {
+                "avg_ms_per_call": 35.849,
+                "calls_per_run": 16,
+                "scope": "per_map_draw"
+              },
+              "ui": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 16,
+                "scope": "per_map_draw"
+              }
+            },
+            "runs": 2,
+            "sprite_cache": {
+              "gc_removals": 0,
+              "hits": 368,
+              "lookups": 368,
+              "misses": 0
+            },
+            "window_p95_ms": {
+              "first": 50.34,
+              "last": 50.34
+            },
+            "work_ms": {
+              "max": 51.43,
+              "p50": 44.9,
+              "p95": 50.34,
+              "p99": 50.34
+            }
+          },
+          "resumed": {
+            "draw_reasons": {
+              "animation": 80,
+              "external": 0,
+              "lighting": 0,
+              "packet": 80,
+              "resize": 0,
+              "scroll": 80,
+              "ui": 0
+            },
+            "lighting": {
+              "field_dirty_pixels": 93708800,
+              "field_partial_rebuilds": 400,
+              "field_rebuilds": 400,
+              "field_reuses": 0,
+              "field_translations": 400,
+              "lit_sprite_evictions": 2960,
+              "lit_sprite_hits": 0,
+              "lit_sprite_lookups": 9920,
+              "lit_sprite_misses": 9920
+            },
+            "map": {
+              "auxiliary_map_draws": 41,
+              "changed_map_packets": 80,
+              "map_draws": 121,
+              "noop_map_packets": 0,
+              "presents": 0,
+              "primary_map_draws": 80
+            },
+            "queue": {
+              "budget_yields": 15,
+              "oldest_age_us": 1000000,
+              "peak_bytes": 1197,
+              "peak_depth": 9,
+              "recoveries": 1
+            },
+            "render_stages": {
+              "command_sort": {
+                "avg_ms_per_call": 0.01,
+                "calls_per_run": 121,
+                "scope": "per_map_draw"
+              },
+              "ground": {
+                "avg_ms_per_call": 0.283,
+                "calls_per_run": 605,
+                "scope": "per_level"
+              },
+              "ground_composite": {
+                "avg_ms_per_call": 11.27,
+                "calls_per_run": 121,
+                "scope": "per_map_draw"
+              },
+              "hint_replay": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 80,
+                "scope": "per_map_draw"
+              },
+              "lighting": {
+                "avg_ms_per_call": 10.444,
+                "calls_per_run": 400,
+                "scope": "per_level"
+              },
+              "living_occlusion": {
+                "avg_ms_per_call": 0.296,
+                "calls_per_run": 80,
+                "scope": "per_map_draw"
+              },
+              "map": {
+                "avg_ms_per_call": 110.233,
+                "calls_per_run": 121,
+                "scope": "per_map_draw"
+              },
+              "map_scratch_clear": {
+                "avg_ms_per_call": 0.371,
+                "calls_per_run": 121,
+                "scope": "per_map_draw"
+              },
+              "objects": {
+                "avg_ms_per_call": 1.566,
+                "calls_per_run": 605,
+                "scope": "per_level"
+              },
+              "paint": {
+                "avg_ms_per_call": 53.988,
+                "calls_per_run": 121,
+                "scope": "per_map_draw"
+              },
+              "sprite_effects": {
+                "avg_ms_per_call": 53.34,
+                "calls_per_run": 121,
+                "scope": "per_map_draw"
+              },
+              "ui": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 121,
+                "scope": "per_map_draw"
+              }
+            },
+            "runs": 2,
+            "sprite_cache": {
+              "gc_removals": 0,
+              "hits": 15529,
+              "lookups": 15530,
+              "misses": 1
+            },
+            "window_p95_ms": {
+              "first": 187.48,
+              "last": 185.46
+            },
+            "work_ms": {
+              "max": 190.37,
+              "p50": 175.07,
+              "p95": 186.67,
+              "p99": 188.79
+            }
+          },
+          "sustained": {
+            "draw_reasons": {
+              "animation": 480,
+              "external": 0,
+              "lighting": 0,
+              "packet": 480,
+              "resize": 0,
+              "scroll": 480,
+              "ui": 0
+            },
+            "lighting": {
+              "field_dirty_pixels": 599039360,
+              "field_partial_rebuilds": 2380,
+              "field_rebuilds": 2400,
+              "field_reuses": 0,
+              "field_translations": 2400,
+              "lit_sprite_evictions": 17754,
+              "lit_sprite_hits": 0,
+              "lit_sprite_lookups": 59512,
+              "lit_sprite_misses": 59512
+            },
+            "map": {
+              "auxiliary_map_draws": 240,
+              "changed_map_packets": 480,
+              "map_draws": 720,
+              "noop_map_packets": 0,
+              "presents": 0,
+              "primary_map_draws": 480
+            },
+            "queue": {
+              "budget_yields": 0,
+              "oldest_age_us": 0,
+              "peak_bytes": 133,
+              "peak_depth": 1,
+              "recoveries": 0
+            },
+            "render_stages": {
+              "command_sort": {
+                "avg_ms_per_call": 0.01,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "ground": {
+                "avg_ms_per_call": 0.284,
+                "calls_per_run": 3600,
+                "scope": "per_level"
+              },
+              "ground_composite": {
+                "avg_ms_per_call": 11.264,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "hint_replay": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 480,
+                "scope": "per_map_draw"
+              },
+              "lighting": {
+                "avg_ms_per_call": 10.881,
+                "calls_per_run": 2400,
+                "scope": "per_level"
+              },
+              "living_occlusion": {
+                "avg_ms_per_call": 0.295,
+                "calls_per_run": 480,
+                "scope": "per_map_draw"
+              },
+              "map": {
+                "avg_ms_per_call": 112.415,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "map_scratch_clear": {
+                "avg_ms_per_call": 0.372,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "objects": {
+                "avg_ms_per_call": 1.569,
+                "calls_per_run": 3600,
+                "scope": "per_level"
+              },
+              "paint": {
+                "avg_ms_per_call": 54.369,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "sprite_effects": {
+                "avg_ms_per_call": 53.715,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "ui": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              }
+            },
+            "runs": 2,
+            "sprite_cache": {
+              "gc_removals": 0,
+              "hits": 91152,
+              "lookups": 91170,
+              "misses": 18
+            },
+            "window_p95_ms": {
+              "first": 430.08,
+              "last": 183.24
+            },
+            "work_ms": {
+              "max": 452.16,
+              "p50": 174.71,
+              "p95": 186.3,
+              "p99": 191.41
+            }
+          }
+        },
+        "mode": "smooth",
+        "phases": {
+          "cold": {
+            "draw_reasons": {
+              "animation": 1,
+              "external": 0,
+              "lighting": 0,
+              "packet": 1,
+              "resize": 0,
+              "scroll": 0,
+              "ui": 0
+            },
+            "lighting": {
+              "field_dirty_pixels": 384000,
+              "field_partial_rebuilds": 0,
+              "field_rebuilds": 5,
+              "field_reuses": 0,
+              "field_translations": 0,
+              "lit_sprite_evictions": 0,
+              "lit_sprite_hits": 0,
+              "lit_sprite_lookups": 66,
+              "lit_sprite_misses": 66
+            },
+            "map": {
+              "auxiliary_map_draws": 1,
+              "changed_map_packets": 1,
+              "map_draws": 2,
+              "noop_map_packets": 0,
+              "presents": 0,
+              "primary_map_draws": 1
+            },
+            "queue": {
+              "budget_yields": 0,
+              "oldest_age_us": 0,
+              "peak_bytes": 11611,
+              "peak_depth": 1,
+              "recoveries": 0
+            },
+            "render_stages": {
+              "command_sort": {
+                "avg_ms_per_call": 0.009,
+                "calls_per_run": 2,
+                "scope": "per_map_draw"
+              },
+              "ground": {
+                "avg_ms_per_call": 0.215,
+                "calls_per_run": 10,
+                "scope": "per_level"
+              },
+              "ground_composite": {
+                "avg_ms_per_call": 5.864,
+                "calls_per_run": 2,
+                "scope": "per_map_draw"
+              },
+              "hint_replay": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 1,
+                "scope": "per_map_draw"
+              },
+              "lighting": {
+                "avg_ms_per_call": 2.321,
+                "calls_per_run": 5,
+                "scope": "per_level"
+              },
+              "living_occlusion": {
+                "avg_ms_per_call": 0.125,
+                "calls_per_run": 1,
+                "scope": "per_map_draw"
+              },
+              "map": {
+                "avg_ms_per_call": 40.757,
+                "calls_per_run": 2,
+                "scope": "per_map_draw"
+              },
+              "map_scratch_clear": {
+                "avg_ms_per_call": 0.185,
+                "calls_per_run": 2,
+                "scope": "per_map_draw"
+              },
+              "objects": {
+                "avg_ms_per_call": 0.727,
+                "calls_per_run": 10,
+                "scope": "per_level"
+              },
+              "paint": {
+                "avg_ms_per_call": 22.629,
+                "calls_per_run": 2,
+                "scope": "per_map_draw"
+              },
+              "sprite_effects": {
+                "avg_ms_per_call": 22.366,
+                "calls_per_run": 2,
+                "scope": "per_map_draw"
+              },
+              "ui": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 2,
+                "scope": "per_map_draw"
+              }
+            },
+            "runs": 2,
+            "sprite_cache": {
+              "gc_removals": 0,
+              "hits": 291,
+              "lookups": 319,
+              "misses": 28
+            },
+            "window_p95_ms": {
+              "first": 83.95,
+              "last": 83.95
+            },
+            "work_ms": {
+              "max": 83.95,
+              "p50": 83.95,
+              "p95": 83.95,
+              "p99": 83.95
+            }
+          },
+          "idle": {
+            "draw_reasons": {
+              "animation": 16,
+              "external": 0,
+              "lighting": 0,
+              "packet": 0,
+              "resize": 0,
+              "scroll": 0,
+              "ui": 0
+            },
+            "lighting": {
+              "field_dirty_pixels": 0,
+              "field_partial_rebuilds": 0,
+              "field_rebuilds": 0,
+              "field_reuses": 0,
+              "field_translations": 0,
+              "lit_sprite_evictions": 14,
+              "lit_sprite_hits": 1040,
+              "lit_sprite_lookups": 1056,
+              "lit_sprite_misses": 16
+            },
+            "map": {
+              "auxiliary_map_draws": 0,
+              "changed_map_packets": 0,
+              "map_draws": 0,
+              "noop_map_packets": 8,
+              "presents": 0,
+              "primary_map_draws": 0
+            },
+            "queue": {
+              "budget_yields": 0,
+              "oldest_age_us": 0,
+              "peak_bytes": 33,
+              "peak_depth": 1,
+              "recoveries": 0
+            },
+            "render_stages": {
+              "command_sort": {
+                "avg_ms_per_call": 0.003,
+                "calls_per_run": 16,
+                "scope": "per_map_draw"
+              },
+              "ground": {
+                "avg_ms_per_call": null,
+                "calls_per_run": 0,
+                "scope": "per_level"
+              },
+              "ground_composite": {
+                "avg_ms_per_call": null,
+                "calls_per_run": 0,
+                "scope": "per_map_draw"
+              },
+              "hint_replay": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 16,
+                "scope": "per_map_draw"
+              },
+              "lighting": {
+                "avg_ms_per_call": null,
+                "calls_per_run": 0,
+                "scope": "per_level"
+              },
+              "living_occlusion": {
+                "avg_ms_per_call": 0.119,
+                "calls_per_run": 16,
+                "scope": "per_map_draw"
+              },
+              "map": {
+                "avg_ms_per_call": 1.215,
+                "calls_per_run": 16,
+                "scope": "per_map_draw"
+              },
+              "map_scratch_clear": {
+                "avg_ms_per_call": null,
+                "calls_per_run": 0,
+                "scope": "per_map_draw"
+              },
+              "objects": {
+                "avg_ms_per_call": 0.058,
+                "calls_per_run": 80,
+                "scope": "per_level"
+              },
+              "paint": {
+                "avg_ms_per_call": 0.912,
+                "calls_per_run": 16,
+                "scope": "per_map_draw"
+              },
+              "sprite_effects": {
+                "avg_ms_per_call": 0.398,
+                "calls_per_run": 16,
+                "scope": "per_map_draw"
+              },
+              "ui": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 16,
+                "scope": "per_map_draw"
+              }
+            },
+            "runs": 2,
+            "sprite_cache": {
+              "gc_removals": 0,
+              "hits": 144,
+              "lookups": 144,
+              "misses": 0
+            },
+            "window_p95_ms": {
+              "first": 1.45,
+              "last": 1.45
+            },
+            "work_ms": {
+              "max": 1.59,
+              "p50": 1.3,
+              "p95": 1.45,
+              "p99": 1.45
+            }
+          },
+          "resumed": {
+            "draw_reasons": {
+              "animation": 80,
+              "external": 0,
+              "lighting": 0,
+              "packet": 80,
+              "resize": 0,
+              "scroll": 80,
+              "ui": 0
+            },
+            "lighting": {
+              "field_dirty_pixels": 15500800,
+              "field_partial_rebuilds": 400,
+              "field_rebuilds": 400,
+              "field_reuses": 0,
+              "field_translations": 400,
+              "lit_sprite_evictions": 0,
+              "lit_sprite_hits": 0,
+              "lit_sprite_lookups": 5060,
+              "lit_sprite_misses": 5060
+            },
+            "map": {
+              "auxiliary_map_draws": 41,
+              "changed_map_packets": 80,
+              "map_draws": 121,
+              "noop_map_packets": 0,
+              "presents": 0,
+              "primary_map_draws": 80
+            },
+            "queue": {
+              "budget_yields": 15,
+              "oldest_age_us": 1000000,
+              "peak_bytes": 1197,
+              "peak_depth": 9,
+              "recoveries": 1
+            },
+            "render_stages": {
+              "command_sort": {
+                "avg_ms_per_call": 0.006,
+                "calls_per_run": 121,
+                "scope": "per_map_draw"
+              },
+              "ground": {
+                "avg_ms_per_call": 0.105,
+                "calls_per_run": 605,
+                "scope": "per_level"
+              },
+              "ground_composite": {
+                "avg_ms_per_call": 4.16,
+                "calls_per_run": 121,
+                "scope": "per_map_draw"
+              },
+              "hint_replay": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 80,
+                "scope": "per_map_draw"
+              },
+              "lighting": {
+                "avg_ms_per_call": 1.47,
+                "calls_per_run": 400,
+                "scope": "per_level"
+              },
+              "living_occlusion": {
+                "avg_ms_per_call": 0.119,
+                "calls_per_run": 80,
+                "scope": "per_map_draw"
+              },
+              "map": {
+                "avg_ms_per_call": 34.233,
+                "calls_per_run": 121,
+                "scope": "per_map_draw"
+              },
+              "map_scratch_clear": {
+                "avg_ms_per_call": 0.129,
+                "calls_per_run": 121,
+                "scope": "per_map_draw"
+              },
+              "objects": {
+                "avg_ms_per_call": 0.575,
+                "calls_per_run": 605,
+                "scope": "per_level"
+              },
+              "paint": {
+                "avg_ms_per_call": 21.625,
+                "calls_per_run": 121,
+                "scope": "per_map_draw"
+              },
+              "sprite_effects": {
+                "avg_ms_per_call": 21.327,
+                "calls_per_run": 121,
+                "scope": "per_map_draw"
+              },
+              "ui": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 121,
+                "scope": "per_map_draw"
+              }
+            },
+            "runs": 2,
+            "sprite_cache": {
+              "gc_removals": 0,
+              "hits": 14208,
+              "lookups": 14210,
+              "misses": 2
+            },
+            "window_p95_ms": {
+              "first": 69.35,
+              "last": 68.84
+            },
+            "work_ms": {
+              "max": 72.38,
+              "p50": 59.33,
+              "p95": 70.09,
+              "p99": 71.91
+            }
+          },
+          "sustained": {
+            "draw_reasons": {
+              "animation": 480,
+              "external": 0,
+              "lighting": 0,
+              "packet": 480,
+              "resize": 0,
+              "scroll": 480,
+              "ui": 0
+            },
+            "lighting": {
+              "field_dirty_pixels": 93765760,
+              "field_partial_rebuilds": 2380,
+              "field_rebuilds": 2400,
+              "field_reuses": 0,
+              "field_translations": 2400,
+              "lit_sprite_evictions": 0,
+              "lit_sprite_hits": 0,
+              "lit_sprite_lookups": 30360,
+              "lit_sprite_misses": 30360
+            },
+            "map": {
+              "auxiliary_map_draws": 240,
+              "changed_map_packets": 480,
+              "map_draws": 720,
+              "noop_map_packets": 0,
+              "presents": 0,
+              "primary_map_draws": 480
+            },
+            "queue": {
+              "budget_yields": 0,
+              "oldest_age_us": 0,
+              "peak_bytes": 133,
+              "peak_depth": 1,
+              "recoveries": 0
+            },
+            "render_stages": {
+              "command_sort": {
+                "avg_ms_per_call": 0.006,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "ground": {
+                "avg_ms_per_call": 0.096,
+                "calls_per_run": 3600,
+                "scope": "per_level"
+              },
+              "ground_composite": {
+                "avg_ms_per_call": 4.104,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "hint_replay": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 480,
+                "scope": "per_map_draw"
+              },
+              "lighting": {
+                "avg_ms_per_call": 1.475,
+                "calls_per_run": 2400,
+                "scope": "per_level"
+              },
+              "living_occlusion": {
+                "avg_ms_per_call": 0.118,
+                "calls_per_run": 480,
+                "scope": "per_map_draw"
+              },
+              "map": {
+                "avg_ms_per_call": 34.296,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "map_scratch_clear": {
+                "avg_ms_per_call": 0.127,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "objects": {
+                "avg_ms_per_call": 0.541,
+                "calls_per_run": 3600,
+                "scope": "per_level"
+              },
+              "paint": {
+                "avg_ms_per_call": 21.911,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "sprite_effects": {
+                "avg_ms_per_call": 21.608,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              },
+              "ui": {
+                "avg_ms_per_call": 0.0,
+                "calls_per_run": 720,
+                "scope": "per_map_draw"
+              }
+            },
+            "runs": 2,
+            "sprite_cache": {
+              "gc_removals": 0,
+              "hits": 83254,
+              "lookups": 83270,
+              "misses": 16
+            },
+            "window_p95_ms": {
+              "first": 70.26,
+              "last": 70.12
+            },
+            "work_ms": {
+              "max": 80.85,
+              "p50": 47.44,
+              "p95": 69.77,
+              "p99": 71.18
+            }
+          }
+        },
+        "recorded_at": "2026-08-14T00:06:32.497529+00:00",
+        "resources": {
+          "process_peak_rss_available": true,
+          "process_peak_rss_max_bytes": 178982912,
+          "process_peak_rss_median_bytes": 178892800,
+          "runs": 2,
+          "sprite_cache_end_bytes": 722693,
+          "sprite_cache_end_entries": 46,
+          "sprite_cache_gc_removals": 0,
+          "sprite_cache_peak_bytes": 722693,
+          "sprite_cache_peak_entries": 46
+        },
+        "run_id": "31755454661",
+        "schema_version": 2,
+        "status": "passed",
+        "viewport": {
+          "height": 240,
+          "name": "standard",
+          "width": 320
+        }
+      }
+    ]
+  },
+  "retention_watermarks": {},
+  "schema_version": 2
+}
