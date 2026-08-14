@@ -3684,6 +3684,12 @@ void map_target_handle(uint8_t is_friend) {
     utarray_free(targets);
 }
 
+/** Convert screen mouse coordinates to map-local coordinates. */
+static void map_mouse_to_local_coords(int *mx, int *my) {
+    *mx -= widget_x(cur_widget[MAP_ID]);
+    *my -= widget_y(cur_widget[MAP_ID]);
+}
+
 /**
  * Transform mouse coordinates to tile coordinates on map.
  *
@@ -3699,11 +3705,6 @@ void map_target_handle(uint8_t is_friend) {
  * @return
  * True on success, false on failure.
  */
-static void map_mouse_to_local_coords(int *mx, int *my) {
-    *mx -= widget_x(cur_widget[MAP_ID]);
-    *my -= widget_y(cur_widget[MAP_ID]);
-}
-
 bool mouse_to_tile_coords(int mx, int my, int *tx, int *ty) {
 #ifdef ATRINIK_WIDGET_TESTS
     if (map_interaction_test_active) {
