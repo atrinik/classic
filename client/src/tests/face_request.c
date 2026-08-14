@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2026 Atrinik Development Team                         *
+ *   Copyright 2026 The Atrinik Project                                  *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -342,6 +342,10 @@ void sprite_free_sprite(sprite_struct *sprite) {
     }
     SDL_DestroySurface(sprite->bitmap);
     free(sprite);
+}
+
+void sprite_free_rendered(sprite_struct *sprite) {
+    sprite_free_sprite(sprite);
 }
 
 void sprite_cache_free_all(void) {}

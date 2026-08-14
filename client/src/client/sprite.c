@@ -40,6 +40,7 @@
  */
 typedef struct sprite_cache {
     char *name; ///< Name of the sprite. Used for hash table lookups.
+    SDL_Surface *source; ///< Render-owned source this transformed result depends on.
     SDL_Surface *surface; ///< The sprite's surface.
     size_t estimated_bytes; ///< Entry, key, surface, and pixel storage estimate.
     time_t last_used; ///< Last time the sprite was used.
@@ -382,6 +383,7 @@ static void sprite_cache_free(sprite_cache_t *cache) {
     HARD_ASSERT(cache != NULL);
 
     free(cache->name);
+    lighting_invalidate_surface(cache->surface);
     SDL_DestroySurface(cache->surface);
     free(cache);
 }
@@ -394,8 +396,35 @@ void sprite_cache_free_all(void) {
     HASH_ITER(hh, sprites_cache, cache, tmp) {
         sprite_cache_remove(cache);
     }
+}
 
-    lighting_clear_sprite_cache();
+/** Remove transformed entries derived from one render-owned source. */
+static void sprite_cache_invalidate_source(SDL_Surface *source) {
+    sprite_cache_t *cache, *next;
+    HASH_ITER(hh, sprites_cache, cache, next) {
+        if (cache->source == source) {
+            sprite_cache_remove(cache);
+        }
+    }
+}
+
+void sprite_invalidate_surface(SDL_Surface *source) {
+    if (source == NULL) {
+        return;
+    }
+    sprite_cache_invalidate_source(source);
+    lighting_invalidate_surface(source);
+}
+
+void sprite_free_rendered(sprite_struct *sprite) {
+    if (sprite == NULL) {
+        return;
+    }
+
+    if (sprite->bitmap != NULL) {
+        sprite_invalidate_surface(sprite->bitmap);
+    }
+    sprite_free_sprite(sprite);
 }
 
 /**
@@ -410,12 +439,10 @@ static void sprite_cache_gc_run(bool force) {
     gettimeofday(&tv1, NULL);
 
     sprite_cache_t *cache, *tmp;
-    bool removed = false;
     HASH_ITER(hh, sprites_cache, cache, tmp) {
         if (now - cache->last_used >= SPRITE_CACHE_GC_FREE_TIME) {
             sprite_cache_remove(cache);
             sprite_cache_statistics.gc_removals++;
-            removed = true;
         }
 
         /* Avoid executing this loop for too long. */
@@ -426,9 +453,6 @@ static void sprite_cache_gc_run(bool force) {
         }
     }
 
-    if (removed) {
-        lighting_clear_sprite_cache();
-    }
     sprite_cache_statistics.gc_time_ns += SDL_GetTicksNS() - gc_started_ns;
 }
 
@@ -439,6 +463,34 @@ void sprite_cache_gc(void) {
 #ifdef ATRINIK_WIDGET_TESTS
 void sprite_cache_gc_force(void) {
     sprite_cache_gc_run(true);
+}
+
+bool sprite_benchmark_source_lifetime_complete(void) {
+    sprite_cache_t *dependency = NULL;
+    sprite_cache_t *cache, *next;
+    HASH_ITER(hh, sprites_cache, cache, next) {
+        if (cache->source != NULL &&
+            lighting_benchmark_source_address_retained((uintptr_t)cache->surface)) {
+            dependency = cache;
+            break;
+        }
+    }
+    if (dependency == NULL) {
+        return false;
+    }
+
+    SDL_Surface *source = dependency->source;
+    uintptr_t source_address = (uintptr_t)source;
+    uintptr_t transformed_address = (uintptr_t)dependency->surface;
+    sprite_invalidate_surface(source);
+
+    HASH_ITER(hh, sprites_cache, cache, next) {
+        if (cache->source == source) {
+            return false;
+        }
+    }
+    return !lighting_benchmark_source_address_retained(source_address) &&
+           !lighting_benchmark_source_address_retained(transformed_address);
 }
 #endif
 
@@ -1068,6 +1120,7 @@ void surface_show_effects(SDL_Surface *surface,
                 src = tmp;
 
                 cache = sprite_cache_create(name);
+                cache->source = old_src;
                 cache->surface = src;
                 if (!sprite_cache_add(cache)) {
                     free(cache->name);
@@ -1107,6 +1160,7 @@ void surface_show_effects(SDL_Surface *surface,
     }
 
     if (temporary_effect_surface) {
+        lighting_invalidate_surface(src);
         SDL_DestroySurface(src);
     }
 }

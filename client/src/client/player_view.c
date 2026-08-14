@@ -54,7 +54,7 @@
 #define PLAYER_VIEW_MOVEMENT_RESUMED_TICKS 80U
 #define PLAYER_VIEW_MOVEMENT_PACKETS 5U
 #define PLAYER_VIEW_MOVEMENT_ACTIVE_PACKETS 4U
-#define PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION 6U
+#define PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION 7U
 #define PLAYER_VIEW_MOVEMENT_WINDOW_TICKS 32U
 #define PLAYER_VIEW_MOVEMENT_FIXTURE_SCHEMA 3U
 #define PLAYER_VIEW_MOVEMENT_CHECKPOINTS 12U
@@ -1379,7 +1379,7 @@ static void player_view_lighting_counters_json(const lighting_benchmark_counters
            ",\"lit_sprite_lookups\":%" PRIu64 ",\"lit_sprite_hits\":%" PRIu64
            ",\"lit_sprite_misses\":%" PRIu64 ",\"lit_sprite_insertions\":%" PRIu64
            ",\"lit_sprite_evictions\":%" PRIu64 ",\"lit_sprite_fallbacks\":%" PRIu64
-           ",\"lit_sprite_clears\":%" PRIu64 ",\"lit_sprite_cleared_entries\":%" PRIu64 "}",
+           ",\"lit_sprite_clears\":%" PRIu64 ",\"lit_sprite_cleared_entries\":%" PRIu64,
            counters->field_begins,
            counters->field_dirty_marks,
            counters->field_dirty_pixels,
@@ -1412,6 +1412,44 @@ static void player_view_lighting_counters_json(const lighting_benchmark_counters
            counters->lit_sprite_fallbacks,
            counters->lit_sprite_clears,
            counters->lit_sprite_cleared_entries);
+    printf(",\"lit_sprite_structure_lookups\":%" PRIu64
+           ",\"lit_sprite_structure_hits\":%" PRIu64
+           ",\"lit_sprite_structure_misses\":%" PRIu64
+           ",\"lit_sprite_structure_constructions\":%" PRIu64
+           ",\"lit_sprite_structure_insertions\":%" PRIu64
+           ",\"lit_sprite_structure_evictions\":%" PRIu64
+           ",\"lit_sprite_structure_invalidations\":%" PRIu64
+           ",\"lit_sprite_projected_lookups\":%" PRIu64
+           ",\"lit_sprite_projected_hits\":%" PRIu64
+           ",\"lit_sprite_projected_misses\":%" PRIu64
+           ",\"lit_sprite_projected_constructions\":%" PRIu64
+           ",\"lit_sprite_projected_insertions\":%" PRIu64
+           ",\"lit_sprite_projected_evictions\":%" PRIu64
+           ",\"lit_sprite_projected_invalidations\":%" PRIu64
+           ",\"lit_sprite_invalidation_field\":%" PRIu64
+           ",\"lit_sprite_invalidation_scroll\":%" PRIu64
+           ",\"lit_sprite_invalidation_source\":%" PRIu64
+           ",\"lit_sprite_invalidation_reset\":%" PRIu64
+           ",\"lit_sprite_invalidation_eviction\":%" PRIu64 "}",
+           counters->lit_sprite_structure_lookups,
+           counters->lit_sprite_structure_hits,
+           counters->lit_sprite_structure_misses,
+           counters->lit_sprite_structure_constructions,
+           counters->lit_sprite_structure_insertions,
+           counters->lit_sprite_structure_evictions,
+           counters->lit_sprite_structure_invalidations,
+           counters->lit_sprite_projected_lookups,
+           counters->lit_sprite_projected_hits,
+           counters->lit_sprite_projected_misses,
+           counters->lit_sprite_projected_constructions,
+           counters->lit_sprite_projected_insertions,
+           counters->lit_sprite_projected_evictions,
+           counters->lit_sprite_projected_invalidations,
+           counters->lit_sprite_invalidation_field,
+           counters->lit_sprite_invalidation_scroll,
+           counters->lit_sprite_invalidation_source,
+           counters->lit_sprite_invalidation_reset,
+           counters->lit_sprite_invalidation_eviction);
 }
 
 static void player_view_lighting_timings_json(const lighting_benchmark_timings_t *timings) {
@@ -2403,7 +2441,8 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
                                            size_t next_snapshot_size,
                                            bool large_viewport,
                                            lighting_benchmark_reconstruction_t reconstruction,
-                                           bool isolated_lighting) {
+                                           bool isolated_lighting,
+                                           bool fine_timing) {
     bool success = false;
     uint8_t *transition = NULL;
     size_t transition_size = 0;
@@ -2439,6 +2478,7 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
         "lighting-structure-lock",
         "lighting-projected-lock",
         "lighting-destination-lock",
+        "lighting-source-lifetime",
     };
     for (size_t i = 0; fault_requested && i < arraysize(lighting_faults); i++) {
         if (strcmp(fault, lighting_faults[i]) == 0) {
@@ -2476,7 +2516,7 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
     }
     effects_deinit();
     render_profiler_set_enabled(true);
-    lighting_benchmark_configure(manifest->smooth_lighting, reconstruction);
+    lighting_benchmark_configure(manifest->smooth_lighting && fine_timing, reconstruction);
     lighting_benchmark_statistics_reset();
     sprite_cache_statistics_reset();
     rndm_seed(PLAYER_VIEW_MOVEMENT_RNG_SEED);
@@ -2666,7 +2706,8 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
            "\"runner_image_os\":\"%s\",\"runner_image_version\":\"%s\","
            "\"ci\":\"%s\",\"cpu_count\":%d,\"cpu_model\":\"%s\",\"viewport\":{"
            "\"name\":\"%s\",\"width\":%d,\"height\":%d},\"mode\":\"%s\","
-           "\"reconstruction\":\"%s\",\"workload_variant\":\"%s\"}},"
+           "\"reconstruction\":\"%s\",\"workload_variant\":\"%s\","
+           "\"fine_timing\":%s}},"
            "\"fixture\":{\"manifest_schema_version\":%u,\"manifest_sha256\":\"%s\","
            "\"snapshot_sha256\":\"%s\",\"movement_stream_sha256\":\"%s\","
            "\"transition_snapshot_sha256\":\"%s\","
@@ -2712,6 +2753,7 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
            manifest->smooth_lighting ? "smooth" : "discrete",
            reconstruction_name,
            workload_variant,
+           fine_timing ? "true" : "false",
            PLAYER_VIEW_SCHEMA_VERSION,
            manifest->manifest_digest,
            manifest->snapshot_digest,
@@ -2904,8 +2946,9 @@ int player_view_main(int argc, char *argv[]) {
     lighting_benchmark_reconstruction_t reconstruction =
         LIGHTING_BENCHMARK_RECONSTRUCTION_TRANSLATED;
     bool isolated_lighting = false;
+    bool fine_timing = true;
     bool movement_benchmark = strcmp(argv[0], "--player-view-movement-benchmark") == 0;
-    if ((argc == 3 || ((argc == 4 || argc == 5) && movement_benchmark)) &&
+    if ((argc == 3 || ((argc >= 4 && argc <= 6) && movement_benchmark)) &&
         (strcmp(argv[0], "--player-view-benchmark") == 0 || movement_benchmark)) {
         if (strcmp(argv[2], "standard") == 0) {
             mode = strcmp(argv[0], "--player-view-benchmark") == 0 ? PLAYER_VIEW_BENCHMARK_STANDARD
@@ -2929,11 +2972,21 @@ int player_view_main(int argc, char *argv[]) {
                 return 2;
             }
         }
-        if (argc == 5) {
+        if (argc >= 5) {
             if (strcmp(argv[4], "isolated") == 0) {
                 isolated_lighting = true;
             } else if (strcmp(argv[4], "production") != 0) {
                 fprintf(stderr, "player-view: movement workload must be production or isolated\n");
+                return 2;
+            }
+        }
+        if (argc == 6) {
+            if (strcmp(argv[5], "timed") == 0) {
+                fine_timing = true;
+            } else if (strcmp(argv[5], "untimed") == 0) {
+                fine_timing = false;
+            } else {
+                fprintf(stderr, "player-view: movement probes must be timed or untimed\n");
                 return 2;
             }
         }
@@ -2943,7 +2996,7 @@ int player_view_main(int argc, char *argv[]) {
                 "       atrinik --player-view-benchmark MANIFEST standard|large\n"
                 "       atrinik --player-view-movement-benchmark MANIFEST "
                 "standard|large "
-                "[translated|full] [production|isolated]\n");
+                "[translated|full] [production|isolated] [timed|untimed]\n");
         return 2;
     }
 
@@ -3155,7 +3208,8 @@ int player_view_main(int argc, char *argv[]) {
                                             next_snapshot_size,
                                             strcmp(argv[2], "large") == 0,
                                             reconstruction,
-                                            isolated_lighting)) {
+                                            isolated_lighting,
+                                            fine_timing)) {
             goto cleanup;
         }
         /* The movement path verifies every frozen input, hashes every
