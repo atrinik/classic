@@ -19,6 +19,7 @@
 #include <shop.h>
 #include <player.h>
 #include <object.h>
+#include <object_methods.h>
 #include <metrics.h>
 #include <arch.h>
 #include <party.h>
@@ -744,6 +745,48 @@ START_TEST(test_progression_adjustments_and_level_boundaries_are_journaled) {
     snprintf(VS(subject_pattern), "\"subject_id\":\"skill:%s\"", skill_id_from_index(SK_UNARMED));
     ck_assert_ptr_ne(strstr(contents, subject_pattern), NULL);
     ck_assert_ptr_ne(strstr(contents, "\"lineage_id\":\"actor:trusted-content\""), NULL);
+    free(contents);
+    object_destroy(pl);
+    remove_fixture(directory);
+}
+END_TEST
+
+START_TEST(test_spell_learning_commits_stable_progression_milestone) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    ck_assert_ptr_ne(CONTR(pl)->skill_ptr[SK_LITERACY], NULL);
+    ck_assert_ptr_ne(CONTR(pl)->skill_ptr[SK_WIZARDRY_SPELLS], NULL);
+    CONTR(pl)->skill_ptr[SK_LITERACY]->level = MAXLEVEL;
+    CONTR(pl)->skill_ptr[SK_WIZARDRY_SPELLS]->level = MAXLEVEL;
+    ck_assert_ptr_eq(player_find_spell(pl, &spells[SP_MAGIC_MISSILE]), NULL);
+
+    char directory[] = "/tmp/atrinik-spell-journal-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+
+    object *book = arch_get("book_spell");
+    book->stats.sp = SP_MAGIC_MISSILE;
+    SET_FLAG(book, FLAG_IDENTIFIED);
+    book = object_insert_into(book, pl, INS_NO_MERGE);
+    ck_assert_ptr_ne(book, NULL);
+    ck_assert_int_eq(object_apply(book, pl, 0), OBJECT_METHOD_OK);
+    ck_assert_ptr_ne(player_find_spell(pl, &spells[SP_MAGIC_MISSILE]), NULL);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("progression.spell-learned"), 1);
+
+    gameplay_journal_deinit();
+    char *contents = read_fixture(directory);
+    char subject_pattern[GAMEPLAY_JOURNAL_ID_MAX + 32];
+    snprintf(VS(subject_pattern),
+             "\"subject_id\":\"spell:%s\"",
+             spell_id_from_index(SP_MAGIC_MISSILE));
+    ck_assert_ptr_ne(strstr(contents, subject_pattern), NULL);
     free(contents);
     object_destroy(pl);
     remove_fixture(directory);
@@ -2607,6 +2650,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_one_drop_quest_grant_commits_item_and_marker_together);
     tcase_add_test(tc_core, test_objective_item_milestones_emit_only_on_discovery_and_threshold);
     tcase_add_test(tc_core, test_progression_adjustments_and_level_boundaries_are_journaled);
+    tcase_add_test(tc_core, test_spell_learning_commits_stable_progression_milestone);
     tcase_add_test(tc_core, test_survival_outcomes_preserve_exclusive_attribution);
     tcase_add_test(tc_core,
                    test_pending_domains_block_checkpoints_and_unique_maps_use_primary_component);
