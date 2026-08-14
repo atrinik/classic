@@ -427,11 +427,13 @@ class JournalTests(unittest.TestCase):
         journal = gameplay_journal.load([self.root])
         player_save = self.root / "player.save"
         player_save.write_text(
-            "journal_sequence 3\nendplst\nmsg\njournal_sequence 999\ncustody_actor forged\nendmsg\n"
+            f"journal_run {RUN}\njournal_sequence 3\nendplst\nmsg\n"
+            "journal_sequence 999\ncustody_actor forged\nendmsg\n"
         )
         map_save = self.root / "map.save"
         map_save.write_text(
-            "journal_sequence 2\nend\narch sign\nmsg\n# gameplay-journal "
+            f"journal_run {RUN}\njournal_sequence 2\nend\narch sign\nmsg\n"
+            "# gameplay-journal "
             f"{RUN} 999\njournal_sequence 999\nendmsg\nend\n"
         )
         unique_save = self.root / "map.v00"
@@ -459,6 +461,10 @@ class JournalTests(unittest.TestCase):
         legacy_save = self.root / "legacy-player.save"
         legacy_save.write_text("endplst\narch human_male\nend\n")
         self.assertEqual(gameplay_journal._checkpoint_sequence(legacy_save), (0, False))
+        invalid_save = self.root / "invalid-player.save"
+        invalid_save.write_text("journal_sequence 3\nendplst\n")
+        with self.assertRaisesRegex(gameplay_journal.JournalError, "no run identity"):
+            gameplay_journal._checkpoint_sequence(invalid_save)
 
     def test_rejects_corruption_permissions_and_redaction(self) -> None:
         record = bytearray(self.record("boundary"))

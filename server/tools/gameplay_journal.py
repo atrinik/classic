@@ -563,6 +563,7 @@ def _checkpoint_sequence(path: Path) -> tuple[int, bool]:
     if stat.S_ISLNK(metadata.st_mode) or _is_reparse(metadata) or not stat.S_ISREG(metadata.st_mode):
         raise JournalError(f"save domain is not a direct regular file: {path}")
     sequence: int | None = None
+    run_id: bytes | None = None
     unique_component = False
     lines = path.read_bytes().splitlines()
     if lines and lines[0].startswith(b"# gameplay-journal "):
@@ -574,10 +575,18 @@ def _checkpoint_sequence(path: Path) -> tuple[int, bool]:
         except ValueError as error:
             raise JournalError(f"invalid save-domain sequence: {path}") from error
         unique_component = True
+        run_id = fields[2]
     else:
         for raw_line in lines:
             if raw_line in {b"end", b"endplst"}:
                 break
+            if raw_line.startswith(b"journal_run "):
+                if run_id is not None:
+                    raise JournalError(f"duplicate save-domain run identity: {path}")
+                run_id = raw_line.removeprefix(b"journal_run ")
+                if re.fullmatch(b"[0-9a-f]{32}", run_id) is None:
+                    raise JournalError(f"invalid save-domain run identity: {path}")
+                continue
             if not raw_line.startswith(b"journal_sequence "):
                 continue
             if sequence is not None:
@@ -588,6 +597,8 @@ def _checkpoint_sequence(path: Path) -> tuple[int, bool]:
                 raise JournalError(f"invalid save-domain sequence: {path}") from error
     if sequence is None:
         sequence = 0
+    elif run_id is None:
+        raise JournalError(f"save domain sequence has no run identity: {path}")
     if not _integer(sequence, 0, (1 << 64) - 1):
         raise JournalError(f"save domain has no valid journal sequence: {path}")
     return sequence, unique_component
