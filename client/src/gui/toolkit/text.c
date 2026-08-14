@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -107,9 +107,14 @@ static font_struct *fonts;
 
 #ifdef ATRINIK_WIDGET_TESTS
 static const char *text_test_font_path;
+static const char *text_test_mono_font_path;
 
 void text_test_font_path_set(const char *path) {
     text_test_font_path = path;
+}
+
+void text_test_mono_font_path_set(const char *path) {
+    text_test_mono_font_path = path;
 }
 #endif
 
@@ -148,6 +153,9 @@ static TTF_Font *font_open(const char *name, uint8_t size) {
 #ifdef ATRINIK_WIDGET_TESTS
     if (text_test_font_path != NULL && strcmp(name, "sans") == 0) {
         return TTF_OpenFont(text_test_font_path, size);
+    }
+    if (text_test_mono_font_path != NULL && strcmp(name, "mono") == 0) {
+        return TTF_OpenFont(text_test_mono_font_path, size);
     }
 #endif
 

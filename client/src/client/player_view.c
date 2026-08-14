@@ -20,6 +20,7 @@
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 #include <lighting.h>
+#include <map_transform.h>
 #include <openssl/evp.h>
 #include <player_view.h>
 #include <toolkit/map_protocol.h>
@@ -42,6 +43,7 @@
 #define PLAYER_VIEW_MAX_ASSET_PIXELS (16U * 1024U * 1024U)
 #define PLAYER_VIEW_MAX_TOTAL_ASSET_PIXELS (64U * 1024U * 1024U)
 #define PLAYER_VIEW_SHA256_HEX_SIZE 65
+#define PLAYER_VIEW_DEATH_FACE 9
 #define PLAYER_VIEW_BENCHMARK_ITERATIONS 101
 #define PLAYER_VIEW_BENCHMARK_WARMUPS 5
 #define PLAYER_VIEW_LARGE_WIDTH 1920
@@ -107,12 +109,14 @@ typedef struct player_view_manifest {
     char *next_snapshot_path;
     char *transition_snapshot_path;
     char *font_path;
+    char *mono_font_path;
     char settings_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char archdef_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char snapshot_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char next_snapshot_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char transition_snapshot_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char font_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+    char mono_font_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char expected_ui_pixels_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char expected_pixels_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
     char expected_standard_checkpoint_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
@@ -129,12 +133,23 @@ typedef struct player_view_manifest {
     uint32_t clock_ms;
     uint32_t resize_width_delta;
     uint32_t resize_height_delta;
+    uint32_t widget_x;
+    uint32_t widget_y;
+    int32_t animation_depth;
+    int32_t animation_x_offset;
+    int32_t animation_y_offset;
+    uint32_t animation_sub_layer;
     bool smooth_lighting;
     bool zoom_smoothing;
     bool primary_surface;
     bool widget_render;
     bool player_names;
     bool target_ui;
+    bool damage_animation;
+    bool kill_animation;
+    bool animation_elevated;
+    bool animation_layer_content;
+    bool animation_coordinates_set;
 } player_view_manifest_t;
 
 static void player_view_manifest_free(player_view_manifest_t *manifest) {
@@ -145,6 +160,7 @@ static void player_view_manifest_free(player_view_manifest_t *manifest) {
     free(manifest->next_snapshot_path);
     free(manifest->transition_snapshot_path);
     free(manifest->font_path);
+    free(manifest->mono_font_path);
     for (size_t i = 0; i < manifest->assets_num; i++) {
         free(manifest->assets[i].path);
     }
@@ -175,6 +191,21 @@ player_view_parse_uint(const char *text, uint32_t minimum, uint32_t maximum, uin
         return false;
     }
     *value = (uint32_t)parsed;
+    return true;
+}
+
+static bool
+player_view_parse_int(const char *text, int32_t minimum, int32_t maximum, int32_t *value) {
+    if (text == NULL || *text == '\0' || isspace((unsigned char)*text)) {
+        return false;
+    }
+    errno = 0;
+    char *end;
+    long long parsed = strtoll(text, &end, 10);
+    if (errno != 0 || *end != '\0' || parsed < minimum || parsed > maximum) {
+        return false;
+    }
+    *value = (int32_t)parsed;
     return true;
 }
 
@@ -462,6 +493,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "transition-snapshot-sha256",
                                            "font",
                                            "font-sha256",
+                                           "mono-font",
+                                           "mono-font-sha256",
                                            "viewport-width",
                                            "viewport-height",
                                            "resize-width-delta",
@@ -473,8 +506,18 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "zoom-smoothing",
                                            "primary-surface",
                                            "widget-render",
+                                           "widget-x",
+                                           "widget-y",
                                            "player-names",
                                            "target-ui",
+                                           "damage-animation",
+                                           "kill-animation",
+                                           "animation-depth",
+                                           "animation-sub-layer",
+                                           "animation-x-offset",
+                                           "animation-y-offset",
+                                           "animation-elevated",
+                                           "animation-layer-content",
                                            "clock-ms",
                                            "expected-ui-pixels-sha256",
                                            "expected-standard-checkpoint-sha256",
@@ -501,6 +544,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
         success ? player_view_xml_property(root, "transition-snapshot-sha256") : NULL;
     char *font = success ? player_view_xml_property(root, "font") : NULL;
     char *font_digest = success ? player_view_xml_property(root, "font-sha256") : NULL;
+    char *mono_font = success ? player_view_xml_property(root, "mono-font") : NULL;
+    char *mono_font_digest = success ? player_view_xml_property(root, "mono-font-sha256") : NULL;
     char *viewport_width = success ? player_view_xml_property(root, "viewport-width") : NULL;
     char *viewport_height = success ? player_view_xml_property(root, "viewport-height") : NULL;
     char *resize_width_delta =
@@ -514,8 +559,23 @@ static bool player_view_manifest_parse(const char *manifest_path,
     char *zoom_smoothing = success ? player_view_xml_property(root, "zoom-smoothing") : NULL;
     char *primary_surface = success ? player_view_xml_property(root, "primary-surface") : NULL;
     char *widget_render = success ? player_view_xml_property(root, "widget-render") : NULL;
+    char *widget_x = success ? player_view_xml_property(root, "widget-x") : NULL;
+    char *widget_y = success ? player_view_xml_property(root, "widget-y") : NULL;
     char *player_names = success ? player_view_xml_property(root, "player-names") : NULL;
     char *target_ui = success ? player_view_xml_property(root, "target-ui") : NULL;
+    char *damage_animation = success ? player_view_xml_property(root, "damage-animation") : NULL;
+    char *kill_animation = success ? player_view_xml_property(root, "kill-animation") : NULL;
+    char *animation_depth = success ? player_view_xml_property(root, "animation-depth") : NULL;
+    char *animation_sub_layer =
+        success ? player_view_xml_property(root, "animation-sub-layer") : NULL;
+    char *animation_x_offset =
+        success ? player_view_xml_property(root, "animation-x-offset") : NULL;
+    char *animation_y_offset =
+        success ? player_view_xml_property(root, "animation-y-offset") : NULL;
+    char *animation_elevated =
+        success ? player_view_xml_property(root, "animation-elevated") : NULL;
+    char *animation_layer_content =
+        success ? player_view_xml_property(root, "animation-layer-content") : NULL;
     char *clock_ms = success ? player_view_xml_property(root, "clock-ms") : NULL;
     char *expected_ui =
         success ? player_view_xml_property(root, "expected-ui-pixels-sha256") : NULL;
@@ -542,6 +602,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
           player_view_sha256_text_valid(transition_snapshot_digest))) &&
         ((font == NULL && font_digest == NULL) ||
          (font != NULL && player_view_sha256_text_valid(font_digest))) &&
+        ((mono_font == NULL && mono_font_digest == NULL) ||
+         (mono_font != NULL && player_view_sha256_text_valid(mono_font_digest))) &&
         player_view_parse_uint(viewport_width, 64, 4096, &manifest->viewport_width) &&
         player_view_parse_uint(viewport_height, 64, 4096, &manifest->viewport_height) &&
         ((resize_width_delta == NULL && resize_height_delta == NULL) ||
@@ -551,15 +613,48 @@ static bool player_view_manifest_parse(const char *manifest_path,
           manifest->resize_height_delta <= 4096 - manifest->viewport_height)) &&
         player_view_parse_uint(look_width, 9, 17, &manifest->look_width) &&
         player_view_parse_uint(look_height, 9, 17, &manifest->look_height) &&
-        player_view_parse_uint(map_zoom, 50, 400, &manifest->map_zoom) &&
+        player_view_parse_uint(map_zoom,
+                               MAP_DISPLAY_ZOOM_MIN,
+                               MAP_DISPLAY_ZOOM_MAX,
+                               &manifest->map_zoom) &&
         player_view_parse_bool(smooth_lighting, &manifest->smooth_lighting) &&
         player_view_parse_bool(zoom_smoothing, &manifest->zoom_smoothing) &&
         (primary_surface == NULL ||
          player_view_parse_bool(primary_surface, &manifest->primary_surface)) &&
         (widget_render == NULL ||
          player_view_parse_bool(widget_render, &manifest->widget_render)) &&
+        (widget_x == NULL ||
+         player_view_parse_uint(widget_x, 0, manifest->viewport_width - 1, &manifest->widget_x)) &&
+        (widget_y == NULL ||
+         player_view_parse_uint(widget_y, 0, manifest->viewport_height - 1, &manifest->widget_y)) &&
         (player_names == NULL || player_view_parse_bool(player_names, &manifest->player_names)) &&
         (target_ui == NULL || player_view_parse_bool(target_ui, &manifest->target_ui)) &&
+        (damage_animation == NULL ||
+         player_view_parse_bool(damage_animation, &manifest->damage_animation)) &&
+        (kill_animation == NULL ||
+         player_view_parse_bool(kill_animation, &manifest->kill_animation)) &&
+        ((animation_depth == NULL && animation_sub_layer == NULL) ||
+         (animation_depth != NULL && animation_sub_layer != NULL &&
+          player_view_parse_int(animation_depth,
+                                -MAP2_MAX_DEPTH,
+                                MAP2_MAX_DEPTH,
+                                &manifest->animation_depth) &&
+          player_view_parse_uint(animation_sub_layer,
+                                 0,
+                                 NUM_SUB_LAYERS - 1,
+                                 &manifest->animation_sub_layer))) &&
+        (animation_elevated == NULL ||
+         player_view_parse_bool(animation_elevated, &manifest->animation_elevated)) &&
+        (animation_layer_content == NULL ||
+         player_view_parse_bool(animation_layer_content, &manifest->animation_layer_content)) &&
+        (animation_x_offset == NULL || player_view_parse_int(animation_x_offset,
+                                                             -(int32_t)(manifest->look_width / 2),
+                                                             (int32_t)(manifest->look_width / 2),
+                                                             &manifest->animation_x_offset)) &&
+        (animation_y_offset == NULL || player_view_parse_int(animation_y_offset,
+                                                             -(int32_t)(manifest->look_height / 2),
+                                                             (int32_t)(manifest->look_height / 2),
+                                                             &manifest->animation_y_offset)) &&
         player_view_parse_uint(clock_ms, 0, UINT32_MAX, &manifest->clock_ms) &&
         (expected_standard_checkpoint == NULL ||
          player_view_sha256_text_valid(expected_standard_checkpoint)) &&
@@ -568,13 +663,23 @@ static bool player_view_manifest_parse(const char *manifest_path,
         manifest->primary_surface = true;
     }
     bool ui_test = manifest->player_names && manifest->target_ui;
-    success = success && (!manifest->widget_render || manifest->primary_surface) &&
-              manifest->player_names == manifest->target_ui &&
-              ((ui_test && manifest->widget_render && font != NULL &&
-                player_view_sha256_text_valid(expected_ui)) ||
-               (!ui_test && font == NULL && expected_ui == NULL));
+    bool overlay_test = manifest->damage_animation || manifest->kill_animation;
+    manifest->animation_coordinates_set = animation_depth != NULL;
+    success =
+        success && (!manifest->widget_render || manifest->primary_surface) &&
+        ((manifest->widget_x == 0 && manifest->widget_y == 0) || manifest->widget_render) &&
+        manifest->player_names == manifest->target_ui &&
+        ((ui_test && manifest->widget_render && font != NULL) || (!ui_test && font == NULL)) &&
+        ((overlay_test && manifest->widget_render && mono_font != NULL) ||
+         (!overlay_test && mono_font == NULL)) &&
+        (!manifest->animation_coordinates_set || overlay_test) &&
+        ((animation_x_offset == NULL && animation_y_offset == NULL) || overlay_test) &&
+        (!manifest->animation_elevated || overlay_test) &&
+        (!manifest->animation_layer_content || overlay_test) &&
+        ((ui_test && player_view_sha256_text_valid(expected_ui)) ||
+         (!ui_test && expected_ui == NULL));
 #ifndef ATRINIK_WIDGET_TESTS
-    success = success && !manifest->widget_render && font == NULL;
+    success = success && !manifest->widget_render && font == NULL && mono_font == NULL;
 #endif
 
     char *manifest_directory = player_view_directory(canonical_manifest);
@@ -608,11 +713,16 @@ static bool player_view_manifest_parse(const char *manifest_path,
             manifest->font_path =
                 player_view_resolve_path(manifest->input_root, font, manifest->input_root);
         }
+        if (mono_font != NULL) {
+            manifest->mono_font_path =
+                player_view_resolve_path(manifest->input_root, mono_font, manifest->input_root);
+        }
         success = manifest->settings_path != NULL && manifest->archdef_path != NULL &&
                   manifest->snapshot_path != NULL &&
                   (next_snapshot == NULL || manifest->next_snapshot_path != NULL) &&
                   (transition_snapshot == NULL || manifest->transition_snapshot_path != NULL) &&
-                  (font == NULL || manifest->font_path != NULL);
+                  (font == NULL || manifest->font_path != NULL) &&
+                  (mono_font == NULL || manifest->mono_font_path != NULL);
     }
     if (success) {
         snprintf(VS(manifest->settings_digest), "%s", settings_digest);
@@ -626,6 +736,9 @@ static bool player_view_manifest_parse(const char *manifest_path,
         }
         if (font != NULL) {
             snprintf(VS(manifest->font_digest), "%s", font_digest);
+        }
+        if (mono_font != NULL) {
+            snprintf(VS(manifest->mono_font_digest), "%s", mono_font_digest);
         }
         if (expected_ui != NULL) {
             snprintf(VS(manifest->expected_ui_pixels_digest), "%s", expected_ui);
@@ -759,6 +872,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(transition_snapshot_digest);
     free(font);
     free(font_digest);
+    free(mono_font);
+    free(mono_font_digest);
     free(viewport_width);
     free(viewport_height);
     free(resize_width_delta);
@@ -770,8 +885,18 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(zoom_smoothing);
     free(primary_surface);
     free(widget_render);
+    free(widget_x);
+    free(widget_y);
     free(player_names);
     free(target_ui);
+    free(damage_animation);
+    free(kill_animation);
+    free(animation_depth);
+    free(animation_sub_layer);
+    free(animation_x_offset);
+    free(animation_y_offset);
+    free(animation_elevated);
+    free(animation_layer_content);
     free(clock_ms);
     free(expected_ui);
     free(expected_standard_checkpoint);
@@ -819,6 +944,12 @@ static bool player_view_inputs_verify(const player_view_manifest_t *manifest) {
                                                                  manifest->font_path,
                                                                  manifest->font_digest,
                                                                  &total_size)) {
+        return false;
+    }
+    if (manifest->mono_font_path != NULL && !player_view_verify_input("mono font",
+                                                                      manifest->mono_font_path,
+                                                                      manifest->mono_font_digest,
+                                                                      &total_size)) {
         return false;
     }
     for (size_t i = 0; i < manifest->assets_num; i++) {
@@ -2903,9 +3034,16 @@ int player_view_main(int argc, char *argv[]) {
     if (manifest.font_path != NULL) {
 #ifdef ATRINIK_WIDGET_TESTS
         text_test_font_path_set(manifest.font_path);
+#endif
+    }
+    if (manifest.mono_font_path != NULL) {
+#ifdef ATRINIK_WIDGET_TESTS
+        text_test_mono_font_path_set(manifest.mono_font_path);
+#endif
+    }
+    if (manifest.font_path != NULL || manifest.mono_font_path != NULL) {
         text_init();
         text_ready = true;
-#endif
     }
     sprite_init_system();
     memset(&cpl, 0, sizeof(cpl));
@@ -2924,6 +3062,17 @@ int player_view_main(int argc, char *argv[]) {
         fprintf(stderr, "player-view: cannot initialize frozen renderer inputs\n");
         goto cleanup;
     }
+#ifdef ATRINIK_WIDGET_TESTS
+    if (manifest.kill_animation && (FaceList[PLAYER_VIEW_DEATH_FACE].sprite == NULL ||
+                                    FaceList[PLAYER_VIEW_DEATH_FACE].sprite->bitmap == NULL)) {
+        fprintf(stderr, "player-view: overlay fixture lacks the death texture\n");
+        goto cleanup;
+    }
+    if (manifest.kill_animation) {
+        widget_map_animation_test_death_texture_set(
+            FaceList[PLAYER_VIEW_DEATH_FACE].sprite->bitmap);
+    }
+#endif
 
     surface = SDL_CreateSurface((int)manifest.viewport_width,
                                 (int)manifest.viewport_height,
@@ -2946,6 +3095,8 @@ int player_view_main(int argc, char *argv[]) {
     }
     widgetdata map_widget = {
         .surface = map_widget_surface,
+        .x = (int)manifest.widget_x,
+        .y = (int)manifest.widget_y,
         .w = (int)manifest.viewport_width,
         .h = (int)manifest.viewport_height,
     };
@@ -2964,6 +3115,33 @@ int player_view_main(int argc, char *argv[]) {
             fprintf(stderr, "player-view: snapshot references an unavailable face\n");
             goto cleanup;
         }
+#ifdef ATRINIK_WIDGET_TESTS
+        if (mode == PLAYER_VIEW_RENDER && (manifest.damage_animation || manifest.kill_animation)) {
+            widget_map_animation_test_begin();
+        }
+        if (mode == PLAYER_VIEW_RENDER && manifest.damage_animation) {
+            widget_map_animation_test_add(
+                ANIM_DAMAGE,
+                manifest.animation_x_offset,
+                manifest.animation_y_offset,
+                manifest.animation_coordinates_set ? (int)manifest.animation_sub_layer
+                                                   : MapData.player_sub_layer,
+                manifest.animation_coordinates_set ? (int)manifest.animation_depth : 0,
+                37,
+                425);
+        }
+        if (mode == PLAYER_VIEW_RENDER && manifest.kill_animation) {
+            widget_map_animation_test_add(
+                ANIM_KILL,
+                manifest.animation_x_offset + 1,
+                manifest.animation_y_offset,
+                manifest.animation_coordinates_set ? (int)manifest.animation_sub_layer
+                                                   : MapData.player_sub_layer,
+                manifest.animation_coordinates_set ? (int)manifest.animation_depth : 0,
+                1,
+                425);
+        }
+#endif
     }
     uint64_t benchmark_median_ns = 0;
     if (mode == PLAYER_VIEW_BENCHMARK_STANDARD || mode == PLAYER_VIEW_BENCHMARK_LARGE) {
@@ -3005,6 +3183,10 @@ int player_view_main(int argc, char *argv[]) {
         SDL_FillSurfaceRect(surface, NULL, 0);
         if (manifest.widget_render) {
 #ifdef ATRINIK_WIDGET_TESTS
+            if (mode == PLAYER_VIEW_RENDER &&
+                (manifest.damage_animation || manifest.kill_animation)) {
+                widget_map_animation_test_begin();
+            }
             widget_map_draw_test(&map_widget);
             map_widget_surface = map_widget.surface;
 #endif
@@ -3039,6 +3221,17 @@ int player_view_main(int argc, char *argv[]) {
         SDL_FillSurfaceRect(surface, NULL, 0);
         widget_map_draw_test(&map_widget);
         map_widget_surface = map_widget.surface;
+    }
+#endif
+
+#ifdef ATRINIK_WIDGET_TESTS
+    if (mode == PLAYER_VIEW_RENDER && (manifest.damage_animation || manifest.kill_animation) &&
+        !widget_map_animation_test_end(manifest.damage_animation,
+                                       manifest.kill_animation,
+                                       manifest.animation_elevated,
+                                       manifest.animation_layer_content)) {
+        fprintf(stderr, "player-view: damage or kill animation was not rendered\n");
+        goto cleanup;
     }
 #endif
 
@@ -3086,6 +3279,9 @@ cleanup:
     if (animations != NULL || anim_table != NULL) {
         anims_deinit();
     }
+#ifdef ATRINIK_WIDGET_TESTS
+    widget_map_animation_test_death_texture_set(NULL);
+#endif
     image_bmaps_deinit();
     if (FormatHolder != NULL) {
         SDL_DestroySurface(FormatHolder);
@@ -3096,6 +3292,7 @@ cleanup:
             text_deinit();
 #ifdef ATRINIK_WIDGET_TESTS
             text_test_font_path_set(NULL);
+            text_test_mono_font_path_set(NULL);
 #endif
         }
         SDL_Quit();
