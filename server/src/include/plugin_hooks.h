@@ -722,6 +722,12 @@ struct plugin_hooklist
                          const char *)
     PLUGIN_HOOK_FUNCTION(bool, gameplay_journal_player_checkpoint_allowed, const object *)
     PLUGIN_HOOK_FUNCTION(bool, gameplay_journal_map_checkpoint_allowed, const mapstruct *)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         object_decrease_reason,
+                         object *,
+                         uint32_t,
+                         const char *,
+                         object **)
 
 };
 // clang-format on

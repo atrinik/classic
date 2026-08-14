@@ -2148,7 +2148,18 @@ static PyObject *Atrinik_Object_Decrease(Atrinik_Object *self, PyObject *args) {
 
     OBJEXISTCHECK(self);
 
-    return wrap_object(hooks->object_decrease(self->obj, num));
+    object *survivor = NULL;
+    object_semantic_result_t result =
+        hooks->object_decrease_reason(self->obj, num, "script.item-decrease", &survivor);
+    if (result != OBJECT_SEMANTIC_COMMITTED) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        result == OBJECT_SEMANTIC_FAILED
+                            ? "Item decrease could not be journaled."
+                            : "Item decreased, but its durable journal commit is uncertain.");
+        return NULL;
+    }
+
+    return wrap_object(survivor);
 }
 
 /** Documentation for Atrinik_Object_SquaresAround(). */

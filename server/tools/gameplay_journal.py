@@ -20,7 +20,7 @@ SCHEMA_VERSIONS = {1, 2}
 HASH_MARKER = b',"record_hash":"'
 FORBIDDEN_FIELDS = {"password", "session_secret", "chat", "inscription", "text"}
 TOKEN = re.compile(r"[A-Za-z0-9_.:/@+\-]{1,255}\Z")
-MAP_ID = re.compile(r"[A-Za-z0-9_.:/@+$\-]{1,255}\Z")
+MAP_ID = re.compile(r"[A-Za-z0-9_.:/@+$%\-]{1,255}\Z")
 IDENTITY = re.compile(r"[ -~]{1,255}\Z")
 HASH = re.compile(r"[0-9a-f]{64}\Z")
 KINDS = {"item", "currency", "quest", "progression"}
@@ -221,7 +221,7 @@ def _validate_schema(value: dict[str, Any], source: str) -> None:
             or set(domains[0]) != {"kind", "id"}
             or domains[0]["kind"] != "player"
             or not isinstance(domains[0]["id"], str)
-            or IDENTITY.fullmatch(domains[0]["id"]) is None
+            or domains[0]["id"] != f'{value["account_id"]}/{value["character_id"]}'
         ):
             raise JournalError(f"invalid intent save domains at {source}")
         details = value.get("details")
@@ -434,6 +434,8 @@ def load(inputs: Iterable[Path]) -> Journal:
         state["events"].append(record)
         phase = record["phase"]
         if phase == "intent":
+            if state["terminal"] is not None:
+                raise JournalError(f"intent after terminal for {transaction_id}")
             variable = {
                 "_source", "event_id", "sequence", "utc", "server_id", "run_id",
                 "prev_hash", "record_hash",
@@ -450,11 +452,15 @@ def load(inputs: Iterable[Path]) -> Journal:
                 if comparable != existing:
                     raise JournalError(f"conflicting duplicate intent for {transaction_id}")
             else:
+                if state["events"][:-1]:
+                    raise JournalError(f"intent is not first for {transaction_id}")
                 state["intent"] = record
                 state["domains"] = list(record.get("domains", []))
         elif phase == "domain":
             if state["intent"] is None:
                 raise JournalError(f"save domain without intent for {transaction_id}")
+            if state["terminal"] is not None:
+                raise JournalError(f"save domain after terminal for {transaction_id}")
             domain = record["domain"]
             if domain in state["domains"]:
                 raise JournalError(f"duplicate save domain for {transaction_id}")
@@ -558,13 +564,12 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _checkpoint_sequence(path: Path) -> tuple[int, bool]:
+def _checkpoint_sequence(path: Path) -> tuple[int, str]:
     metadata = path.lstat()
     if stat.S_ISLNK(metadata.st_mode) or _is_reparse(metadata) or not stat.S_ISREG(metadata.st_mode):
         raise JournalError(f"save domain is not a direct regular file: {path}")
     sequence: int | None = None
     run_id: bytes | None = None
-    unique_component = False
     lines = path.read_bytes().splitlines()
     if lines and lines[0].startswith(b"# gameplay-journal "):
         fields = lines[0].split()
@@ -574,11 +579,23 @@ def _checkpoint_sequence(path: Path) -> tuple[int, bool]:
             sequence = int(fields[3])
         except ValueError as error:
             raise JournalError(f"invalid save-domain sequence: {path}") from error
-        unique_component = True
+        component = "map-unique"
         run_id = fields[2]
     else:
-        for raw_line in lines:
-            if raw_line in {b"end", b"endplst"}:
+        component = "map-runtime" if lines and lines[0] == b"arch map" else "player"
+        terminator = b"end" if component == "map-runtime" else b"endplst"
+        found_terminator = False
+        in_message = False
+        for raw_line in lines[1:] if component == "map-runtime" else lines:
+            if in_message:
+                if raw_line == b"endmsg":
+                    in_message = False
+                continue
+            if component == "map-runtime" and raw_line == b"msg":
+                in_message = True
+                continue
+            if raw_line == terminator:
+                found_terminator = True
                 break
             if raw_line.startswith(b"journal_run "):
                 if run_id is not None:
@@ -595,13 +612,15 @@ def _checkpoint_sequence(path: Path) -> tuple[int, bool]:
                 sequence = int(raw_line.removeprefix(b"journal_sequence "))
             except ValueError as error:
                 raise JournalError(f"invalid save-domain sequence: {path}") from error
+        if not found_terminator or in_message:
+            raise JournalError(f"invalid {component} save structure: {path}")
     if sequence is None:
         sequence = 0
     elif run_id is None:
         raise JournalError(f"save domain sequence has no run identity: {path}")
     if not _integer(sequence, 0, (1 << 64) - 1):
         raise JournalError(f"save domain has no valid journal sequence: {path}")
-    return sequence, unique_component
+    return sequence, component
 
 
 def _saved_domain_arguments(options: argparse.Namespace) -> list[str]:
@@ -610,14 +629,18 @@ def _saved_domain_arguments(options: argparse.Namespace) -> list[str]:
         identity, separator, raw_path = value.partition("=")
         if not separator or not identity or not raw_path or IDENTITY.fullmatch(identity) is None:
             raise JournalError(f"invalid player save argument: {value}")
-        sequence, _unique_component = _checkpoint_sequence(Path(raw_path))
+        sequence, component = _checkpoint_sequence(Path(raw_path))
+        if component != "player":
+            raise JournalError(f"player save argument is not a player save: {value}")
         domains.append(f"player:{identity}={sequence}")
     for value in options.map_save:
         identity, separator, raw_path = value.partition("=")
         if not separator or not identity or not raw_path:
             raise JournalError(f"invalid map save argument: {value}")
-        sequence, unique_component = _checkpoint_sequence(Path(raw_path))
-        kind = "map-unique" if unique_component else "map-runtime"
+        sequence, component = _checkpoint_sequence(Path(raw_path))
+        if component == "player":
+            raise JournalError(f"map save argument is not a map save: {value}")
+        kind = component
         domains.append(f"{kind}:{identity}={sequence}")
     return domains
 
@@ -724,7 +747,11 @@ def main(argv: list[str] | None = None) -> int:
         except JournalError as error:
             print(f"error: {error}", file=sys.stderr)
             return 2
-        print(json.dumps(result, sort_keys=True))
+        ordered = [
+            {"transaction_id": transaction_id, **entry}
+            for transaction_id, entry in result.items()
+        ]
+        print(json.dumps(ordered, sort_keys=False))
     return 0
 
 

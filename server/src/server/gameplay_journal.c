@@ -159,11 +159,43 @@ static bool journal_map_id_valid(const char *value) {
     for (const unsigned char *cp = (const unsigned char *)value; *cp != '\0'; cp++) {
         bool alphanumeric =
             (*cp >= 'a' && *cp <= 'z') || (*cp >= 'A' && *cp <= 'Z') || (*cp >= '0' && *cp <= '9');
-        if (!alphanumeric && strchr("_.:/@+$-", *cp) == NULL) {
+        if (!alphanumeric && strchr("_.:/@+$%-", *cp) == NULL) {
             return false;
         }
     }
     return true;
+}
+
+static bool journal_map_identity(const mapstruct *map, char output[GAMEPLAY_JOURNAL_ID_MAX + 1]) {
+    if (map == NULL) {
+        output[0] = '\0';
+        return true;
+    }
+    if (map->path == NULL || map->path[0] == '\0') {
+        return snprintf(output, GAMEPLAY_JOURNAL_ID_MAX + 1, "runtime:%" PRIu32, map->count) > 0;
+    }
+
+    static const char hex[] = "0123456789ABCDEF";
+    size_t used = 0;
+    for (const unsigned char *cp = (const unsigned char *)map->path; *cp != '\0'; cp++) {
+        bool alphanumeric =
+            (*cp >= 'a' && *cp <= 'z') || (*cp >= 'A' && *cp <= 'Z') || (*cp >= '0' && *cp <= '9');
+        if (alphanumeric || strchr("_.:/@+$-", *cp) != NULL) {
+            if (used == GAMEPLAY_JOURNAL_ID_MAX) {
+                return false;
+            }
+            output[used++] = (char)*cp;
+        } else {
+            if (used > GAMEPLAY_JOURNAL_ID_MAX - 3) {
+                return false;
+            }
+            output[used++] = '%';
+            output[used++] = hex[*cp >> 4];
+            output[used++] = hex[*cp & 0x0f];
+        }
+    }
+    output[used] = '\0';
+    return used != 0;
 }
 
 static bool journal_identity_valid(const char *value) {
@@ -939,6 +971,10 @@ static bool journal_player_domain_id(const char *account,
 }
 
 static bool journal_append_domain(const char *transaction_id, const char *kind, const char *id) {
+    if (!journal_token_valid(transaction_id, false) || !journal_token_valid(kind, false) ||
+        !journal_identity_valid(id)) {
+        return false;
+    }
     StringBuffer *record = journal_record("domain", transaction_id, "transaction", "domain.add");
     if (record == NULL) {
         return false;
@@ -995,10 +1031,7 @@ static bool journal_track_map(const char *transaction_id, mapstruct *map, bool u
     }
     pending_transaction_t *pending = &journal.pending[(size_t)index];
     char id[GAMEPLAY_JOURNAL_ID_MAX + 1];
-    int length = map->path != NULL && map->path[0] != '\0'
-                     ? snprintf(VS(id), "%s", map->path)
-                     : snprintf(VS(id), "runtime:%" PRIu32, map->count);
-    if (length < 0 || length > GAMEPLAY_JOURNAL_ID_MAX) {
+    if (!journal_map_identity(map, id)) {
         return false;
     }
     for (size_t i = 0; i < pending->map_count; i++) {
@@ -1176,10 +1209,14 @@ static bool journal_finish(const char *transaction_id, const char *phase, const 
     }
     pending_transaction_t *pending = &journal.pending[(size_t)index];
     if (strcmp(phase, "commit") == 0 && pending->player_count == 0 && pending->map_count == 0) {
+        journal.pending[(size_t)index] = journal.pending[journal.pending_count - 1];
+        journal.pending_count--;
         return false;
     }
     StringBuffer *record = journal_record(phase, transaction_id, "transaction", reason);
     if (record == NULL) {
+        journal.pending[(size_t)index] = journal.pending[journal.pending_count - 1];
+        journal.pending_count--;
         return false;
     }
     stringbuffer_append_string(record, ",\"domains\":[");
@@ -1208,6 +1245,8 @@ static bool journal_finish(const char *transaction_id, const char *phase, const 
     bool ok = journal_append(record);
     stringbuffer_free(record);
     if (!ok) {
+        journal.pending[(size_t)index] = journal.pending[journal.pending_count - 1];
+        journal.pending_count--;
         return false;
     }
     if (strcmp(phase, "commit") == 0) {
@@ -1314,10 +1353,14 @@ bool gameplay_journal_player_begin_change(
     gameplay_journal_subject_t subject = {
         .account_id = pl->cs->account,
         .character_id = pl->ob->name,
-        .map_id = pl->ob->map != NULL && pl->ob->map->path != NULL ? pl->ob->map->path : "",
         .x = pl->ob->x,
         .y = pl->ob->y,
     };
+    char map_id[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    if (!journal_map_identity(pl->ob->map, map_id)) {
+        return false;
+    }
+    subject.map_id = map_id;
     if (!gameplay_journal_begin(&subject, kind, reason, change, transaction_id)) {
         return false;
     }

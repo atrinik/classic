@@ -128,6 +128,9 @@ unique-object marker headers as `map-unique`, matching terminal domain kinds
 without conflating independently durable files. `--domain
 KIND:ID=SEQUENCE` is available for operator-managed save domains that are not
 ordinary Classic files.
+The reconciliation command emits an ordered JSON array in intent-sequence
+order; each entry includes its `transaction_id`, so correlated source debits
+precede their recipient grants.
 
 Validation checks schema, filenames, duplicate JSON fields, permissions,
 redaction, size bounds, event-ID uniqueness, globally ordered sequence, and
@@ -137,6 +140,9 @@ file for its run is classified as a torn tail and ignored; malformed interior
 records, a torn rotated predecessor followed by more records, conflicting
 duplicate intents, commit-without-intent, and commit/abort conflicts fail
 validation.
+Version-2 validation also requires the actor domain to equal
+`ACCOUNT/CHARACTER` and enforces `intent`, then any additional `domain`
+records, then the terminal record.
 
 Reconciliation is idempotent: identical repeated intents and terminal records
 do not themselves apply a mutation. Player and runtime-map save headers persist
@@ -162,6 +168,11 @@ state under the preceding watermark. Player-unique/apartment maps persist all
 objects in their primary file, so their objects are consistently tracked as
 `map-runtime`; ordinary maps retain independent runtime and `.v00`
 `map-unique` coordinates.
+Map domain/context IDs percent-encode characters outside the journal's bounded
+portable identity alphabet, so apartment paths remain stable under spaces,
+backslashes, and other platform path characters. If a terminal sync fails, the
+transaction becomes an attempted record and releases its in-memory checkpoint
+pins; the already-mutated domains can then be saved and inspected by recovery.
 
 Both `attempted` and `committed` transactions also carry typed before/after
 values, lineage, and a bounded snapshot for validation and partial completion.
@@ -267,7 +278,7 @@ else:
     player.JournalCommit(transaction)
 ```
 
-Item and currency mutations use `InsertInto`, `Remove`, `Destroy`, `Map.Insert`,
+Item and currency mutations use `InsertInto`, `Decrease`, `Remove`, `Destroy`, `Map.Insert`,
 `TeleportTo`, `InsertCoins`, and `PayAmount` so schema-v2 semantic details
 cannot be omitted. Quest and progression intents use stable authored subject IDs.
 Producers must not catch and ignore a journal exception or emit a commit for a

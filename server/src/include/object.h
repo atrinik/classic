@@ -941,6 +941,13 @@ object *object_stack_get(object *op, uint32_t nrof);
 object *object_stack_get_reinsert(object *op, uint32_t nrof);
 object *object_stack_get_removed(object *op, uint32_t nrof);
 object *object_decrease(object *op, uint32_t i);
+/**
+ * Reason-aware stack decrease. On COMMITTED or AMBIGUOUS, survivor is the
+ * remaining live stack or NULL when the requested quantity destroyed op. On
+ * FAILED, no mutation occurred and survivor is NULL.
+ */
+object_semantic_result_t
+object_decrease_reason(object *op, uint32_t nrof, const char *reason, object **survivor);
 object *object_insert_into(object *op, object *where, int flag);
 /**
  * Reason-aware insertion. On COMMITTED or AMBIGUOUS, inserted is the live

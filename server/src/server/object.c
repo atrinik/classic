@@ -2632,6 +2632,56 @@ object_semantic_result_t object_remove_reason(object *op, const char *reason, bo
     return OBJECT_SEMANTIC_COMMITTED;
 }
 
+object_semantic_result_t
+object_decrease_reason(object *op, uint32_t nrof, const char *reason, object **survivor_out) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(reason != NULL);
+    HARD_ASSERT(survivor_out != NULL);
+    *survivor_out = NULL;
+
+    object *root = object_get_env(op);
+    bool journal = root->type == PLAYER && object_custody_auditable(op) && nrof != 0;
+    if (!journal) {
+        *survivor_out = object_decrease(op, nrof);
+        return OBJECT_SEMANTIC_COMMITTED;
+    }
+
+    uint32_t before = MAX(1, op->nrof);
+    uint32_t quantity = MIN(nrof, before);
+    uint32_t after = before - quantity;
+    object_custody_transaction_t transaction = {0};
+    const char *actor = object_custody_actor_id(root);
+    if (actor == NULL || !object_custody_begin_parties(op,
+                                                       root,
+                                                       reason,
+                                                       "player",
+                                                       after == 0 ? "destroyed" : "service",
+                                                       "",
+                                                       quantity,
+                                                       "",
+                                                       "",
+                                                       before,
+                                                       -(int64_t)quantity,
+                                                       after,
+                                                       0,
+                                                       "",
+                                                       "",
+                                                       &transaction)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+    if (!object_custody_track_player(&transaction, root)) {
+        object_custody_abort(&transaction, "domain-registration-failed");
+        return OBJECT_SEMANTIC_FAILED;
+    }
+
+    if (op->custody_lineage == NULL) {
+        op->custody_lineage = add_string(transaction.lineage);
+    }
+    *survivor_out = object_decrease(op, quantity);
+    return object_custody_finish(&transaction) ? OBJECT_SEMANTIC_COMMITTED
+                                               : OBJECT_SEMANTIC_AMBIGUOUS;
+}
+
 /**
  * Searches for any object with a matching archetype in the inventory
  * of the given object.
