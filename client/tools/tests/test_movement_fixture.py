@@ -313,6 +313,19 @@ class MovementFixtureTests(unittest.TestCase):
             self.assertEqual([depth for depth, _ in levels], list(DEPTHS))
             self.assertTrue(all(payload == b"" for _, payload in levels))
 
+    def test_lighting_work_interval_wraps_queue_drain_and_primary_draw(self) -> None:
+        source = (CLIENT_ROOT / "src/client/player_view.c").read_text(encoding="utf-8")
+        function = source[source.index("player_view_movement_draw(") :]
+        started = function.index("uint64_t lighting_work_started = SDL_GetTicksNS();")
+        drained = function.index("client_commands_drain_with_clock(")
+        drawn = function.index("map_draw_map(surface);")
+        finished = function.index("SDL_GetTicksNS() - lighting_work_started;")
+        minimap = function.index("map_draw_map(local_minimap_surface);")
+        self.assertLess(started, drained)
+        self.assertLess(drained, drawn)
+        self.assertLess(drawn, finished)
+        self.assertLess(finished, minimap)
+
     def test_snapshot_is_dense_representative_and_sparsely_colored(self) -> None:
         source = bytes.fromhex(
             (FIXTURES / "colored-scene.map2.hex").read_text(encoding="ascii")

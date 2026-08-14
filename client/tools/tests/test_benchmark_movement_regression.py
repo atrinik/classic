@@ -78,7 +78,7 @@ def lighting_timings(counters: dict[str, int]) -> dict[str, dict[str, object]]:
         + counters["field_translation_fallback_bounds"]
         + counters["field_translation_fallback_control"],
         "dirty_clear": counters["field_dirty_marks"],
-        "rasterization": counters["field_rebuilds"],
+        "rasterization": counters["field_rasterized_quads"],
         "extrapolation": counters["field_rebuilds"],
         "tone_map_multiply": counters["render_calls"],
         "sprite_lookup": counters["lit_sprite_lookups"],
@@ -128,10 +128,12 @@ def lighting_level(
                 "field_begins": draws,
                 "field_dirty_marks": rebuilds,
                 "field_dirty_pixels": rebuilds * (320 * 240 if full_control else 1024),
+                "field_rasterized_quads": rebuilds,
                 "field_translations": rebuilds if translated else 0,
                 "field_translated_pixels": rebuilds * 512 if translated else 0,
                 "field_translated_bytes": rebuilds * 5120 if translated else 0,
-                "field_scroll_x_pixels": rebuilds * 32 if name == "sustained" else 0,
+                "field_scroll_x_pixels": rebuilds * 24 if name == "sustained" else 0,
+                "field_scroll_y_pixels": rebuilds * 12 if name == "sustained" else 0,
                 "field_translation_fallback_control": rebuilds if full_control else 0,
                 "field_partial_rebuilds": rebuilds if translated else 0,
                 "field_full_rebuilds": rebuilds if not translated else 0,
@@ -985,12 +987,32 @@ class NativeV6RecordTests(unittest.TestCase):
         phase["levels"][6]["counters"]["lit_sprite_evictions"] = 1
         with self.assertRaisesRegex(ValueError, "lighting timing is incomplete"):
             benchmark.validate_record(malformed)
-
         phase["timings"]["sprite_invalidation"].update({"calls": 1, "elapsed": 100})
         phase["levels"][6]["timings"]["sprite_invalidation"].update(
             {"calls": 1, "elapsed": 100}
         )
         benchmark.validate_record(malformed)
+
+    def test_rejects_incomplete_raster_translation_and_scroll_telemetry(self) -> None:
+        for field, value, message in (
+            ("field_rasterized_quads", 0, "lighting timing is incomplete"),
+            ("field_translated_bytes", 5, "exercise every eligible translation"),
+            ("field_scroll_x_pixels", 0, "isolated scroll offsets are incomplete"),
+            ("field_scroll_y_pixels", 0, "isolated scroll offsets are incomplete"),
+        ):
+            malformed = native_record(workload_variant="isolated-lighting")
+            lighting = malformed["phases"][1]["lighting"]
+            lighting["counters"][field] = value
+            lighting["levels"][6]["counters"][field] = value
+            for level in lighting["levels"]:
+                if level is not lighting["levels"][6]:
+                    level["counters"][field] = 0
+            if field == "field_rasterized_quads":
+                lighting["timings"]["rasterization"].update({"calls": 0, "elapsed": 0})
+                for level in lighting["levels"]:
+                    level["timings"]["rasterization"].update({"calls": 0, "elapsed": 0})
+            with self.assertRaisesRegex(ValueError, message):
+                benchmark.validate_record(malformed)
 
 
 class EvidenceTests(unittest.TestCase):
@@ -1116,6 +1138,12 @@ class EvidenceTests(unittest.TestCase):
         changed["fixture"]["manifest_sha256"] = "f" * 64
         check = benchmark._reconstruction_equivalence([translated], [full, changed])
         self.assertFalse(check["identities_match"])
+        self.assertFalse(check["passed"])
+
+        changed = copy.deepcopy(full)
+        changed["phases"][1]["lighting"]["counters"]["field_scroll_x_pixels"] += 1
+        check = benchmark._reconstruction_equivalence([translated], [full, changed])
+        self.assertFalse(check["scroll_offsets_match"])
         self.assertFalse(check["passed"])
 
     def test_incidental_lighting_reuse_does_not_mask_full_rebuilds(self) -> None:

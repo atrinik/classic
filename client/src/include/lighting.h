@@ -82,6 +82,8 @@ typedef struct lighting_benchmark_counters {
     uint64_t field_dirty_marks;
     /** Lighting-field pixels invalidated for a subsequent full rebuild. */
     uint64_t field_dirty_pixels;
+    /** Quads accepted by the lighting rasterizer. */
+    uint64_t field_rasterized_quads;
     uint64_t field_translations;
     uint64_t field_translated_pixels;
     uint64_t field_translated_bytes;

@@ -933,6 +933,20 @@ def _reconstruction_equivalence(
     full_checkpoints = {record["checkpoint_sha256"] for record in full}
     translated_states = {record["final_state_digest"] for record in translated}
     full_states = {record["final_state_digest"] for record in full}
+    translated_offsets = {
+        (
+            record["phases"][1]["lighting"]["counters"]["field_scroll_x_pixels"],
+            record["phases"][1]["lighting"]["counters"]["field_scroll_y_pixels"],
+        )
+        for record in translated
+    }
+    full_offsets = {
+        (
+            record["phases"][1]["lighting"]["counters"]["field_scroll_x_pixels"],
+            record["phases"][1]["lighting"]["counters"]["field_scroll_y_pixels"],
+        )
+        for record in full
+    }
 
     def contract_identity(record: dict[str, object]) -> str:
         run = dict(record["identity"]["run"])
@@ -961,6 +975,10 @@ def _reconstruction_equivalence(
         len(translated_states) == len(full_states) == 1
         and translated_states == full_states
     )
+    offsets_match = (
+        len(translated_offsets) == len(full_offsets) == 1
+        and translated_offsets == full_offsets
+    )
     return {
         "translated_runs": len(translated),
         "full_runs": len(full),
@@ -968,10 +986,12 @@ def _reconstruction_equivalence(
         "identities_match": identities_match,
         "checkpoints_match": checkpoints_match,
         "final_states_match": final_states_match,
+        "scroll_offsets_match": offsets_match,
         "passed": len(translated) >= 1
         and len(full) >= 2
         and checkpoints_match
         and final_states_match
+        and offsets_match
         and identities_match,
     }
 
@@ -1515,9 +1535,9 @@ def _append_lighting_ab_report(
             "### Attributable lighting movement A/B",
             "",
             "Translated and full reconstruction replay the same sustained movement stream. "
-            "`Lighting work` sums mutually exclusive benchmark-only lighting scopes from before "
-            "queued MAP decode through the primary map draw; it excludes the separately measured "
-            "local minimap. The broader "
+            "`Lighting work` is wall-clock time from before queued MAP decode through the primary "
+            "map draw; it excludes the separately measured local minimap. The operation rows are "
+            "the non-overlapping instrumented lighting scopes within that interval. The broader "
             "total-work and render-profiler rows remain production-like parent measurements and "
             "must not be added to these operation timings.",
             "",
@@ -1863,12 +1883,14 @@ def _validate_evidence_check(
             "identities_match",
             "checkpoints_match",
             "final_states_match",
+            "scroll_offsets_match",
         }
         integer_fields = {"translated_runs", "full_runs"}
         boolean_fields = common | {
             "identities_match",
             "checkpoints_match",
             "final_states_match",
+            "scroll_offsets_match",
         }
     elif any(name == guard or name.endswith(f"_{guard}") for guard in NATIVE_GUARD_NAMES):
         expected = common | {"failed_runs", "runs"}

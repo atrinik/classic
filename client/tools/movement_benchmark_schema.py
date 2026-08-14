@@ -13,6 +13,7 @@ EXPECTED_PACKETS = {"cold": 1, "sustained": 480, "idle": 8, "resumed": 80}
 EXPECTED_CHANGED = {"cold": 1, "sustained": 480, "idle": 0, "resumed": 80}
 EXPECTED_FULL_MAP_DRAWS = {"cold": 1, "sustained": 480, "idle": 0, "resumed": 80}
 EXPECTED_ANIMATION_DRAWS = {"cold": 0, "sustained": 0, "idle": 16, "resumed": 0}
+LIGHTING_SAMPLE_BYTES = 10
 EXPECTED_LOCAL_MINIMAP_DRAWS = {"cold": 1, "sustained": 240, "idle": 0, "resumed": 40}
 EXPECTED_CHECKPOINTS = (
     "cold",
@@ -51,6 +52,7 @@ LIGHTING_COUNTER_FIELDS = {
     "field_begins",
     "field_dirty_marks",
     "field_dirty_pixels",
+    "field_rasterized_quads",
     "field_translations",
     "field_translated_pixels",
     "field_translated_bytes",
@@ -996,6 +998,10 @@ def validate_record(value: object) -> dict[str, object]:
                 + lighting_counters["field_translation_fallback_control"]
                 or timing_calls["dirty_clear"]
                 != lighting_counters["field_dirty_marks"]
+                or timing_calls["rasterization"]
+                != lighting_counters["field_rasterized_quads"]
+                or lighting_counters["field_rasterized_quads"]
+                < lighting_counters["field_rebuilds"]
                 or timing_calls["extrapolation"]
                 != lighting_counters["field_rebuilds"]
                 or timing_calls["tone_map_multiply"]
@@ -1036,7 +1042,9 @@ def validate_record(value: object) -> dict[str, object]:
                     or lighting_counters["field_full_rebuild_bounds"] != 0
                     or lighting_counters["field_full_rebuild_control"] != 0
                     or lighting_counters["field_translated_pixels"] == 0
-                    or lighting_counters["field_translated_bytes"] == 0
+                    or lighting_counters["field_translated_bytes"]
+                    != lighting_counters["field_translated_pixels"]
+                    * LIGHTING_SAMPLE_BYTES
                     or lighting_counters["field_dirty_pixels"] >= eligible_pixels
                 ):
                     raise ValueError(
@@ -1057,6 +1065,13 @@ def validate_record(value: object) -> dict[str, object]:
                 ):
                     raise ValueError(
                         "movement benchmark full-rebuild control is incomplete"
+                    )
+                if isolated and (
+                    lighting_counters["field_scroll_x_pixels"] != eligible * 24
+                    or lighting_counters["field_scroll_y_pixels"] != eligible * 12
+                ):
+                    raise ValueError(
+                        "movement benchmark isolated scroll offsets are incomplete"
                     )
         else:
             meaningful_counters = LIGHTING_COUNTER_FIELDS - {

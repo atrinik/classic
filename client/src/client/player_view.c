@@ -12,9 +12,10 @@
 /** @file Deterministic, bounded replay through the live map decoder/renderer.
  */
 
+#include <global.h>
+
 #include <animations.h>
 #include <commands.h>
-#include <global.h>
 #include <image_codec.h>
 #include <libxml/parser.h>
 #include <libxml/tree.h>
@@ -1233,10 +1234,10 @@ static void player_view_timing_json(const uint64_t *durations, size_t count) {
 
 static void player_view_lighting_counters_json(const lighting_benchmark_counters_t *counters) {
     printf("{\"field_begins\":%" PRIu64 ",\"field_dirty_marks\":%" PRIu64
-           ",\"field_dirty_pixels\":%" PRIu64 ",\"field_translations\":%" PRIu64
-           ",\"field_translated_pixels\":%" PRIu64 ",\"field_translated_bytes\":%" PRIu64
-           ",\"field_scroll_x_pixels\":%" PRIu64 ",\"field_scroll_y_pixels\":%" PRIu64
-           ",\"field_translation_fallback_active\":%" PRIu64
+           ",\"field_dirty_pixels\":%" PRIu64 ",\"field_rasterized_quads\":%" PRIu64
+           ",\"field_translations\":%" PRIu64 ",\"field_translated_pixels\":%" PRIu64
+           ",\"field_translated_bytes\":%" PRIu64 ",\"field_scroll_x_pixels\":%" PRIu64
+           ",\"field_scroll_y_pixels\":%" PRIu64 ",\"field_translation_fallback_active\":%" PRIu64
            ",\"field_translation_fallback_bounds\":%" PRIu64
            ",\"field_translation_fallback_control\":%" PRIu64 ",\"field_partial_rebuilds\":%" PRIu64
            ",\"field_full_rebuilds\":%" PRIu64 ",\"field_full_rebuild_cache\":%" PRIu64
@@ -1251,6 +1252,7 @@ static void player_view_lighting_counters_json(const lighting_benchmark_counters
            counters->field_begins,
            counters->field_dirty_marks,
            counters->field_dirty_pixels,
+           counters->field_rasterized_quads,
            counters->field_translations,
            counters->field_translated_pixels,
            counters->field_translated_bytes,
@@ -1311,13 +1313,6 @@ static void player_view_lighting_timings_json(const lighting_benchmark_timings_t
                values[i]->elapsed_ns);
     }
     printf("}");
-}
-
-static uint64_t player_view_lighting_elapsed(const lighting_benchmark_timings_t *timings) {
-    return timings->translation.elapsed_ns + timings->dirty_clear.elapsed_ns +
-           timings->rasterization.elapsed_ns + timings->extrapolation.elapsed_ns +
-           timings->tone_map_multiply.elapsed_ns + timings->sprite_lookup.elapsed_ns +
-           timings->sprite_construction.elapsed_ns + timings->sprite_invalidation.elapsed_ns;
 }
 
 static void player_view_lighting_state_json(const lighting_benchmark_statistics_t *statistics,
@@ -1720,10 +1715,9 @@ static bool player_view_movement_draw(player_view_movement_replay_t *replay,
         }
         LastTick = (uint32_t)(*tick_us / 1000);
         uint64_t frame_started = SDL_GetTicksNS();
-        lighting_benchmark_statistics_t lighting_before_tick;
-        lighting_benchmark_statistics_get(&lighting_before_tick);
         player_view_movement_clock_t queue_clock = {.now_us = *tick_us};
         client_command_queue_drain_result_t drain;
+        uint64_t lighting_work_started = SDL_GetTicksNS();
         uint64_t queue_started = SDL_GetTicksNS();
         client_commands_drain_with_clock(CLIENT_COMMAND_QUEUE_BUDGET_US,
                                          player_view_movement_queue_clock,
@@ -1742,10 +1736,11 @@ static bool player_view_movement_draw(player_view_movement_replay_t *replay,
                         SDL_GetError());
                 return false;
             }
-            lighting_benchmark_statistics_t lighting_after_draw;
             uint64_t map_started = SDL_GetTicksNS();
             map_draw_map(surface);
             phase->map_durations[phase->map_samples++] = SDL_GetTicksNS() - map_started;
+            phase->lighting_work_durations[phase->lighting_work_samples++] =
+                SDL_GetTicksNS() - lighting_work_started;
 #ifdef ATRINIK_WIDGET_TESTS
             if (lighting_benchmark_fault_complete()) {
                 fprintf(stderr,
@@ -1754,10 +1749,6 @@ static bool player_view_movement_draw(player_view_movement_replay_t *replay,
                 return false;
             }
 #endif
-            lighting_benchmark_statistics_get(&lighting_after_draw);
-            phase->lighting_work_durations[phase->lighting_work_samples++] =
-                player_view_lighting_elapsed(&lighting_after_draw.timings) -
-                player_view_lighting_elapsed(&lighting_before_tick.timings);
             phase->full_map_draws++;
             if (!phase->isolated_lighting && *tick_us >= *next_local_minimap_us) {
                 if (!SDL_FillSurfaceRect(local_minimap_surface, NULL, 0)) {

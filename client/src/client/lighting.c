@@ -62,7 +62,7 @@ typedef enum lighting_full_rebuild_cause {
     LIGHTING_FULL_REBUILD_CONTROL,
 } lighting_full_rebuild_cause_t;
 
-_Static_assert(sizeof(lighting_sample) <= 10U, "high-precision lighting sample budget exceeded");
+_Static_assert(sizeof(lighting_sample) == 10U, "lighting telemetry requires ten-byte samples");
 
 typedef struct lighting_context {
     lighting_sample *samples;
@@ -920,6 +920,7 @@ void lighting_draw_quad(const lighting_vertex_t vertices[4]) {
     }
 
     uint64_t timing_started = lighting_benchmark_timing_start();
+    LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, field_rasterized_quads);
     lighting_draw_triangle(vertices, true);
     lighting_draw_triangle(vertices, false);
     LIGHTING_BENCHMARK_TIMING_FINISH(lighting_context_current, rasterization, timing_started);
