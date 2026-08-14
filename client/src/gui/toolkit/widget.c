@@ -1350,12 +1350,20 @@ int widget_priority_integration_test(const char *fixture, const char *saved) {
         int y = map->y;
         int zoom_x = widget_x(map);
         int zoom_y = widget_y(map);
+        int local_x = widget_w(map) / 2;
+        int local_y = widget_h(map) / 2;
+        WIDGET_TEST_CHECK(
+            widget_map_mouse_origin_test(zoom_x + local_x, zoom_y + local_y, local_x, local_y));
         move_widget(map, 17, -9);
         WIDGET_TEST_CHECK(map->x == x + 17 && map->y == y - 9);
         WIDGET_TEST_CHECK(widget_x(map) == zoom_x + 17 && widget_y(map) == zoom_y - 9);
         WIDGET_TEST_CHECK(widget_mouse_over(map,
                                             widget_x(map) + widget_w(map) / 2,
                                             widget_y(map) + widget_h(map) / 2));
+        WIDGET_TEST_CHECK(widget_map_mouse_origin_test(zoom_x + local_x + 17,
+                                                       zoom_y + local_y - 9,
+                                                       local_x,
+                                                       local_y));
         move_widget(map, -17, 9);
         WIDGET_TEST_CHECK(map->x == x && map->y == y);
         WIDGET_TEST_CHECK(widget_x(map) == zoom_x && widget_y(map) == zoom_y);
@@ -1396,12 +1404,20 @@ int widget_priority_integration_test(const char *fixture, const char *saved) {
         int y = map->y;
         int zoom_x = widget_x(map);
         int zoom_y = widget_y(map);
+        int local_x = widget_w(map) / 2;
+        int local_y = widget_h(map) / 2;
+        WIDGET_TEST_CHECK(
+            widget_map_mouse_origin_test(zoom_x + local_x, zoom_y + local_y, local_x, local_y));
         move_widget(nested, 17, -9);
         WIDGET_TEST_CHECK(map->x == x + 17 && map->y == y - 9);
         WIDGET_TEST_CHECK(widget_x(map) == zoom_x + 17 && widget_y(map) == zoom_y - 9);
         WIDGET_TEST_CHECK(widget_mouse_over(map,
                                             widget_x(map) + widget_w(map) / 2,
                                             widget_y(map) + widget_h(map) / 2));
+        WIDGET_TEST_CHECK(widget_map_mouse_origin_test(zoom_x + local_x + 17,
+                                                       zoom_y + local_y - 9,
+                                                       local_x,
+                                                       local_y));
         move_widget(nested, -17, 9);
         WIDGET_TEST_CHECK(map->x == x && map->y == y);
         WIDGET_TEST_CHECK(widget_x(map) == zoom_x && widget_y(map) == zoom_y);
