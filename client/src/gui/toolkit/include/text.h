@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -369,6 +369,7 @@ extern void text_deinit(void);
 
 #ifdef ATRINIK_WIDGET_TESTS
 extern void text_test_font_path_set(const char *path);
+extern void text_test_mono_font_path_set(const char *path);
 #endif
 
 extern void text_offset_set(int x, int y);
