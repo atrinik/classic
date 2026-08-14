@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -931,6 +931,8 @@ object *object_stack_get_reinsert(object *op, uint32_t nrof);
 object *object_stack_get_removed(object *op, uint32_t nrof);
 object *object_decrease(object *op, uint32_t i);
 object *object_insert_into(object *op, object *where, int flag);
+object *object_insert_into_reason(object *op, object *where, const char *reason);
+bool object_remove_reason(object *op, const char *reason, bool destroy);
 object *object_find_arch(object *op, archetype_t *at);
 object *object_find_type(object *op, uint8_t type);
 int object_dir_to_target(object *op, object *target);
@@ -944,6 +946,48 @@ bool object_set_value(object *op, const char *key, const char *value, bool add_k
 void object_custody_acquire(object *op, const object *player_ob);
 void object_custody_relinquish(object *op, const object *player_ob);
 void object_custody_record(const object *op, object *player_ob, const char *reason);
+const char *object_custody_actor_id(object *player_ob);
+
+typedef struct object_custody_transaction {
+    char transaction_id[33];
+    char lineage[256];
+    char actor[256];
+    char first_after[256];
+    char last_after[256];
+    bool active;
+    bool acquire;
+    bool relinquish;
+} object_custody_transaction_t;
+
+bool object_custody_begin(const object *op,
+                          object *actor_ob,
+                          const char *reason,
+                          const char *source,
+                          const char *destination,
+                          const char *counterparty,
+                          uint32_t quantity,
+                          bool acquire,
+                          bool relinquish,
+                          object_custody_transaction_t *transaction);
+bool object_custody_begin_economy(const object *op,
+                                  object *actor_ob,
+                                  const char *reason,
+                                  const char *source,
+                                  const char *destination,
+                                  const char *counterparty,
+                                  uint32_t quantity,
+                                  bool acquire,
+                                  bool relinquish,
+                                  int64_t before,
+                                  int64_t delta,
+                                  int64_t after,
+                                  int64_t price,
+                                  const char *currency,
+                                  const char *funding,
+                                  object_custody_transaction_t *transaction);
+bool object_custody_commit(object *op, object_custody_transaction_t *transaction);
+bool object_custody_finish(object_custody_transaction_t *transaction);
+void object_custody_abort(object_custody_transaction_t *transaction, const char *reason);
 int object_matches_string(object *op, object *caller, const char *str);
 int object_get_gender(const object *op);
 void object_reverse_inventory(object *op);

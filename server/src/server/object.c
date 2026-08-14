@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -2424,6 +2424,84 @@ object *object_insert_into(object *op, object *where, int flag) {
     return op;
 }
 
+object *object_insert_into_reason(object *op, object *where, const char *reason) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(where != NULL);
+    HARD_ASSERT(reason != NULL);
+
+    object *source_root = object_get_env(op);
+    object *destination_root = object_get_env(where);
+    object *source_player = source_root->type == PLAYER ? source_root : NULL;
+    object *destination_player = destination_root->type == PLAYER ? destination_root : NULL;
+    if (source_player == destination_player) {
+        if (!QUERY_FLAG(op, FLAG_REMOVED)) {
+            object_remove(op, 0);
+        }
+        return object_insert_into(op, where, 0);
+    }
+
+    object *actor = source_player != NULL ? source_player : destination_player;
+    object_custody_transaction_t transaction = {0};
+    const char *counterparty = "";
+    if (source_player != NULL && destination_player != NULL) {
+        object *other = actor == source_player ? destination_player : source_player;
+        counterparty = object_custody_actor_id(other);
+        if (counterparty == NULL) {
+            counterparty = "";
+        }
+    }
+    if (actor != NULL && !object_custody_begin(op,
+                                               actor,
+                                               reason,
+                                               source_player != NULL ? "player" : "service",
+                                               destination_player != NULL ? "player" : "service",
+                                               counterparty,
+                                               MAX(1, op->nrof),
+                                               destination_player != NULL,
+                                               source_player != NULL,
+                                               &transaction)) {
+        return NULL;
+    }
+    if (!QUERY_FLAG(op, FLAG_REMOVED)) {
+        object_remove(op, 0);
+    }
+    object *inserted = object_insert_into(op, where, 0);
+    if (actor != NULL) {
+        (void)object_custody_commit(inserted, &transaction);
+    }
+    return inserted;
+}
+
+bool object_remove_reason(object *op, const char *reason, bool destroy) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(reason != NULL);
+
+    object *root = object_get_env(op);
+    object_custody_transaction_t transaction = {0};
+    if (root->type == PLAYER && !object_custody_begin(op,
+                                                      root,
+                                                      reason,
+                                                      "player",
+                                                      destroy ? "destroyed" : "service",
+                                                      "",
+                                                      MAX(1, op->nrof),
+                                                      false,
+                                                      true,
+                                                      &transaction)) {
+        return false;
+    }
+    if (!QUERY_FLAG(op, FLAG_REMOVED)) {
+        object_remove(op, 0);
+    }
+    if (destroy) {
+        object_destroy(op);
+    }
+    if (root->type == PLAYER) {
+        (void)object_custody_finish(&transaction);
+    }
+    return true;
+}
+
 /**
  * Searches for any object with a matching archetype in the inventory
  * of the given object.
@@ -2824,6 +2902,187 @@ static bool object_custody_random_id(char output[GAMEPLAY_JOURNAL_TRANSACTION_ID
     return ok;
 }
 
+static bool object_custody_actor(object *actor_ob) {
+    if (actor_ob->type != PLAYER || CONTR(actor_ob) == NULL || CONTR(actor_ob)->cs == NULL ||
+        CONTR(actor_ob)->cs->account == NULL || actor_ob->name == NULL) {
+        return false;
+    }
+    if (actor_ob->custody_actor != NULL) {
+        return true;
+    }
+    char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE], actor[MAX_BUF];
+    if (!object_custody_random_id(id)) {
+        LOG(ERROR, "Could not create durable custody identity for player %s.", actor_ob->name);
+        return false;
+    }
+    snprintf(actor, sizeof(actor), "%s:%s", CONTR(actor_ob)->cs->account, id);
+    actor_ob->custody_actor = add_string(actor);
+    return true;
+}
+
+const char *object_custody_actor_id(object *player_ob) {
+    return object_custody_actor(player_ob) ? player_ob->custody_actor : NULL;
+}
+
+bool object_custody_begin_economy(const object *op,
+                                  object *actor_ob,
+                                  const char *reason,
+                                  const char *source,
+                                  const char *destination,
+                                  const char *counterparty,
+                                  uint32_t quantity,
+                                  bool acquire,
+                                  bool relinquish,
+                                  int64_t before,
+                                  int64_t delta,
+                                  int64_t after,
+                                  int64_t price,
+                                  const char *currency,
+                                  const char *funding,
+                                  object_custody_transaction_t *transaction) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(actor_ob != NULL);
+    HARD_ASSERT(reason != NULL);
+    HARD_ASSERT(source != NULL);
+    HARD_ASSERT(destination != NULL);
+    HARD_ASSERT(transaction != NULL);
+
+    memset(transaction, 0, sizeof(*transaction));
+    if (!object_custody_actor(actor_ob)) {
+        return false;
+    }
+    snprintf(VS(transaction->actor), "%s", actor_ob->custody_actor);
+    if (op->custody_lineage != NULL) {
+        snprintf(VS(transaction->lineage), "%s", op->custody_lineage);
+    } else {
+        char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+        if (!object_custody_random_id(id)) {
+            return false;
+        }
+        snprintf(VS(transaction->lineage), "item:%s", id);
+    }
+    snprintf(VS(transaction->first_after),
+             "%s",
+             op->custody_first != NULL ? op->custody_first : (acquire ? transaction->actor : ""));
+    snprintf(VS(transaction->last_after),
+             "%s",
+             relinquish ? transaction->actor : (op->custody_last != NULL ? op->custody_last : ""));
+    transaction->acquire = acquire;
+    transaction->relinquish = relinquish;
+
+    char snapshot[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    snprintf(VS(snapshot),
+             "arch=%s;type=%u;nrof=%" PRIu32 ";value=%" PRId64 ";weight=%" PRIu32,
+             op->arch != NULL ? op->arch->name : "unknown",
+             op->type,
+             op->nrof != 0 ? op->nrof : 1,
+             op->value,
+             op->weight);
+    char provenance_before[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    char provenance_after[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    snprintf(VS(provenance_before),
+             "first=%.112s;last=%.112s",
+             op->custody_first != NULL ? op->custody_first : "",
+             op->custody_last != NULL ? op->custody_last : "");
+    snprintf(VS(provenance_after),
+             "first=%.112s;last=%.112s",
+             transaction->first_after,
+             transaction->last_after);
+    gameplay_journal_change_t change = {
+        .subject_id = transaction->lineage,
+        .lineage_id = transaction->lineage,
+        .before = before,
+        .delta = delta,
+        .after = after,
+        .archetype = op->arch != NULL ? op->arch->name : "unknown",
+        .object_type = op->type,
+        .snapshot = snapshot,
+        .quantity = quantity,
+        .source = source,
+        .destination = destination,
+        .actor = transaction->actor,
+        .counterparty = counterparty,
+        .provenance_before = provenance_before,
+        .provenance_after = provenance_after,
+        .price = price,
+        .currency = currency,
+        .funding = funding,
+    };
+    if (!gameplay_journal_required()) {
+        return true;
+    }
+    transaction->active = gameplay_journal_player_begin_change(CONTR(actor_ob),
+                                                               GAMEPLAY_JOURNAL_ITEM,
+                                                               reason,
+                                                               &change,
+                                                               transaction->transaction_id);
+    return transaction->active;
+}
+
+bool object_custody_begin(const object *op,
+                          object *actor_ob,
+                          const char *reason,
+                          const char *source,
+                          const char *destination,
+                          const char *counterparty,
+                          uint32_t quantity,
+                          bool acquire,
+                          bool relinquish,
+                          object_custody_transaction_t *transaction) {
+    return object_custody_begin_economy(op,
+                                        actor_ob,
+                                        reason,
+                                        source,
+                                        destination,
+                                        counterparty,
+                                        quantity,
+                                        acquire,
+                                        relinquish,
+                                        relinquish ? quantity : 0,
+                                        relinquish ? -(int64_t)quantity : (int64_t)quantity,
+                                        relinquish ? 0 : quantity,
+                                        0,
+                                        "",
+                                        "",
+                                        transaction);
+}
+
+bool object_custody_commit(object *op, object_custody_transaction_t *transaction) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(transaction != NULL);
+
+    if (op->custody_lineage == NULL) {
+        op->custody_lineage = add_string(transaction->lineage);
+    }
+    if (transaction->acquire && op->custody_first == NULL) {
+        op->custody_first = add_string(transaction->first_after);
+    }
+    if (transaction->relinquish) {
+        FREE_AND_CLEAR_HASH2(op->custody_last);
+        op->custody_last = add_string(transaction->last_after);
+    }
+    return object_custody_finish(transaction);
+}
+
+bool object_custody_finish(object_custody_transaction_t *transaction) {
+    HARD_ASSERT(transaction != NULL);
+    if (transaction->active) {
+        bool committed = gameplay_journal_commit(transaction->transaction_id);
+        transaction->active = false;
+        return committed;
+    }
+    return true;
+}
+
+void object_custody_abort(object_custody_transaction_t *transaction, const char *reason) {
+    HARD_ASSERT(transaction != NULL);
+    HARD_ASSERT(reason != NULL);
+    if (transaction->active) {
+        (void)gameplay_journal_abort(transaction->transaction_id, reason);
+        transaction->active = false;
+    }
+}
+
 void object_custody_record(const object *op, object *actor_ob, const char *reason) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(actor_ob != NULL);
@@ -2858,14 +3117,8 @@ void object_custody_acquire(object *op, const object *player_ob) {
     }
 
     object *actor_ob = (object *)player_ob;
-    if (actor_ob->custody_actor == NULL) {
-        char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE], actor[MAX_BUF];
-        if (!object_custody_random_id(id)) {
-            LOG(ERROR, "Could not create durable custody identity for player %s.", actor_ob->name);
-            return;
-        }
-        snprintf(actor, sizeof(actor), "%s:%s", CONTR(actor_ob)->cs->account, id);
-        actor_ob->custody_actor = add_string(actor);
+    if (!object_custody_actor(actor_ob)) {
+        return;
     }
 
     if (op->custody_first == NULL) {
@@ -2895,14 +3148,8 @@ void object_custody_relinquish(object *op, const object *player_ob) {
     }
 
     object *actor_ob = (object *)player_ob;
-    if (actor_ob->custody_actor == NULL) {
-        char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE], actor[MAX_BUF];
-        if (!object_custody_random_id(id)) {
-            LOG(ERROR, "Could not create durable custody identity for player %s.", actor_ob->name);
-            return;
-        }
-        snprintf(actor, sizeof(actor), "%s:%s", CONTR(actor_ob)->cs->account, id);
-        actor_ob->custody_actor = add_string(actor);
+    if (!object_custody_actor(actor_ob)) {
+        return;
     }
     FREE_AND_CLEAR_HASH2(op->custody_last);
     op->custody_last = add_refcount(actor_ob->custody_actor);

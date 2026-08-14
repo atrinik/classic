@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -424,11 +424,12 @@ static void party_loot_split(object *pl, object *corpse) {
                     value_split += value % count;
                 }
 
-                draw_info_format(COLOR_BLUE,
-                                 ol->objlink.ob,
-                                 "You receive %s.",
-                                 shop_get_cost_string(value_split));
-                shop_insert_coins(ol->objlink.ob, value_split);
+                if (shop_insert_coins_reason(ol->objlink.ob, value_split, "party.currency-split")) {
+                    draw_info_format(COLOR_BLUE,
+                                     ol->objlink.ob,
+                                     "You receive %s.",
+                                     shop_get_cost_string(value_split));
+                }
 
                 num++;
             }

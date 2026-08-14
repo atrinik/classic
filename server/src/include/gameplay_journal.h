@@ -16,7 +16,7 @@
 
 #include <decls.h>
 
-#define GAMEPLAY_JOURNAL_SCHEMA_VERSION 1
+#define GAMEPLAY_JOURNAL_SCHEMA_VERSION 2
 #define GAMEPLAY_JOURNAL_ID_MAX 255
 #define GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE 33
 
@@ -48,6 +48,21 @@ typedef struct gameplay_journal_change {
     int64_t before;
     int64_t delta;
     int64_t after;
+
+    /** Optional bounded semantic detail (empty fields are omitted by producers). */
+    const char *archetype;
+    int32_t object_type;
+    const char *snapshot;
+    uint32_t quantity;
+    const char *source;
+    const char *destination;
+    const char *actor;
+    const char *counterparty;
+    const char *provenance_before;
+    const char *provenance_after;
+    int64_t price;
+    const char *currency;
+    const char *funding;
 } gameplay_journal_change_t;
 
 /**
@@ -64,6 +79,9 @@ void gameplay_journal_deinit(void);
 
 /** Whether journal-backed gameplay mutations may currently start. */
 bool gameplay_journal_available(void);
+
+/** Whether this process initialized (or failed to initialize) the journal. */
+bool gameplay_journal_required(void);
 
 /**
  * Durably record an intent before its gameplay mutation.
@@ -96,11 +114,38 @@ bool gameplay_journal_player_begin(player *pl,
                                    int64_t after,
                                    char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]);
 
+/** Native semantic adapter retaining all version-2 typed detail. */
+bool gameplay_journal_player_begin_change(
+    player *pl,
+    gameplay_journal_kind_t kind,
+    const char *reason,
+    const gameplay_journal_change_t *change,
+    char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]);
+
+/** Begin one reason-aware player currency mutation. */
+bool gameplay_journal_currency_begin(object *player_ob,
+                                     const char *reason,
+                                     const char *subject_id,
+                                     int64_t before,
+                                     int64_t delta,
+                                     int64_t after,
+                                     const char *source,
+                                     const char *destination,
+                                     const char *funding,
+                                     char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]);
+
+/** Commit/abort helpers accept an empty ID for unit-test/non-runtime bypass. */
+bool gameplay_journal_semantic_commit(const char *transaction_id);
+bool gameplay_journal_semantic_abort(const char *transaction_id, const char *reason);
+
 #ifdef ATRINIK_TESTING
 /** Unit-test seam for the fail-stop write policy; unavailable in release builds. */
 void gameplay_journal_fail_writes_for_test(bool fail);
+void gameplay_journal_fail_after_writes_for_test(size_t writes);
 void gameplay_journal_file_limit_for_test(size_t limit);
 void gameplay_journal_hard_limit_for_test(size_t limit);
+uint64_t gameplay_journal_committed_count_for_test(const char *reason);
+void gameplay_journal_counts_reset_for_test(void);
 #endif
 
 #endif

@@ -85,6 +85,17 @@ class JournalTests(unittest.TestCase):
         self.path.write_bytes(b"".join(records))
         self.path.chmod(0o600)
 
+    @staticmethod
+    def details(**updates: object) -> dict[str, object]:
+        value: dict[str, object] = {
+            "archetype": "", "object_type": 0, "snapshot": "", "quantity": 0,
+            "source": "", "destination": "", "actor": "", "counterparty": "",
+            "provenance_before": "", "provenance_after": "", "price": 0, "currency": "",
+            "funding": "",
+        }
+        value.update(updates)
+        return value
+
     def test_reconstructs_committed_timeline_and_queries(self) -> None:
         boundary = self.record("boundary")
         intent = self.record(
@@ -322,6 +333,42 @@ class JournalTests(unittest.TestCase):
         self.assertNotIn("before-intent", journal.transactions)
         self.assertEqual(journal.transactions["attempted"]["status"], "attempted")
         self.assertEqual(journal.transactions["committed"]["status"], "committed")
+
+    def test_version_two_transaction_families_reconcile_after_restart(self) -> None:
+        records: list[bytes] = []
+        families = (
+            ("item.acquire", "item"),
+            ("shop.purchase", "item"),
+            ("bank.deposit", "currency"),
+            ("script.item-grant", "item"),
+        )
+        for index, (reason, kind) in enumerate(families):
+            attempted = f"attempted-{index}"
+            committed = f"committed-{index}"
+            details = self.details(
+                archetype="sword" if kind == "item" else "",
+                object_type=15 if kind == "item" else 0,
+                snapshot="arch=sword;type=15;nrof=1" if kind == "item" else "",
+                quantity=1 if kind == "item" else 0,
+                source="ground" if kind == "item" else "carried-cash",
+                destination="player" if kind == "item" else "bank",
+                actor="acct:actor",
+                price=75 if reason == "shop.purchase" else 0,
+                currency="" if kind == "item" else "copper-equivalent",
+                funding="" if kind == "item" else "carried-cash",
+            )
+            records.append(self.record(
+                "intent", attempted, version=2, kind=kind, reason=reason, details=details
+            ))
+            records.append(self.record(
+                "intent", committed, version=2, kind=kind, reason=reason, details=details
+            ))
+            records.append(self.record("commit", committed, version=2))
+        self.write(*records)
+        journal = gameplay_journal.load([self.root])
+        for index, _family in enumerate(families):
+            self.assertEqual(journal.transactions[f"attempted-{index}"]["status"], "attempted")
+            self.assertEqual(journal.transactions[f"committed-{index}"]["status"], "committed")
 
     def test_rejects_corruption_permissions_and_redaction(self) -> None:
         record = bytearray(self.record("boundary"))

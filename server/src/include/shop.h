@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -27,6 +27,8 @@
 
 #include <decls.h>
 
+struct object_custody_transaction;
+
 /**
  * @file
  * Public declarations for the corresponding server module.
@@ -44,11 +46,21 @@ extern int64_t shop_get_money(object *op);
 
 extern bool shop_pay(object *op, int64_t to_pay);
 
+extern bool shop_pay_reason(object *op, int64_t to_pay, const char *reason);
+
 extern bool shop_pay_item(object *op, object *item);
 
 extern bool shop_pay_items(object *op);
 
 extern void shop_sell_item(object *op, object *item);
+
+extern bool shop_sell_item_begin(object *op,
+                                 object *item,
+                                 uint32_t quantity,
+                                 struct object_custody_transaction *transaction);
+
+extern bool
+shop_sell_item_commit(object *op, object *item, struct object_custody_transaction *transaction);
 
 extern int64_t bank_get_balance(object *op);
 
@@ -59,5 +71,7 @@ extern int bank_deposit(object *op, const char *text, int64_t *value);
 extern int bank_withdraw(object *op, const char *text, int64_t *value);
 
 extern void shop_insert_coins(object *op, int64_t value);
+
+extern bool shop_insert_coins_reason(object *op, int64_t value, const char *reason);
 
 #endif

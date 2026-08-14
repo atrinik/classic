@@ -2289,6 +2289,26 @@ static object *get_pickup_object(object *pl, object *op, int nrof) {
     return op;
 }
 
+static const char *item_location(const object *item, const object *player_ob) {
+    if (item->map != NULL) {
+        return "ground";
+    }
+    object *root = object_get_env((object *)item);
+    if (root == player_ob) {
+        return "player";
+    }
+    return root->type == PLAYER ? "other-player" : "external-container";
+}
+
+static const char *item_counterparty(const object *item, const object *player_ob) {
+    object *root = object_get_env((object *)item);
+    if (root != player_ob && root->type == PLAYER) {
+        const char *identity = object_custody_actor_id(root);
+        return identity != NULL ? identity : "";
+    }
+    return "";
+}
+
 /**
  * Pick up object.
  * @param pl
@@ -2336,19 +2356,35 @@ static void pick_up_object(object *pl, object *op, object *tmp, int nrof, int no
         return;
     }
 
-    if (pl->type == PLAYER) {
-        metrics_add(&CONTR(pl)->metrics,
-                    METRIC_CHARACTER_ITEM_UNITS_PICKED_UP,
-                    (uint64_t)MAX(1, nrof));
+    bool custody_transfer =
+        pl->type == PLAYER && !QUERY_FLAG(tmp, FLAG_UNPAID) && object_get_env(tmp) != pl;
+    object_custody_transaction_t custody = {0};
+    if (custody_transfer &&
+        !object_custody_begin(tmp,
+                              pl,
+                              object_get_env(tmp)->type == PLAYER ? "item.player-transfer"
+                                                                  : "item.acquire",
+                              item_location(tmp, pl),
+                              "player",
+                              item_counterparty(tmp, pl),
+                              (uint32_t)nrof,
+                              true,
+                              object_get_env(tmp)->type == PLAYER,
+                              &custody)) {
+        draw_info(COLOR_WHITE, pl, "The item transfer could not be journaled.");
+        return;
     }
 
     tmp = get_pickup_object(pl, tmp, nrof);
-    if (pl->type == PLAYER) {
-        object_custody_acquire(tmp, pl);
-    }
     object *inserted = object_insert_into(tmp, op, 0);
-    if (pl->type == PLAYER) {
-        object_custody_record(inserted, pl, "custody-acquired");
+    bool committed = true;
+    if (custody_transfer) {
+        committed = object_custody_commit(inserted, &custody);
+    }
+    if (pl->type == PLAYER && committed) {
+        metrics_add(&CONTR(pl)->metrics,
+                    METRIC_CHARACTER_ITEM_UNITS_PICKED_UP,
+                    (uint64_t)MAX(1, nrof));
     }
 }
 
@@ -2519,6 +2555,32 @@ void put_object_in_sack(object *op, object *sack, object *tmp, long nrof) {
         }
     }
 
+    object *destination_root = object_get_env(sack);
+    bool custody_transfer = destination_root != op;
+    object_custody_transaction_t custody = {0};
+    const char *counterparty = "";
+    if (destination_root->type == PLAYER) {
+        counterparty = object_custody_actor_id(destination_root);
+        if (counterparty == NULL) {
+            counterparty = "";
+        }
+    }
+    if (custody_transfer &&
+        !object_custody_begin(
+            tmp,
+            op,
+            destination_root->type == PLAYER ? "item.player-transfer" : "item.external-transfer",
+            "player",
+            destination_root->type == PLAYER ? "other-player" : "external-container",
+            counterparty,
+            (uint32_t)nrof,
+            false,
+            true,
+            &custody)) {
+        draw_info(COLOR_WHITE, op, "The item transfer could not be journaled.");
+        return;
+    }
+
     tmp = get_pickup_object(op, tmp, nrof);
 
     char *name = object_get_name_s(sack, op);
@@ -2527,7 +2589,10 @@ void put_object_in_sack(object *op, object *sack, object *tmp, long nrof) {
     free(name);
     free(tmp_name);
 
-    object_insert_into(tmp, sack, 0);
+    object *inserted = object_insert_into(tmp, sack, 0);
+    if (custody_transfer) {
+        (void)object_custody_commit(inserted, &custody);
+    }
 }
 
 /**
@@ -2567,13 +2632,41 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
         return;
     }
 
+    int tmp_nrof = tmp->nrof != 0 ? (int)tmp->nrof : 1;
+    if (nrof <= 0 || nrof > tmp_nrof) {
+        nrof = tmp_nrof;
+    }
+    floor_ob = GET_MAP_OB_LAYER(op->map, op->x, op->y, LAYER_FLOOR, 0);
+    bool shop_sale = floor_ob != NULL && floor_ob->type == SHOP_FLOOR &&
+                     !QUERY_FLAG(tmp, FLAG_UNPAID) && tmp->type != MONEY;
+    bool journal_drop = op->type == PLAYER && !QUERY_FLAG(tmp, FLAG_UNPAID);
+    object_custody_transaction_t custody = {0};
+    if (journal_drop) {
+        bool journal_ok;
+        if (shop_sale) {
+            journal_ok = shop_sell_item_begin(op, tmp, (uint32_t)nrof, &custody);
+        } else {
+            journal_ok = object_custody_begin(
+                tmp,
+                op,
+                QUERY_FLAG(tmp, FLAG_STARTEQUIP) ? "item.startequip-destroy" : "item.drop",
+                "player",
+                QUERY_FLAG(tmp, FLAG_STARTEQUIP) ? "destroyed" : "ground",
+                "",
+                (uint32_t)nrof,
+                false,
+                true,
+                &custody);
+        }
+        if (!journal_ok) {
+            draw_info(COLOR_WHITE, op, "The item transfer could not be journaled.");
+            return;
+        }
+    }
+
     tmp = object_stack_get_removed(tmp, nrof);
 
-    if (op->type == PLAYER) {
-        metrics_add(&CONTR(op)->metrics,
-                    METRIC_CHARACTER_ITEM_UNITS_DROPPED,
-                    (uint64_t)MAX(1, tmp->nrof));
-    }
+    uint64_t dropped_quantity = (uint64_t)MAX(1, tmp->nrof);
 
     if (QUERY_FLAG(tmp, FLAG_STARTEQUIP) || QUERY_FLAG(tmp, FLAG_UNPAID)) {
         if (op->type == PLAYER) {
@@ -2584,8 +2677,6 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
             if (QUERY_FLAG(tmp, FLAG_UNPAID)) {
                 draw_info(COLOR_WHITE, op, "The shop magic put it back to the storage.");
 
-                floor_ob = GET_MAP_OB_LAYER(op->map, op->x, op->y, LAYER_FLOOR, 0);
-
                 /* If the player is standing on a unique shop floor or unique
                  * randomitems shop floor, drop the object back to the floor */
                 if (floor_ob && floor_ob->type == SHOP_FLOOR &&
@@ -2593,13 +2684,10 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
                      (floor_ob->randomitems && QUERY_FLAG(floor_ob, FLAG_CURSED)))) {
                     tmp->x = op->x;
                     tmp->y = op->y;
-                    if (op->type == PLAYER) {
-                        object_custody_relinquish(tmp, op);
-                    }
                     tmp = object_insert_map(tmp, op->map, op, 0);
-                    if (op->type == PLAYER) {
-                        object_custody_record(tmp, op, "custody-relinquished");
-                    }
+                    metrics_add(&CONTR(op)->metrics,
+                                METRIC_CHARACTER_ITEM_UNITS_DROPPED,
+                                dropped_quantity);
                     return;
                 }
             } else {
@@ -2610,6 +2698,10 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
         }
 
         object_destroy(tmp);
+        bool committed = !journal_drop || object_custody_finish(&custody);
+        if (op->type == PLAYER && committed) {
+            metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_ITEM_UNITS_DROPPED, dropped_quantity);
+        }
         return;
     }
 
@@ -2625,24 +2717,23 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
     }
 #endif
 
-    floor_ob = GET_MAP_OB_LAYER(op->map, op->x, op->y, LAYER_FLOOR, 0);
-
-    if (floor_ob && floor_ob->type == SHOP_FLOOR && !QUERY_FLAG(tmp, FLAG_UNPAID) &&
-        tmp->type != MONEY) {
-        shop_sell_item(op, tmp);
+    bool committed = true;
+    if (shop_sale) {
+        committed = shop_sell_item_commit(op, tmp, &custody);
 
         /* Ok, we have really sold it - not only dropped. Run this only
          * if the floor is not magical (i.e., unique shop) */
         if (QUERY_FLAG(tmp, FLAG_UNPAID) && !QUERY_FLAG(floor_ob, FLAG_IS_MAGICAL)) {
             if (op->type == PLAYER) {
-                object_custody_relinquish(tmp, op);
-                object_custody_record(tmp, op, "custody-sold");
-            }
-            if (op->type == PLAYER) {
                 draw_info(COLOR_WHITE, op, "The shop magic put it to the storage.");
             }
 
             object_destroy(tmp);
+            if (op->type == PLAYER && committed) {
+                metrics_add(&CONTR(op)->metrics,
+                            METRIC_CHARACTER_ITEM_UNITS_DROPPED,
+                            dropped_quantity);
+            }
             return;
         }
     }
@@ -2651,12 +2742,12 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent) {
     tmp->y = op->y;
     tmp->sub_layer = op->sub_layer;
 
-    if (op->type == PLAYER) {
-        object_custody_relinquish(tmp, op);
-    }
     tmp = object_insert_map(tmp, op->map, op, 0);
-    if (op->type == PLAYER) {
-        object_custody_record(tmp, op, "custody-relinquished");
+    if (journal_drop && !shop_sale) {
+        committed = object_custody_commit(tmp, &custody);
+    }
+    if (op->type == PLAYER && committed) {
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_ITEM_UNITS_DROPPED, dropped_quantity);
     }
 
     SET_FLAG(op, FLAG_NO_APPLY);

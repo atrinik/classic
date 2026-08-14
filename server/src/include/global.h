@@ -51,6 +51,8 @@
 #define BANK_SYNTAX_ERROR -1
 /** Successfully withdrawn/deposited money. */
 #define BANK_SUCCESS 0
+/** Durable audit failed before mutation, or its terminal state is ambiguous. */
+#define BANK_JOURNAL_ERROR 5
 
 /** Withdraw value was too high. */
 #define BANK_WITHDRAW_HIGH 1

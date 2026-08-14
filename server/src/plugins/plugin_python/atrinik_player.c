@@ -1129,10 +1129,12 @@ static PyObject *Atrinik_Player_FactionClearBounty(Atrinik_Player *self, PyObjec
 
 /** Documentation for Atrinik_Player_InsertCoins(). */
 static const char doc_Atrinik_Player_InsertCoins[] =
-    ".. method:: InsertCoins(value).\n\n"
+    ".. method:: InsertCoins(value, reason='script.currency-grant').\n\n"
     "Gives coins of the specified value to the player.\n\n"
     ":param value: The value.\n"
-    ":type value: int";
+    ":type value: int\n"
+    ":param reason: Bounded semantic reason code for the private journal.\n"
+    ":type reason: str";
 
 /**
  * Implements Atrinik.Player.Player.InsertCoins() Python method.
@@ -1140,12 +1142,16 @@ static const char doc_Atrinik_Player_InsertCoins[] =
  */
 static PyObject *Atrinik_Player_InsertCoins(Atrinik_Player *self, PyObject *args) {
     int64_t value;
+    const char *reason = "script.currency-grant";
 
-    if (!PyArg_ParseTuple(args, "L", &value)) {
+    if (!PyArg_ParseTuple(args, "L|s", &value, &reason)) {
         return NULL;
     }
 
-    hooks->shop_insert_coins(self->pl->ob, value);
+    if (!hooks->shop_insert_coins_reason(self->pl->ob, value, reason)) {
+        PyErr_SetString(PyExc_RuntimeError, "Currency grant could not be journaled.");
+        return NULL;
+    }
 
     Py_INCREF(Py_None);
     return Py_None;

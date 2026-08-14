@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -29,6 +29,7 @@
 
 #include <global.h>
 #include <shop.h>
+#include <gameplay_journal.h>
 #include <server_main.h>
 #include <server_item.h>
 #include <server.h>
@@ -434,11 +435,11 @@ static int64_t shop_pay_amount(object *op, int64_t to_pay) {
  * False if not enough money, in which case nothing is removed, true
  * if money was removed.
  */
-bool shop_pay(object *op, int64_t to_pay) {
+static bool shop_pay_internal(object *op, int64_t to_pay, const char *reason, object *item) {
     if (to_pay < 0) {
         return false;
     }
-    if (to_pay == 0) {
+    if (to_pay == 0 && item == NULL) {
         return true;
     }
 
@@ -447,34 +448,82 @@ bool shop_pay(object *op, int64_t to_pay) {
     }
 
     int64_t amount = to_pay;
+    int64_t total_before = shop_get_money(op);
+    int64_t bank_before = bank_get_balance(op);
+    int64_t carried_before = total_before - bank_before;
+    int64_t bank_used = MAX(0, amount - carried_before);
+    const char *funding = bank_used == 0 ? "carried-cash" : bank_used == amount ? "bank" : "mixed";
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
+    object_custody_transaction_t item_transaction = {0};
+    bool journal_payment = op->type == PLAYER;
+    bool item_journal = journal_payment && item != NULL;
+    if (item_journal) {
+        if (!object_custody_begin_economy(item,
+                                          op,
+                                          reason,
+                                          "shop-service",
+                                          "player",
+                                          "shop-service",
+                                          MAX(1, item->nrof),
+                                          true,
+                                          false,
+                                          bank_used != 0 ? bank_before : total_before,
+                                          -(bank_used != 0 ? bank_used : amount),
+                                          bank_used != 0 ? bank_before - bank_used
+                                                         : total_before - amount,
+                                          amount,
+                                          "copper-equivalent",
+                                          funding,
+                                          &item_transaction)) {
+            return false;
+        }
+    } else if (journal_payment && !gameplay_journal_currency_begin(op,
+                                                                   reason,
+                                                                   "currency:payment",
+                                                                   total_before,
+                                                                   -amount,
+                                                                   total_before - amount,
+                                                                   funding,
+                                                                   "service",
+                                                                   funding,
+                                                                   transaction)) {
+        return false;
+    }
     to_pay = shop_pay_amount(op, to_pay);
     if (to_pay != 0) {
         object *bank = bank_find_info(op);
         if (bank != NULL) {
-            SOFT_ASSERT_RC(bank->value >= to_pay,
-                           true,
-                           "Bank object value is "
-                           "%" PRId64 ", but object needs %" PRId64 " to finish "
-                           "payment, op: %s",
-                           bank->value,
-                           to_pay,
-                           object_get_str(op));
-            bank->value -= to_pay;
+            HARD_ASSERT(bank->value >= to_pay);
+            bank->value = bank_before - to_pay;
             to_pay = 0;
         }
     }
 
-    SOFT_ASSERT_RC(to_pay == 0,
-                   true,
-                   "Still %" PRId64 " left to pay, op: %s",
-                   to_pay,
-                   object_get_str(op));
+    HARD_ASSERT(to_pay == 0);
 
+    bool committed = true;
+    if (item_journal) {
+        committed = object_custody_commit(item, &item_transaction);
+    } else if (journal_payment) {
+        committed = gameplay_journal_semantic_commit(transaction);
+    }
+    if (!committed) {
+        return false;
+    }
     if (op->type == PLAYER) {
         metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_CURRENCY_SPENT, (uint64_t)amount);
     }
 
     return true;
+}
+
+bool shop_pay_reason(object *op, int64_t to_pay, const char *reason) {
+    HARD_ASSERT(reason != NULL);
+    return shop_pay_internal(op, to_pay, reason, NULL);
+}
+
+bool shop_pay(object *op, int64_t to_pay) {
+    return shop_pay_reason(op, to_pay, "script.payment");
 }
 
 /**
@@ -488,7 +537,7 @@ bool shop_pay(object *op, int64_t to_pay) {
  */
 bool shop_pay_item(object *op, object *item) {
     int64_t cost = shop_get_cost(item, COST_BUY);
-    if (!shop_pay(op, cost)) {
+    if (!shop_pay_internal(op, cost, "shop.purchase", item)) {
         return false;
     }
     if (op->type == PLAYER && cost > 0) {
@@ -585,7 +634,37 @@ bool shop_pay_items(object *op) {
  * @param item
  * The item to sell.
  */
-void shop_sell_item(object *op, object *item) {
+bool shop_sell_item_begin(object *op,
+                          object *item,
+                          uint32_t quantity,
+                          object_custody_transaction_t *transaction) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(item != NULL);
+    HARD_ASSERT(transaction != NULL);
+
+    object priced = *item;
+    priced.nrof = quantity;
+    int64_t value = shop_get_cost(&priced, COST_SELL);
+    int64_t before = shop_get_money(op);
+    return object_custody_begin_economy(item,
+                                        op,
+                                        "shop.sale",
+                                        "player",
+                                        "shop-service",
+                                        "shop-service",
+                                        quantity,
+                                        false,
+                                        true,
+                                        before,
+                                        value,
+                                        before + value,
+                                        value,
+                                        "copper-equivalent",
+                                        "shop-service",
+                                        transaction);
+}
+
+bool shop_sell_item_commit(object *op, object *item, object_custody_transaction_t *transaction) {
     HARD_ASSERT(op != NULL);
 
     if (item->custom_name) {
@@ -599,10 +678,6 @@ void shop_sell_item(object *op, object *item) {
     }
 
     shop_insert_coins(op, value);
-    if (op->type == PLAYER && value > 0) {
-        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_SHOP_SALES, 1);
-        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_SHOP_CURRENCY_EARNED, (uint64_t)value);
-    }
     draw_info_format(COLOR_WHITE, op, "You receive %s for %s.", shop_get_cost_string(value), name);
 
     SET_FLAG(item, FLAG_UNPAID);
@@ -610,6 +685,22 @@ void shop_sell_item(object *op, object *item) {
      * identified. */
     identify(item);
     free(name);
+    if (!object_custody_commit(item, transaction)) {
+        return false;
+    }
+    if (op->type == PLAYER && value > 0) {
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_SHOP_SALES, 1);
+        metrics_add(&CONTR(op)->metrics, METRIC_CHARACTER_SHOP_CURRENCY_EARNED, (uint64_t)value);
+    }
+    return true;
+}
+
+void shop_sell_item(object *op, object *item) {
+    object_custody_transaction_t transaction;
+    if (!shop_sell_item_begin(op, item, MAX(1, item->nrof), &transaction)) {
+        return;
+    }
+    (void)shop_sell_item_commit(op, item, &transaction);
 }
 
 /**
@@ -700,4 +791,34 @@ void shop_insert_coins(object *op, int64_t value) {
                 "Value is not zero: %" PRId64 ", object: %s",
                 value,
                 object_get_str(op));
+}
+
+bool shop_insert_coins_reason(object *op, int64_t value, const char *reason) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(reason != NULL);
+    if (value < 0) {
+        return false;
+    }
+    if (value == 0) {
+        return true;
+    }
+    int64_t before = shop_get_money(op);
+    if (value > INT64_MAX - before) {
+        return false;
+    }
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    if (op->type == PLAYER && !gameplay_journal_currency_begin(op,
+                                                               reason,
+                                                               "currency:grant",
+                                                               before,
+                                                               value,
+                                                               before + value,
+                                                               "service",
+                                                               "player-or-ground",
+                                                               "generated",
+                                                               transaction)) {
+        return false;
+    }
+    shop_insert_coins(op, value);
+    return op->type != PLAYER || gameplay_journal_semantic_commit(transaction);
 }

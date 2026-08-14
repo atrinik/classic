@@ -37,6 +37,7 @@
 #include <arch.h>
 #include <player.h>
 #include <object.h>
+#include <gameplay_journal.h>
 #include <disease.h>
 #include <player_status.h>
 
@@ -1428,11 +1429,32 @@ int cast_transform_wealth(object *op) {
     }
 
     /* Figure out our value of money to give to player. */
-    val = (marked->value * (marked->nrof ? marked->nrof : 1)) * TRANSFORM_WEALTH_SACRIFICE;
+    int64_t sacrificed = marked->value * (marked->nrof ? marked->nrof : 1);
+    val = sacrificed * TRANSFORM_WEALTH_SACRIFICE;
+    int64_t before = shop_get_money(op);
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    if (!gameplay_journal_currency_begin(op,
+                                         "spell.alchemy",
+                                         "currency:transformation",
+                                         before,
+                                         val - sacrificed,
+                                         before - sacrificed + val,
+                                         "carried-cash",
+                                         "player-or-ground",
+                                         "alchemy",
+                                         transaction)) {
+        draw_info(COLOR_WHITE, op, "The transformation could not be journaled.");
+        free(name);
+        return 0;
+    }
     /* We remove the money. */
     object_remove(marked, 0);
     /* Now give the player the new money. */
     shop_insert_coins(op, val);
+    if (!gameplay_journal_semantic_commit(transaction)) {
+        free(name);
+        return 0;
+    }
     draw_info_format(COLOR_WHITE, op, "You transform %s into %s.", name, shop_get_cost_string(val));
     free(name);
     return 1;

@@ -35,6 +35,7 @@
 
 typedef struct pending_transaction {
     char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    char reason[GAMEPLAY_JOURNAL_ID_MAX + 1];
 } pending_transaction_t;
 
 typedef struct journal_state {
@@ -54,17 +55,43 @@ typedef struct journal_state {
     pending_transaction_t pending[JOURNAL_PENDING_LIMIT];
     size_t pending_count;
     bool failed;
+    bool required;
 } journal_state_t;
 
 static journal_state_t journal = {.lock_fd = -1};
 
 #ifdef ATRINIK_TESTING
 static bool journal_test_fail_writes;
+static size_t journal_test_writes_before_failure = SIZE_MAX;
 static size_t journal_test_file_limit = JOURNAL_FILE_LIMIT;
 static size_t journal_test_hard_limit = JOURNAL_FILE_HARD_LIMIT;
 
+typedef struct journal_test_count {
+    char reason[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    uint64_t count;
+} journal_test_count_t;
+
+static journal_test_count_t journal_test_counts[JOURNAL_PENDING_LIMIT];
+
 void gameplay_journal_fail_writes_for_test(bool fail) {
     journal_test_fail_writes = fail;
+}
+
+void gameplay_journal_fail_after_writes_for_test(size_t writes) {
+    journal_test_writes_before_failure = writes;
+}
+
+uint64_t gameplay_journal_committed_count_for_test(const char *reason) {
+    for (size_t i = 0; i < JOURNAL_PENDING_LIMIT; i++) {
+        if (strcmp(journal_test_counts[i].reason, reason) == 0) {
+            return journal_test_counts[i].count;
+        }
+    }
+    return 0;
+}
+
+void gameplay_journal_counts_reset_for_test(void) {
+    memset(journal_test_counts, 0, sizeof(journal_test_counts));
 }
 
 void gameplay_journal_file_limit_for_test(size_t limit) {
@@ -131,6 +158,10 @@ static bool journal_identity_valid(const char *value) {
     return true;
 }
 
+static bool journal_identity_valid_optional(const char *value) {
+    return value == NULL || value[0] == '\0' || journal_identity_valid(value);
+}
+
 static void journal_append_json_string(StringBuffer *record, const char *value) {
     for (const unsigned char *cp = (const unsigned char *)value; *cp != '\0'; cp++) {
         if (*cp == '"' || *cp == '\\') {
@@ -147,7 +178,20 @@ static bool journal_change_valid(const gameplay_journal_change_t *change) {
     if (change->delta < 0 && change->before < INT64_MIN - change->delta) {
         return false;
     }
-    return change->before + change->delta == change->after;
+    if (change->before + change->delta != change->after || change->price < 0 ||
+        !journal_token_valid(change->archetype, true) ||
+        !journal_identity_valid_optional(change->snapshot) ||
+        !journal_token_valid(change->source, true) ||
+        !journal_token_valid(change->destination, true) ||
+        !journal_identity_valid_optional(change->actor) ||
+        !journal_identity_valid_optional(change->counterparty) ||
+        !journal_identity_valid_optional(change->provenance_before) ||
+        !journal_identity_valid_optional(change->provenance_after) ||
+        !journal_token_valid(change->currency, true) ||
+        !journal_token_valid(change->funding, true)) {
+        return false;
+    }
+    return true;
 }
 
 static bool journal_random_id(char output[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
@@ -475,7 +519,10 @@ static bool journal_append(StringBuffer *record) {
     size_t length = stringbuffer_length(record);
     bool forced_failure = false;
 #ifdef ATRINIK_TESTING
-    forced_failure = journal_test_fail_writes;
+    forced_failure = journal_test_fail_writes || journal_test_writes_before_failure == 0;
+    if (!forced_failure && journal_test_writes_before_failure != SIZE_MAX) {
+        journal_test_writes_before_failure--;
+    }
 #endif
     if (forced_failure || !journal_rotate(length) ||
         fwrite(stringbuffer_data(record), 1, length, journal.fp) != length || !journal_sync()) {
@@ -555,6 +602,7 @@ bool gameplay_journal_init(const char *datapath,
                            const char *server_id,
                            const gameplay_journal_profile_t *profile) {
     gameplay_journal_deinit();
+    journal.required = true;
     if (datapath == NULL || !journal_token_valid(server_id, false) ||
         !journal_profile_copy(profile) ||
         snprintf(VS(journal.directory), "%s/%s", datapath, JOURNAL_DIRECTORY) >=
@@ -617,6 +665,10 @@ bool gameplay_journal_available(void) {
     return journal.fp != NULL && !journal.failed;
 }
 
+bool gameplay_journal_required(void) {
+    return journal.required;
+}
+
 static ssize_t journal_pending_find(const char *transaction_id) {
     for (size_t i = 0; i < journal.pending_count; i++) {
         if (strcmp(journal.pending[i].id, transaction_id) == 0) {
@@ -654,7 +706,8 @@ bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
         record,
         "\",\"context\":{\"map_id\":\"%s\",\"x\":%" PRId32 ",\"y\":%" PRId32 "}"
         ",\"change\":{\"subject_id\":\"%s\",\"lineage_id\":\"%s\""
-        ",\"before\":%" PRId64 ",\"delta\":%" PRId64 ",\"after\":%" PRId64 "}",
+        ",\"before\":%" PRId64 ",\"delta\":%" PRId64 ",\"after\":%" PRId64 "}"
+        ",\"details\":{\"archetype\":\"",
         subject->map_id != NULL ? subject->map_id : "",
         subject->x,
         subject->y,
@@ -663,6 +716,32 @@ bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
         change->before,
         change->delta,
         change->after);
+    journal_append_json_string(record, change->archetype != NULL ? change->archetype : "");
+    stringbuffer_append_printf(record,
+                               "\",\"object_type\":%" PRId32 ",\"snapshot\":\"",
+                               change->object_type);
+    journal_append_json_string(record, change->snapshot != NULL ? change->snapshot : "");
+    stringbuffer_append_printf(record,
+                               "\",\"quantity\":%" PRIu32 ",\"source\":\"",
+                               change->quantity);
+    journal_append_json_string(record, change->source != NULL ? change->source : "");
+    stringbuffer_append_string(record, "\",\"destination\":\"");
+    journal_append_json_string(record, change->destination != NULL ? change->destination : "");
+    stringbuffer_append_string(record, "\",\"actor\":\"");
+    journal_append_json_string(record, change->actor != NULL ? change->actor : "");
+    stringbuffer_append_string(record, "\",\"counterparty\":\"");
+    journal_append_json_string(record, change->counterparty != NULL ? change->counterparty : "");
+    stringbuffer_append_string(record, "\",\"provenance_before\":\"");
+    journal_append_json_string(record,
+                               change->provenance_before != NULL ? change->provenance_before : "");
+    stringbuffer_append_string(record, "\",\"provenance_after\":\"");
+    journal_append_json_string(record,
+                               change->provenance_after != NULL ? change->provenance_after : "");
+    stringbuffer_append_printf(record, "\",\"price\":%" PRId64 ",\"currency\":\"", change->price);
+    journal_append_json_string(record, change->currency != NULL ? change->currency : "");
+    stringbuffer_append_string(record, "\",\"funding\":\"");
+    journal_append_json_string(record, change->funding != NULL ? change->funding : "");
+    stringbuffer_append_string(record, "\"}");
     bool ok = journal_append(record);
     stringbuffer_free(record);
     if (!ok) {
@@ -670,6 +749,7 @@ bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
         return false;
     }
     snprintf(VS(journal.pending[journal.pending_count].id), "%s", transaction_id);
+    snprintf(VS(journal.pending[journal.pending_count].reason), "%s", reason);
     journal.pending_count++;
     return true;
 }
@@ -692,6 +772,20 @@ static bool journal_finish(const char *transaction_id, const char *phase, const 
     if (!ok) {
         return false;
     }
+#ifdef ATRINIK_TESTING
+    if (strcmp(phase, "commit") == 0) {
+        for (size_t i = 0; i < JOURNAL_PENDING_LIMIT; i++) {
+            if (journal_test_counts[i].reason[0] == '\0' ||
+                strcmp(journal_test_counts[i].reason, journal.pending[(size_t)index].reason) == 0) {
+                snprintf(VS(journal_test_counts[i].reason),
+                         "%s",
+                         journal.pending[(size_t)index].reason);
+                journal_test_counts[i].count++;
+                break;
+            }
+        }
+    }
+#endif
     journal.pending[(size_t)index] = journal.pending[journal.pending_count - 1];
     journal.pending_count--;
     return true;
@@ -744,13 +838,6 @@ bool gameplay_journal_player_begin(player *pl,
     } else {
         return false;
     }
-    gameplay_journal_subject_t subject = {
-        .account_id = pl->cs->account,
-        .character_id = pl->ob->name,
-        .map_id = pl->ob->map != NULL ? pl->ob->map->path : "",
-        .x = pl->ob->x,
-        .y = pl->ob->y,
-    };
     gameplay_journal_change_t change = {
         .subject_id = subject_id,
         .lineage_id = lineage_id,
@@ -758,5 +845,80 @@ bool gameplay_journal_player_begin(player *pl,
         .delta = delta,
         .after = after,
     };
-    return gameplay_journal_begin(&subject, journal_kind, reason, &change, transaction_id);
+    return gameplay_journal_player_begin_change(pl, journal_kind, reason, &change, transaction_id);
+}
+
+bool gameplay_journal_player_begin_change(
+    player *pl,
+    gameplay_journal_kind_t kind,
+    const char *reason,
+    const gameplay_journal_change_t *change,
+    char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    if (pl == NULL || pl->ob == NULL || pl->cs == NULL || pl->cs->account == NULL) {
+        return false;
+    }
+    gameplay_journal_subject_t subject = {
+        .account_id = pl->cs->account,
+        .character_id = pl->ob->name,
+        .map_id = pl->ob->map != NULL ? pl->ob->map->path : "",
+        .x = pl->ob->x,
+        .y = pl->ob->y,
+    };
+    return gameplay_journal_begin(&subject, kind, reason, change, transaction_id);
+}
+
+bool gameplay_journal_currency_begin(object *player_ob,
+                                     const char *reason,
+                                     const char *subject_id,
+                                     int64_t before,
+                                     int64_t delta,
+                                     int64_t after,
+                                     const char *source,
+                                     const char *destination,
+                                     const char *funding,
+                                     char transaction_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
+    HARD_ASSERT(transaction_id != NULL);
+    transaction_id[0] = '\0';
+    if (player_ob == NULL || player_ob->type != PLAYER || CONTR(player_ob) == NULL) {
+        return false;
+    }
+    const char *actor = object_custody_actor_id(player_ob);
+    if (actor == NULL) {
+        return false;
+    }
+    gameplay_journal_change_t change = {
+        .subject_id = subject_id,
+        .lineage_id = "",
+        .before = before,
+        .delta = delta,
+        .after = after,
+        .archetype = "",
+        .object_type = 0,
+        .snapshot = "",
+        .quantity = 0,
+        .source = source,
+        .destination = destination,
+        .actor = actor,
+        .counterparty = "",
+        .provenance_before = "",
+        .provenance_after = "",
+        .currency = "copper-equivalent",
+        .funding = funding,
+    };
+    return !gameplay_journal_required() ||
+           gameplay_journal_player_begin_change(CONTR(player_ob),
+                                                GAMEPLAY_JOURNAL_CURRENCY,
+                                                reason,
+                                                &change,
+                                                transaction_id);
+}
+
+bool gameplay_journal_semantic_commit(const char *transaction_id) {
+    return transaction_id != NULL &&
+           (transaction_id[0] == '\0' || gameplay_journal_commit(transaction_id));
+}
+
+bool gameplay_journal_semantic_abort(const char *transaction_id, const char *reason) {
+    return transaction_id != NULL &&
+           (transaction_id[0] == '\0' || gameplay_journal_abort(transaction_id, reason));
 }

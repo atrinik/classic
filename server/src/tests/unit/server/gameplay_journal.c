@@ -16,6 +16,11 @@
 #include <check_utils.h>
 #include <gameplay_journal.h>
 #include <plugin_hooklist.h>
+#include <shop.h>
+#include <player.h>
+#include <object.h>
+#include <metrics.h>
+#include <arch.h>
 
 #ifndef WIN32
 #include <sys/wait.h>
@@ -38,6 +43,34 @@ static void remove_fixture(const char *directory) {
     ck_assert_int_eq(closedir(dir), 0);
     ck_assert_int_eq(rmdir(journal_directory), 0);
     ck_assert_int_eq(rmdir(directory), 0);
+}
+
+static char *read_fixture(const char *directory) {
+    char journal_directory[MAX_BUF];
+    snprintf(VS(journal_directory), "%s/gameplay-journal", directory);
+    DIR *dir = opendir(journal_directory);
+    ck_assert_ptr_ne(dir, NULL);
+    char path[HUGE_BUF] = "";
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, "journal-", 8) == 0) {
+            snprintf(VS(path), "%s/%s", journal_directory, entry->d_name);
+            break;
+        }
+    }
+    ck_assert_int_eq(closedir(dir), 0);
+    ck_assert_str_ne(path, "");
+    struct stat metadata;
+    ck_assert_int_eq(stat(path, &metadata), 0);
+    char *contents = malloc((size_t)metadata.st_size + 1);
+    ck_assert_ptr_ne(contents, NULL);
+    FILE *fp = fopen(path, "rb");
+    ck_assert_ptr_ne(fp, NULL);
+    size_t length = fread(contents, 1, (size_t)metadata.st_size, fp);
+    ck_assert_uint_eq(length, (size_t)metadata.st_size);
+    ck_assert_int_eq(fclose(fp), 0);
+    contents[length] = '\0';
+    return contents;
 }
 
 START_TEST(test_intent_commit_abort_and_private_storage) {
@@ -129,6 +162,185 @@ START_TEST(test_intent_commit_abort_and_private_storage) {
     }
     ck_assert_int_eq(closedir(dir), 0);
     ck_assert_uint_eq(files, 1);
+    remove_fixture(directory);
+}
+END_TEST
+
+START_TEST(test_semantic_item_shop_and_bank_producers) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    char directory[] = "/tmp/atrinik-gameplay-journal-producers-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    gameplay_journal_counts_reset_for_test();
+
+    object *existing = arch_get("bolt");
+    existing->nrof = 4;
+    existing = object_insert_into(existing, pl, 0);
+    object *ground = arch_get("bolt");
+    ground->nrof = 5;
+    ground->x = pl->x;
+    ground->y = pl->y;
+    ground = object_insert_map(ground, map, NULL, INS_NO_MERGE);
+    CONTR(pl)->count = 2;
+    pick_up(pl, ground, 1);
+    ck_assert_uint_eq(ground->nrof, 3);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("item.acquire"), 1);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_ITEM_UNITS_PICKED_UP), 2);
+    object *acquired = NULL;
+    FOR_INV_PREPARE(pl, candidate) {
+        if (candidate->arch == ground->arch && candidate->custody_lineage != NULL) {
+            acquired = candidate;
+            break;
+        }
+    }
+    FOR_INV_FINISH();
+    ck_assert_ptr_ne(acquired, NULL);
+    ck_assert_ptr_eq(acquired, existing);
+    ck_assert_uint_eq(acquired->nrof, 6);
+    drop_object(pl, acquired, 1, 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("item.drop"), 1);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_ITEM_UNITS_DROPPED), 1);
+
+    object *sack = object_insert_into(arch_get("sack"), pl, 0);
+    acquired = object_insert_into_reason(acquired, sack, "test.reorder");
+    ck_assert_ptr_ne(acquired, NULL);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("test.reorder"), 0);
+    object *external = arch_get("sack");
+    external->x = pl->x;
+    external->y = pl->y;
+    external = object_insert_map(external, map, NULL, INS_NO_MERGE);
+    acquired = object_insert_into_reason(acquired, external, "test.external-transfer");
+    ck_assert_ptr_ne(acquired, NULL);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("test.external-transfer"), 1);
+
+    object *blocked = arch_get("sword");
+    SET_FLAG(blocked, FLAG_NO_PICK);
+    blocked->x = pl->x;
+    blocked->y = pl->y;
+    blocked = object_insert_map(blocked, map, NULL, INS_NO_MERGE);
+    pick_up(pl, blocked, 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("item.acquire"), 1);
+
+    object *unpaid = arch_get("sword");
+    SET_FLAG(unpaid, FLAG_UNPAID);
+    unpaid->x = pl->x;
+    unpaid->y = pl->y;
+    unpaid = object_insert_map(unpaid, map, NULL, INS_NO_MERGE);
+    pick_up(pl, unpaid, 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("item.acquire"), 1);
+
+    object *money = object_insert_into(arch_get("coppercoin"), pl, 0);
+    money->nrof = 100;
+    int64_t value;
+    ck_assert_int_eq(bank_deposit(pl, "40 copper", &value), BANK_SUCCESS);
+    ck_assert_int_eq(value, 40);
+    ck_assert_int_eq(bank_get_balance(pl), 40);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("bank.deposit"), 1);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_BANK_DEPOSITS), 1);
+
+    ck_assert_int_eq(bank_withdraw(pl, "10 copper", &value), BANK_SUCCESS);
+    ck_assert_int_eq(value, 10);
+    ck_assert_int_eq(bank_get_balance(pl), 30);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("bank.withdraw"), 1);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_BANK_WITHDRAWALS), 1);
+
+    object *sale = arch_get("sword");
+    SET_FLAG(sale, FLAG_IDENTIFIED);
+    sale->value = 75;
+    ck_assert(shop_pay_item(pl, sale));
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("shop.purchase"), 1);
+    ck_assert_int_eq(bank_get_balance(pl), 25);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("bank.withdraw"), 1);
+    ck_assert_ptr_ne(sale->custody_lineage, NULL);
+    int64_t total_after_purchase = shop_get_money(pl);
+    sale->value = total_after_purchase + 1;
+    ck_assert(!shop_pay_item(pl, sale));
+    ck_assert_int_eq(shop_get_money(pl), total_after_purchase);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("shop.purchase"), 1);
+    object_destroy(sale);
+
+    object *grant = arch_get("sword");
+    grant = object_insert_into_reason(grant, pl, "test.item-grant");
+    ck_assert_ptr_ne(grant, NULL);
+    ck_assert_ptr_ne(grant->custody_lineage, NULL);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("test.item-grant"), 1);
+    ck_assert(object_remove_reason(grant, "test.item-destroy", true));
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("test.item-destroy"), 1);
+
+    object *sold = arch_get("sword");
+    SET_FLAG(sold, FLAG_IDENTIFIED);
+    sold->value = 100;
+    sold = object_insert_into_reason(sold, pl, "test.sale-stock");
+    uint64_t sales_before = metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_SHOP_SALES);
+    shop_sell_item(pl, sold);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("shop.sale"), 1);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_SHOP_SALES),
+                      sales_before + 1);
+
+    object *failure_coin = object_insert_into(arch_get("coppercoin"), pl, 0);
+    failure_coin->nrof = 1;
+    int64_t balance_before = bank_get_balance(pl);
+    int64_t total_before = shop_get_money(pl);
+    gameplay_journal_fail_writes_for_test(true);
+    ck_assert_int_eq(bank_deposit(pl, "1 copper", &value), BANK_JOURNAL_ERROR);
+    ck_assert_int_eq(value, 0);
+    ck_assert_int_eq(bank_get_balance(pl), balance_before);
+    ck_assert_int_eq(shop_get_money(pl), total_before);
+    gameplay_journal_fail_writes_for_test(false);
+
+    gameplay_journal_deinit();
+    char *contents = read_fixture(directory);
+    ck_assert_ptr_ne(strstr(contents, "\"reason\":\"shop.purchase\""), NULL);
+    ck_assert_ptr_ne(strstr(contents, "\"price\":75"), NULL);
+    ck_assert_ptr_ne(strstr(contents, "\"funding\":\"mixed\""), NULL);
+    ck_assert_ptr_ne(strstr(contents, "\"provenance_before\":"), NULL);
+    ck_assert_ptr_ne(strstr(contents, "\"provenance_after\":"), NULL);
+    ck_assert_ptr_ne(strstr(contents, "\"reason\":\"shop.sale\""), NULL);
+    free(contents);
+    object_destroy(pl);
+    remove_fixture(directory);
+}
+END_TEST
+
+START_TEST(test_semantic_commit_failure_remains_reconcilable) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object *money = object_insert_into(arch_get("coppercoin"), pl, 0);
+    money->nrof = 1;
+
+    char directory[] = "/tmp/atrinik-gameplay-journal-commit-failure-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    gameplay_journal_counts_reset_for_test();
+    gameplay_journal_fail_after_writes_for_test(1);
+
+    int64_t value;
+    ck_assert_int_eq(bank_deposit(pl, "1 copper", &value), BANK_JOURNAL_ERROR);
+    ck_assert_int_eq(value, 1);
+    ck_assert_int_eq(bank_get_balance(pl), 1);
+    ck_assert(!gameplay_journal_available());
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("bank.deposit"), 0);
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_BANK_DEPOSITS), 0);
+
+    gameplay_journal_fail_after_writes_for_test(SIZE_MAX);
+    gameplay_journal_deinit();
+    object_destroy(pl);
     remove_fixture(directory);
 }
 END_TEST
@@ -519,6 +731,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_retention_stays_bounded_when_opening_a_file);
     tcase_add_test(tc_core, test_real_rotation_and_retention_keep_complete_transactions);
     tcase_add_test(tc_core, test_append_failure_disables_journal);
+    tcase_add_test(tc_core, test_semantic_item_shop_and_bank_producers);
+    tcase_add_test(tc_core, test_semantic_commit_failure_remains_reconcilable);
 #ifndef WIN32
     tcase_add_test(tc_core, test_abrupt_process_crash_preserves_synced_phases);
     tcase_add_test(tc_core, test_second_writer_is_rejected_while_lock_is_held);

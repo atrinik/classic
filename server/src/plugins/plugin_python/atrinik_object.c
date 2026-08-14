@@ -818,10 +818,12 @@ static PyObject *Atrinik_Object_TeleportTo(Atrinik_Object *self, PyObject *args,
 
 /** Documentation for Atrinik_Object_InsertInto(). */
 static const char doc_Atrinik_Object_InsertInto[] =
-    ".. method:: InsertInto(where).\n\n"
+    ".. method:: InsertInto(where, reason='script.item-transfer').\n\n"
     "Inserts the object into some other object.\n\n"
     ":param where: Where to insert the object.\n"
     ":type where: :class:`Atrinik.Object.Object`\n"
+    ":param reason: Bounded semantic reason code for the private journal.\n"
+    ":type reason: str\n"
     ":returns: The inserted object, which may be different from the original (due"
     "to merging, for example). None is returned on failure.\n"
     ":rtype: class:`Atrinik.Object.Object` or None";
@@ -832,19 +834,16 @@ static const char doc_Atrinik_Object_InsertInto[] =
  */
 static PyObject *Atrinik_Object_InsertInto(Atrinik_Object *self, PyObject *args) {
     Atrinik_Object *where;
+    const char *reason = "script.item-transfer";
 
-    if (!PyArg_ParseTuple(args, "O!", &Atrinik_ObjectType, &where)) {
+    if (!PyArg_ParseTuple(args, "O!|s", &Atrinik_ObjectType, &where, &reason)) {
         return NULL;
     }
 
     OBJEXISTCHECK(self);
     OBJEXISTCHECK(where);
 
-    if (!QUERY_FLAG(self->obj, FLAG_REMOVED)) {
-        hooks->object_remove(self->obj, 0);
-    }
-
-    object *ret = hooks->object_insert_into(self->obj, where->obj, 0);
+    object *ret = hooks->object_insert_into_reason(self->obj, where->obj, reason);
     if (ret == NULL) {
         Py_INCREF(Py_None);
         return Py_None;
@@ -1246,7 +1245,8 @@ Atrinik_Object_CreateForce(Atrinik_Object *self, PyObject *args, PyObject *keywd
 
 /** Documentation for Atrinik_Object_CreateObject(). */
 static const char doc_Atrinik_Object_CreateObject[] =
-    ".. method:: CreateObject(archname, nrof=1, value=-1, identified=True).\n\n"
+    ".. method:: CreateObject(archname, nrof=1, value=-1, identified=True, "
+    "reason='script.item-grant').\n\n"
     "Creates a new object from archname and inserts it into the object.\n\n"
     ":param archname: Name of the arch to create.\n"
     ":type archname: str\n"
@@ -1256,6 +1256,8 @@ static const char doc_Atrinik_Object_CreateObject[] =
     ":type value: int\n"
     ":param identified: If False, the object will not be identified.\n"
     ":type identified: bool\n"
+    ":param reason: Bounded semantic reason code for the private journal.\n"
+    ":type reason: str\n"
     ":returns: The created (and inserted) object, None on failure.\n"
     ":rtype: :class:`Atrinik.Object.Object` or None\n"
     ":raises Atrinik.AtrinikError: If archname references an invalid "
@@ -1267,8 +1269,9 @@ static const char doc_Atrinik_Object_CreateObject[] =
  */
 static PyObject *
 Atrinik_Object_CreateObject(Atrinik_Object *self, PyObject *args, PyObject *keywds) {
-    static char *kwlist[] = {"archname", "nrof", "value", "identified", NULL};
+    static char *kwlist[] = {"archname", "nrof", "value", "identified", "reason", NULL};
     const char *archname;
+    const char *reason = "script.item-grant";
     uint32_t nrof = 1;
     int64_t value = -1;
     int identified = 1;
@@ -1277,12 +1280,13 @@ Atrinik_Object_CreateObject(Atrinik_Object *self, PyObject *args, PyObject *keyw
 
     if (!PyArg_ParseTupleAndKeywords(args,
                                      keywds,
-                                     "s|ILi",
+                                     "s|ILis",
                                      kwlist,
                                      &archname,
                                      &nrof,
                                      &value,
-                                     &identified)) {
+                                     &identified,
+                                     &reason)) {
         return NULL;
     }
 
@@ -1309,7 +1313,7 @@ Atrinik_Object_CreateObject(Atrinik_Object *self, PyObject *args, PyObject *keyw
         SET_FLAG(tmp, FLAG_IDENTIFIED);
     }
 
-    tmp = hooks->object_insert_into(tmp, self->obj, 0);
+    tmp = hooks->object_insert_into_reason(tmp, self->obj, reason);
     if (tmp != NULL && self->obj->type == PLAYER && tmp->type == SPELL) {
         hooks->metrics_character_add_by_name(CONTR(self->obj), "magic.spells_learned", 1);
         hooks->metrics_character_spells_changed(CONTR(self->obj));
@@ -1507,7 +1511,7 @@ Atrinik_Object_FindObjects(Atrinik_Object *self, PyObject *args, PyObject *keywd
 
 /** Documentation for Atrinik_Object_Remove(). */
 static const char doc_Atrinik_Object_Remove[] =
-    ".. method:: Remove().\n\n"
+    ".. method:: Remove(reason='script.item-remove').\n\n"
     "Takes the object out of whatever map or inventory it is in. The object can "
     "then be inserted or teleported somewhere else.\n\n"
     "Be careful when removing one of the objects involved in the event activation "
@@ -1520,35 +1524,46 @@ static const char doc_Atrinik_Object_Remove[] =
  * Implements Atrinik.Object.Object.Remove() Python method.
  * @copydoc PyMethod_NOARGS
  */
-static PyObject *Atrinik_Object_Remove(Atrinik_Object *self, PyObject *ignored) {
+static PyObject *Atrinik_Object_Remove(Atrinik_Object *self, PyObject *args) {
+    const char *reason = "script.item-remove";
+    if (!PyArg_ParseTuple(args, "|s", &reason)) {
+        return NULL;
+    }
     OBJEXISTCHECK(self);
 
     if (QUERY_FLAG(self->obj, FLAG_REMOVED)) {
         RAISE("Object has been removed already.");
     }
 
-    hooks->object_remove(self->obj, 0);
+    if (!hooks->object_remove_reason(self->obj, reason, false)) {
+        PyErr_SetString(PyExc_RuntimeError, "Item removal could not be journaled.");
+        return NULL;
+    }
 
     Py_INCREF(Py_None);
     return Py_None;
 }
 
 /** Documentation for Atrinik_Object_Destroy(). */
-static const char doc_Atrinik_Object_Destroy[] = ".. method:: Destroy().\n\n"
-                                                 "Frees all data associated with the object.";
+static const char doc_Atrinik_Object_Destroy[] =
+    ".. method:: Destroy(reason='script.item-destroy').\n\n"
+    "Frees all data associated with the object.";
 
 /**
  * Implements Atrinik.Object.Object.Destroy() Python method.
  * @copydoc PyMethod_NOARGS
  */
-static PyObject *Atrinik_Object_Destroy(Atrinik_Object *self, PyObject *ignored) {
+static PyObject *Atrinik_Object_Destroy(Atrinik_Object *self, PyObject *args) {
+    const char *reason = "script.item-destroy";
+    if (!PyArg_ParseTuple(args, "|s", &reason)) {
+        return NULL;
+    }
     OBJEXISTCHECK(self);
 
-    if (!QUERY_FLAG(self->obj, FLAG_REMOVED)) {
-        hooks->object_remove(self->obj, 0);
+    if (!hooks->object_remove_reason(self->obj, reason, true)) {
+        PyErr_SetString(PyExc_RuntimeError, "Item destruction could not be journaled.");
+        return NULL;
     }
-
-    hooks->object_destroy(self->obj);
 
     Py_INCREF(Py_None);
     return Py_None;
@@ -1712,10 +1727,12 @@ static PyObject *Atrinik_Object_GetMoney(Atrinik_Object *self, PyObject *ignored
 
 /** Documentation for Atrinik_Object_PayAmount(). */
 static const char doc_Atrinik_Object_PayAmount[] =
-    ".. method:: PayAmount(value).\n\n"
+    ".. method:: PayAmount(value, reason='script.payment').\n\n"
     "Makes the object pay a specified amount of money.\n\n"
     ":param value: The amount of money to pay.\n"
-    ":type value: int"
+    ":type value: int\n"
+    ":param reason: Bounded semantic reason code for the private journal.\n"
+    ":type reason: str\n"
     ":returns: Whether the value was paid successfully (had enough money).\n"
     ":rtype: bool";
 
@@ -1725,14 +1742,15 @@ static const char doc_Atrinik_Object_PayAmount[] =
  */
 static PyObject *Atrinik_Object_PayAmount(Atrinik_Object *self, PyObject *args) {
     int64_t value;
+    const char *reason = "script.payment";
 
-    if (!PyArg_ParseTuple(args, "L", &value)) {
+    if (!PyArg_ParseTuple(args, "L|s", &value, &reason)) {
         return NULL;
     }
 
     OBJEXISTCHECK(self);
 
-    return Py_BuildBoolean(hooks->shop_pay(self->obj, value));
+    return Py_BuildBoolean(hooks->shop_pay_reason(self->obj, value, reason));
 }
 
 /** Documentation for Atrinik_Object_Clone(). */
@@ -2651,8 +2669,8 @@ static PyMethodDef methods[] = {
      PY_METHOD(Atrinik_Object_FindObjects),
      METH_VARARGS | METH_KEYWORDS,
      doc_Atrinik_Object_FindObjects},
-    {"Remove", PY_METHOD(Atrinik_Object_Remove), METH_NOARGS, doc_Atrinik_Object_Remove},
-    {"Destroy", PY_METHOD(Atrinik_Object_Destroy), METH_NOARGS, doc_Atrinik_Object_Destroy},
+    {"Remove", PY_METHOD(Atrinik_Object_Remove), METH_VARARGS, doc_Atrinik_Object_Remove},
+    {"Destroy", PY_METHOD(Atrinik_Object_Destroy), METH_VARARGS, doc_Atrinik_Object_Destroy},
     {"SetPosition",
      PY_METHOD(Atrinik_Object_SetPosition),
      METH_VARARGS,

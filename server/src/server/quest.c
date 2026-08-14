@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -150,7 +150,10 @@ static void quest_check_item_drop(object *op, object *quest, object *quest_pl, o
     SET_FLAG(clone, FLAG_IDENTIFIED);
 
     /* Insert the quest item inside the player. */
-    object_insert_into(clone, op, 0);
+    if (object_insert_into_reason(clone, op, "quest.item-grant") == NULL) {
+        object_destroy(clone);
+        return;
+    }
 
     if (QUERY_FLAG(item, FLAG_ONE_DROP)) {
         /* Create a quest object in the player's container, so that the item
@@ -286,7 +289,10 @@ static void quest_check_item(object *op, object *quest, object *quest_pl, object
     draw_info(COLOR_NAVY, op, buf);
 
     /* Insert the quest item inside the player. */
-    object_insert_into(clone, op, 0);
+    if (object_insert_into_reason(clone, op, "quest.objective-grant") == NULL) {
+        object_destroy(clone);
+        return;
+    }
     play_sound_player_only(CONTR(op), CMD_SOUND_EFFECT, "event01.ogg", 0, 0, 0, 0);
 }
 

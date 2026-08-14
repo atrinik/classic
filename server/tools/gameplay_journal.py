@@ -16,7 +16,7 @@ import sys
 from typing import Any, Iterable
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSIONS = {1, 2}
 HASH_MARKER = b',"record_hash":"'
 FORBIDDEN_FIELDS = {"password", "session_secret", "chat", "inscription", "text"}
 TOKEN = re.compile(r"[A-Za-z0-9_.:/@+\-]{1,255}\Z")
@@ -101,6 +101,8 @@ def _validate_schema(value: dict[str, Any], source: str) -> None:
         raise JournalError(f"invalid record kind at {source}")
     intent = {"account_id", "character_id", "context", "change"}
     expected = common | (intent if phase == "intent" else set())
+    if phase == "intent" and value["version"] == 2:
+        expected.add("details")
     if set(value) != expected:
         raise JournalError(f"unexpected fields for {phase!r} record at {source}")
     if not all(_token(value[name]) for name in ("server_id", "run_id", "reason")):
@@ -168,6 +170,29 @@ def _validate_schema(value: dict[str, Any], source: str) -> None:
         raise JournalError(f"typed change is outside int64 bounds at {source}")
     if change["before"] + change["delta"] != change["after"]:
         raise JournalError(f"typed change arithmetic mismatch at {source}")
+    if value["version"] == 2:
+        details = value.get("details")
+        expected_details = {
+            "archetype", "object_type", "snapshot", "quantity", "source",
+            "destination", "actor", "counterparty", "provenance_before",
+            "provenance_after", "price", "currency", "funding",
+        }
+        if not isinstance(details, dict) or set(details) != expected_details:
+            raise JournalError(f"invalid semantic details at {source}")
+        token_fields = ("archetype", "source", "destination", "currency", "funding")
+        identity_fields = (
+            "snapshot", "actor", "counterparty", "provenance_before",
+            "provenance_after",
+        )
+        if not all(_token(details[name], empty=True) for name in token_fields) or not all(
+            isinstance(details[name], str)
+            and (details[name] == "" or IDENTITY.fullmatch(details[name]) is not None)
+            for name in identity_fields
+        ) or not _integer(details["object_type"], -(1 << 31), (1 << 31) - 1) or not _integer(
+            details["quantity"], 0, (1 << 32) - 1
+        ) or not _integer(details["price"], 0, (1 << 63) - 1
+        ):
+            raise JournalError(f"invalid semantic detail value at {source}")
 
 
 def _record(raw: bytes, source: str) -> dict[str, Any]:
@@ -208,7 +233,7 @@ def _record(raw: bytes, source: str) -> dict[str, Any]:
     }
     if not isinstance(value, dict) or not required.issubset(value):
         raise JournalError(f"missing required fields at {source}")
-    if value["version"] != SCHEMA_VERSION or value["record_hash"] != claimed:
+    if value["version"] not in SCHEMA_VERSIONS or value["record_hash"] != claimed:
         raise JournalError(f"unsupported schema or inconsistent hash at {source}")
     if HASH.fullmatch(claimed) is None:
         raise JournalError(f"invalid record hash at {source}")
