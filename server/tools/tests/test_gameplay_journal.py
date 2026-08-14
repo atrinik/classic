@@ -563,6 +563,58 @@ class JournalTests(unittest.TestCase):
                 ["player:acct/hero=0", "map-runtime:/world/start=0"],
             )
 
+        self.sequence = 0
+        self.previous = ""
+        self.write(self.record(
+            "intent", "source-tx", version=2, kind="currency",
+            reason="party.currency-source", details=source_details,
+            change={
+                "subject_id": "currency:party-corpse", "lineage_id": "",
+                "before": 5, "delta": -5, "after": 0,
+            },
+        ))
+        attempted_plan = gameplay_journal.reconcile(
+            gameplay_journal.load([self.root]),
+            ["player:acct/hero=0"],
+        )
+        self.assertEqual(attempted_plan["source-tx"]["action"], "inspect-party-batch")
+
+        self.sequence = 0
+        self.previous = ""
+        child_details["funding"] = "source-tx"
+        self.write(
+            self.record(
+                "intent", "source-tx", version=2, kind="currency",
+                reason="party.currency-source", details=source_details,
+                change={
+                    "subject_id": "currency:party-corpse", "lineage_id": "",
+                    "before": 5, "delta": -5, "after": 0,
+                },
+            ),
+            self.record(
+                "intent", "grant-tx", version=2, kind="currency",
+                reason="party.currency-split", details=child_details,
+                change={
+                    "subject_id": "currency:party-loot", "lineage_id": "",
+                    "before": 10, "delta": 2, "after": 12,
+                },
+            ),
+            self.record(
+                "abort", "grant-tx", version=2,
+                domains=[{"kind": "player", "id": "acct/hero"}],
+            ),
+            self.record(
+                "abort", "source-tx", version=2,
+                domains=[{"kind": "player", "id": "acct/hero"}],
+            ),
+        )
+        aborted_plan = gameplay_journal.reconcile(
+            gameplay_journal.load([self.root]),
+            ["player:acct/hero=0"],
+        )
+        self.assertEqual(aborted_plan["source-tx"]["action"], "none")
+        self.assertEqual(aborted_plan["grant-tx"]["action"], "covered-by-party-batch")
+
     def test_reconcile_cli_preserves_intent_sequence_order(self) -> None:
         details = self.details(
             actor="acct:actor", currency="copper-equivalent", source="corpse",

@@ -762,7 +762,7 @@ def reconcile(journal: Journal, raw_domains: list[str]) -> dict[str, Any]:
 
     for source_id, source in party_sources.items():
         children = party_children[source_id]
-        if not children:
+        if source["status"] == "committed" and not children:
             raise JournalError(f"party batch source {source_id} has no recipient grants")
         source_change = source["intent"]["change"]
         source_details = source["intent"].get("details", {})
@@ -792,19 +792,18 @@ def reconcile(journal: Journal, raw_domains: list[str]) -> dict[str, Any]:
             ):
                 raise JournalError(f"invalid party batch grant arithmetic for {child_id}")
             child_total += child_change["delta"]
-            if source["status"] == "committed" and child["status"] not in {
-                "committed", "attempted",
-            }:
-                raise JournalError(f"invalid terminal state for party batch grant {child_id}")
-            if source["status"] != "committed" and child["status"] != source["status"]:
-                raise JournalError(f"party batch terminal states differ for {child_id}")
+            if source["status"] == "committed":
+                if child["status"] not in {"committed", "attempted"}:
+                    raise JournalError(f"invalid terminal state for party batch grant {child_id}")
+            elif child["status"] == "committed":
+                raise JournalError(f"party batch grant precedes source commit for {child_id}")
             if child["status"] == "committed":
                 child_terminal = next(
                     event for event in child["events"] if event["phase"] == "commit"
                 )
                 if source_terminal is None or child_terminal["sequence"] <= source_terminal["sequence"]:
                     raise JournalError(f"party batch grant precedes source terminal for {child_id}")
-        if child_total != source_change["before"]:
+        if source["status"] == "committed" and child_total != source_change["before"]:
             raise JournalError(f"party batch grants do not conserve source value for {source_id}")
         source_entry = result[source_id]
         source_domains = {
