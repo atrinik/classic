@@ -496,6 +496,10 @@ struct pl_player {
     player_faction_t *factions;
 
     long item_power_effects; ///< Next time of item power effects.
+
+    /** Latest gameplay-journal commit included by a later player checkpoint. */
+    char journal_run_id[33];
+    uint64_t journal_sequence;
 };
 
 /* Prototypes */

@@ -313,11 +313,10 @@ static void party_loot_random(object *pl, object *corpse) {
                         char *received_name = NULL;
                         object_semantic_result_t result;
                         if (tmp->type == MONEY) {
-                            int64_t nrof = MAX(1, tmp->nrof);
-                            if (tmp->value < 0 || tmp->value > INT64_MAX / nrof) {
+                            int64_t value;
+                            if (!shop_money_object_value(tmp, &value)) {
                                 break;
                             }
-                            int64_t value = tmp->value * nrof;
                             int64_t before;
                             if (!shop_get_recovery_money(ol->objlink.ob, &before) ||
                                 value > INT64_MAX - before) {
@@ -375,6 +374,39 @@ static void party_loot_random(object *pl, object *corpse) {
             }
         }
     }
+}
+
+static bool party_currency_recovery_total(party_struct *party, object *reference, int64_t *total) {
+    *total = 0;
+    for (objectlink *member = party->members; member != NULL; member = member->next) {
+        object *recipient = member->objlink.ob;
+        if (!on_same_map(recipient, reference)) {
+            continue;
+        }
+        int64_t held;
+        if (!shop_get_held_money(recipient, &held) || *total > INT64_MAX - held) {
+            return false;
+        }
+        *total += held;
+
+        bool first_on_tile = true;
+        for (objectlink *prior = party->members; prior != member; prior = prior->next) {
+            object *other = prior->objlink.ob;
+            if (other->map == recipient->map && other->x == recipient->x &&
+                other->y == recipient->y) {
+                first_on_tile = false;
+                break;
+            }
+        }
+        if (first_on_tile) {
+            int64_t tile;
+            if (!shop_get_tile_money(recipient, &tile) || *total > INT64_MAX - tile) {
+                return false;
+            }
+            *total += tile;
+        }
+    }
+    return true;
 }
 
 /**
@@ -479,6 +511,11 @@ static void party_loot_split(object *pl, object *corpse) {
         party_currency_grant_t *grants = xcalloc(count, sizeof(*grants));
         uint32_t num = 0;
         bool prepared = shop_coins_available();
+        int64_t party_before = 0;
+        int64_t planned = 0;
+        if (prepared && !party_currency_recovery_total(party, pl, &party_before)) {
+            prepared = false;
+        }
 
         for (ol = party->members; prepared && ol != NULL; ol = ol->next) {
             if (on_same_map(ol->objlink.ob, pl)) {
@@ -487,12 +524,11 @@ static void party_loot_split(object *pl, object *corpse) {
                 if (num == 0) {
                     value_split += value % count;
                 }
-                int64_t before;
-                if (!shop_get_recovery_money(ol->objlink.ob, &before) ||
-                    value_split > INT64_MAX - before) {
+                if (value_split > INT64_MAX - party_before - planned) {
                     prepared = false;
                     break;
                 }
+                int64_t before = party_before + planned;
                 if (!gameplay_journal_currency_begin(ol->objlink.ob,
                                                      "party.currency-split",
                                                      "currency:party-loot",
@@ -510,6 +546,7 @@ static void party_loot_split(object *pl, object *corpse) {
                 grants[num].value = value_split;
                 grants[num].active = true;
                 num++;
+                planned += value_split;
             }
         }
 

@@ -255,27 +255,58 @@ const char *shop_get_cost_string_item(object *op, int mode) {
  * @return
  * Total money the player is carrying.
  */
+bool shop_money_object_value(const object *money, int64_t *value) {
+    HARD_ASSERT(money != NULL);
+    HARD_ASSERT(value != NULL);
+    if (money->type != MONEY || money->arch == NULL || money->nrof == 0 || money->value <= 0) {
+        return false;
+    }
+    bool canonical = false;
+    for (int i = 0; i < NUM_COINS; i++) {
+        if (strcmp(coins[i], money->arch->name) == 0 && money->value == money->arch->clone.value) {
+            canonical = true;
+            break;
+        }
+    }
+    int64_t nrof = money->nrof;
+    if (!canonical || money->value > INT64_MAX / nrof) {
+        return false;
+    }
+    *value = money->value * nrof;
+    return true;
+}
+
+bool shop_money_object_counted(const object *root, const object *money) {
+    HARD_ASSERT(root != NULL);
+    HARD_ASSERT(money != NULL);
+    FOR_INV_PREPARE(root, tmp) {
+        if (tmp == money) {
+            int64_t value;
+            return shop_money_object_value(tmp, &value);
+        }
+        if (tmp->type == CONTAINER &&
+            (QUERY_FLAG(tmp, FLAG_APPLIED) || tmp->race == NULL ||
+             strstr(tmp->race, "gold") != NULL) &&
+            shop_money_object_counted(tmp, money)) {
+            return true;
+        }
+    }
+    FOR_INV_FINISH();
+    return false;
+}
+
 static bool shop_get_money_checked(object *op, int64_t *total) {
     HARD_ASSERT(op != NULL);
     FOR_INV_PREPARE(op, tmp) {
         if (tmp->type == MONEY) {
-            int denomination = -1;
-            for (int i = 0; i < NUM_COINS; i++) {
-                if (strcmp(coins[i], tmp->arch->name) == 0 &&
-                    tmp->value == tmp->arch->clone.value) {
-                    denomination = i;
-                    break;
-                }
-            }
-            int64_t nrof = tmp->nrof;
-            if (denomination < 0 || nrof == 0) {
+            int64_t value;
+            if (!shop_money_object_value(tmp, &value)) {
                 continue;
             }
-            if (tmp->value <= 0 || tmp->value > INT64_MAX / nrof ||
-                *total > INT64_MAX - tmp->value * nrof) {
+            if (*total > INT64_MAX - value) {
                 return false;
             }
-            *total += tmp->value * nrof;
+            *total += value;
         } else if (tmp->type == CONTAINER && (QUERY_FLAG(tmp, FLAG_APPLIED) || tmp->race == NULL ||
                                               strstr(tmp->race, "gold") != NULL)) {
             if (!shop_get_money_checked(tmp, total)) {
@@ -309,13 +340,17 @@ int64_t shop_get_money(object *op) {
     return total;
 }
 
-bool shop_get_recovery_money(object *op, int64_t *total) {
+bool shop_get_held_money(object *op, int64_t *total) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(total != NULL);
     *total = 0;
-    if (!shop_get_money_checked(op, total)) {
-        return false;
-    }
+    return shop_get_money_checked(op, total);
+}
+
+bool shop_get_tile_money(object *op, int64_t *total) {
+    HARD_ASSERT(op != NULL);
+    HARD_ASSERT(total != NULL);
+    *total = 0;
     if (op->map == NULL) {
         return true;
     }
@@ -323,21 +358,26 @@ bool shop_get_recovery_money(object *op, int64_t *total) {
         if (tmp->type != MONEY || tmp->arch == NULL || tmp->nrof == 0) {
             continue;
         }
-        bool canonical = false;
-        for (int i = 0; i < NUM_COINS; i++) {
-            if (strcmp(coins[i], tmp->arch->name) == 0 && tmp->value == tmp->arch->clone.value) {
-                canonical = true;
-                break;
-            }
+        int64_t value;
+        if (!shop_money_object_value(tmp, &value)) {
+            continue;
         }
-        int64_t nrof = tmp->nrof;
-        if (!canonical || tmp->value <= 0 || tmp->value > INT64_MAX / nrof ||
-            *total > INT64_MAX - tmp->value * nrof) {
+        if (*total > INT64_MAX - value) {
             return false;
         }
-        *total += tmp->value * nrof;
+        *total += value;
     }
     FOR_MAP_FINISH();
+    return true;
+}
+
+bool shop_get_recovery_money(object *op, int64_t *total) {
+    int64_t held, tile;
+    if (!shop_get_held_money(op, &held) || !shop_get_tile_money(op, &tile) ||
+        held > INT64_MAX - tile) {
+        return false;
+    }
+    *total = held + tile;
     return true;
 }
 

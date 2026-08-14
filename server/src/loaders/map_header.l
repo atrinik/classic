@@ -90,6 +90,21 @@ lex_error = 0;
 ^reset_timeout{S}    m->reset_timeout = IVAL;
 ^swap_time{S}        m->swap_time = IVAL;
 ^difficulty{S}       m->difficulty = IVAL;
+^journal_run{S}      {
+    const char *run_id = yval();
+    if (string_is_hex_fixed(run_id, 32, true)) {
+        snprintf(VS(m->journal_run_id), "%s", run_id);
+    }
+}
+^journal_sequence{S} {
+    const char *value = yval();
+    char *end;
+    errno = 0;
+    uintmax_t sequence = strtoumax(value, &end, 10);
+    if (errno == 0 && end != value && *end == '\0' && sequence <= UINT64_MAX) {
+        m->journal_sequence = (uint64_t) sequence;
+    }
+}
 ^darkness{S}         {
     int v = IVAL;
 
@@ -298,6 +313,11 @@ void save_map_header(mapstruct *m, FILE *fp, int flag)
 
     if (m->difficulty) {
         fprintf(fp, "difficulty %d\n", m->difficulty);
+    }
+
+    if (!flag && m->journal_run_id[0] != '\0') {
+        fprintf(fp, "journal_run %s\n", m->journal_run_id);
+        fprintf(fp, "journal_sequence %" PRIu64 "\n", m->journal_sequence);
     }
 
     fprintf(fp, "darkness %d\n", m->darkness);

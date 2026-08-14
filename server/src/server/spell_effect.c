@@ -1429,13 +1429,13 @@ int cast_transform_wealth(object *op) {
     }
 
     /* Figure out our value of money to give to player. */
-    int64_t nrof = marked->nrof != 0 ? marked->nrof : 1;
-    if (marked->value < 0 || marked->value > INT64_MAX / nrof ||
-        marked->value * nrof > INT64_MAX / TRANSFORM_WEALTH_SACRIFICE || !shop_coins_available()) {
+    int64_t source_value;
+    if (!shop_money_object_counted(op, marked) || !shop_money_object_value(marked, &source_value) ||
+        source_value > INT64_MAX / TRANSFORM_WEALTH_SACRIFICE || !shop_coins_available()) {
         free(name);
         return 0;
     }
-    int64_t sacrificed = marked->value * nrof;
+    int64_t sacrificed = source_value;
     val = sacrificed * TRANSFORM_WEALTH_SACRIFICE;
     int64_t before;
     if (!shop_get_recovery_money(op, &before)) {

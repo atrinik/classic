@@ -2971,6 +2971,11 @@ void player_save(object *op) {
         fprintf(fp, "faction %s %e\n", faction->name, faction->reputation);
     }
 
+    if (pl->journal_run_id[0] != '\0') {
+        fprintf(fp, "journal_run %s\n", pl->journal_run_id);
+        fprintf(fp, "journal_sequence %" PRIu64 "\n", pl->journal_sequence);
+    }
+
     fprintf(fp, "fame %" PRId64 "\n", pl->fame);
     fprintf(fp, "endplst\n");
 
@@ -3061,6 +3066,18 @@ bool player_load_stream(player *pl, FILE *fp) {
             pl->bed_x = atoi(buf + 5);
         } else if (strncmp(buf, "bed_y ", 5) == 0) {
             pl->bed_y = atoi(buf + 5);
+        } else if (strncmp(buf, "journal_run ", 12) == 0) {
+            const char *run_id = buf + 12;
+            if (string_is_hex_fixed(run_id, 32, true)) {
+                snprintf(VS(pl->journal_run_id), "%s", run_id);
+            }
+        } else if (strncmp(buf, "journal_sequence ", 17) == 0) {
+            char *end;
+            errno = 0;
+            uintmax_t sequence = strtoumax(buf + 17, &end, 10);
+            if (errno == 0 && end != buf + 17 && *end == '\0' && sequence <= UINT64_MAX) {
+                pl->journal_sequence = (uint64_t)sequence;
+            }
         } else if (strncmp(buf, "cmd_permission ", 15) == 0) {
             pl->cmd_permissions =
                 xreallocarray(pl->cmd_permissions, (pl->num_cmd_permissions + 1), sizeof(char *));

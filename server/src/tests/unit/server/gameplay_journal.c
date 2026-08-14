@@ -24,6 +24,7 @@
 #include <party.h>
 #include <quest.h>
 #include <spells.h>
+#include <loader.h>
 
 #ifndef WIN32
 #include <sys/wait.h>
@@ -359,11 +360,16 @@ START_TEST(test_party_random_currency_retirement_preserves_message_lifetime) {
     object *corpse = arch_get("corpse");
     object *coins = object_insert_into(arch_get("coppercoin"), corpse, 0);
     coins->nrof = 10;
+    object *invalid_coins = object_insert_into(arch_get("coppercoin"), corpse, INS_NO_MERGE);
+    invalid_coins->value = 2;
 
     party_handle_corpse(pl, corpse);
-    ck_assert_ptr_eq(corpse->inv, NULL);
+    ck_assert_ptr_eq(object_get_env(invalid_coins), corpse);
     ck_assert_int_eq(shop_get_money(pl), 12);
     ck_assert_ptr_eq(object_find_type(pl, MONEY)->custody_lineage, NULL);
+    object_remove(invalid_coins, 0);
+    object_destroy(invalid_coins);
+    ck_assert_ptr_eq(corpse->inv, NULL);
 
     coins = object_insert_into(arch_get("coppercoin"), corpse, 0);
     coins->nrof = 10;
@@ -387,17 +393,33 @@ START_TEST(test_party_random_currency_retirement_preserves_message_lifetime) {
     remove_fixture(directory);
 
     CONTR(pl)->party->loot = PARTY_LOOT_SPLIT;
+    object *other = player_get_dummy("Journal split recipient", NULL);
+    other->map = map;
+    other->x = pl->x;
+    other->y = pl->y;
+    add_party_member(CONTR(pl)->party, other);
+    pl->carrying = weight_limit[MIN(pl->stats.Str, MAX_STAT)];
+    other->carrying = weight_limit[MIN(other->stats.Str, MAX_STAT)];
     coins = object_insert_into(arch_get("coppercoin"), corpse, 0);
-    coins->nrof = 5;
+    coins->nrof = 10;
     char split_directory[] = "/tmp/atrinik-party-split-loot-XXXXXX";
     ck_assert_ptr_ne(mkdtemp(split_directory), NULL);
     ck_assert(gameplay_journal_init(split_directory, "server", &profile));
     party_handle_corpse(pl, corpse);
-    ck_assert_int_eq(shop_get_money(pl), 27);
-    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("party.currency-split"), 1);
+    ck_assert_int_eq(shop_get_money(pl), 22);
+    int64_t recovery_total;
+    ck_assert(shop_get_recovery_money(pl, &recovery_total));
+    ck_assert_int_eq(recovery_total, 32);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("party.currency-split"), 2);
     gameplay_journal_deinit();
+    char *split_contents = read_fixture(split_directory);
+    ck_assert_ptr_ne(strstr(split_contents, "\"before\":22,\"delta\":5,\"after\":27"), NULL);
+    ck_assert_ptr_ne(strstr(split_contents, "\"before\":27,\"delta\":5,\"after\":32"), NULL);
+    free(split_contents);
     remove_fixture(split_directory);
 
+    remove_party_member(CONTR(pl)->party, other);
+    object_destroy(other);
     remove_party_member(CONTR(pl)->party, pl);
     object_destroy(corpse);
     object_destroy(pl);
@@ -415,6 +437,11 @@ START_TEST(test_currency_recovery_aggregate_includes_floor_delivery) {
     floor->x = pl->x;
     floor->y = pl->y;
     object_insert_map(floor, map, NULL, INS_NO_MERGE);
+    object *noncanonical = arch_get("coppercoin");
+    noncanonical->value = 2;
+    noncanonical->x = pl->x;
+    noncanonical->y = pl->y;
+    object_insert_map(noncanonical, map, NULL, INS_NO_MERGE);
     pl->carrying = weight_limit[MIN(pl->stats.Str, MAX_STAT)];
 
     int64_t before;
@@ -484,6 +511,103 @@ START_TEST(test_one_drop_quest_grant_commits_item_and_marker_together) {
 }
 END_TEST
 
+START_TEST(test_checkpoint_watermarks_persist_player_and_map) {
+    const char *run_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    snprintf(VS(CONTR(pl)->journal_run_id), "%s", run_id);
+    CONTR(pl)->journal_sequence = 42;
+
+    FILE *fp = tmpfile();
+    ck_assert_ptr_ne(fp, NULL);
+    fprintf(fp, "journal_run %s\n", CONTR(pl)->journal_run_id);
+    fprintf(fp, "journal_sequence %" PRIu64 "\n", CONTR(pl)->journal_sequence);
+    fprintf(fp, "endplst\n");
+    object_save(pl, fp);
+    rewind(fp);
+    object *loaded_player = player_get_dummy("Journal watermark reload", NULL);
+    ck_assert(player_load_stream(CONTR(loaded_player), fp));
+    ck_assert_str_eq(CONTR(loaded_player)->journal_run_id, run_id);
+    ck_assert_uint_eq(CONTR(loaded_player)->journal_sequence, 42);
+    ck_assert_int_eq(fclose(fp), 0);
+    object_destroy(loaded_player);
+
+    mapstruct saved = {0};
+    snprintf(VS(saved.journal_run_id), "%s", run_id);
+    saved.journal_sequence = 84;
+    fp = tmpfile();
+    ck_assert_ptr_ne(fp, NULL);
+    save_map_header(&saved, fp, 0);
+    rewind(fp);
+    mapstruct loaded = {0};
+    ck_assert_int_eq(load_map_header(&loaded, fp), 1);
+    ck_assert_str_eq(loaded.journal_run_id, run_id);
+    ck_assert_uint_eq(loaded.journal_sequence, 84);
+    ck_assert_int_eq(fclose(fp), 0);
+    object_destroy(pl);
+}
+END_TEST
+
+START_TEST(test_checkpoint_watermark_resolves_inverse_currency_aba) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object *money = object_insert_into(arch_get("coppercoin"), pl, 0);
+    money->nrof = 100;
+    char directory[] = "/tmp/atrinik-journal-watermark-aba-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    ck_assert_int_eq(shop_insert_coins_reason(pl, 3, "test.aba-grant"), OBJECT_SEMANTIC_COMMITTED);
+    uint64_t grant_sequence = CONTR(pl)->journal_sequence;
+    ck_assert_int_eq(shop_pay_reason(pl, 3, "test.aba-payment"), OBJECT_SEMANTIC_COMMITTED);
+    ck_assert_int_eq(shop_get_money(pl), 100);
+    ck_assert_uint_gt(CONTR(pl)->journal_sequence, grant_sequence);
+    ck_assert_uint_eq(map->journal_sequence, CONTR(pl)->journal_sequence);
+    gameplay_journal_deinit();
+    remove_fixture(directory);
+    object_destroy(pl);
+}
+END_TEST
+
+START_TEST(test_floor_withdrawal_watermarks_player_and_map_domains) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object_insert_into(arch_get("coppercoin"), pl, 0);
+    char directory[] = "/tmp/atrinik-journal-floor-withdraw-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(directory), NULL);
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    int64_t value;
+    ck_assert_int_eq(bank_deposit(pl, "all", &value), BANK_SUCCESS);
+    uint64_t before_sequence = CONTR(pl)->journal_sequence;
+    pl->carrying = weight_limit[MIN(pl->stats.Str, MAX_STAT)];
+    ck_assert_int_eq(bank_withdraw(pl, "all", &value), BANK_SUCCESS);
+    ck_assert_int_eq(value, 1);
+    ck_assert_int_eq(bank_get_balance(pl), 0);
+    ck_assert_ptr_eq(object_find_type(pl, MONEY), NULL);
+    ck_assert_ptr_ne(map_find_type(map, pl->x, pl->y, MONEY), NULL);
+    ck_assert_uint_gt(CONTR(pl)->journal_sequence, before_sequence);
+    ck_assert_uint_eq(map->journal_sequence, CONTR(pl)->journal_sequence);
+    ck_assert_str_eq(map->journal_run_id, CONTR(pl)->journal_run_id);
+    gameplay_journal_deinit();
+    remove_fixture(directory);
+    object_destroy(pl);
+}
+END_TEST
+
 START_TEST(test_semantic_item_shop_and_bank_producers) {
     mapstruct *map;
     object *pl;
@@ -538,6 +662,10 @@ START_TEST(test_semantic_item_shop_and_bank_producers) {
     ck_assert_uint_eq(ground->nrof, 3);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("item.acquire"), 1);
     ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_ITEM_UNITS_PICKED_UP), 2);
+    ck_assert_uint_eq(strlen(CONTR(pl)->journal_run_id), 32);
+    ck_assert_uint_gt(CONTR(pl)->journal_sequence, 0);
+    ck_assert_str_eq(map->journal_run_id, CONTR(pl)->journal_run_id);
+    ck_assert_uint_eq(map->journal_sequence, CONTR(pl)->journal_sequence);
     object *acquired = NULL;
     FOR_INV_PREPARE(pl, candidate) {
         if (candidate->arch == ground->arch && candidate->custody_lineage != NULL) {
@@ -643,9 +771,25 @@ START_TEST(test_semantic_item_shop_and_bank_producers) {
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("script.currency-grant"), 1);
 
     object *alchemy_source = object_insert_into(arch_get("coppercoin"), pl, INS_NO_MERGE);
+    alchemy_source->nrof = 10;
     CONTR(pl)->mark = alchemy_source;
     CONTR(pl)->mark_count = alchemy_source->count;
     ck_assert_int_eq(cast_transform_wealth(pl), 1);
+    ck_assert_uint_eq(gameplay_journal_committed_count_for_test("spell.alchemy"), 1);
+    object *restricted_sack = arch_get("sack");
+    FREE_AND_COPY_HASH(restricted_sack->race, "food");
+    restricted_sack = object_insert_into(restricted_sack, pl, INS_NO_MERGE);
+    object *excluded_source = object_insert_into(arch_get("coppercoin"), restricted_sack, 0);
+    excluded_source->nrof = 10;
+    CONTR(pl)->mark = excluded_source;
+    CONTR(pl)->mark_count = excluded_source->count;
+    ck_assert_int_eq(cast_transform_wealth(pl), 0);
+    ck_assert_ptr_eq(excluded_source->env, restricted_sack);
+    object *mutated_source = object_insert_into(arch_get("coppercoin"), pl, INS_NO_MERGE);
+    mutated_source->value = 2;
+    CONTR(pl)->mark = mutated_source;
+    CONTR(pl)->mark_count = mutated_source->count;
+    ck_assert_int_eq(cast_transform_wealth(pl), 0);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("spell.alchemy"), 1);
     FOR_INV_PREPARE(pl, candidate) {
         if (candidate->type == MONEY) {
@@ -1122,6 +1266,41 @@ static void write_crash_ground(const char *directory, const object *ground) {
     free(state);
 }
 
+static bool crash_intent_field(const char *contents,
+                               const char *reason,
+                               const char *field,
+                               char *value,
+                               size_t value_size) {
+    char reason_token[GAMEPLAY_JOURNAL_ID_MAX + 32];
+    snprintf(VS(reason_token), "\"reason\":\"%s\"", reason);
+    const char *reason_pos = strstr(contents, reason_token);
+    if (reason_pos == NULL) {
+        return false;
+    }
+    const char *line = reason_pos;
+    while (line > contents && line[-1] != '\n') {
+        line--;
+    }
+    const char *line_end = strchr(reason_pos, '\n');
+    if (line_end == NULL) {
+        line_end = contents + strlen(contents);
+    }
+    char field_token[128];
+    snprintf(VS(field_token), "\"%s\":\"", field);
+    const char *start = strstr(line, field_token);
+    if (start == NULL || start >= line_end) {
+        return false;
+    }
+    start += strlen(field_token);
+    const char *end = strchr(start, '"');
+    if (end == NULL || end > line_end || (size_t)(end - start) >= value_size) {
+        return false;
+    }
+    memcpy(value, start, (size_t)(end - start));
+    value[end - start] = '\0';
+    return true;
+}
+
 typedef enum crash_operation {
     CRASH_ITEM_GRANT,
     CRASH_ITEM_ACQUIRE,
@@ -1323,6 +1502,16 @@ START_TEST(test_abrupt_semantic_operations_leave_reconcilable_authoritative_stat
                          "\"reason\":\"%s\"",
                          crash_operation_reason((crash_operation_t)operation));
                 ck_assert_ptr_ne(strstr(contents, reason), NULL);
+                char intent_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+                char intent_lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
+                ck_assert(crash_intent_field(contents,
+                                             crash_operation_reason((crash_operation_t)operation),
+                                             "transaction_id",
+                                             VS(intent_transaction)));
+                ck_assert(crash_intent_field(contents,
+                                             crash_operation_reason((crash_operation_t)operation),
+                                             "lineage_id",
+                                             VS(intent_lineage)));
                 static const int64_t expected_arithmetic[CRASH_OPERATION_COUNT][3] = {
                     {0, 1, 1},
                     {0, 1, 1},
@@ -1362,12 +1551,27 @@ START_TEST(test_abrupt_semantic_operations_leave_reconcilable_authoritative_stat
                     ck_assert_int_eq(item != NULL, checkpoint_after);
                     if (item != NULL) {
                         ck_assert_ptr_ne(item->custody_lineage, NULL);
+                        ck_assert_str_eq(item->custody_lineage, intent_lineage);
                     }
                 } else if (operation == CRASH_ITEM_DROP || operation == CRASH_ITEM_DESTROY) {
                     ck_assert_int_eq(object_find_arch(reloaded, arch_find("sword")) == NULL,
                                      checkpoint_after);
                 } else if (operation == CRASH_CURRENCY_GRANT) {
                     ck_assert_int_eq(shop_get_money(reloaded), checkpoint_after ? 103 : 100);
+                    if (checkpoint_after && fail_terminal) {
+                        char expected[GAMEPLAY_JOURNAL_ID_MAX + 1];
+                        snprintf(VS(expected), "currency:%s", intent_transaction);
+                        bool found = false;
+                        FOR_INV_PREPARE(reloaded, coin) {
+                            if (coin->type == MONEY && coin->custody_lineage != NULL &&
+                                strcmp(coin->custody_lineage, expected) == 0) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        FOR_INV_FINISH();
+                        ck_assert(found);
+                    }
                 } else if (operation == CRASH_BANK_DEPOSIT) {
                     ck_assert_int_eq(bank_get_balance(reloaded), checkpoint_after ? 1 : 0);
                     ck_assert_int_eq(object_find_type(reloaded, MONEY) == NULL, checkpoint_after);
@@ -1377,7 +1581,9 @@ START_TEST(test_abrupt_semantic_operations_leave_reconcilable_authoritative_stat
                     ck_assert_int_eq(coins != NULL, checkpoint_after);
                     if (coins != NULL && fail_terminal) {
                         ck_assert_ptr_ne(coins->custody_lineage, NULL);
-                        ck_assert_int_eq(strncmp(coins->custody_lineage, "currency:", 9), 0);
+                        char expected[GAMEPLAY_JOURNAL_ID_MAX + 1];
+                        snprintf(VS(expected), "currency:%s", intent_transaction);
+                        ck_assert_str_eq(coins->custody_lineage, expected);
                     } else if (coins != NULL) {
                         ck_assert_ptr_eq(coins->custody_lineage, NULL);
                     }
@@ -1392,6 +1598,9 @@ START_TEST(test_abrupt_semantic_operations_leave_reconcilable_authoritative_stat
                     ck_assert_int_eq(shop_get_money(reloaded), checkpoint_after ? 20 : 0);
                     if (coins != NULL && fail_terminal) {
                         ck_assert_ptr_ne(coins->custody_lineage, NULL);
+                        char expected[GAMEPLAY_JOURNAL_ID_MAX + 1];
+                        snprintf(VS(expected), "currency:%s", intent_transaction);
+                        ck_assert_str_eq(coins->custody_lineage, expected);
                     } else if (coins != NULL) {
                         ck_assert_ptr_eq(coins->custody_lineage, NULL);
                     }
@@ -1419,6 +1628,10 @@ START_TEST(test_abrupt_semantic_operations_leave_reconcilable_authoritative_stat
                         object *ground = object_load_str(state_text);
                         ck_assert_ptr_ne(ground, NULL);
                         ck_assert_ptr_eq(ground->arch, arch_find("sword"));
+                        if (checkpoint_after) {
+                            ck_assert_ptr_ne(ground->custody_lineage, NULL);
+                            ck_assert_str_eq(ground->custody_lineage, intent_lineage);
+                        }
                         object_destroy(ground);
                         free(state_text);
                     }
@@ -1520,6 +1733,9 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_party_random_currency_retirement_preserves_message_lifetime);
     tcase_add_test(tc_core, test_currency_recovery_aggregate_includes_floor_delivery);
     tcase_add_test(tc_core, test_one_drop_quest_grant_commits_item_and_marker_together);
+    tcase_add_test(tc_core, test_checkpoint_watermarks_persist_player_and_map);
+    tcase_add_test(tc_core, test_checkpoint_watermark_resolves_inverse_currency_aba);
+    tcase_add_test(tc_core, test_floor_withdrawal_watermarks_player_and_map_domains);
 #ifndef WIN32
     tcase_add_test(tc_core, test_abrupt_process_crash_preserves_synced_phases);
     tcase_add_test(tc_core, test_abrupt_semantic_operations_leave_reconcilable_authoritative_state);

@@ -36,6 +36,10 @@
 typedef struct pending_transaction {
     char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
     char reason[GAMEPLAY_JOURNAL_ID_MAX + 1];
+    object *actor;
+    tag_t actor_count;
+    mapstruct *source_map;
+    tag_t source_map_count;
 } pending_transaction_t;
 
 typedef struct journal_state {
@@ -865,14 +869,30 @@ static bool journal_finish(const char *transaction_id, const char *phase, const 
     if (!ok) {
         return false;
     }
+    pending_transaction_t *pending = &journal.pending[(size_t)index];
+    if (strcmp(phase, "commit") == 0 && pending->actor != NULL &&
+        OBJECT_VALID(pending->actor, pending->actor_count) && pending->actor->type == PLAYER &&
+        CONTR(pending->actor) != NULL) {
+        player *pl = CONTR(pending->actor);
+        snprintf(VS(pl->journal_run_id), "%s", journal.run_id);
+        pl->journal_sequence = journal.sequence;
+        if (pending->source_map != NULL && pending->source_map->count != 0 &&
+            pending->source_map->count == pending->source_map_count) {
+            snprintf(VS(pending->source_map->journal_run_id), "%s", journal.run_id);
+            pending->source_map->journal_sequence = journal.sequence;
+        }
+        mapstruct *current_map = pending->actor->map;
+        if (current_map != NULL && current_map->count != 0) {
+            snprintf(VS(current_map->journal_run_id), "%s", journal.run_id);
+            current_map->journal_sequence = journal.sequence;
+        }
+    }
 #ifdef ATRINIK_TESTING
     if (strcmp(phase, "commit") == 0) {
         for (size_t i = 0; i < JOURNAL_PENDING_LIMIT; i++) {
             if (journal_test_counts[i].reason[0] == '\0' ||
-                strcmp(journal_test_counts[i].reason, journal.pending[(size_t)index].reason) == 0) {
-                snprintf(VS(journal_test_counts[i].reason),
-                         "%s",
-                         journal.pending[(size_t)index].reason);
+                strcmp(journal_test_counts[i].reason, pending->reason) == 0) {
+                snprintf(VS(journal_test_counts[i].reason), "%s", pending->reason);
                 journal_test_counts[i].count++;
                 break;
             }
@@ -953,7 +973,17 @@ bool gameplay_journal_player_begin_change(
         .x = pl->ob->x,
         .y = pl->ob->y,
     };
-    return gameplay_journal_begin(&subject, kind, reason, change, transaction_id);
+    if (!gameplay_journal_begin(&subject, kind, reason, change, transaction_id)) {
+        return false;
+    }
+    ssize_t index = journal_pending_find(transaction_id);
+    HARD_ASSERT(index >= 0);
+    pending_transaction_t *pending = &journal.pending[(size_t)index];
+    pending->actor = pl->ob;
+    pending->actor_count = pl->ob->count;
+    pending->source_map = pl->ob->map;
+    pending->source_map_count = pl->ob->map != NULL ? pl->ob->map->count : 0;
+    return true;
 }
 
 bool gameplay_journal_currency_begin(object *player_ob,

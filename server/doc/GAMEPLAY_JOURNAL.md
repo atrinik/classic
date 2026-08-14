@@ -123,17 +123,24 @@ duplicate intents, commit-without-intent, and commit/abort conflicts fail
 validation.
 
 Reconciliation is idempotent: identical repeated intents and terminal records
-do not themselves apply a mutation. Both `attempted` and `committed`
-transactions require the operator to compare their typed before/after values,
-lineage, and bounded snapshot with authoritative saved state. A terminal commit
-proves that the in-memory operation completed before the crash; it does not
-claim that a later periodic player/map checkpoint was already durable. Replay a
-committed transaction only when saved state still matches its `before` side;
-when saved state matches `after`, do not apply it again. For an attempted
-transaction, either side may be authoritative because the crash may have
-occurred during the mutation. An `aborted` transaction is never replayed. The
-tool reports the complete evidence needed for this comparison and deliberately
-does not edit game state.
+do not themselves apply a mutation. Player and runtime-map save headers persist
+`journal_run` and `journal_sequence`, the latest successful terminal commit
+whose in-memory state that domain includes. Compare each committed record's run
+and sequence with every affected saved domain: a matching watermark at or
+beyond the terminal sequence proves that domain already includes the mutation;
+an older/different watermark requires replay for that domain. This remains
+unambiguous when player and map checkpoints occur independently and when later
+transactions return a balance to an earlier value.
+
+Both `attempted` and `committed` transactions also carry typed before/after
+values, lineage, and a bounded snapshot for validation and partial completion.
+A terminal commit proves that the in-memory operation completed before the
+crash; it does not claim that a later periodic checkpoint was already durable.
+For an attempted transaction, either side may be authoritative because the
+crash may have occurred during the mutation; retained transaction lineage and
+the typed values identify applied output. An `aborted` transaction is never
+replayed. The tool reports the complete evidence needed for this comparison and
+deliberately does not edit game state.
 Account, character, subject, and lineage queries first select matching intents,
 then return each selected transaction's complete ordered intent/terminal
 timeline so an attempted action cannot be mistaken for a committed change.
@@ -174,12 +181,13 @@ verifies each concrete reason and business-state call site.
 The item transaction's top-level arithmetic is quantity for ordinary custody.
 For purchases it represents the balance actually mutated (the hidden bank
 slice for bank or mixed funding), while `details.price` always holds the
-complete copper-equivalent price. Shop sales, generated/party currency, and
-alchemy use a recovery aggregate spanning player-held/bank currency plus
-canonical currency on the player's current delivery tile. Their before/after
-values therefore remain comparable when output is carried, spilled, or split
-across the two, including a partially checkpointed delivery. Bank records
-remain exact hidden-balance arithmetic. These conventions keep recovery
+complete copper-equivalent price. Shop sales, generated/random-party currency,
+and alchemy use a recovery aggregate spanning player-held/bank currency plus
+canonical currency on the player's current delivery tile. Party split uses one
+ordered party-wide aggregate: every member's held/bank currency plus each
+occupied delivery tile counted once. Their before/after values therefore remain
+comparable when output is carried, spilled, or split across domains. Bank
+records remain exact hidden-balance arithmetic. These conventions keep recovery
 arithmetic authoritative without double-counting correlated writes.
 
 Journal-backed currency output is materialized in non-merging stacks carrying
