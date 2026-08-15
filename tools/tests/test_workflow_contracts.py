@@ -631,6 +631,11 @@ class WorkflowContractTests(unittest.TestCase):
         ):
             self.assertIn(path, client)
         self.assertIn('"${movement_rendering_paths[@]}"', client)
+        self.assertIn("client/tools/verify_movement_probe_control.py", client)
+        self.assertIn(
+            'python3 "${source_root}/client/tools/verify_movement_probe_control.py"',
+            client,
+        )
         self.assertIn(
             '"${benchmark_base_sha}:client/tools/movement_benchmark_schema.py"',
             client,

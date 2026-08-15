@@ -166,6 +166,11 @@ extern sprite_struct *sprite_tryload_file(char *fname, uint32_t flag, SDL_IOStre
 
 extern void sprite_free_sprite(sprite_struct *sprite);
 
+/** Invalidate transformed and lit results derived from a main-thread source. */
+extern void sprite_invalidate_surface(SDL_Surface *source);
+/** Free a main-thread-rendered sprite after invalidating all dependent caches. */
+extern void sprite_free_rendered(sprite_struct *sprite);
+
 extern void sprite_cache_free_all(void);
 
 extern void sprite_cache_gc(void);
@@ -173,6 +178,8 @@ extern void sprite_cache_gc(void);
 #ifdef ATRINIK_WIDGET_TESTS
 /** Run one transformed-sprite GC pass without its production random sampling gate. */
 extern void sprite_cache_gc_force(void);
+/** Exercise source dependency invalidation across effects and lighting caches. */
+extern bool sprite_benchmark_source_lifetime_complete(void);
 #endif
 
 /** Use a deterministic timestamp for transformed-sprite cache aging in offline replays. */

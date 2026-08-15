@@ -81,6 +81,25 @@ LIGHTING_COUNTER_FIELDS = {
     "lit_sprite_fallbacks",
     "lit_sprite_clears",
     "lit_sprite_cleared_entries",
+    "lit_sprite_structure_lookups",
+    "lit_sprite_structure_hits",
+    "lit_sprite_structure_misses",
+    "lit_sprite_structure_constructions",
+    "lit_sprite_structure_insertions",
+    "lit_sprite_structure_evictions",
+    "lit_sprite_structure_invalidations",
+    "lit_sprite_projected_lookups",
+    "lit_sprite_projected_hits",
+    "lit_sprite_projected_misses",
+    "lit_sprite_projected_constructions",
+    "lit_sprite_projected_insertions",
+    "lit_sprite_projected_evictions",
+    "lit_sprite_projected_invalidations",
+    "lit_sprite_invalidation_field",
+    "lit_sprite_invalidation_scroll",
+    "lit_sprite_invalidation_source",
+    "lit_sprite_invalidation_reset",
+    "lit_sprite_invalidation_eviction",
 }
 LIGHTING_TIMING_FIELDS = {
     "translation",
@@ -207,6 +226,43 @@ def _draw_reasons(value: object, draws: int, context: str) -> dict[str, object]:
     return reasons
 
 
+def _lighting_counter_accounting(counters: dict[str, object], context: str) -> None:
+    if counters["lit_sprite_hits"] + counters["lit_sprite_misses"] \
+            != counters["lit_sprite_lookups"]:
+        raise ValueError(f"movement benchmark {context} lit-sprite accounting is invalid")
+    mode_prefixes = ("lit_sprite_structure", "lit_sprite_projected")
+    for prefix in mode_prefixes:
+        if (
+            counters[f"{prefix}_hits"] + counters[f"{prefix}_misses"]
+            != counters[f"{prefix}_lookups"]
+            or counters[f"{prefix}_constructions"] != counters[f"{prefix}_misses"]
+            or counters[f"{prefix}_insertions"] > counters[f"{prefix}_constructions"]
+            or counters[f"{prefix}_evictions"] > counters[f"{prefix}_invalidations"]
+        ):
+            raise ValueError(f"movement benchmark {context} {prefix} accounting is invalid")
+    for event in ("lookups", "hits", "misses", "insertions", "evictions"):
+        if sum(counters[f"{prefix}_{event}"] for prefix in mode_prefixes) \
+                != counters[f"lit_sprite_{event}"]:
+            raise ValueError(
+                f"movement benchmark {context} lit-sprite mode accounting is invalid"
+            )
+    invalidations = sum(counters[f"{prefix}_invalidations"] for prefix in mode_prefixes)
+    causes = sum(
+        counters[f"lit_sprite_invalidation_{cause}"]
+        for cause in ("field", "scroll", "source", "reset", "eviction")
+    )
+    cleared = sum(
+        counters[f"lit_sprite_invalidation_{cause}"]
+        for cause in ("field", "scroll", "reset")
+    )
+    if (
+        invalidations != causes
+        or counters["lit_sprite_invalidation_eviction"] != counters["lit_sprite_evictions"]
+        or counters["lit_sprite_cleared_entries"] != cleared
+    ):
+        raise ValueError(f"movement benchmark {context} invalidation cause is incomplete")
+
+
 def _lighting(value: object, context: str) -> None:
     lighting = _mapping(
         value,
@@ -237,8 +293,7 @@ def _lighting(value: object, context: str) -> None:
     counters = _mapping(lighting["counters"], LIGHTING_COUNTER_FIELDS, f"{context} counters")
     for field, item in counters.items():
         _integer(item, f"{context} counters {field}")
-    if counters["lit_sprite_hits"] + counters["lit_sprite_misses"] != counters["lit_sprite_lookups"]:
-        raise ValueError(f"movement benchmark {context} lit-sprite accounting is invalid")
+    _lighting_counter_accounting(counters, context)
     if counters["render_failures"] != 0 or counters["lit_sprite_fallbacks"] != 0:
         raise ValueError(f"movement benchmark {context} rendering failed")
     timings = _mapping(lighting["timings"], LIGHTING_TIMING_FIELDS, f"{context} timings")
@@ -299,6 +354,9 @@ def _lighting(value: object, context: str) -> None:
         )
         for field, item in level_counters.items():
             _integer(item, f"{context} level counter {field}")
+        _lighting_counter_accounting(
+            level_counters, f"{context} level {expected_depth}"
+        )
         level_timings = _mapping(
             level["timings"], LIGHTING_TIMING_FIELDS, f"{context} level timings"
         )
@@ -440,7 +498,7 @@ def _visual_lifecycle_digest(checkpoints: list[dict[str, object]]) -> str:
 
 
 def validate_record(value: object) -> dict[str, object]:
-    """Validate and return one complete version-six native record."""
+    """Validate and return one complete version-seven native record."""
     record = _mapping(
         value,
         {
@@ -463,7 +521,7 @@ def validate_record(value: object) -> dict[str, object]:
         },
         "record",
     )
-    if record["schema_version"] != 6 or record["benchmark"] != "player-view-movement" \
+    if record["schema_version"] != 7 or record["benchmark"] != "player-view-movement" \
             or record["tick_ms"] != 125 or record["simulated_tick_hz"] != 8:
         raise ValueError("movement benchmark emitted an incompatible schema")
     checkpoint = _digest(record["checkpoint_sha256"], SHA256, "checkpoint")
@@ -516,10 +574,10 @@ def validate_record(value: object) -> dict[str, object]:
         "instrumentation identity",
     )
     if instrumentation != {
-        "schema_version": 6,
+        "schema_version": 7,
         "fixture_schema_version": 3,
         "workload": "pvm1-map2-lifecycle-v4",
-        "lighting_statistics_version": 5,
+        "lighting_statistics_version": 6,
         "map_statistics_version": 3,
         "render_profiler_statistics_version": 4,
         "sprite_cache_statistics_version": 3,
@@ -561,6 +619,7 @@ def validate_record(value: object) -> dict[str, object]:
             "mode",
             "reconstruction",
             "workload_variant",
+            "fine_timing",
         },
         "run identity",
     )
@@ -573,6 +632,8 @@ def validate_record(value: object) -> dict[str, object]:
         raise ValueError("movement benchmark workload identity is invalid")
     if run["mode"] not in ("smooth", "discrete"):
         raise ValueError("movement benchmark run mode is invalid")
+    if type(run["fine_timing"]) is not bool:
+        raise ValueError("movement benchmark fine timing identity is invalid")
     _integer(run["cpu_count"], "run identity CPU count", positive=True)
     viewport = _mapping(run["viewport"], {"name", "width", "height"}, "viewport identity")
     if viewport["name"] not in ("standard", "large"):
@@ -733,7 +794,7 @@ def validate_record(value: object) -> dict[str, object]:
             phase["full_map_draws"],
             f"phase {name} isolated lighting work time",
             allow_empty=True,
-            allow_zero=run["mode"] == "discrete",
+            allow_zero=run["mode"] == "discrete" or not run["fine_timing"],
         )
         main_loop = _mapping(
             phase["main_loop"],
@@ -991,7 +1052,7 @@ def validate_record(value: object) -> dict[str, object]:
                 timing_name: timing["calls"]
                 for timing_name, timing in lighting["timings"].items()
             }
-            if (
+            if run["fine_timing"] and (
                 timing_calls["translation"]
                 != lighting_counters["field_translations"]
                 + lighting_counters["field_translation_fallback_bounds"]
@@ -1013,12 +1074,29 @@ def validate_record(value: object) -> dict[str, object]:
                 or timing_calls["sprite_invalidation"]
                 < lighting_counters["lit_sprite_clears"]
                 + (1 if lighting_counters["lit_sprite_evictions"] else 0)
+                + (1 if lighting_counters["lit_sprite_invalidation_source"] else 0)
                 or timing_calls["sprite_invalidation"]
                 > lighting_counters["lit_sprite_clears"]
                 + lighting_counters["lit_sprite_evictions"]
+                + lighting_counters["lit_sprite_invalidation_source"]
             ):
                 raise ValueError(
                     f"movement benchmark phase {name} lighting timing is incomplete"
+                )
+            if not run["fine_timing"] and any(
+                timing[field] != 0
+                for timing in lighting["timings"].values()
+                for field in ("calls", "elapsed")
+            ):
+                raise ValueError(
+                    f"movement benchmark phase {name} disabled lighting timing is nonzero"
+                )
+            if not run["fine_timing"] and (
+                any(lighting_work_time[field] != 0 for field in ("p50", "p95", "p99", "max"))
+                or any(window["p95_ns"] != 0 for window in lighting_work_time["windows"])
+            ):
+                raise ValueError(
+                    f"movement benchmark phase {name} disabled lighting work timing is nonzero"
                 )
             if name == "sustained":
                 eligible = lighting_counters["field_begins"]
