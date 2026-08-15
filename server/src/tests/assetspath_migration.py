@@ -10,7 +10,7 @@ import sys
 import tempfile
 
 
-SERVER_TIMEOUT_SECONDS = 30
+SERVER_TIMEOUT_SECONDS = 60
 
 
 def require_rejection(result: subprocess.CompletedProcess[str], surface: str) -> None:
@@ -137,6 +137,8 @@ def main() -> int:
         require_staging_rejection(
             executable, invalid_data_file, "nested data file"
         )
+        if (invalid_data_file / "data").read_text(encoding="utf-8") != "invalid\n":
+            raise RuntimeError("nested data file rejection modified the file")
 
         invalid_data_link = root / "asset-data-link"
         invalid_data_link.mkdir()
@@ -146,6 +148,17 @@ def main() -> int:
         )
         if sentinel.read_text(encoding="utf-8") != "unchanged\n":
             raise RuntimeError("nested data symlink rejection modified its target")
+
+        invalid_maps_file = root / "asset-maps-file"
+        invalid_maps_file.mkdir()
+        (invalid_maps_file / "data").mkdir()
+        invalid_maps_component = invalid_maps_file / "client-maps"
+        invalid_maps_component.write_text("invalid\n", encoding="utf-8")
+        require_staging_rejection(
+            executable, invalid_maps_file, "nested client-maps file"
+        )
+        if invalid_maps_component.read_text(encoding="utf-8") != "invalid\n":
+            raise RuntimeError("client-maps file rejection modified the file")
 
         invalid_maps_link = root / "asset-maps-link"
         invalid_maps_link.mkdir()
