@@ -50,6 +50,7 @@ struct lighting_sample {
     uint16_t green;
     uint16_t blue;
     uint8_t present;
+    uint8_t reserved;
 };
 
 typedef struct lighting_dirty_rect {
@@ -75,7 +76,8 @@ typedef enum lighting_sprite_invalidation_cause {
     LIGHTING_SPRITE_INVALIDATION_EVICTION,
 } lighting_sprite_invalidation_cause_t;
 
-_Static_assert(sizeof(lighting_sample) == 10U, "lighting telemetry requires ten-byte samples");
+_Static_assert(sizeof(lighting_sample) == 10U,
+               "lighting samples require a padding-free ten-byte representation");
 
 typedef struct lighting_context {
     lighting_sample *samples;
@@ -362,6 +364,7 @@ static uint16_t lighting_sample_channel(const lighting_sample *sample, size_t ch
 
 static void lighting_sample_channel_set(lighting_sample *sample, size_t channel, uint16_t value) {
     HARD_ASSERT(sample != NULL);
+    sample->reserved = 0;
     switch (channel) {
         case 0:
             sample->scalar = value;
@@ -995,6 +998,7 @@ static void lighting_draw_triangle(const lighting_vertex_t vertices[4], bool fir
                     sample->green = INTERPOLATE_CHANNEL(green);
                     sample->blue = INTERPOLATE_CHANNEL(blue);
                     sample->present = 1;
+                    sample->reserved = 0;
 #undef INTERPOLATE_CHANNEL
                 }
 
@@ -1126,7 +1130,7 @@ static void lighting_extrapolate(void) {
 
     if (first_sampled_row == -1) {
         for (size_t i = 0; i < light_samples_num; i++) {
-            light_samples[i] = (lighting_sample){2048, 2048, 2048, 2048, 1};
+            light_samples[i] = (lighting_sample){2048, 2048, 2048, 2048, 1, 0};
         }
         return;
     }
@@ -1594,7 +1598,7 @@ static bool lighting_structure_identity(SDL_Surface *source,
     result = lighting_signature_uint32(result, (uint32_t)source_rect->w);
     for (int source_x = 0; source_x < source_rect->w; source_x++) {
         int bottom = structure_column_bottom[source_x];
-        lighting_sample illumination = {2048, 2048, 2048, 2048, 1};
+        lighting_sample illumination = {2048, 2048, 2048, 2048, 1, 0};
         if (bottom >= 0) {
             int light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
             int light_y = MAX(0, MIN(lighting_height - 1, sample_y - max_bottom + bottom));
@@ -1638,14 +1642,7 @@ static bool lighting_sprite_illumination_count(const SDL_Rect *source_rect,
 static bool lighting_samples_equal(const lighting_sample *first,
                                    const lighting_sample *second,
                                    size_t count) {
-    for (size_t i = 0; i < count; i++) {
-        if (first[i].scalar != second[i].scalar || first[i].red != second[i].red ||
-            first[i].green != second[i].green || first[i].blue != second[i].blue ||
-            first[i].present != second[i].present) {
-            return false;
-        }
-    }
-    return true;
+    return memcmp(first, second, count * sizeof(*first)) == 0;
 }
 
 /** Compare the full sampled illumination so a hash collision can only miss. */
