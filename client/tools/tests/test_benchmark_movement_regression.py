@@ -147,6 +147,8 @@ def lighting_level(
                 "lit_sprite_draws": 2,
                 "lit_sprite_lookups": 2,
                 "lit_sprite_hits": 2,
+                "lit_sprite_structure_lookups": 2,
+                "lit_sprite_structure_hits": 2,
             }
         )
     timings = lighting_timings(counters)
@@ -209,6 +211,7 @@ def native_record(
     viewport: str = "standard",
     reconstruction: str = "translated",
     workload_variant: str = "production",
+    fine_timing: bool = True,
 ) -> dict[str, object]:
     phases = []
     packet_counts = {"cold": 1, "sustained": 480, "idle": 8, "resumed": 80}
@@ -266,6 +269,14 @@ def native_record(
             }
             for timing_name in benchmark.validate_record.__globals__["LIGHTING_TIMING_FIELDS"]
         }
+        if not fine_timing:
+            for timing_value in lighting_phase_timings.values():
+                timing_value["calls"] = 0
+                timing_value["elapsed"] = 0
+            for level in lighting_levels:
+                for timing_value in level["timings"].values():
+                    timing_value["calls"] = 0
+                    timing_value["elapsed"] = 0
         lighting_active = mode == "smooth"
         phases.append(
             {
@@ -294,10 +305,10 @@ def native_record(
                 "animation_time": timing(animation_draws),
                 "lighting_work_time": timing(
                     draws,
-                    p50_ns=500_000 if lighting_active else 0,
-                    p95_ns=600_000 if lighting_active else 0,
-                    first_ns=600_000 if lighting_active else 0,
-                    last_ns=600_000 if lighting_active else 0,
+                    p50_ns=500_000 if lighting_active and fine_timing else 0,
+                    p95_ns=600_000 if lighting_active and fine_timing else 0,
+                    first_ns=600_000 if lighting_active and fine_timing else 0,
+                    last_ns=600_000 if lighting_active and fine_timing else 0,
                 ),
                 "local_minimap": {
                     "enabled": workload_variant == "production",
@@ -425,16 +436,16 @@ def native_record(
     )]
     standard_checkpoint_sha = visual_lifecycle_digest(standard_checkpoints)
     return {
-        "schema_version": 6,
+        "schema_version": 7,
         "benchmark": "player-view-movement",
         "tick_ms": 125,
         "simulated_tick_hz": 8,
         "identity": {
             "instrumentation": {
-                "schema_version": 6,
+                "schema_version": 7,
                 "fixture_schema_version": 3,
                 "workload": "pvm1-map2-lifecycle-v4",
-                "lighting_statistics_version": 5,
+                "lighting_statistics_version": 6,
                 "map_statistics_version": 3,
                 "render_profiler_statistics_version": 4,
                 "sprite_cache_statistics_version": 3,
@@ -466,6 +477,7 @@ def native_record(
                 "mode": mode,
                 "reconstruction": reconstruction,
                 "workload_variant": workload_variant,
+                "fine_timing": fine_timing,
             },
         },
         "fixture": {
@@ -568,16 +580,31 @@ def additional_contexts(
     return contexts
 
 
-class NativeV6RecordTests(unittest.TestCase):
-    def test_parse_accepts_closed_v5_record(self) -> None:
-        self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 6)
+class NativeV7RecordTests(unittest.TestCase):
+    def test_parse_accepts_closed_v7_record(self) -> None:
+        self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 7)
+
+    def test_parse_accepts_same_workload_with_fine_timing_disabled(self) -> None:
+        record = native_record(fine_timing=False)
+        self.assertFalse(benchmark.validate_record(record)["identity"]["run"]["fine_timing"])
+
+    def test_disabled_fine_timing_rejects_operation_clock_evidence(self) -> None:
+        record = native_record(fine_timing=False)
+        record["phases"][1]["lighting"]["timings"]["sprite_lookup"].update(
+            {"calls": 1, "elapsed": 100}
+        )
+        record["phases"][1]["lighting"]["levels"][4]["timings"][
+            "sprite_lookup"
+        ].update({"calls": 1, "elapsed": 100})
+        with self.assertRaisesRegex(ValueError, "disabled lighting timing is nonzero"):
+            benchmark.validate_record(record)
 
     def test_parse_rejects_extra_output_and_duplicate_fields(self) -> None:
         encoded = json.dumps(native_record())
         with self.assertRaisesRegex(benchmark.BenchmarkError, "exactly one"):
             benchmark.parse_result(encoded + "\nnoise\n")
-        duplicate = encoded.replace('"schema_version": 6,',
-                                    '"schema_version": 6, "schema_version": 6,', 1)
+        duplicate = encoded.replace('"schema_version": 7,',
+                                    '"schema_version": 7, "schema_version": 7,', 1)
         with self.assertRaisesRegex(benchmark.BenchmarkError, "repeated JSON field"):
             benchmark.parse_result(duplicate)
         with self.assertRaisesRegex(ValueError, "repeated JSON field"):
@@ -983,8 +1010,11 @@ class NativeV6RecordTests(unittest.TestCase):
     def test_requires_eviction_work_in_the_invalidation_bucket(self) -> None:
         malformed = native_record()
         phase = malformed["phases"][2]["lighting"]
-        phase["counters"]["lit_sprite_evictions"] = 1
-        phase["levels"][6]["counters"]["lit_sprite_evictions"] = 1
+        for counters in (phase["counters"], phase["levels"][6]["counters"]):
+            counters["lit_sprite_evictions"] = 1
+            counters["lit_sprite_structure_evictions"] = 1
+            counters["lit_sprite_structure_invalidations"] = 1
+            counters["lit_sprite_invalidation_eviction"] = 1
         with self.assertRaisesRegex(ValueError, "lighting timing is incomplete"):
             benchmark.validate_record(malformed)
         phase["timings"]["sprite_invalidation"].update({"calls": 1, "elapsed": 100})
@@ -992,6 +1022,49 @@ class NativeV6RecordTests(unittest.TestCase):
             {"calls": 1, "elapsed": 100}
         )
         benchmark.validate_record(malformed)
+
+    def test_rejects_incomplete_lit_sprite_mode_and_cause_accounting(self) -> None:
+        malformed = native_record()
+        malformed["phases"][1]["lighting"]["counters"][
+            "lit_sprite_structure_hits"
+        ] -= 1
+        with self.assertRaisesRegex(ValueError, "lit_sprite_structure accounting"):
+            benchmark.validate_record(malformed)
+
+        malformed = native_record()
+        malformed["phases"][1]["lighting"]["counters"][
+            "lit_sprite_invalidation_scroll"
+        ] += 1
+        with self.assertRaisesRegex(ValueError, "invalidation cause is incomplete"):
+            benchmark.validate_record(malformed)
+
+        malformed = native_record()
+        malformed["phases"][1]["lighting"]["counters"][
+            "lit_sprite_cleared_entries"
+        ] += 1
+        with self.assertRaisesRegex(ValueError, "invalidation cause is incomplete"):
+            benchmark.validate_record(malformed)
+
+    def test_rejects_balanced_invalid_per_depth_lit_sprite_accounting(self) -> None:
+        malformed = native_record()
+        levels = malformed["phases"][1]["lighting"]["levels"]
+        for prefix in ("lit_sprite", "lit_sprite_structure"):
+            levels[4]["counters"][f"{prefix}_lookups"] -= 1
+            levels[5]["counters"][f"{prefix}_lookups"] += 1
+        with self.assertRaisesRegex(ValueError, "level -2.*lit-sprite accounting"):
+            benchmark.validate_record(malformed)
+
+    def test_accepts_targeted_source_invalidation_timing(self) -> None:
+        record = native_record()
+        phase = record["phases"][2]["lighting"]
+        for counters in (phase["counters"], phase["levels"][6]["counters"]):
+            counters["lit_sprite_structure_invalidations"] = 2
+            counters["lit_sprite_invalidation_source"] = 2
+        phase["timings"]["sprite_invalidation"].update({"calls": 1, "elapsed": 100})
+        phase["levels"][6]["timings"]["sprite_invalidation"].update(
+            {"calls": 1, "elapsed": 100}
+        )
+        benchmark.validate_record(record)
 
     def test_rejects_incomplete_raster_translation_and_scroll_telemetry(self) -> None:
         for field, value, message in (
@@ -1494,7 +1567,7 @@ class EvidenceTests(unittest.TestCase):
 
     def test_error_evidence_is_bounded_and_versioned(self) -> None:
         evidence = benchmark.error_evidence(benchmark.BenchmarkError("x" * 600))
-        self.assertEqual(evidence["schema_version"], 6)
+        self.assertEqual(evidence["schema_version"], 7)
         self.assertEqual(len(evidence["error"]), 500)
 
 
@@ -1697,7 +1770,7 @@ class CommentTests(unittest.TestCase):
         self.assertIn("was skipped", benchmark.render_comment(
             benchmark.skipped_evidence("not selected"), "success"
         ))
-        error = {"schema_version": 6, "status": "error", "error": "untrusted | markdown"}
+        error = {"schema_version": 7, "status": "error", "error": "untrusted | markdown"}
         error_report = benchmark.render_comment(error, "failure")
         self.assertIn("generation failed", error_report)
         self.assertNotIn("untrusted", error_report)
@@ -1811,7 +1884,7 @@ class CommentTests(unittest.TestCase):
             discrete.write_text("x")
             output = root / "evidence.json"
             with mock.patch.object(benchmark, "candidate_only", return_value={
-                "schema_version": 6, "status": "passed", "failed": False
+                "schema_version": 7, "status": "passed", "failed": False
             }) as candidate:
                 result = benchmark.main(
                     [
@@ -1891,7 +1964,7 @@ class CommentTests(unittest.TestCase):
             with mock.patch.object(
                 benchmark,
                 "compare",
-                return_value={"schema_version": 6, "status": "passed", "failed": False},
+                return_value={"schema_version": 7, "status": "passed", "failed": False},
             ) as compare:
                 self.assertEqual(benchmark.main(arguments), 0)
             self.assertFalse(compare.call_args.kwargs["enforce_performance"])

@@ -21,6 +21,7 @@ LIGHTING_FAULTS = (
     "lighting-structure-lock",
     "lighting-projected-lock",
     "lighting-destination-lock",
+    "lighting-source-lifetime",
 )
 
 

@@ -863,6 +863,11 @@ if (BUILD_TESTING)
             "$<TARGET_FILE:atrinik>"
             "${player_view_fixtures}/colored-smooth.xml"
             "${player_view_fixtures}/movement-colored.xml")
+    add_test(NAME client-player-view-movement-probe-control
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_probe_control.py"
+            "$<TARGET_FILE:atrinik>"
+            "${player_view_fixtures}/movement-lighting-isolated.xml")
     set_tests_properties(
         client-player-view-movement-benchmark-smooth
         client-player-view-movement-benchmark-discrete
@@ -878,6 +883,9 @@ if (BUILD_TESTING)
     set_tests_properties(client-player-view-movement-fault-injection PROPERTIES
         LABELS fault-injection
         TIMEOUT 75)
+    set_tests_properties(client-player-view-movement-probe-control PROPERTIES
+        LABELS "performance;standard-performance"
+        TIMEOUT 420)
     add_test(NAME client-player-view-colored-smooth
         COMMAND atrinik --player-view "${player_view_fixtures}/colored-smooth.xml" -)
     add_test(NAME client-player-view-colored-discrete
