@@ -19,15 +19,39 @@ mxe_cmake=${MXE_TARGET:-x86_64-w64-mingw32.shared}-cmake
 command -v "${mxe_cmake}" >/dev/null
 dependency_downloads=${ATRINIK_DEPENDENCY_DOWNLOADS:-}
 dependency_sync_arguments=()
-if [[ -n ${dependency_downloads} ]]; then
-  if [[ ! -d ${dependency_downloads} ]]; then
-    echo "ATRINIK_DEPENDENCY_DOWNLOADS does not identify a staged archive bundle" >&2
+profile_sound=${ATRINIK_PROFILE_SOUND_DIR:-}
+if [[ -n ${profile_sound} ]]; then
+  if [[ ! -d ${profile_sound} || -L ${profile_sound} ]]; then
+    echo "ATRINIK_PROFILE_SOUND_DIR does not identify a regular directory" >&2
     exit 1
   fi
-  dependency_sync_arguments+=(--cache "${dependency_downloads}" --refresh --offline)
+  expected_sound=$(realpath -e sound)
+  selected_sound=$(realpath -e "${profile_sound}")
+  if [[ ${selected_sound} != "${expected_sound}" ]]; then
+    echo "ATRINIK_PROFILE_SOUND_DIR must identify the staged client sound directory" >&2
+    exit 1
+  fi
+  mapfile -t invalid_sound_entries < <(
+    find -P "${profile_sound}" ! -type d ! -type f -print -quit
+  )
+  mapfile -t profile_sound_files < <(
+    find -P "${profile_sound}" -type f -print -quit
+  )
+  if [[ ${#invalid_sound_entries[@]} -ne 0 || ${#profile_sound_files[@]} -eq 0 ]]; then
+    echo "ATRINIK_PROFILE_SOUND_DIR contains an invalid or empty tree" >&2
+    exit 1
+  fi
+else
+  if [[ -n ${dependency_downloads} ]]; then
+    if [[ ! -d ${dependency_downloads} ]]; then
+      echo "ATRINIK_DEPENDENCY_DOWNLOADS does not identify a staged archive bundle" >&2
+      exit 1
+    fi
+    dependency_sync_arguments+=(--cache "${dependency_downloads}" --refresh --offline)
+  fi
+  python3 tools/dependencies.py sync "${dependency_sync_arguments[@]}"
+  python3 tools/dependencies.py verify
 fi
-python3 tools/dependencies.py sync "${dependency_sync_arguments[@]}"
-python3 tools/dependencies.py verify
 mkdir -p "${output_directory}"
 
 dependency_arguments=()
