@@ -135,6 +135,38 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('gh attestation verify "oci://${reference}"', installer)
         self.assertGreaterEqual(candidate.count("GH_TOKEN: ${{ github.token }}"), 1)
 
+    def test_windows_package_profile_sound_override_is_explicit_and_bounded(self) -> None:
+        script = (ROOT / "client/tools/build-windows-package.sh").read_text(
+            encoding="utf-8"
+        )
+        server_script = (ROOT / "server/tools/build-windows-package.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('profile_sound=${ATRINIK_PROFILE_SOUND_DIR:-}', script)
+        self.assertIn('expected_sound=$(realpath -e sound)', script)
+        self.assertIn('selected_sound=$(realpath -e "${profile_sound}")', script)
+        self.assertIn('find -P "${profile_sound}" ! -type d ! -type f', script)
+        self.assertIn('python3 tools/dependencies.py sync', script)
+        self.assertIn('python3 tools/dependencies.py verify', script)
+        self.assertIn(
+            'profile_content=${ATRINIK_PROFILE_CONTENT_DIR:-}', server_script
+        )
+        self.assertIn(
+            'profile_resources=${ATRINIK_PROFILE_RESOURCES_DIR:-}', server_script
+        )
+        self.assertIn("validate_profile_tree ATRINIK_PROFILE_CONTENT_DIR", server_script)
+        self.assertIn("validate_profile_tree ATRINIK_PROFILE_RESOURCES_DIR", server_script)
+        self.assertIn(
+            "PYTHONDONTWRITEBYTECODE=1 ./atrinik-server", server_script
+        )
+        self.assertIn('python3 tools/dependencies.py sync', server_script)
+        self.assertIn('python3 tools/dependencies.py verify', server_script)
+        for workflow in ("build-release-candidate.yml", "package-release.yml"):
+            workflow_text = self.text(workflow)
+            self.assertNotIn("ATRINIK_PROFILE_SOUND_DIR", workflow_text)
+            self.assertNotIn("ATRINIK_PROFILE_CONTENT_DIR", workflow_text)
+            self.assertNotIn("ATRINIK_PROFILE_RESOURCES_DIR", workflow_text)
+
     def test_dependency_bundle_publication_is_trusted_and_digest_preserving(self) -> None:
         workflow = self.text("publish-dependency-bundle.yml")
         self.assertIn("branches: [main]", workflow)
