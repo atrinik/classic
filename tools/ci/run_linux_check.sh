@@ -247,6 +247,7 @@ case "${component}" in
       client/tools/tests/test_verify_movement_fault_injection.py
       client/tools/verify_movement_fault_injection.py
       client/tools/verify_movement_benchmark.py
+      client/tools/verify_movement_probe_control.py
       libatrinik/tests/smoke.c
       libatrinik/math.c
       libatrinik/math.h
@@ -269,6 +270,7 @@ case "${component}" in
       client/tools/generate_movement_five_depth.py
       client/tools/movement_benchmark_schema.py
       client/tools/verify_movement_benchmark.py
+      client/tools/verify_movement_probe_control.py
     )
 
     lighting_comparison=false
@@ -381,6 +383,17 @@ case "${component}" in
       printf '%s\n' \
         '{"schema_version":1,"skipped":true,"reason":"lighting-sensitive-files-unchanged-or-no-comparison-base"}' \
         >"${lighting_evidence}"
+    fi
+
+    probe_status=0
+    if [[ ${movement_action} != skip ]]; then
+      python3 "${source_root}/client/tools/verify_movement_probe_control.py" \
+        "${source_root}/client/build/linux-release/atrinik" \
+        "${source_root}/client/src/tests/fixtures/player_view/movement-lighting-isolated.xml" \
+        || probe_status=$?
+    fi
+    if [[ ${probe_status} -ne 0 ]]; then
+      validation_exit=${probe_status}
     fi
 
     command_status=0

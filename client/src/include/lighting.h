@@ -52,7 +52,7 @@ typedef struct lighting_vertex {
 } lighting_vertex_t;
 
 /** Increment when the statistics-only benchmark API changes. */
-#define LIGHTING_BENCHMARK_STATISTICS_VERSION UINT8_C(5)
+#define LIGHTING_BENCHMARK_STATISTICS_VERSION UINT8_C(6)
 
 typedef enum lighting_benchmark_reconstruction {
     LIGHTING_BENCHMARK_RECONSTRUCTION_TRANSLATED,
@@ -112,6 +112,25 @@ typedef struct lighting_benchmark_counters {
     uint64_t lit_sprite_fallbacks;
     uint64_t lit_sprite_clears;
     uint64_t lit_sprite_cleared_entries;
+    uint64_t lit_sprite_structure_lookups;
+    uint64_t lit_sprite_structure_hits;
+    uint64_t lit_sprite_structure_misses;
+    uint64_t lit_sprite_structure_constructions;
+    uint64_t lit_sprite_structure_insertions;
+    uint64_t lit_sprite_structure_evictions;
+    uint64_t lit_sprite_structure_invalidations;
+    uint64_t lit_sprite_projected_lookups;
+    uint64_t lit_sprite_projected_hits;
+    uint64_t lit_sprite_projected_misses;
+    uint64_t lit_sprite_projected_constructions;
+    uint64_t lit_sprite_projected_insertions;
+    uint64_t lit_sprite_projected_evictions;
+    uint64_t lit_sprite_projected_invalidations;
+    uint64_t lit_sprite_invalidation_field;
+    uint64_t lit_sprite_invalidation_scroll;
+    uint64_t lit_sprite_invalidation_source;
+    uint64_t lit_sprite_invalidation_reset;
+    uint64_t lit_sprite_invalidation_eviction;
 } lighting_benchmark_counters_t;
 
 /** Current and peak cache state for one protocol depth. */
@@ -215,6 +234,8 @@ void lighting_show_surface(SDL_Surface *destination,
                            SDL_Surface *source,
                            int sample_y,
                            lighting_surface_mode_t mode);
+/** Main-thread only: remove lit results referring to a source before destruction. */
+void lighting_invalidate_surface(SDL_Surface *source);
 void lighting_clear_sprite_cache(void);
 void lighting_deinit(void);
 
@@ -228,6 +249,8 @@ void lighting_benchmark_configure(bool timing_enabled,
 /** Configure and query the movement-only construction fallback seam. */
 void lighting_benchmark_fault_configure(unsigned int fault);
 bool lighting_benchmark_fault_complete(void);
+/** Report whether a source address token is retained by any lit-sprite cache key. */
+bool lighting_benchmark_source_address_retained(uintptr_t source_address);
 #endif
 /** Copy the benchmark state for one protocol depth. */
 bool lighting_benchmark_level_statistics_get(int depth,

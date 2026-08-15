@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -595,7 +595,7 @@ void image_bmaps_deinit(void) {
         if (FaceList[i].name != NULL) {
             free(FaceList[i].name);
             FaceList[i].name = NULL;
-            sprite_free_sprite(FaceList[i].sprite);
+            sprite_free_rendered(FaceList[i].sprite);
             FaceList[i].sprite = NULL;
             FaceList[i].checksum = 0;
         }
@@ -649,7 +649,7 @@ void finish_face_cmd(int facenum, uint32_t checksum, const char *face) {
         face_asset_request_cancel((uint16_t)facenum);
         free(FaceList[facenum].name);
         FaceList[facenum].name = NULL;
-        sprite_free_sprite(FaceList[facenum].sprite);
+        sprite_free_rendered(FaceList[facenum].sprite);
         FaceList[facenum].sprite = NULL;
     }
 
@@ -1150,7 +1150,7 @@ face_asset_requests_complete_loader(uint64_t now_ms, uint64_t started_us, bool *
                     result->override_name = NULL;
                     FaceList[request->face].checksum = result->override_checksum;
                 }
-                sprite_free_sprite(FaceList[request->face].sprite);
+                sprite_free_rendered(FaceList[request->face].sprite);
                 FaceList[request->face].sprite = result->sprite;
                 result->sprite = NULL;
                 FaceList[request->face].flags &= ~FACE_REQUESTED;
@@ -1159,7 +1159,7 @@ face_asset_requests_complete_loader(uint64_t now_ms, uint64_t started_us, bool *
             }
         } else if (result->sprite != NULL) {
             face_cache_enqueue(FaceList[request->face].name, result->data, result->size);
-            sprite_free_sprite(FaceList[request->face].sprite);
+            sprite_free_rendered(FaceList[request->face].sprite);
             FaceList[request->face].sprite = result->sprite;
             result->sprite = NULL;
             LOG(DEBUG,

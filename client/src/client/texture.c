@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -47,6 +47,7 @@ static texture_struct *textures[TEXTURE_TYPE_NUM];
  */
 static void texture_data_free(texture_struct *tmp) {
     if (tmp->surface) {
+        sprite_invalidate_surface(tmp->surface);
         SDL_DestroySurface(tmp->surface);
         tmp->surface = NULL;
     }
