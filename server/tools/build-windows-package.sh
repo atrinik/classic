@@ -21,11 +21,48 @@ mxe_cmake=${MXE_TARGET:-x86_64-w64-mingw32.shared}-cmake
 command -v "${mxe_cmake}" >/dev/null
 dependency_downloads=${ATRINIK_DEPENDENCY_DOWNLOADS:-}
 dependency_sync_arguments=()
-if [[ -n ${dependency_downloads} ]]; then
-  dependency_sync_arguments+=(--cache "${dependency_downloads}" --refresh --offline)
+profile_content=${ATRINIK_PROFILE_CONTENT_DIR:-}
+profile_resources=${ATRINIK_PROFILE_RESOURCES_DIR:-}
+if [[ -n ${profile_content} || -n ${profile_resources} ]]; then
+  if [[ -z ${profile_content} || -z ${profile_resources} ]]; then
+    echo "profile content and resources must be provided together" >&2
+    exit 1
+  fi
+
+  validate_profile_tree() {
+    local variable_name=$1
+    local selected=$2
+    local expected=$3
+    if [[ ! -d ${selected} || -L ${selected} ]]; then
+      echo "${variable_name} does not identify a regular directory" >&2
+      exit 1
+    fi
+    if [[ $(realpath -e "${selected}") != $(realpath -e "${expected}") ]]; then
+      echo "${variable_name} does not identify its staged package directory" >&2
+      exit 1
+    fi
+    local -a invalid_entries files
+    mapfile -t invalid_entries < <(
+      find -P "${selected}" ! -type d ! -type f -print -quit
+    )
+    mapfile -t files < <(find -P "${selected}" -type f -print -quit)
+    if [[ ${#invalid_entries[@]} -ne 0 || ${#files[@]} -eq 0 ]]; then
+      echo "${variable_name} contains an invalid or empty tree" >&2
+      exit 1
+    fi
+  }
+
+  validate_profile_tree ATRINIK_PROFILE_CONTENT_DIR \
+    "${profile_content}" runtime/content
+  validate_profile_tree ATRINIK_PROFILE_RESOURCES_DIR \
+    "${profile_resources}" resources
+else
+  if [[ -n ${dependency_downloads} ]]; then
+    dependency_sync_arguments+=(--cache "${dependency_downloads}" --refresh --offline)
+  fi
+  python3 tools/dependencies.py sync "${dependency_sync_arguments[@]}"
+  python3 tools/dependencies.py verify
 fi
-python3 tools/dependencies.py sync "${dependency_sync_arguments[@]}"
-python3 tools/dependencies.py verify
 
 dependency_arguments=()
 native_compiler_arguments=()
@@ -83,7 +120,7 @@ cmake -E copy_directory install_data "${region_data}"
 repository_root=$(pwd)
 (
   cd "${region_runtime}"
-  ./atrinik-server \
+  PYTHONDONTWRITEBYTECODE=1 ./atrinik-server \
     --worldmaker \
     --libpath="${repository_root}/${package_root}/lib" \
     --mapspath="${repository_root}/${package_root}/maps" \
