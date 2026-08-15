@@ -24,8 +24,9 @@ typedef struct SDL_Surface SDL_Surface;
 #define LIGHTING_TRANSFER_VERSION UINT8_C(1)
 #define LIGHTING_SPRITE_CACHE_MAX_BYTES (8U * 1024U * 1024U)
 #define LIGHTING_SPRITE_CACHE_ENTRY_OVERHEAD 512U
-/* Keep per-level transformed sprites bounded across viewport translations. */
-#define LIGHTING_SPRITE_CACHE_MAX_ENTRIES 20U
+/* Retain two translated dense-view working sets while the byte ceiling remains
+ * the authoritative bound for large transformed sprites. */
+#define LIGHTING_SPRITE_CACHE_MAX_ENTRIES 64U
 
 /** Conservatively charge pixels plus retained entry/surface/allocator metadata.
  */

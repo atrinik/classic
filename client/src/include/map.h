@@ -604,11 +604,12 @@ extern void widget_map_animation_test_add(int type,
 /** Minimum interval between expensive local-world minimap renders. */
 #define MINIMAP_DYNAMIC_REDRAW_INTERVAL 250U
 
-/** Production local-world minimap render-surface width. */
-#define MINIMAP_DYNAMIC_SURFACE_WIDTH (850 * (MAP_FOW_SIZE / 2))
+/** Dynamic-map surface dimensions retained for identical zoom/crop coverage. */
+#define MINIMAP_DYNAMIC_LEGACY_SURFACE_WIDTH (850 * (MAP_FOW_SIZE / 2))
+#define MINIMAP_DYNAMIC_LEGACY_SURFACE_HEIGHT (600 * (MAP_FOW_SIZE / 2))
 
-/** Production local-world minimap render-surface height. */
-#define MINIMAP_DYNAMIC_SURFACE_HEIGHT (600 * (MAP_FOW_SIZE / 2))
+#define MINIMAP_DYNAMIC_SURFACE_WIDTH MINIMAP_DYNAMIC_LEGACY_SURFACE_WIDTH
+#define MINIMAP_DYNAMIC_SURFACE_HEIGHT MINIMAP_DYNAMIC_LEGACY_SURFACE_HEIGHT
 
 extern bool minimap_redraw_due(void);
 

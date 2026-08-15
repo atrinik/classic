@@ -19,6 +19,8 @@
 
 #define LIGHTING_SCROLL_MARGIN 64
 
+typedef struct lighting_sample lighting_sample;
+
 typedef struct lighting_sprite_cache_key {
     SDL_Surface *source;
     int32_t source_x;
@@ -32,6 +34,9 @@ typedef struct lighting_sprite_cache_key {
 
 typedef struct lighting_sprite_cache_entry {
     lighting_sprite_cache_key key;
+    lighting_sample *illumination;
+    size_t illumination_count;
+    int *structure_column_bottom;
     SDL_Surface *surface;
     size_t bytes;
     struct lighting_sprite_cache_entry *lru_previous;
@@ -39,13 +44,13 @@ typedef struct lighting_sprite_cache_entry {
     UT_hash_handle hh;
 } lighting_sprite_cache_entry;
 
-typedef struct lighting_sample {
+struct lighting_sample {
     uint16_t scalar;
     uint16_t red;
     uint16_t green;
     uint16_t blue;
     uint8_t present;
-} lighting_sample;
+};
 
 typedef struct lighting_dirty_rect {
     int x0;
@@ -136,15 +141,13 @@ static void lighting_sprite_cache_clear(lighting_context *context,
         lighting_benchmark_statistics.counters._field_ += (uint64_t)(_value_); \
     } while (0)
 
-#define LIGHTING_BENCHMARK_MODE_INCREMENT(_context_, _mode_, _field_)       \
-    do {                                                                    \
-        if ((_mode_) == LIGHTING_SURFACE_STRUCTURE) {                       \
-            LIGHTING_BENCHMARK_INCREMENT((_context_),                      \
-                                         lit_sprite_structure_##_field_);  \
-        } else {                                                            \
-            LIGHTING_BENCHMARK_INCREMENT((_context_),                      \
-                                         lit_sprite_projected_##_field_);  \
-        }                                                                   \
+#define LIGHTING_BENCHMARK_MODE_INCREMENT(_context_, _mode_, _field_)                  \
+    do {                                                                               \
+        if ((_mode_) == LIGHTING_SURFACE_STRUCTURE) {                                  \
+            LIGHTING_BENCHMARK_INCREMENT((_context_), lit_sprite_structure_##_field_); \
+        } else {                                                                       \
+            LIGHTING_BENCHMARK_INCREMENT((_context_), lit_sprite_projected_##_field_); \
+        }                                                                              \
     } while (0)
 
 static uint64_t lighting_benchmark_timing_start(void) {
@@ -378,10 +381,9 @@ static void lighting_sample_channel_set(lighting_sample *sample, size_t channel,
 }
 
 /** Record why one cached result stopped being eligible for reuse. */
-static void lighting_sprite_cache_invalidation_record(
-    lighting_context *context,
-    const lighting_sprite_cache_entry *entry,
-    lighting_sprite_invalidation_cause_t cause) {
+static void lighting_sprite_cache_invalidation_record(lighting_context *context,
+                                                      const lighting_sprite_cache_entry *entry,
+                                                      lighting_sprite_invalidation_cause_t cause) {
     LIGHTING_BENCHMARK_MODE_INCREMENT(context, entry->key.mode, invalidations);
     switch (cause) {
         case LIGHTING_SPRITE_INVALIDATION_FIELD:
@@ -419,6 +421,8 @@ static void lighting_sprite_cache_remove(lighting_context *context,
     HASH_DEL(context->sprite_cache, entry);
     context->sprite_cache_bytes -= entry->bytes;
     lighting_sprite_cache_invalidation_record(context, entry, cause);
+    free(entry->illumination);
+    free(entry->structure_column_bottom);
     SDL_DestroySurface(entry->surface);
     free(entry);
 }
@@ -485,9 +489,7 @@ static void lighting_sprite_cache_reserve(lighting_context *context, size_t byte
         HARD_ASSERT(oldest != NULL);
         LIGHTING_BENCHMARK_INCREMENT(context, lit_sprite_evictions);
         LIGHTING_BENCHMARK_MODE_INCREMENT(context, oldest->key.mode, evictions);
-        lighting_sprite_cache_remove(context,
-                                     oldest,
-                                     LIGHTING_SPRITE_INVALIDATION_EVICTION);
+        lighting_sprite_cache_remove(context, oldest, LIGHTING_SPRITE_INVALIDATION_EVICTION);
     }
     LIGHTING_BENCHMARK_TIMING_FINISH(context, sprite_invalidation, timing_started);
 }
@@ -590,11 +592,6 @@ bool lighting_begin(int width, int height, uint64_t cache_key) {
     lighting_update_needed =
         lighting_update_needed || !lighting_cache_valid || lighting_cache_key != cache_key;
     if (!lighting_cache_valid || lighting_cache_key != cache_key) {
-        for (size_t i = 0; i < arraysize(lighting_contexts); i++) {
-            lighting_sprite_cache_clear(&lighting_contexts[i],
-                                        LIGHTING_SPRITE_INVALIDATION_FIELD);
-        }
-        lighting_benchmark_peaks_update();
         lighting_dirty_full(lighting_context_current, LIGHTING_FULL_REBUILD_CACHE);
     }
     lighting_pending_cache_key = cache_key;
@@ -625,8 +622,7 @@ bool lighting_begin(int width, int height, uint64_t cache_key) {
 
 void lighting_clear_sprite_cache(void) {
     for (size_t i = 0; i < arraysize(lighting_contexts); i++) {
-        lighting_sprite_cache_clear(&lighting_contexts[i],
-                                    LIGHTING_SPRITE_INVALIDATION_RESET);
+        lighting_sprite_cache_clear(&lighting_contexts[i], LIGHTING_SPRITE_INVALIDATION_RESET);
     }
     lighting_benchmark_peaks_update();
 }
@@ -647,9 +643,7 @@ void lighting_invalidate_surface(SDL_Surface *source) {
             if (timing_started == 0) {
                 timing_started = lighting_benchmark_timing_start();
             }
-            lighting_sprite_cache_remove(context,
-                                         entry,
-                                         LIGHTING_SPRITE_INVALIDATION_SOURCE);
+            lighting_sprite_cache_remove(context, entry, LIGHTING_SPRITE_INVALIDATION_SOURCE);
         }
         LIGHTING_BENCHMARK_TIMING_FINISH(context, sprite_invalidation, timing_started);
     }
@@ -810,12 +804,6 @@ void lighting_scroll(int screen_dx, int screen_dy) {
     if (screen_dx == 0 && screen_dy == 0) {
         return;
     }
-
-    for (size_t i = 0; i < arraysize(lighting_contexts); i++) {
-        lighting_sprite_cache_clear(&lighting_contexts[i],
-                                    LIGHTING_SPRITE_INVALIDATION_SCROLL);
-    }
-    lighting_benchmark_peaks_update();
 
     for (size_t i = 0; i < arraysize(lighting_contexts); i++) {
         lighting_context *context = &lighting_contexts[i];
@@ -1522,6 +1510,17 @@ static uint64_t lighting_signature_uint32(uint64_t signature, uint32_t value) {
     return signature;
 }
 
+static uint64_t lighting_signature_sample(uint64_t signature, const lighting_sample *sample) {
+    uint64_t sample_value = sample->scalar;
+    sample_value = (sample_value << 16) | sample->red;
+    sample_value = (sample_value << 16) | sample->green;
+    sample_value = (sample_value << 16) | sample->blue;
+    signature ^= sample_value;
+    signature *= UINT64_C(1099511628211);
+    signature ^= sample->present;
+    return signature * UINT64_C(1099511628211);
+}
+
 /**
  * Identify a projected sprite by the radiance it consumes, not by its current
  * viewport position.  The resulting key is stable when the same world sprite
@@ -1541,17 +1540,186 @@ static uint64_t lighting_projected_signature(int x, int y, const SDL_Rect *sourc
             int light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
             const lighting_sample *sample =
                 &light_samples[(size_t)light_y * (size_t)lighting_width + (size_t)light_x];
-            uint64_t sample_value = sample->scalar;
-            sample_value = (sample_value << 16) | sample->red;
-            sample_value = (sample_value << 16) | sample->green;
-            sample_value = (sample_value << 16) | sample->blue;
-            signature ^= sample_value;
-            signature *= UINT64_C(1099511628211);
-            signature ^= sample->present;
-            signature *= UINT64_C(1099511628211);
+            signature = lighting_signature_sample(signature, sample);
         }
     }
     return signature;
+}
+
+/**
+ * Derive the complete per-column illumination that determines one structural
+ * sprite's lit output. The source pixels remain identified by the retained
+ * source surface and rectangle; the sampled values deliberately exclude
+ * viewport position and field generation.
+ */
+static bool lighting_structure_identity(SDL_Surface *source,
+                                        const SDL_Rect *source_rect,
+                                        int x,
+                                        int sample_y,
+                                        bool has_colorkey,
+                                        Uint32 colorkey,
+                                        const int *retained_column_bottom,
+                                        uint64_t *signature) {
+    int max_bottom = -1;
+    if (retained_column_bottom != NULL) {
+        memcpy(structure_column_bottom,
+               retained_column_bottom,
+               (size_t)source_rect->w * sizeof(*structure_column_bottom));
+        for (int source_x = 0; source_x < source_rect->w; source_x++) {
+            max_bottom = MAX(max_bottom, structure_column_bottom[source_x]);
+        }
+    } else {
+        if (!SDL_LockSurface(source)) {
+            LOG(ERROR, "Could not lock smoothly lit sprite identity: %s", SDL_GetError());
+            return false;
+        }
+        for (int source_x = 0; source_x < source_rect->w; source_x++) {
+            int bottom = -1;
+            for (int source_y = source_rect->h - 1; source_y >= 0; source_y--) {
+                Uint32 source_pixel =
+                    getpixel(source, source_rect->x + source_x, source_rect->y + source_y);
+                if (lighting_source_alpha(source, source_pixel, has_colorkey, colorkey) !=
+                    SDL_ALPHA_TRANSPARENT) {
+                    bottom = source_y;
+                    break;
+                }
+            }
+            structure_column_bottom[source_x] = bottom;
+            max_bottom = MAX(max_bottom, bottom);
+        }
+        SDL_UnlockSurface(source);
+    }
+
+    uint64_t result = UINT64_C(14695981039346656037);
+    result = lighting_signature_uint32(result, (uint32_t)source_rect->w);
+    for (int source_x = 0; source_x < source_rect->w; source_x++) {
+        int bottom = structure_column_bottom[source_x];
+        lighting_sample illumination = {2048, 2048, 2048, 2048, 1};
+        if (bottom >= 0) {
+            int light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
+            int light_y = MAX(0, MIN(lighting_height - 1, sample_y - max_bottom + bottom));
+            illumination = lighting_structure_illumination(light_x, light_y);
+        }
+        structure_column_illumination[source_x] = illumination;
+        result = lighting_signature_sample(result, &illumination);
+    }
+    *signature = result;
+    return true;
+}
+
+/** Reuse immutable source-column geometry retained by any equivalent source. */
+static const int *lighting_structure_geometry_find(const lighting_context *context,
+                                                   SDL_Surface *source,
+                                                   const SDL_Rect *source_rect) {
+    lighting_sprite_cache_entry *entry, *next;
+    HASH_ITER(hh, context->sprite_cache, entry, next) {
+        if (entry->key.mode == LIGHTING_SURFACE_STRUCTURE && entry->key.source == source &&
+            entry->key.source_x == source_rect->x && entry->key.source_y == source_rect->y &&
+            entry->key.source_w == source_rect->w && entry->key.source_h == source_rect->h &&
+            entry->structure_column_bottom != NULL) {
+            return entry->structure_column_bottom;
+        }
+    }
+    return NULL;
+}
+
+static bool lighting_sprite_illumination_count(const SDL_Rect *source_rect,
+                                               lighting_surface_mode_t mode,
+                                               size_t *count) {
+    size_t width = (size_t)source_rect->w;
+    size_t height = mode == LIGHTING_SURFACE_STRUCTURE ? 1U : (size_t)source_rect->h;
+    if (height != 0 && width > SIZE_MAX / height) {
+        return false;
+    }
+    *count = width * height;
+    return *count <= SIZE_MAX / sizeof(lighting_sample);
+}
+
+static bool lighting_samples_equal(const lighting_sample *first,
+                                   const lighting_sample *second,
+                                   size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        if (first[i].scalar != second[i].scalar || first[i].red != second[i].red ||
+            first[i].green != second[i].green || first[i].blue != second[i].blue ||
+            first[i].present != second[i].present) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Compare the full sampled illumination so a hash collision can only miss. */
+static bool lighting_sprite_cache_equivalent(const lighting_sprite_cache_entry *entry,
+                                             int x,
+                                             int y,
+                                             const SDL_Rect *source_rect,
+                                             lighting_surface_mode_t mode) {
+    size_t expected;
+    if (!lighting_sprite_illumination_count(source_rect, mode, &expected) ||
+        entry->illumination_count != expected) {
+        return false;
+    }
+
+    if (mode == LIGHTING_SURFACE_STRUCTURE) {
+        return lighting_samples_equal(
+            entry->illumination, structure_column_illumination, expected);
+    }
+
+    for (int source_y = 0; source_y < source_rect->h; source_y++) {
+        int light_y = MAX(0, MIN(lighting_height - 1, y + source_y));
+        int light_x = MAX(0, MIN(lighting_width - 1, x));
+        if (x >= 0 && x <= lighting_width - source_rect->w &&
+            lighting_samples_equal(
+                entry->illumination + (size_t)source_y * (size_t)source_rect->w,
+                light_samples + (size_t)light_y * (size_t)lighting_width + (size_t)light_x,
+                (size_t)source_rect->w)) {
+            continue;
+        }
+        for (int source_x = 0; source_x < source_rect->w; source_x++) {
+            light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
+            const lighting_sample *sample =
+                &light_samples[(size_t)light_y * (size_t)lighting_width + (size_t)light_x];
+            size_t index = (size_t)source_y * (size_t)source_rect->w + (size_t)source_x;
+            if (!lighting_samples_equal(&entry->illumination[index], sample, 1U)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static lighting_sample *lighting_sprite_illumination_copy(int x,
+                                                          int y,
+                                                          const SDL_Rect *source_rect,
+                                                          lighting_surface_mode_t mode,
+                                                          size_t *count) {
+    if (!lighting_sprite_illumination_count(source_rect, mode, count)) {
+        return NULL;
+    }
+    lighting_sample *copy = malloc(*count * sizeof(*copy));
+    if (copy == NULL) {
+        return NULL;
+    }
+    if (mode == LIGHTING_SURFACE_STRUCTURE) {
+        memcpy(copy, structure_column_illumination, *count * sizeof(*copy));
+        return copy;
+    }
+
+    for (int source_y = 0; source_y < source_rect->h; source_y++) {
+        int light_y = MAX(0, MIN(lighting_height - 1, y + source_y));
+        if (x >= 0 && x <= lighting_width - source_rect->w) {
+            memcpy(copy + (size_t)source_y * (size_t)source_rect->w,
+                   light_samples + (size_t)light_y * (size_t)lighting_width + (size_t)x,
+                   (size_t)source_rect->w * sizeof(*copy));
+            continue;
+        }
+        for (int source_x = 0; source_x < source_rect->w; source_x++) {
+            int light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
+            size_t index = (size_t)source_y * (size_t)source_rect->w + (size_t)source_x;
+            copy[index] = light_samples[(size_t)light_y * (size_t)lighting_width + (size_t)light_x];
+        }
+    }
+    return copy;
 }
 
 /** Preserve pixel readability when a failed lit transform falls back to an RLE source. */
@@ -1600,18 +1768,28 @@ void lighting_show_surface(SDL_Surface *destination,
     Uint8 surface_alpha = SDL_ALPHA_OPAQUE;
     SDL_GetSurfaceAlphaMod(source, &surface_alpha);
     bool has_surface_alpha = surface_alpha != SDL_ALPHA_OPAQUE;
-    /* Projected sprites are keyed by their sampled radiance.  Structure sprites
-     * use a geometry-dependent vertical projection and retain their positional
-     * profile until that path receives the same world-space identity. */
+    /* Both modes are keyed by their complete output-driving illumination. The
+     * retained samples below are compared exactly before a hit is accepted, so
+     * the signature is only an index and a collision cannot reuse pixels. */
     uint64_t illumination_signature;
     if (mode == LIGHTING_SURFACE_PROJECTED) {
         illumination_signature = lighting_projected_signature(x, y, &source_rect);
     } else {
-        illumination_signature = lighting_cache_key;
-        illumination_signature = lighting_signature_uint32(illumination_signature, (uint32_t)x);
-        illumination_signature = lighting_signature_uint32(illumination_signature, (uint32_t)y);
-        illumination_signature =
-            lighting_signature_uint32(illumination_signature, (uint32_t)sample_y);
+        const int *retained_column_bottom =
+            lighting_structure_geometry_find(lighting_context_current, source, &source_rect);
+        if (!lighting_lit_surface_create(source_rect.w, source_rect.h) ||
+            !lighting_structure_identity(source,
+                                         &source_rect,
+                                         x,
+                                         sample_y,
+                                         has_colorkey,
+                                         colorkey,
+                                         retained_column_bottom,
+                                         &illumination_signature)) {
+            LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_fallbacks);
+            lighting_show_surface_fallback(destination, x, y, srcrect, source);
+            return;
+        }
     }
 
     lighting_sprite_cache_key cache_key;
@@ -1626,6 +1804,9 @@ void lighting_show_surface(SDL_Surface *destination,
     cache_key.surface_alpha = surface_alpha;
     lighting_sprite_cache_entry *cached;
     HASH_FIND(hh, lighting_context_current->sprite_cache, &cache_key, sizeof(cache_key), cached);
+    if (cached != NULL && !lighting_sprite_cache_equivalent(cached, x, y, &source_rect, mode)) {
+        cached = NULL;
+    }
     LIGHTING_BENCHMARK_TIMING_FINISH(lighting_context_current, sprite_lookup, lookup_started);
     LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_lookups);
     LIGHTING_BENCHMARK_MODE_INCREMENT(lighting_context_current, mode, lookups);
@@ -1671,41 +1852,6 @@ void lighting_show_surface(SDL_Surface *destination,
             return;
         }
         source_locked = true;
-
-        /* A wall sprite is a vertical projection of an isometric ground edge.
-         * Find that edge from the lowest opaque pixel in each source column,
-         * then project every pixel in the column onto it. */
-        int max_bottom = -1;
-        for (int source_x = 0; source_x < source_rect.w; source_x++) {
-            int bottom = -1;
-
-            for (int source_y = source_rect.h - 1; source_y >= 0; source_y--) {
-                Uint32 source_pixel =
-                    getpixel(source, source_rect.x + source_x, source_rect.y + source_y);
-                if (lighting_source_alpha(source, source_pixel, has_colorkey, colorkey) !=
-                    SDL_ALPHA_TRANSPARENT) {
-                    bottom = source_y;
-                    break;
-                }
-            }
-
-            structure_column_bottom[source_x] = bottom;
-            max_bottom = MAX(max_bottom, bottom);
-        }
-
-        for (int source_x = 0; source_x < source_rect.w; source_x++) {
-            int bottom = structure_column_bottom[source_x];
-            if (bottom < 0) {
-                structure_column_illumination[source_x] =
-                    (lighting_sample){2048, 2048, 2048, 2048, 1};
-                continue;
-            }
-
-            int light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
-            int light_y = MAX(0, MIN(lighting_height - 1, sample_y - max_bottom + bottom));
-            structure_column_illumination[source_x] =
-                lighting_structure_illumination(light_x, light_y);
-        }
     }
 
     if (!source_locked) {
@@ -1798,8 +1944,33 @@ void lighting_show_surface(SDL_Surface *destination,
     SDL_UnlockSurface(source);
 
     SDL_Rect lit_rect = {.x = 0, .y = 0, .w = source_rect.w, .h = source_rect.h};
+    size_t illumination_count = 0;
+    lighting_sample *illumination =
+        lighting_sprite_illumination_copy(x, y, &source_rect, mode, &illumination_count);
+    size_t illumination_bytes = illumination_count * sizeof(*illumination);
+    int *retained_column_bottom = NULL;
+    size_t structure_geometry_bytes = 0;
+    if (mode == LIGHTING_SURFACE_STRUCTURE &&
+        (size_t)source_rect.w <= SIZE_MAX / sizeof(*retained_column_bottom)) {
+        structure_geometry_bytes = (size_t)source_rect.w * sizeof(*retained_column_bottom);
+        retained_column_bottom = malloc(structure_geometry_bytes);
+        if (retained_column_bottom != NULL) {
+            memcpy(retained_column_bottom, structure_column_bottom, structure_geometry_bytes);
+        }
+    }
     size_t cache_bytes =
         lighting_sprite_cache_charge((size_t)lighting_lit_surface->pitch, (size_t)source_rect.h);
+    if (illumination == NULL ||
+        (mode == LIGHTING_SURFACE_STRUCTURE && retained_column_bottom == NULL) ||
+        cache_bytes > SIZE_MAX - illumination_bytes ||
+        cache_bytes + illumination_bytes > SIZE_MAX - structure_geometry_bytes) {
+        free(illumination);
+        free(retained_column_bottom);
+        illumination = NULL;
+        cache_bytes = SIZE_MAX;
+    } else {
+        cache_bytes += illumination_bytes + structure_geometry_bytes;
+    }
     if (cache_bytes <= LIGHTING_SPRITE_CACHE_MAX_BYTES) {
         SDL_Surface *copy = lighting_lit_surface_copy(source_rect.w, source_rect.h);
         if (copy != NULL) {
@@ -1809,6 +1980,9 @@ void lighting_show_surface(SDL_Surface *destination,
             lighting_sprite_cache_reserve(lighting_context_current, cache_bytes);
             lighting_sprite_cache_entry *entry = xcalloc(1, sizeof(*entry));
             entry->key = cache_key;
+            entry->illumination = illumination;
+            entry->illumination_count = illumination_count;
+            entry->structure_column_bottom = retained_column_bottom;
             entry->surface = copy;
             entry->bytes = cache_bytes;
             HASH_ADD(hh, lighting_context_current->sprite_cache, key, sizeof(entry->key), entry);
@@ -1821,6 +1995,8 @@ void lighting_show_surface(SDL_Surface *destination,
             return;
         }
     }
+    free(illumination);
+    free(retained_column_bottom);
 
     LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_fallbacks);
     LIGHTING_BENCHMARK_TIMING_FINISH(lighting_context_current,
