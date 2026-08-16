@@ -3268,7 +3268,8 @@ static bool map_exit_cue_group_build(map_exit_cue_t *group,
     SDL_Surface *mask = SDL_CreateSurface(maximum_x - minimum_x,
                                           maximum_y - minimum_y,
                                           FormatHolder->format);
-    if (mask == NULL || !surface_clear_transparent_black(mask)) {
+    if (mask == NULL || !surface_set_transparent_black_mutable(mask) ||
+        !surface_clear_transparent_black(mask)) {
         SDL_DestroySurface(mask);
         for (size_t i = 0; i < indices_num; i++) {
             if (geometries[i] != NULL && geometries[i] != context->commands[indices[i]].source) {
