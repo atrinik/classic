@@ -610,6 +610,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("RESOURCE_LOCK server-test-runtime", cmake)
         self.assertIn("tools/run_isolated_test.py", cmake)
         self.assertIn("-fprofile-update=atomic", cmake)
+        self.assertIn(
+            "ASAN_OPTIONS=detect_leaks=1;LSAN_OPTIONS=detect_leaks=1:suppressions=",
+            cmake,
+        )
 
         migration = (
             ROOT / "server/src/tests/assetspath_migration.py"

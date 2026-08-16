@@ -563,7 +563,8 @@ if (BUILD_TESTING AND NOT MINGW)
                 # CI disables leak checks for the general sanitizer suite;
                 # keep the focused embedded-Python fixture leak-checked.
                 set_tests_properties(server-plugin-python-fixture-pass PROPERTIES
-                    ENVIRONMENT "LSAN_OPTIONS=detect_leaks=1:suppressions=${CMAKE_CURRENT_SOURCE_DIR}/cmake/python_plugin_lsan.supp")
+                    ENVIRONMENT
+                        "ASAN_OPTIONS=detect_leaks=1;LSAN_OPTIONS=detect_leaks=1:suppressions=${CMAKE_CURRENT_SOURCE_DIR}/cmake/python_plugin_lsan.supp")
             endif ()
         endif ()
 
