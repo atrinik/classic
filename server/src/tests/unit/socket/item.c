@@ -630,10 +630,11 @@ START_TEST(test_player_status_paralysis_refresh_snapshot_and_cure) {
     packet_reader_init(&reader, packet->data, packet->len);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_SNAPSHOT);
     ck_assert_uint_eq(packet_reader_read_uint16(&reader), 1);
-    assert_status_entry(&reader,
-                        "condition:paralysis",
-                        "paralysis",
-                        (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
+    assert_status_entry_face(&reader,
+                             "condition:paralysis",
+                             "paralysis.101",
+                             "paralysis",
+                             (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
     ck_assert(packet_reader_finish(&reader));
 
     socket_buffer_clear(CONTR(pl)->cs);
