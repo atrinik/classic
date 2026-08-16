@@ -55,6 +55,15 @@ static object *add_colored_light(mapstruct *map, int x, int y, int radius, uint3
     return object_insert_map(source, map, NULL, 0);
 }
 
+static void add_roof_surface(mapstruct *map, int x, int y) {
+    object *roof = arch_get("roof_thatch");
+    ck_assert_ptr_nonnull(roof);
+    roof->x = x;
+    roof->y = y;
+    ck_assert_ptr_nonnull(object_insert_map(roof, map, NULL, 0));
+    ck_assert(object_is_roof_surface(roof));
+}
+
 START_TEST(test_radial_light_profile_is_symmetric_monotonic_and_exact) {
     mapstruct *map = get_empty_map(11, 11);
     adjust_light_source(map, 5, 5, 3);
@@ -416,6 +425,42 @@ START_TEST(test_light_mask_propagates_in_three_dimensions) {
 }
 END_TEST
 
+START_TEST(test_light_mask_preserves_exact_vertical_roof_falloff) {
+    const int expected[] = {0, 180, 80, 20, 0};
+
+    for (int roof_depth = 1; roof_depth <= 4; roof_depth++) {
+        mapstruct *levels[5] = {0};
+        for (size_t depth = 0; depth < arraysize(levels); depth++) {
+            levels[depth] = get_empty_map(9, 9);
+            if (depth != 0) {
+                link_stacked_maps(levels[depth - 1], levels[depth]);
+            }
+        }
+
+        add_roof_surface(levels[roof_depth], 4, 4);
+        adjust_light_source(levels[0], 4, 4, 5);
+
+        ck_assert_int_eq(GET_MAP_SPACE_PTR(levels[roof_depth], 4, 4)->light_source_value,
+                         expected[roof_depth]);
+    }
+}
+END_TEST
+
+START_TEST(test_roof_surface_terminates_light_at_receiving_depth) {
+    mapstruct *lower = get_empty_map(9, 9);
+    mapstruct *roof_level = get_empty_map(9, 9);
+    mapstruct *higher = get_empty_map(9, 9);
+    link_stacked_maps(lower, roof_level);
+    link_stacked_maps(roof_level, higher);
+
+    add_roof_surface(roof_level, 4, 4);
+    adjust_light_source(lower, 4, 4, 5);
+
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(roof_level, 4, 4)->light_source_value, 180);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(higher, 4, 4)->light_source_value, 0);
+}
+END_TEST
+
 START_TEST(test_radial_light_crosses_horizontal_map_boundaries) {
     mapstruct *west = get_empty_map(7, 7);
     mapstruct *east = get_empty_map(7, 7);
@@ -542,6 +587,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_darkness_subtracts_achromatically_from_colored_light);
     tcase_add_test(tc_core, test_colored_light_recalculation_and_linked_depth_are_stable);
     tcase_add_test(tc_core, test_light_mask_propagates_in_three_dimensions);
+    tcase_add_test(tc_core, test_light_mask_preserves_exact_vertical_roof_falloff);
+    tcase_add_test(tc_core, test_roof_surface_terminates_light_at_receiving_depth);
     tcase_add_test(tc_core, test_radial_light_crosses_horizontal_map_boundaries);
     tcase_add_test(tc_core, test_light_mask_is_blocked_by_floors_in_both_directions);
     tcase_add_test(tc_core, test_light_mask_lights_exposed_upper_wall_face);

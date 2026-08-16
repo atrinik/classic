@@ -21,6 +21,15 @@
 
 typedef struct lighting_sample lighting_sample;
 
+struct lighting_sample {
+    uint16_t scalar;
+    uint16_t red;
+    uint16_t green;
+    uint16_t blue;
+    uint8_t present;
+    uint8_t reserved;
+};
+
 typedef struct lighting_sprite_cache_key {
     SDL_Surface *source;
     int32_t source_x;
@@ -43,15 +52,6 @@ typedef struct lighting_sprite_cache_entry {
     struct lighting_sprite_cache_entry *lru_next;
     UT_hash_handle hh;
 } lighting_sprite_cache_entry;
-
-struct lighting_sample {
-    uint16_t scalar;
-    uint16_t red;
-    uint16_t green;
-    uint16_t blue;
-    uint8_t present;
-    uint8_t reserved;
-};
 
 typedef struct lighting_dirty_rect {
     int x0;
