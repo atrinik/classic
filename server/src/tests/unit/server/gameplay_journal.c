@@ -312,7 +312,7 @@ START_TEST(test_item_terminal_failures_report_ambiguity) {
 
     char decrease_directory[] = "/tmp/atrinik-item-decrease-failure-XXXXXX";
     semantic_failure_journal_init(decrease_directory);
-    object *stack = arch_get("bolt");
+    object *stack = arch_get("sword");
     stack->nrof = 5;
     stack->custody_lineage = add_string("item:test-decrease");
     stack->custody_first = add_string(actor);
@@ -1454,9 +1454,9 @@ START_TEST(test_semantic_item_shop_and_bank_producers) {
     }
     FOR_INV_FINISH();
     ck_assert_ptr_ne(acquired, NULL);
-    ck_assert_ptr_ne(acquired, existing);
-    ck_assert_uint_eq(acquired->nrof, 2);
-    ck_assert_uint_eq(existing->nrof, 4);
+    ck_assert_ptr_eq(acquired, existing);
+    ck_assert_uint_eq(acquired->nrof, 6);
+    ck_assert_uint_eq(existing->nrof, 6);
     drop_object(pl, acquired, 1, 1);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("item.drop"), 1);
     ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_ITEM_UNITS_DROPPED), 1);

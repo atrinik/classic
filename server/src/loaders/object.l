@@ -430,6 +430,7 @@ stable_identity_state *identity = &identities[*depth];
     }
 }
 ^custody_lineage{S}  FREE_AND_COPY_HASH(op->custody_lineage, yval());
+^custody_provenance{S} FREE_AND_COPY_HASH(op->custody_provenance, yval());
 ^custody_first{S}    FREE_AND_COPY_HASH(op->custody_first, yval());
 ^custody_last{S}     FREE_AND_COPY_HASH(op->custody_last, yval());
 ^custody_actor{S}    FREE_AND_COPY_HASH(op->custody_actor, yval());
@@ -1570,6 +1571,9 @@ get_ob_diff (StringBuffer *sb, const object *op, const object *op2)
 
     if (op->custody_lineage && op->custody_lineage != op2->custody_lineage) {
         SAVE_STRING(sb, "custody_lineage", op->custody_lineage);
+    }
+    if (op->custody_provenance && op->custody_provenance != op2->custody_provenance) {
+        SAVE_STRING(sb, "custody_provenance", op->custody_provenance);
     }
 
     if (op->custody_first && op->custody_first != op2->custody_first) {

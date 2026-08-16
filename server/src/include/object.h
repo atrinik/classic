@@ -219,6 +219,9 @@ struct obj {
     /** Immutable lineage identifier for hidden player-custody provenance. */
     shstr *custody_lineage;
 
+    /** Quantity-bearing custody lineage segments, kept private to the server. */
+    shstr *custody_provenance;
+
     /** First player identity to acquire this item; never overwritten. */
     shstr *custody_first;
 
