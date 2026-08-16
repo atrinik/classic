@@ -123,6 +123,7 @@ LIGHTING_STATE_FIELDS = {
 }
 RENDER_STAGES = {
     "map": "per_map_draw",
+    "pointer": "per_frame",
     "map_scratch_clear": "per_map_draw",
     "ground": "per_level",
     "ground_composite": "per_map_draw",
@@ -593,7 +594,7 @@ def validate_record(value: object) -> dict[str, object]:
         "workload": "pvm1-map2-lifecycle-v4",
         "lighting_statistics_version": 6,
         "map_statistics_version": 3,
-        "render_profiler_statistics_version": 4,
+        "render_profiler_statistics_version": 5,
         "sprite_cache_statistics_version": 3,
     }:
         raise ValueError("movement benchmark instrumentation identity is invalid")

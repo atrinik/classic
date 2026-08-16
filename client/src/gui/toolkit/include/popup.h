@@ -234,6 +234,17 @@ extern void popup_render(popup_struct *popup);
 
 extern void popup_render_all(void);
 
+/**
+ * Check whether a screen point is covered by a visible popup.
+ * @param x
+ * Screen X coordinate.
+ * @param y
+ * Screen Y coordinate.
+ * @return
+ * 1 if a popup covers the point, 0 otherwise.
+ */
+extern bool popup_covers_point(int x, int y);
+
 extern int popup_handle_event(SDL_Event *event);
 
 extern popup_struct *popup_get_head(void);

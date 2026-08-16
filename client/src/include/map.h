@@ -520,6 +520,21 @@ extern void map_draw_map(SDL_Surface *surface);
 /** Repaint map objects over the cached lit ground without rebuilding static levels. */
 extern bool map_draw_animation(SDL_Surface *surface);
 
+/** Draw the current world-pointer cue over the completed map composition. */
+extern void map_draw_pointer_overlay(void);
+
+/**
+ * Check whether the map pointer cue may occupy a screen point.
+ * @param x
+ * Screen X coordinate.
+ * @param y
+ * Screen Y coordinate.
+ * @return
+ * 1 if the point is not covered by a popup or higher-priority widget, 0
+ * otherwise.
+ */
+extern bool map_pointer_overlay_visible_at(int x, int y);
+
 #define MAP_BENCHMARK_STATISTICS_VERSION UINT8_C(3)
 
 /** Map renderer work accumulated since the last benchmark reset. */
@@ -590,6 +605,8 @@ extern bool widget_map_animation_test_end(bool expect_damage,
                                           bool expect_elevated,
                                           bool expect_layer_content);
 extern void widget_map_animation_test_death_texture_set(SDL_Surface *texture);
+/** Set the synthetic pointer owner used by the cursor redraw benchmark. */
+extern void widget_map_pointer_test_set(int x, int y, bool world_pointer);
 extern void widget_map_animation_test_add(int type,
                                           int x_offset,
                                           int y_offset,
