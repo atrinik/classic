@@ -20,7 +20,7 @@ from movement_benchmark_schema import RENDER_STAGES, validate_record
 
 
 EVIDENCE_SCHEMA_VERSION = 7
-NATIVE_SCHEMA_VERSION = 7
+NATIVE_SCHEMA_VERSION = 8
 SUSTAINED_P95_LIMIT_NS = 33_300_000
 LARGE_SUSTAINED_P95_LIMIT_NS = 125_000_000
 DISPLAY_REFERENCE_FPS = 144
@@ -2334,9 +2334,10 @@ def _render_complete_evidence(
             "The replay injects MAP state at 8 Hz (one 125 ms simulation tick); that update "
             "cadence is not the client display frame rate. Measured replay-work capacity is the "
             "unslept throughput implied by decode, full-map or animation-only rendering, "
-            "production-sized local minimap map-core draws when due, and maintenance work. "
-            "The local minimap uses its "
-            "real 250 ms refresh cadence and 1700×1200 render surface; widget masking/zooming and "
+            "bounded local minimap map-core draws when due, and maintenance work. "
+            "The local minimap uses its real 250 ms refresh cadence and retains the 1700×1200 "
+            "surface required by the production zoom/crop path; "
+            "widget masking/zooming and "
             "the otherwise small UI/widget work are outside this map-focused measurement. The "
             "144 FPS reference (6.944 ms/frame) is informational only and is not an enforced "
             "server threshold.",
