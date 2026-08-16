@@ -295,7 +295,7 @@ def verify_component_release_map(manifest: dict[str, Any]) -> None:
 def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> None:
     policy_path = ROOT / manifest["active_release_tags"]
     policy = json.loads(policy_path.read_text(encoding="utf-8"))
-    require(policy.get("schema_version") == 2, "unsupported release-tag policy")
+    require(policy.get("schema_version") == 3, "unsupported release-tag policy")
     require(policy.get("policy") == "unified-classic", "unexpected release-tag policy")
     historical_tags = policy.get("tags")
     require(
@@ -366,6 +366,7 @@ def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> N
                 "disposition": "delete-empty-draft",
                 "empty_draft_id": 367395490,
                 "failed_package_run_ids": [31298735525, 31341539056],
+                "windows_server_conclusion": "failure",
                 "server_image_conclusion": "failure",
             },
             "v5.10.0": {
@@ -373,7 +374,27 @@ def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> N
                 "disposition": "delete-empty-draft",
                 "empty_draft_id": 368181077,
                 "failed_package_run_ids": [31429488922],
+                "windows_server_conclusion": "failure",
                 "server_image_conclusion": "success",
+            },
+            "v5.33.1": {
+                "commit": "1f98d430a03e6d9fbf6f27f4ca1356542d905d08",
+                "disposition": "delete-empty-draft",
+                "empty_draft_id": 370711804,
+                "failed_package_run_ids": [
+                    31822208933,
+                    31833279365,
+                    31841251143,
+                    31865043230,
+                    31871183601,
+                    31918742511,
+                    31921140116,
+                    31927359906,
+                    31929611625,
+                    31935172521,
+                ],
+                "windows_server_conclusion": "success",
+                "server_image_conclusion": "failure",
             },
         },
         "unexpected failed-release policy",
