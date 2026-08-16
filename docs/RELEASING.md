@@ -94,6 +94,17 @@ evidence; after the guarded empty-draft deletion, ordinary semantic analysis
 selects the next version containing the Dockerfile correction and all later
 first-parent changes.
 
+The `v5.34.0` Package Release failed because the root `.dockerignore` still
+excluded `cmake/`, so BuildKit could not satisfy the server Dockerfile's
+`COPY cmake ./cmake` instruction. The Windows server package succeeded, but
+the server-image job failed before complete-candidate validation, image
+publication, or draft asset upload. The policy records exact draft ID
+`371272859`, tag commit `458522ca74dd4c44d3d0502af341e5012560bd10`,
+failed run `31936701583`, and both job conclusions. The tag remains immutable
+unpublished historical evidence; after the guarded empty-draft deletion,
+ordinary semantic analysis selects the next version containing the Docker
+context correction and all later first-parent changes.
+
 If the failed run reached complete-candidate validation but a defect in its
 tag-bound publication code makes a job rerun impossible, dispatch Package
 Release from current `main` with both the release tag and the numeric failed

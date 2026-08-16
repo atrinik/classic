@@ -40,6 +40,7 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_server_image_copies_authoritative_cmake_version_module(self) -> None:
         dockerfile = (ROOT / "server/Dockerfile").read_text(encoding="utf-8")
+        dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
         server_cmake = (ROOT / "server/CMakeLists.txt").read_text(encoding="utf-8")
 
         copy_lines = {
@@ -51,6 +52,13 @@ class WorkflowContractTests(unittest.TestCase):
             copy_lines & {"COPY cmake ./cmake"}, {"COPY cmake ./cmake"}
         )
         self.assertEqual(dockerfile.count("COPY cmake ./cmake"), 1)
+        dockerignore_lines = {
+            line.strip()
+            for line in dockerignore.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        self.assertIn("!cmake/", dockerignore_lines)
+        self.assertIn("!cmake/**", dockerignore_lines)
         self.assertIn(
             '"${ATRINIK_COMPONENT_SOURCE_DIR}/../cmake/AtrinikVersion.cmake"',
             server_cmake,
