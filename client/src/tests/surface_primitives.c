@@ -264,6 +264,144 @@ static void assert_rotation_transparency(SDL_Surface *source, int smooth) {
     SDL_DestroySurface(rotated);
 }
 
+static SDL_Surface *create_directional_surface(int width, int height) {
+    SDL_Surface *surface = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_RGBA32);
+    TEST_CHECK(surface != NULL);
+    TEST_CHECK(SDL_FillSurfaceRect(surface, NULL, surface_map_rgba(surface, 0, 0, 0, 0)));
+    TEST_CHECK(SDL_WriteSurfacePixel(surface, 0, 0, 255, 0, 0, SDL_ALPHA_OPAQUE));
+    TEST_CHECK(SDL_WriteSurfacePixel(surface, width - 1, 0, 0, 255, 0, SDL_ALPHA_OPAQUE));
+    TEST_CHECK(SDL_WriteSurfacePixel(surface, 0, height - 1, 0, 0, 255, SDL_ALPHA_OPAQUE));
+    TEST_CHECK(
+        SDL_WriteSurfacePixel(surface, width - 1, height - 1, 255, 255, 0, SDL_ALPHA_OPAQUE));
+    return surface;
+}
+
+static void assert_surfaces_equal(SDL_Surface *actual, SDL_Surface *expected) {
+    TEST_CHECK(actual != NULL && expected != NULL);
+    TEST_CHECK(actual->w == expected->w && actual->h == expected->h);
+
+    for (int y = 0; y < actual->h; y++) {
+        for (int x = 0; x < actual->w; x++) {
+            Uint8 actual_red, actual_green, actual_blue, actual_alpha;
+            Uint8 expected_red, expected_green, expected_blue, expected_alpha;
+            TEST_CHECK(SDL_ReadSurfacePixel(actual,
+                                            x,
+                                            y,
+                                            &actual_red,
+                                            &actual_green,
+                                            &actual_blue,
+                                            &actual_alpha));
+            TEST_CHECK(SDL_ReadSurfacePixel(expected,
+                                            x,
+                                            y,
+                                            &expected_red,
+                                            &expected_green,
+                                            &expected_blue,
+                                            &expected_alpha));
+            TEST_CHECK(actual_red == expected_red && actual_green == expected_green &&
+                       actual_blue == expected_blue && actual_alpha == expected_alpha);
+        }
+    }
+}
+
+static void assert_surface_pixel(SDL_Surface *surface,
+                                 int x,
+                                 int y,
+                                 Uint8 expected_red,
+                                 Uint8 expected_green,
+                                 Uint8 expected_blue,
+                                 Uint8 expected_alpha) {
+    Uint8 red, green, blue, alpha;
+    TEST_CHECK(SDL_ReadSurfacePixel(surface, x, y, &red, &green, &blue, &alpha));
+    TEST_CHECK(red == expected_red && green == expected_green && blue == expected_blue &&
+               alpha == expected_alpha);
+}
+
+static void test_authored_rotation_direction(void) {
+    SDL_Surface *source = create_directional_surface(3, 2);
+    SDL_Surface *positive = rotozoomSurface(source, 90.0, 1.0, 0);
+    SDL_Surface *negative = rotozoomSurface(source, -90.0, 1.0, 0);
+    SDL_Surface *positive_reference = SDL_RotateSurface(source, -90.0f);
+    SDL_Surface *negative_reference = SDL_RotateSurface(source, 90.0f);
+
+    TEST_CHECK(positive != NULL && negative != NULL);
+    TEST_CHECK(positive->w == 2 && positive->h == 3);
+    TEST_CHECK(negative->w == 2 && negative->h == 3);
+    assert_surfaces_equal(positive, positive_reference);
+    assert_surfaces_equal(negative, negative_reference);
+
+    /* The two signs must remain distinguishable at the compatibility edge. */
+    assert_surface_pixel(positive, 0, 2, 255, 0, 0, SDL_ALPHA_OPAQUE);
+    assert_surface_pixel(negative, 1, 0, 255, 0, 0, SDL_ALPHA_OPAQUE);
+
+    SDL_DestroySurface(negative_reference);
+    SDL_DestroySurface(positive_reference);
+    SDL_DestroySurface(negative);
+    SDL_DestroySurface(positive);
+    SDL_DestroySurface(source);
+}
+
+static void test_authored_rotation_geometry(void) {
+    const struct {
+        int width;
+        int height;
+        double angle;
+    } cases[] = {
+        {28, 19, -10.0}, /* flagwall_short_brick1.111 rail */
+        {48, 23, 128.0}, /* floor_wood2.101 bridge */
+    };
+
+    for (size_t i = 0; i < arraysize(cases); i++) {
+        SDL_Surface *source = create_directional_surface(cases[i].width, cases[i].height);
+        int expected_width, expected_height;
+        rotozoomSurfaceSizeXY(cases[i].width,
+                              cases[i].height,
+                              cases[i].angle,
+                              1.0,
+                              1.0,
+                              &expected_width,
+                              &expected_height);
+
+        SDL_Surface *rotated = rotozoomSurface(source, cases[i].angle, 1.0, 0);
+        SDL_Surface *reference = SDL_RotateSurface(source, (float)-cases[i].angle);
+        TEST_CHECK(rotated != NULL && reference != NULL);
+        TEST_CHECK(rotated->w == expected_width && rotated->h == expected_height);
+        assert_surfaces_equal(rotated, reference);
+
+        int scaled_width, scaled_height;
+        rotozoomSurfaceSizeXY(cases[i].width,
+                              cases[i].height,
+                              cases[i].angle,
+                              1.5,
+                              0.75,
+                              &scaled_width,
+                              &scaled_height);
+        SDL_Surface *scaled_rotated = rotozoomSurfaceXY(source, cases[i].angle, 1.5, 0.75, 0);
+        int source_scaled_width, source_scaled_height;
+        zoomSurfaceSize(cases[i].width,
+                        cases[i].height,
+                        1.5,
+                        0.75,
+                        &source_scaled_width,
+                        &source_scaled_height);
+        SDL_Surface *scaled = SDL_ScaleSurface(source,
+                                               source_scaled_width,
+                                               source_scaled_height,
+                                               SDL_SCALEMODE_NEAREST);
+        SDL_Surface *scaled_reference = SDL_RotateSurface(scaled, (float)-cases[i].angle);
+        TEST_CHECK(scaled_rotated != NULL && scaled_reference != NULL);
+        TEST_CHECK(scaled_rotated->w == scaled_width && scaled_rotated->h == scaled_height);
+        assert_surfaces_equal(scaled_rotated, scaled_reference);
+
+        SDL_DestroySurface(scaled_reference);
+        SDL_DestroySurface(scaled);
+        SDL_DestroySurface(scaled_rotated);
+        SDL_DestroySurface(reference);
+        SDL_DestroySurface(rotated);
+        SDL_DestroySurface(source);
+    }
+}
+
 static void test_indexed_alpha_rotation(int smooth) {
     SDL_Surface *source = create_indexed_alpha_surface();
     assert_rotation_transparency(source, smooth);
@@ -399,7 +537,10 @@ static void test_map_marker_rotation_contract(void) {
     for (size_t zoom = 0; zoom < arraysize(zooms); zoom++) {
         /* Region-map facings advance clockwise in 45-degree steps. */
         for (int direction = 0; direction < 8; direction++) {
-            SDL_Surface *transformed = rotozoomSurface(converted, direction * 45.0, zooms[zoom], 1);
+            /* region_map_render_marker() passes the already-clockwise
+             * direction through the compatibility inverse. */
+            SDL_Surface *transformed =
+                rotozoomSurface(converted, -(direction * 45.0), zooms[zoom], 1);
             TEST_CHECK(transformed != NULL);
             assert_map_marker_palette(transformed);
             SDL_DestroySurface(transformed);
@@ -417,6 +558,8 @@ int main(void) {
     test_mutable_color_key_surface_reuse();
     test_indexed_alpha_rotation(0);
     test_indexed_alpha_rotation(1);
+    test_authored_rotation_direction();
+    test_authored_rotation_geometry();
     test_color_key_rotation();
     test_opaque_indexed_rotation();
     test_indexed_alpha_without_rotation();

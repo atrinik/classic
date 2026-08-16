@@ -482,10 +482,11 @@ void region_map_render_marker(region_map_t *region_map, SDL_Surface *surface, in
     }
 
     /* TODO: Could cache this */
-    /* Positive angles follow the server's clockwise N-to-NW facing order.
-     * Full client state is required here; the transform contract is tested offline. */
+    /* Region-map directions already use SDL3's clockwise facing order.  The
+     * shared transform restores the legacy counterclockwise authored contract,
+     * so negate this pre-adjusted angle to preserve the #172 behavior. */
     marker = rotozoomSurface(TEXTURE_CLIENT("map_marker"),
-                             (map_get_player_direction() - 1) * 45, /* GCOVR_EXCL_LINE */
+                             -((map_get_player_direction() - 1) * 45), /* GCOVR_EXCL_LINE */
                              region_map->zoom / 100.0,
                              1);
     if (marker == NULL) {
