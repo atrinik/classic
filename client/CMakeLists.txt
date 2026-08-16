@@ -898,7 +898,7 @@ if (BUILD_TESTING)
         client-player-view-cursor-benchmark-smooth
         client-player-view-cursor-benchmark-discrete
         PROPERTIES
-        LABELS "performance;standard-performance"
+        LABELS "cursor-redraw;standard"
         TIMEOUT 420)
     set_tests_properties(
         client-player-view-movement-benchmark-smooth-large
@@ -906,7 +906,7 @@ if (BUILD_TESTING)
         client-player-view-cursor-benchmark-smooth-large
         client-player-view-cursor-benchmark-discrete-large
         PROPERTIES
-        LABELS "performance;long-performance"
+        LABELS "cursor-redraw;long"
         TIMEOUT 1900)
     set_tests_properties(client-player-view-movement-fault-injection PROPERTIES
         LABELS fault-injection
