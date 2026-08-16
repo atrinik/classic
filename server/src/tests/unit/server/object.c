@@ -463,11 +463,11 @@ START_TEST(test_object_can_merge) {
     ob2 = arch_get("bolt");
     ck_assert(object_can_merge(ob1, ob2));
     FREE_AND_COPY_HASH(ob1->custody_lineage, "lineage-1");
-    ck_assert(!object_can_merge(ob1, ob2));
+    ck_assert(object_can_merge(ob1, ob2));
     FREE_AND_COPY_HASH(ob2->custody_lineage, "lineage-1");
     ck_assert(object_can_merge(ob1, ob2));
     FREE_AND_COPY_HASH(ob2->custody_first, "account:character");
-    ck_assert(!object_can_merge(ob1, ob2));
+    ck_assert(object_can_merge(ob1, ob2));
     FREE_AND_COPY_HASH(ob1->custody_first, "account:character");
     ck_assert(object_can_merge(ob1, ob2));
     FREE_AND_CLEAR_HASH(ob1->custody_lineage);
@@ -503,6 +503,54 @@ START_TEST(test_object_can_merge) {
     ck_assert(!object_can_merge(ob1, ob2));
     object_destroy(ob1);
     object_destroy(ob2);
+}
+END_TEST
+
+START_TEST(test_object_custody_quantity_provenance) {
+    object *player = player_get_dummy("Quantity custody tester", NULL);
+    object *first = arch_get("bolt");
+    first->nrof = 5;
+    FREE_AND_COPY_HASH(first->custody_lineage, "item:first");
+    object_custody_acquire(first, player);
+    first = object_insert_into(first, player, INS_NO_MERGE);
+
+    object *second = arch_get("bolt");
+    second->nrof = 3;
+    FREE_AND_COPY_HASH(second->custody_lineage, "item:second");
+    object_custody_acquire(second, player);
+    ck_assert_ptr_eq(object_insert_into(second, player, 0), first);
+    ck_assert_uint_eq(first->nrof, 8);
+    ck_assert_ptr_nonnull(strstr(first->custody_provenance, "item:first@5"));
+    ck_assert_ptr_nonnull(strstr(first->custody_provenance, "item:second@3"));
+
+    object *split = object_stack_get(first, 3);
+    ck_assert_ptr_ne(split, first);
+    ck_assert_uint_eq(first->nrof, 5);
+    ck_assert_uint_eq(split->nrof, 3);
+    ck_assert_str_eq(split->custody_provenance, "item:second@3");
+    ck_assert_str_eq(first->custody_provenance, "item:first@5");
+    ck_assert_ptr_eq(object_decrease(split, 1), split);
+    ck_assert_uint_eq(split->nrof, 2);
+    ck_assert_str_eq(split->custody_provenance, "item:second@2");
+
+    ck_assert_ptr_eq(object_insert_into(split, player, 0), first);
+    ck_assert_uint_eq(first->nrof, 7);
+
+    object *legacy = arch_get("bolt");
+    legacy->nrof = 2;
+    ck_assert_ptr_eq(object_insert_into(legacy, player, 0), first);
+    ck_assert_uint_eq(first->nrof, 9);
+    ck_assert_ptr_nonnull(strstr(first->custody_provenance, "legacy:unknown@2"));
+
+    object *bounded = arch_get("bolt");
+    object *overflow = arch_get("bolt");
+    FREE_AND_COPY_HASH(bounded->custody_provenance,
+                       "item:1@1|item:2@1|item:3@1|item:4@1|item:5@1|item:6@1|item:7@1|item:8@1");
+    FREE_AND_COPY_HASH(overflow->custody_provenance, "item:9@1");
+    ck_assert(!object_can_merge(bounded, overflow));
+    object_destroy(bounded);
+    object_destroy(overflow);
+    object_destroy(player);
 }
 END_TEST
 
@@ -1166,11 +1214,13 @@ END_TEST
 
 START_TEST(test_object_stable_identity_serialization) {
     object *ob = object_load_str("arch bolt\ncustody_lineage 42\n"
+                                 "custody_provenance 42@3\n"
                                  "custody_first account:original\n"
                                  "custody_last account:latest\n"
                                  "custody_actor account:opaque-character\nend\n");
     ck_assert_ptr_ne(ob, NULL);
     ck_assert_str_eq(ob->custody_lineage, "42");
+    ck_assert_str_eq(ob->custody_provenance, "42@3");
     ck_assert_str_eq(ob->custody_first, "account:original");
     ck_assert_str_eq(ob->custody_last, "account:latest");
     ck_assert_str_eq(ob->custody_actor, "account:opaque-character");
@@ -1178,6 +1228,7 @@ START_TEST(test_object_stable_identity_serialization) {
     object_dump_rec(ob, sb);
     char *dump = stringbuffer_finish(sb);
     ck_assert_ptr_ne(strstr(dump, "custody_lineage 42\n"), NULL);
+    ck_assert_ptr_ne(strstr(dump, "custody_provenance 42@3\n"), NULL);
     ck_assert_ptr_ne(strstr(dump, "custody_first account:original\n"), NULL);
     ck_assert_ptr_ne(strstr(dump, "custody_last account:latest\n"), NULL);
     ck_assert_ptr_ne(strstr(dump, "custody_actor account:opaque-character\n"), NULL);
@@ -1493,6 +1544,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_tiled_enemy);
     tcase_add_test(tc_core, test_object_can_merge);
     tcase_add_test(tc_core, test_object_custody_provenance);
+    tcase_add_test(tc_core, test_object_custody_quantity_provenance);
     tcase_add_test(tc_core, test_object_plural_name_contract);
     tcase_add_test(tc_core, test_object_merge_updates_name_and_count);
     tcase_add_test(tc_core, test_map_stack_operations_increment_update_once);
