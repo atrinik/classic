@@ -68,6 +68,79 @@ texture_struct *cursor_texture;
 int cursor_x = -1;
 int cursor_y = -1;
 
+/* Completed screen without the transient custom cursor or world-pointer cue.
+ * Cursor motion restores only a bounded dirty rectangle from this frame. */
+static SDL_Surface *screen_completed_frame;
+
+#define POINTER_DIRTY_RADIUS 128
+
+void screen_completed_frame_deinit(void) {
+    SDL_DestroySurface(screen_completed_frame);
+    screen_completed_frame = NULL;
+}
+
+static bool screen_completed_frame_ready(void) {
+    return screen_completed_frame != NULL && ScreenSurface != NULL &&
+           screen_completed_frame->w == ScreenSurface->w &&
+           screen_completed_frame->h == ScreenSurface->h &&
+           screen_completed_frame->format == ScreenSurface->format;
+}
+
+static bool screen_completed_frame_capture(void) {
+    if (ScreenSurface == NULL) {
+        return false;
+    }
+
+    if (!screen_completed_frame_ready()) {
+        screen_completed_frame_deinit();
+        screen_completed_frame =
+            SDL_CreateSurface(ScreenSurface->w, ScreenSurface->h, ScreenSurface->format);
+        if (screen_completed_frame == NULL ||
+            !SDL_SetSurfaceBlendMode(screen_completed_frame, SDL_BLENDMODE_NONE)) {
+            screen_completed_frame_deinit();
+            return false;
+        }
+    }
+
+    return SDL_BlitSurface(ScreenSurface, NULL, screen_completed_frame, NULL);
+}
+
+static SDL_Rect screen_pointer_dirty_rect(int old_x, int old_y, int new_x, int new_y) {
+    int left = MIN(old_x, new_x) - POINTER_DIRTY_RADIUS;
+    int top = MIN(old_y, new_y) - POINTER_DIRTY_RADIUS;
+    int right = MAX(old_x, new_x) + POINTER_DIRTY_RADIUS + 1;
+    int bottom = MAX(old_y, new_y) + POINTER_DIRTY_RADIUS + 1;
+    SDL_Rect rect = {.x = left, .y = top, .w = right - left, .h = bottom - top};
+
+    if (rect.x < 0) {
+        rect.w += rect.x;
+        rect.x = 0;
+    }
+    if (rect.y < 0) {
+        rect.h += rect.y;
+        rect.y = 0;
+    }
+    if (rect.x + rect.w > ScreenSurface->w) {
+        rect.w = ScreenSurface->w - rect.x;
+    }
+    if (rect.y + rect.h > ScreenSurface->h) {
+        rect.h = ScreenSurface->h - rect.y;
+    }
+    return rect;
+}
+
+static bool screen_completed_frame_restore(int old_x, int old_y, int new_x, int new_y) {
+    if (!screen_completed_frame_ready()) {
+        return false;
+    }
+
+    SDL_Rect rect = screen_pointer_dirty_rect(old_x, old_y, new_x, new_y);
+    if (rect.w <= 0 || rect.h <= 0) {
+        return true;
+    }
+    return SDL_BlitSurface(screen_completed_frame, &rect, ScreenSurface, &rect);
+}
+
 /* update map area */
 int map_redraw_flag;
 int minimap_redraw_flag;
@@ -635,6 +708,8 @@ static bool clioptions_option_reconnect(const char *arg, char **errmsg) {
 int main(int argc, char *argv[]) {
     char *path;
     int done = 0, update, frames;
+    int old_cursor_x = -1, old_cursor_y = -1;
+    int rendered_cursor_x = -1, rendered_cursor_y = -1;
     uint32_t anim_tick, frame_start_time, elapsed_time, fps_limit, last_frame_ticks;
     int fps_limits[] = {30, 60, 120, 0};
 
@@ -658,7 +733,8 @@ int main(int argc, char *argv[]) {
 
     if (argc > 1 &&
         (strcmp(argv[1], "--player-view") == 0 || strcmp(argv[1], "--player-view-benchmark") == 0 ||
-         strcmp(argv[1], "--player-view-movement-benchmark") == 0)) {
+         strcmp(argv[1], "--player-view-movement-benchmark") == 0 ||
+         strcmp(argv[1], "--player-view-cursor-benchmark") == 0)) {
         return player_view_main(argc - 1, &argv[1]);
     }
 
@@ -848,14 +924,14 @@ int main(int argc, char *argv[]) {
 
         update = 0;
 
+        bool pointer_overlay_only = false;
         if (window_is_active()) {
             if (cpl.state == ST_PLAY) {
-                static int old_cursor_x = -1, old_cursor_y = -1;
-
                 if (widgets_need_redraw()) {
                     update = 1;
                 } else if (cursor_x != old_cursor_x || cursor_y != old_cursor_y) {
                     update = 1;
+                    pointer_overlay_only = screen_completed_frame_ready();
                     old_cursor_x = cursor_x;
                     old_cursor_y = cursor_y;
                 } else if (event_dragging_need_redraw()) {
@@ -874,36 +950,66 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        if (update) {
+        if (update && !pointer_overlay_only) {
             SDL_FillSurfaceRect(ScreenSurface, NULL, 0);
         }
 
         uint64_t profile_widgets_started = render_profiler_begin();
-        if (cpl.state <= ST_WAITFORPLAY) {
-            intro_show();
-        } else if (cpl.state == ST_PLAY) {
-            process_widgets(update);
+        if (!pointer_overlay_only) {
+            if (cpl.state <= ST_WAITFORPLAY) {
+                intro_show();
+            } else if (cpl.state == ST_PLAY) {
+                process_widgets(update);
+            }
         }
         render_profiler_end(RENDER_PROFILE_WIDGETS, profile_widgets_started);
 
         uint64_t profile_overlays_started = render_profiler_begin();
-        popup_render_all();
-        tooltip_show();
+        if (!pointer_overlay_only) {
+            popup_render_all();
+            tooltip_show();
 
-        /* Show the currently dragged item. */
-        if (event_dragging_check()) {
-            int mx, my;
+            /* Show the currently dragged item. */
+            if (event_dragging_check()) {
+                int mx, my;
 
-            mouse_get_state(&mx, &my);
-            object_show_centered(ScreenSurface,
-                                 object_find(cpl.dragging_tag),
-                                 mx,
-                                 my,
-                                 INVENTORY_ICON_SIZE,
-                                 INVENTORY_ICON_SIZE,
-                                 false);
+                mouse_get_state(&mx, &my);
+                object_show_centered(ScreenSurface,
+                                     object_find(cpl.dragging_tag),
+                                     mx,
+                                     my,
+                                     INVENTORY_ICON_SIZE,
+                                     INVENTORY_ICON_SIZE,
+                                     false);
+            }
         }
+        render_profiler_end(RENDER_PROFILE_OVERLAYS, profile_overlays_started);
 
+        uint64_t profile_pointer_started = render_profiler_begin();
+        if (pointer_overlay_only) {
+            if (!screen_completed_frame_restore(rendered_cursor_x,
+                                                rendered_cursor_y,
+                                                cursor_x,
+                                                cursor_y)) {
+                pointer_overlay_only = false;
+                SDL_FillSurfaceRect(ScreenSurface, NULL, 0);
+                if (cpl.state <= ST_WAITFORPLAY) {
+                    intro_show();
+                } else if (cpl.state == ST_PLAY) {
+                    process_widgets(update);
+                }
+                popup_render_all();
+                tooltip_show();
+            }
+        }
+        if (!pointer_overlay_only && update && cpl.state == ST_PLAY) {
+            if (!screen_completed_frame_capture()) {
+                LOG(ERROR, "Could not retain completed screen frame: %s", SDL_GetError());
+            }
+        }
+        if (cpl.state == ST_PLAY && update) {
+            map_draw_pointer_overlay();
+        }
         if (!setting_get_int(OPT_CAT_CLIENT, OPT_SYSTEM_CURSOR) && cursor_x != -1 &&
             cursor_y != -1 && SDL_GetWindowFlags(ScreenWindow) & SDL_WINDOW_MOUSE_FOCUS) {
             surface_show(ScreenSurface,
@@ -912,7 +1018,13 @@ int main(int argc, char *argv[]) {
                          NULL,
                          texture_surface(cursor_texture));
         }
-        render_profiler_end(RENDER_PROFILE_OVERLAYS, profile_overlays_started);
+        if (cpl.state == ST_PLAY && update) {
+            old_cursor_x = cursor_x;
+            old_cursor_y = cursor_y;
+            rendered_cursor_x = cursor_x;
+            rendered_cursor_y = cursor_y;
+        }
+        render_profiler_end(RENDER_PROFILE_POINTER, profile_pointer_started);
 
         uint64_t profile_maintenance_started = render_profiler_begin();
         texture_gc();

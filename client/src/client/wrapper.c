@@ -59,6 +59,7 @@ void system_start(void) {
  * End the system.
  */
 void system_end(void) {
+    screen_completed_frame_deinit();
     rich_presence_deinit();
     tooltip_dismiss();
     object_deinit();

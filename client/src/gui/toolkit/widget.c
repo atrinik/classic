@@ -1335,8 +1335,10 @@ int widget_priority_integration_test(const char *fixture, const char *saved) {
     stats->y = map->y + 10;
     stats->show = 1;
     WIDGET_TEST_CHECK(get_widget_owner(stats->x + 1, stats->y + 1, NULL, NULL) == stats);
+    WIDGET_TEST_CHECK(!map_pointer_overlay_visible_at(stats->x + 1, stats->y + 1));
     stats->show = 0;
     WIDGET_TEST_CHECK(get_widget_owner(stats->x + 1, stats->y + 1, NULL, NULL) == map);
+    WIDGET_TEST_CHECK(map_pointer_overlay_visible_at(stats->x + 1, stats->y + 1));
     stats->show = 1;
 
     menu_container_detach(map, NULL, NULL);

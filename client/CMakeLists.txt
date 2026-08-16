@@ -857,6 +857,30 @@ if (BUILD_TESTING)
             "$<TARGET_FILE:atrinik>"
             "${player_view_fixtures}/movement-colored-discrete.xml"
             large)
+    add_test(NAME client-player-view-cursor-benchmark-smooth
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_cursor_benchmark.py"
+            "$<TARGET_FILE:atrinik>"
+            "${player_view_fixtures}/dense-cursor.xml"
+            standard)
+    add_test(NAME client-player-view-cursor-benchmark-discrete
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_cursor_benchmark.py"
+            "$<TARGET_FILE:atrinik>"
+            "${player_view_fixtures}/dense-cursor-discrete.xml"
+            standard)
+    add_test(NAME client-player-view-cursor-benchmark-smooth-large
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_cursor_benchmark.py"
+            "$<TARGET_FILE:atrinik>"
+            "${player_view_fixtures}/dense-cursor.xml"
+            large)
+    add_test(NAME client-player-view-cursor-benchmark-discrete-large
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_cursor_benchmark.py"
+            "$<TARGET_FILE:atrinik>"
+            "${player_view_fixtures}/dense-cursor-discrete.xml"
+            large)
     add_test(NAME client-player-view-movement-fault-injection
         COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_fault_injection.py"
@@ -871,12 +895,16 @@ if (BUILD_TESTING)
     set_tests_properties(
         client-player-view-movement-benchmark-smooth
         client-player-view-movement-benchmark-discrete
+        client-player-view-cursor-benchmark-smooth
+        client-player-view-cursor-benchmark-discrete
         PROPERTIES
         LABELS "performance;standard-performance"
         TIMEOUT 420)
     set_tests_properties(
         client-player-view-movement-benchmark-smooth-large
         client-player-view-movement-benchmark-discrete-large
+        client-player-view-cursor-benchmark-smooth-large
+        client-player-view-cursor-benchmark-discrete-large
         PROPERTIES
         LABELS "performance;long-performance"
         TIMEOUT 1900)
