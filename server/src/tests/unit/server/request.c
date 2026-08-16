@@ -16,6 +16,7 @@
 #include <initialization.h>
 #include <light.h>
 #include <los.h>
+#include <movement.h>
 #include <object.h>
 #include <player.h>
 #include <exit.h>
@@ -279,6 +280,41 @@ START_TEST(test_move_path_blocks_opaque_passable_target) {
     ck_assert_ptr_null(CONTR(pl)->move_path);
     ck_assert_ptr_null(CONTR(pl)->move_path_end);
     ck_assert(!(pl->x == 8 && pl->y == 4));
+}
+END_TEST
+
+START_TEST(test_move_path_adjacent_opaque_target_matches_direct_movement) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    request_move_player(&pl, map, 4, 4);
+    object *shortcut = arch_get("fwall_rock1");
+    ck_assert_ptr_nonnull(shortcut);
+    CLEAR_FLAG(shortcut, FLAG_NO_PASS);
+    shortcut->x = 5;
+    shortcut->y = 4;
+    shortcut = object_insert_map(shortcut, map, NULL, 0);
+    ck_assert_ptr_nonnull(shortcut);
+
+    ck_assert_int_eq(object_blocked(pl, map, 5, 4), 0);
+    ck_assert_int_ne(path_tile_blocked(pl, map, 5, 4), 0);
+    ck_assert_int_eq(move_object(pl, 3), 3);
+    ck_assert_int_eq(pl->x, 5);
+    ck_assert_int_eq(pl->y, 4);
+
+    request_move_player(&pl, map, 4, 4);
+    request_move_path(CONTR(pl), 5, 4);
+
+    player_path *last = request_path_last(CONTR(pl));
+    ck_assert_ptr_nonnull(last);
+    ck_assert_ptr_eq(last->map, map);
+    ck_assert_int_eq(last->x, 5);
+    ck_assert_int_eq(last->y, 4);
+    request_run_path(CONTR(pl));
+    ck_assert_ptr_null(CONTR(pl)->move_path);
+    ck_assert_ptr_null(CONTR(pl)->move_path_end);
+    ck_assert_int_eq(pl->x, 5);
+    ck_assert_int_eq(pl->y, 4);
 }
 END_TEST
 
@@ -1721,6 +1757,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_move_path_blocked_target_stops_at_deterministic_adjacent_tile);
     tcase_add_test(tc_core, test_move_path_occupied_target_stops_at_adjacent_tile);
     tcase_add_test(tc_core, test_move_path_blocks_opaque_passable_target);
+    tcase_add_test(tc_core, test_move_path_adjacent_opaque_target_matches_direct_movement);
     tcase_add_test(tc_core, test_move_path_unreachable_request_clears_existing_queue);
     tcase_add_test(tc_core, test_move_path_center_request_clears_existing_queue);
     tcase_add_test(tc_core, test_move_path_unmapped_request_clears_existing_queue);
