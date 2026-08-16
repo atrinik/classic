@@ -1526,6 +1526,7 @@ typedef struct map_render_command {
     size_t sequence;
     uint8_t object_layer;
     int8_t depth;
+    int32_t elevation;
     bool draw_double;
     bool door;
     bool door_hint;
@@ -1553,9 +1554,43 @@ typedef struct map_render_context {
     uint8_t target_sub_layer;
 } map_render_context_t;
 
+/** Stable geometry identity for one visible exit cue member. */
+typedef struct map_exit_cue_key {
+    int16_t tile_x;
+    int16_t tile_y;
+    int32_t x;
+    int32_t y;
+    int32_t elevation;
+    int8_t depth;
+    int16_t zoom_x;
+    int16_t zoom_y;
+    int16_t rotate;
+    SDL_Surface *source;
+    bool draw_double;
+} map_exit_cue_key_t;
+
+/** One cached outer perimeter for a connected group of exits. */
+typedef struct map_exit_cue {
+    SDL_Surface *surface;
+    int32_t x;
+    int32_t y;
+    map_exit_cue_key_t *keys;
+    size_t keys_num;
+} map_exit_cue_t;
+
+/** Grouped exit geometry retained between a full and animation-only redraw. */
+typedef struct map_exit_cue_cache {
+    map_exit_cue_t *groups;
+    size_t groups_num;
+    map_exit_cue_key_t *keys;
+    size_t keys_num;
+    bool valid;
+} map_exit_cue_cache_t;
+
 static map_render_command_t *map_animation_ground_commands;
 static size_t map_animation_ground_commands_num;
 static size_t map_animation_object_sequences[MAP2_LEVELS];
+static map_exit_cue_cache_t map_animation_exit_cues;
 
 /**
  * Structure used to pass data between the rendering loops in map_draw_map()
@@ -1798,6 +1833,9 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
             .tile_y = data->y,
             .object_layer = data->layer,
             .depth = data->depth,
+            .elevation = data->level_support_height +
+                         data->cell->height[GET_MAP_LAYER(LAYER_FLOOR, data->sub_layer)] +
+                         (data->layer > LAYER_FLOOR ? data->cell->height[map_layer] : 0),
             .draw_double = data->cell->draw_double[map_layer],
             .door = (data->cell->door[data->sub_layer] & (UINT8_C(1) << (data->layer - 1))) != 0,
             .exit = !data->cell->fow &&
@@ -3025,9 +3063,348 @@ static void map_render_commands_find_living_occlusion(map_render_context_t *cont
     }
 }
 
+/** Return whether a command participates in the visible exit cue. */
+static bool map_exit_cue_command(const map_render_command_t *command) {
+    return command->exit && command->depth == 0;
+}
+
+/** Copy the geometry identity used to reuse grouped exit cues. */
+static map_exit_cue_key_t map_exit_cue_key(const map_render_command_t *command) {
+    return (map_exit_cue_key_t){
+        .tile_x = command->tile_x,
+        .tile_y = command->tile_y,
+        .x = command->x,
+        .y = command->y,
+        .elevation = command->elevation,
+        .depth = command->depth,
+        .zoom_x = command->effects.zoom_x,
+        .zoom_y = command->effects.zoom_y,
+        .rotate = command->effects.rotate,
+        .source = command->source,
+        .draw_double = command->draw_double,
+    };
+}
+
+/** Compare two exit cue keys without relying on pointer ordering. */
+static int map_exit_cue_key_compare(const void *left_ptr, const void *right_ptr) {
+    const map_exit_cue_key_t *left = left_ptr;
+    const map_exit_cue_key_t *right = right_ptr;
+
+#define COMPARE_KEY_FIELD(_field) \
+    if (left->_field != right->_field) { \
+        return left->_field < right->_field ? -1 : 1; \
+    }
+    COMPARE_KEY_FIELD(tile_x);
+    COMPARE_KEY_FIELD(tile_y);
+    COMPARE_KEY_FIELD(elevation);
+    COMPARE_KEY_FIELD(depth);
+    COMPARE_KEY_FIELD(x);
+    COMPARE_KEY_FIELD(y);
+    COMPARE_KEY_FIELD(zoom_x);
+    COMPARE_KEY_FIELD(zoom_y);
+    COMPARE_KEY_FIELD(rotate);
+    if (left->source != right->source) {
+        uintptr_t left_source = (uintptr_t)left->source;
+        uintptr_t right_source = (uintptr_t)right->source;
+        return left_source < right_source ? -1 : 1;
+    }
+    COMPARE_KEY_FIELD(draw_double);
+#undef COMPARE_KEY_FIELD
+    return 0;
+}
+
+/** Compare two already canonicalized exit cue keys. */
+static bool map_exit_cue_key_equal(const map_exit_cue_key_t *left,
+                                   const map_exit_cue_key_t *right) {
+    return map_exit_cue_key_compare(left, right) == 0;
+}
+
+/** Release cached grouped cue masks and their geometry identities. */
+static void map_exit_cue_cache_clear(map_exit_cue_cache_t *cache) {
+    for (size_t i = 0; i < cache->groups_num; i++) {
+        SDL_DestroySurface(cache->groups[i].surface);
+        free(cache->groups[i].keys);
+    }
+    free(cache->groups);
+    free(cache->keys);
+    memset(cache, 0, sizeof(*cache));
+}
+
+/** Return whether two visible exits belong to one cardinally connected group. */
+static bool map_exit_cue_commands_linked(const map_render_command_t *left,
+                                         const map_render_command_t *right) {
+    if (!map_exit_cue_command(left) || !map_exit_cue_command(right) ||
+        left->elevation != right->elevation || left->depth != right->depth) {
+        return false;
+    }
+
+    int distance_x = abs(left->tile_x - right->tile_x);
+    int distance_y = abs(left->tile_y - right->tile_y);
+    return distance_x + distance_y <= 1;
+}
+
+/** Collect the sorted identities for all visible depth-zero exit commands. */
+static map_exit_cue_key_t *map_exit_cue_keys_create(const map_render_context_t *context,
+                                                    size_t *keys_num) {
+    size_t count = 0;
+    for (size_t i = 0; i < context->commands_num; i++) {
+        count += map_exit_cue_command(&context->commands[i]);
+    }
+
+    map_exit_cue_key_t *keys = count == 0 ? NULL : xmallocarray(count, sizeof(*keys));
+    size_t output = 0;
+    for (size_t i = 0; i < context->commands_num; i++) {
+        if (map_exit_cue_command(&context->commands[i])) {
+            keys[output++] = map_exit_cue_key(&context->commands[i]);
+        }
+    }
+    if (count > 1) {
+        qsort(keys, count, sizeof(*keys), map_exit_cue_key_compare);
+    }
+    *keys_num = count;
+    return keys;
+}
+
+/** Return whether the cached cue masks still describe this animation frame. */
+static bool map_exit_cue_cache_matches(const map_exit_cue_cache_t *cache,
+                                       const map_render_context_t *context) {
+    if (!cache->valid) {
+        return false;
+    }
+
+    size_t keys_num;
+    map_exit_cue_key_t *keys = map_exit_cue_keys_create(context, &keys_num);
+    bool matches = keys_num == cache->keys_num;
+    for (size_t i = 0; matches && i < keys_num; i++) {
+        matches = map_exit_cue_key_equal(&keys[i], &cache->keys[i]);
+    }
+    free(keys);
+    return matches;
+}
+
+/** Copy one transformed sprite silhouette into a shared group mask. */
+static bool map_exit_cue_copy_geometry(SDL_Surface *mask,
+                                       int32_t mask_x,
+                                       int32_t mask_y,
+                                       const map_render_command_t *command,
+                                       SDL_Surface *geometry) {
+    bool geometry_locked = false;
+    bool mask_locked = false;
+    if (SDL_MUSTLOCK(geometry)) {
+        if (!SDL_LockSurface(geometry)) {
+            return false;
+        }
+        geometry_locked = true;
+    }
+    if (SDL_MUSTLOCK(mask)) {
+        if (!SDL_LockSurface(mask)) {
+            if (geometry_locked) {
+                SDL_UnlockSurface(geometry);
+            }
+            return false;
+        }
+        mask_locked = true;
+    }
+
+    Uint32 visible = pixel_format_map_rgba(mask->format, 255, 255, 255, 255);
+    int copies = command->draw_double ? 2 : 1;
+    for (int copy = 0; copy < copies; copy++) {
+        int32_t source_y = command->y - copy * 22;
+        for (int y = 0; y < geometry->h; y++) {
+            for (int x = 0; x < geometry->w; x++) {
+                if (surface_pixel_visible(geometry, x, y)) {
+                    putpixel(mask,
+                             command->x + x - mask_x,
+                             source_y + y - mask_y,
+                             visible);
+                }
+            }
+        }
+    }
+
+    if (mask_locked) {
+        SDL_UnlockSurface(mask);
+    }
+    if (geometry_locked) {
+        SDL_UnlockSurface(geometry);
+    }
+    return true;
+}
+
+/** Build one shared alpha mask for a connected exit component. */
+static bool map_exit_cue_group_build(map_exit_cue_t *group,
+                                     const map_render_context_t *context,
+                                     const size_t *indices,
+                                     size_t indices_num) {
+    SDL_Surface **geometries = xcalloc(indices_num, sizeof(*geometries));
+    int32_t minimum_x = INT32_MAX;
+    int32_t minimum_y = INT32_MAX;
+    int32_t maximum_x = INT32_MIN;
+    int32_t maximum_y = INT32_MIN;
+    bool success = true;
+
+    for (size_t i = 0; i < indices_num; i++) {
+        const map_render_command_t *command = &context->commands[indices[i]];
+        geometries[i] = map_render_command_geometry(command);
+        if (geometries[i] == NULL) {
+            success = false;
+            break;
+        }
+        minimum_x = MIN(minimum_x, command->x);
+        minimum_y = MIN(minimum_y, command->y - (command->draw_double ? 22 : 0));
+        maximum_x = MAX(maximum_x, command->x + geometries[i]->w);
+        maximum_y = MAX(maximum_y, command->y + geometries[i]->h);
+    }
+    if (!success || minimum_x == INT32_MAX || maximum_x <= minimum_x || maximum_y <= minimum_y) {
+        for (size_t i = 0; i < indices_num; i++) {
+            if (geometries[i] != NULL && geometries[i] != context->commands[indices[i]].source) {
+                SDL_DestroySurface(geometries[i]);
+            }
+        }
+        free(geometries);
+        return false;
+    }
+
+    SDL_Surface *mask = SDL_CreateSurface(maximum_x - minimum_x,
+                                          maximum_y - minimum_y,
+                                          FormatHolder->format);
+    if (mask == NULL || !surface_clear_transparent_black(mask)) {
+        SDL_DestroySurface(mask);
+        for (size_t i = 0; i < indices_num; i++) {
+            if (geometries[i] != NULL && geometries[i] != context->commands[indices[i]].source) {
+                SDL_DestroySurface(geometries[i]);
+            }
+        }
+        free(geometries);
+        return false;
+    }
+
+    for (size_t i = 0; i < indices_num && success; i++) {
+        success = map_exit_cue_copy_geometry(mask,
+                                              minimum_x,
+                                              minimum_y,
+                                              &context->commands[indices[i]],
+                                              geometries[i]);
+    }
+    for (size_t i = 0; i < indices_num; i++) {
+        if (geometries[i] != context->commands[indices[i]].source) {
+            SDL_DestroySurface(geometries[i]);
+        }
+    }
+    free(geometries);
+    if (!success) {
+        SDL_DestroySurface(mask);
+        return false;
+    }
+
+    group->surface = mask;
+    group->x = minimum_x;
+    group->y = minimum_y;
+    group->keys_num = indices_num;
+    group->keys = xmallocarray(indices_num, sizeof(*group->keys));
+    for (size_t i = 0; i < indices_num; i++) {
+        group->keys[i] = map_exit_cue_key(&context->commands[indices[i]]);
+    }
+    if (indices_num > 1) {
+        qsort(group->keys, indices_num, sizeof(*group->keys), map_exit_cue_key_compare);
+    }
+    return true;
+}
+
+/** Build grouped exit masks from the current sorted painter commands. */
+static bool map_exit_cue_cache_build(map_exit_cue_cache_t *cache,
+                                     const map_render_context_t *context) {
+    map_exit_cue_cache_clear(cache);
+    cache->keys = map_exit_cue_keys_create(context, &cache->keys_num);
+
+    bool *assigned = xcalloc(context->commands_num, sizeof(*assigned));
+    for (size_t start = 0; start < context->commands_num; start++) {
+        if (assigned[start] || !map_exit_cue_command(&context->commands[start])) {
+            continue;
+        }
+
+        size_t indices_num = 1;
+        size_t indices_capacity = 8;
+        size_t *indices = xmallocarray(indices_capacity, sizeof(*indices));
+        indices[0] = start;
+        assigned[start] = true;
+        for (size_t member = 0; member < indices_num; member++) {
+            for (size_t candidate = 0; candidate < context->commands_num; candidate++) {
+                if (assigned[candidate] ||
+                    !map_exit_cue_commands_linked(&context->commands[indices[member]],
+                                                  &context->commands[candidate])) {
+                    continue;
+                }
+                if (indices_num == indices_capacity) {
+                    indices_capacity *= 2;
+                    indices = xreallocarray(indices, indices_capacity, sizeof(*indices));
+                }
+                indices[indices_num++] = candidate;
+                assigned[candidate] = true;
+            }
+        }
+
+        map_exit_cue_t group = {0};
+        bool success = map_exit_cue_group_build(&group, context, indices, indices_num);
+        free(indices);
+        if (!success) {
+            free(assigned);
+            map_exit_cue_cache_clear(cache);
+            return false;
+        }
+        cache->groups = xreallocarray(cache->groups, cache->groups_num + 1, sizeof(*cache->groups));
+        cache->groups[cache->groups_num++] = group;
+    }
+    free(assigned);
+    cache->valid = true;
+    return true;
+}
+
+/** Draw all cached grouped exit perimeters after the world painter pass. */
+static void map_exit_cue_cache_draw(SDL_Surface *surface, const map_exit_cue_cache_t *cache) {
+    SDL_Color color;
+    if (!text_color_parse(MAP_OUTLINE_COLOR, &color)) {
+        return;
+    }
+    for (size_t i = 0; i < cache->groups_num; i++) {
+        SDL_Surface *outline = sprite_outline_create(cache->groups[i].surface, &color);
+        if (outline == NULL) {
+            continue;
+        }
+        surface_show(surface,
+                     cache->groups[i].x - SPRITE_GLOW_SIZE,
+                     cache->groups[i].y - SPRITE_GLOW_SIZE,
+                     NULL,
+                     outline);
+        SDL_DestroySurface(outline);
+    }
+}
+
+/** Preserve the old single-sprite cue as an allocation-failure fallback. */
+static void map_render_command_draw_exit(SDL_Surface *surface,
+                                         const map_render_command_t *command) {
+    sprite_effects_t effects = {0};
+    effects.zoom_x = command->effects.zoom_x;
+    effects.zoom_y = command->effects.zoom_y;
+    effects.rotate = command->effects.rotate;
+    snprintf(VS(effects.outline), "%s", MAP_OUTLINE_COLOR);
+    surface_show_effects(surface, command->x, command->y, NULL, command->source, &effects);
+    if (command->draw_double) {
+        surface_show_effects(surface,
+                             command->x,
+                             command->y - 22,
+                             NULL,
+                             command->source,
+                             &effects);
+    }
+}
+
 /** Paint all projected sprites in one isometric order. */
 static void
-map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool primary_surface) {
+map_render_commands(SDL_Surface *surface,
+                    map_render_context_t *context,
+                    bool primary_surface,
+                    map_exit_cue_cache_t *exit_cues) {
     uint64_t profile_paint_started = render_profiler_begin();
     uint64_t profile_sort_started = render_profiler_begin();
     if (context->commands_num > 1) {
@@ -3045,6 +3422,15 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool pr
         uint64_t profile_occlusion_started = render_profiler_begin();
         map_render_commands_find_living_occlusion(context);
         render_profiler_end(RENDER_PROFILE_MAP_LIVING_OCCLUSION, profile_occlusion_started);
+    }
+
+    bool grouped_exit_cues = false;
+    if (primary_surface && exit_cues != NULL) {
+        if (!map_exit_cue_cache_matches(exit_cues, context)) {
+            grouped_exit_cues = map_exit_cue_cache_build(exit_cues, context);
+        } else {
+            grouped_exit_cues = true;
+        }
     }
 
     uint64_t profile_effects_started = render_profiler_begin();
@@ -3076,10 +3462,15 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool pr
     render_profiler_end(RENDER_PROFILE_MAP_SPRITE_EFFECTS, profile_effects_started);
 
     if (primary_surface) {
+        /* Draw grouped cues after the world painter, matching the legacy
+         * per-sprite cue phase so later sprites cannot erase the perimeter. */
+        if (grouped_exit_cues) {
+            map_exit_cue_cache_draw(surface, exit_cues);
+        }
+
         for (size_t i = 0; i < context->commands_num; i++) {
             map_render_command_t *command = &context->commands[i];
-            if (command->living_occlusion_mask == NULL && !command->door_hint &&
-                !(command->exit && command->depth == 0)) {
+            if (command->living_occlusion_mask == NULL && !command->door_hint) {
                 continue;
             }
 
@@ -3103,23 +3494,35 @@ map_render_commands(SDL_Surface *surface, map_render_context_t *context, bool pr
                 }
                 SDL_DestroySurface(command->living_occlusion_mask);
                 command->living_occlusion_mask = NULL;
-                if (!command->door_hint && !(command->exit && command->depth == 0)) {
-                    continue;
-                }
             }
 
-            effects.zoom_x = command->effects.zoom_x;
-            effects.zoom_y = command->effects.zoom_y;
-            effects.rotate = command->effects.rotate;
-            snprintf(VS(effects.outline), "%s", MAP_OUTLINE_COLOR);
-            surface_show_effects(surface, command->x, command->y, NULL, command->source, &effects);
-            if (command->draw_double) {
+            if (command->door_hint) {
+                effects.zoom_x = command->effects.zoom_x;
+                effects.zoom_y = command->effects.zoom_y;
+                effects.rotate = command->effects.rotate;
+                snprintf(VS(effects.outline), "%s", MAP_OUTLINE_COLOR);
                 surface_show_effects(surface,
                                      command->x,
-                                     command->y - 22,
+                                     command->y,
                                      NULL,
                                      command->source,
                                      &effects);
+                if (command->draw_double) {
+                    surface_show_effects(surface,
+                                         command->x,
+                                         command->y - 22,
+                                         NULL,
+                                         command->source,
+                                         &effects);
+                }
+            }
+        }
+
+        if (!grouped_exit_cues) {
+            for (size_t i = 0; i < context->commands_num; i++) {
+                if (map_exit_cue_command(&context->commands[i])) {
+                    map_render_command_draw_exit(surface, &context->commands[i]);
+                }
             }
         }
     }
@@ -3284,6 +3687,7 @@ void map_draw_map(SDL_Surface *surface) {
     bool animation_base_captured = false;
     if (primary_surface) {
         map_animation_cache_valid = false;
+        map_exit_cue_cache_clear(&map_animation_exit_cues);
     }
     map_benchmark_statistics.map_draws++;
     if (primary_surface) {
@@ -3408,7 +3812,10 @@ void map_draw_map(SDL_Surface *surface) {
     map_benchmark_statistics.peak_active_levels =
         MAX(map_benchmark_statistics.peak_active_levels, active_levels);
 
-    map_render_commands(surface, &render_context, primary_surface);
+    map_render_commands(surface,
+                        &render_context,
+                        primary_surface,
+                        primary_surface ? &map_animation_exit_cues : NULL);
     map_draw_ui(surface, &render_context);
     map_select_level(0, true);
     lighting_select_level(0);
@@ -3467,7 +3874,7 @@ bool map_draw_animation(SDL_Surface *surface) {
     map_benchmark_statistics.peak_active_levels =
         MAX(map_benchmark_statistics.peak_active_levels, active_levels);
 
-    map_render_commands(surface, &render_context, true);
+    map_render_commands(surface, &render_context, true, &map_animation_exit_cues);
     map_draw_ui(surface, &render_context);
     map_select_level(0, true);
     lighting_select_level(0);
@@ -4275,6 +4682,7 @@ void map_runtime_deinit(void) {
     free(map_animation_ground_commands);
     map_animation_ground_commands = NULL;
     map_animation_ground_commands_num = 0;
+    map_exit_cue_cache_clear(&map_animation_exit_cues);
     map_animation_cache_valid = false;
 
     for (size_t i = 0; i < arraysize(level_cells); i++) {
