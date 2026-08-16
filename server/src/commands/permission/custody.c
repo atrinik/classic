@@ -43,6 +43,10 @@ void command_custody(object *op, const char *command, char *params) {
                      match->custody_lineage != NULL ? match->custody_lineage : "legacy/unknown");
     draw_info_format(COLOR_WHITE,
                      op,
+                     "  quantity segments: %s",
+                     match->custody_provenance != NULL ? match->custody_provenance : "legacy/unknown");
+    draw_info_format(COLOR_WHITE,
+                     op,
                      "  first acquirer: %s",
                      match->custody_first != NULL ? match->custody_first : "legacy/unknown");
     draw_info_format(COLOR_WHITE,

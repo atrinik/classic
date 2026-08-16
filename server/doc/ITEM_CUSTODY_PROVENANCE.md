@@ -24,9 +24,22 @@ persistent lineage.
 
 Movement between a player's inventory, open containers, or nested containers is
 not a custody transfer. A container and all of its contents retain their own
-records when it moves. A partial stack inherits its lineage on split/copy; a
-merge is allowed only when every custody field matches, so mixed history is
-never discarded.
+records when it moves. A partial stack receives an exact quantity slice of its
+lineage segments on split/copy. Equivalent gameplay objects may merge even when
+their hidden custody fields differ: the server combines their bounded,
+deterministic quantity-bearing segments instead of making audit metadata
+fragment the inventory. The private `custody_provenance` save field uses
+`lineage@quantity|lineage@quantity` and retains up to eight distinct segments;
+an attempted merge that cannot fit the bound fails closed. Legacy objects with
+only `custody_lineage` are treated as one segment covering their current
+quantity. An otherwise untracked object merged with a tracked object is
+represented as `legacy:unknown`, preserving the quantity without inventing a
+historical lineage.
+
+Currency outputs tagged with `currency:<transaction>` remain merge barriers
+until the journal transaction retires the tag. This keeps ambiguous or
+restart-reconciled outputs discoverable by their transaction lineage; once
+settled, the normal segment merge rules apply.
 
 Objects with no provenance are legacy/unknown. A new observed semantic transfer
 assigns a lineage, but never invents a historical acquirer: `first` is set only
@@ -41,4 +54,6 @@ retain their final journal evidence but have no new owner.
 The runtime object tag and combat/effect owner fields remain unrelated to this
 feature. Map and player serialization persist custody fields verbatim; old
 records simply omit them and remain unknown. Migration deliberately performs no
-backfill because there is no trustworthy historical source.
+backfill because there is no trustworthy historical source. Journal lineage and
+transaction IDs remain the stable operator correlation keys, while `/custody`
+exposes the private segment string for contributor debugging.
