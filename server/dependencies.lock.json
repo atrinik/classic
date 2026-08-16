@@ -4,10 +4,10 @@
     {
       "name": "content",
       "repository": "atrinik/content",
-      "tag": "v5.0.0",
-      "commit": "b0ccf98ed5e65d3d1a66f6dfce44c19122b26eef",
-      "url": "https://github.com/atrinik/content/releases/download/v5.0.0/atrinik-content-5.0.0-classic-runtime.tar.gz",
-      "sha256": "ac15a58d6ac07e9cbef64076dded0024a9a0c8b03d07748c1f0224d5901f4178",
+      "tag": "v6.0.0",
+      "commit": "7a4904172eee99fdd65482450fac219061676e5e",
+      "url": "https://github.com/atrinik/content/releases/download/v6.0.0/atrinik-content-6.0.0-classic-runtime.tar.gz",
+      "sha256": "dad5ef25be949e5874baba854b1ff008881e03ea42eefab0a14c6be38558b23d",
       "destination": "runtime/content",
       "strip_components": 1
     },
