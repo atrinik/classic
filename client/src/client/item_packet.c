@@ -65,12 +65,14 @@ bool item_packet_parse_update(packet_reader_t *reader,
             update->spell_cost = packet_reader_read_uint16(reader);
             update->spell_path = packet_reader_read_uint32(reader);
             update->spell_flags = packet_reader_read_uint32(reader);
-            packet_reader_read_string(reader, update->extra_message, MAX_BUF);
+            packet_reader_read_string(
+                reader, update->extra_message, ATRINIK_PROTOCOL_ITEM_EXTRA_MESSAGE_SIZE);
         } else if (update->item.itype == TYPE_SKILL) {
             update->extra_type = ITEM_PACKET_EXTRA_SKILL;
             update->skill_level = packet_reader_read_uint8(reader);
             update->skill_exp = packet_reader_read_int64(reader);
-            packet_reader_read_string(reader, update->extra_message, MAX_BUF);
+            packet_reader_read_string(
+                reader, update->extra_message, ATRINIK_PROTOCOL_ITEM_EXTRA_MESSAGE_SIZE);
         }
     }
     if (flags & UPD_GLOW) {

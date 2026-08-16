@@ -63,6 +63,92 @@ static void assert_status_entry(packet_reader_t *reader,
     ck_assert_int_eq(packet_reader_read_int32(reader), expected_seconds);
 }
 
+static void assert_spell_extra_message(const char *message, size_t expected_length) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    object *spell = arch_get("spell_transform_wealth");
+    ck_assert_ptr_nonnull(spell);
+    spell->stats.sp = SP_TRANSFORM_WEALTH;
+    FREE_AND_COPY_HASH(spell->msg, message);
+
+    packet_struct *packet = packet_new(0, 128, 64);
+    add_object_to_packet(packet, spell, pl, CMD_APPLY_ACTION_NORMAL, UPD_TYPE | UPD_EXTRA, 0);
+
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), spell->count);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), SPELL);
+    (void)packet_reader_read_uint8(&reader);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), 255);
+    (void)packet_reader_read_uint16(&reader);
+    (void)packet_reader_read_uint32(&reader);
+    (void)packet_reader_read_uint32(&reader);
+
+    char received[ATRINIK_PROTOCOL_ITEM_EXTRA_MESSAGE_SIZE];
+    ck_assert(packet_reader_read_string(&reader, VS(received)));
+    ck_assert_uint_eq(strlen(received), expected_length);
+    ck_assert(packet_reader_finish(&reader));
+
+    packet_free(packet);
+    object_destroy(spell);
+    object_destroy(pl);
+}
+
+static void assert_skill_extra_message(const char *message, size_t expected_length) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->socket_version = 1065;
+
+    object *skill = arch_get("skill_wizardry_spells");
+    ck_assert_ptr_nonnull(skill);
+    FREE_AND_COPY_HASH(skill->msg, message);
+
+    packet_struct *packet = packet_new(0, 128, 64);
+    add_object_to_packet(packet, skill, pl, CMD_APPLY_ACTION_NORMAL, UPD_TYPE | UPD_EXTRA, 0);
+
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), skill->count);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), SKILL);
+    (void)packet_reader_read_uint8(&reader);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), 255);
+    (void)packet_reader_read_uint8(&reader);
+    (void)packet_reader_read_int64(&reader);
+
+    char received[ATRINIK_PROTOCOL_ITEM_EXTRA_MESSAGE_SIZE];
+    ck_assert(packet_reader_read_string(&reader, VS(received)));
+    ck_assert_uint_eq(strlen(received), expected_length);
+    ck_assert(packet_reader_finish(&reader));
+
+    packet_free(packet);
+    object_destroy(skill);
+    object_destroy(pl);
+}
+
+START_TEST(test_spell_extra_message_wire_limit) {
+    char exact[ATRINIK_PROTOCOL_ITEM_EXTRA_MESSAGE_SIZE];
+    memset(exact, 'x', 252);
+    memcpy(exact + 252, "\xE2\x82\xAC", 3);
+    exact[255] = '\0';
+    assert_spell_extra_message(exact, 255);
+
+    char oversized_ascii[ATRINIK_PROTOCOL_ITEM_EXTRA_MESSAGE_SIZE + 1U];
+    memset(oversized_ascii, 'x', sizeof(oversized_ascii) - 1U);
+    oversized_ascii[sizeof(oversized_ascii) - 1U] = '\0';
+    assert_spell_extra_message(oversized_ascii, 255);
+
+    char oversized_utf8[ATRINIK_PROTOCOL_ITEM_EXTRA_MESSAGE_SIZE + 1U];
+    memset(oversized_utf8, 'x', 253);
+    memcpy(oversized_utf8 + 253, "\xE2\x82\xAC", 3);
+    oversized_utf8[256] = '\0';
+    assert_spell_extra_message(oversized_utf8, 253);
+    assert_skill_extra_message(oversized_ascii, 255);
+}
+END_TEST
+
 START_TEST(test_update_map_item_name_and_count_marks_look_stale) {
     mapstruct *map;
     object *pl;
@@ -812,6 +898,7 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_spell_extra_message_wire_limit);
     tcase_add_test(tc_core, test_update_map_item_name_and_count_marks_look_stale);
     tcase_add_test(tc_core, test_player_status_hidden_disease_lifecycle_and_snapshot);
     tcase_add_test(tc_core, test_player_status_disease_infection_duplicate_and_cure);
