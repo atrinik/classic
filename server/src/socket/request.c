@@ -952,7 +952,7 @@ static bool map_space_has_roof(mapstruct *map, int x, int y) {
     for (object *tmp = GET_MAP_OB(map, x, y); tmp != NULL; tmp = tmp->above) {
         /* Roof archetypes deliberately use the hidden wall layer rather than
          * blocksview: they are camera occluders, not gameplay LOS blockers. */
-        if (tmp->layer == LAYER_WALL && QUERY_FLAG(tmp, FLAG_HIDDEN)) {
+        if (object_is_roof_surface(tmp)) {
             return true;
         }
     }
@@ -1712,6 +1712,8 @@ void draw_client_map2(object *pl) {
                             }
                         }
 
+                        bool roof_surface = object_is_roof_surface(tmp);
+
                         if (tmp != NULL &&
                             (!light_set[sub_layer] || (layer == LAYER_EFFECT && sub_layer > 0))) {
                             light_set[sub_layer] = 1;
@@ -1721,10 +1723,12 @@ void draw_client_map2(object *pl) {
                                 raw_light[sub_layer] += global_darkness_table[MAX_DARKNESS];
                             }
 
-                            if (raw_light[sub_layer] < 100) {
-                                if (QUERY_FLAG(tmp, FLAG_HIDDEN) || special_vision & 1) {
-                                    raw_light[sub_layer] = 100;
-                                }
+                            /* XRAY vision is an explicit authorization to see
+                             * through darkness. Ordinary roofs retain their
+                             * physical illumination, including zero; their
+                             * geometry is kept below even when unlit. */
+                            if (raw_light[sub_layer] < 100 && special_vision & 1) {
+                                raw_light[sub_layer] = 100;
                             }
 
                             light_radiance_from_raw(GET_MAP_SPACE_PTR(tmp->map, tmp->x, tmp->y),
@@ -1733,7 +1737,7 @@ void draw_client_map2(object *pl) {
                                                     light_rgb_radiance[sub_layer]);
                         }
 
-                        if (tmp != NULL && raw_light[sub_layer] <= 0) {
+                        if (tmp != NULL && raw_light[sub_layer] <= 0 && !roof_surface) {
                             tmp = NULL;
                         }
 
@@ -1888,7 +1892,7 @@ void draw_client_map2(object *pl) {
                                 flags2 |= MAP2_FLAG2_GLOW;
                             }
 
-                            if (layer == LAYER_WALL && QUERY_FLAG(head, FLAG_HIDDEN)) {
+                            if (object_is_roof_surface(head)) {
                                 flags2 |= MAP2_FLAG2_ROOF;
                                 is_roof = 1;
                             }

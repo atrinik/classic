@@ -427,6 +427,17 @@ static bool light_space_has_floor(mapstruct *map, int x, int y) {
     return false;
 }
 
+/** Whether a map space contains a roof/camera surface that ends local rays. */
+static bool light_space_has_roof(mapstruct *map, int x, int y) {
+    for (object *tmp = GET_MAP_OB(map, x, y); tmp != NULL; tmp = tmp->above) {
+        if (object_is_roof_surface(tmp)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static int light_round_div(int value, int divisor) {
     if (value < 0) {
         return -((-value + divisor / 2) / divisor);
@@ -467,6 +478,12 @@ static bool light_path_is_clear(mapstruct *map, int x, int y, int dx, int dy, in
         }
 
         bool target = step == steps;
+
+        /* A roof receives the ray on its exposed face, but an opaque camera
+         * surface cannot pass local light to a higher or farther target. */
+        if (!target && light_space_has_roof(current_map, current_rx, current_ry)) {
+            return false;
+        }
 
         if (current_z != previous_z) {
             mapstruct *upper_map;
