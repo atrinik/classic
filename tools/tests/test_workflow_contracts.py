@@ -38,6 +38,26 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(package.count("build-args: ATRINIK_PACKAGE_VERSION="), 1)
         self.assertEqual(candidate.count("hashFiles('cmake/**'"), 2)
 
+    def test_server_image_copies_authoritative_cmake_version_module(self) -> None:
+        dockerfile = (ROOT / "server/Dockerfile").read_text(encoding="utf-8")
+        server_cmake = (ROOT / "server/CMakeLists.txt").read_text(encoding="utf-8")
+
+        copy_lines = {
+            line.strip()
+            for line in dockerfile.splitlines()
+            if line.lstrip().startswith("COPY ")
+        }
+        self.assertEqual(
+            copy_lines & {"COPY cmake ./cmake"}, {"COPY cmake ./cmake"}
+        )
+        self.assertEqual(dockerfile.count("COPY cmake ./cmake"), 1)
+        self.assertIn(
+            '"${ATRINIK_COMPONENT_SOURCE_DIR}/../cmake/AtrinikVersion.cmake"',
+            server_cmake,
+        )
+        self.assertTrue((ROOT / "cmake/AtrinikVersion.cmake").is_file())
+        self.assertFalse((ROOT / "server/cmake/AtrinikVersion.cmake").exists())
+
     def test_content_updater_has_a_narrow_human_reviewed_mutation_boundary(self) -> None:
         workflow = self.text("update-content.yml")
         self.assertIn("  schedule:\n", workflow)

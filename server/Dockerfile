@@ -14,6 +14,7 @@ RUN apt-get update \
 
 WORKDIR /src
 COPY LICENSE.md ATTRIBUTIONS.md ./
+COPY cmake ./cmake
 COPY protocol ./protocol
 COPY libatrinik ./libatrinik
 COPY server ./server
