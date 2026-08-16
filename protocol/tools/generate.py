@@ -36,6 +36,7 @@ def load_schema(path: Path) -> dict[str, object]:
         "schema_version",
         "protocol_version",
         "item_name_size",
+        "item_extra_message_size",
         "player_status",
         *DIRECTIONS,
     }:
@@ -52,6 +53,11 @@ def load_schema(path: Path) -> dict[str, object]:
         raise ValueError("item_name_size must be an integer")
     if item_name_size <= 1 or item_name_size > 0xFFFFFFFF:
         raise ValueError("item_name_size is outside the supported range")
+    item_extra_message_size = data["item_extra_message_size"]
+    if isinstance(item_extra_message_size, bool) or not isinstance(item_extra_message_size, int):
+        raise ValueError("item_extra_message_size must be an integer")
+    if item_extra_message_size <= 1 or item_extra_message_size > 0xFFFFFFFF:
+        raise ValueError("item_extra_message_size is outside the supported range")
 
     player_status = data["player_status"]
     if not isinstance(player_status, dict) or set(player_status) != {
@@ -148,6 +154,7 @@ def render_header(schema: dict[str, object]) -> str:
         f"#define ATRINIK_PROTOCOL_VERSION {schema['protocol_version']}U\n",
         "#define SOCKET_VERSION ATRINIK_PROTOCOL_VERSION\n",
         f"#define ATRINIK_PROTOCOL_ITEM_NAME_SIZE {schema['item_name_size']}U\n\n",
+        f"#define ATRINIK_PROTOCOL_ITEM_EXTRA_MESSAGE_SIZE {schema['item_extra_message_size']}U\n\n",
         f"#define ATRINIK_PLAYER_STATUS_MAX_STATUSES {schema['player_status']['max_statuses']}U\n",
         f"#define ATRINIK_PLAYER_STATUS_KEY_SIZE {schema['player_status']['key_size']}U\n",
         f"#define ATRINIK_PLAYER_STATUS_NAME_SIZE {schema['player_status']['name_size']}U\n",
@@ -245,6 +252,7 @@ def render_python(schema: dict[str, object]) -> str:
         "from enum import IntEnum\n\n",
         f"PROTOCOL_VERSION = {schema['protocol_version']}\n\n\n",
         f"ITEM_NAME_SIZE = {schema['item_name_size']}\n\n\n",
+        f"ITEM_EXTRA_MESSAGE_SIZE = {schema['item_extra_message_size']}\n\n\n",
         f"PLAYER_STATUS_MAX_STATUSES = {schema['player_status']['max_statuses']}\n",
         f"PLAYER_STATUS_KEY_SIZE = {schema['player_status']['key_size']}\n",
         f"PLAYER_STATUS_NAME_SIZE = {schema['player_status']['name_size']}\n",
@@ -266,6 +274,7 @@ def render_python_init(schema: dict[str, object]) -> str:
     del schema
     exports = [
         "ClientToServerCommand",
+        "ITEM_EXTRA_MESSAGE_SIZE",
         "ITEM_NAME_SIZE",
         "PLAYER_STATUS_KEY_SIZE",
         "PLAYER_STATUS_MAX_STATUSES",

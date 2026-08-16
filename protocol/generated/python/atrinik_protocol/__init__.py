@@ -4,6 +4,7 @@
 
 from .game import (
     ClientToServerCommand,
+    ITEM_EXTRA_MESSAGE_SIZE,
     ITEM_NAME_SIZE,
     PLAYER_STATUS_KEY_SIZE,
     PLAYER_STATUS_MAX_STATUSES,
@@ -16,6 +17,7 @@ from .game import (
 
 __all__ = [
     "ClientToServerCommand",
+    "ITEM_EXTRA_MESSAGE_SIZE",
     "ITEM_NAME_SIZE",
     "PLAYER_STATUS_KEY_SIZE",
     "PLAYER_STATUS_MAX_STATUSES",
