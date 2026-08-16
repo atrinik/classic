@@ -27,6 +27,8 @@
 
 #include <decls.h>
 
+#include <stdint.h>
+
 /**
  * @file
  * Public declarations for the corresponding server module.
@@ -49,6 +51,15 @@ extern void light_radiance_from_raw(const MapSpace *space,
                                     int raw_light,
                                     uint16_t *scalar_radiance,
                                     uint16_t radiance[3]);
+
+/** Invalidate the bounded celestial field after structural/topology changes. */
+extern void celestial_light_invalidate(mapstruct *map);
+
+/** Publish the bounded celestial field for one absolute gameplay hour. */
+extern bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour);
+
+/** Ensure the field used by map_get_darkness() matches the current hour/profile. */
+extern void celestial_light_ensure(mapstruct *map);
 
 extern void adjust_light_source(mapstruct *map, int x, int y, int light);
 

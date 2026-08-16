@@ -401,6 +401,12 @@ typedef struct MapSpace_s {
     /** Positive-source white-reference sum, scaled by Q0.16 one. */
     int64_t light_source_color_weight;
 
+    /** Authoritative celestial scalar contribution, before local sources. */
+    int32_t celestial_light_value;
+
+    /** Authoritative celestial RGB contribution, before local sources. */
+    int32_t celestial_light_rgb[3];
+
     /**
      * Flags about this space
      * @see map_look_flags
@@ -682,6 +688,15 @@ typedef struct mapdef {
     /** Immutable, canonicalized system metadata consumed during map loading. */
     celestial_rectangle_t *celestial_rectangles;
     uint16_t celestial_rectangle_count;
+
+    /** Structural revision used to invalidate the bounded celestial field. */
+    uint64_t celestial_structure_revision;
+
+    /** Phase/profile/topology key of the currently published celestial field. */
+    uint64_t celestial_light_key;
+
+    /** True only after a complete celestial field has been published. */
+    bool celestial_light_valid;
 
     /** Array of spaces on this map */
     MapSpace *spaces;

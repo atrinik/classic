@@ -240,6 +240,7 @@ void light_radiance_from_raw(const MapSpace *space,
             MIN(MAX(space->light_source_positive_value, 0), accumulated_source_raw);
     }
     int64_t channels[3];
+    int64_t celestial_raw = MAX(space->celestial_light_value, 0);
     for (size_t channel = 0; channel < arraysize(channels); channel++) {
         uint64_t colored_raw = 0;
         if (effective_source_raw > 0) {
@@ -252,7 +253,10 @@ void light_radiance_from_raw(const MapSpace *space,
                 colored_raw = light_div_round(color_sum, UINT16_MAX);
             }
         }
-        channels[channel] = MAX((int64_t)raw_light - effective_source_raw + (int64_t)colored_raw, 0);
+        int64_t local_raw = (int64_t)raw_light - celestial_raw;
+        channels[channel] = MAX(local_raw - effective_source_raw + (int64_t)colored_raw +
+                                    MAX(space->celestial_light_rgb[channel], 0),
+                                0);
     }
     int64_t maximum = MAX(channels[0], MAX(channels[1], channels[2]));
     if (maximum > INT64_C(40959)) {
