@@ -19,7 +19,7 @@
 
 #define LIGHTING_SCROLL_MARGIN 64
 
-typedef struct lighting_sample lighting_sample;
+typedef lighting_sample_t lighting_sample;
 
 typedef struct lighting_sprite_cache_key {
     SDL_Surface *source;
@@ -43,15 +43,6 @@ typedef struct lighting_sprite_cache_entry {
     struct lighting_sprite_cache_entry *lru_next;
     UT_hash_handle hh;
 } lighting_sprite_cache_entry;
-
-struct lighting_sample {
-    uint16_t scalar;
-    uint16_t red;
-    uint16_t green;
-    uint16_t blue;
-    uint8_t present;
-    uint8_t reserved;
-};
 
 typedef struct lighting_dirty_rect {
     int x0;
@@ -1550,6 +1541,13 @@ static uint64_t lighting_projected_signature(int x, int y, const SDL_Rect *sourc
     return signature;
 }
 
+/** Identify a sprite using one authoritative cell light sample. */
+static uint64_t lighting_constant_signature(const lighting_sample *sample, int width) {
+    uint64_t signature = UINT64_C(14695981039346656037);
+    signature = lighting_signature_uint32(signature, (uint32_t)width);
+    return lighting_signature_sample(signature, sample);
+}
+
 /**
  * Derive the complete per-column illumination that determines one structural
  * sprite's lit output. The source pixels remain identified by the retained
@@ -1631,7 +1629,7 @@ static bool lighting_sprite_illumination_count(const SDL_Rect *source_rect,
                                                lighting_surface_mode_t mode,
                                                size_t *count) {
     size_t width = (size_t)source_rect->w;
-    size_t height = mode == LIGHTING_SURFACE_STRUCTURE ? 1U : (size_t)source_rect->h;
+    size_t height = mode == LIGHTING_SURFACE_PROJECTED ? (size_t)source_rect->h : 1U;
     if (height != 0 && width > SIZE_MAX / height) {
         return false;
     }
@@ -1657,7 +1655,7 @@ static bool lighting_sprite_cache_equivalent(const lighting_sprite_cache_entry *
         return false;
     }
 
-    if (mode == LIGHTING_SURFACE_STRUCTURE) {
+    if (mode == LIGHTING_SURFACE_STRUCTURE || mode == LIGHTING_SURFACE_CONSTANT) {
         return lighting_samples_equal(
             entry->illumination, structure_column_illumination, expected);
     }
@@ -1702,6 +1700,13 @@ static lighting_sample *lighting_sprite_illumination_copy(int x,
         return copy;
     }
 
+    if (mode == LIGHTING_SURFACE_CONSTANT) {
+        for (size_t index = 0; index < *count; index++) {
+            copy[index] = structure_column_illumination[index];
+        }
+        return copy;
+    }
+
     for (int source_y = 0; source_y < source_rect->h; source_y++) {
         int light_y = MAX(0, MIN(lighting_height - 1, y + source_y));
         if (x >= 0 && x <= lighting_width - source_rect->w) {
@@ -1730,13 +1735,14 @@ static void lighting_show_surface_fallback(SDL_Surface *destination,
 }
 
 /** Draw a sprite through the cached continuous light field. */
-void lighting_show_surface(SDL_Surface *destination,
-                           int x,
-                           int y,
-                           SDL_Rect *srcrect,
-                           SDL_Surface *source,
-                           int sample_y,
-                           lighting_surface_mode_t mode) {
+static void lighting_show_surface_mode(SDL_Surface *destination,
+                                       int x,
+                                       int y,
+                                       SDL_Rect *srcrect,
+                                       SDL_Surface *source,
+                                       int sample_y,
+                                       lighting_surface_mode_t mode,
+                                       const lighting_sample *constant_sample) {
     HARD_ASSERT(destination != NULL);
     HARD_ASSERT(source != NULL);
     LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_draws);
@@ -1771,6 +1777,16 @@ void lighting_show_surface(SDL_Surface *destination,
     uint64_t illumination_signature;
     if (mode == LIGHTING_SURFACE_PROJECTED) {
         illumination_signature = lighting_projected_signature(x, y, &source_rect);
+    } else if (mode == LIGHTING_SURFACE_CONSTANT) {
+        if (constant_sample == NULL || !lighting_lit_surface_create(source_rect.w, source_rect.h)) {
+            LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, lit_sprite_fallbacks);
+            lighting_show_surface_fallback(destination, x, y, srcrect, source);
+            return;
+        }
+        for (int source_x = 0; source_x < source_rect.w; source_x++) {
+            structure_column_illumination[source_x] = *constant_sample;
+        }
+        illumination_signature = lighting_constant_signature(constant_sample, source_rect.w);
     } else {
         const int *retained_column_bottom =
             lighting_structure_geometry_find(lighting_context_current, source, &source_rect);
@@ -1834,10 +1850,17 @@ void lighting_show_surface(SDL_Surface *destination,
 
     bool source_locked = false;
 
-    if (mode == LIGHTING_SURFACE_STRUCTURE) {
+    if (mode == LIGHTING_SURFACE_STRUCTURE || mode == LIGHTING_SURFACE_CONSTANT) {
         bool lock_failed = false;
 #ifdef ATRINIK_WIDGET_TESTS
-        lock_failed = lighting_benchmark_fault_take(LIGHTING_BENCHMARK_FAULT_STRUCTURE_LOCK);
+        /* Constant roof surfaces are flat/projected transforms even though
+         * they retain one sample per source column. Keep their fault seam
+         * aligned with the projected path; ordinary structural sprites retain
+         * the structure-lock seam. */
+        uint8_t lock_fault = mode == LIGHTING_SURFACE_CONSTANT
+                                 ? LIGHTING_BENCHMARK_FAULT_PROJECTED_LOCK
+                                 : LIGHTING_BENCHMARK_FAULT_STRUCTURE_LOCK;
+        lock_failed = lighting_benchmark_fault_take(lock_fault);
 #endif
         if (lock_failed || !SDL_LockSurface(source)) {
             LOG(ERROR, "Could not lock smoothly lit sprite: %s", SDL_GetError());
@@ -1910,7 +1933,7 @@ void lighting_show_surface(SDL_Surface *destination,
             }
 
             lighting_sample illumination;
-            if (mode == LIGHTING_SURFACE_STRUCTURE) {
+            if (mode == LIGHTING_SURFACE_STRUCTURE || mode == LIGHTING_SURFACE_CONSTANT) {
                 illumination = structure_column_illumination[source_x];
             } else {
                 int light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
@@ -2000,6 +2023,41 @@ void lighting_show_surface(SDL_Surface *destination,
                                      sprite_construction,
                                      construction_started);
     surface_show(destination, x, y, &lit_rect, lighting_lit_surface);
+}
+
+void lighting_show_surface(SDL_Surface *destination,
+                           int x,
+                           int y,
+                           SDL_Rect *srcrect,
+                           SDL_Surface *source,
+                           int sample_y,
+                           lighting_surface_mode_t mode) {
+    lighting_show_surface_mode(destination, x, y, srcrect, source, sample_y, mode, NULL);
+}
+
+void lighting_show_surface_constant(SDL_Surface *destination,
+                                    int x,
+                                    int y,
+                                    SDL_Rect *srcrect,
+                                    SDL_Surface *source,
+                                    uint16_t scalar,
+                                    const uint16_t rgb[3]) {
+    lighting_sample sample = {
+        scalar,
+        rgb[0],
+        rgb[1],
+        rgb[2],
+        1,
+        0,
+    };
+    lighting_show_surface_mode(destination,
+                                x,
+                                y,
+                                srcrect,
+                                source,
+                                0,
+                                LIGHTING_SURFACE_CONSTANT,
+                                &sample);
 }
 
 #undef light_samples

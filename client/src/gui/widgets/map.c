@@ -1733,6 +1733,13 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     } else if (data->world_surface && data->smooth_lighting && !data->lightmap_pending) {
         if (data->cell->roof[map_layer]) {
             BIT_SET(effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
+            if (data->cell->light_known[data->sub_layer]) {
+                effects.smooth_dark_constant = 1;
+                effects.smooth_dark_scalar = data->cell->light_radiance[data->sub_layer];
+                memcpy(effects.smooth_dark_rgb,
+                       data->cell->light_rgb_radiance[data->sub_layer],
+                       sizeof(effects.smooth_dark_rgb));
+            }
         } else {
             BIT_SET(effects.flags, SPRITE_FLAG_SMOOTH_DARK);
             effects.smooth_dark_y =

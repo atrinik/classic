@@ -56,6 +56,9 @@ typedef struct sprite_effects {
     uint8_t glow_speed;
     uint8_t glow_state;
     int32_t smooth_dark_y; ///< Lightmap row used for smooth structural lighting.
+    uint8_t smooth_dark_constant; ///< Use the receiving cell's complete light sample.
+    uint16_t smooth_dark_scalar; ///< Scalar radiance for a constant smooth sample.
+    uint16_t smooth_dark_rgb[3]; ///< RGB radiance for a constant smooth sample.
 } sprite_effects_t;
 
 #define SPRITE_EFFECTS_NEED_RENDERING(_effects)                                                 \

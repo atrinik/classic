@@ -12,6 +12,12 @@ without floor geometry and gives only its canonical object sub-layer a light
 sample. It guards against shading such roofs with an unrelated empty player
 sub-layer.
 
+Smooth roof/camera-surface sprites consume the receiving cell's authoritative
+scalar and RGB radiance as one flat sample per sprite. Ground and ordinary
+structural sprites retain their interpolated screen-space or column-based
+lighting paths; the smooth roof goldens therefore prove that roof falloff is
+not replaced by the unrelated ground light field.
+
 The colored scene retains neutral ambient cells and adds the normative subtle
 warm and cool full-day vectors together with resolved red, blue, and magenta
 overlap samples across ground, fog, ordinary and elevated objects, walls, a
