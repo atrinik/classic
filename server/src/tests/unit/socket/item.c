@@ -63,6 +63,23 @@ static void assert_status_entry(packet_reader_t *reader,
     ck_assert_int_eq(packet_reader_read_int32(reader), expected_seconds);
 }
 
+static void assert_status_entry_face(packet_reader_t *reader,
+                                     const char *expected_key,
+                                     const char *expected_face,
+                                     const char *expected_name,
+                                     int32_t expected_seconds) {
+    char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+    char name[ATRINIK_PLAYER_STATUS_NAME_SIZE + 1U];
+    char tooltip[ATRINIK_PLAYER_STATUS_TOOLTIP_SIZE + 1U];
+    ck_assert(packet_reader_read_string(reader, VS(key)));
+    ck_assert_str_eq(key, expected_key);
+    ck_assert_uint_eq(packet_reader_read_uint16(reader), (uint16_t)find_face(expected_face, 0));
+    ck_assert(packet_reader_read_string(reader, VS(name)));
+    ck_assert_str_eq(name, expected_name);
+    ck_assert(packet_reader_read_string(reader, VS(tooltip)));
+    ck_assert_int_eq(packet_reader_read_int32(reader), expected_seconds);
+}
+
 static void assert_spell_extra_message(const char *message, size_t expected_length) {
     mapstruct *map;
     object *pl;
@@ -309,6 +326,7 @@ START_TEST(test_player_status_explicit_force_allowlist) {
         "confusion",
         "depletion",
         "force_effect",
+        "slowness",
         "soul_depletion",
     };
     for (size_t i = 0; i < arraysize(published); i++) {
@@ -440,10 +458,11 @@ START_TEST(test_player_status_capacity_resnapshots_membership_changes) {
     packet_reader_init(&reader, packet->data, packet->len);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_SNAPSHOT);
     ck_assert_uint_eq(packet_reader_read_uint16(&reader), ATRINIK_PLAYER_STATUS_MAX_STATUSES);
-    assert_status_entry(&reader,
-                        "condition:paralysis",
-                        "paralysis",
-                        (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
+    assert_status_entry_face(&reader,
+                             "condition:paralysis",
+                             "paralysis.101",
+                             "paralysis",
+                             (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
     char keys[ATRINIK_PLAYER_STATUS_MAX_STATUSES - 1U][ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
     for (size_t i = 0; i < arraysize(keys); i++) {
         char name[ATRINIK_PLAYER_STATUS_NAME_SIZE + 1U];
@@ -654,10 +673,11 @@ START_TEST(test_player_status_paralysis_refresh_snapshot_and_cure) {
     packet_reader_t reader;
     packet_reader_init(&reader, packet->data, packet->len);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
-    assert_status_entry(&reader,
-                        "condition:paralysis",
-                        "paralysis",
-                        (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
+    assert_status_entry_face(&reader,
+                             "condition:paralysis",
+                             "paralysis.101",
+                             "paralysis",
+                             (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
     ck_assert(packet_reader_finish(&reader));
 
     double first_debt = pl->speed_left;
@@ -668,10 +688,11 @@ START_TEST(test_player_status_paralysis_refresh_snapshot_and_cure) {
     ck_assert_ptr_nonnull(packet);
     packet_reader_init(&reader, packet->data, packet->len);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
-    assert_status_entry(&reader,
-                        "condition:paralysis",
-                        "paralysis",
-                        (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
+    assert_status_entry_face(&reader,
+                             "condition:paralysis",
+                             "paralysis.101",
+                             "paralysis",
+                             (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
     ck_assert(packet_reader_finish(&reader));
 
     socket_buffer_clear(CONTR(pl)->cs);
@@ -681,10 +702,11 @@ START_TEST(test_player_status_paralysis_refresh_snapshot_and_cure) {
     ck_assert_ptr_nonnull(packet);
     packet_reader_init(&reader, packet->data, packet->len);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_UPSERT);
-    assert_status_entry(&reader,
-                        "condition:paralysis",
-                        "paralysis",
-                        (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
+    assert_status_entry_face(&reader,
+                             "condition:paralysis",
+                             "paralysis.101",
+                             "paralysis",
+                             (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
     ck_assert(packet_reader_finish(&reader));
 
     socket_buffer_clear(CONTR(pl)->cs);
@@ -694,10 +716,11 @@ START_TEST(test_player_status_paralysis_refresh_snapshot_and_cure) {
     packet_reader_init(&reader, packet->data, packet->len);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), PLAYER_STATUS_SNAPSHOT);
     ck_assert_uint_eq(packet_reader_read_uint16(&reader), 1);
-    assert_status_entry(&reader,
-                        "condition:paralysis",
-                        "paralysis",
-                        (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
+    assert_status_entry_face(&reader,
+                             "condition:paralysis",
+                             "paralysis.101",
+                             "paralysis",
+                             (int32_t)ceil(-pl->speed_left / FABS(pl->speed) / MAX_TICKS));
     ck_assert(packet_reader_finish(&reader));
 
     socket_buffer_clear(CONTR(pl)->cs);
