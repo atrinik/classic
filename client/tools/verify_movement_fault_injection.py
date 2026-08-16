@@ -25,6 +25,29 @@ LIGHTING_FAULTS = (
 )
 
 
+def verify_cursor(client: Path, manifest: Path) -> None:
+    """Run one dense cursor matrix in the normal coverage test set."""
+    cursor_manifest = manifest.with_name("dense-cursor.xml")
+    environment = os.environ.copy()
+    environment.pop("ATRINIK_MOVEMENT_FAULT", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).with_name("verify_cursor_benchmark.py")),
+            str(client),
+            str(cursor_manifest),
+            "standard",
+        ],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+        timeout=180,
+    )
+    if result.returncode != 0:
+        raise SystemExit(f"dense cursor coverage guard failed:\n{result.stderr}")
+
+
 def invoke(
     client: Path, arguments: list[object], fault: str = FAULT
 ) -> subprocess.CompletedProcess[str]:
@@ -103,6 +126,7 @@ def main() -> int:
             lighting_fault,
             f"player-view: movement fault {lighting_fault} was injected and detected",
         )
+    verify_cursor(client, movement_manifest)
     return 0
 
 
