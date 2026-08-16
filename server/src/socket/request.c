@@ -2593,6 +2593,9 @@ void socket_command_move_path(socket_struct *ns,
         return;
     }
 
+    bool adjacent_destination =
+        abs((int)x - pl->cs->mapx_2) <= 1 && abs((int)y - pl->cs->mapy_2) <= 1;
+
     /* A valid request always replaces the previous click-to-move queue, even
      * when it cannot produce a new route. */
     player_path_clear(pl);
@@ -2638,9 +2641,13 @@ void socket_command_move_path(socket_struct *ns,
         }
     }
 
-    /* Successful searches use proximity-goal semantics. Add the exact goal
-     * only when it is occupiable under the pathfinder's collision policy. */
-    if (path_tile_blocked(pl->ob, m, xt, yt) == 0) {
+    /* Successful searches use proximity-goal semantics. An adjacent click is
+     * the same single step as direct movement, so let it use direct movement's
+     * collision policy. Longer routes retain pathfinding's hidden-tile policy. */
+    bool goal_open = adjacent_destination
+                         ? CONTR(pl->ob)->tcl || object_blocked(pl->ob, m, xt, yt) == 0
+                         : path_tile_blocked(pl->ob, m, xt, yt) == 0;
+    if (goal_open) {
         player_path_add(pl, m, xt, yt);
     }
     path_result_free(&result);
