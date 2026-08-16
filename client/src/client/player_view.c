@@ -60,6 +60,9 @@
 #define PLAYER_VIEW_MOVEMENT_CHECKPOINTS 12U
 #define PLAYER_VIEW_MOVEMENT_RNG_SEED UINT64_C(0x1961932026)
 #define PLAYER_VIEW_MOVEMENT_SIMULATED_COMMAND_US UINT64_C(5000)
+#define PLAYER_VIEW_CURSOR_TICKS 16U
+#define PLAYER_VIEW_CURSOR_SCHEMA_VERSION 1U
+#define PLAYER_VIEW_CURSOR_DIRTY_RADIUS 128
 
 #ifndef ATRINIK_BUILD_TYPE
 #define ATRINIK_BUILD_TYPE "unknown"
@@ -85,6 +88,7 @@ typedef enum player_view_mode {
     PLAYER_VIEW_BENCHMARK_STANDARD,
     PLAYER_VIEW_BENCHMARK_LARGE,
     PLAYER_VIEW_BENCHMARK_MOVEMENT,
+    PLAYER_VIEW_BENCHMARK_CURSOR,
 } player_view_mode_t;
 
 typedef struct player_view_asset {
@@ -1170,6 +1174,68 @@ static uint64_t player_view_benchmark(SDL_Surface *surface) {
     return durations[arraysize(durations) / 2];
 }
 
+typedef struct player_view_cursor_phase {
+    const char *name;
+    uint32_t redraw_reasons;
+    uint64_t dirty_pixels;
+    uint64_t frame_durations[PLAYER_VIEW_CURSOR_TICKS];
+    uint64_t wait_durations[PLAYER_VIEW_CURSOR_TICKS];
+    size_t frame_samples;
+    map_benchmark_statistics_t map;
+    lighting_benchmark_statistics_t lighting;
+    render_profile_snapshot_t render;
+    sprite_cache_statistics_t sprite_cache_start;
+    sprite_cache_statistics_t sprite_cache_end;
+    char pixels_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+} player_view_cursor_phase_t;
+
+#ifdef ATRINIK_WIDGET_TESTS
+static SDL_Rect player_view_cursor_dirty_rect(SDL_Surface *surface,
+                                               int old_x,
+                                               int old_y,
+                                               int new_x,
+                                               int new_y) {
+    int left = MIN(old_x, new_x) - PLAYER_VIEW_CURSOR_DIRTY_RADIUS;
+    int top = MIN(old_y, new_y) - PLAYER_VIEW_CURSOR_DIRTY_RADIUS;
+    int right = MAX(old_x, new_x) + PLAYER_VIEW_CURSOR_DIRTY_RADIUS + 1;
+    int bottom = MAX(old_y, new_y) + PLAYER_VIEW_CURSOR_DIRTY_RADIUS + 1;
+    SDL_Rect rect = {.x = left, .y = top, .w = right - left, .h = bottom - top};
+    if (rect.x < 0) {
+        rect.w += rect.x;
+        rect.x = 0;
+    }
+    if (rect.y < 0) {
+        rect.h += rect.y;
+        rect.y = 0;
+    }
+    if (rect.x + rect.w > surface->w) {
+        rect.w = surface->w - rect.x;
+    }
+    if (rect.y + rect.h > surface->h) {
+        rect.h = surface->h - rect.y;
+    }
+    return rect;
+}
+
+static bool player_view_cursor_phase_begin(player_view_cursor_phase_t *phase) {
+    lighting_benchmark_statistics_reset();
+    map_benchmark_statistics_reset();
+    render_profiler_statistics_reset();
+    sprite_cache_statistics_get(&phase->sprite_cache_start);
+    sprite_cache_statistics_reset();
+    return true;
+}
+
+static bool player_view_cursor_phase_end(player_view_cursor_phase_t *phase,
+                                          SDL_Surface *surface) {
+    lighting_benchmark_statistics_get(&phase->lighting);
+    map_benchmark_statistics_get(&phase->map);
+    render_profiler_statistics_get(&phase->render);
+    sprite_cache_statistics_get(&phase->sprite_cache_end);
+    return player_view_surface_sha256(surface, phase->pixels_digest);
+}
+#endif
+
 typedef struct player_view_movement_phase {
     const char *name;
     bool isolated_lighting;
@@ -1580,6 +1646,7 @@ static void player_view_render_stages_json(const render_profile_snapshot_t *stat
         render_profile_stage_t stage;
     } stages[] = {
         {"map", RENDER_PROFILE_MAP},
+        {"pointer", RENDER_PROFILE_POINTER},
         {"map_scratch_clear", RENDER_PROFILE_MAP_SCRATCH_CLEAR},
         {"ground", RENDER_PROFILE_MAP_GROUND},
         {"ground_composite", RENDER_PROFILE_MAP_GROUND_COMPOSITE},
@@ -1637,6 +1704,155 @@ static void player_view_sprite_cache_json(const sprite_cache_statistics_t *start
            (uint64_t)end->estimated_bytes,
            (uint64_t)end->peak_entries,
            (uint64_t)end->peak_estimated_bytes);
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+static void player_view_cursor_phase_json(const player_view_cursor_phase_t *phase) {
+    printf("{\"name\":\"%s\",\"redraw_reasons\":%u,\"dirty_pixels\":%" PRIu64
+           ",\"frame\":",
+           phase->name,
+           phase->redraw_reasons,
+           phase->dirty_pixels);
+    player_view_timing_json(phase->frame_durations, phase->frame_samples);
+    printf(",\"wait\":");
+    player_view_timing_json(phase->wait_durations, phase->frame_samples);
+    printf(",\"map\":");
+    player_view_map_json(&phase->map);
+    printf(",\"lighting\":{\"counters\":");
+    player_view_lighting_counters_json(&phase->lighting.counters);
+    printf(",\"timings\":");
+    player_view_lighting_timings_json(&phase->lighting.timings);
+    printf("},\"render_stages\":");
+    player_view_render_stages_json(&phase->render);
+    printf(",\"sprite_cache\":");
+    player_view_sprite_cache_json(&phase->sprite_cache_start, &phase->sprite_cache_end);
+    printf(",\"pixels_sha256\":\"%s\"}", phase->pixels_digest);
+}
+#endif
+
+static bool player_view_cursor_benchmark(SDL_Surface *surface,
+                                         const player_view_manifest_t *manifest,
+                                         bool large_viewport) {
+#ifndef ATRINIK_WIDGET_TESTS
+    (void)surface;
+    (void)manifest;
+    (void)large_viewport;
+    fprintf(stderr, "player-view: cursor benchmark requires widget tests\n");
+    return false;
+#else
+    static const char *const names[] = {
+        "stationary",
+        "world_pointer",
+        "ui_pointer",
+        "animation",
+        "movement",
+    };
+    player_view_cursor_phase_t phases[arraysize(names)] = {0};
+    for (size_t i = 0; i < arraysize(names); i++) {
+        phases[i].name = names[i];
+    }
+    render_profiler_set_enabled(true);
+
+    SDL_Surface *completed = SDL_CreateSurface(surface->w, surface->h, surface->format);
+    if (completed == NULL || !SDL_SetSurfaceBlendMode(completed, SDL_BLENDMODE_NONE)) {
+        SDL_DestroySurface(completed);
+        fprintf(stderr, "player-view: cursor benchmark cannot retain completed world: %s\n",
+                SDL_GetError());
+        return false;
+    }
+    map_redraw_consume();
+    map_benchmark_statistics_reset();
+    if (!SDL_FillSurfaceRect(surface, NULL, 0)) {
+        SDL_DestroySurface(completed);
+        return false;
+    }
+    map_draw_map(surface);
+    map_redraw_consume();
+    if (!SDL_BlitSurface(surface, NULL, completed, NULL)) {
+        SDL_DestroySurface(completed);
+        return false;
+    }
+
+    const uint64_t target_ns = UINT64_C(125000000);
+    int old_x = surface->w / 2;
+    int old_y = surface->h / 2;
+    widget_map_pointer_test_set(old_x, old_y, false);
+
+    for (size_t phase_index = 0; phase_index < arraysize(phases); phase_index++) {
+        player_view_cursor_phase_t *phase = &phases[phase_index];
+        player_view_cursor_phase_begin(phase);
+        for (uint32_t tick = 0; tick < PLAYER_VIEW_CURSOR_TICKS; tick++) {
+            uint64_t started = SDL_GetTicksNS();
+            if (phase_index == 0) {
+                widget_map_pointer_test_set(old_x, old_y, false);
+            } else if (phase_index == 1 || phase_index == 2) {
+                int new_x = surface->w / 2 + (int)(tick % 8) * 4;
+                int new_y = surface->h / 2 + (int)(tick % 4) * 3;
+                SDL_Rect dirty = player_view_cursor_dirty_rect(surface, old_x, old_y, new_x, new_y);
+                if (!SDL_BlitSurface(completed, &dirty, surface, &dirty)) {
+                    SDL_DestroySurface(completed);
+                    return false;
+                }
+                phase->dirty_pixels += (uint64_t)dirty.w * (uint64_t)dirty.h;
+                widget_map_pointer_test_set(new_x, new_y, phase_index == 1);
+                uint64_t pointer_started = render_profiler_begin();
+                map_draw_pointer_overlay();
+                render_profiler_end(RENDER_PROFILE_POINTER, pointer_started);
+                old_x = new_x;
+                old_y = new_y;
+            } else if (phase_index == 3) {
+                map_redraw_request(MAP_REDRAW_REASON_ANIMATION);
+                phase->redraw_reasons |= map_redraw_pending_reasons();
+                if (!map_draw_animation(surface)) {
+                    SDL_DestroySurface(completed);
+                    fprintf(stderr, "player-view: cursor animation pass could not reuse world\n");
+                    return false;
+                }
+                map_animation_redraw_consume();
+            } else {
+                map_redraw_request(MAP_REDRAW_REASON_MAP_PACKET);
+                map_redraw_request(MAP_REDRAW_REASON_SCROLL);
+                phase->redraw_reasons |= map_redraw_pending_reasons();
+                if (!SDL_FillSurfaceRect(surface, NULL, 0)) {
+                    SDL_DestroySurface(completed);
+                    return false;
+                }
+                map_draw_map(surface);
+                map_redraw_consume();
+            }
+            uint64_t elapsed = SDL_GetTicksNS() - started;
+            phase->frame_durations[phase->frame_samples] = elapsed;
+            phase->wait_durations[phase->frame_samples] = elapsed < target_ns ? target_ns - elapsed : 0;
+            phase->frame_samples++;
+            render_profiler_frame_finished(phase_index >= 3);
+        }
+        if (!player_view_cursor_phase_end(phase, surface)) {
+            SDL_DestroySurface(completed);
+            return false;
+        }
+        if (phase_index == 3 && !SDL_BlitSurface(surface, NULL, completed, NULL)) {
+            SDL_DestroySurface(completed);
+            return false;
+        }
+    }
+
+    printf("{\"schema\":%u,\"benchmark\":\"cursor-redraw\",\"fixture\":\"dense-multi-depth-v1\","
+           "\"snapshot_sha256\":\"%s\",\"viewport\":\"%s\",\"width\":%d,\"height\":%d,"
+           "\"lighting\":\"%s\",\"completed_world_reused\":true,\"phases\":[",
+           PLAYER_VIEW_CURSOR_SCHEMA_VERSION,
+           manifest->snapshot_digest,
+           large_viewport ? "large" : "standard",
+           surface->w,
+           surface->h,
+           manifest->smooth_lighting ? "smooth" : "discrete");
+    for (size_t i = 0; i < arraysize(phases); i++) {
+        printf("%s", i == 0 ? "" : ",");
+        player_view_cursor_phase_json(&phases[i]);
+    }
+    printf("]}\n");
+    SDL_DestroySurface(completed);
+    return true;
+#endif
 }
 
 static bool player_view_movement_fixture_parse(const uint8_t *data,
@@ -2948,7 +3164,14 @@ int player_view_main(int argc, char *argv[]) {
     bool isolated_lighting = false;
     bool fine_timing = true;
     bool movement_benchmark = strcmp(argv[0], "--player-view-movement-benchmark") == 0;
-    if ((argc == 3 || ((argc >= 4 && argc <= 6) && movement_benchmark)) &&
+    bool cursor_benchmark = strcmp(argv[0], "--player-view-cursor-benchmark") == 0;
+    if (cursor_benchmark) {
+        if (argc != 3 || (strcmp(argv[2], "standard") != 0 && strcmp(argv[2], "large") != 0)) {
+            fprintf(stderr, "player-view: cursor benchmark viewport must be standard or large\n");
+            return 2;
+        }
+        mode = PLAYER_VIEW_BENCHMARK_CURSOR;
+    } else if ((argc == 3 || ((argc >= 4 && argc <= 6) && movement_benchmark)) &&
         (strcmp(argv[0], "--player-view-benchmark") == 0 || movement_benchmark)) {
         if (strcmp(argv[2], "standard") == 0) {
             mode = strcmp(argv[0], "--player-view-benchmark") == 0 ? PLAYER_VIEW_BENCHMARK_STANDARD
@@ -2994,6 +3217,7 @@ int player_view_main(int argc, char *argv[]) {
         fprintf(stderr,
                 "usage: atrinik --player-view MANIFEST OUTPUT.png|-\n"
                 "       atrinik --player-view-benchmark MANIFEST standard|large\n"
+                "       atrinik --player-view-cursor-benchmark MANIFEST standard|large\n"
                 "       atrinik --player-view-movement-benchmark MANIFEST "
                 "standard|large "
                 "[translated|full] [production|isolated] [timed|untimed]\n");
@@ -3006,7 +3230,8 @@ int player_view_main(int argc, char *argv[]) {
         return 3;
     }
     if ((mode == PLAYER_VIEW_BENCHMARK_LARGE ||
-         (mode == PLAYER_VIEW_BENCHMARK_MOVEMENT && strcmp(argv[2], "large") == 0))) {
+         (mode == PLAYER_VIEW_BENCHMARK_MOVEMENT && strcmp(argv[2], "large") == 0) ||
+         (mode == PLAYER_VIEW_BENCHMARK_CURSOR && strcmp(argv[2], "large") == 0))) {
         manifest.viewport_width = PLAYER_VIEW_LARGE_WIDTH;
         manifest.viewport_height = PLAYER_VIEW_LARGE_HEIGHT;
     }
@@ -3199,6 +3424,12 @@ int player_view_main(int argc, char *argv[]) {
     uint64_t benchmark_median_ns = 0;
     if (mode == PLAYER_VIEW_BENCHMARK_STANDARD || mode == PLAYER_VIEW_BENCHMARK_LARGE) {
         benchmark_median_ns = player_view_benchmark(surface);
+    } else if (mode == PLAYER_VIEW_BENCHMARK_CURSOR) {
+        if (!player_view_cursor_benchmark(surface, &manifest, strcmp(argv[2], "large") == 0)) {
+            goto cleanup;
+        }
+        result = 0;
+        goto cleanup;
     } else if (mode == PLAYER_VIEW_BENCHMARK_MOVEMENT) {
         if (!player_view_movement_benchmark(surface,
                                             &manifest,

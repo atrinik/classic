@@ -3883,6 +3883,21 @@ bool map_draw_animation(SDL_Surface *surface) {
     return true;
 }
 
+/** Draw the tile cue after the completed screen frame has been retained. */
+void map_draw_pointer_overlay(void) {
+    if (!map_show_mouse || widget_mouse_event.owner != cur_widget[MAP_ID]) {
+        return;
+    }
+
+    int tx, ty;
+    if (!mouse_to_tile_coords(cursor_x, cursor_y, &tx, &ty)) {
+        map_show_mouse = false;
+        return;
+    }
+
+    map_draw_one(tx, ty, TEXTURE_CLIENT("square_highlight"));
+}
+
 /** Return the exact source or scaled surface selected by the map blit. */
 static SDL_Surface *map_displayed_surface(widgetdata *widget) {
     if (setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) != 100 && zoomed != NULL) {
@@ -4382,15 +4397,6 @@ static void widget_draw(widgetdata *widget) {
     SDL_Surface *displayed = map_displayed_surface(widget);
     SDL_BlitSurface(displayed, NULL, ScreenSurface, &box);
 
-    if (map_show_mouse && widget_mouse_event.owner == cur_widget[MAP_ID]) {
-        int tx, ty;
-        if (!mouse_to_tile_coords(cursor_x, cursor_y, &tx, &ty)) {
-            map_show_mouse = false;
-        } else {
-            map_draw_one(tx, ty, TEXTURE_CLIENT("square_highlight"));
-        }
-    }
-
     /* The damage numbers */
     map_anims_play();
 
@@ -4540,6 +4546,13 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
 
 void widget_map_draw_test(widgetdata *widget) {
     widget_draw(widget);
+}
+
+void widget_map_pointer_test_set(int x, int y, bool world_pointer) {
+    cursor_x = x;
+    cursor_y = y;
+    widget_mouse_event.owner = world_pointer ? cur_widget[MAP_ID] : NULL;
+    map_show_mouse = world_pointer;
 }
 
 void widget_map_ui_test_begin(void) {
