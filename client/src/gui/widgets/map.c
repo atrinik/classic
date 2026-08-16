@@ -3431,9 +3431,6 @@ map_render_commands(SDL_Surface *surface,
         } else {
             grouped_exit_cues = true;
         }
-        if (grouped_exit_cues) {
-            map_exit_cue_cache_draw(surface, exit_cues);
-        }
     }
 
     uint64_t profile_effects_started = render_profiler_begin();
@@ -3465,6 +3462,12 @@ map_render_commands(SDL_Surface *surface,
     render_profiler_end(RENDER_PROFILE_MAP_SPRITE_EFFECTS, profile_effects_started);
 
     if (primary_surface) {
+        /* Draw grouped cues after the world painter, matching the legacy
+         * per-sprite cue phase so later sprites cannot erase the perimeter. */
+        if (grouped_exit_cues) {
+            map_exit_cue_cache_draw(surface, exit_cues);
+        }
+
         for (size_t i = 0; i < context->commands_num; i++) {
             map_render_command_t *command = &context->commands[i];
             if (command->living_occlusion_mask == NULL && !command->door_hint) {
