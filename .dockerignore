@@ -1,6 +1,8 @@
 **
 !LICENSE.md
 !ATTRIBUTIONS.md
+!cmake/
+!cmake/**
 !protocol/
 !protocol/**
 !libatrinik/
