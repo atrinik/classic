@@ -545,6 +545,7 @@ int player_exists(const char *name);
 void player_save(object *op);
 bool player_load_stream(player *pl, FILE *fp);
 object *player_get_dummy(const char *name, const char *host);
+bool player_target_is_in_map_neighborhood(const player *pl);
 bool player_provision_scenario(const char *name,
                                const char *archname,
                                const char *map_path,
