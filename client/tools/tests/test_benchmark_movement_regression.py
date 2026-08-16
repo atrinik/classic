@@ -315,6 +315,8 @@ def native_record(
                     "update_interval_ms": 250 if workload_variant == "production" else 0,
                     "surface_width": 1700 if workload_variant == "production" else 0,
                     "surface_height": 1200 if workload_variant == "production" else 0,
+                    "legacy_surface_width": 1700 if workload_variant == "production" else 0,
+                    "legacy_surface_height": 1200 if workload_variant == "production" else 0,
                     "map_draws": minimap_draws,
                     "map_time": timing(minimap_draws),
                 },
@@ -436,13 +438,13 @@ def native_record(
     )]
     standard_checkpoint_sha = visual_lifecycle_digest(standard_checkpoints)
     return {
-        "schema_version": 7,
+        "schema_version": 8,
         "benchmark": "player-view-movement",
         "tick_ms": 125,
         "simulated_tick_hz": 8,
         "identity": {
             "instrumentation": {
-                "schema_version": 7,
+                "schema_version": 8,
                 "fixture_schema_version": 3,
                 "workload": "pvm1-map2-lifecycle-v4",
                 "lighting_statistics_version": 6,
@@ -582,11 +584,34 @@ def additional_contexts(
 
 class NativeV7RecordTests(unittest.TestCase):
     def test_parse_accepts_closed_v7_record(self) -> None:
-        self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 7)
+        self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 8)
 
     def test_parse_accepts_same_workload_with_fine_timing_disabled(self) -> None:
         record = native_record(fine_timing=False)
         self.assertFalse(benchmark.validate_record(record)["identity"]["run"]["fine_timing"])
+
+    def test_sustained_guard_rejects_visible_sprite_reconstruction(self) -> None:
+        guard = benchmark.validate_record.__globals__[
+            "_validate_sustained_lit_sprite_retention"
+        ]
+        counters = empty_lighting_counters()
+        counters.update(
+            {
+                "lit_sprite_lookups": 100,
+                "lit_sprite_hits": 89,
+                "lit_sprite_structure_constructions": 11,
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "reconstructed unchanged lit sprites"):
+            guard(counters)
+
+        counters.update(
+            {
+                "lit_sprite_hits": 99,
+                "lit_sprite_structure_constructions": 1,
+            }
+        )
+        guard(counters)
 
     def test_disabled_fine_timing_rejects_operation_clock_evidence(self) -> None:
         record = native_record(fine_timing=False)
@@ -603,8 +628,8 @@ class NativeV7RecordTests(unittest.TestCase):
         encoded = json.dumps(native_record())
         with self.assertRaisesRegex(benchmark.BenchmarkError, "exactly one"):
             benchmark.parse_result(encoded + "\nnoise\n")
-        duplicate = encoded.replace('"schema_version": 7,',
-                                    '"schema_version": 7, "schema_version": 7,', 1)
+        duplicate = encoded.replace('"schema_version": 8,',
+                                    '"schema_version": 8, "schema_version": 8,', 1)
         with self.assertRaisesRegex(benchmark.BenchmarkError, "repeated JSON field"):
             benchmark.parse_result(duplicate)
         with self.assertRaisesRegex(ValueError, "repeated JSON field"):

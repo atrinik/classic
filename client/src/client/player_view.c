@@ -54,7 +54,7 @@
 #define PLAYER_VIEW_MOVEMENT_RESUMED_TICKS 80U
 #define PLAYER_VIEW_MOVEMENT_PACKETS 5U
 #define PLAYER_VIEW_MOVEMENT_ACTIVE_PACKETS 4U
-#define PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION 7U
+#define PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION 8U
 #define PLAYER_VIEW_MOVEMENT_WINDOW_TICKS 32U
 #define PLAYER_VIEW_MOVEMENT_FIXTURE_SCHEMA 3U
 #define PLAYER_VIEW_MOVEMENT_CHECKPOINTS 12U
@@ -1412,44 +1412,41 @@ static void player_view_lighting_counters_json(const lighting_benchmark_counters
            counters->lit_sprite_fallbacks,
            counters->lit_sprite_clears,
            counters->lit_sprite_cleared_entries);
-    printf(",\"lit_sprite_structure_lookups\":%" PRIu64
-           ",\"lit_sprite_structure_hits\":%" PRIu64
-           ",\"lit_sprite_structure_misses\":%" PRIu64
-           ",\"lit_sprite_structure_constructions\":%" PRIu64
-           ",\"lit_sprite_structure_insertions\":%" PRIu64
-           ",\"lit_sprite_structure_evictions\":%" PRIu64
-           ",\"lit_sprite_structure_invalidations\":%" PRIu64
-           ",\"lit_sprite_projected_lookups\":%" PRIu64
-           ",\"lit_sprite_projected_hits\":%" PRIu64
-           ",\"lit_sprite_projected_misses\":%" PRIu64
-           ",\"lit_sprite_projected_constructions\":%" PRIu64
-           ",\"lit_sprite_projected_insertions\":%" PRIu64
-           ",\"lit_sprite_projected_evictions\":%" PRIu64
-           ",\"lit_sprite_projected_invalidations\":%" PRIu64
-           ",\"lit_sprite_invalidation_field\":%" PRIu64
-           ",\"lit_sprite_invalidation_scroll\":%" PRIu64
-           ",\"lit_sprite_invalidation_source\":%" PRIu64
-           ",\"lit_sprite_invalidation_reset\":%" PRIu64
-           ",\"lit_sprite_invalidation_eviction\":%" PRIu64 "}",
-           counters->lit_sprite_structure_lookups,
-           counters->lit_sprite_structure_hits,
-           counters->lit_sprite_structure_misses,
-           counters->lit_sprite_structure_constructions,
-           counters->lit_sprite_structure_insertions,
-           counters->lit_sprite_structure_evictions,
-           counters->lit_sprite_structure_invalidations,
-           counters->lit_sprite_projected_lookups,
-           counters->lit_sprite_projected_hits,
-           counters->lit_sprite_projected_misses,
-           counters->lit_sprite_projected_constructions,
-           counters->lit_sprite_projected_insertions,
-           counters->lit_sprite_projected_evictions,
-           counters->lit_sprite_projected_invalidations,
-           counters->lit_sprite_invalidation_field,
-           counters->lit_sprite_invalidation_scroll,
-           counters->lit_sprite_invalidation_source,
-           counters->lit_sprite_invalidation_reset,
-           counters->lit_sprite_invalidation_eviction);
+    printf(
+        ",\"lit_sprite_structure_lookups\":%" PRIu64 ",\"lit_sprite_structure_hits\":%" PRIu64
+        ",\"lit_sprite_structure_misses\":%" PRIu64
+        ",\"lit_sprite_structure_constructions\":%" PRIu64
+        ",\"lit_sprite_structure_insertions\":%" PRIu64
+        ",\"lit_sprite_structure_evictions\":%" PRIu64
+        ",\"lit_sprite_structure_invalidations\":%" PRIu64
+        ",\"lit_sprite_projected_lookups\":%" PRIu64 ",\"lit_sprite_projected_hits\":%" PRIu64
+        ",\"lit_sprite_projected_misses\":%" PRIu64
+        ",\"lit_sprite_projected_constructions\":%" PRIu64
+        ",\"lit_sprite_projected_insertions\":%" PRIu64
+        ",\"lit_sprite_projected_evictions\":%" PRIu64
+        ",\"lit_sprite_projected_invalidations\":%" PRIu64
+        ",\"lit_sprite_invalidation_field\":%" PRIu64 ",\"lit_sprite_invalidation_scroll\":%" PRIu64
+        ",\"lit_sprite_invalidation_source\":%" PRIu64 ",\"lit_sprite_invalidation_reset\":%" PRIu64
+        ",\"lit_sprite_invalidation_eviction\":%" PRIu64 "}",
+        counters->lit_sprite_structure_lookups,
+        counters->lit_sprite_structure_hits,
+        counters->lit_sprite_structure_misses,
+        counters->lit_sprite_structure_constructions,
+        counters->lit_sprite_structure_insertions,
+        counters->lit_sprite_structure_evictions,
+        counters->lit_sprite_structure_invalidations,
+        counters->lit_sprite_projected_lookups,
+        counters->lit_sprite_projected_hits,
+        counters->lit_sprite_projected_misses,
+        counters->lit_sprite_projected_constructions,
+        counters->lit_sprite_projected_insertions,
+        counters->lit_sprite_projected_evictions,
+        counters->lit_sprite_projected_invalidations,
+        counters->lit_sprite_invalidation_field,
+        counters->lit_sprite_invalidation_scroll,
+        counters->lit_sprite_invalidation_source,
+        counters->lit_sprite_invalidation_reset,
+        counters->lit_sprite_invalidation_eviction);
 }
 
 static void player_view_lighting_timings_json(const lighting_benchmark_timings_t *timings) {
@@ -1931,13 +1928,13 @@ static bool player_view_movement_draw(player_view_movement_replay_t *replay,
 #endif
             phase->full_map_draws++;
             if (!phase->isolated_lighting && *tick_us >= *next_local_minimap_us) {
+                uint64_t minimap_started = SDL_GetTicksNS();
                 if (!SDL_FillSurfaceRect(local_minimap_surface, NULL, 0)) {
                     fprintf(stderr,
                             "player-view: cannot clear local minimap benchmark surface: %s\n",
                             SDL_GetError());
                     return false;
                 }
-                uint64_t minimap_started = SDL_GetTicksNS();
                 map_draw_map(local_minimap_surface);
                 phase->local_minimap_durations[phase->local_minimap_samples++] =
                     SDL_GetTicksNS() - minimap_started;
@@ -2330,12 +2327,15 @@ static void player_view_movement_phase_json(const player_view_movement_phase_t *
     printf(",\"lighting_work_time\":");
     player_view_timing_json(phase->lighting_work_durations, phase->lighting_work_samples);
     printf(",\"local_minimap\":{\"enabled\":%s,\"update_interval_ms\":%u,"
-           "\"surface_width\":%d,\"surface_height\":%d,\"map_draws\":%u,\"map_"
-           "time\":",
+           "\"surface_width\":%d,\"surface_height\":%d,"
+           "\"legacy_surface_width\":%d,\"legacy_surface_height\":%d,"
+           "\"map_draws\":%u,\"map_time\":",
            phase->isolated_lighting ? "false" : "true",
            phase->isolated_lighting ? 0U : MINIMAP_DYNAMIC_REDRAW_INTERVAL,
            phase->isolated_lighting ? 0 : MINIMAP_DYNAMIC_SURFACE_WIDTH,
            phase->isolated_lighting ? 0 : MINIMAP_DYNAMIC_SURFACE_HEIGHT,
+           phase->isolated_lighting ? 0 : MINIMAP_DYNAMIC_LEGACY_SURFACE_WIDTH,
+           phase->isolated_lighting ? 0 : MINIMAP_DYNAMIC_LEGACY_SURFACE_HEIGHT,
            phase->local_minimap_draws);
     player_view_timing_json(phase->local_minimap_durations, phase->local_minimap_samples);
     printf("},\"queue\":{\"enqueued\":%" PRIu64 ",\"dequeued\":%" PRIu64

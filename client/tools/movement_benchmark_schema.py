@@ -149,6 +149,20 @@ def _integer(value: object, context: str, *, positive: bool = False) -> int:
     return value
 
 
+def _validate_sustained_lit_sprite_retention(counters: dict[str, int]) -> None:
+    constructions = (
+        counters["lit_sprite_structure_constructions"]
+        + counters["lit_sprite_projected_constructions"]
+    )
+    if (
+        counters["lit_sprite_hits"] == 0
+        or constructions * 10 > counters["lit_sprite_lookups"]
+        or counters["lit_sprite_invalidation_scroll"] != 0
+        or counters["lit_sprite_invalidation_field"] != 0
+    ):
+        raise ValueError("movement benchmark reconstructed unchanged lit sprites")
+
+
 def _number(value: object, context: str, *, positive: bool = False) -> float:
     if type(value) not in (int, float) or not math.isfinite(value) \
             or value < 0 or (positive and value == 0):
@@ -498,7 +512,7 @@ def _visual_lifecycle_digest(checkpoints: list[dict[str, object]]) -> str:
 
 
 def validate_record(value: object) -> dict[str, object]:
-    """Validate and return one complete version-seven native record."""
+    """Validate and return one complete version-eight native record."""
     record = _mapping(
         value,
         {
@@ -521,7 +535,7 @@ def validate_record(value: object) -> dict[str, object]:
         },
         "record",
     )
-    if record["schema_version"] != 7 or record["benchmark"] != "player-view-movement" \
+    if record["schema_version"] != 8 or record["benchmark"] != "player-view-movement" \
             or record["tick_ms"] != 125 or record["simulated_tick_hz"] != 8:
         raise ValueError("movement benchmark emitted an incompatible schema")
     checkpoint = _digest(record["checkpoint_sha256"], SHA256, "checkpoint")
@@ -574,7 +588,7 @@ def validate_record(value: object) -> dict[str, object]:
         "instrumentation identity",
     )
     if instrumentation != {
-        "schema_version": 7,
+        "schema_version": 8,
         "fixture_schema_version": 3,
         "workload": "pvm1-map2-lifecycle-v4",
         "lighting_statistics_version": 6,
@@ -861,6 +875,8 @@ def validate_record(value: object) -> dict[str, object]:
                 "update_interval_ms",
                 "surface_width",
                 "surface_height",
+                "legacy_surface_width",
+                "legacy_surface_height",
                 "map_draws",
                 "map_time",
             },
@@ -872,12 +888,16 @@ def validate_record(value: object) -> dict[str, object]:
             and local_minimap["update_interval_ms"] == 0
             and local_minimap["surface_width"] == 0
             and local_minimap["surface_height"] == 0
+            and local_minimap["legacy_surface_width"] == 0
+            and local_minimap["legacy_surface_height"] == 0
             and local_minimap["map_draws"] == 0
             if isolated
             else local_minimap["enabled"] is True
             and local_minimap["update_interval_ms"] == 250
             and local_minimap["surface_width"] == 1700
             and local_minimap["surface_height"] == 1200
+            and local_minimap["legacy_surface_width"] == 1700
+            and local_minimap["legacy_surface_height"] == 1200
             and local_minimap["map_draws"] in range(
                 EXPECTED_LOCAL_MINIMAP_DRAWS[name],
                 EXPECTED_LOCAL_MINIMAP_DRAWS[name] + (2 if name == "resumed" else 1),
@@ -1100,6 +1120,7 @@ def validate_record(value: object) -> dict[str, object]:
                 )
             if name == "sustained":
                 eligible = lighting_counters["field_begins"]
+                _validate_sustained_lit_sprite_retention(lighting_counters)
                 eligible_pixels = sum(
                     level["counters"]["field_begins"]
                     * level["width"]
