@@ -46,11 +46,15 @@ and assets while assigning a distinct map name and path to a second validated
 checkpoints remain deterministic. The movement replay clears its offscreen
 frame target before every map draw, matching the software renderer's per-frame
 compositor contract; frame timing therefore includes that clear and the full
-primary map draw. It also renders the map core into the production 1700-by-1200
-local-minimap surface whenever the real 250-millisecond dynamic-minimap cadence
-is due. Main-map and local-minimap calls and timings remain separate, while the
-complete update-frame work measurement includes both. Minimap zoom/masking and
-the remaining UI/widget work are outside this map-focused measurement.
+primary map draw. It also renders the map core into the production
+1700-by-1200 local-minimap surface whenever the real 250-millisecond
+dynamic-minimap cadence is due. Retaining the production surface extent keeps
+every supported zoom, widget size, scale mode, centered crop, mask, and border
+on the existing display path; the performance change is the bounded redraw
+cadence rather than a change to the visible world footprint. Main-map and
+local-minimap calls and timings remain separate, while the complete
+update-frame work measurement includes both. Minimap zoom/masking and the
+remaining UI/widget work are outside this map-focused measurement.
 
 Fixture schema 3 also defines a same-contract lighting reconstruction A/B over
 the smooth five-depth snapshot and a separately generated movement-only SAME
