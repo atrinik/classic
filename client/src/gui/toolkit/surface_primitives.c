@@ -528,7 +528,11 @@ rotozoomSurfaceXY(SDL_Surface *surface, double angle, double zoom_x, double zoom
         return scaled;
     }
 
-    SDL_Surface *rotated = SDL_RotateSurface(scaled, (float)angle);
+    /* SDL3 defines positive rotation as clockwise, while the legacy
+     * rotozoom contract used by map-authored effects defines it as
+     * counterclockwise.  Keep the compatibility conversion here so every
+     * shared caller retains its authored meaning. */
+    SDL_Surface *rotated = SDL_RotateSurface(scaled, (float)-angle);
     SDL_DestroySurface(scaled);
     return rotated;
 }
