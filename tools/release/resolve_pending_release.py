@@ -58,6 +58,7 @@ def list_drafts(repository: str) -> list[dict[str, object]]:
 def validate_failed_run(
     repository: str,
     run_id: int,
+    windows_server_conclusion: str,
     server_image_conclusion: str,
     request: Callable[[str], object],
 ) -> None:
@@ -105,7 +106,7 @@ def validate_failed_run(
     required = (
         (
             "Build and validate immutable candidate / Build Windows server package",
-            "failure",
+            windows_server_conclusion,
         ),
         (
             "Build and validate immutable candidate / "
@@ -134,7 +135,7 @@ def resolve(
     drafts: list[dict[str, object]],
     failed_releases: object,
     tag_commit: Callable[[str], str],
-    validate_run: Callable[[int, str], None],
+    validate_run: Callable[[int, str, str], None],
 ) -> dict[str, str]:
     if len(drafts) > 1:
         raise PendingReleaseError("multiple draft releases require manual investigation")
@@ -171,6 +172,7 @@ def resolve(
     commit = disposition.get("commit")
     expected_id = disposition.get("empty_draft_id")
     run_ids = disposition.get("failed_package_run_ids")
+    windows_server_conclusion = disposition.get("windows_server_conclusion")
     server_image_conclusion = disposition.get("server_image_conclusion")
     if (
         disposition.get("disposition") != "delete-empty-draft"
@@ -180,13 +182,14 @@ def resolve(
         or not isinstance(run_ids, list)
         or not run_ids
         or not all(isinstance(run_id, int) and run_id > 0 for run_id in run_ids)
+        or windows_server_conclusion not in {"success", "failure"}
         or server_image_conclusion not in {"success", "failure"}
     ):
         raise PendingReleaseError(f"{tag}: failed-release disposition is invalid")
     if release_id != expected_id or assets or tag_commit(tag) != commit:
         raise PendingReleaseError(f"{tag}: empty failed draft no longer matches policy")
     for run_id in run_ids:
-        validate_run(run_id, server_image_conclusion)
+        validate_run(run_id, windows_server_conclusion, server_image_conclusion)
     return {"action": "delete-empty-draft", "tag": tag, "release_id": str(release_id)}
 
 
@@ -241,8 +244,8 @@ def resolve_repository(repository: str) -> dict[str, str]:
         list_drafts(repository),
         policy.get("failed_releases"),
         lambda tag: command("git", "rev-parse", f"refs/tags/{tag}^{{commit}}"),
-        lambda run_id, image_conclusion: validate_failed_run(
-            repository, run_id, image_conclusion, api
+        lambda run_id, windows_conclusion, image_conclusion: validate_failed_run(
+            repository, run_id, windows_conclusion, image_conclusion, api
         ),
     )
     if values["tag"] and not is_ancestor(f"refs/tags/{values['tag']}^{{commit}}", "HEAD"):

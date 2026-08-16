@@ -52,7 +52,8 @@ The immutable `v5.8.1` and `v5.10.0` tags are the recorded exceptions to that
 retry rule. Both `v5.8.1` Package Release attempts failed in the Release-only
 server build before finalizing a candidate, publishing an image, or uploading
 a draft asset. `docs/history/release-tags.json` records each exact tag commit,
-empty draft ID, failed run IDs, expected server-image job conclusion, and
+empty draft ID, failed run IDs, expected Windows-server and server-image job
+conclusions, and
 `delete-empty-draft` disposition. On current validated `main`, Semantic Release
 rechecks those immutable coordinates and the failed job conclusions, then
 re-lists the complete draft inventory and every page of failed-run jobs, reads
@@ -78,6 +79,20 @@ The policy records exact draft ID `368181077`, tag commit
 The tag remains immutable unpublished historical evidence and is never used as
 an image alias. The next semantic version includes the portable staging-path
 correction.
+
+The `v5.33.1` Package Release failed after version metadata moved into the
+authoritative root `cmake/AtrinikVersion.cmake`: the tagged server Dockerfile
+did not copy that directory into its build context. Every recorded attempt
+successfully built the Windows server package, then failed the server-image
+job before complete-candidate validation, image publication, or draft asset
+upload. A later source fix added the missing Dockerfile copy, but recovery
+continued to build the immutable tagged source and therefore could not repair
+that draft. The policy records exact draft ID `370711804`, tag commit
+`1f98d430a03e6d9fbf6f27f4ca1356542d905d08`, every failed Package Release run,
+and both job conclusions. The tag remains immutable unpublished historical
+evidence; after the guarded empty-draft deletion, ordinary semantic analysis
+selects the next version containing the Dockerfile correction and all later
+first-parent changes.
 
 If the failed run reached complete-candidate validation but a defect in its
 tag-bound publication code makes a job rerun impossible, dispatch Package
