@@ -72,6 +72,33 @@ static int save_life(object *op);
 static void remove_unpaid_objects(object *op, object *env);
 
 /**
+ * Check whether a player's selected target remains locally reachable.
+ * @param pl
+ * Player whose target is checked.
+ * @return
+ * True when the selected target is valid and on the same or a nearby map.
+ */
+bool player_target_is_in_map_neighborhood(const player *pl) {
+    object *target;
+    rv_vector rv;
+
+    if (pl == NULL || pl->ob == NULL || pl->ob->map == NULL || pl->target_object == NULL) {
+        return false;
+    }
+
+    target = pl->target_object;
+    if (target == pl->ob) {
+        return true;
+    }
+
+    if (!OBJECT_VALID(target, pl->target_object_count) || target->map == NULL) {
+        return false;
+    }
+
+    return get_rangevector(pl->ob, target, &rv, 0);
+}
+
+/**
  * Player memory pool.
  */
 mempool_struct *pool_player;
@@ -3955,6 +3982,35 @@ static void remove_map_func(object *op) {
     }
 }
 
+static bool player_target_needs_update(const player *pl) {
+    object *target = pl->target_object;
+
+    if (target == NULL || target == pl->ob) {
+        return target == NULL;
+    }
+
+    return !OBJECT_VALID(target, pl->target_object_count) ||
+           QUERY_FLAG(target, FLAG_SYS_OBJECT) ||
+           (QUERY_FLAG(target, FLAG_IS_INVISIBLE) &&
+            !QUERY_FLAG(pl->ob, FLAG_SEE_INVISIBLE)) ||
+           !player_target_is_in_map_neighborhood(pl);
+}
+
+static void player_update_target(player *pl) {
+    if (!pl->ob->map || !player_target_needs_update(pl)) {
+        return;
+    }
+
+    /* send_target_command() validates object lifetime and visibility, but a
+     * map-neighborhood failure needs to clear an otherwise live object first. */
+    if (pl->target_object != pl->ob) {
+        pl->target_object = NULL;
+        pl->target_object_count = 0;
+    }
+
+    send_target_command(pl);
+}
+
 /** @copydoc object_methods_t::process_func */
 static void process_func(object *op) {
     HARD_ASSERT(op != NULL);
@@ -3999,6 +4055,10 @@ static void process_func(object *op) {
             FREE_AND_CLEAR_HASH(pl->followed_player);
         }
     }
+
+    /* Clear targets that are no longer locally reachable before processing
+     * player actions, so spells use the normal self-target fallback. */
+    player_update_target(pl);
 
     /* Use the target system to hit our target - don't hit friendly
      * objects, ourselves or when we are not in combat mode. */
@@ -4061,14 +4121,7 @@ static void process_func(object *op) {
 #endif
 
     /* Check if our target is still valid - if not, update client. */
-    if (pl->ob->map &&
-        (!pl->target_object ||
-         (pl->target_object != pl->ob && pl->target_object_count != pl->target_object->count) ||
-         QUERY_FLAG(pl->target_object, FLAG_SYS_OBJECT) ||
-         (QUERY_FLAG(pl->target_object, FLAG_IS_INVISIBLE) &&
-          !QUERY_FLAG(pl->ob, FLAG_SEE_INVISIBLE)))) {
-        send_target_command(pl);
-    }
+    player_update_target(pl);
 }
 
 /**

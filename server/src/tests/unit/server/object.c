@@ -47,6 +47,8 @@
 #include <toolkit/path.h>
 #include <waypoint.h>
 
+static packet_struct *queued_command_find(socket_struct *cs, uint8_t type);
+
 static bool active_list_contains_at(const object *needle, const char *phase) {
     size_t visited = 0;
     const object *previous = NULL;
@@ -240,6 +242,67 @@ START_TEST(test_find_enemy_returns_valid_direction_for_tiled_exit_enemy) {
     object_remove(monster, 0);
     object_destroy(monster);
     object_remove(pl, 0);
+    object_destroy(pl);
+}
+END_TEST
+
+START_TEST(test_player_clears_target_outside_map_neighborhood_before_self_heal) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    mapstruct *nearby = get_empty_map(24, 24);
+    map->tile_map[TILED_EAST] = nearby;
+    nearby->tile_map[TILED_WEST] = map;
+
+    object *target = player_get_dummy("Friendly target", NULL);
+    object_remove(target, 0);
+    target->x = 0;
+    target->y = pl->y;
+    target = object_insert_map(target, nearby, NULL, 0);
+    ck_assert_ptr_nonnull(target);
+
+    CONTR(pl)->target_object = target;
+    CONTR(pl)->target_object_count = target->count;
+    ck_assert(player_target_is_in_map_neighborhood(CONTR(pl)));
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    /* Exercise the player hook directly; the generic object pre-processing
+     * path can consume a dummy player's tick before reaching this hook. */
+    ck_assert_ptr_nonnull(OBJECT_METHODS(pl->type)->process_func);
+    OBJECT_METHODS(pl->type)->process_func(pl);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, target);
+    ck_assert_uint_eq(CONTR(pl)->target_object_count, target->count);
+    ck_assert_ptr_null(queued_command_find(CONTR(pl)->cs, CLIENT_CMD_TARGET));
+
+    mapstruct *far = get_empty_map(24, 24);
+    object_remove(pl, 0);
+    pl = object_insert_map(pl, far, NULL, 0);
+    ck_assert_ptr_nonnull(pl);
+    ck_assert(!player_target_is_in_map_neighborhood(CONTR(pl)));
+
+    object *spell_target = NULL;
+    ck_assert(find_target_for_spell(pl, &spell_target, spells[SP_MINOR_HEAL].flags));
+    ck_assert_ptr_eq(spell_target, pl);
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    OBJECT_METHODS(pl->type)->process_func(pl);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, pl);
+    ck_assert_uint_eq(CONTR(pl)->target_object_count, 0);
+
+    packet_struct *packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_TARGET);
+    ck_assert_ptr_nonnull(packet);
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), CMD_TARGET_SELF);
+
+    pl->stats.hp = pl->stats.maxhp / 2;
+    pl->stats.sp = 1000;
+    int hp_before = pl->stats.hp;
+    ck_assert(cast_spell(pl, pl, 0, SP_MINOR_HEAL, 0, CAST_NORMAL, NULL));
+    ck_assert_int_gt(pl->stats.hp, hp_before);
+
+    object_destroy(target);
     object_destroy(pl);
 }
 END_TEST
@@ -1425,6 +1488,7 @@ static Suite *suite(void) {
     suite_add_tcase(s, tc_movement);
     tcase_add_test(tc_movement, test_move_ob_rejects_invalid_directions);
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_enemy);
+    tcase_add_test(tc_core, test_player_clears_target_outside_map_neighborhood_before_self_heal);
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_exit_tiled_enemy);
     tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_tiled_enemy);
     tcase_add_test(tc_core, test_object_can_merge);
