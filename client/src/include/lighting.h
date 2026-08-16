@@ -40,19 +40,7 @@ static inline size_t lighting_sprite_cache_charge(size_t pitch, size_t height) {
 typedef enum lighting_surface_mode {
     LIGHTING_SURFACE_STRUCTURE,
     LIGHTING_SURFACE_PROJECTED,
-    /** Use one authoritative map-cell sample for the complete sprite. */
-    LIGHTING_SURFACE_CONSTANT,
 } lighting_surface_mode_t;
-
-/** One authoritative pre-tone illumination sample. */
-typedef struct lighting_sample {
-    uint16_t scalar;
-    uint16_t red;
-    uint16_t green;
-    uint16_t blue;
-    uint8_t present;
-    uint8_t reserved;
-} lighting_sample_t;
 
 /** One light sample projected into map-widget coordinates. */
 typedef struct lighting_vertex {
@@ -247,13 +235,6 @@ void lighting_show_surface(SDL_Surface *destination,
                            SDL_Surface *source,
                            int sample_y,
                            lighting_surface_mode_t mode);
-void lighting_show_surface_constant(SDL_Surface *destination,
-                                    int x,
-                                    int y,
-                                    SDL_Rect *srcrect,
-                                    SDL_Surface *source,
-                                    uint16_t scalar,
-                                    const uint16_t rgb[3]);
 /** Main-thread only: remove lit results referring to a source before destruction. */
 void lighting_invalidate_surface(SDL_Surface *source);
 void lighting_clear_sprite_cache(void);

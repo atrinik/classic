@@ -1154,17 +1154,7 @@ void surface_show_effects(SDL_Surface *surface,
                               effects->smooth_dark_y,
                               LIGHTING_SURFACE_STRUCTURE);
     } else if (effects != NULL && BIT_QUERY(effects->flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE)) {
-        if (effects->smooth_dark_constant) {
-            lighting_show_surface_constant(surface,
-                                           x,
-                                           y,
-                                           srcrect,
-                                           src,
-                                           effects->smooth_dark_scalar,
-                                           effects->smooth_dark_rgb);
-        } else {
-            lighting_show_surface(surface, x, y, srcrect, src, 0, LIGHTING_SURFACE_PROJECTED);
-        }
+        lighting_show_surface(surface, x, y, srcrect, src, 0, LIGHTING_SURFACE_PROJECTED);
     } else {
         surface_show(surface, x, y, srcrect, src);
     }
