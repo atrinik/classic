@@ -52,6 +52,44 @@ static packet_struct *make_interface_command(const char *glow) {
     return packet;
 }
 
+static packet_struct *make_spell_extra_update(const char *message) {
+    packet_struct *packet = packet_new(0, 32, 32);
+    packet_writer_write_uint8(packet, TYPE_SPELL);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint8(packet, 255);
+    packet_writer_write_uint16(packet, 0);
+    packet_writer_write_uint32(packet, 0);
+    packet_writer_write_uint32(packet, 0);
+    packet_writer_write_cstring(packet, message);
+    return packet;
+}
+
+static packet_struct *make_spell_item_command(const char *message) {
+    packet_struct *packet = packet_new(0, 128, 64);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint32(packet, 1);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint32(packet, 42);
+    packet_writer_write_uint32(packet, 0);
+    packet_writer_write_uint32(packet, 1000);
+    packet_writer_write_uint16(packet, 1);
+    packet_writer_write_uint8(packet, 2);
+    packet_writer_write_uint8(packet, TYPE_SPELL);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint8(packet, 255);
+    packet_writer_write_cstring(packet, "test spell");
+    packet_writer_write_uint16(packet, 0);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint32(packet, 1);
+    packet_writer_write_uint16(packet, 0);
+    packet_writer_write_uint32(packet, 0);
+    packet_writer_write_uint32(packet, 0);
+    packet_writer_write_cstring(packet, message);
+    packet_writer_write_cstring(packet, "#dbce3");
+    packet_writer_write_uint8(packet, 1);
+    return packet;
+}
+
 static void check_interface_payload_truncations(packet_struct *packet) {
     TEST_CHECK(interface_packet_validate(packet->data, packet->len, 0));
     for (size_t len = 1; len < packet->len; len++) {
@@ -162,6 +200,45 @@ static void test_name_count_update(void) {
     packet_reader_init(&reader, packet->data, packet->len);
     TEST_CHECK(!item_packet_parse_update(&reader, UPD_NAME | UPD_NROF, &base, &update) ||
                !packet_reader_finish(&reader));
+    packet_free(packet);
+}
+
+static void test_extra_message_limit(void) {
+    object base = {0};
+    item_packet_update_t update;
+    packet_reader_t reader;
+
+    char exact[ATRINIK_PROTOCOL_ITEM_EXTRA_MESSAGE_SIZE];
+    memset(exact, 'x', sizeof(exact) - 1);
+    exact[sizeof(exact) - 1] = '\0';
+    packet_struct *packet = make_spell_extra_update(exact);
+    packet_reader_init(&reader, packet->data, packet->len);
+    TEST_CHECK(item_packet_parse_update(&reader, UPD_TYPE | UPD_EXTRA, &base, &update));
+    TEST_CHECK(packet_reader_finish(&reader));
+    TEST_CHECK(strlen(update.extra_message) == sizeof(exact) - 1);
+    packet_free(packet);
+
+    char oversized[ATRINIK_PROTOCOL_ITEM_EXTRA_MESSAGE_SIZE + 1];
+    memset(oversized, 'x', sizeof(oversized) - 1);
+    oversized[sizeof(oversized) - 1] = '\0';
+    packet = make_spell_extra_update(oversized);
+    packet_reader_init(&reader, packet->data, packet->len);
+    TEST_CHECK(!item_packet_parse_update(&reader, UPD_TYPE | UPD_EXTRA, &base, &update));
+    TEST_CHECK(packet_reader_error(&reader) == PACKET_ERROR_LIMIT_EXCEEDED);
+    packet_free(packet);
+
+    char utf8_boundary[ATRINIK_PROTOCOL_ITEM_EXTRA_MESSAGE_SIZE + 1];
+    memset(utf8_boundary, 'x', 253);
+    memcpy(utf8_boundary + 253, "\xE2\x82\xAC", 3);
+    utf8_boundary[256] = '\0';
+    packet = make_spell_extra_update(utf8_boundary);
+    packet_reader_init(&reader, packet->data, packet->len);
+    TEST_CHECK(!item_packet_parse_update(&reader, UPD_TYPE | UPD_EXTRA, &base, &update));
+    TEST_CHECK(packet_reader_error(&reader) == PACKET_ERROR_LIMIT_EXCEEDED);
+    packet_free(packet);
+
+    packet = make_spell_item_command(oversized);
+    TEST_CHECK(!item_packet_validate_command(packet->data, packet->len, 0));
     packet_free(packet);
 }
 
@@ -276,6 +353,7 @@ int main(void) {
     toolkit_import(packet);
     test_item_command();
     test_name_count_update();
+    test_extra_message_limit();
     test_glow_limit_and_error_scope();
     test_interface_command();
     test_interface_fields();

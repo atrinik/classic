@@ -19,6 +19,7 @@ class GenerateTests(unittest.TestCase):
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
         self.assertEqual(schema["protocol_version"], 1079)
         self.assertEqual(schema["item_name_size"], 128)
+        self.assertEqual(schema["item_extra_message_size"], 256)
         self.assertEqual(schema["player_status"]["max_statuses"], 48)
         self.assertEqual(len(schema["client_to_server"]), 23)
         self.assertEqual(len(schema["server_to_client"]), 29)
@@ -50,6 +51,15 @@ class GenerateTests(unittest.TestCase):
             path = Path(directory) / "schema.json"
             path.write_text(json.dumps(data), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "item_name_size is outside"):
+                GENERATE.load_schema(path)
+
+    def test_invalid_item_extra_message_size_is_rejected(self) -> None:
+        data = json.loads((ROOT / "schema/game-commands.json").read_text(encoding="utf-8"))
+        data["item_extra_message_size"] = 1
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "schema.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "item_extra_message_size is outside"):
                 GENERATE.load_schema(path)
 
     def test_duplicate_symbol_is_rejected(self) -> None:

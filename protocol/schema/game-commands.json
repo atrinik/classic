@@ -2,6 +2,7 @@
   "schema_version": 1,
   "protocol_version": 1079,
   "item_name_size": 128,
+  "item_extra_message_size": 256,
   "player_status": {
     "max_statuses": 48,
     "key_size": 64,
