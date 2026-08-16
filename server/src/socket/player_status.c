@@ -23,6 +23,7 @@ static bool player_status_force_candidate(const object *op) {
         "confusion",
         "depletion",
         "force_effect",
+        "slowness",
         "soul_depletion",
     };
     for (size_t i = 0; i < arraysize(archetypes); i++) {
@@ -294,7 +295,7 @@ static int32_t player_status_paralysis_seconds(const object *pl) {
 
 static void player_status_write_paralysis(packet_struct *packet, const object *pl) {
     packet_writer_write_cstring(packet, PLAYER_STATUS_PARALYSIS_KEY);
-    packet_writer_write_uint16(packet, (uint16_t)find_face("force.101", 0));
+    packet_writer_write_uint16(packet, (uint16_t)find_face("paralysis.101", 0));
     packet_writer_write_cstring(packet, "paralysis");
     packet_writer_write_cstring(packet, "You cannot act until the paralysis wears off.");
     packet_writer_write_int32(packet, player_status_paralysis_seconds(pl));
