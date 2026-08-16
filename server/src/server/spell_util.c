@@ -1007,8 +1007,7 @@ int find_target_for_spell(object *op, object **target, uint32_t flags) {
         tmp = CONTR(op)->target_object;
 
         /* Let's check our target - we have one? friend or enemy? */
-        if (!tmp || !OBJECT_ACTIVE(tmp) || tmp == CONTR(op)->ob ||
-            CONTR(op)->target_object_count != tmp->count) {
+        if (!player_target_is_in_map_neighborhood(CONTR(op)) || tmp == CONTR(op)->ob) {
             /* Can we cast this on self? */
             if (flags & SPELL_DESC_SELF) {
                 /* Right, we are target */
