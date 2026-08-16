@@ -56,6 +56,16 @@ local-minimap calls and timings remain separate, while the complete
 update-frame work measurement includes both. Minimap zoom/masking and the
 remaining UI/widget work are outside this map-focused measurement.
 
+The `dense-cursor` manifests reuse the frozen five-depth roof stack as a
+Brynknot-style dense multi-depth fixture. The cursor replay records stationary,
+world-pointer, UI-pointer, animation-only, and movement phases, including
+frame/wait timings, redraw reasons, projected/structural lighting-cache
+telemetry, sprite-cache counters, and pixel checkpoints. Stationary and both
+pointer phases must perform zero full map draws; animation may perform only the
+object pass; movement retains explicit packet-plus-scroll reasons. Pointer
+motion restores only the bounded union of its old and new dirty regions over a
+retained completed world.
+
 Fixture schema 3 also defines a same-contract lighting reconstruction A/B over
 the smooth five-depth snapshot and a separately generated movement-only SAME
 stream. Its active packets carry all five depths with empty payloads, preserving

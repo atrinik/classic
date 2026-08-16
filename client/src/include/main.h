@@ -327,6 +327,9 @@ extern int cursor_x;
 
 extern int cursor_y;
 
+/** Release the retained pre-cursor screen frame. */
+extern void screen_completed_frame_deinit(void);
+
 extern int map_redraw_flag;
 
 extern int minimap_redraw_flag;

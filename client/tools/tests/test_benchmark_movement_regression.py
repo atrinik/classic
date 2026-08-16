@@ -449,7 +449,7 @@ def native_record(
                 "workload": "pvm1-map2-lifecycle-v4",
                 "lighting_statistics_version": 6,
                 "map_statistics_version": 3,
-                "render_profiler_statistics_version": 4,
+                "render_profiler_statistics_version": 5,
                 "sprite_cache_statistics_version": 3,
             },
             "implementation": {
