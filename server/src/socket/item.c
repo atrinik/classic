@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -62,6 +62,25 @@ static size_t item_name_wire_length(const char *name, size_t length) {
     }
 
     while (maximum > 0 && ((unsigned char)name[maximum] & 0xc0U) == 0x80U) {
+        maximum--;
+    }
+
+    return maximum;
+}
+
+/**
+ * Return a wire-safe UTF-8 prefix that fits in an item extra-message field.
+ */
+static size_t item_extra_message_wire_length(const char *message) {
+    HARD_ASSERT(message != NULL);
+
+    size_t length = strlen(message);
+    size_t maximum = ATRINIK_PROTOCOL_ITEM_EXTRA_MESSAGE_SIZE - 1U;
+    if (length <= maximum) {
+        return length;
+    }
+
+    while (maximum > 0 && ((unsigned char)message[maximum] & 0xc0U) == 0x80U) {
         maximum--;
     }
 
@@ -286,7 +305,8 @@ void add_object_to_packet(struct packet_struct *packet,
             packet_debug_data(packet, level + 1, "Flags");
             packet_writer_write_uint32(packet, spells[op->stats.sp].flags);
             packet_debug_data(packet, level + 1, "Message");
-            packet_writer_write_cstring(packet, op->msg ? op->msg : "");
+            const char *message = op->msg ? op->msg : "";
+            packet_writer_write_cstring_n(packet, message, item_extra_message_wire_length(message));
         } else if (op->type == SKILL) {
             packet_debug(packet, level, "Skill info:\n");
             packet_debug_data(packet, level + 1, "Level");
@@ -296,7 +316,9 @@ void add_object_to_packet(struct packet_struct *packet,
 
             if (CONTR(pl)->cs->socket_version >= 1065) {
                 packet_debug_data(packet, level + 1, "Message");
-                packet_writer_write_cstring(packet, op->msg ? op->msg : "");
+                const char *message = op->msg ? op->msg : "";
+                packet_writer_write_cstring_n(
+                    packet, message, item_extra_message_wire_length(message));
             }
         }
     }
