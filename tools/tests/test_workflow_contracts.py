@@ -1240,6 +1240,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("successful-performance-runs.json", project)
         self.assertIn("performance-checkpoint/v1/manifest.json", project)
         self.assertIn(".source_sha build/performance-checkpoint/v1/manifest.json", project)
+        predecessor = project[
+            project.index("      - name: Load the exact predecessor checkpoint") :
+            project.index("      - name: Build and validate the complete static deployment")
+        ]
+        self.assertIn("GH_TOKEN: ${{ github.token }}", predecessor)
         self.assertIn("--legacy-final-ref", project)
         self.assertIn("daily_performance_site.py build", project)
         self.assertIn("daily_performance_site.py validate", project)

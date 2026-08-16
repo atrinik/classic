@@ -192,6 +192,7 @@ jobs:
           path: build/ci-evidence
       - name: Load the exact predecessor checkpoint
         env:
+          GH_TOKEN: ${{ github.token }}
           CHECKPOINT_SOURCE: ${{ inputs.checkpoint_source || 'pages' }}
         run: |
           if test "${CHECKPOINT_SOURCE}" = pages; then
