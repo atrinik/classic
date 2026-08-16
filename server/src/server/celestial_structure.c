@@ -1144,6 +1144,9 @@ void celestial_structure_reset_parse_state(mapstruct *map) {
     map->celestial_height_seen = false;
     map->celestial_region_seen = false;
     map->light_value = 0;
+    map->celestial_structure_revision = 0;
+    map->celestial_light_key = 0;
+    map->celestial_light_valid = false;
     map->width = 0;
     map->height = 0;
     map->region = NULL;

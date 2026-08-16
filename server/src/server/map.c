@@ -1113,6 +1113,10 @@ void map_set_tile(mapstruct *m, int tile, const char *pathname) {
             neighbor->tile_map[dest_tile] = m;
         }
     }
+    celestial_light_invalidate(m);
+    if (neighbor != NULL) {
+        celestial_light_invalidate(neighbor);
+    }
 }
 
 /**
@@ -1774,6 +1778,7 @@ void free_map(mapstruct *m, int flag) {
     }
 
     m->in_memory = MAP_SWAPPED;
+    m->celestial_light_valid = false;
 }
 
 /**
@@ -2744,6 +2749,13 @@ int map_get_darkness(mapstruct *m, int x, int y, object **mirror) {
     }
 
     msp = GET_MAP_SPACE_PTR(m, x, y);
+
+    if (m->celestial_schema == 1) {
+        celestial_light_ensure(m);
+        return m->light_value + msp->light_value + msp->light_source_value +
+               msp->celestial_light_value;
+    }
+
     outdoor =
         MAP_OUTDOORS(m) || (msp->map_info && OBJECT_VALID(msp->map_info, msp->map_info_count) &&
                             msp->map_info->item_power == -2);
