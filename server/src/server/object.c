@@ -1037,6 +1037,11 @@ bool object_is_in_inventory(const object *op, const object *inv) {
     return false;
 }
 
+/** Whether an object is a hidden wall-layer roof/camera surface. */
+bool object_is_roof_surface(const object *op) {
+    return op != NULL && op->layer == LAYER_WALL && QUERY_FLAG(op, FLAG_HIDDEN);
+}
+
 /**
  * Dumps an object.
  *

@@ -915,6 +915,8 @@ void object_weight_sub(object *op, uint32_t weight);
 object *object_get_env(object *op);
 bool object_is_in_inventory(const object *op, const object *inv);
 bool object_contains_money_descendant(const object *op);
+/** Whether an object is a hidden wall-layer roof/camera surface. */
+bool object_is_roof_surface(const object *op);
 void object_dump(const object *op, StringBuffer *sb);
 void object_dump_rec(const object *op, StringBuffer *sb);
 void object_owner_clear(object *op);
