@@ -202,6 +202,30 @@ void popup_render_all(void) {
 }
 
 /**
+ * Check whether a screen point is covered by a visible popup.
+ * @param x
+ * Screen X coordinate.
+ * @param y
+ * Screen Y coordinate.
+ * @return
+ * 1 if a popup covers the point, 0 otherwise.
+ */
+bool popup_covers_point(int x, int y) {
+    popup_struct *popup;
+
+    DL_FOREACH(popup_head, popup) {
+        if (popup->surface == NULL || x < popup->x || x >= popup->x + popup->surface->w ||
+            y < popup->y || y >= popup->y + popup->surface->h) {
+            continue;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+/**
  * Handle popup button event.
  * @param button
  * The button.

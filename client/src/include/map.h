@@ -523,6 +523,18 @@ extern bool map_draw_animation(SDL_Surface *surface);
 /** Draw the current world-pointer cue over the completed map composition. */
 extern void map_draw_pointer_overlay(void);
 
+/**
+ * Check whether the map pointer cue may occupy a screen point.
+ * @param x
+ * Screen X coordinate.
+ * @param y
+ * Screen Y coordinate.
+ * @return
+ * 1 if the point is not covered by a popup or higher-priority widget, 0
+ * otherwise.
+ */
+extern bool map_pointer_overlay_visible_at(int x, int y);
+
 #define MAP_BENCHMARK_STATISTICS_VERSION UINT8_C(3)
 
 /** Map renderer work accumulated since the last benchmark reset. */

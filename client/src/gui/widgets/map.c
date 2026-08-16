@@ -3883,9 +3883,34 @@ bool map_draw_animation(SDL_Surface *surface) {
     return true;
 }
 
+/**
+ * Check whether the map pointer cue may occupy a screen point.
+ * @param x
+ * Screen X coordinate.
+ * @param y
+ * Screen Y coordinate.
+ * @return
+ * 1 if the point is not covered by a popup or higher-priority widget, 0
+ * otherwise.
+ */
+bool map_pointer_overlay_visible_at(int x, int y) {
+    /* The retained-frame path draws this cue after widgets and popups.  The
+     * popup event path deliberately leaves the previous widget owner in
+     * place, so refresh the hit-test here and explicitly reject popup-covered
+     * points before drawing over the UI.  A NULL widget owner is valid for
+     * the off-screen player-view benchmark, which has only a synthetic map
+     * widget and no widget tree. */
+    if (popup_covers_point(x, y)) {
+        return false;
+    }
+    widgetdata *owner = get_widget_owner(x, y, NULL, NULL);
+    return owner == NULL || owner == cur_widget[MAP_ID];
+}
+
 /** Draw the tile cue after the completed screen frame has been retained. */
 void map_draw_pointer_overlay(void) {
-    if (!map_show_mouse || widget_mouse_event.owner != cur_widget[MAP_ID]) {
+    if (!map_show_mouse || widget_mouse_event.owner != cur_widget[MAP_ID] ||
+        !map_pointer_overlay_visible_at(cursor_x, cursor_y)) {
         return;
     }
 
