@@ -2202,11 +2202,151 @@ static bool quarantine_private_map_file(const char *path, const char *reason) {
     return true;
 }
 
+static bool private_map_roster_owner(const char *directory,
+                                     unsigned int depth,
+                                     const char *character,
+                                     char account[MAX_BUF],
+                                     size_t *matches,
+                                     char *error,
+                                     size_t error_size) {
+    if (depth > 32) {
+        return set_error(error, error_size, "celestial account directory nesting is too deep");
+    }
+    DIR *directory_handle = opendir(directory);
+    if (directory_handle == NULL) {
+        if (errno == ENOENT) {
+            return true;
+        }
+        return set_error(error,
+                         error_size,
+                         "cannot inspect celestial account roster: %s",
+                         strerror(errno));
+    }
+    struct dirent *entry;
+    while ((entry = readdir(directory_handle)) != NULL) {
+        if (entry->d_name[0] == '.') {
+            continue;
+        }
+        char path[HUGE_BUF];
+        int written = snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name);
+        if (written < 0 || (size_t)written >= sizeof(path)) {
+            closedir(directory_handle);
+            return set_error(error, error_size, "celestial account roster path is too long");
+        }
+        struct stat statbuf;
+        if (lstat(path, &statbuf) != 0) {
+            closedir(directory_handle);
+            return set_error(error,
+                             error_size,
+                             "cannot inspect celestial account roster %s: %s",
+                             path,
+                             strerror(errno));
+        }
+        if (S_ISDIR(statbuf.st_mode)) {
+            if (!private_map_roster_owner(path,
+                                          depth + 1,
+                                          character,
+                                          account,
+                                          matches,
+                                          error,
+                                          error_size)) {
+                closedir(directory_handle);
+                return false;
+            }
+            continue;
+        }
+        size_t name_length = strlen(entry->d_name);
+        if (!S_ISREG(statbuf.st_mode) || name_length <= 4 ||
+            strcmp(entry->d_name + name_length - 4, ".dat") != 0) {
+            continue;
+        }
+        char *account_name = path_basename(path);
+        if (account_name == NULL) {
+            closedir(directory_handle);
+            return set_error(error, error_size, "cannot resolve celestial account roster owner");
+        }
+        account_name[name_length - 4] = '\0';
+        string_tolower(account_name);
+        FILE *fp = fopen(path, "rb");
+        if (fp == NULL) {
+            free(account_name);
+            closedir(directory_handle);
+            return set_error(error,
+                             error_size,
+                             "cannot read celestial account roster %s: %s",
+                             path,
+                             strerror(errno));
+        }
+        char line[HUGE_BUF];
+        bool account_matches = false;
+        while (fgets(line, sizeof(line), fp) != NULL) {
+            if (strncmp(line, "char ", 5) != 0) {
+                continue;
+            }
+            string_strip_newline(line);
+            char *parts[4];
+            if (string_split(line + 5, parts, arraysize(parts), ':') != arraysize(parts)) {
+                continue;
+            }
+            char canonical_character[MAX_BUF];
+            snprintf(VS(canonical_character), "%s", parts[1]);
+            string_title(canonical_character);
+            if (strcmp(canonical_character, character) != 0) {
+                continue;
+            }
+            account_matches = true;
+        }
+        if (account_matches) {
+            (*matches)++;
+            if (*matches == 1) {
+                snprintf(VS(account), "%s", account_name);
+            }
+        }
+        fclose(fp);
+        free(account_name);
+    }
+    closedir(directory_handle);
+    return true;
+}
+
 static bool preflight_private_map_file(const char *path, char *error, size_t error_size) {
     char reason[HUGE_BUF] = "";
     char source_path[HUGE_BUF];
     if (!celestial_private_source_from_path(path, source_path)) {
         snprintf(VS(reason), "invalid $-demangled authored source");
+    }
+
+    if (reason[0] == '\0') {
+        char *parent = path_dirname(path);
+        char *character = parent != NULL ? path_basename(parent) : NULL;
+        char account[MAX_BUF] = "";
+        size_t matches = 0;
+        if (character == NULL) {
+            snprintf(VS(reason), "private map has no canonical character directory");
+        } else {
+            string_title(character);
+            char accounts_directory[HUGE_BUF];
+            int written = snprintf(accounts_directory,
+                                   sizeof(accounts_directory),
+                                   "%s/accounts",
+                                   settings.datapath);
+            if (written < 0 || (size_t)written >= sizeof(accounts_directory)) {
+                snprintf(VS(reason), "celestial account roster path is too long");
+            } else if (!private_map_roster_owner(accounts_directory,
+                                                 0,
+                                                 character,
+                                                 account,
+                                                 &matches,
+                                                 VS(reason))) {
+                /* Keep the detailed roster error. */
+            } else if (matches == 0) {
+                snprintf(VS(reason), "private map character has no account roster owner");
+            } else if (matches > 1) {
+                snprintf(VS(reason), "private map character has ambiguous account roster ownership");
+            }
+        }
+        free(parent);
+        free(character);
     }
 
     mapstruct *map = NULL;
