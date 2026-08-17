@@ -236,6 +236,12 @@ static char *render_profiler_widget_text(const render_profile_snapshot_t *snapsh
     return stringbuffer_finish(sb);
 }
 
+#ifdef ATRINIK_RENDER_PROFILER_TESTING
+char *render_profiler_widget_text_for_test(const render_profile_snapshot_t *snapshot) {
+    return render_profiler_widget_text(snapshot);
+}
+#endif
+
 /** @copydoc widgetdata::draw_func */
 static void widget_draw(widgetdata *widget) {
     render_profiler_widget_t *profiler_widget = widget->subwidget;
