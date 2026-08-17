@@ -23,6 +23,11 @@
 - With the active celestial-v1 runtime, player persistence uses owner-bound
   `unique-v1:` map/savebed tokens for private maps; physical datapath identities
   must fail closed and use the existing savebed/emergency fallback.
+- Before celestial activation commits its forward-only marker, startup publishes
+  a schema-2 snapshot plus a bounded, symlink-free archive at
+  `celestial-activation-state` for the complete mutable datapath. Treat the
+  archive and immutable Classic/content coordinates as one offline rollback
+  cohort; never edit or restore either in place while a server is running.
 - `install_data/` defines new-runtime defaults. Never handcraft, replace, or
   delete initialized account/player/key/identity state unless the task owns
   that mutable data.
