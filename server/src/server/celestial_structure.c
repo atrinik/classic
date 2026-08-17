@@ -1934,6 +1934,21 @@ bool celestial_structure_v1_runtime_active(void) {
     return celestial_v1_runtime_active;
 }
 
+#ifndef WIN32
+static bool private_map_roster_owner(const char *directory,
+                                     unsigned int depth,
+                                     const char *character,
+                                     char account[MAX_BUF],
+                                     size_t *matches,
+                                     char *error,
+                                     size_t error_size);
+static bool private_map_owner_from_path(const char *path,
+                                        char account[MAX_BUF],
+                                        char character[MAX_BUF],
+                                        char *error,
+                                        size_t error_size);
+#endif
+
 static bool provenance_path(const char *map_path_value,
                             char output[HUGE_BUF],
                             char digest_output[SHA256_DIGEST_LENGTH * 2 + 1]) {
@@ -2050,6 +2065,7 @@ bool celestial_structure_write_provenance(const mapstruct *map, char *error, siz
     char source_path[HUGE_BUF], source_file[HUGE_BUF];
     char source_sha[SHA256_DIGEST_LENGTH * 2 + 1];
     char map_file[HUGE_BUF], map_sha[SHA256_DIGEST_LENGTH * 2 + 1];
+    char owner_account[MAX_BUF] = "", owner_character[MAX_BUF] = "";
     source_path[0] = '\0';
     source_file[0] = '\0';
     if (!provenance_path(map->path, ledger, ledger_id)) {
@@ -2070,6 +2086,19 @@ bool celestial_structure_write_provenance(const mapstruct *map, char *error, siz
                          "cannot hash mutable map file for %s",
                          map_path(map));
     }
+#ifndef WIN32
+    char *physical_base = MAP_UNIQUE(map) ? path_basename(map->path) : NULL;
+    bool private_map = physical_base != NULL && strchr(physical_base, '$') != NULL;
+    free(physical_base);
+    if (private_map &&
+        !private_map_owner_from_path(map->path,
+                                     owner_account,
+                                     owner_character,
+                                     error,
+                                     error_size)) {
+        return false;
+    }
+#endif
     char contents[HUGE_BUF];
     int written = snprintf(contents,
                            sizeof(contents),
@@ -2079,12 +2108,16 @@ bool celestial_structure_write_provenance(const mapstruct *map, char *error, siz
                            "  \"source_path\": \"%s\",\n"
                            "  \"source_sha256\": \"%s\",\n"
                            "  \"map_sha256\": \"%s\",\n"
+                           "  \"owner_account\": \"%s\",\n"
+                           "  \"owner_character\": \"%s\",\n"
                            "  \"content_commit\": \"%s\"\n"
                            "}\n",
                            map->path,
                            source_path,
                            source_sha,
                            map_sha,
+                           owner_account,
+                           owner_character,
                            celestial_artifact_commit[0] != '\0'
                                ? celestial_artifact_commit
                                : "0000000000000000000000000000000000000000");
@@ -2114,6 +2147,7 @@ bool celestial_structure_validate_provenance(const mapstruct *map, char *error, 
     }
     char map_path_value[HUGE_BUF], source_path[HUGE_BUF], source_sha[SHA256_DIGEST_LENGTH * 2 + 1];
     char map_sha[SHA256_DIGEST_LENGTH * 2 + 1];
+    char owner_account[MAX_BUF], owner_character[MAX_BUF];
     char content_commit[41];
     uint64_t schema;
     const char *end = contents + ledger_size;
@@ -2126,8 +2160,32 @@ bool celestial_structure_validate_provenance(const mapstruct *map, char *error, 
                  preflight_hex(source_sha, SHA256_DIGEST_LENGTH * 2) &&
                  preflight_json_string(contents, end, "map_sha256", VS(map_sha)) &&
                  preflight_hex(map_sha, SHA256_DIGEST_LENGTH * 2) &&
+                 preflight_json_string(contents, end, "owner_account", VS(owner_account)) &&
+                 preflight_json_string(contents, end, "owner_character", VS(owner_character)) &&
                  preflight_json_string(contents, end, "content_commit", VS(content_commit)) &&
                  preflight_hex(content_commit, 40);
+#ifndef WIN32
+    char expected_account[MAX_BUF] = "", expected_character[MAX_BUF] = "";
+    char owner_error[HUGE_BUF] = "";
+    char *physical_base = MAP_UNIQUE(map) ? path_basename(map->path) : NULL;
+    bool private_map = physical_base != NULL && strchr(physical_base, '$') != NULL;
+    free(physical_base);
+    if (valid && private_map &&
+        (!private_map_owner_from_path(map->path,
+                                      expected_account,
+                                      expected_character,
+                                      VS(owner_error)) ||
+         strcmp(owner_account, expected_account) != 0 ||
+         strcmp(owner_character, expected_character) != 0)) {
+        valid = false;
+    }
+    if (valid && !private_map && (owner_account[0] != '\0' || owner_character[0] != '\0')) {
+        valid = false;
+    }
+#else
+    (void)owner_account;
+    (void)owner_character;
+#endif
     if (valid && celestial_artifact_commit[0] != '\0' &&
         strcmp(content_commit, celestial_artifact_commit) != 0) {
         valid = false;
@@ -2309,6 +2367,51 @@ static bool private_map_roster_owner(const char *directory,
     return true;
 }
 
+static bool private_map_owner_from_path(const char *path,
+                                        char account[MAX_BUF],
+                                        char character[MAX_BUF],
+                                        char *error,
+                                        size_t error_size) {
+    char *parent = path_dirname(path);
+    char *name = parent != NULL ? path_basename(parent) : NULL;
+    if (name == NULL) {
+        free(parent);
+        return set_error(error, error_size, "private map has no canonical character directory");
+    }
+    string_title(name);
+    char accounts_directory[HUGE_BUF];
+    int written = snprintf(accounts_directory,
+                           sizeof(accounts_directory),
+                           "%s/accounts",
+                           settings.datapath);
+    if (written < 0 || (size_t)written >= sizeof(accounts_directory)) {
+        free(parent);
+        free(name);
+        return set_error(error, error_size, "celestial account roster path is too long");
+    }
+    size_t matches = 0;
+    bool scanned = private_map_roster_owner(accounts_directory,
+                                            0,
+                                            name,
+                                            account,
+                                            &matches,
+                                            error,
+                                            error_size);
+    if (scanned && matches == 0) {
+        set_error(error, error_size, "private map character has no account roster owner");
+        scanned = false;
+    } else if (scanned && matches > 1) {
+        set_error(error, error_size, "private map character has ambiguous account roster ownership");
+        scanned = false;
+    }
+    if (scanned) {
+        snprintf(character, MAX_BUF, "%s", name);
+    }
+    free(parent);
+    free(name);
+    return scanned;
+}
+
 static bool preflight_private_map_file(const char *path, char *error, size_t error_size) {
     char reason[HUGE_BUF] = "";
     char source_path[HUGE_BUF];
@@ -2317,36 +2420,9 @@ static bool preflight_private_map_file(const char *path, char *error, size_t err
     }
 
     if (reason[0] == '\0') {
-        char *parent = path_dirname(path);
-        char *character = parent != NULL ? path_basename(parent) : NULL;
         char account[MAX_BUF] = "";
-        size_t matches = 0;
-        if (character == NULL) {
-            snprintf(VS(reason), "private map has no canonical character directory");
-        } else {
-            string_title(character);
-            char accounts_directory[HUGE_BUF];
-            int written = snprintf(accounts_directory,
-                                   sizeof(accounts_directory),
-                                   "%s/accounts",
-                                   settings.datapath);
-            if (written < 0 || (size_t)written >= sizeof(accounts_directory)) {
-                snprintf(VS(reason), "celestial account roster path is too long");
-            } else if (!private_map_roster_owner(accounts_directory,
-                                                 0,
-                                                 character,
-                                                 account,
-                                                 &matches,
-                                                 VS(reason))) {
-                /* Keep the detailed roster error. */
-            } else if (matches == 0) {
-                snprintf(VS(reason), "private map character has no account roster owner");
-            } else if (matches > 1) {
-                snprintf(VS(reason), "private map character has ambiguous account roster ownership");
-            }
-        }
-        free(parent);
-        free(character);
+        char character[MAX_BUF] = "";
+        (void)private_map_owner_from_path(path, account, character, VS(reason));
     }
 
     mapstruct *map = NULL;

@@ -1070,13 +1070,14 @@ START_TEST(test_private_map_provenance_demangles_authored_source) {
     snprintf(VS(saved_mapspath), "%s", settings.mapspath);
 
     char datapath[HUGE_BUF], mapspath[HUGE_BUF], maps_dir[HUGE_BUF], source_path[HUGE_BUF];
-    char private_path[HUGE_BUF], provenance_dir[HUGE_BUF];
+    char private_path[HUGE_BUF], provenance_dir[HUGE_BUF], account_path[HUGE_BUF];
     snprintf(VS(datapath), "%s/data", temporary_root);
     snprintf(VS(mapspath), "%s", temporary_root);
     snprintf(VS(maps_dir), "%s/maps", temporary_root);
     snprintf(VS(source_path), "%s/maps/apartment", temporary_root);
     snprintf(VS(private_path), "%s/data/players/a/alice/$maps$apartment", temporary_root);
     snprintf(VS(provenance_dir), "%s/data/celestial-provenance", temporary_root);
+    snprintf(VS(account_path), "%s/data/accounts/a/alice.dat", temporary_root);
     ck_assert_uint_lt(strlen(datapath), sizeof(settings.datapath));
     ck_assert_uint_lt(strlen(mapspath), sizeof(settings.mapspath));
     snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
@@ -1084,14 +1085,19 @@ START_TEST(test_private_map_provenance_demangles_authored_source) {
 
     path_ensure_directories(source_path);
     path_ensure_directories(private_path);
+    path_ensure_directories(account_path);
     FILE *source = fopen(source_path, "wb");
     FILE *private_map = fopen(private_path, "wb");
+    FILE *account = fopen(account_path, "wb");
     ck_assert_ptr_ne(source, NULL);
     ck_assert_ptr_ne(private_map, NULL);
+    ck_assert_ptr_ne(account, NULL);
     ck_assert_int_ne(fputs("authored source\n", source), EOF);
     ck_assert_int_ne(fputs("private mutable map\n", private_map), EOF);
+    ck_assert_int_ne(fputs("char human_male:Alice::1\n", account), EOF);
     ck_assert_int_eq(fclose(source), 0);
     ck_assert_int_eq(fclose(private_map), 0);
+    ck_assert_int_eq(fclose(account), 0);
     ck_assert(path_exists(source_path));
     ck_assert(path_exists(private_path));
     ck_assert(celestial_structure_logical_map_id_valid("/maps/apartment"));
@@ -1132,12 +1138,18 @@ START_TEST(test_private_map_provenance_demangles_authored_source) {
     ck_assert_int_eq(unlink(source_path), 0);
     ck_assert_int_eq(unlink(private_path), 0);
     char private_parent[HUGE_BUF], private_grandparent[HUGE_BUF], players_dir[HUGE_BUF];
+    char account_parent[HUGE_BUF], accounts_dir[HUGE_BUF];
     snprintf(VS(private_parent), "%s/data/players/a/alice", temporary_root);
     snprintf(VS(private_grandparent), "%s/data/players/a", temporary_root);
     snprintf(VS(players_dir), "%s/data/players", temporary_root);
+    snprintf(VS(account_parent), "%s/data/accounts/a", temporary_root);
+    snprintf(VS(accounts_dir), "%s/data/accounts", temporary_root);
     ck_assert_int_eq(rmdir(private_parent), 0);
     ck_assert_int_eq(rmdir(private_grandparent), 0);
     ck_assert_int_eq(rmdir(players_dir), 0);
+    ck_assert_int_eq(unlink(account_path), 0);
+    ck_assert_int_eq(rmdir(account_parent), 0);
+    ck_assert_int_eq(rmdir(accounts_dir), 0);
     ck_assert_int_eq(rmdir(maps_dir), 0);
     ck_assert_int_eq(rmdir(datapath), 0);
     ck_assert_uint_lt(strlen(saved_datapath), sizeof(settings.datapath));
