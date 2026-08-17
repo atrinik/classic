@@ -3160,7 +3160,8 @@ bool celestial_structure_recover_map_transactions(char *error, size_t error_size
         char ledger[HUGE_BUF], ledger_id[SHA256_DIGEST_LENGTH * 2 + 1];
         bool ledger_present = provenance_path(map_path_value, ledger, ledger_id) &&
                               path_exists(ledger);
-        if (strcmp(state, "committed") == 0 && path_exists(map_file) && ledger_present) {
+        if (strcmp(state, "committed") == 0 && path_exists(map_file) && path_exists(unique_file) &&
+            ledger_present) {
             unlink(transaction);
             continue;
         }
