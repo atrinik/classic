@@ -728,6 +728,15 @@ void socket_command_mapstats(uint8_t *data, size_t len, size_t pos) {
     (void)packet_reader_finish(&reader);
 }
 
+static void socket_command_map_abort_timed_light(void) {
+    map_light_keyframe_transaction_abort();
+    MapData.light_keyframe_generation = 0;
+    MapData.light_keyframe_start_seconds = 0;
+    MapData.light_keyframe_end_seconds = 0;
+    MapData.light_keyframe_flags = 0;
+    MapData.light_keyframe_valid = false;
+}
+
 /** @copydoc socket_command_struct::handle_func */
 void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
@@ -841,6 +850,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
                                                   light_keyframe_end_seconds,
                                                   light_keyframe_flags)) {
             LOG(PACKET, "Rejected invalid timed-light generation descriptor.");
+            socket_command_map_abort_timed_light();
             return;
         }
         MapData.light_keyframe_generation = light_keyframe_generation;
@@ -859,12 +869,14 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
 
     if (pos >= len) {
         LOG(PACKET, "Map packet has no level count.");
+        socket_command_map_abort_timed_light();
         return;
     }
 
     uint8_t level_count = packet_reader_read_uint8(&reader);
     if (level_count > MAP2_LEVELS) {
         LOG(PACKET, "Map packet contains too many levels: %" PRIu8 ".", level_count);
+        socket_command_map_abort_timed_light();
         return;
     }
 
@@ -880,6 +892,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     }
     if (!packet_reader_finish(&scan)) {
         LOG(PACKET, "Could not inspect validated map level blocks.");
+        socket_command_map_abort_timed_light();
         return;
     }
     if (mapstat == MAP_UPDATE_CMD_PARTIAL &&
@@ -890,7 +903,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
                                            player_sub_layer,
                                            incoming_level_mask)) {
         LOG(PACKET, "Rejected unsolicited, mismatched, or out-of-sequence map continuation.");
-        map_light_keyframe_transaction_abort();
+        socket_command_map_abort_timed_light();
         return;
     }
 
@@ -907,6 +920,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     for (uint8_t level_num = 0; level_num < level_count; level_num++) {
         if (len - pos < sizeof(int8_t) + sizeof(uint32_t)) {
             LOG(PACKET, "Truncated map level header.");
+            socket_command_map_abort_timed_light();
             return;
         }
 
@@ -914,6 +928,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         uint32_t level_size = packet_reader_read_uint32(&reader);
         if (depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH || level_size > len - pos) {
             LOG(PACKET, "Invalid map level depth or payload size.");
+            socket_command_map_abort_timed_light();
             return;
         }
 
@@ -921,11 +936,13 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         len = level_end;
         if (!map_select_level(depth, true)) {
             LOG(PACKET, "Could not select map level %d.", depth);
+            socket_command_map_abort_timed_light();
             return;
         }
         uint16_t level_bit = UINT16_C(1) << MAP2_DEPTH_INDEX(depth);
         if (level_mask & level_bit) {
             LOG(PACKET, "Map packet contains duplicate depth %d.", depth);
+            socket_command_map_abort_timed_light();
             return;
         }
         level_mask |= level_bit;
@@ -933,6 +950,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         while (pos < level_end) {
             if (len - pos < sizeof(uint16_t)) {
                 LOG(PACKET, "Truncated map tile mask.");
+                socket_command_map_abort_timed_light();
                 return;
             }
 
@@ -968,6 +986,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
             }
             if (len - pos < tile_values + sizeof(num_layers)) {
                 LOG(PACKET, "Truncated map tile metadata.");
+                socket_command_map_abort_timed_light();
                 return;
             }
 
@@ -1229,7 +1248,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
                                                           rgb_bitmap,
                                                           rgb)) {
                     LOG(PACKET, "Timed-light generation exceeded its staging bound.");
-                    map_light_keyframe_transaction_abort();
+                    socket_command_map_abort_timed_light();
                     return;
                 }
             }
@@ -1268,6 +1287,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
 
         if (pos != level_end) {
             LOG(PACKET, "Map level payload was not consumed exactly.");
+            socket_command_map_abort_timed_light();
             return;
         }
 
@@ -1276,6 +1296,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
 
     if (pos != packet_end) {
         LOG(PACKET, "Map packet has trailing data after its level blocks.");
+        socket_command_map_abort_timed_light();
         return;
     }
 
