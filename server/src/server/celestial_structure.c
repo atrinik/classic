@@ -56,6 +56,7 @@ static bool preflight_activation_snapshot(const char *manifest_digest,
                                           const char *migration_digest,
                                           const char *private_digest,
                                           size_t private_records,
+                                          bool require_current_private_cohort,
                                           char *error,
                                           size_t error_size);
 
@@ -1956,26 +1957,49 @@ bool celestial_structure_startup_preflight(char *error, size_t error_size) {
     private_digest[sizeof(private_digest) - 1] = '\0';
     size_t private_records = 0;
 #endif
+    char activation_marker_path[HUGE_BUF];
+    if (snprintf(activation_marker_path,
+                 sizeof(activation_marker_path),
+                 "%s/celestial-activation.json",
+                 settings.datapath) < 0 ||
+        strlen(activation_marker_path) >= sizeof(activation_marker_path)) {
+        return set_error(error, error_size, "celestial activation marker path is too long");
+    }
+    bool activation_committed = path_exists(activation_marker_path);
+    char snapshot_path[HUGE_BUF];
+    if (snprintf(snapshot_path,
+                 sizeof(snapshot_path),
+                 "%s/celestial-activation-snapshot.json",
+                 settings.datapath) < 0 ||
+        strlen(snapshot_path) >= sizeof(snapshot_path)) {
+        return set_error(error, error_size, "celestial activation snapshot path is too long");
+    }
+    if (activation_committed && !path_exists(snapshot_path)) {
+        return set_error(error, error_size, "celestial activation snapshot is missing after marker commit");
+    }
     if (!preflight_activation_snapshot(manifest_digest,
-                                      migration_digest,
-                                      private_digest,
-                                      private_records,
-                                      error,
-                                      error_size)) {
+                                       migration_digest,
+                                       private_digest,
+                                       private_records,
+                                       !activation_committed,
+                                       error,
+                                       error_size)) {
         return false;
     }
 #ifndef WIN32
-    char post_snapshot_digest[SHA256_DIGEST_LENGTH * 2 + 1];
-    size_t post_snapshot_records = 0;
-    if (!preflight_private_map_inventory_readonly(post_snapshot_digest,
-                                                  &post_snapshot_records,
-                                                  error,
-                                                  error_size) ||
-        post_snapshot_records != private_records ||
-        strcmp(post_snapshot_digest, private_digest) != 0) {
-        return set_error(error,
-                         error_size,
-                         "celestial private-map cohort changed after activation snapshot");
+    if (!activation_committed) {
+        char post_snapshot_digest[SHA256_DIGEST_LENGTH * 2 + 1];
+        size_t post_snapshot_records = 0;
+        if (!preflight_private_map_inventory_readonly(post_snapshot_digest,
+                                                      &post_snapshot_records,
+                                                      error,
+                                                      error_size) ||
+            post_snapshot_records != private_records ||
+            strcmp(post_snapshot_digest, private_digest) != 0) {
+            return set_error(error,
+                             error_size,
+                             "celestial private-map cohort changed after activation snapshot");
+        }
     }
 #endif
     if (!preflight_activation_marker(migration_digest, error, error_size)) {
@@ -2836,6 +2860,7 @@ static bool preflight_activation_snapshot(const char *manifest_digest,
                                           const char *migration_digest,
                                           const char *private_digest,
                                           size_t private_records,
+                                          bool require_current_private_cohort,
                                           char *error,
                                           size_t error_size) {
     char snapshot_path[HUGE_BUF];
@@ -2874,12 +2899,16 @@ static bool preflight_activation_snapshot(const char *manifest_digest,
                      preflight_json_string(snapshot, end, "migration_index_sha256", VS(recorded_migration)) &&
                      strcmp(recorded_migration, migration_digest) == 0 &&
                      preflight_json_string(snapshot, end, "private_inventory_sha256", VS(recorded_private)) &&
-                     strcmp(recorded_private, private_digest) == 0 &&
+                     preflight_hex(recorded_private, SHA256_DIGEST_LENGTH * 2) &&
                      preflight_json_uint(snapshot, end, "private_inventory_records", &recorded_records) &&
-                     recorded_records == private_records &&
                      preflight_json_string(snapshot, end, "generation", VS(recorded_generation)) &&
-                     strcmp(recorded_generation, generation) == 0 &&
                      preflight_hex(recorded_generation, SHA256_DIGEST_LENGTH * 2);
+        if (valid && require_current_private_cohort &&
+            (strcmp(recorded_private, private_digest) != 0 ||
+             recorded_records != private_records ||
+             strcmp(recorded_generation, generation) != 0)) {
+            valid = false;
+        }
         free(snapshot);
         if (!valid) {
             return set_error(error,
