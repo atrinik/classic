@@ -78,6 +78,21 @@ bool celestial_structure_begin_map_transaction(const mapstruct *map,
 bool celestial_structure_commit_map_transaction(const mapstruct *map, char *error, size_t error_size);
 bool celestial_structure_finish_map_transaction(const mapstruct *map, char *error, size_t error_size);
 bool celestial_structure_recover_map_transactions(char *error, size_t error_size);
+bool celestial_structure_begin_character_transaction(const char *account,
+                                                     const char *character,
+                                                     const char *map_path,
+                                                     const char *player_path,
+                                                     char *error,
+                                                     size_t error_size);
+bool celestial_structure_commit_character_transaction(const char *account,
+                                                      const char *character,
+                                                      char *error,
+                                                      size_t error_size);
+bool celestial_structure_finish_character_transaction(const char *account,
+                                                      const char *character,
+                                                      char *error,
+                                                      size_t error_size);
+bool celestial_structure_recover_character_transactions(char *error, size_t error_size);
 int celestial_structure_inventory_run(void);
 void celestial_structure_save_metadata(const mapstruct *map, FILE *fp);
 void celestial_structure_free(mapstruct *map);

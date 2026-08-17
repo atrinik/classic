@@ -3268,6 +3268,9 @@ void player_save(object *op) {
 
     char *path = player_make_path(op->name, "player.dat");
     char *path_tmp = player_make_path(op->name, "player.dat.tmp");
+    bool character_transaction = false;
+    char transaction_account[MAX_BUF] = "", transaction_character[MAX_BUF] = "";
+    FILE *fp = NULL;
 
     player *pl = CONTR(op);
     char map_value[MAX_BUF], bed_value[MAX_BUF];
@@ -3289,8 +3292,25 @@ void player_save(object *op) {
         goto out;
     }
 
+    if (celestial_structure_v1_runtime_active() && op->map != NULL && MAP_UNIQUE(op->map)) {
+        char transaction_error[HUGE_BUF] = "";
+        if (!player_unique_owner_parts(pl, transaction_account, transaction_character) ||
+            !celestial_structure_begin_character_transaction(transaction_account,
+                                                              transaction_character,
+                                                              op->map->path,
+                                                              path,
+                                                              VS(transaction_error))) {
+            LOG(ERROR,
+                "Cannot begin celestial character transaction for %s: %s",
+                STRING_SAFE(op->name),
+                transaction_error);
+            goto error;
+        }
+        character_transaction = true;
+    }
+
     path_ensure_directories(path_tmp);
-    FILE *fp = fopen(path_tmp, "w");
+    fp = fopen(path_tmp, "w");
     if (unlikely(fp == NULL)) {
         LOG(ERROR, "Failure opening %s for writing: %s", path_tmp, strerror(errno));
         goto error;
@@ -3347,6 +3367,27 @@ void player_save(object *op) {
     if (unlikely(path_rename(path_tmp, path) != 0)) {
         LOG(ERROR, "Failure renaming %s to %s: %s", path_tmp, path, strerror(errno));
         goto error;
+    }
+
+    if (character_transaction) {
+        char transaction_error[HUGE_BUF];
+        if (!celestial_structure_commit_character_transaction(transaction_account,
+                                                              transaction_character,
+                                                              VS(transaction_error))) {
+            LOG(ERROR,
+                "Celestial character transaction for %s remains prepared: %s",
+                STRING_SAFE(op->name),
+                transaction_error);
+            goto error;
+        }
+        if (!celestial_structure_finish_character_transaction(transaction_account,
+                                                              transaction_character,
+                                                              VS(transaction_error))) {
+            LOG(ERROR,
+                "Celestial character transaction for %s committed but could not be retired: %s",
+                STRING_SAFE(op->name),
+                transaction_error);
+        }
     }
 
     if (!metrics_character_save(pl)) {

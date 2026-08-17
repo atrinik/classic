@@ -1159,6 +1159,50 @@ START_TEST(test_private_map_provenance_demangles_authored_source) {
     ck_assert_int_eq(rmdir(temporary_root), 0);
 }
 END_TEST
+
+START_TEST(test_character_transaction_lifecycle_is_durable) {
+    char temporary_root[] = "/tmp/atrinik-celestial-character-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
+
+    char saved_datapath[HUGE_BUF];
+    snprintf(VS(saved_datapath), "%s", settings.datapath);
+    char datapath[HUGE_BUF], map_path[HUGE_BUF], player_path[HUGE_BUF], transaction_dir[HUGE_BUF];
+    snprintf(VS(datapath), "%s/data", temporary_root);
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
+    strcpy(map_path, datapath);
+    strcat(map_path, "/players/a/alice/$maps$apartment");
+    strcpy(player_path, datapath);
+    strcat(player_path, "/players/a/alice/player.dat");
+    strcpy(transaction_dir, datapath);
+    strcat(transaction_dir, "/celestial-character-transactions");
+
+    char error[HUGE_BUF];
+    ck_assert_msg(celestial_structure_begin_character_transaction("alice",
+                                                                  "Alice",
+                                                                  map_path,
+                                                                  player_path,
+                                                                  VS(error)),
+                  "%s",
+                  error);
+    ck_assert(path_exists(transaction_dir));
+    ck_assert_msg(celestial_structure_commit_character_transaction("alice",
+                                                                   "Alice",
+                                                                   VS(error)),
+                  "%s",
+                  error);
+    ck_assert_msg(celestial_structure_finish_character_transaction("alice",
+                                                                   "Alice",
+                                                                   VS(error)),
+                  "%s",
+                  error);
+    ck_assert_int_eq(celestial_structure_recover_character_transactions(VS(error)), true);
+
+    ck_assert_int_eq(rmdir(transaction_dir), 0);
+    ck_assert_int_eq(rmdir(datapath), 0);
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
+    ck_assert_int_eq(rmdir(temporary_root), 0);
+}
+END_TEST
 #endif
 
 static Suite *suite(void) {
@@ -1171,6 +1215,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_generated_factory_is_validated_and_bounded);
 #ifndef WIN32
     tcase_add_test(tc_core, test_private_map_provenance_demangles_authored_source);
+    tcase_add_test(tc_core, test_character_transaction_lifecycle_is_durable);
 #endif
     tcase_add_test(tc_core, test_saved_v1_map_swaps_and_reloads_mutable_state);
     tcase_add_test(tc_core, test_metadata_is_validated_consumed_sorted_and_saved);

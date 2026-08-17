@@ -1810,6 +1810,9 @@ bool celestial_structure_startup_preflight(char *error, size_t error_size) {
     if (!celestial_structure_acquire_writer_lease(error, error_size)) {
         return false;
     }
+    if (!celestial_structure_recover_character_transactions(error, error_size)) {
+        return false;
+    }
     if (!celestial_structure_recover_map_transactions(error, error_size)) {
         return false;
     }
@@ -2761,6 +2764,261 @@ bool celestial_structure_recover_map_transactions(char *error, size_t error_size
             return set_error(error,
                              error_size,
                              "cannot quarantine interrupted celestial map transaction %s",
+                             transaction_id);
+        }
+        unlink(transaction);
+    }
+    closedir(directory_handle);
+    return true;
+#endif
+}
+
+static bool character_transaction_path(const char *account,
+                                       const char *character,
+                                       char output[HUGE_BUF],
+                                       char transaction_id[SHA256_DIGEST_LENGTH * 2 + 1]) {
+    if (account == NULL || character == NULL || account[0] == '\0' || character[0] == '\0' ||
+        strchr(account, ':') != NULL || strchr(character, ':') != NULL) {
+        return false;
+    }
+    char identity[MAX_BUF * 2 + 2];
+    int written = snprintf(identity, sizeof(identity), "%s:%s", account, character);
+    if (written < 0 || (size_t)written >= sizeof(identity)) {
+        return false;
+    }
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    if (SHA256((const unsigned char *)identity, strlen(identity), digest) == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(digest); i++) {
+        snprintf(transaction_id + i * 2, 3, "%02x", digest[i]);
+    }
+    transaction_id[sizeof(digest) * 2] = '\0';
+    written = snprintf(output,
+                       HUGE_BUF,
+                       "%s/celestial-character-transactions/%s.json",
+                       settings.datapath,
+                       transaction_id);
+    return written >= 0 && (size_t)written < HUGE_BUF;
+}
+
+static bool character_transaction_write(const char *account,
+                                         const char *character,
+                                         const char *state,
+                                         const char *map_path,
+                                         const char *ledger_path,
+                                         const char *player_path,
+                                         char *error,
+                                         size_t error_size) {
+    char transaction[HUGE_BUF], transaction_id[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (!character_transaction_path(account, character, transaction, transaction_id) ||
+        state == NULL || map_path == NULL || ledger_path == NULL || player_path == NULL) {
+        return set_error(error, error_size, "cannot resolve celestial character transaction identity");
+    }
+    char contents[HUGE_BUF];
+    int written = snprintf(contents,
+                           sizeof(contents),
+                           "{\n"
+                           "  \"schema_version\": 1,\n"
+                           "  \"state\": \"%s\",\n"
+                           "  \"account\": \"%s\",\n"
+                           "  \"character\": \"%s\",\n"
+                           "  \"map_path\": \"%s\",\n"
+                           "  \"ledger_path\": \"%s\",\n"
+                           "  \"player_path\": \"%s\"\n"
+                           "}\n",
+                           state,
+                           account,
+                           character,
+                           map_path,
+                           ledger_path,
+                           player_path);
+    if (written < 0 || (size_t)written >= sizeof(contents)) {
+        return set_error(error, error_size, "celestial character transaction %s is too large", transaction_id);
+    }
+    char directory[HUGE_BUF];
+    if (snprintf(directory,
+                 sizeof(directory),
+                 "%s/celestial-character-transactions",
+                 settings.datapath) < 0 ||
+        strlen(directory) >= sizeof(directory)) {
+        return set_error(error, error_size, "celestial character transaction directory is too long");
+    }
+    path_ensure_directories(directory);
+    if (!path_write_atomic(transaction, contents, (size_t)written, SAVE_MODE)) {
+        return set_error(error,
+                         error_size,
+                         "cannot durably publish celestial character transaction %s",
+                         transaction_id);
+    }
+    return true;
+}
+
+bool celestial_structure_begin_character_transaction(const char *account,
+                                                     const char *character,
+                                                     const char *map_path,
+                                                     const char *player_path,
+                                                     char *error,
+                                                     size_t error_size) {
+    char ledger_path[HUGE_BUF], ledger_id[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (map_path == NULL || player_path == NULL ||
+        !celestial_map_identity_valid(map_path) ||
+        !provenance_path(map_path, ledger_path, ledger_id)) {
+        return set_error(error, error_size, "cannot resolve celestial character transaction paths");
+    }
+    return character_transaction_write(account,
+                                       character,
+                                       "prepared",
+                                       map_path,
+                                       ledger_path,
+                                       player_path,
+                                       error,
+                                       error_size);
+}
+
+bool celestial_structure_commit_character_transaction(const char *account,
+                                                      const char *character,
+                                                      char *error,
+                                                      size_t error_size) {
+    char transaction[HUGE_BUF], transaction_id[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (!character_transaction_path(account, character, transaction, transaction_id)) {
+        return set_error(error, error_size, "cannot resolve celestial character transaction identity");
+    }
+    size_t size;
+    char *contents = preflight_read_file(transaction, &size, error, error_size);
+    if (contents == NULL) {
+        return false;
+    }
+    const char *end = contents + size;
+    char state[32], recorded_account[MAX_BUF], recorded_character[MAX_BUF];
+    char map_path[HUGE_BUF], ledger_path[HUGE_BUF], player_path[HUGE_BUF];
+    uint64_t schema;
+    bool valid = preflight_json_uint(contents, end, "schema_version", &schema) && schema == 1 &&
+                 preflight_json_string(contents, end, "state", VS(state)) &&
+                 strcmp(state, "prepared") == 0 &&
+                 preflight_json_string(contents, end, "account", VS(recorded_account)) &&
+                 strcmp(recorded_account, account) == 0 &&
+                 preflight_json_string(contents, end, "character", VS(recorded_character)) &&
+                 strcmp(recorded_character, character) == 0 &&
+                 preflight_json_string(contents, end, "map_path", VS(map_path)) &&
+                 preflight_json_string(contents, end, "ledger_path", VS(ledger_path)) &&
+                 preflight_json_string(contents, end, "player_path", VS(player_path));
+    free(contents);
+    if (!valid) {
+        return set_error(error,
+                         error_size,
+                         "celestial character transaction %s is not prepared",
+                         transaction_id);
+    }
+    return character_transaction_write(account,
+                                       character,
+                                       "committed",
+                                       map_path,
+                                       ledger_path,
+                                       player_path,
+                                       error,
+                                       error_size);
+}
+
+bool celestial_structure_finish_character_transaction(const char *account,
+                                                      const char *character,
+                                                      char *error,
+                                                      size_t error_size) {
+    char transaction[HUGE_BUF], transaction_id[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (!character_transaction_path(account, character, transaction, transaction_id)) {
+        return set_error(error, error_size, "cannot resolve celestial character transaction identity");
+    }
+    if (unlink(transaction) != 0 && errno != ENOENT) {
+        return set_error(error,
+                         error_size,
+                         "cannot retire celestial character transaction %s",
+                         transaction_id);
+    }
+    return true;
+}
+
+bool celestial_structure_recover_character_transactions(char *error, size_t error_size) {
+#ifdef WIN32
+    (void)error;
+    (void)error_size;
+    return true;
+#else
+    char directory[HUGE_BUF];
+    if (snprintf(directory,
+                 sizeof(directory),
+                 "%s/celestial-character-transactions",
+                 settings.datapath) < 0 ||
+        strlen(directory) >= sizeof(directory) || !path_exists(directory)) {
+        return true;
+    }
+    DIR *directory_handle = opendir(directory);
+    if (directory_handle == NULL) {
+        return set_error(error,
+                         error_size,
+                         "cannot inspect celestial character transactions: %s",
+                         strerror(errno));
+    }
+    struct dirent *entry;
+    size_t records = 0;
+    while ((entry = readdir(directory_handle)) != NULL) {
+        size_t name_length = strlen(entry->d_name);
+        if (name_length != SHA256_DIGEST_LENGTH * 2 + 5 ||
+            strcmp(entry->d_name + name_length - 5, ".json") != 0) {
+            continue;
+        }
+        char transaction_id[SHA256_DIGEST_LENGTH * 2 + 1];
+        memcpy(transaction_id, entry->d_name, sizeof(transaction_id) - 1);
+        transaction_id[sizeof(transaction_id) - 1] = '\0';
+        if (!preflight_hex(transaction_id, SHA256_DIGEST_LENGTH * 2) || ++records > 256) {
+            closedir(directory_handle);
+            return set_error(error, error_size, "celestial character transaction directory is not bounded");
+        }
+        char transaction[HUGE_BUF];
+        if (snprintf(transaction, sizeof(transaction), "%s/%s", directory, entry->d_name) < 0 ||
+            strlen(transaction) >= sizeof(transaction)) {
+            closedir(directory_handle);
+            return set_error(error, error_size, "celestial character transaction path is too long");
+        }
+        size_t size;
+        char *contents = preflight_read_file(transaction, &size, error, error_size);
+        if (contents == NULL) {
+            closedir(directory_handle);
+            return false;
+        }
+        const char *end = contents + size;
+        char state[32], account[MAX_BUF], character[MAX_BUF];
+        char map_path[HUGE_BUF], ledger_path[HUGE_BUF], player_path[HUGE_BUF];
+        uint64_t schema;
+        bool valid = preflight_json_uint(contents, end, "schema_version", &schema) && schema == 1 &&
+                     preflight_json_string(contents, end, "state", VS(state)) &&
+                     (strcmp(state, "prepared") == 0 || strcmp(state, "committed") == 0) &&
+                     preflight_json_string(contents, end, "account", VS(account)) &&
+                     preflight_json_string(contents, end, "character", VS(character)) &&
+                     preflight_json_string(contents, end, "map_path", VS(map_path)) &&
+                     celestial_map_identity_valid(map_path) &&
+                     preflight_json_string(contents, end, "ledger_path", VS(ledger_path)) &&
+                     preflight_json_string(contents, end, "player_path", VS(player_path)) &&
+                     string_startswith(player_path, settings.datapath);
+        free(contents);
+        if (!valid) {
+            closedir(directory_handle);
+            return set_error(error,
+                             error_size,
+                             "celestial character transaction %s is malformed",
+                             transaction_id);
+        }
+        bool complete = path_exists(map_path) && path_exists(ledger_path) && path_exists(player_path);
+        if (strcmp(state, "committed") == 0 && complete) {
+            unlink(transaction);
+            continue;
+        }
+        if (!quarantine_transaction_file(map_path, transaction_id) ||
+            !quarantine_transaction_file(ledger_path, transaction_id) ||
+            !quarantine_transaction_file(player_path, transaction_id)) {
+            closedir(directory_handle);
+            return set_error(error,
+                             error_size,
+                             "cannot quarantine interrupted celestial character transaction %s",
                              transaction_id);
         }
         unlink(transaction);
