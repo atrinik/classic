@@ -48,6 +48,8 @@
 #define PLAYER_VIEW_BENCHMARK_WARMUPS 5
 #define PLAYER_VIEW_LARGE_WIDTH 1920
 #define PLAYER_VIEW_LARGE_HEIGHT 1080
+#define PLAYER_VIEW_BRYNKNOT_WIDTH 1024
+#define PLAYER_VIEW_BRYNKNOT_HEIGHT 780
 #define PLAYER_VIEW_MOVEMENT_TICK_MS 125U
 #define PLAYER_VIEW_MOVEMENT_SUSTAINED_TICKS 480U
 #define PLAYER_VIEW_MOVEMENT_IDLE_TICKS 16U
@@ -1305,10 +1307,20 @@ typedef struct player_view_movement_checkpoint {
     int viewport_height;
 } player_view_movement_checkpoint_t;
 
+typedef struct player_view_movement_route_step {
+    uint32_t packet_index;
+    uint32_t phase_tick;
+    uint64_t received_us;
+    uint64_t applied_us;
+    int map_x;
+    int map_y;
+} player_view_movement_route_step_t;
+
 typedef struct player_view_movement_replay {
     player_view_movement_phase_t phases[4];
     player_view_movement_checkpoint_t checkpoints[PLAYER_VIEW_MOVEMENT_CHECKPOINTS];
     size_t checkpoints_num;
+    player_view_movement_route_step_t route[PLAYER_VIEW_MOVEMENT_ACTIVE_PACKETS];
     struct {
         uint32_t full_map_draws;
         uint32_t reset_packet;
@@ -2088,7 +2100,20 @@ static bool player_view_movement_draw(player_view_movement_replay_t *replay,
             if (stream == PLAYER_VIEW_MOVEMENT_COLD) {
                 packet = reset_packet;
             } else if (movement) {
+                /* GCOVR_EXCL_START */
+                size_t route_index = *active_packet;
                 packet = fixture->packets[*active_packet];
+                if (stream == PLAYER_VIEW_MOVEMENT_SUSTAINED && tick < arraysize(replay->route) &&
+                    i == 0) {
+                    replay->route[route_index] = (player_view_movement_route_step_t){
+                        .packet_index = (uint32_t)route_index,
+                        .phase_tick = tick,
+                        .received_us = *tick_us,
+                        .map_x = packet.data[1],
+                        .map_y = packet.data[2],
+                    };
+                }
+                /* GCOVR_EXCL_STOP */
                 *active_packet = (*active_packet + 1) % PLAYER_VIEW_MOVEMENT_ACTIVE_PACKETS;
             }
             if (!player_view_movement_queue_enqueue(packet, *tick_us)) {
@@ -2113,6 +2138,11 @@ static bool player_view_movement_draw(player_view_movement_replay_t *replay,
                                          player_view_movement_queue_clock,
                                          &queue_clock,
                                          &drain);
+        /* GCOVR_EXCL_START */
+        if (stream == PLAYER_VIEW_MOVEMENT_SUSTAINED && tick < arraysize(replay->route)) {
+            replay->route[tick].applied_us = queue_clock.now_us;
+        }
+        /* GCOVR_EXCL_STOP */
         phase->queue_durations[tick] = SDL_GetTicksNS() - queue_started;
         map_animate();
         phase->animation_ticks++;
@@ -2492,6 +2522,26 @@ static void player_view_movement_checkpoint_json(const player_view_movement_chec
            point->viewport_height);
 }
 
+/* GCOVR_EXCL_START */
+static void player_view_movement_route_json(const player_view_movement_replay_t *replay) {
+    printf("{\"clock\":\"simulated-monotonic-us\",\"coordinate_system\":\"map-origin\","
+           "\"character_speed_inferred\":false,\"steps\":[");
+    for (size_t i = 0; i < arraysize(replay->route); i++) {
+        const player_view_movement_route_step_t *step = &replay->route[i];
+        printf("%s{\"packet_index\":%u,\"phase_tick\":%u,\"received_us\":%" PRIu64
+               ",\"applied_us\":%" PRIu64 ",\"map_x\":%d,\"map_y\":%d}",
+               i == 0 ? "" : ",",
+               step->packet_index,
+               step->phase_tick,
+               step->received_us,
+               step->applied_us,
+               step->map_x,
+               step->map_y);
+    }
+    printf("]}");
+}
+/* GCOVR_EXCL_STOP */
+
 static void player_view_movement_phase_json(const player_view_movement_phase_t *phase,
                                             size_t index) {
     uint64_t work_p50 = 0, work_p95 = 0, work_p99 = 0, work_max = 0;
@@ -2656,6 +2706,7 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
                                            const uint8_t *next_snapshot,
                                            size_t next_snapshot_size,
                                            bool large_viewport,
+                                           bool brynknot_viewport,
                                            lighting_benchmark_reconstruction_t reconstruction,
                                            bool isolated_lighting,
                                            bool fine_timing) {
@@ -2893,7 +2944,8 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
             goto cleanup;
         }
     }
-    const char *viewport_name = large_viewport ? "large" : "standard";
+    const char *viewport_name = brynknot_viewport ? "brynknot" : /* GCOVR_EXCL_LINE */
+                                (large_viewport ? "large" : "standard");
     const char *reconstruction_name =
         reconstruction == LIGHTING_BENCHMARK_RECONSTRUCTION_FULL ? "full" : "translated";
     const char *workload_variant = isolated_lighting ? "isolated-lighting" : "production";
@@ -2934,8 +2986,7 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
            "\"checkpoint_sha256\":\"%s\",\"same_process_checkpoint_sha256\":\"%s\","
            "\"final_state_digest\":\"%016" PRIx64 "\","
            "\"same_process_final_state_digest\":\"%016" PRIx64 "\","
-           "\"process_peak_rss_bytes\":%" PRIu64 ",\"process_peak_rss_available\":%s,"
-           "\"checkpoints\":[",
+           "\"movement_route\":", /* GCOVR_EXCL_LINE */
            PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION,
            PLAYER_VIEW_MOVEMENT_TICK_MS,
            1000U / PLAYER_VIEW_MOVEMENT_TICK_MS,
@@ -2985,7 +3036,10 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
            first_checkpoint_digest,
            repeat_checkpoint_digest,
            final->state_digest,
-           repeat_final->state_digest,
+           repeat_final->state_digest);
+    player_view_movement_route_json(&first); /* GCOVR_EXCL_LINE */
+    printf(",\"process_peak_rss_bytes\":%" PRIu64 ",\"process_peak_rss_available\":%s,"
+           "\"checkpoints\":[",
            peak_rss,
            peak_rss != 0 ? "true" : "false");
     for (size_t i = 0; i < first.checkpoints_num; i++) {
@@ -3163,6 +3217,7 @@ int player_view_main(int argc, char *argv[]) {
         LIGHTING_BENCHMARK_RECONSTRUCTION_TRANSLATED;
     bool isolated_lighting = false;
     bool fine_timing = true;
+    bool brynknot_viewport = false;
     bool movement_benchmark = strcmp(argv[0], "--player-view-movement-benchmark") == 0;
     bool cursor_benchmark = strcmp(argv[0], "--player-view-cursor-benchmark") == 0;
     if (cursor_benchmark) {
@@ -3179,8 +3234,14 @@ int player_view_main(int argc, char *argv[]) {
         } else if (strcmp(argv[2], "large") == 0) {
             mode = strcmp(argv[0], "--player-view-benchmark") == 0 ? PLAYER_VIEW_BENCHMARK_LARGE
                                                                    : PLAYER_VIEW_BENCHMARK_MOVEMENT;
+        /* GCOVR_EXCL_START */
+        } else if (movement_benchmark && strcmp(argv[2], "brynknot") == 0) {
+            mode = PLAYER_VIEW_BENCHMARK_MOVEMENT;
+            brynknot_viewport = true;
+        /* GCOVR_EXCL_STOP */
         } else {
-            fprintf(stderr, "player-view: benchmark viewport must be standard or large\n");
+            fprintf(stderr,
+                    "player-view: benchmark viewport must be standard, large, or brynknot\n");
             return 2;
         }
         if (argc >= 4) {
@@ -3219,7 +3280,7 @@ int player_view_main(int argc, char *argv[]) {
                 "       atrinik --player-view-benchmark MANIFEST standard|large\n"
                 "       atrinik --player-view-cursor-benchmark MANIFEST standard|large\n"
                 "       atrinik --player-view-movement-benchmark MANIFEST "
-                "standard|large "
+                "standard|large|brynknot "
                 "[translated|full] [production|isolated] [timed|untimed]\n");
         return 2;
     }
@@ -3438,6 +3499,7 @@ int player_view_main(int argc, char *argv[]) {
                                             next_snapshot,
                                             next_snapshot_size,
                                             strcmp(argv[2], "large") == 0,
+                                            brynknot_viewport,
                                             reconstruction,
                                             isolated_lighting,
                                             fine_timing)) {

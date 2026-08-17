@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import subprocess
+import sys
 import unittest
 from unittest import mock
 
@@ -19,6 +20,40 @@ def result(returncode: int, stdout: str = "", stderr: str = "") -> subprocess.Co
 
 
 class MovementFaultInjectionTests(unittest.TestCase):
+    @mock.patch.object(fault_verifier, "verify_cursor")
+    @mock.patch.object(fault_verifier, "verify_movement_fault")
+    @mock.patch.object(fault_verifier, "verify_movement")
+    @mock.patch.object(fault_verifier, "verify_frozen")
+    def test_main_accepts_brynknot_viewport(
+        self,
+        verify_frozen: mock.Mock,
+        verify_movement: mock.Mock,
+        verify_movement_fault: mock.Mock,
+        verify_cursor: mock.Mock,
+    ) -> None:
+        with mock.patch.object(
+            sys,
+            "argv",
+            [
+                "verify_movement_fault_injection.py",
+                "client",
+                "frozen.xml",
+                "movement.xml",
+                "brynknot",
+            ],
+        ):
+            self.assertEqual(fault_verifier.main(), 0)
+
+        verify_frozen.assert_called_once_with(Path("client"), Path("frozen.xml"))
+        verify_movement.assert_called_once_with(
+            Path("client"), Path("movement.xml"), "brynknot"
+        )
+        self.assertTrue(verify_movement_fault.call_args_list)
+        self.assertTrue(
+            all(call.args[-1] == "brynknot" for call in verify_movement_fault.call_args_list)
+        )
+        verify_cursor.assert_called_once_with(Path("client"), Path("movement.xml"))
+
     @mock.patch.object(fault_verifier.subprocess, "run")
     def test_invoke_scopes_fault_to_child_process(self, run: mock.Mock) -> None:
         run.return_value = result(0)
