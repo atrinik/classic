@@ -649,7 +649,8 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
     if (NOT IS_DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/maps" OR
             NOT IS_DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/lib" OR
             NOT IS_DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/client-maps" OR
-            NOT IS_REGULAR_FILE "${ATRINIK_SERVER_PACKAGE_ROOT}/manifest.json")
+            NOT EXISTS "${ATRINIK_SERVER_PACKAGE_ROOT}/manifest.json" OR
+            IS_DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/manifest.json")
         message(FATAL_ERROR
             "ATRINIK_SERVER_PACKAGE_ROOT must contain maps/, lib/, and "
             "client-maps/, plus manifest.json.")
