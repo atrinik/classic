@@ -3130,7 +3130,7 @@ static bool celestial_activation_generation(const char *manifest_digest,
                                             size_t private_records,
                                             char output[SHA256_DIGEST_LENGTH * 2 + 1]) {
     char record_count[32];
-    int written = snprintf(record_count, sizeof(record_count), "%zu", private_records);
+    int written = snprintf(record_count, sizeof(record_count), "%" PRIu64, (uint64_t)private_records);
     if (written < 0 || (size_t)written >= sizeof(record_count)) {
         return false;
     }
@@ -3252,18 +3252,18 @@ static bool preflight_activation_snapshot(const char *manifest_digest,
                            "  \"manifest_sha256\": \"%s\",\n"
                            "  \"migration_index_sha256\": \"%s\",\n"
                            "  \"private_inventory_sha256\": \"%s\",\n"
-                           "  \"private_inventory_records\": %zu,\n"
+                           "  \"private_inventory_records\": %" PRIu64 ",\n"
                            "  \"state_snapshot_sha256\": \"%s\",\n"
-                           "  \"state_snapshot_files\": %zu,\n"
+                           "  \"state_snapshot_files\": %" PRIu64 ",\n"
                            "  \"generation\": \"%s\"\n"
                            "}\n",
                            celestial_artifact_commit,
                            manifest_digest,
                            migration_digest,
                            private_digest,
-                           private_records,
+                           (uint64_t)private_records,
                            state_digest,
-                           state_files,
+                           (uint64_t)state_files,
                            generation);
     if (written < 0 || (size_t)written >= sizeof(contents) ||
         !path_write_atomic(snapshot_path, contents, (size_t)written, SAVE_MODE)) {
