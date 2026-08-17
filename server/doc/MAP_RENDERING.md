@@ -1855,3 +1855,270 @@ display the complete profile digest used for continuous-link validation.
 Tests must cover lighting rebuild/load/unload, inside/outside buildings, delta
 cache semantic changes, fog versus hard clear, roof silhouettes, disclosure
 boundaries, cutaway connectivity, and depth-transition cache shifts.
+
+## Remembered-world visibility and lighting semantics
+
+This section is the normative Classic client contract for the remembered-world
+work beginning with issue #386. It freezes presentation semantics before the
+state and compositor implementations in #387, #388, and #389 change. It also
+defines the authority boundary for the optional shadow research in #390 and the
+measurements in #391. A later implementation may change representation, but it
+must preserve these observable results and limits.
+
+### Authority and terms
+
+The server remains authoritative for every current MAP2 clear, fog-of-war
+result, serialized object, door/gate state, and Q5.11 scalar/RGB radiance
+sample. The client may retain only geometry that the server previously
+authorized. It must never infer a current-visible cell, blocker, source, or
+hidden object from artwork, remembered geometry, a wall silhouette, or a
+client-side light value. The player's field is presentation-only: it is never
+written to `MapCell.light_*`, sent back to the server, or used for gameplay,
+targeting, pathfinding, or serialization.
+
+The contract uses these terms:
+
+| Term | Meaning |
+| --- | --- |
+| current | Geometry and live records authorized by the latest accepted MAP2 state for the cell and physical depth. |
+| remembered | Previously authorized static geometry retained in the bounded five-window client cache after a soft clear or scroll. |
+| transient | A living object, temporary effect, animation state, or interaction record whose lifetime follows current authorization. |
+| soft clear | An ordinary MAP2/FOW loss that removes current/live presentation while retaining eligible remembered geometry. |
+| hard clear | A map/cache invalidation that removes remembered geometry, live records, ownership metadata, and dependent resources. |
+| sky/structural visibility | Camera presentation of authorized floors, walls, roofs, and linked-depth structure; it is separate from gameplay LOS. |
+| player field | A fixed-point neutral presentation contribution centered on the local player and clipped by current server authorization. |
+| stale | A live record that has received no newer authoritative update by the expiry bound; it is not targetable or annotatable. |
+
+### MAP2 classification
+
+Classification is semantic and explicit. A layer or heuristic is not allowed to
+turn an interactive or temporary object into remembered geometry merely because
+it is drawn on a static-looking layer. The decoder records the classification
+with each authorized object and applies the same result to online and offline
+player-view paths.
+
+| MAP2 object/layer | Remembered after soft clear | Current/live only | Required outcome |
+| --- | --- | --- | --- |
+| `FLOOR`, floor mask, support height, elevation, and painter metadata | Yes | No | Retain the latest authorized face, transform, owner depth, and support data. |
+| `WALL`, roof, tree, and persistent map decoration | Yes | No | Retain static geometry and its explicit depth/elevation; do not retain actors attached to it. |
+| Closed/open door or gate shell | Yes | No | Retain the shell and aperture class; a state change replaces the remembered geometry atomically. |
+| Window, grate, curtain, and other persistent aperture decoration | Yes | No | Retain the authored/transmitted surface class; openness never broadens gameplay LOS by itself. |
+| Multipart, tall, stretched, transformed, or `draw_double` static geometry | Yes | No | Retain every face and the painter/support metadata needed to reproduce the same projection. |
+| Animated map decoration with no living/interactive state | Yes | No | Retain the static frame/identity and advance only while its bounded animation remains authorized. |
+| `ITEM`/`ITEM2`, pickable item, container, corpse, and scripted object | No | Yes | Clear on soft loss; never make a pickable or script-controlled object permanent by layer. |
+| Living player, monster, NPC, familiar, or summoned creature | No | Yes | Track as a transient record with deterministic alpha and expiry. |
+| Spell, weather, firestorm, projectile, particle, temporary animation, or other effect | No | Yes | Track as a transient record; expiry cannot keep an idle map redraw alive. |
+| Name, probe, target bar, pointer cue, exit interaction, status marker, or other annotation | No | Yes | Keep only with its current authoritative owner and cutoff; draw after lighting when eligible. |
+| Script-controlled visibility or plugin-produced object | No implicit result | Yes unless explicitly classified by MAP2 metadata | Require an explicit server-authorized static classification; otherwise clear on soft loss. |
+
+Doors, gates, corpses, containers, multipart objects, animated decoration,
+and script-controlled visibility therefore have distinct outcomes. `blocksview`
+controls the current server result; it is not a remembered-geometry predicate.
+An object absent from authorized MAP2 history is never fabricated from a nearby
+cell, a reused cache coordinate, or a client-side inference.
+
+### State and transition contract
+
+The remembered cell owns only static geometry, projection data, physical depth,
+elevation/owner data, source/resource identity, and the last authorized map
+revision. The live record owns current object identity, current alpha, latest
+authoritative update, animation/effect state, interaction metadata, and target
+eligibility. Both are keyed by map identity, physical depth, map coordinate, and
+cache generation; coordinate reuse cannot resurrect a prior map.
+
+| Input/event | Remembered state | Live/transient state | Invalidation and publication rule |
+| --- | --- | --- | --- |
+| New MAP2 cell/layer | Replace with the complete validated static result, or publish no remembered state for a transient-only result. | Replace only the records present in the transaction. | Validate the whole framed command and all continuations before publishing any part. |
+| Same-cell delta | Keep unchanged static fields and replace only fields named by the delta. | Replace or remove only authoritative records named by the delta. | A semantic blocker, fog, depth, or resource change increments the affected revision. |
+| Partial/continuation update | Stage all pieces outside live state. | Stage all pieces outside live state. | Missing, duplicate, out-of-order, oversize, or malformed continuation rolls back the complete transaction. |
+| Soft LOS/FOW clear | Keep eligible remembered static geometry and its last authorized resources. | Remove current records or start bounded fade-out; remove interaction metadata at its cutoff. | No player boost or current live object is allowed behind the lost authorization. |
+| Hard clear/map replacement | Destroy all remembered geometry, owners, fields, source locks, and cache entries for the affected identity. | Destroy every live/transient record and annotation. | Publish an empty generation only after dependents are invalidated; stale data cannot reappear. |
+| Scroll out of the live 17-by-17 window | Translate/reuse only the matching physical cache coordinates; retain no more than the five-window bound. | Mark out-of-window records not currently authorized and begin fade/expiry. | Reuse is valid only when map identity, depth, revision, transform, and resource identity match. |
+| Scroll back/A-to-B-to-A | Reproduce the last authorized remembered geometry for A. | Do not restore actors/effects/annotations without a newer authoritative update. | A hard reset or map identity change makes A unavailable, not recoverable from B. |
+| Linked-depth add/remove/shift | Preserve signed physical-depth/elevation relationships; allocate only within `MAP2_LEVELS`. | Clear records belonging to removed or shifted depths. | Missing, cyclic, misaligned, or unresolved links fail closed and invalidate affected columns. |
+| Visibility enter | Keep remembered geometry and accept current records from the new MAP2 transaction. | Fade in only newly authorized records; local player is always fully visible. | Entering a radial field never substitutes for server authorization. |
+| Visibility leave | Keep remembered geometry at the memory presentation floor. | Fade out, remove interactions, then expire at the stale bound. | No live target or annotation remains after current visibility is lost. |
+| Stale expiry | Unchanged. | Remove the record and all interaction references. | Expiry is deterministic and cannot schedule continuous redraw after alpha reaches zero. |
+| Teleport, reconnect, logout, renderer shutdown, or reset | Hard clear the affected map/session generation. | Hard clear all live records and annotations. | Reconnect starts from a new server-authorized MAP2 history; no client cache is trusted across identity change. |
+
+The local render clock is an injected monotonic integer-millisecond clock. It
+does not use wall time or random state. Pausing, focus loss, and minimized
+windows suspend the presentation clock; they do not advance fades or expire a
+record. Resume consumes the next authoritative update and then advances from
+the saved clock value. A new map, renderer reset, or reconnect starts a new
+clock generation.
+
+### Fixed visibility and light transfer
+
+All distances and transfers use map-coordinate integer arithmetic. The field is
+not calculated in screen pixels and does not become an isometric ellipse. The
+frozen constants are:
+
+| Quantity | Value |
+| --- | ---: |
+| Normal daylight raw radiance | 1280 |
+| Remembered-geometry neutral floor (`M`) | 512 raw (40% of daylight) |
+| Player-field neutral center (`P`) | 640 raw (50% of daylight) |
+| Inner radius squared | 16 (radius 4) |
+| Outer radius squared | 64 (radius 8) |
+| Field weight unit | 256 |
+| Actor/effect fade duration | 250 ms |
+| Stale live-record bound | 500 ms after the last authoritative update |
+| Full alpha | 255 |
+| Interaction cutoff | alpha below 192 or no current authorization |
+
+For `d2 = dx*dx + dy*dy`, the field weight is `256` when `d2 <= 16`, `0`
+when `d2 >= 64`, and otherwise:
+
+```text
+weight(d2) = floor((2 * (64 - d2) * 256 + 48) / (2 * 48))
+```
+
+This is round-half-up for the linear falloff between the two squared-radius
+boundaries. The conformance vector is:
+
+| `d2` | 0 | 1 | 4 | 8 | 16 | 17 | 25 | 32 | 36 | 48 | 49 | 64 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| weight | 256 | 256 | 256 | 256 | 256 | 251 | 208 | 171 | 149 | 85 | 80 | 0 |
+
+The player contribution for a current-authorized cell is
+`round_half_up(P * weight / 256)` added equally to scalar and RGB linear
+channels. It is applied after interpolating the server's Q5.11 samples and
+before tone mapping. It never changes the cached authoritative samples. The
+local player uses alpha 255 and receives the same contribution at all field
+positions where the player is rendered.
+
+Remembered static geometry outside current authorization receives a neutral
+memory lift, not a current-visibility grant. Let `S` be the decoded server
+scalar and `C` its decoded linear RGB vector. The display-only values are:
+
+```text
+memory_lift = max(0, 512 - S)
+S_display   = S + memory_lift
+C_display   = max((0, 0, 0), C + (memory_lift, memory_lift, memory_lift))
+```
+
+Thus zero-radiance remembered geometry is `(512,512,512)`, a low colored local
+sample keeps its color while receiving only the missing neutral floor, and a
+negative or zero endpoint cannot produce a negative display value. The RGB
+component clamp is display-only and does not alter the cached sample. At or
+above raw 512 the server sample is unchanged. Current visible geometry does not get
+the memory lift; it receives the authoritative sample plus the player-field
+contribution. Q5.11 encoding remains the existing checked round-half-up
+`raw * 8 / 5` operation at the wire boundary; this contract adds no protocol
+field and no second visibility authority.
+
+Fade alpha is integer and monotonic for one authoritative transition:
+
+```text
+fade_in(elapsed)  = min(255, floor((elapsed * 255 + 125) / 250))
+fade_out(elapsed) = max(0, 255 - floor((elapsed * 255 + 125) / 250))
+```
+
+An authoritative reappearance cancels fade-out and starts from the current
+alpha without overshoot. A newer authoritative absence replaces the prior
+target and timestamp. At alpha zero the record and any redraw request are
+removed; alpha-only changes repaint the affected bounded region but never
+rebuild remembered geometry or the light field.
+
+### Unified composition and resource contract
+
+The normal MAP decoder and `map_draw_map()` path remain the only scene-building
+path. The compositor performs these phases in order:
+
+1. Validate and publish MAP2 state, including current fog/clear, depth, owner,
+   alpha, transform, and server Q5.11 samples.
+2. Resolve the bounded remembered/live scene without synthesizing absent cells.
+3. Paint albedo, alpha, color-key, transformed, double-face, stretch, and
+   multipart geometry in the established global isometric order.
+4. For every final visible pixel/span, retain the physical depth/elevation
+   owner (or an equivalent surface-light coordinate) and select its authorized
+   interpolated sample.
+5. Apply the player contribution or remembered memory lift, then perform one
+   scene-linear tone-map/multiply traversal for the complete primary map.
+6. Draw names, probes, target bars, pointer cues, exits, and other annotations
+   in one documented post-light phase only when their current cutoff permits.
+
+Color-key pixels remain transparent and write no owner. True alpha and surface
+alpha modulate the final albedo contribution; they do not discard the owner
+metadata of a partially transparent surface unless the existing painter marks
+the span transparent. Outlines and glows use the same owner/light result as
+their source sprite. UI annotations are unlit. A lock, texture, allocation,
+surface, or output failure discards the partial frame and presents the existing
+deterministic readable fallback; it never displays a partially composed or
+previous-map frame.
+
+For viewport pixel count `N = width * height`, active physical depths `D` are
+bounded by `MAP2_LEVELS` and the configured viewport limit. Retained buffers
+must satisfy these hard formulas, including pitch and allocator overhead:
+
+| Resource | Bound |
+| --- | --- |
+| Albedo/output surface | one `N`-pixel surface each; no per-sprite lit surface |
+| Owner/elevation metadata | at most one record per output pixel plus one bounded row scratch buffer |
+| Interpolated scalar/RGB field | at most one field per active physical depth and one translation scratch field |
+| Static transformed/effect cache | existing explicit byte/entry cap; no uncapped fallback cache |
+| Live records | at most the bounded MAP2 command/object count for the active generation |
+| Retained physical depths | `D <= MAP2_LEVELS == 2 * MAP2_MAX_DEPTH + 1` |
+| Compositions | exactly one complete primary-field composition for a complete primary draw |
+
+The implementation must expose counters for whole-field compositions, processed
+pixels/spans, dirty area, field builds/translations/reuses, owner writes,
+per-visible-sprite lit-surface constructions, allocations, lock failures,
+fallbacks, live records, fade redraws, and retained bytes. A complete primary
+draw has exactly one whole-field composition and zero per-visible-sprite
+lit-surface constructions. Idle after fades and timed buckets settle has zero
+visibility, field, shadow, and map reconstruction work.
+
+### Optional shadows and dependency gates
+
+The server's aggregate celestial/local radiance and structural spill remain
+authoritative. Optional client contact or directional shadows may be proposed
+only as a bounded presentation derived from visible authorized geometry and the
+already decoded aggregate field. They must not expose source positions,
+identities, hidden blockers, celestial profiles, or new MAP2 authority. #390
+must measure at least two bounded techniques on the same deterministic fixtures,
+separate server-produced shadow/spill from client projection, and either land a
+separate reviewed contract or reject the feature. No production shadow or wire
+change is implied by this document.
+
+The implementation dependency graph is:
+
+| Work | Consumes | Must not redefine |
+| --- | --- | --- |
+| #387 remembered/live state | classification and transition tables above | MAP2 framing, server disclosure, or light math |
+| #388 visibility and fades | current authorization, field vectors, fade/expiry rules | gameplay LOS, server radiance, or compositor ownership |
+| #389 unified compositor | remembered/live state, player transfer, owner/elevation, resource bounds | classification, protocol authority, or shadow research |
+| #390 optional shadows | unified compositor and aggregate radiance | hidden source identities, new wire data, or parent budgets |
+| #391 performance proof | all counters, cache bounds, and redraw rules | a second benchmark schema or portable timing exception |
+| #142 renderer context | the complete renderer state/lifecycle contract | a parallel decoder or alternate map renderer |
+
+These children may develop in parallel only against this contract. A change to
+one frozen value or authority boundary requires a new design review and a
+coordinated update to all consumers before implementation proceeds.
+
+### Conformance vectors and review gates
+
+The following vectors are mandatory in unit/fixture coverage:
+
+| Case | Remembered display scalar/RGB | Player contribution | Alpha |
+| --- | --- | --- | ---: |
+| never-seen cell | empty; no output | none | 0 |
+| remembered, zero server radiance | `(512,512,512)` | none | 255 for static geometry |
+| remembered, raw server `(80,0,0)` | `(512,432,432)` after neutral lift | none | 255 |
+| current visible, neutral raw 1280, center | `(1280,1280,1280)` | `640` each channel before tone mapping | 255 |
+| current visible, neutral raw 1280, `d2=25` | `(1280,1280,1280)` | `520` each channel | 255 |
+| fade-in at 125 ms | unchanged light | unchanged | 128 |
+| fade-out at 125 ms | unchanged static geometry | none | 127 |
+| stale at 500 ms | unchanged remembered geometry only | none | 0 for live record |
+
+Tests must cover every classification row, new/same/partial MAP2, soft/hard
+clear, scroll out/back, A-to-B-to-A, resize, teleport, reconnect, pause and
+focus resume, linked-depth add/remove/shift, closed/open `blocksview`, colored
+and negative radiance, zero and timed endpoints, alpha/transforms/double faces,
+allocation and lock failure, and deterministic reset. The same fixtures must
+exercise the production decoder and `map_draw_map()` path. The review gates are
+the issue acceptance criteria: no implicit layer/lifecycle case, exact order
+and vectors, hard resource bounds, one-pass ownership, preserved #185/#188/#271
+authority/confidentiality, and an implementation graph that lets the remaining
+children land without semantic drift.
