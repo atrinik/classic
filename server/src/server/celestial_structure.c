@@ -2276,7 +2276,6 @@ static bool quarantine_private_map_file(const char *path, const char *reason) {
         free(base);
         return false;
     }
-    path_ensure_directories(directory);
     int written = snprintf(destination,
                            sizeof(destination),
                            "%s/private-%ld-%s",
@@ -2304,6 +2303,7 @@ static bool quarantine_private_map_file(const char *path, const char *reason) {
             return false;
         }
     }
+    path_ensure_directories(destination);
     if (path_exists(destination) || path_rename(path, destination) != 0) {
         return false;
     }
@@ -3038,7 +3038,6 @@ static bool quarantine_transaction_file(const char *source, const char *transact
         strlen(directory) >= sizeof(directory)) {
         return false;
     }
-    path_ensure_directories(directory);
     int written = snprintf(destination,
                            sizeof(destination),
                            "%s/transaction-%s-%ld",
@@ -3060,7 +3059,16 @@ static bool quarantine_transaction_file(const char *source, const char *transact
             return false;
         }
     }
-    return !path_exists(destination) && path_rename(source, destination) == 0;
+    path_ensure_directories(destination);
+    if (path_exists(destination) || path_rename(source, destination) != 0) {
+        LOG(ERROR,
+            "Cannot quarantine celestial transaction input %s as %s: %s",
+            source,
+            destination,
+            strerror(errno));
+        return false;
+    }
+    return true;
 }
 #endif
 
