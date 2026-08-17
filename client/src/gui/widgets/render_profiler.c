@@ -216,10 +216,12 @@ static char *render_profiler_widget_text(const render_profile_snapshot_t *snapsh
                                render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_UI));
 
     for (stage = 0; stage < RENDER_PROFILE_STAGE_NUM; stage++) {
-        render_profile_stage_metadata_t metadata;
+        render_profile_stage_metadata_t metadata = {0};
         const char *scope;
 
-        HARD_ASSERT(render_profiler_stage_metadata_get(stage, &metadata));
+        if (!render_profiler_stage_metadata_get(stage, &metadata)) {
+            continue;
+        }
         scope = render_profiler_scope_name(metadata.scope);
         HARD_ASSERT(scope != NULL);
         stringbuffer_append_printf(sb,
