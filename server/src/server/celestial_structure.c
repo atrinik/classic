@@ -1876,20 +1876,76 @@ static bool provenance_source(const mapstruct *map,
                               char source_path[HUGE_BUF],
                               char source_file[HUGE_BUF],
                               char source_sha[SHA256_DIGEST_LENGTH * 2 + 1]) {
-    const char *logical = map->path;
-    if (logical == NULL || !celestial_structure_logical_map_id_valid(logical)) {
+    if (map == NULL || map->path == NULL) {
         return false;
     }
+    const char *logical = map->path;
+    char logical_path[HUGE_BUF];
+    char *demangled = NULL;
     if (map->celestial_generated_origin != NULL) {
         logical = map->celestial_generated_origin;
-    }
-    if (!celestial_structure_logical_map_id_valid(logical) ||
-        snprintf(source_path, HUGE_BUF, "%s", logical) < 0 ||
-        snprintf(source_file, HUGE_BUF, "%s%s", settings.mapspath, logical) < 0 ||
-        !preflight_sha256_file(source_file, source_sha)) {
+        if (snprintf(logical_path, sizeof(logical_path), "%s", logical) < 0 ||
+            strlen(logical_path) >= sizeof(logical_path)) {
+            return false;
+        }
+    } else if (!celestial_structure_logical_map_id_valid(logical)) {
+        if (!MAP_UNIQUE(map) || !string_startswith(map->path, settings.datapath)) {
+            return false;
+        }
+        demangled = path_basename(map->path);
+        if (demangled == NULL || strchr(demangled, '$') == NULL) {
+            free(demangled);
+            return false;
+        }
+        string_replace_char(demangled, "$", '/');
+        logical = demangled;
+        while (*logical == '/') {
+            logical++;
+        }
+        int written = snprintf(logical_path, sizeof(logical_path), "/%s", logical);
+        if (written < 0 || (size_t)written >= sizeof(logical_path) ||
+            !celestial_structure_logical_map_id_valid(logical_path)) {
+            free(demangled);
+            return false;
+        }
+    } else if (snprintf(logical_path, sizeof(logical_path), "%s", logical) < 0 ||
+               strlen(logical_path) >= sizeof(logical_path)) {
         return false;
     }
+    if (!celestial_structure_logical_map_id_valid(logical_path) ||
+        snprintf(source_path, HUGE_BUF, "%s", logical_path) < 0 ||
+        strlen(source_path) >= HUGE_BUF ||
+        snprintf(source_file, HUGE_BUF, "%s%s", settings.mapspath, logical_path) < 0 ||
+        strlen(source_file) >= HUGE_BUF ||
+        !preflight_sha256_file(source_file, source_sha)) {
+        free(demangled);
+        return false;
+    }
+    free(demangled);
     return true;
+}
+
+static bool celestial_map_identity_valid(const char *path) {
+    if (celestial_structure_logical_map_id_valid(path)) {
+        return true;
+    }
+    if (path == NULL || !string_startswith(path, settings.datapath)) {
+        return false;
+    }
+    char *demangled = path_basename(path);
+    if (demangled == NULL || strchr(demangled, '$') == NULL) {
+        free(demangled);
+        return false;
+    }
+    string_replace_char(demangled, "$", '/');
+    while (*demangled == '/') {
+        memmove(demangled, demangled + 1, strlen(demangled));
+    }
+    char normalized[HUGE_BUF];
+    int written = snprintf(normalized, sizeof(normalized), "/%s", demangled);
+    free(demangled);
+    return written >= 0 && (size_t)written < sizeof(normalized) &&
+           celestial_structure_logical_map_id_valid(normalized);
 }
 
 static bool provenance_map_file(const mapstruct *map,
@@ -1900,6 +1956,12 @@ static bool provenance_map_file(const mapstruct *map,
     }
     if (map->tmpname != NULL) {
         if (snprintf(map_file, HUGE_BUF, "%s", map->tmpname) < 0 ||
+            strlen(map_file) >= HUGE_BUF) {
+            return false;
+        }
+    } else if (MAP_UNIQUE(map) && map->path != NULL &&
+               string_startswith(map->path, settings.datapath)) {
+        if (snprintf(map_file, HUGE_BUF, "%s", map->path) < 0 ||
             strlen(map_file) >= HUGE_BUF) {
             return false;
         }
@@ -1959,7 +2021,7 @@ bool celestial_structure_write_provenance(const mapstruct *map, char *error, siz
 }
 
 bool celestial_structure_validate_provenance(const mapstruct *map, char *error, size_t error_size) {
-    if (map == NULL || map->path == NULL || map->tmpname == NULL) {
+    if (map == NULL || map->path == NULL) {
         return set_error(error, error_size, "temporary v1 map has no provenance identity");
     }
     char ledger[HUGE_BUF], ledger_id[SHA256_DIGEST_LENGTH * 2 + 1];
@@ -2001,8 +2063,8 @@ bool celestial_structure_validate_provenance(const mapstruct *map, char *error, 
                   strcmp(actual_sha, source_sha) != 0)) {
         valid = false;
     }
-    char actual_map_sha[SHA256_DIGEST_LENGTH * 2 + 1];
-    if (valid && (!preflight_sha256_file(map->tmpname, actual_map_sha) ||
+    char map_file[HUGE_BUF], actual_map_sha[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (valid && (!provenance_map_file(map, map_file, actual_map_sha) ||
                   strcmp(actual_map_sha, map_sha) != 0)) {
         valid = false;
     }
@@ -2213,7 +2275,7 @@ bool celestial_structure_recover_map_transactions(char *error, size_t error_size
         bool valid = preflight_json_uint(contents, end, "schema_version", &schema) && schema == 1 &&
                      preflight_json_string(contents, end, "state", VS(state)) &&
                      preflight_json_string(contents, end, "map_path", VS(map_path_value)) &&
-                     celestial_structure_logical_map_id_valid(map_path_value) &&
+                     celestial_map_identity_valid(map_path_value) &&
                      preflight_json_string(contents, end, "map_file", VS(map_file)) &&
                      preflight_json_string(contents, end, "unique_file", VS(unique_file));
         free(contents);

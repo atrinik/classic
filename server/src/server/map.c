@@ -1167,6 +1167,15 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
         string_replace_char(real_path, "$", '/');
     }
 
+    if (flags & MAP_PLAYER_UNIQUE && !path_exists(pathname) &&
+        celestial_structure_v1_runtime_active()) {
+        LOG(ERROR,
+            "Refusing source-less celestial-v1 private map %s; savebed fallback is required.",
+            pathname);
+        free(real_path);
+        return NULL;
+    }
+
     if (flags & MAP_PLAYER_UNIQUE && !path_exists(pathname)) {
         fp = fopen(create_pathname(real_path), "rb");
     } else {
@@ -1196,6 +1205,13 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
         char error[HUGE_BUF];
         if (!celestial_structure_validate_header(m, VS(error))) {
             LOG(ERROR, "Celestial structural header validation failed: %s", error);
+            delete_map(m);
+            fclose(fp);
+            return NULL;
+        }
+        if ((flags & MAP_PLAYER_UNIQUE) && celestial_structure_v1_runtime_active() &&
+            !celestial_structure_validate_provenance(m, VS(error))) {
+            LOG(ERROR, "Celestial private-map provenance validation failed: %s", error);
             delete_map(m);
             fclose(fp);
             return NULL;
@@ -1731,13 +1747,16 @@ int new_save_map(mapstruct *m, int flag) {
         snprintf(VS(filename), "%s", m->tmpname);
     }
 
-    if (m->celestial_schema == 1 && celestial_structure_v1_runtime_active() && !flag &&
-        !MAP_UNIQUE(m)) {
-        snprintf(buf, sizeof(buf), "%s.v00", create_items_path(m->path));
+    if (m->celestial_schema == 1 && celestial_structure_v1_runtime_active() && !flag) {
+        const char *transaction_unique = filename;
+        if (!MAP_UNIQUE(m)) {
+            snprintf(buf, sizeof(buf), "%s.v00", create_items_path(m->path));
+            transaction_unique = buf;
+        }
         char transaction_error[HUGE_BUF];
         if (!celestial_structure_begin_map_transaction(m,
                                                        filename,
-                                                       buf,
+                                                       transaction_unique,
                                                        VS(transaction_error))) {
             LOG(ERROR,
                 "Cannot begin celestial map transaction for %s: %s",
