@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <celestial_structure.h>
 #include <gameplay_journal.h>
 #include <movement.h>
 #include <shop.h>
@@ -70,6 +71,100 @@ void player_event_veto_for_test(bool pickup, bool drop, bool map_pickup, bool ma
 
 static int save_life(object *op);
 static void remove_unpaid_objects(object *op, object *env);
+
+#define CELESTIAL_UNIQUE_TOKEN_PREFIX "unique-v1:"
+
+static bool player_unique_owner_parts(const player *pl,
+                                      char account[MAX_BUF],
+                                      char character[MAX_BUF]) {
+    if (pl == NULL || pl->cs == NULL || pl->cs->account == NULL || pl->ob == NULL ||
+        pl->ob->name == NULL || pl->cs->account[0] == '\0' || pl->ob->name[0] == '\0') {
+        return false;
+    }
+    snprintf(account, MAX_BUF, "%s", pl->cs->account);
+    snprintf(character, MAX_BUF, "%s", pl->ob->name);
+    string_tolower(account);
+    string_title(character);
+    if (strchr(account, ':') != NULL || strchr(character, ':') != NULL) {
+        return false;
+    }
+    return strcasecmp(account, pl->cs->account) == 0;
+}
+
+static bool player_unique_token_from_path(const player *pl,
+                                          const char *path,
+                                          char token[MAX_BUF]) {
+    char account[MAX_BUF], character[MAX_BUF];
+    if (!celestial_structure_v1_runtime_active() || path == NULL ||
+        !string_startswith(path, settings.datapath) ||
+        !player_unique_owner_parts(pl, account, character)) {
+        return false;
+    }
+    char *base = path_basename(path);
+    if (base == NULL || strchr(base, '$') == NULL) {
+        free(base);
+        return false;
+    }
+    string_replace_char(base, "$", '/');
+    const char *source_value = base;
+    while (*source_value == '/') {
+        source_value++;
+    }
+    char source[MAX_BUF];
+    int written = snprintf(source, sizeof(source), "/%s", source_value);
+    free(base);
+    if (written < 0 || (size_t)written >= sizeof(source) ||
+        !celestial_structure_logical_map_id_valid(source)) {
+        return false;
+    }
+    written = snprintf(token,
+                       MAX_BUF,
+                       "%s%s:%s:%s",
+                       CELESTIAL_UNIQUE_TOKEN_PREFIX,
+                       account,
+                       character,
+                       source);
+    return written >= 0 && written < MAX_BUF;
+}
+
+static char *player_resolve_saved_path(const player *pl, const char *value) {
+    if (value == NULL || value[0] == '\0') {
+        return NULL;
+    }
+    if (!string_startswith(value, CELESTIAL_UNIQUE_TOKEN_PREFIX)) {
+        if (celestial_structure_v1_runtime_active() &&
+            string_startswith(value, settings.datapath)) {
+            return NULL;
+        }
+        return xstrdup(value);
+    }
+    const char *cursor = value + strlen(CELESTIAL_UNIQUE_TOKEN_PREFIX);
+    const char *account_end = strchr(cursor, ':');
+    if (account_end == NULL) {
+        return NULL;
+    }
+    const char *character_start = account_end + 1;
+    const char *character_end = strchr(character_start, ':');
+    if (character_end == NULL || character_end == character_start || character_end[1] != '/') {
+        return NULL;
+    }
+    char account[MAX_BUF], character[MAX_BUF], expected_account[MAX_BUF], expected_character[MAX_BUF];
+    size_t account_length = (size_t)(account_end - cursor);
+    size_t character_length = (size_t)(character_end - character_start);
+    if (account_length == 0 || account_length >= sizeof(account) || character_length >= sizeof(character)) {
+        return NULL;
+    }
+    memcpy(account, cursor, account_length);
+    account[account_length] = '\0';
+    memcpy(character, character_start, character_length);
+    character[character_length] = '\0';
+    if (!player_unique_owner_parts(pl, expected_account, expected_character) ||
+        strcmp(account, expected_account) != 0 || strcmp(character, expected_character) != 0 ||
+        !celestial_structure_logical_map_id_valid(character_end + 1)) {
+        return NULL;
+    }
+    return map_get_path(NULL, character_end + 1, 1, pl->ob->name);
+}
 
 /**
  * Check whether a player's selected target remains locally reachable.
@@ -3162,6 +3257,24 @@ void player_save(object *op) {
     char *path_tmp = player_make_path(op->name, "player.dat.tmp");
 
     player *pl = CONTR(op);
+    char map_value[MAX_BUF], bed_value[MAX_BUF];
+    const char *saved_map = op->map != NULL ? op->map->path : EMERGENCY_MAPPATH;
+    if (op->map != NULL && MAP_UNIQUE(op->map) &&
+        !player_unique_token_from_path(pl, saved_map, map_value)) {
+        LOG(ERROR, "Refusing to persist an unbound celestial unique map for %s.", STRING_SAFE(op->name));
+        goto out;
+    }
+    if (op->map != NULL && MAP_UNIQUE(op->map)) {
+        saved_map = map_value;
+    }
+    const char *saved_bed = pl->savebed_map;
+    if (player_unique_token_from_path(pl, pl->savebed_map, bed_value)) {
+        saved_bed = bed_value;
+    } else if (celestial_structure_v1_runtime_active() &&
+               string_startswith(pl->savebed_map, settings.datapath)) {
+        LOG(ERROR, "Refusing to persist an unbound celestial unique savebed for %s.", STRING_SAFE(op->name));
+        goto out;
+    }
 
     path_ensure_directories(path_tmp);
     FILE *fp = fopen(path_tmp, "w");
@@ -3176,8 +3289,8 @@ void player_save(object *op) {
     fprintf(fp, "tsi %d\n", pl->tsi);
     fprintf(fp, "tli %d\n", pl->tli);
     fprintf(fp, "tls %d\n", pl->tls);
-    fprintf(fp, "map %s\n", op->map ? op->map->path : EMERGENCY_MAPPATH);
-    fprintf(fp, "bed_map %s\n", pl->savebed_map);
+    fprintf(fp, "map %s\n", saved_map);
+    fprintf(fp, "bed_map %s\n", saved_bed);
     fprintf(fp, "bed_x %d\nbed_y %d\n", pl->bed_x, pl->bed_y);
 
     for (int i = 0; i < pl->num_cmd_permissions; i++) {
@@ -3709,15 +3822,15 @@ void player_login(socket_struct *ns, const char *name, struct archetype *at) {
     memcpy(connection_id, socket_get_id(pl->cs->sc), sizeof(connection_id));
     trigger_global_event(GEVENT_LOGIN, pl, connection_id);
 
-    mapstruct *m = ready_map_name(pl->maplevel, NULL, 0);
+    char *saved_map_path = player_resolve_saved_path(pl, pl->maplevel);
+    mapstruct *m = saved_map_path != NULL ? ready_map_name(saved_map_path, NULL, 0) : NULL;
+    free(saved_map_path);
 
-    if (!m && strncmp(pl->maplevel, "/random/", 8) == 0) {
-        object_enter_map(pl->ob,
-                         NULL,
-                         ready_map_name(pl->savebed_map, NULL, 0),
-                         pl->bed_x,
-                         pl->bed_y,
-                         true);
+    if (m == NULL) {
+        char *saved_bed_path = player_resolve_saved_path(pl, pl->savebed_map);
+        mapstruct *bed = saved_bed_path != NULL ? ready_map_name(saved_bed_path, NULL, 0) : NULL;
+        free(saved_bed_path);
+        object_enter_map(pl->ob, NULL, bed, pl->bed_x, pl->bed_y, true);
     } else {
         object_enter_map(pl->ob, NULL, m, pl->ob->x, pl->ob->y, true);
     }
