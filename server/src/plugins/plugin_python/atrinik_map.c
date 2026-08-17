@@ -974,6 +974,12 @@ static PyObject *get_attribute(Atrinik_Map *map, void *context) {
  * 0 on success, -1 on failure.
  */
 static int set_attribute(Atrinik_Map *map, PyObject *value, void *context) {
+    if (((fields_struct *)context)->offset == offsetof(mapstruct, darkness) &&
+        map->map->celestial_schema == 1) {
+        PyErr_SetString(AtrinikError, "celestial-v1 map darkness is immutable");
+        return -1;
+    }
+
     if (generic_field_setter(context, map->map, value) == -1) {
         return -1;
     }
@@ -1024,6 +1030,11 @@ static int Map_SetFlag(Atrinik_Map *map, PyObject *val, void *context) {
     /* Should not happen. */
     if (flagno >= NUM_MAPFLAGS) {
         PyErr_SetString(PyExc_OverflowError, "Invalid flag ID.");
+        return -1;
+    }
+
+    if (map->map->celestial_schema == 1 && flagno == 0) {
+        PyErr_SetString(AtrinikError, "celestial-v1 map outdoor state is immutable");
         return -1;
     }
 

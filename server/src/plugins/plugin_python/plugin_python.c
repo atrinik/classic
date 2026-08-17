@@ -35,6 +35,7 @@
 #endif
 
 #include <plugin_python.h>
+#include <celestial_structure.h>
 #include <toolkit/packet.h>
 #include <player.h>
 #include <object.h>
@@ -1691,8 +1692,8 @@ static PyObject *Atrinik_GetFirst(PyObject *self, PyObject *args) {
 
 /** Documentation for Atrinik_CreateMap(). */
 static const char doc_Atrinik_CreateMap[] =
-    ".. function:: CreateMap(width, height, path).\n\n"
-    "Creates an empty map.\n\n"
+    ".. function:: CreateMap(width, height, path, origin_map, sky_above, light).\n\n"
+    "Creates a validated celestial-v1 generated map.\n\n"
     ":param width: The new map's width.\n"
     ":type width: int\n"
     ":param height: The new map's height.\n"
@@ -1701,7 +1702,13 @@ static const char doc_Atrinik_CreateMap[] =
     "collisions. \"/python-maps/\" is prepended to this to ensure no collision "
     "with regular maps.\n"
     ":type path: str\n"
-    ":returns: The new empty map.\n"
+    ":param origin_map: A resident validated celestial-v1 origin map.\n"
+    ":type origin_map: Atrinik.Map.Map\n"
+    ":param sky_above: Either open or sealed.\n"
+    ":type sky_above: str\n"
+    ":param light: Neutral Q5.11 light value from 0 through 40959.\n"
+    ":type light: int\n"
+    ":returns: The new generated map.\n"
     ":rtype: :class:`Atrinik.Map.Map`";
 
 /**
@@ -1710,16 +1717,32 @@ static const char doc_Atrinik_CreateMap[] =
  */
 static PyObject *Atrinik_CreateMap(PyObject *self, PyObject *args) {
     int width, height;
-    const char *path;
+    const char *path, *sky_above;
+    int light;
+    PyObject *origin_object;
 
-    if (!PyArg_ParseTuple(args, "iis", &width, &height, &path)) {
+    if (!PyArg_ParseTuple(args, "iisOsi", &width, &height, &path, &origin_object, &sky_above,
+                          &light)) {
         return NULL;
     }
 
-    mapstruct *m = hooks->get_empty_map(width, height);
-    char buf[HUGE_BUF];
-    snprintf(VS(buf), "/python-maps/%s", path);
-    m->path = hooks->add_string(buf);
+    if (!PyObject_TypeCheck(origin_object, &Atrinik_MapType)) {
+        PyErr_SetString(PyExc_TypeError, "origin_map must be an Atrinik.Map.Map");
+        return NULL;
+    }
+
+    char error[HUGE_BUF];
+    mapstruct *m = hooks->celestial_structure_create_map(width,
+                                                         height,
+                                                         path,
+                                                         ((Atrinik_Map *)origin_object)->map,
+                                                         sky_above,
+                                                         light,
+                                                         VS(error));
+    if (m == NULL) {
+        PyErr_SetString(AtrinikError, error);
+        return NULL;
+    }
 
     return wrap_map(m);
 }

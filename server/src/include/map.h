@@ -679,9 +679,13 @@ typedef struct mapdef {
     /** Parsed celestial-v1 sky anchor. */
     uint8_t celestial_sky_above;
 
+    /** Canonical origin map for a generated mutable map, when present. */
+    shstr *celestial_generated_origin;
+
     /** Header parse-state used to reject duplicate/contradictory records. */
     bool celestial_schema_seen;
     bool celestial_sky_seen;
+    bool celestial_generated_origin_seen;
     bool celestial_v1_header_seen;
     bool celestial_header_invalid;
     bool celestial_legacy_darkness_seen;
