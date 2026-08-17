@@ -91,6 +91,19 @@ static bool player_unique_owner_parts(const player *pl,
     return strcasecmp(account, pl->cs->account) == 0;
 }
 
+static bool player_root_matches_roster(const player *pl,
+                                       const char *requested_name,
+                                       const archetype_t *expected_arch) {
+    if (pl == NULL || pl->ob == NULL || requested_name == NULL || expected_arch == NULL ||
+        pl->ob->name == NULL || pl->ob->arch == NULL || expected_arch->name == NULL ||
+        pl->ob->arch->name == NULL || pl->ob->type != PLAYER ||
+        expected_arch->clone.type != PLAYER) {
+        return false;
+    }
+    return strcmp(pl->ob->name, requested_name) == 0 &&
+           strcmp(pl->ob->arch->name, expected_arch->name) == 0;
+}
+
 static bool player_unique_token_from_path(const player *pl,
                                           const char *path,
                                           char token[MAX_BUF]) {
@@ -3797,6 +3810,21 @@ void player_login(socket_struct *ns, const char *name, struct archetype *at) {
     pl->ob->custom_attrset = pl;
     pl->ob->speed_left = 0.5;
 
+    if (!player_root_matches_roster(pl, name, at)) {
+        LOG(ERROR,
+            "Player %s root does not match its account roster (type=%d, arch=%s).",
+            name,
+            pl->ob->type,
+            pl->ob->arch != NULL && pl->ob->arch->name != NULL ? pl->ob->arch->name : "<none>");
+        draw_info_send(CHAT_TYPE_GAME,
+                       NULL,
+                       COLOR_RED,
+                       ns,
+                       "Your player file does not match the account roster; contact an administrator.");
+        free_player(pl);
+        goto out;
+    }
+
     object_weight_sum(pl->ob);
     living_update_player(pl->ob);
     link_player_skills(pl->ob);
@@ -3830,7 +3858,23 @@ void player_login(socket_struct *ns, const char *name, struct archetype *at) {
         char *saved_bed_path = player_resolve_saved_path(pl, pl->savebed_map);
         mapstruct *bed = saved_bed_path != NULL ? ready_map_name(saved_bed_path, NULL, 0) : NULL;
         free(saved_bed_path);
-        object_enter_map(pl->ob, NULL, bed, pl->bed_x, pl->bed_y, true);
+        if (bed == NULL) {
+            LOG(ERROR,
+                "Player %s has no usable map or savebed; rewriting fallback to %s.",
+                name,
+                EMERGENCY_MAPPATH);
+            snprintf(VS(pl->savebed_map), "%s", EMERGENCY_MAPPATH);
+            pl->bed_x = EMERGENCY_X;
+            pl->bed_y = EMERGENCY_Y;
+            object_enter_map(pl->ob, NULL, NULL, EMERGENCY_X, EMERGENCY_Y, true);
+        } else {
+            char bed_token[MAX_BUF];
+            if (MAP_UNIQUE(bed) &&
+                player_unique_token_from_path(pl, bed->path, bed_token)) {
+                snprintf(VS(pl->savebed_map), "%s", bed_token);
+            }
+            object_enter_map(pl->ob, NULL, bed, pl->bed_x, pl->bed_y, true);
+        }
     } else {
         object_enter_map(pl->ob, NULL, m, pl->ob->x, pl->ob->y, true);
     }
