@@ -365,6 +365,8 @@ static void clear_map_field(mapstruct *map) {
             MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
             space->celestial_light_value = 0;
             memset(space->celestial_light_rgb, 0, sizeof(space->celestial_light_rgb));
+            space->celestial_light_next_value = 0;
+            memset(space->celestial_light_next_rgb, 0, sizeof(space->celestial_light_next_rgb));
         }
     }
 }
@@ -470,6 +472,7 @@ void celestial_light_invalidate(mapstruct *map) {
         }
         cursor->celestial_structure_revision++;
         cursor->celestial_light_valid = false;
+        cursor->celestial_light_keyframe_valid = false;
         cursor = cursor->tile_map[TILED_UP];
     }
     cursor = map->tile_map[TILED_DOWN];
@@ -479,6 +482,7 @@ void celestial_light_invalidate(mapstruct *map) {
         }
         cursor->celestial_structure_revision++;
         cursor->celestial_light_valid = false;
+        cursor->celestial_light_keyframe_valid = false;
         cursor = cursor->tile_map[TILED_DOWN];
     }
 }
@@ -501,6 +505,10 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
         region_celestial_phases_t phases;
         region_celestial_phases(profile, absolute_hour, &phases);
         map->celestial_light_key = celestial_key(map, profile, &phases);
+        if (map->celestial_light_generation_id == 0) {
+            map->celestial_light_generation_id = 1;
+        }
+        map->celestial_light_keyframe_valid = false;
         return false;
     }
 
@@ -573,8 +581,19 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
                           injected_rgb);
 
         const region_celestial_profile_t *profile = region_celestial_for_map(current);
+        uint64_t previous_key = current->celestial_light_key;
+        bool previous_valid = current->celestial_light_valid;
         current->celestial_light_key = celestial_key(current, profile, &phases);
+        if (!previous_valid || current->celestial_light_generation_id == 0) {
+            current->celestial_light_generation_id = 1;
+        } else if (previous_key != current->celestial_light_key) {
+            if (current->celestial_light_generation_id == UINT64_MAX) {
+                HARD_ASSERT(false);
+            }
+            current->celestial_light_generation_id++;
+        }
         current->celestial_light_valid = true;
+        current->celestial_light_keyframe_valid = false;
         free(injected_rgb);
         free(injected);
         free(starlight);
@@ -586,6 +605,107 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
         free(exposed);
     }
     return true;
+}
+
+typedef struct celestial_field_snapshot {
+    mapstruct *map;
+    size_t count;
+    int32_t *value;
+    int32_t(*rgb)[3];
+    uint64_t key;
+    uint64_t generation;
+    bool valid;
+} celestial_field_snapshot_t;
+
+/** Preserve the current field while the next hourly field is solved. */
+static bool celestial_field_snapshot_save(mapstruct *map,
+                                          celestial_field_snapshot_t *snapshot) {
+    snapshot->map = map;
+    snapshot->count = (size_t)map->width * map->height;
+    snapshot->value = xcalloc(snapshot->count, sizeof(*snapshot->value));
+    snapshot->rgb = xcalloc(snapshot->count, sizeof(*snapshot->rgb));
+    snapshot->key = map->celestial_light_key;
+    snapshot->generation = map->celestial_light_generation_id;
+    snapshot->valid = map->celestial_light_valid;
+    for (size_t i = 0; i < snapshot->count; i++) {
+        snapshot->value[i] = map->spaces[i].celestial_light_value;
+        memcpy(snapshot->rgb[i], map->spaces[i].celestial_light_rgb, sizeof(snapshot->rgb[i]));
+    }
+    return true;
+}
+
+static void celestial_field_snapshot_restore(celestial_field_snapshot_t *snapshot) {
+    for (size_t i = 0; i < snapshot->count; i++) {
+        snapshot->map->spaces[i].celestial_light_value = snapshot->value[i];
+        memcpy(snapshot->map->spaces[i].celestial_light_rgb,
+               snapshot->rgb[i],
+               sizeof(snapshot->rgb[i]));
+    }
+    snapshot->map->celestial_light_key = snapshot->key;
+    snapshot->map->celestial_light_generation_id = snapshot->generation;
+    snapshot->map->celestial_light_valid = snapshot->valid;
+    free(snapshot->value);
+    free(snapshot->rgb);
+    snapshot->value = NULL;
+    snapshot->rgb = NULL;
+}
+
+uint64_t celestial_light_generation(const mapstruct *map) {
+    if (map == NULL || !map->celestial_light_valid || map->celestial_light_generation_id == 0) {
+        return 0;
+    }
+    return map->celestial_light_generation_id;
+}
+
+bool celestial_light_keyframe_ensure(mapstruct *map, uint64_t absolute_hour) {
+    if (map == NULL || map->celestial_schema != 1 || map->spaces == NULL) {
+        return false;
+    }
+
+    celestial_light_ensure(map);
+    if (!map->celestial_light_valid) {
+        return false;
+    }
+
+    const region_celestial_profile_t *profile = region_celestial_for_map(map);
+    region_celestial_phases_t next_phases;
+    region_celestial_phases(profile, absolute_hour + 1, &next_phases);
+    uint64_t next_key = celestial_key(map, profile, &next_phases);
+    if (map->celestial_light_keyframe_valid && map->celestial_light_next_key == next_key) {
+        return true;
+    }
+
+    mapstruct *levels[MAP2_LEVELS] = {0};
+    size_t count = 0;
+    if (!collect_stack(map, levels, &count)) {
+        map->celestial_light_keyframe_valid = false;
+        return false;
+    }
+
+    celestial_field_snapshot_t snapshots[MAP2_LEVELS] = {0};
+    for (size_t i = 0; i < count; i++) {
+        celestial_field_snapshot_save(levels[i], &snapshots[i]);
+    }
+
+    bool rebuilt = celestial_light_rebuild(map, absolute_hour + 1);
+    if (rebuilt) {
+        for (size_t i = 0; i < count; i++) {
+            for (size_t cell = 0; cell < snapshots[i].count; cell++) {
+                levels[i]->spaces[cell].celestial_light_next_value =
+                    levels[i]->spaces[cell].celestial_light_value;
+                memcpy(levels[i]->spaces[cell].celestial_light_next_rgb,
+                       levels[i]->spaces[cell].celestial_light_rgb,
+                       sizeof(levels[i]->spaces[cell].celestial_light_next_rgb));
+            }
+        }
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        celestial_field_snapshot_restore(&snapshots[i]);
+        levels[i]->celestial_light_keyframe_valid = rebuilt;
+        levels[i]->celestial_light_next_key = next_key;
+    }
+    return rebuilt;
 }
 
 void celestial_light_ensure(mapstruct *map) {

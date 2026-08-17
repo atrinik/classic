@@ -96,6 +96,16 @@ static packet_struct *map_protocol_test_packet(uint8_t level_count) {
     return packet;
 }
 
+static packet_struct *map_protocol_test_packet_with_marker(uint16_t marker) {
+    packet_struct *packet = packet_new(0, 16, 16);
+    packet_writer_write_uint8(packet, MAP_UPDATE_CMD_SAME);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint16(packet, marker);
+    return packet;
+}
+
 static void map_protocol_test_level(packet_struct *packet, int8_t depth, packet_struct *level);
 
 /** Build a complete NEW MAP update with caller-selected metadata. */
@@ -393,6 +403,110 @@ START_TEST(test_map_protocol_validates_colored_light_extension) {
     packet = map_protocol_test_packet(1);
     map_protocol_test_level(packet, 0, level);
     ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+    packet_free(level);
+}
+END_TEST
+
+START_TEST(test_map_protocol_validates_timed_light_keyframes) {
+    packet_struct *packet = map_protocol_test_packet_with_marker(MAP2_CONTINUATION_TIMED_LIGHT);
+    packet_writer_write_uint64(packet, 7);
+    packet_writer_write_uint64(packet, 1000);
+    packet_writer_write_uint64(packet, 4600);
+    packet_writer_write_uint8(packet, MAP2_LIGHT_KEYFRAME_CONTINUOUS);
+    packet_writer_write_uint8(packet, 1);
+    map_protocol_test_level(packet, 0, NULL);
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+
+    /* The descriptor is fixed-width and every prefix of it is malformed. */
+    for (size_t len = 0; len < packet->len; len++) {
+        ck_assert(!map_protocol_validate(packet->data, len, 0, 21, 21));
+    }
+
+    /* Descriptor fields begin immediately after the six-byte MAP2 prefix. */
+    packet->data[6 + 7] = 0;
+    packet->data[6 + 6] = 0;
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+
+    packet = map_protocol_test_packet_with_marker(MAP2_CONTINUATION_TIMED_LIGHT);
+    packet_writer_write_uint64(packet, 1);
+    packet_writer_write_uint64(packet, 1000);
+    packet_writer_write_uint64(packet, 1000);
+    packet_writer_write_uint8(packet, MAP2_LIGHT_KEYFRAME_CONTINUOUS);
+    packet_writer_write_uint8(packet, 1);
+    map_protocol_test_level(packet, 0, NULL);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+
+    packet = map_protocol_test_packet_with_marker(MAP2_CONTINUATION_TIMED_LIGHT);
+    packet_writer_write_uint64(packet, 1);
+    packet_writer_write_uint64(packet, 1000);
+    packet_writer_write_uint64(packet, 4600);
+    packet_writer_write_uint8(packet, 0x80);
+    packet_writer_write_uint8(packet, 1);
+    map_protocol_test_level(packet, 0, NULL);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+
+    packet = map_protocol_test_packet_with_marker(MAP2_CONTINUATION_TIMED_LIGHT);
+    packet_writer_write_uint64(packet, 1);
+    packet_writer_write_uint64(packet, 1000);
+    packet_writer_write_uint64(packet, 4601);
+    packet_writer_write_uint8(packet, MAP2_LIGHT_KEYFRAME_CONTINUOUS);
+    packet_writer_write_uint8(packet, 1);
+    map_protocol_test_level(packet, 0, NULL);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+
+    packet = map_protocol_test_packet_with_marker(MAP2_CONTINUATION_TIMED_LIGHT);
+    packet_writer_write_uint64(packet, 1);
+    packet_writer_write_uint64(packet, 1000);
+    packet_writer_write_uint64(packet, 4600);
+    packet_writer_write_uint8(packet, MAP2_LIGHT_KEYFRAME_CONTINUOUS);
+    packet_writer_write_uint8(packet, 1);
+    map_protocol_test_level(packet, 0, NULL);
+    packet->data[4] = 0;
+    packet->data[5] = 1;
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+
+    packet_struct *level = packet_new(0, 32, 16);
+    packet_writer_write_uint16(level, MAP2_MASK_LIGHT_LEVEL);
+    packet_writer_write_uint16(level, 2176);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_KEYFRAME);
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint16(level, 2180);
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint16(level, 2180);
+    packet_writer_write_uint16(level, 2170);
+    packet_writer_write_uint16(level, 2160);
+    packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+
+    /* RGB endpoints must be a subset of the scalar endpoint bitmap. */
+    level->data[9] = 2;
+    packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+
+    /* Reserved sub-layer bits and every truncated endpoint are rejected. */
+    level->data[6] = UINT8_C(1) << MAP2_PROTOCOL_SUB_LAYERS;
+    packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+    level->data[6] = 1;
+    level->data[9] = 1;
+    packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    size_t packet_len = packet->len;
+    for (size_t len = 0; len < packet_len; len++) {
+        ck_assert(!map_protocol_validate(packet->data, len, 0, 21, 21));
+    }
     packet_free(packet);
     packet_free(level);
 }
@@ -1193,6 +1307,7 @@ static Suite *suite(void) {
                    test_map_protocol_accepts_exit_flag_and_rejects_unknown_or_truncated_flags);
     tcase_add_test(tc_core, test_map_protocol_enforces_layer_string_bounds);
     tcase_add_test(tc_core, test_map_protocol_validates_colored_light_extension);
+    tcase_add_test(tc_core, test_map_protocol_validates_timed_light_keyframes);
     tcase_add_test(tc_core, test_map_protocol_accepts_bounded_continuation);
     tcase_add_test(tc_core, test_map_protocol_continuation_state_is_bounded_and_ordered);
     tcase_add_test(tc_core, test_map_protocol_rejects_unterminated_metadata);

@@ -91,6 +91,12 @@ static bool map_packet_read_uint32(map_packet_reader_t *reader, uint32_t *value)
     return packet_reader_error(reader) == PACKET_ERROR_NONE;
 }
 
+/** Read a network-order uint64 from a MAP validation cursor. */
+static bool map_packet_read_uint64(map_packet_reader_t *reader, uint64_t *value) {
+    *value = packet_reader_read_uint64(reader);
+    return packet_reader_error(reader) == PACKET_ERROR_NONE;
+}
+
 /** Skip one required bounded NUL-terminated string in a MAP command. */
 static bool map_packet_skip_string(map_packet_reader_t *reader, size_t max_len) {
     (void)packet_reader_read_string_view(reader, max_len);
@@ -250,7 +256,8 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
 
         uint8_t ext_flags;
         if (!map_packet_read_uint8(reader, &ext_flags) ||
-            (ext_flags & ~(MAP2_FLAG_EXT_ANIM | MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16)) != 0) {
+            (ext_flags & ~(MAP2_FLAG_EXT_ANIM | MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16 |
+                           MAP2_FLAG_EXT_LIGHT_KEYFRAME)) != 0) {
             return false;
         }
 
@@ -264,6 +271,30 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
 
             for (uint8_t sub_layer = 0; sub_layer < MAP2_PROTOCOL_SUB_LAYERS; sub_layer++) {
                 if ((bitmap & (UINT8_C(1) << sub_layer)) &&
+                    !map_packet_skip(reader, sizeof(uint16_t) * 3)) {
+                    return false;
+                }
+            }
+        }
+
+        if (ext_flags & MAP2_FLAG_EXT_LIGHT_KEYFRAME) {
+            uint8_t scalar_bitmap, rgb_bitmap;
+            if (!map_packet_read_uint8(reader, &scalar_bitmap) ||
+                (scalar_bitmap & ~((UINT8_C(1) << MAP2_PROTOCOL_SUB_LAYERS) - 1)) != 0) {
+                return false;
+            }
+            for (uint8_t sub_layer = 0; sub_layer < MAP2_PROTOCOL_SUB_LAYERS; sub_layer++) {
+                if ((scalar_bitmap & (UINT8_C(1) << sub_layer)) &&
+                    !map_packet_skip(reader, sizeof(uint16_t))) {
+                    return false;
+                }
+            }
+            if (!map_packet_read_uint8(reader, &rgb_bitmap) ||
+                (rgb_bitmap & ~scalar_bitmap) != 0) {
+                return false;
+            }
+            for (uint8_t sub_layer = 0; sub_layer < MAP2_PROTOCOL_SUB_LAYERS; sub_layer++) {
+                if ((rgb_bitmap & (UINT8_C(1) << sub_layer)) &&
                     !map_packet_skip(reader, sizeof(uint16_t) * 3)) {
                     return false;
                 }
@@ -362,9 +393,27 @@ bool map_protocol_validate(const uint8_t *data,
         player_sub_layer >= MAP2_PROTOCOL_SUB_LAYERS ||
         (new_map_width != 0 && (xpos >= new_map_width || ypos >= new_map_height)) ||
         !map_packet_read_uint16(&reader, &continuation_marker) ||
-        (mapstat == MAP_UPDATE_CMD_PARTIAL && continuation_marker == 0) ||
-        continuation_marker > MAP2_PROTOCOL_CONTINUATIONS_MAX ||
-        !map_packet_read_uint8(&reader, &level_count) || level_count == 0 ||
+        (mapstat == MAP_UPDATE_CMD_PARTIAL &&
+         ((continuation_marker & MAP2_CONTINUATION_TIMED_LIGHT) != 0 ||
+          (continuation_marker & ~MAP2_CONTINUATION_TIMED_LIGHT) == 0)) ||
+        (continuation_marker & ~MAP2_CONTINUATION_TIMED_LIGHT) > MAP2_PROTOCOL_CONTINUATIONS_MAX) {
+        return false;
+    }
+
+    if ((continuation_marker & MAP2_CONTINUATION_TIMED_LIGHT) != 0) {
+        uint64_t generation;
+        uint64_t start_seconds, end_seconds;
+        uint8_t flags;
+        if (mapstat == MAP_UPDATE_CMD_PARTIAL || !map_packet_read_uint64(&reader, &generation) ||
+            generation == 0 || !map_packet_read_uint64(&reader, &start_seconds) ||
+            !map_packet_read_uint64(&reader, &end_seconds) || end_seconds <= start_seconds ||
+            end_seconds - start_seconds != 3600 || !map_packet_read_uint8(&reader, &flags) ||
+            flags == 0 || (flags & ~(MAP2_LIGHT_KEYFRAME_CONTINUOUS | MAP2_LIGHT_KEYFRAME_SNAP)) != 0) {
+            return false;
+        }
+    }
+
+    if (!map_packet_read_uint8(&reader, &level_count) || level_count == 0 ||
         level_count > MAP2_LEVELS) {
         return false;
     }

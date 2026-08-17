@@ -2,7 +2,7 @@
 # Do not edit by hand.
 from enum import IntEnum
 
-PROTOCOL_VERSION = 1079
+PROTOCOL_VERSION = 1080
 
 
 ITEM_NAME_SIZE = 128

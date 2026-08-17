@@ -207,8 +207,8 @@ endif ()
 file(STRINGS
     "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
     ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
-if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1079U$")
-    message(FATAL_ERROR "Client requires classic game protocol v1079")
+if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1080U$")
+    message(FATAL_ERROR "Client requires classic game protocol v1080")
 endif ()
 if (NOT TARGET Atrinik::Core)
     set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
@@ -921,6 +921,8 @@ if (BUILD_TESTING)
         COMMAND atrinik --player-view "${player_view_fixtures}/colored-smooth.xml" -)
     add_test(NAME client-player-view-colored-discrete
         COMMAND atrinik --player-view "${player_view_fixtures}/colored-discrete.xml" -)
+    add_test(NAME client-player-view-timed-light
+        COMMAND atrinik --player-view "${player_view_fixtures}/timed-light.xml" -)
     add_test(NAME client-player-view-high-key-smooth
         COMMAND atrinik --player-view "${player_view_fixtures}/high-key-smooth.xml" -)
     add_test(NAME client-player-view-high-key-discrete

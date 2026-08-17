@@ -82,6 +82,21 @@ typedef struct MapCell_struct {
     /** Last complete bitmap of explicitly colored sub-layers. */
     uint8_t light_rgb_explicit;
 
+    /** Last next-hour scalar endpoint sent to the client. */
+    uint16_t light_next_radiance[NUM_SUB_LAYERS];
+
+    /** Whether each next-hour scalar endpoint is established client-side. */
+    uint8_t light_next_known[NUM_SUB_LAYERS];
+
+    /** Timed-light generation for the cached next endpoint. */
+    uint64_t light_next_generation;
+
+    /** Last next-hour RGB endpoint sent to the client. */
+    uint16_t light_next_rgb_radiance[NUM_SUB_LAYERS][3];
+
+    /** Whether each next-hour RGB endpoint is explicitly colored. */
+    uint8_t light_next_rgb_explicit;
+
     /** Last base-map structural support height sent to the client. */
     int16_t support_height;
 
@@ -270,6 +285,9 @@ typedef struct socket_struct {
 
     /** Whether ::lastmap_player_level has been initialized. */
     bool lastmap_player_level_known;
+
+    /** Timed-light generation currently established in the client map cache. */
+    uint64_t lastmap_light_generation;
 
     /** Outgoing packets. */
     struct packet_struct *packets;
