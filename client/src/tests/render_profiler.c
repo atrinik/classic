@@ -20,6 +20,81 @@
 
 char *render_profiler_widget_text_for_test(const render_profile_snapshot_t *snapshot);
 
+/* The formatter test does not execute the widget's SDL/scrollbar paths. */
+Uint32 pixel_format_map_rgba(SDL_PixelFormat format,
+                             Uint8 red,
+                             Uint8 green,
+                             Uint8 blue,
+                             Uint8 alpha) {
+    (void)format;
+    (void)red;
+    (void)green;
+    (void)blue;
+    (void)alpha;
+    return 0;
+}
+
+font_struct *font_get_weak(const char *name, uint8_t size) {
+    (void)name;
+    (void)size;
+    return NULL;
+}
+
+void text_show(SDL_Surface *surface,
+               font_struct *font,
+               const char *text,
+               int x,
+               int y,
+               const char *color_notation,
+               uint64_t flags,
+               SDL_Rect *box) {
+    (void)surface;
+    (void)font;
+    (void)text;
+    (void)x;
+    (void)y;
+    (void)color_notation;
+    (void)flags;
+    (void)box;
+}
+
+void scrollbar_create(scrollbar_struct *scrollbar,
+                      int width,
+                      int height,
+                      uint32_t *scroll_offset,
+                      uint32_t *num_lines,
+                      uint32_t max_lines) {
+    (void)scrollbar;
+    (void)width;
+    (void)height;
+    (void)scroll_offset;
+    (void)num_lines;
+    (void)max_lines;
+}
+
+void scrollbar_scroll_to(scrollbar_struct *scrollbar, int scroll) {
+    (void)scrollbar;
+    (void)scroll;
+}
+
+void scrollbar_scroll_adjust(scrollbar_struct *scrollbar, int adjust) {
+    (void)scrollbar;
+    (void)adjust;
+}
+
+void scrollbar_show(scrollbar_struct *scrollbar, SDL_Surface *surface, int x, int y) {
+    (void)scrollbar;
+    (void)surface;
+    (void)x;
+    (void)y;
+}
+
+int scrollbar_event(scrollbar_struct *scrollbar, SDL_Event *event) {
+    (void)scrollbar;
+    (void)event;
+    return 0;
+}
+
 static void test_stage_metadata_is_rendered(void) {
     render_profile_snapshot_t snapshot = {
         .interval_us = UINT64_C(2000000),
