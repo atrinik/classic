@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <celestial_structure.h>
 #include <server_main.h>
 #include <object.h>
 
@@ -41,13 +42,27 @@
  * @return
  * Atrinik map structure.
  */
-mapstruct *make_map_floor(char *floorstyle, RMParms *RP) {
+mapstruct *make_map_floor(char *floorstyle,
+                          RMParms *RP,
+                          const char *generated_path,
+                          mapstruct *origin) {
     char styledirname[256], stylefilepath[HUGE_BUF];
     mapstruct *style_map = NULL, *newMap = NULL;
     int x, y;
 
     /* Allocate the map */
     newMap = get_empty_map(RP->Xsize, RP->Ysize);
+    char error[HUGE_BUF];
+    if (!celestial_structure_initialize_generated_map(
+            newMap,
+            generated_path,
+            origin,
+            global_darkness_table[MIN(MAX(RP->darkness, 0), MAX_DARKNESS)],
+            VS(error))) {
+        LOG(BUG, "Could not initialize generated random map: %s", error);
+        delete_map(newMap);
+        return NULL;
+    }
 
     /* Get the style map */
     strncpy(styledirname, "/styles/floorstyles", sizeof(styledirname) - 1);

@@ -267,6 +267,47 @@ class UpdateContentLockTests(unittest.TestCase):
                         classic_version=(5, 15, 4),
                     )
 
+    def test_celestial_manifest_contract_is_digest_bound(self) -> None:
+        value = manifest()
+        migration = b"{}\n"
+        migration_digest = hashlib.sha256(migration).hexdigest()
+        value["files"] = [
+            value["files"][0],
+            {
+                "path": "maps/celestial-migration-index.json",
+                "sha256": migration_digest,
+                "size": len(migration),
+            },
+        ]
+        value["license_files"] = [value["files"][0]]
+        value.update({
+            "celestial_schema_version": 1,
+            "celestial_runtime_factory_version": 1,
+            "celestial_migration_index": "maps/celestial-migration-index.json",
+            "celestial_migration_index_sha256": migration_digest,
+        })
+        digest = hashlib.sha256()
+        for entry in value["files"]:
+            digest.update(
+                f"{entry['path']}\0{entry['sha256']}\0{entry['size']}\n".encode()
+            )
+        value["celestial_manifest_files_sha256"] = digest.hexdigest()
+        files = {
+            entry["path"]: (entry["sha256"], entry["size"])
+            for entry in value["files"]
+        }
+        UPDATER.validate_manifest(
+            json.dumps(value).encode(), files, version="2.14.0",
+            commit="a" * 40, classic_version=(5, 15, 4),
+        )
+
+        value["celestial_migration_index_sha256"] = "b" * 64
+        with self.assertRaisesRegex(UPDATER.UpdateError, "migration index digest"):
+            UPDATER.validate_manifest(
+                json.dumps(value).encode(), files, version="2.14.0",
+                commit="a" * 40, classic_version=(5, 15, 4),
+            )
+
     def test_tag_peeling_is_bounded_and_rejects_cycles(self) -> None:
         api = mock.Mock()
         api.get.side_effect = [

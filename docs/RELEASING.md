@@ -134,9 +134,11 @@ and runtime check all succeed. Its read-only phase runs
 semantic release and emits machine-readable old/new evidence only after the
 release tag, checksums, archive, complete manifest, explicit `classic` target,
 `main` source identity, compatibility range, consumer contract, and license
-attributions all agree. After the authenticated one-time cross-line cutover,
-commit ancestry must agree as well. Invalid candidates are recorded and
-skipped; incomplete discovery or an invalid current coordinate stops the run.
+attributions all agree. Celestial-v1 manifests additionally bind the migration
+index and complete file-list digest when present. After the authenticated
+one-time cross-line cutover, commit ancestry must agree as well. Invalid
+candidates are recorded and skipped; incomplete discovery or an invalid current
+coordinate stops the run.
 
 When a verified update exists, the workflow mints the narrowly installed
 GitHub App credential and creates or refreshes at most one App-owned pull

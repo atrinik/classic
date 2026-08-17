@@ -184,6 +184,16 @@ lex_error = 0;
         m->celestial_header_invalid = true;
     }
 }
+^celestial_generated_origin{S} {
+    m->celestial_v1_header_seen = true;
+    if (m->celestial_generated_origin_seen ||
+        !celestial_structure_logical_map_id_valid(yval())) {
+        m->celestial_header_invalid = true;
+    } else {
+        FREE_AND_COPY_HASH(m->celestial_generated_origin, yval());
+    }
+    m->celestial_generated_origin_seen = true;
+}
 ^celestial_boundary_[0-9]{1,2}{S} {
     m->celestial_v1_header_seen = true;
     int tile = atoi(yytext + 19);
@@ -467,6 +477,9 @@ void save_map_header(mapstruct *m, FILE *fp, int flag)
                 m->celestial_sky_above == CELESTIAL_SKY_OPEN
                     ? "open"
                     : m->celestial_sky_above == CELESTIAL_SKY_LINKED ? "linked" : "sealed");
+        if (m->celestial_generated_origin != NULL) {
+            fprintf(fp, "celestial_generated_origin %s\n", m->celestial_generated_origin);
+        }
         if (m->light_value != 0) {
             fprintf(fp, "light %d\n", m->light_value);
         }
