@@ -21,6 +21,7 @@
 #include <map.h>
 #include <object.h>
 #include <swap.h>
+#include <toolkit/path.h>
 
 #ifndef WIN32
 static ssize_t fail_inventory_write(void *cookie, const char *buffer, size_t size) {
@@ -1058,6 +1059,96 @@ START_TEST(test_generated_factory_is_validated_and_bounded) {
 }
 END_TEST
 
+#ifndef WIN32
+START_TEST(test_private_map_provenance_demangles_authored_source) {
+    char temporary_root[] = "/tmp/atrinik-celestial-private-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
+
+    char saved_datapath[HUGE_BUF];
+    char saved_mapspath[HUGE_BUF];
+    snprintf(VS(saved_datapath), "%s", settings.datapath);
+    snprintf(VS(saved_mapspath), "%s", settings.mapspath);
+
+    char datapath[HUGE_BUF], mapspath[HUGE_BUF], maps_dir[HUGE_BUF], source_path[HUGE_BUF];
+    char private_path[HUGE_BUF], provenance_dir[HUGE_BUF];
+    snprintf(VS(datapath), "%s/data", temporary_root);
+    snprintf(VS(mapspath), "%s", temporary_root);
+    snprintf(VS(maps_dir), "%s/maps", temporary_root);
+    snprintf(VS(source_path), "%s/maps/apartment", temporary_root);
+    snprintf(VS(private_path), "%s/data/players/a/alice/$maps$apartment", temporary_root);
+    snprintf(VS(provenance_dir), "%s/data/celestial-provenance", temporary_root);
+    ck_assert_uint_lt(strlen(datapath), sizeof(settings.datapath));
+    ck_assert_uint_lt(strlen(mapspath), sizeof(settings.mapspath));
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
+    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, mapspath);
+
+    path_ensure_directories(source_path);
+    path_ensure_directories(private_path);
+    FILE *source = fopen(source_path, "wb");
+    FILE *private_map = fopen(private_path, "wb");
+    ck_assert_ptr_ne(source, NULL);
+    ck_assert_ptr_ne(private_map, NULL);
+    ck_assert_int_ne(fputs("authored source\n", source), EOF);
+    ck_assert_int_ne(fputs("private mutable map\n", private_map), EOF);
+    ck_assert_int_eq(fclose(source), 0);
+    ck_assert_int_eq(fclose(private_map), 0);
+    ck_assert(path_exists(source_path));
+    ck_assert(path_exists(private_path));
+    ck_assert(celestial_structure_logical_map_id_valid("/maps/apartment"));
+
+    mapstruct *map = get_empty_map(3, 3);
+    FREE_AND_COPY_HASH(map->path, private_path);
+    map->map_flags |= MAP_FLAG_UNIQUE;
+    map->celestial_schema = 1;
+    char error[HUGE_BUF];
+    ck_assert_msg(celestial_structure_write_provenance(map, VS(error)), "%s", error);
+    ck_assert_msg(celestial_structure_validate_provenance(map, VS(error)), "%s", error);
+
+    private_map = fopen(private_path, "ab");
+    ck_assert_ptr_ne(private_map, NULL);
+    ck_assert_int_ne(fputs("changed\n", private_map), EOF);
+    ck_assert_int_eq(fclose(private_map), 0);
+    ck_assert(!celestial_structure_validate_provenance(map, VS(error)));
+    delete_map(map);
+
+    DIR *directory = opendir(provenance_dir);
+    ck_assert_ptr_ne(directory, NULL);
+    struct dirent *entry;
+    while ((entry = readdir(directory)) != NULL) {
+        if (entry->d_name[0] == '.') {
+            continue;
+        }
+        char ledger[HUGE_BUF];
+        size_t directory_length = strlen(provenance_dir);
+        size_t entry_length = strlen(entry->d_name);
+        ck_assert_uint_lt(directory_length + entry_length + 1, sizeof(ledger));
+        memcpy(ledger, provenance_dir, directory_length);
+        ledger[directory_length] = '/';
+        memcpy(ledger + directory_length + 1, entry->d_name, entry_length + 1);
+        ck_assert_int_eq(unlink(ledger), 0);
+    }
+    ck_assert_int_eq(closedir(directory), 0);
+    ck_assert_int_eq(rmdir(provenance_dir), 0);
+    ck_assert_int_eq(unlink(source_path), 0);
+    ck_assert_int_eq(unlink(private_path), 0);
+    char private_parent[HUGE_BUF], private_grandparent[HUGE_BUF], players_dir[HUGE_BUF];
+    snprintf(VS(private_parent), "%s/data/players/a/alice", temporary_root);
+    snprintf(VS(private_grandparent), "%s/data/players/a", temporary_root);
+    snprintf(VS(players_dir), "%s/data/players", temporary_root);
+    ck_assert_int_eq(rmdir(private_parent), 0);
+    ck_assert_int_eq(rmdir(private_grandparent), 0);
+    ck_assert_int_eq(rmdir(players_dir), 0);
+    ck_assert_int_eq(rmdir(maps_dir), 0);
+    ck_assert_int_eq(rmdir(datapath), 0);
+    ck_assert_uint_lt(strlen(saved_datapath), sizeof(settings.datapath));
+    ck_assert_uint_lt(strlen(saved_mapspath), sizeof(settings.mapspath));
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
+    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
+    ck_assert_int_eq(rmdir(temporary_root), 0);
+}
+END_TEST
+#endif
+
 static Suite *suite(void) {
     Suite *s = suite_create("celestial_structure");
     TCase *tc_core = tcase_create("Core");
@@ -1066,6 +1157,9 @@ static Suite *suite(void) {
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_header_round_trip_is_canonical_and_rejects_legacy_fields);
     tcase_add_test(tc_core, test_generated_factory_is_validated_and_bounded);
+#ifndef WIN32
+    tcase_add_test(tc_core, test_private_map_provenance_demangles_authored_source);
+#endif
     tcase_add_test(tc_core, test_saved_v1_map_swaps_and_reloads_mutable_state);
     tcase_add_test(tc_core, test_metadata_is_validated_consumed_sorted_and_saved);
     tcase_add_test(tc_core, test_rectangles_fail_closed_with_coordinates);

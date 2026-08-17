@@ -1888,10 +1888,7 @@ static bool provenance_source(const mapstruct *map,
             strlen(logical_path) >= sizeof(logical_path)) {
             return false;
         }
-    } else if (!celestial_structure_logical_map_id_valid(logical)) {
-        if (!MAP_UNIQUE(map) || !string_startswith(map->path, settings.datapath)) {
-            return false;
-        }
+    } else if (MAP_UNIQUE(map) && string_startswith(map->path, settings.datapath)) {
         demangled = path_basename(map->path);
         if (demangled == NULL || strchr(demangled, '$') == NULL) {
             free(demangled);
@@ -1987,12 +1984,24 @@ bool celestial_structure_write_provenance(const mapstruct *map, char *error, siz
     char source_path[HUGE_BUF], source_file[HUGE_BUF];
     char source_sha[SHA256_DIGEST_LENGTH * 2 + 1];
     char map_file[HUGE_BUF], map_sha[SHA256_DIGEST_LENGTH * 2 + 1];
-    if (!provenance_path(map->path, ledger, ledger_id) ||
-        !provenance_source(map, source_path, source_file, source_sha) ||
-        !provenance_map_file(map, map_file, map_sha)) {
+    source_path[0] = '\0';
+    source_file[0] = '\0';
+    if (!provenance_path(map->path, ledger, ledger_id)) {
+        return set_error(error, error_size, "cannot resolve provenance identity for %s", map_path(map));
+    }
+    if (!provenance_source(map, source_path, source_file, source_sha)) {
         return set_error(error,
                          error_size,
-                         "cannot resolve immutable source lineage for %s",
+                         "cannot resolve immutable source lineage for %s under %s (source=%s file=%s)",
+                         map_path(map),
+                         settings.mapspath,
+                         source_path,
+                         source_file);
+    }
+    if (!provenance_map_file(map, map_file, map_sha)) {
+        return set_error(error,
+                         error_size,
+                         "cannot hash mutable map file for %s",
                          map_path(map));
     }
     char contents[HUGE_BUF];
