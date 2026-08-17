@@ -136,6 +136,27 @@ START_TEST(test_celestial_invalidation_rebuilds_only_after_revision_change) {
 }
 END_TEST
 
+START_TEST(test_celestial_keyframe_preserves_current_and_stages_next_field) {
+    mapstruct *map = open_fixture(2, 2);
+    uint64_t hour = (uint64_t)todtick;
+    ck_assert(celestial_light_rebuild(map, hour));
+    MapSpace *space = GET_MAP_SPACE_PTR(map, 0, 0);
+    int32_t current = space->celestial_light_value;
+    uint64_t generation = celestial_light_generation(map);
+    ck_assert_uint_gt(generation, 0);
+
+    ck_assert(celestial_light_keyframe_ensure(map, hour));
+    ck_assert(map->celestial_light_keyframe_valid);
+    ck_assert_uint_eq(celestial_light_generation(map), generation);
+    ck_assert_int_eq(space->celestial_light_value, current);
+    ck_assert_uint_gt(space->celestial_light_next_value, 0);
+    ck_assert(celestial_light_keyframe_ensure(map, hour));
+
+    celestial_light_invalidate(map);
+    ck_assert(!map->celestial_light_keyframe_valid);
+}
+END_TEST
+
 START_TEST(test_celestial_64x64_build_is_bounded) {
     mapstruct *map = open_fixture(64, 64);
     struct timespec start;
@@ -163,6 +184,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_celestial_rebuild_reaches_existing_radiance_resolver);
     tcase_add_test(tc_core, test_celestial_map_darkness_uses_current_cached_field);
     tcase_add_test(tc_core, test_celestial_invalidation_rebuilds_only_after_revision_change);
+    tcase_add_test(tc_core, test_celestial_keyframe_preserves_current_and_stages_next_field);
     tcase_add_test(tc_core, test_celestial_64x64_build_is_bounded);
     return s;
 }
