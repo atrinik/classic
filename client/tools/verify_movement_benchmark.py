@@ -36,7 +36,7 @@ def run(client: Path, manifest: Path, viewport: str) -> dict[str, object]:
         check=False,
         capture_output=True,
         text=True,
-        timeout=900 if viewport == "large" else 180,
+        timeout=900 if viewport in ("large", "brynknot") else 180,
     )
     print(
         f"movement benchmark: completed fresh {viewport} process in "
@@ -61,6 +61,8 @@ def verify_fresh_process_pair(
         raise SystemExit(f"{viewport} instrumentation differs across fresh processes")
     if first["fixture"] != second["fixture"]:
         raise SystemExit(f"{viewport} fixture identity differs across fresh processes")
+    if first["movement_route"] != second["movement_route"]:
+        raise SystemExit(f"{viewport} movement route differs across fresh processes")
     if first["checkpoint_sha256"] != second["checkpoint_sha256"]:
         raise SystemExit(f"{viewport} checkpoint is not deterministic across fresh processes")
     if first["final_state_digest"] != second["final_state_digest"]:
@@ -76,9 +78,9 @@ def verify_fresh_process_pair(
 
 
 def main() -> int:
-    if len(sys.argv) != 4 or sys.argv[3] not in ("standard", "large"):
+    if len(sys.argv) != 4 or sys.argv[3] not in ("standard", "large", "brynknot"):
         raise SystemExit(
-            "usage: verify_movement_benchmark.py CLIENT MANIFEST standard|large"
+            "usage: verify_movement_benchmark.py CLIENT MANIFEST standard|large|brynknot"
         )
     client = Path(sys.argv[1])
     manifest = Path(sys.argv[2])

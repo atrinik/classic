@@ -75,16 +75,20 @@ def verify_frozen(client: Path, manifest: Path) -> None:
         raise SystemExit("frozen benchmark activated the movement-only fault")
 
 
-def verify_movement(client: Path, manifest: Path) -> None:
-    verify_movement_fault(client, manifest, FAULT, FAULT_DIAGNOSTIC)
+def verify_movement(client: Path, manifest: Path, viewport: str = "standard") -> None:
+    verify_movement_fault(client, manifest, FAULT, FAULT_DIAGNOSTIC, viewport)
 
 
 def verify_movement_fault(
-    client: Path, manifest: Path, fault: str, diagnostic: str
+    client: Path,
+    manifest: Path,
+    fault: str,
+    diagnostic: str,
+    viewport: str = "standard",
 ) -> None:
     result = invoke(
         client,
-        ["--player-view-movement-benchmark", manifest, "standard"],
+        ["--player-view-movement-benchmark", manifest, viewport],
         fault,
     )
     if result.returncode == 0:
@@ -104,20 +108,24 @@ def verify_movement_fault(
 
 
 def main() -> int:
-    if len(sys.argv) != 4:
+    if len(sys.argv) not in (4, 5) or (len(sys.argv) == 5 and sys.argv[4] not in (
+        "standard", "brynknot"
+    )):
         raise SystemExit(
             "usage: verify_movement_fault_injection.py CLIENT FROZEN_MANIFEST "
-            "MOVEMENT_MANIFEST"
+            "MOVEMENT_MANIFEST [standard|brynknot]"
         )
     client = Path(sys.argv[1])
     verify_frozen(client, Path(sys.argv[2]))
     movement_manifest = Path(sys.argv[3])
-    verify_movement(client, movement_manifest)
+    viewport = sys.argv[4] if len(sys.argv) == 5 else "standard"
+    verify_movement(client, movement_manifest, viewport)
     verify_movement_fault(
         client,
         movement_manifest,
         CLOCK_FAULT,
         CLOCK_FAULT_DIAGNOSTIC,
+        viewport,
     )
     for lighting_fault in LIGHTING_FAULTS:
         verify_movement_fault(
@@ -125,6 +133,7 @@ def main() -> int:
             movement_manifest,
             lighting_fault,
             f"player-view: movement fault {lighting_fault} was injected and detected",
+            viewport,
         )
     verify_cursor(client, movement_manifest)
     return 0
