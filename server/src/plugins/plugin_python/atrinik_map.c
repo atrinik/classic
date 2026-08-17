@@ -1033,6 +1033,11 @@ static int Map_SetFlag(Atrinik_Map *map, PyObject *val, void *context) {
         return -1;
     }
 
+    if (map->map->celestial_schema == 1 && flagno == 0) {
+        PyErr_SetString(AtrinikError, "celestial-v1 map outdoor state is immutable");
+        return -1;
+    }
+
     if (val == Py_True) {
         map->map->map_flags |= (1U << flagno);
     } else if (val == Py_False) {
