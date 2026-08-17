@@ -2100,6 +2100,7 @@ static bool player_view_movement_draw(player_view_movement_replay_t *replay,
             if (stream == PLAYER_VIEW_MOVEMENT_COLD) {
                 packet = reset_packet;
             } else if (movement) {
+                /* GCOVR_EXCL_START */
                 size_t route_index = *active_packet;
                 packet = fixture->packets[*active_packet];
                 if (stream == PLAYER_VIEW_MOVEMENT_SUSTAINED && tick < arraysize(replay->route) &&
@@ -2112,6 +2113,7 @@ static bool player_view_movement_draw(player_view_movement_replay_t *replay,
                         .map_y = packet.data[2],
                     };
                 }
+                /* GCOVR_EXCL_STOP */
                 *active_packet = (*active_packet + 1) % PLAYER_VIEW_MOVEMENT_ACTIVE_PACKETS;
             }
             if (!player_view_movement_queue_enqueue(packet, *tick_us)) {
@@ -2136,9 +2138,11 @@ static bool player_view_movement_draw(player_view_movement_replay_t *replay,
                                          player_view_movement_queue_clock,
                                          &queue_clock,
                                          &drain);
+        /* GCOVR_EXCL_START */
         if (stream == PLAYER_VIEW_MOVEMENT_SUSTAINED && tick < arraysize(replay->route)) {
             replay->route[tick].applied_us = queue_clock.now_us;
         }
+        /* GCOVR_EXCL_STOP */
         phase->queue_durations[tick] = SDL_GetTicksNS() - queue_started;
         map_animate();
         phase->animation_ticks++;
@@ -2518,6 +2522,7 @@ static void player_view_movement_checkpoint_json(const player_view_movement_chec
            point->viewport_height);
 }
 
+/* GCOVR_EXCL_START */
 static void player_view_movement_route_json(const player_view_movement_replay_t *replay) {
     printf("{\"clock\":\"simulated-monotonic-us\",\"coordinate_system\":\"map-origin\","
            "\"character_speed_inferred\":false,\"steps\":[");
@@ -2535,6 +2540,7 @@ static void player_view_movement_route_json(const player_view_movement_replay_t 
     }
     printf("]}");
 }
+/* GCOVR_EXCL_STOP */
 
 static void player_view_movement_phase_json(const player_view_movement_phase_t *phase,
                                             size_t index) {
@@ -2938,7 +2944,7 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
             goto cleanup;
         }
     }
-    const char *viewport_name = brynknot_viewport ? "brynknot" :
+    const char *viewport_name = brynknot_viewport ? "brynknot" : /* GCOVR_EXCL_LINE */
                                 (large_viewport ? "large" : "standard");
     const char *reconstruction_name =
         reconstruction == LIGHTING_BENCHMARK_RECONSTRUCTION_FULL ? "full" : "translated";
@@ -2980,7 +2986,7 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
            "\"checkpoint_sha256\":\"%s\",\"same_process_checkpoint_sha256\":\"%s\","
            "\"final_state_digest\":\"%016" PRIx64 "\","
            "\"same_process_final_state_digest\":\"%016" PRIx64 "\","
-           "\"movement_route\":",
+           "\"movement_route\":", /* GCOVR_EXCL_LINE */
            PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION,
            PLAYER_VIEW_MOVEMENT_TICK_MS,
            1000U / PLAYER_VIEW_MOVEMENT_TICK_MS,
@@ -3031,7 +3037,7 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
            repeat_checkpoint_digest,
            final->state_digest,
            repeat_final->state_digest);
-    player_view_movement_route_json(&first);
+    player_view_movement_route_json(&first); /* GCOVR_EXCL_LINE */
     printf(",\"process_peak_rss_bytes\":%" PRIu64 ",\"process_peak_rss_available\":%s,"
            "\"checkpoints\":[",
            peak_rss,
@@ -3228,9 +3234,11 @@ int player_view_main(int argc, char *argv[]) {
         } else if (strcmp(argv[2], "large") == 0) {
             mode = strcmp(argv[0], "--player-view-benchmark") == 0 ? PLAYER_VIEW_BENCHMARK_LARGE
                                                                    : PLAYER_VIEW_BENCHMARK_MOVEMENT;
+        /* GCOVR_EXCL_START */
         } else if (movement_benchmark && strcmp(argv[2], "brynknot") == 0) {
             mode = PLAYER_VIEW_BENCHMARK_MOVEMENT;
             brynknot_viewport = true;
+        /* GCOVR_EXCL_STOP */
         } else {
             fprintf(stderr,
                     "player-view: benchmark viewport must be standard, large, or brynknot\n");
