@@ -26,6 +26,9 @@
 
 #include <openssl/evp.h>
 #include <openssl/sha.h>
+#ifndef WIN32
+#include <dirent.h>
+#endif
 #include <stdarg.h>
 
 #define CELESTIAL_PREFLIGHT_FILE_LIMIT (64U * 1024U * 1024U)
@@ -1606,17 +1609,50 @@ static bool preflight_migration_index(const char *index,
         if (object_end == NULL || object_end > array_end) {
             return set_error(error, error_size, "celestial migration index has a truncated map record");
         }
-        char logical[MAX_BUF], expected[SHA256_DIGEST_LENGTH * 2 + 1];
+        char logical[MAX_BUF], predecessor[SHA256_DIGEST_LENGTH * 2 + 1];
+        char expected[SHA256_DIGEST_LENGTH * 2 + 1];
+        char expected_region[MAX_BUF], expected_sky[16], disposition[32];
+        uint64_t expected_light, expected_boundaries;
         if (!preflight_json_string(object_start,
                                    object_end,
                                    "path",
                                    VS(logical)) ||
             !preflight_json_string(object_start,
                                    object_end,
+                                   "predecessor_sha256",
+                                   VS(predecessor)) ||
+            !preflight_json_string(object_start,
+                                   object_end,
                                    "migrated_sha256",
                                    VS(expected)) ||
+            !preflight_json_string(object_start,
+                                   object_end,
+                                   "region",
+                                   VS(expected_region)) ||
+            !preflight_json_string(object_start,
+                                   object_end,
+                                   "sky_above",
+                                   VS(expected_sky)) ||
+            !preflight_json_string(object_start,
+                                   object_end,
+                                   "legacy_disposition",
+                                   VS(disposition)) ||
+            !preflight_json_uint(object_start, object_end, "target_light", &expected_light) ||
+            !preflight_json_uint(object_start,
+                                 object_end,
+                                 "horizontal_boundaries",
+                                 &expected_boundaries) ||
             !celestial_structure_logical_map_id_valid(logical) ||
+            !preflight_hex(predecessor, SHA256_DIGEST_LENGTH * 2) ||
             !preflight_hex(expected, SHA256_DIGEST_LENGTH * 2) ||
+            expected_region[0] == '\0' ||
+            (strcmp(expected_sky, "open") != 0 && strcmp(expected_sky, "linked") != 0 &&
+             strcmp(expected_sky, "sealed") != 0) ||
+            (strcmp(disposition, "absent-zero") != 0 &&
+             strcmp(disposition, "ignored-outdoor") != 0 &&
+             strcmp(disposition, "translated-darkness") != 0 &&
+             strcmp(disposition, "reviewed-ambient") != 0) ||
+            expected_light > 40959 ||
             (actual_maps != 0 && strcmp(previous, logical) >= 0)) {
             return set_error(error, error_size, "celestial migration index has a noncanonical map record");
         }
@@ -1642,6 +1678,25 @@ static bool preflight_migration_index(const char *index,
         if (map_valid) {
             char header_error[HUGE_BUF];
             map_valid = celestial_structure_validate_header(map, VS(header_error));
+        }
+        if (map_valid &&
+            (map->region == NULL || strcmp(map->region->name, expected_region) != 0 ||
+             (strcmp(expected_sky, "open") == 0 && map->celestial_sky_above != CELESTIAL_SKY_OPEN) ||
+             (strcmp(expected_sky, "linked") == 0 &&
+              map->celestial_sky_above != CELESTIAL_SKY_LINKED) ||
+             (strcmp(expected_sky, "sealed") == 0 &&
+              map->celestial_sky_above != CELESTIAL_SKY_SEALED) ||
+             (uint64_t)map->light_value != expected_light)) {
+            map_valid = false;
+        }
+        if (map_valid) {
+            uint64_t boundaries = 0;
+            for (size_t tile = 0; tile < TILED_NUM; tile++) {
+                if (map->tile_path[tile] != NULL) {
+                    boundaries++;
+                }
+            }
+            map_valid = boundaries == expected_boundaries;
         }
         if (!map_valid) {
             delete_map(map);
@@ -1678,6 +1733,9 @@ static bool preflight_migration_index(const char *index,
 bool celestial_structure_startup_preflight(char *error, size_t error_size) {
     celestial_v1_runtime_active = false;
     celestial_artifact_commit[0] = '\0';
+    if (!celestial_structure_recover_map_transactions(error, error_size)) {
+        return false;
+    }
     char manifest_path[HUGE_BUF];
     if (snprintf(manifest_path,
                  sizeof(manifest_path),
@@ -1954,6 +2012,235 @@ bool celestial_structure_validate_provenance(const mapstruct *map, char *error, 
                               error_size,
                               "temporary v1 map %s has changed or unprovable source lineage",
                               map_path(map));
+}
+
+static bool map_transaction_path(const mapstruct *map,
+                                 char output[HUGE_BUF],
+                                 char transaction_id[SHA256_DIGEST_LENGTH * 2 + 1]) {
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    if (map == NULL || map->path == NULL ||
+        SHA256((const unsigned char *)map->path, strlen(map->path), digest) == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(digest); i++) {
+        snprintf(transaction_id + i * 2, 3, "%02x", digest[i]);
+    }
+    transaction_id[sizeof(digest) * 2] = '\0';
+    int written = snprintf(output,
+                           HUGE_BUF,
+                           "%s/celestial-transactions/%s.json",
+                           settings.datapath,
+                           transaction_id);
+    return written >= 0 && (size_t)written < HUGE_BUF;
+}
+
+static bool map_transaction_write(const mapstruct *map,
+                                  const char *state,
+                                  const char *map_file,
+                                  const char *unique_file,
+                                  char *error,
+                                  size_t error_size) {
+    char transaction[HUGE_BUF], transaction_id[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (!map_transaction_path(map, transaction, transaction_id) || map_file == NULL ||
+        unique_file == NULL) {
+        return set_error(error, error_size, "cannot resolve celestial map transaction identity");
+    }
+    char contents[HUGE_BUF];
+    int written = snprintf(contents,
+                           sizeof(contents),
+                           "{\n"
+                           "  \"schema_version\": 1,\n"
+                           "  \"state\": \"%s\",\n"
+                           "  \"map_path\": \"%s\",\n"
+                           "  \"map_file\": \"%s\",\n"
+                           "  \"unique_file\": \"%s\"\n"
+                           "}\n",
+                           state,
+                           map->path,
+                           map_file,
+                           unique_file);
+    if (written < 0 || (size_t)written >= sizeof(contents)) {
+        return set_error(error, error_size, "celestial map transaction record is too large");
+    }
+    char directory[HUGE_BUF];
+    if (snprintf(directory, sizeof(directory), "%s/celestial-transactions", settings.datapath) < 0 ||
+        strlen(directory) >= sizeof(directory)) {
+        return set_error(error, error_size, "celestial map transaction directory is too long");
+    }
+    path_ensure_directories(directory);
+    if (!path_write_atomic(transaction, contents, (size_t)written, SAVE_MODE)) {
+        return set_error(error,
+                         error_size,
+                         "cannot durably publish celestial map transaction %s",
+                         transaction_id);
+    }
+    return true;
+}
+
+bool celestial_structure_begin_map_transaction(const mapstruct *map,
+                                               const char *map_file,
+                                               const char *unique_file,
+                                               char *error,
+                                               size_t error_size) {
+    if (map == NULL || map->celestial_schema != 1 || map->path == NULL) {
+        return set_error(error, error_size, "cannot journal a non-v1 map transaction");
+    }
+    return map_transaction_write(map, "prepared", map_file, unique_file, error, error_size);
+}
+
+bool celestial_structure_commit_map_transaction(const mapstruct *map, char *error, size_t error_size) {
+    char transaction[HUGE_BUF], transaction_id[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (!map_transaction_path(map, transaction, transaction_id)) {
+        return set_error(error, error_size, "cannot resolve celestial map transaction identity");
+    }
+    size_t size;
+    char *contents = preflight_read_file(transaction, &size, error, error_size);
+    if (contents == NULL) {
+        return false;
+    }
+    const char *end = contents + size;
+    char map_file[HUGE_BUF], unique_file[HUGE_BUF], map_path_value[HUGE_BUF], state[32];
+    uint64_t schema;
+    bool valid = preflight_json_uint(contents, end, "schema_version", &schema) && schema == 1 &&
+                 preflight_json_string(contents, end, "state", VS(state)) &&
+                 strcmp(state, "prepared") == 0 &&
+                 preflight_json_string(contents, end, "map_path", VS(map_path_value)) &&
+                 strcmp(map_path_value, map->path) == 0 &&
+                 preflight_json_string(contents, end, "map_file", VS(map_file)) &&
+                 preflight_json_string(contents, end, "unique_file", VS(unique_file));
+    free(contents);
+    if (!valid) {
+        return set_error(error, error_size, "celestial map transaction %s is not prepared", transaction_id);
+    }
+    return map_transaction_write(map, "committed", map_file, unique_file, error, error_size);
+}
+
+bool celestial_structure_finish_map_transaction(const mapstruct *map, char *error, size_t error_size) {
+    char transaction[HUGE_BUF], transaction_id[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (!map_transaction_path(map, transaction, transaction_id)) {
+        return set_error(error, error_size, "cannot resolve celestial map transaction identity");
+    }
+    if (unlink(transaction) != 0 && errno != ENOENT) {
+        return set_error(error,
+                         error_size,
+                         "cannot retire committed celestial map transaction %s",
+                         transaction_id);
+    }
+    return true;
+}
+
+#ifndef WIN32
+static bool quarantine_transaction_file(const char *source, const char *transaction_id) {
+    if (source == NULL || !path_exists(source)) {
+        return true;
+    }
+    char directory[HUGE_BUF], destination[HUGE_BUF];
+    if (snprintf(directory, sizeof(directory), "%s/celestial-quarantine", settings.datapath) < 0 ||
+        strlen(directory) >= sizeof(directory)) {
+        return false;
+    }
+    path_ensure_directories(directory);
+    int written = snprintf(destination,
+                           sizeof(destination),
+                           "%s/transaction-%s-%ld",
+                           directory,
+                           transaction_id,
+                           (long)getpid());
+    if (written < 0 || (size_t)written >= sizeof(destination)) {
+        return false;
+    }
+    for (unsigned int attempt = 0; path_exists(destination) && attempt < 100; attempt++) {
+        written = snprintf(destination,
+                           sizeof(destination),
+                           "%s/transaction-%s-%ld-%u",
+                           directory,
+                           transaction_id,
+                           (long)getpid(),
+                           attempt + 1);
+        if (written < 0 || (size_t)written >= sizeof(destination)) {
+            return false;
+        }
+    }
+    return !path_exists(destination) && path_rename(source, destination) == 0;
+}
+#endif
+
+bool celestial_structure_recover_map_transactions(char *error, size_t error_size) {
+#ifdef WIN32
+    (void)error;
+    (void)error_size;
+    return true;
+#else
+    char directory[HUGE_BUF];
+    if (snprintf(directory, sizeof(directory), "%s/celestial-transactions", settings.datapath) < 0 ||
+        strlen(directory) >= sizeof(directory) || !path_exists(directory)) {
+        return true;
+    }
+    DIR *directory_handle = opendir(directory);
+    if (directory_handle == NULL) {
+        return set_error(error, error_size, "cannot inspect celestial map transactions: %s", strerror(errno));
+    }
+    struct dirent *entry;
+    size_t records = 0;
+    while ((entry = readdir(directory_handle)) != NULL) {
+        size_t name_length = strlen(entry->d_name);
+        if (name_length != SHA256_DIGEST_LENGTH * 2 + 5 ||
+            strcmp(entry->d_name + name_length - 5, ".json") != 0) {
+            continue;
+        }
+        char transaction_id[SHA256_DIGEST_LENGTH * 2 + 1];
+        memcpy(transaction_id, entry->d_name, sizeof(transaction_id) - 1);
+        transaction_id[sizeof(transaction_id) - 1] = '\0';
+        if (!preflight_hex(transaction_id, SHA256_DIGEST_LENGTH * 2) || ++records > 256) {
+            closedir(directory_handle);
+            return set_error(error, error_size, "celestial map transaction directory is not bounded");
+        }
+        char transaction[HUGE_BUF];
+        if (snprintf(transaction, sizeof(transaction), "%s/%s", directory, entry->d_name) < 0 ||
+            strlen(transaction) >= sizeof(transaction)) {
+            closedir(directory_handle);
+            return set_error(error, error_size, "celestial map transaction path is too long");
+        }
+        size_t size;
+        char *contents = preflight_read_file(transaction, &size, error, error_size);
+        if (contents == NULL) {
+            closedir(directory_handle);
+            return false;
+        }
+        const char *end = contents + size;
+        char state[32], map_file[HUGE_BUF], unique_file[HUGE_BUF], map_path_value[HUGE_BUF];
+        uint64_t schema;
+        bool valid = preflight_json_uint(contents, end, "schema_version", &schema) && schema == 1 &&
+                     preflight_json_string(contents, end, "state", VS(state)) &&
+                     preflight_json_string(contents, end, "map_path", VS(map_path_value)) &&
+                     celestial_structure_logical_map_id_valid(map_path_value) &&
+                     preflight_json_string(contents, end, "map_file", VS(map_file)) &&
+                     preflight_json_string(contents, end, "unique_file", VS(unique_file));
+        free(contents);
+        if (!valid || (strcmp(state, "prepared") != 0 && strcmp(state, "committed") != 0)) {
+            closedir(directory_handle);
+            return set_error(error, error_size, "celestial map transaction %s is malformed", transaction_id);
+        }
+        char ledger[HUGE_BUF], ledger_id[SHA256_DIGEST_LENGTH * 2 + 1];
+        bool ledger_present = provenance_path(map_path_value, ledger, ledger_id) &&
+                              path_exists(ledger);
+        if (strcmp(state, "committed") == 0 && path_exists(map_file) && ledger_present) {
+            unlink(transaction);
+            continue;
+        }
+        if (!quarantine_transaction_file(map_file, transaction_id) ||
+            !quarantine_transaction_file(unique_file, transaction_id)) {
+            closedir(directory_handle);
+            return set_error(error,
+                             error_size,
+                             "cannot quarantine interrupted celestial map transaction %s",
+                             transaction_id);
+        }
+        unlink(transaction);
+    }
+    closedir(directory_handle);
+    return true;
+#endif
 }
 
 /** Validate the relative path accepted by the Python generated-map factory. */

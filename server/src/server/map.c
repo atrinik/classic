@@ -1682,6 +1682,7 @@ int new_save_map(mapstruct *m, int flag) {
     FILE *fp, *fp2;
     char filename[HUGE_BUF], buf[MAX_BUF];
     map_atomic_file_t primary, unique;
+    bool celestial_transaction = false;
     memset(&primary, 0, sizeof(primary));
     memset(&unique, 0, sizeof(unique));
 
@@ -1730,8 +1731,29 @@ int new_save_map(mapstruct *m, int flag) {
         snprintf(VS(filename), "%s", m->tmpname);
     }
 
+    if (m->celestial_schema == 1 && celestial_structure_v1_runtime_active() && !flag &&
+        !MAP_UNIQUE(m)) {
+        snprintf(buf, sizeof(buf), "%s.v00", create_items_path(m->path));
+        char transaction_error[HUGE_BUF];
+        if (!celestial_structure_begin_map_transaction(m,
+                                                       filename,
+                                                       buf,
+                                                       VS(transaction_error))) {
+            LOG(ERROR,
+                "Cannot begin celestial map transaction for %s: %s",
+                m->path != NULL ? m->path : "<runtime>",
+                transaction_error);
+            return -1;
+        }
+        celestial_transaction = true;
+    }
+
     if (!map_atomic_open(&primary, filename)) {
         LOG(ERROR, "Can't open file %s for saving: %d (%s)", filename, errno, strerror(errno));
+        if (celestial_transaction) {
+            char transaction_error[HUGE_BUF];
+            (void)celestial_structure_finish_map_transaction(m, VS(transaction_error));
+        }
         return -1;
     }
     fp = primary.fp;
@@ -1754,6 +1776,10 @@ int new_save_map(mapstruct *m, int flag) {
             LOG(BUG, "Can't open unique items file %s", buf);
             map_atomic_cancel(&primary);
             m->in_memory = previous_in_memory;
+            if (celestial_transaction) {
+                char transaction_error[HUGE_BUF];
+                (void)celestial_structure_finish_map_transaction(m, VS(transaction_error));
+            }
             return -1;
         }
         fp2 = unique.fp;
@@ -1772,10 +1798,18 @@ int new_save_map(mapstruct *m, int flag) {
     if (!MAP_UNIQUE(m) && !map_atomic_publish(&unique)) {
         map_atomic_cancel(&primary);
         m->in_memory = previous_in_memory;
+        if (celestial_transaction) {
+            char transaction_error[HUGE_BUF];
+            (void)celestial_structure_finish_map_transaction(m, VS(transaction_error));
+        }
         return -1;
     }
     if (!map_atomic_publish(&primary)) {
         m->in_memory = previous_in_memory;
+        if (celestial_transaction) {
+            char transaction_error[HUGE_BUF];
+            (void)celestial_structure_finish_map_transaction(m, VS(transaction_error));
+        }
         return -1;
     }
     if (m->celestial_schema == 1 && celestial_structure_v1_runtime_active()) {
@@ -1787,6 +1821,23 @@ int new_save_map(mapstruct *m, int flag) {
                 provenance_error);
             m->in_memory = previous_in_memory;
             return -1;
+        }
+    }
+    if (celestial_transaction) {
+        char transaction_error[HUGE_BUF];
+        if (!celestial_structure_commit_map_transaction(m, VS(transaction_error))) {
+            LOG(ERROR,
+                "Celestial map transaction for %s remains prepared: %s",
+                m->path != NULL ? m->path : "<runtime>",
+                transaction_error);
+            m->in_memory = previous_in_memory;
+            return -1;
+        }
+        if (!celestial_structure_finish_map_transaction(m, VS(transaction_error))) {
+            LOG(ERROR,
+                "Celestial map transaction for %s committed but could not be retired: %s",
+                m->path != NULL ? m->path : "<runtime>",
+                transaction_error);
         }
     }
     return 0;
