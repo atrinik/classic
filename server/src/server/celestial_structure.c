@@ -1631,11 +1631,20 @@ static bool preflight_migration_index(const char *index,
         if (!preflight_sha256_file(filename, actual) || strcmp(actual, expected) != 0) {
             return set_error(error, error_size, "celestial map digest mismatch: %s", logical);
         }
-        mapstruct *map = load_original_map(logical, NULL, MAP_NO_DYNAMIC);
-        if (map == NULL || map->celestial_schema != 1) {
-            if (map != NULL) {
-                delete_map(map);
-            }
+        FILE *map_file = fopen(filename, "rb");
+        mapstruct *map = get_linked_map();
+        FREE_AND_COPY_HASH(map->path, logical);
+        bool map_valid = map_file != NULL && load_map_header(map, map_file) &&
+                         map->celestial_schema == 1;
+        if (map_file != NULL) {
+            fclose(map_file);
+        }
+        if (map_valid) {
+            char header_error[HUGE_BUF];
+            map_valid = celestial_structure_validate_header(map, VS(header_error));
+        }
+        if (!map_valid) {
+            delete_map(map);
             return set_error(error, error_size, "celestial map failed structural load: %s", logical);
         }
         for (size_t tile = 0; tile < TILED_NUM; tile++) {
