@@ -1454,6 +1454,9 @@ static bool preflight_manifest_files(const char *manifest,
         while (object_start > array && object_start[-1] != '{') {
             object_start--;
         }
+        if (object_start > array) {
+            object_start--;
+        }
         const char *object_end = object_start > array
                                      ? preflight_json_matching(object_start,
                                                                array_end,
@@ -1589,6 +1592,9 @@ static bool preflight_migration_index(const char *index,
         }
         const char *object_start = path_marker;
         while (object_start > array && object_start[-1] != '{') {
+            object_start--;
+        }
+        if (object_start > array) {
             object_start--;
         }
         const char *object_end = object_start > array
