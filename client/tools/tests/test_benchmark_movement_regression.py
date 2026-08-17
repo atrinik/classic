@@ -428,14 +428,21 @@ def native_record(
                 },
             }
         )
-    viewport_width, viewport_height = (320, 240) if viewport == "standard" else (1920, 1080)
+    viewport_width, viewport_height = {
+        "standard": (320, 240),
+        "large": (1920, 1080),
+        "brynknot": (1024, 780),
+    }[viewport]
     checkpoints = [checkpoint(name, index, viewport_width, viewport_height) for index, name in enumerate(
         benchmark.validate_record.__globals__["EXPECTED_CHECKPOINTS"]
     )]
     checkpoint_sha = visual_lifecycle_digest(checkpoints)
-    standard_checkpoints = [checkpoint(name, index) for index, name in enumerate(
-        benchmark.validate_record.__globals__["EXPECTED_CHECKPOINTS"]
-    )]
+    standard_checkpoints = [
+        checkpoint(name, index, viewport_width, viewport_height)
+        if viewport == "brynknot"
+        else checkpoint(name, index)
+        for index, name in enumerate(benchmark.validate_record.__globals__["EXPECTED_CHECKPOINTS"])
+    ]
     standard_checkpoint_sha = visual_lifecycle_digest(standard_checkpoints)
     return {
         "schema_version": 8,
@@ -500,6 +507,24 @@ def native_record(
         "same_process_checkpoint_sha256": checkpoint_sha,
         "final_state_digest": checkpoints[-1]["state_digest"],
         "same_process_final_state_digest": checkpoints[-1]["state_digest"],
+        "movement_route": {
+            "clock": "simulated-monotonic-us",
+            "coordinate_system": "map-origin",
+            "character_speed_inferred": False,
+            "steps": [
+                {
+                    "packet_index": index,
+                    "phase_tick": index,
+                    "received_us": 1_000_000 + index * 125_000,
+                    "applied_us": 1_005_000 + index * 125_000,
+                    "map_x": x,
+                    "map_y": y,
+                }
+                for index, (x, y) in enumerate(
+                    ((11, 10), (10, 10), (10, 11), (10, 10))
+                )
+            ],
+        },
         "checkpoints": checkpoints,
         "same_process_checkpoints": copy.deepcopy(checkpoints),
         "lifecycle": {
@@ -583,6 +608,21 @@ def additional_contexts(
 
 
 class NativeV7RecordTests(unittest.TestCase):
+    @mock.patch.object(movement_verifier.subprocess, "run")
+    def test_brynknot_verifier_covers_route_and_long_timeout(self, run: mock.Mock) -> None:
+        record = native_record(viewport="brynknot")
+        run.return_value = subprocess.CompletedProcess(
+            [], 0, json.dumps(record) + "\n", ""
+        )
+
+        observed = movement_verifier.run(
+            Path("atrinik"), Path("brynknot.xml"), "brynknot"
+        )
+        movement_verifier.verify_fresh_process_pair(record, copy.deepcopy(record), "brynknot")
+
+        self.assertEqual(observed, record)
+        self.assertEqual(run.call_args.kwargs["timeout"], 900)
+
     def test_parse_accepts_closed_v7_record(self) -> None:
         self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 8)
 

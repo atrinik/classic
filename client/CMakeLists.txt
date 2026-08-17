@@ -848,6 +848,12 @@ if (BUILD_TESTING)
             "$<TARGET_FILE:atrinik>"
             "${player_view_fixtures}/movement-colored-discrete.xml"
             standard)
+    add_test(NAME client-player-view-movement-benchmark-brynknot
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
+            "$<TARGET_FILE:atrinik>"
+            "${player_view_fixtures}/brynknot-movement.xml"
+            brynknot)
     add_test(NAME client-player-view-movement-benchmark-smooth-large
         COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
@@ -890,6 +896,13 @@ if (BUILD_TESTING)
             "$<TARGET_FILE:atrinik>"
             "${player_view_fixtures}/colored-smooth.xml"
             "${player_view_fixtures}/movement-colored.xml")
+    add_test(NAME client-player-view-movement-brynknot-fault-injection
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_fault_injection.py"
+            "$<TARGET_FILE:atrinik>"
+            "${player_view_fixtures}/colored-smooth.xml"
+            "${player_view_fixtures}/brynknot-movement.xml"
+            brynknot)
     add_test(NAME client-player-view-movement-probe-control
         COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_probe_control.py"
@@ -898,6 +911,7 @@ if (BUILD_TESTING)
     set_tests_properties(
         client-player-view-movement-benchmark-smooth
         client-player-view-movement-benchmark-discrete
+        client-player-view-movement-benchmark-brynknot
         client-player-view-cursor-benchmark-smooth
         client-player-view-cursor-benchmark-discrete
         PROPERTIES
@@ -911,7 +925,13 @@ if (BUILD_TESTING)
         PROPERTIES
         LABELS "performance;long-performance"
         TIMEOUT 1900)
+    set_tests_properties(client-player-view-movement-benchmark-brynknot PROPERTIES
+        LABELS "performance;long-performance"
+        TIMEOUT 1900)
     set_tests_properties(client-player-view-movement-fault-injection PROPERTIES
+        LABELS fault-injection
+        TIMEOUT 75)
+    set_tests_properties(client-player-view-movement-brynknot-fault-injection PROPERTIES
         LABELS fault-injection
         TIMEOUT 75)
     set_tests_properties(client-player-view-movement-probe-control PROPERTIES
