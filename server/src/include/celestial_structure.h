@@ -61,6 +61,10 @@ bool celestial_structure_initialize_generated_map(mapstruct *map,
 bool celestial_structure_validate_archetypes(char *error, size_t error_size);
 /** Verify the immutable Classic artifact before the server accepts players. */
 bool celestial_structure_startup_preflight(char *error, size_t error_size);
+/** Acquire the process-wide writer exclusion used by celestial activation. */
+bool celestial_structure_acquire_writer_lease(char *error, size_t error_size);
+/** Release the process-wide celestial activation writer exclusion. */
+void celestial_structure_release_writer_lease(void);
 /** Whether startup has selected the fail-closed celestial-v1 runtime. */
 bool celestial_structure_v1_runtime_active(void);
 /** Publish and validate the digest-addressed mutable-map provenance sidecar. */

@@ -213,6 +213,7 @@ void cleanup(void) {
     free_object_loader();
     free_random_map_loader();
     free_map_header_loader();
+    celestial_structure_release_writer_lease();
 }
 
 /**

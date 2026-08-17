@@ -30,15 +30,65 @@
 #include <dirent.h>
 #endif
 #include <stdarg.h>
+#ifndef WIN32
+#include <sys/file.h>
+#endif
 
 #define CELESTIAL_PREFLIGHT_FILE_LIMIT (64U * 1024U * 1024U)
 
 static bool celestial_v1_runtime_active;
 static char celestial_artifact_commit[41];
+static int celestial_writer_lease_fd = -1;
+static bool set_error(char *error, size_t error_size, const char *format, ...);
 
 #ifndef WIN32
 static bool preflight_private_maps(char *error, size_t error_size);
 #endif
+
+bool celestial_structure_acquire_writer_lease(char *error, size_t error_size) {
+    if (celestial_writer_lease_fd >= 0) {
+        return true;
+    }
+    char lease_path[HUGE_BUF];
+    int written = snprintf(lease_path,
+                           sizeof(lease_path),
+                           "%s/celestial-activation.lock",
+                           settings.datapath);
+    if (written < 0 || (size_t)written >= sizeof(lease_path)) {
+        return set_error(error, error_size, "celestial activation lease path is too long");
+    }
+    path_ensure_directories(settings.datapath);
+    celestial_writer_lease_fd = open(lease_path, O_RDWR | O_CREAT, SAVE_MODE);
+    if (celestial_writer_lease_fd < 0) {
+        return set_error(error,
+                         error_size,
+                         "cannot open celestial activation lease: %s",
+                         strerror(errno));
+    }
+#ifndef WIN32
+    if (flock(celestial_writer_lease_fd, LOCK_EX | LOCK_NB) != 0) {
+        int saved_errno = errno;
+        close(celestial_writer_lease_fd);
+        celestial_writer_lease_fd = -1;
+        return set_error(error,
+                         error_size,
+                         "celestial activation writer lease is held: %s",
+                         strerror(saved_errno));
+    }
+#endif
+    return true;
+}
+
+void celestial_structure_release_writer_lease(void) {
+    if (celestial_writer_lease_fd < 0) {
+        return;
+    }
+#ifndef WIN32
+    (void)flock(celestial_writer_lease_fd, LOCK_UN);
+#endif
+    (void)close(celestial_writer_lease_fd);
+    celestial_writer_lease_fd = -1;
+}
 
 #define CELESTIAL_INVENTORY_MAX_ROOTS 16
 #define CELESTIAL_INVENTORY_MAX_MAPS 256
@@ -1757,6 +1807,9 @@ static bool preflight_migration_index(const char *index,
 bool celestial_structure_startup_preflight(char *error, size_t error_size) {
     celestial_v1_runtime_active = false;
     celestial_artifact_commit[0] = '\0';
+    if (!celestial_structure_acquire_writer_lease(error, error_size)) {
+        return false;
+    }
     if (!celestial_structure_recover_map_transactions(error, error_size)) {
         return false;
     }
