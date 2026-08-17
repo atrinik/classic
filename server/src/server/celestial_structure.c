@@ -2739,7 +2739,7 @@ static bool private_map_roster_owner(const char *directory,
         if (account_matches) {
             (*matches)++;
             if (*matches == 1) {
-                snprintf(VS(account), "%s", account_name);
+                snprintf(account, MAX_BUF, "%s", account_name);
             }
         }
         fclose(fp);
