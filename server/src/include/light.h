@@ -61,6 +61,12 @@ extern bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour);
 /** Ensure the field used by map_get_darkness() matches the current hour/profile. */
 extern void celestial_light_ensure(mapstruct *map);
 
+/** Ensure current and next authoritative hourly fields are available. */
+extern bool celestial_light_keyframe_ensure(mapstruct *map, uint64_t absolute_hour);
+
+/** Return the nonzero generation identifying the current authoritative field. */
+extern uint64_t celestial_light_generation(const mapstruct *map);
+
 extern void adjust_light_source(mapstruct *map, int x, int y, int light);
 
 extern void
