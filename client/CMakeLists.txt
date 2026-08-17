@@ -921,6 +921,8 @@ if (BUILD_TESTING)
         COMMAND atrinik --player-view "${player_view_fixtures}/colored-smooth.xml" -)
     add_test(NAME client-player-view-colored-discrete
         COMMAND atrinik --player-view "${player_view_fixtures}/colored-discrete.xml" -)
+    add_test(NAME client-player-view-timed-light
+        COMMAND atrinik --player-view "${player_view_fixtures}/timed-light.xml" -)
     add_test(NAME client-player-view-high-key-smooth
         COMMAND atrinik --player-view "${player_view_fixtures}/high-key-smooth.xml" -)
     add_test(NAME client-player-view-high-key-discrete
