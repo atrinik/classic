@@ -49,6 +49,7 @@
 #include <arch.h>
 #include <artifact.h>
 #include <cache.h>
+#include <celestial_structure.h>
 #include <commands.h>
 #include <connection.h>
 #include <face.h>
@@ -103,6 +104,17 @@ static struct plugin_hooklist hooklist =
 struct plugin_hooklist
 #endif
 {
+
+    PLUGIN_HOOK_FUNCTION(mapstruct *,
+                         celestial_structure_create_map,
+                         int,
+                         int,
+                         const char *,
+                         mapstruct *,
+                         const char *,
+                         int,
+                         char *,
+                         size_t)
 
     PLUGIN_HOOK_FUNCTION(
         StringBuffer *,

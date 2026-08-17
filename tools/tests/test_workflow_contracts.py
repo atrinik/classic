@@ -945,6 +945,18 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("command -v ccache", script)
         self.assertIn("-DCMAKE_C_COMPILER_LAUNCHER=", script)
+        self.assertIn(
+            'cmake -E copy runtime/content/manifest.json "${package_root}/manifest.json"',
+            script,
+        )
+        self.assertIn(
+            'cmake -E copy_directory runtime/content/attribution "${package_root}/attribution"',
+            script,
+        )
+        self.assertIn(
+            '"${package_root}/compatibility.json"',
+            script,
+        )
 
     def test_native_windows_security_tests_are_cross_built_and_run_on_windows(self) -> None:
         workflow = self.text("check.yml")

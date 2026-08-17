@@ -648,10 +648,15 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
 
     if (NOT IS_DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/maps" OR
             NOT IS_DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/lib" OR
-            NOT IS_DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/client-maps")
+            NOT IS_DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/client-maps" OR
+            NOT IS_DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/attribution" OR
+            NOT EXISTS "${ATRINIK_SERVER_PACKAGE_ROOT}/manifest.json" OR
+            IS_DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/manifest.json" OR
+            NOT EXISTS "${ATRINIK_SERVER_PACKAGE_ROOT}/compatibility.json" OR
+            IS_DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/compatibility.json")
         message(FATAL_ERROR
             "ATRINIK_SERVER_PACKAGE_ROOT must contain maps/, lib/, and "
-            "client-maps/.")
+            "client-maps/, attribution/, manifest.json, and compatibility.json.")
     endif ()
 
     install(TARGETS ${EXECUTABLE} plugin_arena plugin_python
@@ -677,6 +682,13 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
         DESTINATION server/lib)
     install(DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/client-maps"
         DESTINATION server/assets)
+    install(FILES "${ATRINIK_SERVER_PACKAGE_ROOT}/manifest.json"
+        DESTINATION server)
+    install(DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/attribution"
+        DESTINATION server
+        PATTERN ".git" EXCLUDE)
+    install(FILES "${ATRINIK_SERVER_PACKAGE_ROOT}/compatibility.json"
+        DESTINATION server)
     install(DIRECTORY install_data resources tools
         DESTINATION server
         PATTERN ".git" EXCLUDE)

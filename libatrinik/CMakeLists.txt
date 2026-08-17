@@ -552,6 +552,9 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     add_executable(libatrinik-path tests/path.c)
     atrinik_configure_target(libatrinik-path)
     target_link_libraries(libatrinik-path PRIVATE Atrinik::Core)
+    if (UNIX AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_link_options(libatrinik-path PRIVATE "-Wl,--wrap=fsync" "-Wl,--wrap=close")
+    endif ()
     add_test(NAME libatrinik-path COMMAND libatrinik-path)
 
     add_executable(libatrinik-rendezvous tests/rendezvous.c)

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -105,10 +105,10 @@ mapstruct *generate_random_map(char *OutFileName, RMParms *RP) {
 #endif
 
     /* allocate the map and set the floor */
-    theMap = make_map_floor(RP->floorstyle, RP);
-
-    /* set the name of the map. */
-    FREE_AND_COPY_HASH(theMap->path, OutFileName);
+    theMap = make_map_floor(RP->floorstyle, RP, OutFileName, RP->origin_map_ptr);
+    if (theMap == NULL) {
+        return NULL;
+    }
 
     FREE_AND_COPY_HASH(theMap->name, RP->dungeon_name[0] ? RP->dungeon_name : OutFileName);
 
@@ -129,7 +129,6 @@ mapstruct *generate_random_map(char *OutFileName, RMParms *RP) {
     put_decor(theMap, layout, RP);
 
     unblock_exits(theMap, layout, RP);
-    set_map_darkness(theMap, RP->darkness);
 
     for (i = 0; i < RP->Xsize; i++) {
         free(layout[i]);

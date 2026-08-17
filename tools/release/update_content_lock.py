@@ -35,6 +35,13 @@ COPY_CHUNK_BYTES = 1024 * 1024
 SEMVER_RE = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+CELESTIAL_MANIFEST_KEYS = {
+    "celestial_schema_version",
+    "celestial_runtime_factory_version",
+    "celestial_migration_index",
+    "celestial_migration_index_sha256",
+    "celestial_manifest_files_sha256",
+}
 
 
 class UpdateError(RuntimeError):
@@ -262,12 +269,13 @@ def validate_manifest(
     value = load_json_bytes(data, "runtime manifest")
     if not isinstance(value, dict):
         raise UpdateError("runtime manifest root must be an object")
-    require_keys(value, {
+    base_keys = {
         "schema_version", "target", "source", "release_version",
         "content_format", "artifact_format", "compatible_classic_releases",
         "consumers", "replacement_ready", "replacement_toolkit_package",
         "license_files", "files",
-    }, "runtime manifest")
+    }
+    require_keys(value, base_keys | (set(value) & CELESTIAL_MANIFEST_KEYS), "runtime manifest")
     source = value["source"]
     if not isinstance(source, dict):
         raise UpdateError("runtime manifest source must be an object")
@@ -313,6 +321,38 @@ def validate_manifest(
     manifest_files = {path: (digest, size) for path, digest, size in validated}
     if manifest_files != files:
         raise UpdateError("runtime archive files do not exactly match the manifest")
+
+    migration_entry = next(
+        (entry for entry in validated if entry[0] == "maps/celestial-migration-index.json"),
+        None,
+    )
+    celestial_keys = set(value) & CELESTIAL_MANIFEST_KEYS
+    if migration_entry is None:
+        if celestial_keys:
+            raise UpdateError("runtime celestial manifest fields require the migration index")
+    else:
+        if celestial_keys != CELESTIAL_MANIFEST_KEYS:
+            raise UpdateError("runtime celestial manifest fields are incomplete")
+        if value["celestial_schema_version"] != 1 or isinstance(
+            value["celestial_schema_version"], bool
+        ):
+            raise UpdateError("runtime celestial schema version is unsupported")
+        if value["celestial_runtime_factory_version"] != 1 or isinstance(
+            value["celestial_runtime_factory_version"], bool
+        ):
+            raise UpdateError("runtime celestial factory version is unsupported")
+        if value["celestial_migration_index"] != migration_entry[0]:
+            raise UpdateError("runtime celestial migration index path is incorrect")
+        migration_digest = value["celestial_migration_index_sha256"]
+        if not isinstance(migration_digest, str) or SHA256_RE.fullmatch(migration_digest) is None:
+            raise UpdateError("runtime celestial migration index digest is invalid")
+        if migration_digest != migration_entry[1]:
+            raise UpdateError("runtime celestial migration index digest is incorrect")
+        manifest_files_digest = hashlib.sha256()
+        for path, digest, size in validated:
+            manifest_files_digest.update(f"{path}\0{digest}\0{size}\n".encode("utf-8"))
+        if value["celestial_manifest_files_sha256"] != manifest_files_digest.hexdigest():
+            raise UpdateError("runtime celestial manifest files digest is incorrect")
 
     licenses = value["license_files"]
     if not isinstance(licenses, list) or not licenses:

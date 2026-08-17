@@ -33,6 +33,7 @@
 #include <initialization.h>
 #include <toolkit/string.h>
 #include <plugin.h>
+#include <celestial_structure.h>
 
 /**
  * Write maps log.
@@ -99,6 +100,10 @@ void read_map_log(void) {
 
         map->in_memory = MAP_SWAPPED;
         map->darkness = darkness;
+        if (celestial_structure_v1_runtime_active()) {
+            map->celestial_schema = 1;
+            map->celestial_v1_header_seen = true;
+        }
 
         if (darkness == -1) {
             darkness = MAX_DARKNESS;
