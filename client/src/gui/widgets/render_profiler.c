@@ -16,6 +16,7 @@
 
 #include <global.h>
 #include <toolkit/datetime.h>
+#include <toolkit/string.h>
 
 static bool profiler_enabled;
 static render_profile_snapshot_t accumulated;
@@ -23,6 +24,12 @@ static render_profile_snapshot_t completed;
 static render_profile_snapshot_t statistics;
 static uint64_t interval_started_us;
 static uint64_t statistics_started_us;
+
+typedef struct render_profiler_widget {
+    uint32_t generation;
+    scrollbar_struct scrollbar;
+    scrollbar_info_struct scrollbar_info;
+} render_profiler_widget_t;
 
 static const render_profile_stage_metadata_t stage_metadata[RENDER_PROFILE_STAGE_NUM] = {
     [RENDER_PROFILE_FRAME] = {"frame", RENDER_PROFILE_SCOPE_FRAME},
@@ -159,79 +166,230 @@ static double render_profile_rate(const render_profile_snapshot_t *snapshot, uin
     return snapshot->interval_us == 0 ? 0.0 : count * 1000000.0 / snapshot->interval_us;
 }
 
+static char *render_profiler_widget_text(const render_profile_snapshot_t *snapshot) {
+    StringBuffer *sb = stringbuffer_new();
+    render_profile_stage_t stage;
+
+    stringbuffer_append_printf(sb,
+                               "[c=#ffd060]Render profiler[/c] (last %.2fs)\n"
+                               "Loop %.1f fps, drawn %.1f fps\n"
+                               "Frame %6.2f ms  work %6.2f  wait %6.2f\n"
+                               "Events %5.2f  game %5.2f\n"
+                               "Widgets %5.2f  overlays %5.2f\n"
+                               "GC %8.2f  present %5.2f\n"
+                               "[c=#ffd060]Map/draw[/c] %5.2f ms @ %.1f/s\n"
+                               " scratch/draw %4.2f  ground/level %4.2f\n"
+                               " composite/draw %4.2f  lighting/level %4.2f\n"
+                               " objects/level %4.2f  paint/draw %4.2f\n"
+                               " sort %4.2f  living %4.2f  sprites %4.2f  hints %4.2f\n"
+                               " UI/draw %4.2f\n"
+                               "[c=#ffd060]Stage breakdown[/c] (average, calls, rate)\n",
+                               snapshot->interval_us / 1000000.0,
+                               render_profile_rate(snapshot, snapshot->frames),
+                               render_profile_rate(snapshot, snapshot->drawn_frames),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_FRAME),
+                               MAX(0.0,
+                                   render_profile_average_ms(snapshot, RENDER_PROFILE_FRAME) -
+                                       render_profile_average_ms(snapshot, RENDER_PROFILE_WAIT)),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_WAIT),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_EVENTS),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_GAME),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_WIDGETS),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_OVERLAYS),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAINTENANCE),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_PRESENT),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP),
+                               render_profile_rate(snapshot, snapshot->calls[RENDER_PROFILE_MAP]),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_SCRATCH_CLEAR),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_GROUND),
+                               render_profile_average_ms(snapshot,
+                                                         RENDER_PROFILE_MAP_GROUND_COMPOSITE),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_LIGHTING),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_OBJECTS),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_PAINT),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_COMMAND_SORT),
+                               render_profile_average_ms(snapshot,
+                                                         RENDER_PROFILE_MAP_LIVING_OCCLUSION),
+                               render_profile_average_ms(snapshot,
+                                                         RENDER_PROFILE_MAP_SPRITE_EFFECTS),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_HINT_REPLAY),
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_UI));
+
+    for (stage = 0; stage < RENDER_PROFILE_STAGE_NUM; stage++) {
+        render_profile_stage_metadata_t metadata = {0};
+        const char *scope;
+
+        if (!render_profiler_stage_metadata_get(stage, &metadata)) {
+            continue;
+        }
+        scope = render_profiler_scope_name(metadata.scope);
+        HARD_ASSERT(scope != NULL);
+        stringbuffer_append_printf(sb,
+                                   "%s [%s] %.2f ms, %" PRIu32 " calls, %.1f/s\n",
+                                   metadata.name,
+                                   scope,
+                                   render_profile_average_ms(snapshot, stage),
+                                   snapshot->calls[stage],
+                                   render_profile_rate(snapshot, snapshot->calls[stage]));
+    }
+
+    return stringbuffer_finish(sb);
+}
+
+#ifdef ATRINIK_RENDER_PROFILER_TESTING
+char *render_profiler_widget_text_for_test(const render_profile_snapshot_t *snapshot) {
+    return render_profiler_widget_text(snapshot);
+}
+
+void render_profiler_set_completed_generation_for_test(uint32_t generation) {
+    completed.generation = generation;
+}
+#endif
+
 /** @copydoc widgetdata::draw_func */
 static void widget_draw(widgetdata *widget) {
+    render_profiler_widget_t *profiler_widget = widget->subwidget;
+    char *text;
+    SDL_Rect box;
+    int content_width;
+    int content_height;
+    int scrollbar_width = 11;
+
     if (!widget->redraw) {
         return;
     }
 
     const render_profile_snapshot_t *snapshot = render_profiler_snapshot();
+    text = render_profiler_widget_text(snapshot);
     SDL_FillSurfaceRect(widget->surface,
                         NULL,
                         pixel_format_map_rgba(widget->surface->format, 0, 0, 0, SDL_ALPHA_OPAQUE));
 
-    SDL_Rect box = {.x = 5, .y = 4, .w = widget->w - 10, .h = widget->h - 8};
-    double frame_ms = render_profile_average_ms(snapshot, RENDER_PROFILE_FRAME);
-    double wait_ms = render_profile_average_ms(snapshot, RENDER_PROFILE_WAIT);
-    text_show_format(widget->surface,
-                     FONT_ARIAL10,
-                     box.x,
-                     box.y,
-                     COLOR_WHITE,
-                     TEXT_MARKUP,
-                     &box,
-                     "[c=#ffd060]Render profiler[/c] (last %.2fs)\n"
-                     "Loop %.1f fps, drawn %.1f fps\n"
-                     "Frame %6.2f ms  work %6.2f  wait %6.2f\n"
-                     "Events %5.2f  game %5.2f\n"
-                     "Widgets %5.2f  overlays %5.2f\n"
-                     "GC %8.2f  present %5.2f\n"
-                     "[c=#ffd060]Map/draw[/c] %5.2f ms @ %.1f/s\n"
-                     " scratch/draw %4.2f  ground/level %4.2f\n"
-                     " composite/draw %4.2f  lighting/level %4.2f\n"
-                     " objects/level %4.2f  paint/draw %4.2f\n"
-                     " sort %4.2f  living %4.2f  sprites %4.2f  hints %4.2f\n"
-                     " UI/draw %4.2f",
-                     snapshot->interval_us / 1000000.0,
-                     render_profile_rate(snapshot, snapshot->frames),
-                     render_profile_rate(snapshot, snapshot->drawn_frames),
-                     frame_ms,
-                     MAX(0.0, frame_ms - wait_ms),
-                     wait_ms,
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_EVENTS),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_GAME),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_WIDGETS),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_OVERLAYS),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAINTENANCE),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_PRESENT),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP),
-                     render_profile_rate(snapshot, snapshot->calls[RENDER_PROFILE_MAP]),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_SCRATCH_CLEAR),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_GROUND),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_GROUND_COMPOSITE),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_LIGHTING),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_OBJECTS),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_PAINT),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_COMMAND_SORT),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_LIVING_OCCLUSION),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_SPRITE_EFFECTS),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_HINT_REPLAY),
-                     render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_UI));
+    content_width = MAX(1, widget->w - 10 - scrollbar_width);
+    content_height = MAX(1, widget->h - 8);
+    box = (SDL_Rect){.x = 0, .y = 0, .w = content_width, .h = content_height};
+    text_show(NULL,
+              FONT_ARIAL10,
+              text,
+              0,
+              0,
+              COLOR_WHITE,
+              TEXT_MARKUP | TEXT_WORD_WRAP | TEXT_LINES_CALC,
+              &box);
+
+    if (profiler_widget->scrollbar.background.w != scrollbar_width ||
+        profiler_widget->scrollbar.background.h != content_height) {
+        scrollbar_create(&profiler_widget->scrollbar,
+                         scrollbar_width,
+                         content_height,
+                         &profiler_widget->scrollbar_info.scroll_offset,
+                         &profiler_widget->scrollbar_info.num_lines,
+                         MAX(1, box.y));
+        profiler_widget->scrollbar.redraw = &profiler_widget->scrollbar_info.redraw;
+    }
+
+    profiler_widget->scrollbar.max_lines = MAX(1, box.y);
+    profiler_widget->scrollbar_info.num_lines = box.h;
+    scrollbar_scroll_to(&profiler_widget->scrollbar,
+                        profiler_widget->scrollbar_info.scroll_offset);
+
+    box.x = 5;
+    box.y = profiler_widget->scrollbar_info.scroll_offset;
+    box.w = content_width;
+    box.h = content_height;
+    text_show(widget->surface,
+              FONT_ARIAL10,
+              text,
+              box.x,
+              4,
+              COLOR_WHITE,
+              TEXT_MARKUP | TEXT_WORD_WRAP | TEXT_LINES_SKIP,
+              &box);
+
+    profiler_widget->scrollbar.px = widget->x;
+    profiler_widget->scrollbar.py = widget->y;
+    scrollbar_show(&profiler_widget->scrollbar,
+                   widget->surface,
+                   widget->w - 5 - scrollbar_width,
+                   4);
+    profiler_widget->scrollbar_info.redraw = 0;
+    free(text);
+}
+
+/** @copydoc widgetdata::event_func */
+static int widget_event(widgetdata *widget, SDL_Event *event) {
+    render_profiler_widget_t *profiler_widget = widget->subwidget;
+
+    if (scrollbar_event(&profiler_widget->scrollbar, event)) {
+        WIDGET_REDRAW(widget);
+        return 1;
+    }
+
+    if (event->type == SDL_EVENT_MOUSE_WHEEL) {
+        if (event_wheel_y(event) > 0.0f) {
+            scrollbar_scroll_adjust(&profiler_widget->scrollbar, -1);
+            WIDGET_REDRAW(widget);
+            return 1;
+        } else if (event_wheel_y(event) < 0.0f) {
+            scrollbar_scroll_adjust(&profiler_widget->scrollbar, 1);
+            WIDGET_REDRAW(widget);
+            return 1;
+        }
+    }
+
+    if (event->type == SDL_EVENT_KEY_DOWN) {
+        if (event->key.key == SDLK_PAGEUP) {
+            scrollbar_scroll_adjust(&profiler_widget->scrollbar,
+                                     -(int)profiler_widget->scrollbar.max_lines);
+            WIDGET_REDRAW(widget);
+            return 1;
+        } else if (event->key.key == SDLK_PAGEDOWN) {
+            scrollbar_scroll_adjust(&profiler_widget->scrollbar,
+                                     profiler_widget->scrollbar.max_lines);
+            WIDGET_REDRAW(widget);
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 /** @copydoc widgetdata::background_func */
 static void widget_background(widgetdata *widget, int draw) {
     const render_profile_snapshot_t *snapshot = render_profiler_snapshot();
-    uint32_t *generation = widget->subwidget;
+    render_profiler_widget_t *profiler_widget = widget->subwidget;
 
-    if (*generation != snapshot->generation) {
-        *generation = snapshot->generation;
+    (void)draw;
+
+    if (profiler_widget->generation != snapshot->generation) {
+        profiler_widget->generation = snapshot->generation;
+        widget->redraw = 1;
+    }
+
+    if (profiler_widget->scrollbar_info.redraw) {
         widget->redraw = 1;
     }
 }
 
+/** @copydoc widgetdata::deinit_func */
+static void widget_deinit(widgetdata *widget) {
+    free(widget->subwidget);
+}
+
 void widget_render_profiler_init(widgetdata *widget) {
+    render_profiler_widget_t *profiler_widget = xcalloc(1, sizeof(*profiler_widget));
+
     widget->draw_func = widget_draw;
     widget->background_func = widget_background;
-    widget->subwidget = xcalloc(1, sizeof(uint32_t));
+    widget->event_func = widget_event;
+    widget->deinit_func = widget_deinit;
+    scrollbar_info_create(&profiler_widget->scrollbar_info);
+    scrollbar_create(&profiler_widget->scrollbar,
+                     11,
+                     MAX(1, widget->h - 8),
+                     &profiler_widget->scrollbar_info.scroll_offset,
+                     &profiler_widget->scrollbar_info.num_lines,
+                     1);
+    profiler_widget->scrollbar.redraw = &profiler_widget->scrollbar_info.redraw;
+    widget->subwidget = profiler_widget;
 }
