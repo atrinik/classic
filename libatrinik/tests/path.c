@@ -8,6 +8,37 @@
 #include <sys/stat.h>
 #endif
 
+#ifndef WIN32
+static bool fail_parent_directory_fsync;
+static bool fail_parent_directory_close;
+static bool fail_next_parent_close;
+static unsigned int fsync_call_count;
+
+int __real_fsync(int fd);
+int __real_close(int fd);
+
+int __wrap_fsync(int fd) {
+    if (fail_parent_directory_close && ++fsync_call_count == 2) {
+        fail_next_parent_close = true;
+    }
+    if (fail_parent_directory_fsync && ++fsync_call_count == 2) {
+        errno = EIO;
+        return -1;
+    }
+    return __real_fsync(fd);
+}
+
+int __wrap_close(int fd) {
+    if (fail_next_parent_close) {
+        fail_next_parent_close = false;
+        int result = __real_close(fd);
+        errno = EIO;
+        return result == 0 ? -1 : result;
+    }
+    return __real_close(fd);
+}
+#endif
+
 static void
 require_failed(const char *expression, const char *file, int line, unsigned long system_error) {
     fprintf(stderr,
@@ -293,6 +324,26 @@ int main(int argc, char **argv) {
     char *atomic_contents = path_file_contents(atomic);
     require(atomic_contents != NULL && strcmp(atomic_contents, atomic_data) == 0);
     free(atomic_contents);
+
+#ifndef WIN32
+    char unsynced[HUGE_BUF];
+    require(snprintf(VS(unsynced), "%s/unsynced", directory) < (int)sizeof(unsynced));
+    fail_parent_directory_fsync = true;
+    fsync_call_count = 0;
+    require(!path_write_atomic_existing(unsynced, atomic_data, sizeof(atomic_data) - 1U, 0600));
+    fail_parent_directory_fsync = false;
+    require(path_exists(unsynced));
+    unlink(unsynced);
+
+    char unclosed[HUGE_BUF];
+    require(snprintf(VS(unclosed), "%s/unclosed", directory) < (int)sizeof(unclosed));
+    fail_parent_directory_close = true;
+    fsync_call_count = 0;
+    require(!path_write_atomic_existing(unclosed, atomic_data, sizeof(atomic_data) - 1U, 0600));
+    fail_parent_directory_close = false;
+    require(path_exists(unclosed));
+    unlink(unclosed);
+#endif
 
     char missing_parent[HUGE_BUF];
     require(snprintf(VS(missing_parent), "%s/missing/atomic", directory) <

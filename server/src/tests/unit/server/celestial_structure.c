@@ -21,6 +21,9 @@
 #include <map.h>
 #include <object.h>
 #include <swap.h>
+#include <toolkit/path.h>
+
+#include <openssl/sha.h>
 
 #ifndef WIN32
 static ssize_t fail_inventory_write(void *cookie, const char *buffer, size_t size) {
@@ -994,6 +997,473 @@ START_TEST(test_inventory_is_bounded_deterministic_and_read_only) {
 }
 END_TEST
 
+START_TEST(test_generated_factory_is_validated_and_bounded) {
+    char error[HUGE_BUF];
+    mapstruct *origin = new_v1_map("/factory-origin", 5, 5, CELESTIAL_SKY_SEALED);
+    mapstruct *generated = celestial_structure_create_map(40,
+                                                          40,
+                                                          "factory-test-256",
+                                                          origin,
+                                                          "sealed",
+                                                          1280,
+                                                          VS(error));
+    ck_assert_msg(generated != NULL, "%s", error);
+    ck_assert_uint_eq(generated->celestial_schema, 1);
+    ck_assert_uint_eq(generated->celestial_sky_above, CELESTIAL_SKY_SEALED);
+    ck_assert_int_eq(generated->light_value, 1280);
+    ck_assert_str_eq(generated->celestial_generated_origin, "/factory-origin");
+    ck_assert(!MAP_OUTDOORS(generated));
+    ck_assert(celestial_structure_validate_header(generated, VS(error)));
+
+    ck_assert_ptr_eq(celestial_structure_create_map(0,
+                                                    40,
+                                                    "invalid",
+                                                    origin,
+                                                    "sealed",
+                                                    0,
+                                                    VS(error)),
+                     NULL);
+    ck_assert_ptr_eq(celestial_structure_create_map(40,
+                                                    40,
+                                                    "../invalid",
+                                                    origin,
+                                                    "sealed",
+                                                    0,
+                                                    VS(error)),
+                     NULL);
+    ck_assert_ptr_eq(celestial_structure_create_map(40,
+                                                    40,
+                                                    "invalid",
+                                                    origin,
+                                                    "linked",
+                                                    0,
+                                                    VS(error)),
+                     NULL);
+    ck_assert_ptr_eq(celestial_structure_create_map(40,
+                                                    40,
+                                                    "invalid",
+                                                    origin,
+                                                    "sealed",
+                                                    40960,
+                                                    VS(error)),
+                     NULL);
+    ck_assert_ptr_eq(celestial_structure_create_map(40,
+                                                    40,
+                                                    "factory-test-256",
+                                                    origin,
+                                                    "sealed",
+                                                    0,
+                                                    VS(error)),
+                     NULL);
+
+    delete_map(generated);
+    delete_map(origin);
+}
+END_TEST
+
+#ifndef WIN32
+START_TEST(test_private_map_provenance_demangles_authored_source) {
+    char temporary_root[] = "/tmp/atrinik-celestial-private-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
+
+    char saved_datapath[HUGE_BUF];
+    char saved_mapspath[HUGE_BUF];
+    snprintf(VS(saved_datapath), "%s", settings.datapath);
+    snprintf(VS(saved_mapspath), "%s", settings.mapspath);
+
+    char datapath[HUGE_BUF], mapspath[HUGE_BUF], maps_dir[HUGE_BUF], source_path[HUGE_BUF];
+    char private_path[HUGE_BUF], provenance_dir[HUGE_BUF], account_path[HUGE_BUF];
+    snprintf(VS(datapath), "%s/data", temporary_root);
+    snprintf(VS(mapspath), "%s", temporary_root);
+    snprintf(VS(maps_dir), "%s/maps", temporary_root);
+    snprintf(VS(source_path), "%s/maps/apartment", temporary_root);
+    snprintf(VS(private_path), "%s/data/players/a/alice/$maps$apartment", temporary_root);
+    snprintf(VS(provenance_dir), "%s/data/celestial-provenance", temporary_root);
+    snprintf(VS(account_path), "%s/data/accounts/a/alice.dat", temporary_root);
+    ck_assert_uint_lt(strlen(datapath), sizeof(settings.datapath));
+    ck_assert_uint_lt(strlen(mapspath), sizeof(settings.mapspath));
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
+    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, mapspath);
+
+    path_ensure_directories(source_path);
+    path_ensure_directories(private_path);
+    path_ensure_directories(account_path);
+    FILE *source = fopen(source_path, "wb");
+    FILE *private_map = fopen(private_path, "wb");
+    FILE *account = fopen(account_path, "wb");
+    ck_assert_ptr_ne(source, NULL);
+    ck_assert_ptr_ne(private_map, NULL);
+    ck_assert_ptr_ne(account, NULL);
+    ck_assert_int_ne(fputs("authored source\n", source), EOF);
+    ck_assert_int_ne(fputs("private mutable map\n", private_map), EOF);
+    ck_assert_int_ne(fputs("char human_male:Alice::1\n", account), EOF);
+    ck_assert_int_eq(fclose(source), 0);
+    ck_assert_int_eq(fclose(private_map), 0);
+    ck_assert_int_eq(fclose(account), 0);
+    ck_assert(path_exists(source_path));
+    ck_assert(path_exists(private_path));
+    ck_assert(celestial_structure_logical_map_id_valid("/maps/apartment"));
+
+    mapstruct *map = get_empty_map(3, 3);
+    FREE_AND_COPY_HASH(map->path, private_path);
+    map->map_flags |= MAP_FLAG_UNIQUE;
+    map->celestial_schema = 1;
+    char error[HUGE_BUF];
+    ck_assert_msg(celestial_structure_write_provenance(map, VS(error)), "%s", error);
+    ck_assert_msg(celestial_structure_validate_provenance(map, VS(error)), "%s", error);
+
+    private_map = fopen(private_path, "ab");
+    ck_assert_ptr_ne(private_map, NULL);
+    ck_assert_int_ne(fputs("changed\n", private_map), EOF);
+    ck_assert_int_eq(fclose(private_map), 0);
+    ck_assert(!celestial_structure_validate_provenance(map, VS(error)));
+    delete_map(map);
+
+    DIR *directory = opendir(provenance_dir);
+    ck_assert_ptr_ne(directory, NULL);
+    struct dirent *entry;
+    while ((entry = readdir(directory)) != NULL) {
+        if (entry->d_name[0] == '.') {
+            continue;
+        }
+        char ledger[HUGE_BUF];
+        size_t directory_length = strlen(provenance_dir);
+        size_t entry_length = strlen(entry->d_name);
+        ck_assert_uint_lt(directory_length + entry_length + 1, sizeof(ledger));
+        memcpy(ledger, provenance_dir, directory_length);
+        ledger[directory_length] = '/';
+        memcpy(ledger + directory_length + 1, entry->d_name, entry_length + 1);
+        ck_assert_int_eq(unlink(ledger), 0);
+    }
+    ck_assert_int_eq(closedir(directory), 0);
+    ck_assert_int_eq(rmdir(provenance_dir), 0);
+    ck_assert_int_eq(unlink(source_path), 0);
+    ck_assert_int_eq(unlink(private_path), 0);
+    char private_parent[HUGE_BUF], private_grandparent[HUGE_BUF], players_dir[HUGE_BUF];
+    char account_parent[HUGE_BUF], accounts_dir[HUGE_BUF];
+    snprintf(VS(private_parent), "%s/data/players/a/alice", temporary_root);
+    snprintf(VS(private_grandparent), "%s/data/players/a", temporary_root);
+    snprintf(VS(players_dir), "%s/data/players", temporary_root);
+    snprintf(VS(account_parent), "%s/data/accounts/a", temporary_root);
+    snprintf(VS(accounts_dir), "%s/data/accounts", temporary_root);
+    ck_assert_int_eq(rmdir(private_parent), 0);
+    ck_assert_int_eq(rmdir(private_grandparent), 0);
+    ck_assert_int_eq(rmdir(players_dir), 0);
+    ck_assert_int_eq(unlink(account_path), 0);
+    ck_assert_int_eq(rmdir(account_parent), 0);
+    ck_assert_int_eq(rmdir(accounts_dir), 0);
+    ck_assert_int_eq(rmdir(maps_dir), 0);
+    ck_assert_int_eq(rmdir(datapath), 0);
+    ck_assert_uint_lt(strlen(saved_datapath), sizeof(settings.datapath));
+    ck_assert_uint_lt(strlen(saved_mapspath), sizeof(settings.mapspath));
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
+    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
+    ck_assert_int_eq(rmdir(temporary_root), 0);
+}
+END_TEST
+
+START_TEST(test_character_transaction_lifecycle_is_durable) {
+    char temporary_root[] = "/tmp/atrinik-celestial-character-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
+
+    char saved_datapath[HUGE_BUF];
+    snprintf(VS(saved_datapath), "%s", settings.datapath);
+    char datapath[HUGE_BUF], map_path[HUGE_BUF], player_path[HUGE_BUF], transaction_dir[HUGE_BUF];
+    snprintf(VS(datapath), "%s/data", temporary_root);
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
+    strcpy(map_path, datapath);
+    strcat(map_path, "/players/a/alice/$maps$apartment");
+    strcpy(player_path, datapath);
+    strcat(player_path, "/players/a/alice/player.dat");
+    strcpy(transaction_dir, datapath);
+    strcat(transaction_dir, "/celestial-character-transactions");
+
+    char error[HUGE_BUF];
+    ck_assert_msg(celestial_structure_begin_character_transaction("alice",
+                                                                  "Alice",
+                                                                  map_path,
+                                                                  player_path,
+                                                                  VS(error)),
+                  "%s",
+                  error);
+    ck_assert(path_exists(transaction_dir));
+    ck_assert_msg(celestial_structure_commit_character_transaction("alice",
+                                                                   "Alice",
+                                                                   VS(error)),
+                  "%s",
+                  error);
+    ck_assert_msg(celestial_structure_finish_character_transaction("alice",
+                                                                   "Alice",
+                                                                   VS(error)),
+                  "%s",
+                  error);
+    ck_assert_int_eq(celestial_structure_recover_character_transactions(VS(error)), true);
+
+    ck_assert_int_eq(rmdir(transaction_dir), 0);
+    ck_assert_int_eq(rmdir(datapath), 0);
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
+    ck_assert_int_eq(rmdir(temporary_root), 0);
+}
+END_TEST
+
+START_TEST(test_character_transaction_recovery_quarantines_prepared_group) {
+    char temporary_root[] = "/tmp/atrinik-celestial-character-recovery-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
+
+    char saved_datapath[HUGE_BUF];
+    snprintf(VS(saved_datapath), "%s", settings.datapath);
+    char datapath[HUGE_BUF], map_path[HUGE_BUF], player_path[HUGE_BUF];
+    char ledger_path[HUGE_BUF], quarantine_dir[HUGE_BUF];
+    snprintf(VS(datapath), "%s/data", temporary_root);
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
+    strcpy(map_path, datapath);
+    strcat(map_path, "/players/a/alice/$maps$apartment");
+    strcpy(player_path, datapath);
+    strcat(player_path, "/players/a/alice/player.dat");
+    strcpy(quarantine_dir, datapath);
+    strcat(quarantine_dir, "/celestial-quarantine");
+
+    unsigned char identity_digest[SHA256_DIGEST_LENGTH];
+    ck_assert_ptr_nonnull(SHA256((const unsigned char *)map_path,
+                                 strlen(map_path),
+                                 identity_digest));
+    char ledger_id[SHA256_DIGEST_LENGTH * 2 + 1];
+    for (size_t i = 0; i < sizeof(identity_digest); i++) {
+        snprintf(ledger_id + i * 2, 3, "%02x", identity_digest[i]);
+    }
+    ledger_id[SHA256_DIGEST_LENGTH * 2] = '\0';
+    strcpy(ledger_path, datapath);
+    strcat(ledger_path, "/celestial-provenance/");
+    strcat(ledger_path, ledger_id);
+    strcat(ledger_path, ".json");
+
+    path_ensure_directories(map_path);
+    path_ensure_directories(player_path);
+    path_ensure_directories(ledger_path);
+    FILE *map = fopen(map_path, "wb");
+    FILE *player = fopen(player_path, "wb");
+    FILE *ledger = fopen(ledger_path, "wb");
+    ck_assert_ptr_nonnull(map);
+    ck_assert_ptr_nonnull(player);
+    ck_assert_ptr_nonnull(ledger);
+    ck_assert_int_ne(fputs("map", map), EOF);
+    ck_assert_int_ne(fputs("player", player), EOF);
+    ck_assert_int_ne(fputs("ledger", ledger), EOF);
+    ck_assert_int_eq(fclose(map), 0);
+    ck_assert_int_eq(fclose(player), 0);
+    ck_assert_int_eq(fclose(ledger), 0);
+
+    char error[HUGE_BUF];
+    ck_assert_msg(celestial_structure_begin_character_transaction("alice",
+                                                                  "Alice",
+                                                                  map_path,
+                                                                  player_path,
+                                                                  VS(error)),
+                  "%s",
+                  error);
+    ck_assert_msg(celestial_structure_recover_character_transactions(VS(error)),
+                  "%s",
+                  error);
+    ck_assert(!path_exists(map_path));
+    ck_assert(!path_exists(player_path));
+    ck_assert(!path_exists(ledger_path));
+
+    DIR *quarantine = opendir(quarantine_dir);
+    ck_assert_ptr_nonnull(quarantine);
+    size_t quarantined = 0;
+    struct dirent *entry;
+    while ((entry = readdir(quarantine)) != NULL) {
+        if (entry->d_name[0] == '.') {
+            continue;
+        }
+        char path[HUGE_BUF];
+        strcpy(path, quarantine_dir);
+        strcat(path, "/");
+        strcat(path, entry->d_name);
+        ck_assert_int_eq(unlink(path), 0);
+        quarantined++;
+    }
+    ck_assert_int_eq(closedir(quarantine), 0);
+    ck_assert_uint_ge(quarantined, 3);
+    ck_assert_int_eq(rmdir(quarantine_dir), 0);
+    char transaction_dir[HUGE_BUF], alice_dir[HUGE_BUF], players_a_dir[HUGE_BUF];
+    char players_dir[HUGE_BUF], provenance_dir[HUGE_BUF];
+    strcpy(transaction_dir, datapath);
+    strcat(transaction_dir, "/celestial-character-transactions");
+    strcpy(alice_dir, datapath);
+    strcat(alice_dir, "/players/a/alice");
+    strcpy(players_a_dir, datapath);
+    strcat(players_a_dir, "/players/a");
+    strcpy(players_dir, datapath);
+    strcat(players_dir, "/players");
+    strcpy(provenance_dir, datapath);
+    strcat(provenance_dir, "/celestial-provenance");
+    ck_assert_int_eq(rmdir(transaction_dir), 0);
+    ck_assert_int_eq(rmdir(alice_dir), 0);
+    ck_assert_int_eq(rmdir(players_a_dir), 0);
+    ck_assert_int_eq(rmdir(players_dir), 0);
+    ck_assert_int_eq(rmdir(provenance_dir), 0);
+    ck_assert_int_eq(rmdir(datapath), 0);
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
+    ck_assert_int_eq(rmdir(temporary_root), 0);
+}
+END_TEST
+
+START_TEST(test_committed_map_transaction_missing_unique_is_quarantined) {
+    char temporary_root[] = "/tmp/atrinik-celestial-map-recovery-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
+
+    char saved_datapath[HUGE_BUF];
+    snprintf(VS(saved_datapath), "%s", settings.datapath);
+    char datapath[HUGE_BUF], map_path[HUGE_BUF], unique_path[HUGE_BUF];
+    char ledger_path[HUGE_BUF], transaction_dir[HUGE_BUF], provenance_dir[HUGE_BUF];
+    char quarantine_dir[HUGE_BUF];
+    snprintf(VS(datapath), "%s/data", temporary_root);
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
+    strcpy(map_path, datapath);
+    strcat(map_path, "/map.dat");
+    strcpy(unique_path, datapath);
+    strcat(unique_path, "/map.v00");
+    strcpy(transaction_dir, datapath);
+    strcat(transaction_dir, "/celestial-transactions");
+    strcpy(provenance_dir, datapath);
+    strcat(provenance_dir, "/celestial-provenance");
+    strcpy(quarantine_dir, datapath);
+    strcat(quarantine_dir, "/celestial-quarantine");
+
+    mapstruct *map = new_v1_map("/test/transaction-recovery", 3, 3, CELESTIAL_SKY_OPEN);
+    path_ensure_directories(map_path);
+    FILE *map_file = fopen(map_path, "wb");
+    ck_assert_ptr_nonnull(map_file);
+    ck_assert_int_ne(fputs("map", map_file), EOF);
+    ck_assert_int_eq(fclose(map_file), 0);
+
+    unsigned char identity_digest[SHA256_DIGEST_LENGTH];
+    ck_assert_ptr_nonnull(SHA256((const unsigned char *)map->path,
+                                 strlen(map->path),
+                                 identity_digest));
+    char ledger_id[SHA256_DIGEST_LENGTH * 2 + 1];
+    for (size_t i = 0; i < sizeof(identity_digest); i++) {
+        snprintf(ledger_id + i * 2, 3, "%02x", identity_digest[i]);
+    }
+    ledger_id[SHA256_DIGEST_LENGTH * 2] = '\0';
+    strcpy(ledger_path, provenance_dir);
+    strcat(ledger_path, "/");
+    strcat(ledger_path, ledger_id);
+    strcat(ledger_path, ".json");
+    path_ensure_directories(ledger_path);
+    FILE *ledger = fopen(ledger_path, "wb");
+    ck_assert_ptr_nonnull(ledger);
+    ck_assert_int_ne(fputs("{}\n", ledger), EOF);
+    ck_assert_int_eq(fclose(ledger), 0);
+
+    char error[HUGE_BUF];
+    ck_assert_msg(celestial_structure_begin_map_transaction(map,
+                                                            map_path,
+                                                            unique_path,
+                                                            VS(error)),
+                  "%s",
+                  error);
+    ck_assert_msg(celestial_structure_commit_map_transaction(map, VS(error)), "%s", error);
+    ck_assert(path_exists(map_path));
+    ck_assert(!path_exists(unique_path));
+    ck_assert_msg(celestial_structure_recover_map_transactions(VS(error)), "%s", error);
+    ck_assert(!path_exists(map_path));
+
+    DIR *quarantine = opendir(quarantine_dir);
+    ck_assert_ptr_nonnull(quarantine);
+    size_t quarantined = 0;
+    struct dirent *entry;
+    while ((entry = readdir(quarantine)) != NULL) {
+        if (entry->d_name[0] == '.') {
+            continue;
+        }
+        char path[HUGE_BUF];
+        strcpy(path, quarantine_dir);
+        strcat(path, "/");
+        strcat(path, entry->d_name);
+        ck_assert_int_eq(unlink(path), 0);
+        quarantined++;
+    }
+    ck_assert_int_eq(closedir(quarantine), 0);
+    ck_assert_uint_eq(quarantined, 1);
+    ck_assert_int_eq(rmdir(quarantine_dir), 0);
+    ck_assert_int_eq(unlink(ledger_path), 0);
+    ck_assert_int_eq(rmdir(provenance_dir), 0);
+    ck_assert_int_eq(rmdir(transaction_dir), 0);
+    delete_map(map);
+    ck_assert_int_eq(rmdir(datapath), 0);
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
+    ck_assert_int_eq(rmdir(temporary_root), 0);
+}
+END_TEST
+
+START_TEST(test_character_transaction_rejects_path_escape) {
+    char temporary_root[] = "/tmp/atrinik-celestial-character-path-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
+
+    char saved_datapath[HUGE_BUF];
+    snprintf(VS(saved_datapath), "%s", settings.datapath);
+    char datapath[HUGE_BUF], map_path[HUGE_BUF], player_path[HUGE_BUF];
+    char transaction_dir[HUGE_BUF], transaction_path[HUGE_BUF];
+    snprintf(VS(datapath), "%s/data", temporary_root);
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
+    strcpy(map_path, datapath);
+    strcat(map_path, "/players/a/alice/$maps$apartment");
+    strcpy(player_path, datapath);
+    strcat(player_path, "/players/a/alice/player.dat");
+    strcpy(transaction_dir, datapath);
+    strcat(transaction_dir, "/celestial-character-transactions");
+
+    char error[HUGE_BUF];
+    ck_assert_msg(celestial_structure_begin_character_transaction("alice",
+                                                                  "Alice",
+                                                                  map_path,
+                                                                  player_path,
+                                                                  VS(error)),
+                  "%s",
+                  error);
+
+    unsigned char identity_digest[SHA256_DIGEST_LENGTH];
+    ck_assert_ptr_nonnull(SHA256((const unsigned char *)"alice:Alice",
+                                 strlen("alice:Alice"),
+                                 identity_digest));
+    char transaction_id[SHA256_DIGEST_LENGTH * 2 + 1];
+    for (size_t i = 0; i < sizeof(identity_digest); i++) {
+        snprintf(transaction_id + i * 2, 3, "%02x", identity_digest[i]);
+    }
+    transaction_id[SHA256_DIGEST_LENGTH * 2] = '\0';
+    strcpy(transaction_path, transaction_dir);
+    strcat(transaction_path, "/");
+    strcat(transaction_path, transaction_id);
+    strcat(transaction_path, ".json");
+    FILE *transaction = fopen(transaction_path, "wb");
+    ck_assert_ptr_nonnull(transaction);
+    ck_assert_int_ne(fprintf(transaction,
+                             "{\n"
+                             "  \"schema_version\": 1,\n"
+                             "  \"state\": \"prepared\",\n"
+                             "  \"account\": \"alice\",\n"
+                             "  \"character\": \"Alice\",\n"
+                             "  \"map_path\": \"/tmp/escape\",\n"
+                             "  \"ledger_path\": \"/tmp/escape-ledger\",\n"
+                             "  \"player_path\": \"%s\"\n"
+                             "}\n",
+                             player_path),
+                      0);
+    ck_assert_int_eq(fclose(transaction), 0);
+    ck_assert(!celestial_structure_recover_character_transactions(VS(error)));
+    ck_assert(path_exists(transaction_path));
+
+    ck_assert_int_eq(unlink(transaction_path), 0);
+    ck_assert_int_eq(rmdir(transaction_dir), 0);
+    ck_assert_int_eq(rmdir(datapath), 0);
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
+    ck_assert_int_eq(rmdir(temporary_root), 0);
+}
+END_TEST
+#endif
+
 static Suite *suite(void) {
     Suite *s = suite_create("celestial_structure");
     TCase *tc_core = tcase_create("Core");
@@ -1001,6 +1471,14 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_header_round_trip_is_canonical_and_rejects_legacy_fields);
+    tcase_add_test(tc_core, test_generated_factory_is_validated_and_bounded);
+#ifndef WIN32
+    tcase_add_test(tc_core, test_private_map_provenance_demangles_authored_source);
+    tcase_add_test(tc_core, test_character_transaction_lifecycle_is_durable);
+    tcase_add_test(tc_core, test_character_transaction_recovery_quarantines_prepared_group);
+    tcase_add_test(tc_core, test_committed_map_transaction_missing_unique_is_quarantined);
+    tcase_add_test(tc_core, test_character_transaction_rejects_path_escape);
+#endif
     tcase_add_test(tc_core, test_saved_v1_map_swaps_and_reloads_mutable_state);
     tcase_add_test(tc_core, test_metadata_is_validated_consumed_sorted_and_saved);
     tcase_add_test(tc_core, test_rectangles_fail_closed_with_coordinates);

@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <celestial_structure.h>
 #include <gameplay_journal.h>
 #include <movement.h>
 #include <shop.h>
@@ -70,6 +71,119 @@ void player_event_veto_for_test(bool pickup, bool drop, bool map_pickup, bool ma
 
 static int save_life(object *op);
 static void remove_unpaid_objects(object *op, object *env);
+
+#define CELESTIAL_UNIQUE_TOKEN_PREFIX "unique-v1:"
+
+static bool player_unique_owner_parts(const player *pl,
+                                      char account[MAX_BUF],
+                                      char character[MAX_BUF]) {
+    if (pl == NULL || pl->cs == NULL || pl->cs->account == NULL || pl->ob == NULL ||
+        pl->ob->name == NULL || pl->cs->account[0] == '\0' || pl->ob->name[0] == '\0') {
+        return false;
+    }
+    snprintf(account, MAX_BUF, "%s", pl->cs->account);
+    snprintf(character, MAX_BUF, "%s", pl->ob->name);
+    string_tolower(account);
+    string_title(character);
+    if (strchr(account, ':') != NULL || strchr(character, ':') != NULL) {
+        return false;
+    }
+    return strcasecmp(account, pl->cs->account) == 0;
+}
+
+static bool player_root_matches_roster(const player *pl,
+                                       const char *requested_name,
+                                       const archetype_t *expected_arch) {
+    if (pl == NULL || pl->ob == NULL || requested_name == NULL || expected_arch == NULL ||
+        pl->ob->name == NULL || pl->ob->arch == NULL || expected_arch->name == NULL ||
+        pl->ob->arch->name == NULL || pl->ob->type != PLAYER ||
+        expected_arch->clone.type != PLAYER) {
+        return false;
+    }
+    return strcmp(pl->ob->name, requested_name) == 0 &&
+           strcmp(pl->ob->arch->name, expected_arch->name) == 0;
+}
+
+static bool player_unique_token_from_path(const player *pl,
+                                          const char *path,
+                                          char token[MAX_BUF]) {
+    char account[MAX_BUF], character[MAX_BUF];
+    if (!celestial_structure_v1_runtime_active() || path == NULL ||
+        !string_startswith(path, settings.datapath) ||
+        !player_unique_owner_parts(pl, account, character)) {
+        return false;
+    }
+    char *base = path_basename(path);
+    if (base == NULL || strchr(base, '$') == NULL) {
+        free(base);
+        return false;
+    }
+    string_replace_char(base, "$", '/');
+    const char *source_value = base;
+    while (*source_value == '/') {
+        source_value++;
+    }
+    char source[MAX_BUF];
+    int written = snprintf(source, sizeof(source), "/%s", source_value);
+    free(base);
+    if (written < 0 || (size_t)written >= sizeof(source) ||
+        !celestial_structure_logical_map_id_valid(source)) {
+        return false;
+    }
+    char *expected_path = map_get_path(NULL, source, 1, pl->ob->name);
+    bool owned_path = expected_path != NULL && strcmp(expected_path, path) == 0;
+    free(expected_path);
+    if (!owned_path) {
+        return false;
+    }
+    written = snprintf(token,
+                       MAX_BUF,
+                       "%s%s:%s:%s",
+                       CELESTIAL_UNIQUE_TOKEN_PREFIX,
+                       account,
+                       character,
+                       source);
+    return written >= 0 && written < MAX_BUF;
+}
+
+static char *player_resolve_saved_path(const player *pl, const char *value) {
+    if (value == NULL || value[0] == '\0') {
+        return NULL;
+    }
+    if (!string_startswith(value, CELESTIAL_UNIQUE_TOKEN_PREFIX)) {
+        if (celestial_structure_v1_runtime_active() &&
+            string_startswith(value, settings.datapath)) {
+            return NULL;
+        }
+        return xstrdup(value);
+    }
+    const char *cursor = value + strlen(CELESTIAL_UNIQUE_TOKEN_PREFIX);
+    const char *account_end = strchr(cursor, ':');
+    if (account_end == NULL) {
+        return NULL;
+    }
+    const char *character_start = account_end + 1;
+    const char *character_end = strchr(character_start, ':');
+    if (character_end == NULL || character_end == character_start || character_end[1] != '/') {
+        return NULL;
+    }
+    char account[MAX_BUF], character[MAX_BUF], expected_account[MAX_BUF], expected_character[MAX_BUF];
+    size_t account_length = (size_t)(account_end - cursor);
+    size_t character_length = (size_t)(character_end - character_start);
+    if (account_length == 0 || account_length >= sizeof(account) || character_length >= sizeof(character)) {
+        return NULL;
+    }
+    memcpy(account, cursor, account_length);
+    account[account_length] = '\0';
+    memcpy(character, character_start, character_length);
+    character[character_length] = '\0';
+    if (!player_unique_owner_parts(pl, expected_account, expected_character) ||
+        strcmp(account, expected_account) != 0 || strcmp(character, expected_character) != 0 ||
+        !celestial_structure_logical_map_id_valid(character_end + 1)) {
+        return NULL;
+    }
+    return map_get_path(NULL, character_end + 1, 1, pl->ob->name);
+}
 
 /**
  * Check whether a player's selected target remains locally reachable.
@@ -3159,14 +3273,59 @@ void player_save(object *op) {
     }
 
     char *path = player_make_path(op->name, "player.dat");
-    char *path_tmp = player_make_path(op->name, "player.dat.tmp");
+    char *path_tmp = player_make_path(op->name, "player.dat.tmp.XXXXXX");
+    bool character_transaction = false;
+    char transaction_account[MAX_BUF] = "", transaction_character[MAX_BUF] = "";
+    FILE *fp = NULL;
 
     player *pl = CONTR(op);
+    char map_value[MAX_BUF], bed_value[MAX_BUF];
+    const char *saved_map = op->map != NULL ? op->map->path : EMERGENCY_MAPPATH;
+    if (op->map != NULL && MAP_UNIQUE(op->map) &&
+        !player_unique_token_from_path(pl, saved_map, map_value)) {
+        LOG(ERROR, "Refusing to persist an unbound celestial unique map for %s.", STRING_SAFE(op->name));
+        goto out;
+    }
+    if (op->map != NULL && MAP_UNIQUE(op->map)) {
+        saved_map = map_value;
+    }
+    const char *saved_bed = pl->savebed_map;
+    if (player_unique_token_from_path(pl, pl->savebed_map, bed_value)) {
+        saved_bed = bed_value;
+    } else if (celestial_structure_v1_runtime_active() &&
+               string_startswith(pl->savebed_map, settings.datapath)) {
+        LOG(ERROR, "Refusing to persist an unbound celestial unique savebed for %s.", STRING_SAFE(op->name));
+        goto out;
+    }
+
+    if (celestial_structure_v1_runtime_active() && op->map != NULL && MAP_UNIQUE(op->map)) {
+        char transaction_error[HUGE_BUF] = "";
+        if (!player_unique_owner_parts(pl, transaction_account, transaction_character) ||
+            !celestial_structure_begin_character_transaction(transaction_account,
+                                                              transaction_character,
+                                                              op->map->path,
+                                                              path,
+                                                              VS(transaction_error))) {
+            LOG(ERROR,
+                "Cannot begin celestial character transaction for %s: %s",
+                STRING_SAFE(op->name),
+                transaction_error);
+            goto error;
+        }
+        character_transaction = true;
+    }
 
     path_ensure_directories(path_tmp);
-    FILE *fp = fopen(path_tmp, "w");
+    int temporary_fd = mkstemp(path_tmp);
+    if (temporary_fd >= 0) {
+        fp = fdopen(temporary_fd, "w");
+        if (fp == NULL) {
+            close(temporary_fd);
+        }
+    }
     if (unlikely(fp == NULL)) {
         LOG(ERROR, "Failure opening %s for writing: %s", path_tmp, strerror(errno));
+        unlink(path_tmp);
         goto error;
     }
 
@@ -3176,8 +3335,8 @@ void player_save(object *op) {
     fprintf(fp, "tsi %d\n", pl->tsi);
     fprintf(fp, "tli %d\n", pl->tli);
     fprintf(fp, "tls %d\n", pl->tls);
-    fprintf(fp, "map %s\n", op->map ? op->map->path : EMERGENCY_MAPPATH);
-    fprintf(fp, "bed_map %s\n", pl->savebed_map);
+    fprintf(fp, "map %s\n", saved_map);
+    fprintf(fp, "bed_map %s\n", saved_bed);
     fprintf(fp, "bed_x %d\nbed_y %d\n", pl->bed_x, pl->bed_y);
 
     for (int i = 0; i < pl->num_cmd_permissions; i++) {
@@ -3205,22 +3364,49 @@ void player_save(object *op) {
     object_save(op, fp);
     CLEAR_FLAG(op, FLAG_NO_FIX_PLAYER);
 
-    /* Make sure the write succeeded. */
-    if (unlikely(fclose(fp) == EOF)) {
-        LOG(ERROR, "Failure closing file %s: %s", path_tmp, strerror(errno));
-        goto error;
-    }
-
-    /* Set the correct permissions. */
+    /* Set permissions while the exclusively-created temporary file is open. */
+#ifndef WIN32
+    if (unlikely(fchmod(fileno(fp), SAVE_MODE) != 0)) {
+#else
     if (unlikely(chmod(path_tmp, SAVE_MODE) != 0)) {
+#endif
         LOG(ERROR, "Failure setting permissions of %s: %s", path_tmp, strerror(errno));
         goto error;
     }
+
+    /* Make sure the write succeeded. */
+    if (unlikely(fclose(fp) == EOF)) {
+        LOG(ERROR, "Failure closing file %s: %s", path_tmp, strerror(errno));
+        fp = NULL;
+        goto error;
+    }
+    fp = NULL;
 
     /* Rename the file, removing the .tmp extension. */
     if (unlikely(path_rename(path_tmp, path) != 0)) {
         LOG(ERROR, "Failure renaming %s to %s: %s", path_tmp, path, strerror(errno));
         goto error;
+    }
+
+    if (character_transaction) {
+        char transaction_error[HUGE_BUF];
+        if (!celestial_structure_commit_character_transaction(transaction_account,
+                                                              transaction_character,
+                                                              VS(transaction_error))) {
+            LOG(ERROR,
+                "Celestial character transaction for %s remains prepared: %s",
+                STRING_SAFE(op->name),
+                transaction_error);
+            goto error;
+        }
+        if (!celestial_structure_finish_character_transaction(transaction_account,
+                                                              transaction_character,
+                                                              VS(transaction_error))) {
+            LOG(ERROR,
+                "Celestial character transaction for %s committed but could not be retired: %s",
+                STRING_SAFE(op->name),
+                transaction_error);
+        }
     }
 
     if (!metrics_character_save(pl)) {
@@ -3234,7 +3420,11 @@ error:
     draw_info(COLOR_RED, op, "Your character couldn't be saved.");
 
     /* Try to remove the temporary file if it was created. */
-    if (fp != NULL && unlink(path_tmp) != 0) {
+    if (fp != NULL) {
+        (void)fclose(fp);
+        fp = NULL;
+    }
+    if (unlink(path_tmp) != 0 && errno != ENOENT) {
         LOG(ERROR, "Failure removing temporary file %s: %s", path_tmp, strerror(errno));
     }
 
@@ -3684,6 +3874,21 @@ void player_login(socket_struct *ns, const char *name, struct archetype *at) {
     pl->ob->custom_attrset = pl;
     pl->ob->speed_left = 0.5;
 
+    if (!player_root_matches_roster(pl, name, at)) {
+        LOG(ERROR,
+            "Player %s root does not match its account roster (type=%d, arch=%s).",
+            name,
+            pl->ob->type,
+            pl->ob->arch != NULL && pl->ob->arch->name != NULL ? pl->ob->arch->name : "<none>");
+        draw_info_send(CHAT_TYPE_GAME,
+                       NULL,
+                       COLOR_RED,
+                       ns,
+                       "Your player file does not match the account roster; contact an administrator.");
+        free_player(pl);
+        goto out;
+    }
+
     object_weight_sum(pl->ob);
     living_update_player(pl->ob);
     link_player_skills(pl->ob);
@@ -3709,15 +3914,31 @@ void player_login(socket_struct *ns, const char *name, struct archetype *at) {
     memcpy(connection_id, socket_get_id(pl->cs->sc), sizeof(connection_id));
     trigger_global_event(GEVENT_LOGIN, pl, connection_id);
 
-    mapstruct *m = ready_map_name(pl->maplevel, NULL, 0);
+    char *saved_map_path = player_resolve_saved_path(pl, pl->maplevel);
+    mapstruct *m = saved_map_path != NULL ? ready_map_name(saved_map_path, NULL, 0) : NULL;
+    free(saved_map_path);
 
-    if (!m && strncmp(pl->maplevel, "/random/", 8) == 0) {
-        object_enter_map(pl->ob,
-                         NULL,
-                         ready_map_name(pl->savebed_map, NULL, 0),
-                         pl->bed_x,
-                         pl->bed_y,
-                         true);
+    if (m == NULL) {
+        char *saved_bed_path = player_resolve_saved_path(pl, pl->savebed_map);
+        mapstruct *bed = saved_bed_path != NULL ? ready_map_name(saved_bed_path, NULL, 0) : NULL;
+        free(saved_bed_path);
+        if (bed == NULL) {
+            LOG(ERROR,
+                "Player %s has no usable map or savebed; rewriting fallback to %s.",
+                name,
+                EMERGENCY_MAPPATH);
+            snprintf(VS(pl->savebed_map), "%s", EMERGENCY_MAPPATH);
+            pl->bed_x = EMERGENCY_X;
+            pl->bed_y = EMERGENCY_Y;
+            object_enter_map(pl->ob, NULL, NULL, EMERGENCY_X, EMERGENCY_Y, true);
+        } else {
+            char bed_token[MAX_BUF];
+            if (MAP_UNIQUE(bed) &&
+                player_unique_token_from_path(pl, bed->path, bed_token)) {
+                snprintf(VS(pl->savebed_map), "%s", bed_token);
+            }
+            object_enter_map(pl->ob, NULL, bed, pl->bed_x, pl->bed_y, true);
+        }
     } else {
         object_enter_map(pl->ob, NULL, m, pl->ob->x, pl->ob->y, true);
     }
