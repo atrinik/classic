@@ -1430,9 +1430,19 @@ void init(int argc, char **argv) {
         return;
     }
 
-    /* Load up the old temp map files */
-    read_map_log();
     regions_init();
+    if (!settings.world_maker && !settings.unit_tests && !settings.plugin_unit_tests &&
+        !settings.provision_scenario && !settings.content_benchmark) {
+        char celestial_error[HUGE_BUF];
+        if (!celestial_structure_startup_preflight(VS(celestial_error))) {
+            LOG(ERROR, "Celestial-v1 startup preflight failed: %s", celestial_error);
+            exit(EXIT_FAILURE);
+        }
+    }
+    /* Load temporary maps only after the immutable artifact has selected the
+     * fail-closed v1 runtime, so placeholders cannot silently take the legacy
+     * swap fallback. */
+    read_map_log();
     hiscore_init();
 
     init_beforeplay();

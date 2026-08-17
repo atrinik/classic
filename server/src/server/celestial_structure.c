@@ -20,10 +20,18 @@
 #include <object.h>
 #include <initialization.h>
 #include <region.h>
+#include <server_main.h>
 #include <toolkit/path.h>
 #include <toolkit/string.h>
 
+#include <openssl/evp.h>
+#include <openssl/sha.h>
 #include <stdarg.h>
+
+#define CELESTIAL_PREFLIGHT_FILE_LIMIT (64U * 1024U * 1024U)
+
+static bool celestial_v1_runtime_active;
+static char celestial_artifact_commit[41];
 
 #define CELESTIAL_INVENTORY_MAX_ROOTS 16
 #define CELESTIAL_INVENTORY_MAX_MAPS 256
@@ -40,6 +48,238 @@ static bool set_error(char *error, size_t error_size, const char *format, ...) {
 
 static const char *map_path(const mapstruct *map) {
     return map->path != NULL ? map->path : "<unbound>";
+}
+
+static bool preflight_hex(const char *value, size_t length) {
+    if (value == NULL || strlen(value) != length) {
+        return false;
+    }
+    for (size_t i = 0; i < length; i++) {
+        if (!isxdigit((unsigned char)value[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool preflight_json_string(const char *start,
+                                  const char *end,
+                                  const char *key,
+                                  char *value,
+                                  size_t value_size) {
+    char marker[128];
+    int marker_length = snprintf(marker, sizeof(marker), "\"%s\"", key);
+    if (marker_length < 0 || (size_t)marker_length >= sizeof(marker)) {
+        return false;
+    }
+    const char *cursor = start;
+    while (cursor < end) {
+        const char *found = strstr(cursor, marker);
+        if (found == NULL || found >= end) {
+            return false;
+        }
+        const char *colon = found + marker_length;
+        while (colon < end && isspace((unsigned char)*colon)) {
+            colon++;
+        }
+        if (colon >= end || *colon++ != ':') {
+            cursor = found + marker_length;
+            continue;
+        }
+        while (colon < end && isspace((unsigned char)*colon)) {
+            colon++;
+        }
+        if (colon >= end || *colon++ != '"') {
+            return false;
+        }
+        const char *finish = colon;
+        while (finish < end && *finish != '"') {
+            if (*finish == '\\' || (unsigned char)*finish < 0x20) {
+                return false;
+            }
+            finish++;
+        }
+        if (finish >= end || (size_t)(finish - colon) >= value_size) {
+            return false;
+        }
+        memcpy(value, colon, (size_t)(finish - colon));
+        value[finish - colon] = '\0';
+        return true;
+    }
+    return false;
+}
+
+static bool preflight_json_uint(const char *start,
+                                const char *end,
+                                const char *key,
+                                uint64_t *value) {
+    char marker[128];
+    int marker_length = snprintf(marker, sizeof(marker), "\"%s\"", key);
+    if (marker_length < 0 || (size_t)marker_length >= sizeof(marker)) {
+        return false;
+    }
+    const char *found = strstr(start, marker);
+    if (found == NULL || found >= end) {
+        return false;
+    }
+    const char *cursor = found + marker_length;
+    while (cursor < end && isspace((unsigned char)*cursor)) {
+        cursor++;
+    }
+    if (cursor >= end || *cursor++ != ':') {
+        return false;
+    }
+    while (cursor < end && isspace((unsigned char)*cursor)) {
+        cursor++;
+    }
+    if (cursor >= end || !isdigit((unsigned char)*cursor)) {
+        return false;
+    }
+    errno = 0;
+    char *finish;
+    unsigned long long parsed = strtoull(cursor, &finish, 10);
+    if (errno != 0 || finish == cursor || finish > end) {
+        return false;
+    }
+    *value = (uint64_t)parsed;
+    return true;
+}
+
+static const char *preflight_json_matching(const char *open,
+                                           const char *limit,
+                                           char opening,
+                                           char closing) {
+    size_t depth = 0;
+    bool string = false;
+    bool escaped = false;
+    for (const char *cursor = open; cursor < limit; cursor++) {
+        if (string) {
+            if (escaped) {
+                escaped = false;
+            } else if (*cursor == '\\') {
+                escaped = true;
+            } else if (*cursor == '"') {
+                string = false;
+            }
+            continue;
+        }
+        if (*cursor == '"') {
+            string = true;
+        } else if (*cursor == opening) {
+            depth++;
+        } else if (*cursor == closing && depth-- == 1) {
+            return cursor;
+        }
+    }
+    return NULL;
+}
+
+static char *preflight_read_file(const char *path, size_t *size, char *error, size_t error_size) {
+    FILE *fp = fopen(path, "rb");
+    if (fp == NULL) {
+        set_error(error, error_size, "cannot open %s: %s", path, strerror(errno));
+        return NULL;
+    }
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        fclose(fp);
+        set_error(error, error_size, "cannot size %s", path);
+        return NULL;
+    }
+    long length = ftell(fp);
+    if (length < 0 || (uintmax_t)length > CELESTIAL_PREFLIGHT_FILE_LIMIT) {
+        fclose(fp);
+        set_error(error, error_size, "artifact file %s exceeds the bounded preflight limit", path);
+        return NULL;
+    }
+    rewind(fp);
+    char *contents = xmalloc((size_t)length + 1);
+    if (fread(contents, 1, (size_t)length, fp) != (size_t)length || ferror(fp)) {
+        free(contents);
+        fclose(fp);
+        set_error(error, error_size, "cannot read %s", path);
+        return NULL;
+    }
+    fclose(fp);
+    contents[length] = '\0';
+    if (size != NULL) {
+        *size = (size_t)length;
+    }
+    return contents;
+}
+
+static bool preflight_sha256_file(const char *path, char output[SHA256_DIGEST_LENGTH * 2 + 1]) {
+    size_t size;
+    char *contents = preflight_read_file(path, &size, NULL, 0);
+    if (contents == NULL) {
+        return false;
+    }
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    if (SHA256((const unsigned char *)contents, size, digest) == NULL) {
+        free(contents);
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(digest); i++) {
+        snprintf(output + i * 2, 3, "%02x", digest[i]);
+    }
+    output[sizeof(digest) * 2] = '\0';
+    free(contents);
+    return true;
+}
+
+static bool preflight_activation_marker(const char *migration_digest,
+                                        char *error,
+                                        size_t error_size) {
+    char marker_path[HUGE_BUF];
+    if (snprintf(marker_path,
+                 sizeof(marker_path),
+                 "%s/celestial-activation.json",
+                 settings.datapath) < 0 ||
+        strlen(marker_path) >= sizeof(marker_path)) {
+        return set_error(error, error_size, "celestial activation marker path is too long");
+    }
+
+    if (path_exists(marker_path)) {
+        size_t marker_size;
+        char *marker = preflight_read_file(marker_path, &marker_size, error, error_size);
+        if (marker == NULL) {
+            return false;
+        }
+        const char *end = marker + marker_size;
+        uint64_t schema;
+        char commit[41], recorded_digest[SHA256_DIGEST_LENGTH * 2 + 1];
+        bool valid = preflight_json_uint(marker, end, "schema_version", &schema) && schema == 1 &&
+                     preflight_json_string(marker, end, "content_commit", VS(commit)) &&
+                     preflight_hex(commit, 40) && strcmp(commit, celestial_artifact_commit) == 0 &&
+                     preflight_json_string(marker,
+                                           end,
+                                           "migration_index_sha256",
+                                           VS(recorded_digest)) &&
+                     preflight_hex(recorded_digest, SHA256_DIGEST_LENGTH * 2) &&
+                     strcmp(recorded_digest, migration_digest) == 0;
+        free(marker);
+        if (!valid) {
+            return set_error(error,
+                             error_size,
+                             "celestial activation marker does not match the immutable artifact");
+        }
+        return true;
+    }
+
+    char contents[512];
+    int written = snprintf(contents,
+                           sizeof(contents),
+                           "{\n"
+                           "  \"schema_version\": 1,\n"
+                           "  \"content_commit\": \"%s\",\n"
+                           "  \"migration_index_sha256\": \"%s\"\n"
+                           "}\n",
+                           celestial_artifact_commit,
+                           migration_digest);
+    if (written < 0 || (size_t)written >= sizeof(contents) ||
+        !path_write_atomic(marker_path, contents, (size_t)written, SAVE_MODE)) {
+        return set_error(error, error_size, "cannot durably publish the celestial activation marker");
+    }
+    return true;
 }
 
 celestial_transmission_t celestial_structure_transmission(const char *value) {
@@ -577,6 +817,14 @@ bool celestial_structure_validate_header(mapstruct *map, char *error, size_t err
     }
     if (!map->celestial_region_seen) {
         map->region = region_find_by_name("world");
+    }
+    if (map->celestial_generated_origin_seen &&
+        (map->celestial_generated_origin == NULL ||
+         !celestial_structure_logical_map_id_valid(map->celestial_generated_origin))) {
+        return set_error(error,
+                         error_size,
+                         "%s has an invalid generated-map origin",
+                         map_path(map));
     }
     if (map->region == NULL) {
         return set_error(error, error_size, "%s has no valid region", map_path(map));
@@ -1123,6 +1371,7 @@ void celestial_structure_free(mapstruct *map) {
     HARD_ASSERT(map != NULL);
     FREE_AND_NULL_PTR(map->celestial_rectangles);
     map->celestial_rectangle_count = 0;
+    FREE_AND_CLEAR_HASH(map->celestial_generated_origin);
 }
 
 void celestial_structure_reset_parse_state(mapstruct *map) {
@@ -1133,6 +1382,7 @@ void celestial_structure_reset_parse_state(mapstruct *map) {
     map->celestial_tile_path_invalid = false;
     map->celestial_schema = 0;
     map->celestial_sky_above = 0;
+    map->celestial_generated_origin_seen = false;
     map->celestial_schema_seen = false;
     map->celestial_sky_seen = false;
     map->celestial_v1_header_seen = false;
@@ -1166,6 +1416,668 @@ bool celestial_structure_logical_map_id_valid(const char *path) {
         }
     }
     return true;
+}
+
+static bool preflight_manifest_files(const char *manifest,
+                                     const char *artifact_root,
+                                     char *error,
+                                     size_t error_size) {
+    const char *files = strstr(manifest, "\"files\"");
+    if (files == NULL) {
+        return set_error(error, error_size, "Classic artifact has no canonical files manifest");
+    }
+    const char *array = strchr(files, '[');
+    const char *array_end = array != NULL
+                                ? preflight_json_matching(array,
+                                                          manifest + strlen(manifest),
+                                                          '[',
+                                                          ']')
+                                : NULL;
+    if (array == NULL || array_end == NULL) {
+        return set_error(error, error_size, "Classic artifact files manifest is malformed");
+    }
+
+    EVP_MD_CTX *aggregate = EVP_MD_CTX_new();
+    if (aggregate == NULL || EVP_DigestInit_ex(aggregate, EVP_sha256(), NULL) != 1) {
+        EVP_MD_CTX_free(aggregate);
+        return set_error(error, error_size, "cannot initialize artifact manifest digest");
+    }
+    char previous[MAX_BUF] = "";
+    size_t entries = 0;
+    const char *cursor = array + 1;
+    while (cursor < array_end) {
+        const char *path_marker = strstr(cursor, "\"path\"");
+        if (path_marker == NULL || path_marker >= array_end) {
+            break;
+        }
+        const char *object_start = path_marker;
+        while (object_start > array && object_start[-1] != '{') {
+            object_start--;
+        }
+        const char *object_end = object_start > array
+                                     ? preflight_json_matching(object_start,
+                                                               array_end,
+                                                               '{',
+                                                               '}')
+                                     : NULL;
+        if (object_end == NULL || object_end > array_end) {
+            return set_error(error, error_size, "Classic artifact has a truncated file entry");
+        }
+        char relative[MAX_BUF], expected[SHA256_DIGEST_LENGTH * 2 + 1];
+        uint64_t expected_size;
+        if (!preflight_json_string(object_start,
+                                   object_end,
+                                   "path",
+                                   VS(relative)) ||
+            !preflight_json_string(object_start,
+                                   object_end,
+                                   "sha256",
+                                   VS(expected)) ||
+            !preflight_json_uint(object_start, object_end, "size", &expected_size) ||
+            !path_is_safe_relative(relative) || relative[0] == '\0' ||
+            !preflight_hex(expected, SHA256_DIGEST_LENGTH * 2) ||
+            (entries != 0 && strcmp(previous, relative) >= 0)) {
+            return set_error(error,
+                             error_size,
+                             "Classic artifact file manifest has a noncanonical or duplicate entry");
+        }
+        snprintf(previous, sizeof(previous), "%s", relative);
+
+        char path[HUGE_BUF];
+        if (snprintf(path, sizeof(path), "%s/%s", artifact_root, relative) < 0 ||
+            strlen(path) >= sizeof(path)) {
+            return set_error(error, error_size, "Classic artifact file path is too long: %s", relative);
+        }
+        struct stat metadata;
+        if (stat(path, &metadata) != 0 || !S_ISREG(metadata.st_mode) ||
+            (uint64_t)metadata.st_size != expected_size) {
+            return set_error(error, error_size, "Classic artifact file is missing or changed: %s", relative);
+        }
+        char actual[SHA256_DIGEST_LENGTH * 2 + 1];
+        if (!preflight_sha256_file(path, actual) || strcmp(actual, expected) != 0) {
+            return set_error(error, error_size, "Classic artifact digest mismatch: %s", relative);
+        }
+
+        char size_text[32];
+        int written = snprintf(size_text, sizeof(size_text), "%" PRIu64 "\n", expected_size);
+        unsigned char zero = 0;
+        if (written < 0 || (size_t)written >= sizeof(size_text) ||
+            EVP_DigestUpdate(aggregate, relative, strlen(relative)) != 1 ||
+            EVP_DigestUpdate(aggregate, &zero, sizeof(zero)) != 1 ||
+            EVP_DigestUpdate(aggregate, expected, strlen(expected)) != 1 ||
+            EVP_DigestUpdate(aggregate, &zero, sizeof(zero)) != 1 ||
+            EVP_DigestUpdate(aggregate, size_text, (size_t)written) != 1) {
+            EVP_MD_CTX_free(aggregate);
+            return set_error(error, error_size, "cannot calculate artifact manifest digest");
+        }
+        entries++;
+        cursor = object_end + 1;
+    }
+    if (entries == 0) {
+        return set_error(error, error_size, "Classic artifact files manifest is empty");
+    }
+
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    char actual_aggregate[SHA256_DIGEST_LENGTH * 2 + 1];
+    unsigned int digest_length = 0;
+    if (EVP_DigestFinal_ex(aggregate, digest, &digest_length) != 1 ||
+        digest_length != SHA256_DIGEST_LENGTH) {
+        EVP_MD_CTX_free(aggregate);
+        return set_error(error, error_size, "cannot finalize artifact manifest digest");
+    }
+    EVP_MD_CTX_free(aggregate);
+    for (size_t i = 0; i < sizeof(digest); i++) {
+        snprintf(actual_aggregate + i * 2, 3, "%02x", digest[i]);
+    }
+    actual_aggregate[sizeof(digest) * 2] = '\0';
+    char expected_aggregate[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (!preflight_json_string(manifest,
+                               manifest + strlen(manifest),
+                               "celestial_manifest_files_sha256",
+                               VS(expected_aggregate)) ||
+        strcmp(actual_aggregate, expected_aggregate) != 0) {
+        return set_error(error, error_size, "Classic artifact aggregate file digest mismatch");
+    }
+    return true;
+}
+
+static bool preflight_migration_index(const char *index,
+                                      char *error,
+                                      size_t error_size) {
+    const char *index_end = index + strlen(index);
+    uint64_t schema, expected_maps;
+    char migration[64], source_commit[64], classic_sha[64];
+    if (!preflight_json_uint(index, index_end, "schema_version", &schema) || schema != 1 ||
+        !preflight_json_string(index, index_end, "migration", VS(migration)) ||
+        strcmp(migration, "celestial-v1") != 0 ||
+        !preflight_json_string(index, index_end, "source_commit", VS(source_commit)) ||
+        !preflight_hex(source_commit, 40) ||
+        !preflight_json_string(index, index_end, "classic_compatible_sha", VS(classic_sha)) ||
+        !preflight_hex(classic_sha, 40) ||
+        !preflight_json_uint(index, index_end, "maps", &expected_maps)) {
+        return set_error(error, error_size, "celestial migration index identity is malformed");
+    }
+
+    const char *maps_marker = strstr(index, "\"maps\"");
+    const char *array = NULL;
+    while (maps_marker != NULL && maps_marker < index_end) {
+        const char *colon = strchr(maps_marker, ':');
+        if (colon != NULL && colon < index_end) {
+            while (++colon < index_end && isspace((unsigned char)*colon)) {
+            }
+            if (colon < index_end && *colon == '[') {
+                array = colon;
+                break;
+            }
+        }
+        maps_marker = strstr(maps_marker + 7, "\"maps\"");
+    }
+    const char *array_end = array != NULL
+                                ? preflight_json_matching(array, index_end, '[', ']')
+                                : NULL;
+    if (array == NULL || array_end == NULL) {
+        return set_error(error, error_size, "celestial migration index map array is missing");
+    }
+
+    char previous[MAX_BUF] = "";
+    size_t actual_maps = 0;
+    const char *cursor = array + 1;
+    while (cursor < array_end) {
+        const char *path_marker = strstr(cursor, "\"path\"");
+        if (path_marker == NULL || path_marker >= array_end) {
+            break;
+        }
+        const char *object_start = path_marker;
+        while (object_start > array && object_start[-1] != '{') {
+            object_start--;
+        }
+        const char *object_end = object_start > array
+                                     ? preflight_json_matching(object_start,
+                                                               array_end,
+                                                               '{',
+                                                               '}')
+                                     : NULL;
+        if (object_end == NULL || object_end > array_end) {
+            return set_error(error, error_size, "celestial migration index has a truncated map record");
+        }
+        char logical[MAX_BUF], expected[SHA256_DIGEST_LENGTH * 2 + 1];
+        if (!preflight_json_string(object_start,
+                                   object_end,
+                                   "path",
+                                   VS(logical)) ||
+            !preflight_json_string(object_start,
+                                   object_end,
+                                   "migrated_sha256",
+                                   VS(expected)) ||
+            !celestial_structure_logical_map_id_valid(logical) ||
+            !preflight_hex(expected, SHA256_DIGEST_LENGTH * 2) ||
+            (actual_maps != 0 && strcmp(previous, logical) >= 0)) {
+            return set_error(error, error_size, "celestial migration index has a noncanonical map record");
+        }
+        snprintf(previous, sizeof(previous), "%s", logical);
+
+        char filename[HUGE_BUF];
+        if (snprintf(filename, sizeof(filename), "%s%s", settings.mapspath, logical) < 0 ||
+            strlen(filename) >= sizeof(filename)) {
+            return set_error(error, error_size, "celestial map path is too long: %s", logical);
+        }
+        char actual[SHA256_DIGEST_LENGTH * 2 + 1];
+        if (!preflight_sha256_file(filename, actual) || strcmp(actual, expected) != 0) {
+            return set_error(error, error_size, "celestial map digest mismatch: %s", logical);
+        }
+        mapstruct *map = load_original_map(logical, NULL, MAP_NO_DYNAMIC);
+        if (map == NULL || map->celestial_schema != 1) {
+            if (map != NULL) {
+                delete_map(map);
+            }
+            return set_error(error, error_size, "celestial map failed structural load: %s", logical);
+        }
+        for (size_t tile = 0; tile < TILED_NUM; tile++) {
+            if (map->tile_path[tile] == NULL) {
+                continue;
+            }
+            char target[HUGE_BUF];
+            if (snprintf(target, sizeof(target), "%s%s", settings.mapspath, map->tile_path[tile]) < 0 ||
+                strlen(target) >= sizeof(target) || !path_exists(target)) {
+                delete_map(map);
+                return set_error(error,
+                                 error_size,
+                                 "celestial map %s has an unindexed or missing link",
+                                 logical);
+            }
+        }
+        delete_map(map);
+        actual_maps++;
+        cursor = object_end + 1;
+    }
+    if (actual_maps != expected_maps) {
+        return set_error(error,
+                         error_size,
+                         "celestial migration index is incomplete: expected %" PRIu64 " maps, found %zu",
+                         expected_maps,
+                         actual_maps);
+    }
+    return true;
+}
+
+bool celestial_structure_startup_preflight(char *error, size_t error_size) {
+    celestial_v1_runtime_active = false;
+    celestial_artifact_commit[0] = '\0';
+    char manifest_path[HUGE_BUF];
+    if (snprintf(manifest_path,
+                 sizeof(manifest_path),
+                 "%s/../manifest.json",
+                 settings.mapspath) < 0 || strlen(manifest_path) >= sizeof(manifest_path)) {
+        return set_error(error, error_size, "Classic artifact manifest path is too long");
+    }
+    size_t manifest_size;
+    char *manifest = preflight_read_file(manifest_path, &manifest_size, error, error_size);
+    if (manifest == NULL) {
+        return false;
+    }
+    (void)manifest_size;
+    char value[HUGE_BUF];
+    uint64_t number;
+    bool identity = preflight_json_uint(manifest,
+                                        manifest + strlen(manifest),
+                                        "schema_version",
+                                        &number) &&
+                    number == 2 &&
+                    preflight_json_string(manifest,
+                                          manifest + strlen(manifest),
+                                          "target",
+                                          VS(value)) &&
+                    strcmp(value, "classic") == 0 &&
+                    preflight_json_string(manifest,
+                                          manifest + strlen(manifest),
+                                          "artifact_format",
+                                          VS(value)) &&
+                    strcmp(value, "atrinik-classic-runtime-content-v1") == 0;
+    char repository[128], branch[64], commit[64], migration_index[128];
+    char migration_digest[SHA256_DIGEST_LENGTH * 2 + 1];
+    identity = identity &&
+               preflight_json_string(manifest,
+                                     manifest + strlen(manifest),
+                                     "repository",
+                                     VS(repository)) &&
+               strcmp(repository, "atrinik/content") == 0 &&
+               preflight_json_string(manifest,
+                                     manifest + strlen(manifest),
+                                     "branch",
+                                     VS(branch)) &&
+               strcmp(branch, "main") == 0 &&
+               preflight_json_string(manifest,
+                                     manifest + strlen(manifest),
+                                     "commit",
+                                     VS(commit)) &&
+               preflight_hex(commit, 40) &&
+               preflight_json_uint(manifest,
+                                   manifest + strlen(manifest),
+                                   "celestial_schema_version",
+                                   &number) &&
+               number == 1 &&
+               preflight_json_uint(manifest,
+                                   manifest + strlen(manifest),
+                                   "celestial_runtime_factory_version",
+                                   &number) &&
+               number == 1 &&
+               preflight_json_string(manifest,
+                                     manifest + strlen(manifest),
+                                     "celestial_migration_index",
+                                     VS(migration_index)) &&
+               strcmp(migration_index, "maps/celestial-migration-index.json") == 0 &&
+               preflight_json_string(manifest,
+                                     manifest + strlen(manifest),
+                                     "celestial_migration_index_sha256",
+                                     VS(migration_digest)) &&
+               preflight_hex(migration_digest, SHA256_DIGEST_LENGTH * 2);
+    if (!identity) {
+        free(manifest);
+        return set_error(error, error_size, "Classic artifact does not declare celestial-v1");
+    }
+    memcpy(celestial_artifact_commit, commit, sizeof(celestial_artifact_commit) - 1);
+    celestial_artifact_commit[sizeof(celestial_artifact_commit) - 1] = '\0';
+    char artifact_root[HUGE_BUF];
+    if (snprintf(artifact_root, sizeof(artifact_root), "%s/..", settings.mapspath) < 0 ||
+        strlen(artifact_root) >= sizeof(artifact_root) ||
+        !preflight_manifest_files(manifest, artifact_root, error, error_size)) {
+        free(manifest);
+        return false;
+    }
+    free(manifest);
+
+    char index_path[HUGE_BUF];
+    if (snprintf(index_path, sizeof(index_path), "%s/celestial-migration-index.json", settings.mapspath) < 0 ||
+        strlen(index_path) >= sizeof(index_path)) {
+        return set_error(error, error_size, "celestial migration index path is too long");
+    }
+    size_t index_size;
+    char *index = preflight_read_file(index_path, &index_size, error, error_size);
+    if (index == NULL) {
+        return false;
+    }
+    (void)index_size;
+    char actual_index_digest[SHA256_DIGEST_LENGTH * 2 + 1];
+    bool digest_valid = preflight_sha256_file(index_path, actual_index_digest) &&
+                        strcmp(actual_index_digest, migration_digest) == 0;
+    bool valid = digest_valid && preflight_migration_index(index, error, error_size);
+    if (!digest_valid) {
+        set_error(error, error_size, "celestial migration index digest does not match the artifact");
+    }
+    free(index);
+    if (!valid) {
+        return false;
+    }
+    if (!preflight_activation_marker(migration_digest, error, error_size)) {
+        return false;
+    }
+    celestial_v1_runtime_active = true;
+    return true;
+}
+
+bool celestial_structure_v1_runtime_active(void) {
+    return celestial_v1_runtime_active;
+}
+
+static bool provenance_path(const char *map_path_value,
+                            char output[HUGE_BUF],
+                            char digest_output[SHA256_DIGEST_LENGTH * 2 + 1]) {
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    if (map_path_value == NULL || SHA256((const unsigned char *)map_path_value,
+                                         strlen(map_path_value),
+                                         digest) == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(digest); i++) {
+        snprintf(digest_output + i * 2, 3, "%02x", digest[i]);
+    }
+    digest_output[sizeof(digest) * 2] = '\0';
+    return snprintf(output,
+                    HUGE_BUF,
+                    "%s/celestial-provenance/%s.json",
+                    settings.datapath,
+                    digest_output) >= 0;
+}
+
+static bool provenance_source(const mapstruct *map,
+                              char source_path[HUGE_BUF],
+                              char source_file[HUGE_BUF],
+                              char source_sha[SHA256_DIGEST_LENGTH * 2 + 1]) {
+    const char *logical = map->path;
+    if (logical == NULL || !celestial_structure_logical_map_id_valid(logical)) {
+        return false;
+    }
+    if (map->celestial_generated_origin != NULL) {
+        logical = map->celestial_generated_origin;
+    }
+    if (!celestial_structure_logical_map_id_valid(logical) ||
+        snprintf(source_path, HUGE_BUF, "%s", logical) < 0 ||
+        snprintf(source_file, HUGE_BUF, "%s%s", settings.mapspath, logical) < 0 ||
+        !preflight_sha256_file(source_file, source_sha)) {
+        return false;
+    }
+    return true;
+}
+
+static bool provenance_map_file(const mapstruct *map,
+                                char map_file[HUGE_BUF],
+                                char map_sha[SHA256_DIGEST_LENGTH * 2 + 1]) {
+    if (map == NULL) {
+        return false;
+    }
+    if (map->tmpname != NULL) {
+        if (snprintf(map_file, HUGE_BUF, "%s", map->tmpname) < 0 ||
+            strlen(map_file) >= HUGE_BUF) {
+            return false;
+        }
+    } else {
+        char *resolved = create_pathname(map->path);
+        if (resolved == NULL) {
+            return false;
+        }
+        bool copied = snprintf(map_file, HUGE_BUF, "%s", resolved) >= 0 &&
+                      strlen(map_file) < HUGE_BUF;
+        if (!copied) {
+            return false;
+        }
+    }
+    return preflight_sha256_file(map_file, map_sha);
+}
+
+bool celestial_structure_write_provenance(const mapstruct *map, char *error, size_t error_size) {
+    if (map == NULL || map->celestial_schema != 1 || map->path == NULL) {
+        return set_error(error, error_size, "cannot publish provenance for a non-v1 map");
+    }
+    char ledger[HUGE_BUF], ledger_id[SHA256_DIGEST_LENGTH * 2 + 1];
+    char source_path[HUGE_BUF], source_file[HUGE_BUF];
+    char source_sha[SHA256_DIGEST_LENGTH * 2 + 1];
+    char map_file[HUGE_BUF], map_sha[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (!provenance_path(map->path, ledger, ledger_id) ||
+        !provenance_source(map, source_path, source_file, source_sha) ||
+        !provenance_map_file(map, map_file, map_sha)) {
+        return set_error(error,
+                         error_size,
+                         "cannot resolve immutable source lineage for %s",
+                         map_path(map));
+    }
+    char contents[HUGE_BUF];
+    int written = snprintf(contents,
+                           sizeof(contents),
+                           "{\n"
+                           "  \"schema_version\": 1,\n"
+                           "  \"map_path\": \"%s\",\n"
+                           "  \"source_path\": \"%s\",\n"
+                           "  \"source_sha256\": \"%s\",\n"
+                           "  \"map_sha256\": \"%s\",\n"
+                           "  \"content_commit\": \"%s\"\n"
+                           "}\n",
+                           map->path,
+                           source_path,
+                           source_sha,
+                           map_sha,
+                           celestial_artifact_commit[0] != '\0'
+                               ? celestial_artifact_commit
+                               : "0000000000000000000000000000000000000000");
+    if (written < 0 || (size_t)written >= sizeof(contents) ||
+        !path_write_atomic(ledger, contents, (size_t)written, SAVE_MODE)) {
+        return set_error(error, error_size, "cannot atomically publish provenance ledger %s", ledger_id);
+    }
+    return true;
+}
+
+bool celestial_structure_validate_provenance(const mapstruct *map, char *error, size_t error_size) {
+    if (map == NULL || map->path == NULL || map->tmpname == NULL) {
+        return set_error(error, error_size, "temporary v1 map has no provenance identity");
+    }
+    char ledger[HUGE_BUF], ledger_id[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (!provenance_path(map->path, ledger, ledger_id)) {
+        return set_error(error, error_size, "temporary v1 map has an invalid provenance identity");
+    }
+    size_t ledger_size;
+    char *contents = preflight_read_file(ledger, &ledger_size, error, error_size);
+    if (contents == NULL) {
+        return set_error(error,
+                         error_size,
+                         "temporary v1 map %s has no provenance ledger (%s)",
+                         map_path(map),
+                         ledger_id);
+    }
+    char map_path_value[HUGE_BUF], source_path[HUGE_BUF], source_sha[SHA256_DIGEST_LENGTH * 2 + 1];
+    char map_sha[SHA256_DIGEST_LENGTH * 2 + 1];
+    char content_commit[41];
+    uint64_t schema;
+    const char *end = contents + ledger_size;
+    bool valid = preflight_json_uint(contents, end, "schema_version", &schema) && schema == 1 &&
+                 preflight_json_string(contents, end, "map_path", VS(map_path_value)) &&
+                 strcmp(map_path_value, map->path) == 0 &&
+                 preflight_json_string(contents, end, "source_path", VS(source_path)) &&
+                 celestial_structure_logical_map_id_valid(source_path) &&
+                 preflight_json_string(contents, end, "source_sha256", VS(source_sha)) &&
+                 preflight_hex(source_sha, SHA256_DIGEST_LENGTH * 2) &&
+                 preflight_json_string(contents, end, "map_sha256", VS(map_sha)) &&
+                 preflight_hex(map_sha, SHA256_DIGEST_LENGTH * 2) &&
+                 preflight_json_string(contents, end, "content_commit", VS(content_commit)) &&
+                 preflight_hex(content_commit, 40);
+    if (valid && celestial_artifact_commit[0] != '\0' &&
+        strcmp(content_commit, celestial_artifact_commit) != 0) {
+        valid = false;
+    }
+    char source_file[HUGE_BUF], actual_sha[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (valid && (snprintf(source_file, sizeof(source_file), "%s%s", settings.mapspath, source_path) < 0 ||
+                  !preflight_sha256_file(source_file, actual_sha) ||
+                  strcmp(actual_sha, source_sha) != 0)) {
+        valid = false;
+    }
+    char actual_map_sha[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (valid && (!preflight_sha256_file(map->tmpname, actual_map_sha) ||
+                  strcmp(actual_map_sha, map_sha) != 0)) {
+        valid = false;
+    }
+    free(contents);
+    return valid ? true
+                 : set_error(error,
+                              error_size,
+                              "temporary v1 map %s has changed or unprovable source lineage",
+                              map_path(map));
+}
+
+/** Validate the relative path accepted by the Python generated-map factory. */
+static bool generated_map_path_valid(const char *path) {
+    if (path == NULL) {
+        return false;
+    }
+
+    size_t length = strlen(path);
+    if (length == 0 || length > 240 || path[0] == '/' || path[length - 1] == '/') {
+        return false;
+    }
+
+    size_t segment_length = 0;
+    for (size_t i = 0; i <= length; i++) {
+        unsigned char value = (unsigned char)path[i];
+        if (value == '/' || value == '\0') {
+            if (segment_length == 0 || segment_length > 64) {
+                return false;
+            }
+            segment_length = 0;
+            continue;
+        }
+        if (value < 0x21 || value > 0x7e) {
+            return false;
+        }
+        if (segment_length == 0) {
+            if (!isalnum(value)) {
+                return false;
+            }
+        } else if (!isalnum(value) && value != '_' && value != '-' && value != '.') {
+            return false;
+        }
+        segment_length++;
+    }
+    return true;
+}
+
+bool celestial_structure_initialize_generated_map(mapstruct *map,
+                                                  const char *path,
+                                                  mapstruct *origin,
+                                                  int light,
+                                                  char *error,
+                                                  size_t error_size) {
+    if (map == NULL || map->width < 1 || map->width > 64 || map->height < 1 ||
+        map->height > 64 || !celestial_structure_logical_map_id_valid(path)) {
+        set_error(error, error_size, "generated map path or dimensions are invalid");
+        return false;
+    }
+    if (origin == NULL || origin->in_memory != MAP_IN_MEMORY || origin->spaces == NULL ||
+        origin->path == NULL || origin->celestial_schema != 1) {
+        set_error(error, error_size, "generated map origin is not a resident celestial-v1 map");
+        return false;
+    }
+    if (light < 0 || light > 40959) {
+        set_error(error, error_size, "generated map light must be between 0 and 40959");
+        return false;
+    }
+    char origin_error[HUGE_BUF];
+    if (!celestial_structure_validate_header(origin, VS(origin_error))) {
+        set_error(error, error_size, "generated map origin is invalid: %s", origin_error);
+        return false;
+    }
+
+    if (path_exists(path)) {
+        set_error(error, error_size, "generated map path collides or is not canonical");
+        return false;
+    }
+
+    mapstruct *cursor;
+    DL_FOREACH(first_map, cursor) {
+        if (cursor != map && cursor->path != NULL && strcmp(cursor->path, path) == 0) {
+            set_error(error, error_size, "generated map path already exists: %s", path);
+            return false;
+        }
+    }
+
+    FREE_AND_COPY_HASH(map->path, path);
+    map->celestial_schema = 1;
+    map->celestial_schema_seen = true;
+    map->celestial_v1_header_seen = true;
+    map->celestial_sky_seen = true;
+    map->celestial_sky_above = CELESTIAL_SKY_SEALED;
+    map->celestial_width_seen = true;
+    map->celestial_height_seen = true;
+    map->celestial_light_seen = true;
+    map->light_value = light;
+    map->celestial_region_seen = true;
+    map->region = origin->region != NULL ? origin->region : region_world();
+    FREE_AND_COPY_HASH(map->celestial_generated_origin, origin->path);
+    map->celestial_generated_origin_seen = true;
+    map->darkness = 0;
+    map->map_flags &= ~MAP_FLAG_OUTDOOR;
+    return true;
+}
+
+mapstruct *celestial_structure_create_map(int width,
+                                          int height,
+                                          const char *path,
+                                          mapstruct *origin,
+                                          const char *sky_above,
+                                          int light,
+                                          char *error,
+                                          size_t error_size) {
+    if (width < 1 || width > 64 || height < 1 || height > 64) {
+        set_error(error, error_size, "generated map dimensions must be between 1 and 64");
+        return NULL;
+    }
+    if (!generated_map_path_valid(path)) {
+        set_error(error, error_size, "generated map path is not canonical");
+        return NULL;
+    }
+    if (sky_above == NULL ||
+        (strcmp(sky_above, "open") != 0 && strcmp(sky_above, "sealed") != 0)) {
+        set_error(error, error_size, "generated map sky_above must be open or sealed");
+        return NULL;
+    }
+
+    char full_path[HUGE_BUF];
+    int written = snprintf(full_path, sizeof(full_path), "/python-maps/%s", path);
+    if (written < 0 || (size_t)written >= sizeof(full_path)) {
+        set_error(error, error_size, "generated map path is too long");
+        return NULL;
+    }
+
+    mapstruct *map = get_empty_map(width, height);
+    if (!celestial_structure_initialize_generated_map(map,
+                                                       full_path,
+                                                       origin,
+                                                       light,
+                                                       error,
+                                                       error_size)) {
+        delete_map(map);
+        return NULL;
+    }
+    map->celestial_sky_seen = true;
+    map->celestial_sky_above = strcmp(sky_above, "open") == 0 ? CELESTIAL_SKY_OPEN
+                                                               : CELESTIAL_SKY_SEALED;
+    return map;
 }
 
 static size_t parse_inventory_map_ids(const char *input,

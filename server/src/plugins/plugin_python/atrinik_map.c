@@ -974,6 +974,12 @@ static PyObject *get_attribute(Atrinik_Map *map, void *context) {
  * 0 on success, -1 on failure.
  */
 static int set_attribute(Atrinik_Map *map, PyObject *value, void *context) {
+    if (((fields_struct *)context)->offset == offsetof(mapstruct, darkness) &&
+        map->map->celestial_schema == 1) {
+        PyErr_SetString(AtrinikError, "celestial-v1 map darkness is immutable");
+        return -1;
+    }
+
     if (generic_field_setter(context, map->map, value) == -1) {
         return -1;
     }

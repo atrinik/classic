@@ -4471,6 +4471,7 @@ bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool
             rp.origin_x = exit->x;
             rp.origin_y = exit->y;
             snprintf(VS(rp.origin_map), "%s", op->map->path);
+            rp.origin_map_ptr = op->map;
 
             /* Pick a new pathname for the new map. Currently, we just use a
              * static variable and increment the counter by one each time. */

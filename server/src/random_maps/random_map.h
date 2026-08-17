@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -57,6 +57,9 @@ typedef struct {
 
     /** Original map. */
     char origin_map[RM_SIZE];
+
+    /** Resident origin map used to initialize generated metadata. */
+    mapstruct *origin_map_ptr;
 
     /** Final map. */
     char final_map[RM_SIZE];
@@ -224,7 +227,10 @@ extern char **expand2x(char **layout, int xsize, int ysize);
 
 /** Public API implemented in src/random_maps/floor.c. */
 
-extern mapstruct *make_map_floor(char *floorstyle, RMParms *RP);
+extern mapstruct *make_map_floor(char *floorstyle,
+                                 RMParms *RP,
+                                 const char *generated_path,
+                                 mapstruct *origin);
 
 /** Public API implemented in src/random_maps/maze_gen.c. */
 

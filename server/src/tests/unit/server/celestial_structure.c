@@ -994,6 +994,70 @@ START_TEST(test_inventory_is_bounded_deterministic_and_read_only) {
 }
 END_TEST
 
+START_TEST(test_generated_factory_is_validated_and_bounded) {
+    char error[HUGE_BUF];
+    mapstruct *origin = new_v1_map("/factory-origin", 5, 5, CELESTIAL_SKY_SEALED);
+    mapstruct *generated = celestial_structure_create_map(40,
+                                                          40,
+                                                          "factory-test-256",
+                                                          origin,
+                                                          "sealed",
+                                                          1280,
+                                                          VS(error));
+    ck_assert_msg(generated != NULL, "%s", error);
+    ck_assert_uint_eq(generated->celestial_schema, 1);
+    ck_assert_uint_eq(generated->celestial_sky_above, CELESTIAL_SKY_SEALED);
+    ck_assert_int_eq(generated->light_value, 1280);
+    ck_assert_str_eq(generated->celestial_generated_origin, "/factory-origin");
+    ck_assert(!MAP_OUTDOORS(generated));
+    ck_assert(celestial_structure_validate_header(generated, VS(error)));
+
+    ck_assert_ptr_eq(celestial_structure_create_map(0,
+                                                    40,
+                                                    "invalid",
+                                                    origin,
+                                                    "sealed",
+                                                    0,
+                                                    VS(error)),
+                     NULL);
+    ck_assert_ptr_eq(celestial_structure_create_map(40,
+                                                    40,
+                                                    "../invalid",
+                                                    origin,
+                                                    "sealed",
+                                                    0,
+                                                    VS(error)),
+                     NULL);
+    ck_assert_ptr_eq(celestial_structure_create_map(40,
+                                                    40,
+                                                    "invalid",
+                                                    origin,
+                                                    "linked",
+                                                    0,
+                                                    VS(error)),
+                     NULL);
+    ck_assert_ptr_eq(celestial_structure_create_map(40,
+                                                    40,
+                                                    "invalid",
+                                                    origin,
+                                                    "sealed",
+                                                    40960,
+                                                    VS(error)),
+                     NULL);
+    ck_assert_ptr_eq(celestial_structure_create_map(40,
+                                                    40,
+                                                    "factory-test-256",
+                                                    origin,
+                                                    "sealed",
+                                                    0,
+                                                    VS(error)),
+                     NULL);
+
+    delete_map(generated);
+    delete_map(origin);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("celestial_structure");
     TCase *tc_core = tcase_create("Core");
@@ -1001,6 +1065,7 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_header_round_trip_is_canonical_and_rejects_legacy_fields);
+    tcase_add_test(tc_core, test_generated_factory_is_validated_and_bounded);
     tcase_add_test(tc_core, test_saved_v1_map_swaps_and_reloads_mutable_state);
     tcase_add_test(tc_core, test_metadata_is_validated_consumed_sorted_and_saved);
     tcase_add_test(tc_core, test_rectangles_fail_closed_with_coordinates);

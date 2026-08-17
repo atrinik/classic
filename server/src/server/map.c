@@ -1326,6 +1326,53 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
     return m;
 }
 
+/* Preserve invalid v1 mutable state for operator recovery. */
+static void reject_celestial_temporary(mapstruct *m, const char *reason) {
+    if (m->tmpname != NULL && path_exists(m->tmpname)) {
+            char quarantine[HUGE_BUF];
+            const char *base = strrchr(m->tmpname, '/');
+            base = base != NULL ? base + 1 : m->tmpname;
+            path_ensure_directories(settings.datapath);
+            int written = snprintf(quarantine,
+                                   sizeof(quarantine),
+                                   "%s/celestial-quarantine/%s.%ld",
+                                   settings.datapath,
+                                   base,
+                                   (long)getpid());
+            if (written > 0 && (size_t)written < sizeof(quarantine)) {
+                path_ensure_directories(quarantine);
+                for (unsigned int attempt = 0; attempt < 100 && path_exists(quarantine); attempt++) {
+                    written = snprintf(quarantine,
+                                       sizeof(quarantine),
+                                       "%s/celestial-quarantine/%s.%ld.%u",
+                                       settings.datapath,
+                                       base,
+                                       (long)getpid(),
+                                       attempt + 1);
+                    if (written <= 0 || (size_t)written >= sizeof(quarantine)) {
+                        break;
+                    }
+                }
+                if (written > 0 && (size_t)written < sizeof(quarantine) &&
+                    !path_exists(quarantine) && path_rename(m->tmpname, quarantine) == 0) {
+                    LOG(ERROR,
+                        "Quarantined celestial temporary map %s as %s (%s).",
+                        m->tmpname,
+                        quarantine,
+                        reason);
+                } else {
+                    LOG(ERROR,
+                        "Could not quarantine celestial temporary map %s (%s); input remains in place.",
+                        m->tmpname,
+                        reason);
+                }
+            }
+    } else {
+        LOG(ERROR, "Celestial temporary map %s is unavailable (%s).", m->path, reason);
+    }
+    delete_map(m);
+}
+
 /**
  * Loads a map, which has been loaded earlier, from file.
  * @param m
@@ -1337,8 +1384,14 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
 static mapstruct *load_temporary_map(mapstruct *m) {
     FILE *fp;
     char buf[HUGE_BUF];
+    bool celestial_v1 = celestial_structure_v1_runtime_active() &&
+                        (m->celestial_schema == 1 || m->celestial_v1_header_seen);
 
     if (!m->tmpname) {
+        if (celestial_v1) {
+            reject_celestial_temporary(m, "missing temporary filename");
+            return NULL;
+        }
         LOG(BUG, "No temporary filename for map %s! Fallback to original!", m->path);
         snprintf(buf, sizeof(buf), "%s", m->path);
         delete_map(m);
@@ -1353,6 +1406,11 @@ static mapstruct *load_temporary_map(mapstruct *m) {
             return NULL;
         }
 
+        if (celestial_v1) {
+            reject_celestial_temporary(m, "temporary file could not be opened");
+            return NULL;
+        }
+
         LOG(BUG, "Can't open temporary map %s! Fallback to original!", m->tmpname);
         snprintf(buf, sizeof(buf), "%s", m->path);
         delete_map(m);
@@ -1363,6 +1421,14 @@ static mapstruct *load_temporary_map(mapstruct *m) {
     celestial_structure_reset_parse_state(m);
 
     if (!load_map_header(m, fp)) {
+        celestial_v1 = celestial_v1 ||
+                       (celestial_structure_v1_runtime_active() &&
+                        (m->celestial_schema == 1 || m->celestial_v1_header_seen));
+        if (celestial_v1) {
+            fclose(fp);
+            reject_celestial_temporary(m, "malformed temporary header");
+            return NULL;
+        }
         LOG(BUG,
             "Error loading map header for %s (%s)! Fallback to original!",
             m->path,
@@ -1373,9 +1439,17 @@ static mapstruct *load_temporary_map(mapstruct *m) {
         fclose(fp);
         return m;
     }
+    celestial_v1 = celestial_v1 ||
+                   (celestial_structure_v1_runtime_active() &&
+                    (m->celestial_schema == 1 || m->celestial_v1_header_seen));
     if (m->celestial_v1_header_seen) {
         char error[HUGE_BUF];
         if (!celestial_structure_validate_header(m, VS(error))) {
+            if (celestial_v1) {
+                fclose(fp);
+                reject_celestial_temporary(m, error);
+                return NULL;
+            }
             LOG(BUG,
                 "Invalid celestial map header for %s (%s): %s. Falling back to original!",
                 m->path,
@@ -1388,6 +1462,17 @@ static mapstruct *load_temporary_map(mapstruct *m) {
             return m;
         }
     }
+    if (celestial_v1) {
+        char error[HUGE_BUF];
+        if (!m->celestial_v1_header_seen ||
+            !celestial_structure_validate_provenance(m, VS(error))) {
+            fclose(fp);
+            reject_celestial_temporary(m,
+                                       m->celestial_v1_header_seen ? error
+                                                                    : "temporary map is not celestial-v1");
+            return NULL;
+        }
+    }
 
     allocate_map(m);
 
@@ -1395,6 +1480,10 @@ static mapstruct *load_temporary_map(mapstruct *m) {
     bool objects_valid = load_objects(m, fp, 0);
     fclose(fp);
     if (!objects_valid) {
+        if (celestial_v1) {
+            reject_celestial_temporary(m, "malformed temporary object stream");
+            return NULL;
+        }
         LOG(BUG,
             "Invalid celestial structure in temporary map %s; falling back to original.",
             m->path);
@@ -1688,6 +1777,17 @@ int new_save_map(mapstruct *m, int flag) {
     if (!map_atomic_publish(&primary)) {
         m->in_memory = previous_in_memory;
         return -1;
+    }
+    if (m->celestial_schema == 1 && celestial_structure_v1_runtime_active()) {
+        char provenance_error[HUGE_BUF];
+        if (!celestial_structure_write_provenance(m, VS(provenance_error))) {
+            LOG(ERROR,
+                "Celestial-v1 map %s was saved without a provenance ledger: %s",
+                m->path != NULL ? m->path : "<runtime>",
+                provenance_error);
+            m->in_memory = previous_in_memory;
+            return -1;
+        }
     }
     return 0;
 }

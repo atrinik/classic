@@ -44,7 +44,28 @@ celestial_transmission_t celestial_structure_transmission(const char *value);
 bool celestial_structure_inventory(const mapstruct *map, FILE *fp, size_t max_records);
 bool celestial_structure_inventory_maps_valid(const char *input);
 bool celestial_structure_logical_map_id_valid(const char *path);
+mapstruct *celestial_structure_create_map(int width,
+                                          int height,
+                                          const char *path,
+                                          mapstruct *origin,
+                                          const char *sky_above,
+                                          int light,
+                                          char *error,
+                                          size_t error_size);
+bool celestial_structure_initialize_generated_map(mapstruct *map,
+                                                  const char *path,
+                                                  mapstruct *origin,
+                                                  int light,
+                                                  char *error,
+                                                  size_t error_size);
 bool celestial_structure_validate_archetypes(char *error, size_t error_size);
+/** Verify the immutable Classic artifact before the server accepts players. */
+bool celestial_structure_startup_preflight(char *error, size_t error_size);
+/** Whether startup has selected the fail-closed celestial-v1 runtime. */
+bool celestial_structure_v1_runtime_active(void);
+/** Publish and validate the digest-addressed mutable-map provenance sidecar. */
+bool celestial_structure_write_provenance(const mapstruct *map, char *error, size_t error_size);
+bool celestial_structure_validate_provenance(const mapstruct *map, char *error, size_t error_size);
 int celestial_structure_inventory_run(void);
 void celestial_structure_save_metadata(const mapstruct *map, FILE *fp);
 void celestial_structure_free(mapstruct *map);
