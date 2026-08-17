@@ -95,13 +95,29 @@ void telemetry_game_time_sync(uint64_t game_seconds, uint32_t millis_per_game_mi
     telemetry.millis_per_game_minute = millis_per_game_minute;
 }
 
+bool telemetry_game_time_seconds(uint64_t *game_seconds);
+
 bool telemetry_game_time_get(uint64_t *game_minutes, uint32_t *millis_per_game_minute) {
-    if (!telemetry.game_time_valid) {
+    uint64_t current_seconds;
+    if (!telemetry_game_time_seconds(&current_seconds)) {
+        return false;
+    }
+
+    *game_minutes = current_seconds / 60;
+    *millis_per_game_minute = telemetry.millis_per_game_minute;
+    return true;
+}
+
+bool telemetry_game_time_seconds(uint64_t *game_seconds) {
+    if (!telemetry.game_time_valid || game_seconds == NULL) {
         return false;
     }
 
     uint64_t elapsed_us = datetime_monotonic_us() - telemetry.game_time_synced_us;
     uint64_t minute_us = (uint64_t)telemetry.millis_per_game_minute * 1000;
+    if (minute_us == 0) {
+        return false;
+    }
     uint64_t elapsed_minutes = elapsed_us / minute_us;
     uint64_t elapsed_seconds = elapsed_minutes * 60 + elapsed_us % minute_us * 60 / minute_us;
     uint64_t current_seconds = telemetry.game_seconds;
@@ -110,8 +126,6 @@ bool telemetry_game_time_get(uint64_t *game_minutes, uint32_t *millis_per_game_m
     } else {
         current_seconds += elapsed_seconds;
     }
-
-    *game_minutes = current_seconds / 60;
-    *millis_per_game_minute = telemetry.millis_per_game_minute;
+    *game_seconds = current_seconds;
     return true;
 }

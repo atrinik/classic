@@ -58,6 +58,9 @@ typedef enum socket_role {
  */
 #define MAP_UPDATE_CMD_PARTIAL 3
 
+/** High bit of the complete-update continuation marker announces a timed-light descriptor. */
+#define MAP2_CONTINUATION_TIMED_LIGHT UINT16_C(0x8000)
+
 /** First valid tiled-map identifier in a connected MAP update. */
 #define MAP_UPDATE_TILE_MIN 1
 /** Connected-map identifier for a TILED_UP transition. */
@@ -100,6 +103,11 @@ typedef enum socket_role {
 #define MAP2_PROTOCOL_METADATA_LONG_MAX 4095
 /** Maximum byte length of MAP weather or region metadata. */
 #define MAP2_PROTOCOL_METADATA_SHORT_MAX 255
+
+/** Continuous hourly rollover. */
+#define MAP2_LIGHT_KEYFRAME_CONTINUOUS 1
+/** Immediate local/profile snap or rebase. */
+#define MAP2_LIGHT_KEYFRAME_SNAP 2
 
 /**
  * @defgroup CMD_TARGET_xxx Target command types
@@ -419,6 +427,8 @@ typedef struct socket_face_batch_response {
 #define MAP2_FLAG_EXT_ANIM 1
 /** Complete per-tile set of explicitly colored Q5.11 RGB radiance follows. */
 #define MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16 2
+/** Next authoritative hourly aggregate-light endpoint follows. */
+#define MAP2_FLAG_EXT_LIGHT_KEYFRAME 4
 /*@}*/
 
 /**

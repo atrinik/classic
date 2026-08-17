@@ -164,6 +164,13 @@ typedef struct _mapdata {
     /** Bounded sequencing state for the last full MAP2 update. */
     map_protocol_continuation_state_t continuation;
 
+    /** Timed-light descriptor staged by the current complete MAP2 transaction. */
+    uint64_t light_keyframe_generation;
+    uint64_t light_keyframe_start_seconds;
+    uint64_t light_keyframe_end_seconds;
+    uint8_t light_keyframe_flags;
+    bool light_keyframe_valid;
+
     /**
      * If set, height difference will be taken into account when rendering
      * tiles (even if they are not FoW tiles).
@@ -212,6 +219,25 @@ typedef struct MapCell {
 
     /** Bitmap of sub-layers whose RGB state is explicitly colored. */
     uint8_t light_rgb_explicit;
+
+    /** Next authoritative scalar endpoint for each sub-layer. */
+    uint16_t light_next_radiance[NUM_SUB_LAYERS];
+
+    /** Whether each next endpoint is explicitly established. */
+    uint8_t light_next_known[NUM_SUB_LAYERS];
+
+    /** Next authoritative RGB endpoint for each sub-layer. */
+    uint16_t light_next_rgb_radiance[NUM_SUB_LAYERS][3];
+
+    /** Bitmap of sub-layers with explicitly colored next endpoints. */
+    uint8_t light_next_rgb_explicit;
+
+    /** Timed-light generation and absolute interpolation interval. */
+    uint64_t light_keyframe_generation;
+    uint64_t light_keyframe_start_seconds;
+    uint64_t light_keyframe_end_seconds;
+    uint8_t light_keyframe_flags;
+    uint8_t light_keyframe_valid;
 
     /** Object flags. */
     uint8_t flags[NUM_REAL_LAYERS];
@@ -312,6 +338,15 @@ static inline void map_cell_clear_light_state(MapCell *cell) {
     memset(cell->light_known, 0, sizeof(cell->light_known));
     memset(cell->light_rgb_radiance, 0, sizeof(cell->light_rgb_radiance));
     cell->light_rgb_explicit = 0;
+    memset(cell->light_next_radiance, 0, sizeof(cell->light_next_radiance));
+    memset(cell->light_next_known, 0, sizeof(cell->light_next_known));
+    memset(cell->light_next_rgb_radiance, 0, sizeof(cell->light_next_rgb_radiance));
+    cell->light_next_rgb_explicit = 0;
+    cell->light_keyframe_generation = 0;
+    cell->light_keyframe_start_seconds = 0;
+    cell->light_keyframe_end_seconds = 0;
+    cell->light_keyframe_flags = 0;
+    cell->light_keyframe_valid = 0;
 }
 
 #define MAP_STARTX map_width *(MAP_FOW_SIZE / 2)
@@ -483,6 +518,30 @@ extern bool map_get_fow(int x, int y);
 extern void map_set_light_radiance(int x, int y, int sub_layer, uint16_t radiance);
 extern void
 map_set_light_rgb_radiance(int x, int y, uint8_t bitmap, const uint16_t rgb[NUM_SUB_LAYERS][3]);
+extern void map_set_light_keyframe(int x,
+                                   int y,
+                                   uint64_t generation,
+                                   uint64_t start_seconds,
+                                   uint64_t end_seconds,
+                                   uint8_t flags,
+                                   uint8_t scalar_bitmap,
+                                   const uint16_t scalar[NUM_SUB_LAYERS],
+                                   uint8_t rgb_bitmap,
+                                   const uint16_t rgb[NUM_SUB_LAYERS][3]);
+extern bool map_light_keyframe_transaction_begin(uint64_t generation,
+                                                  uint64_t start_seconds,
+                                                  uint64_t end_seconds,
+                                                  uint8_t flags);
+extern bool map_light_keyframe_transaction_pending(void);
+extern bool map_light_keyframe_transaction_stage(int depth,
+                                                  int x,
+                                                  int y,
+                                                  uint8_t scalar_bitmap,
+                                                  const uint16_t scalar[NUM_SUB_LAYERS],
+                                                  uint8_t rgb_bitmap,
+                                                  const uint16_t rgb[NUM_SUB_LAYERS][3]);
+extern void map_light_keyframe_transaction_commit(void);
+extern void map_light_keyframe_transaction_abort(void);
 
 extern void map_animate(void);
 

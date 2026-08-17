@@ -407,6 +407,12 @@ typedef struct MapSpace_s {
     /** Authoritative celestial RGB contribution, before local sources. */
     int32_t celestial_light_rgb[3];
 
+    /** Precomputed authoritative celestial scalar for the next hour. */
+    int32_t celestial_light_next_value;
+
+    /** Precomputed authoritative celestial RGB contribution for the next hour. */
+    int32_t celestial_light_next_rgb[3];
+
     /**
      * Flags about this space
      * @see map_look_flags
@@ -697,6 +703,15 @@ typedef struct mapdef {
 
     /** True only after a complete celestial field has been published. */
     bool celestial_light_valid;
+
+    /** Key of the precomputed next-hour field. */
+    uint64_t celestial_light_next_key;
+
+    /** Monotonic in-memory generation of the published current field. */
+    uint64_t celestial_light_generation_id;
+
+    /** True when the next-hour field is complete for this map stack. */
+    bool celestial_light_keyframe_valid;
 
     /** Array of spaces on this map */
     MapSpace *spaces;

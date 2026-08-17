@@ -737,6 +737,11 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     int mapstat;
     int xpos, ypos;
     int layer, ext_flags;
+    uint64_t light_keyframe_generation = 0;
+    uint64_t light_keyframe_start_seconds = 0;
+    uint64_t light_keyframe_end_seconds = 0;
+    uint8_t light_keyframe_flags = 0;
+    bool timed_light_header = false;
     uint8_t num_layers;
     region_map_def_map_t *def_map;
     bool region_map_fow_need_update;
@@ -749,6 +754,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
             MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_WIDTH)),
             MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT)))) {
         LOG(PACKET, "Rejected malformed map packet.");
+        map_light_keyframe_transaction_abort();
         return;
     }
 
@@ -823,6 +829,34 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     uint8_t player_sub_layer = packet_reader_read_uint8(&reader);
     uint16_t continuation_marker = packet_reader_read_uint16(&reader);
 
+    timed_light_header = (continuation_marker & MAP2_CONTINUATION_TIMED_LIGHT) != 0;
+    continuation_marker &= (uint16_t)~MAP2_CONTINUATION_TIMED_LIGHT;
+    if (timed_light_header) {
+        light_keyframe_generation = packet_reader_read_uint64(&reader);
+        light_keyframe_start_seconds = packet_reader_read_uint64(&reader);
+        light_keyframe_end_seconds = packet_reader_read_uint64(&reader);
+        light_keyframe_flags = packet_reader_read_uint8(&reader);
+        if (!map_light_keyframe_transaction_begin(light_keyframe_generation,
+                                                  light_keyframe_start_seconds,
+                                                  light_keyframe_end_seconds,
+                                                  light_keyframe_flags)) {
+            LOG(PACKET, "Rejected invalid timed-light generation descriptor.");
+            return;
+        }
+        MapData.light_keyframe_generation = light_keyframe_generation;
+        MapData.light_keyframe_start_seconds = light_keyframe_start_seconds;
+        MapData.light_keyframe_end_seconds = light_keyframe_end_seconds;
+        MapData.light_keyframe_flags = light_keyframe_flags;
+        MapData.light_keyframe_valid = true;
+    } else if (mapstat != MAP_UPDATE_CMD_PARTIAL &&
+               !map_light_keyframe_transaction_pending()) {
+        MapData.light_keyframe_generation = 0;
+        MapData.light_keyframe_start_seconds = 0;
+        MapData.light_keyframe_end_seconds = 0;
+        MapData.light_keyframe_flags = 0;
+        MapData.light_keyframe_valid = false;
+    }
+
     if (pos >= len) {
         LOG(PACKET, "Map packet has no level count.");
         return;
@@ -856,6 +890,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
                                            player_sub_layer,
                                            incoming_level_mask)) {
         LOG(PACKET, "Rejected unsolicited, mismatched, or out-of-sequence map continuation.");
+        map_light_keyframe_transaction_abort();
         return;
     }
 
@@ -1167,6 +1202,38 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
                 map_set_light_rgb_radiance(x, y, bitmap, rgb);
             }
 
+            if (ext_flags & MAP2_FLAG_EXT_LIGHT_KEYFRAME) {
+                uint8_t scalar_bitmap = packet_reader_read_uint8(&reader);
+                uint16_t scalar[NUM_SUB_LAYERS] = {0};
+                for (uint8_t sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                    if (scalar_bitmap & (UINT8_C(1) << sub_layer)) {
+                        scalar[sub_layer] = packet_reader_read_uint16(&reader);
+                    }
+                }
+                uint8_t rgb_bitmap = packet_reader_read_uint8(&reader);
+                uint16_t rgb[NUM_SUB_LAYERS][3] = {{0}};
+                for (uint8_t sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                    if (!(rgb_bitmap & (UINT8_C(1) << sub_layer))) {
+                        continue;
+                    }
+                    for (size_t channel = 0; channel < 3; channel++) {
+                        rgb[sub_layer][channel] = packet_reader_read_uint16(&reader);
+                    }
+                }
+                if (MapData.light_keyframe_valid &&
+                    !map_light_keyframe_transaction_stage(depth,
+                                                          x,
+                                                          y,
+                                                          scalar_bitmap,
+                                                          scalar,
+                                                          rgb_bitmap,
+                                                          rgb)) {
+                    LOG(PACKET, "Timed-light generation exceeded its staging bound.");
+                    map_light_keyframe_transaction_abort();
+                    return;
+                }
+            }
+
             /* Animation? */
             if (ext_flags & MAP2_FLAG_EXT_ANIM) {
                 uint8_t anim_num = packet_reader_read_uint8(&reader);
@@ -1222,6 +1289,10 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
                                         ypos,
                                         player_sub_layer,
                                         level_mask);
+    }
+
+    if (!MapData.continuation.pending && map_light_keyframe_transaction_pending()) {
+        map_light_keyframe_transaction_commit();
     }
 
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
