@@ -82,8 +82,10 @@ _Static_assert(sizeof(lighting_sample) == 10U,
 typedef struct lighting_context {
     lighting_sample *samples;
     lighting_sample *structure_samples;
+    lighting_sample *structure_illumination;
     lighting_sample *structure_blur_row;
     uint8_t *rows_valid;
+    uint8_t *structure_illumination_valid;
     size_t samples_num;
     int width;
     int height;
@@ -131,6 +133,8 @@ static lighting_sample *structure_column_illumination;
 static void lighting_sprite_cache_clear(lighting_context *context,
                                         lighting_sprite_invalidation_cause_t cause);
 
+#define LIGHT_STRUCTURE_BLUR_RADIUS 24
+
 #define LIGHTING_BENCHMARK_INCREMENT(_context_, _field_)  \
     do {                                                  \
         (_context_)->benchmark_counters._field_++;        \
@@ -167,11 +171,18 @@ static uint64_t lighting_benchmark_timing_start(void) {
         }                                                                        \
     } while (0)
 
-static size_t lighting_context_retained_field_bytes(const lighting_context *context) {
+static size_t lighting_context_semantic_field_bytes(const lighting_context *context) {
     return context->samples_num *
                (sizeof(*context->samples) + sizeof(*context->structure_samples)) +
            (size_t)context->width * sizeof(*context->structure_blur_row) +
            (size_t)context->height * sizeof(*context->rows_valid);
+}
+
+static size_t lighting_context_retained_field_bytes(const lighting_context *context) {
+    return lighting_context_semantic_field_bytes(context) +
+           context->samples_num *
+               (sizeof(*context->structure_illumination) +
+                sizeof(*context->structure_illumination_valid));
 }
 
 static bool lighting_context_allocated(const lighting_context *context) {
@@ -245,7 +256,8 @@ static uint64_t lighting_context_state_digest(const lighting_context *context, i
     hash = lighting_benchmark_hash_uint64(hash, context->pending_cache_key);
     hash = lighting_benchmark_hash_uint64(hash, lighting_context_sprite_entries(context));
     hash = lighting_benchmark_hash_uint64(hash, context->sprite_cache_bytes);
-    hash = lighting_benchmark_hash_uint64(hash, lighting_context_retained_field_bytes(context));
+    /* Auxiliary derived caches must not change the visual-state digest. */
+    hash = lighting_benchmark_hash_uint64(hash, lighting_context_semantic_field_bytes(context));
 
     uint64_t cache_xor = 0;
     uint64_t cache_sum = 0;
@@ -316,8 +328,10 @@ static void lighting_benchmark_peaks_update(void) {
 static void lighting_context_free(lighting_context *context) {
     free(context->samples);
     free(context->structure_samples);
+    free(context->structure_illumination);
     free(context->structure_blur_row);
     free(context->rows_valid);
+    free(context->structure_illumination_valid);
     lighting_sprite_cache_clear(context, LIGHTING_SPRITE_INVALIDATION_RESET);
     lighting_benchmark_timings_t benchmark_timings = context->benchmark_timings;
     memset(context, 0, sizeof(*context));
@@ -328,8 +342,11 @@ static void lighting_context_free(lighting_context *context) {
 
 #define light_samples (lighting_context_current->samples)
 #define structure_samples (lighting_context_current->structure_samples)
+#define structure_illumination_cache (lighting_context_current->structure_illumination)
 #define structure_blur_row (lighting_context_current->structure_blur_row)
 #define structure_rows_valid (lighting_context_current->rows_valid)
+#define structure_illumination_cache_valid \
+    (lighting_context_current->structure_illumination_valid)
 #define light_samples_num (lighting_context_current->samples_num)
 #define lighting_width (lighting_context_current->width)
 #define lighting_height (lighting_context_current->height)
@@ -338,8 +355,6 @@ static void lighting_context_free(lighting_context *context) {
 #define lighting_update_needed (lighting_context_current->update_needed)
 #define lighting_cache_key (lighting_context_current->cache_key)
 #define lighting_pending_cache_key (lighting_context_current->pending_cache_key)
-
-#define LIGHT_STRUCTURE_BLUR_RADIUS 24
 
 _Static_assert(sizeof(lighting_sprite_cache_entry) + sizeof(SDL_Surface) <=
                    LIGHTING_SPRITE_CACHE_ENTRY_OVERHEAD,
@@ -569,10 +584,19 @@ static bool lighting_surface_create(int width, int height) {
         light_samples = xreallocarray(light_samples, samples_num, sizeof(*light_samples));
         structure_samples =
             xreallocarray(structure_samples, samples_num, sizeof(*structure_samples));
+        structure_illumination_cache = xreallocarray(structure_illumination_cache,
+                                                     samples_num,
+                                                     sizeof(*structure_illumination_cache));
         structure_blur_row =
             xreallocarray(structure_blur_row, (size_t)width, sizeof(*structure_blur_row));
         structure_rows_valid =
             xreallocarray(structure_rows_valid, (size_t)height, sizeof(*structure_rows_valid));
+        structure_illumination_cache_valid = xreallocarray(structure_illumination_cache_valid,
+                                                            samples_num,
+                                                            sizeof(*structure_illumination_cache_valid));
+        memset(structure_illumination_cache_valid,
+               0,
+               samples_num * sizeof(*structure_illumination_cache_valid));
         light_samples_num = samples_num;
         lighting_width = width;
         lighting_height = height;
@@ -581,6 +605,48 @@ static bool lighting_surface_create(int width, int height) {
     }
     lighting_benchmark_peaks_update();
     return true;
+}
+
+/** Invalidate structural samples whose filtered field depends on a dirty area. */
+static void lighting_structure_illumination_invalidate_rect(lighting_context *context,
+                                                            int x0,
+                                                            int y0,
+                                                            int x1,
+                                                            int y1) {
+    if (context->structure_illumination_valid == NULL) {
+        return;
+    }
+
+    int expanded_x0 = MAX(0, x0 - LIGHT_STRUCTURE_BLUR_RADIUS * 2);
+    int expanded_y0 = MAX(0, y0 - LIGHT_STRUCTURE_BLUR_RADIUS);
+    int expanded_x1 = MIN(context->width, x1 + LIGHT_STRUCTURE_BLUR_RADIUS * 2);
+    int expanded_y1 = MIN(context->height, y1 + LIGHT_STRUCTURE_BLUR_RADIUS);
+    for (int y = expanded_y0; y < expanded_y1; y++) {
+        memset(context->structure_illumination_valid +
+                   (size_t)y * (size_t)context->width + (size_t)expanded_x0,
+               0,
+               (size_t)(expanded_x1 - expanded_x0) *
+                   sizeof(*context->structure_illumination_valid));
+    }
+}
+
+/** Invalidate cached structural samples for the current lighting update. */
+static void lighting_structure_illumination_invalidate_dirty(lighting_context *context,
+                                                             bool full) {
+    if (context->structure_illumination_valid == NULL) {
+        return;
+    }
+    if (full) {
+        memset(context->structure_illumination_valid,
+               0,
+               context->samples_num * sizeof(*context->structure_illumination_valid));
+        return;
+    }
+    for (size_t i = 0; i < context->dirty_num; i++) {
+        const lighting_dirty_rect_t *rect = &context->dirty[i];
+        lighting_structure_illumination_invalidate_rect(
+            context, rect->x0, rect->y0, rect->x1, rect->y1);
+    }
 }
 
 bool lighting_begin(int width, int height, uint64_t cache_key) {
@@ -826,6 +892,9 @@ void lighting_scroll(int screen_dx, int screen_dy) {
             lighting_dirty_full(context, LIGHTING_FULL_REBUILD_CONTROL);
             memset(context->samples, 0, context->samples_num * sizeof(*context->samples));
             memset(context->rows_valid, 0, (size_t)context->height);
+            memset(context->structure_illumination_valid,
+                   0,
+                   context->samples_num * sizeof(*context->structure_illumination_valid));
             context->update_needed = true;
             LIGHTING_BENCHMARK_INCREMENT(context, field_translation_fallback_control);
             LIGHTING_BENCHMARK_TIMING_FINISH(context, translation, timing_started);
@@ -842,6 +911,9 @@ void lighting_scroll(int screen_dx, int screen_dy) {
             lighting_dirty_full(context, LIGHTING_FULL_REBUILD_BOUNDS);
             memset(context->samples, 0, context->samples_num * sizeof(*context->samples));
             memset(context->rows_valid, 0, (size_t)height);
+            memset(context->structure_illumination_valid,
+                   0,
+                   context->samples_num * sizeof(*context->structure_illumination_valid));
             context->update_needed = true;
             LIGHTING_BENCHMARK_INCREMENT(context, field_translation_fallback_bounds);
             LIGHTING_BENCHMARK_TIMING_FINISH(context, translation, timing_started);
@@ -878,6 +950,12 @@ void lighting_scroll(int screen_dx, int screen_dy) {
                    0,
                    (size_t)-screen_dy * (size_t)width * sizeof(*context->samples));
         }
+
+        /* A translated field is not guaranteed to be a pure screen translation;
+         * rebuild derived structural samples after every scroll. */
+        memset(context->structure_illumination_valid,
+               0,
+               context->samples_num * sizeof(*context->structure_illumination_valid));
 
         context->dirty_num = 0;
         if (screen_dx > 0) {
@@ -1286,6 +1364,11 @@ static void lighting_blur_structure_row(int y) {
 
 /** Sample the structural field through a vertical triangular filter. */
 static lighting_sample lighting_structure_illumination(int x, int y) {
+    size_t index = (size_t)y * (size_t)lighting_width + (size_t)x;
+    if (structure_illumination_cache_valid[index]) {
+        return structure_illumination_cache[index];
+    }
+
     const int radius = LIGHT_STRUCTURE_BLUR_RADIUS;
     uint32_t total[4] = {0};
     uint32_t weights = 0;
@@ -1308,6 +1391,8 @@ static lighting_sample lighting_structure_illumination(int x, int y) {
                                     channel,
                                     (uint16_t)((total[channel] + weights / 2) / weights));
     }
+    structure_illumination_cache[index] = result;
+    structure_illumination_cache_valid[index] = 1;
     return result;
 }
 
@@ -1352,6 +1437,8 @@ void lighting_render(SDL_Surface *destination) {
             lighting_extrapolate_dirty();
         }
         LIGHTING_BENCHMARK_TIMING_FINISH(lighting_context_current, extrapolation, timing_started);
+        lighting_structure_illumination_invalidate_dirty(
+            lighting_context_current, dirty_pixels == light_samples_num);
         memset(structure_rows_valid, 0, (size_t)lighting_height * sizeof(*structure_rows_valid));
         lighting_cache_key = lighting_pending_cache_key;
         lighting_cache_valid = true;
@@ -1602,7 +1689,12 @@ static bool lighting_structure_identity(SDL_Surface *source,
         if (bottom >= 0) {
             int light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
             int light_y = MAX(0, MIN(lighting_height - 1, sample_y - max_bottom + bottom));
-            illumination = lighting_structure_illumination(light_x, light_y);
+            size_t index = (size_t)light_y * (size_t)lighting_width + (size_t)light_x;
+            if (structure_illumination_cache_valid[index]) {
+                illumination = structure_illumination_cache[index];
+            } else {
+                illumination = lighting_structure_illumination(light_x, light_y);
+            }
         }
         structure_column_illumination[source_x] = illumination;
         result = lighting_signature_sample(result, &illumination);
@@ -2004,8 +2096,10 @@ void lighting_show_surface(SDL_Surface *destination,
 
 #undef light_samples
 #undef structure_samples
+#undef structure_illumination_cache
 #undef structure_blur_row
 #undef structure_rows_valid
+#undef structure_illumination_cache_valid
 #undef light_samples_num
 #undef lighting_width
 #undef lighting_height
