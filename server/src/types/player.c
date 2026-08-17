@@ -3273,7 +3273,7 @@ void player_save(object *op) {
     }
 
     char *path = player_make_path(op->name, "player.dat");
-    char *path_tmp = player_make_path(op->name, "player.dat.tmp");
+    char *path_tmp = player_make_path(op->name, "player.dat.tmp.XXXXXX");
     bool character_transaction = false;
     char transaction_account[MAX_BUF] = "", transaction_character[MAX_BUF] = "";
     FILE *fp = NULL;
@@ -3316,9 +3316,16 @@ void player_save(object *op) {
     }
 
     path_ensure_directories(path_tmp);
-    fp = fopen(path_tmp, "w");
+    int temporary_fd = mkstemp(path_tmp);
+    if (temporary_fd >= 0) {
+        fp = fdopen(temporary_fd, "w");
+        if (fp == NULL) {
+            close(temporary_fd);
+        }
+    }
     if (unlikely(fp == NULL)) {
         LOG(ERROR, "Failure opening %s for writing: %s", path_tmp, strerror(errno));
+        unlink(path_tmp);
         goto error;
     }
 
@@ -3357,17 +3364,23 @@ void player_save(object *op) {
     object_save(op, fp);
     CLEAR_FLAG(op, FLAG_NO_FIX_PLAYER);
 
-    /* Make sure the write succeeded. */
-    if (unlikely(fclose(fp) == EOF)) {
-        LOG(ERROR, "Failure closing file %s: %s", path_tmp, strerror(errno));
-        goto error;
-    }
-
-    /* Set the correct permissions. */
+    /* Set permissions while the exclusively-created temporary file is open. */
+#ifndef WIN32
+    if (unlikely(fchmod(fileno(fp), SAVE_MODE) != 0)) {
+#else
     if (unlikely(chmod(path_tmp, SAVE_MODE) != 0)) {
+#endif
         LOG(ERROR, "Failure setting permissions of %s: %s", path_tmp, strerror(errno));
         goto error;
     }
+
+    /* Make sure the write succeeded. */
+    if (unlikely(fclose(fp) == EOF)) {
+        LOG(ERROR, "Failure closing file %s: %s", path_tmp, strerror(errno));
+        fp = NULL;
+        goto error;
+    }
+    fp = NULL;
 
     /* Rename the file, removing the .tmp extension. */
     if (unlikely(path_rename(path_tmp, path) != 0)) {
@@ -3407,7 +3420,11 @@ error:
     draw_info(COLOR_RED, op, "Your character couldn't be saved.");
 
     /* Try to remove the temporary file if it was created. */
-    if (fp != NULL && unlink(path_tmp) != 0) {
+    if (fp != NULL) {
+        (void)fclose(fp);
+        fp = NULL;
+    }
+    if (unlink(path_tmp) != 0 && errno != ENOENT) {
         LOG(ERROR, "Failure removing temporary file %s: %s", path_tmp, strerror(errno));
     }
 
