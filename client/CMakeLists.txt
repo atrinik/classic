@@ -717,6 +717,28 @@ if (BUILD_TESTING)
     target_link_libraries(client-widget-priority-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-widget-priority COMMAND client-widget-priority-tests)
 
+    add_executable(client-render-profiler-tests
+        src/tests/render_profiler.c
+        src/gui/widgets/render_profiler.c)
+    atrinik_configure_target(client-render-profiler-tests)
+    target_compile_definitions(client-render-profiler-tests PRIVATE
+        ATRINIK_RENDER_PROFILER_TESTING
+        SDL_DISABLE_OLD_NAMES)
+    target_compile_options(client-render-profiler-tests PRIVATE
+        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>)
+    target_link_options(client-render-profiler-tests PRIVATE
+        $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
+    target_include_directories(client-render-profiler-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-render-profiler-tests PRIVATE
+        Atrinik::Core
+        SDL3::SDL3
+        SDL3_ttf::SDL3_ttf)
+    add_test(NAME client-render-profiler COMMAND client-render-profiler-tests)
+
     add_executable(client-map-light-state-tests src/tests/map_light_state.c)
     atrinik_configure_target(client-map-light-state-tests)
     target_compile_definitions(client-map-light-state-tests PRIVATE SDL_DISABLE_OLD_NAMES)
