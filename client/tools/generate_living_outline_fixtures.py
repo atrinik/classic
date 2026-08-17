@@ -11,6 +11,7 @@ from pathlib import Path
 MAP_SIZE = 13
 ORIGIN = 6
 SCALAR_RADIANCE = 0x0800
+MAP2_MASK_FOW = 0x20
 LAYER_WALL = 4
 LAYER_LIVING = 5
 FACE_ACTOR = 4
@@ -71,6 +72,21 @@ def packet(levels: tuple[tuple[int, bytes], ...]) -> bytes:
     return bytes(result)
 
 
+def same_packet(payload: bytes) -> bytes:
+    """Create a same-position MAP2 packet for a retained-cache update."""
+    result = bytearray(b"\0" + bytes((ORIGIN, ORIGIN, 0)) + b"\0\0")
+    result.append(1)
+    result.extend(struct.pack(">bI", 0, len(payload)))
+    result.extend(payload)
+    return bytes(result)
+
+
+def fow_tile(x: int, y: int) -> bytes:
+    """Mark one cached tile as fog without discarding its remembered layers."""
+    mask = x << 11 | y << 6 | MAP2_MASK_FOW
+    return struct.pack(">HB", mask, 1) + b"\0\0"
+
+
 def base(*records: bytes) -> bytes:
     """Create a base-level scene with an unobscured local actor."""
     local = tile(ORIGIN, ORIGIN, layer(LAYER_LIVING, FACE_ACTOR))
@@ -125,6 +141,8 @@ def scenes() -> dict[str, bytes]:
         ),
         "living-outline-crowded-unobscured": packet(((0, bytes(crowded_unobscured)),)),
         "living-outline-crowded": packet(((0, bytes(crowded)),)),
+        "living-outline-retained-fow": base(actor, same_level_wall),
+        "living-outline-retained-fow-next": same_packet(fow_tile(7, 6)),
     }
 
 
