@@ -49,8 +49,10 @@
   headers, and update `src/cmake.txt` for source additions/removals.
 - For lighting, linked depths, MAP2 caches, cutaways, fog, or structural
   disclosure, read and preserve [`doc/MAP_RENDERING.md`](doc/MAP_RENDERING.md).
-  Gameplay LOS remains separate from camera structure and no visual change may
-  disclose hidden gameplay state.
+  The same document freezes the remembered/live client contract, player-field
+  presentation, and unified-compositor boundaries. Gameplay LOS remains
+  separate from camera structure and no visual change may disclose hidden
+  gameplay state or radiance source identity.
 
 ## Validation and release
 
