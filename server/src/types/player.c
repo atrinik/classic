@@ -130,6 +130,12 @@ static bool player_unique_token_from_path(const player *pl,
         !celestial_structure_logical_map_id_valid(source)) {
         return false;
     }
+    char *expected_path = map_get_path(NULL, source, 1, pl->ob->name);
+    bool owned_path = expected_path != NULL && strcmp(expected_path, path) == 0;
+    free(expected_path);
+    if (!owned_path) {
+        return false;
+    }
     written = snprintf(token,
                        MAX_BUF,
                        "%s%s:%s:%s",

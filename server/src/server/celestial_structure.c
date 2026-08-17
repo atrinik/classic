@@ -1502,7 +1502,7 @@ bool celestial_structure_logical_map_id_valid(const char *path) {
         return false;
     }
     for (const unsigned char *cp = (const unsigned char *)path; *cp != '\0'; cp++) {
-        if (*cp < 0x21 || *cp > 0x7e || *cp == ',' || *cp == '\\') {
+        if (*cp < 0x21 || *cp > 0x7e || *cp == ',' || *cp == '\\' || *cp == '$') {
             return false;
         }
     }
