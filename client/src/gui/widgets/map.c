@@ -33,6 +33,7 @@
 #include <video.h>
 #include <surface_primitives.h>
 #include <client_socket.h>
+#include <player.h>
 #include <animations.h>
 #include <map_transform.h>
 #include <region_map.h>
@@ -56,6 +57,31 @@ static bool map_animation_cache_valid;
 static map_benchmark_statistics_t map_benchmark_statistics;
 static uint32_t map_pending_redraw_reasons;
 static bool map_animation_redraw_flag;
+/* The temporal light presentation is invalidated at one-minute game-time
+ * buckets, never by an exact per-frame clock value. */
+static uint64_t map_temporal_lighting_bucket = UINT64_MAX;
+
+#define MAP_LIGHT_KEYFRAME_STAGE_MAX 8192U
+
+typedef struct map_light_keyframe_stage {
+    int depth;
+    int x;
+    int y;
+    uint8_t scalar_bitmap;
+    uint16_t scalar[NUM_SUB_LAYERS];
+    uint8_t rgb_bitmap;
+    uint16_t rgb[NUM_SUB_LAYERS][3];
+} map_light_keyframe_stage_t;
+
+static struct {
+    bool active;
+    uint64_t generation;
+    uint64_t start_seconds;
+    uint64_t end_seconds;
+    uint8_t flags;
+    size_t count;
+    map_light_keyframe_stage_t *entries;
+} map_light_keyframe_transaction;
 #ifdef ATRINIK_WIDGET_TESTS
 static bool map_benchmark_mutable_rle_fault_armed;
 static map_benchmark_fault_t map_benchmark_fault;
@@ -438,6 +464,8 @@ void load_mapdef_dat(void) {
 void clear_map(bool hard) {
     size_t cells_size;
 
+    map_light_keyframe_transaction_abort();
+
     /* Cache the map width and height. */
     map_width = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_WIDTH));
     map_height = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT));
@@ -453,6 +481,12 @@ void clear_map(bool hard) {
 
     map_level_mask = UINT16_C(1) << MAP2_DEPTH_INDEX(0);
     map_protocol_continuation_reset(&MapData.continuation);
+    MapData.light_keyframe_generation = 0;
+    MapData.light_keyframe_start_seconds = 0;
+    MapData.light_keyframe_end_seconds = 0;
+    MapData.light_keyframe_flags = 0;
+    MapData.light_keyframe_valid = false;
+    map_temporal_lighting_bucket = UINT64_MAX;
     map_cache_origin_x = 0;
     map_cache_origin_y = 0;
     map_select_level(0, true);
@@ -1337,6 +1371,14 @@ void map_set_light_radiance(int x, int y, int sub_layer, uint16_t radiance) {
             cell->light_rgb_radiance[sub_layer][channel] = radiance;
         }
     }
+    /* A current endpoint without a timed extension is an authoritative
+     * snap/rebase. The following keyframe extension, when present, replaces
+     * this provisional target in the same tile transaction. */
+    cell->light_next_radiance[sub_layer] = radiance;
+    cell->light_next_known[sub_layer] = 0;
+    memcpy(cell->light_next_rgb_radiance[sub_layer],
+           cell->light_rgb_radiance[sub_layer],
+           sizeof(cell->light_next_rgb_radiance[sub_layer]));
     if (changed) {
         level_lighting_revision[current_level_index]++;
     }
@@ -1367,9 +1409,142 @@ void map_set_light_rgb_radiance(int x,
     }
 
     cell->light_rgb_explicit = bitmap;
+    memcpy(cell->light_next_rgb_radiance,
+           cell->light_rgb_radiance,
+           sizeof(cell->light_next_rgb_radiance));
+    cell->light_next_rgb_explicit = bitmap;
     if (changed) {
         level_lighting_revision[current_level_index]++;
     }
+}
+
+void map_set_light_keyframe(int x,
+                            int y,
+                            uint64_t generation,
+                            uint64_t start_seconds,
+                            uint64_t end_seconds,
+                            uint8_t flags,
+                            uint8_t scalar_bitmap,
+                            const uint16_t scalar[NUM_SUB_LAYERS],
+                            uint8_t rgb_bitmap,
+                            const uint16_t rgb[NUM_SUB_LAYERS][3]) {
+    struct MapCell *cell = MAP_CELL_GET_MIDDLE(x, y);
+    if (generation == 0 || start_seconds >= end_seconds ||
+        (cell->light_keyframe_valid && generation < cell->light_keyframe_generation)) {
+        return;
+    }
+
+    bool changed = !cell->light_keyframe_valid || cell->light_keyframe_generation != generation ||
+                   cell->light_keyframe_start_seconds != start_seconds ||
+                   cell->light_keyframe_end_seconds != end_seconds ||
+                   cell->light_keyframe_flags != flags;
+    cell->light_keyframe_generation = generation;
+    cell->light_keyframe_start_seconds = start_seconds;
+    cell->light_keyframe_end_seconds = end_seconds;
+    cell->light_keyframe_flags = flags;
+    cell->light_keyframe_valid = 1;
+    for (uint8_t sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        uint16_t next_scalar = (scalar_bitmap & (UINT8_C(1) << sub_layer))
+                                   ? scalar[sub_layer]
+                                   : cell->light_radiance[sub_layer];
+        if (!cell->light_next_known[sub_layer] || cell->light_next_radiance[sub_layer] != next_scalar) {
+            changed = true;
+        }
+        cell->light_next_radiance[sub_layer] = next_scalar;
+        cell->light_next_known[sub_layer] = 1;
+        for (size_t channel = 0; channel < 3; channel++) {
+            uint16_t next_rgb = (rgb_bitmap & (UINT8_C(1) << sub_layer))
+                                    ? rgb[sub_layer][channel]
+                                    : cell->light_rgb_radiance[sub_layer][channel];
+            if (cell->light_next_rgb_radiance[sub_layer][channel] != next_rgb) {
+                changed = true;
+            }
+            cell->light_next_rgb_radiance[sub_layer][channel] = next_rgb;
+        }
+    }
+    if (cell->light_next_rgb_explicit != rgb_bitmap) {
+        changed = true;
+    }
+    cell->light_next_rgb_explicit = rgb_bitmap;
+    if (changed) {
+        level_lighting_revision[current_level_index]++;
+    }
+}
+
+bool map_light_keyframe_transaction_begin(uint64_t generation,
+                                           uint64_t start_seconds,
+                                           uint64_t end_seconds,
+                                           uint8_t flags) {
+    if (generation == 0 || end_seconds <= start_seconds || flags == 0 ||
+        (flags & ~(MAP2_LIGHT_KEYFRAME_CONTINUOUS | MAP2_LIGHT_KEYFRAME_SNAP)) != 0) {
+        return false;
+    }
+    map_light_keyframe_transaction_abort();
+    map_light_keyframe_transaction.entries =
+        xcalloc(MAP_LIGHT_KEYFRAME_STAGE_MAX, sizeof(*map_light_keyframe_transaction.entries));
+    map_light_keyframe_transaction.active = true;
+    map_light_keyframe_transaction.generation = generation;
+    map_light_keyframe_transaction.start_seconds = start_seconds;
+    map_light_keyframe_transaction.end_seconds = end_seconds;
+    map_light_keyframe_transaction.flags = flags;
+    return true;
+}
+
+bool map_light_keyframe_transaction_pending(void) {
+    return map_light_keyframe_transaction.active;
+}
+
+bool map_light_keyframe_transaction_stage(int depth,
+                                           int x,
+                                           int y,
+                                           uint8_t scalar_bitmap,
+                                           const uint16_t scalar[NUM_SUB_LAYERS],
+                                           uint8_t rgb_bitmap,
+                                           const uint16_t rgb[NUM_SUB_LAYERS][3]) {
+    if (!map_light_keyframe_transaction.active || depth < -MAP2_MAX_DEPTH ||
+        depth > MAP2_MAX_DEPTH || x < 0 || y < 0 ||
+        map_light_keyframe_transaction.count >= MAP_LIGHT_KEYFRAME_STAGE_MAX) {
+        return false;
+    }
+    map_light_keyframe_stage_t *entry =
+        &map_light_keyframe_transaction.entries[map_light_keyframe_transaction.count++];
+    entry->depth = depth;
+    entry->x = x;
+    entry->y = y;
+    entry->scalar_bitmap = scalar_bitmap;
+    memcpy(entry->scalar, scalar, sizeof(entry->scalar));
+    entry->rgb_bitmap = rgb_bitmap;
+    memcpy(entry->rgb, rgb, sizeof(entry->rgb));
+    return true;
+}
+
+void map_light_keyframe_transaction_commit(void) {
+    if (!map_light_keyframe_transaction.active) {
+        return;
+    }
+    for (size_t i = 0; i < map_light_keyframe_transaction.count; i++) {
+        map_light_keyframe_stage_t *entry = &map_light_keyframe_transaction.entries[i];
+        if (!map_select_level(entry->depth, false)) {
+            continue;
+        }
+        map_set_light_keyframe(entry->x,
+                               entry->y,
+                               map_light_keyframe_transaction.generation,
+                               map_light_keyframe_transaction.start_seconds,
+                               map_light_keyframe_transaction.end_seconds,
+                               map_light_keyframe_transaction.flags,
+                               entry->scalar_bitmap,
+                               entry->scalar,
+                               entry->rgb_bitmap,
+                               entry->rgb);
+    }
+    map_select_level(0, true);
+    map_light_keyframe_transaction_abort();
+}
+
+void map_light_keyframe_transaction_abort(void) {
+    free(map_light_keyframe_transaction.entries);
+    memset(&map_light_keyframe_transaction, 0, sizeof(map_light_keyframe_transaction));
 }
 
 /**
@@ -1421,9 +1596,79 @@ static void map_animate_object(struct MapCell *cell, int layer) {
     }
 }
 
+/**
+ * Request one redraw when the visible timed-light blend enters a new game
+ * minute.  The renderer still samples the exact bounded clock position, but
+ * the redraw/cache invalidation boundary remains deliberately coarse and
+ * deterministic.
+ */
+static void map_temporal_lighting_update(void) {
+    if (!MapData.light_keyframe_valid || MapData.light_keyframe_end_seconds <=
+                                                     MapData.light_keyframe_start_seconds) {
+        map_temporal_lighting_bucket = UINT64_MAX;
+        return;
+    }
+
+    uint64_t now;
+    if (!telemetry_game_time_seconds(&now)) {
+        return;
+    }
+
+    uint64_t duration = MapData.light_keyframe_end_seconds - MapData.light_keyframe_start_seconds;
+    uint64_t progress = now <= MapData.light_keyframe_start_seconds
+                            ? 0
+                            : now - MapData.light_keyframe_start_seconds;
+    progress = MIN(progress, duration);
+    uint64_t bucket = (progress * UINT64_C(60)) / duration;
+    if (bucket == map_temporal_lighting_bucket) {
+        return;
+    }
+    map_temporal_lighting_bucket = bucket;
+
+    bool endpoint_differs = false;
+    size_t cell_count = (size_t)map_width * MAP_FOW_SIZE * map_height * MAP_FOW_SIZE;
+    for (size_t level = 0; level < arraysize(level_cells) && !endpoint_differs; level++) {
+        if (level_cells[level] == NULL || !(map_level_mask & (UINT16_C(1) << level))) {
+            continue;
+        }
+        for (size_t index = 0; index < cell_count && !endpoint_differs; index++) {
+            const MapCell *cell = &level_cells[level][index];
+            if (!cell->light_keyframe_valid) {
+                continue;
+            }
+            for (uint8_t sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                if (!cell->light_next_known[sub_layer]) {
+                    continue;
+                }
+                if (cell->light_radiance[sub_layer] != cell->light_next_radiance[sub_layer]) {
+                    endpoint_differs = true;
+                    break;
+                }
+                for (size_t channel = 0; channel < 3; channel++) {
+                    if (cell->light_rgb_radiance[sub_layer][channel] !=
+                        cell->light_next_rgb_radiance[sub_layer][channel]) {
+                        endpoint_differs = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (!endpoint_differs) {
+        return;
+    }
+    for (size_t level = 0; level < arraysize(level_lighting_revision); level++) {
+        level_lighting_revision[level]++;
+    }
+    map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+}
+
 void map_animate(void) {
     int x, y, layer;
     struct MapCell *cell;
+
+    map_temporal_lighting_update();
 
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         if (!(map_level_mask & (UINT16_C(1) << MAP2_DEPTH_INDEX(depth))) ||
@@ -2295,6 +2540,56 @@ static uint8_t map_lighting_sub_layer(const struct MapCell *cell) {
     return selected_has_floor ? selected : 0;
 }
 
+static uint16_t map_lighting_interpolate(uint16_t current,
+                                         uint16_t next,
+                                         uint64_t progress,
+                                         uint64_t duration) {
+    if (progress == 0 || current == next) {
+        return current;
+    }
+    if (progress >= duration) {
+        return next;
+    }
+    if (next > current) {
+        uint64_t delta = (uint64_t)(next - current);
+        return (uint16_t)MIN(UINT16_MAX, (uint64_t)current + (delta * progress + duration / 2) / duration);
+    }
+    uint64_t delta = (uint64_t)(current - next);
+    uint64_t reduction = (delta * progress + duration / 2) / duration;
+    return (uint16_t)(reduction > current ? 0 : current - reduction);
+}
+
+/** Resolve one cell's temporal aggregate endpoint before spatial filtering. */
+static bool map_lighting_temporal_sample(const MapCell *cell,
+                                         uint8_t sub_layer,
+                                         uint16_t *scalar,
+                                         uint16_t rgb[3]) {
+    if (!cell->light_keyframe_valid || !cell->light_known[sub_layer] ||
+        !cell->light_next_known[sub_layer]) {
+        return false;
+    }
+
+    uint64_t now;
+    if (!telemetry_game_time_seconds(&now)) {
+        return false;
+    }
+    uint64_t duration = cell->light_keyframe_end_seconds - cell->light_keyframe_start_seconds;
+    uint64_t progress = now <= cell->light_keyframe_start_seconds
+                            ? 0
+                            : now - cell->light_keyframe_start_seconds;
+    *scalar = map_lighting_interpolate(cell->light_radiance[sub_layer],
+                                       cell->light_next_radiance[sub_layer],
+                                       progress,
+                                       duration);
+    for (size_t channel = 0; channel < 3; channel++) {
+        rgb[channel] = map_lighting_interpolate(cell->light_rgb_radiance[sub_layer][channel],
+                                                cell->light_next_rgb_radiance[sub_layer][channel],
+                                                progress,
+                                                duration);
+    }
+    return true;
+}
+
 /**
  * Resolve a light sample without treating an unseen map-cache cell as dark.
  *
@@ -2313,8 +2608,10 @@ static void map_lighting_radiance(int x,
     int cache_height = map_height * MAP_FOW_SIZE;
 
     if (cell->light_known[sub_layer]) {
-        *scalar = cell->light_radiance[sub_layer];
-        memcpy(rgb, cell->light_rgb_radiance[sub_layer], sizeof(cell->light_rgb_radiance[0]));
+        if (!map_lighting_temporal_sample(cell, sub_layer, scalar, rgb)) {
+            *scalar = cell->light_radiance[sub_layer];
+            memcpy(rgb, cell->light_rgb_radiance[sub_layer], sizeof(cell->light_rgb_radiance[0]));
+        }
         return;
     }
 

@@ -314,6 +314,9 @@ extern void telemetry_game_time_sync(uint64_t game_seconds, uint32_t millis_per_
 
 extern bool telemetry_game_time_get(uint64_t *game_minutes, uint32_t *millis_per_game_minute);
 
+/** Return the current synchronized absolute game seconds, including progress. */
+extern bool telemetry_game_time_seconds(uint64_t *game_seconds);
+
 extern void player_draw_exp_progress(SDL_Surface *surface, int x, int y, int64_t xp, uint8_t level);
 
 /** Public API implemented in src/gui/widgets/playerdoll.c. */

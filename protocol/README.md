@@ -9,7 +9,11 @@ The game and metaserver protocols are separate contract families. This package
 currently publishes only the classic game command registry. Add another family
 only with its own namespace, specification, version, fixtures, and validation.
 
-Protocol v1079 adds the server-to-client `PLAYER_STATUS` command. Its payload is
+Protocol v1080 adds timed celestial aggregate-light keyframes to MAP2. Its
+payload carries a bounded absolute game-time interval and next-endpoint samples;
+the client interpolates locally without periodic MAP traffic.
+
+Protocol v1079 added the server-to-client `PLAYER_STATUS` command. Its payload is
 one bounded operation byte: a snapshot contains a 16-bit count and complete
 entries, an upsert contains one complete entry, and a removal contains one
 status key. Each entry contains a NUL-terminated stable key, a 16-bit face, a

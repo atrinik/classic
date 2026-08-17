@@ -626,6 +626,7 @@ void draw_client_map(object *pl) {
         if (!CONTR(pl)->last_update || !tile_map) {
             CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_NEW;
             map_client_cache_clear(&CONTR(pl)->cs->lastmap);
+            CONTR(pl)->cs->lastmap_light_generation = 0;
             CONTR(pl)->last_update = pl->map;
             redraw_below = 1;
         } else {
@@ -1298,6 +1299,9 @@ void draw_client_map2(object *pl) {
     int layer, raw_light[NUM_SUB_LAYERS], light_set[NUM_SUB_LAYERS];
     uint16_t light_radiance[NUM_SUB_LAYERS];
     uint16_t light_rgb_radiance[NUM_SUB_LAYERS][3];
+    uint16_t light_next_radiance[NUM_SUB_LAYERS];
+    uint16_t light_next_rgb_radiance[NUM_SUB_LAYERS][3];
+    MapSpace *light_spaces[NUM_SUB_LAYERS];
     int ext_flags, anim_num;
     int num_layers;
     object *tmp, *tmp2;
@@ -1309,6 +1313,26 @@ void draw_client_map2(object *pl) {
     uint16_t level_packet_count = 0;
     int sub_layer, socket_layer;
     packet_writer_mark_t packet_save_buf;
+    bool timed_light_descriptor = false;
+    uint64_t timed_light_generation = 0;
+    uint64_t timed_light_start_seconds = 0;
+    uint64_t timed_light_end_seconds = 0;
+    uint8_t timed_light_flags = MAP2_LIGHT_KEYFRAME_CONTINUOUS;
+
+    if (pl->map->celestial_schema == 1 &&
+        celestial_light_keyframe_ensure(pl->map, (uint64_t)todtick)) {
+        timed_light_generation = celestial_light_generation(pl->map);
+        timed_light_descriptor = timed_light_generation != 0 &&
+                                 (CONTR(pl)->map_update_cmd != MAP_UPDATE_CMD_SAME ||
+                                  timed_light_generation != CONTR(pl)->cs->lastmap_light_generation);
+        timed_light_start_seconds = (uint64_t)todtick * UINT64_C(60) * UINT64_C(60);
+        timed_light_end_seconds = timed_light_start_seconds > UINT64_MAX - UINT64_C(3600)
+                                      ? UINT64_MAX
+                                      : timed_light_start_seconds + UINT64_C(3600);
+        if ((uint64_t)pticks % PTICKS_PER_CLOCK != 0) {
+            timed_light_flags = MAP2_LIGHT_KEYFRAME_SNAP;
+        }
+    }
 
     /* Any kind of special vision? */
     special_vision =
@@ -1429,7 +1453,17 @@ void draw_client_map2(object *pl) {
     packet_writer_write_uint8(packet, pl->sub_layer);
     packet_debug_data(packet, 0, "Number of continuation packets");
     size_t continuation_count_pos = packet->len;
-    packet_writer_write_uint16(packet, 0);
+    packet_writer_write_uint16(packet, timed_light_descriptor ? MAP2_CONTINUATION_TIMED_LIGHT : 0);
+    if (timed_light_descriptor) {
+        packet_debug_data(packet, 0, "Timed-light generation");
+        packet_writer_write_uint64(packet, timed_light_generation);
+        packet_debug_data(packet, 0, "Timed-light start game seconds");
+        packet_writer_write_uint64(packet, timed_light_start_seconds);
+        packet_debug_data(packet, 0, "Timed-light end game seconds");
+        packet_writer_write_uint64(packet, timed_light_end_seconds);
+        packet_debug_data(packet, 0, "Timed-light flags");
+        packet_writer_write_uint8(packet, timed_light_flags);
+    }
 
     packet_header = packet;
     uint8_t present_level_count = 0;
@@ -1623,7 +1657,12 @@ void draw_client_map2(object *pl) {
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                     light_set[sub_layer] = 0;
                     light_radiance[sub_layer] = 0;
+                    light_next_radiance[sub_layer] = 0;
                     memset(light_rgb_radiance[sub_layer], 0, sizeof(light_rgb_radiance[sub_layer]));
+                    memset(light_next_rgb_radiance[sub_layer],
+                           0,
+                           sizeof(light_next_rgb_radiance[sub_layer]));
+                    light_spaces[sub_layer] = NULL;
                 }
 
                 /* Initialize default values for some variables. */
@@ -1717,6 +1756,10 @@ void draw_client_map2(object *pl) {
                         if (tmp != NULL &&
                             (!light_set[sub_layer] || (layer == LAYER_EFFECT && sub_layer > 0))) {
                             light_set[sub_layer] = 1;
+                            if (tmp->map->celestial_schema == 1) {
+                                celestial_light_keyframe_ensure(tmp->map, (uint64_t)todtick);
+                            }
+                            light_spaces[sub_layer] = GET_MAP_SPACE_PTR(tmp->map, tmp->x, tmp->y);
                             raw_light[sub_layer] = map_get_darkness(tmp->map, tmp->x, tmp->y, NULL);
 
                             if (CONTR(pl)->tli) {
@@ -2160,6 +2203,68 @@ void draw_client_map2(object *pl) {
                     }
                 }
 
+                uint8_t light_next_bitmap = 0;
+                uint8_t light_next_rgb_bitmap = 0;
+                bool light_next_changed = false;
+                for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                    uint16_t current_scalar = light_set[sub_layer] ? light_radiance[sub_layer] : 0;
+                    uint16_t current_rgb[3] = {current_scalar, current_scalar, current_scalar};
+                    if (light_set[sub_layer]) {
+                        memcpy(current_rgb,
+                               light_rgb_radiance[sub_layer],
+                               sizeof(current_rgb));
+                    }
+                    light_next_radiance[sub_layer] = current_scalar;
+                    memcpy(light_next_rgb_radiance[sub_layer],
+                           current_rgb,
+                           sizeof(light_next_rgb_radiance[sub_layer]));
+
+                    if (light_set[sub_layer] && light_spaces[sub_layer] != NULL &&
+                        light_spaces[sub_layer]->celestial_light_next_value !=
+                            light_spaces[sub_layer]->celestial_light_value) {
+                        MapSpace next_space = *light_spaces[sub_layer];
+                        int next_raw = raw_light[sub_layer] -
+                                       light_spaces[sub_layer]->celestial_light_value +
+                                       light_spaces[sub_layer]->celestial_light_next_value;
+                        next_space.celestial_light_value =
+                            light_spaces[sub_layer]->celestial_light_next_value;
+                        memcpy(next_space.celestial_light_rgb,
+                               light_spaces[sub_layer]->celestial_light_next_rgb,
+                               sizeof(next_space.celestial_light_rgb));
+                        light_radiance_from_raw(&next_space,
+                                                next_raw,
+                                                &light_next_radiance[sub_layer],
+                                                light_next_rgb_radiance[sub_layer]);
+                    }
+
+                    if (light_next_radiance[sub_layer] != current_scalar ||
+                        memcmp(light_next_rgb_radiance[sub_layer], current_rgb, sizeof(current_rgb)) != 0 ||
+                        (timed_light_descriptor &&
+                         (mp->light_next_generation != timed_light_generation ||
+                          !mp->light_next_known[sub_layer] ||
+                          mp->light_next_radiance[sub_layer] != light_next_radiance[sub_layer]))) {
+                        light_next_bitmap |= UINT8_C(1) << sub_layer;
+                    }
+                    if (light_next_rgb_radiance[sub_layer][0] != light_next_radiance[sub_layer] ||
+                        light_next_rgb_radiance[sub_layer][1] != light_next_radiance[sub_layer] ||
+                        light_next_rgb_radiance[sub_layer][2] != light_next_radiance[sub_layer]) {
+                        light_next_rgb_bitmap |= UINT8_C(1) << sub_layer;
+                    }
+                }
+                if (timed_light_descriptor &&
+                    (mp->light_next_generation != timed_light_generation ||
+                     mp->light_next_rgb_explicit != light_next_rgb_bitmap)) {
+                    light_next_changed = true;
+                }
+                for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                    if (timed_light_descriptor &&
+                        (mp->light_next_generation != timed_light_generation ||
+                         !mp->light_next_known[sub_layer] ||
+                         mp->light_next_radiance[sub_layer] != light_next_radiance[sub_layer])) {
+                        light_next_changed = true;
+                    }
+                }
+
                 /* A zero-valued sample is meaningful too. Compare the completed
                  * light field independently of whether a dark tile had a drawable
                  * object, and send every visible sub-layer at least once. */
@@ -2277,6 +2382,9 @@ void draw_client_map2(object *pl) {
                 if (light_rgb_changed) {
                     ext_flags |= MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16;
                 }
+                if (timed_light_descriptor && light_next_changed) {
+                    ext_flags |= MAP2_FLAG_EXT_LIGHT_KEYFRAME;
+                }
 
                 /* Add flags for this tile. */
                 packet_debug_data(packet, 1, "Extended tile flags");
@@ -2312,6 +2420,32 @@ void draw_client_map2(object *pl) {
                         mp->light_rgb_known[sub_layer] = 1;
                     }
                     mp->light_rgb_explicit = light_rgb_bitmap;
+                }
+
+                if (ext_flags & MAP2_FLAG_EXT_LIGHT_KEYFRAME) {
+                    packet_debug_data(packet, 1, "Next-hour scalar endpoint bitmap");
+                    packet_writer_write_uint8(packet, light_next_bitmap);
+                    for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                        if (light_next_bitmap & (UINT8_C(1) << sub_layer)) {
+                            packet_writer_write_uint16(packet, light_next_radiance[sub_layer]);
+                        }
+                        mp->light_next_radiance[sub_layer] = light_next_radiance[sub_layer];
+                        mp->light_next_known[sub_layer] = 1;
+                    }
+                    packet_debug_data(packet, 1, "Next-hour RGB endpoint bitmap");
+                    packet_writer_write_uint8(packet, light_next_rgb_bitmap);
+                    for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                        if (light_next_rgb_bitmap & (UINT8_C(1) << sub_layer)) {
+                            packet_writer_write_uint16(packet, light_next_rgb_radiance[sub_layer][0]);
+                            packet_writer_write_uint16(packet, light_next_rgb_radiance[sub_layer][1]);
+                            packet_writer_write_uint16(packet, light_next_rgb_radiance[sub_layer][2]);
+                        }
+                        memcpy(mp->light_next_rgb_radiance[sub_layer],
+                               light_next_rgb_radiance[sub_layer],
+                               sizeof(mp->light_next_rgb_radiance[sub_layer]));
+                    }
+                    mp->light_next_rgb_explicit = light_next_rgb_bitmap;
+                    mp->light_next_generation = timed_light_generation;
                 }
 
                 /* Animation? Add its type and value. */
@@ -2432,8 +2566,10 @@ void draw_client_map2(object *pl) {
         continuation_packets[continuation_packet_count++] = continuation;
     }
 
-    packet_header->data[continuation_count_pos] = continuation_packet_count >> 8;
-    packet_header->data[continuation_count_pos + 1] = continuation_packet_count & UINT8_MAX;
+    uint16_t continuation_marker = continuation_packet_count |
+                                   (timed_light_descriptor ? MAP2_CONTINUATION_TIMED_LIGHT : 0);
+    packet_header->data[continuation_count_pos] = continuation_marker >> 8;
+    packet_header->data[continuation_count_pos + 1] = continuation_marker & UINT8_MAX;
     HARD_ASSERT(packet_writer_finish(packet_header));
     bool connected = CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED;
     socket_send_packet(CONTR(pl)->cs, packet_header);
@@ -2444,6 +2580,10 @@ void draw_client_map2(object *pl) {
     for (uint16_t i = 0; i < level_packet_count; i++) {
         HARD_ASSERT(level_sent[i]);
         packet_free(level_packets[i]);
+    }
+
+    if (timed_light_descriptor) {
+        CONTR(pl)->cs->lastmap_light_generation = timed_light_generation;
     }
 
     if (connected) {
