@@ -240,6 +240,10 @@ static char *render_profiler_widget_text(const render_profile_snapshot_t *snapsh
 char *render_profiler_widget_text_for_test(const render_profile_snapshot_t *snapshot) {
     return render_profiler_widget_text(snapshot);
 }
+
+void render_profiler_set_completed_generation_for_test(uint32_t generation) {
+    completed.generation = generation;
+}
 #endif
 
 /** @copydoc widgetdata::draw_func */

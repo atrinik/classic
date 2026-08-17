@@ -19,6 +19,7 @@
     } while (0)
 
 char *render_profiler_widget_text_for_test(const render_profile_snapshot_t *snapshot);
+void render_profiler_set_completed_generation_for_test(uint32_t generation);
 
 /* The formatter test does not execute the widget's SDL/scrollbar paths. */
 Uint32 pixel_format_map_rgba(SDL_PixelFormat format,
@@ -54,8 +55,9 @@ void text_show(SDL_Surface *surface,
     (void)x;
     (void)y;
     (void)color_notation;
-    (void)flags;
-    (void)box;
+    if ((flags & TEXT_LINES_CALC) != 0) {
+        box->y = 500;
+    }
 }
 
 void scrollbar_create(scrollbar_struct *scrollbar,
@@ -70,6 +72,10 @@ void scrollbar_create(scrollbar_struct *scrollbar,
     (void)scroll_offset;
     (void)num_lines;
     (void)max_lines;
+}
+
+void scrollbar_info_create(scrollbar_info_struct *info) {
+    (void)info;
 }
 
 void scrollbar_scroll_to(scrollbar_struct *scrollbar, int scroll) {
@@ -132,8 +138,47 @@ static void test_zero_interval_and_calls_are_safe(void) {
     free(text);
 }
 
+static void test_widget_navigation_and_resize(void) {
+    SDL_Surface *surface = SDL_CreateSurface(300, 145, SDL_PIXELFORMAT_RGBA32);
+    widgetdata widget = {
+        .w = 300,
+        .h = 145,
+        .redraw = 1,
+        .surface = surface,
+    };
+    SDL_Event event = {0};
+
+    TEST_CHECK(surface != NULL);
+    widget_render_profiler_init(&widget);
+    widget.draw_func(&widget);
+
+    widget.h = 200;
+    widget.redraw = 1;
+    widget.draw_func(&widget);
+
+    event.type = SDL_EVENT_MOUSE_WHEEL;
+    event.wheel.y = 1;
+    TEST_CHECK(widget.event_func(&widget, &event) == 1);
+    event.wheel.y = -1;
+    TEST_CHECK(widget.event_func(&widget, &event) == 1);
+
+    event.type = SDL_EVENT_KEY_DOWN;
+    event.key.key = SDLK_PAGEUP;
+    TEST_CHECK(widget.event_func(&widget, &event) == 1);
+    event.key.key = SDLK_PAGEDOWN;
+    TEST_CHECK(widget.event_func(&widget, &event) == 1);
+
+    render_profiler_set_completed_generation_for_test(1);
+    widget.redraw = 0;
+    widget.background_func(&widget, 0);
+    TEST_CHECK(widget.redraw == 1);
+    widget.deinit_func(&widget);
+    SDL_DestroySurface(surface);
+}
+
 int main(void) {
     test_stage_metadata_is_rendered();
     test_zero_interval_and_calls_are_safe();
+    test_widget_navigation_and_resize();
     return 0;
 }
