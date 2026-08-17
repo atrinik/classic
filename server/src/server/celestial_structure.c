@@ -2028,6 +2028,8 @@ static bool private_map_owner_from_path(const char *path,
                                         size_t error_size);
 #endif
 
+static bool celestial_map_identity_valid(const char *path);
+
 static bool provenance_path(const char *map_path_value,
                             char output[HUGE_BUF],
                             char digest_output[SHA256_DIGEST_LENGTH * 2 + 1]) {
@@ -2046,6 +2048,29 @@ static bool provenance_path(const char *map_path_value,
                     "%s/celestial-provenance/%s.json",
                     settings.datapath,
                     digest_output) >= 0;
+}
+
+static bool path_under_root(const char *path, const char *root) {
+    if (path == NULL || root == NULL) {
+        return false;
+    }
+    size_t root_length = strlen(root);
+    return root_length > 0 && strncmp(path, root, root_length) == 0 &&
+           path[root_length] == '/';
+}
+
+static bool character_transaction_paths_valid(const char *map_path,
+                                              const char *ledger_path,
+                                              const char *player_path) {
+    char players_root[HUGE_BUF], expected_ledger[HUGE_BUF], ledger_id[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (snprintf(players_root, sizeof(players_root), "%s/players", settings.datapath) < 0 ||
+        strlen(players_root) >= sizeof(players_root) ||
+        !path_under_root(map_path, players_root) || !path_under_root(player_path, players_root) ||
+        !celestial_map_identity_valid(map_path) ||
+        !provenance_path(map_path, expected_ledger, ledger_id)) {
+        return false;
+    }
+    return strcmp(ledger_path, expected_ledger) == 0;
 }
 
 static bool provenance_source(const mapstruct *map,
@@ -3269,9 +3294,11 @@ bool celestial_structure_begin_character_transaction(const char *account,
                                                      size_t error_size) {
     char ledger_path[HUGE_BUF], ledger_id[SHA256_DIGEST_LENGTH * 2 + 1];
     if (map_path == NULL || player_path == NULL ||
-        !celestial_map_identity_valid(map_path) ||
         !provenance_path(map_path, ledger_path, ledger_id)) {
         return set_error(error, error_size, "cannot resolve celestial character transaction paths");
+    }
+    if (!character_transaction_paths_valid(map_path, ledger_path, player_path)) {
+        return set_error(error, error_size, "celestial character transaction paths are outside private state");
     }
     return character_transaction_write(account,
                                        character,
@@ -3309,7 +3336,8 @@ bool celestial_structure_commit_character_transaction(const char *account,
                  strcmp(recorded_character, character) == 0 &&
                  preflight_json_string(contents, end, "map_path", VS(map_path)) &&
                  preflight_json_string(contents, end, "ledger_path", VS(ledger_path)) &&
-                 preflight_json_string(contents, end, "player_path", VS(player_path));
+                 preflight_json_string(contents, end, "player_path", VS(player_path)) &&
+                 character_transaction_paths_valid(map_path, ledger_path, player_path);
     free(contents);
     if (!valid) {
         return set_error(error,
@@ -3402,10 +3430,9 @@ bool celestial_structure_recover_character_transactions(char *error, size_t erro
                      preflight_json_string(contents, end, "account", VS(account)) &&
                      preflight_json_string(contents, end, "character", VS(character)) &&
                      preflight_json_string(contents, end, "map_path", VS(map_path)) &&
-                     celestial_map_identity_valid(map_path) &&
                      preflight_json_string(contents, end, "ledger_path", VS(ledger_path)) &&
                      preflight_json_string(contents, end, "player_path", VS(player_path)) &&
-                     string_startswith(player_path, settings.datapath);
+                     character_transaction_paths_valid(map_path, ledger_path, player_path);
         free(contents);
         if (!valid) {
             closedir(directory_handle);

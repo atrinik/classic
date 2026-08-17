@@ -1397,6 +1397,71 @@ START_TEST(test_committed_map_transaction_missing_unique_is_quarantined) {
     ck_assert_int_eq(rmdir(temporary_root), 0);
 }
 END_TEST
+
+START_TEST(test_character_transaction_rejects_path_escape) {
+    char temporary_root[] = "/tmp/atrinik-celestial-character-path-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
+
+    char saved_datapath[HUGE_BUF];
+    snprintf(VS(saved_datapath), "%s", settings.datapath);
+    char datapath[HUGE_BUF], map_path[HUGE_BUF], player_path[HUGE_BUF];
+    char transaction_dir[HUGE_BUF], transaction_path[HUGE_BUF];
+    snprintf(VS(datapath), "%s/data", temporary_root);
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
+    strcpy(map_path, datapath);
+    strcat(map_path, "/players/a/alice/$maps$apartment");
+    strcpy(player_path, datapath);
+    strcat(player_path, "/players/a/alice/player.dat");
+    strcpy(transaction_dir, datapath);
+    strcat(transaction_dir, "/celestial-character-transactions");
+
+    char error[HUGE_BUF];
+    ck_assert_msg(celestial_structure_begin_character_transaction("alice",
+                                                                  "Alice",
+                                                                  map_path,
+                                                                  player_path,
+                                                                  VS(error)),
+                  "%s",
+                  error);
+
+    unsigned char identity_digest[SHA256_DIGEST_LENGTH];
+    ck_assert_ptr_nonnull(SHA256((const unsigned char *)"alice:Alice",
+                                 strlen("alice:Alice"),
+                                 identity_digest));
+    char transaction_id[SHA256_DIGEST_LENGTH * 2 + 1];
+    for (size_t i = 0; i < sizeof(identity_digest); i++) {
+        snprintf(transaction_id + i * 2, 3, "%02x", identity_digest[i]);
+    }
+    transaction_id[SHA256_DIGEST_LENGTH * 2] = '\0';
+    strcpy(transaction_path, transaction_dir);
+    strcat(transaction_path, "/");
+    strcat(transaction_path, transaction_id);
+    strcat(transaction_path, ".json");
+    FILE *transaction = fopen(transaction_path, "wb");
+    ck_assert_ptr_nonnull(transaction);
+    ck_assert_int_ne(fprintf(transaction,
+                             "{\n"
+                             "  \"schema_version\": 1,\n"
+                             "  \"state\": \"prepared\",\n"
+                             "  \"account\": \"alice\",\n"
+                             "  \"character\": \"Alice\",\n"
+                             "  \"map_path\": \"/tmp/escape\",\n"
+                             "  \"ledger_path\": \"/tmp/escape-ledger\",\n"
+                             "  \"player_path\": \"%s\"\n"
+                             "}\n",
+                             player_path),
+                      0);
+    ck_assert_int_eq(fclose(transaction), 0);
+    ck_assert(!celestial_structure_recover_character_transactions(VS(error)));
+    ck_assert(path_exists(transaction_path));
+
+    ck_assert_int_eq(unlink(transaction_path), 0);
+    ck_assert_int_eq(rmdir(transaction_dir), 0);
+    ck_assert_int_eq(rmdir(datapath), 0);
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
+    ck_assert_int_eq(rmdir(temporary_root), 0);
+}
+END_TEST
 #endif
 
 static Suite *suite(void) {
@@ -1412,6 +1477,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_character_transaction_lifecycle_is_durable);
     tcase_add_test(tc_core, test_character_transaction_recovery_quarantines_prepared_group);
     tcase_add_test(tc_core, test_committed_map_transaction_missing_unique_is_quarantined);
+    tcase_add_test(tc_core, test_character_transaction_rejects_path_escape);
 #endif
     tcase_add_test(tc_core, test_saved_v1_map_swaps_and_reloads_mutable_state);
     tcase_add_test(tc_core, test_metadata_is_validated_consumed_sorted_and_saved);
