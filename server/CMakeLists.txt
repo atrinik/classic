@@ -648,10 +648,11 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
 
     if (NOT IS_DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/maps" OR
             NOT IS_DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/lib" OR
-            NOT IS_DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/client-maps")
+            NOT IS_DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/client-maps" OR
+            NOT IS_REGULAR_FILE "${ATRINIK_SERVER_PACKAGE_ROOT}/manifest.json")
         message(FATAL_ERROR
             "ATRINIK_SERVER_PACKAGE_ROOT must contain maps/, lib/, and "
-            "client-maps/.")
+            "client-maps/, plus manifest.json.")
     endif ()
 
     install(TARGETS ${EXECUTABLE} plugin_arena plugin_python
@@ -677,6 +678,8 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
         DESTINATION server/lib)
     install(DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/client-maps"
         DESTINATION server/assets)
+    install(FILES "${ATRINIK_SERVER_PACKAGE_ROOT}/manifest.json"
+        DESTINATION server)
     install(DIRECTORY install_data resources tools
         DESTINATION server
         PATTERN ".git" EXCLUDE)

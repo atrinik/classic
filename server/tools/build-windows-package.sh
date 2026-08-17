@@ -98,6 +98,7 @@ cmake -E remove_directory build/windows-release
 cmake -E make_directory "${package_root}"
 cmake -E copy_directory runtime/content/maps "${package_root}/maps"
 cmake -E copy_directory runtime/content/lib "${package_root}/lib"
+cmake -E copy runtime/content/manifest.json "${package_root}/manifest.json"
 
 cmake -S . -B "${region_build}" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
