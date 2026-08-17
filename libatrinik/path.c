@@ -487,10 +487,26 @@ bool path_write_atomic_existing(const char *path,
     if (fclose(fp) != 0) {
         ok = false;
     }
-    if (!ok || path_rename(temporary, path) != 0) {
+    if (!ok) {
         unlink(temporary);
         return false;
     }
+    if (path_rename(temporary, path) != 0) {
+        unlink(temporary);
+        return false;
+    }
+#ifndef WIN32
+    char *directory = path_dirname(path);
+    int directory_fd = directory != NULL ? open(directory, O_RDONLY | O_DIRECTORY) : -1;
+    bool directory_synced = directory_fd >= 0 && fsync(directory_fd) == 0;
+    if (directory_fd >= 0 && close(directory_fd) != 0) {
+        directory_synced = false;
+    }
+    free(directory);
+    if (!directory_synced) {
+        return false;
+    }
+#endif
     return true;
 }
 

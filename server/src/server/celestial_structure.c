@@ -35,11 +35,15 @@
 #endif
 
 #define CELESTIAL_PREFLIGHT_FILE_LIMIT (64U * 1024U * 1024U)
+#define CELESTIAL_SNAPSHOT_MAX_FILES 65536U
+#define CELESTIAL_SNAPSHOT_MAX_BYTES (4ULL * 1024ULL * 1024ULL * 1024ULL)
 
 static bool celestial_v1_runtime_active;
 static char celestial_artifact_commit[41];
 static int celestial_writer_lease_fd = -1;
 static bool set_error(char *error, size_t error_size, const char *format, ...);
+static char *preflight_read_file(const char *path, size_t *size, char *error, size_t error_size);
+static bool preflight_sha256_file(const char *path, char output[SHA256_DIGEST_LENGTH * 2 + 1]);
 
 #ifndef WIN32
 static bool preflight_private_maps(char *digest,
@@ -59,6 +63,280 @@ static bool preflight_activation_snapshot(const char *manifest_digest,
                                           bool require_current_private_cohort,
                                           char *error,
                                           size_t error_size);
+
+#ifndef WIN32
+static bool celestial_snapshot_archive_path(char output[HUGE_BUF]) {
+    int written = snprintf(output,
+                           HUGE_BUF,
+                           "%s/celestial-activation-state",
+                           settings.datapath);
+    return written >= 0 && (size_t)written < HUGE_BUF;
+}
+
+static bool celestial_snapshot_excluded(const char *name) {
+    return strcmp(name, "celestial-activation-state") == 0 ||
+           string_startswith(name, "celestial-activation-state.tmp.") ||
+           strcmp(name, "celestial-activation-snapshot.json") == 0 ||
+           strcmp(name, "celestial-activation.json") == 0 ||
+           strcmp(name, "celestial-activation.lock") == 0;
+}
+
+static bool celestial_snapshot_digest_file(const char *relative,
+                                           const char *path,
+                                           unsigned char aggregate[SHA256_DIGEST_LENGTH],
+                                           size_t *files,
+                                           uint64_t *bytes,
+                                           char *error,
+                                           size_t error_size) {
+    char sha[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (!preflight_sha256_file(path, sha)) {
+        return set_error(error, error_size, "cannot hash activation snapshot file %s", relative);
+    }
+    uint64_t size = path_size(path);
+    if (++*files > CELESTIAL_SNAPSHOT_MAX_FILES ||
+        size > CELESTIAL_PREFLIGHT_FILE_LIMIT ||
+        *bytes > CELESTIAL_SNAPSHOT_MAX_BYTES - size) {
+        return set_error(error, error_size, "celestial activation snapshot exceeds its bounded state budget");
+    }
+    *bytes += size;
+    EVP_MD_CTX *context = EVP_MD_CTX_new();
+    if (context == NULL || EVP_DigestInit_ex(context, EVP_sha256(), NULL) != 1 ||
+        EVP_DigestUpdate(context, relative, strlen(relative)) != 1 ||
+        EVP_DigestUpdate(context, "\0", 1) != 1 ||
+        EVP_DigestUpdate(context, sha, strlen(sha)) != 1) {
+        if (context != NULL) {
+            EVP_MD_CTX_free(context);
+        }
+        return set_error(error, error_size, "cannot derive activation snapshot digest");
+    }
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    unsigned int digest_size = 0;
+    bool finalized = EVP_DigestFinal_ex(context, digest, &digest_size) == 1 &&
+                     digest_size == sizeof(digest);
+    EVP_MD_CTX_free(context);
+    if (!finalized) {
+        return set_error(error, error_size, "cannot finalize activation snapshot digest");
+    }
+    for (size_t i = 0; i < sizeof(digest); i++) {
+        aggregate[i] ^= digest[i];
+    }
+    return true;
+}
+
+static bool celestial_snapshot_inventory_directory(const char *directory,
+                                                   const char *relative,
+                                                   unsigned int depth,
+                                                   size_t *files,
+                                                   uint64_t *bytes,
+                                                   unsigned char aggregate[SHA256_DIGEST_LENGTH],
+                                                   char *error,
+                                                   size_t error_size) {
+    if (depth > 32) {
+        return set_error(error, error_size, "celestial activation snapshot nesting is too deep");
+    }
+    DIR *handle = opendir(directory);
+    if (handle == NULL) {
+        return set_error(error,
+                         error_size,
+                         "cannot inspect activation snapshot state: %s",
+                         strerror(errno));
+    }
+    struct dirent *entry;
+    while ((entry = readdir(handle)) != NULL) {
+        if (entry->d_name[0] == '.' || celestial_snapshot_excluded(entry->d_name)) {
+            continue;
+        }
+        char path[HUGE_BUF], child[HUGE_BUF];
+        int written = snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name);
+        int child_written = relative[0] == '\0'
+                                ? snprintf(child, sizeof(child), "%s", entry->d_name)
+                                : snprintf(child, sizeof(child), "%s/%s", relative, entry->d_name);
+        if (written < 0 || (size_t)written >= sizeof(path) || child_written < 0 ||
+            (size_t)child_written >= sizeof(child)) {
+            closedir(handle);
+            return set_error(error, error_size, "activation snapshot state path is too long");
+        }
+        struct stat statbuf;
+        if (lstat(path, &statbuf) != 0) {
+            closedir(handle);
+            return set_error(error,
+                             error_size,
+                             "cannot inspect activation snapshot state %s: %s",
+                             child,
+                             strerror(errno));
+        }
+        if (S_ISDIR(statbuf.st_mode)) {
+            if (!celestial_snapshot_inventory_directory(path,
+                                                         child,
+                                                         depth + 1,
+                                                         files,
+                                                         bytes,
+                                                         aggregate,
+                                                         error,
+                                                         error_size)) {
+                closedir(handle);
+                return false;
+            }
+        } else if (S_ISREG(statbuf.st_mode)) {
+            if (!celestial_snapshot_digest_file(child,
+                                                path,
+                                                aggregate,
+                                                files,
+                                                bytes,
+                                                error,
+                                                error_size)) {
+                closedir(handle);
+                return false;
+            }
+        } else {
+            closedir(handle);
+            return set_error(error, error_size, "activation snapshot state contains non-regular file %s", child);
+        }
+    }
+    closedir(handle);
+    return true;
+}
+
+static bool celestial_snapshot_copy_directory(const char *source,
+                                              const char *destination,
+                                              unsigned int depth,
+                                              char *error,
+                                              size_t error_size) {
+    if (depth > 32) {
+        return set_error(error, error_size, "celestial activation snapshot nesting is too deep");
+    }
+    DIR *handle = opendir(source);
+    if (handle == NULL) {
+        return set_error(error,
+                         error_size,
+                         "cannot read activation snapshot state: %s",
+                         strerror(errno));
+    }
+    struct dirent *entry;
+    while ((entry = readdir(handle)) != NULL) {
+        if (entry->d_name[0] == '.' || celestial_snapshot_excluded(entry->d_name)) {
+            continue;
+        }
+        char source_path[HUGE_BUF], destination_path[HUGE_BUF];
+        int source_written = snprintf(source_path, sizeof(source_path), "%s/%s", source, entry->d_name);
+        int destination_written = snprintf(destination_path,
+                                           sizeof(destination_path),
+                                           "%s/%s",
+                                           destination,
+                                           entry->d_name);
+        if (source_written < 0 || (size_t)source_written >= sizeof(source_path) ||
+            destination_written < 0 || (size_t)destination_written >= sizeof(destination_path)) {
+            closedir(handle);
+            return set_error(error, error_size, "activation snapshot state path is too long");
+        }
+        struct stat statbuf;
+        if (lstat(source_path, &statbuf) != 0) {
+            closedir(handle);
+            return set_error(error, error_size, "cannot inspect activation snapshot state: %s", strerror(errno));
+        }
+        if (S_ISDIR(statbuf.st_mode)) {
+            path_ensure_directories(destination_path);
+            if (!celestial_snapshot_copy_directory(source_path,
+                                                    destination_path,
+                                                    depth + 1,
+                                                    error,
+                                                    error_size)) {
+                closedir(handle);
+                return false;
+            }
+        } else if (S_ISREG(statbuf.st_mode)) {
+            size_t size;
+            char *contents = preflight_read_file(source_path, &size, error, error_size);
+            if (contents == NULL || !path_write_atomic(destination_path,
+                                                        contents,
+                                                        size,
+                                                        (unsigned int)(statbuf.st_mode & 0777))) {
+                free(contents);
+                closedir(handle);
+                return set_error(error, error_size, "cannot publish activation snapshot state %s", entry->d_name);
+            }
+            free(contents);
+        } else {
+            closedir(handle);
+            return set_error(error, error_size, "activation snapshot state contains non-regular file %s", entry->d_name);
+        }
+    }
+    closedir(handle);
+    return true;
+}
+
+static bool celestial_snapshot_create_archive(char digest[SHA256_DIGEST_LENGTH * 2 + 1],
+                                              size_t *files,
+                                              char *error,
+                                              size_t error_size) {
+    char archive[HUGE_BUF], staging[HUGE_BUF];
+    if (!celestial_snapshot_archive_path(archive) ||
+        snprintf(staging, sizeof(staging), "%s.tmp.XXXXXX", archive) < 0 ||
+        strlen(staging) >= sizeof(staging)) {
+        return set_error(error, error_size, "activation snapshot archive path is too long");
+    }
+    if (path_exists(archive) || mkdtemp(staging) == NULL) {
+        return set_error(error, error_size, "activation snapshot archive already exists or cannot be created");
+    }
+    if (!celestial_snapshot_copy_directory(settings.datapath, staging, 0, error, error_size)) {
+        return false;
+    }
+    unsigned char aggregate[SHA256_DIGEST_LENGTH] = {0};
+    size_t count = 0;
+    uint64_t bytes = 0;
+    if (!celestial_snapshot_inventory_directory(staging,
+                                                "",
+                                                0,
+                                                &count,
+                                                &bytes,
+                                                aggregate,
+                                                error,
+                                                error_size) ||
+        path_rename(staging, archive) != 0) {
+        return set_error(error, error_size, "cannot publish activation snapshot archive");
+    }
+    for (size_t i = 0; i < sizeof(aggregate); i++) {
+        snprintf(digest + i * 2, 3, "%02x", aggregate[i]);
+    }
+    digest[SHA256_DIGEST_LENGTH * 2] = '\0';
+    if (files != NULL) {
+        *files = count;
+    }
+    return true;
+}
+
+static bool celestial_snapshot_validate_archive(const char *expected_digest,
+                                                size_t expected_files,
+                                                char *error,
+                                                size_t error_size) {
+    char archive[HUGE_BUF];
+    if (!celestial_snapshot_archive_path(archive) || !path_exists(archive)) {
+        return set_error(error, error_size, "celestial activation snapshot state archive is missing");
+    }
+    unsigned char aggregate[SHA256_DIGEST_LENGTH] = {0};
+    size_t files = 0;
+    uint64_t bytes = 0;
+    if (!celestial_snapshot_inventory_directory(archive,
+                                                "",
+                                                0,
+                                                &files,
+                                                &bytes,
+                                                aggregate,
+                                                error,
+                                                error_size)) {
+        return false;
+    }
+    char digest[SHA256_DIGEST_LENGTH * 2 + 1];
+    for (size_t i = 0; i < sizeof(aggregate); i++) {
+        snprintf(digest + i * 2, 3, "%02x", aggregate[i]);
+    }
+    digest[SHA256_DIGEST_LENGTH * 2] = '\0';
+    if (files != expected_files || strcmp(digest, expected_digest) != 0) {
+        return set_error(error, error_size, "celestial activation snapshot state archive does not match its manifest");
+    }
+    return true;
+}
+#endif
 
 bool celestial_structure_acquire_writer_lease(char *error, size_t error_size) {
     if (celestial_writer_lease_fd >= 0) {
@@ -2911,12 +3189,13 @@ static bool preflight_activation_snapshot(const char *manifest_digest,
             return false;
         }
         const char *end = snapshot + snapshot_size;
-        uint64_t schema, recorded_records;
+        uint64_t schema, recorded_records, recorded_state_files;
         char recorded_commit[41], recorded_manifest[SHA256_DIGEST_LENGTH * 2 + 1];
         char recorded_migration[SHA256_DIGEST_LENGTH * 2 + 1];
         char recorded_private[SHA256_DIGEST_LENGTH * 2 + 1];
+        char recorded_state[SHA256_DIGEST_LENGTH * 2 + 1];
         char recorded_generation[SHA256_DIGEST_LENGTH * 2 + 1];
-        bool valid = preflight_json_uint(snapshot, end, "schema_version", &schema) && schema == 1 &&
+        bool valid = preflight_json_uint(snapshot, end, "schema_version", &schema) && schema == 2 &&
                      preflight_json_string(snapshot, end, "content_commit", VS(recorded_commit)) &&
                      strcmp(recorded_commit, celestial_artifact_commit) == 0 &&
                      preflight_json_string(snapshot, end, "manifest_sha256", VS(recorded_manifest)) &&
@@ -2926,8 +3205,19 @@ static bool preflight_activation_snapshot(const char *manifest_digest,
                      preflight_json_string(snapshot, end, "private_inventory_sha256", VS(recorded_private)) &&
                      preflight_hex(recorded_private, SHA256_DIGEST_LENGTH * 2) &&
                      preflight_json_uint(snapshot, end, "private_inventory_records", &recorded_records) &&
+                     preflight_json_string(snapshot, end, "state_snapshot_sha256", VS(recorded_state)) &&
+                     preflight_hex(recorded_state, SHA256_DIGEST_LENGTH * 2) &&
+                     preflight_json_uint(snapshot, end, "state_snapshot_files", &recorded_state_files) &&
                      preflight_json_string(snapshot, end, "generation", VS(recorded_generation)) &&
                      preflight_hex(recorded_generation, SHA256_DIGEST_LENGTH * 2);
+        if (valid) {
+#ifndef WIN32
+            valid = celestial_snapshot_validate_archive(recorded_state,
+                                                        (size_t)recorded_state_files,
+                                                        error,
+                                                        error_size);
+#endif
+        }
         if (valid && require_current_private_cohort &&
             (strcmp(recorded_private, private_digest) != 0 ||
              recorded_records != private_records ||
@@ -2942,16 +3232,27 @@ static bool preflight_activation_snapshot(const char *manifest_digest,
         }
         return true;
     }
+    char state_digest[SHA256_DIGEST_LENGTH * 2 + 1] = "";
+    size_t state_files = 0;
+#ifndef WIN32
+    if (!celestial_snapshot_create_archive(state_digest, &state_files, error, error_size)) {
+        return false;
+    }
+#else
+    snprintf(state_digest, sizeof(state_digest), "%064d", 0);
+#endif
     char contents[HUGE_BUF];
     int written = snprintf(contents,
                            sizeof(contents),
                            "{\n"
-                           "  \"schema_version\": 1,\n"
+                           "  \"schema_version\": 2,\n"
                            "  \"content_commit\": \"%s\",\n"
                            "  \"manifest_sha256\": \"%s\",\n"
                            "  \"migration_index_sha256\": \"%s\",\n"
                            "  \"private_inventory_sha256\": \"%s\",\n"
                            "  \"private_inventory_records\": %zu,\n"
+                           "  \"state_snapshot_sha256\": \"%s\",\n"
+                           "  \"state_snapshot_files\": %zu,\n"
                            "  \"generation\": \"%s\"\n"
                            "}\n",
                            celestial_artifact_commit,
@@ -2959,6 +3260,8 @@ static bool preflight_activation_snapshot(const char *manifest_digest,
                            migration_digest,
                            private_digest,
                            private_records,
+                           state_digest,
+                           state_files,
                            generation);
     if (written < 0 || (size_t)written >= sizeof(contents) ||
         !path_write_atomic(snapshot_path, contents, (size_t)written, SAVE_MODE)) {
