@@ -41,23 +41,34 @@ def object_face(layer: int, seed: int) -> int:
     return faces[seed % len(faces)]
 
 
-def object_layers(depth: int, x: int, y: int) -> tuple[tuple[int, int], ...]:
+def object_layers(
+    depth: int, x: int, y: int, roof_heavy: bool = False
+) -> tuple[tuple[int, int], ...]:
     """Return representative socket-layer/face pairs for one map cell."""
     seed = x * 13 + y * 7 + (depth + 2) * 17
     layers: list[tuple[int, int]] = []
 
     # About two thirds of the base level is ordinary floor. Lower levels form
     # narrow traversable bands; upper levels retain scattered roofs/effects.
-    if depth == 0 and seed % 3 != 0:
+    # The roof-heavy variant keeps the same bounded 17-by-17 geometry while
+    # matching the denser upper-depth painter mix seen in the motivating town.
+    if roof_heavy and depth == 0 and seed % 4 != 0:
+        layers.append((0, object_face(0, seed)))
+    elif depth == 0 and seed % 3 != 0:
         layers.append((0, object_face(0, seed)))
     elif depth == -1 and (x + 2 * y) % 13 == 0:
         layers.append((0, object_face(0, seed)))
     elif depth == -2 and (2 * x + y) % 19 == 0:
         layers.append((0, object_face(0, seed)))
-    elif depth == 1 and (x + y) % 17 == 0:
+    elif depth == 1 and (x + y) % (11 if roof_heavy else 17) == 0:
         layers.append((4, object_face(4, seed)))
-    elif depth == 2 and (3 * x + y) % 23 == 0:
+    elif depth == 2 and (3 * x + y) % (17 if roof_heavy else 23) == 0:
         layers.append((6, object_face(6, seed)))
+
+    if roof_heavy and depth == 1 and (2 * x + y) % 19 == 0:
+        layers.append((6, object_face(6, seed + 5)))
+    elif roof_heavy and depth == 2 and (x + 3 * y) % 19 == 0:
+        layers.append((4, object_face(4, seed + 7)))
 
     # A small number of secondary layers keeps ordinary object painter-order
     # and effect paths active without turning every depth into five stacked
@@ -85,7 +96,7 @@ def colored_radiance(depth_index: int, x: int, y: int) -> tuple[int, int, int] |
     return accents[(source_index + depth_index) % len(accents)]
 
 
-def dense_payload(depth: int) -> bytes:
+def dense_payload(depth: int, roof_heavy: bool = False) -> bytes:
     """Build dense scalar lighting plus representative geometry for one depth."""
     depth_index = DEPTHS.index(depth)
     result = bytearray()
@@ -93,7 +104,7 @@ def dense_payload(depth: int) -> bytes:
         for x in VISIBLE_COORDINATES:
             mask = x << 11 | y << 6 | 0x4
             scalar = 0x0700 + ((x * 29 + y * 17 + depth_index * 31) % 0x0180)
-            layers = object_layers(depth, x, y)
+            layers = object_layers(depth, x, y, roof_heavy)
             result.extend(struct.pack(">HHB", mask, scalar, len(layers)))
             for layer, face in layers:
                 result.extend(struct.pack(">BHBB", layer, face, 0, 0))
@@ -157,7 +168,12 @@ def level_payloads(packet: bytes) -> list[bytes]:
     return result
 
 
-def expanded(packet: bytes, map_name: str | None = None, map_path: str | None = None) -> bytes:
+def expanded(
+    packet: bytes,
+    map_name: str | None = None,
+    map_path: str | None = None,
+    roof_heavy: bool = False,
+) -> bytes:
     if (map_name is None) != (map_path is None):
         raise ValueError("map name and path must be supplied together")
     if map_name is not None and map_path is not None:
@@ -170,7 +186,7 @@ def expanded(packet: bytes, map_name: str | None = None, map_path: str | None = 
     result.extend(b"\0\0")
     result.append(len(DEPTHS))
     for index, depth in enumerate(DEPTHS):
-        payload = dense_payload(depth) + payloads[index % len(payloads)]
+        payload = dense_payload(depth, roof_heavy) + payloads[index % len(payloads)]
         result.extend(struct.pack(">bI", depth, len(payload)))
         result.extend(payload)
     return bytes(result)
@@ -181,11 +197,13 @@ def main() -> int:
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--transition", action="store_true")
+    parser.add_argument("--roof-heavy", action="store_true")
     arguments = parser.parse_args()
     source = bytes.fromhex(arguments.input.read_text(encoding="ascii"))
     map_name = TRANSITION_MAP_NAME if arguments.transition else None
     map_path = TRANSITION_MAP_PATH if arguments.transition else None
-    arguments.output.write_text(expanded(source, map_name, map_path).hex() + "\n",
+    arguments.output.write_text(
+        expanded(source, map_name, map_path, arguments.roof_heavy).hex() + "\n",
                                 encoding="ascii")
     return 0
 

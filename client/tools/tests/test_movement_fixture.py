@@ -147,12 +147,23 @@ class MovementFixtureTests(unittest.TestCase):
             generated_delta = temporary_path / "delta.hex"
             generated_static_delta = temporary_path / "static-delta.hex"
             generated_transition = temporary_path / "transition.hex"
+            generated_roof_heavy = temporary_path / "roof-heavy.hex"
             subprocess.run(
                 [
                     sys.executable,
                     str(CLIENT_ROOT / "tools/generate_movement_five_depth.py"),
                     str(FIXTURES / "colored-scene.map2.hex"),
                     str(generated_snapshot),
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(CLIENT_ROOT / "tools/generate_movement_five_depth.py"),
+                    str(FIXTURES / "colored-scene.map2.hex"),
+                    str(generated_roof_heavy),
+                    "--roof-heavy",
                 ],
                 check=True,
             )
@@ -191,11 +202,35 @@ class MovementFixtureTests(unittest.TestCase):
                     FIXTURES / "movement-lighting-static-delta.map2.hex",
                 ),
                 (generated_transition, FIXTURES / "movement-colored-transition.map2.hex"),
+                (
+                    generated_roof_heavy,
+                    FIXTURES / "brynknot-movement-five-depth.map2.hex",
+                ),
             ):
                 self.assertEqual(
                     hashlib.sha256(generated.read_bytes()).digest(),
                     hashlib.sha256(pinned.read_bytes()).digest(),
                 )
+
+    def test_roof_heavy_fixture_keeps_upper_depths_furnished(self) -> None:
+        levels = new_packet_levels(
+            bytes.fromhex(
+                (FIXTURES / "brynknot-movement-five-depth.map2.hex").read_text(
+                    encoding="ascii"
+                )
+            )
+        )
+        objects_by_depth = {}
+        layers_by_depth = {}
+        for depth, payload in levels:
+            records, dense_size = dense_records(payload)
+            self.assertEqual(len(payload[dense_size:]) > 0, True)
+            objects_by_depth[depth] = sum(len(record["layers"]) for record in records)
+            layers_by_depth[depth] = {layer for record in records for layer, _ in record["layers"]}
+        self.assertGreaterEqual(objects_by_depth[1], 40)
+        self.assertGreaterEqual(objects_by_depth[2], 30)
+        self.assertEqual(layers_by_depth[1], {4, 6})
+        self.assertEqual(layers_by_depth[2], {4, 6})
 
     def test_lifecycle_inputs_have_distinct_pinned_identities(self) -> None:
         reset_path = FIXTURES / "movement-colored-five-depth.map2.hex"

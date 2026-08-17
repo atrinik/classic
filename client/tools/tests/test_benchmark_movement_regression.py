@@ -500,6 +500,24 @@ def native_record(
         "same_process_checkpoint_sha256": checkpoint_sha,
         "final_state_digest": checkpoints[-1]["state_digest"],
         "same_process_final_state_digest": checkpoints[-1]["state_digest"],
+        "movement_route": {
+            "clock": "simulated-monotonic-us",
+            "coordinate_system": "map-origin",
+            "character_speed_inferred": False,
+            "steps": [
+                {
+                    "packet_index": index,
+                    "phase_tick": index,
+                    "received_us": 1_000_000 + index * 125_000,
+                    "applied_us": 1_005_000 + index * 125_000,
+                    "map_x": x,
+                    "map_y": y,
+                }
+                for index, (x, y) in enumerate(
+                    ((11, 10), (10, 10), (10, 11), (10, 10))
+                )
+            ],
+        },
         "checkpoints": checkpoints,
         "same_process_checkpoints": copy.deepcopy(checkpoints),
         "lifecycle": {

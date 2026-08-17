@@ -527,6 +527,7 @@ def validate_record(value: object) -> dict[str, object]:
             "same_process_checkpoint_sha256",
             "final_state_digest",
             "same_process_final_state_digest",
+            "movement_route",
             "checkpoints",
             "same_process_checkpoints",
             "lifecycle",
@@ -573,6 +574,37 @@ def validate_record(value: object) -> dict[str, object]:
         raise ValueError("movement benchmark process peak RSS availability is invalid")
     if record["process_peak_rss_available"] != (record["process_peak_rss_bytes"] > 0):
         raise ValueError("movement benchmark process peak RSS availability is inconsistent")
+
+    route = _mapping(
+        record["movement_route"],
+        {"clock", "coordinate_system", "character_speed_inferred", "steps"},
+        "movement route",
+    )
+    if route["clock"] != "simulated-monotonic-us" or route["coordinate_system"] != "map-origin" \
+            or route["character_speed_inferred"] is not False:
+        raise ValueError("movement benchmark route metadata is invalid")
+    steps = route["steps"]
+    if not isinstance(steps, list) or len(steps) != 4:
+        raise ValueError("movement benchmark route steps are incomplete")
+    expected_route = ((11, 10), (10, 10), (10, 11), (10, 10))
+    previous_received = -1
+    previous_applied = -1
+    for index, step_value in enumerate(steps):
+        step = _mapping(
+            step_value,
+            {"packet_index", "phase_tick", "received_us", "applied_us", "map_x", "map_y"},
+            "movement route step",
+        )
+        for field in ("packet_index", "phase_tick", "received_us", "applied_us", "map_x", "map_y"):
+            _integer(step[field], f"movement route {field}")
+        if (step["packet_index"], step["phase_tick"]) != (index, index) \
+                or (step["map_x"], step["map_y"]) != expected_route[index] \
+                or step["received_us"] <= previous_received \
+                or step["applied_us"] < step["received_us"] \
+                or step["applied_us"] < previous_applied:
+            raise ValueError("movement benchmark route timing or origin is invalid")
+        previous_received = step["received_us"]
+        previous_applied = step["applied_us"]
 
     identity = _mapping(record["identity"], {"instrumentation", "implementation", "run"}, "identity")
     instrumentation = _mapping(
@@ -651,9 +683,15 @@ def validate_record(value: object) -> dict[str, object]:
         raise ValueError("movement benchmark fine timing identity is invalid")
     _integer(run["cpu_count"], "run identity CPU count", positive=True)
     viewport = _mapping(run["viewport"], {"name", "width", "height"}, "viewport identity")
-    if viewport["name"] not in ("standard", "large"):
+    if viewport["name"] not in ("standard", "large", "brynknot"):
         raise ValueError("movement benchmark viewport identity is invalid")
-    expected_viewport = {"standard": (320, 240), "large": (1920, 1080)}[viewport["name"]]
+    expected_viewport = {
+        "standard": (320, 240),
+        "large": (1920, 1080),
+        "brynknot": (1024, 780),
+    }.get(viewport["name"])
+    if expected_viewport is None:
+        raise ValueError("movement benchmark viewport identity is invalid")
     if (viewport["width"], viewport["height"]) != expected_viewport:
         raise ValueError("movement benchmark viewport identity is invalid")
 
@@ -719,7 +757,7 @@ def validate_record(value: object) -> dict[str, object]:
             raise ValueError("movement benchmark lifecycle checkpoint geometry is invalid")
     if checkpoint != _visual_lifecycle_digest(checkpoints):
         raise ValueError("movement benchmark checkpoint does not cover its visual lifecycle")
-    if viewport["name"] == "standard" and checkpoint != fixture[
+    if viewport["name"] in ("standard", "brynknot") and checkpoint != fixture[
         "expected_standard_checkpoint_sha256"
     ]:
         raise ValueError("movement benchmark standard checkpoint does not match its fixture golden")
