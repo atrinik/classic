@@ -42,8 +42,22 @@ static int celestial_writer_lease_fd = -1;
 static bool set_error(char *error, size_t error_size, const char *format, ...);
 
 #ifndef WIN32
-static bool preflight_private_maps(char *error, size_t error_size);
+static bool preflight_private_maps(char *digest,
+                                   size_t digest_size,
+                                   size_t *records,
+                                   char *error,
+                                   size_t error_size);
+static bool preflight_private_map_inventory_readonly(char digest[SHA256_DIGEST_LENGTH * 2 + 1],
+                                                     size_t *records,
+                                                     char *error,
+                                                     size_t error_size);
 #endif
+static bool preflight_activation_snapshot(const char *manifest_digest,
+                                          const char *migration_digest,
+                                          const char *private_digest,
+                                          size_t private_records,
+                                          char *error,
+                                          size_t error_size);
 
 bool celestial_structure_acquire_writer_lease(char *error, size_t error_size) {
     if (celestial_writer_lease_fd >= 0) {
@@ -1828,6 +1842,11 @@ bool celestial_structure_startup_preflight(char *error, size_t error_size) {
     if (manifest == NULL) {
         return false;
     }
+    char manifest_digest[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (!preflight_sha256_file(manifest_path, manifest_digest)) {
+        free(manifest);
+        return set_error(error, error_size, "cannot hash Classic artifact manifest");
+    }
     (void)manifest_size;
     char value[HUGE_BUF];
     uint64_t number;
@@ -1922,8 +1941,41 @@ bool celestial_structure_startup_preflight(char *error, size_t error_size) {
         return false;
     }
 #ifndef WIN32
-    if (!preflight_private_maps(error, error_size)) {
+    char private_digest[SHA256_DIGEST_LENGTH * 2 + 1];
+    size_t private_records = 0;
+    if (!preflight_private_maps(private_digest,
+                                sizeof(private_digest),
+                                &private_records,
+                                error,
+                                error_size)) {
         return false;
+    }
+#else
+    char private_digest[SHA256_DIGEST_LENGTH * 2 + 1];
+    memset(private_digest, '0', sizeof(private_digest) - 1);
+    private_digest[sizeof(private_digest) - 1] = '\0';
+    size_t private_records = 0;
+#endif
+    if (!preflight_activation_snapshot(manifest_digest,
+                                      migration_digest,
+                                      private_digest,
+                                      private_records,
+                                      error,
+                                      error_size)) {
+        return false;
+    }
+#ifndef WIN32
+    char post_snapshot_digest[SHA256_DIGEST_LENGTH * 2 + 1];
+    size_t post_snapshot_records = 0;
+    if (!preflight_private_map_inventory_readonly(post_snapshot_digest,
+                                                  &post_snapshot_records,
+                                                  error,
+                                                  error_size) ||
+        post_snapshot_records != private_records ||
+        strcmp(post_snapshot_digest, private_digest) != 0) {
+        return set_error(error,
+                         error_size,
+                         "celestial private-map cohort changed after activation snapshot");
     }
 #endif
     if (!preflight_activation_marker(migration_digest, error, error_size)) {
@@ -2467,9 +2519,68 @@ static bool preflight_private_map_file(const char *path, char *error, size_t err
     return true;
 }
 
+static bool preflight_private_map_inventory_record(const char *path,
+                                                   unsigned char aggregate[SHA256_DIGEST_LENGTH],
+                                                   char *error,
+                                                   size_t error_size) {
+    char map_sha[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (!preflight_sha256_file(path, map_sha)) {
+        return set_error(error, error_size, "cannot hash celestial private map %s", path);
+    }
+    char ledger_path[HUGE_BUF], ledger_id[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (!provenance_path(path, ledger_path, ledger_id)) {
+        return set_error(error, error_size, "cannot resolve private map provenance for %s", path);
+    }
+    char ledger_sha[SHA256_DIGEST_LENGTH * 2 + 1] = "missing";
+    if (path_exists(ledger_path) && !preflight_sha256_file(ledger_path, ledger_sha)) {
+        return set_error(error, error_size, "cannot hash private map provenance for %s", path);
+    }
+    char *parent = path_dirname(path);
+    if (parent == NULL) {
+        return set_error(error, error_size, "cannot resolve private player root for %s", path);
+    }
+    char player_path[HUGE_BUF];
+    int written = snprintf(player_path, sizeof(player_path), "%s/player.dat", parent);
+    free(parent);
+    if (written < 0 || (size_t)written >= sizeof(player_path)) {
+        return set_error(error, error_size, "private player record path is too long");
+    }
+    char player_sha[SHA256_DIGEST_LENGTH * 2 + 1] = "missing";
+    if (path_exists(player_path) && !preflight_sha256_file(player_path, player_sha)) {
+        return set_error(error, error_size, "cannot hash private player record for %s", path);
+    }
+
+    EVP_MD_CTX *context = EVP_MD_CTX_new();
+    if (context == NULL || EVP_DigestInit_ex(context, EVP_sha256(), NULL) != 1 ||
+        EVP_DigestUpdate(context, path, strlen(path)) != 1 ||
+        EVP_DigestUpdate(context, "\0", 1) != 1 ||
+        EVP_DigestUpdate(context, map_sha, strlen(map_sha)) != 1 ||
+        EVP_DigestUpdate(context, ledger_sha, strlen(ledger_sha)) != 1 ||
+        EVP_DigestUpdate(context, player_sha, strlen(player_sha)) != 1) {
+        if (context != NULL) {
+            EVP_MD_CTX_free(context);
+        }
+        return set_error(error, error_size, "cannot derive private map activation generation");
+    }
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    unsigned int digest_size = 0;
+    bool finalized = EVP_DigestFinal_ex(context, digest, &digest_size) == 1 &&
+                     digest_size == sizeof(digest);
+    EVP_MD_CTX_free(context);
+    if (!finalized) {
+        return set_error(error, error_size, "cannot finalize private map activation generation");
+    }
+    for (size_t i = 0; i < sizeof(digest); i++) {
+        aggregate[i] ^= digest[i];
+    }
+    return true;
+}
+
 static bool preflight_private_map_directory(const char *directory,
                                             unsigned int depth,
                                             size_t *records,
+                                            size_t *inspected,
+                                            unsigned char aggregate[SHA256_DIGEST_LENGTH],
                                             char *error,
                                             size_t error_size) {
     if (depth > 32) {
@@ -2503,12 +2614,18 @@ static bool preflight_private_map_directory(const char *directory,
                              strerror(errno));
         }
         if (S_ISDIR(statbuf.st_mode)) {
-            if (!preflight_private_map_directory(path, depth + 1, records, error, error_size)) {
+            if (!preflight_private_map_directory(path,
+                                                 depth + 1,
+                                                 records,
+                                                 inspected,
+                                                 aggregate,
+                                                 error,
+                                                 error_size)) {
                 closedir(directory_handle);
                 return false;
             }
         } else if (strchr(entry->d_name, '$') != NULL) {
-            if (++*records > 65536) {
+            if (++*inspected > 65536) {
                 closedir(directory_handle);
                 return set_error(error, error_size, "celestial private-map inventory is not bounded");
             }
@@ -2523,6 +2640,11 @@ static bool preflight_private_map_directory(const char *directory,
             } else if (!preflight_private_map_file(path, error, error_size)) {
                 closedir(directory_handle);
                 return false;
+            } else if (!preflight_private_map_inventory_record(path, aggregate, error, error_size)) {
+                closedir(directory_handle);
+                return false;
+            } else {
+                (*records)++;
             }
         }
     }
@@ -2530,19 +2652,266 @@ static bool preflight_private_map_directory(const char *directory,
     return true;
 }
 
-static bool preflight_private_maps(char *error, size_t error_size) {
+static bool preflight_private_maps(char *digest,
+                                   size_t digest_size,
+                                   size_t *records,
+                                   char *error,
+                                   size_t error_size) {
+    unsigned char aggregate[SHA256_DIGEST_LENGTH] = {0};
     char directory[HUGE_BUF];
     int written = snprintf(directory, sizeof(directory), "%s/players", settings.datapath);
     if (written < 0 || (size_t)written >= sizeof(directory)) {
         return set_error(error, error_size, "celestial private-map root path is too long");
     }
     if (!path_exists(directory)) {
+        if (digest != NULL && digest_size > 0) {
+            for (size_t i = 0; i < sizeof(aggregate) && i * 2 + 1 < digest_size; i++) {
+                snprintf(digest + i * 2, 3, "%02x", aggregate[i]);
+            }
+        }
+        if (records != NULL) {
+            *records = 0;
+        }
         return true;
     }
-    size_t records = 0;
-    return preflight_private_map_directory(directory, 0, &records, error, error_size);
+    size_t valid_records = 0, inspected = 0;
+    if (!preflight_private_map_directory(directory,
+                                         0,
+                                         &valid_records,
+                                         &inspected,
+                                         aggregate,
+                                         error,
+                                         error_size)) {
+        return false;
+    }
+    if (digest != NULL && digest_size > 0) {
+        for (size_t i = 0; i < sizeof(aggregate) && i * 2 + 1 < digest_size; i++) {
+            snprintf(digest + i * 2, 3, "%02x", aggregate[i]);
+        }
+    }
+    if (records != NULL) {
+        *records = valid_records;
+    }
+    return true;
+}
+
+static bool preflight_private_map_inventory_directory(const char *directory,
+                                                       unsigned int depth,
+                                                       size_t *records,
+                                                       unsigned char aggregate[SHA256_DIGEST_LENGTH],
+                                                       char *error,
+                                                       size_t error_size) {
+    if (depth > 32) {
+        return set_error(error, error_size, "celestial private-map directory nesting is too deep");
+    }
+    DIR *directory_handle = opendir(directory);
+    if (directory_handle == NULL) {
+        if (errno == ENOENT) {
+            return true;
+        }
+        return set_error(error,
+                         error_size,
+                         "cannot inspect post-snapshot private maps: %s",
+                         strerror(errno));
+    }
+    struct dirent *entry;
+    while ((entry = readdir(directory_handle)) != NULL) {
+        if (entry->d_name[0] == '.') {
+            continue;
+        }
+        char path[HUGE_BUF];
+        int written = snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name);
+        if (written < 0 || (size_t)written >= sizeof(path)) {
+            closedir(directory_handle);
+            return set_error(error, error_size, "celestial private-map path is too long");
+        }
+        struct stat statbuf;
+        if (lstat(path, &statbuf) != 0) {
+            closedir(directory_handle);
+            return set_error(error,
+                             error_size,
+                             "cannot inspect post-snapshot private map %s: %s",
+                             path,
+                             strerror(errno));
+        }
+        if (S_ISDIR(statbuf.st_mode)) {
+            if (!preflight_private_map_inventory_directory(path,
+                                                            depth + 1,
+                                                            records,
+                                                            aggregate,
+                                                            error,
+                                                            error_size)) {
+                closedir(directory_handle);
+                return false;
+            }
+            continue;
+        }
+        if (strchr(entry->d_name, '$') == NULL) {
+            continue;
+        }
+        if (++*records > 65536) {
+            closedir(directory_handle);
+            return set_error(error, error_size, "celestial private-map inventory is not bounded");
+        }
+        if (!S_ISREG(statbuf.st_mode) ||
+            !preflight_private_map_inventory_record(path, aggregate, error, error_size)) {
+            closedir(directory_handle);
+            return set_error(error,
+                             error_size,
+                             "post-snapshot private-map inventory is not readable");
+        }
+    }
+    closedir(directory_handle);
+    return true;
+}
+
+static bool preflight_private_map_inventory_readonly(char digest[SHA256_DIGEST_LENGTH * 2 + 1],
+                                                     size_t *records,
+                                                     char *error,
+                                                     size_t error_size) {
+    unsigned char aggregate[SHA256_DIGEST_LENGTH] = {0};
+    char directory[HUGE_BUF];
+    int written = snprintf(directory, sizeof(directory), "%s/players", settings.datapath);
+    if (written < 0 || (size_t)written >= sizeof(directory)) {
+        return set_error(error, error_size, "celestial private-map root path is too long");
+    }
+    size_t count = 0;
+    if (!preflight_private_map_inventory_directory(directory,
+                                                    0,
+                                                    &count,
+                                                    aggregate,
+                                                    error,
+                                                    error_size)) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(aggregate); i++) {
+        snprintf(digest + i * 2, 3, "%02x", aggregate[i]);
+    }
+    digest[SHA256_DIGEST_LENGTH * 2] = '\0';
+    if (records != NULL) {
+        *records = count;
+    }
+    return true;
 }
 #endif
+
+static bool celestial_activation_generation(const char *manifest_digest,
+                                            const char *migration_digest,
+                                            const char *private_digest,
+                                            size_t private_records,
+                                            char output[SHA256_DIGEST_LENGTH * 2 + 1]) {
+    char record_count[32];
+    int written = snprintf(record_count, sizeof(record_count), "%zu", private_records);
+    if (written < 0 || (size_t)written >= sizeof(record_count)) {
+        return false;
+    }
+    EVP_MD_CTX *context = EVP_MD_CTX_new();
+    if (context == NULL || EVP_DigestInit_ex(context, EVP_sha256(), NULL) != 1 ||
+        EVP_DigestUpdate(context, celestial_artifact_commit, strlen(celestial_artifact_commit)) != 1 ||
+        EVP_DigestUpdate(context, manifest_digest, strlen(manifest_digest)) != 1 ||
+        EVP_DigestUpdate(context, migration_digest, strlen(migration_digest)) != 1 ||
+        EVP_DigestUpdate(context, private_digest, strlen(private_digest)) != 1 ||
+        EVP_DigestUpdate(context, record_count, strlen(record_count)) != 1) {
+        if (context != NULL) {
+            EVP_MD_CTX_free(context);
+        }
+        return false;
+    }
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    unsigned int digest_size = 0;
+    bool finalized = EVP_DigestFinal_ex(context, digest, &digest_size) == 1 &&
+                     digest_size == sizeof(digest);
+    EVP_MD_CTX_free(context);
+    if (!finalized) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(digest); i++) {
+        snprintf(output + i * 2, 3, "%02x", digest[i]);
+    }
+    output[SHA256_DIGEST_LENGTH * 2] = '\0';
+    return true;
+}
+
+static bool preflight_activation_snapshot(const char *manifest_digest,
+                                          const char *migration_digest,
+                                          const char *private_digest,
+                                          size_t private_records,
+                                          char *error,
+                                          size_t error_size) {
+    char snapshot_path[HUGE_BUF];
+    if (snprintf(snapshot_path,
+                 sizeof(snapshot_path),
+                 "%s/celestial-activation-snapshot.json",
+                 settings.datapath) < 0 ||
+        strlen(snapshot_path) >= sizeof(snapshot_path)) {
+        return set_error(error, error_size, "celestial activation snapshot path is too long");
+    }
+    char generation[SHA256_DIGEST_LENGTH * 2 + 1];
+    if (!celestial_activation_generation(manifest_digest,
+                                         migration_digest,
+                                         private_digest,
+                                         private_records,
+                                         generation)) {
+        return set_error(error, error_size, "cannot derive celestial activation generation");
+    }
+    if (path_exists(snapshot_path)) {
+        size_t snapshot_size;
+        char *snapshot = preflight_read_file(snapshot_path, &snapshot_size, error, error_size);
+        if (snapshot == NULL) {
+            return false;
+        }
+        const char *end = snapshot + snapshot_size;
+        uint64_t schema, recorded_records;
+        char recorded_commit[41], recorded_manifest[SHA256_DIGEST_LENGTH * 2 + 1];
+        char recorded_migration[SHA256_DIGEST_LENGTH * 2 + 1];
+        char recorded_private[SHA256_DIGEST_LENGTH * 2 + 1];
+        char recorded_generation[SHA256_DIGEST_LENGTH * 2 + 1];
+        bool valid = preflight_json_uint(snapshot, end, "schema_version", &schema) && schema == 1 &&
+                     preflight_json_string(snapshot, end, "content_commit", VS(recorded_commit)) &&
+                     strcmp(recorded_commit, celestial_artifact_commit) == 0 &&
+                     preflight_json_string(snapshot, end, "manifest_sha256", VS(recorded_manifest)) &&
+                     strcmp(recorded_manifest, manifest_digest) == 0 &&
+                     preflight_json_string(snapshot, end, "migration_index_sha256", VS(recorded_migration)) &&
+                     strcmp(recorded_migration, migration_digest) == 0 &&
+                     preflight_json_string(snapshot, end, "private_inventory_sha256", VS(recorded_private)) &&
+                     strcmp(recorded_private, private_digest) == 0 &&
+                     preflight_json_uint(snapshot, end, "private_inventory_records", &recorded_records) &&
+                     recorded_records == private_records &&
+                     preflight_json_string(snapshot, end, "generation", VS(recorded_generation)) &&
+                     strcmp(recorded_generation, generation) == 0 &&
+                     preflight_hex(recorded_generation, SHA256_DIGEST_LENGTH * 2);
+        free(snapshot);
+        if (!valid) {
+            return set_error(error,
+                             error_size,
+                             "celestial activation snapshot does not match the current cohort generation");
+        }
+        return true;
+    }
+    char contents[HUGE_BUF];
+    int written = snprintf(contents,
+                           sizeof(contents),
+                           "{\n"
+                           "  \"schema_version\": 1,\n"
+                           "  \"content_commit\": \"%s\",\n"
+                           "  \"manifest_sha256\": \"%s\",\n"
+                           "  \"migration_index_sha256\": \"%s\",\n"
+                           "  \"private_inventory_sha256\": \"%s\",\n"
+                           "  \"private_inventory_records\": %zu,\n"
+                           "  \"generation\": \"%s\"\n"
+                           "}\n",
+                           celestial_artifact_commit,
+                           manifest_digest,
+                           migration_digest,
+                           private_digest,
+                           private_records,
+                           generation);
+    if (written < 0 || (size_t)written >= sizeof(contents) ||
+        !path_write_atomic(snapshot_path, contents, (size_t)written, SAVE_MODE)) {
+        return set_error(error, error_size, "cannot durably publish celestial activation snapshot");
+    }
+    return true;
+}
 
 static bool map_transaction_path(const mapstruct *map,
                                  char output[HUGE_BUF],
