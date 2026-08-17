@@ -143,7 +143,8 @@ static bool celestial_snapshot_inventory_directory(const char *directory,
     }
     struct dirent *entry;
     while ((entry = readdir(handle)) != NULL) {
-        if (entry->d_name[0] == '.' || celestial_snapshot_excluded(entry->d_name)) {
+        if ((strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) ||
+            celestial_snapshot_excluded(entry->d_name)) {
             continue;
         }
         char path[HUGE_BUF], child[HUGE_BUF];
@@ -214,7 +215,8 @@ static bool celestial_snapshot_copy_directory(const char *source,
     }
     struct dirent *entry;
     while ((entry = readdir(handle)) != NULL) {
-        if (entry->d_name[0] == '.' || celestial_snapshot_excluded(entry->d_name)) {
+        if ((strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) ||
+            celestial_snapshot_excluded(entry->d_name)) {
             continue;
         }
         char source_path[HUGE_BUF], destination_path[HUGE_BUF];
