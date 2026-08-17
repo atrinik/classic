@@ -56,6 +56,19 @@ local-minimap calls and timings remain separate, while the complete
 update-frame work measurement includes both. Minimap zoom/masking and the
 remaining UI/widget work are outside this map-focused measurement.
 
+The `brynknot-movement` manifest is the roof-heavy companion workload for
+dense Brynknot-style movement. It uses the same sanitized 17-by-17 MAP2
+geometry and packet route as the colored fixture, but keeps furnished physical
+depths `+1` and `+2` with both roof and effect layers so the ordinary painter
+and roof/cutaway paths stay active at the 1024-by-780 viewport. Recreate its
+snapshot with `generate_movement_five_depth.py --roof-heavy`; the manifest's
+`movement_route` record reports the four accepted MAP2 packet coordinates with
+deterministic simulated receive/apply timestamps. Those timestamps document
+queue ordering and application timing only; they are not character-speed
+measurements. Run `python3 tools/verify_movement_benchmark.py CLIENT
+src/tests/fixtures/player_view/brynknot-movement.xml brynknot` to require the
+same record from two fresh processes.
+
 The `dense-cursor` manifests reuse the frozen five-depth roof stack as a
 Brynknot-style dense multi-depth fixture. The cursor replay records stationary,
 world-pointer, UI-pointer, animation-only, and movement phases, including
