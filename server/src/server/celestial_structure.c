@@ -36,6 +36,10 @@
 static bool celestial_v1_runtime_active;
 static char celestial_artifact_commit[41];
 
+#ifndef WIN32
+static bool preflight_private_maps(char *error, size_t error_size);
+#endif
+
 #define CELESTIAL_INVENTORY_MAX_ROOTS 16
 #define CELESTIAL_INVENTORY_MAX_MAPS 256
 
@@ -51,6 +55,26 @@ static bool set_error(char *error, size_t error_size, const char *format, ...) {
 
 static const char *map_path(const mapstruct *map) {
     return map->path != NULL ? map->path : "<unbound>";
+}
+
+static bool celestial_private_source_from_path(const char *map_path_value,
+                                               char source_path[HUGE_BUF]) {
+    if (map_path_value == NULL || !string_startswith(map_path_value, settings.datapath)) {
+        return false;
+    }
+    char *demangled = path_basename(map_path_value);
+    if (demangled == NULL || strchr(demangled, '$') == NULL) {
+        free(demangled);
+        return false;
+    }
+    string_replace_char(demangled, "$", '/');
+    while (*demangled == '/') {
+        memmove(demangled, demangled + 1, strlen(demangled));
+    }
+    int written = snprintf(source_path, HUGE_BUF, "/%s", demangled);
+    free(demangled);
+    return written >= 0 && (size_t)written < HUGE_BUF &&
+           celestial_structure_logical_map_id_valid(source_path);
 }
 
 static bool preflight_hex(const char *value, size_t length) {
@@ -1841,6 +1865,11 @@ bool celestial_structure_startup_preflight(char *error, size_t error_size) {
     if (!valid) {
         return false;
     }
+#ifndef WIN32
+    if (!preflight_private_maps(error, error_size)) {
+        return false;
+    }
+#endif
     if (!preflight_activation_marker(migration_digest, error, error_size)) {
         return false;
     }
@@ -1881,7 +1910,6 @@ static bool provenance_source(const mapstruct *map,
     }
     const char *logical = map->path;
     char logical_path[HUGE_BUF];
-    char *demangled = NULL;
     if (map->celestial_generated_origin != NULL) {
         logical = map->celestial_generated_origin;
         if (snprintf(logical_path, sizeof(logical_path), "%s", logical) < 0 ||
@@ -1889,20 +1917,7 @@ static bool provenance_source(const mapstruct *map,
             return false;
         }
     } else if (MAP_UNIQUE(map) && string_startswith(map->path, settings.datapath)) {
-        demangled = path_basename(map->path);
-        if (demangled == NULL || strchr(demangled, '$') == NULL) {
-            free(demangled);
-            return false;
-        }
-        string_replace_char(demangled, "$", '/');
-        logical = demangled;
-        while (*logical == '/') {
-            logical++;
-        }
-        int written = snprintf(logical_path, sizeof(logical_path), "/%s", logical);
-        if (written < 0 || (size_t)written >= sizeof(logical_path) ||
-            !celestial_structure_logical_map_id_valid(logical_path)) {
-            free(demangled);
+        if (!celestial_private_source_from_path(map->path, logical_path)) {
             return false;
         }
     } else if (snprintf(logical_path, sizeof(logical_path), "%s", logical) < 0 ||
@@ -1915,10 +1930,8 @@ static bool provenance_source(const mapstruct *map,
         snprintf(source_file, HUGE_BUF, "%s%s", settings.mapspath, logical_path) < 0 ||
         strlen(source_file) >= HUGE_BUF ||
         !preflight_sha256_file(source_file, source_sha)) {
-        free(demangled);
         return false;
     }
-    free(demangled);
     return true;
 }
 
@@ -2081,9 +2094,183 @@ bool celestial_structure_validate_provenance(const mapstruct *map, char *error, 
     return valid ? true
                  : set_error(error,
                               error_size,
-                              "temporary v1 map %s has changed or unprovable source lineage",
-                              map_path(map));
+                             "temporary v1 map %s has changed or unprovable source lineage",
+                             map_path(map));
 }
+
+#ifndef WIN32
+static bool quarantine_private_map_file(const char *path, const char *reason) {
+    char directory[HUGE_BUF], destination[HUGE_BUF];
+    char *base = path_basename(path);
+    if (base == NULL || snprintf(directory,
+                                 sizeof(directory),
+                                 "%s/celestial-quarantine",
+                                 settings.datapath) < 0 ||
+        strlen(directory) >= sizeof(directory)) {
+        free(base);
+        return false;
+    }
+    path_ensure_directories(directory);
+    int written = snprintf(destination,
+                           sizeof(destination),
+                           "%s/private-%ld-%s",
+                           directory,
+                           (long)getpid(),
+                           base);
+    free(base);
+    if (written < 0 || (size_t)written >= sizeof(destination)) {
+        return false;
+    }
+    for (unsigned int attempt = 0; path_exists(destination) && attempt < 100; attempt++) {
+        char *attempt_base = path_basename(path);
+        if (attempt_base == NULL) {
+            return false;
+        }
+        written = snprintf(destination,
+                           sizeof(destination),
+                           "%s/private-%ld-%u-%s",
+                           directory,
+                           (long)getpid(),
+                           attempt + 1,
+                           attempt_base);
+        free(attempt_base);
+        if (written < 0 || (size_t)written >= sizeof(destination)) {
+            return false;
+        }
+    }
+    if (path_exists(destination) || path_rename(path, destination) != 0) {
+        return false;
+    }
+    LOG(ERROR,
+        "Quarantined celestial private map %s as %s (%s).",
+        path,
+        destination,
+        reason != NULL ? reason : "unprovable state");
+    return true;
+}
+
+static bool preflight_private_map_file(const char *path, char *error, size_t error_size) {
+    char reason[HUGE_BUF] = "";
+    char source_path[HUGE_BUF];
+    if (!celestial_private_source_from_path(path, source_path)) {
+        snprintf(VS(reason), "invalid $-demangled authored source");
+    }
+
+    mapstruct *map = NULL;
+    FILE *fp = NULL;
+    if (reason[0] == '\0') {
+        fp = fopen(path, "rb");
+        map = get_linked_map();
+        FREE_AND_COPY_HASH(map->path, path);
+        map->map_flags |= MAP_FLAG_UNIQUE;
+        if (fp == NULL || !load_map_header(map, fp)) {
+            snprintf(VS(reason), "malformed private map header");
+        } else if (map->celestial_schema != 1 ||
+                   !celestial_structure_validate_header(map, VS(reason))) {
+            if (reason[0] == '\0') {
+                snprintf(VS(reason), "private map is not a valid celestial-v1 map");
+            }
+        } else if (!celestial_structure_validate_provenance(map, VS(reason))) {
+            if (reason[0] == '\0') {
+                snprintf(VS(reason), "private map provenance is invalid");
+            }
+        }
+    }
+    if (fp != NULL) {
+        fclose(fp);
+    }
+    if (map != NULL) {
+        delete_map(map);
+    }
+    if (reason[0] == '\0') {
+        return true;
+    }
+    if (!quarantine_private_map_file(path, reason)) {
+        return set_error(error,
+                         error_size,
+                         "cannot quarantine celestial private map %s (%s)",
+                         path,
+                         reason);
+    }
+    return true;
+}
+
+static bool preflight_private_map_directory(const char *directory,
+                                            unsigned int depth,
+                                            size_t *records,
+                                            char *error,
+                                            size_t error_size) {
+    if (depth > 32) {
+        return set_error(error, error_size, "celestial private-map directory nesting is too deep");
+    }
+    DIR *directory_handle = opendir(directory);
+    if (directory_handle == NULL) {
+        return set_error(error,
+                         error_size,
+                         "cannot inspect celestial private maps: %s",
+                         strerror(errno));
+    }
+    struct dirent *entry;
+    while ((entry = readdir(directory_handle)) != NULL) {
+        if (entry->d_name[0] == '.') {
+            continue;
+        }
+        char path[HUGE_BUF];
+        int written = snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name);
+        if (written < 0 || (size_t)written >= sizeof(path)) {
+            closedir(directory_handle);
+            return set_error(error, error_size, "celestial private-map path is too long");
+        }
+        struct stat statbuf;
+        if (lstat(path, &statbuf) != 0) {
+            closedir(directory_handle);
+            return set_error(error,
+                             error_size,
+                             "cannot inspect celestial private map %s: %s",
+                             path,
+                             strerror(errno));
+        }
+        if (S_ISDIR(statbuf.st_mode)) {
+            if (!preflight_private_map_directory(path, depth + 1, records, error, error_size)) {
+                closedir(directory_handle);
+                return false;
+            }
+        } else if (strchr(entry->d_name, '$') != NULL) {
+            if (++*records > 65536) {
+                closedir(directory_handle);
+                return set_error(error, error_size, "celestial private-map inventory is not bounded");
+            }
+            if (!S_ISREG(statbuf.st_mode)) {
+                if (!quarantine_private_map_file(path, "private map is not a regular file")) {
+                    closedir(directory_handle);
+                    return set_error(error,
+                                     error_size,
+                                     "cannot quarantine non-regular celestial private map %s",
+                                     path);
+                }
+            } else if (!preflight_private_map_file(path, error, error_size)) {
+                closedir(directory_handle);
+                return false;
+            }
+        }
+    }
+    closedir(directory_handle);
+    return true;
+}
+
+static bool preflight_private_maps(char *error, size_t error_size) {
+    char directory[HUGE_BUF];
+    int written = snprintf(directory, sizeof(directory), "%s/players", settings.datapath);
+    if (written < 0 || (size_t)written >= sizeof(directory)) {
+        return set_error(error, error_size, "celestial private-map root path is too long");
+    }
+    if (!path_exists(directory)) {
+        return true;
+    }
+    size_t records = 0;
+    return preflight_private_map_directory(directory, 0, &records, error, error_size);
+}
+#endif
 
 static bool map_transaction_path(const mapstruct *map,
                                  char output[HUGE_BUF],
