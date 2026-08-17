@@ -1532,6 +1532,7 @@ typedef struct map_render_command {
     bool door_hint;
     bool exit;
     bool local_player;
+    bool fogged; ///< The cached tile is outside the current visible area.
     bool ground;
     SDL_Surface *living_occlusion_mask;
     bool transformed;
@@ -1843,6 +1844,7 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
             .local_player = data->primary_level && data->x == data->midx && data->y == data->midy &&
                             data->layer == LAYER_LIVING &&
                             data->sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1),
+            .fogged = data->cell->fow,
             .ground = data->ground_pass,
             .transformed = transformed,
         };
@@ -3006,7 +3008,7 @@ static bool map_render_command_is_living_occluder(const map_render_command_t *li
 static void map_render_commands_find_living_occlusion(map_render_context_t *context) {
     for (size_t living_index = 0; living_index < context->commands_num; living_index++) {
         map_render_command_t *living = &context->commands[living_index];
-        if (living->object_layer != LAYER_LIVING ||
+        if (living->object_layer != LAYER_LIVING || living->fogged ||
             (BIT_QUERY(living->effects.flags, SPRITE_FLAG_DARK) &&
              living->effects.dark_level == DARK_LEVELS)) {
             continue;
