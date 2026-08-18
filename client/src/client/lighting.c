@@ -136,6 +136,10 @@ static lighting_sample *structure_column_illumination;
  * from the RGBA scene surface. */
 static int8_t *lighting_scene_depth;
 static int16_t *lighting_scene_sample_y;
+static uint8_t *lighting_scene_marked;
+static uint32_t *lighting_scene_pixels;
+static size_t lighting_scene_pixels_num;
+static size_t lighting_scene_pixels_capacity;
 static int lighting_scene_width;
 static int lighting_scene_height;
 
@@ -1733,18 +1737,36 @@ bool lighting_scene_begin(int width, int height) {
     if (pixels > SIZE_MAX / sizeof(*lighting_scene_sample_y)) {
         return false;
     }
+    if (pixels > SIZE_MAX / sizeof(*lighting_scene_pixels) || pixels > UINT32_MAX) {
+        return false;
+    }
     lighting_scene_depth = calloc(pixels, sizeof(*lighting_scene_depth));
     lighting_scene_sample_y = malloc(pixels * sizeof(*lighting_scene_sample_y));
-    if (lighting_scene_depth == NULL || lighting_scene_sample_y == NULL) {
+    lighting_scene_marked = calloc(pixels, sizeof(*lighting_scene_marked));
+    lighting_scene_pixels = malloc(pixels * sizeof(*lighting_scene_pixels));
+    if (lighting_scene_depth == NULL || lighting_scene_sample_y == NULL ||
+        lighting_scene_marked == NULL || lighting_scene_pixels == NULL) {
         lighting_scene_cancel();
         return false;
     }
     for (size_t i = 0; i < pixels; i++) {
         lighting_scene_sample_y[i] = LIGHTING_SCENE_SAMPLE_Y_RAW;
     }
+    lighting_scene_pixels_num = 0;
+    lighting_scene_pixels_capacity = pixels;
     lighting_scene_width = width;
     lighting_scene_height = height;
     return true;
+}
+
+static void lighting_scene_mark_pixel(size_t index, int8_t owner, int16_t sample_y) {
+    if (!lighting_scene_marked[index]) {
+        HARD_ASSERT(lighting_scene_pixels_num < lighting_scene_pixels_capacity);
+        lighting_scene_marked[index] = 1;
+        lighting_scene_pixels[lighting_scene_pixels_num++] = (uint32_t)index;
+    }
+    lighting_scene_depth[index] = owner;
+    lighting_scene_sample_y[index] = sample_y;
 }
 
 void lighting_scene_mark_surface(SDL_Surface *source,
@@ -1808,16 +1830,12 @@ void lighting_scene_mark_surface(SDL_Surface *source,
             int destination_x = MAX(0, x);
             int width = MIN(source_rect.w - source_x, lighting_scene_width - destination_x);
             if (width > 0) {
-                memset(&lighting_scene_depth[(size_t)destination_y *
-                                                  (size_t)lighting_scene_width +
-                                              (size_t)destination_x],
-                       owner,
-                       (size_t)width * sizeof(*lighting_scene_depth));
                 for (int offset = 0; offset < width; offset++) {
-                    lighting_scene_sample_y[(size_t)destination_y *
-                                                (size_t)lighting_scene_width +
-                                            (size_t)destination_x + (size_t)offset] =
-                        owner_sample_y;
+                    lighting_scene_mark_pixel(
+                        (size_t)destination_y * (size_t)lighting_scene_width +
+                            (size_t)destination_x + (size_t)offset,
+                        owner,
+                        owner_sample_y);
                 }
             }
         }
@@ -1861,12 +1879,10 @@ void lighting_scene_mark_surface(SDL_Surface *source,
                         size_t destination_index = (size_t)destination_y *
                                                         (size_t)lighting_scene_width +
                                                     (size_t)run_destination;
-                        memset(&lighting_scene_depth[destination_index],
-                               owner,
-                               (size_t)run_width * sizeof(*lighting_scene_depth));
                         for (int offset = 0; offset < run_width; offset++) {
-                            lighting_scene_sample_y[destination_index + (size_t)offset] =
-                                owner_sample_y;
+                            lighting_scene_mark_pixel(destination_index + (size_t)offset,
+                                                      owner,
+                                                      owner_sample_y);
                         }
                     }
                 }
@@ -1914,10 +1930,10 @@ void lighting_scene_mark_surface(SDL_Surface *source,
             if (alpha == SDL_ALPHA_TRANSPARENT) {
                 continue;
             }
-            lighting_scene_depth[(size_t)destination_y * (size_t)lighting_scene_width +
-                                 (size_t)destination_x] = owner;
-            lighting_scene_sample_y[(size_t)destination_y * (size_t)lighting_scene_width +
-                                     (size_t)destination_x] = owner_sample_y;
+            lighting_scene_mark_pixel((size_t)destination_y * (size_t)lighting_scene_width +
+                                          (size_t)destination_x,
+                                      owner,
+                                      owner_sample_y);
         }
     }
 
@@ -1926,8 +1942,9 @@ void lighting_scene_mark_surface(SDL_Surface *source,
     }
 }
 
-/* The complete-scene pass is intentionally hot even in the debug profile:
- * keep its bounded pixel traversal representative of the optimized client. */
+/* Compose only pixels recorded by the painter. The list is bounded by the
+ * destination surface and makes animation-only work proportional to changed
+ * scene geometry instead of the complete viewport. */
 __attribute__((optimize("O2"))) void lighting_scene_render(SDL_Surface *destination) {
     if (lighting_scene_depth == NULL || destination == NULL) {
         lighting_scene_cancel();
@@ -1958,65 +1975,67 @@ __attribute__((optimize("O2"))) void lighting_scene_render(SDL_Surface *destinat
     uint64_t timing_started = lighting_benchmark_timing_start();
     LIGHTING_BENCHMARK_INCREMENT(benchmark_context, whole_field_compositions);
 
-    for (int y = 0; y < lighting_scene_height; y++) {
+    for (size_t scene_pixel = 0; scene_pixel < lighting_scene_pixels_num; scene_pixel++) {
+        LIGHTING_BENCHMARK_INCREMENT(benchmark_context, whole_field_processed_pixels);
+        size_t index = lighting_scene_pixels[scene_pixel];
+        int y = (int)(index / (size_t)lighting_scene_width);
+        int x = (int)(index % (size_t)lighting_scene_width);
         Uint32 *pixels = (Uint32 *)((Uint8 *)destination->pixels + y * destination->pitch);
-        for (int x = 0; x < lighting_scene_width; x++) {
-            if (has_colorkey && pixels[x] == colorkey) {
-                continue;
-            }
-
-            uint8_t red, green, blue, alpha;
-            if (direct_argb) {
-                red = pixels[x] >> 16;
-                green = pixels[x] >> 8;
-                blue = pixels[x];
-                alpha = pixels[x] >> 24;
-            } else {
-                SDL_GetRGBA(pixels[x], format, palette, &red, &green, &blue, &alpha);
-            }
-            if (alpha == SDL_ALPHA_TRANSPARENT) {
-                continue;
-            }
-
-            int depth = lighting_scene_depth[(size_t)y * (size_t)lighting_scene_width +
-                                             (size_t)x];
-            if (depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH ||
-                !lighting_contexts[MAP2_DEPTH_INDEX(depth)].cache_valid) {
-                depth = 0;
-            }
-            const lighting_context *context = &lighting_contexts[MAP2_DEPTH_INDEX(depth)];
-            int sample_y = lighting_scene_sample_y[(size_t)y *
-                                                   (size_t)lighting_scene_width + (size_t)x];
-            if (sample_y == LIGHTING_SCENE_SAMPLE_Y_RAW) {
-                sample_y = y;
-            }
-            sample_y = MAX(0, MIN(context->height - 1, sample_y));
-            const lighting_sample *sample = &context->samples[(size_t)sample_y *
-                                                                   (size_t)context->width +
-                                                               (size_t)x];
-            const uint16_t radiance[3] = {sample->red, sample->green, sample->blue};
-            uint16_t illumination[3];
-            if (sample->scalar == 0) {
-                illumination[0] = illumination[1] = illumination[2] = 0;
-            } else {
-                uint32_t neutral = lighting_scene_neutral_linear(sample->scalar);
-                for (size_t channel = 0; channel < 3; channel++) {
-                    uint64_t scaled = (uint64_t)radiance[channel] * neutral;
-                    scaled = (scaled + sample->scalar / 2) / sample->scalar;
-                    illumination[channel] =
-                        (uint16_t)(scaled > UINT16_MAX ? UINT16_MAX : scaled);
-                }
-            }
-            red = lighting_scene_multiply(red, illumination[0]);
-            green = lighting_scene_multiply(green, illumination[1]);
-            blue = lighting_scene_multiply(blue, illumination[2]);
-            if (direct_argb) {
-                pixels[x] = (Uint32)alpha << 24 | (Uint32)red << 16 | (Uint32)green << 8 | blue;
-            } else {
-                pixels[x] = SDL_MapRGBA(format, palette, red, green, blue, alpha);
-            }
-            LIGHTING_BENCHMARK_INCREMENT(benchmark_context, whole_field_pixels);
+        if (has_colorkey && pixels[x] == colorkey) {
+            continue;
         }
+
+        uint8_t red, green, blue, alpha;
+        if (direct_argb) {
+            red = pixels[x] >> 16;
+            green = pixels[x] >> 8;
+            blue = pixels[x];
+            alpha = pixels[x] >> 24;
+        } else {
+            SDL_GetRGBA(pixels[x], format, palette, &red, &green, &blue, &alpha);
+        }
+        if (alpha == SDL_ALPHA_TRANSPARENT) {
+            continue;
+        }
+
+        int depth = lighting_scene_depth[(size_t)y * (size_t)lighting_scene_width +
+                                         (size_t)x];
+        if (depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH ||
+            !lighting_contexts[MAP2_DEPTH_INDEX(depth)].cache_valid) {
+            depth = 0;
+        }
+        const lighting_context *context = &lighting_contexts[MAP2_DEPTH_INDEX(depth)];
+        int sample_y = lighting_scene_sample_y[(size_t)y * (size_t)lighting_scene_width +
+                                               (size_t)x];
+        if (sample_y == LIGHTING_SCENE_SAMPLE_Y_RAW) {
+            sample_y = y;
+        }
+        sample_y = MAX(0, MIN(context->height - 1, sample_y));
+        const lighting_sample *sample = &context->samples[(size_t)sample_y *
+                                                               (size_t)context->width +
+                                                           (size_t)x];
+        const uint16_t radiance[3] = {sample->red, sample->green, sample->blue};
+        uint16_t illumination[3];
+        if (sample->scalar == 0) {
+            illumination[0] = illumination[1] = illumination[2] = 0;
+        } else {
+            uint32_t neutral = lighting_scene_neutral_linear(sample->scalar);
+            for (size_t channel = 0; channel < 3; channel++) {
+                uint64_t scaled = (uint64_t)radiance[channel] * neutral;
+                scaled = (scaled + sample->scalar / 2) / sample->scalar;
+                illumination[channel] =
+                    (uint16_t)(scaled > UINT16_MAX ? UINT16_MAX : scaled);
+            }
+        }
+        red = lighting_scene_multiply(red, illumination[0]);
+        green = lighting_scene_multiply(green, illumination[1]);
+        blue = lighting_scene_multiply(blue, illumination[2]);
+        if (direct_argb) {
+            pixels[x] = (Uint32)alpha << 24 | (Uint32)red << 16 | (Uint32)green << 8 | blue;
+        } else {
+            pixels[x] = SDL_MapRGBA(format, palette, red, green, blue, alpha);
+        }
+        LIGHTING_BENCHMARK_INCREMENT(benchmark_context, whole_field_pixels);
     }
     SDL_UnlockSurface(destination);
     LIGHTING_BENCHMARK_TIMING_FINISH(benchmark_context, tone_map_multiply, timing_started);
@@ -2026,8 +2045,14 @@ __attribute__((optimize("O2"))) void lighting_scene_render(SDL_Surface *destinat
 void lighting_scene_cancel(void) {
     free(lighting_scene_depth);
     free(lighting_scene_sample_y);
+    free(lighting_scene_marked);
+    free(lighting_scene_pixels);
     lighting_scene_depth = NULL;
     lighting_scene_sample_y = NULL;
+    lighting_scene_marked = NULL;
+    lighting_scene_pixels = NULL;
+    lighting_scene_pixels_num = 0;
+    lighting_scene_pixels_capacity = 0;
     lighting_scene_width = 0;
     lighting_scene_height = 0;
 }
