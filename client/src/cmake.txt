@@ -26,6 +26,7 @@ set(SOURCES
 	src/client/lighting_transfer.c
 	src/client/main.c
 	src/client/map_transform.c
+	src/client/map_visibility.c
 	src/client/menu.c
 	src/client/metaserver.c
 	src/client/metaserver_directory.c

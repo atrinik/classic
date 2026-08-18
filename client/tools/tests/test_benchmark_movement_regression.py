@@ -217,7 +217,7 @@ def native_record(
     packet_counts = {"cold": 1, "sustained": 480, "idle": 8, "resumed": 80}
     changed_counts = {"cold": 1, "sustained": 480, "idle": 0, "resumed": 80}
     draw_counts = {"cold": 1, "sustained": 480, "idle": 0, "resumed": 80}
-    animation_draw_counts = {"cold": 0, "sustained": 0, "idle": 16, "resumed": 0}
+    animation_draw_counts = {"cold": 0, "sustained": 0, "idle": 0, "resumed": 0}
     minimap_draw_counts = {"cold": 1, "sustained": 240, "idle": 0, "resumed": 40}
     for name, samples in benchmark.REQUIRED_PHASES.items():
         p95_ns = sustained_p95_ns if name == "sustained" else 2_000_000
@@ -236,7 +236,7 @@ def native_record(
             "external": 0,
             "packet": changed,
             "scroll": 0,
-            "animation": samples,
+            "animation": animation_draws,
             "lighting": 0,
             "resize": 0,
             "ui": 0,
@@ -445,13 +445,13 @@ def native_record(
     ]
     standard_checkpoint_sha = visual_lifecycle_digest(standard_checkpoints)
     return {
-        "schema_version": 8,
+        "schema_version": 9,
         "benchmark": "player-view-movement",
         "tick_ms": 125,
         "simulated_tick_hz": 8,
         "identity": {
             "instrumentation": {
-                "schema_version": 8,
+                "schema_version": 9,
                 "fixture_schema_version": 3,
                 "workload": "pvm1-map2-lifecycle-v4",
                 "lighting_statistics_version": 6,
@@ -624,7 +624,7 @@ class NativeV7RecordTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["timeout"], 900)
 
     def test_parse_accepts_closed_v7_record(self) -> None:
-        self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 8)
+        self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 9)
 
     def test_parse_accepts_same_workload_with_fine_timing_disabled(self) -> None:
         record = native_record(fine_timing=False)
@@ -668,8 +668,8 @@ class NativeV7RecordTests(unittest.TestCase):
         encoded = json.dumps(native_record())
         with self.assertRaisesRegex(benchmark.BenchmarkError, "exactly one"):
             benchmark.parse_result(encoded + "\nnoise\n")
-        duplicate = encoded.replace('"schema_version": 8,',
-                                    '"schema_version": 8, "schema_version": 8,', 1)
+        duplicate = encoded.replace('"schema_version": 9,',
+                                    '"schema_version": 9, "schema_version": 9,', 1)
         with self.assertRaisesRegex(benchmark.BenchmarkError, "repeated JSON field"):
             benchmark.parse_result(duplicate)
         with self.assertRaisesRegex(ValueError, "repeated JSON field"):
@@ -1394,16 +1394,22 @@ class EvidenceTests(unittest.TestCase):
         for heading, candidate_calls in (
             ("### Render-profiler stages (standard smooth sustained)", 720),
             ("### Render-profiler stages (standard smooth cold)", 2),
-            ("### Render-profiler stages (standard smooth idle)", 16),
+            ("### Render-profiler stages (standard smooth idle)", 0),
             ("### Render-profiler stages (standard smooth resumed)", 120),
         ):
             with self.subTest(heading=heading):
                 start = report.index(heading)
                 end = report.find("\n###", start + len(heading))
                 section = report[start : end if end != -1 else len(report)]
-                self.assertIn(
+                expected_stage = (
                     f"| `map` | `per_map_draw` | n/a → {candidate_calls} | "
-                    "n/a → 0.001 ms | n/a |",
+                    "n/a → n/a | n/a |"
+                    if candidate_calls == 0
+                    else f"| `map` | `per_map_draw` | n/a → {candidate_calls} | "
+                    "n/a → 0.001 ms | n/a |"
+                )
+                self.assertIn(
+                    expected_stage,
                     section,
                 )
 
@@ -1685,7 +1691,7 @@ class CommentTests(unittest.TestCase):
         expected_map_stages = {
             "cold": (2, 1_000, 1_500, "+50.0%"),
             "sustained": (720, 2_000, 2_500, "+25.0%"),
-            "idle": (16, 3_000, 3_500, "+16.7%"),
+            "idle": (0, 0, 0, "n/a"),
             "resumed": (120, 4_000, 4_500, "+12.5%"),
         }
         for records, elapsed_index in ((baseline, 1), (candidate, 2)):
@@ -1706,9 +1712,12 @@ class CommentTests(unittest.TestCase):
                 start = report.index(heading)
                 end = report.find("\n### ", start + len(heading))
                 section = report[start : end if end != -1 else len(report)]
+                timing = "n/a → n/a" if calls == 0 else (
+                    f"{baseline_us / 1_000:.3f} ms → {candidate_us / 1_000:.3f} ms"
+                )
                 self.assertIn(
                     f"| `map` | `per_map_draw` | {calls} → {calls} | "
-                    f"{baseline_us / 1_000:.3f} ms → {candidate_us / 1_000:.3f} ms | "
+                    f"{timing} | "
                     f"{delta} |",
                     section,
                 )

@@ -21,7 +21,7 @@ typedef struct SDL_Rect SDL_Rect;
 typedef struct SDL_Surface SDL_Surface;
 
 /** Increment when cached lighting transfer semantics change. */
-#define LIGHTING_TRANSFER_VERSION UINT8_C(1)
+#define LIGHTING_TRANSFER_VERSION UINT8_C(2)
 #define LIGHTING_SPRITE_CACHE_MAX_BYTES (8U * 1024U * 1024U)
 #define LIGHTING_SPRITE_CACHE_ENTRY_OVERHEAD 512U
 /* Retain two translated dense-view working sets while the byte ceiling remains
