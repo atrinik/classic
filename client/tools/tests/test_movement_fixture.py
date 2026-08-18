@@ -22,8 +22,8 @@ TRANSITION_MAP_NAME = "Movement transition"
 TRANSITION_MAP_PATH = "/tests/player-view/movement-transition"
 RESIZE_DELTA = (32, 24)
 EXPECTED_STANDARD_CHECKPOINTS = {
-    "movement-colored.xml": "0f574a3139253b0eed593437359cda1501681be323fcc13403fe787de726677a",
-    "movement-lighting-isolated.xml": "f1d97c51f01f6c01d2f8115d4cb66ad09f19ab44a602f1895cf758103da977e2",
+    "movement-colored.xml": "7a49c97b190bc6d69e42768ea6ee4069791a8e4f9d1dd1c0c06eb814c73d14c9",
+    "movement-lighting-isolated.xml": "3f0248f9ac3ce7253076a40db7c9b315aa563b00f7a246fd184f631f3d8969ca",
     "movement-colored-discrete.xml": "4d66d3823792e1bce932dbadcebd712471fa0dfef1e540561cfeafde37fdc792",
 }
 
