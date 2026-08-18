@@ -63,6 +63,8 @@ LIGHTING_FIELDS = {
     "field_full_rebuild_bounds",
     "field_full_rebuild_control",
     "field_full_rebuild_other",
+    "whole_field_compositions",
+    "whole_field_pixels",
     "lit_sprite_lookups",
     "lit_sprite_hits",
     "lit_sprite_misses",

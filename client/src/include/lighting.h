@@ -104,6 +104,9 @@ typedef struct lighting_benchmark_counters {
     uint64_t field_reuses;
     uint64_t render_calls;
     uint64_t render_failures;
+    /** One final scene-linear composition for a complete primary-map draw. */
+    uint64_t whole_field_compositions;
+    uint64_t whole_field_pixels;
     uint64_t lit_sprite_draws;
     uint64_t lit_sprite_lookups;
     uint64_t lit_sprite_hits;
@@ -228,6 +231,23 @@ bool lighting_needs_update(void);
 void lighting_scroll(int screen_dx, int screen_dy);
 void lighting_draw_quad(const lighting_vertex_t vertices[4]);
 void lighting_render(SDL_Surface *destination);
+
+/**
+ * Begin a painter-owned scene composition.
+ *
+ * Map commands record the physical lighting depth that owns each visible
+ * pixel while the established painter order is still being emitted. The
+ * scene is multiplied once, after all world sprites have been painted.
+ */
+bool lighting_scene_begin(int width, int height);
+void lighting_scene_mark_surface(SDL_Surface *source,
+                                 int x,
+                                 int y,
+                                 SDL_Rect *srcrect,
+                                 int depth,
+                                 int sample_y);
+void lighting_scene_render(SDL_Surface *destination);
+void lighting_scene_cancel(void);
 void lighting_show_surface(SDL_Surface *destination,
                            int x,
                            int y,

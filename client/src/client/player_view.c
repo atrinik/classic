@@ -1453,7 +1453,8 @@ static void player_view_lighting_counters_json(const lighting_benchmark_counters
            ",\"field_full_rebuild_active\":%" PRIu64 ",\"field_full_rebuild_bounds\":%" PRIu64
            ",\"field_full_rebuild_control\":%" PRIu64 ",\"field_full_rebuild_other\":%" PRIu64
            ",\"field_rebuilds\":%" PRIu64 ",\"field_reuses\":%" PRIu64 ",\"render_calls\":%" PRIu64
-           ",\"render_failures\":%" PRIu64 ",\"lit_sprite_draws\":%" PRIu64
+           ",\"render_failures\":%" PRIu64 ",\"whole_field_compositions\":%" PRIu64
+           ",\"whole_field_pixels\":%" PRIu64 ",\"lit_sprite_draws\":%" PRIu64
            ",\"lit_sprite_lookups\":%" PRIu64 ",\"lit_sprite_hits\":%" PRIu64
            ",\"lit_sprite_misses\":%" PRIu64 ",\"lit_sprite_insertions\":%" PRIu64
            ",\"lit_sprite_evictions\":%" PRIu64 ",\"lit_sprite_fallbacks\":%" PRIu64
@@ -1481,6 +1482,8 @@ static void player_view_lighting_counters_json(const lighting_benchmark_counters
            counters->field_reuses,
            counters->render_calls,
            counters->render_failures,
+           counters->whole_field_compositions,
+           counters->whole_field_pixels,
            counters->lit_sprite_draws,
            counters->lit_sprite_lookups,
            counters->lit_sprite_hits,
