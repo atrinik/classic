@@ -730,11 +730,7 @@ void socket_command_mapstats(uint8_t *data, size_t len, size_t pos) {
 
 static void socket_command_map_abort_timed_light(void) {
     map_light_keyframe_transaction_abort();
-    MapData.light_keyframe_generation = 0;
-    MapData.light_keyframe_start_seconds = 0;
-    MapData.light_keyframe_end_seconds = 0;
-    MapData.light_keyframe_flags = 0;
-    MapData.light_keyframe_valid = false;
+    map_state_transaction_abort();
 }
 
 /** @copydoc socket_command_struct::handle_func */
@@ -768,6 +764,8 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     }
 
     mapstat = packet_reader_read_uint8(&reader);
+    map_state_transaction_begin(mapstat != MAP_UPDATE_CMD_SAME &&
+                                mapstat != MAP_UPDATE_CMD_PARTIAL);
     map_visible_change = mapstat != MAP_UPDATE_CMD_SAME && mapstat != MAP_UPDATE_CMD_PARTIAL;
 
     if (mapstat != MAP_UPDATE_CMD_SAME && mapstat != MAP_UPDATE_CMD_PARTIAL) {
@@ -1332,6 +1330,8 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     if (region_map_fow_need_update) {
         region_map_fow_update(MapData.region_map);
     }
+
+    map_state_transaction_commit();
 }
 
 /** @copydoc socket_command_struct::handle_func */
