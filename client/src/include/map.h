@@ -31,6 +31,7 @@
 #define MAP_H
 
 #include <toolkit/map_protocol.h>
+#include <map_visibility.h>
 
 /** Map tile position Y offset */
 #define MAP_TILE_POS_YOFF 23
@@ -289,6 +290,9 @@ typedef struct MapCell {
     /** Alpha value. */
     uint8_t alpha[NUM_REAL_LAYERS];
 
+    /** Presentation-only visibility transitions for transient layers. */
+    map_visibility_fade_t visibility[NUM_REAL_LAYERS];
+
     /** Faces. */
     int16_t faces[NUM_REAL_LAYERS];
 
@@ -375,6 +379,12 @@ static inline void map_cell_clear_live_state(MapCell *cell) {
             }
 
             int layer = GET_MAP_LAYER(object_layer, sub_layer);
+            /* A live transient may be in its bounded fade-out window after
+             * the authoritative record was cleared. Keep its presentation
+             * payload until the visibility clock expires it. */
+            if (cell->visibility[layer].initialized && cell->visibility[layer].alpha != 0) {
+                continue;
+            }
             cell->faces[layer] = 0;
             cell->flags[layer] = 0;
             cell->roof[layer] = 0;
@@ -387,6 +397,7 @@ static inline void map_cell_clear_live_state(MapCell *cell) {
             cell->infravision[layer] = 0;
             cell->draw_double[layer] = 0;
             cell->alpha[layer] = 0;
+            memset(&cell->visibility[layer], 0, sizeof(cell->visibility[layer]));
             cell->anim_last[layer] = 0;
             cell->anim_speed[layer] = 0;
             cell->anim_facing[layer] = 0;

@@ -1380,8 +1380,70 @@ static void map_update_render_height(struct MapCell *cell) {
 
 /** Clear live MAP2 presentation while retaining remembered static geometry. */
 static void map_clear_live_cell(struct MapCell *cell) {
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        for (int object_layer = LAYER_ITEM; object_layer <= LAYER_EFFECT; object_layer++) {
+            int layer = GET_MAP_LAYER(object_layer, sub_layer);
+            map_visibility_fade_t *fade = &cell->visibility[layer];
+            if (fade->initialized && fade->authorized) {
+                map_visibility_fade_revoke(fade, LastTick);
+            }
+        }
+    }
     map_cell_clear_live_state(cell);
     map_update_render_height(cell);
+}
+
+static bool map_visibility_transient_layer(int layer) {
+    return layer == LAYER_ITEM || layer == LAYER_ITEM2 || layer == LAYER_LIVING ||
+           layer == LAYER_EFFECT;
+}
+
+/** Clear one expired live layer after its presentation fade reaches zero. */
+static void map_clear_expired_visibility_layer(MapCell *cell,
+                                               int sub_layer,
+                                               int object_layer) {
+    int layer = GET_MAP_LAYER(object_layer, sub_layer);
+    uint8_t object_layer_mask = UINT8_C(1) << (object_layer - 1);
+
+    cell->door[sub_layer] &= (uint8_t)~object_layer_mask;
+    cell->exit[sub_layer] &= (uint8_t)~object_layer_mask;
+    cell->priority[sub_layer] &= (uint8_t)~object_layer_mask;
+    cell->secondpass[sub_layer] &= (uint8_t)~object_layer_mask;
+    if (object_layer == LAYER_LIVING) {
+        cell->anim_flags[sub_layer] = 0;
+        cell->probe[sub_layer] = 0;
+        cell->target_object_count[sub_layer] = 0;
+        cell->target_is_friend[sub_layer] = 0;
+        cell->pname[sub_layer][0] = '\0';
+        cell->pcolor[sub_layer][0] = '\0';
+    }
+
+    cell->faces[layer] = 0;
+    cell->flags[layer] = 0;
+    cell->roof[layer] = 0;
+    cell->quick_pos[layer] = 0;
+    cell->height[layer] = 0;
+    cell->zoom_x[layer] = 0;
+    cell->zoom_y[layer] = 0;
+    cell->align[layer] = 0;
+    cell->rotate[layer] = 0;
+    cell->infravision[layer] = 0;
+    cell->draw_double[layer] = 0;
+    cell->alpha[layer] = 0;
+    cell->visibility[layer].alpha = 0;
+    cell->visibility[layer].from_alpha = 0;
+    cell->visibility[layer].target_alpha = 0;
+    cell->visibility[layer].transition_started = LastTick;
+    cell->visibility[layer].last_authoritative_update = LastTick;
+    cell->visibility[layer].initialized = true;
+    cell->visibility[layer].authorized = false;
+    cell->anim_last[layer] = 0;
+    cell->anim_speed[layer] = 0;
+    cell->anim_facing[layer] = 0;
+    cell->anim_state[layer] = 0;
+    cell->glow[layer][0] = '\0';
+    cell->glow_speed[layer] = 0;
+    cell->glow_state[layer] = 0;
 }
 
 /**
@@ -1476,6 +1538,27 @@ void map_set_data(int x,
         cell->secondpass[sub_layer] |= object_layer_mask;
     }
 
+    bool retain_visibility_fade = face == 0 && map_visibility_transient_layer(object_layer) &&
+                                 cell->faces[layer] != 0 &&
+                                 cell->visibility[layer].initialized &&
+                                 cell->visibility[layer].alpha != 0;
+    if (retain_visibility_fade) {
+        map_visibility_fade_revoke(&cell->visibility[layer], LastTick);
+        cell->door[sub_layer] &= (uint8_t)~object_layer_mask;
+        cell->exit[sub_layer] &= (uint8_t)~object_layer_mask;
+        cell->priority[sub_layer] &= (uint8_t)~object_layer_mask;
+        cell->secondpass[sub_layer] &= (uint8_t)~object_layer_mask;
+        if (object_layer == LAYER_LIVING) {
+            cell->anim_flags[sub_layer] = 0;
+            cell->probe[sub_layer] = 0;
+            cell->target_object_count[sub_layer] = 0;
+            cell->target_is_friend[sub_layer] = 0;
+            cell->pname[sub_layer][0] = '\0';
+            cell->pcolor[sub_layer][0] = '\0';
+        }
+        return;
+    }
+
     cell->faces[layer] = face;
     cell->flags[layer] = obj_flags;
     cell->roof[layer] = roof;
@@ -1498,6 +1581,23 @@ void map_set_data(int x,
     cell->align[layer] = align;
     cell->draw_double[layer] = draw_double;
     cell->alpha[layer] = alpha;
+    if (map_visibility_transient_layer(object_layer)) {
+        map_visibility_fade_t *fade = &cell->visibility[layer];
+        if (face == 0) {
+            map_visibility_fade_revoke(fade, LastTick);
+        } else {
+            bool first_authoritative_record = !fade->initialized;
+            map_visibility_fade_authorize(fade, UINT8_MAX, LastTick);
+            /* The first complete MAP2 snapshot is the renderer's baseline;
+             * transitions apply to later visibility enters/reappearances. */
+            if (first_authoritative_record) {
+                fade->alpha = UINT8_MAX;
+                fade->from_alpha = UINT8_MAX;
+                fade->target_alpha = UINT8_MAX;
+                fade->transition_started = LastTick;
+            }
+        }
+    }
     cell->rotate[layer] = rotate;
     cell->infravision[layer] = infravision;
     cell->glow_speed[layer] = glow_speed;
@@ -1886,6 +1986,42 @@ static void map_animate_object(struct MapCell *cell, int layer) {
     }
 }
 
+/** Advance presentation-only live alpha without mutating MAP2 authority. */
+static void map_animate_visibility(int depth, int x, int y, MapCell *cell) {
+    bool changed = false;
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        for (int object_layer = LAYER_ITEM; object_layer <= LAYER_EFFECT; object_layer++) {
+            if (!map_visibility_transient_layer(object_layer)) {
+                continue;
+            }
+            int layer = GET_MAP_LAYER(object_layer, sub_layer);
+            map_visibility_fade_t *fade = &cell->visibility[layer];
+            if (!fade->initialized) {
+                continue;
+            }
+            if (!fade->authorized || cell->faces[layer] == 0 || cell->fow) {
+                map_visibility_fade_revoke(fade, LastTick);
+            } else {
+                uint8_t target = map_visibility_field_alpha(map_visibility_field_weight(x, y));
+                bool local_player = depth == 0 && x == 0 && y == 0 &&
+                                    object_layer == LAYER_LIVING &&
+                                    sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
+                if (local_player) {
+                    target = UINT8_MAX;
+                }
+                map_visibility_fade_set_target(fade, target, LastTick);
+            }
+            changed |= map_visibility_fade_advance(fade, LastTick);
+            if (!fade->authorized && fade->alpha == 0 && cell->faces[layer] != 0) {
+                map_clear_expired_visibility_layer(cell, sub_layer, object_layer);
+            }
+        }
+    }
+    if (changed) {
+        map_animation_redraw_request(LAYER_LIVING);
+    }
+}
+
 /**
  * Request one redraw when the visible timed-light blend enters a new game
  * minute.  The renderer still samples the exact bounded clock position, but
@@ -1969,6 +2105,8 @@ void map_animate(void) {
         for (x = 0; x < map_width; x++) {
             for (y = 0; y < map_height; y++) {
                 cell = MAP_CELL_GET_MIDDLE(x, y);
+
+                map_animate_visibility(depth, x, y, cell);
 
                 if (cell->fow) {
                     continue;
@@ -2294,6 +2432,18 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     }
 
     effects.alpha = data->cell->alpha[map_layer];
+    bool transient = map_visibility_transient_layer(data->layer);
+    const map_visibility_fade_t *fade = &data->cell->visibility[map_layer];
+    if (transient) {
+        if (!fade->initialized || fade->alpha == 0) {
+            return;
+        }
+        if (effects.alpha != 0) {
+            effects.alpha = MIN(effects.alpha, fade->alpha);
+        } else {
+            effects.alpha = fade->alpha;
+        }
+    }
 
     if (data->alpha_forced != 0) {
         if (effects.alpha != 0) {
@@ -2409,8 +2559,9 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
         xoff2 = (int)(((double)xlen / 100.0) * 20.0);
     }
 
-    if ((data->layer == LAYER_LIVING && data->cell->pname[data->sub_layer][0] != '\0') ||
-        data->cell->flags[map_layer] != 0) {
+    if ((!transient || map_visibility_fade_interactive(fade)) &&
+        ((data->layer == LAYER_LIVING && data->cell->pname[data->sub_layer][0] != '\0') ||
+         data->cell->flags[map_layer] != 0)) {
         map_render_context_t *context = data->render_context;
         if (context->annotations_num == context->annotations_capacity) {
             context->annotations_capacity =
@@ -2454,6 +2605,7 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     }
 
     if (data->primary_level && data->layer == LAYER_LIVING && !data->cell->fow &&
+        (!transient || map_visibility_fade_interactive(fade)) &&
         data->cell->probe[data->sub_layer] != 0) {
         map_render_context_t *context = data->render_context;
         context->target_cell = data->cell;
@@ -2972,6 +3124,13 @@ map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, 
     };
     uint16_t rgb[3];
     map_lighting_radiance(x, y, cell, sub_layer, &vertex.scalar, rgb);
+    if (data->primary_level && data->depth == 0 && !cell->fow) {
+        uint16_t weight = map_visibility_field_weight(x - data->midx, y - data->midy);
+        vertex.scalar = map_visibility_add_player_radiance(vertex.scalar, weight);
+        for (size_t channel = 0; channel < 3; channel++) {
+            rgb[channel] = map_visibility_add_player_radiance(rgb[channel], weight);
+        }
+    }
     vertex.red = rgb[0];
     vertex.green = rgb[1];
     vertex.blue = rgb[2];

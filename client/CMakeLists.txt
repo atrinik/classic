@@ -750,6 +750,19 @@ if (BUILD_TESTING)
     target_link_libraries(client-map-light-state-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-map-light-state COMMAND client-map-light-state-tests)
 
+    add_executable(client-map-visibility-tests
+        src/tests/map_visibility.c
+        src/client/map_visibility.c)
+    atrinik_configure_target(client-map-visibility-tests)
+    target_compile_definitions(client-map-visibility-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-map-visibility-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-map-visibility-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-map-visibility COMMAND client-map-visibility-tests)
+
     add_executable(client-map-transform-tests
         src/tests/map_transform.c
         src/client/map_transform.c)
