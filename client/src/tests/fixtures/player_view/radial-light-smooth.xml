@@ -16,7 +16,7 @@
              smooth-lighting="true"
              zoom-smoothing="false"
              clock-ms="1200"
-             expected-pixels-sha256="2d91137cd6920095263548ed048db0910e38e0abb3faefa4cec3185dd296a7e2">
+             expected-pixels-sha256="d487084c5b00f8005695ae200122c6816cf72a2ae7e274a2f4893c76367d6d11">
   <asset face="1" path="textures/square_highlight.png" sha256="fecfd2da236702bc874c58a767d0d237f5425e423e6699742accb26215c9676b"/>
   <asset face="2" path="textures/target_attack.png" sha256="6924dbe0a7ed3bd7b71577b0d00c91c70855cba39102c20ba3270452c2d4d806"/>
 </player-view>
