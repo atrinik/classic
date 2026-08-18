@@ -100,6 +100,17 @@
 
 #define GET_MAP_LAYER(_layer, _sub_layer) (NUM_LAYERS * (_sub_layer) + (_layer) - 1)
 
+/**
+ * Return whether an object layer is remembered static geometry.
+ *
+ * These are the only layers that survive a soft visibility clear. Actors,
+ * items, and effects remain live MAP2 presentation and are discarded when a
+ * cell leaves the current visibility set.
+ */
+static inline bool map_layer_is_remembered(uint8_t layer) {
+    return layer == LAYER_FLOOR || layer == LAYER_FMASK || layer == LAYER_WALL;
+}
+
 /** Multi part object tile structure */
 typedef struct _multi_part_tile {
     /** X-offset */
@@ -332,6 +343,61 @@ typedef struct MapCell {
     uint8_t glow_state[NUM_REAL_LAYERS];
 } MapCell;
 
+/** Clear live presentation while retaining all remembered map geometry. */
+static inline void map_cell_clear_live_state(MapCell *cell) {
+    HARD_ASSERT(cell != NULL);
+    uint8_t remembered_layer_mask = 0;
+
+    for (int object_layer = 1; object_layer <= NUM_LAYERS; object_layer++) {
+        if (map_layer_is_remembered((uint8_t)object_layer)) {
+            remembered_layer_mask |= UINT8_C(1) << (object_layer - 1);
+        }
+    }
+    uint8_t live_layer_mask = (uint8_t)~remembered_layer_mask;
+
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        cell->door[sub_layer] &= (uint8_t)~live_layer_mask;
+        cell->exit[sub_layer] &= (uint8_t)~live_layer_mask;
+        cell->priority[sub_layer] &= (uint8_t)~live_layer_mask;
+        cell->secondpass[sub_layer] &= (uint8_t)~live_layer_mask;
+        cell->anim_flags[sub_layer] = 0;
+        cell->probe[sub_layer] = 0;
+        cell->target_object_count[sub_layer] = 0;
+        cell->target_is_friend[sub_layer] = 0;
+        cell->pname[sub_layer][0] = '\0';
+        cell->pcolor[sub_layer][0] = '\0';
+    }
+
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        for (int object_layer = 1; object_layer <= NUM_LAYERS; object_layer++) {
+            if (map_layer_is_remembered((uint8_t)object_layer)) {
+                continue;
+            }
+
+            int layer = GET_MAP_LAYER(object_layer, sub_layer);
+            cell->faces[layer] = 0;
+            cell->flags[layer] = 0;
+            cell->roof[layer] = 0;
+            cell->quick_pos[layer] = 0;
+            cell->height[layer] = 0;
+            cell->zoom_x[layer] = 0;
+            cell->zoom_y[layer] = 0;
+            cell->align[layer] = 0;
+            cell->rotate[layer] = 0;
+            cell->infravision[layer] = 0;
+            cell->draw_double[layer] = 0;
+            cell->alpha[layer] = 0;
+            cell->anim_last[layer] = 0;
+            cell->anim_speed[layer] = 0;
+            cell->anim_facing[layer] = 0;
+            cell->anim_state[layer] = 0;
+            cell->glow[layer][0] = '\0';
+            cell->glow_speed[layer] = 0;
+            cell->glow_state[layer] = 0;
+        }
+    }
+}
+
 /** Discard presentation light knowledge while retaining the scalar cache value. */
 static inline void map_cell_clear_light_state(MapCell *cell) {
     HARD_ASSERT(cell != NULL);
@@ -542,6 +608,11 @@ extern bool map_light_keyframe_transaction_stage(int depth,
                                                   const uint16_t rgb[NUM_SUB_LAYERS][3]);
 extern void map_light_keyframe_transaction_commit(void);
 extern void map_light_keyframe_transaction_abort(void);
+
+/** Begin, commit, or roll back one complete MAP2 map-state transaction. */
+extern void map_state_transaction_begin(bool full_snapshot);
+extern void map_state_transaction_commit(void);
+extern void map_state_transaction_abort(void);
 
 extern void map_animate(void);
 
