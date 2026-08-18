@@ -53,7 +53,7 @@ typedef struct lighting_vertex {
 } lighting_vertex_t;
 
 /** Increment when the statistics-only benchmark API changes. */
-#define LIGHTING_BENCHMARK_STATISTICS_VERSION UINT8_C(6)
+#define LIGHTING_BENCHMARK_STATISTICS_VERSION UINT8_C(7)
 
 typedef enum lighting_benchmark_reconstruction {
     LIGHTING_BENCHMARK_RECONSTRUCTION_TRANSLATED,
@@ -106,6 +106,8 @@ typedef struct lighting_benchmark_counters {
     uint64_t render_failures;
     /** One final scene-linear composition for a complete primary-map draw. */
     uint64_t whole_field_compositions;
+    /** Marked scene pixels visited by the final composition pass. */
+    uint64_t whole_field_processed_pixels;
     uint64_t whole_field_pixels;
     uint64_t lit_sprite_draws;
     uint64_t lit_sprite_lookups;
