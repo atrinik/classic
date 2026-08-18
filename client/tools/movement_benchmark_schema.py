@@ -76,6 +76,7 @@ LIGHTING_COUNTER_FIELDS = {
     "render_calls",
     "render_failures",
     "whole_field_compositions",
+    "whole_field_processed_pixels",
     "whole_field_pixels",
     "lit_sprite_draws",
     "lit_sprite_lookups",
@@ -520,7 +521,7 @@ def _visual_lifecycle_digest(checkpoints: list[dict[str, object]]) -> str:
 
 
 def validate_record(value: object) -> dict[str, object]:
-    """Validate and return one complete version-eight native record."""
+    """Validate and return one complete version-ten native record."""
     record = _mapping(
         value,
         {
@@ -544,7 +545,7 @@ def validate_record(value: object) -> dict[str, object]:
         },
         "record",
     )
-    if record["schema_version"] != 9 or record["benchmark"] != "player-view-movement" \
+    if record["schema_version"] != 10 or record["benchmark"] != "player-view-movement" \
             or record["tick_ms"] != 125 or record["simulated_tick_hz"] != 8:
         raise ValueError("movement benchmark emitted an incompatible schema")
     checkpoint = _digest(record["checkpoint_sha256"], SHA256, "checkpoint")
@@ -628,10 +629,10 @@ def validate_record(value: object) -> dict[str, object]:
         "instrumentation identity",
     )
     if instrumentation != {
-        "schema_version": 9,
+        "schema_version": 10,
         "fixture_schema_version": 3,
         "workload": "pvm1-map2-lifecycle-v4",
-        "lighting_statistics_version": 6,
+        "lighting_statistics_version": 7,
         "map_statistics_version": 3,
         "render_profiler_statistics_version": 5,
         "sprite_cache_statistics_version": 3,
@@ -1094,6 +1095,20 @@ def validate_record(value: object) -> dict[str, object]:
         lighting = phase["lighting"]
         lighting_counters = lighting["counters"]
         if run["mode"] == "smooth":
+            composition_count = lighting_counters["whole_field_compositions"]
+            processed_pixels = lighting_counters["whole_field_processed_pixels"]
+            visible_pixels = lighting_counters["whole_field_pixels"]
+            expected_compositions = phase["full_map_draws"] + phase["animation_draws"]
+            viewport_pixels = viewport["width"] * viewport["height"]
+            if (
+                composition_count != expected_compositions
+                or processed_pixels < visible_pixels
+                or processed_pixels > composition_count * viewport_pixels
+                or (composition_count != 0 and processed_pixels >= composition_count * viewport_pixels)
+            ):
+                raise ValueError(
+                    f"movement benchmark phase {name} scene composition is not proportional"
+                )
             primary_level_draws = (
                 map_stats["primary_map_draws"] * map_stats["peak_active_levels"]
             )
