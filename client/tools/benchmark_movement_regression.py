@@ -20,7 +20,7 @@ from movement_benchmark_schema import RENDER_STAGES, validate_record
 
 
 EVIDENCE_SCHEMA_VERSION = 7
-NATIVE_SCHEMA_VERSION = 9
+NATIVE_SCHEMA_VERSION = 10
 SUSTAINED_P95_LIMIT_NS = 33_300_000
 LARGE_SUSTAINED_P95_LIMIT_NS = 125_000_000
 DISPLAY_REFERENCE_FPS = 144
@@ -64,6 +64,7 @@ LIGHTING_FIELDS = {
     "field_full_rebuild_control",
     "field_full_rebuild_other",
     "whole_field_compositions",
+    "whole_field_processed_pixels",
     "whole_field_pixels",
     "lit_sprite_lookups",
     "lit_sprite_hits",
