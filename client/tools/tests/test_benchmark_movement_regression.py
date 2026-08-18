@@ -144,6 +144,8 @@ def lighting_level(
                 "field_rebuilds": rebuilds,
                 "field_reuses": reuses,
                 "render_calls": draws,
+                "whole_field_compositions": draws if depth == 0 else 0,
+                "whole_field_pixels": draws * 320 * 240 if depth == 0 else 0,
                 "lit_sprite_draws": 2,
                 "lit_sprite_lookups": 2,
                 "lit_sprite_hits": 2,

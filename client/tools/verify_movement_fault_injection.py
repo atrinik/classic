@@ -16,13 +16,8 @@ CLOCK_FAULT = "sprite-cache-clock"
 CLOCK_FAULT_DIAGNOSTIC = (
     "player-view: movement fault sprite-cache-clock was injected and detected"
 )
-LIGHTING_FAULTS = (
-    "lighting-create",
-    "lighting-structure-lock",
-    "lighting-projected-lock",
-    "lighting-destination-lock",
-    "lighting-source-lifetime",
-)
+# The unified scene compositor no longer constructs or locks per-sprite lit
+# surfaces, so the former per-sprite construction fault matrix is obsolete.
 
 
 def verify_cursor(client: Path, manifest: Path) -> None:
@@ -127,14 +122,6 @@ def main() -> int:
         CLOCK_FAULT_DIAGNOSTIC,
         viewport,
     )
-    for lighting_fault in LIGHTING_FAULTS:
-        verify_movement_fault(
-            client,
-            movement_manifest,
-            lighting_fault,
-            f"player-view: movement fault {lighting_fault} was injected and detected",
-            viewport,
-        )
     verify_cursor(client, movement_manifest)
     return 0
 

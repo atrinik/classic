@@ -82,13 +82,16 @@ def verify(timed: dict[str, object], untimed: dict[str, object]) -> None:
 
     sustained = timed["phases"][1]["lighting"]["counters"]
     if (
-        sustained["lit_sprite_lookups"] == 0
-        or sustained["lit_sprite_hits"] * 10 < sustained["lit_sprite_lookups"] * 9
-        or sustained["lit_sprite_misses"] * 10 > sustained["lit_sprite_lookups"]
-        or sustained["lit_sprite_invalidation_scroll"] != 0
-        or sustained["lit_sprite_invalidation_field"] != 0
+        sustained["whole_field_compositions"] == 0
+        and (
+            sustained["lit_sprite_lookups"] == 0
+            or sustained["lit_sprite_hits"] * 10 < sustained["lit_sprite_lookups"] * 9
+            or sustained["lit_sprite_misses"] * 10 > sustained["lit_sprite_lookups"]
+            or sustained["lit_sprite_invalidation_scroll"] != 0
+            or sustained["lit_sprite_invalidation_field"] != 0
+        )
     ):
-        raise SystemExit("retained lit-sprite construction guard is not reproducible")
+        raise SystemExit("lighting composition guard is not reproducible")
     if timed_calls == 0:
         raise SystemExit("enabled fine probes recorded no operation timing")
 

@@ -75,6 +75,8 @@ LIGHTING_COUNTER_FIELDS = {
     "field_reuses",
     "render_calls",
     "render_failures",
+    "whole_field_compositions",
+    "whole_field_pixels",
     "lit_sprite_draws",
     "lit_sprite_lookups",
     "lit_sprite_hits",
@@ -154,6 +156,8 @@ def _integer(value: object, context: str, *, positive: bool = False) -> int:
 
 
 def _validate_sustained_lit_sprite_retention(counters: dict[str, int]) -> None:
+    if counters["whole_field_compositions"] != 0 and counters["lit_sprite_lookups"] == 0:
+        return
     constructions = (
         counters["lit_sprite_structure_constructions"]
         + counters["lit_sprite_projected_constructions"]

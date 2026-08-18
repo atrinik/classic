@@ -54,6 +54,8 @@ static uint16_t map_level_mask;
 static SDL_Surface *map_level_surfaces[2];
 static SDL_Surface *map_animation_base_surface;
 static bool map_animation_cache_valid;
+/* Paint the primary world first, then apply one final field composition. */
+static bool map_scene_composition_active;
 static map_benchmark_statistics_t map_benchmark_statistics;
 static uint32_t map_pending_redraw_reasons;
 static bool map_animation_redraw_flag;
@@ -2537,6 +2539,18 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
         };
         context->commands_num++;
     } else {
+        int scene_sample_y =
+            BIT_QUERY(effects.flags, SPRITE_FLAG_SMOOTH_DARK) ||
+                    BIT_QUERY(effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE)
+                ? effects.smooth_dark_y
+                : INT16_MIN;
+        if (map_scene_composition_active) {
+            /* Fog, infravision, and grayscale remain explicit presentation
+             * effects. Ordinary smooth lighting is deferred to the scene pass. */
+            BITMASK_CLEAR(effects.flags,
+                          BIT_MASK(SPRITE_FLAG_SMOOTH_DARK) |
+                              BIT_MASK(SPRITE_FLAG_SMOOTH_DARK_SURFACE));
+        }
         surface_show_effects(surface, xl, yl, NULL, face_sprite->bitmap, &effects);
 
         /* Double faces are shown twice, one above the other, when not lower
@@ -2544,6 +2558,22 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
          * obscuring the user's view. */
         if (data->cell->draw_double[map_layer]) {
             surface_show_effects(surface, xl, yl - 22, NULL, face_sprite->bitmap, &effects);
+        }
+        if (map_scene_composition_active) {
+            lighting_scene_mark_surface(face_sprite->bitmap,
+                                         xl,
+                                         yl,
+                                         NULL,
+                                         data->depth,
+                                         scene_sample_y);
+            if (data->cell->draw_double[map_layer]) {
+                lighting_scene_mark_surface(face_sprite->bitmap,
+                                             xl,
+                                             yl - 22,
+                                             NULL,
+                                             data->depth,
+                                             scene_sample_y);
+            }
         }
     }
 
@@ -3307,7 +3337,9 @@ static void map_draw_level(SDL_Surface *surface,
         if (data.smooth_lighting) {
             uint64_t profile_lighting_started = render_profiler_begin();
             map_draw_lighting(surface,
-                              primary_level && ground_present ? ground_surface : NULL,
+                              map_scene_composition_active
+                                  ? NULL
+                                  : (primary_level && ground_present ? ground_surface : NULL),
                               &data,
                               x,
                               y,
@@ -3320,6 +3352,9 @@ static void map_draw_level(SDL_Surface *surface,
         if (primary_level && ground_present) {
             uint64_t profile_composite_started = render_profiler_begin();
             surface_show(surface, 0, 0, NULL, ground_surface);
+            if (map_scene_composition_active) {
+                lighting_scene_mark_surface(ground_surface, 0, 0, NULL, depth, INT16_MIN);
+            }
             render_profiler_end(RENDER_PROFILE_MAP_GROUND_COMPOSITE, profile_composite_started);
         }
         data.ground_pass = false;
@@ -4195,22 +4230,60 @@ map_render_commands(SDL_Surface *surface,
             selected_depth = command->depth;
         }
 
+        bool scene_lit = BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK) ||
+                         BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
+        sprite_effects_t effects = command->effects;
+        if (map_scene_composition_active) {
+            BITMASK_CLEAR(effects.flags,
+                          BIT_MASK(SPRITE_FLAG_SMOOTH_DARK) |
+                              BIT_MASK(SPRITE_FLAG_SMOOTH_DARK_SURFACE));
+        }
         surface_show_effects(surface,
                              command->x,
                              command->y,
                              NULL,
                              command->source,
-                             &command->effects);
+                             &effects);
         if (command->draw_double) {
             surface_show_effects(surface,
                                  command->x,
                                  command->y - 22,
                                  NULL,
                                  command->source,
-                                 &command->effects);
+                                 &effects);
+        }
+
+        if (map_scene_composition_active && scene_lit) {
+            SDL_Surface *geometry = map_render_command_geometry(command);
+            int scene_sample_y = command->effects.smooth_dark_y;
+            if (geometry != NULL) {
+                lighting_scene_mark_surface(geometry,
+                                             command->x,
+                                             command->y,
+                                             NULL,
+                                             command->depth,
+                                             scene_sample_y);
+                if (command->draw_double) {
+                    lighting_scene_mark_surface(
+                        geometry,
+                        command->x,
+                        command->y - 22,
+                        NULL,
+                        command->depth,
+                        scene_sample_y);
+                }
+                if (geometry != command->source) {
+                    SDL_DestroySurface(geometry);
+                }
+            }
         }
     }
     render_profiler_end(RENDER_PROFILE_MAP_SPRITE_EFFECTS, profile_effects_started);
+
+    if (map_scene_composition_active) {
+        lighting_scene_render(surface);
+        map_scene_composition_active = false;
+    }
 
     if (primary_surface) {
         /* Draw grouped cues after the world painter, matching the legacy
@@ -4499,11 +4572,29 @@ void map_draw_map(SDL_Surface *surface) {
             map_benchmark_mutable_rle_fault_armed = true;
             map_benchmark_fault_status.injected = true;
             map_benchmark_statistics.fault_injections++;
+            if (!surface_clear_transparent_black(*level_surface)) {
+                map_benchmark_statistics.render_failures++;
+            }
+            /* The injected surface has been exercised by the clear seam. Do
+             * not enter a full large-viewport painter pass for a fault-only
+             * replay; the production renderer remains on the path below. */
+            map_benchmark_statistics.fault_detections++;
+            map_benchmark_fault_status.detected = true;
+            SDL_SetSurfaceRLE(*level_surface, false);
+            map_benchmark_mutable_rle_fault_armed = false;
+            map_select_level(0, true);
+            lighting_select_level(0);
+            render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
+            return;
         } else {
             map_benchmark_statistics.render_failures++;
         }
     }
 #endif
+
+    map_scene_composition_active =
+        primary_surface && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) &&
+        lighting_scene_begin(surface->w, surface->h);
 
     uint64_t active_levels = 0;
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
@@ -4591,6 +4682,10 @@ bool map_draw_animation(SDL_Surface *surface) {
         render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
         return false;
     }
+
+    map_scene_composition_active =
+        setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) &&
+        lighting_scene_begin(surface->w, surface->h);
 
     map_render_context_t render_context = {0};
     if (map_animation_ground_commands_num != 0) {

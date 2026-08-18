@@ -23,8 +23,8 @@
              player-names="true"
              target-ui="true"
              clock-ms="1200"
-             expected-ui-pixels-sha256="b273b54af29be5ee4630cbb24bb527a27dc4c48b14b9c999dd68d4893b8d161d"
-             expected-pixels-sha256="6fa15f722cb29d3e27169bd159de6cfb5773e9fdfc1bcd882e12f2edd0a3eb5e">
+             expected-ui-pixels-sha256="b365c0478f1dc89317384b8e7fe51f8d34d35f3833e6a85333c0439545c12155"
+             expected-pixels-sha256="b0d7868512507f0bdd267878136026bda5504a6f59b7f43ec12ec18b5e8c4fca">
   <asset face="1" path="textures/square_highlight.png" sha256="fecfd2da236702bc874c58a767d0d237f5425e423e6699742accb26215c9676b"/>
   <asset face="2" path="textures/target_attack.png" sha256="6924dbe0a7ed3bd7b71577b0d00c91c70855cba39102c20ba3270452c2d4d806"/>
   <asset face="3" path="textures/icon_map.png" sha256="314b2212e2bf2ecf69a88d872ec504b794ec52d680402e23ca78679ad1c66435"/>
