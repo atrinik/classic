@@ -12,7 +12,10 @@ EXPECTED_SAMPLES = {"cold": 1, "sustained": 480, "idle": 16, "resumed": 80}
 EXPECTED_PACKETS = {"cold": 1, "sustained": 480, "idle": 8, "resumed": 80}
 EXPECTED_CHANGED = {"cold": 1, "sustained": 480, "idle": 0, "resumed": 80}
 EXPECTED_FULL_MAP_DRAWS = {"cold": 1, "sustained": 480, "idle": 0, "resumed": 80}
-EXPECTED_ANIMATION_DRAWS = {"cold": 0, "sustained": 0, "idle": 16, "resumed": 0}
+# Visibility fades request animation-only work only while an alpha transition
+# is active. Once the bounded fade/stale lifecycle settles, idle ticks must not
+# rebuild or repaint the map.
+EXPECTED_ANIMATION_DRAWS = {"cold": 0, "sustained": 0, "idle": 0, "resumed": 0}
 LIGHTING_SAMPLE_BYTES = 10
 EXPECTED_LOCAL_MINIMAP_DRAWS = {"cold": 1, "sustained": 240, "idle": 0, "resumed": 40}
 EXPECTED_CHECKPOINTS = (
@@ -537,7 +540,7 @@ def validate_record(value: object) -> dict[str, object]:
         },
         "record",
     )
-    if record["schema_version"] != 8 or record["benchmark"] != "player-view-movement" \
+    if record["schema_version"] != 9 or record["benchmark"] != "player-view-movement" \
             or record["tick_ms"] != 125 or record["simulated_tick_hz"] != 8:
         raise ValueError("movement benchmark emitted an incompatible schema")
     checkpoint = _digest(record["checkpoint_sha256"], SHA256, "checkpoint")
@@ -621,7 +624,7 @@ def validate_record(value: object) -> dict[str, object]:
         "instrumentation identity",
     )
     if instrumentation != {
-        "schema_version": 8,
+        "schema_version": 9,
         "fixture_schema_version": 3,
         "workload": "pvm1-map2-lifecycle-v4",
         "lighting_statistics_version": 6,
@@ -818,7 +821,7 @@ def validate_record(value: object) -> dict[str, object]:
             or phase["animation_draws"] != EXPECTED_ANIMATION_DRAWS[name]
             or phase_reasons["packet"] != phase["changed_map_packets"]
             or phase_reasons["scroll"] > phase["changed_map_packets"]
-            or phase_reasons["animation"] != phase["animation_ticks"]
+            or phase_reasons["animation"] > phase["animation_ticks"]
             or any(phase_reasons[field] != 0 for field in ("external", "lighting", "resize", "ui"))
         ):
             raise ValueError(f"movement benchmark phase {name} draw reason is impossible")

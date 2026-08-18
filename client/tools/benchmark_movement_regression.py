@@ -20,7 +20,7 @@ from movement_benchmark_schema import RENDER_STAGES, validate_record
 
 
 EVIDENCE_SCHEMA_VERSION = 7
-NATIVE_SCHEMA_VERSION = 8
+NATIVE_SCHEMA_VERSION = 9
 SUSTAINED_P95_LIMIT_NS = 33_300_000
 LARGE_SUSTAINED_P95_LIMIT_NS = 125_000_000
 DISPLAY_REFERENCE_FPS = 144
@@ -763,7 +763,7 @@ def _guard_native_record(record: dict[str, object]) -> dict[str, dict[str, objec
         "passed": noop_redraws == 0 and idle["draw_reasons"]["packet"] == 0,
     }
     animation_isolated = (
-        idle["animation_draws"] == idle["samples"]
+        0 <= idle["animation_draws"] <= idle["samples"]
         and idle["map"]["animation_level_draws"]
         == idle["animation_draws"] * idle["map"]["peak_active_levels"]
         and all(
