@@ -28,7 +28,7 @@
              animation-y-offset="0"
              animation-elevated="true"
              clock-ms="1200"
-             expected-pixels-sha256="50bc032d53ff5a3c74e2238dfc73f761d075644e799e8cfb4bae84bc30eaf67a">
+             expected-pixels-sha256="02e4c78c15c36f417a06413da7676e9b8401e19cacd4c6e04274d034ee5875f8">
   <asset face="1" path="textures/square_highlight.png" sha256="fecfd2da236702bc874c58a767d0d237f5425e423e6699742accb26215c9676b"/>
   <asset face="2" path="textures/target_attack.png" sha256="6924dbe0a7ed3bd7b71577b0d00c91c70855cba39102c20ba3270452c2d4d806"/>
   <asset face="3" path="textures/icon_map.png" sha256="314b2212e2bf2ecf69a88d872ec504b794ec52d680402e23ca78679ad1c66435"/>
