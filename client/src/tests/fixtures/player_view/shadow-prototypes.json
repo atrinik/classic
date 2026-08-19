@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "source_fixture": "client/src/tests/fixtures/player_view/brynknot-movement-five-depth.map2.hex",
+  "viewport": {"width": 64, "height": 48},
+  "workload": {
+    "movement_frames": 480,
+    "idle_frames": 16,
+    "path": [
+      {"x": 0, "y": 0},
+      {"x": 1, "y": 0},
+      {"x": 1, "y": 1},
+      {"x": 0, "y": 1},
+      {"x": -1, "y": 1},
+      {"x": -1, "y": 0},
+      {"x": -1, "y": -1},
+      {"x": 0, "y": -1}
+    ]
+  },
+  "light_cases": [
+    {"state": "dawn", "scalar": 128, "rgb": [128, 112, 96], "negative": false, "timed": true},
+    {"state": "noon", "scalar": 192, "rgb": [192, 192, 192], "negative": false, "timed": false},
+    {"state": "dusk", "scalar": 96, "rgb": [96, 72, 64], "negative": false, "timed": true},
+    {"state": "night", "scalar": 32, "rgb": [24, 28, 40], "negative": false, "timed": false},
+    {"state": "full-moon", "scalar": 64, "rgb": [56, 64, 88], "negative": false, "timed": false},
+    {"state": "new-moon", "scalar": 16, "rgb": [8, 8, 12], "negative": false, "timed": false},
+    {"state": "starlight-only", "scalar": 8, "rgb": [6, 8, 16], "negative": false, "timed": false},
+    {"state": "map-local-colored", "scalar": 160, "rgb": [96, 160, 208], "negative": false, "timed": false},
+    {"state": "negative-light", "scalar": 0, "rgb": [0, 0, 0], "negative": true, "timed": false},
+    {"state": "timed-keyframe", "scalar": 144, "rgb": [144, 128, 112], "negative": false, "timed": true}
+  ],
+  "scenes": [
+    {
+      "name": "deterministic-player-view",
+      "field_seed": 37,
+      "roof_rows": [12, 13, 14, 15],
+      "blocked": [
+        {"x": 24, "y": 20}, {"x": 25, "y": 20}, {"x": 26, "y": 20},
+        {"x": 24, "y": 21}, {"x": 25, "y": 21}, {"x": 26, "y": 21}
+      ],
+      "casters": [
+        {"name": "player", "x": 31, "y": 25, "depth": 0, "elevation": 2, "opacity": 255, "fade": 255, "radius": 2, "animated": true, "visible": true, "transformed": false, "effect": false},
+        {"name": "monster", "x": 36, "y": 27, "depth": 0, "elevation": 1, "opacity": 220, "fade": 255, "radius": 2, "animated": true, "visible": true, "transformed": true, "effect": false},
+        {"name": "effect", "x": 39, "y": 23, "depth": 1, "elevation": 3, "opacity": 160, "fade": 128, "radius": 1, "animated": true, "visible": true, "transformed": true, "effect": true},
+        {"name": "hidden-actor", "x": 28, "y": 28, "depth": 0, "elevation": 1, "opacity": 255, "fade": 255, "radius": 2, "animated": true, "visible": false, "transformed": false, "effect": false}
+      ],
+      "directions": [
+        {"state": "dawn", "dx": 1, "dy": 1},
+        {"state": "noon", "dx": 1, "dy": 0},
+        {"state": "dusk", "dx": -1, "dy": 1},
+        {"state": "night-starlight", "dx": 0, "dy": 0},
+        {"state": "timed-keyframe", "dx": -1, "dy": -1}
+      ]
+    },
+    {
+      "name": "roof-heavy-dense-movement",
+      "field_seed": 113,
+      "roof_rows": [8, 9, 10, 11, 12, 13, 14, 15, 16],
+      "blocked": [
+        {"x": 18, "y": 17}, {"x": 19, "y": 17}, {"x": 20, "y": 17}, {"x": 21, "y": 17},
+        {"x": 18, "y": 18}, {"x": 19, "y": 18}, {"x": 20, "y": 18}, {"x": 21, "y": 18},
+        {"x": 42, "y": 30}, {"x": 43, "y": 30}, {"x": 44, "y": 30}
+      ],
+      "casters": [
+        {"name": "player", "x": 30, "y": 25, "depth": 0, "elevation": 2, "opacity": 255, "fade": 255, "radius": 2, "animated": true, "visible": true, "transformed": false, "effect": false},
+        {"name": "roof-tree", "x": 22, "y": 14, "depth": 1, "elevation": 8, "opacity": 200, "fade": 255, "radius": 3, "animated": false, "visible": true, "transformed": false, "effect": false},
+        {"name": "facade-monster", "x": 40, "y": 18, "depth": 1, "elevation": 4, "opacity": 235, "fade": 200, "radius": 2, "animated": true, "visible": true, "transformed": true, "effect": false},
+        {"name": "animated-effect", "x": 44, "y": 25, "depth": 2, "elevation": 2, "opacity": 128, "fade": 160, "radius": 2, "animated": true, "visible": true, "transformed": true, "effect": true}
+      ],
+      "directions": [
+        {"state": "dawn", "dx": 1, "dy": 1},
+        {"state": "noon", "dx": 1, "dy": 0},
+        {"state": "dusk", "dx": -1, "dy": 1},
+        {"state": "night-starlight", "dx": 0, "dy": 0},
+        {"state": "timed-keyframe", "dx": -1, "dy": -1}
+      ]
+    }
+  ]
+}
