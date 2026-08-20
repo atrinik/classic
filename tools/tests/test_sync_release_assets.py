@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "release" / "sync_release_assets.py"
@@ -80,6 +81,51 @@ class SyncReleaseAssetsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "github-output"
             sync_release_assets.write_output(output, "draft", 371791046)
+            self.assertEqual(
+                output.read_text(encoding="utf-8"),
+                "state=draft\nrelease_id=371791046\n",
+            )
+
+    def test_verify_only_writes_verified_release_id_through_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            assets_directory = Path(directory) / "assets"
+            assets_directory.mkdir()
+            for index in range(12):
+                (assets_directory / f"asset-{index}.bin").write_bytes(bytes([index]))
+            expected = sync_release_assets.expected_assets(assets_directory)
+            release = {
+                "tag_name": "v5.37.0",
+                "draft": True,
+                "prerelease": False,
+                "id": 371791046,
+                "assets": [
+                    {
+                        "name": name,
+                        "size": size,
+                        "digest": digest,
+                        "state": "uploaded",
+                    }
+                    for name, (size, digest) in expected.items()
+                ],
+            }
+            output = Path(directory) / "github-output"
+            arguments = [
+                "sync_release_assets.py",
+                "--directory",
+                str(assets_directory),
+                "--repository",
+                "atrinik/classic",
+                "--tag",
+                "v5.37.0",
+                "--verify-only",
+                "--github-output",
+                str(output),
+            ]
+            with mock.patch.object(
+                sync_release_assets, "lookup_release", return_value=release
+            ):
+                with mock.patch.object(sys, "argv", arguments):
+                    self.assertEqual(sync_release_assets.main(), 0)
             self.assertEqual(
                 output.read_text(encoding="utf-8"),
                 "state=draft\nrelease_id=371791046\n",
