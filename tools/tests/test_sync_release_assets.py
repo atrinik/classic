@@ -65,7 +65,10 @@ class SyncReleaseAssetsTests(unittest.TestCase):
             sync_release_assets.require_release_id(release, "v5.37.0"), 371791046
         )
         for invalid in (
+            None,
+            {"tag_name": "v5.36.0", "id": 371791046},
             {"tag_name": "v5.37.0", "id": 0},
+            {"tag_name": "v5.37.0", "id": True},
             {"tag_name": "v5.37.0", "id": "371791046"},
             {"tag_name": "v5.37.0"},
         ):
