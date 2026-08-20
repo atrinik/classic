@@ -31,7 +31,6 @@
 #define SOCKET_STUN_RESOLVER_WORKERS_MAX 4U
 #define SOCKET_STUN_LATE_DRAIN_MAX 4U
 #define SOCKET_PUNCH_UNRELATED_DRAIN_MAX 4U
-#define SOCKET_WEBSOCKET_CONTROL_PAYLOAD_MAX 125U
 
 typedef enum socket_rendezvous_attempt_state {
     SOCKET_RENDEZVOUS_ATTEMPT_READY,
@@ -1687,20 +1686,15 @@ socket_websocket_receive_ex(void *handle,
         return SOCKET_WEBSOCKET_PROTOCOL;
     }
 
-    bool discarding_control_payload = false;
-    unsigned char control_payload[SOCKET_WEBSOCKET_CONTROL_PAYLOAD_MAX];
     for (;;) {
         size_t available = capacity - 1 - *used;
-        void *destination = discarding_control_payload ? (void *)control_payload
-                                                        : (void *)(buffer + *used);
-        size_t destination_size = discarding_control_payload ? sizeof(control_payload) : available;
         size_t received = 0;
 #if LIBCURL_VERSION_NUM >= 0x080200
         const struct curl_ws_frame *frame = NULL;
 #else
         struct curl_ws_frame *frame = NULL;
 #endif
-        CURLcode result = curl_ws_recv(handle, destination, destination_size, &received, &frame);
+        CURLcode result = curl_ws_recv(handle, buffer + *used, available, &received, &frame);
         if (info != NULL) {
             info->curl_result = (int)result;
             info->bytes_received = received;
@@ -1719,9 +1713,7 @@ socket_websocket_receive_ex(void *handle,
 
         unsigned int flags = (unsigned int)frame->flags;
         if ((flags & CURLWS_CLOSE) != 0) {
-            const unsigned char *close_payload = discarding_control_payload
-                                                      ? control_payload
-                                                      : (const unsigned char *)(buffer + *used);
+            const unsigned char *close_payload = (const unsigned char *)(buffer + *used);
             if (received >= 2 && info != NULL) {
                 info->close_code = (uint16_t)(((uint16_t)close_payload[0] << 8) |
                                               (uint16_t)close_payload[1]);
@@ -1730,16 +1722,11 @@ socket_websocket_receive_ex(void *handle,
             return SOCKET_WEBSOCKET_CLOSED;
         }
         if ((flags & (CURLWS_PING | CURLWS_PONG)) != 0) {
-            discarding_control_payload = frame->bytesleft != 0;
             continue;
         }
         if ((flags & CURLWS_TEXT) == 0 || (flags & CURLWS_BINARY) != 0 ||
             received > available) {
             return SOCKET_WEBSOCKET_PROTOCOL;
-        }
-        if (discarding_control_payload) {
-            memcpy(buffer + *used, control_payload, received);
-            discarding_control_payload = false;
         }
         *used += received;
         if (frame->bytesleft != 0 || (flags & CURLWS_CONT) != 0) {
@@ -2030,7 +2017,7 @@ size_t socket_rendezvous_client(socket_t *sc,
                                 socket_connect_failure_t *failure) {
     (void)attempt;
     if (failure != NULL) {
-        failure->code = SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+        failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
         failure->retry_after_seconds = 0;
     }
     return 0;
