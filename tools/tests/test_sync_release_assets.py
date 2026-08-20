@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 
@@ -56,6 +57,29 @@ class SyncReleaseAssetsTests(unittest.TestCase):
         with self.assertRaises(sync_release_assets.AssetSyncError):
             sync_release_assets.require_published_immutable(
                 {**release, "immutable": False}, "v5.6.0"
+            )
+
+    def test_verified_release_id_is_positive_and_numeric(self) -> None:
+        release = {"tag_name": "v5.37.0", "id": 371791046}
+        self.assertEqual(
+            sync_release_assets.require_release_id(release, "v5.37.0"), 371791046
+        )
+        for invalid in (
+            {"tag_name": "v5.37.0", "id": 0},
+            {"tag_name": "v5.37.0", "id": "371791046"},
+            {"tag_name": "v5.37.0"},
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(sync_release_assets.AssetSyncError):
+                    sync_release_assets.require_release_id(invalid, "v5.37.0")
+
+    def test_write_output_propagates_the_verified_release_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "github-output"
+            sync_release_assets.write_output(output, "draft", 371791046)
+            self.assertEqual(
+                output.read_text(encoding="utf-8"),
+                "state=draft\nrelease_id=371791046\n",
             )
 
 
