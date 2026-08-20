@@ -725,24 +725,24 @@ static void *metaserver_rendezvous_thread(void *data) {
                         if (receive_info.has_close_code) {
                             LOG(ERROR,
                                 "Rendezvous control receive %s (libcurl result %d: %s, "
-                                "frame flags 0x%x, payload %zu, bytes left %" PRIu64
+                                "frame flags 0x%x, payload %" PRIu64 ", bytes left %" PRIu64
                                 ", close code %u)",
                                 receive_reason,
                                 receive_info.curl_result,
                                 curl_error,
                                 receive_info.frame_flags,
-                                receive_info.bytes_received,
+                                (uint64_t)receive_info.bytes_received,
                                 receive_info.bytes_left,
-                                receive_info.close_code);
+                                (unsigned int)receive_info.close_code);
                         } else {
                             LOG(ERROR,
                                 "Rendezvous control receive %s (libcurl result %d: %s, "
-                                "frame flags 0x%x, payload %zu, bytes left %" PRIu64 ")",
+                                "frame flags 0x%x, payload %" PRIu64 ", bytes left %" PRIu64 ")",
                                 receive_reason,
                                 receive_info.curl_result,
                                 curl_error,
                                 receive_info.frame_flags,
-                                receive_info.bytes_received,
+                                (uint64_t)receive_info.bytes_received,
                                 receive_info.bytes_left);
                         }
                         break;
