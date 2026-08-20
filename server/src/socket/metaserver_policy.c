@@ -221,6 +221,14 @@ bool metaserver_attempt_budget_consume(metaserver_attempt_budget_t *budget,
     return false;
 }
 
+void metaserver_attempt_budget_reset(metaserver_attempt_budget_t *budget, server_monotonic_t now) {
+    HARD_ASSERT(budget != NULL);
+
+    budget->tokens = METASERVER_ATTEMPT_RATE_CAPACITY;
+    budget->refill_deadline =
+        metaserver_deadline_after_seconds(now, METASERVER_ATTEMPT_RATE_REFILL_SECONDS);
+}
+
 uint32_t metaserver_publish_heartbeat_delay_seconds(uint32_t heartbeat_seconds,
                                                     uint32_t random_value) {
     HARD_ASSERT(heartbeat_seconds >= METASERVER_PUBLISH_HEARTBEAT_MIN_SECONDS);

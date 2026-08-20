@@ -298,6 +298,24 @@ metaserver_rendezvous_send(CURL *curl, const char *frame, uint64_t generation) {
     return ok ? METASERVER_RENDEZVOUS_FRAME_HANDLED : METASERVER_RENDEZVOUS_FRAME_CONTROL_ERROR;
 }
 
+static CURLcode metaserver_rendezvous_ping(CURL *curl, uint64_t generation) {
+    pthread_mutex_lock(&rendezvous_disclosure_lock);
+    pthread_mutex_lock(&rendezvous_lock);
+    bool current = metaserver_rendezvous_current_locked(generation);
+    pthread_mutex_unlock(&rendezvous_lock);
+    if (!current) {
+        pthread_mutex_unlock(&rendezvous_disclosure_lock);
+        return CURLE_ABORTED_BY_CALLBACK;
+    }
+
+    static const char payload[] = "";
+    size_t sent = 0;
+    CURLcode result = curl_ws_send(curl, payload, 0, &sent, 0, CURLWS_PING);
+    pthread_mutex_unlock(&rendezvous_disclosure_lock);
+    return result == CURLE_OK && sent == 0 ? CURLE_OK
+                                          : result == CURLE_OK ? CURLE_WRITE_ERROR : result;
+}
+
 static metaserver_rendezvous_frame_result_t
 metaserver_rendezvous_auth_init(CURL *curl,
                                 metaserver_rendezvous_auth_job_t *jobs,
@@ -641,6 +659,10 @@ static void *metaserver_rendezvous_thread(void *data) {
                 }
             } else {
                 uint64_t connected_at = datetime_monotonic_ms();
+                uint64_t next_heartbeat =
+                    UINT64_MAX - connected_at < METASERVER_RENDEZVOUS_HEARTBEAT_MS
+                        ? UINT64_MAX
+                        : connected_at + METASERVER_RENDEZVOUS_HEARTBEAT_MS;
                 rendezvous_punch_job_t punch_jobs[RENDEZVOUS_PUNCH_JOBS_MAX] = {0};
                 metaserver_rendezvous_auth_job_t auth_jobs[METASERVER_RENDEZVOUS_AUTH_JOBS_MAX] = {
                     0};
@@ -648,6 +670,30 @@ static void *metaserver_rendezvous_thread(void *data) {
                 size_t used = 0;
                 bool stop_control = false;
                 while (!stop_control && metaserver_rendezvous_current(args->generation)) {
+                    uint64_t now = datetime_monotonic_ms();
+                    if (now >= next_heartbeat) {
+                        CURLcode heartbeat_result =
+                            metaserver_rendezvous_ping(curl, args->generation);
+                        if (heartbeat_result == CURLE_OK) {
+                            next_heartbeat =
+                                UINT64_MAX - now < METASERVER_RENDEZVOUS_HEARTBEAT_MS
+                                    ? UINT64_MAX
+                                    : now + METASERVER_RENDEZVOUS_HEARTBEAT_MS;
+                            LOG(DEBUG, "Sent rendezvous control heartbeat");
+                        } else if (heartbeat_result == CURLE_AGAIN) {
+                            next_heartbeat =
+                                UINT64_MAX - now < METASERVER_RENDEZVOUS_HEARTBEAT_RETRY_MS
+                                    ? UINT64_MAX
+                                    : now + METASERVER_RENDEZVOUS_HEARTBEAT_RETRY_MS;
+                        } else {
+                            if (metaserver_rendezvous_current(args->generation)) {
+                                LOG(ERROR,
+                                    "Rendezvous control heartbeat failed: %s",
+                                    curl_easy_strerror(heartbeat_result));
+                            }
+                            break;
+                        }
+                    }
                     metaserver_rendezvous_auth_expire(auth_jobs,
                                                       arraysize(auth_jobs),
                                                       datetime_monotonic_ms());
@@ -657,8 +703,9 @@ static void *metaserver_rendezvous_thread(void *data) {
                         break;
                     }
 
+                    socket_websocket_receive_info_t receive_info;
                     socket_websocket_receive_state_t receive_state =
-                        socket_websocket_receive(curl, VS(message), &used);
+                        socket_websocket_receive_ex(curl, VS(message), &used, &receive_info);
                     if (receive_state == SOCKET_WEBSOCKET_EMPTY) {
                         if (!metaserver_rendezvous_wait(args->generation, 20)) {
                             break;
@@ -669,6 +716,35 @@ static void *metaserver_rendezvous_thread(void *data) {
                         continue;
                     }
                     if (receive_state != SOCKET_WEBSOCKET_MESSAGE) {
+                        const char *receive_reason =
+                            receive_state == SOCKET_WEBSOCKET_CLOSED ? "closed" : "protocol error";
+                        const char *curl_error = receive_info.curl_result >= 0
+                                                     ? curl_easy_strerror(
+                                                           (CURLcode)receive_info.curl_result)
+                                                     : "not available";
+                        if (receive_info.has_close_code) {
+                            LOG(ERROR,
+                                "Rendezvous control receive %s (libcurl result %d: %s, "
+                                "frame flags 0x%x, payload %zu, bytes left %" PRIu64
+                                ", close code %u)",
+                                receive_reason,
+                                receive_info.curl_result,
+                                curl_error,
+                                receive_info.frame_flags,
+                                receive_info.bytes_received,
+                                receive_info.bytes_left,
+                                receive_info.close_code);
+                        } else {
+                            LOG(ERROR,
+                                "Rendezvous control receive %s (libcurl result %d: %s, "
+                                "frame flags 0x%x, payload %zu, bytes left %" PRIu64 ")",
+                                receive_reason,
+                                receive_info.curl_result,
+                                curl_error,
+                                receive_info.frame_flags,
+                                receive_info.bytes_received,
+                                receive_info.bytes_left);
+                        }
                         break;
                     }
 
@@ -811,6 +887,14 @@ static void *metaserver_rendezvous_thread(void *data) {
             stats.rendezvous_rejections++;
             pthread_mutex_unlock(&stats_lock);
             break;
+        }
+        if (connected_ms >= METASERVER_RENDEZVOUS_STABLE_MS) {
+            pthread_mutex_lock(&rendezvous_lock);
+            if (metaserver_rendezvous_current_locked(args->generation)) {
+                metaserver_attempt_budget_reset(&rendezvous_attempt_budget,
+                                                server_monotonic_now());
+            }
+            pthread_mutex_unlock(&rendezvous_lock);
         }
         failures = metaserver_rendezvous_retry_failures(failures, connected_ms);
         if (!metaserver_rendezvous_retry(args, &failures, retry_after_seconds)) {

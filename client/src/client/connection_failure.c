@@ -63,6 +63,19 @@ bool client_connection_failure_format(const socket_connect_failure_t *failure,
                                "The server uses an incompatible connection protocol.");
             break;
 
+        case SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE:
+            written = snprintf(message,
+                               message_size,
+                               "The server's connection service is temporarily unavailable. "
+                               "Please try again.");
+            break;
+
+        case SOCKET_CONNECT_FAILURE_RENDEZVOUS_PROTOCOL:
+            written = snprintf(message,
+                               message_size,
+                               "The server and client use incompatible rendezvous protocols.");
+            break;
+
         case SOCKET_CONNECT_FAILURE_NONE:
         case SOCKET_CONNECT_FAILURE_UNAVAILABLE:
         default:

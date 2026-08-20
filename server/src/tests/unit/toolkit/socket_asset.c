@@ -1538,6 +1538,16 @@ START_TEST(test_metaserver_publish_retry_and_daily_budget) {
     ck_assert(metaserver_attempt_budget_consume(&budget, budget_refill, &wait_ms));
 
     metaserver_attempt_budget_init(&budget, budget_now);
+    ck_assert(metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+    ck_assert(metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+    ck_assert(!metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+    metaserver_attempt_budget_reset(&budget, budget_now);
+    ck_assert_uint_eq(budget.tokens, METASERVER_ATTEMPT_RATE_CAPACITY);
+    ck_assert(metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+    ck_assert(metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+    ck_assert(!metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+
+    metaserver_attempt_budget_init(&budget, budget_now);
     unsigned int rendezvous_attempts = 0;
     server_monotonic_t rendezvous_now = budget_now;
     while (rendezvous_now.microseconds <=
