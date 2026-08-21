@@ -34,6 +34,8 @@ void server_metrics_transport_wait(uint64_t wait_us,
                                    size_t quic_timer_services,
                                    uint64_t pending_queue_age_us,
                                    bool work_limited);
+void server_metrics_transport_service(uint64_t service_us);
+void server_metrics_keepalive_echo(uint64_t latency_us);
 void server_metrics_game_loop(uint64_t duration_us);
 void server_metrics_stats(char *buffer, size_t size);
 

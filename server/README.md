@@ -122,8 +122,19 @@
  other world work only when its scheduled deadline is due. This separation
  keeps inbound packets, QUIC timers, and queued writes responsive without
  changing gameplay tick ownership or introducing a network thread. The
- `/stats network` output reports wake reasons, wait percentiles, queue age,
- timer services, and bounded-work hits for diagnosing the two lanes.
+ `/stats network` output reports wake reasons, wait/service percentiles,
+ maximums, keepalive receive-to-echo latency, queue age, timer services, and
+ bounded-work hits for diagnosing the two lanes. The loopback regression
+ benchmark is the `server-unit-server.transport_benchmark` CTest entry; it
+ keeps the server loop on one thread, holds four QUIC clients idle for the
+ two-second keepalive interval, then sends sustained keepalives and prints
+ client RTT, late/missed responses, CPU, and simulation-tick distributions.
+ Use it for loopback comparisons; repeat the same workload against a remote
+ endpoint in an isolated environment when network impairment or a second
+ host is available, and retain the raw `/stats network` and client latency/
+ ping output with the run's route and loss/delay settings. Pending asset
+ streams and connection cleanup remain covered by the `server.assets` and
+ `toolkit.socket_asset` validation suites.
 
 =================================================
 = 2.1. Configuring the server                   =

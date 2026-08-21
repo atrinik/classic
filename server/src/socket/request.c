@@ -48,6 +48,7 @@
 #include <toolkit/map_protocol.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
+#include <toolkit/datetime.h>
 #include <monster_data.h>
 #include <plugin.h>
 #include <monster_guard.h>
@@ -60,6 +61,7 @@
 #include <object_methods.h>
 #include <resources.h>
 #include <exit.h>
+#include <network_metrics.h>
 
 #include <openssl/crypto.h>
 #define GET_CLIENT_FLAGS(_O_) ((_O_)->flags[0] & 0x7f)
@@ -2883,6 +2885,12 @@ void socket_command_keepalive(socket_struct *ns,
     packet_debug_data(packet, 0, "Keepalive ID");
     packet_writer_write_uint32(packet, id);
     socket_send_packet(ns, packet);
+    if (ns->packet_receive_started_us != 0) {
+        uint64_t now_us = datetime_monotonic_us();
+        if (now_us >= ns->packet_receive_started_us) {
+            server_metrics_keepalive_echo(now_us - ns->packet_receive_started_us);
+        }
+    }
 }
 
 void socket_command_move(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos) {
