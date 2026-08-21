@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -124,11 +124,6 @@ struct packet_struct {
     packet_error_t error;
 
     /**
-     * Whether to enable NDELAY on this packet.
-     */
-    uint8_t ndelay;
-
-    /**
      * The packet's command type.
      */
     uint8_t type;
@@ -187,7 +182,6 @@ void toolkit_packet_deinit(void);
 packet_struct *packet_new(uint8_t type, size_t size, size_t expand);
 void packet_free(packet_struct *packet);
 void packet_compress(packet_struct *packet);
-void packet_enable_ndelay(packet_struct *packet);
 packet_struct *packet_dup(packet_struct *packet);
 void packet_delete(packet_struct *packet, size_t pos, size_t len);
 void packet_writer_mark(packet_writer_t *writer, packet_writer_mark_t *mark);
