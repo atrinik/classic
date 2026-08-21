@@ -16,11 +16,18 @@ from github_release import GitHubReleaseError, invoke, list_releases, parse_json
 
 ROOT = Path(__file__).resolve().parents[2]
 POLICY = ROOT / "docs" / "history" / "release-tags.json"
-TAG_RE = re.compile(r"v5\.[0-9]+\.[0-9]+")
+TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
+BRANCH_RE = re.compile(r"^[0-9]+\.[0-9]+\.x$")
 
 
 class PendingReleaseError(RuntimeError):
     """Raised when a pending release cannot be resolved safely."""
+
+
+def validate_branch(branch: str) -> str:
+    if branch != "main" and BRANCH_RE.fullmatch(branch) is None:
+        raise PendingReleaseError("release branch must be main or MAJOR.MINOR.x")
+    return branch
 
 
 def command(*arguments: str) -> str:
@@ -234,11 +241,15 @@ def delete_policy_listed_empty_draft(
     delete(expected_release_id)
 
 
-def resolve_repository(repository: str) -> dict[str, str]:
+def resolve_repository(repository: str, branch: str = "main") -> dict[str, str]:
+    branch = validate_branch(branch)
+    remote_branch = f"refs/remotes/origin/{branch}"
     if command("git", "rev-parse", "HEAD") != command(
-        "git", "rev-parse", "refs/remotes/origin/main"
+        "git", "rev-parse", remote_branch
     ):
-        raise PendingReleaseError("pending-release resolution is not current origin/main")
+        raise PendingReleaseError(
+            f"pending-release resolution is not current origin/{branch}"
+        )
     policy = json.loads(POLICY.read_text(encoding="utf-8"))
     values = resolve(
         list_drafts(repository),
@@ -249,13 +260,18 @@ def resolve_repository(repository: str) -> dict[str, str]:
         ),
     )
     if values["tag"] and not is_ancestor(f"refs/tags/{values['tag']}^{{commit}}", "HEAD"):
-        raise PendingReleaseError(f"{values['tag']}: tag is not an ancestor of current main")
+        raise PendingReleaseError(
+            f"{values['tag']}: tag is not an ancestor of current {branch}"
+        )
     return values
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", required=True)
+    parser.add_argument(
+        "--branch", default=os.environ.get("ATRINIK_RELEASE_BRANCH", "main")
+    )
     parser.add_argument("--github-output", type=Path)
     parser.add_argument("--delete-policy-listed-empty-draft", action="store_true")
     parser.add_argument("--expected-tag")
@@ -275,7 +291,7 @@ def main() -> int:
             arguments.repository,
             arguments.expected_tag,
             arguments.expected_release_id,
-            lambda: resolve_repository(arguments.repository),
+            lambda: resolve_repository(arguments.repository, arguments.branch),
             api,
             lambda release_id: command(
                 "gh",
@@ -289,7 +305,7 @@ def main() -> int:
     if arguments.expected_tag is not None or arguments.expected_release_id is not None:
         parser.error("expected deletion coordinates require guarded deletion")
 
-    values = resolve_repository(arguments.repository)
+    values = resolve_repository(arguments.repository, arguments.branch)
 
     output = arguments.github_output
     if output is None and os.environ.get("GITHUB_OUTPUT"):

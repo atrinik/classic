@@ -24,36 +24,47 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main')
+      github.event.workflow_run.head_branch != '')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      ATRINIK_RELEASE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
     steps:
-      - name: Require the default-branch workflow definition
+      - name: Require a supported release branch and workflow definition
         env:
           RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
           RELEASE_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha || '' }}
         run: |
-          test "${GITHUB_REF}" = refs/heads/main
+          [[ ${RELEASE_BRANCH} == main || ${RELEASE_BRANCH} =~ ^[0-9]+\.[0-9]+\.x$ ]]
+          if test "${RELEASE_EVENT}" = workflow_run; then
+            test "${GITHUB_REF}" = refs/heads/main
+          else
+            test "${GITHUB_REF}" = "refs/heads/${RELEASE_BRANCH}"
+          fi
           if test "${RELEASE_EVENT}" = workflow_run; then
             test -n "${RELEASE_TRIGGER_SHA}"
           fi
-      - name: Check out the validated main commit
+      - name: Check out the validated release commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: main
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
-      - name: Require the validated current main commit
+      - name: Verify release branch policy
+        run: node tools/tests/test_release_policy.cjs
+      - name: Require the validated current release-branch commit
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
           RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha || '' }}
         run: |
           commit=$(git rev-parse HEAD)
-          test "${commit}" = "$(git rev-parse refs/remotes/origin/main)"
+          test "${commit}" = "$(git rev-parse "refs/remotes/origin/${RELEASE_BRANCH}")"
           if test "${RELEASE_EVENT}" = workflow_run; then
             test "${commit}" = "${RELEASE_TRIGGER_SHA}"
           fi
@@ -82,14 +93,15 @@ jobs:
             fi
             sleep 30
           done
-      - name: Rebind release mutation to current main
+      - name: Rebind release mutation to the current release branch
         env:
           RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
           RELEASE_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha || '' }}
         run: |
-          git fetch --no-tags origin main
+          git fetch --no-tags origin "${RELEASE_BRANCH}"
           commit=$(git rev-parse HEAD)
-          test "${commit}" = "$(git rev-parse refs/remotes/origin/main)"
+          test "${commit}" = "$(git rev-parse "refs/remotes/origin/${RELEASE_BRANCH}")"
           if test "${RELEASE_EVENT}" = workflow_run; then
             test "${commit}" = "${RELEASE_TRIGGER_SHA}"
           fi
@@ -101,6 +113,7 @@ jobs:
         run: |
           python3 tools/release/resolve_pending_release.py \
             --repository "${RELEASE_REPOSITORY}" \
+            --branch "${ATRINIK_RELEASE_BRANCH}" \
             --github-output "${GITHUB_OUTPUT}"
       - name: Delete the policy-listed empty failed draft
         if: steps.pending-release.outputs.action == 'delete-empty-draft'
@@ -113,6 +126,7 @@ jobs:
           set -euo pipefail
           python3 tools/release/resolve_pending_release.py \
             --repository "${RELEASE_REPOSITORY}" \
+            --branch "${ATRINIK_RELEASE_BRANCH}" \
             --delete-policy-listed-empty-draft \
             --expected-tag "${RELEASE_TAG}" \
             --expected-release-id "${RELEASE_ID}"
@@ -125,8 +139,9 @@ jobs:
         run: >-
           gh workflow run package-release.yml
           --repo "${RELEASE_REPOSITORY}"
-          --ref main
+          --ref "${ATRINIK_RELEASE_BRANCH}"
           --field "tag=${RELEASE_TAG}"
+          --field "source_branch=${ATRINIK_RELEASE_BRANCH}"
       - name: Analyze commits, tag, and publish release notes
         if: steps.pending-release.outputs.action != 'resume'
         env:

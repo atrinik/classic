@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -15,6 +16,7 @@ from github_release import GitHubReleaseError, lookup_release
 ROOT = Path(__file__).resolve().parents[2]
 POLICY = ROOT / "docs" / "history" / "release-tags.json"
 TAG_RE = re.compile(r"v([0-9]+)\.([0-9]+)\.([0-9]+)")
+BRANCH_RE = re.compile(r"^([0-9]+)\.([0-9]+)\.x$")
 
 
 class RecoveryError(RuntimeError):
@@ -46,6 +48,15 @@ def semantic_version(tag: str) -> tuple[int, int, int]:
     if match is None:
         raise RecoveryError("recovery tag must be unprefixed vMAJOR.MINOR.PATCH")
     return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+
+
+def source_branch(value: str) -> tuple[str, tuple[int, int] | None]:
+    if value == "main":
+        return value, None
+    match = BRANCH_RE.fullmatch(value)
+    if match is None:
+        raise RecoveryError("source branch must be main or MAJOR.MINOR.x")
+    return value, (int(match.group(1)), int(match.group(2)))
 
 
 def select_previous_release_tag(current_tag: str, tags: list[str]) -> str:
@@ -110,16 +121,25 @@ def main() -> int:
     parser.add_argument("--tag", required=True)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--github-output", type=Path)
+    parser.add_argument(
+        "--source-branch", default=os.environ.get("ATRINIK_RELEASE_BRANCH", "main")
+    )
     arguments = parser.parse_args()
 
     try:
         verify_version_policy(arguments.tag)
+        branch, maintenance = source_branch(arguments.source_branch)
+        tag_version = semantic_version(arguments.tag)
+        if maintenance is not None and tag_version[:2] != maintenance:
+            raise RecoveryError("recovery tag is outside the source maintenance range")
         tag_commit = command("git", "rev-parse", f"{arguments.tag}^{{commit}}")
-        main_commit = command("git", "rev-parse", "refs/remotes/origin/main")
-        if command("git", "rev-parse", "HEAD") != main_commit:
-            raise RecoveryError("recovery must run from the current main commit")
+        source_commit = command(
+            "git", "rev-parse", f"refs/remotes/origin/{branch}"
+        )
+        if command("git", "rev-parse", "HEAD") != source_commit:
+            raise RecoveryError(f"recovery must run from the current {branch} commit")
         first_parent = set(
-            command("git", "rev-list", "--first-parent", main_commit).splitlines()
+            command("git", "rev-list", "--first-parent", source_commit).splitlines()
         )
         if tag_commit not in first_parent:
             raise RecoveryError("release tag is not on main's first-parent line")

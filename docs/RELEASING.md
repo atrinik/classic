@@ -2,9 +2,11 @@
 
 Classic uses one repository version, commit, tag, GitHub release, and artifact
 set. The first post-consolidation release is `v5.6.0`; later versions stay on
-the `v5.x.x` line and follow Conventional Commits through semantic-release. A
-breaking marker or `feat` bumps minor, and every other accepted type bumps
-patch.
+the `v5.x.x` line and follow a branch-aware Conventional Commits policy through
+semantic-release. On `main`, every accepted release-driving commit starts the
+next minor line. A numeric `X.Y.x` branch is cut from its published `vX.Y.0`
+tag and accepts only patch releases (`vX.Y.1`, then later point fixes);
+feature/breaking transitions fail closed instead of leaving the range.
 
 ## Historical boundary
 
