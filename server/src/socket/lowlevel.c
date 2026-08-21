@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -167,7 +167,6 @@ void socket_send_packet(socket_struct *ns, struct packet_struct *packet) {
     }
 
     packet_struct *packet_meta = packet_new(0, 4, 0);
-    packet_meta->ndelay = packet->ndelay;
 
     packet_compress(packet);
     uint32_t payload_len = (uint32_t)packet->len + 1;
