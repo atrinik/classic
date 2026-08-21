@@ -187,11 +187,6 @@ static void keepalive_send(void) {
     uint32_t id;
 
     packet = packet_new(SERVER_CMD_KEEPALIVE, 0, 0);
-    /* Keep the legacy packet metadata for transports that still consume it.
-     * The measurement intentionally includes output queueing; packet priority
-     * cleanup is tracked separately from the application RTT definition. */
-    packet_enable_ndelay(packet);
-
     uint64_t now_us = datetime_monotonic_us();
     client_keepalive_expire(&keepalive_state, now_us);
     last_keepalive_us = now_us;
