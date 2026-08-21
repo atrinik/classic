@@ -19,6 +19,7 @@
 #include <initialization.h>
 #include <player.h>
 #include <object.h>
+#include <network_metrics.h>
 #include <toolkit/path.h>
 #include <server_clock_fake.h>
 
@@ -62,6 +63,25 @@ START_TEST(test_registry_is_complete_and_stable_names_are_unique) {
             }
         }
     }
+}
+END_TEST
+
+START_TEST(test_transport_wait_metrics_record_and_serialize) {
+    for (unsigned int reason = 0; reason < SERVER_TRANSPORT_WAKE_REASON_COUNT; reason++) {
+        server_metrics_transport_wait(100U + reason,
+                                      (server_transport_wake_reason_t)reason,
+                                      reason,
+                                      reason + 1U,
+                                      1000U + reason,
+                                      reason == SERVER_TRANSPORT_WAKE_ERROR);
+    }
+    server_metrics_transport_wait(999U, SERVER_TRANSPORT_WAKE_REASON_COUNT, 0, 0, 0, true);
+
+    char buffer[HUGE_BUF] = {0};
+    server_metrics_stats(VS(buffer));
+    ck_assert(strstr(buffer, "Transport: waits=") != NULL);
+    ck_assert(strstr(buffer, "Transport wait us: p50=") != NULL);
+    ck_assert(strstr(buffer, "Pending queue age us: p50=") != NULL);
 }
 END_TEST
 
@@ -407,6 +427,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_quest_outcomes_are_distinct_and_repeats_are_counted);
     tcase_add_test(tc_core, test_death_causes_are_exclusive_and_reset_survival_time);
     tcase_add_test(tc_core, test_session_timing_uses_monotonic_clock_and_afk_transitions);
+    tcase_add_test(tc_core, test_transport_wait_metrics_record_and_serialize);
     suite_add_tcase(s, tc_core);
     return s;
 }

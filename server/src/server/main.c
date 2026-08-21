@@ -321,7 +321,8 @@ void clean_tmp_files(void) {
                 if (new_save_map(m, 0) == 0) {
                     clean_tmp_map(m);
                 } else {
-                    LOG(BUG, "Keeping unsaved map %s resident during temporary-file cleanup.",
+                    LOG(BUG,
+                        "Keeping unsaved map %s resident during temporary-file cleanup.",
                         m->path != NULL ? m->path : "<runtime>");
                 }
             }
@@ -708,7 +709,12 @@ int server_run(int argc, char **argv) {
         }
 
         console_command_handle();
-        socket_server_process();
+        if (!socket_server_process()) {
+            /* Transport wakeups are intentionally independent from the game
+             * loop. Keep servicing QUIC readiness and timers until the next
+             * scheduled non-transport pass is due. */
+            continue;
+        }
 
         if (++process_delay >= max_time_multiplier) {
             process_delay = 0;
@@ -719,8 +725,10 @@ int server_run(int argc, char **argv) {
         socket_assets_service();
         server_metrics_game_loop(datetime_monotonic_us() - loop_started_us);
 
-        /* Sleep proper amount of time before next tick */
-        sleep_delta();
+        /* The transport poller waits for this deadline while still waking
+         * immediately for listener readiness, QUIC timers, and application
+         * output. */
+        sleep_delta_complete();
     }
 
     server_shutdown();

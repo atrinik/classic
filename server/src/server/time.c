@@ -177,50 +177,48 @@ static void log_time(long process_utime) {
     process_tot_mtime += process_utime / 1000;
 }
 
-/**
- * Checks how much time has elapsed since last tick.
- * If it is less than max_time, the remaining time is slept with
- * select().
- */
-void sleep_delta(void) {
-    static struct timeval new_time;
+/** Calculate the remaining time before the next non-transport pass. */
+static void
+sleep_delta_remaining(const struct timeval *new_time, long *sleep_sec, long *sleep_usec) {
+    *sleep_sec = last_time.tv_sec - new_time->tv_sec;
+    *sleep_usec = max_time / max_time_multiplier - (new_time->tv_usec - last_time.tv_usec);
+
+    /* This is very ugly, but probably the fastest for our use: */
+    while (*sleep_usec < 0) {
+        *sleep_usec += 1000000;
+        *sleep_sec -= 1;
+    }
+
+    while (*sleep_usec > 1000000) {
+        *sleep_usec -= 1000000;
+        *sleep_sec += 1;
+    }
+}
+
+uint64_t sleep_delta_timeout_us(void) {
+    struct timeval new_time;
     long sleep_sec, sleep_usec;
 
     GETTIMEOFDAY(&new_time);
-
-    sleep_sec = last_time.tv_sec - new_time.tv_sec;
-    sleep_usec = max_time / max_time_multiplier - (new_time.tv_usec - last_time.tv_usec);
-
-    /* This is very ugly, but probably the fastest for our use: */
-    while (sleep_usec < 0) {
-        sleep_usec += 1000000;
-        sleep_sec -= 1;
+    sleep_delta_remaining(&new_time, &sleep_sec, &sleep_usec);
+    if (sleep_sec < 0 || sleep_usec <= 0) {
+        return 0;
     }
 
-    while (sleep_usec > 1000000) {
-        sleep_usec -= 1000000;
-        sleep_sec += 1;
-    }
+    return (uint64_t)sleep_sec * UINT64_C(1000000) + (uint64_t)sleep_usec;
+}
+
+/** Advance the next non-transport pass deadline without sleeping. */
+void sleep_delta_complete(void) {
+    struct timeval new_time;
+    long sleep_sec, sleep_usec;
+
+    GETTIMEOFDAY(&new_time);
+    sleep_delta_remaining(&new_time, &sleep_sec, &sleep_usec);
 
     log_time((new_time.tv_sec - last_time.tv_sec) * 1000000 + new_time.tv_usec - last_time.tv_usec);
 
-    if (sleep_sec >= 0 && sleep_usec > 0) {
-        static struct timeval sleep_time;
-
-        sleep_time.tv_sec = sleep_sec;
-        sleep_time.tv_usec = sleep_usec;
-
-#ifndef WIN32
-        select(0, NULL, NULL, NULL, &sleep_time);
-#else
-
-        if (sleep_time.tv_sec) {
-            Sleep(sleep_time.tv_sec * 1000);
-        }
-
-        Sleep((int)(sleep_time.tv_usec / 1000.0));
-#endif
-    } else {
+    if (sleep_sec < 0 || sleep_usec <= 0) {
         process_utime_long_count++;
     }
 
@@ -239,6 +237,32 @@ void sleep_delta(void) {
         last_time.tv_sec = new_time.tv_sec;
         last_time.tv_usec = new_time.tv_usec;
     }
+}
+
+/**
+ * Checks how much time has elapsed since last tick and blocks until the next
+ * non-transport pass. The main server loop now uses the transport poller for
+ * that wait, but retain this wrapper for the standalone timing API.
+ */
+void sleep_delta(void) {
+    uint64_t timeout_us = sleep_delta_timeout_us();
+    if (timeout_us != 0) {
+        struct timeval sleep_time = {
+            .tv_sec = (long)(timeout_us / UINT64_C(1000000)),
+            .tv_usec = (long)(timeout_us % UINT64_C(1000000)),
+        };
+
+#ifndef WIN32
+        select(0, NULL, NULL, NULL, &sleep_time);
+#else
+        if (sleep_time.tv_sec) {
+            Sleep(sleep_time.tv_sec * 1000);
+        }
+        Sleep((int)(sleep_time.tv_usec / 1000.0));
+#endif
+    }
+
+    sleep_delta_complete();
 }
 
 /**
