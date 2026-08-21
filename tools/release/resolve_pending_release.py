@@ -18,6 +18,44 @@ ROOT = Path(__file__).resolve().parents[2]
 POLICY = ROOT / "docs" / "history" / "release-tags.json"
 TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
 BRANCH_RE = re.compile(r"^[0-9]+\.[0-9]+\.x$")
+SHA_RE = re.compile(r"[0-9a-f]{40}")
+DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
+
+PACKAGE_WORKFLOW_PATH = ".github/workflows/package-release.yml"
+PACKAGE_RUN_NAME = "Package Release"
+IMAGE_JOB = (
+    "Build and validate immutable candidate / "
+    "Build classic server image without publishing"
+)
+WINDOWS_JOB = (
+    "Build and validate immutable candidate / Build Windows server package"
+)
+CANDIDATE_FINALIZER_JOB = (
+    "Build and validate immutable candidate / Validate complete release candidate"
+)
+PUBLISH_JOB = "Publish unified release"
+PUBLISH_STEP = "Publish the complete draft release"
+IMAGE_INSPECTION_STEP = "Inspect the versioned server image"
+
+# The resolver deliberately keeps GitHub API inspection finite. A release draft
+# is old state, not permission to scan an unbounded Actions history on every
+# successful main validation.
+MAX_API_PAGES = 20
+MAX_WORKFLOW_RUNS = 50
+MAX_CANDIDATE_INSPECTIONS = 25
+MAX_AUTOMATIC_SERVER_IMAGE_RETRIES = 3
+
+RETAINED_PROOF_STEPS = (
+    IMAGE_INSPECTION_STEP,
+    "Recheck candidate hashes before publication",
+    "Attest downloadable artifact provenance",
+    "Attest downloadable artifact SBOM",
+    "Resume draft assets or verify the immutable release",
+    "Verify the exact image, labels, provenance, and SBOM",
+    "Attest the exact published server image",
+    "Verify the GitHub server-image attestation",
+    "Recheck the exact release assets immediately before publication",
+)
 
 
 class PendingReleaseError(RuntimeError):
@@ -28,6 +66,10 @@ def validate_branch(branch: str) -> str:
     if branch != "main" and BRANCH_RE.fullmatch(branch) is None:
         raise PendingReleaseError("release branch must be main or MAJOR.MINOR.x")
     return branch
+
+
+class CandidateNotSafe(PendingReleaseError):
+    """Raised when one failed run is not a publishable retained candidate."""
 
 
 def command(*arguments: str) -> str:
@@ -62,32 +104,16 @@ def list_drafts(repository: str) -> list[dict[str, object]]:
     return [release for release in list_releases(repository) if release.get("draft") is True]
 
 
-def validate_failed_run(
+def _collect_jobs(
     repository: str,
     run_id: int,
-    windows_server_conclusion: str,
-    server_image_conclusion: str,
     request: Callable[[str], object],
-) -> None:
-    run = request(f"repos/{repository}/actions/runs/{run_id}")
-    if not isinstance(run, dict) or any(
-        run.get(key) != value
-        for key, value in {
-            "name": "Package Release",
-            "path": ".github/workflows/package-release.yml",
-            "event": "workflow_dispatch",
-            "conclusion": "failure",
-        }.items()
-    ):
-        raise PendingReleaseError(f"run {run_id} is not the recorded failed package run")
-    head_repository = run.get("head_repository")
-    if not isinstance(head_repository, dict) or head_repository.get("full_name") != repository:
-        raise PendingReleaseError(f"run {run_id} belongs to another repository")
-
-    jobs: list[object] = []
+) -> list[dict[str, object]]:
+    jobs: list[dict[str, object]] = []
     total_count: int | None = None
-    page = 1
-    while total_count is None or len(jobs) < total_count:
+    for page in range(1, MAX_API_PAGES + 1):
+        if total_count is not None and len(jobs) >= total_count:
+            return jobs
         response = request(
             f"repos/{repository}/actions/runs/{run_id}/jobs"
             f"?filter=latest&per_page=100&page={page}"
@@ -104,38 +130,372 @@ def validate_failed_run(
             total_count = response["total_count"]
         elif response["total_count"] != total_count:
             raise PendingReleaseError(f"run {run_id} jobs changed during inspection")
-        if not response["jobs"] and len(jobs) < total_count:
+        page_jobs = response["jobs"]
+        if not page_jobs and len(jobs) < total_count:
             raise PendingReleaseError(f"run {run_id} returned incomplete jobs")
-        jobs.extend(response["jobs"])
+        for job in page_jobs:
+            if not isinstance(job, dict):
+                raise PendingReleaseError(f"run {run_id} returned invalid jobs")
+            jobs.append(job)
         if len(jobs) > total_count:
             raise PendingReleaseError(f"run {run_id} returned invalid jobs")
-        page += 1
+    raise PendingReleaseError(f"run {run_id} has too many job pages")
+
+
+def _collect_artifacts(
+    repository: str,
+    run_id: int,
+    request: Callable[[str], object],
+) -> list[dict[str, object]]:
+    artifacts: list[dict[str, object]] = []
+    total_count: int | None = None
+    for page in range(1, MAX_API_PAGES + 1):
+        if total_count is not None and len(artifacts) >= total_count:
+            return artifacts
+        response = request(
+            f"repos/{repository}/actions/runs/{run_id}/artifacts"
+            f"?per_page=100&page={page}"
+        )
+        if (
+            not isinstance(response, dict)
+            or not isinstance(response.get("total_count"), int)
+            or response["total_count"] < 0
+            or not isinstance(response.get("artifacts"), list)
+            or len(response["artifacts"]) > 100
+        ):
+            raise PendingReleaseError(f"run {run_id} returned invalid artifacts")
+        if total_count is None:
+            total_count = response["total_count"]
+        elif response["total_count"] != total_count:
+            raise PendingReleaseError(
+                f"run {run_id} artifacts changed during inspection"
+            )
+        page_artifacts = response["artifacts"]
+        if not page_artifacts and len(artifacts) < total_count:
+            raise PendingReleaseError(f"run {run_id} returned incomplete artifacts")
+        for artifact in page_artifacts:
+            if not isinstance(artifact, dict):
+                raise PendingReleaseError(f"run {run_id} returned invalid artifacts")
+            artifacts.append(artifact)
+        if len(artifacts) > total_count:
+            raise PendingReleaseError(f"run {run_id} returned invalid artifacts")
+    raise PendingReleaseError(f"run {run_id} has too many artifact pages")
+
+
+def _validate_package_run(
+    repository: str, run_id: int, run: object
+) -> dict[str, object]:
+    if not isinstance(run, dict) or any(
+        run.get(key) != value
+        for key, value in {
+            "name": PACKAGE_RUN_NAME,
+            "path": PACKAGE_WORKFLOW_PATH,
+            "event": "workflow_dispatch",
+            "conclusion": "failure",
+        }.items()
+    ):
+        raise PendingReleaseError(f"run {run_id} is not a failed package run")
+    if "id" in run and run.get("id") != run_id:
+        raise PendingReleaseError(f"run {run_id} returned the wrong identity")
+    head_repository = run.get("head_repository")
+    if not isinstance(head_repository, dict) or head_repository.get("full_name") != repository:
+        raise PendingReleaseError(f"run {run_id} belongs to another repository")
+    return run
+
+
+def validate_failed_run(
+    repository: str,
+    run_id: int,
+    windows_server_conclusion: str,
+    server_image_conclusion: str,
+    request: Callable[[str], object],
+) -> None:
+    run = request(f"repos/{repository}/actions/runs/{run_id}")
+    _validate_package_run(repository, run_id, run)
+    jobs = _collect_jobs(repository, run_id, request)
     required = (
-        (
-            "Build and validate immutable candidate / Build Windows server package",
-            windows_server_conclusion,
-        ),
-        (
-            "Build and validate immutable candidate / "
-            "Build classic server image without publishing",
-            server_image_conclusion,
-        ),
-        (
-            "Build and validate immutable candidate / Validate complete release candidate",
-            "skipped",
-        ),
-        ("Publish unified release", "skipped"),
+        (WINDOWS_JOB, windows_server_conclusion),
+        (IMAGE_JOB, server_image_conclusion),
+        (CANDIDATE_FINALIZER_JOB, "skipped"),
+        (PUBLISH_JOB, "skipped"),
     )
     for name, conclusion in required:
-        matches = [
-            job
-            for job in jobs
-            if isinstance(job, dict) and job.get("name") == name
-        ]
+        matches = [job for job in jobs if job.get("name") == name]
         if len(matches) != 1 or matches[0].get("conclusion") != conclusion:
             raise PendingReleaseError(
                 f"run {run_id} no longer matches the failed-candidate evidence"
             )
+
+
+def _non_success_step_names(job: dict[str, object], run_id: int) -> list[str]:
+    steps = job.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise CandidateNotSafe(f"run {run_id} has no inspectable publication steps")
+    non_success: list[str] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            raise CandidateNotSafe(f"run {run_id} has invalid publication steps")
+        name = step.get("name")
+        conclusion = step.get("conclusion")
+        if not isinstance(name, str) or not isinstance(conclusion, str):
+            raise CandidateNotSafe(f"run {run_id} has an incomplete publication step")
+        if conclusion not in {"success", "skipped"}:
+            non_success.append(name)
+    return non_success
+
+
+def classify_failed_run(jobs: list[dict[str, object]]) -> str:
+    """Return a stable failure class derived from the failed job boundary."""
+
+    image_jobs = [job for job in jobs if job.get("name") == IMAGE_JOB]
+    if any(job.get("conclusion") == "failure" for job in image_jobs):
+        return "server-image-build"
+
+    windows_jobs = [job for job in jobs if job.get("name") == WINDOWS_JOB]
+    if any(job.get("conclusion") == "failure" for job in windows_jobs):
+        return "windows-server-build"
+
+    publish_jobs = [job for job in jobs if job.get("name") == PUBLISH_JOB]
+    if any(job.get("conclusion") == "failure" for job in publish_jobs):
+        for job in publish_jobs:
+            if job.get("conclusion") != "failure":
+                continue
+            steps = job.get("steps")
+            if isinstance(steps, list):
+                failed_names = {
+                    step.get("name")
+                    for step in steps
+                    if isinstance(step, dict) and step.get("conclusion") == "failure"
+                }
+                if IMAGE_INSPECTION_STEP in failed_names:
+                    return "server-image-inspection"
+                if PUBLISH_STEP in failed_names:
+                    return "release-publication"
+            return "release-publication"
+
+    if any(
+        job.get("name") == CANDIDATE_FINALIZER_JOB
+        and job.get("conclusion") == "failure"
+        for job in jobs
+    ):
+        return "candidate-validation"
+    return "unknown"
+
+
+def validate_retained_candidate(
+    repository: str,
+    tag: str,
+    run_id: int,
+    request: Callable[[str], object],
+) -> dict[str, str]:
+    """Prove that a failed run stopped only at the release publication boundary."""
+
+    run = _validate_package_run(
+        repository, run_id, request(f"repos/{repository}/actions/runs/{run_id}")
+    )
+    run_commit = run.get("head_sha")
+    if not isinstance(run_commit, str) or SHA_RE.fullmatch(run_commit) is None:
+        raise CandidateNotSafe(f"run {run_id} has no immutable source commit")
+
+    jobs = _collect_jobs(repository, run_id, request)
+    finalizer_jobs = [
+        job for job in jobs if job.get("name") == CANDIDATE_FINALIZER_JOB
+    ]
+    publisher_jobs = [job for job in jobs if job.get("name") == PUBLISH_JOB]
+    if (
+        len(finalizer_jobs) != 1
+        or finalizer_jobs[0].get("conclusion") != "success"
+        or len(publisher_jobs) != 1
+        or publisher_jobs[0].get("conclusion") != "failure"
+    ):
+        raise CandidateNotSafe(
+            f"run {run_id} does not have one complete candidate and one failed publisher"
+        )
+
+    publisher = publisher_jobs[0]
+    failed_steps = _non_success_step_names(publisher, run_id)
+    if failed_steps != [PUBLISH_STEP]:
+        raise CandidateNotSafe(
+            f"run {run_id} failed outside the complete-release publication boundary"
+        )
+    steps = publisher["steps"]
+    assert isinstance(steps, list)
+    for required_name in RETAINED_PROOF_STEPS:
+        matches = [
+            step
+            for step in steps
+            if isinstance(step, dict) and step.get("name") == required_name
+        ]
+        if len(matches) != 1 or matches[0].get("conclusion") != "success":
+            raise CandidateNotSafe(
+                f"run {run_id} lacks successful retained-candidate proof: {required_name}"
+            )
+
+    expected_artifact = f"complete-release-candidate-{tag}"
+    artifacts = _collect_artifacts(repository, run_id, request)
+    matches = [artifact for artifact in artifacts if artifact.get("name") == expected_artifact]
+    if len(matches) != 1:
+        raise CandidateNotSafe(
+            f"run {run_id} does not have exactly one complete candidate artifact"
+        )
+    artifact = matches[0]
+    digest = artifact.get("digest")
+    size = artifact.get("size_in_bytes")
+    if (
+        artifact.get("expired") is not False
+        or isinstance(size, bool)
+        or not isinstance(size, int)
+        or size <= 0
+        or not isinstance(digest, str)
+        or DIGEST_RE.fullmatch(digest) is None
+    ):
+        raise CandidateNotSafe(f"run {run_id} has an invalid complete candidate artifact")
+
+    return {
+        "tag": tag,
+        "candidate_run_id": str(run_id),
+        "run_commit": run_commit,
+        "artifact_digest": digest,
+        "failure_class": "release-publication",
+    }
+
+
+def list_workflow_runs(
+    repository: str,
+    request: Callable[[str], object],
+) -> list[dict[str, object]]:
+    """Read a bounded, newest-first window of completed Package Release runs."""
+
+    runs: list[dict[str, object]] = []
+    total_count: int | None = None
+    for page in range(1, MAX_API_PAGES + 1):
+        if len(runs) >= MAX_WORKFLOW_RUNS:
+            return runs[:MAX_WORKFLOW_RUNS]
+        response = request(
+            f"repos/{repository}/actions/workflows/package-release.yml/runs"
+            f"?event=workflow_dispatch&status=completed&sort=created"
+            f"&direction=desc&per_page=100&page={page}"
+        )
+        if (
+            not isinstance(response, dict)
+            or not isinstance(response.get("total_count"), int)
+            or response["total_count"] < 0
+            or not isinstance(response.get("workflow_runs"), list)
+            or len(response["workflow_runs"]) > 100
+        ):
+            raise PendingReleaseError("Package Release returned invalid workflow runs")
+        if total_count is None:
+            total_count = response["total_count"]
+        elif response["total_count"] != total_count:
+            raise PendingReleaseError("Package Release runs changed during inspection")
+        page_runs = response["workflow_runs"]
+        if not page_runs and len(runs) < total_count:
+            raise PendingReleaseError("Package Release returned incomplete workflow runs")
+        for run in page_runs:
+            if not isinstance(run, dict):
+                raise PendingReleaseError("Package Release returned invalid workflow runs")
+            runs.append(run)
+        if len(runs) > total_count:
+            raise PendingReleaseError("Package Release returned invalid workflow runs")
+        if not page_runs:
+            return runs
+        if total_count == len(runs):
+            return runs
+    raise PendingReleaseError("Package Release workflow history exceeds inspection bound")
+
+
+def find_retained_candidates(
+    repository: str,
+    tag: str,
+    tag_commit: str,
+    current_head: str,
+    request: Callable[[str], object],
+) -> list[dict[str, str]]:
+    """Find exactly one safe retained candidate without rebuilding or guessing."""
+
+    candidates: list[dict[str, str]] = []
+    inspected = 0
+    for listed_run in list_workflow_runs(repository, request):
+        if (
+            listed_run.get("name") != PACKAGE_RUN_NAME
+            or listed_run.get("path") != PACKAGE_WORKFLOW_PATH
+            or listed_run.get("event") != "workflow_dispatch"
+            or listed_run.get("conclusion") != "failure"
+        ):
+            continue
+        run_id = listed_run.get("id")
+        if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+            continue
+        inspected += 1
+        if inspected > MAX_CANDIDATE_INSPECTIONS:
+            break
+        try:
+            candidate = validate_retained_candidate(repository, tag, run_id, request)
+        except CandidateNotSafe:
+            continue
+        if not is_ancestor(tag_commit, candidate["run_commit"]):
+            continue
+        if not is_ancestor(candidate["run_commit"], current_head):
+            continue
+        candidates.append(candidate)
+        if len(candidates) > 1:
+            raise PendingReleaseError(
+                f"draft {tag} has multiple verified retained candidates"
+            )
+    return candidates
+
+
+def recent_failure_classes(
+    repository: str,
+    tag: str,
+    tag_commit: str,
+    current_head: str,
+    request: Callable[[str], object],
+) -> list[str]:
+    """Classify the newest failed runs on the tag-to-main release lineage."""
+
+    classes: list[str] = []
+    inspected = 0
+    for listed_run in list_workflow_runs(repository, request):
+        if (
+            listed_run.get("name") != PACKAGE_RUN_NAME
+            or listed_run.get("path") != PACKAGE_WORKFLOW_PATH
+            or listed_run.get("event") != "workflow_dispatch"
+            or listed_run.get("conclusion") != "failure"
+        ):
+            continue
+        head_branch = listed_run.get("head_branch")
+        listed_sha = listed_run.get("head_sha")
+        if head_branch not in {tag, "main"} and listed_sha != tag_commit:
+            continue
+        run_id = listed_run.get("id")
+        if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+            continue
+        inspected += 1
+        if inspected > MAX_AUTOMATIC_SERVER_IMAGE_RETRIES:
+            break
+        run = _validate_package_run(
+            repository, run_id, request(f"repos/{repository}/actions/runs/{run_id}")
+        )
+        run_sha = run.get("head_sha")
+        if (
+            not isinstance(run_sha, str)
+            or SHA_RE.fullmatch(run_sha) is None
+            or not is_ancestor(tag_commit, run_sha)
+            or not is_ancestor(run_sha, current_head)
+        ):
+            continue
+        classes.append(classify_failed_run(_collect_jobs(repository, run_id, request)))
+    return classes
+
+
+def _leading_failure_class_count(classes: list[str], failure_class: str) -> int:
+    count = 0
+    for value in classes:
+        if value != failure_class:
+            break
+        count += 1
+    return count
 
 
 def resolve(
@@ -143,6 +503,8 @@ def resolve(
     failed_releases: object,
     tag_commit: Callable[[str], str],
     validate_run: Callable[[int, str, str], None],
+    retained_candidates: Callable[[str], list[dict[str, str]]] | None = None,
+    failure_classes: Callable[[str], list[str]] | None = None,
 ) -> dict[str, str]:
     if len(drafts) > 1:
         raise PendingReleaseError("multiple draft releases require manual investigation")
@@ -169,9 +531,64 @@ def resolve(
     disposition = failed_releases.get(tag)
     if disposition is None:
         if assets:
+            candidates = retained_candidates(tag) if retained_candidates is not None else []
+            if len(candidates) > 1:
+                raise PendingReleaseError(
+                    f"draft {tag} has multiple verified retained candidates"
+                )
+            if len(candidates) == 1:
+                candidate = candidates[0]
+                if not isinstance(candidate, dict):
+                    raise PendingReleaseError(
+                        f"draft {tag}: retained candidate evidence is invalid"
+                    )
+                candidate_run_id = candidate.get("candidate_run_id")
+                candidate_tag = candidate.get("tag")
+                failure_class = candidate.get("failure_class", "release-publication")
+                if (
+                    candidate_tag not in (None, tag)
+                    or isinstance(candidate_run_id, bool)
+                    or not isinstance(candidate_run_id, str)
+                    or re.fullmatch(r"[1-9][0-9]*", candidate_run_id) is None
+                    or not isinstance(failure_class, str)
+                    or re.fullmatch(r"[a-z0-9-]+", failure_class) is None
+                ):
+                    raise PendingReleaseError(
+                        f"draft {tag}: retained candidate identity is invalid"
+                    )
+                return {
+                    "action": "resume-retained-candidate",
+                    "tag": tag,
+                    "release_id": str(release_id),
+                    "candidate_run_id": candidate_run_id,
+                    "failure_class": failure_class,
+                }
             raise PendingReleaseError(
-                f"draft {tag} has assets; retained-candidate recovery is required"
+                f"draft {tag} has assets; retained-candidate recovery is required "
+                "but no safe retained-candidate run was found"
             )
+        classes = failure_classes(tag) if failure_classes is not None else []
+        if classes:
+            failure_class = classes[0]
+            retry_count = _leading_failure_class_count(classes, failure_class)
+            if (
+                failure_class == "server-image-build"
+                and retry_count >= MAX_AUTOMATIC_SERVER_IMAGE_RETRIES
+            ):
+                return {
+                    "action": "blocked",
+                    "tag": tag,
+                    "release_id": str(release_id),
+                    "failure_class": failure_class,
+                    "retry_count": str(retry_count),
+                }
+            return {
+                "action": "resume",
+                "tag": tag,
+                "release_id": str(release_id),
+                "failure_class": failure_class,
+                "retry_count": str(retry_count),
+            }
         return {"action": "resume", "tag": tag, "release_id": str(release_id)}
 
     if not isinstance(disposition, dict):
@@ -184,7 +601,7 @@ def resolve(
     if (
         disposition.get("disposition") != "delete-empty-draft"
         or not isinstance(commit, str)
-        or re.fullmatch(r"[0-9a-f]{40}", commit) is None
+        or SHA_RE.fullmatch(commit) is None
         or not isinstance(expected_id, int)
         or not isinstance(run_ids, list)
         or not run_ids
@@ -243,23 +660,36 @@ def delete_policy_listed_empty_draft(
 
 def resolve_repository(repository: str, branch: str = "main") -> dict[str, str]:
     branch = validate_branch(branch)
+    current_head = command("git", "rev-parse", "HEAD")
     remote_branch = f"refs/remotes/origin/{branch}"
-    if command("git", "rev-parse", "HEAD") != command(
+    if current_head != command(
         "git", "rev-parse", remote_branch
     ):
         raise PendingReleaseError(
             f"pending-release resolution is not current origin/{branch}"
         )
     policy = json.loads(POLICY.read_text(encoding="utf-8"))
+
+    def tag_commit(tag: str) -> str:
+        return command("git", "rev-parse", f"refs/tags/{tag}^{{commit}}")
+
     values = resolve(
         list_drafts(repository),
         policy.get("failed_releases"),
-        lambda tag: command("git", "rev-parse", f"refs/tags/{tag}^{{commit}}"),
+        tag_commit,
         lambda run_id, windows_conclusion, image_conclusion: validate_failed_run(
             repository, run_id, windows_conclusion, image_conclusion, api
         ),
+        lambda tag: find_retained_candidates(
+            repository, tag, tag_commit(tag), current_head, api
+        ),
+        lambda tag: recent_failure_classes(
+            repository, tag, tag_commit(tag), current_head, api
+        ),
     )
-    if values["tag"] and not is_ancestor(f"refs/tags/{values['tag']}^{{commit}}", "HEAD"):
+    if values["tag"] and not is_ancestor(
+        f"refs/tags/{values['tag']}^{{commit}}", current_head
+    ):
         raise PendingReleaseError(
             f"{values['tag']}: tag is not an ancestor of current {branch}"
         )

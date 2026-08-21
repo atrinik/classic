@@ -145,8 +145,39 @@ jobs:
           --ref "${ATRINIK_RELEASE_BRANCH}"
           --field "tag=${RELEASE_TAG}"
           --field "source_branch=${ATRINIK_RELEASE_BRANCH}"
+      - name: Resume the retained complete candidate
+        if: steps.pending-release.outputs.action == 'resume-retained-candidate'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ steps.pending-release.outputs.candidate_run_id }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.pending-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ ${CANDIDATE_RUN_ID} =~ ^[1-9][0-9]*$ ]]
+          [[ ${RELEASE_TAG} =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh workflow run package-release.yml \
+            --repo "${RELEASE_REPOSITORY}" \
+            --ref main \
+            --field "tag=${RELEASE_TAG}" \
+            --field "candidate_run_id=${CANDIDATE_RUN_ID}"
+      - name: Record pending release recovery disposition
+        if: steps.pending-release.outputs.failure_class != ''
+        env:
+          RELEASE_ACTION: ${{ steps.pending-release.outputs.action }}
+          RELEASE_FAILURE_CLASS: ${{ steps.pending-release.outputs.failure_class }}
+          RELEASE_RETRY_COUNT: ${{ steps.pending-release.outputs.retry_count || '0' }}
+        run: |
+          {
+            echo "### Pending release recovery disposition"
+            echo "- action: \`${RELEASE_ACTION}\`"
+            echo "- failure class: \`${RELEASE_FAILURE_CLASS}\`"
+            echo "- consecutive matching failures inspected: \`${RELEASE_RETRY_COUNT}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
       - name: Analyze commits, tag, and publish release notes
-        if: steps.pending-release.outputs.action != 'resume'
+        if: >-
+          steps.pending-release.outputs.action == 'none' ||
+          steps.pending-release.outputs.action == 'delete-empty-draft'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
