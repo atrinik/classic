@@ -1592,10 +1592,13 @@ socket_rendezvous_authorize(CURL *curl, socket_rendezvous_attempt_t *attempt) {
     char frame[RENDEZVOUS_FRAME_MAX + 1U];
     size_t used = 0;
     char proof_frame[RENDEZVOUS_FRAME_MAX + 1U];
-    socket_connect_failure_code_t failure = SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+    socket_connect_failure_code_t failure = SOCKET_CONNECT_FAILURE_RENDEZVOUS_PROTOCOL;
 
-    if (!socket_rendezvous_attempt_auth_init(attempt, VS(frame)) ||
-        !socket_websocket_send_text(curl, frame)) {
+    if (!socket_rendezvous_attempt_auth_init(attempt, VS(frame))) {
+        goto out;
+    }
+    if (!socket_websocket_send_text(curl, frame)) {
+        failure = SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
         goto out;
     }
     while (!socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())) {
@@ -1607,15 +1610,24 @@ socket_rendezvous_authorize(CURL *curl, socket_rendezvous_attempt_t *attempt) {
         if (state == SOCKET_WEBSOCKET_PARTIAL) {
             continue;
         }
+        if (state == SOCKET_WEBSOCKET_CLOSED) {
+            failure = socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())
+                          ? SOCKET_CONNECT_FAILURE_TIMEOUT
+                          : SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
+            goto out;
+        }
         if (state != SOCKET_WEBSOCKET_MESSAGE ||
             socket_rendezvous_attempt_challenge(attempt, frame, used, VS(proof_frame)) !=
-                SOCKET_RENDEZVOUS_FRAME_CHALLENGE ||
-            !socket_websocket_send_text(curl, proof_frame)) {
+                SOCKET_RENDEZVOUS_FRAME_CHALLENGE) {
+            goto out;
+        }
+        if (!socket_websocket_send_text(curl, proof_frame)) {
+            failure = SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
             goto out;
         }
         break;
     }
-    if (used == 0) {
+    if (socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())) {
         failure = SOCKET_CONNECT_FAILURE_TIMEOUT;
         goto out;
     }
@@ -1630,6 +1642,12 @@ socket_rendezvous_authorize(CURL *curl, socket_rendezvous_attempt_t *attempt) {
         if (state == SOCKET_WEBSOCKET_PARTIAL) {
             continue;
         }
+        if (state == SOCKET_WEBSOCKET_CLOSED) {
+            failure = socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())
+                          ? SOCKET_CONNECT_FAILURE_TIMEOUT
+                          : SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
+            goto out;
+        }
         if (state != SOCKET_WEBSOCKET_MESSAGE) {
             goto out;
         }
@@ -1638,10 +1656,10 @@ socket_rendezvous_authorize(CURL *curl, socket_rendezvous_attempt_t *attempt) {
         failure = result == SOCKET_RENDEZVOUS_FRAME_AUTHORIZED ? SOCKET_CONNECT_FAILURE_NONE
                   : result == SOCKET_RENDEZVOUS_FRAME_DENIED
                       ? SOCKET_CONNECT_FAILURE_AUTHORIZATION
-                      : SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+                      : SOCKET_CONNECT_FAILURE_RENDEZVOUS_PROTOCOL;
         break;
     }
-    if (used == 0) {
+    if (socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())) {
         failure = SOCKET_CONNECT_FAILURE_TIMEOUT;
     }
 
@@ -1652,35 +1670,76 @@ out:
 }
 
 socket_websocket_receive_state_t
-socket_websocket_receive(void *handle, char *buffer, size_t capacity, size_t *used) {
+socket_websocket_receive_ex(void *handle,
+                            char *buffer,
+                            size_t capacity,
+                            size_t *used,
+                            socket_websocket_receive_info_t *info) {
     HARD_ASSERT(handle != NULL);
     HARD_ASSERT(buffer != NULL);
     HARD_ASSERT(used != NULL);
+    if (info != NULL) {
+        memset(info, 0, sizeof(*info));
+        info->curl_result = -1;
+    }
     if (capacity < 2 || *used >= capacity - 1) {
-        return SOCKET_WEBSOCKET_CLOSED;
+        return SOCKET_WEBSOCKET_PROTOCOL;
     }
 
-    size_t received = 0;
+    for (;;) {
+        size_t available = capacity - 1 - *used;
+        size_t received = 0;
 #if LIBCURL_VERSION_NUM >= 0x080200
-    const struct curl_ws_frame *frame = NULL;
+        const struct curl_ws_frame *frame = NULL;
 #else
-    struct curl_ws_frame *frame = NULL;
+        struct curl_ws_frame *frame = NULL;
 #endif
-    CURLcode result = curl_ws_recv(handle, buffer + *used, capacity - 1 - *used, &received, &frame);
-    if (result == CURLE_AGAIN) {
-        return SOCKET_WEBSOCKET_EMPTY;
-    }
-    if (result != CURLE_OK || frame == NULL || (frame->flags & CURLWS_CLOSE) != 0 ||
-        (frame->flags & CURLWS_TEXT) == 0 || received > capacity - 1 - *used) {
-        return SOCKET_WEBSOCKET_CLOSED;
-    }
+        CURLcode result = curl_ws_recv(handle, buffer + *used, available, &received, &frame);
+        if (info != NULL) {
+            info->curl_result = (int)result;
+            info->bytes_received = received;
+            info->frame_present = frame != NULL;
+            if (frame != NULL) {
+                info->frame_flags = (unsigned int)frame->flags;
+                info->bytes_left = frame->bytesleft > 0 ? (uint64_t)frame->bytesleft : 0;
+            }
+        }
+        if (result == CURLE_AGAIN) {
+            return SOCKET_WEBSOCKET_EMPTY;
+        }
+        if (result != CURLE_OK || frame == NULL) {
+            return SOCKET_WEBSOCKET_CLOSED;
+        }
 
-    *used += received;
-    if (frame->bytesleft != 0) {
-        return SOCKET_WEBSOCKET_PARTIAL;
+        unsigned int flags = (unsigned int)frame->flags;
+        if ((flags & CURLWS_CLOSE) != 0) {
+            const unsigned char *close_payload = (const unsigned char *)(buffer + *used);
+            if (received >= 2 && info != NULL) {
+                info->close_code = (uint16_t)(((uint16_t)close_payload[0] << 8) |
+                                              (uint16_t)close_payload[1]);
+                info->has_close_code = true;
+            }
+            return SOCKET_WEBSOCKET_CLOSED;
+        }
+        if ((flags & (CURLWS_PING | CURLWS_PONG)) != 0) {
+            continue;
+        }
+        if ((flags & CURLWS_TEXT) == 0 || (flags & CURLWS_BINARY) != 0 ||
+            received > available) {
+            return SOCKET_WEBSOCKET_PROTOCOL;
+        }
+        *used += received;
+        if (frame->bytesleft != 0 || (flags & CURLWS_CONT) != 0) {
+            return SOCKET_WEBSOCKET_PARTIAL;
+        }
+        buffer[*used] = '\0';
+        return SOCKET_WEBSOCKET_MESSAGE;
     }
-    buffer[*used] = '\0';
-    return SOCKET_WEBSOCKET_MESSAGE;
+}
+
+socket_websocket_receive_state_t
+socket_websocket_receive(void *handle, char *buffer, size_t capacity, size_t *used) {
+    return socket_websocket_receive_ex(handle, buffer, capacity, used, NULL);
 }
 
 static bool socket_rendezvous_fallback_candidate(socket_t *sc,
@@ -1711,6 +1770,8 @@ size_t socket_rendezvous_client(socket_t *sc,
         capacity > SOCKET_DIRECT_MAX_CANDIDATES + 1U || failure == NULL) {
         return 0;
     }
+    failure->code = SOCKET_CONNECT_FAILURE_UNAVAILABLE;
+    failure->retry_after_seconds = 0;
     memset(candidates, 0, capacity * sizeof(*candidates));
     if (socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())) {
         failure->code = SOCKET_CONNECT_FAILURE_TIMEOUT;
@@ -1738,12 +1799,14 @@ size_t socket_rendezvous_client(socket_t *sc,
 
     CURL *curl = curl_easy_init();
     if (curl == NULL) {
+        failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
         return 0;
     }
     struct curl_slist *headers = NULL;
     if (attempt->authorization_required) {
         headers = curl_slist_append(NULL, "Sec-WebSocket-Protocol: " RENDEZVOUS_INVITE_SUBPROTOCOL);
         if (headers == NULL) {
+            failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
             curl_easy_cleanup(curl);
             return 0;
         }
@@ -1775,18 +1838,18 @@ size_t socket_rendezvous_client(socket_t *sc,
         if (response_code == 401 || response_code == 403) {
             failure->code = SOCKET_CONNECT_FAILURE_AUTHORIZATION;
         } else if (response_code == 404 || response_code == 503) {
-            failure->code = SOCKET_CONNECT_FAILURE_SERVER_OFFLINE;
+            failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
         } else if (response_code == 429) {
             failure->code = SOCKET_CONNECT_FAILURE_RATE_LIMITED;
             failure->retry_after_seconds = socket_rendezvous_attempt_retry_after(attempt);
         } else if (response_code == 400 || response_code == 426 ||
                    (result == CURLE_OK && !socket_rendezvous_attempt_protocol_valid(attempt))) {
-            failure->code = SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+            failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_PROTOCOL;
         } else if (result == CURLE_OPERATION_TIMEDOUT ||
                    socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())) {
             failure->code = SOCKET_CONNECT_FAILURE_TIMEOUT;
         } else {
-            failure->code = SOCKET_CONNECT_FAILURE_UNAVAILABLE;
+            failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
         }
         if (result != CURLE_OK) {
             LOG(ERROR, "Rendezvous connection failed: %s", curl_easy_strerror(result));
@@ -1818,19 +1881,19 @@ size_t socket_rendezvous_client(socket_t *sc,
 
     char candidate[256];
     if (!socket_rendezvous_attempt_client_candidate(attempt, host, port, VS(candidate))) {
-        failure->code = SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+        failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_PROTOCOL;
         curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
         return 0;
     }
     if (!socket_websocket_send_text(curl, candidate)) {
-        failure->code = SOCKET_CONNECT_FAILURE_UNAVAILABLE;
+        failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
         curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
         return 0;
     }
     if (!socket_rendezvous_attempt_peer_traffic_allowed(attempt)) {
-        failure->code = SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+        failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_PROTOCOL;
         curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
         return 0;
@@ -1842,6 +1905,7 @@ size_t socket_rendezvous_client(socket_t *sc,
     size_t count = 0;
     bool complete = false;
     bool valid = true;
+    bool signaling_closed = false;
     socket_punch_job_t punch_jobs[SOCKET_DIRECT_MAX_CANDIDATES] = {0};
     unsigned int punch_attempts = 0;
     unsigned int punches_sent = 0;
@@ -1866,6 +1930,7 @@ size_t socket_rendezvous_client(socket_t *sc,
             continue;
         }
         if (receive_state != SOCKET_WEBSOCKET_MESSAGE) {
+            signaling_closed = receive_state == SOCKET_WEBSOCKET_CLOSED;
             valid = false;
             break;
         }
@@ -1910,8 +1975,9 @@ size_t socket_rendezvous_client(socket_t *sc,
         memset(candidates, 0, capacity * sizeof(*candidates));
         failure->code = socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())
                             ? SOCKET_CONNECT_FAILURE_TIMEOUT
+                        : signaling_closed ? SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE
                         : valid ? SOCKET_CONNECT_FAILURE_SERVER_OFFLINE
-                                : SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+                                : SOCKET_CONNECT_FAILURE_RENDEZVOUS_PROTOCOL;
         return 0;
     }
     memcpy(candidates, parsed_candidates, count * sizeof(*candidates));
@@ -1921,12 +1987,25 @@ size_t socket_rendezvous_client(socket_t *sc,
 }
 #else
 socket_websocket_receive_state_t
-socket_websocket_receive(void *handle, char *buffer, size_t capacity, size_t *used) {
+socket_websocket_receive_ex(void *handle,
+                            char *buffer,
+                            size_t capacity,
+                            size_t *used,
+                            socket_websocket_receive_info_t *info) {
     (void)handle;
     (void)buffer;
     (void)capacity;
     (void)used;
+    if (info != NULL) {
+        memset(info, 0, sizeof(*info));
+        info->curl_result = -1;
+    }
     return SOCKET_WEBSOCKET_CLOSED;
+}
+
+socket_websocket_receive_state_t
+socket_websocket_receive(void *handle, char *buffer, size_t capacity, size_t *used) {
+    return socket_websocket_receive_ex(handle, buffer, capacity, used, NULL);
 }
 
 size_t socket_rendezvous_client(socket_t *sc,
@@ -1938,7 +2017,7 @@ size_t socket_rendezvous_client(socket_t *sc,
                                 socket_connect_failure_t *failure) {
     (void)attempt;
     if (failure != NULL) {
-        failure->code = SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
+        failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
         failure->retry_after_seconds = 0;
     }
     return 0;

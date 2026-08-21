@@ -1009,7 +1009,11 @@ typedef enum socket_connect_failure_code {
     SOCKET_CONNECT_FAILURE_RATE_LIMITED,
     SOCKET_CONNECT_FAILURE_SERVER_OFFLINE,
     SOCKET_CONNECT_FAILURE_TIMEOUT,
-    SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION
+    SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION,
+    /** The rendezvous transport is temporarily unavailable. */
+    SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE,
+    /** The rendezvous WebSocket protocol or signaling frame is incompatible. */
+    SOCKET_CONNECT_FAILURE_RENDEZVOUS_PROTOCOL
 } socket_connect_failure_code_t;
 
 /**
@@ -1027,8 +1031,28 @@ typedef enum socket_websocket_receive_state {
     SOCKET_WEBSOCKET_EMPTY,
     SOCKET_WEBSOCKET_PARTIAL,
     SOCKET_WEBSOCKET_MESSAGE,
-    SOCKET_WEBSOCKET_CLOSED
+    SOCKET_WEBSOCKET_CLOSED,
+    /** The peer sent a frame that is not valid for the text signaling stream. */
+    SOCKET_WEBSOCKET_PROTOCOL
 } socket_websocket_receive_state_t;
+
+/** Bounded diagnostics for the most recent WebSocket receive operation. */
+typedef struct socket_websocket_receive_info {
+    /** libcurl CURLcode, or -1 when no libcurl call was made. */
+    int curl_result;
+    /** libcurl WebSocket frame flags, when frame_present is true. */
+    unsigned int frame_flags;
+    /** Whether libcurl returned frame metadata. */
+    bool frame_present;
+    /** Payload bytes returned by the most recent libcurl call. */
+    size_t bytes_received;
+    /** Payload bytes remaining in the current libcurl frame. */
+    uint64_t bytes_left;
+    /** Close reason code, in host byte order, when present in a close frame. */
+    uint16_t close_code;
+    /** Whether close_code was present and decoded. */
+    bool has_close_code;
+} socket_websocket_receive_info_t;
 
 #ifdef WIN32
 static inline const char *s_strerror(int val) {
@@ -1225,6 +1249,19 @@ bool socket_rendezvous_attempt_stats(const socket_rendezvous_attempt_t *attempt,
                                      socket_rendezvous_stats_t *stats);
 socket_websocket_receive_state_t
 socket_websocket_receive(void *handle, char *buffer, size_t capacity, size_t *used);
+/**
+ * Receive one complete text message, consuming WebSocket control frames.
+ *
+ * PING and PONG frames are discarded while fragmented text is accumulated in
+ * `buffer`. When the function returns CLOSED, `info` describes the last
+ * libcurl result or WebSocket frame when available.
+ */
+socket_websocket_receive_state_t
+socket_websocket_receive_ex(void *handle,
+                            char *buffer,
+                            size_t capacity,
+                            size_t *used,
+                            socket_websocket_receive_info_t *info);
 bool socket_is_quic(socket_t *sc);
 socket_connection_mode_t socket_connection_mode_get(socket_t *sc);
 const char *socket_connection_mode_name(socket_connection_mode_t mode);

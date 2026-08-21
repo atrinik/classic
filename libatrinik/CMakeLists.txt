@@ -582,6 +582,15 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     target_link_libraries(libatrinik-socket-asset PRIVATE Atrinik::Core)
     add_test(NAME libatrinik-socket-asset COMMAND libatrinik-socket-asset)
 
+    if (UNIX AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        add_executable(libatrinik-socket-websocket tests/socket_websocket.c)
+        atrinik_configure_target(libatrinik-socket-websocket)
+        target_link_options(libatrinik-socket-websocket PRIVATE
+            "-Wl,--wrap=curl_ws_recv")
+        target_link_libraries(libatrinik-socket-websocket PRIVATE Atrinik::Core)
+        add_test(NAME libatrinik-socket-websocket COMMAND libatrinik-socket-websocket)
+    endif ()
+
     if (HAVE_GETADDRINFO)
         add_executable(libatrinik-socket-address tests/socket_address.c)
         atrinik_configure_target(libatrinik-socket-address)
