@@ -222,8 +222,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ env.RELEASE_COMMIT }}
-      - name: Check out the trusted recovery verifier
-        if: github.ref_type == 'branch'
+      - name: Check out the trusted release verifier
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: build/release-automation
@@ -282,7 +281,7 @@ jobs:
           RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
-          python3 tools/release/sync_release_assets.py \
+          python3 build/release-automation/tools/release/sync_release_assets.py \
             --directory build/release \
             --repository "${RELEASE_REPOSITORY}" \
             --tag "${RELEASE_TAG}" \
@@ -371,7 +370,7 @@ jobs:
           RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
-          python3 tools/release/sync_release_assets.py \
+          python3 build/release-automation/tools/release/sync_release_assets.py \
             --directory build/release \
             --repository "${RELEASE_REPOSITORY}" \
             --tag "${RELEASE_TAG}" \
@@ -404,7 +403,7 @@ jobs:
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
           for attempt in {1..6}; do
-            if python3 tools/release/sync_release_assets.py \
+            if python3 build/release-automation/tools/release/sync_release_assets.py \
                 --directory build/release \
                 --repository "${RELEASE_REPOSITORY}" \
                 --tag "${RELEASE_TAG}" \
