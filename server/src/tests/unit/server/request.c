@@ -1210,6 +1210,38 @@ START_TEST(test_only_valid_post_setup_activity_refreshes_login_deadline) {
 }
 END_TEST
 
+START_TEST(test_keepalive_echoes_identifier) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    socket_struct *cs = CONTR(pl)->cs;
+    settings.join_password[0] = '\0';
+    const uint32_t expected_id = UINT32_C(0x12345678);
+    uint8_t keepalive[] = {
+        SERVER_CMD_KEEPALIVE,
+        (uint8_t)(expected_id >> 24),
+        (uint8_t)(expected_id >> 16),
+        (uint8_t)(expected_id >> 8),
+        (uint8_t)expected_id,
+    };
+
+    cs->state = ST_LOGIN;
+    cs->socket_version = SOCKET_VERSION;
+    cs->setup_completed = true;
+    socket_buffer_clear(cs);
+    ck_assert(socket_server_handle_command(cs, NULL, keepalive, sizeof(keepalive)));
+    ck_assert_uint_eq(cs->keepalive, 0);
+
+    packet_struct *response = queued_command_find(cs, CLIENT_CMD_KEEPALIVE);
+    ck_assert_ptr_nonnull(response);
+    packet_reader_t reader;
+    packet_reader_init(&reader, response->data, response->len);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), expected_id);
+    ck_assert(packet_reader_finish(&reader));
+}
+END_TEST
+
 START_TEST(test_version_requires_exact_match) {
     mapstruct *map;
     object *pl;
@@ -1803,6 +1835,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_move_and_fire_require_exact_v1078_payloads);
     tcase_add_test(tc_core, test_malformed_tombstone_queue_is_discarded_safely);
     tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
+    tcase_add_test(tc_core, test_keepalive_echoes_identifier);
     tcase_add_test(tc_core, test_version_requires_exact_match);
     tcase_add_test(tc_core, test_move_path_walkable_target_reaches_exact_coordinate);
     tcase_add_test(tc_core, test_move_path_blocked_target_stops_at_deterministic_adjacent_tile);
