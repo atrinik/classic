@@ -100,6 +100,32 @@ class RecoverReleaseTests(unittest.TestCase):
                 recover_release.main()
         self.assertEqual(error.exception.code, 1)
 
+    def test_recovery_requires_the_current_source_maintenance_commit(self) -> None:
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "recover_release.py",
+                    "--tag",
+                    "v8.3.1",
+                    "--repository",
+                    "atrinik/classic",
+                    "--source-branch",
+                    "8.3.x",
+                ],
+            ),
+            patch.object(recover_release, "verify_version_policy"),
+            patch.object(
+                recover_release,
+                "command",
+                side_effect=["a" * 40, "b" * 40, "c" * 40],
+            ),
+        ):
+            with self.assertRaises(SystemExit) as error:
+                recover_release.main()
+        self.assertEqual(error.exception.code, 1)
+
     def test_recovery_version_stays_on_unified_line(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             policy = Path(temporary) / "policy.json"

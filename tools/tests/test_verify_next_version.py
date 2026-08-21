@@ -3,8 +3,10 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "release" / "verify_next_version.py"
@@ -117,6 +119,23 @@ class VerifyNextVersionTests(unittest.TestCase):
             verify_next_version.verify_next_version(
                 "8.3.1", policy, {"v8.0.0", "v8.3.0"}, branch="feature/release"
             )
+
+    def test_cli_forwards_the_selected_branch(self) -> None:
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "verify_next_version.py",
+                    "8.3.1",
+                    "--branch",
+                    "8.3.x",
+                ],
+            ),
+            patch.object(verify_next_version, "verify_next_version") as verify,
+        ):
+            self.assertEqual(verify_next_version.main(), 0)
+        verify.assert_called_once_with("8.3.1", branch="8.3.x")
 
 
 if __name__ == "__main__":
