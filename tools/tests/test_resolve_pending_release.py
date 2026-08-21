@@ -335,6 +335,118 @@ class ResolvePendingReleaseTests(unittest.TestCase):
                 "atrinik/classic", "v5.37.0", 32048332566, request
             )
 
+    def test_retained_candidate_rejects_duplicate_boundary_jobs(self) -> None:
+        run = {
+            "id": 32048332566,
+            "name": "Package Release",
+            "path": ".github/workflows/package-release.yml",
+            "event": "workflow_dispatch",
+            "conclusion": "failure",
+            "head_sha": "1" * 40,
+            "head_repository": {"full_name": "atrinik/classic"},
+        }
+        jobs = {
+            "total_count": 2,
+            "jobs": [
+                {
+                    "name": resolve_pending_release.CANDIDATE_FINALIZER_JOB,
+                    "conclusion": "success",
+                },
+                {
+                    "name": resolve_pending_release.PUBLISH_JOB,
+                    "conclusion": "failure",
+                    "steps": retained_publication_steps(
+                        resolve_pending_release.PUBLISH_STEP
+                    ),
+                },
+            ],
+        }
+        artifacts = {
+            "total_count": 1,
+            "artifacts": [
+                {
+                    "name": "complete-release-candidate-v5.37.0",
+                    "expired": False,
+                    "size_in_bytes": 100,
+                    "digest": "sha256:" + "2" * 64,
+                }
+            ],
+        }
+
+        def request(path: str) -> object:
+            if "/jobs?" in path:
+                return jobs
+            if "/artifacts?" in path:
+                return artifacts
+            return run
+
+        for duplicate_index in (0, 1):
+            with self.subTest(duplicate_index=duplicate_index):
+                jobs["jobs"].append(dict(jobs["jobs"][duplicate_index]))
+                jobs["total_count"] = 3
+                with self.assertRaisesRegex(
+                    resolve_pending_release.CandidateNotSafe,
+                    "one complete candidate and one failed publisher",
+                ):
+                    resolve_pending_release.validate_retained_candidate(
+                        "atrinik/classic", "v5.37.0", 32048332566, request
+                    )
+                jobs["jobs"].pop()
+                jobs["total_count"] = 2
+
+    def test_retained_candidate_rejects_non_success_publisher_steps(self) -> None:
+        run = {
+            "id": 32048332566,
+            "name": "Package Release",
+            "path": ".github/workflows/package-release.yml",
+            "event": "workflow_dispatch",
+            "conclusion": "failure",
+            "head_sha": "1" * 40,
+            "head_repository": {"full_name": "atrinik/classic"},
+        }
+        steps = retained_publication_steps(resolve_pending_release.PUBLISH_STEP)
+        steps[1]["conclusion"] = "cancelled"
+        jobs = {
+            "total_count": 2,
+            "jobs": [
+                {
+                    "name": resolve_pending_release.CANDIDATE_FINALIZER_JOB,
+                    "conclusion": "success",
+                },
+                {
+                    "name": resolve_pending_release.PUBLISH_JOB,
+                    "conclusion": "failure",
+                    "steps": steps,
+                },
+            ],
+        }
+        artifacts = {
+            "total_count": 1,
+            "artifacts": [
+                {
+                    "name": "complete-release-candidate-v5.37.0",
+                    "expired": False,
+                    "size_in_bytes": 100,
+                    "digest": "sha256:" + "2" * 64,
+                }
+            ],
+        }
+
+        def request(path: str) -> object:
+            if "/jobs?" in path:
+                return jobs
+            if "/artifacts?" in path:
+                return artifacts
+            return run
+
+        with self.assertRaisesRegex(
+            resolve_pending_release.CandidateNotSafe,
+            "publication boundary",
+        ):
+            resolve_pending_release.validate_retained_candidate(
+                "atrinik/classic", "v5.37.0", 32048332566, request
+            )
+
     def test_failed_run_classification_exposes_image_boundary(self) -> None:
         self.assertEqual(
             resolve_pending_release.classify_failed_run(

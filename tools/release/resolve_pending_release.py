@@ -220,20 +220,21 @@ def validate_failed_run(
             )
 
 
-def _failed_step_names(job: dict[str, object], run_id: int) -> list[str]:
+def _non_success_step_names(job: dict[str, object], run_id: int) -> list[str]:
     steps = job.get("steps")
-    if not isinstance(steps, list):
+    if not isinstance(steps, list) or not steps:
         raise CandidateNotSafe(f"run {run_id} has no inspectable publication steps")
-    failed: list[str] = []
+    non_success: list[str] = []
     for step in steps:
         if not isinstance(step, dict):
             raise CandidateNotSafe(f"run {run_id} has invalid publication steps")
-        if step.get("conclusion") == "failure":
-            name = step.get("name")
-            if not isinstance(name, str):
-                raise CandidateNotSafe(f"run {run_id} has an unnamed failed step")
-            failed.append(name)
-    return failed
+        name = step.get("name")
+        conclusion = step.get("conclusion")
+        if not isinstance(name, str) or not isinstance(conclusion, str):
+            raise CandidateNotSafe(f"run {run_id} has an incomplete publication step")
+        if conclusion not in {"success", "skipped"}:
+            non_success.append(name)
+    return non_success
 
 
 def classify_failed_run(jobs: list[dict[str, object]]) -> str:
@@ -290,24 +291,22 @@ def validate_retained_candidate(
         raise CandidateNotSafe(f"run {run_id} has no immutable source commit")
 
     jobs = _collect_jobs(repository, run_id, request)
-    finalizers = [
-        job
-        for job in jobs
-        if job.get("name") == CANDIDATE_FINALIZER_JOB
-        and job.get("conclusion") == "success"
+    finalizer_jobs = [
+        job for job in jobs if job.get("name") == CANDIDATE_FINALIZER_JOB
     ]
-    publishers = [
-        job
-        for job in jobs
-        if job.get("name") == PUBLISH_JOB and job.get("conclusion") == "failure"
-    ]
-    if len(finalizers) != 1 or len(publishers) != 1:
+    publisher_jobs = [job for job in jobs if job.get("name") == PUBLISH_JOB]
+    if (
+        len(finalizer_jobs) != 1
+        or finalizer_jobs[0].get("conclusion") != "success"
+        or len(publisher_jobs) != 1
+        or publisher_jobs[0].get("conclusion") != "failure"
+    ):
         raise CandidateNotSafe(
             f"run {run_id} does not have one complete candidate and one failed publisher"
         )
 
-    publisher = publishers[0]
-    failed_steps = _failed_step_names(publisher, run_id)
+    publisher = publisher_jobs[0]
+    failed_steps = _non_success_step_names(publisher, run_id)
     if failed_steps != [PUBLISH_STEP]:
         raise CandidateNotSafe(
             f"run {run_id} failed outside the complete-release publication boundary"
@@ -367,7 +366,8 @@ def list_workflow_runs(
             return runs[:MAX_WORKFLOW_RUNS]
         response = request(
             f"repos/{repository}/actions/workflows/package-release.yml/runs"
-            f"?event=workflow_dispatch&status=completed&per_page=100&page={page}"
+            f"?event=workflow_dispatch&status=completed&sort=created"
+            f"&direction=desc&per_page=100&page={page}"
         )
         if (
             not isinstance(response, dict)
