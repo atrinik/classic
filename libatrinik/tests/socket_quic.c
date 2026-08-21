@@ -226,15 +226,6 @@ static void quic_test_run(size_t count, bool delay_accept) {
     REQUIRE(pthread_join(server_thread, NULL) == 0);
     REQUIRE(!server.failed);
 
-    quic_test_pending_stream_timeout(clients[0].connection, accepted[0]);
-
-    /* Force an otherwise idle connection's QUIC timer due. The server-side
-     * service call must make progress without a readable UDP handle. */
-    accepted[0]->quic_event_deadline_ms = 0;
-    REQUIRE(socket_quic_timeout(accepted[0], 1000U) == 0U);
-    REQUIRE(socket_quic_timer_due(accepted[0]));
-    REQUIRE(socket_quic_service(accepted[0], false, false));
-
     bool sent[QUIC_TEST_CLIENTS] = {0};
     bool received[QUIC_TEST_CLIENTS] = {0};
     socket_t *accepted_by_client[QUIC_TEST_CLIENTS] = {0};
@@ -263,6 +254,15 @@ static void quic_test_run(size_t count, bool delay_accept) {
         }
     }
     REQUIRE(received_count == count);
+
+    quic_test_pending_stream_timeout(clients[0].connection, accepted_by_client[0]);
+
+    /* Force an otherwise idle connection's QUIC timer due. The server-side
+     * service call must make progress without a readable UDP handle. */
+    accepted_by_client[0]->quic_event_deadline_ms = 0;
+    REQUIRE(socket_quic_timeout(accepted_by_client[0], 1000U) == 0U);
+    REQUIRE(socket_quic_timer_due(accepted_by_client[0]));
+    REQUIRE(socket_quic_service(accepted_by_client[0], false, false));
 
     for (size_t i = 1; i < count; i++) {
         socket_destroy(clients[i].connection);
