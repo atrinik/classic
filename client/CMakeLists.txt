@@ -477,6 +477,15 @@ if (BUILD_TESTING)
     target_link_libraries(client-packet-payload-tests PRIVATE Atrinik::Core)
     add_test(NAME client-packet-payload COMMAND client-packet-payload-tests)
 
+    add_executable(client-keepalive-tests
+        src/tests/keepalive.c
+        src/client/keepalive.c)
+    atrinik_configure_target(client-keepalive-tests)
+    target_include_directories(client-keepalive-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-keepalive-tests PRIVATE Atrinik::Core)
+    add_test(NAME client-keepalive COMMAND client-keepalive-tests)
+
     add_executable(client-command-queue-tests
         src/tests/client_command_queue.c
         src/client/client_command_queue.c)
