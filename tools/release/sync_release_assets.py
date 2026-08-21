@@ -78,9 +78,19 @@ def require_published_immutable(
     return release
 
 
-def write_output(path: Path, state: str) -> None:
+def require_release_id(release: object, tag: str) -> int:
+    if not isinstance(release, dict) or release.get("tag_name") != tag:
+        raise AssetSyncError(f"GitHub release for {tag} is missing")
+    identifier = release.get("id")
+    if type(identifier) is not int or identifier <= 0:
+        raise AssetSyncError(f"GitHub release for {tag} has no valid numeric ID")
+    return identifier
+
+
+def write_output(path: Path, state: str, release_id: int) -> None:
     with path.open("a", encoding="utf-8") as stream:
         stream.write(f"state={state}\n")
+        stream.write(f"release_id={release_id}\n")
 
 
 def main() -> int:
@@ -140,8 +150,9 @@ def main() -> int:
         remaining = compare_assets(expected, release.get("assets"))
         if remaining:
             raise AssetSyncError(f"release assets are still missing: {remaining}")
+        release_id = require_release_id(release, arguments.tag)
         if arguments.github_output is not None:
-            write_output(arguments.github_output, state)
+            write_output(arguments.github_output, state, release_id)
     except (GitHubReleaseError, OSError, ValueError, AssetSyncError) as error:
         parser.exit(1, f"release asset sync failed: {error}\n")
     description = "published immutable" if state == "published" else "draft"

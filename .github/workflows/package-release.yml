@@ -368,11 +368,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_ID: ${{ steps.final-assets.outputs.release_id }}
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
-          gh release edit "${RELEASE_TAG}" \
-            --repo "${RELEASE_REPOSITORY}" \
-            --draft=false
+          [[ ${RELEASE_ID} =~ ^[1-9][0-9]*$ ]]
+          published=$(gh api \
+            --method PATCH \
+            "repos/${RELEASE_REPOSITORY}/releases/${RELEASE_ID}" \
+            -F draft=false \
+            --jq '[.id, .tag_name, .draft, .prerelease] | @tsv')
+          IFS=$'\t' read -r published_id published_tag published_draft \
+            published_prerelease <<<"${published}"
+          test "${published_id}" = "${RELEASE_ID}"
+          test "${published_tag}" = "${RELEASE_TAG}"
+          test "${published_draft}" = false
+          test "${published_prerelease}" = false
       - name: Verify the published immutable release
         env:
           GH_TOKEN: ${{ github.token }}
