@@ -16,10 +16,14 @@
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
+#include <openssl/crypto.h>
+#if OPENSSL_VERSION_NUMBER >= 0x30500000L
 #include <pthread.h>
 #include <stdatomic.h>
+#endif
 #include <toolkit/datetime.h>
 
+#if OPENSSL_VERSION_NUMBER >= 0x30500000L
 typedef struct scheduler_client {
     char host[HUGE_BUF];
     uint16_t port;
@@ -42,6 +46,7 @@ static void *scheduler_client_main(void *data) {
     atomic_store(&client->finished, true);
     return NULL;
 }
+#endif
 
 static bool first_regular_file(const char *root, const char *relative, char *output, size_t size) {
     char directory[HUGE_BUF];
@@ -137,6 +142,7 @@ START_TEST(test_transport_scheduler_runs_simulation_pass) {
 }
 END_TEST
 
+#if OPENSSL_VERSION_NUMBER >= 0x30500000L
 START_TEST(test_transport_scheduler_services_initialized_quic_listener) {
     scheduler_client_t client = {0};
     atomic_init(&client.finished, false);
@@ -169,6 +175,7 @@ START_TEST(test_transport_scheduler_services_initialized_quic_listener) {
     }
 }
 END_TEST
+#endif
 
 static Suite *suite(void) {
     Suite *s = suite_create("assets");
@@ -179,7 +186,9 @@ static Suite *suite(void) {
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_transport_neutral_asset_cache);
     tcase_add_test(tc_core, test_transport_scheduler_runs_simulation_pass);
+#if OPENSSL_VERSION_NUMBER >= 0x30500000L
     tcase_add_test(tc_core, test_transport_scheduler_services_initialized_quic_listener);
+#endif
     return s;
 }
 
