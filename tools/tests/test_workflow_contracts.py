@@ -132,6 +132,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('select(.name == "Classic validation"', workflow)
         self.assertIn('test "${GITHUB_REF}" = refs/heads/main', workflow)
         self.assertIn("node tools/tests/test_release_policy.cjs", workflow)
+        self.assertIn('export GITHUB_REF="refs/heads/${ATRINIK_RELEASE_BRANCH}"', workflow)
+        self.assertIn('export GITHUB_REF_NAME="${ATRINIK_RELEASE_BRANCH}"', workflow)
+        self.assertIn('release_commit=$(git rev-parse HEAD)', workflow)
+        self.assertIn('export GITHUB_SHA="${release_commit}"', workflow)
 
     def test_rehearsal_is_bound_to_current_main(self) -> None:
         workflow = self.text("release-rehearsal.yml")

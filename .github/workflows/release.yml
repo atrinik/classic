@@ -146,11 +146,15 @@ jobs:
         if: steps.pending-release.outputs.action != 'resume'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          npx --yes
-          --package=semantic-release@25.0.9
-          --package=@semantic-release/commit-analyzer@13.0.1
-          --package=@semantic-release/release-notes-generator@14.1.1
-          --package=@semantic-release/exec@7.1.0
-          --package=conventional-changelog-conventionalcommits@9.3.1
-          node tools/release/run_semantic_release.mjs
+        run: |
+          export GITHUB_REF="refs/heads/${ATRINIK_RELEASE_BRANCH}"
+          export GITHUB_REF_NAME="${ATRINIK_RELEASE_BRANCH}"
+          release_commit=$(git rev-parse HEAD)
+          export GITHUB_SHA="${release_commit}"
+          npx --yes \
+            --package=semantic-release@25.0.9 \
+            --package=@semantic-release/commit-analyzer@13.0.1 \
+            --package=@semantic-release/release-notes-generator@14.1.1 \
+            --package=@semantic-release/exec@7.1.0 \
+            --package=conventional-changelog-conventionalcommits@9.3.1 \
+            node tools/release/run_semantic_release.mjs
