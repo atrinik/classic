@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import call, patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "release" / "recover_release.py"
@@ -17,6 +18,88 @@ SPEC.loader.exec_module(recover_release)
 
 
 class RecoverReleaseTests(unittest.TestCase):
+    def test_source_branch_accepts_main_and_maintenance_lines(self) -> None:
+        self.assertEqual(recover_release.source_branch("main"), ("main", None))
+        self.assertEqual(
+            recover_release.source_branch("8.3.x"), ("8.3.x", (8, 3))
+        )
+        with self.assertRaisesRegex(
+            recover_release.RecoveryError, "source branch must be"
+        ):
+            recover_release.source_branch("feature/release")
+
+    def test_recovery_main_uses_the_source_maintenance_line(self) -> None:
+        tag_commit = "a" * 40
+        source_commit = "b" * 40
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "recover_release.py",
+                    "--tag",
+                    "v8.3.1",
+                    "--repository",
+                    "atrinik/classic",
+                    "--source-branch",
+                    "8.3.x",
+                ],
+            ),
+            patch.object(recover_release, "verify_version_policy"),
+            patch.object(recover_release, "lookup_release", return_value=None),
+            patch.object(
+                recover_release,
+                "command",
+                side_effect=[
+                    tag_commit,
+                    source_commit,
+                    source_commit,
+                    f"{tag_commit}\n",
+                    json.dumps(
+                        {
+                            "check_runs": [
+                                {
+                                    "name": "Classic validation",
+                                    "conclusion": "success",
+                                    "app": {"id": 15368},
+                                }
+                            ]
+                        }
+                    ),
+                    "v8.3.0\n",
+                ],
+            ) as command,
+            patch.object(recover_release.subprocess, "run") as process_run,
+        ):
+            process_run.return_value.returncode = 0
+            self.assertEqual(recover_release.main(), 0)
+
+        self.assertIn(
+            call("git", "rev-parse", "refs/remotes/origin/8.3.x"),
+            command.call_args_list,
+        )
+
+    def test_recovery_rejects_a_tag_outside_the_source_maintenance_line(self) -> None:
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "recover_release.py",
+                    "--tag",
+                    "v8.4.1",
+                    "--repository",
+                    "atrinik/classic",
+                    "--source-branch",
+                    "8.3.x",
+                ],
+            ),
+            patch.object(recover_release, "verify_version_policy"),
+        ):
+            with self.assertRaises(SystemExit) as error:
+                recover_release.main()
+        self.assertEqual(error.exception.code, 1)
+
     def test_recovery_version_stays_on_unified_line(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             policy = Path(temporary) / "policy.json"

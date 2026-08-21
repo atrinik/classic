@@ -103,6 +103,21 @@ class VerifyNextVersionTests(unittest.TestCase):
                         version, policy, {"v8.0.0", "v8.3.0", "v8.3.1"}, branch="8.3.x"
                     )
 
+    def test_maintenance_branch_requires_a_baseline_and_valid_branch_name(self) -> None:
+        policy = self.policy_for_eight()
+        with self.assertRaisesRegex(
+            verify_next_version.VersionPolicyError, "baseline tag is missing"
+        ):
+            verify_next_version.verify_next_version(
+                "8.3.1", policy, {"v8.0.0"}, branch="8.3.x"
+            )
+        with self.assertRaisesRegex(
+            verify_next_version.VersionPolicyError, "release branch must be"
+        ):
+            verify_next_version.verify_next_version(
+                "8.3.1", policy, {"v8.0.0", "v8.3.0"}, branch="feature/release"
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
