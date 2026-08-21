@@ -467,6 +467,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn(
             "steps.pending-release.outputs.action == 'delete-empty-draft'", workflow
         )
+        self.assertIn("Resume the retained complete candidate", workflow)
+        self.assertIn(
+            "steps.pending-release.outputs.action == 'resume-retained-candidate'",
+            workflow,
+        )
+        self.assertIn('--field "candidate_run_id=${CANDIDATE_RUN_ID}"', workflow)
+        self.assertIn("Record pending release recovery disposition", workflow)
+        self.assertIn("steps.pending-release.outputs.failure_class != ''", workflow)
         self.assertEqual(workflow.count("tools/release/resolve_pending_release.py"), 2)
         delete_step = workflow[deletion:recovery]
         self.assertIn('RELEASE_TAG: ${{ steps.pending-release.outputs.tag }}', delete_step)
@@ -475,7 +483,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('--expected-release-id "${RELEASE_ID}"', delete_step)
         self.assertNotIn("gh api --method DELETE", delete_step)
         self.assertIn("--ref main", workflow)
-        self.assertIn("if: steps.pending-release.outputs.action != 'resume'", workflow)
+        self.assertIn(
+            "steps.pending-release.outputs.action == 'none' ||",
+            workflow,
+        )
+        self.assertIn(
+            "steps.pending-release.outputs.action == 'delete-empty-draft'",
+            workflow,
+        )
 
     def test_retained_candidate_recovery_is_bound_and_does_not_rebuild(self) -> None:
         workflow = self.text("package-release.yml")
