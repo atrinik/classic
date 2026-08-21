@@ -49,6 +49,25 @@ class ReleaseTagPolicyTests(unittest.TestCase):
             "refs/remotes/origin/main",
         )
 
+    def test_release_config_uses_mainline_policy_in_ci(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=["node"],
+            returncode=0,
+            stdout='{"branches": []}',
+            stderr="",
+        )
+        with mock.patch.object(
+            verify_import_history.subprocess,
+            "run",
+            return_value=completed,
+        ) as run:
+            self.assertEqual(
+                verify_import_history.load_release_config(),
+                {"branches": []},
+            )
+        environment = run.call_args.kwargs["env"]
+        self.assertEqual(environment["ATRINIK_RELEASE_BRANCH"], "main")
+
     def test_main_forwards_release_history_ref(self) -> None:
         manifest = {"components": []}
         history_ref = "refs/remotes/origin/main"

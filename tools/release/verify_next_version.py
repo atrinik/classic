@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -13,6 +14,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[2]
 POLICY = ROOT / "docs" / "history" / "release-tags.json"
 VERSION_RE = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)")
+MAINTENANCE_BRANCH_RE = re.compile(r"^([0-9]+)\.([0-9]+)\.x$")
 
 
 class VersionPolicyError(RuntimeError):
@@ -24,6 +26,16 @@ def semantic_version(value: str) -> tuple[int, int, int]:
     if match is None:
         raise VersionPolicyError("next version must be MAJOR.MINOR.PATCH")
     return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+
+
+def release_branch(value: str | None = None) -> tuple[str, tuple[int, int] | None]:
+    branch = value or os.environ.get("ATRINIK_RELEASE_BRANCH") or "main"
+    if branch == "main":
+        return branch, None
+    match = MAINTENANCE_BRANCH_RE.fullmatch(branch)
+    if match is None:
+        raise VersionPolicyError("release branch must be main or MAJOR.MINOR.x")
+    return branch, (int(match.group(1)), int(match.group(2)))
 
 
 def local_tags() -> set[str]:
@@ -46,6 +58,7 @@ def verify_next_version(
     value: str,
     policy_path: Path = POLICY,
     active_tags: set[str] | None = None,
+    branch: str | None = None,
 ) -> None:
     proposed = semantic_version(value)
     policy = json.loads(policy_path.read_text(encoding="utf-8"))
@@ -92,6 +105,30 @@ def verify_next_version(
         )
     except VersionPolicyError as error:
         raise VersionPolicyError("an existing future tag is not semantic") from error
+    _, maintenance = release_branch(branch)
+    if maintenance is not None:
+        if proposed[:2] != maintenance:
+            raise VersionPolicyError(
+                "maintenance release must remain in its MAJOR.MINOR.x range"
+            )
+        if proposed[2] == 0:
+            raise VersionPolicyError("maintenance releases must use a non-zero patch")
+        baseline = f"v{maintenance[0]}.{maintenance[1]}.0"
+        if baseline not in present:
+            raise VersionPolicyError(f"maintenance baseline tag is missing: {baseline}")
+        line_versions = [
+            maintenance + (0,),
+            *[version for version in future_versions if version[:2] == maintenance],
+        ]
+        if proposed <= max(line_versions):
+            raise VersionPolicyError(
+                "next maintenance version must exceed every existing patch"
+            )
+        return
+    if proposed[2] != 0:
+        raise VersionPolicyError(
+            "mainline releases must begin a new minor line with patch zero"
+        )
     if future_versions:
         if future_versions[0] != first:
             raise VersionPolicyError(f"the first unified tag must be {first_value}")
@@ -104,9 +141,10 @@ def verify_next_version(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("version")
+    parser.add_argument("--branch")
     arguments = parser.parse_args()
     try:
-        verify_next_version(arguments.version)
+        verify_next_version(arguments.version, branch=arguments.branch)
     except (OSError, ValueError, VersionPolicyError) as error:
         parser.exit(1, f"next-version verification failed: {error}\n")
     print(f"verified classic release version {arguments.version}")

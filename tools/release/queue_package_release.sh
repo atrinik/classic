@@ -11,10 +11,17 @@ if [[ -z ${GITHUB_REPOSITORY:-} ]]; then
   exit 1
 fi
 
+source_branch=${ATRINIK_RELEASE_BRANCH:-main}
+if [[ ${source_branch} != main && ! ${source_branch} =~ ^[0-9]+\.[0-9]+\.x$ ]]; then
+  echo "ATRINIK_RELEASE_BRANCH must be main or MAJOR.MINOR.x" >&2
+  exit 1
+fi
+
 tag=v$1
 for attempt in {1..6}; do
   if gh workflow run package-release.yml \
-      --repo "${GITHUB_REPOSITORY}" --ref "${tag}" --field "tag=${tag}"; then
+      --repo "${GITHUB_REPOSITORY}" --ref "${tag}" \
+      --field "tag=${tag}" --field "source_branch=${source_branch}"; then
     exit 0
   fi
   ((attempt < 6)) || exit 1

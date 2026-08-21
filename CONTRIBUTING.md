@@ -15,8 +15,10 @@ and exact validation requirements.
    `feat(protocol)!: ...`.
 
 The squash-merge title is the unified release input. Classic stays on the
-`5.x.x` line: a breaking marker or `feat` advances the minor version, and every
-other accepted Conventional Commit type advances the patch version.
+`5.x.x` line: `main` advances every release-driving commit to the next minor
+version, while a numeric `X.Y.x` maintenance branch advances only its patch
+version from the published `vX.Y.0` baseline. A breaking marker or `feat` on a
+maintenance branch is rejected as out of range.
 
 Do not vendor content, sound, resources, generated dependency trees, or copies
 of sibling source. Do not edit imported history maps or archive refs. Security

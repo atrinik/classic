@@ -5,22 +5,26 @@ const {
   firstParentReleaseRules,
   firstParentWriterOptions,
 } = require("./tools/release/first_parent_release.cjs");
+const {
+  currentBranch,
+  rulesForBranch,
+} = require("./tools/release/release_policy.cjs");
 
 const firstParent = firstParentHashes("HEAD", __dirname);
+const releaseBranch = currentBranch();
 
 module.exports = {
-  branches: ["main"],
+  branches: ["+([0-9]).+([0-9]).x", "main"],
   tagFormat: "v${version}",
   plugins: [
     [
       "@semantic-release/commit-analyzer",
       {
         preset: "conventionalcommits",
-        releaseRules: firstParentReleaseRules(firstParent, [
-          { breaking: true, release: "minor" },
-          { type: "feat", release: "minor" },
-          { type: "*", release: "patch" },
-        ]),
+        releaseRules: firstParentReleaseRules(
+          firstParent,
+          rulesForBranch(releaseBranch),
+        ),
       },
     ],
     [

@@ -12,6 +12,7 @@ import {
 
 const require = createRequire(import.meta.url);
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+process.env.ATRINIK_RELEASE_BRANCH = "main";
 const config = require("../../.releaserc.cjs");
 const {
   firstParentHashes,
