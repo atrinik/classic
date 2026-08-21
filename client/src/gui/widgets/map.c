@@ -3117,8 +3117,10 @@ static void map_dirty_lighting_fow(int dx, int dy) {
     int shifted_view_y = view_y - dy;
     int lighting_width = 0;
     int lighting_height = 0;
-    int map_projection_width = (map_width + map_height) * MAP_TILE_YOFF;
-    int map_projection_height = (map_width + map_height) * MAP_TILE_XOFF;
+    int cache_width = map_width * MAP_FOW_SIZE;
+    int cache_height = map_height * MAP_FOW_SIZE;
+    int map_projection_width = (cache_width + cache_height) * MAP_TILE_YOFF;
+    int map_projection_height = (cache_width + cache_height) * MAP_TILE_XOFF;
     bool dirty_incoming_fow = lighting_viewport_size_get(&lighting_width, &lighting_height) &&
                               lighting_width >= map_projection_width &&
                               lighting_height >= map_projection_height;
