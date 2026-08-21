@@ -466,6 +466,11 @@ if (BUILD_TESTING AND NOT MINGW)
                 LABELS "server;unit"
                 TIMEOUT 300
                 WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+            if (suite STREQUAL "server.transport_benchmark")
+                set_tests_properties(server-unit-${suite} PROPERTIES
+                    LABELS "server;unit;benchmark;performance"
+                    TIMEOUT 60)
+            endif ()
         endforeach ()
 
         add_test(NAME server-gameplay-journal-tool

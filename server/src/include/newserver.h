@@ -300,6 +300,9 @@ typedef struct socket_struct {
     /** Monotonic enqueue time of the oldest packet, or zero when empty. */
     uint64_t packet_queue_started_us;
 
+    /** Monotonic start of the current transport receive batch, or zero. */
+    uint64_t packet_receive_started_us;
+
     /**
      * Buffer for how many ticks have passed since the last keep alive
      * command. When this reaches @ref SOCKET_KEEPALIVE_TIMEOUT, the

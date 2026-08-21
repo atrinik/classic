@@ -76,12 +76,17 @@ START_TEST(test_transport_wait_metrics_record_and_serialize) {
                                       reason == SERVER_TRANSPORT_WAKE_ERROR);
     }
     server_metrics_transport_wait(999U, SERVER_TRANSPORT_WAKE_REASON_COUNT, 0, 0, 0, true);
+    server_metrics_transport_service(250U);
+    server_metrics_keepalive_echo(500U);
 
     char buffer[HUGE_BUF] = {0};
     server_metrics_stats(VS(buffer));
     ck_assert(strstr(buffer, "Transport: waits=") != NULL);
     ck_assert(strstr(buffer, "Transport wait us: p50=") != NULL);
+    ck_assert(strstr(buffer, "Transport service us: p50=") != NULL);
     ck_assert(strstr(buffer, "Pending queue age us: p50=") != NULL);
+    ck_assert(strstr(buffer, "Keepalive receive-to-echo us: p50=") != NULL);
+    ck_assert(strstr(buffer, "max=") != NULL);
 }
 END_TEST
 
