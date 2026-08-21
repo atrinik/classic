@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -47,6 +48,10 @@ def require(condition: bool, message: str) -> None:
 
 
 def load_release_config() -> dict[str, Any]:
+    # This validator checks the imported mainline history.  Keep a CI pull
+    # request's feature branch from selecting the branch-aware release rules.
+    environment = os.environ.copy()
+    environment["ATRINIK_RELEASE_BRANCH"] = "main"
     result = subprocess.run(
         [
             "node",
@@ -61,6 +66,7 @@ def load_release_config() -> dict[str, Any]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=environment,
     )
     if result.returncode:
         raise RuntimeError(
