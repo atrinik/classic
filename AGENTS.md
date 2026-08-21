@@ -61,7 +61,9 @@
   `client`, `server`, `editor`, `libatrinik`, `protocol`, `build`, `ci`, `docs`,
   and `release`.
 - Root semantic-release owns one unprefixed repository version and first-parent
-  release history. Never hand-edit tags, images, drafts, or release assets; use
+  release history. `main` advances every release-driving commit to the next
+  minor line; a numeric `X.Y.x` branch is cut from `vX.Y.0` and publishes only
+  later patches. Never hand-edit tags, images, drafts, or release assets; use
   the checked publication/recovery procedures in `docs/RELEASING.md`.
 - `tools/ci/classify_changes.py` is the single path-selection contract for
   native Check and CodeQL work. Pull requests are path-aware; protocol,

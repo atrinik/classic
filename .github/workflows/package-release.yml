@@ -7,6 +7,11 @@ on:
         description: Existing unified semantic-release tag to package
         required: true
         type: string
+      source_branch:
+        description: Release branch that owns the tag
+        required: false
+        default: main
+        type: string
       candidate_run_id:
         description: Failed Package Release run with a retained complete candidate
         required: false
@@ -39,34 +44,36 @@ jobs:
       tag: ${{ steps.metadata.outputs.tag || steps.retained.outputs.tag }}
       version: ${{ steps.metadata.outputs.version || steps.retained.outputs.version }}
     steps:
-      - name: Check out the current main recovery definition
-        if: github.ref == 'refs/heads/main'
+      - name: Check out the current release-branch recovery definition
+        if: github.ref_type == 'branch'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: main
+          ref: ${{ github.ref }}
       - name: Check out the immutable release tag
         if: github.ref_type == 'tag'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ inputs.tag }}
-      - name: Require an immutable tag or validated main recovery definition
+      - name: Require an immutable tag or validated release-branch definition
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_SOURCE_BRANCH: ${{ inputs.source_branch || 'main' }}
           RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_REF_TYPE: ${{ github.ref_type }}
           RELEASE_WORKFLOW_SHA: ${{ github.sha }}
         run: |
+          [[ ${RELEASE_SOURCE_BRANCH} == main || ${RELEASE_SOURCE_BRANCH} =~ ^[0-9]+\.[0-9]+\.x$ ]]
           [[ ${RELEASE_TAG} =~ ^v5\.[0-9]+\.[0-9]+$ ]]
           if test "${RELEASE_REF_TYPE}" = tag; then
             test "${GITHUB_REF}" = "refs/tags/${RELEASE_TAG}"
           else
             test "${RELEASE_REF_TYPE}" = branch
-            test "${GITHUB_REF}" = refs/heads/main
+            test "${GITHUB_REF}" = "refs/heads/${RELEASE_SOURCE_BRANCH}"
             test "$(git rev-parse HEAD)" = "${RELEASE_WORKFLOW_SHA}"
-            test "$(git rev-parse refs/remotes/origin/main)" = \
+            test "$(git rev-parse "refs/remotes/origin/${RELEASE_SOURCE_BRANCH}")" = \
               "${RELEASE_WORKFLOW_SHA}"
             release_commit=$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")
             git merge-base --is-ancestor "${release_commit}" \
@@ -82,16 +89,18 @@ jobs:
         if: inputs.candidate_run_id == ''
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_SOURCE_BRANCH: ${{ inputs.source_branch || 'main' }}
           RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           recovery_arguments=()
-          if test "${GITHUB_REF}" = refs/heads/main; then
-            recovery_arguments+=(--recovery-main)
+          if test "${GITHUB_REF_TYPE}" = branch; then
+            recovery_arguments+=(--recovery-branch "${RELEASE_SOURCE_BRANCH}")
           fi
           python3 tools/release/validate_release.py \
             --tag "${RELEASE_TAG}" \
             --repository "${RELEASE_REPOSITORY}" \
+            --source-branch "${RELEASE_SOURCE_BRANCH}" \
             "${recovery_arguments[@]}"
       - id: retained
         name: Validate the retained complete candidate
@@ -99,10 +108,13 @@ jobs:
         env:
           CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_SOURCE_BRANCH: ${{ inputs.source_branch || 'main' }}
           RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          test "${GITHUB_REF}" = refs/heads/main
+          test "${GITHUB_REF_TYPE}" = branch
+          test "${GITHUB_REF}" = "refs/heads/${RELEASE_SOURCE_BRANCH}"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/remotes/origin/${RELEASE_SOURCE_BRANCH}")"
           [[ ${CANDIDATE_RUN_ID} =~ ^[1-9][0-9]*$ ]]
           run_fields=$(gh api \
             "repos/${RELEASE_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}" \
@@ -132,7 +144,8 @@ jobs:
           python3 tools/release/validate_release.py \
             --tag "${RELEASE_TAG}" \
             --repository "${RELEASE_REPOSITORY}" \
-            --recovery-main \
+            --source-branch "${RELEASE_SOURCE_BRANCH}" \
+            --recovery-branch "${RELEASE_SOURCE_BRANCH}" \
             --github-output "${GITHUB_OUTPUT}"
 
   discord-config:
@@ -201,6 +214,7 @@ jobs:
       packages: write
     env:
       RELEASE_COMMIT: ${{ needs.candidate.outputs.commit || needs.preflight.outputs.commit }}
+      RELEASE_SOURCE_BRANCH: ${{ inputs.source_branch || 'main' }}
       RELEASE_TAG: ${{ needs.candidate.outputs.tag || needs.preflight.outputs.tag }}
       RELEASE_VERSION: ${{ needs.candidate.outputs.version || needs.preflight.outputs.version }}
     steps:
@@ -209,7 +223,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ env.RELEASE_COMMIT }}
       - name: Check out the trusted recovery verifier
-        if: github.ref == 'refs/heads/main'
+        if: github.ref_type == 'branch'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: build/release-automation
@@ -325,7 +339,7 @@ jobs:
           test -n "${IMAGE_DIGEST}"
           docker pull "${IMAGE}@${IMAGE_DIGEST}"
           verifier=tools/release/locked_inputs.py
-          if test '${{ github.ref }}' = refs/heads/main; then
+          if test '${{ github.ref_type }}' = branch; then
             verifier=build/release-automation/tools/release/locked_inputs.py
           fi
           python3 "${verifier}" \

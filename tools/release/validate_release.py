@@ -16,6 +16,7 @@ from github_release import GitHubReleaseError, lookup_release
 ROOT = Path(__file__).resolve().parents[2]
 POLICY = ROOT / "docs" / "history" / "release-tags.json"
 TAG_RE = re.compile(r"v([0-9]+)\.([0-9]+)\.([0-9]+)")
+BRANCH_RE = re.compile(r"^([0-9]+)\.([0-9]+)\.x$")
 
 
 class ValidationError(RuntimeError):
@@ -49,6 +50,15 @@ def version(tag: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
 
 
+def source_branch(value: str) -> tuple[str, tuple[int, int] | None]:
+    if value == "main":
+        return value, None
+    match = BRANCH_RE.fullmatch(value)
+    if match is None:
+        raise ValidationError("source branch must be main or MAJOR.MINOR.x")
+    return value, (int(match.group(1)), int(match.group(2)))
+
+
 def is_ancestor(older: str, newer: str) -> bool:
     result = subprocess.run(
         ["git", "merge-base", "--is-ancestor", older, newer],
@@ -74,9 +84,26 @@ def main() -> int:
     parser.add_argument("--repository", required=True)
     parser.add_argument("--github-output", type=Path)
     parser.add_argument("--recovery-main", action="store_true")
+    parser.add_argument(
+        "--recovery-branch",
+        help="require HEAD to equal the current source branch before recovery",
+    )
+    parser.add_argument(
+        "--source-branch", default=os.environ.get("ATRINIK_RELEASE_BRANCH", "main")
+    )
     arguments = parser.parse_args()
 
     release_version = version(arguments.tag)
+    branch, maintenance = source_branch(arguments.source_branch)
+    if arguments.recovery_main and arguments.recovery_branch is not None:
+        raise ValidationError("recovery-main and recovery-branch are mutually exclusive")
+    recovery_branch = arguments.recovery_branch
+    if arguments.recovery_main:
+        recovery_branch = "main"
+    if recovery_branch is not None:
+        recovery_branch, _ = source_branch(recovery_branch)
+        if recovery_branch != branch:
+            raise ValidationError("recovery branch must equal source branch")
     policy = json.loads(POLICY.read_text(encoding="utf-8"))
     future = policy.get("future_tags", {})
     minimum = future.get("minimum_version")
@@ -94,20 +121,25 @@ def main() -> int:
         raise ValidationError(
             f"classic releases must remain on major version {maximum_major}"
         )
+    if maintenance is not None and release_version[:2] != maintenance:
+        raise ValidationError("release tag is outside the source maintenance range")
 
     commit = git("rev-parse", f"{arguments.tag}^{{commit}}")
     head = git("rev-parse", "HEAD")
-    if arguments.recovery_main:
-        if head != git("rev-parse", "refs/remotes/origin/main"):
-            raise ValidationError("recovery workflow is not current origin/main")
+    remote_branch = f"refs/remotes/origin/{branch}"
+    if recovery_branch is not None:
+        if head != git("rev-parse", remote_branch):
+            raise ValidationError(f"recovery workflow is not current origin/{branch}")
         if not is_ancestor(commit, head):
-            raise ValidationError("release commit is not an ancestor of recovery main")
+            raise ValidationError(
+                f"release commit is not an ancestor of recovery {branch}"
+            )
     elif head != commit:
         raise ValidationError("checked-out tag does not resolve to HEAD")
     if not is_ancestor(floor, commit):
         raise ValidationError("release tag predates the unified release floor")
-    if not is_ancestor(commit, "refs/remotes/origin/main"):
-        raise ValidationError("release commit is not an ancestor of origin/main")
+    if not is_ancestor(commit, remote_branch):
+        raise ValidationError(f"release commit is not an ancestor of origin/{branch}")
 
     subprocess.run(
         ["python3", "tools/verify_import_history.py"], cwd=ROOT, check=True

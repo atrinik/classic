@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - '[0-9]+.[0-9]+.x'
   pull_request:
     branches:
       - main
@@ -137,6 +138,8 @@ jobs:
           --package=@semantic-release/exec@7.1.0
           --package=conventional-changelog-conventionalcommits@9.3.1
           node --test tools/tests/test_first_parent_release.mjs
+      - name: Validate branch-aware release policy
+        run: node tools/tests/test_release_policy.cjs
       - name: Check generated bindings
         run: python3 tools/generate.py --check
         working-directory: protocol

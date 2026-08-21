@@ -1,9 +1,10 @@
 name: Semantic Release
 
 on:
-  workflow_run:
-    workflows: [Check]
-    types: [completed]
+  push:
+    branches:
+      - main
+      - '[0-9]+.[0-9]+.x'
   workflow_dispatch:
 
 permissions:
@@ -20,48 +21,64 @@ concurrency:
 jobs:
   release:
     name: Semantic release
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main')
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
+    env:
+      ATRINIK_RELEASE_BRANCH: ${{ github.ref_name }}
     steps:
-      - name: Require the default-branch workflow definition
+      - name: Require a supported release branch and workflow definition
         env:
-          RELEASE_EVENT: ${{ github.event_name }}
-          RELEASE_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+          RELEASE_BRANCH: ${{ github.ref_name }}
+          RELEASE_TRIGGER_SHA: ${{ github.sha }}
         run: |
-          test "${GITHUB_REF}" = refs/heads/main
-          if test "${RELEASE_EVENT}" = workflow_run; then
-            test -n "${RELEASE_TRIGGER_SHA}"
-          fi
-      - name: Check out the validated main commit
+          [[ ${RELEASE_BRANCH} == main || ${RELEASE_BRANCH} =~ ^[0-9]+\.[0-9]+\.x$ ]]
+          test "${GITHUB_REF}" = "refs/heads/${RELEASE_BRANCH}"
+          test -n "${RELEASE_TRIGGER_SHA}"
+      - name: Check out the release commit from the protected branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: main
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
-      - name: Require the validated current main commit
+      - name: Verify release branch policy
+        run: node tools/tests/test_release_policy.cjs
+      - name: Require the validated current release-branch commit
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_BRANCH: ${{ github.ref_name }}
           RELEASE_REPOSITORY: ${{ github.repository }}
-          RELEASE_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+          RELEASE_TRIGGER_SHA: ${{ github.sha }}
         run: |
           commit=$(git rev-parse HEAD)
-          test "${commit}" = "$(git rev-parse refs/remotes/origin/main)"
-          if test "${RELEASE_EVENT}" = workflow_run; then
-            test "${commit}" = "${RELEASE_TRIGGER_SHA}"
-          fi
-          successful=$(gh api \
-            -H 'Accept: application/vnd.github+json' \
-            "repos/${RELEASE_REPOSITORY}/commits/${commit}/check-runs?per_page=100" \
-            --jq '[.check_runs[] | select(.name == "Classic validation" and .conclusion == "success" and .app.id == 15368)] | length')
-          test "${successful}" -ge 1
+          test "${commit}" = "$(git rev-parse "refs/remotes/origin/${RELEASE_BRANCH}")"
+          test "${commit}" = "${RELEASE_TRIGGER_SHA}"
+          for attempt in {1..30}; do
+            check_state=$(gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "repos/${RELEASE_REPOSITORY}/commits/${commit}/check-runs?per_page=100" \
+              --jq '[.check_runs[] | select(.name == "Classic validation" and .app.id == 15368)] | sort_by(.id) | .[-1] |
+                if . == null then "pending"
+                elif .status != "completed" then "pending"
+                elif .conclusion == "success" then "success"
+                else "failure"
+                end')
+            case "${check_state}" in
+              success) break ;;
+              failure) echo "Classic validation failed for ${commit}" >&2; exit 1 ;;
+              pending)
+                if test "${attempt}" -eq 30; then
+                  echo "Classic validation did not complete for ${commit}" >&2
+                  exit 1
+                fi
+                sleep 30
+                ;;
+              *) echo "unexpected Classic validation state: ${check_state}" >&2; exit 1 ;;
+            esac
+          done
           python3 tools/verify_import_history.py
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -82,17 +99,15 @@ jobs:
             fi
             sleep 30
           done
-      - name: Rebind release mutation to current main
+      - name: Rebind release mutation to the current release branch
         env:
-          RELEASE_EVENT: ${{ github.event_name }}
-          RELEASE_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+          RELEASE_BRANCH: ${{ github.ref_name }}
+          RELEASE_TRIGGER_SHA: ${{ github.sha }}
         run: |
-          git fetch --no-tags origin main
+          git fetch --no-tags origin "${RELEASE_BRANCH}"
           commit=$(git rev-parse HEAD)
-          test "${commit}" = "$(git rev-parse refs/remotes/origin/main)"
-          if test "${RELEASE_EVENT}" = workflow_run; then
-            test "${commit}" = "${RELEASE_TRIGGER_SHA}"
-          fi
+          test "${commit}" = "$(git rev-parse "refs/remotes/origin/${RELEASE_BRANCH}")"
+          test "${commit}" = "${RELEASE_TRIGGER_SHA}"
       - id: pending-release
         name: Detect an incomplete semantic release
         env:
@@ -101,6 +116,7 @@ jobs:
         run: |
           python3 tools/release/resolve_pending_release.py \
             --repository "${RELEASE_REPOSITORY}" \
+            --branch "${ATRINIK_RELEASE_BRANCH}" \
             --github-output "${GITHUB_OUTPUT}"
       - name: Delete the policy-listed empty failed draft
         if: steps.pending-release.outputs.action == 'delete-empty-draft'
@@ -113,6 +129,7 @@ jobs:
           set -euo pipefail
           python3 tools/release/resolve_pending_release.py \
             --repository "${RELEASE_REPOSITORY}" \
+            --branch "${ATRINIK_RELEASE_BRANCH}" \
             --delete-policy-listed-empty-draft \
             --expected-tag "${RELEASE_TAG}" \
             --expected-release-id "${RELEASE_ID}"
@@ -125,8 +142,9 @@ jobs:
         run: >-
           gh workflow run package-release.yml
           --repo "${RELEASE_REPOSITORY}"
-          --ref main
+          --ref "${ATRINIK_RELEASE_BRANCH}"
           --field "tag=${RELEASE_TAG}"
+          --field "source_branch=${ATRINIK_RELEASE_BRANCH}"
       - name: Resume the retained complete candidate
         if: steps.pending-release.outputs.action == 'resume-retained-candidate'
         env:
@@ -137,7 +155,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ ${CANDIDATE_RUN_ID} =~ ^[1-9][0-9]*$ ]]
-          [[ ${RELEASE_TAG} =~ ^v5\.[0-9]+\.[0-9]+$ ]]
+          [[ ${RELEASE_TAG} =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           gh workflow run package-release.yml \
             --repo "${RELEASE_REPOSITORY}" \
             --ref main \
@@ -162,11 +180,15 @@ jobs:
           steps.pending-release.outputs.action == 'delete-empty-draft'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          npx --yes
-          --package=semantic-release@25.0.9
-          --package=@semantic-release/commit-analyzer@13.0.1
-          --package=@semantic-release/release-notes-generator@14.1.1
-          --package=@semantic-release/exec@7.1.0
-          --package=conventional-changelog-conventionalcommits@9.3.1
-          node tools/release/run_semantic_release.mjs
+        run: |
+          export GITHUB_REF="refs/heads/${ATRINIK_RELEASE_BRANCH}"
+          export GITHUB_REF_NAME="${ATRINIK_RELEASE_BRANCH}"
+          release_commit=$(git rev-parse HEAD)
+          export GITHUB_SHA="${release_commit}"
+          npx --yes \
+            --package=semantic-release@25.0.9 \
+            --package=@semantic-release/commit-analyzer@13.0.1 \
+            --package=@semantic-release/release-notes-generator@14.1.1 \
+            --package=@semantic-release/exec@7.1.0 \
+            --package=conventional-changelog-conventionalcommits@9.3.1 \
+            node tools/release/run_semantic_release.mjs
