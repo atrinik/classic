@@ -1153,6 +1153,7 @@ static inline void socket_server_csocket_read(socket_struct *cs) {
         return;
     }
 
+    size_t previous_len = cs->packet_recv->len;
     size_t amt;
     if (!socket_read(cs->sc,
                      (void *)(cs->packet_recv->data + cs->packet_recv->len),
@@ -1163,6 +1164,9 @@ static inline void socket_server_csocket_read(socket_struct *cs) {
     }
 
     cs->packet_recv->len += amt;
+    if (amt != 0 && previous_len == 0) {
+        cs->packet_receive_started_us = datetime_monotonic_us();
+    }
 
     while (cs->packet_recv->len >= 2) {
         size_t size = 2 + (cs->packet_recv->data[0] << 8) + cs->packet_recv->data[1];
@@ -1191,6 +1195,10 @@ static inline void socket_server_csocket_read(socket_struct *cs) {
         }
 
         packet_delete(cs->packet_recv, 0, size);
+    }
+
+    if (cs->packet_recv->len == 0) {
+        cs->packet_receive_started_us = 0;
     }
 }
 
@@ -1496,6 +1504,7 @@ bool socket_server_process(void) {
         FD_ZERO(&fds_read);
     }
 
+    uint64_t service_started_us = datetime_monotonic_us();
     bool listener_ready = false;
     for (size_t i = 0; i < arraysize(quic_server_sockets); i++) {
         if (quic_server_sockets[i] != NULL && ready >= 0 &&
@@ -1539,6 +1548,7 @@ bool socket_server_process(void) {
     }
     uint64_t waited_us = datetime_monotonic_us() - wait_started_us;
     pending_queue_age_us = MAX(pending_queue_age_us, socket_server_pending_queue_age_us());
+    server_metrics_transport_service(datetime_monotonic_us() - service_started_us);
     server_metrics_transport_wait(waited_us,
                                   reason,
                                   stats.ready_connections,
