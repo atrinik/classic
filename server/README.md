@@ -113,6 +113,18 @@
  without retransmitting its contents. Restart after changing collected assets
  so the server publishes a new immutable snapshot.
 
+ Network scheduling remains single-threaded on the server thread but has two
+ distinct lanes. The transport lane waits for the earliest QUIC UDP readiness,
+ connection timer, buffered application data, outbound queue, or simulation
+ deadline; it services transport work immediately and bounds per-wakeup
+ connection and packet work with round-robin fairness. The simulation lane
+ runs `main_process()`, liveness checks, map rendering, asset scheduling, and
+ other world work only when its scheduled deadline is due. This separation
+ keeps inbound packets, QUIC timers, and queued writes responsive without
+ changing gameplay tick ownership or introducing a network thread. The
+ `/stats network` output reports wake reasons, wait percentiles, queue age,
+ timer services, and bounded-work hits for diagnosing the two lanes.
+
 =================================================
 = 2.1. Configuring the server                   =
 =================================================

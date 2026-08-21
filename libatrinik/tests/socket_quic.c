@@ -64,10 +64,52 @@ static void *quic_test_client_main(void *data) {
 static void quic_test_service(socket_t **connections, size_t count) {
     for (size_t i = 0; i < count; i++) {
         if (connections[i] != NULL) {
-            bool ready = socket_wait(connections[i], true, true, 1);
+            unsigned int timeout = socket_quic_timeout(connections[i], 1);
+            bool ready = socket_wait(connections[i], true, true, timeout);
             socket_quic_service(connections[i], ready, true);
         }
     }
+}
+
+static void quic_test_timeout_deadline(void) {
+    socket_t connection = {0};
+    connection.transport = SOCKET_TRANSPORT_QUIC_CONNECTION;
+    connection.quic_event_deadline_ms = datetime_monotonic_ms() + 1000U;
+    REQUIRE(socket_quic_timeout(&connection, 5000U) <= 1000U);
+    connection.quic_event_deadline_ms = 0;
+    REQUIRE(socket_quic_timeout(&connection, 5000U) == 0U);
+}
+
+static void quic_test_pending_stream_timeout(socket_t *client, socket_t *server) {
+    socket_stream_t *asset = socket_stream_open(client, SOCKET_STREAM_ASSET);
+    REQUIRE(asset != NULL);
+
+    uint8_t value = UINT8_C(0xa5);
+    size_t written = 0;
+    uint64_t deadline = datetime_monotonic_ms() + QUIC_TEST_TIMEOUT_MS;
+    while (SSL_get_accept_stream_queue_len(server->quic) == 0 &&
+           datetime_monotonic_ms() < deadline) {
+        if (written == 0) {
+            socket_stream_result_t result =
+                socket_stream_write(asset, &value, sizeof(value), &written);
+            REQUIRE(result == SOCKET_STREAM_RESULT_OK ||
+                    result == SOCKET_STREAM_RESULT_WOULD_BLOCK);
+        }
+
+        bool client_ready = socket_wait(client, true, true, 1);
+        socket_quic_service(client, client_ready, true);
+        bool server_ready = socket_wait(server, true, true, 1);
+        socket_quic_service(server, server_ready, false);
+    }
+
+    REQUIRE(written == sizeof(value));
+    REQUIRE(SSL_get_accept_stream_queue_len(server->quic) != 0);
+
+    /* The transport loop cannot classify this queue; the asset lane does so
+     * on the next simulation pass. It must not turn the wait into a spin. */
+    server->quic_event_deadline_ms = UINT64_MAX;
+    REQUIRE(socket_quic_timeout(server, 1000U) == 1000U);
+    socket_stream_destroy(asset);
 }
 
 static void *quic_test_server_main(void *data) {
@@ -213,6 +255,15 @@ static void quic_test_run(size_t count, bool delay_accept) {
     }
     REQUIRE(received_count == count);
 
+    quic_test_pending_stream_timeout(clients[0].connection, accepted_by_client[0]);
+
+    /* Force an otherwise idle connection's QUIC timer due. The server-side
+     * service call must make progress without a readable UDP handle. */
+    accepted_by_client[0]->quic_event_deadline_ms = 0;
+    REQUIRE(socket_quic_timeout(accepted_by_client[0], 1000U) == 0U);
+    REQUIRE(socket_quic_timer_due(accepted_by_client[0]));
+    REQUIRE(socket_quic_service(accepted_by_client[0], false, false));
+
     for (size_t i = 1; i < count; i++) {
         socket_destroy(clients[i].connection);
         clients[i].connection = NULL;
@@ -261,6 +312,7 @@ static void quic_test_run(size_t count, bool delay_accept) {
 int main(void) {
     toolkit_import(path);
     toolkit_import(socket);
+    quic_test_timeout_deadline();
     quic_test_run(1U, false);
     quic_test_run(QUIC_TEST_CLIENTS, true);
     toolkit_deinit();

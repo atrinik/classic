@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -16,6 +16,37 @@
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
+#include <openssl/crypto.h>
+#if OPENSSL_VERSION_NUMBER >= 0x30500000L
+#include <pthread.h>
+#include <stdatomic.h>
+#endif
+#include <toolkit/datetime.h>
+
+#if OPENSSL_VERSION_NUMBER >= 0x30500000L
+typedef struct scheduler_client {
+    char host[HUGE_BUF];
+    uint16_t port;
+    char fingerprint[65];
+    socket_t *socket;
+    socket_connect_failure_t failure;
+    atomic_bool finished;
+} scheduler_client_t;
+
+static void *scheduler_client_main(void *data) {
+    scheduler_client_t *client = data;
+    client->socket = socket_quic_client_create(client->host,
+                                               client->port,
+                                               client->fingerprint,
+                                               NULL,
+                                               NULL,
+                                               NULL,
+                                               SOCKET_CONNECTION_PREFERENCE_DIRECTORY,
+                                               &client->failure);
+    atomic_store(&client->finished, true);
+    return NULL;
+}
+#endif
 
 static bool first_regular_file(const char *root, const char *relative, char *output, size_t size) {
     char directory[HUGE_BUF];
@@ -106,6 +137,46 @@ START_TEST(test_transport_neutral_asset_cache) {
 }
 END_TEST
 
+START_TEST(test_transport_scheduler_runs_simulation_pass) {
+    ck_assert(socket_server_process());
+}
+END_TEST
+
+#if OPENSSL_VERSION_NUMBER >= 0x30500000L
+START_TEST(test_transport_scheduler_services_initialized_quic_listener) {
+    scheduler_client_t client = {0};
+    atomic_init(&client.finished, false);
+    toolkit_import(socket_server);
+    ck_assert(socket_server_quic_info(VS(client.host), &client.port, client.fingerprint));
+    if (client.host[0] == '\0') {
+        snprintf(VS(client.host), "%s", "127.0.0.1");
+    }
+
+    pthread_t thread;
+    ck_assert_int_eq(pthread_create(&thread, NULL, scheduler_client_main, &client), 0);
+
+    uint64_t deadline = datetime_monotonic_ms() + 5000;
+    bool simulation_due = false;
+    while (!atomic_load(&client.finished) && datetime_monotonic_ms() < deadline) {
+        simulation_due |= socket_server_process();
+    }
+
+    ck_assert_int_eq(pthread_join(thread, NULL), 0);
+    ck_assert(simulation_due);
+    ck_assert_ptr_nonnull(client.socket);
+    ck_assert_int_eq(client.failure.code, SOCKET_CONNECT_FAILURE_NONE);
+
+    socket_destroy(client.socket);
+    client.socket = NULL;
+    deadline = datetime_monotonic_ms() + 1000;
+    while (datetime_monotonic_ms() < deadline) {
+        socket_server_process();
+        socket_server_post_process();
+    }
+}
+END_TEST
+#endif
+
 static Suite *suite(void) {
     Suite *s = suite_create("assets");
     TCase *tc_core = tcase_create("Core");
@@ -114,6 +185,10 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_transport_neutral_asset_cache);
+    tcase_add_test(tc_core, test_transport_scheduler_runs_simulation_pass);
+#if OPENSSL_VERSION_NUMBER >= 0x30500000L
+    tcase_add_test(tc_core, test_transport_scheduler_services_initialized_quic_listener);
+#endif
     return s;
 }
 

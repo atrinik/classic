@@ -117,6 +117,12 @@ extern const int periodsofday_hours[24];
 
 extern void reset_sleep(void);
 
+/** Return the time remaining until the next non-transport server pass. */
+extern uint64_t sleep_delta_timeout_us(void);
+
+/** Advance the non-transport server pass deadline without blocking. */
+extern void sleep_delta_complete(void);
+
 extern void sleep_delta(void);
 
 extern void set_max_time(long t);

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -36,6 +36,7 @@
 #include <toolkit/path.h>
 #include <toolkit/string.h>
 #include <toolkit/packet.h>
+#include <toolkit/datetime.h>
 #include <server.h>
 #include <player.h>
 #include <object.h>
@@ -71,6 +72,9 @@ typedef enum socket_command_policy {
  * iteration.
  */
 #define SOCKET_SERVER_PLAYER_MAX_COMMANDS 15
+
+/** Maximum connections serviced from each intrusive list per transport wake. */
+#define SOCKET_SERVER_CONNECTIONS_PER_WAKEUP 64U
 
 /**
  * Structure to provide link linkage for client socket entries.
@@ -121,6 +125,14 @@ static player *socket_server_player_find(socket_struct *cs);
  */
 static csocket_entry_t *client_sockets;
 static size_t client_sockets_count;
+/** Round-robin cursor for pending-login transport work. */
+static size_t client_service_cursor;
+/** Round-robin cursor for logged-in transport work. */
+static size_t player_service_cursor;
+/** Avoid retrying a permanently blocked application queue in a tight loop. */
+static bool application_wakeup_armed = true;
+/** Preserve the existing immediate first non-transport pass after startup. */
+static bool transport_first_pass = true;
 
 static int socket_server_address_family(const struct sockaddr_storage *address) {
     return ((const struct sockaddr *)address)->sa_family;
@@ -489,6 +501,10 @@ TOOLKIT_INIT_FUNC(socket_server) {
 
     client_sockets = NULL;
     client_sockets_count = 0;
+    client_service_cursor = 0;
+    player_service_cursor = 0;
+    application_wakeup_armed = true;
+    transport_first_pass = true;
 }
 TOOLKIT_INIT_FUNC_FINISH
 
@@ -1118,27 +1134,10 @@ bool socket_server_remove(socket_struct *cs) {
     return false;
 }
 
-/**
- * Checks if the specified client socket is in zombie state and takes care
- * of increasing the zombie tick counter until the socket is marked as dead.
- *
- * @param cs
- * Client socket.
- * @return
- * True if the client socket is in zombie state, false otherwise.
- */
+/** Check whether the specified client socket is in zombie state. */
 static inline bool server_socket_csocket_is_zombie(socket_struct *cs) {
     HARD_ASSERT(cs != NULL);
-
-    if (cs->state != ST_ZOMBIE) {
-        return false;
-    }
-
-    if (cs->login_count++ >= MAX_TICKS_MULTIPLIER) {
-        cs->state = ST_DEAD;
-    }
-
-    return true;
+    return cs->state == ST_ZOMBIE;
 }
 
 /**
@@ -1195,11 +1194,207 @@ static inline void socket_server_csocket_read(socket_struct *cs) {
     }
 }
 
+typedef struct socket_server_transport_stats {
+    size_t ready_connections;
+    size_t quic_timer_services;
+    bool work_limited;
+} socket_server_transport_stats_t;
+
+static size_t socket_server_player_count(void) {
+    size_t count = 0;
+    player *pl;
+    DL_FOREACH(first_player, pl) {
+        count++;
+    }
+    return count;
+}
+
+static bool socket_server_pending_application(void) {
+    csocket_entry_t *entry;
+    DL_FOREACH(client_sockets, entry) {
+        if (!server_socket_csocket_is_zombie(entry->cs) &&
+            (entry->cs->packets != NULL || socket_assets_pending(entry->cs))) {
+            return true;
+        }
+    }
+
+    player *pl;
+    DL_FOREACH(first_player, pl) {
+        if (!server_socket_csocket_is_zombie(pl->cs) &&
+            (pl->cs->packets != NULL || socket_assets_pending(pl->cs))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static uint64_t socket_server_pending_queue_age_us(void) {
+    uint64_t now = datetime_monotonic_us();
+    uint64_t oldest = 0;
+    csocket_entry_t *entry;
+    DL_FOREACH(client_sockets, entry) {
+        uint64_t started = entry->cs->packet_queue_started_us;
+        if (started != 0 && (oldest == 0 || started < oldest)) {
+            oldest = started;
+        }
+    }
+
+    player *pl;
+    DL_FOREACH(first_player, pl) {
+        uint64_t started = pl->cs->packet_queue_started_us;
+        if (started != 0 && (oldest == 0 || started < oldest)) {
+            oldest = started;
+        }
+    }
+
+    return oldest != 0 && now >= oldest ? now - oldest : 0;
+}
+
+static void socket_server_deadline_min(uint64_t *timeout_us, socket_t *sc) {
+    unsigned int timeout_ms = socket_quic_timeout(sc, UINT_MAX);
+    uint64_t quic_timeout_us = (uint64_t)timeout_ms * UINT64_C(1000);
+    if (quic_timeout_us < *timeout_us) {
+        *timeout_us = quic_timeout_us;
+    }
+}
+
+static uint64_t socket_server_transport_timeout_us(void) {
+    uint64_t timeout_us = sleep_delta_timeout_us();
+    if (application_wakeup_armed && socket_server_pending_application()) {
+        return 0;
+    }
+
+    csocket_entry_t *entry;
+    DL_FOREACH(client_sockets, entry) {
+        if (!server_socket_csocket_is_zombie(entry->cs)) {
+            socket_server_deadline_min(&timeout_us, entry->cs->sc);
+        }
+    }
+
+    player *pl;
+    DL_FOREACH(first_player, pl) {
+        if (!server_socket_csocket_is_zombie(pl->cs)) {
+            socket_server_deadline_min(&timeout_us, pl->cs->sc);
+        }
+    }
+    return timeout_us;
+}
+
+static bool socket_server_service_connection(socket_struct *cs,
+                                             bool network_ready,
+                                             socket_server_transport_stats_t *stats) {
+    bool transport_ready = socket_quic_timeout(cs->sc, 1U) == 0;
+    bool timer_due = socket_quic_timer_due(cs->sc);
+    bool application_pending = cs->packets != NULL || socket_assets_pending(cs);
+    bool application_ready = application_wakeup_armed && application_pending;
+    if (!network_ready && !transport_ready && !application_ready) {
+        return false;
+    }
+
+    if (network_ready) {
+        stats->ready_connections++;
+    }
+    if (timer_due) {
+        stats->quic_timer_services++;
+    }
+    server_metrics_quic_service(network_ready);
+    if (!socket_quic_service(cs->sc, network_ready, application_pending)) {
+        return false;
+    }
+
+    socket_server_csocket_read(cs);
+    return true;
+}
+
+static void socket_server_service_client_connections(socket_server_transport_stats_t *stats) {
+    size_t count = client_sockets_count;
+    if (count == 0) {
+        client_service_cursor = 0;
+        return;
+    }
+
+    size_t start = client_service_cursor % count;
+    csocket_entry_t *entry = client_sockets;
+    for (size_t skipped = 0; skipped < start && entry != NULL; skipped++) {
+        entry = entry->next;
+    }
+
+    size_t limit = MIN(count, (size_t)SOCKET_SERVER_CONNECTIONS_PER_WAKEUP);
+    stats->work_limited |= count > limit;
+    size_t visited = 0;
+    while (entry != NULL && visited < limit) {
+        csocket_entry_t *next = entry->next;
+        socket_struct *cs = entry->cs;
+        if (!server_socket_csocket_is_zombie(cs) &&
+            socket_server_service_connection(cs, socket_server_quic_network_ready(cs->sc), stats)) {
+            csocket_entry_t *live = socket_server_csocket_find(cs);
+            if (live == NULL) {
+                /* Login promoted the connection to the player list. */
+                entry = next;
+                visited++;
+                continue;
+            }
+            if (cs->state == ST_DEAD) {
+                socket_server_csocket_drop(live);
+            } else {
+                socket_buffer_write(live->cs);
+            }
+        }
+        entry = next;
+        visited++;
+    }
+
+    client_service_cursor =
+        client_sockets_count == 0 ? 0 : (start + visited) % client_sockets_count;
+}
+
+static void socket_server_service_player_connections(socket_server_transport_stats_t *stats) {
+    size_t count = socket_server_player_count();
+    if (count == 0) {
+        player_service_cursor = 0;
+        return;
+    }
+
+    size_t start = player_service_cursor % count;
+    player *pl = first_player;
+    for (size_t skipped = 0; skipped < start && pl != NULL; skipped++) {
+        pl = pl->next;
+    }
+
+    size_t limit = MIN(count, (size_t)SOCKET_SERVER_CONNECTIONS_PER_WAKEUP);
+    stats->work_limited |= count > limit;
+    size_t visited = 0;
+    while (pl != NULL && visited < limit) {
+        player *next = pl->next;
+        socket_struct *cs = pl->cs;
+        if (!server_socket_csocket_is_zombie(cs) &&
+            socket_server_service_connection(cs, socket_server_quic_network_ready(cs->sc), stats)) {
+            player *live = socket_server_player_find(cs);
+            if (live == NULL) {
+                pl = next;
+                visited++;
+                continue;
+            }
+            if (cs->state == ST_DEAD) {
+                player_logout(live);
+            } else {
+                socket_buffer_write(cs);
+            }
+        }
+        pl = next;
+        visited++;
+    }
+
+    size_t remaining = socket_server_player_count();
+    player_service_cursor = remaining == 0 ? 0 : (start + visited) % remaining;
+}
+
 /**
- * Accept incoming connections, read data from clients and write data to
- * clients.
+ * Wait for and service transport work. The non-transport server pass is
+ * scheduled independently by sleep_delta_timeout_us(), so QUIC readiness and
+ * timer events do not inherit the simulation tick cadence.
  */
-void socket_server_process(void) {
+bool socket_server_process(void) {
     static time_t heartbeat_last;
     time_t now = time(NULL);
     if (heartbeat_last == 0 || now - heartbeat_last >= 5) {
@@ -1266,15 +1461,6 @@ void socket_server_process(void) {
             pl->cs->state = ST_DEAD;
         }
 
-        if (pl->cs->keepalive++ >= SOCKET_KEEPALIVE_TIMEOUT) {
-            LOG(SYSTEM,
-                "Keepalive: disconnecting %s [%s]: %d",
-                object_get_str(pl->ob),
-                socket_get_id(pl->cs->sc),
-                socket_fd(pl->cs->sc));
-            pl->cs->state = ST_DEAD;
-        }
-
         if (pl->cs->state == ST_DEAD) {
             player_logout(pl);
             continue;
@@ -1285,26 +1471,36 @@ void socket_server_process(void) {
         }
     }
 
+    uint64_t pending_queue_age_us = socket_server_pending_queue_age_us();
+    uint64_t wait_timeout_us = transport_first_pass ? 0 : socket_server_transport_timeout_us();
+    bool application_wake_requested =
+        application_wakeup_armed && socket_server_pending_application();
+    uint64_t wait_started_us = datetime_monotonic_us();
+    struct timeval timeout = {
+        .tv_sec = (long)(wait_timeout_us / UINT64_C(1000000)),
+        .tv_usec = (long)(wait_timeout_us % UINT64_C(1000000)),
+    };
     int ready;
 #ifdef HAVE_PSELECT
-    static struct timespec timeout;
-    /* pselect does not change the timeout argument, so we're OK with a
-     * static storage duration one. */
-    ready = pselect(nfds + 1, &fds_read, NULL, NULL, &timeout, NULL);
+    struct timespec pselect_timeout = {
+        .tv_sec = timeout.tv_sec,
+        .tv_nsec = timeout.tv_usec * 1000L,
+    };
+    ready = pselect(nfds + 1, &fds_read, NULL, NULL, &pselect_timeout, NULL);
 #else
-    struct timeval timeout;
-    timeout.tv_sec = 0;
-    timeout.tv_usec = 0;
     ready = select(nfds + 1, &fds_read, NULL, NULL, &timeout);
 #endif
+    bool wait_error = ready == -1;
     if (unlikely(ready == -1)) {
         LOG(ERROR, "pselect/select() returned an error: %s (%d)", strerror(errno), errno);
-        return;
+        FD_ZERO(&fds_read);
     }
 
+    bool listener_ready = false;
     for (size_t i = 0; i < arraysize(quic_server_sockets); i++) {
-        if (quic_server_sockets[i] != NULL &&
+        if (quic_server_sockets[i] != NULL && ready >= 0 &&
             FD_ISSET(socket_fd(quic_server_sockets[i]), &fds_read)) {
+            listener_ready = true;
             if (socket_server_quic_punch_receive(quic_server_sockets[i])) {
                 continue;
             }
@@ -1312,55 +1508,44 @@ void socket_server_process(void) {
         }
     }
 
-    DL_FOREACH_SAFE(client_sockets, entry, entry_tmp) {
-        if (entry->cs->state == ST_ZOMBIE) {
-            continue;
-        }
-        socket_struct *cs = entry->cs;
-        bool network_ready = socket_server_quic_network_ready(cs->sc);
-        server_metrics_quic_service(network_ready);
-        if (!socket_quic_service(cs->sc,
-                                 network_ready,
-                                 cs->packets != NULL || socket_assets_pending(cs))) {
-            continue;
-        }
-        socket_server_csocket_read(cs);
-        entry = socket_server_csocket_find(cs);
-        if (entry == NULL) {
-            /* Login moved the live socket to first_player; the player pass
-             * below will flush its queued response. */
-            continue;
-        }
-        if (cs->state == ST_DEAD) {
-            socket_server_csocket_drop(entry);
-            continue;
-        }
-        socket_buffer_write(entry->cs);
+    socket_server_transport_stats_t stats = {0};
+    socket_server_service_client_connections(&stats);
+    socket_server_service_player_connections(&stats);
+
+    bool simulation_due = transport_first_pass || sleep_delta_timeout_us() == 0;
+    transport_first_pass = false;
+    bool pending_application = socket_server_pending_application();
+    if (!pending_application) {
+        application_wakeup_armed = true;
+    } else if (application_wake_requested) {
+        application_wakeup_armed = false;
     }
 
-    DL_FOREACH_SAFE(first_player, pl, pl_tmp) {
-        if (pl->cs->state == ST_ZOMBIE) {
-            continue;
-        }
-        socket_struct *cs = pl->cs;
-        bool network_ready = socket_server_quic_network_ready(cs->sc);
-        server_metrics_quic_service(network_ready);
-        if (!socket_quic_service(cs->sc,
-                                 network_ready,
-                                 cs->packets != NULL || socket_assets_pending(cs))) {
-            continue;
-        }
-        socket_server_csocket_read(cs);
-        pl = socket_server_player_find(cs);
-        if (pl == NULL) {
-            continue;
-        }
-        if (cs->state == ST_DEAD) {
-            player_logout(pl);
-            continue;
-        }
-        socket_buffer_write(cs);
+    server_transport_wake_reason_t reason;
+    if (wait_error) {
+        reason = SERVER_TRANSPORT_WAKE_ERROR;
+    } else if (listener_ready) {
+        reason = SERVER_TRANSPORT_WAKE_LISTENER;
+    } else if (stats.quic_timer_services != 0) {
+        reason = SERVER_TRANSPORT_WAKE_QUIC_TIMER;
+    } else if (stats.ready_connections != 0) {
+        reason = SERVER_TRANSPORT_WAKE_CONNECTION;
+    } else if (application_wake_requested) {
+        reason = SERVER_TRANSPORT_WAKE_APPLICATION;
+    } else if (simulation_due) {
+        reason = SERVER_TRANSPORT_WAKE_SIMULATION;
+    } else {
+        reason = SERVER_TRANSPORT_WAKE_CONNECTION;
     }
+    uint64_t waited_us = datetime_monotonic_us() - wait_started_us;
+    pending_queue_age_us = MAX(pending_queue_age_us, socket_server_pending_queue_age_us());
+    server_metrics_transport_wait(waited_us,
+                                  reason,
+                                  stats.ready_connections,
+                                  stats.quic_timer_services,
+                                  pending_queue_age_us,
+                                  stats.work_limited);
+    return simulation_due;
 }
 
 /**
@@ -1368,9 +1553,35 @@ void socket_server_process(void) {
  * Afterwards, attempt to write to the players' clients.
  */
 void socket_server_post_process(void) {
+    csocket_entry_t *entry, *entry_tmp;
+    DL_FOREACH_SAFE(client_sockets, entry, entry_tmp) {
+        if (server_socket_csocket_is_zombie(entry->cs) &&
+            entry->cs->login_count++ >= MAX_TICKS_MULTIPLIER) {
+            entry->cs->state = ST_DEAD;
+        }
+        if (entry->cs->state == ST_DEAD) {
+            socket_server_csocket_drop(entry);
+        }
+    }
+
     player *pl, *pl_tmp;
     DL_FOREACH_SAFE(first_player, pl, pl_tmp) {
+        if (server_socket_csocket_is_zombie(pl->cs) &&
+            pl->cs->login_count++ >= MAX_TICKS_MULTIPLIER) {
+            pl->cs->state = ST_DEAD;
+        }
         if (pl->cs->state == ST_DEAD) {
+            player_logout(pl);
+            continue;
+        }
+
+        if (pl->cs->keepalive++ >= SOCKET_KEEPALIVE_TIMEOUT) {
+            LOG(SYSTEM,
+                "Keepalive: disconnecting %s [%s]: %d",
+                object_get_str(pl->ob),
+                socket_get_id(pl->cs->sc),
+                socket_fd(pl->cs->sc));
+            pl->cs->state = ST_DEAD;
             player_logout(pl);
             continue;
         }
@@ -1400,4 +1611,9 @@ void socket_server_post_process(void) {
 
         socket_buffer_write(pl->cs);
     }
+
+    /* The pass above can enqueue map/asset responses. Permit one immediate
+     * transport retry, but let the transport poller back off if a socket
+     * remains unable to accept application data. */
+    application_wakeup_armed = true;
 }
