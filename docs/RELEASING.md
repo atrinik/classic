@@ -105,15 +105,28 @@ unpublished historical evidence; after the guarded empty-draft deletion,
 ordinary semantic analysis selects the next version containing the Docker
 context correction and all later first-parent changes.
 
-If the failed run reached complete-candidate validation but a defect in its
-tag-bound publication code makes a job rerun impossible, dispatch Package
-Release from current `main` with both the release tag and the numeric failed
-run ID. The recovery preflight requires the original run to have exactly one
-successful complete-candidate finalizer, a failed publication job, and one
-unexpired candidate artifact named for that tag. It skips every candidate
-build, downloads that retained artifact by run ID, rejects any draft-asset
-mismatch, and uses only the validated current-main verifier against the tagged
-source tree. This is the sole exception to recovery within the original run.
+If a failed run reached complete-candidate validation but a defect in its
+publication code makes a job rerun impossible, the semantic-release guard
+searches a bounded, paginated window of failed Package Release runs. It
+accepts exactly one run only when the run belongs to this repository, its tag
+and source commit are ancestors of current `main`, its complete-candidate
+finalizer succeeded, its publication job failed only at `Publish the complete
+draft release`, its image and attestation checks succeeded, and it has one
+unexpired `complete-release-candidate-TAG` artifact with a SHA-256 digest. The
+guard then dispatches Package Release from current `main` with the exact tag
+and numeric failed run ID. Package Release skips every candidate build,
+downloads that retained artifact by run ID, rejects any draft-asset mismatch,
+and uses only the validated current-main verifier against the tagged source
+tree. This is the sole exception to recovery within the original run; it never
+rebuilds or edits a tag, release, asset, image, or attestation identity.
+
+For the `v5.37.0` incident, run `32038894588` is not a retained publication
+candidate because its publisher failed while inspecting the versioned server
+image. Run `32048332566` is the candidate disposition when its exact release,
+tag, artifact, image, and attestation evidence still revalidates: it failed at
+the release-publication boundary after the complete candidate was finalized.
+If that exact proof is no longer present, the guard fails closed with the
+recovery disposition instead of guessing or mutating the draft.
 
 ```sh
 gh workflow run package-release.yml --repo atrinik/classic --ref main \
@@ -421,6 +434,19 @@ to another tag or any draft containing an asset. The mutable `latest` alias is
 convenience only. Its globally serialized
 promoter recomputes GitHub's latest complete immutable release on every run, and
 the alias is never a rollback source.
+
+The pending-release guard classifies failed Package Release boundaries as
+`server-image-build`, `server-image-inspection`, `windows-server-build`,
+`release-publication`, or `candidate-validation`. An assetless ordinary draft
+may receive at most two automatic retries after consecutive
+`server-image-build` failures; the third matching failure returns a successful
+`blocked` disposition with the class and count in the workflow summary, so
+successful main validation does not waste another release run. Other classes
+are surfaced in the summary and continue through their existing exact
+disposition; tag-bound runs and current-main recovery runs count only when their
+commits are on the draft tag's lineage to current `main`, and only the server-
+image build class receives this automatic retry cap. Operators must inspect the
+recorded failed job boundary before changing any retry policy.
 
 Before upgrading a production server, snapshot its state and retain the exact
 prior `content@main` Classic artifact coordinate. Roll back by stopping the

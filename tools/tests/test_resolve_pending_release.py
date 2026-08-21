@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 
 RELEASE_TOOLS = Path(__file__).resolve().parents[1] / "release"
@@ -44,6 +45,31 @@ def policy() -> dict[str, object]:
             "server_image_conclusion": "failure",
         }
     }
+
+
+def retained_candidate(**updates: str) -> dict[str, str]:
+    value = {
+        "tag": "v5.37.0",
+        "candidate_run_id": "32048332566",
+        "run_commit": "1" * 40,
+        "artifact_digest": "sha256:" + "2" * 64,
+        "failure_class": "release-publication",
+    }
+    value.update(updates)
+    return value
+
+
+def retained_publication_steps(failed_name: str) -> list[dict[str, str]]:
+    steps = [
+        {
+            "name": name,
+            "conclusion": "failure" if name == failed_name else "success",
+        }
+        for name in resolve_pending_release.RETAINED_PROOF_STEPS
+    ]
+    if failed_name not in resolve_pending_release.RETAINED_PROOF_STEPS:
+        steps.append({"name": failed_name, "conclusion": "failure"})
+    return steps
 
 
 class ResolvePendingReleaseTests(unittest.TestCase):
@@ -129,6 +155,66 @@ class ResolvePendingReleaseTests(unittest.TestCase):
                 lambda run, windows, image: None,
             )
 
+    def test_complete_ordinary_draft_dispatches_exact_retained_candidate(self) -> None:
+        result = resolve_pending_release.resolve(
+            [
+                draft(
+                    id=371791046,
+                    tag_name="v5.37.0",
+                    assets=[{"name": "atrinik-classic-v5.37.0.tar.gz"}],
+                )
+            ],
+            policy(),
+            lambda tag: "0" * 40,
+            lambda run, windows, image: None,
+            lambda tag: [retained_candidate()],
+        )
+        self.assertEqual(
+            result,
+            {
+                "action": "resume-retained-candidate",
+                "tag": "v5.37.0",
+                "release_id": "371791046",
+                "candidate_run_id": "32048332566",
+                "failure_class": "release-publication",
+            },
+        )
+
+    def test_repeated_server_image_failures_stop_automatic_retries(self) -> None:
+        result = resolve_pending_release.resolve(
+            [draft(id=10, tag_name="v5.8.0")],
+            policy(),
+            lambda tag: "0" * 40,
+            lambda run, windows, image: None,
+            failure_classes=lambda tag: [
+                "server-image-build",
+                "server-image-build",
+                "server-image-build",
+            ],
+        )
+        self.assertEqual(
+            result,
+            {
+                "action": "blocked",
+                "tag": "v5.8.0",
+                "release_id": "10",
+                "failure_class": "server-image-build",
+                "retry_count": "3",
+            },
+        )
+
+    def test_first_server_image_failure_remains_bounded_and_resumable(self) -> None:
+        result = resolve_pending_release.resolve(
+            [draft(id=10, tag_name="v5.8.0")],
+            policy(),
+            lambda tag: "0" * 40,
+            lambda run, windows, image: None,
+            failure_classes=lambda tag: ["server-image-build"],
+        )
+        self.assertEqual(result["action"], "resume")
+        self.assertEqual(result["failure_class"], "server-image-build")
+        self.assertEqual(result["retry_count"], "1")
+
     def test_multiple_drafts_fail_closed(self) -> None:
         with self.assertRaisesRegex(
             resolve_pending_release.PendingReleaseError,
@@ -183,6 +269,296 @@ class ResolvePendingReleaseTests(unittest.TestCase):
         ):
             resolve_pending_release.validate_failed_run(
                 "atrinik/classic", RUN_IDS[0], "failure", "failure", request
+            )
+
+    def test_retained_candidate_requires_publication_boundary_proof(self) -> None:
+        run = {
+            "id": 32048332566,
+            "name": "Package Release",
+            "path": ".github/workflows/package-release.yml",
+            "event": "workflow_dispatch",
+            "conclusion": "failure",
+            "head_sha": "1" * 40,
+            "head_repository": {"full_name": "atrinik/classic"},
+        }
+        jobs = {
+            "total_count": 2,
+            "jobs": [
+                {
+                    "name": "Build and validate immutable candidate / "
+                    "Validate complete release candidate",
+                    "conclusion": "success",
+                },
+                {
+                    "name": "Publish unified release",
+                    "conclusion": "failure",
+                    "steps": retained_publication_steps(
+                        resolve_pending_release.PUBLISH_STEP
+                    ),
+                },
+            ],
+        }
+        artifacts = {
+            "total_count": 1,
+            "artifacts": [
+                {
+                    "name": "complete-release-candidate-v5.37.0",
+                    "expired": False,
+                    "size_in_bytes": 100,
+                    "digest": "sha256:" + "2" * 64,
+                }
+            ],
+        }
+
+        def request(path: str) -> object:
+            if "/jobs?" in path:
+                return jobs
+            if "/artifacts?" in path:
+                return artifacts
+            return run
+
+        self.assertEqual(
+            resolve_pending_release.validate_retained_candidate(
+                "atrinik/classic", "v5.37.0", 32048332566, request
+            ),
+            retained_candidate(),
+        )
+
+        jobs["jobs"][1]["steps"] = retained_publication_steps(
+            resolve_pending_release.IMAGE_INSPECTION_STEP
+        )
+        with self.assertRaisesRegex(
+            resolve_pending_release.CandidateNotSafe,
+            "publication boundary",
+        ):
+            resolve_pending_release.validate_retained_candidate(
+                "atrinik/classic", "v5.37.0", 32048332566, request
+            )
+
+    def test_retained_candidate_rejects_duplicate_boundary_jobs(self) -> None:
+        run = {
+            "id": 32048332566,
+            "name": "Package Release",
+            "path": ".github/workflows/package-release.yml",
+            "event": "workflow_dispatch",
+            "conclusion": "failure",
+            "head_sha": "1" * 40,
+            "head_repository": {"full_name": "atrinik/classic"},
+        }
+        jobs = {
+            "total_count": 2,
+            "jobs": [
+                {
+                    "name": resolve_pending_release.CANDIDATE_FINALIZER_JOB,
+                    "conclusion": "success",
+                },
+                {
+                    "name": resolve_pending_release.PUBLISH_JOB,
+                    "conclusion": "failure",
+                    "steps": retained_publication_steps(
+                        resolve_pending_release.PUBLISH_STEP
+                    ),
+                },
+            ],
+        }
+        artifacts = {
+            "total_count": 1,
+            "artifacts": [
+                {
+                    "name": "complete-release-candidate-v5.37.0",
+                    "expired": False,
+                    "size_in_bytes": 100,
+                    "digest": "sha256:" + "2" * 64,
+                }
+            ],
+        }
+
+        def request(path: str) -> object:
+            if "/jobs?" in path:
+                return jobs
+            if "/artifacts?" in path:
+                return artifacts
+            return run
+
+        for duplicate_index in (0, 1):
+            with self.subTest(duplicate_index=duplicate_index):
+                jobs["jobs"].append(dict(jobs["jobs"][duplicate_index]))
+                jobs["total_count"] = 3
+                with self.assertRaisesRegex(
+                    resolve_pending_release.CandidateNotSafe,
+                    "one complete candidate and one failed publisher",
+                ):
+                    resolve_pending_release.validate_retained_candidate(
+                        "atrinik/classic", "v5.37.0", 32048332566, request
+                    )
+                jobs["jobs"].pop()
+                jobs["total_count"] = 2
+
+    def test_retained_candidate_rejects_non_success_publisher_steps(self) -> None:
+        run = {
+            "id": 32048332566,
+            "name": "Package Release",
+            "path": ".github/workflows/package-release.yml",
+            "event": "workflow_dispatch",
+            "conclusion": "failure",
+            "head_sha": "1" * 40,
+            "head_repository": {"full_name": "atrinik/classic"},
+        }
+        steps = retained_publication_steps(resolve_pending_release.PUBLISH_STEP)
+        steps[1]["conclusion"] = "cancelled"
+        jobs = {
+            "total_count": 2,
+            "jobs": [
+                {
+                    "name": resolve_pending_release.CANDIDATE_FINALIZER_JOB,
+                    "conclusion": "success",
+                },
+                {
+                    "name": resolve_pending_release.PUBLISH_JOB,
+                    "conclusion": "failure",
+                    "steps": steps,
+                },
+            ],
+        }
+        artifacts = {
+            "total_count": 1,
+            "artifacts": [
+                {
+                    "name": "complete-release-candidate-v5.37.0",
+                    "expired": False,
+                    "size_in_bytes": 100,
+                    "digest": "sha256:" + "2" * 64,
+                }
+            ],
+        }
+
+        def request(path: str) -> object:
+            if "/jobs?" in path:
+                return jobs
+            if "/artifacts?" in path:
+                return artifacts
+            return run
+
+        with self.assertRaisesRegex(
+            resolve_pending_release.CandidateNotSafe,
+            "publication boundary",
+        ):
+            resolve_pending_release.validate_retained_candidate(
+                "atrinik/classic", "v5.37.0", 32048332566, request
+            )
+
+    def test_failed_run_classification_exposes_image_boundary(self) -> None:
+        self.assertEqual(
+            resolve_pending_release.classify_failed_run(
+                [
+                    {"name": resolve_pending_release.IMAGE_JOB, "conclusion": "failure"}
+                ]
+            ),
+            "server-image-build",
+        )
+        self.assertEqual(
+            resolve_pending_release.classify_failed_run(
+                [
+                    {
+                        "name": resolve_pending_release.PUBLISH_JOB,
+                        "conclusion": "failure",
+                        "steps": [
+                            {
+                                "name": resolve_pending_release.IMAGE_INSPECTION_STEP,
+                                "conclusion": "failure",
+                            }
+                        ],
+                    }
+                ]
+            ),
+            "server-image-inspection",
+        )
+
+    def test_recent_tag_runs_are_classified_from_the_failed_job(self) -> None:
+        runs = {
+            "total_count": 3,
+            "workflow_runs": [
+                {
+                    "id": run_id,
+                    "name": "Package Release",
+                    "path": ".github/workflows/package-release.yml",
+                    "event": "workflow_dispatch",
+                    "conclusion": "failure",
+                    "head_branch": "v5.8.0",
+                    "head_sha": "1" * 40,
+                }
+                for run_id in (3, 2, 1)
+            ],
+        }
+        run = {
+            "name": "Package Release",
+            "path": ".github/workflows/package-release.yml",
+            "event": "workflow_dispatch",
+            "conclusion": "failure",
+            "head_sha": "1" * 40,
+            "head_repository": {"full_name": "atrinik/classic"},
+        }
+        jobs = {
+            "total_count": 1,
+            "jobs": [{"name": resolve_pending_release.IMAGE_JOB, "conclusion": "failure"}],
+        }
+
+        def request(path: str) -> object:
+            if "/actions/workflows/" in path:
+                return runs
+            if "/jobs?" in path:
+                return jobs
+            return run
+
+        with patch.object(resolve_pending_release, "is_ancestor", return_value=True):
+            self.assertEqual(
+                resolve_pending_release.recent_failure_classes(
+                    "atrinik/classic", "v5.8.0", "1" * 40, "1" * 40, request
+                ),
+                ["server-image-build", "server-image-build", "server-image-build"],
+            )
+
+    def test_recent_main_recovery_runs_are_classified_on_tag_lineage(self) -> None:
+        runs = {
+            "total_count": 1,
+            "workflow_runs": [
+                {
+                    "id": 2,
+                    "name": "Package Release",
+                    "path": ".github/workflows/package-release.yml",
+                    "event": "workflow_dispatch",
+                    "conclusion": "failure",
+                    "head_branch": "main",
+                    "head_sha": "1" * 40,
+                }
+            ],
+        }
+        run = {
+            "name": "Package Release",
+            "path": ".github/workflows/package-release.yml",
+            "event": "workflow_dispatch",
+            "conclusion": "failure",
+            "head_sha": "1" * 40,
+            "head_repository": {"full_name": "atrinik/classic"},
+        }
+        jobs = {
+            "total_count": 1,
+            "jobs": [{"name": resolve_pending_release.IMAGE_JOB, "conclusion": "failure"}],
+        }
+
+        def request(path: str) -> object:
+            if "/actions/workflows/" in path:
+                return runs
+            if "/jobs?" in path:
+                return jobs
+            return run
+
+        with patch.object(resolve_pending_release, "is_ancestor", return_value=True):
+            self.assertEqual(
+                resolve_pending_release.recent_failure_classes(
+                    "atrinik/classic", "v5.8.0", "0" * 40, "1" * 40, request
+                ),
+                ["server-image-build"],
             )
 
     def test_duplicate_failed_run_jobs_are_ambiguous(self) -> None:
