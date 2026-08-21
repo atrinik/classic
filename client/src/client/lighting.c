@@ -19,7 +19,10 @@
 
 #include "lighting_lut.inc"
 
+#define LIGHTING_MAX_DIRTY_RECTS 64
+#define LIGHTING_MAX_DIRTY_SPANS 8
 #define LIGHTING_SCROLL_MARGIN 64
+#define LIGHTING_MAP_LEVEL_PIXEL_HEIGHT 46
 
 typedef struct lighting_sample lighting_sample;
 
@@ -62,6 +65,16 @@ typedef struct lighting_dirty_rect {
     int y1;
 } lighting_dirty_rect_t;
 
+typedef struct lighting_dirty_span {
+    int x0;
+    int x1;
+} lighting_dirty_span_t;
+
+typedef struct lighting_interval {
+    int start;
+    int end;
+} lighting_interval_t;
+
 typedef enum lighting_full_rebuild_cause {
     LIGHTING_FULL_REBUILD_NONE,
     LIGHTING_FULL_REBUILD_CACHE,
@@ -96,8 +109,11 @@ typedef struct lighting_context {
     bool update_needed;
     uint64_t cache_key;
     uint64_t pending_cache_key;
-    lighting_dirty_rect_t dirty[2];
+    lighting_dirty_rect_t dirty[LIGHTING_MAX_DIRTY_RECTS];
     size_t dirty_num;
+    lighting_dirty_span_t *dirty_spans;
+    uint8_t *dirty_span_num;
+    bool dirty_span_overflow;
     lighting_full_rebuild_cause_t full_rebuild_cause;
     lighting_sprite_cache_entry *sprite_cache;
     lighting_sprite_cache_entry *sprite_cache_lru_oldest;
@@ -387,7 +403,10 @@ static size_t lighting_context_retained_field_bytes(const lighting_context *cont
     return lighting_context_semantic_field_bytes(context) +
            context->samples_num *
                (sizeof(*context->structure_illumination) +
-                sizeof(*context->structure_illumination_valid));
+                sizeof(*context->structure_illumination_valid)) +
+           (size_t)context->height *
+               (LIGHTING_MAX_DIRTY_SPANS * sizeof(*context->dirty_spans) +
+                sizeof(*context->dirty_span_num));
 }
 
 static bool lighting_context_allocated(const lighting_context *context) {
@@ -398,23 +417,124 @@ static size_t lighting_context_sprite_entries(const lighting_context *context) {
     return (size_t)HASH_COUNT(context->sprite_cache);
 }
 
+/** Sort a small bounded integer list without relying on libc qsort state. */
+static void lighting_sort_ints(int *values, size_t count) {
+    for (size_t i = 1; i < count; i++) {
+        int value = values[i];
+        size_t position = i;
+        while (position > 0 && values[position - 1] > value) {
+            values[position] = values[position - 1];
+            position--;
+        }
+        values[position] = value;
+    }
+}
+
 static size_t lighting_dirty_pixels(const lighting_context *context) {
-    size_t pixels = 0;
+    int x_edges[LIGHTING_MAX_DIRTY_RECTS * 2];
+    size_t x_edges_num = 0;
     for (size_t i = 0; i < context->dirty_num; i++) {
-        const lighting_dirty_rect_t *rect = &context->dirty[i];
-        pixels += (size_t)(rect->x1 - rect->x0) * (size_t)(rect->y1 - rect->y0);
-        for (size_t j = 0; j < i; j++) {
-            const lighting_dirty_rect_t *previous = &context->dirty[j];
-            int x0 = MAX(rect->x0, previous->x0);
-            int y0 = MAX(rect->y0, previous->y0);
-            int x1 = MIN(rect->x1, previous->x1);
-            int y1 = MIN(rect->y1, previous->y1);
-            if (x0 < x1 && y0 < y1) {
-                pixels -= (size_t)(x1 - x0) * (size_t)(y1 - y0);
-            }
+        x_edges[x_edges_num++] = context->dirty[i].x0;
+        x_edges[x_edges_num++] = context->dirty[i].x1;
+    }
+    lighting_sort_ints(x_edges, x_edges_num);
+    size_t unique_x_edges = 0;
+    for (size_t i = 0; i < x_edges_num; i++) {
+        if (unique_x_edges == 0 || x_edges[i] != x_edges[unique_x_edges - 1]) {
+            x_edges[unique_x_edges++] = x_edges[i];
         }
     }
+
+    size_t pixels = 0;
+    for (size_t x_index = 0; x_index + 1 < unique_x_edges; x_index++) {
+        int x0 = x_edges[x_index];
+        int x1 = x_edges[x_index + 1];
+        if (x0 >= x1) {
+            continue;
+        }
+
+        lighting_interval_t intervals[LIGHTING_MAX_DIRTY_RECTS];
+        size_t interval_num = 0;
+        for (size_t rect_index = 0; rect_index < context->dirty_num; rect_index++) {
+            const lighting_dirty_rect_t *rect = &context->dirty[rect_index];
+            if (rect->x0 < x1 && rect->x1 > x0) {
+                lighting_interval_t interval = {.start = rect->y0, .end = rect->y1};
+                size_t position = interval_num;
+                while (position > 0 && intervals[position - 1].start > interval.start) {
+                    intervals[position] = intervals[position - 1];
+                    position--;
+                }
+                intervals[position] = interval;
+                interval_num++;
+            }
+        }
+
+        int covered_y = 0;
+        int current_y1 = 0;
+        for (size_t interval_index = 0; interval_index < interval_num; interval_index++) {
+            int y0 = intervals[interval_index].start;
+            int y1 = intervals[interval_index].end;
+            if (interval_index == 0) {
+                covered_y = y1 - y0;
+                current_y1 = y1;
+                continue;
+            }
+            if (y0 > current_y1) {
+                pixels += (size_t)(x1 - x0) * (size_t)covered_y;
+                covered_y = y1 - y0;
+            } else if (y1 > current_y1) {
+                covered_y += y1 - current_y1;
+            }
+            current_y1 = MAX(current_y1, y1);
+        }
+        pixels += (size_t)(x1 - x0) * (size_t)covered_y;
+    }
     return pixels;
+}
+
+/** Build non-overlapping horizontal spans from the bounded dirty rectangle union. */
+static void lighting_dirty_spans_build(lighting_context *context) {
+    context->dirty_span_overflow = false;
+    for (int y = 0; y < context->height; y++) {
+        lighting_dirty_span_t spans[LIGHTING_MAX_DIRTY_RECTS];
+        size_t span_num = 0;
+        for (size_t rect_index = 0; rect_index < context->dirty_num; rect_index++) {
+            const lighting_dirty_rect_t *rect = &context->dirty[rect_index];
+            if (y < rect->y0 || y >= rect->y1 || rect->x0 >= rect->x1) {
+                continue;
+            }
+
+            lighting_dirty_span_t span = {.x0 = rect->x0, .x1 = rect->x1};
+            size_t position = span_num;
+            while (position > 0 && spans[position - 1].x0 > span.x0) {
+                spans[position] = spans[position - 1];
+                position--;
+            }
+            spans[position] = span;
+            span_num++;
+        }
+
+        size_t merged_num = 0;
+        for (size_t span_index = 0; span_index < span_num; span_index++) {
+            lighting_dirty_span_t span = spans[span_index];
+            if (merged_num != 0 && span.x0 <= spans[merged_num - 1].x1) {
+                spans[merged_num - 1].x1 = MAX(spans[merged_num - 1].x1, span.x1);
+                continue;
+            }
+            spans[merged_num++] = span;
+        }
+
+        if (merged_num > LIGHTING_MAX_DIRTY_SPANS) {
+            context->dirty_span_overflow = true;
+            context->dirty_span_num[y] = 0;
+            continue;
+        }
+        context->dirty_span_num[y] = (uint8_t)merged_num;
+        memcpy(context->dirty_spans +
+                   (size_t)y * LIGHTING_MAX_DIRTY_SPANS,
+               spans,
+               merged_num * sizeof(*spans));
+    }
 }
 
 static bool
@@ -537,6 +657,8 @@ static void lighting_context_free(lighting_context *context) {
     free(context->structure_blur_row);
     free(context->rows_valid);
     free(context->structure_illumination_valid);
+    free(context->dirty_spans);
+    free(context->dirty_span_num);
     lighting_sprite_cache_clear(context, LIGHTING_SPRITE_INVALIDATION_RESET);
     lighting_benchmark_timings_t benchmark_timings = context->benchmark_timings;
     memset(context, 0, sizeof(*context));
@@ -550,6 +672,8 @@ static void lighting_context_free(lighting_context *context) {
 #define structure_illumination_cache (lighting_context_current->structure_illumination)
 #define structure_blur_row (lighting_context_current->structure_blur_row)
 #define structure_rows_valid (lighting_context_current->rows_valid)
+#define lighting_dirty_spans (lighting_context_current->dirty_spans)
+#define lighting_dirty_span_num (lighting_context_current->dirty_span_num)
 #define structure_illumination_cache_valid \
     (lighting_context_current->structure_illumination_valid)
 #define light_samples_num (lighting_context_current->samples_num)
@@ -799,6 +923,12 @@ static bool lighting_surface_create(int width, int height) {
         structure_illumination_cache_valid = xreallocarray(structure_illumination_cache_valid,
                                                             samples_num,
                                                             sizeof(*structure_illumination_cache_valid));
+        lighting_dirty_spans = xreallocarray(lighting_dirty_spans,
+                                              (size_t)height * LIGHTING_MAX_DIRTY_SPANS,
+                                              sizeof(*lighting_dirty_spans));
+        lighting_dirty_span_num = xreallocarray(lighting_dirty_span_num,
+                                                (size_t)height,
+                                                sizeof(*lighting_dirty_span_num));
         memset(structure_illumination_cache_valid,
                0,
                samples_num * sizeof(*structure_illumination_cache_valid));
@@ -872,7 +1002,15 @@ bool lighting_begin(int width, int height, uint64_t cache_key) {
     LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, field_begins);
     if (lighting_update_needed) {
         LIGHTING_BENCHMARK_INCREMENT(lighting_context_current, field_dirty_marks);
+        lighting_dirty_spans_build(lighting_context_current);
         size_t dirty_pixels = lighting_dirty_pixels(lighting_context_current);
+        if (dirty_pixels == light_samples_num &&
+            lighting_context_current->full_rebuild_cause == LIGHTING_FULL_REBUILD_NONE) {
+            /* A union of bounded invalidation rectangles can cover the full
+             * field without going through lighting_dirty_full(). Keep the
+             * benchmark cause accounting explicit for that case. */
+            lighting_context_current->full_rebuild_cause = LIGHTING_FULL_REBUILD_BOUNDS;
+        }
         lighting_context_current->benchmark_counters.field_dirty_pixels += dirty_pixels;
         lighting_benchmark_statistics.counters.field_dirty_pixels += dirty_pixels;
         uint64_t timing_started = lighting_benchmark_timing_start();
@@ -1079,7 +1217,52 @@ bool lighting_needs_update(void) {
     return lighting_update_needed;
 }
 
-/** Translate cached screen-space lighting and dirty newly exposed edges. */
+bool lighting_viewport_size_get(int *width, int *height) {
+    if (width == NULL || height == NULL) {
+        return false;
+    }
+
+    const lighting_context *context = &lighting_contexts[MAP2_DEPTH_INDEX(0)];
+    if (!lighting_context_allocated(context)) {
+        return false;
+    }
+
+    *width = context->width;
+    *height = context->height;
+    return true;
+}
+
+/** Dirty a clipped viewport-relative rectangle in one allocated depth. */
+void lighting_dirty_screen_rect(int depth, int x0, int y0, int x1, int y1) {
+    if (depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH || x0 >= x1 || y0 >= y1) {
+        return;
+    }
+
+    lighting_context *context = &lighting_contexts[MAP2_DEPTH_INDEX(depth)];
+    if (!lighting_context_allocated(context)) {
+        return;
+    }
+
+    x0 += context->width / 2;
+    y0 += context->height / 2 - depth * LIGHTING_MAP_LEVEL_PIXEL_HEIGHT;
+    x1 += context->width / 2;
+    y1 += context->height / 2 - depth * LIGHTING_MAP_LEVEL_PIXEL_HEIGHT;
+    x0 = MAX(0, x0);
+    y0 = MAX(0, y0);
+    x1 = MIN(context->width, x1);
+    y1 = MIN(context->height, y1);
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
+    if (context->dirty_num >= arraysize(context->dirty)) {
+        lighting_dirty_full(context, LIGHTING_FULL_REBUILD_BOUNDS);
+    } else {
+        context->dirty[context->dirty_num++] = (lighting_dirty_rect_t){x0, y0, x1, y1};
+    }
+    context->update_needed = true;
+}
+
+/** Translate cached screen-space lighting and dirty changed scroll edges. */
 void lighting_scroll(int screen_dx, int screen_dy) {
     if (screen_dx == 0 && screen_dy == 0) {
         return;
@@ -1252,12 +1435,31 @@ static void lighting_draw_triangle(const lighting_vertex_t vertices[4], bool fir
     int64_t step_y_c = orientation * -2 * (b->x - a->x);
 
     for (int y = min_y; y <= max_y; y++) {
-        for (size_t dirty_index = 0; dirty_index < lighting_context_current->dirty_num;
-             dirty_index++) {
-            const lighting_dirty_rect_t *dirty = &lighting_context_current->dirty[dirty_index];
-            int x_start = MAX(min_x, dirty->x0);
-            int x_end = MIN(max_x, dirty->x1 - 1);
-            if (x_start > x_end || y < dirty->y0 || y >= dirty->y1) {
+        lighting_dirty_span_t fallback_spans[LIGHTING_MAX_DIRTY_RECTS];
+        const lighting_dirty_span_t *spans;
+        size_t span_num;
+        if (lighting_context_current->dirty_span_overflow) {
+            span_num = 0;
+            for (size_t dirty_index = 0; dirty_index < lighting_context_current->dirty_num;
+                 dirty_index++) {
+                const lighting_dirty_rect_t *dirty =
+                    &lighting_context_current->dirty[dirty_index];
+                if (y >= dirty->y0 && y < dirty->y1) {
+                    fallback_spans[span_num++] = (lighting_dirty_span_t){dirty->x0, dirty->x1};
+                }
+            }
+            spans = fallback_spans;
+        } else {
+            spans = lighting_context_current->dirty_spans +
+                    (size_t)y * LIGHTING_MAX_DIRTY_SPANS;
+            span_num = lighting_context_current->dirty_span_num[y];
+        }
+
+        for (size_t span_index = 0; span_index < span_num; span_index++) {
+            const lighting_dirty_span_t *span = &spans[span_index];
+            int x_start = MAX(min_x, span->x0);
+            int x_end = MIN(max_x, span->x1 - 1);
+            if (x_start > x_end) {
                 continue;
             }
 
@@ -2644,6 +2846,8 @@ void lighting_show_surface(SDL_Surface *destination,
 #undef structure_illumination_cache
 #undef structure_blur_row
 #undef structure_rows_valid
+#undef lighting_dirty_spans
+#undef lighting_dirty_span_num
 #undef structure_illumination_cache_valid
 #undef light_samples_num
 #undef lighting_width

@@ -229,7 +229,11 @@ bool lighting_select_level(int depth);
 void lighting_set_level_mask(uint16_t mask);
 void lighting_level_scroll(int dz);
 bool lighting_needs_update(void);
-/** Translate cached screen-space lighting and dirty newly exposed pixels. */
+/** Return the primary lighting viewport dimensions when its cache exists. */
+bool lighting_viewport_size_get(int *width, int *height);
+/** Dirty a viewport-relative rectangle in one physical map depth. */
+void lighting_dirty_screen_rect(int depth, int x0, int y0, int x1, int y1);
+/** Translate cached lighting and dirty newly exposed screen pixels. */
 void lighting_scroll(int screen_dx, int screen_dy);
 void lighting_draw_quad(const lighting_vertex_t vertices[4]);
 void lighting_render(SDL_Surface *destination);
