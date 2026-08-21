@@ -116,21 +116,20 @@ class WorkflowContractTests(unittest.TestCase):
                     )
                 self.assertFalse((ROOT / module / ".releaserc.json").exists())
 
-    def test_semantic_release_follows_successful_current_main_check(self) -> None:
+    def test_semantic_release_follows_successful_current_release_branch_check(self) -> None:
         workflow = self.text("release.yml")
         self.assertIn("  workflow_dispatch:\n", workflow)
-        self.assertIn("  workflow_run:\n", workflow)
-        self.assertIn("    workflows: [Check]\n", workflow)
-        self.assertIn("    types: [completed]\n", workflow)
-        self.assertIn("github.event.workflow_run.event == 'push'", workflow)
-        self.assertIn("github.event.workflow_run.conclusion == 'success'", workflow)
-        self.assertIn("github.event.workflow_run.head_branch != ''", workflow)
+        self.assertIn("  push:\n", workflow)
+        self.assertIn("      - main\n", workflow)
+        self.assertIn("      - '[0-9]+.[0-9]+.x'\n", workflow)
         self.assertIn("ATRINIK_RELEASE_BRANCH", workflow)
         self.assertIn("RELEASE_TRIGGER_SHA", workflow)
         self.assertIn('test "${commit}" = "${RELEASE_TRIGGER_SHA}"', workflow)
         self.assertIn('refs/remotes/origin/${RELEASE_BRANCH}', workflow)
         self.assertIn('select(.name == "Classic validation"', workflow)
-        self.assertIn('test "${GITHUB_REF}" = refs/heads/main', workflow)
+        self.assertIn('test "${GITHUB_REF}" = "refs/heads/${RELEASE_BRANCH}"', workflow)
+        self.assertIn('check_state=$(gh api', workflow)
+        self.assertIn('Classic validation did not complete', workflow)
         self.assertIn("node tools/tests/test_release_policy.cjs", workflow)
         self.assertIn('export GITHUB_REF="refs/heads/${ATRINIK_RELEASE_BRANCH}"', workflow)
         self.assertIn('export GITHUB_REF_NAME="${ATRINIK_RELEASE_BRANCH}"', workflow)
@@ -348,7 +347,7 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn("invalid material-tag audit result", result.stderr)
             self.assertEqual(log, "")
 
-    def test_release_rebinds_current_main_after_waiting_for_bundle(self) -> None:
+    def test_release_rebinds_current_release_branch_after_waiting_for_bundle(self) -> None:
         workflow = self.text("release.yml")
         bundle = workflow.index("Require the exact durable dependency bundle")
         rebind = workflow.index("Rebind release mutation to the current release branch")

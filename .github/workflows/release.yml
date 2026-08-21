@@ -1,9 +1,10 @@
 name: Semantic Release
 
 on:
-  workflow_run:
-    workflows: [Check]
-    types: [completed]
+  push:
+    branches:
+      - main
+      - '[0-9]+.[0-9]+.x'
   workflow_dispatch:
 
 permissions:
@@ -20,36 +21,25 @@ concurrency:
 jobs:
   release:
     name: Semantic release
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch != '')
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
-      ATRINIK_RELEASE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+      ATRINIK_RELEASE_BRANCH: ${{ github.ref_name }}
     steps:
       - name: Require a supported release branch and workflow definition
         env:
-          RELEASE_EVENT: ${{ github.event_name }}
-          RELEASE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
-          RELEASE_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+          RELEASE_BRANCH: ${{ github.ref_name }}
+          RELEASE_TRIGGER_SHA: ${{ github.sha }}
         run: |
           [[ ${RELEASE_BRANCH} == main || ${RELEASE_BRANCH} =~ ^[0-9]+\.[0-9]+\.x$ ]]
-          if test "${RELEASE_EVENT}" = workflow_run; then
-            test "${GITHUB_REF}" = refs/heads/main
-          else
-            test "${GITHUB_REF}" = "refs/heads/${RELEASE_BRANCH}"
-          fi
-          if test "${RELEASE_EVENT}" = workflow_run; then
-            test -n "${RELEASE_TRIGGER_SHA}"
-          fi
-      - name: Check out the validated release commit
+          test "${GITHUB_REF}" = "refs/heads/${RELEASE_BRANCH}"
+          test -n "${RELEASE_TRIGGER_SHA}"
+      - name: Check out the release commit from the protected branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
@@ -59,20 +49,36 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_EVENT: ${{ github.event_name }}
-          RELEASE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          RELEASE_BRANCH: ${{ github.ref_name }}
           RELEASE_REPOSITORY: ${{ github.repository }}
-          RELEASE_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+          RELEASE_TRIGGER_SHA: ${{ github.sha }}
         run: |
           commit=$(git rev-parse HEAD)
           test "${commit}" = "$(git rev-parse "refs/remotes/origin/${RELEASE_BRANCH}")"
-          if test "${RELEASE_EVENT}" = workflow_run; then
-            test "${commit}" = "${RELEASE_TRIGGER_SHA}"
-          fi
-          successful=$(gh api \
-            -H 'Accept: application/vnd.github+json' \
-            "repos/${RELEASE_REPOSITORY}/commits/${commit}/check-runs?per_page=100" \
-            --jq '[.check_runs[] | select(.name == "Classic validation" and .conclusion == "success" and .app.id == 15368)] | length')
-          test "${successful}" -ge 1
+          test "${commit}" = "${RELEASE_TRIGGER_SHA}"
+          for attempt in {1..30}; do
+            check_state=$(gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "repos/${RELEASE_REPOSITORY}/commits/${commit}/check-runs?per_page=100" \
+              --jq '[.check_runs[] | select(.name == "Classic validation" and .app.id == 15368)] | sort_by(.id) | .[-1] |
+                if . == null then "pending"
+                elif .status != "completed" then "pending"
+                elif .conclusion == "success" then "success"
+                else "failure"
+                end')
+            case "${check_state}" in
+              success) break ;;
+              failure) echo "Classic validation failed for ${commit}" >&2; exit 1 ;;
+              pending)
+                if test "${attempt}" -eq 30; then
+                  echo "Classic validation did not complete for ${commit}" >&2
+                  exit 1
+                fi
+                sleep 30
+                ;;
+              *) echo "unexpected Classic validation state: ${check_state}" >&2; exit 1 ;;
+            esac
+          done
           python3 tools/verify_import_history.py
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -95,16 +101,13 @@ jobs:
           done
       - name: Rebind release mutation to the current release branch
         env:
-          RELEASE_EVENT: ${{ github.event_name }}
-          RELEASE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
-          RELEASE_TRIGGER_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+          RELEASE_BRANCH: ${{ github.ref_name }}
+          RELEASE_TRIGGER_SHA: ${{ github.sha }}
         run: |
           git fetch --no-tags origin "${RELEASE_BRANCH}"
           commit=$(git rev-parse HEAD)
           test "${commit}" = "$(git rev-parse "refs/remotes/origin/${RELEASE_BRANCH}")"
-          if test "${RELEASE_EVENT}" = workflow_run; then
-            test "${commit}" = "${RELEASE_TRIGGER_SHA}"
-          fi
+          test "${commit}" = "${RELEASE_TRIGGER_SHA}"
       - id: pending-release
         name: Detect an incomplete semantic release
         env:

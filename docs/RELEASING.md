@@ -301,7 +301,9 @@ not publish an untested first release. Semantic Release remained manual-only
 until a complete post-merge rehearsal succeeded and an administrator
 live-audited repository immutable releases as enabled through the governance
 rollout. The separate activation change then added only the successful current
-`main` Check trigger.
+release-branch Check gate. Automatic publication now starts from protected
+pushes and waits for that exact commit's validation result before mutating
+release state.
 
 The first automatic analysis must produce `v5.6.0` from the already-merged
 unified release work. Imported component features, breaking markers, and old

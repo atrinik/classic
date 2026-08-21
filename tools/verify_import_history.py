@@ -420,7 +420,8 @@ def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> N
     head_first_parent_commits = first_parent_commits("HEAD")
     release_config = load_release_config()
     require(
-        release_config.get("branches") == ["main"],
+        release_config.get("branches")
+        == ["+([0-9]).+([0-9]).x", "main"],
         "unexpected release branches",
     )
     require(release_config.get("tagFormat") == "v${version}", "unexpected tag format")
@@ -449,7 +450,7 @@ def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> N
     expected_rules = [
         {"breaking": True, "release": "minor"},
         {"type": "feat", "release": "minor"},
-        {"type": "*", "release": "patch"},
+        {"type": "*", "release": "minor"},
     ]
     rules_by_hash: dict[str, list[dict[str, Any]]] = {}
     for rule in release_rules[1:]:
