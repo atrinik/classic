@@ -1143,11 +1143,15 @@ static void socket_quic_schedule_event(socket_t *sc) {
     sc->quic_event_deadline_ms = datetime_monotonic_ms() + delay;
 }
 
-static bool socket_quic_application_pending(socket_t *sc) {
+static bool socket_quic_buffered_pending(socket_t *sc) {
     return sc->quic != NULL &&
            (SSL_has_pending(sc->quic) != 0 ||
-            (sc->game_stream != NULL && SSL_has_pending(sc->game_stream->ssl) != 0) ||
-            SSL_get_accept_stream_queue_len(sc->quic) != 0);
+            (sc->game_stream != NULL && SSL_has_pending(sc->game_stream->ssl) != 0));
+}
+
+static bool socket_quic_application_pending(socket_t *sc) {
+    return socket_quic_buffered_pending(sc) ||
+           (sc->quic != NULL && SSL_get_accept_stream_queue_len(sc->quic) != 0);
 }
 
 unsigned int socket_quic_timeout(socket_t *sc, unsigned int maximum_ms) {
@@ -1155,7 +1159,7 @@ unsigned int socket_quic_timeout(socket_t *sc, unsigned int maximum_ms) {
     if (sc->transport != SOCKET_TRANSPORT_QUIC_CONNECTION) {
         return maximum_ms;
     }
-    if (socket_quic_application_pending(sc)) {
+    if (socket_quic_buffered_pending(sc)) {
         return 0;
     }
     if (sc->quic_event_deadline_ms == UINT64_MAX) {
@@ -1175,8 +1179,7 @@ bool socket_quic_timer_due(socket_t *sc) {
         sc->quic_event_deadline_ms == UINT64_MAX) {
         return false;
     }
-    return sc->quic_event_deadline_ms == 0 ||
-           datetime_monotonic_ms() >= sc->quic_event_deadline_ms;
+    return sc->quic_event_deadline_ms == 0 || datetime_monotonic_ms() >= sc->quic_event_deadline_ms;
 }
 
 bool socket_quic_service(socket_t *sc, bool network_ready, bool app_write_pending) {

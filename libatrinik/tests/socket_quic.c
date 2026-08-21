@@ -80,6 +80,38 @@ static void quic_test_timeout_deadline(void) {
     REQUIRE(socket_quic_timeout(&connection, 5000U) == 0U);
 }
 
+static void quic_test_pending_stream_timeout(socket_t *client, socket_t *server) {
+    socket_stream_t *asset = socket_stream_open(client, SOCKET_STREAM_ASSET);
+    REQUIRE(asset != NULL);
+
+    uint8_t value = UINT8_C(0xa5);
+    size_t written = 0;
+    uint64_t deadline = datetime_monotonic_ms() + QUIC_TEST_TIMEOUT_MS;
+    while (SSL_get_accept_stream_queue_len(server->quic) == 0 &&
+           datetime_monotonic_ms() < deadline) {
+        if (written == 0) {
+            socket_stream_result_t result =
+                socket_stream_write(asset, &value, sizeof(value), &written);
+            REQUIRE(result == SOCKET_STREAM_RESULT_OK ||
+                    result == SOCKET_STREAM_RESULT_WOULD_BLOCK);
+        }
+
+        bool client_ready = socket_wait(client, true, true, 1);
+        socket_quic_service(client, client_ready, true);
+        bool server_ready = socket_wait(server, true, true, 1);
+        socket_quic_service(server, server_ready, false);
+    }
+
+    REQUIRE(written == sizeof(value));
+    REQUIRE(SSL_get_accept_stream_queue_len(server->quic) != 0);
+
+    /* The transport loop cannot classify this queue; the asset lane does so
+     * on the next simulation pass. It must not turn the wait into a spin. */
+    server->quic_event_deadline_ms = UINT64_MAX;
+    REQUIRE(socket_quic_timeout(server, 1000U) == 1000U);
+    socket_stream_destroy(asset);
+}
+
 static void *quic_test_server_main(void *data) {
     quic_test_server_t *server = data;
     uint64_t deadline = datetime_monotonic_ms() + QUIC_TEST_TIMEOUT_MS;
@@ -193,6 +225,8 @@ static void quic_test_run(size_t count, bool delay_accept) {
     }
     REQUIRE(pthread_join(server_thread, NULL) == 0);
     REQUIRE(!server.failed);
+
+    quic_test_pending_stream_timeout(clients[0].connection, accepted[0]);
 
     /* Force an otherwise idle connection's QUIC timer due. The server-side
      * service call must make progress without a readable UDP handle. */
