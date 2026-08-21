@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -187,21 +187,12 @@ void packet_compress(packet_struct *packet) {
 #endif
 }
 
-/**
- * Enables NDELAY on the specified packet.
- */
-void packet_enable_ndelay(packet_struct *packet) {
-    TOOLKIT_PROTECT();
-    packet->ndelay = 1;
-}
-
 packet_struct *packet_dup(packet_struct *packet) {
     packet_struct *cp;
 
     TOOLKIT_PROTECT();
 
     cp = packet_new(packet->type, packet->size, packet->expand);
-    cp->ndelay = packet->ndelay;
     cp->limit = packet->limit;
     cp->error = packet->error;
 
