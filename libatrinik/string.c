@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -170,19 +170,134 @@ size_t string_split(char *str, char *array[], size_t array_size, char sep) {
 }
 
 /**
- * Replaces any unprintable character in the given buffer with a space.
+ * Decode one UTF-8 scalar value without reading beyond the supplied buffer.
+ *
+ * @param str
+ * The beginning of the sequence.
+ * @param remaining
+ * Number of bytes available from 'str'.
+ * @param[out] width
+ * Number of bytes in the decoded sequence.
+ * @param[out] codepoint
+ * Decoded Unicode scalar value.
+ * @return
+ * TRUE if the sequence is valid UTF-8, FALSE otherwise.
+ */
+static bool string_utf8_decode(const unsigned char *str,
+                               size_t remaining,
+                               size_t *width,
+                               uint32_t *codepoint) {
+    unsigned char leading;
+    size_t continuation;
+    uint32_t value;
+
+    if (str == NULL || remaining == 0 || width == NULL || codepoint == NULL) {
+        return false;
+    }
+
+    *width = 1;
+    leading = str[0];
+    if (leading < 0x80U) {
+        *width = 1;
+        *codepoint = leading;
+        return true;
+    }
+
+    if (leading >= 0xc2U && leading <= 0xdfU) {
+        continuation = 1;
+        value = leading & 0x1fU;
+    } else if (leading >= 0xe0U && leading <= 0xefU) {
+        continuation = 2;
+        value = leading & 0x0fU;
+    } else if (leading >= 0xf0U && leading <= 0xf4U) {
+        continuation = 3;
+        value = leading & 0x07U;
+    } else {
+        return false;
+    }
+
+    if (remaining <= continuation) {
+        return false;
+    }
+
+    for (size_t i = 1; i <= continuation; i++) {
+        if ((str[i] & 0xc0U) != 0x80U) {
+            return false;
+        }
+
+        value = (value << 6U) | (str[i] & 0x3fU);
+    }
+
+    if ((leading == 0xe0U && value < 0x800U) ||
+        (leading == 0xedU && value >= 0xd800U) ||
+        (leading == 0xf0U && value < 0x10000U) ||
+        value > 0x10ffffU) {
+        return false;
+    }
+
+    *width = continuation + 1;
+    *codepoint = value;
+    return true;
+}
+
+/**
+ * Check whether a decoded scalar is safe to retain in player text.
+ *
+ * This intentionally does not depend on the process locale. In addition to
+ * C0/C1 controls, reject invisible formatting controls, line separators, and
+ * Unicode noncharacters that could make output or logs ambiguous.
+ */
+static bool string_utf8_codepoint_printable(uint32_t codepoint) {
+    if (codepoint < 0x20U || (codepoint >= 0x7fU && codepoint <= 0x9fU) ||
+        (codepoint >= 0x200bU && codepoint <= 0x200fU) ||
+        (codepoint == 0x2028U || codepoint == 0x2029U) ||
+        (codepoint >= 0x202aU && codepoint <= 0x202eU) ||
+        (codepoint >= 0x2060U && codepoint <= 0x2064U) ||
+        (codepoint >= 0x2066U && codepoint <= 0x206fU) ||
+        codepoint == 0xfeffU ||
+        (codepoint >= 0xfdd0U && codepoint <= 0xfdefU) ||
+        (codepoint & 0xffffU) >= 0xfffeU) {
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Check ASCII whitespace without allowing a UTF-8 byte to be interpreted by
+ * the current locale's character classification table.
+ */
+static bool string_is_ascii_whitespace(unsigned char value) {
+    return value < 0x80U && isspace(value);
+}
+
+/**
+ * Replaces malformed UTF-8 and unprintable characters in the given buffer
+ * with spaces. Valid printable UTF-8 sequences are preserved byte-for-byte.
+ *
  * @param buf
  * The buffer to modify.
  */
 void string_replace_unprintable_chars(char *buf) {
-    char *p;
+    size_t length;
+    size_t pos;
 
     TOOLKIT_PROTECT();
 
-    for (p = buf; *p != '\0'; p++) {
-        if (*p < ' ' || *p > '~') {
-            *p = ' ';
+    length = strlen(buf);
+    for (pos = 0; pos < length;) {
+        size_t width = 1;
+        uint32_t codepoint;
+
+        if (!string_utf8_decode((const unsigned char *)buf + pos,
+                                length - pos,
+                                &width,
+                                &codepoint) ||
+            !string_utf8_codepoint_printable(codepoint)) {
+            memset(buf + pos, ' ', width);
         }
+
+        pos += width;
     }
 }
 
@@ -262,11 +377,11 @@ char *string_whitespace_trim(char *str) {
     cp = str;
     len = strlen(cp);
 
-    while (len > 0 && isspace((unsigned char)cp[len - 1])) {
+    while (len > 0 && string_is_ascii_whitespace((unsigned char)cp[len - 1])) {
         cp[--len] = '\0';
     }
 
-    while (len > 0 && isspace((unsigned char)*cp)) {
+    while (len > 0 && string_is_ascii_whitespace((unsigned char)*cp)) {
         cp++;
         len--;
     }
@@ -291,8 +406,8 @@ char *string_whitespace_squeeze(char *str) {
     TOOLKIT_PROTECT();
 
     for (r = 0, w = 0; str[r] != '\0'; r++) {
-        if (isspace(str[r])) {
-            if (!w || !isspace(str[w - 1])) {
+        if (string_is_ascii_whitespace((unsigned char)str[r])) {
+            if (!w || !string_is_ascii_whitespace((unsigned char)str[w - 1])) {
                 str[w++] = ' ';
             }
         } else {
@@ -408,7 +523,7 @@ void string_skip_word(const char *str, size_t *i, int dir) {
 
     /* Skip whitespace. */
     while (((dir == -1 && *i != 0) || (dir == 1 && str[*i] != '\0'))) {
-        if (isspace(str[*i + MIN(0, dir)])) {
+        if (string_is_ascii_whitespace((unsigned char)str[*i + MIN(0, dir)])) {
             if (!whitespace) {
                 break;
             }
@@ -642,7 +757,7 @@ int string_iswhite(const char *str) {
     TOOLKIT_PROTECT();
 
     while (str && *str != '\0') {
-        if (!isspace(*str)) {
+        if (!string_is_ascii_whitespace((unsigned char)*str)) {
             return 0;
         }
 

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -45,7 +45,8 @@
 #define string_skip_whitespace(str)              \
     do {                                         \
         HARD_ASSERT(str != NULL);                \
-        while (isspace((unsigned char)*(str))) { \
+        while ((unsigned char)*(str) < 0x80U &&  \
+               isspace((unsigned char)*(str))) { \
             (str)++;                             \
         }                                        \
     } while (0)
@@ -93,6 +94,14 @@ void string_replace(const char *src,
                     size_t resultsize);
 void string_replace_char(char *str, const char *key, const char replacement);
 size_t string_split(char *str, char *array[], size_t array_size, char sep);
+/**
+ * Replace malformed UTF-8, control characters, and other non-printable
+ * codepoints in the given buffer with spaces. Valid printable UTF-8 is
+ * preserved byte-for-byte.
+ *
+ * @param buf
+ * The buffer to modify.
+ */
 void string_replace_unprintable_chars(char *buf);
 char *string_format_number_comma(uint64_t num);
 void string_toupper(char *str);
