@@ -402,6 +402,22 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('refs/tags/${RELEASE_TAG}^{commit}', workflow)
         self.assertIn('select(.name == "Classic validation"', workflow)
         self.assertNotIn("immutable-releases", workflow)
+        trusted_verifier_start = workflow.index(
+            "      - name: Check out the trusted release verifier"
+        )
+        trusted_verifier_end = workflow.index(
+            "      - uses: actions/download-artifact", trusted_verifier_start
+        )
+        trusted_verifier = workflow[trusted_verifier_start:trusted_verifier_end]
+        self.assertNotIn("if: github.ref_type == 'branch'", trusted_verifier)
+        self.assertIn("ref: ${{ github.sha }}", trusted_verifier)
+        self.assertEqual(
+            workflow.count(
+                "python3 build/release-automation/tools/release/sync_release_assets.py"
+            ),
+            3,
+        )
+        self.assertNotIn("python3 tools/release/sync_release_assets.py", workflow)
         self.assertIn("--verify-only", workflow)
         self.assertIn(
             "RELEASE_ID: ${{ steps.final-assets.outputs.release_id }}", workflow
