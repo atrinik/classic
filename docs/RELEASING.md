@@ -443,9 +443,10 @@ may receive at most two automatic retries after consecutive
 `blocked` disposition with the class and count in the workflow summary, so
 successful main validation does not waste another release run. Other classes
 are surfaced in the summary and continue through their existing exact
-disposition; only the server-image build class receives this automatic retry
-cap. Operators must inspect the recorded failed job boundary before changing
-any retry policy.
+disposition; tag-bound runs and current-main recovery runs count only when their
+commits are on the draft tag's lineage to current `main`, and only the server-
+image build class receives this automatic retry cap. Operators must inspect the
+recorded failed job boundary before changing any retry policy.
 
 Before upgrading a production server, snapshot its state and retain the exact
 prior `content@main` Classic artifact coordinate. Roll back by stopping the

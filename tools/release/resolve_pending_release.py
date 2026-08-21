@@ -445,7 +445,7 @@ def recent_failure_classes(
     current_head: str,
     request: Callable[[str], object],
 ) -> list[str]:
-    """Classify the newest failed tag-bound runs for bounded retry policy."""
+    """Classify the newest failed runs on the tag-to-main release lineage."""
 
     classes: list[str] = []
     inspected = 0
@@ -459,7 +459,7 @@ def recent_failure_classes(
             continue
         head_branch = listed_run.get("head_branch")
         listed_sha = listed_run.get("head_sha")
-        if head_branch != tag and listed_sha != tag_commit:
+        if head_branch not in {tag, "main"} and listed_sha != tag_commit:
             continue
         run_id = listed_run.get("id")
         if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:

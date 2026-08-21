@@ -518,6 +518,49 @@ class ResolvePendingReleaseTests(unittest.TestCase):
                 ["server-image-build", "server-image-build", "server-image-build"],
             )
 
+    def test_recent_main_recovery_runs_are_classified_on_tag_lineage(self) -> None:
+        runs = {
+            "total_count": 1,
+            "workflow_runs": [
+                {
+                    "id": 2,
+                    "name": "Package Release",
+                    "path": ".github/workflows/package-release.yml",
+                    "event": "workflow_dispatch",
+                    "conclusion": "failure",
+                    "head_branch": "main",
+                    "head_sha": "1" * 40,
+                }
+            ],
+        }
+        run = {
+            "name": "Package Release",
+            "path": ".github/workflows/package-release.yml",
+            "event": "workflow_dispatch",
+            "conclusion": "failure",
+            "head_sha": "1" * 40,
+            "head_repository": {"full_name": "atrinik/classic"},
+        }
+        jobs = {
+            "total_count": 1,
+            "jobs": [{"name": resolve_pending_release.IMAGE_JOB, "conclusion": "failure"}],
+        }
+
+        def request(path: str) -> object:
+            if "/actions/workflows/" in path:
+                return runs
+            if "/jobs?" in path:
+                return jobs
+            return run
+
+        with patch.object(resolve_pending_release, "is_ancestor", return_value=True):
+            self.assertEqual(
+                resolve_pending_release.recent_failure_classes(
+                    "atrinik/classic", "v5.8.0", "0" * 40, "1" * 40, request
+                ),
+                ["server-image-build"],
+            )
+
     def test_duplicate_failed_run_jobs_are_ambiguous(self) -> None:
         run = {
             "name": "Package Release",
