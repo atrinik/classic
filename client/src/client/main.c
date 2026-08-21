@@ -215,7 +215,6 @@ static void keepalive_send(void) {
 
     packet = packet_new(SERVER_CMD_KEEPALIVE, 0, 0);
     packet_writer_write_uint32(packet, keepalive->id);
-    packet_enable_ndelay(packet);
     socket_send_packet(packet);
     last_keepalive = keepalive->ticks;
 }
