@@ -439,7 +439,6 @@ void esrv_draw_look(object *pl) {
                      UPD_ANIMSPEED | UPD_NROF | UPD_GLOW;
 
     packet_struct *packet = packet_new(CLIENT_CMD_ITEM, 512, 256);
-    packet_enable_ndelay(packet);
     packet_debug_data(packet, 0, "Delete inventory flag");
     packet_writer_write_uint8(packet, 1);
     packet_debug_data(packet, 0, "Inventory to delete ID");
@@ -566,7 +565,6 @@ void esrv_close_container(object *pl, object *op) {
     SOFT_ASSERT(op != NULL, "op is NULL");
 
     packet = packet_new(CLIENT_CMD_ITEM, 32, 0);
-    packet_enable_ndelay(packet);
 
     if (CONTR(pl)->cs->socket_version >= 1061) {
         packet_debug_data(packet, 0, "Delete inventory flag");
@@ -596,7 +594,6 @@ void esrv_send_inventory(object *pl, object *op) {
     object *tmp;
 
     packet = packet_new(CLIENT_CMD_ITEM, 128, 256);
-    packet_enable_ndelay(packet);
 
     if (CONTR(pl)->cs->socket_version >= 1061) {
         packet_debug_data(packet, 0, "Delete inventory flag");
@@ -663,7 +660,6 @@ static void esrv_update_item_send(int flags, object *pl, object *op) {
     }
 
     packet = packet_new(CLIENT_CMD_ITEM_UPDATE, 64, 128);
-    packet_enable_ndelay(packet);
     packet_debug_data(packet, 0, "Flags");
     packet_writer_write_uint16(packet, flags);
     add_object_to_packet(packet, op, pl, CMD_APPLY_ACTION_NORMAL, flags, 0);
@@ -719,7 +715,6 @@ static void esrv_send_item_send(object *pl, object *op) {
     }
 
     packet = packet_new(CLIENT_CMD_ITEM, 64, 128);
-    packet_enable_ndelay(packet);
 
     if (CONTR(pl)->cs->socket_version >= 1061) {
         packet_debug_data(packet, 0, "Delete inventory flag");
@@ -789,7 +784,6 @@ static void esrv_del_item_send(object *pl, object *op) {
     }
 
     packet = packet_new(CLIENT_CMD_ITEM_DELETE, 16, 0);
-    packet_enable_ndelay(packet);
     packet_debug_data(packet, 0, "Object ID");
     packet_writer_write_uint32(packet, op->count);
     socket_send_packet(CONTR(pl)->cs, packet);
