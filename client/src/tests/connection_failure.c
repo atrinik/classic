@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  ************************************************************************/
 
 #include <connection_failure.h>
@@ -30,6 +30,8 @@ int main(void) {
         {SOCKET_CONNECT_FAILURE_SERVER_OFFLINE, "server is offline"},
         {SOCKET_CONNECT_FAILURE_TIMEOUT, "timed out"},
         {SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION, "incompatible"},
+        {SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE, "connection service"},
+        {SOCKET_CONNECT_FAILURE_RENDEZVOUS_PROTOCOL, "rendezvous protocols"},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         socket_connect_failure_t failure = {.code = cases[i].code};

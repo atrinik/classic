@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -1536,6 +1536,16 @@ START_TEST(test_metaserver_publish_retry_and_daily_budget) {
     server_monotonic_t budget_refill = {budget_now.microseconds +
                                         METASERVER_ATTEMPT_RATE_REFILL_SECONDS * UINT64_C(1000000)};
     ck_assert(metaserver_attempt_budget_consume(&budget, budget_refill, &wait_ms));
+
+    metaserver_attempt_budget_init(&budget, budget_now);
+    ck_assert(metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+    ck_assert(metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+    ck_assert(!metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+    metaserver_attempt_budget_reset(&budget, budget_now);
+    ck_assert_uint_eq(budget.tokens, METASERVER_ATTEMPT_RATE_CAPACITY);
+    ck_assert(metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+    ck_assert(metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
+    ck_assert(!metaserver_attempt_budget_consume(&budget, budget_now, &wait_ms));
 
     metaserver_attempt_budget_init(&budget, budget_now);
     unsigned int rendezvous_attempts = 0;
