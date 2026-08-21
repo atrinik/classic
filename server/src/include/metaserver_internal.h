@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -22,6 +22,8 @@
 #define METASERVER_RENDEZVOUS_RETRY_MAX_MS 3600000U
 #define METASERVER_RENDEZVOUS_RETRY_AFTER_MAX_SECONDS 86400U
 #define METASERVER_RENDEZVOUS_STABLE_MS 60000U
+#define METASERVER_RENDEZVOUS_HEARTBEAT_MS 300000U
+#define METASERVER_RENDEZVOUS_HEARTBEAT_RETRY_MS 20U
 #define METASERVER_RENDEZVOUS_CONNECT_TIMEOUT_MS 2000L
 #define METASERVER_RENDEZVOUS_UPGRADE_TIMEOUT_MS 10000L
 
@@ -97,6 +99,8 @@ void metaserver_attempt_budget_init(metaserver_attempt_budget_t *budget, server_
 bool metaserver_attempt_budget_consume(metaserver_attempt_budget_t *budget,
                                        server_monotonic_t now,
                                        uint32_t *wait_ms);
+/** Restore the full reconnect allowance after a stable rendezvous session. */
+void metaserver_attempt_budget_reset(metaserver_attempt_budget_t *budget, server_monotonic_t now);
 
 uint32_t metaserver_publish_heartbeat_delay_seconds(uint32_t heartbeat_seconds,
                                                     uint32_t random_value);
