@@ -1281,8 +1281,8 @@ static uint64_t socket_server_transport_timeout_us(void) {
 }
 
 static bool socket_server_service_connection(socket_struct *cs,
-                                              bool network_ready,
-                                              socket_server_transport_stats_t *stats) {
+                                             bool network_ready,
+                                             socket_server_transport_stats_t *stats) {
     bool transport_ready = socket_quic_timeout(cs->sc, 1U) == 0;
     bool timer_due = socket_quic_timer_due(cs->sc);
     bool application_pending = cs->packets != NULL || socket_assets_pending(cs);
@@ -1344,9 +1344,8 @@ static void socket_server_service_client_connections(socket_server_transport_sta
         visited++;
     }
 
-    client_service_cursor = client_sockets_count == 0
-                                ? 0
-                                : (start + visited) % client_sockets_count;
+    client_service_cursor =
+        client_sockets_count == 0 ? 0 : (start + visited) % client_sockets_count;
 }
 
 static void socket_server_service_player_connections(socket_server_transport_stats_t *stats) {
@@ -1474,8 +1473,8 @@ bool socket_server_process(void) {
 
     uint64_t pending_queue_age_us = socket_server_pending_queue_age_us();
     uint64_t wait_timeout_us = transport_first_pass ? 0 : socket_server_transport_timeout_us();
-    bool application_wake_requested = application_wakeup_armed &&
-                                      socket_server_pending_application();
+    bool application_wake_requested =
+        application_wakeup_armed && socket_server_pending_application();
     uint64_t wait_started_us = datetime_monotonic_us();
     struct timeval timeout = {
         .tv_sec = (long)(wait_timeout_us / UINT64_C(1000000)),
@@ -1499,8 +1498,8 @@ bool socket_server_process(void) {
 
     bool listener_ready = false;
     for (size_t i = 0; i < arraysize(quic_server_sockets); i++) {
-        if (quic_server_sockets[i] != NULL &&
-            ready >= 0 && FD_ISSET(socket_fd(quic_server_sockets[i]), &fds_read)) {
+        if (quic_server_sockets[i] != NULL && ready >= 0 &&
+            FD_ISSET(socket_fd(quic_server_sockets[i]), &fds_read)) {
             listener_ready = true;
             if (socket_server_quic_punch_receive(quic_server_sockets[i])) {
                 continue;

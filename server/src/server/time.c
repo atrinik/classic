@@ -178,9 +178,8 @@ static void log_time(long process_utime) {
 }
 
 /** Calculate the remaining time before the next non-transport pass. */
-static void sleep_delta_remaining(const struct timeval *new_time,
-                                  long *sleep_sec,
-                                  long *sleep_usec) {
+static void
+sleep_delta_remaining(const struct timeval *new_time, long *sleep_sec, long *sleep_usec) {
     *sleep_sec = last_time.tv_sec - new_time->tv_sec;
     *sleep_usec = max_time / max_time_multiplier - (new_time->tv_usec - last_time.tv_usec);
 

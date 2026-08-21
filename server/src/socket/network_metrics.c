@@ -264,8 +264,8 @@ void server_metrics_stats(char *buffer, size_t size) {
                 size,
                 "\nTransport: waits=%" PRIu64 " simulation=%" PRIu64 " listener=%" PRIu64
                 " connection=%" PRIu64 " quic_timer=%" PRIu64 " application=%" PRIu64
-                " errors=%" PRIu64 " ready_connections=%" PRIu64
-                " quic_timer_services=%" PRIu64 " work_limit_hits=%" PRIu64,
+                " errors=%" PRIu64 " ready_connections=%" PRIu64 " quic_timer_services=%" PRIu64
+                " work_limit_hits=%" PRIu64,
                 (uint64_t)transport_wait_count,
                 metrics.transport_wake_reasons[SERVER_TRANSPORT_WAKE_SIMULATION],
                 metrics.transport_wake_reasons[SERVER_TRANSPORT_WAKE_LISTENER],

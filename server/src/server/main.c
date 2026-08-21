@@ -321,7 +321,8 @@ void clean_tmp_files(void) {
                 if (new_save_map(m, 0) == 0) {
                     clean_tmp_map(m);
                 } else {
-                    LOG(BUG, "Keeping unsaved map %s resident during temporary-file cleanup.",
+                    LOG(BUG,
+                        "Keeping unsaved map %s resident during temporary-file cleanup.",
                         m->path != NULL ? m->path : "<runtime>");
                 }
             }
