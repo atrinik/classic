@@ -1352,7 +1352,6 @@ void draw_client_map2(object *pl) {
     packet = packet_new(CLIENT_CMD_MAP, 0, 512);
     packet_sound = packet_new(CLIENT_CMD_SOUND_AMBIENT, 0, 256);
 
-    packet_enable_ndelay(packet);
     packet_debug_data(packet, 0, "Map update command type");
     packet_writer_write_uint8(packet, CONTR(pl)->map_update_cmd);
 
@@ -2533,7 +2532,6 @@ void draw_client_map2(object *pl) {
     uint16_t continuation_packet_count = 0;
     for (;;) {
         packet_struct *continuation = packet_new(CLIENT_CMD_MAP, 0, 512);
-        packet_enable_ndelay(continuation);
         packet_writer_write_uint8(continuation, MAP_UPDATE_CMD_PARTIAL);
         packet_writer_write_uint8(continuation, pl->x);
         packet_writer_write_uint8(continuation, pl->y);
@@ -2882,7 +2880,6 @@ void socket_command_keepalive(socket_struct *ns,
     uint32_t id = packet_reader_read_uint32(&reader);
 
     packet_struct *packet = packet_new(CLIENT_CMD_KEEPALIVE, 20, 0);
-    packet_enable_ndelay(packet);
     packet_debug_data(packet, 0, "Keepalive ID");
     packet_writer_write_uint32(packet, id);
     socket_send_packet(ns, packet);
@@ -2942,7 +2939,6 @@ void send_target_command(player *pl) {
     }
 
     packet = packet_new(CLIENT_CMD_TARGET, 64, 64);
-    packet_enable_ndelay(packet);
 
     pl->ob->enemy = NULL;
     pl->ob->enemy_count = 0;
@@ -3392,7 +3388,6 @@ void socket_command_control(socket_struct *ns, player *pl, uint8_t *data, size_t
 
             if (ret == 1) {
                 packet = packet_new(CLIENT_CMD_CONTROL, 256, 256);
-                packet_enable_ndelay(packet);
                 packet_debug_data(packet, 0, "Forwarded data");
                 packet_writer_write_bytes(packet, data, len);
                 socket_send_packet(control_player->cs, packet);
