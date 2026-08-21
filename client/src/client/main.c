@@ -47,6 +47,7 @@
 #include <toolkit/binreloc.h>
 #include <toolkit/datetime.h>
 #include <toolkit/metaserver_url.h>
+#include <keepalive.h>
 #include <cmake.h>
 #include <openssl/crypto.h>
 
@@ -159,106 +160,106 @@ _face_struct FaceList[MAX_FACE_TILES];
 
 /** The message animation structure. */
 struct msg_anim_struct msg_anim;
-/** Last time we sent keepalive command. */
-static uint32_t last_keepalive;
+/** Last monotonic timestamp at which we sent a keepalive command. */
+static uint64_t last_keepalive_us;
 
 /**
  * Command line option settings.
  */
 clioption_settings_struct clioption_settings;
 
-/**
- * Used to keep track of keepalive commands.
- */
-typedef struct keepalive_data_struct {
-    struct keepalive_data_struct *next; ///< Next keepalive data.
-
-    uint32_t ticks; ///< When the keepalive command was sent.
-    uint32_t id; ///< ID of the keepalive command.
-} keepalive_data_struct;
-
-static keepalive_data_struct *keepalive_data; ///< Keepalive data.
-static int keepalive_id; ///< UID for sending keepalives.
-static int keepalive_ping; ///< Last keepalive ping time.
-static int keepalive_ping_avg; ///< Average keepalive ping time.
-static int keepalive_ping_num; ///< Number of keepalive pings.
+/** Keepalive request accounting for the current connection. */
+static client_keepalive_state_t keepalive_state;
 
 /**
  * Reset keepalive data.
  */
 static void keepalive_reset(void) {
-    keepalive_data_struct *keepalive, *tmp;
-
-    last_keepalive = SDL_GetTicks();
-    keepalive_id = 0;
-    keepalive_ping = 0;
-    keepalive_ping_avg = 0;
-    keepalive_ping_num = 0;
-
-    LL_FOREACH_SAFE(keepalive_data, keepalive, tmp) {
-        LL_DELETE(keepalive_data, keepalive);
-        free(keepalive);
-    }
+    client_keepalive_reset(&keepalive_state);
+    last_keepalive_us = datetime_monotonic_us();
 }
 
 /**
  * Send a keepalive packet.
  */
 static void keepalive_send(void) {
-    keepalive_data_struct *keepalive;
     packet_struct *packet;
-
-    keepalive = xmalloc(sizeof(*keepalive));
-    keepalive->ticks = SDL_GetTicks();
-    keepalive->id = ++keepalive_id;
-    LL_PREPEND(keepalive_data, keepalive);
+    uint32_t id;
 
     packet = packet_new(SERVER_CMD_KEEPALIVE, 0, 0);
-    packet_writer_write_uint32(packet, keepalive->id);
-    packet_enable_ndelay(packet);
+    uint64_t now_us = datetime_monotonic_us();
+    client_keepalive_expire(&keepalive_state, now_us);
+    last_keepalive_us = now_us;
+    if (!client_keepalive_start(&keepalive_state, now_us, &id)) {
+        packet_free(packet);
+        LOG(ERROR, "Unable to record keepalive request; packet not sent");
+        return;
+    }
+
+    packet_writer_write_uint32(packet, id);
     socket_send_packet(packet);
-    last_keepalive = keepalive->ticks;
 }
 
 /**
  * Display ping statistics.
  */
 void keepalive_ping_stats(void) {
+    client_keepalive_statistics_t statistics;
+    client_keepalive_expire(&keepalive_state, datetime_monotonic_us());
+    client_keepalive_statistics(&keepalive_state, &statistics);
+
     draw_info(COLOR_WHITE, "\nPing statistics this session:");
     draw_info_format(COLOR_WHITE,
-                     "Keepalive TX: %d, RX: %d, missed: %d",
-                     keepalive_id,
-                     keepalive_ping_num,
-                     keepalive_id - keepalive_ping_num);
-    draw_info_format(COLOR_WHITE, "Average ping: %d", keepalive_ping_avg);
-    draw_info_format(COLOR_WHITE, "Last ping: %d", keepalive_ping);
+                     "Keepalive TX: %" PRIu64 ", on-time RX: %" PRIu64 ", timed out: %" PRIu64,
+                     statistics.tx,
+                     statistics.rx,
+                     statistics.timed_out);
+    draw_info_format(COLOR_WHITE,
+                     "Responses: %" PRIu64 ", late: %" PRIu64 ", duplicate: %" PRIu64
+                     ", unknown: %" PRIu64,
+                     statistics.responses,
+                     statistics.late,
+                     statistics.duplicate,
+                     statistics.unknown);
+    draw_info_format(COLOR_WHITE,
+                     "Application RTT average: %" PRIu64 " ms",
+                     client_keepalive_average_us(&statistics) / UINT64_C(1000));
+    draw_info_format(COLOR_WHITE,
+                     "Last application RTT: %" PRIu64 " ms",
+                     statistics.last_rtt_us / UINT64_C(1000));
+    draw_info(COLOR_WHITE,
+              "Application RTT includes client queueing, server scheduling/processing, "
+              "transport, and client dispatch.");
 }
 
 /** @copydoc socket_command_struct::handle_func */
 void socket_command_keepalive(uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
-    uint32_t id, ticks;
-    keepalive_data_struct *keepalive, *tmp;
-
-    id = packet_reader_read_uint32(&reader);
-    ticks = SDL_GetTicks();
-
-    LL_FOREACH_SAFE(keepalive_data, keepalive, tmp) {
-        if (id == keepalive->id) {
-            LL_DELETE(keepalive_data, keepalive);
-
-            keepalive_ping = ticks - keepalive->ticks;
-            keepalive_ping_num++;
-            keepalive_ping_avg =
-                keepalive_ping_avg + ((keepalive_ping - keepalive_ping_avg) / keepalive_ping_num);
-            free(keepalive);
-
-            return;
-        }
+    uint32_t id = packet_reader_read_uint32(&reader);
+    if (!packet_reader_finish(&reader)) {
+        LOG(PACKET, "Ignoring malformed keepalive response");
+        return;
     }
 
-    LOG(BUG, "Received unknown keepalive ID: %d", id);
+    uint64_t now_us = datetime_monotonic_us();
+    client_keepalive_expire(&keepalive_state, now_us);
+    switch (client_keepalive_receive(&keepalive_state, id, now_us, NULL)) {
+    case CLIENT_KEEPALIVE_RESPONSE_MATCHED:
+        return;
+    case CLIENT_KEEPALIVE_RESPONSE_LATE:
+        LOG(DEBUG, "Received late keepalive ID: %" PRIu32, id);
+        return;
+    case CLIENT_KEEPALIVE_RESPONSE_DUPLICATE:
+        LOG(DEBUG, "Received duplicate keepalive ID: %" PRIu32, id);
+        return;
+    case CLIENT_KEEPALIVE_RESPONSE_CLOCK_REGRESSION:
+        LOG(ERROR, "Ignoring keepalive ID after a monotonic clock regression: %" PRIu32, id);
+        return;
+    case CLIENT_KEEPALIVE_RESPONSE_UNKNOWN:
+        LOG(DEBUG, "Received unknown keepalive ID: %" PRIu32, id);
+        return;
+    }
 }
 
 /**
@@ -891,7 +892,10 @@ int main(int argc, char *argv[]) {
         if (cpl.state > ST_CONNECT) {
             /* Keep the negotiated five-second QUIC idle timeout alive while
              * retaining a short bound on silent peer failure. */
-            if (SDL_GetTicks() - last_keepalive > SOCKET_QUIC_KEEPALIVE_INTERVAL_MS) {
+            uint64_t now_us = datetime_monotonic_us();
+            client_keepalive_expire(&keepalive_state, now_us);
+            if (now_us - last_keepalive_us >
+                (uint64_t)SOCKET_QUIC_KEEPALIVE_INTERVAL_MS * UINT64_C(1000)) {
                 keepalive_send();
             }
 

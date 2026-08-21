@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -219,6 +219,14 @@ bool metaserver_attempt_budget_consume(metaserver_attempt_budget_t *budget,
     }
     *wait_ms = (uint32_t)MIN(milliseconds, UINT32_MAX);
     return false;
+}
+
+void metaserver_attempt_budget_reset(metaserver_attempt_budget_t *budget, server_monotonic_t now) {
+    HARD_ASSERT(budget != NULL);
+
+    budget->tokens = METASERVER_ATTEMPT_RATE_CAPACITY;
+    budget->refill_deadline =
+        metaserver_deadline_after_seconds(now, METASERVER_ATTEMPT_RATE_REFILL_SECONDS);
 }
 
 uint32_t metaserver_publish_heartbeat_delay_seconds(uint32_t heartbeat_seconds,

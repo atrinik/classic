@@ -397,9 +397,19 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('select(.name == "Classic validation"', workflow)
         self.assertNotIn("immutable-releases", workflow)
         self.assertIn("--verify-only", workflow)
+        self.assertIn(
+            "RELEASE_ID: ${{ steps.final-assets.outputs.release_id }}", workflow
+        )
+        self.assertIn("--method PATCH", workflow)
+        self.assertIn(
+            '"repos/${RELEASE_REPOSITORY}/releases/${RELEASE_ID}"', workflow
+        )
+        self.assertIn("-F draft=false", workflow)
+        self.assertIn('test "${published_tag}" = "${RELEASE_TAG}"', workflow)
+        self.assertNotIn("gh release edit", workflow)
         self.assertLess(
             workflow.index("--verify-only"),
-            workflow.index("gh release edit"),
+            workflow.index("--method PATCH"),
         )
 
     def test_production_metadata_can_read_drafts_without_broad_write_access(self) -> None:

@@ -312,7 +312,6 @@ static void player_status_send_upsert(object *pl, const object *op) {
     }
 
     packet_struct *packet = packet_new(CLIENT_CMD_PLAYER_STATUS, 256, 256);
-    packet_enable_ndelay(packet);
     packet_writer_write_uint8(packet, PLAYER_STATUS_UPSERT);
     player_status_write_entry(packet, op);
     socket_send_packet(CONTR(pl)->cs, packet);
@@ -376,7 +375,6 @@ static void player_status_send_remove(object *pl, const char *key) {
     }
 
     packet_struct *packet = packet_new(CLIENT_CMD_PLAYER_STATUS, 32, 32);
-    packet_enable_ndelay(packet);
     packet_writer_write_uint8(packet, PLAYER_STATUS_REMOVE);
     packet_writer_write_cstring(packet, key);
     socket_send_packet(CONTR(pl)->cs, packet);
@@ -401,7 +399,6 @@ void player_status_update_paralysis(object *pl) {
         return;
     }
     packet_struct *packet = packet_new(CLIENT_CMD_PLAYER_STATUS, 128, 128);
-    packet_enable_ndelay(packet);
     packet_writer_write_uint8(packet, PLAYER_STATUS_UPSERT);
     player_status_write_paralysis(packet, pl);
     socket_send_packet(CONTR(pl)->cs, packet);
@@ -463,7 +460,6 @@ void player_status_send_snapshot(object *pl) {
     uint16_t count = (uint16_t)player_status_collect(pl, statuses, object_limit);
 
     packet_struct *packet = packet_new(CLIENT_CMD_PLAYER_STATUS, 512, 512);
-    packet_enable_ndelay(packet);
     packet_writer_write_uint8(packet, PLAYER_STATUS_SNAPSHOT);
     packet_writer_write_uint16(packet, count + (paralysis ? 1U : 0U));
     if (paralysis) {
