@@ -40,6 +40,12 @@ static struct {
     uint64_t pending_queue_age_us[METRICS_SAMPLES];
     size_t pending_queue_age_count;
     size_t pending_queue_age_next;
+    uint64_t transport_service_us[METRICS_SAMPLES];
+    size_t transport_service_count;
+    size_t transport_service_next;
+    uint64_t keepalive_echo_us[METRICS_SAMPLES];
+    size_t keepalive_echo_count;
+    size_t keepalive_echo_next;
     uint64_t transport_wake_reasons[SERVER_TRANSPORT_WAKE_REASON_COUNT];
     uint64_t transport_ready_connections;
     uint64_t transport_quic_timer_services;
@@ -62,6 +68,14 @@ static uint64_t metrics_percentile(uint64_t *samples, size_t count, unsigned int
     qsort(samples, count, sizeof(*samples), metrics_compare_u64);
     size_t index = (count - 1) * percentile / 100;
     return samples[index];
+}
+
+static uint64_t metrics_max(const uint64_t *samples, size_t count) {
+    uint64_t maximum = 0;
+    for (size_t i = 0; i < count; i++) {
+        maximum = MAX(maximum, samples[i]);
+    }
+    return maximum;
 }
 
 void server_metrics_pending_changed(size_t pending) {
@@ -189,6 +203,23 @@ void server_metrics_transport_wait(uint64_t wait_us,
     pthread_mutex_unlock(&metrics_lock);
 }
 
+void server_metrics_transport_service(uint64_t service_us) {
+    pthread_mutex_lock(&metrics_lock);
+    metrics.transport_service_us[metrics.transport_service_next++] = service_us;
+    metrics.transport_service_next %= METRICS_SAMPLES;
+    metrics.transport_service_count =
+        MIN(metrics.transport_service_count + 1, (size_t)METRICS_SAMPLES);
+    pthread_mutex_unlock(&metrics_lock);
+}
+
+void server_metrics_keepalive_echo(uint64_t latency_us) {
+    pthread_mutex_lock(&metrics_lock);
+    metrics.keepalive_echo_us[metrics.keepalive_echo_next++] = latency_us;
+    metrics.keepalive_echo_next %= METRICS_SAMPLES;
+    metrics.keepalive_echo_count = MIN(metrics.keepalive_echo_count + 1, (size_t)METRICS_SAMPLES);
+    pthread_mutex_unlock(&metrics_lock);
+}
+
 void server_metrics_game_loop(uint64_t duration_us) {
     pthread_mutex_lock(&metrics_lock);
     metrics.game_loop_us[metrics.game_loop_next++] = duration_us;
@@ -202,12 +233,16 @@ void server_metrics_stats(char *buffer, size_t size) {
     uint64_t asset[METRICS_SAMPLES];
     uint64_t transport_wait[METRICS_SAMPLES];
     uint64_t pending_queue_age[METRICS_SAMPLES];
+    uint64_t transport_service[METRICS_SAMPLES];
+    uint64_t keepalive_echo[METRICS_SAMPLES];
 
     pthread_mutex_lock(&metrics_lock);
     size_t game_count = metrics.game_loop_count;
     size_t asset_count = metrics.asset_latency_count;
     size_t transport_wait_count = metrics.transport_wait_count;
     size_t pending_queue_age_count = metrics.pending_queue_age_count;
+    size_t transport_service_count = metrics.transport_service_count;
+    size_t keepalive_echo_count = metrics.keepalive_echo_count;
     memcpy(game, metrics.game_loop_us, game_count * sizeof(*game));
     memcpy(asset, metrics.asset_latency_us, asset_count * sizeof(*asset));
     memcpy(transport_wait,
@@ -216,6 +251,12 @@ void server_metrics_stats(char *buffer, size_t size) {
     memcpy(pending_queue_age,
            metrics.pending_queue_age_us,
            pending_queue_age_count * sizeof(*pending_queue_age));
+    memcpy(transport_service,
+           metrics.transport_service_us,
+           transport_service_count * sizeof(*transport_service));
+    memcpy(keepalive_echo,
+           metrics.keepalive_echo_us,
+           keepalive_echo_count * sizeof(*keepalive_echo));
 
     snprintfcat(buffer, size, "\n=== NETWORK ===\n");
     snprintfcat(buffer,
@@ -280,26 +321,51 @@ void server_metrics_stats(char *buffer, size_t size) {
 
     snprintfcat(buffer,
                 size,
-                "\nAsset latency us: p50=%" PRIu64 " p95=%" PRIu64 " p99=%" PRIu64,
+                "\nAsset latency us: p50=%" PRIu64 " p95=%" PRIu64 " p99=%" PRIu64
+                " max=%" PRIu64,
                 metrics_percentile(asset, asset_count, 50),
                 metrics_percentile(asset, asset_count, 95),
-                metrics_percentile(asset, asset_count, 99));
+                metrics_percentile(asset, asset_count, 99),
+                metrics_max(asset, asset_count));
     snprintfcat(buffer,
                 size,
-                "\nGame loop us: p50=%" PRIu64 " p95=%" PRIu64 " p99=%" PRIu64 "\n",
+                "\nGame loop us: p50=%" PRIu64 " p95=%" PRIu64 " p99=%" PRIu64
+                " max=%" PRIu64 "\n",
                 metrics_percentile(game, game_count, 50),
                 metrics_percentile(game, game_count, 95),
-                metrics_percentile(game, game_count, 99));
+                metrics_percentile(game, game_count, 99),
+                metrics_max(game, game_count));
     snprintfcat(buffer,
                 size,
-                "Transport wait us: p50=%" PRIu64 " p95=%" PRIu64 " p99=%" PRIu64,
+                "Transport wait us: p50=%" PRIu64 " p95=%" PRIu64 " p99=%" PRIu64
+                " max=%" PRIu64,
                 metrics_percentile(transport_wait, transport_wait_count, 50),
                 metrics_percentile(transport_wait, transport_wait_count, 95),
-                metrics_percentile(transport_wait, transport_wait_count, 99));
+                metrics_percentile(transport_wait, transport_wait_count, 99),
+                metrics_max(transport_wait, transport_wait_count));
     snprintfcat(buffer,
                 size,
-                "\nPending queue age us: p50=%" PRIu64 " p95=%" PRIu64 " p99=%" PRIu64 "\n",
+                "\nTransport service us: p50=%" PRIu64 " p95=%" PRIu64 " p99=%" PRIu64
+                " max=%" PRIu64,
+                metrics_percentile(transport_service, transport_service_count, 50),
+                metrics_percentile(transport_service, transport_service_count, 95),
+                metrics_percentile(transport_service, transport_service_count, 99),
+                metrics_max(transport_service, transport_service_count));
+    snprintfcat(buffer,
+                size,
+                "\nPending queue age us: p50=%" PRIu64 " p95=%" PRIu64 " p99=%" PRIu64
+                " max=%" PRIu64 "\n",
                 metrics_percentile(pending_queue_age, pending_queue_age_count, 50),
                 metrics_percentile(pending_queue_age, pending_queue_age_count, 95),
-                metrics_percentile(pending_queue_age, pending_queue_age_count, 99));
+                metrics_percentile(pending_queue_age, pending_queue_age_count, 99),
+                metrics_max(pending_queue_age, pending_queue_age_count));
+    snprintfcat(buffer,
+                size,
+                "Keepalive receive-to-echo us: p50=%" PRIu64 " p95=%" PRIu64
+                " p99=%" PRIu64 " max=%" PRIu64 " samples=%" PRIu64 "\n",
+                metrics_percentile(keepalive_echo, keepalive_echo_count, 50),
+                metrics_percentile(keepalive_echo, keepalive_echo_count, 95),
+                metrics_percentile(keepalive_echo, keepalive_echo_count, 99),
+                metrics_max(keepalive_echo, keepalive_echo_count),
+                (uint64_t)keepalive_echo_count);
 }
