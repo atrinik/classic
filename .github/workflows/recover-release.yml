@@ -7,6 +7,11 @@ on:
         description: Existing immutable tag whose GitHub release is missing
         required: true
         type: string
+      source_branch:
+        description: Release branch that owns the tag
+        required: false
+        default: main
+        type: string
 
 permissions:
   actions: write
@@ -23,12 +28,16 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Require the default-branch workflow definition
-        run: test "${GITHUB_REF}" = refs/heads/main
+      - name: Require a supported source branch and workflow definition
+        env:
+          RELEASE_SOURCE_BRANCH: ${{ inputs.source_branch || 'main' }}
+        run: |
+          [[ ${RELEASE_SOURCE_BRANCH} == main || ${RELEASE_SOURCE_BRANCH} =~ ^[0-9]+\.[0-9]+\.x$ ]]
+          test "${GITHUB_REF}" = "refs/heads/${RELEASE_SOURCE_BRANCH}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: main
+          ref: ${{ github.ref }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
@@ -36,12 +45,14 @@ jobs:
         name: Prove the exact recoverable state
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_SOURCE_BRANCH: ${{ inputs.source_branch || 'main' }}
           RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           python3 tools/release/recover_release.py \
             --tag "${RELEASE_TAG}" \
             --repository "${RELEASE_REPOSITORY}" \
+            --source-branch "${RELEASE_SOURCE_BRANCH}" \
             --github-output "${GITHUB_OUTPUT}"
       - name: Create release notes for the existing tag
         env:
@@ -69,5 +80,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          ATRINIK_RELEASE_BRANCH: ${{ inputs.source_branch || 'main' }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: tools/release/queue_package_release.sh "${RELEASE_TAG#v}"

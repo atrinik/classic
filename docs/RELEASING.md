@@ -2,9 +2,11 @@
 
 Classic uses one repository version, commit, tag, GitHub release, and artifact
 set. The first post-consolidation release is `v5.6.0`; later versions stay on
-the `v5.x.x` line and follow Conventional Commits through semantic-release. A
-breaking marker or `feat` bumps minor, and every other accepted type bumps
-patch.
+the `v5.x.x` line and follow a branch-aware Conventional Commits policy through
+semantic-release. On `main`, every accepted release-driving commit starts the
+next minor line. A numeric `X.Y.x` branch is cut from its published `vX.Y.0`
+tag and accepts only patch releases (`vX.Y.1`, then later point fixes);
+feature/breaking transitions fail closed instead of leaving the range.
 
 ## Historical boundary
 
@@ -312,7 +314,9 @@ not publish an untested first release. Semantic Release remained manual-only
 until a complete post-merge rehearsal succeeded and an administrator
 live-audited repository immutable releases as enabled through the governance
 rollout. The separate activation change then added only the successful current
-`main` Check trigger.
+release-branch Check gate. Automatic publication now starts from protected
+pushes and waits for that exact commit's validation result before mutating
+release state.
 
 The first automatic analysis must produce `v5.6.0` from the already-merged
 unified release work. Imported component features, breaking markers, and old

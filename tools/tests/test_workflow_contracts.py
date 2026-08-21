@@ -116,20 +116,25 @@ class WorkflowContractTests(unittest.TestCase):
                     )
                 self.assertFalse((ROOT / module / ".releaserc.json").exists())
 
-    def test_semantic_release_follows_successful_current_main_check(self) -> None:
+    def test_semantic_release_follows_successful_current_release_branch_check(self) -> None:
         workflow = self.text("release.yml")
         self.assertIn("  workflow_dispatch:\n", workflow)
-        self.assertIn("  workflow_run:\n", workflow)
-        self.assertIn("    workflows: [Check]\n", workflow)
-        self.assertIn("    types: [completed]\n", workflow)
-        self.assertIn("github.event.workflow_run.event == 'push'", workflow)
-        self.assertIn("github.event.workflow_run.conclusion == 'success'", workflow)
-        self.assertIn("github.event.workflow_run.head_branch == 'main'", workflow)
+        self.assertIn("  push:\n", workflow)
+        self.assertIn("      - main\n", workflow)
+        self.assertIn("      - '[0-9]+.[0-9]+.x'\n", workflow)
+        self.assertIn("ATRINIK_RELEASE_BRANCH", workflow)
         self.assertIn("RELEASE_TRIGGER_SHA", workflow)
         self.assertIn('test "${commit}" = "${RELEASE_TRIGGER_SHA}"', workflow)
-        self.assertIn("refs/remotes/origin/main", workflow)
+        self.assertIn('refs/remotes/origin/${RELEASE_BRANCH}', workflow)
         self.assertIn('select(.name == "Classic validation"', workflow)
-        self.assertIn('test "${GITHUB_REF}" = refs/heads/main', workflow)
+        self.assertIn('test "${GITHUB_REF}" = "refs/heads/${RELEASE_BRANCH}"', workflow)
+        self.assertIn('check_state=$(gh api', workflow)
+        self.assertIn('Classic validation did not complete', workflow)
+        self.assertIn("node tools/tests/test_release_policy.cjs", workflow)
+        self.assertIn('export GITHUB_REF="refs/heads/${ATRINIK_RELEASE_BRANCH}"', workflow)
+        self.assertIn('export GITHUB_REF_NAME="${ATRINIK_RELEASE_BRANCH}"', workflow)
+        self.assertIn('release_commit=$(git rev-parse HEAD)', workflow)
+        self.assertIn('export GITHUB_SHA="${release_commit}"', workflow)
 
     def test_rehearsal_is_bound_to_current_main(self) -> None:
         workflow = self.text("release-rehearsal.yml")
@@ -342,16 +347,16 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn("invalid material-tag audit result", result.stderr)
             self.assertEqual(log, "")
 
-    def test_release_rebinds_current_main_after_waiting_for_bundle(self) -> None:
+    def test_release_rebinds_current_release_branch_after_waiting_for_bundle(self) -> None:
         workflow = self.text("release.yml")
         bundle = workflow.index("Require the exact durable dependency bundle")
-        rebind = workflow.index("Rebind release mutation to current main")
+        rebind = workflow.index("Rebind release mutation to the current release branch")
         pending = workflow.index("Detect an incomplete semantic release")
         self.assertLess(bundle, rebind)
         self.assertLess(rebind, pending)
         rebind_step = workflow[rebind:pending]
-        self.assertIn("git fetch --no-tags origin main", rebind_step)
-        self.assertIn('refs/remotes/origin/main', rebind_step)
+        self.assertIn('git fetch --no-tags origin "${RELEASE_BRANCH}"', rebind_step)
+        self.assertIn('refs/remotes/origin/${RELEASE_BRANCH}', rebind_step)
         self.assertIn('test "${commit}" = "${RELEASE_TRIGGER_SHA}"', rebind_step)
 
     def test_dependency_bundle_install_fails_before_pull_without_attestation(self) -> None:
@@ -390,8 +395,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('test "${RELEASE_REF_TYPE}" = tag', workflow)
         self.assertIn('test "${GITHUB_REF}" = "refs/tags/${RELEASE_TAG}"', workflow)
         self.assertIn('test "${RELEASE_REF_TYPE}" = branch', workflow)
-        self.assertIn('test "${GITHUB_REF}" = refs/heads/main', workflow)
-        self.assertIn('refs/remotes/origin/main', workflow)
+        self.assertIn('source_branch:', workflow)
+        self.assertIn('test "${GITHUB_REF}" = "refs/heads/${RELEASE_SOURCE_BRANCH}"', workflow)
+        self.assertIn('refs/remotes/origin/${RELEASE_SOURCE_BRANCH}', workflow)
         self.assertIn('test "$(git rev-parse HEAD)"', workflow)
         self.assertIn('refs/tags/${RELEASE_TAG}^{commit}', workflow)
         self.assertIn('select(.name == "Classic validation"', workflow)
@@ -437,11 +443,11 @@ class WorkflowContractTests(unittest.TestCase):
         preflight_job = workflow[
             workflow.index("  preflight:") : workflow.index("  discord-config:")
         ]
-        self.assertIn("Check out the current main recovery definition", preflight_job)
+        self.assertIn("Check out the current release-branch recovery definition", preflight_job)
         self.assertIn("fetch-depth: 0", preflight_job)
-        self.assertIn("ref: main", preflight_job)
-        self.assertIn('test "${GITHUB_REF}" = refs/heads/main', preflight_job)
-        self.assertIn("recovery_arguments+=(--recovery-main)", preflight_job)
+        self.assertIn("ref: ${{ github.ref }}", preflight_job)
+        self.assertIn('test "${GITHUB_REF}" = "refs/heads/${RELEASE_SOURCE_BRANCH}"', preflight_job)
+        self.assertIn('recovery_arguments+=(--recovery-branch "${RELEASE_SOURCE_BRANCH}")', preflight_job)
         self.assertIn("python3 tools/release/validate_release.py", preflight_job)
 
     def test_semantic_release_skips_cross_repository_issue_comments(self) -> None:
@@ -482,7 +488,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('--expected-tag "${RELEASE_TAG}"', delete_step)
         self.assertIn('--expected-release-id "${RELEASE_ID}"', delete_step)
         self.assertNotIn("gh api --method DELETE", delete_step)
-        self.assertIn("--ref main", workflow)
+        self.assertIn('--ref "${ATRINIK_RELEASE_BRANCH}"', workflow)
+        self.assertIn('--field "source_branch=${ATRINIK_RELEASE_BRANCH}"', workflow)
         self.assertIn(
             "steps.pending-release.outputs.action == 'none' ||",
             workflow,
@@ -507,7 +514,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"${run_commit}" HEAD', workflow)
         self.assertIn("run-id: ${{ inputs.candidate_run_id || github.run_id }}", workflow)
         self.assertIn("retained candidate has no matching versioned server image", workflow)
-        self.assertIn("--recovery-main", workflow)
+        self.assertIn("--recovery-branch", workflow)
         self.assertIn(
             "build/release-automation/tools/release/locked_inputs.py", workflow
         )
@@ -572,7 +579,9 @@ class WorkflowContractTests(unittest.TestCase):
     def test_recovery_and_manual_promotion_require_main_definitions(self) -> None:
         recovery = self.text("recover-release.yml")
         promoter = self.text("promote-latest.yml")
-        self.assertIn('test "${GITHUB_REF}" = refs/heads/main', recovery)
+        self.assertIn("RELEASE_SOURCE_BRANCH: ${{ inputs.source_branch || 'main' }}", recovery)
+        self.assertIn('test "${GITHUB_REF}" = "refs/heads/${RELEASE_SOURCE_BRANCH}"', recovery)
+        self.assertIn("--source-branch", recovery)
         self.assertIn('test "${GITHUB_REF}" = refs/heads/main', promoter)
         self.assertIn("Require the exact current main promotion definition", promoter)
         self.assertIn("PROMOTION_WORKFLOW_SHA: ${{ github.sha }}", promoter)
@@ -597,6 +606,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("node tools/release/run_semantic_release.mjs", release)
         self.assertIn("node tools/release/generate_release_notes.mjs", recovery)
         self.assertIn("node --test tools/tests/test_first_parent_release.mjs", check)
+        self.assertIn("node tools/tests/test_release_policy.cjs", check)
 
     def test_recovery_uses_first_parent_notes_file(self) -> None:
         recovery = self.text("recover-release.yml")

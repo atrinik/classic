@@ -73,6 +73,135 @@ def retained_publication_steps(failed_name: str) -> list[dict[str, str]]:
 
 
 class ResolvePendingReleaseTests(unittest.TestCase):
+    def test_validate_branch_accepts_main_and_maintenance_lines(self) -> None:
+        self.assertEqual(resolve_pending_release.validate_branch("main"), "main")
+        self.assertEqual(
+            resolve_pending_release.validate_branch("8.3.x"), "8.3.x"
+        )
+        with self.assertRaisesRegex(
+            resolve_pending_release.PendingReleaseError, "release branch must be"
+        ):
+            resolve_pending_release.validate_branch("feature/release")
+
+    def test_resolve_repository_checks_the_maintenance_remote(self) -> None:
+        with (
+            patch.object(
+                resolve_pending_release,
+                "command",
+                side_effect=["b" * 40, "b" * 40],
+            ) as command,
+            patch.object(resolve_pending_release, "list_drafts", return_value=[]),
+            patch.object(
+                resolve_pending_release,
+                "resolve",
+                return_value={"action": "none", "tag": "", "release_id": ""},
+            ),
+        ):
+            self.assertEqual(
+                resolve_pending_release.resolve_repository(
+                    "atrinik/classic", "8.3.x"
+                ),
+                {"action": "none", "tag": "", "release_id": ""},
+            )
+
+        self.assertEqual(
+            command.call_args_list[1].args,
+            ("git", "rev-parse", "refs/remotes/origin/8.3.x"),
+        )
+
+    def test_resolve_repository_rejects_a_stale_maintenance_head(self) -> None:
+        with patch.object(
+            resolve_pending_release,
+            "command",
+            side_effect=["a" * 40, "b" * 40],
+        ):
+            with self.assertRaisesRegex(
+                resolve_pending_release.PendingReleaseError,
+                "current origin/8.3.x",
+            ):
+                resolve_pending_release.resolve_repository(
+                    "atrinik/classic", "8.3.x"
+                )
+
+    def test_resolve_repository_checks_retained_tag_on_the_selected_line(self) -> None:
+        with (
+            patch.object(
+                resolve_pending_release,
+                "command",
+                side_effect=["a" * 40, "a" * 40],
+            ),
+            patch.object(
+                resolve_pending_release, "list_drafts", return_value=[]
+            ),
+            patch.object(
+                resolve_pending_release,
+                "resolve",
+                return_value={
+                    "action": "resume",
+                    "tag": "v8.3.1",
+                    "release_id": "10",
+                },
+            ),
+            patch.object(
+                resolve_pending_release, "is_ancestor", return_value=False
+            ),
+        ):
+            with self.assertRaisesRegex(
+                resolve_pending_release.PendingReleaseError,
+                "not an ancestor of current 8.3.x",
+            ):
+                resolve_pending_release.resolve_repository(
+                    "atrinik/classic", "8.3.x"
+                )
+
+    def test_main_passes_the_selected_branch_to_the_resolver(self) -> None:
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "resolve_pending_release.py",
+                    "--repository",
+                    "atrinik/classic",
+                    "--branch",
+                    "8.3.x",
+                ],
+            ),
+            patch.object(
+                resolve_pending_release,
+                "resolve_repository",
+                return_value={"action": "none", "tag": "", "release_id": ""},
+            ) as resolver,
+        ):
+            self.assertEqual(resolve_pending_release.main(), 0)
+        resolver.assert_called_once_with("atrinik/classic", "8.3.x")
+
+    def test_guarded_deletion_main_passes_the_selected_branch(self) -> None:
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "resolve_pending_release.py",
+                    "--repository",
+                    "atrinik/classic",
+                    "--branch",
+                    "8.3.x",
+                    "--delete-policy-listed-empty-draft",
+                    "--expected-tag",
+                    "v8.3.1",
+                    "--expected-release-id",
+                    "10",
+                ],
+            ),
+            patch.object(
+                resolve_pending_release,
+                "delete_policy_listed_empty_draft",
+            ) as delete,
+        ):
+            self.assertEqual(resolve_pending_release.main(), 0)
+        self.assertEqual(delete.call_args.args[:3], ("atrinik/classic", "v8.3.1", 10))
+
     def test_no_draft_allows_semantic_release(self) -> None:
         self.assertEqual(
             resolve_pending_release.resolve(
