@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -30,12 +30,14 @@
 #include <global.h>
 #include <server_main.h>
 #include <server.h>
+#include <toolkit/datetime.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 #include <network_metrics.h>
 
 #define SOCKET_QUEUE_HARD_LIMIT (4U * 1024U * 1024U)
 #define SOCKET_QUEUE_PACKET_LIMIT 4096U
+#define SOCKET_QUEUE_WRITE_WORK_MAX 64U
 
 static void socket_packet_enqueue(socket_struct *ns, packet_struct *packet) {
 #ifndef DEBUG
@@ -68,6 +70,9 @@ static void socket_packet_enqueue(socket_struct *ns, packet_struct *packet) {
     }
 #endif
 
+    if (ns->packets == NULL) {
+        ns->packet_queue_started_us = datetime_monotonic_us();
+    }
     DL_APPEND(ns->packets, packet);
     ns->packet_queue_bytes += packet->len - packet->pos;
     ns->packet_queue_count++;
@@ -100,6 +105,7 @@ void socket_buffer_clear(socket_struct *ns) {
     ns->packets = NULL;
     ns->packet_queue_bytes = 0;
     ns->packet_queue_count = 0;
+    ns->packet_queue_started_us = 0;
     if (queued_bytes != 0) {
         server_metrics_queue_changed(-(int64_t)queued_bytes, 0, false);
     }
@@ -111,7 +117,8 @@ void socket_buffer_clear(socket_struct *ns) {
  * The socket we are writing to.
  */
 void socket_buffer_write(socket_struct *ns) {
-    while (ns->packets != NULL) {
+    size_t work = 0;
+    while (ns->packets != NULL && work++ < SOCKET_QUEUE_WRITE_WORK_MAX) {
         packet_struct *packet = ns->packets;
 
         size_t amt;
@@ -140,6 +147,10 @@ void socket_buffer_write(socket_struct *ns) {
 
         /* A nonblocking transport made only partial (or no) progress. */
         break;
+    }
+
+    if (ns->packets == NULL) {
+        ns->packet_queue_started_us = 0;
     }
 }
 

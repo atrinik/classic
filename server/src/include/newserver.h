@@ -297,6 +297,8 @@ typedef struct socket_struct {
     size_t packet_queue_peak_bytes;
     size_t packet_queue_count;
     uint64_t packet_queue_rejected;
+    /** Monotonic enqueue time of the oldest packet, or zero when empty. */
+    uint64_t packet_queue_started_us;
 
     /**
      * Buffer for how many ticks have passed since the last keep alive

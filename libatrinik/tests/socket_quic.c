@@ -64,10 +64,20 @@ static void *quic_test_client_main(void *data) {
 static void quic_test_service(socket_t **connections, size_t count) {
     for (size_t i = 0; i < count; i++) {
         if (connections[i] != NULL) {
-            bool ready = socket_wait(connections[i], true, true, 1);
+            unsigned int timeout = socket_quic_timeout(connections[i], 1);
+            bool ready = socket_wait(connections[i], true, true, timeout);
             socket_quic_service(connections[i], ready, true);
         }
     }
+}
+
+static void quic_test_timeout_deadline(void) {
+    socket_t connection = {0};
+    connection.transport = SOCKET_TRANSPORT_QUIC_CONNECTION;
+    connection.quic_event_deadline_ms = datetime_monotonic_ms() + 1000U;
+    REQUIRE(socket_quic_timeout(&connection, 5000U) <= 1000U);
+    connection.quic_event_deadline_ms = 0;
+    REQUIRE(socket_quic_timeout(&connection, 5000U) == 0U);
 }
 
 static void *quic_test_server_main(void *data) {
@@ -184,6 +194,13 @@ static void quic_test_run(size_t count, bool delay_accept) {
     REQUIRE(pthread_join(server_thread, NULL) == 0);
     REQUIRE(!server.failed);
 
+    /* Force an otherwise idle connection's QUIC timer due. The server-side
+     * service call must make progress without a readable UDP handle. */
+    accepted[0]->quic_event_deadline_ms = 0;
+    REQUIRE(socket_quic_timeout(accepted[0], 1000U) == 0U);
+    REQUIRE(socket_quic_timer_due(accepted[0]));
+    REQUIRE(socket_quic_service(accepted[0], false, false));
+
     bool sent[QUIC_TEST_CLIENTS] = {0};
     bool received[QUIC_TEST_CLIENTS] = {0};
     socket_t *accepted_by_client[QUIC_TEST_CLIENTS] = {0};
@@ -261,6 +278,7 @@ static void quic_test_run(size_t count, bool delay_accept) {
 int main(void) {
     toolkit_import(path);
     toolkit_import(socket);
+    quic_test_timeout_deadline();
     quic_test_run(1U, false);
     quic_test_run(QUIC_TEST_CLIENTS, true);
     toolkit_deinit();

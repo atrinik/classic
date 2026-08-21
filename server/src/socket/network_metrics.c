@@ -34,6 +34,16 @@ static struct {
     char mapping_method[32];
     uint64_t mapping_open_failures;
     uint64_t mapping_renewal_failures;
+    uint64_t transport_wait_us[METRICS_SAMPLES];
+    size_t transport_wait_count;
+    size_t transport_wait_next;
+    uint64_t pending_queue_age_us[METRICS_SAMPLES];
+    size_t pending_queue_age_count;
+    size_t pending_queue_age_next;
+    uint64_t transport_wake_reasons[SERVER_TRANSPORT_WAKE_REASON_COUNT];
+    uint64_t transport_ready_connections;
+    uint64_t transport_quic_timer_services;
+    uint64_t transport_work_limit_hits;
     uint64_t game_loop_us[METRICS_SAMPLES];
     size_t game_loop_count;
     size_t game_loop_next;
@@ -154,6 +164,31 @@ void server_metrics_mapping(const char *method, bool open_failed, bool renewal_f
     pthread_mutex_unlock(&metrics_lock);
 }
 
+void server_metrics_transport_wait(uint64_t wait_us,
+                                   server_transport_wake_reason_t reason,
+                                   size_t ready_connections,
+                                   size_t quic_timer_services,
+                                   uint64_t pending_queue_age_us,
+                                   bool work_limited) {
+    pthread_mutex_lock(&metrics_lock);
+    metrics.transport_wait_us[metrics.transport_wait_next++] = wait_us;
+    metrics.transport_wait_next %= METRICS_SAMPLES;
+    metrics.transport_wait_count = MIN(metrics.transport_wait_count + 1, (size_t)METRICS_SAMPLES);
+    metrics.pending_queue_age_us[metrics.pending_queue_age_next++] = pending_queue_age_us;
+    metrics.pending_queue_age_next %= METRICS_SAMPLES;
+    metrics.pending_queue_age_count =
+        MIN(metrics.pending_queue_age_count + 1, (size_t)METRICS_SAMPLES);
+    if ((unsigned int)reason < SERVER_TRANSPORT_WAKE_REASON_COUNT) {
+        metrics.transport_wake_reasons[reason]++;
+    }
+    metrics.transport_ready_connections += ready_connections;
+    metrics.transport_quic_timer_services += quic_timer_services;
+    if (work_limited) {
+        metrics.transport_work_limit_hits++;
+    }
+    pthread_mutex_unlock(&metrics_lock);
+}
+
 void server_metrics_game_loop(uint64_t duration_us) {
     pthread_mutex_lock(&metrics_lock);
     metrics.game_loop_us[metrics.game_loop_next++] = duration_us;
@@ -165,12 +200,22 @@ void server_metrics_game_loop(uint64_t duration_us) {
 void server_metrics_stats(char *buffer, size_t size) {
     uint64_t game[METRICS_SAMPLES];
     uint64_t asset[METRICS_SAMPLES];
+    uint64_t transport_wait[METRICS_SAMPLES];
+    uint64_t pending_queue_age[METRICS_SAMPLES];
 
     pthread_mutex_lock(&metrics_lock);
     size_t game_count = metrics.game_loop_count;
     size_t asset_count = metrics.asset_latency_count;
+    size_t transport_wait_count = metrics.transport_wait_count;
+    size_t pending_queue_age_count = metrics.pending_queue_age_count;
     memcpy(game, metrics.game_loop_us, game_count * sizeof(*game));
     memcpy(asset, metrics.asset_latency_us, asset_count * sizeof(*asset));
+    memcpy(transport_wait,
+           metrics.transport_wait_us,
+           transport_wait_count * sizeof(*transport_wait));
+    memcpy(pending_queue_age,
+           metrics.pending_queue_age_us,
+           pending_queue_age_count * sizeof(*pending_queue_age));
 
     snprintfcat(buffer, size, "\n=== NETWORK ===\n");
     snprintfcat(buffer,
@@ -215,6 +260,22 @@ void server_metrics_stats(char *buffer, size_t size) {
                 *metrics.mapping_method != '\0' ? metrics.mapping_method : "none",
                 metrics.mapping_open_failures,
                 metrics.mapping_renewal_failures);
+    snprintfcat(buffer,
+                size,
+                "\nTransport: waits=%" PRIu64 " simulation=%" PRIu64 " listener=%" PRIu64
+                " connection=%" PRIu64 " quic_timer=%" PRIu64 " application=%" PRIu64
+                " errors=%" PRIu64 " ready_connections=%" PRIu64
+                " quic_timer_services=%" PRIu64 " work_limit_hits=%" PRIu64,
+                (uint64_t)transport_wait_count,
+                metrics.transport_wake_reasons[SERVER_TRANSPORT_WAKE_SIMULATION],
+                metrics.transport_wake_reasons[SERVER_TRANSPORT_WAKE_LISTENER],
+                metrics.transport_wake_reasons[SERVER_TRANSPORT_WAKE_CONNECTION],
+                metrics.transport_wake_reasons[SERVER_TRANSPORT_WAKE_QUIC_TIMER],
+                metrics.transport_wake_reasons[SERVER_TRANSPORT_WAKE_APPLICATION],
+                metrics.transport_wake_reasons[SERVER_TRANSPORT_WAKE_ERROR],
+                metrics.transport_ready_connections,
+                metrics.transport_quic_timer_services,
+                metrics.transport_work_limit_hits);
     pthread_mutex_unlock(&metrics_lock);
 
     snprintfcat(buffer,
@@ -229,4 +290,16 @@ void server_metrics_stats(char *buffer, size_t size) {
                 metrics_percentile(game, game_count, 50),
                 metrics_percentile(game, game_count, 95),
                 metrics_percentile(game, game_count, 99));
+    snprintfcat(buffer,
+                size,
+                "Transport wait us: p50=%" PRIu64 " p95=%" PRIu64 " p99=%" PRIu64,
+                metrics_percentile(transport_wait, transport_wait_count, 50),
+                metrics_percentile(transport_wait, transport_wait_count, 95),
+                metrics_percentile(transport_wait, transport_wait_count, 99));
+    snprintfcat(buffer,
+                size,
+                "\nPending queue age us: p50=%" PRIu64 " p95=%" PRIu64 " p99=%" PRIu64 "\n",
+                metrics_percentile(pending_queue_age, pending_queue_age_count, 50),
+                metrics_percentile(pending_queue_age, pending_queue_age_count, 95),
+                metrics_percentile(pending_queue_age, pending_queue_age_count, 99));
 }

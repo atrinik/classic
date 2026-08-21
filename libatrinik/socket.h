@@ -1315,8 +1315,18 @@ bool socket_stream_conclude(socket_stream_t *stream);
 void socket_stream_reset(socket_stream_t *stream, uint64_t error_code);
 void socket_stream_destroy(socket_stream_t *stream);
 bool socket_wait(socket_t *sc, bool readable, bool writable, unsigned int timeout_ms);
+/**
+ * Return whether the connection needs an I/O pass because its UDP handle,
+ * buffered QUIC data, application queue, or timer is ready.
+ */
 bool socket_quic_service(socket_t *sc, bool network_ready, bool app_write_pending);
+/**
+ * Return the earliest QUIC service timeout, capped at maximum_ms. A zero
+ * result means that a timer or buffered application data is ready now.
+ */
 unsigned int socket_quic_timeout(socket_t *sc, unsigned int maximum_ms);
+/** Return whether a QUIC timer, rather than socket readiness, is due now. */
+bool socket_quic_timer_due(socket_t *sc);
 bool socket_is_fd_valid(socket_t *sc);
 bool socket_opt_reuse_addr(socket_t *sc, bool enable);
 bool socket_opt_non_blocking(socket_t *sc, bool enable);

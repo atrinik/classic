@@ -1143,10 +1143,22 @@ static void socket_quic_schedule_event(socket_t *sc) {
     sc->quic_event_deadline_ms = datetime_monotonic_ms() + delay;
 }
 
+static bool socket_quic_application_pending(socket_t *sc) {
+    return sc->quic != NULL &&
+           (SSL_has_pending(sc->quic) != 0 ||
+            (sc->game_stream != NULL && SSL_has_pending(sc->game_stream->ssl) != 0) ||
+            SSL_get_accept_stream_queue_len(sc->quic) != 0);
+}
+
 unsigned int socket_quic_timeout(socket_t *sc, unsigned int maximum_ms) {
     HARD_ASSERT(sc != NULL);
-    if (sc->transport != SOCKET_TRANSPORT_QUIC_CONNECTION ||
-        sc->quic_event_deadline_ms == UINT64_MAX) {
+    if (sc->transport != SOCKET_TRANSPORT_QUIC_CONNECTION) {
+        return maximum_ms;
+    }
+    if (socket_quic_application_pending(sc)) {
+        return 0;
+    }
+    if (sc->quic_event_deadline_ms == UINT64_MAX) {
         return maximum_ms;
     }
     uint64_t now = datetime_monotonic_ms();
@@ -1157,6 +1169,16 @@ unsigned int socket_quic_timeout(socket_t *sc, unsigned int maximum_ms) {
     return delay < maximum_ms ? (unsigned int)delay : maximum_ms;
 }
 
+bool socket_quic_timer_due(socket_t *sc) {
+    HARD_ASSERT(sc != NULL);
+    if (sc->transport != SOCKET_TRANSPORT_QUIC_CONNECTION ||
+        sc->quic_event_deadline_ms == UINT64_MAX) {
+        return false;
+    }
+    return sc->quic_event_deadline_ms == 0 ||
+           datetime_monotonic_ms() >= sc->quic_event_deadline_ms;
+}
+
 bool socket_quic_service(socket_t *sc, bool network_ready, bool app_write_pending) {
     HARD_ASSERT(sc != NULL);
     if (sc->transport != SOCKET_TRANSPORT_QUIC_CONNECTION) {
@@ -1164,9 +1186,7 @@ bool socket_quic_service(socket_t *sc, bool network_ready, bool app_write_pendin
     }
 
     uint64_t now = datetime_monotonic_ms();
-    bool buffered = SSL_has_pending(sc->quic) != 0 ||
-                    (sc->game_stream != NULL && SSL_has_pending(sc->game_stream->ssl) != 0) ||
-                    SSL_get_accept_stream_queue_len(sc->quic) != 0;
+    bool buffered = socket_quic_application_pending(sc);
     bool timer_due = sc->quic_event_deadline_ms == 0 || (sc->quic_event_deadline_ms != UINT64_MAX &&
                                                          now >= sc->quic_event_deadline_ms);
     if (!network_ready && !buffered && !app_write_pending && !timer_due) {
@@ -1233,6 +1253,11 @@ metaserver_publisher_identity_t *socket_quic_publisher_identity(socket_t *sc,
 
 bool socket_quic_service(socket_t *sc, bool network_ready, bool app_write_pending) {
     return network_ready || app_write_pending;
+}
+
+bool socket_quic_timer_due(socket_t *sc) {
+    (void)sc;
+    return false;
 }
 
 #endif
