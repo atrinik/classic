@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -40,6 +40,30 @@ START_TEST(test_domains_advance_independently) {
     ck_assert_uint_eq(server_tick_now().value, tick.value + 3);
     ck_assert_uint_eq(server_monotonic_now().microseconds,
                       monotonic.microseconds + UINT64_C(25000));
+}
+END_TEST
+
+START_TEST(test_sleep_delta_deadline_can_be_polled_and_completed) {
+    long saved_max_time = max_time;
+    int saved_max_time_multiplier = max_time_multiplier;
+    struct timeval saved_last_time = last_time;
+    struct timeval now;
+    GETTIMEOFDAY(&now);
+
+    max_time = 1000;
+    max_time_multiplier = 1;
+    last_time = now;
+    ck_assert_uint_gt(sleep_delta_timeout_us(), 0);
+    sleep_delta_complete();
+
+    last_time.tv_sec = now.tv_sec - 1;
+    last_time.tv_usec = now.tv_usec;
+    ck_assert_uint_eq(sleep_delta_timeout_us(), 0);
+    sleep_delta();
+
+    max_time = saved_max_time;
+    max_time_multiplier = saved_max_time_multiplier;
+    last_time = saved_last_time;
 }
 END_TEST
 
@@ -205,6 +229,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_arithmetic_saturates_and_elapsed_clamps);
     tcase_add_test(tc_core, test_tick_duration_conversions_are_checked);
     tcase_add_test(tc_core, test_fake_cleanup_restores_production_clock);
+    tcase_add_test(tc_core, test_sleep_delta_deadline_can_be_polled_and_completed);
     suite_add_tcase(s, tc_core);
 
     return s;

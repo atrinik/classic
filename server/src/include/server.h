@@ -56,7 +56,17 @@ TOOLKIT_FUNCS_DECLARE(socket_server);
 
 void socket_server_handle_client(player *pl);
 bool socket_server_remove(socket_struct *cs);
-void socket_server_process(void);
+/**
+ * Wait for and service transport work on the server thread.
+ *
+ * Returns true when the separately scheduled non-transport server pass is
+ * due. The caller owns main_process(), post-processing, and the simulation
+ * tick; this function only owns socket state and packet dispatch. Listener
+ * readiness, QUIC timers, inbound packets, and queued transport output are
+ * transport-immediate. Asset scheduling, liveness, map rendering, and
+ * simulation work remain on the non-transport pass.
+ */
+bool socket_server_process(void);
 void socket_server_post_process(void);
 bool socket_server_quic_identity(char certificate_sha256[65]);
 struct metaserver_publisher_identity;
