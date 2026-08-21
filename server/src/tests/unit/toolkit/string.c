@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -27,6 +27,7 @@
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
+#include <player.h>
 #include <toolkit/string.h>
 
 START_TEST(test_string_replace) {
@@ -167,6 +168,61 @@ START_TEST(test_string_replace_unprintable_char) {
 
 END_TEST
 
+START_TEST(test_string_replace_unprintable_utf8) {
+    char *cp;
+
+    /* Preserve valid UTF-8 from multiple scripts and a supplementary plane. */
+    cp = xstrdup("caf\xc3\xa9 \xe4\xb8\x96 \xf0\x9f\x8c\x8d");
+    string_replace_unprintable_chars(cp);
+    ck_assert_str_eq(cp, "caf\xc3\xa9 \xe4\xb8\x96 \xf0\x9f\x8c\x8d");
+    free(cp);
+
+    /* Replace a malformed continuation and preserve the following ASCII. */
+    cp = xstrdup("\xc3\x28");
+    string_replace_unprintable_chars(cp);
+    ck_assert_str_eq(cp, " (");
+    free(cp);
+
+    /* Truncated, overlong, surrogate, and out-of-range sequences are removed. */
+    cp = xstrdup("\xe2\x82");
+    string_replace_unprintable_chars(cp);
+    ck_assert_str_eq(cp, "  ");
+    free(cp);
+
+    cp = xstrdup("\xc0\xaf");
+    string_replace_unprintable_chars(cp);
+    ck_assert_str_eq(cp, "  ");
+    free(cp);
+
+    cp = xstrdup("\xed\xa0\x80");
+    string_replace_unprintable_chars(cp);
+    ck_assert_str_eq(cp, "   ");
+    free(cp);
+
+    cp = xstrdup("\xf4\x90\x80\x80");
+    string_replace_unprintable_chars(cp);
+    ck_assert_str_eq(cp, "    ");
+    free(cp);
+
+    /* ASCII, C1, and Unicode formatting controls are not printable chat text. */
+    cp = xstrdup("\x01");
+    string_replace_unprintable_chars(cp);
+    ck_assert_str_eq(cp, " ");
+    free(cp);
+
+    cp = xstrdup("\xc2\x80");
+    string_replace_unprintable_chars(cp);
+    ck_assert_str_eq(cp, "  ");
+    free(cp);
+
+    cp = xstrdup("\xe2\x80\xa8");
+    string_replace_unprintable_chars(cp);
+    ck_assert_str_eq(cp, "   ");
+    free(cp);
+}
+
+END_TEST
+
 START_TEST(test_string_format_number_comma) {
     ck_assert_str_eq(string_format_number_comma(100), "100");
     ck_assert_str_eq(string_format_number_comma(1000), "1,000");
@@ -246,6 +302,12 @@ START_TEST(test_string_whitespace_trim) {
     string_whitespace_trim(cp);
     ck_assert_str_eq(cp, "hello world");
     free(cp);
+
+    /* Trim ASCII whitespace without treating UTF-8 boundary bytes as spaces. */
+    cp = xstrdup("\t\xc3\xa9 \xe4\xb8\x96\t");
+    string_whitespace_trim(cp);
+    ck_assert_str_eq(cp, "\xc3\xa9 \xe4\xb8\x96");
+    free(cp);
 }
 
 END_TEST
@@ -272,6 +334,25 @@ START_TEST(test_string_whitespace_squeeze) {
     string_whitespace_squeeze(cp);
     ck_assert_str_eq(cp, "hello world ");
     free(cp);
+
+    /* Do not split or classify UTF-8 bytes as whitespace. */
+    cp = xstrdup("\xc3\xa9   \xe4\xb8\x96\t\xf0\x9f\x8c\x8d");
+    string_whitespace_squeeze(cp);
+    ck_assert_str_eq(cp, "\xc3\xa9 \xe4\xb8\x96 \xf0\x9f\x8c\x8d");
+    free(cp);
+}
+
+END_TEST
+
+START_TEST(test_player_sanitize_input_utf8) {
+    char valid[] = " [a=#charname]\xc3\xa9  \xe4\xb8\x96 \xf0\x9f\x8c\x8d[/a] ";
+    char malformed[] = {'o', 'k', ' ', (char)0xc3, '(', ' ', '\x01', 'x', '\0'};
+    char only_invalid[] = {(char)0xe2, (char)0x82, '\0'};
+
+    ck_assert_str_eq(player_sanitize_input(valid),
+                     "[a=#charname]\xc3\xa9 \xe4\xb8\x96 \xf0\x9f\x8c\x8d[/a]");
+    ck_assert_str_eq(player_sanitize_input(malformed), "ok ( x");
+    ck_assert_ptr_eq(player_sanitize_input(only_invalid), NULL);
 }
 
 END_TEST
@@ -889,11 +970,13 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_string_replace_char);
     tcase_add_test(tc_core, test_string_split);
     tcase_add_test(tc_core, test_string_replace_unprintable_char);
+    tcase_add_test(tc_core, test_string_replace_unprintable_utf8);
     tcase_add_test(tc_core, test_string_format_number_comma);
     tcase_add_test(tc_core, test_string_toupper);
     tcase_add_test(tc_core, test_string_tolower);
     tcase_add_test(tc_core, test_string_whitespace_trim);
     tcase_add_test(tc_core, test_string_whitespace_squeeze);
+    tcase_add_test(tc_core, test_player_sanitize_input_utf8);
     tcase_add_test(tc_core, test_string_newline_to_literal);
     tcase_add_test(tc_core, test_string_get_word);
     tcase_add_test(tc_core, test_string_skip_word);
