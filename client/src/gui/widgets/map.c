@@ -202,6 +202,7 @@ static void map_clear_live_cell(struct MapCell *cell);
 static void map_state_transaction_record_physical(size_t level, int x, int y);
 static void map_state_transaction_record_cell(int x, int y);
 static bool map_state_transaction_should_defer_level_free(void);
+static void map_dirty_lighting_fow(int dx, int dy);
 
 /** Mark the clipped logical rectangle as explored fog. */
 static void map_cache_mark_fow(struct MapCell *level,
@@ -236,6 +237,13 @@ static void map_cache_mark_fow(struct MapCell *level,
 
 /** Vertical screen projection of one linked physical map level. */
 #define MAP_LEVEL_PIXEL_HEIGHT 46
+
+/** Radius of the nearest-known light sample search around an unseen cell. */
+#define MAP_LIGHTING_FOW_SEARCH_RADIUS 6
+/** Keep FOW invalidation rectangles small enough for diagonal projections. */
+#define MAP_LIGHTING_FOW_SEGMENT 4
+/** Cover the interpolated tile and the current player-height offset. */
+#define MAP_LIGHTING_FOW_MARGIN 8
 
 /** Primary-map outlines reveal silhouettes without exposing interiors. */
 #define DOOR_HINT_RADIUS 3
@@ -973,6 +981,7 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
         }
 
         lighting_scroll((dy - dx) * MAP_TILE_YOFF, -(dx + dy) * MAP_TILE_XOFF);
+        map_dirty_lighting_fow(dx, dy);
     }
 
     map_select_level(0, true);
@@ -3012,6 +3021,200 @@ static uint8_t map_lighting_sub_layer(const struct MapCell *cell) {
      * player's base-map sub-layer. Falling back to the latter can select an
      * intentionally empty zero-valued sample and shade the roof fully black. */
     return selected_has_floor ? selected : 0;
+}
+
+/** Dirty the lighting projection of one FOW boundary segment and its light halo. */
+static void map_dirty_lighting_fow_segment(size_t level,
+                                           int depth,
+                                           int x0,
+                                           int x1,
+                                           int y0,
+                                           int y1) {
+    struct MapCell *level_cells_current = level_cells[level];
+    if (level_cells_current == NULL) {
+        return;
+    }
+
+    int cache_width = map_width * MAP_FOW_SIZE;
+    int cache_height = map_height * MAP_FOW_SIZE;
+    x0 = MAX(0, x0 - MAP_LIGHTING_FOW_SEARCH_RADIUS);
+    x1 = MIN(cache_width, x1 + MAP_LIGHTING_FOW_SEARCH_RADIUS);
+    y0 = MAX(0, y0 - MAP_LIGHTING_FOW_SEARCH_RADIUS);
+    y1 = MIN(cache_height, y1 + MAP_LIGHTING_FOW_SEARCH_RADIUS);
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
+
+    int mid_x = map_width * MAP_FOW_SIZE / 2;
+    int mid_y = map_height * MAP_FOW_SIZE / 2;
+    int min_x = 0;
+    int min_y = 0;
+    int max_x = 0;
+    int max_y = 0;
+    bool found = false;
+    for (int x = x0; x < x1; x++) {
+        for (int y = y0; y < y1; y++) {
+            struct MapCell *cell = map_cache_cell(level_cells_current, x, y);
+            uint8_t sub_layer = map_lighting_sub_layer(cell);
+            int floor_height = MAX(0, cell->height[GET_MAP_LAYER(LAYER_FLOOR, sub_layer)]);
+            int support_height = depth > 0 ? map_level_support_height(x, y, depth) : 0;
+            int screen_x = (x - mid_x) * MAP_TILE_YOFF - (y - mid_y) * MAP_TILE_YOFF;
+            int screen_y = (x - mid_x) * MAP_TILE_XOFF + (y - mid_y) * MAP_TILE_XOFF -
+                           floor_height - support_height;
+            if (!found) {
+                min_x = screen_x;
+                min_y = screen_y;
+                max_x = screen_x;
+                max_y = screen_y;
+                found = true;
+            } else {
+                min_x = MIN(min_x, screen_x);
+                min_y = MIN(min_y, screen_y);
+                max_x = MAX(max_x, screen_x);
+                max_y = MAX(max_y, screen_y);
+            }
+        }
+    }
+
+    if (!found) {
+        return;
+    }
+    lighting_dirty_screen_rect(depth,
+                               min_x - MAP_LIGHTING_FOW_MARGIN,
+                               min_y - MAP_LIGHTING_FOW_MARGIN,
+                               max_x + MAP_LIGHTING_FOW_MARGIN + 1,
+                               max_y + MAP_LIGHTING_FOW_MARGIN + 1);
+}
+
+/** Dirty a short projected strip without widening its diagonal envelope. */
+static void map_dirty_lighting_fow_strip(size_t level,
+                                         int depth,
+                                         int x0,
+                                         int x1,
+                                         int y0,
+                                         int y1) {
+    for (int x = x0; x < x1; x += MAP_LIGHTING_FOW_SEGMENT) {
+        for (int y = y0; y < y1; y += MAP_LIGHTING_FOW_SEGMENT) {
+            map_dirty_lighting_fow_segment(level,
+                                           depth,
+                                           x,
+                                           MIN(x1, x + MAP_LIGHTING_FOW_SEGMENT),
+                                           y,
+                                           MIN(y1, y + MAP_LIGHTING_FOW_SEGMENT));
+        }
+    }
+}
+
+/** Dirty every physical level whose light samples lose FOW-known neighbors. */
+static void map_dirty_lighting_fow(int dx, int dy) {
+    if (dx == 0 && dy == 0) {
+        return;
+    }
+
+    int view_x = map_width * (MAP_FOW_SIZE / 2);
+    int view_y = map_height * (MAP_FOW_SIZE / 2);
+    int shifted_view_x = view_x - dx;
+    int shifted_view_y = view_y - dy;
+    int lighting_width = 0;
+    int lighting_height = 0;
+    int map_projection_width = (map_width + map_height) * MAP_TILE_YOFF;
+    int map_projection_height = (map_width + map_height) * MAP_TILE_XOFF;
+    bool dirty_incoming_fow = lighting_viewport_size_get(&lighting_width, &lighting_height) &&
+                              lighting_width >= map_projection_width &&
+                              lighting_height >= map_projection_height;
+    for (size_t level = 0; level < arraysize(level_cells); level++) {
+        int depth = (int)level - MAP2_MAX_DEPTH;
+        /* FOW transitions alter the base lighting field. Linked physical
+         * levels consume that field's support geometry and do not own an
+         * independent visible FOW boundary. */
+        if (depth != 0) {
+            continue;
+        }
+        if (dirty_incoming_fow) {
+            if (dx > 0) {
+                int boundary_x = shifted_view_x + map_width;
+                map_dirty_lighting_fow_strip(level,
+                                             depth,
+                                             boundary_x,
+                                             boundary_x + dx,
+                                             shifted_view_y,
+                                             shifted_view_y + map_height);
+            } else if (dx < 0) {
+                int boundary_x = shifted_view_x;
+                map_dirty_lighting_fow_strip(level,
+                                             depth,
+                                             boundary_x,
+                                             boundary_x - dx,
+                                             shifted_view_y,
+                                             shifted_view_y + map_height);
+            }
+            if (dy > 0) {
+                int boundary_y = shifted_view_y + map_height;
+                map_dirty_lighting_fow_strip(level,
+                                             depth,
+                                             shifted_view_x,
+                                             shifted_view_x + map_width,
+                                             boundary_y,
+                                             boundary_y + dy);
+            } else if (dy < 0) {
+                int boundary_y = shifted_view_y;
+                map_dirty_lighting_fow_strip(level,
+                                             depth,
+                                             shifted_view_x,
+                                             shifted_view_x + map_width,
+                                             boundary_y,
+                                             boundary_y - dy);
+            }
+        }
+
+        if (dx > 0) {
+            for (int y = shifted_view_y; y < shifted_view_y + map_height;
+                 y += MAP_LIGHTING_FOW_SEGMENT) {
+                map_dirty_lighting_fow_segment(level,
+                                               depth,
+                                               shifted_view_x,
+                                               view_x,
+                                               y,
+                                               MIN(shifted_view_y + map_height,
+                                                   y + MAP_LIGHTING_FOW_SEGMENT));
+            }
+        } else if (dx < 0) {
+            for (int y = shifted_view_y; y < shifted_view_y + map_height;
+                 y += MAP_LIGHTING_FOW_SEGMENT) {
+                map_dirty_lighting_fow_segment(level,
+                                               depth,
+                                               view_x + map_width,
+                                               shifted_view_x + map_width,
+                                               y,
+                                               MIN(shifted_view_y + map_height,
+                                                   y + MAP_LIGHTING_FOW_SEGMENT));
+            }
+        }
+
+        if (dy > 0) {
+            for (int x = shifted_view_x; x < shifted_view_x + map_width;
+                 x += MAP_LIGHTING_FOW_SEGMENT) {
+                map_dirty_lighting_fow_segment(level,
+                                               depth,
+                                               x,
+                                               MIN(shifted_view_x + map_width,
+                                                   x + MAP_LIGHTING_FOW_SEGMENT),
+                                               shifted_view_y,
+                                               view_y);
+            }
+        } else if (dy < 0) {
+            for (int x = shifted_view_x; x < shifted_view_x + map_width;
+                 x += MAP_LIGHTING_FOW_SEGMENT) {
+                map_dirty_lighting_fow_segment(level,
+                                               depth,
+                                               x,
+                                               MIN(shifted_view_x + map_width,
+                                                   x + MAP_LIGHTING_FOW_SEGMENT),
+                                               view_y + map_height,
+                                               shifted_view_y + map_height);
+            }
+        }
+    }
 }
 
 static uint16_t map_lighting_interpolate(uint16_t current,
