@@ -736,6 +736,8 @@ extern void map_benchmark_fault_status_get(map_benchmark_fault_status_t *status)
 extern void map_benchmark_fault_clear(void);
 
 extern bool widget_map_interaction_test(widgetdata *widget);
+/** Verify click-to-move hit-testing across fogged and empty map cells. */
+extern bool widget_map_fog_click_test(widgetdata *widget);
 extern bool widget_map_mouse_origin_test(int mx, int my, int expected_mx, int expected_my);
 extern void widget_map_draw_test(widgetdata *widget);
 extern void widget_map_ui_test_begin(void);

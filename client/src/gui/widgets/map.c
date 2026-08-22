@@ -5255,7 +5255,7 @@ bool mouse_to_tile_coords(int mx, int my, int *tx, int *ty) {
                 continue;
             }
 
-            if ((data.cell->fow || MapData.height_diff) &&
+            if (MapData.height_diff &&
                 abs(get_top_floor_height(data.cell, MapData.player_sub_layer) -
                     data.player_height_offset) > HEIGHT_MAX_RENDER) {
                 continue;
@@ -5813,6 +5813,183 @@ void widget_map_animation_test_add(int type,
                                      value);
     anim->start_tick -= elapsed_ms;
     anim->last_tick -= elapsed_ms;
+}
+
+/** Find a screen point that the production hit-test resolves to one tile. */
+static bool widget_map_click_test_find_point(widgetdata *widget,
+                                             int target_x,
+                                             int target_y) {
+    if (widget == NULL || widget->surface == NULL || cur_widget[MAP_ID] == NULL) {
+        return false;
+    }
+
+    map_render_data_t data = {.world_surface = true};
+    int x, y, w, h;
+    map_setup_render_data(widget->surface, &data, &x, &y, &w, &h);
+    if (target_x < x || target_x >= w || target_y < y || target_y >= h) {
+        return false;
+    }
+
+    data.x = target_x;
+    data.y = target_y;
+    if (!map_should_draw(widget->surface, &data)) {
+        return false;
+    }
+
+    double zoom = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0;
+    data.xpos *= zoom;
+    data.ypos *= zoom;
+
+    if (data.cell->faces[0] != 0) {
+        int height = get_top_floor_height(data.cell, MapData.player_sub_layer);
+        data.ypos = (data.ypos - height * zoom) + data.player_height_offset * zoom;
+    }
+
+    uint32_t stretch = 0;
+    int16_t max_height = 0;
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        int16_t height = data.cell->height[sub_layer * NUM_LAYERS];
+        if (height > max_height) {
+            max_height = height;
+            stretch = data.cell->stretch[sub_layer];
+        }
+    }
+
+    int stretch_height = (stretch >> 24) & 0xff;
+    int displayed_width = MAX(1, (int)(widget->surface->w * zoom));
+    int displayed_height = MAX(1, (int)(widget->surface->h * zoom));
+    int left = MAX(0, data.xpos);
+    int top = MAX(0, data.ypos);
+    int right = MIN(displayed_width - 1,
+                    data.xpos + (int)(MAP_TILE_POS_XOFF * zoom));
+    int bottom = MIN(displayed_height - 1,
+                     data.ypos + (int)((MAP_TILE_YOFF + stretch_height) * zoom));
+
+    for (int local_x = left; local_x <= right; local_x++) {
+        for (int local_y = top; local_y <= bottom; local_y++) {
+            int found_x = -1;
+            int found_y = -1;
+            if (mouse_to_tile_coords(widget_x(widget) + local_x,
+                                     widget_y(widget) + local_y,
+                                     &found_x,
+                                     &found_y) &&
+                found_x == target_x && found_y == target_y) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+typedef struct widget_map_click_test_case {
+    const char *name;
+    bool fow;
+    bool structural_fow;
+    bool face;
+    bool black;
+    int height;
+    uint32_t stretch;
+    bool height_diff;
+    bool expected;
+} widget_map_click_test_case_t;
+
+/** Exercise click-to-move hit-testing against cached map presentation states. */
+bool widget_map_fog_click_test(widgetdata *widget) {
+    if (widget == NULL || widget->surface == NULL || map_width < 4 || map_height < 4) {
+        return false;
+    }
+
+    size_t saved_level_index = current_level_index;
+    MapCell *saved_cells_pointer = cells;
+    if (!map_select_level(0, false)) {
+        return false;
+    }
+
+    const int target_x = map_width * (MAP_FOW_SIZE / 2) + 7;
+    const int target_y = map_height * (MAP_FOW_SIZE / 2) + 7;
+    size_t cell_count = (size_t)map_width * MAP_FOW_SIZE * (size_t)map_height * MAP_FOW_SIZE;
+    MapCell *saved_cells = xmalloc(cell_count * sizeof(*saved_cells));
+    memcpy(saved_cells, cells, cell_count * sizeof(*saved_cells));
+    memset(cells, 0, cell_count * sizeof(*cells));
+    MapCell *cell = MAP_CELL_GET(target_x, target_y);
+    bool saved_height_diff = MapData.height_diff;
+    int64_t saved_zoom = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM);
+    double saved_widget_zoom = widget->zoom;
+    int saved_widget_zoom_x = widget->zoom_x;
+    int saved_widget_zoom_y = widget->zoom_y;
+    widgetdata *saved_map_widget = cur_widget[MAP_ID];
+    cur_widget[MAP_ID] = widget;
+
+    static const int zooms[] = {75, 100, 125};
+    static const widget_map_click_test_case_t cases[] = {
+        {"remembered-fog", true, true, true, false, 75, 0, false, true},
+        {"blank-fog", true, false, false, false, 0, 0, false, true},
+        {"black", false, false, true, true, 0, 0, false, true},
+        {"stretched-fog", true, false, false, false, 1, UINT32_C(0x02030401), false, true},
+        {"height-difference", true, true, true, false, 75, 0, true, false},
+    };
+
+    bool success = true;
+    for (size_t case_index = 0; case_index < arraysize(cases) && success; case_index++) {
+        const widget_map_click_test_case_t *test_case = &cases[case_index];
+        for (size_t zoom_index = 0; zoom_index < arraysize(zooms); zoom_index++) {
+            setting_set_int(OPT_CAT_MAP, OPT_MAP_ZOOM, zooms[zoom_index]);
+            widget_set_zoom(widget, zooms[zoom_index] / 100.0);
+
+            memset(cell, 0, sizeof(*cell));
+            cell->fow = test_case->fow;
+            cell->structural_fow = test_case->structural_fow;
+            cell->faces[GET_MAP_LAYER(LAYER_FLOOR, 0)] = test_case->face ? 1 : 0;
+            cell->height[GET_MAP_LAYER(LAYER_FLOOR, 0)] = test_case->height;
+            cell->render_max_height = test_case->height;
+            cell->stretch[0] = test_case->stretch;
+            if (test_case->black) {
+                cell->light_known[0] = 1;
+                cell->light_radiance[0] = 0;
+            }
+            MapData.height_diff = test_case->height_diff;
+
+            bool hit = widget_map_click_test_find_point(widget, target_x, target_y);
+            if (hit != test_case->expected) {
+                fprintf(stderr,
+                        "map click test: case=%s zoom=%d expected=%d got=%d\n",
+                        test_case->name,
+                        zooms[zoom_index],
+                        test_case->expected,
+                        hit);
+                success = false;
+            }
+        }
+    }
+
+    if (success) {
+        int outside = widget->surface->w + MAP_TILE_POS_XOFF;
+        if (mouse_to_tile_coords(widget_x(widget) - outside,
+                                 widget_y(widget) - outside,
+                                 NULL,
+                                 NULL) ||
+            mouse_to_tile_coords(widget_x(widget) + outside,
+                                 widget_y(widget) + outside,
+                                 NULL,
+                                 NULL)) {
+            fprintf(stderr, "map click test: out-of-bounds point resolved to a tile\n");
+            success = false;
+        }
+    }
+
+    setting_set_int(OPT_CAT_MAP, OPT_MAP_ZOOM, saved_zoom);
+    widget->zoom = saved_widget_zoom;
+    widget->zoom_x = saved_widget_zoom_x;
+    widget->zoom_y = saved_widget_zoom_y;
+    MapData.height_diff = saved_height_diff;
+    memcpy(cells, saved_cells, cell_count * sizeof(*cells));
+    free(saved_cells);
+    cur_widget[MAP_ID] = saved_map_widget;
+    current_level_index = saved_level_index;
+    cells = saved_cells_pointer;
+
+    return success;
 }
 
 bool widget_map_interaction_test(widgetdata *widget) {
