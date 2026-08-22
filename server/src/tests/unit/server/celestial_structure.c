@@ -1172,13 +1172,14 @@ START_TEST(test_private_map_loads_from_source_without_provenance) {
     snprintf(VS(saved_mapspath), "%s", settings.mapspath);
 
     char datapath[HUGE_BUF], mapspath[HUGE_BUF], maps_dir[HUGE_BUF];
-    char source_path[HUGE_BUF], private_path[HUGE_BUF];
+    char source_path[HUGE_BUF], private_path[HUGE_BUF], provenance_dir[HUGE_BUF];
     char players_dir[HUGE_BUF], players_a_dir[HUGE_BUF], character_dir[HUGE_BUF];
     snprintf(VS(datapath), "%s/data", temporary_root);
     snprintf(VS(mapspath), "%s", temporary_root);
     snprintf(VS(maps_dir), "%s/maps", temporary_root);
     snprintf(VS(source_path), "%s/maps/apartment", temporary_root);
     snprintf(VS(private_path), "%s/data/players/a/alice/$maps$apartment", temporary_root);
+    snprintf(VS(provenance_dir), "%s/data/celestial-provenance", temporary_root);
     snprintf(VS(players_dir), "%s/data/players", temporary_root);
     snprintf(VS(players_a_dir), "%s/data/players/a", temporary_root);
     snprintf(VS(character_dir), "%s/data/players/a/alice", temporary_root);
@@ -1207,6 +1208,28 @@ START_TEST(test_private_map_loads_from_source_without_provenance) {
     ck_assert_int_eq(new_save_map(map, 0), 0);
     ck_assert(path_exists(private_path));
     delete_map(map);
+
+    if (path_exists(provenance_dir)) {
+        DIR *directory = opendir(provenance_dir);
+        ck_assert_ptr_ne(directory, NULL);
+        struct dirent *entry;
+        while ((entry = readdir(directory)) != NULL) {
+            if (entry->d_name[0] == '.') {
+                continue;
+            }
+            char ledger[HUGE_BUF];
+            size_t directory_length = strlen(provenance_dir);
+            size_t entry_length = strlen(entry->d_name);
+            ck_assert_uint_lt(directory_length + entry_length + 1, sizeof(ledger));
+            memcpy(ledger, provenance_dir, directory_length);
+            ledger[directory_length] = '/';
+            memcpy(ledger + directory_length + 1, entry->d_name, entry_length + 1);
+            ck_assert_int_eq(unlink(ledger), 0);
+        }
+        ck_assert_int_eq(closedir(directory), 0);
+        ck_assert_int_eq(rmdir(provenance_dir), 0);
+    }
+    ck_assert(!path_exists(provenance_dir));
 
     map = load_original_map(private_path, NULL, MAP_PLAYER_UNIQUE);
     ck_assert_ptr_ne(map, NULL);
