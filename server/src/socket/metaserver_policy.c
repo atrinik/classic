@@ -13,6 +13,235 @@
 #include <metaserver_internal.h>
 #include <toolkit/string.h>
 #include <openssl/crypto.h>
+#include <ctype.h>
+#include <string.h>
+
+static void metaserver_json_skip_whitespace(const char **cursor, const char *end) {
+    HARD_ASSERT(cursor != NULL);
+    HARD_ASSERT(*cursor != NULL);
+    HARD_ASSERT(end != NULL);
+
+    while (*cursor < end &&
+           (**cursor == ' ' || **cursor == '\t' || **cursor == '\r' || **cursor == '\n')) {
+        (*cursor)++;
+    }
+}
+
+static bool metaserver_json_expect(const char **cursor, const char *end, char expected) {
+    HARD_ASSERT(cursor != NULL);
+    HARD_ASSERT(*cursor != NULL);
+    HARD_ASSERT(end != NULL);
+
+    metaserver_json_skip_whitespace(cursor, end);
+    if (*cursor >= end || **cursor != expected) {
+        return false;
+    }
+    (*cursor)++;
+    return true;
+}
+
+static bool metaserver_json_string(const char **cursor,
+                                   const char *end,
+                                   char *value,
+                                   size_t value_size,
+                                   bool reject_escapes) {
+    HARD_ASSERT(cursor != NULL);
+    HARD_ASSERT(*cursor != NULL);
+    HARD_ASSERT(end != NULL);
+
+    metaserver_json_skip_whitespace(cursor, end);
+    if (*cursor >= end || **cursor != '"') {
+        return false;
+    }
+    (*cursor)++;
+
+    size_t length = 0;
+    while (*cursor < end) {
+        unsigned char character = (unsigned char)**cursor;
+        (*cursor)++;
+        if (character == '"') {
+            if (value != NULL) {
+                if (length >= value_size) {
+                    return false;
+                }
+                value[length] = '\0';
+            }
+            return true;
+        }
+        if (character < 0x20U) {
+            return false;
+        }
+        if (character == '\\') {
+            if (reject_escapes || *cursor >= end) {
+                return false;
+            }
+            unsigned char escaped = (unsigned char)**cursor;
+            (*cursor)++;
+            if (escaped == 'u') {
+                if ((size_t)(end - *cursor) < 4U) {
+                    return false;
+                }
+                for (size_t index = 0; index < 4U; index++) {
+                    if (!isxdigit((unsigned char)(*cursor)[index])) {
+                        return false;
+                    }
+                }
+                *cursor += 4;
+            } else if (strchr("\"\\/bfnrt", escaped) == NULL) {
+                return false;
+            }
+            continue;
+        }
+        if (value != NULL) {
+            if (length + 1U >= value_size) {
+                return false;
+            }
+            value[length++] = (char)character;
+        }
+    }
+    return false;
+}
+
+static bool metaserver_publish_error_code_valid(const char *value, size_t value_size) {
+    if (value == NULL || value_size == 0 || value_size > METASERVER_PUBLISH_ERROR_CODE_MAX) {
+        return false;
+    }
+    for (size_t index = 0; index < value_size; index++) {
+        unsigned char character = (unsigned char)value[index];
+        bool ascii_alphanumeric = (character >= 'a' && character <= 'z') ||
+                                  (character >= 'A' && character <= 'Z') ||
+                                  (character >= '0' && character <= '9');
+        if (!(ascii_alphanumeric || character == '_' || character == '-' || character == '.')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool metaserver_publish_error_code_parse(const char *body,
+                                                size_t body_size,
+                                                char *error_code,
+                                                size_t error_code_size) {
+    if (body == NULL || body_size == 0 || body_size > METASERVER_PUBLISH_RESPONSE_BODY_MAX ||
+        error_code == NULL || error_code_size == 0) {
+        return false;
+    }
+
+    const char *cursor = body;
+    const char *end = body + body_size;
+    char key[32];
+    char sequence[24];
+    bool code_seen = false;
+    bool message_seen = false;
+    bool replay_sequence_seen = false;
+
+    if (!metaserver_json_expect(&cursor, end, '{') ||
+        !metaserver_json_string(&cursor, end, key, sizeof(key), true) ||
+        strcmp(key, "error") != 0 || !metaserver_json_expect(&cursor, end, ':') ||
+        !metaserver_json_expect(&cursor, end, '{')) {
+        return false;
+    }
+
+    for (;;) {
+        if (!metaserver_json_string(&cursor, end, key, sizeof(key), true) ||
+            !metaserver_json_expect(&cursor, end, ':')) {
+            return false;
+        }
+        if (strcmp(key, "code") == 0) {
+            if (code_seen ||
+                !metaserver_json_string(&cursor,
+                                        end,
+                                        error_code,
+                                        error_code_size,
+                                        true)) {
+                return false;
+            }
+            code_seen = true;
+        } else if (strcmp(key, "message") == 0) {
+            if (message_seen || !metaserver_json_string(&cursor, end, NULL, 0, false)) {
+                return false;
+            }
+            message_seen = true;
+        } else if (strcmp(key, "minimumNextSequence") == 0) {
+            if (replay_sequence_seen ||
+                !metaserver_json_string(&cursor, end, sequence, sizeof(sequence), true)) {
+                return false;
+            }
+            replay_sequence_seen = true;
+        } else {
+            return false;
+        }
+
+        metaserver_json_skip_whitespace(&cursor, end);
+        if (cursor >= end) {
+            return false;
+        }
+        if (*cursor == ',') {
+            cursor++;
+            continue;
+        }
+        if (*cursor != '}') {
+            return false;
+        }
+        cursor++;
+        break;
+    }
+
+    if (!metaserver_json_expect(&cursor, end, '}')) {
+        return false;
+    }
+    metaserver_json_skip_whitespace(&cursor, end);
+    if (cursor != end || !code_seen) {
+        return false;
+    }
+
+    size_t code_size = strlen(error_code);
+    if (!metaserver_publish_error_code_valid(error_code, code_size)) {
+        return false;
+    }
+    if (!replay_sequence_seen) {
+        return message_seen;
+    }
+    if (message_seen || strcmp(error_code, "publish_replay") != 0 || sequence[0] == '0') {
+        return false;
+    }
+    uint64_t minimum_next_sequence;
+    if (!string_parse_uint64(sequence, 10, 1, UINT64_MAX, &minimum_next_sequence)) {
+        return false;
+    }
+    char canonical_sequence[24];
+    return snprintf(VS(canonical_sequence), "%" PRIu64, minimum_next_sequence) ==
+               (int)strlen(sequence) &&
+           strcmp(canonical_sequence, sequence) == 0;
+}
+
+bool metaserver_publish_error_code(const char *body,
+                                   size_t body_size,
+                                   char *error_code,
+                                   size_t error_code_size) {
+    static const char fallback[] = "unavailable";
+
+    if (error_code == NULL || error_code_size == 0) {
+        return false;
+    }
+    if (error_code_size <= sizeof(fallback) - 1U) {
+        error_code[0] = '\0';
+        return false;
+    }
+    memcpy(error_code, fallback, sizeof(fallback));
+
+    char parsed_code[METASERVER_PUBLISH_ERROR_CODE_MAX + 1U] = {0};
+    if (!metaserver_publish_error_code_parse(
+            body, body_size, parsed_code, sizeof(parsed_code))) {
+        return false;
+    }
+    size_t parsed_size = strlen(parsed_code);
+    if (parsed_size >= error_code_size) {
+        return false;
+    }
+    memcpy(error_code, parsed_code, parsed_size + 1U);
+    return true;
+}
 
 static bool
 metaserver_retry_after_parse(const char *value, size_t value_size, uint32_t *retry_after_seconds) {
