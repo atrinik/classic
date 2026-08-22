@@ -22,9 +22,9 @@ TRANSITION_MAP_NAME = "Movement transition"
 TRANSITION_MAP_PATH = "/tests/player-view/movement-transition"
 RESIZE_DELTA = (32, 24)
 EXPECTED_STANDARD_CHECKPOINTS = {
-    "movement-colored.xml": "7a49c97b190bc6d69e42768ea6ee4069791a8e4f9d1dd1c0c06eb814c73d14c9",
-    "movement-lighting-isolated.xml": "53b9659e3c5f908283cccd3e3fa22acd6232192424e134ef0589fc6a0bfb703f",
-    "movement-colored-discrete.xml": "4d66d3823792e1bce932dbadcebd712471fa0dfef1e540561cfeafde37fdc792",
+    "movement-colored.xml": "1bf4bea11d2fdfb987b5c8d4a8a947611b26680e662cae88fcba40da4bb7e808",
+    "movement-lighting-isolated.xml": "40049cfd4f8adbb8b4b22b940a40ad38194e3511bb0ad575bbb7037dde205e6b",
+    "movement-colored-discrete.xml": "724dc0acfd56a8c4fe9fe72e80e51bb3843432a9321bba503015ace0b6d47d66",
 }
 
 GENERATOR_PATH = CLIENT_ROOT / "tools/generate_movement_five_depth.py"

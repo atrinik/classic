@@ -890,6 +890,9 @@ if (BUILD_TESTING)
     add_test(NAME client-player-view-living-outline-retained-fow
         COMMAND atrinik --player-view
             "${player_view_fixtures}/living-outline-retained-fow.xml" -)
+    add_test(NAME client-player-view-visibility-fades
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/visibility-fade-centered.xml" -)
     add_test(NAME client-player-view-movement-benchmark-smooth
         COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
