@@ -109,6 +109,34 @@ static size_t attack_test_hurt_sounds(object *pl, char *filename, size_t filenam
     return count;
 }
 
+static packet_struct *attack_test_target_packet(object *pl) {
+    for (packet_struct *packet = CONTR(pl)->cs->packets; packet != NULL; packet = packet->next) {
+        if (packet->type == CLIENT_CMD_TARGET) {
+            return packet;
+        }
+    }
+
+    return NULL;
+}
+
+static void attack_test_assert_target_packet(object *pl, object *target) {
+    packet_struct *packet = attack_test_target_packet(pl);
+    ck_assert_ptr_nonnull(packet);
+
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    char color[MAX_BUF];
+    char name[MAX_BUF];
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), CMD_TARGET_ENEMY);
+    ck_assert(packet_reader_read_string(&reader, VS(color)));
+    ck_assert(packet_reader_read_string(&reader, VS(name)));
+    ck_assert_str_eq(name, target->name);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), target->level);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), CONTR(pl)->combat);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), CONTR(pl)->combat_force);
+    ck_assert(packet_reader_finish(&reader));
+}
+
 static bool attack_test_is_female_hurt_sound(const char *filename) {
     static const char *const filenames[] = {
         "doh_female_1.ogg",
@@ -192,6 +220,172 @@ START_TEST(test_player_hurt_sound_selection_and_damage_gate) {
     socket_buffer_clear(CONTR(pl)->cs);
     ck_assert_int_eq(attack_hit_nonlethal(pl, attacker, 10), 0);
     ck_assert_uint_eq(attack_test_hurt_sounds(pl, NULL, 0), 0);
+}
+END_TEST
+
+START_TEST(test_player_retaliates_when_no_target_or_combat_is_disabled) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    object *attacker = attack_test_target(map, pl);
+    CONTR(pl)->target_object = NULL;
+    CONTR(pl)->target_object_count = 0;
+    CONTR(pl)->combat = 0;
+    CONTR(pl)->combat_force = 1;
+    socket_buffer_clear(CONTR(pl)->cs);
+
+    ck_assert_int_eq(attack_hit(pl, attacker, 0), 0);
+    ck_assert_ptr_null(CONTR(pl)->target_object);
+    ck_assert_uint_eq(CONTR(pl)->combat, 0);
+    ck_assert_ptr_null(attack_test_target_packet(pl));
+
+    ck_assert_int_gt(attack_hit(pl, attacker, 1), 0);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, attacker);
+    ck_assert_uint_eq(CONTR(pl)->target_object_count, attacker->count);
+    ck_assert_uint_eq(CONTR(pl)->combat, 1);
+    attack_test_assert_target_packet(pl, attacker);
+
+    object *old_target = attack_test_target(map, pl);
+    CONTR(pl)->target_object = old_target;
+    CONTR(pl)->target_object_count = old_target->count;
+    CONTR(pl)->combat = 0;
+    socket_buffer_clear(CONTR(pl)->cs);
+
+    ck_assert_int_gt(attack_hit(pl, attacker, 1), 0);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, attacker);
+    ck_assert_uint_eq(CONTR(pl)->target_object_count, attacker->count);
+    ck_assert_uint_eq(CONTR(pl)->combat, 1);
+    attack_test_assert_target_packet(pl, attacker);
+}
+END_TEST
+
+START_TEST(test_player_retaliation_preserves_active_target) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    object *target = attack_test_target(map, pl);
+    object *attacker = attack_test_target(map, pl);
+    attacker->y++;
+    CONTR(pl)->target_object = target;
+    CONTR(pl)->target_object_count = target->count;
+    CONTR(pl)->combat = 1;
+    socket_buffer_clear(CONTR(pl)->cs);
+
+    ck_assert_int_gt(attack_hit(pl, attacker, 1), 0);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, target);
+    ck_assert_uint_eq(CONTR(pl)->target_object_count, target->count);
+    ck_assert_ptr_null(attack_test_target_packet(pl));
+}
+END_TEST
+
+START_TEST(test_player_retaliation_replaces_unavailable_targets) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    object *attacker = attack_test_target(map, pl);
+    object *old_target = attack_test_target(map, pl);
+
+    CONTR(pl)->target_object = old_target;
+    CONTR(pl)->target_object_count = old_target->count + 1;
+    CONTR(pl)->combat = 1;
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, attacker, 1), 0);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, attacker);
+    ck_assert_uint_eq(CONTR(pl)->target_object_count, attacker->count);
+
+    CONTR(pl)->target_object = old_target;
+    CONTR(pl)->target_object_count = old_target->count;
+    object_remove(old_target, 0);
+    old_target->x = pl->x + 3;
+    old_target->y = pl->y;
+    old_target = object_insert_map(old_target, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(old_target);
+    old_target->stats.hp = old_target->stats.maxhp;
+    CONTR(pl)->target_object = old_target;
+    CONTR(pl)->target_object_count = old_target->count;
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, attacker, 1), 0);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, attacker);
+    ck_assert_uint_eq(CONTR(pl)->target_object_count, attacker->count);
+
+    CONTR(pl)->target_object = old_target;
+    CONTR(pl)->target_object_count = old_target->count;
+    old_target->stats.hp = 0;
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, attacker, 1), 0);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, attacker);
+    ck_assert_uint_eq(CONTR(pl)->target_object_count, attacker->count);
+
+    mapstruct *far = get_empty_map(24, 24);
+    object_remove(old_target, 0);
+    old_target->x = pl->x;
+    old_target->y = pl->y;
+    old_target = object_insert_map(old_target, far, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(old_target);
+    old_target->stats.hp = old_target->stats.maxhp;
+    CONTR(pl)->target_object = old_target;
+    CONTR(pl)->target_object_count = old_target->count;
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, attacker, 1), 0);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, attacker);
+    ck_assert_uint_eq(CONTR(pl)->target_object_count, attacker->count);
+}
+END_TEST
+
+START_TEST(test_player_retaliation_filters_non_hostile_and_invalid_attackers) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+
+    object *target = attack_test_target(map, pl);
+    CONTR(pl)->target_object = target;
+    CONTR(pl)->target_object_count = target->count;
+    CONTR(pl)->combat = 0;
+
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_eq(attack_hit(pl, pl, 1), 0);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, target);
+    ck_assert_uint_eq(CONTR(pl)->combat, 0);
+    ck_assert_ptr_null(attack_test_target_packet(pl));
+
+    object *friend = player_get_dummy("Friendly attacker", NULL);
+    object_remove(friend, 0);
+    friend = object_insert_map(friend, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(friend);
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_eq(attack_hit(pl, friend, 1), 0);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, target);
+    ck_assert_uint_eq(CONTR(pl)->combat, 0);
+    ck_assert_ptr_null(attack_test_target_packet(pl));
+
+    mapstruct *far_map = get_empty_map(24, 24);
+    object *far_attacker = attack_test_target(far_map, pl);
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, far_attacker, 1), 0);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, target);
+    ck_assert_uint_eq(CONTR(pl)->combat, 0);
+    ck_assert_ptr_null(attack_test_target_packet(pl));
+
+    object *invisible = attack_test_target(map, pl);
+    SET_FLAG(invisible, FLAG_IS_INVISIBLE);
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, invisible, 1), 0);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, target);
+    ck_assert_uint_eq(CONTR(pl)->combat, 0);
+    ck_assert_ptr_null(attack_test_target_packet(pl));
+
+    object *effect = arch_get("poisoning");
+    effect->stats.dam = 1;
+    effect = object_insert_into(effect, pl, 0);
+    ck_assert_ptr_nonnull(effect);
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, effect, 1), 0);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, target);
+    ck_assert_uint_eq(CONTR(pl)->combat, 0);
+    ck_assert_ptr_null(attack_test_target_packet(pl));
 }
 END_TEST
 
@@ -585,6 +779,10 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
 
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_player_retaliates_when_no_target_or_combat_is_disabled);
+    tcase_add_test(tc_core, test_player_retaliation_preserves_active_target);
+    tcase_add_test(tc_core, test_player_retaliation_replaces_unavailable_targets);
+    tcase_add_test(tc_core, test_player_retaliation_filters_non_hostile_and_invalid_attackers);
     tcase_add_test(tc_core, test_attack_is_melee_range);
     tcase_add_test(tc_core, test_attack_roll_adjust_describes_positional_bonuses);
     tcase_add_test(tc_core, test_attack_roll_adjust_describes_moved_target_penalty);

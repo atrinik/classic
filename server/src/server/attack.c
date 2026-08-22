@@ -333,6 +333,70 @@ static bool attack_check_abort(object *op, object *hitter, bool attack_map) {
 }
 
 /**
+ * Check whether a player's current target is an active melee fight.
+ *
+ * @param player_obj
+ * Player whose target is being checked.
+ * @return
+ * True when the player is already fighting a valid hostile target in range.
+ */
+static bool attack_player_target_is_active(object *player_obj) {
+    player *pl = CONTR(player_obj);
+    object *target = pl->target_object;
+
+    if (!pl->combat || target == NULL || target == player_obj ||
+        !OBJECT_VALID(target, pl->target_object_count) || !IS_LIVE(target) ||
+        target->stats.hp <= 0 || QUERY_FLAG(target, FLAG_SYS_OBJECT) ||
+        IS_INVISIBLE(target, player_obj) || OBJECT_IS_HIDDEN(player_obj, target) ||
+        is_friend_of(player_obj, target) || !player_target_is_in_map_neighborhood(pl) ||
+        !attack_is_melee_range(player_obj, target)) {
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Select a hostile actor that has just attacked a player when no active target
+ * should be preserved.
+ *
+ * The caller has already applied the ordinary attack acceptance checks. This
+ * helper only accepts a live, visible actor that can be represented by the
+ * player's normal target state; it does not create a separate combat mode.
+ *
+ * @param player_obj
+ * Player that was attacked.
+ * @param attacker
+ * Resolved owner/actor responsible for the attack.
+ * @param damage
+ * Requested damage for the accepted attack.
+ */
+static void attack_player_retarget(object *player_obj, object *attacker, int damage) {
+    HARD_ASSERT(player_obj != NULL);
+
+    if (player_obj->type != PLAYER || damage <= 0 || attacker == NULL) {
+        return;
+    }
+
+    attacker = HEAD(attacker);
+    rv_vector rv;
+    if (attacker == player_obj || !OBJECT_ACTIVE(attacker) || !IS_LIVE(attacker) ||
+        attacker->stats.hp <= 0 || QUERY_FLAG(attacker, FLAG_SYS_OBJECT) ||
+        attacker->env != NULL || player_obj->map == NULL || attacker->map == NULL ||
+        !get_rangevector(player_obj, attacker, &rv, 0) ||
+        IS_INVISIBLE(attacker, player_obj) || OBJECT_IS_HIDDEN(player_obj, attacker) ||
+        is_friend_of(attacker, player_obj) || attack_player_target_is_active(player_obj)) {
+        return;
+    }
+
+    player *pl = CONTR(player_obj);
+    pl->target_object = attacker;
+    pl->target_object_count = attacker->count;
+    pl->combat = 1;
+    send_target_command(pl);
+}
+
+/**
  * Add one named modifier to an attack roll and its optional description.
  *
  * @param adjustment
@@ -1006,6 +1070,8 @@ static int attack_hit_internal(object *op,
     if (!attack_check_sanity(op, hitter, NULL)) {
         return 0;
     }
+
+    attack_player_retarget(op, hitter_owner, dam);
 
     attack_bonus_t bonus = {.damage = dam};
     if (situational) {
