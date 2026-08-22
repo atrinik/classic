@@ -746,6 +746,8 @@ extern bool widget_map_animation_test_end(bool expect_damage,
                                           bool expect_elevated,
                                           bool expect_layer_content);
 extern void widget_map_animation_test_death_texture_set(SDL_Surface *texture);
+/** Verify player-centered transient visibility targets in the real map path. */
+extern bool widget_map_visibility_test(void);
 /** Set the synthetic pointer owner used by the cursor redraw benchmark. */
 extern void widget_map_pointer_test_set(int x, int y, bool world_pointer);
 extern void widget_map_animation_test_add(int type,
