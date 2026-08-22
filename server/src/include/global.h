@@ -356,6 +356,9 @@ typedef struct settings_struct {
     /** Canonical origin and profile prefix for rendezvous signaling. */
     char metaserver_rendezvous_origin[MAX_BUF];
 
+    /** Optional canonical DNS hostname published as the direct fallback endpoint. */
+    char metaserver_hostname[MAX_BUF];
+
     /** Jittered metaserver liveness-heartbeat base interval, in seconds. */
     uint32_t metaserver_heartbeat;
 

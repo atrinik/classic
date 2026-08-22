@@ -50,6 +50,10 @@ typedef struct metaserver_publisher_classic_payload {
     const char *text_comment;
     bool is_public;
     bool password_required;
+    /** Optional canonical DNS fallback for direct friend joining. */
+    const char *hostname;
+    /** QUIC port paired with hostname; zero means addressless publication. */
+    uint16_t port;
 } metaserver_publisher_classic_payload_t;
 
 typedef struct metaserver_publisher_identity metaserver_publisher_identity_t;

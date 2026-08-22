@@ -8,6 +8,7 @@
  ************************************************************************/
 
 #include <toolkit/metaserver_publisher.h>
+#include <toolkit/metaserver_url.h>
 #include <toolkit/string.h>
 
 #include <openssl/core_names.h>
@@ -193,11 +194,26 @@ bool metaserver_publisher_classic_body(const metaserver_publisher_classic_payloa
         !metaserver_publisher_utf8(payload->text_comment, 256, true)) {
         return false;
     }
+    bool has_hostname = payload->hostname != NULL && payload->hostname[0] != '\0';
+    if ((has_hostname && (!metaserver_hostname_valid(payload->hostname) || payload->port == 0)) ||
+        (!has_hostname && payload->port != 0)) {
+        return false;
+    }
     char name[161], version[65], comment[513];
     if (!metaserver_publisher_json_string(payload->name, VS(name)) ||
         !metaserver_publisher_json_string(payload->version, VS(version)) ||
         !metaserver_publisher_json_string(payload->text_comment, VS(comment))) {
         return false;
+    }
+    char endpoint[320] = {0};
+    if (has_hostname) {
+        int endpoint_length = snprintf(VS(endpoint),
+                                       ",\"hostname\":\"%s\",\"port\":%" PRIu16,
+                                       payload->hostname,
+                                       payload->port);
+        if (endpoint_length <= 0 || (size_t)endpoint_length >= sizeof(endpoint)) {
+            return false;
+        }
     }
     int length = snprintf(body,
                           METASERVER_PUBLISH_BODY_MAX + 1U,
@@ -205,7 +221,7 @@ bool metaserver_publisher_classic_body(const metaserver_publisher_classic_payloa
                           "\"serverId\":\"%s\",\"certificate\":\"%s\","
                           "\"name\":\"%s\",\"playersCount\":%" PRIu32 ","
                           "\"version\":\"%s\",\"textComment\":\"%s\","
-                          "\"public\":%s,\"passwordRequired\":%s}",
+                          "\"public\":%s,\"passwordRequired\":%s%s}",
                           payload->server_id,
                           payload->certificate,
                           name,
@@ -213,7 +229,8 @@ bool metaserver_publisher_classic_body(const metaserver_publisher_classic_payloa
                           version,
                           comment,
                           payload->is_public ? "true" : "false",
-                          payload->password_required ? "true" : "false");
+                          payload->password_required ? "true" : "false",
+                          endpoint);
     if (length <= 0 || (size_t)length > METASERVER_PUBLISH_BODY_MAX) {
         *body = '\0';
         return false;

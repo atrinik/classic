@@ -484,6 +484,21 @@ int main(int argc, char **argv) {
     payload.certificate = "AB==";
     require(!metaserver_publisher_classic_body(&payload, body, &body_size));
     payload.certificate = fixture.certificate;
+    payload.hostname = "play.example.net";
+    payload.port = 1730;
+    require(metaserver_publisher_classic_body(&payload, body, &body_size));
+    require(strstr(body,
+                   "\"passwordRequired\":true,\"hostname\":\"play.example.net\",\"port\":1730}") !=
+            NULL);
+    payload.hostname = "192.0.2.1";
+    require(!metaserver_publisher_classic_body(&payload, body, &body_size));
+    payload.hostname = "play.example.net";
+    payload.port = 0;
+    require(!metaserver_publisher_classic_body(&payload, body, &body_size));
+    payload.hostname = NULL;
+    payload.port = 1730;
+    require(!metaserver_publisher_classic_body(&payload, body, &body_size));
+    payload.port = 0;
 
     metaserver_publisher_components_t classic;
     require(metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V1,

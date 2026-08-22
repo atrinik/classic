@@ -429,9 +429,10 @@ for registry, persistence, event, privacy, and analytics semantics.
 
  Addressless listings expose no direct endpoint, so their only connection path
  is the invite-authorized rendezvous exchange. The legacy numeric `server_host`
- setting is no longer published: a future dedicated DNS-hostname setting and
- matching metaserver contract will provide the explicit direct fallback
- without persisting a raw IP address.
+ setting is no longer published. To opt into an explicit direct fallback,
+ configure the canonical lowercase DNS `metaserver_hostname`; the current
+ `port_quic` is published as its paired port. Invalid or numeric hostnames are
+ rejected, and the legacy numeric setting remains addressless.
 
  The server discovers same-LAN and direct global IPv6 addresses, tries PCP
  with automatic NAT-PMP negotiation and UPnP IGD to create and renew a UDP
@@ -534,10 +535,11 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
   server_name = Your Server Name
   server_desc = Description about your server.
 
- QUIC does not require server_host or an HTTP URL. `server_host` is a retained
- legacy numeric-IP option and is no longer published; leave it unset for an
- addressless listing. Automatic mapping, STUN, LAN, and global IPv6 discovery
- remain transient rendezvous candidates.
+ QUIC does not require `server_host` or an HTTP URL. `server_host` is a retained
+ legacy numeric-IP option and is never published. Leave `metaserver_hostname`
+ unset for an addressless listing, or set it to the canonical DNS name that
+ should be offered as the pinned direct fallback. Automatic mapping, STUN, LAN,
+ and global IPv6 discovery remain transient rendezvous candidates.
 
  Direct mode automatically tries a router mapping and does not normally require
  a manual port-forwarding rule. The local firewall must still allow the server

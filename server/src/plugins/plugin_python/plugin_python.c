@@ -1934,6 +1934,9 @@ static PyObject *Atrinik_GetSettings(PyObject *self, PyObject *ignored) {
                          "metaserver_publish_origin",
                          Py_BuildValue("s", hooks->settings->metaserver_publish_origin));
     PyDict_SetItemString(dict,
+                         "metaserver_hostname",
+                         Py_BuildValue("s", hooks->settings->metaserver_hostname));
+    PyDict_SetItemString(dict,
                          "metaserver_rendezvous_origin",
                          Py_BuildValue("s", hooks->settings->metaserver_rendezvous_origin));
     PyDict_SetItemString(dict, "server_host", Py_BuildValue("s", hooks->settings->server_host));
