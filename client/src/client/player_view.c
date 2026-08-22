@@ -154,6 +154,7 @@ typedef struct player_view_manifest {
     bool damage_animation;
     bool kill_animation;
     bool visibility_fade_test;
+    bool map_interaction_test;
     bool animation_elevated;
     bool animation_layer_content;
     bool animation_coordinates_set;
@@ -520,6 +521,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "damage-animation",
                                            "kill-animation",
                                            "visibility-fade-test",
+                                           "map-interaction-test",
                                            "animation-depth",
                                            "animation-sub-layer",
                                            "animation-x-offset",
@@ -575,6 +577,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
     char *kill_animation = success ? player_view_xml_property(root, "kill-animation") : NULL;
     char *visibility_fade_test =
         success ? player_view_xml_property(root, "visibility-fade-test") : NULL;
+    char *map_interaction_test =
+        success ? player_view_xml_property(root, "map-interaction-test") : NULL;
     char *animation_depth = success ? player_view_xml_property(root, "animation-depth") : NULL;
     char *animation_sub_layer =
         success ? player_view_xml_property(root, "animation-sub-layer") : NULL;
@@ -645,6 +649,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
          player_view_parse_bool(kill_animation, &manifest->kill_animation)) &&
         (visibility_fade_test == NULL ||
          player_view_parse_bool(visibility_fade_test, &manifest->visibility_fade_test)) &&
+        (map_interaction_test == NULL ||
+         player_view_parse_bool(map_interaction_test, &manifest->map_interaction_test)) &&
         ((animation_depth == NULL && animation_sub_layer == NULL) ||
          (animation_depth != NULL && animation_sub_layer != NULL &&
           player_view_parse_int(animation_depth,
@@ -904,6 +910,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(damage_animation);
     free(kill_animation);
     free(visibility_fade_test);
+    free(map_interaction_test);
     free(animation_depth);
     free(animation_sub_layer);
     free(animation_x_offset);
@@ -3535,6 +3542,14 @@ int player_view_main(int argc, char *argv[]) {
     } else {
         map_draw_map(surface);
     }
+
+#ifdef ATRINIK_WIDGET_TESTS
+    if (mode == PLAYER_VIEW_RENDER && manifest.map_interaction_test &&
+        !widget_map_fog_click_test(&map_widget)) {
+        fprintf(stderr, "player-view: fogged click-to-move interaction regression failed\n");
+        goto cleanup;
+    }
+#endif
 
     if (next_snapshot != NULL && mode != PLAYER_VIEW_BENCHMARK_MOVEMENT) {
         LastTick = 0;

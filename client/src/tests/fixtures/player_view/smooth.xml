@@ -15,6 +15,7 @@
              map-zoom="100"
              smooth-lighting="true"
              zoom-smoothing="false"
+             map-interaction-test="true"
              clock-ms="1200"
              expected-pixels-sha256="840b492ae6cf4adced6dddfd5162f2039d5d3e765939bbdfcf48e9b25012f846">
   <asset face="1" path="textures/square_highlight.png" sha256="fecfd2da236702bc874c58a767d0d237f5425e423e6699742accb26215c9676b"/>
