@@ -2512,87 +2512,6 @@ bool celestial_structure_write_provenance(const mapstruct *map, char *error, siz
     return true;
 }
 
-bool celestial_structure_validate_provenance(const mapstruct *map, char *error, size_t error_size) {
-    if (map == NULL || map->path == NULL) {
-        return set_error(error, error_size, "temporary v1 map has no provenance identity");
-    }
-    char ledger[HUGE_BUF], ledger_id[SHA256_DIGEST_LENGTH * 2 + 1];
-    if (!provenance_path(map->path, ledger, ledger_id)) {
-        return set_error(error, error_size, "temporary v1 map has an invalid provenance identity");
-    }
-    size_t ledger_size;
-    char *contents = preflight_read_file(ledger, &ledger_size, error, error_size);
-    if (contents == NULL) {
-        return set_error(error,
-                         error_size,
-                         "temporary v1 map %s has no provenance ledger (%s)",
-                         map_path(map),
-                         ledger_id);
-    }
-    char map_path_value[HUGE_BUF], source_path[HUGE_BUF], source_sha[SHA256_DIGEST_LENGTH * 2 + 1];
-    char map_sha[SHA256_DIGEST_LENGTH * 2 + 1];
-    char owner_account[MAX_BUF], owner_character[MAX_BUF];
-    char content_commit[41];
-    uint64_t schema;
-    const char *end = contents + ledger_size;
-    bool valid = preflight_json_uint(contents, end, "schema_version", &schema) && schema == 1 &&
-                 preflight_json_string(contents, end, "map_path", VS(map_path_value)) &&
-                 strcmp(map_path_value, map->path) == 0 &&
-                 preflight_json_string(contents, end, "source_path", VS(source_path)) &&
-                 celestial_structure_logical_map_id_valid(source_path) &&
-                 preflight_json_string(contents, end, "source_sha256", VS(source_sha)) &&
-                 preflight_hex(source_sha, SHA256_DIGEST_LENGTH * 2) &&
-                 preflight_json_string(contents, end, "map_sha256", VS(map_sha)) &&
-                 preflight_hex(map_sha, SHA256_DIGEST_LENGTH * 2) &&
-                 preflight_json_string(contents, end, "owner_account", VS(owner_account)) &&
-                 preflight_json_string(contents, end, "owner_character", VS(owner_character)) &&
-                 preflight_json_string(contents, end, "content_commit", VS(content_commit)) &&
-                 preflight_hex(content_commit, 40);
-#ifndef WIN32
-    char expected_account[MAX_BUF] = "", expected_character[MAX_BUF] = "";
-    char owner_error[HUGE_BUF] = "";
-    char *physical_base = MAP_UNIQUE(map) ? path_basename(map->path) : NULL;
-    bool private_map = physical_base != NULL && strchr(physical_base, '$') != NULL;
-    free(physical_base);
-    if (valid && private_map &&
-        (!private_map_owner_from_path(map->path,
-                                      expected_account,
-                                      expected_character,
-                                      VS(owner_error)) ||
-         strcmp(owner_account, expected_account) != 0 ||
-         strcmp(owner_character, expected_character) != 0)) {
-        valid = false;
-    }
-    if (valid && !private_map && (owner_account[0] != '\0' || owner_character[0] != '\0')) {
-        valid = false;
-    }
-#else
-    (void)owner_account;
-    (void)owner_character;
-#endif
-    if (valid && celestial_artifact_commit[0] != '\0' &&
-        strcmp(content_commit, celestial_artifact_commit) != 0) {
-        valid = false;
-    }
-    char source_file[HUGE_BUF], actual_sha[SHA256_DIGEST_LENGTH * 2 + 1];
-    if (valid && (snprintf(source_file, sizeof(source_file), "%s%s", settings.mapspath, source_path) < 0 ||
-                  !preflight_sha256_file(source_file, actual_sha) ||
-                  strcmp(actual_sha, source_sha) != 0)) {
-        valid = false;
-    }
-    char map_file[HUGE_BUF], actual_map_sha[SHA256_DIGEST_LENGTH * 2 + 1];
-    if (valid && (!provenance_map_file(map, map_file, actual_map_sha) ||
-                  strcmp(actual_map_sha, map_sha) != 0)) {
-        valid = false;
-    }
-    free(contents);
-    return valid ? true
-                 : set_error(error,
-                              error_size,
-                             "temporary v1 map %s has changed or unprovable source lineage",
-                             map_path(map));
-}
-
 #ifndef WIN32
 static bool quarantine_private_map_file(const char *path, const char *reason) {
     char directory[HUGE_BUF], destination[HUGE_BUF];
@@ -2822,10 +2741,6 @@ static bool preflight_private_map_file(const char *path, char *error, size_t err
                    !celestial_structure_validate_header(map, VS(reason))) {
             if (reason[0] == '\0') {
                 snprintf(VS(reason), "private map is not a valid celestial-v1 map");
-            }
-        } else if (!celestial_structure_validate_provenance(map, VS(reason))) {
-            if (reason[0] == '\0') {
-                snprintf(VS(reason), "private map provenance is invalid");
             }
         }
     }
