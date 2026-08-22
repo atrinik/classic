@@ -111,9 +111,51 @@ static void test_resize_preserves_recent_history(void) {
     network_graph_series_free(&latency);
 }
 
+static void test_history_edge_cases(void) {
+    network_graph_series_t series;
+
+    network_graph_series_init(&series, 1);
+    TEST_CHECK(network_graph_series_resize(&series, 0));
+    network_graph_series_advance(&series);
+    network_graph_series_free(&series);
+
+    network_graph_series_init(&series, SIZE_MAX);
+    TEST_CHECK(!network_graph_series_resize(&series, 2));
+    network_graph_series_free(&series);
+
+    network_graph_series_init(&series, SIZE_MAX / sizeof(uint64_t) + 1);
+    TEST_CHECK(!network_graph_series_resize(&series, 1));
+    network_graph_series_free(&series);
+
+    network_graph_series_init(&series, 1);
+    TEST_CHECK(network_graph_series_resize(&series, 2));
+    TEST_CHECK(network_graph_series_resize(&series, 3));
+    network_graph_series_add(&series, 0, 50, false);
+    network_graph_series_advance(&series);
+    network_graph_series_add(&series, 0, 100, false);
+    network_graph_series_add(&series, 0, 25, false);
+    TEST_CHECK(series.max == 50);
+    network_graph_series_advance(&series);
+    TEST_CHECK(network_graph_series_value(&series, 0, 0) == 50);
+    TEST_CHECK(network_graph_series_value(&series, 3, 0) == 0);
+    network_graph_series_advance(&series);
+    TEST_CHECK(network_graph_series_value(&series, 0, 0) == 25);
+    network_graph_series_free(&series);
+
+    network_graph_series_init(&series, 1);
+    TEST_CHECK(network_graph_series_resize(&series, 1));
+    network_graph_series_add(&series, 0, UINT64_MAX, true);
+    network_graph_series_add(&series, 0, 1, true);
+    TEST_CHECK(network_graph_series_value(&series, 0, 0) == UINT64_MAX);
+    network_graph_series_advance(&series);
+    TEST_CHECK(!network_graph_series_is_valid(&series, 0));
+    network_graph_series_free(&series);
+}
+
 int main(void) {
     test_latency_uses_only_matched_responses();
     test_bandwidth_samples_accumulate_per_bucket();
     test_resize_preserves_recent_history();
+    test_history_edge_cases();
     return 0;
 }
