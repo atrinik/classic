@@ -333,12 +333,13 @@ static bool attack_check_abort(object *op, object *hitter, bool attack_map) {
 }
 
 /**
- * Check whether a player's current target is an active melee fight.
+ * Check whether a player's current target is an active aggro fight.
  *
  * @param player_obj
  * Player whose target is being checked.
  * @return
- * True when the player is already fighting a valid hostile target in range.
+ * True when the player is already fighting a valid hostile target in the map
+ * neighborhood and that target is aggroed toward the player.
  */
 static bool attack_player_target_is_active(object *player_obj) {
     player *pl = CONTR(player_obj);
@@ -349,7 +350,7 @@ static bool attack_player_target_is_active(object *player_obj) {
         target->stats.hp <= 0 || QUERY_FLAG(target, FLAG_SYS_OBJECT) ||
         IS_INVISIBLE(target, player_obj) || OBJECT_IS_HIDDEN(player_obj, target) ||
         is_friend_of(player_obj, target) || !player_target_is_in_map_neighborhood(pl) ||
-        !attack_is_melee_range(player_obj, target)) {
+        !OBJECT_VALID(target->enemy, target->enemy_count) || target->enemy != player_obj) {
         return false;
     }
 
