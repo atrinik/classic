@@ -48,6 +48,7 @@
 #include <toolkit/datetime.h>
 #include <toolkit/metaserver_url.h>
 #include <keepalive.h>
+#include <network_graph.h>
 #include <cmake.h>
 #include <openssl/crypto.h>
 
@@ -243,9 +244,11 @@ void socket_command_keepalive(uint8_t *data, size_t len, size_t pos) {
     }
 
     uint64_t now_us = datetime_monotonic_us();
+    uint64_t rtt_us;
     client_keepalive_expire(&keepalive_state, now_us);
-    switch (client_keepalive_receive(&keepalive_state, id, now_us, NULL)) {
+    switch (client_keepalive_receive(&keepalive_state, id, now_us, &rtt_us)) {
     case CLIENT_KEEPALIVE_RESPONSE_MATCHED:
+        network_graph_update_latency(rtt_us);
         return;
     case CLIENT_KEEPALIVE_RESPONSE_LATE:
         LOG(DEBUG, "Received late keepalive ID: %" PRIu32, id);
