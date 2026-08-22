@@ -54,6 +54,30 @@ bind
 	command ?MOVE_STAY
 end
 bind
+	# w
+	key 119
+	repeat 1
+	command ?MOVE_N
+end
+bind
+	# a
+	key 97
+	repeat 1
+	command ?MOVE_W
+end
+bind
+	# s
+	key 115
+	repeat 1
+	command ?MOVE_S
+end
+bind
+	# d
+	key 100
+	repeat 1
+	command ?MOVE_E
+end
+bind
 	# [
 	key 91
 	repeat 1
@@ -82,8 +106,8 @@ bind
 	command ?CONSOLE
 end
 bind
-	# a
-	key 97
+	# f
+	key 102
 	command ?APPLY
 end
 bind
@@ -102,8 +126,8 @@ bind
 	command ?MARK
 end
 bind
-	# d
-	key 100
+	# z
+	key 122
 	repeat 1
 	command ?DROP
 end
@@ -183,8 +207,8 @@ bind
 	command ?TARGET_ENEMY
 end
 bind
-	# s
-	key 115
+	# y
+	key 121
 	command ?TARGET_FRIEND
 end
 bind
@@ -339,9 +363,4 @@ bind
     key 99
     mod 3
     command ?COMBAT_FORCE
-end
-bind
-    # c
-    key 99
-    command ?COMBAT
 end
