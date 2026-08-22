@@ -555,6 +555,11 @@ static inline void copy_lastmap(socket_struct *ns, int dx, int dy, int dz) {
     struct Map newmap = {0};
     int depth, x, y;
 
+    /* A client scroll soft-clears cells leaving its viewport. The translated
+     * server cache still carries authoritative geometry, but any newly exposed
+     * cells need a timed-light endpoint descriptor before they are composed. */
+    ns->lastmap_light_generation = 0;
+
     for (depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         int source_depth = depth + dz;
 
@@ -929,6 +934,22 @@ void send_game_time(player *recipient) {
         (_cell_)->cleared = 1;                                          \
     }
 
+/** Invalidate light state that the client discards when clearing a retained tile. */
+static void map_invalidate_light_cache(MapCell *cell) {
+    HARD_ASSERT(cell != NULL);
+
+    memset(cell->light_radiance, 0, sizeof(cell->light_radiance));
+    memset(cell->light_known, 0, sizeof(cell->light_known));
+    memset(cell->light_rgb_radiance, 0, sizeof(cell->light_rgb_radiance));
+    memset(cell->light_rgb_known, 0, sizeof(cell->light_rgb_known));
+    cell->light_rgb_explicit = 0;
+    memset(cell->light_next_radiance, 0, sizeof(cell->light_next_radiance));
+    memset(cell->light_next_known, 0, sizeof(cell->light_next_known));
+    cell->light_next_generation = 0;
+    memset(cell->light_next_rgb_radiance, 0, sizeof(cell->light_next_rgb_radiance));
+    cell->light_next_rgb_explicit = 0;
+}
+
 typedef enum map_level_visibility {
     MAP_LEVEL_HIDDEN,
     MAP_LEVEL_WALL_BOUNDARY,
@@ -1245,6 +1266,7 @@ map_column_has_visible_roof(mapstruct *base,
                                        mask | MAP2_MASK_CLEAR |                                 \
                                            ((_hard_) ? MAP2_MASK_HARD_CLEAR : 0));              \
             map_clearcell(cached);                                                              \
+            light_state_invalidated = true;                                                     \
             level_present = true;                                                               \
         }                                                                                       \
     }
@@ -1316,10 +1338,27 @@ void draw_client_map2(object *pl) {
     int sub_layer, socket_layer;
     packet_writer_mark_t packet_save_buf;
     bool timed_light_descriptor = false;
+    bool light_state_invalidated = false;
     uint64_t timed_light_generation = 0;
     uint64_t timed_light_start_seconds = 0;
     uint64_t timed_light_end_seconds = 0;
     uint8_t timed_light_flags = MAP2_LIGHT_KEYFRAME_CONTINUOUS;
+
+    /* Any kind of special vision? */
+    special_vision =
+        (QUERY_FLAG(pl, FLAG_XRAYS) ? 1 : 0) | (QUERY_FLAG(pl, FLAG_SEE_IN_DARK) ? 2 : 0);
+    map2_count++;
+
+    /* Non-player name colors are relative to the viewer's level. Invalidate
+     * the delta cache when that level changes so every visible label is sent
+     * again with its newly authoritative color. */
+    if (!CONTR(pl)->cs->lastmap_player_level_known ||
+        CONTR(pl)->cs->lastmap_player_level != pl->level) {
+        map_client_cache_clear(&CONTR(pl)->cs->lastmap);
+        CONTR(pl)->cs->lastmap_light_generation = 0;
+        CONTR(pl)->cs->lastmap_player_level = pl->level;
+        CONTR(pl)->cs->lastmap_player_level_known = true;
+    }
 
     if (pl->map->celestial_schema == 1 &&
         celestial_light_keyframe_ensure(pl->map, (uint64_t)todtick)) {
@@ -1334,21 +1373,6 @@ void draw_client_map2(object *pl) {
         if ((uint64_t)pticks % PTICKS_PER_CLOCK != 0) {
             timed_light_flags = MAP2_LIGHT_KEYFRAME_SNAP;
         }
-    }
-
-    /* Any kind of special vision? */
-    special_vision =
-        (QUERY_FLAG(pl, FLAG_XRAYS) ? 1 : 0) | (QUERY_FLAG(pl, FLAG_SEE_IN_DARK) ? 2 : 0);
-    map2_count++;
-
-    /* Non-player name colors are relative to the viewer's level. Invalidate
-     * the delta cache when that level changes so every visible label is sent
-     * again with its newly authoritative color. */
-    if (!CONTR(pl)->cs->lastmap_player_level_known ||
-        CONTR(pl)->cs->lastmap_player_level != pl->level) {
-        map_client_cache_clear(&CONTR(pl)->cs->lastmap);
-        CONTR(pl)->cs->lastmap_player_level = pl->level;
-        CONTR(pl)->cs->lastmap_player_level_known = true;
     }
 
     packet = packet_new(CLIENT_CMD_MAP, 0, 512);
@@ -1685,6 +1709,8 @@ void draw_client_map2(object *pl) {
                 if (!mp->fow_known || (mp->fow != 0) != tile_fow) {
                     mask |= MAP2_MASK_FOW;
                 }
+                bool light_state_discarded =
+                    tile_fow && (!mp->fow_known || mp->fow == 0);
 
                 /* Go through the visible layers. */
                 for (layer = LAYER_FLOOR; layer <= NUM_LAYERS; layer++) {
@@ -2241,7 +2267,8 @@ void draw_client_map2(object *pl) {
                     if (light_next_radiance[sub_layer] != current_scalar ||
                         memcmp(light_next_rgb_radiance[sub_layer], current_rgb, sizeof(current_rgb)) != 0 ||
                         (timed_light_descriptor &&
-                         (mp->light_next_generation != timed_light_generation ||
+                         (light_state_discarded ||
+                          mp->light_next_generation != timed_light_generation ||
                           !mp->light_next_known[sub_layer] ||
                           mp->light_next_radiance[sub_layer] != light_next_radiance[sub_layer]))) {
                         light_next_bitmap |= UINT8_C(1) << sub_layer;
@@ -2254,12 +2281,14 @@ void draw_client_map2(object *pl) {
                 }
                 if (timed_light_descriptor &&
                     (mp->light_next_generation != timed_light_generation ||
-                     mp->light_next_rgb_explicit != light_next_rgb_bitmap)) {
+                     mp->light_next_rgb_explicit != light_next_rgb_bitmap ||
+                     light_state_discarded)) {
                     light_next_changed = true;
                 }
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                     if (timed_light_descriptor &&
-                        (mp->light_next_generation != timed_light_generation ||
+                        (light_state_discarded ||
+                         mp->light_next_generation != timed_light_generation ||
                          !mp->light_next_known[sub_layer] ||
                          mp->light_next_radiance[sub_layer] != light_next_radiance[sub_layer])) {
                         light_next_changed = true;
@@ -2272,7 +2301,7 @@ void draw_client_map2(object *pl) {
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                     uint16_t resolved_light = light_set[sub_layer] ? light_radiance[sub_layer] : 0;
 
-                    if (!mp->light_known[sub_layer] ||
+                    if (light_state_discarded || !mp->light_known[sub_layer] ||
                         resolved_light != mp->light_radiance[sub_layer]) {
                         if (sub_layer == 0) {
                             mask |= MAP2_MASK_LIGHT_LEVEL;
@@ -2296,7 +2325,8 @@ void draw_client_map2(object *pl) {
                         light_rgb_bitmap |= UINT8_C(1) << sub_layer;
                     }
 
-                    if ((!mp->light_rgb_known[sub_layer] &&
+                    if (light_state_discarded ||
+                        (!mp->light_rgb_known[sub_layer] &&
                          (light_rgb_bitmap & (UINT8_C(1) << sub_layer))) ||
                         (mp->light_rgb_known[sub_layer] &&
                          memcmp(mp->light_rgb_radiance[sub_layer], resolved_rgb, sizeof(resolved_rgb)) !=
@@ -2304,7 +2334,7 @@ void draw_client_map2(object *pl) {
                         light_rgb_changed = true;
                     }
                 }
-                if (light_rgb_bitmap != mp->light_rgb_explicit) {
+                if (light_state_discarded || light_rgb_bitmap != mp->light_rgb_explicit) {
                     light_rgb_changed = true;
                 }
 
@@ -2449,6 +2479,11 @@ void draw_client_map2(object *pl) {
                     mp->light_next_generation = timed_light_generation;
                 }
 
+                if (light_state_discarded) {
+                    map_invalidate_light_cache(mp);
+                    light_state_invalidated = true;
+                }
+
                 /* Animation? Add its type and value. */
                 if (ext_flags & MAP2_FLAG_EXT_ANIM) {
                     packet_debug_data(packet, 1, "Number of animations");
@@ -2582,7 +2617,12 @@ void draw_client_map2(object *pl) {
         packet_free(level_packets[i]);
     }
 
-    if (timed_light_descriptor) {
+    if (light_state_invalidated) {
+        /* The client clears current and timed light knowledge after applying a
+         * tile clear or FOW=true record. Make the next packet establish the
+         * full state again, including a timed-light descriptor when applicable. */
+        CONTR(pl)->cs->lastmap_light_generation = 0;
+    } else if (timed_light_descriptor) {
         CONTR(pl)->cs->lastmap_light_generation = timed_light_generation;
     }
 
