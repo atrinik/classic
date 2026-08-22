@@ -73,8 +73,16 @@ bool face_cache_start(void) {
     }
     if (face_cache_directory == NULL) {
         char *marker = file_path(DIRECTORY_CACHE "/.face-cache-root", "wb");
+        if (marker == NULL) {
+            LOG(ERROR, "Could not prepare the face cache directory");
+            return false;
+        }
         face_cache_directory = path_dirname(marker);
         free(marker);
+        if (face_cache_directory == NULL) {
+            LOG(ERROR, "Could not derive the face cache directory");
+            return false;
+        }
     }
     face_cache_stopping = false;
     face_cache_thread = SDL_CreateThread(face_cache_worker, "face-cache", NULL);

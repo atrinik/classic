@@ -29,6 +29,7 @@
 
 #include <global.h>
 #include <image_codec.h>
+#include <user_data.h>
 #include <wrapper.h>
 #include <video.h>
 #include <metaserver.h>
@@ -267,20 +268,12 @@ void get_data_dir_file(char *buf, size_t len, const char *fname) {
 char *file_path(const char *path, const char *mode) {
     bool is_write, is_append;
     StringBuffer *sb;
-    char version[MAX_BUF], client_path[HUGE_BUF], *new_path;
+    char client_path[HUGE_BUF], user_data_directory[HUGE_BUF], *new_path;
 
     HARD_ASSERT(path != NULL);
     HARD_ASSERT(mode != NULL);
 
     SOFT_ASSERT_RC(path[0] != '/', xstrdup(path), "Path is already absolute: %s", path);
-
-    sb = stringbuffer_new();
-    stringbuffer_append_printf(sb,
-                               "%s/.atrinik/%s/%s",
-                               get_config_dir(),
-                               package_get_version_partial(VS(version)),
-                               path);
-    new_path = stringbuffer_sub(sb, 0, 0);
 
     is_write = is_append = false;
 
@@ -289,6 +282,20 @@ char *file_path(const char *path, const char *mode) {
     } else if (strchr(mode, '+') != NULL || strchr(mode, 'a') != NULL) {
         is_append = true;
     }
+
+    if (!user_data_prepare(get_config_dir(), PACKAGE_VERSION_MAJOR, VS(user_data_directory))) {
+        LOG(ERROR, "Could not prepare the client user-data directory.");
+        if (is_write || is_append) {
+            return NULL;
+        }
+
+        get_data_dir_file(VS(client_path), path);
+        return xstrdup(client_path);
+    }
+
+    sb = stringbuffer_new();
+    stringbuffer_append_printf(sb, "%s/%s", user_data_directory, path);
+    new_path = stringbuffer_sub(sb, 0, 0);
 
     if (is_write || is_append) {
         if (access(new_path, W_OK) != 0) {
@@ -443,7 +450,7 @@ char *file_path_server(const char *path) {
  * that are related to file opening and reading/writing.
  *
  * For GNU/Linux, they call file_path() to determine the path to the file
- * to open in ~/.atrinik, and if the file doesn't exist there, copy it
+ * to open in ~/.atrinik/<major>.x, and if the file doesn't exist there, copy it
  * there from the directory the client is running in.
  *@{*/
 
@@ -458,6 +465,9 @@ char *file_path_server(const char *path) {
  */
 FILE *client_fopen_wrapper(const char *fname, const char *mode) {
     char *path = file_path(fname, mode);
+    if (path == NULL) {
+        return NULL;
+    }
     FILE *fp = fopen(path, mode);
     free(path);
 
@@ -476,6 +486,9 @@ SDL_Surface *IMG_Load_wrapper(const char *file) {
     SDL_Surface *surface;
 
     path = file_path(file, "r");
+    if (path == NULL) {
+        return NULL;
+    }
     surface = image_codec_load(path);
     free(path);
 
@@ -496,6 +509,9 @@ TTF_Font *TTF_OpenFont_wrapper(const char *file, int ptsize) {
     TTF_Font *font;
 
     path = file_path(file, "r");
+    if (path == NULL) {
+        return NULL;
+    }
     font = TTF_OpenFont(path, ptsize);
     free(path);
 

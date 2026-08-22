@@ -655,8 +655,11 @@ void widgets_reset(void) {
     toolkit_widget_deinit();
     path = file_path("settings/interface.cfg", "w");
 
-    if (path_exists(path)) {
+    if (path != NULL && path_exists(path)) {
         unlink(path);
+    }
+    if (path == NULL) {
+        LOG(ERROR, "Could not prepare the widget settings path");
     }
 
     free(path);

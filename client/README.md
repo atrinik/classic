@@ -54,16 +54,19 @@
   $ build/linux-debug/atrinik
 
  Set `ATRINIK_CONFIG_DIR` to give a process an isolated configuration base.
- The client creates its normal `.atrinik/<version>/` hierarchy below that
+ The client creates its normal `.atrinik/<major>.x/` hierarchy below that
  directory. This is useful when running concurrent development clients without
  sharing settings, cached server data, or connection preferences:
   $ ATRINIK_CONFIG_DIR=/absolute/path/to/client-state build/linux-debug/atrinik
 
- Classic supports configuration from the running 5.x major/minor directory.
- Automatic upgrades from `.atrinik/2.0`, `.atrinik/2.5`, and `.atrinik/3.0`
- are no longer supported. The client leaves those historical directories and
- their files untouched while creating or using current defaults. Archive old
- profiles or recover selected settings manually when they are still needed.
+ On first use of a `.atrinik/<major>.x/` directory, the client checks for
+ legacy same-major directories such as `5.34`, `5.35`, or `5.34~`. It selects
+ the highest valid numeric version (including patch components, with
+ deterministic suffix handling) and migrates its files without overwriting
+ existing user data. The source is retained until the destination is usable;
+ interrupted or conflicting migrations leave a recovery marker and resume on
+ a later run. Directories for unrelated or older major releases are left
+ untouched and are never imported.
 
  If you used a different BUILD_DIR or CMake preset, adjust the executable path
  accordingly. Extracted portable Windows packages contain atrinik.exe and all

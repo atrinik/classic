@@ -184,6 +184,10 @@ static void asset_request_cache_save(const asset_request_t *request) {
 
     uint64_t started = SDL_GetTicksNS();
     char *path = file_path(request->cache_path, "wb");
+    if (path == NULL) {
+        LOG(ERROR, "Could not prepare QUIC asset cache %s", request->cache_path);
+        return;
+    }
     bool success = path_write_atomic(path, request->data, request->size, 0600);
     free(path);
     if (success) {

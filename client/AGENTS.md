@@ -34,6 +34,10 @@
 - Focused text inputs own their key-down, key-up, text-input, and text-editing
   events. Do not let gameplay bindings observe an event already consumed by a
   focused widget.
+- Client user data lives below `.atrinik/<major>.x/`. When that stable directory
+  is first created, the client may migrate the highest valid same-major legacy
+  directory; the migration is collision-safe and marker-backed, leaves other
+  major lines untouched, and resumes after interruption or a user-file conflict.
 - Follow the root `.clang-format`, existing allocation/error conventions, and CMake
   source lists. Add focused tests for renderer, input, parser, and lifecycle
   regressions.

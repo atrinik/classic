@@ -345,6 +345,18 @@ if (BUILD_TESTING)
         SDL3_mixer::SDL3_mixer)
     add_test(NAME client-sound-playback COMMAND client-sound-playback-tests)
 
+    add_executable(client-user-data-tests
+        src/tests/user_data.c
+        src/client/user_data.c)
+    atrinik_configure_target(client-user-data-tests)
+    target_include_directories(client-user-data-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-user-data-tests PRIVATE Atrinik::Core)
+    add_test(NAME client-user-data COMMAND client-user-data-tests)
+
     add_test(NAME client-lighting-lut-generated
         COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_lighting_lut.py" --check)

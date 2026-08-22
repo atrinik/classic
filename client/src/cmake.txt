@@ -58,6 +58,7 @@ set(SOURCES
 	src/client/texture.c
 	src/client/tilestretcher.c
 	src/client/updates.c
+	src/client/user_data.c
 	src/client/video.c
 	src/client/window_title.c
 	src/client/wrapper.c
