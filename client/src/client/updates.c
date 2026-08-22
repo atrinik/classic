@@ -112,7 +112,7 @@ void socket_command_file_update(uint8_t *data, size_t len, size_t pos) {
     }
 
     char *path = file_path(filename, "wb");
-    bool saved = path_write_atomic(path, dest, actual_size, 0600);
+    bool saved = path != NULL && path_write_atomic(path, dest, actual_size, 0600);
     free(path);
     free(dest);
     if (!saved) {

@@ -176,8 +176,13 @@ asset_source_state_t asset_source_get_state(asset_source_t *source) {
         if (verified) {
             if (source->cache_path != NULL) {
                 char *path = file_path(source->cache_path, "wb");
-                verified = path_write_atomic(path, body, size, 0600);
-                free(path);
+                if (path == NULL) {
+                    LOG(ERROR, "Could not prepare HTTP asset cache %s", source->cache_path);
+                    verified = false;
+                } else {
+                    verified = path_write_atomic(path, body, size, 0600);
+                    free(path);
+                }
             }
             if (verified) {
                 source->state = ASSET_SOURCE_COMPLETE;

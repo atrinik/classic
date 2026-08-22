@@ -179,7 +179,7 @@ bool resources_is_ready(resource_t *resource) {
     char *path = path_join("resources", resource->digest);
     char *resolved = file_path(path, "wb");
     uint64_t write_started = SDL_GetTicksNS();
-    bool saved = path_write_atomic(resolved, body, body_size, 0600);
+    bool saved = resolved != NULL && path_write_atomic(resolved, body, body_size, 0600);
     free(resolved);
     if (!saved) {
         LOG(ERROR, "Failed to atomically write %s", path);

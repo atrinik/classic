@@ -158,6 +158,23 @@ static void test_numeric_migration(const char *root) {
     TEST_CHECK(strcmp(path, expected) == 0);
 }
 
+static void test_suffixed_candidate(const char *root) {
+    char path[HUGE_BUF];
+    char contents[128];
+
+    snprintf(VS(path), "%s/.atrinik/5.13~/settings/keys.dat", root);
+    write_file(path, "suffix-only\n");
+
+    TEST_CHECK(user_data_prepare(root, 5, VS(path)));
+    snprintf(VS(path), "%s/.atrinik/5.x/settings/keys.dat", root);
+    read_file(path, contents, sizeof(contents));
+    TEST_CHECK(strcmp(contents, "suffix-only\n") == 0);
+    snprintf(VS(path), "%s/.atrinik/5.13~", root);
+    TEST_CHECK(!is_directory(path));
+    snprintf(VS(path), "%s/.atrinik/.5.x.migration", root);
+    TEST_CHECK(access(path, F_OK) != 0);
+}
+
 static void test_existing_target_is_preserved(const char *root) {
     char path[HUGE_BUF];
     char contents[128];
@@ -232,6 +249,10 @@ int main(void) {
     TEST_CHECK(snprintf(VS(scenario), "%s/existing-target", root) < (int)sizeof(scenario));
     TEST_CHECK(path_ensure_real_directory(scenario, 0700) == PATH_DIRECTORY_OK);
     test_existing_target_is_preserved(scenario);
+
+    TEST_CHECK(snprintf(VS(scenario), "%s/suffixed", root) < (int)sizeof(scenario));
+    TEST_CHECK(path_ensure_real_directory(scenario, 0700) == PATH_DIRECTORY_OK);
+    test_suffixed_candidate(scenario);
 
     TEST_CHECK(snprintf(VS(scenario), "%s/no-candidate", root) < (int)sizeof(scenario));
     TEST_CHECK(path_ensure_real_directory(scenario, 0700) == PATH_DIRECTORY_OK);

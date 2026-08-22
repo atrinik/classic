@@ -429,7 +429,7 @@ bool server_file_save(server_files_struct *tmp, unsigned char *data, size_t len)
     char path[MAX_BUF];
     server_file_path(tmp, VS(path));
     char *resolved = file_path(path, "wb");
-    bool ok = path_write_atomic(resolved, data, len, 0600);
+    bool ok = resolved != NULL && path_write_atomic(resolved, data, len, 0600);
     free(resolved);
     if (!ok) {
         LOG(ERROR, "Could not atomically write %s.", path);

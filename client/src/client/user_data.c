@@ -230,7 +230,12 @@ user_data_parse_candidate(const char *name, unsigned int major, user_data_candid
     }
 
     memcpy(candidate->name, name, length);
-    candidate->name[length] = candidate->suffixed ? '~' : '\0';
+    if (candidate->suffixed) {
+        candidate->name[length] = '~';
+        candidate->name[length + 1U] = '\0';
+    } else {
+        candidate->name[length] = '\0';
+    }
     return true;
 }
 
