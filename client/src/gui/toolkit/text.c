@@ -1398,16 +1398,13 @@ int text_show_character(font_struct **font,
                             border_left = icon_sprite->border_left;
                             border_right = icon_sprite->border_right;
                         } else {
-                            Uint32 color_key;
-                            if (!SDL_GetSurfaceColorKey(icon_surface, &color_key)) {
-                                color_key = getpixel(icon_surface, 0, 0);
+                            if (!surface_texture_borders_get(icon_surface,
+                                                             &border_up,
+                                                             &border_down,
+                                                             &border_left,
+                                                             &border_right)) {
+                                return ret;
                             }
-                            surface_borders_get(icon_surface,
-                                                &border_up,
-                                                &border_down,
-                                                &border_left,
-                                                &border_right,
-                                                color_key);
                         }
 
                         icon_w = icon_orig_w = icon_surface->w - border_left - border_right;

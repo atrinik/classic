@@ -91,6 +91,37 @@ bool surface_pixel_visible(SDL_Surface *surface, int x, int y) {
     return true;
 }
 
+/** Read a mapped surface pixel while honoring SDL's direct-access contract. */
+bool surface_pixel_get(SDL_Surface *surface, int x, int y, Uint32 *pixel) {
+    if (surface == NULL || pixel == NULL || x < 0 || x >= surface->w || y < 0 || y >= surface->h) {
+        return false;
+    }
+
+    const SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(surface->format);
+    if (details == NULL || details->bytes_per_pixel <= 0) {
+        return false;
+    }
+
+    bool locked = false;
+    if (SDL_MUSTLOCK(surface)) {
+        if (!SDL_LockSurface(surface)) {
+            return false;
+        }
+        locked = true;
+    }
+
+    bool success = surface->pixels != NULL;
+    if (success) {
+        *pixel = getpixel(surface, x, y);
+    }
+
+    if (locked) {
+        SDL_UnlockSurface(surface);
+    }
+
+    return success;
+}
+
 /** Return the mapped pixel value at a surface coordinate. */
 Uint32 getpixel(SDL_Surface *surface, int x, int y) {
     const SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(surface->format);
@@ -116,4 +147,139 @@ Uint32 getpixel(SDL_Surface *surface, int x, int y) {
     }
 
     return 0;
+}
+
+/** Calculate the left border in a surface relative to a color. */
+static bool surface_border_get_left(SDL_Surface *surface, int *pos, uint32_t color) {
+    for (int x = 0; x < surface->w; x++) {
+        for (int y = 0; y < surface->h; y++) {
+            if (getpixel(surface, x, y) != color) {
+                *pos = x;
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/** Calculate the right border in a surface relative to a color. */
+static bool surface_border_get_right(SDL_Surface *surface, int *pos, uint32_t color) {
+    for (int x = surface->w - 1; x >= 0; x--) {
+        for (int y = 0; y < surface->h; y++) {
+            if (getpixel(surface, x, y) != color) {
+                *pos = (surface->w - 1) - x;
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/** Calculate the top border in a surface relative to a color. */
+static bool surface_border_get_top(SDL_Surface *surface, int *pos, uint32_t color) {
+    for (int y = 0; y < surface->h; y++) {
+        for (int x = 0; x < surface->w; x++) {
+            if (getpixel(surface, x, y) != color) {
+                *pos = y;
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/** Calculate the bottom border in a surface relative to a color. */
+static bool surface_border_get_bottom(SDL_Surface *surface, int *pos, uint32_t color) {
+    for (int y = surface->h - 1; y >= 0; y--) {
+        for (int x = 0; x < surface->w; x++) {
+            if (getpixel(surface, x, y) != color) {
+                *pos = (surface->h - 1) - y;
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Get borders from an SDL surface while honoring its direct-access contract.
+ *
+ * @return 1 if a non-color border was found, 0 if all pixels match, or -1 if
+ * the surface cannot be accessed.
+ */
+int surface_borders_get(SDL_Surface *surface,
+                        int *top,
+                        int *bottom,
+                        int *left,
+                        int *right,
+                        uint32_t color) {
+    if (surface == NULL || top == NULL || bottom == NULL || left == NULL || right == NULL ||
+        surface->w <= 0 || surface->h <= 0) {
+        return -1;
+    }
+
+    const SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(surface->format);
+    if (details == NULL || details->bytes_per_pixel <= 0) {
+        return -1;
+    }
+
+    bool locked = false;
+    if (SDL_MUSTLOCK(surface)) {
+        if (!SDL_LockSurface(surface)) {
+            return -1;
+        }
+        locked = true;
+    }
+
+    if (surface->pixels == NULL) {
+        if (locked) {
+            SDL_UnlockSurface(surface);
+        }
+        return -1;
+    }
+
+    *top = 0;
+    *bottom = 0;
+    *left = 0;
+    *right = 0;
+
+    if (!surface_border_get_top(surface, top, color)) {
+        if (locked) {
+            SDL_UnlockSurface(surface);
+        }
+        return 0;
+    }
+
+    surface_border_get_bottom(surface, bottom, color);
+    surface_border_get_left(surface, left, color);
+    surface_border_get_right(surface, right, color);
+
+    if (locked) {
+        SDL_UnlockSurface(surface);
+    }
+
+    return 1;
+}
+
+/** Calculate markup-icon borders using a surface color key or its first pixel. */
+bool surface_texture_borders_get(SDL_Surface *surface,
+                                 int *top,
+                                 int *bottom,
+                                 int *left,
+                                 int *right) {
+    Uint32 color_key;
+    if (surface == NULL) {
+        return false;
+    }
+
+    if (!SDL_GetSurfaceColorKey(surface, &color_key) &&
+        !surface_pixel_get(surface, 0, 0, &color_key)) {
+        return false;
+    }
+
+    return surface_borders_get(surface, top, bottom, left, right, color_key) >= 0;
 }

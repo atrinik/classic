@@ -134,6 +134,67 @@ static void test_truecolor_pixel_visibility(void) {
     SDL_DestroySurface(surface);
 }
 
+static void test_safe_pixel_access(void) {
+    SDL_Surface *surface = SDL_CreateSurface(2, 1, SDL_PIXELFORMAT_RGBA32);
+    TEST_CHECK(surface != NULL);
+    TEST_CHECK(SDL_WriteSurfacePixel(surface, 0, 0, 10, 20, 30, SDL_ALPHA_OPAQUE));
+
+    Uint32 pixel;
+    TEST_CHECK(surface_pixel_get(surface, 0, 0, &pixel));
+    TEST_CHECK(pixel == surface_map_rgba(surface, 10, 20, 30, SDL_ALPHA_OPAQUE));
+    TEST_CHECK(!surface_pixel_get(surface, -1, 0, &pixel));
+    TEST_CHECK(!surface_pixel_get(surface, surface->w, 0, &pixel));
+    TEST_CHECK(!surface_pixel_get(NULL, 0, 0, &pixel));
+    TEST_CHECK(!surface_pixel_get(surface, 0, 0, NULL));
+
+    void *surface_pixels = surface->pixels;
+    surface->pixels = NULL;
+    TEST_CHECK(!surface_pixel_get(surface, 0, 0, &pixel));
+    surface->pixels = surface_pixels;
+
+    /* Model decoder surfaces that require SDL_LockSurface before direct access. */
+    surface->flags |= SDL_SURFACE_LOCK_NEEDED;
+    TEST_CHECK(SDL_MUSTLOCK(surface));
+    TEST_CHECK(surface_pixel_get(surface, 0, 0, &pixel));
+    surface->flags &= ~SDL_SURFACE_LOCK_NEEDED;
+
+    SDL_DestroySurface(surface);
+
+    surface = SDL_CreateSurface(3, 3, SDL_PIXELFORMAT_RGBA32);
+    TEST_CHECK(surface != NULL);
+    Uint32 color = surface_map_rgba(surface, 0, 0, 0, SDL_ALPHA_OPAQUE);
+    Uint32 visible = surface_map_rgba(surface, 255, 255, 255, SDL_ALPHA_OPAQUE);
+    TEST_CHECK(SDL_FillSurfaceRect(surface, NULL, color));
+    TEST_CHECK(SDL_WriteSurfacePixel(surface, 1, 1, 255, 255, 255, SDL_ALPHA_OPAQUE));
+
+    int top, bottom, left, right;
+    TEST_CHECK(surface_borders_get(surface, &top, &bottom, &left, &right, color) == 1);
+    TEST_CHECK(top == 1 && bottom == 1 && left == 1 && right == 1);
+    TEST_CHECK(surface_texture_borders_get(surface, &top, &bottom, &left, &right));
+    TEST_CHECK(top == 1 && bottom == 1 && left == 1 && right == 1);
+
+    surface->flags |= SDL_SURFACE_LOCK_NEEDED;
+    TEST_CHECK(surface_borders_get(surface, &top, &bottom, &left, &right, color) == 1);
+    TEST_CHECK(surface_texture_borders_get(surface, &top, &bottom, &left, &right));
+    surface->flags &= ~SDL_SURFACE_LOCK_NEEDED;
+
+    TEST_CHECK(SDL_SetSurfaceColorKey(surface, true, color));
+    TEST_CHECK(surface_texture_borders_get(surface, &top, &bottom, &left, &right));
+    TEST_CHECK(top == 1 && bottom == 1 && left == 1 && right == 1);
+    TEST_CHECK(SDL_FillSurfaceRect(surface, NULL, visible));
+    TEST_CHECK(surface_borders_get(surface, &top, &bottom, &left, &right, visible) == 0);
+    TEST_CHECK(top == 0 && bottom == 0 && left == 0 && right == 0);
+
+    void *border_pixels = surface->pixels;
+    surface->pixels = NULL;
+    TEST_CHECK(surface_borders_get(surface, &top, &bottom, &left, &right, color) < 0);
+    surface->pixels = border_pixels;
+    TEST_CHECK(surface_borders_get(NULL, &top, &bottom, &left, &right, color) < 0);
+    TEST_CHECK(surface_texture_borders_get(NULL, &top, &bottom, &left, &right) == false);
+
+    SDL_DestroySurface(surface);
+}
+
 static void test_legacy_texture_transparency(void) {
     char path[1024];
     int length = snprintf(path, sizeof(path), "%s/textures/invslot.png", ATRINIK_TEST_SOURCE_DIR);
@@ -554,6 +615,7 @@ int main(void) {
     test_packed_indexed_conversion();
     test_index8_visible_bounds();
     test_truecolor_pixel_visibility();
+    test_safe_pixel_access();
     test_legacy_texture_transparency();
     test_mutable_color_key_surface_reuse();
     test_indexed_alpha_rotation(0);
