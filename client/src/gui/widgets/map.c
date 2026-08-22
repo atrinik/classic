@@ -5926,7 +5926,7 @@ bool widget_map_fog_click_test(widgetdata *widget) {
         {"remembered-fog", true, true, true, false, 75, 0, false, true},
         {"blank-fog", true, false, false, false, 0, 0, false, true},
         {"black", false, false, true, true, 0, 0, false, true},
-        {"stretched-fog", true, false, false, false, 0, UINT32_C(0x02030401), false, true},
+        {"stretched-fog", true, false, false, false, 1, UINT32_C(0x02030401), false, true},
         {"height-difference", true, true, true, false, 75, 0, true, false},
     };
 
