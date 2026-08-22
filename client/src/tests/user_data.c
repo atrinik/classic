@@ -113,45 +113,55 @@ static void make_temp_root(char *root, size_t root_size) {
 #endif
 }
 
+static void set_path(char *path, size_t path_size, const char *root, const char *relative) {
+    char *joined = path_join(root, relative);
+    TEST_CHECK(joined != NULL);
+
+    size_t length = strlen(joined);
+    TEST_CHECK(length < path_size);
+    memcpy(path, joined, length + 1U);
+    free(joined);
+}
+
 static void test_numeric_migration(const char *root) {
     char path[HUGE_BUF];
     char contents[128];
 
-    snprintf(VS(path), "%s/.atrinik/5.10.9/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.10.9/settings/keys.dat");
     write_file(path, "older\n");
-    snprintf(VS(path), "%s/.atrinik/5.9.999/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.9.999/settings/keys.dat");
     write_file(path, "older-minor\n");
-    snprintf(VS(path), "%s/.atrinik/5.10.10/cache/compatible.dat", root);
+    set_path(VS(path), root, ".atrinik/5.10.10/cache/compatible.dat");
     write_file(path, "cache\n");
-    snprintf(VS(path), "%s/.atrinik/5.10.10/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.10.10/settings/keys.dat");
     write_file(path, "selected\n");
-    snprintf(VS(path), "%s/.atrinik/5.10.10~/.ignored", root);
+    set_path(VS(path), root, ".atrinik/5.10.10~/.ignored");
     write_file(path, "suffix\n");
-    snprintf(VS(path), "%s/.atrinik/6.99/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/6.99/settings/keys.dat");
     write_file(path, "other-major\n");
-    snprintf(VS(path), "%s/.atrinik/5.10.invalid/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.10.invalid/settings/keys.dat");
     write_file(path, "invalid\n");
-    snprintf(VS(path), "%s/.atrinik/5.10~~/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.10~~/settings/keys.dat");
     write_file(path, "invalid-suffix\n");
 
     TEST_CHECK(user_data_prepare(root, 5, VS(path)));
     TEST_CHECK(strcmp(path, "/tmp/never") != 0);
 
     char expected[HUGE_BUF];
-    snprintf(VS(expected), "%s/.atrinik/5.x", root);
+    set_path(VS(expected), root, ".atrinik/5.x");
     TEST_CHECK(strcmp(path, expected) == 0);
 
-    snprintf(VS(path), "%s/.atrinik/5.x/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.x/settings/keys.dat");
     read_file(path, contents, sizeof(contents));
     TEST_CHECK(strcmp(contents, "selected\n") == 0);
-    snprintf(VS(path), "%s/.atrinik/5.x/cache/compatible.dat", root);
+    set_path(VS(path), root, ".atrinik/5.x/cache/compatible.dat");
     read_file(path, contents, sizeof(contents));
     TEST_CHECK(strcmp(contents, "cache\n") == 0);
-    snprintf(VS(path), "%s/.atrinik/5.10.10", root);
+    set_path(VS(path), root, ".atrinik/5.10.10");
     TEST_CHECK(!is_directory(path));
-    snprintf(VS(path), "%s/.atrinik/5.10.10~", root);
+    set_path(VS(path), root, ".atrinik/5.10.10~");
     TEST_CHECK(is_directory(path));
-    snprintf(VS(path), "%s/.atrinik/6.99", root);
+    set_path(VS(path), root, ".atrinik/6.99");
     TEST_CHECK(is_directory(path));
 
     TEST_CHECK(user_data_prepare(root, 5, VS(path)));
@@ -162,16 +172,16 @@ static void test_suffixed_candidate(const char *root) {
     char path[HUGE_BUF];
     char contents[128];
 
-    snprintf(VS(path), "%s/.atrinik/5.13~/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.13~/settings/keys.dat");
     write_file(path, "suffix-only\n");
 
     TEST_CHECK(user_data_prepare(root, 5, VS(path)));
-    snprintf(VS(path), "%s/.atrinik/5.x/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.x/settings/keys.dat");
     read_file(path, contents, sizeof(contents));
     TEST_CHECK(strcmp(contents, "suffix-only\n") == 0);
-    snprintf(VS(path), "%s/.atrinik/5.13~", root);
+    set_path(VS(path), root, ".atrinik/5.13~");
     TEST_CHECK(!is_directory(path));
-    snprintf(VS(path), "%s/.atrinik/.5.x.migration", root);
+    set_path(VS(path), root, ".atrinik/.5.x.migration");
     TEST_CHECK(access(path, F_OK) != 0);
 }
 
@@ -179,16 +189,16 @@ static void test_existing_target_is_preserved(const char *root) {
     char path[HUGE_BUF];
     char contents[128];
 
-    snprintf(VS(path), "%s/.atrinik/5.x/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.x/settings/keys.dat");
     write_file(path, "current\n");
-    snprintf(VS(path), "%s/.atrinik/5.11/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.11/settings/keys.dat");
     write_file(path, "legacy\n");
 
     TEST_CHECK(user_data_prepare(root, 5, VS(path)));
-    snprintf(VS(path), "%s/.atrinik/5.x/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.x/settings/keys.dat");
     read_file(path, contents, sizeof(contents));
     TEST_CHECK(strcmp(contents, "current\n") == 0);
-    snprintf(VS(path), "%s/.atrinik/5.11/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.11/settings/keys.dat");
     read_file(path, contents, sizeof(contents));
     TEST_CHECK(strcmp(contents, "legacy\n") == 0);
 }
@@ -196,13 +206,13 @@ static void test_existing_target_is_preserved(const char *root) {
 static void test_no_candidate_creates_stable_directory(const char *root) {
     char path[HUGE_BUF];
 
-    snprintf(VS(path), "%s/.atrinik/5.1.2.invalid", root);
+    set_path(VS(path), root, ".atrinik/5.1.2.invalid");
     write_file(path, "not a directory\n");
-    snprintf(VS(path), "%s/.atrinik/7.99", root);
+    set_path(VS(path), root, ".atrinik/7.99");
     TEST_CHECK(path_ensure_real_directory(path, 0700) == PATH_DIRECTORY_OK);
 
     TEST_CHECK(user_data_prepare(root, 5, VS(path)));
-    snprintf(VS(path), "%s/.atrinik/5.x", root);
+    set_path(VS(path), root, ".atrinik/5.x");
     TEST_CHECK(is_directory(path));
 }
 
@@ -210,30 +220,30 @@ static void test_conflicting_migration_is_recoverable(const char *root) {
     char path[HUGE_BUF];
     char contents[128];
 
-    snprintf(VS(path), "%s/.atrinik/5.x/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.x/settings/keys.dat");
     write_file(path, "current\n");
-    snprintf(VS(path), "%s/.atrinik/5.12/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.12/settings/keys.dat");
     write_file(path, "legacy\n");
-    snprintf(VS(path), "%s/.atrinik/.5.x.migration", root);
+    set_path(VS(path), root, ".atrinik/.5.x.migration");
     TEST_CHECK(path_secret_create_atomic(path, "5.12", strlen("5.12")) == PATH_SECRET_CREATE_OK);
 
     TEST_CHECK(user_data_prepare(root, 5, VS(path)));
-    snprintf(VS(path), "%s/.atrinik/5.x/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.x/settings/keys.dat");
     read_file(path, contents, sizeof(contents));
     TEST_CHECK(strcmp(contents, "current\n") == 0);
-    snprintf(VS(path), "%s/.atrinik/5.12/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.12/settings/keys.dat");
     read_file(path, contents, sizeof(contents));
     TEST_CHECK(strcmp(contents, "legacy\n") == 0);
 
-    snprintf(VS(path), "%s/.atrinik/5.x/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.x/settings/keys.dat");
     TEST_CHECK(unlink(path) == 0);
     TEST_CHECK(user_data_prepare(root, 5, VS(path)));
-    snprintf(VS(path), "%s/.atrinik/5.x/settings/keys.dat", root);
+    set_path(VS(path), root, ".atrinik/5.x/settings/keys.dat");
     read_file(path, contents, sizeof(contents));
     TEST_CHECK(strcmp(contents, "legacy\n") == 0);
-    snprintf(VS(path), "%s/.atrinik/5.12", root);
+    set_path(VS(path), root, ".atrinik/5.12");
     TEST_CHECK(!is_directory(path));
-    snprintf(VS(path), "%s/.atrinik/.5.x.migration", root);
+    set_path(VS(path), root, ".atrinik/.5.x.migration");
     TEST_CHECK(!is_directory(path));
     TEST_CHECK(access(path, F_OK) != 0);
 }
@@ -246,19 +256,19 @@ int main(void) {
     test_numeric_migration(root);
 
     char scenario[HUGE_BUF];
-    TEST_CHECK(snprintf(VS(scenario), "%s/existing-target", root) < (int)sizeof(scenario));
+    set_path(VS(scenario), root, "existing-target");
     TEST_CHECK(path_ensure_real_directory(scenario, 0700) == PATH_DIRECTORY_OK);
     test_existing_target_is_preserved(scenario);
 
-    TEST_CHECK(snprintf(VS(scenario), "%s/suffixed", root) < (int)sizeof(scenario));
+    set_path(VS(scenario), root, "suffixed");
     TEST_CHECK(path_ensure_real_directory(scenario, 0700) == PATH_DIRECTORY_OK);
     test_suffixed_candidate(scenario);
 
-    TEST_CHECK(snprintf(VS(scenario), "%s/no-candidate", root) < (int)sizeof(scenario));
+    set_path(VS(scenario), root, "no-candidate");
     TEST_CHECK(path_ensure_real_directory(scenario, 0700) == PATH_DIRECTORY_OK);
     test_no_candidate_creates_stable_directory(scenario);
 
-    TEST_CHECK(snprintf(VS(scenario), "%s/recoverable", root) < (int)sizeof(scenario));
+    set_path(VS(scenario), root, "recoverable");
     TEST_CHECK(path_ensure_real_directory(scenario, 0700) == PATH_DIRECTORY_OK);
     test_conflicting_migration_is_recoverable(scenario);
 
