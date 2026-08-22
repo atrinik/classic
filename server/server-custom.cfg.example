@@ -17,7 +17,12 @@ python_reload_modules = off
 # Optional public-server identity:
 # server_name = My Atrinik Server
 # server_desc = A community Atrinik server.
-# server_host optionally advertises a public IP address for the QUIC endpoint.
+# metaserver_hostname = play.example.net
+# This optionally advertises a canonical DNS hostname for the QUIC endpoint;
+# port_quic is published alongside it.
+# Leave it unset for an addressless rendezvous-only listing. The legacy
+# server_host numeric-IP option is retained for compatibility but is not
+# published.
 # Automatic PCP/NAT-PMP/UPnP mapping is enabled by default. Set this only when
 # direct addressing or an externally managed route is intentional.
 # port_mapping = off
