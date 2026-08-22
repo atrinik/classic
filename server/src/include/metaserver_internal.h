@@ -34,6 +34,8 @@
 #define METASERVER_PUBLISH_RETRY_MAX_MS 3600000U
 #define METASERVER_PUBLISH_RETRY_AFTER_MAX_SECONDS 86400U
 #define METASERVER_PUBLISH_TIMEOUT_MS 30000L
+#define METASERVER_PUBLISH_RESPONSE_BODY_MAX 1024U
+#define METASERVER_PUBLISH_ERROR_CODE_MAX 64U
 #define METASERVER_PUBLISH_HEARTBEAT_DEFAULT_SECONDS 9000U
 #define METASERVER_PUBLISH_HEARTBEAT_MIN_SECONDS 60U
 #define METASERVER_PUBLISH_HEARTBEAT_MAX_SECONDS 10800U
@@ -110,6 +112,11 @@ uint32_t metaserver_publish_retry_delay_ms(uint32_t failures,
 bool metaserver_publish_retry_after(const char *headers,
                                     size_t headers_size,
                                     uint32_t *retry_after_seconds);
+/** Parse the bounded canonical error envelope without retaining its body. */
+bool metaserver_publish_error_code(const char *body,
+                                   size_t body_size,
+                                   char *error_code,
+                                   size_t error_code_size);
 bool metaserver_publish_response_retryable(curl_state_t state, int http_code);
 metaserver_publish_failure_action_t metaserver_publish_failure_action(curl_state_t state,
                                                                       int http_code);

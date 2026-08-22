@@ -1429,6 +1429,58 @@ START_TEST(test_metaserver_publish_cadence_attempt_is_fail_closed) {
 }
 END_TEST
 
+START_TEST(test_metaserver_publish_error_code_is_bounded) {
+    char error_code[METASERVER_PUBLISH_ERROR_CODE_MAX + 1U];
+    static const char service_disabled[] =
+        "{\"error\":{\"code\":\"service_disabled\","
+        "\"message\":\"This service is temporarily unavailable.\"}}";
+    ck_assert(metaserver_publish_error_code(service_disabled,
+                                            strlen(service_disabled),
+                                            VS(error_code)));
+    ck_assert_str_eq(error_code, "service_disabled");
+
+    static const char other_code[] =
+        " { \"error\" : { \"message\": \"Try again later\", "
+        "\"code\": \"rate_limited\" } } ";
+    ck_assert(metaserver_publish_error_code(other_code,
+                                            strlen(other_code),
+                                            VS(error_code)));
+    ck_assert_str_eq(error_code, "rate_limited");
+
+    static const char replay[] =
+        "{\"error\":{\"code\":\"publish_replay\","
+        "\"minimumNextSequence\":\"42\"}}";
+    ck_assert(metaserver_publish_error_code(replay, strlen(replay), VS(error_code)));
+    ck_assert_str_eq(error_code, "publish_replay");
+
+    static const char malformed[] = "{\"error\":{\"code\":\"bad code\",\"message\":\"x\"}}";
+    ck_assert(!metaserver_publish_error_code(malformed, strlen(malformed), VS(error_code)));
+    ck_assert_str_eq(error_code, "unavailable");
+    static const char oversized_code[] =
+        "{\"error\":{\"code\":\"abcdefghijklmnopqrstuvwxyz"
+        "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopq\",\"message\":\"x\"}}";
+    ck_assert(!metaserver_publish_error_code(oversized_code,
+                                             strlen(oversized_code),
+                                             VS(error_code)));
+    ck_assert_str_eq(error_code, "unavailable");
+    ck_assert(!metaserver_publish_error_code("<html>503</html>", 16, VS(error_code)));
+    ck_assert_str_eq(error_code, "unavailable");
+    ck_assert(!metaserver_publish_error_code(NULL, 0, VS(error_code)));
+    ck_assert_str_eq(error_code, "unavailable");
+
+    char oversized[METASERVER_PUBLISH_RESPONSE_BODY_MAX + 1U];
+    memset(oversized, 'x', sizeof(oversized));
+    ck_assert(!metaserver_publish_error_code(oversized, sizeof(oversized), VS(error_code)));
+    ck_assert_str_eq(error_code, "unavailable");
+
+    char short_code[4] = {0};
+    ck_assert(!metaserver_publish_error_code(service_disabled,
+                                             strlen(service_disabled),
+                                             VS(short_code)));
+    ck_assert_str_eq(short_code, "");
+}
+END_TEST
+
 START_TEST(test_metaserver_publish_retry_and_daily_budget) {
     ck_assert_uint_eq(metaserver_publish_retry_delay_ms(0, 0, 0), 45000);
     ck_assert_uint_eq(metaserver_publish_retry_delay_ms(1, 0, 0), 90000);
@@ -2076,6 +2128,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_metaserver_rendezvous_retry_policy);
     tcase_add_test(tc_core, test_metaserver_publish_cadence);
     tcase_add_test(tc_core, test_metaserver_publish_cadence_attempt_is_fail_closed);
+    tcase_add_test(tc_core, test_metaserver_publish_error_code_is_bounded);
     tcase_add_test(tc_core, test_metaserver_publish_retry_and_daily_budget);
     tcase_add_test(tc_core, test_metaserver_rendezvous_ticket_isolation);
     tcase_add_test(tc_core, test_metaserver_generation_cancellation);
