@@ -1201,12 +1201,6 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
             fclose(fp);
             return NULL;
         }
-        if ((flags & MAP_PLAYER_UNIQUE) && !celestial_structure_validate_provenance(m, VS(error))) {
-            LOG(INFO,
-                "Celestial private-map provenance diagnostic failed for %s; continuing: %s",
-                m->path,
-                error);
-        }
     }
 
     basename = strrchr(filename, flags & MAP_PLAYER_UNIQUE ? '$' : '/');
@@ -1393,12 +1387,6 @@ static mapstruct *load_temporary_map(mapstruct *m) {
             m = load_original_map(buf, NULL, 0);
             fclose(fp);
             return m;
-        }
-        if (!celestial_structure_validate_provenance(m, VS(error))) {
-            LOG(INFO,
-                "Celestial temporary-map provenance diagnostic failed for %s; continuing: %s",
-                m->path,
-                error);
         }
     }
 

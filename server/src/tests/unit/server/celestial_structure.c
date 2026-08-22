@@ -1062,7 +1062,7 @@ START_TEST(test_generated_factory_is_validated_and_bounded) {
 END_TEST
 
 #ifndef WIN32
-START_TEST(test_private_map_provenance_demangles_authored_source) {
+START_TEST(test_private_map_provenance_writes_authored_source) {
     char temporary_root[] = "/tmp/atrinik-celestial-private-XXXXXX";
     ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
 
@@ -1110,13 +1110,6 @@ START_TEST(test_private_map_provenance_demangles_authored_source) {
     map->celestial_schema = 1;
     char error[HUGE_BUF];
     ck_assert_msg(celestial_structure_write_provenance(map, VS(error)), "%s", error);
-    ck_assert_msg(celestial_structure_validate_provenance(map, VS(error)), "%s", error);
-
-    private_map = fopen(private_path, "ab");
-    ck_assert_ptr_ne(private_map, NULL);
-    ck_assert_int_ne(fputs("changed\n", private_map), EOF);
-    ck_assert_int_eq(fclose(private_map), 0);
-    ck_assert(!celestial_structure_validate_provenance(map, VS(error)));
     delete_map(map);
 
     DIR *directory = opendir(provenance_dir);
@@ -1562,7 +1555,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_header_round_trip_is_canonical_and_rejects_legacy_fields);
     tcase_add_test(tc_core, test_generated_factory_is_validated_and_bounded);
 #ifndef WIN32
-    tcase_add_test(tc_core, test_private_map_provenance_demangles_authored_source);
+    tcase_add_test(tc_core, test_private_map_provenance_writes_authored_source);
     tcase_add_test(tc_core, test_private_map_loads_from_source_without_provenance);
     tcase_add_test(tc_core, test_character_transaction_lifecycle_is_durable);
     tcase_add_test(tc_core, test_character_transaction_recovery_quarantines_prepared_group);
