@@ -1399,15 +1399,18 @@ int text_show_character(font_struct **font,
                             border_right = icon_sprite->border_right;
                         } else {
                             Uint32 color_key;
-                            if (!SDL_GetSurfaceColorKey(icon_surface, &color_key)) {
-                                color_key = getpixel(icon_surface, 0, 0);
+                            if (!SDL_GetSurfaceColorKey(icon_surface, &color_key) &&
+                                !surface_pixel_get(icon_surface, 0, 0, &color_key)) {
+                                return ret;
                             }
-                            surface_borders_get(icon_surface,
-                                                &border_up,
-                                                &border_down,
-                                                &border_left,
-                                                &border_right,
-                                                color_key);
+                            if (surface_borders_get(icon_surface,
+                                                    &border_up,
+                                                    &border_down,
+                                                    &border_left,
+                                                    &border_right,
+                                                    color_key) < 0) {
+                                return ret;
+                            }
                         }
 
                         icon_w = icon_orig_w = icon_surface->w - border_left - border_right;

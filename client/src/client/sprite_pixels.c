@@ -91,6 +91,37 @@ bool surface_pixel_visible(SDL_Surface *surface, int x, int y) {
     return true;
 }
 
+/** Read a mapped surface pixel while honoring SDL's direct-access contract. */
+bool surface_pixel_get(SDL_Surface *surface, int x, int y, Uint32 *pixel) {
+    if (surface == NULL || pixel == NULL || x < 0 || x >= surface->w || y < 0 || y >= surface->h) {
+        return false;
+    }
+
+    const SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(surface->format);
+    if (details == NULL || details->bytes_per_pixel <= 0) {
+        return false;
+    }
+
+    bool locked = false;
+    if (SDL_MUSTLOCK(surface)) {
+        if (!SDL_LockSurface(surface)) {
+            return false;
+        }
+        locked = true;
+    }
+
+    bool success = surface->pixels != NULL;
+    if (success) {
+        *pixel = getpixel(surface, x, y);
+    }
+
+    if (locked) {
+        SDL_UnlockSurface(surface);
+    }
+
+    return success;
+}
+
 /** Return the mapped pixel value at a surface coordinate. */
 Uint32 getpixel(SDL_Surface *surface, int x, int y) {
     const SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(surface->format);

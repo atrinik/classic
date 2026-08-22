@@ -1333,8 +1333,8 @@ static bool surface_border_get_bottom(SDL_Surface *surface, int *pos, uint32_t c
  * @param color
  * Color to check for.
  * @return
- * 1 if the borders were found, 0 otherwise (image is all filled with 'color'
- * color).
+ * 1 if the borders were found, 0 if the image is all filled with 'color', or
+ * -1 if the surface cannot be accessed.
  */
 int surface_borders_get(SDL_Surface *surface,
                         int *top,
@@ -1342,6 +1342,31 @@ int surface_borders_get(SDL_Surface *surface,
                         int *left,
                         int *right,
                         uint32_t color) {
+    if (surface == NULL || top == NULL || bottom == NULL || left == NULL || right == NULL ||
+        surface->w <= 0 || surface->h <= 0) {
+        return -1;
+    }
+
+    const SDL_PixelFormatDetails *details = SDL_GetPixelFormatDetails(surface->format);
+    if (details == NULL || details->bytes_per_pixel <= 0) {
+        return -1;
+    }
+
+    bool locked = false;
+    if (SDL_MUSTLOCK(surface)) {
+        if (!SDL_LockSurface(surface)) {
+            return -1;
+        }
+        locked = true;
+    }
+
+    if (surface->pixels == NULL) {
+        if (locked) {
+            SDL_UnlockSurface(surface);
+        }
+        return -1;
+    }
+
     *top = 0;
     *bottom = 0;
     *left = 0;
@@ -1350,12 +1375,19 @@ int surface_borders_get(SDL_Surface *surface,
     /* If the border was not found, it means the surface is completely
      * filled with 'color' color. */
     if (!surface_border_get_top(surface, top, color)) {
+        if (locked) {
+            SDL_UnlockSurface(surface);
+        }
         return 0;
     }
 
     surface_border_get_bottom(surface, bottom, color);
     surface_border_get_left(surface, left, color);
     surface_border_get_right(surface, right, color);
+
+    if (locked) {
+        SDL_UnlockSurface(surface);
+    }
 
     return 1;
 }
