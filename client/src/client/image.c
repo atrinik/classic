@@ -495,14 +495,16 @@ void image_deinit(void) {
 static bool face_asset_loader_start(void) {
     char *pack_path = file_path(FILE_ATRINIK_P0, "rb");
     char *gfx_user_marker = file_path(DIRECTORY_GFX_USER "/.face-loader-root", "wb");
-    char *gfx_user_path = path_dirname(gfx_user_marker);
+    char *gfx_user_path = gfx_user_marker != NULL ? path_dirname(gfx_user_marker) : NULL;
     char gfx_installed_marker[HUGE_BUF];
     get_data_dir_file(VS(gfx_installed_marker), DIRECTORY_GFX_USER "/.face-loader-root");
     char *gfx_installed_path = path_dirname(gfx_installed_marker);
     char *cache_marker = file_path(DIRECTORY_CACHE "/.face-loader-root", "wb");
-    char *cache_path = path_dirname(cache_marker);
+    char *cache_path = cache_marker != NULL ? path_dirname(cache_marker) : NULL;
 
     bool started =
+        pack_path != NULL && gfx_user_path != NULL && gfx_installed_path != NULL &&
+        cache_path != NULL &&
         face_loader_start(pack_path,
                           gfx_user_path,
                           "./" DIRECTORY_GFX_USER,

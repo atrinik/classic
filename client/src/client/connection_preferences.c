@@ -75,7 +75,7 @@ static void connection_preferences_save(void) {
     }
     char *contents = stringbuffer_finish(output);
     char *path = file_path(FILE_CONNECTION_PREFERENCES, "w");
-    bool ok = path_write_atomic(path, contents, strlen(contents), 0600);
+    bool ok = path != NULL && path_write_atomic(path, contents, strlen(contents), 0600);
     free(path);
     free(contents);
     if (!ok) {
