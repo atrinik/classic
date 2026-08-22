@@ -2431,177 +2431,219 @@ static void crash_semantic_writer(const char *directory,
     _exit(EXIT_SUCCESS);
 }
 
-START_TEST(test_abrupt_semantic_operations_leave_reconcilable_authoritative_state) {
+static void check_abrupt_semantic_operation_recovery(crash_operation_t operation) {
     mapstruct *map;
     object *pl;
     check_setup_env_pl(&map, &pl);
-    for (int operation = 0; operation < CRASH_OPERATION_COUNT; operation++) {
-        for (int fail_terminal = 0; fail_terminal <= 1; fail_terminal++) {
-            for (int checkpoint_after = 0; checkpoint_after <= 1; checkpoint_after++) {
-                char directory[] = "/tmp/atrinik-gameplay-journal-semantic-crash-XXXXXX";
-                ck_assert_ptr_ne(mkdtemp(directory), NULL);
-                pid_t child = fork();
-                ck_assert_int_ge(child, 0);
-                if (child == 0) {
-                    crash_semantic_writer(directory,
-                                          pl,
-                                          (crash_operation_t)operation,
-                                          fail_terminal != 0,
-                                          checkpoint_after != 0);
-                }
-                int status;
-                ck_assert_int_eq(waitpid(child, &status, 0), child);
-                ck_assert(WIFEXITED(status));
-                ck_assert_int_eq(WEXITSTATUS(status), EXIT_SUCCESS);
-
-                char *contents = read_fixture(directory);
-                ck_assert_ptr_ne(strstr(contents, "\"phase\":\"intent\""), NULL);
-                ck_assert_int_eq(strstr(contents, "\"phase\":\"commit\"") != NULL, !fail_terminal);
-                char reason[GAMEPLAY_JOURNAL_ID_MAX + 32];
-                snprintf(VS(reason),
-                         "\"reason\":\"%s\"",
-                         crash_operation_reason((crash_operation_t)operation));
-                ck_assert_ptr_ne(strstr(contents, reason), NULL);
-                char intent_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
-                char intent_lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
-                ck_assert(crash_intent_field(contents,
-                                             crash_operation_reason((crash_operation_t)operation),
-                                             "transaction_id",
-                                             VS(intent_transaction)));
-                ck_assert(crash_intent_field(contents,
-                                             crash_operation_reason((crash_operation_t)operation),
-                                             "lineage_id",
-                                             VS(intent_lineage)));
-                static const int64_t expected_arithmetic[CRASH_OPERATION_COUNT][3] = {
-                    {0, 1, 1},
-                    {0, 1, 1},
-                    {1, -1, 0},
-                    {1, -1, 0},
-                    {100, 3, 103},
-                    {0, 1, 1},
-                    {1, -1, 0},
-                    {100, -75, 25},
-                    {0, 20, 20},
-                };
-                char arithmetic[160];
-                snprintf(VS(arithmetic),
-                         "\"before\":%" PRId64 ",\"delta\":%" PRId64 ",\"after\":%" PRId64,
-                         expected_arithmetic[operation][0],
-                         expected_arithmetic[operation][1],
-                         expected_arithmetic[operation][2]);
-                ck_assert_ptr_ne(strstr(contents, arithmetic), NULL);
-                free(contents);
-
-                char state_path[HUGE_BUF];
-                snprintf(VS(state_path), "%s/authoritative.state", directory);
-                struct stat metadata;
-                ck_assert_int_eq(stat(state_path, &metadata), 0);
-                char *state_text = malloc((size_t)metadata.st_size + 1);
-                ck_assert_ptr_ne(state_text, NULL);
-                FILE *state = fopen(state_path, "rb");
-                ck_assert_ptr_ne(state, NULL);
-                ck_assert_uint_eq(fread(state_text, 1, (size_t)metadata.st_size, state),
-                                  (size_t)metadata.st_size);
-                state_text[metadata.st_size] = '\0';
-                ck_assert_int_eq(fclose(state), 0);
-                object *reloaded = object_load_str(state_text);
-                ck_assert_ptr_ne(reloaded, NULL);
-                if (operation == CRASH_ITEM_GRANT || operation == CRASH_ITEM_ACQUIRE) {
-                    object *item = object_find_arch(reloaded, arch_find("sword"));
-                    ck_assert_int_eq(item != NULL, checkpoint_after);
-                    if (item != NULL) {
-                        ck_assert_ptr_ne(item->custody_lineage, NULL);
-                        ck_assert_str_eq(item->custody_lineage, intent_lineage);
-                    }
-                } else if (operation == CRASH_ITEM_DROP || operation == CRASH_ITEM_DESTROY) {
-                    ck_assert_int_eq(object_find_arch(reloaded, arch_find("sword")) == NULL,
-                                     checkpoint_after);
-                } else if (operation == CRASH_CURRENCY_GRANT) {
-                    ck_assert_int_eq(shop_get_money(reloaded), checkpoint_after ? 103 : 100);
-                    if (checkpoint_after && fail_terminal) {
-                        char expected[GAMEPLAY_JOURNAL_ID_MAX + 1];
-                        snprintf(VS(expected), "currency:%s", intent_transaction);
-                        bool found = false;
-                        FOR_INV_PREPARE(reloaded, coin) {
-                            if (coin->type == MONEY && coin->custody_lineage != NULL &&
-                                strcmp(coin->custody_lineage, expected) == 0) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        FOR_INV_FINISH();
-                        ck_assert(found);
-                    }
-                } else if (operation == CRASH_BANK_DEPOSIT) {
-                    ck_assert_int_eq(bank_get_balance(reloaded), checkpoint_after ? 1 : 0);
-                    ck_assert_int_eq(object_find_type(reloaded, MONEY) == NULL, checkpoint_after);
-                } else if (operation == CRASH_BANK_WITHDRAW) {
-                    ck_assert_int_eq(bank_get_balance(reloaded), checkpoint_after ? 0 : 1);
-                    object *coins = object_find_type(reloaded, MONEY);
-                    ck_assert_int_eq(coins != NULL, checkpoint_after);
-                    if (coins != NULL && fail_terminal) {
-                        ck_assert_ptr_ne(coins->custody_lineage, NULL);
-                        char expected[GAMEPLAY_JOURNAL_ID_MAX + 1];
-                        snprintf(VS(expected), "currency:%s", intent_transaction);
-                        ck_assert_str_eq(coins->custody_lineage, expected);
-                    } else if (coins != NULL) {
-                        ck_assert_ptr_eq(coins->custody_lineage, NULL);
-                    }
-                } else if (operation == CRASH_SHOP_PURCHASE) {
-                    object *item = object_find_arch(reloaded, arch_find("sword"));
-                    ck_assert_ptr_ne(item, NULL);
-                    ck_assert_int_eq(!QUERY_FLAG(item, FLAG_UNPAID), checkpoint_after);
-                    ck_assert_int_eq(shop_get_money(reloaded), checkpoint_after ? 25 : 100);
-                } else {
-                    object *coins = object_find_type(reloaded, MONEY);
-                    ck_assert_int_eq(coins != NULL, checkpoint_after);
-                    ck_assert_int_eq(shop_get_money(reloaded), checkpoint_after ? 20 : 0);
-                    if (coins != NULL && fail_terminal) {
-                        ck_assert_ptr_ne(coins->custody_lineage, NULL);
-                        char expected[GAMEPLAY_JOURNAL_ID_MAX + 1];
-                        snprintf(VS(expected), "currency:%s", intent_transaction);
-                        ck_assert_str_eq(coins->custody_lineage, expected);
-                    } else if (coins != NULL) {
-                        ck_assert_ptr_eq(coins->custody_lineage, NULL);
-                    }
-                    ck_assert_int_eq(object_find_arch(reloaded, arch_find("sword")) == NULL,
-                                     checkpoint_after);
-                }
-                object_destroy(reloaded);
-                free(state_text);
-                ck_assert_int_eq(unlink(state_path), 0);
-                if (operation == CRASH_ITEM_ACQUIRE || operation == CRASH_ITEM_DROP) {
-                    snprintf(VS(state_path), "%s/ground.state", directory);
-                    ck_assert_int_eq(stat(state_path, &metadata), 0);
-                    bool ground_expected =
-                        operation == CRASH_ITEM_ACQUIRE ? !checkpoint_after : checkpoint_after;
-                    ck_assert_int_eq(metadata.st_size != 0, ground_expected);
-                    if (ground_expected) {
-                        state_text = malloc((size_t)metadata.st_size + 1);
-                        ck_assert_ptr_ne(state_text, NULL);
-                        state = fopen(state_path, "rb");
-                        ck_assert_ptr_ne(state, NULL);
-                        ck_assert_uint_eq(fread(state_text, 1, (size_t)metadata.st_size, state),
-                                          (size_t)metadata.st_size);
-                        state_text[metadata.st_size] = '\0';
-                        ck_assert_int_eq(fclose(state), 0);
-                        object *ground = object_load_str(state_text);
-                        ck_assert_ptr_ne(ground, NULL);
-                        ck_assert_ptr_eq(ground->arch, arch_find("sword"));
-                        if (checkpoint_after) {
-                            ck_assert_ptr_ne(ground->custody_lineage, NULL);
-                            ck_assert_str_eq(ground->custody_lineage, intent_lineage);
-                        }
-                        object_destroy(ground);
-                        free(state_text);
-                    }
-                    ck_assert_int_eq(unlink(state_path), 0);
-                }
-                remove_fixture(directory);
+    static const int64_t expected_arithmetic[CRASH_OPERATION_COUNT][3] = {
+        {0, 1, 1},
+        {0, 1, 1},
+        {1, -1, 0},
+        {1, -1, 0},
+        {100, 3, 103},
+        {0, 1, 1},
+        {1, -1, 0},
+        {100, -75, 25},
+        {0, 20, 20},
+    };
+    for (int fail_terminal = 0; fail_terminal <= 1; fail_terminal++) {
+        for (int checkpoint_after = 0; checkpoint_after <= 1; checkpoint_after++) {
+            char directory[] = "/tmp/atrinik-gameplay-journal-semantic-crash-XXXXXX";
+            ck_assert_ptr_ne(mkdtemp(directory), NULL);
+            pid_t child = fork();
+            ck_assert_int_ge(child, 0);
+            if (child == 0) {
+                crash_semantic_writer(directory,
+                                      pl,
+                                      operation,
+                                      fail_terminal != 0,
+                                      checkpoint_after != 0);
             }
+            int status;
+            ck_assert_int_eq(waitpid(child, &status, 0), child);
+            ck_assert(WIFEXITED(status));
+            ck_assert_int_eq(WEXITSTATUS(status), EXIT_SUCCESS);
+
+            char *contents = read_fixture(directory);
+            ck_assert_ptr_ne(strstr(contents, "\"phase\":\"intent\""), NULL);
+            ck_assert_int_eq(strstr(contents, "\"phase\":\"commit\"") != NULL, !fail_terminal);
+            char reason[GAMEPLAY_JOURNAL_ID_MAX + 32];
+            snprintf(VS(reason),
+                     "\"reason\":\"%s\"",
+                     crash_operation_reason(operation));
+            ck_assert_ptr_ne(strstr(contents, reason), NULL);
+            char intent_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+            char intent_lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
+            ck_assert(crash_intent_field(contents,
+                                         crash_operation_reason(operation),
+                                         "transaction_id",
+                                         VS(intent_transaction)));
+            ck_assert(crash_intent_field(contents,
+                                         crash_operation_reason(operation),
+                                         "lineage_id",
+                                         VS(intent_lineage)));
+            char arithmetic[160];
+            snprintf(VS(arithmetic),
+                     "\"before\":%" PRId64 ",\"delta\":%" PRId64 ",\"after\":%" PRId64,
+                     expected_arithmetic[operation][0],
+                     expected_arithmetic[operation][1],
+                     expected_arithmetic[operation][2]);
+            ck_assert_ptr_ne(strstr(contents, arithmetic), NULL);
+            free(contents);
+
+            char state_path[HUGE_BUF];
+            snprintf(VS(state_path), "%s/authoritative.state", directory);
+            struct stat metadata;
+            ck_assert_int_eq(stat(state_path, &metadata), 0);
+            char *state_text = malloc((size_t)metadata.st_size + 1);
+            ck_assert_ptr_ne(state_text, NULL);
+            FILE *state = fopen(state_path, "rb");
+            ck_assert_ptr_ne(state, NULL);
+            ck_assert_uint_eq(fread(state_text, 1, (size_t)metadata.st_size, state),
+                              (size_t)metadata.st_size);
+            state_text[metadata.st_size] = '\0';
+            ck_assert_int_eq(fclose(state), 0);
+            object *reloaded = object_load_str(state_text);
+            ck_assert_ptr_ne(reloaded, NULL);
+            if (operation == CRASH_ITEM_GRANT || operation == CRASH_ITEM_ACQUIRE) {
+                object *item = object_find_arch(reloaded, arch_find("sword"));
+                ck_assert_int_eq(item != NULL, checkpoint_after);
+                if (item != NULL) {
+                    ck_assert_ptr_ne(item->custody_lineage, NULL);
+                    ck_assert_str_eq(item->custody_lineage, intent_lineage);
+                }
+            } else if (operation == CRASH_ITEM_DROP || operation == CRASH_ITEM_DESTROY) {
+                ck_assert_int_eq(object_find_arch(reloaded, arch_find("sword")) == NULL,
+                                 checkpoint_after);
+            } else if (operation == CRASH_CURRENCY_GRANT) {
+                ck_assert_int_eq(shop_get_money(reloaded), checkpoint_after ? 103 : 100);
+                if (checkpoint_after && fail_terminal) {
+                    char expected[GAMEPLAY_JOURNAL_ID_MAX + 1];
+                    snprintf(VS(expected), "currency:%s", intent_transaction);
+                    bool found = false;
+                    FOR_INV_PREPARE(reloaded, coin) {
+                        if (coin->type == MONEY && coin->custody_lineage != NULL &&
+                            strcmp(coin->custody_lineage, expected) == 0) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    FOR_INV_FINISH();
+                    ck_assert(found);
+                }
+            } else if (operation == CRASH_BANK_DEPOSIT) {
+                ck_assert_int_eq(bank_get_balance(reloaded), checkpoint_after ? 1 : 0);
+                ck_assert_int_eq(object_find_type(reloaded, MONEY) == NULL, checkpoint_after);
+            } else if (operation == CRASH_BANK_WITHDRAW) {
+                ck_assert_int_eq(bank_get_balance(reloaded), checkpoint_after ? 0 : 1);
+                object *coins = object_find_type(reloaded, MONEY);
+                ck_assert_int_eq(coins != NULL, checkpoint_after);
+                if (coins != NULL && fail_terminal) {
+                    ck_assert_ptr_ne(coins->custody_lineage, NULL);
+                    char expected[GAMEPLAY_JOURNAL_ID_MAX + 1];
+                    snprintf(VS(expected), "currency:%s", intent_transaction);
+                    ck_assert_str_eq(coins->custody_lineage, expected);
+                } else if (coins != NULL) {
+                    ck_assert_ptr_eq(coins->custody_lineage, NULL);
+                }
+            } else if (operation == CRASH_SHOP_PURCHASE) {
+                object *item = object_find_arch(reloaded, arch_find("sword"));
+                ck_assert_ptr_ne(item, NULL);
+                ck_assert_int_eq(!QUERY_FLAG(item, FLAG_UNPAID), checkpoint_after);
+                ck_assert_int_eq(shop_get_money(reloaded), checkpoint_after ? 25 : 100);
+            } else {
+                object *coins = object_find_type(reloaded, MONEY);
+                ck_assert_int_eq(coins != NULL, checkpoint_after);
+                ck_assert_int_eq(shop_get_money(reloaded), checkpoint_after ? 20 : 0);
+                if (coins != NULL && fail_terminal) {
+                    ck_assert_ptr_ne(coins->custody_lineage, NULL);
+                    char expected[GAMEPLAY_JOURNAL_ID_MAX + 1];
+                    snprintf(VS(expected), "currency:%s", intent_transaction);
+                    ck_assert_str_eq(coins->custody_lineage, expected);
+                } else if (coins != NULL) {
+                    ck_assert_ptr_eq(coins->custody_lineage, NULL);
+                }
+                ck_assert_int_eq(object_find_arch(reloaded, arch_find("sword")) == NULL,
+                                 checkpoint_after);
+            }
+            object_destroy(reloaded);
+            free(state_text);
+            ck_assert_int_eq(unlink(state_path), 0);
+            if (operation == CRASH_ITEM_ACQUIRE || operation == CRASH_ITEM_DROP) {
+                snprintf(VS(state_path), "%s/ground.state", directory);
+                ck_assert_int_eq(stat(state_path, &metadata), 0);
+                bool ground_expected =
+                    operation == CRASH_ITEM_ACQUIRE ? !checkpoint_after : checkpoint_after;
+                ck_assert_int_eq(metadata.st_size != 0, ground_expected);
+                if (ground_expected) {
+                    state_text = malloc((size_t)metadata.st_size + 1);
+                    ck_assert_ptr_ne(state_text, NULL);
+                    state = fopen(state_path, "rb");
+                    ck_assert_ptr_ne(state, NULL);
+                    ck_assert_uint_eq(fread(state_text, 1, (size_t)metadata.st_size, state),
+                                      (size_t)metadata.st_size);
+                    state_text[metadata.st_size] = '\0';
+                    ck_assert_int_eq(fclose(state), 0);
+                    object *ground = object_load_str(state_text);
+                    ck_assert_ptr_ne(ground, NULL);
+                    ck_assert_ptr_eq(ground->arch, arch_find("sword"));
+                    if (checkpoint_after) {
+                        ck_assert_ptr_ne(ground->custody_lineage, NULL);
+                        ck_assert_str_eq(ground->custody_lineage, intent_lineage);
+                    }
+                    object_destroy(ground);
+                    free(state_text);
+                }
+                ck_assert_int_eq(unlink(state_path), 0);
+            }
+            remove_fixture(directory);
         }
     }
     object_destroy(pl);
+}
+
+START_TEST(test_abrupt_item_grant_reconciles_authoritative_state) {
+    check_abrupt_semantic_operation_recovery(CRASH_ITEM_GRANT);
+}
+END_TEST
+
+START_TEST(test_abrupt_item_acquire_reconciles_authoritative_state) {
+    check_abrupt_semantic_operation_recovery(CRASH_ITEM_ACQUIRE);
+}
+END_TEST
+
+START_TEST(test_abrupt_item_drop_reconciles_authoritative_state) {
+    check_abrupt_semantic_operation_recovery(CRASH_ITEM_DROP);
+}
+END_TEST
+
+START_TEST(test_abrupt_item_destroy_reconciles_authoritative_state) {
+    check_abrupt_semantic_operation_recovery(CRASH_ITEM_DESTROY);
+}
+END_TEST
+
+START_TEST(test_abrupt_currency_grant_reconciles_authoritative_state) {
+    check_abrupt_semantic_operation_recovery(CRASH_CURRENCY_GRANT);
+}
+END_TEST
+
+START_TEST(test_abrupt_bank_deposit_reconciles_authoritative_state) {
+    check_abrupt_semantic_operation_recovery(CRASH_BANK_DEPOSIT);
+}
+END_TEST
+
+START_TEST(test_abrupt_bank_withdraw_reconciles_authoritative_state) {
+    check_abrupt_semantic_operation_recovery(CRASH_BANK_WITHDRAW);
+}
+END_TEST
+
+START_TEST(test_abrupt_shop_purchase_reconciles_authoritative_state) {
+    check_abrupt_semantic_operation_recovery(CRASH_SHOP_PURCHASE);
+}
+END_TEST
+
+START_TEST(test_abrupt_shop_sale_reconciles_authoritative_state) {
+    check_abrupt_semantic_operation_recovery(CRASH_SHOP_SALE);
 }
 END_TEST
 
@@ -2708,7 +2750,15 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_floor_withdrawal_watermarks_player_and_map_domains);
 #ifndef WIN32
     tcase_add_test(tc_core, test_abrupt_process_crash_preserves_synced_phases);
-    tcase_add_test(tc_core, test_abrupt_semantic_operations_leave_reconcilable_authoritative_state);
+    tcase_add_test(tc_core, test_abrupt_item_grant_reconciles_authoritative_state);
+    tcase_add_test(tc_core, test_abrupt_item_acquire_reconciles_authoritative_state);
+    tcase_add_test(tc_core, test_abrupt_item_drop_reconciles_authoritative_state);
+    tcase_add_test(tc_core, test_abrupt_item_destroy_reconciles_authoritative_state);
+    tcase_add_test(tc_core, test_abrupt_currency_grant_reconciles_authoritative_state);
+    tcase_add_test(tc_core, test_abrupt_bank_deposit_reconciles_authoritative_state);
+    tcase_add_test(tc_core, test_abrupt_bank_withdraw_reconciles_authoritative_state);
+    tcase_add_test(tc_core, test_abrupt_shop_purchase_reconciles_authoritative_state);
+    tcase_add_test(tc_core, test_abrupt_shop_sale_reconciles_authoritative_state);
     tcase_add_test(tc_core, test_second_writer_is_rejected_while_lock_is_held);
 #endif
     suite_add_tcase(s, tc_core);

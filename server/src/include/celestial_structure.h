@@ -67,9 +67,8 @@ bool celestial_structure_acquire_writer_lease(char *error, size_t error_size);
 void celestial_structure_release_writer_lease(void);
 /** Whether startup has selected the fail-closed celestial-v1 runtime. */
 bool celestial_structure_v1_runtime_active(void);
-/** Publish and validate the digest-addressed mutable-map provenance sidecar. */
+/** Publish the digest-addressed mutable-map provenance sidecar. */
 bool celestial_structure_write_provenance(const mapstruct *map, char *error, size_t error_size);
-bool celestial_structure_validate_provenance(const mapstruct *map, char *error, size_t error_size);
 bool celestial_structure_begin_map_transaction(const mapstruct *map,
                                                const char *map_file,
                                                const char *unique_file,
