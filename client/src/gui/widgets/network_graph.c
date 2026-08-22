@@ -288,12 +288,13 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
         char buf[HUGE_BUF];
         if (network_graph->type == NETWORK_GRAPH_TYPE_LATENCY) {
             snprintf(VS(buf),
-                     "Maximum: %.3Lf ms",
-                     data->series.max / 1000.0L);
+                     "Maximum: %.3f ms",
+                     (double)(data->series.max / 1000.0L));
             if (network_graph_series_is_valid(&data->series, (size_t)x)) {
                 snprintfcat(VS(buf),
-                            "\nApplication RTT: %.3Lf ms",
-                            network_graph_series_value(&data->series, (size_t)x, 0) / 1000.0L);
+                            "\nApplication RTT: %.3f ms",
+                            (double)(network_graph_series_value(&data->series, (size_t)x, 0) /
+                                     1000.0L));
             } else {
                 snprintfcat(VS(buf), "\nApplication RTT: no sample");
             }
@@ -464,7 +465,9 @@ static void widget_network_graph_update(widgetdata *widget,
         }
 
         if (!network_graph_series_resize(&data->series, new_width)) {
-            LOG(ERROR, "Unable to resize network graph history to %zu buckets", new_width);
+            LOG(ERROR,
+                "Unable to resize network graph history to %lu buckets",
+                (unsigned long)new_width);
             return;
         }
     }
