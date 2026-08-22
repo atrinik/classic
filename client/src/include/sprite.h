@@ -136,6 +136,13 @@ bool surface_pixel_visible(SDL_Surface *surface, int x, int y);
 /** Read a mapped surface pixel after acquiring any required SDL surface lock. */
 bool surface_pixel_get(SDL_Surface *surface, int x, int y, Uint32 *pixel);
 
+/** Calculate texture markup borders while acquiring any required SDL surface lock. */
+bool surface_texture_borders_get(SDL_Surface *surface,
+                                 int *top,
+                                 int *bottom,
+                                 int *left,
+                                 int *right);
+
 /** Create a new surface by applying sprite effects to a source surface. */
 SDL_Surface *sprite_effects_create(SDL_Surface *surface, const sprite_effects_t *effects);
 

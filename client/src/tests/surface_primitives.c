@@ -147,11 +147,50 @@ static void test_safe_pixel_access(void) {
     TEST_CHECK(!surface_pixel_get(NULL, 0, 0, &pixel));
     TEST_CHECK(!surface_pixel_get(surface, 0, 0, NULL));
 
+    void *surface_pixels = surface->pixels;
+    surface->pixels = NULL;
+    TEST_CHECK(!surface_pixel_get(surface, 0, 0, &pixel));
+    surface->pixels = surface_pixels;
+
     /* Model decoder surfaces that require SDL_LockSurface before direct access. */
     surface->flags |= SDL_SURFACE_LOCK_NEEDED;
     TEST_CHECK(SDL_MUSTLOCK(surface));
     TEST_CHECK(surface_pixel_get(surface, 0, 0, &pixel));
     surface->flags &= ~SDL_SURFACE_LOCK_NEEDED;
+
+    SDL_DestroySurface(surface);
+
+    surface = SDL_CreateSurface(3, 3, SDL_PIXELFORMAT_RGBA32);
+    TEST_CHECK(surface != NULL);
+    Uint32 color = surface_map_rgba(surface, 0, 0, 0, SDL_ALPHA_OPAQUE);
+    Uint32 visible = surface_map_rgba(surface, 255, 255, 255, SDL_ALPHA_OPAQUE);
+    TEST_CHECK(SDL_FillSurfaceRect(surface, NULL, color));
+    TEST_CHECK(SDL_WriteSurfacePixel(surface, 1, 1, 255, 255, 255, SDL_ALPHA_OPAQUE));
+
+    int top, bottom, left, right;
+    TEST_CHECK(surface_borders_get(surface, &top, &bottom, &left, &right, color) == 1);
+    TEST_CHECK(top == 1 && bottom == 1 && left == 1 && right == 1);
+    TEST_CHECK(surface_texture_borders_get(surface, &top, &bottom, &left, &right));
+    TEST_CHECK(top == 1 && bottom == 1 && left == 1 && right == 1);
+
+    surface->flags |= SDL_SURFACE_LOCK_NEEDED;
+    TEST_CHECK(surface_borders_get(surface, &top, &bottom, &left, &right, color) == 1);
+    TEST_CHECK(surface_texture_borders_get(surface, &top, &bottom, &left, &right));
+    surface->flags &= ~SDL_SURFACE_LOCK_NEEDED;
+
+    TEST_CHECK(SDL_SetSurfaceColorKey(surface, true, color));
+    TEST_CHECK(surface_texture_borders_get(surface, &top, &bottom, &left, &right));
+    TEST_CHECK(top == 1 && bottom == 1 && left == 1 && right == 1);
+    TEST_CHECK(SDL_FillSurfaceRect(surface, NULL, visible));
+    TEST_CHECK(surface_borders_get(surface, &top, &bottom, &left, &right, visible) == 0);
+    TEST_CHECK(top == 0 && bottom == 0 && left == 0 && right == 0);
+
+    void *border_pixels = surface->pixels;
+    surface->pixels = NULL;
+    TEST_CHECK(surface_borders_get(surface, &top, &bottom, &left, &right, color) < 0);
+    surface->pixels = border_pixels;
+    TEST_CHECK(surface_borders_get(NULL, &top, &bottom, &left, &right, color) < 0);
+    TEST_CHECK(surface_texture_borders_get(NULL, &top, &bottom, &left, &right) == false);
 
     SDL_DestroySurface(surface);
 }

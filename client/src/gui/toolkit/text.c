@@ -1398,17 +1398,11 @@ int text_show_character(font_struct **font,
                             border_left = icon_sprite->border_left;
                             border_right = icon_sprite->border_right;
                         } else {
-                            Uint32 color_key;
-                            if (!SDL_GetSurfaceColorKey(icon_surface, &color_key) &&
-                                !surface_pixel_get(icon_surface, 0, 0, &color_key)) {
-                                return ret;
-                            }
-                            if (surface_borders_get(icon_surface,
-                                                    &border_up,
-                                                    &border_down,
-                                                    &border_left,
-                                                    &border_right,
-                                                    color_key) < 0) {
+                            if (!surface_texture_borders_get(icon_surface,
+                                                             &border_up,
+                                                             &border_down,
+                                                             &border_left,
+                                                             &border_right)) {
                                 return ret;
                             }
                         }
