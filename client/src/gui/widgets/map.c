@@ -5906,8 +5906,8 @@ bool widget_map_fog_click_test(widgetdata *widget) {
         return false;
     }
 
-    const int target_x = map_width * (MAP_FOW_SIZE / 2) + 2;
-    const int target_y = map_height * (MAP_FOW_SIZE / 2) + 3;
+    const int target_x = map_width * (MAP_FOW_SIZE / 2) + 7;
+    const int target_y = map_height * (MAP_FOW_SIZE / 2) + 7;
     size_t cell_count = (size_t)map_width * MAP_FOW_SIZE * (size_t)map_height * MAP_FOW_SIZE;
     MapCell *saved_cells = xmalloc(cell_count * sizeof(*saved_cells));
     memcpy(saved_cells, cells, cell_count * sizeof(*saved_cells));
