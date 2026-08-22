@@ -486,6 +486,16 @@ if (BUILD_TESTING)
     target_link_libraries(client-keepalive-tests PRIVATE Atrinik::Core)
     add_test(NAME client-keepalive COMMAND client-keepalive-tests)
 
+    add_executable(client-network-graph-tests
+        src/tests/network_graph.c
+        src/client/keepalive.c
+        src/client/network_graph_data.c)
+    atrinik_configure_target(client-network-graph-tests)
+    target_include_directories(client-network-graph-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-network-graph-tests PRIVATE Atrinik::Core)
+    add_test(NAME client-network-graph COMMAND client-network-graph-tests)
+
     add_executable(client-command-queue-tests
         src/tests/client_command_queue.c
         src/client/client_command_queue.c)

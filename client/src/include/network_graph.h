@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -32,10 +32,14 @@
 #ifndef NETWORK_GRAPH_H
 #define NETWORK_GRAPH_H
 
+#include <stddef.h>
+#include <stdint.h>
+
 enum {
     NETWORK_GRAPH_TYPE_GAME, ///< Game data.
     NETWORK_GRAPH_TYPE_ASSET, ///< In-band QUIC asset data.
     NETWORK_GRAPH_TYPE_HTTP, ///< HTTP data.
+    NETWORK_GRAPH_TYPE_LATENCY, ///< Keepalive application latency.
 
     NETWORK_GRAPH_TYPE_MAX ///< Maximum number of data types.
 };
@@ -50,6 +54,7 @@ enum {
 /* Prototypes */
 
 void network_graph_update(int type, int traffic, size_t bytes);
+void network_graph_update_latency(uint64_t rtt_us);
 void widget_network_graph_init(widgetdata *widget);
 
 #endif
