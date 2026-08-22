@@ -153,6 +153,7 @@ typedef struct player_view_manifest {
     bool target_ui;
     bool damage_animation;
     bool kill_animation;
+    bool visibility_fade_test;
     bool animation_elevated;
     bool animation_layer_content;
     bool animation_coordinates_set;
@@ -518,6 +519,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "target-ui",
                                            "damage-animation",
                                            "kill-animation",
+                                           "visibility-fade-test",
                                            "animation-depth",
                                            "animation-sub-layer",
                                            "animation-x-offset",
@@ -571,6 +573,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
     char *target_ui = success ? player_view_xml_property(root, "target-ui") : NULL;
     char *damage_animation = success ? player_view_xml_property(root, "damage-animation") : NULL;
     char *kill_animation = success ? player_view_xml_property(root, "kill-animation") : NULL;
+    char *visibility_fade_test =
+        success ? player_view_xml_property(root, "visibility-fade-test") : NULL;
     char *animation_depth = success ? player_view_xml_property(root, "animation-depth") : NULL;
     char *animation_sub_layer =
         success ? player_view_xml_property(root, "animation-sub-layer") : NULL;
@@ -639,6 +643,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
          player_view_parse_bool(damage_animation, &manifest->damage_animation)) &&
         (kill_animation == NULL ||
          player_view_parse_bool(kill_animation, &manifest->kill_animation)) &&
+        (visibility_fade_test == NULL ||
+         player_view_parse_bool(visibility_fade_test, &manifest->visibility_fade_test)) &&
         ((animation_depth == NULL && animation_sub_layer == NULL) ||
          (animation_depth != NULL && animation_sub_layer != NULL &&
           player_view_parse_int(animation_depth,
@@ -897,6 +903,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(target_ui);
     free(damage_animation);
     free(kill_animation);
+    free(visibility_fade_test);
     free(animation_depth);
     free(animation_sub_layer);
     free(animation_x_offset);
@@ -3460,6 +3467,11 @@ int player_view_main(int argc, char *argv[]) {
             goto cleanup;
         }
 #ifdef ATRINIK_WIDGET_TESTS
+        if (mode == PLAYER_VIEW_RENDER && manifest.visibility_fade_test &&
+            !widget_map_visibility_test()) {
+            fprintf(stderr, "player-view: visibility fade regression failed\n");
+            goto cleanup;
+        }
         if (mode == PLAYER_VIEW_RENDER && (manifest.damage_animation || manifest.kill_animation)) {
             widget_map_animation_test_begin();
         }

@@ -16,6 +16,8 @@ LAYER_WALL = 4
 LAYER_LIVING = 5
 FACE_ACTOR = 4
 FACE_WALL = 8
+FACE_ITEM = 2
+FACE_EFFECT = 3
 FLAG_HEIGHT = 0x08
 FLAG_DOUBLE = 0x40
 FLAG_MORE = 0x80
@@ -93,6 +95,19 @@ def base(*records: bytes) -> bytes:
     return packet(((0, local + b"".join(records)),))
 
 
+def centered_visibility_fade() -> bytes:
+    """Create center-authorized item, actor, and effect records for fade tests."""
+    center = tile(
+        ORIGIN,
+        ORIGIN,
+        layer(0, 1),
+        layer(2, FACE_ITEM),
+        layer(5, FACE_ACTOR),
+        layer(6, FACE_EFFECT),
+    )
+    return packet(((0, center),))
+
+
 def scenes() -> dict[str, bytes]:
     """Return every deterministic acceptance and benchmark scene."""
     actor = tile(7, 6, layer(LAYER_LIVING, FACE_ACTOR))
@@ -143,6 +158,7 @@ def scenes() -> dict[str, bytes]:
         "living-outline-crowded": packet(((0, bytes(crowded)),)),
         "living-outline-retained-fow": base(actor, same_level_wall),
         "living-outline-retained-fow-next": same_packet(fow_tile(7, 6)),
+        "visibility-fade-centered": centered_visibility_fade(),
     }
 
 

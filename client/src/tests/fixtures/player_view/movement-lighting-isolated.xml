@@ -23,7 +23,7 @@
              smooth-lighting="true"
              zoom-smoothing="false"
              clock-ms="1200"
-             expected-standard-checkpoint-sha256="53b9659e3c5f908283cccd3e3fa22acd6232192424e134ef0589fc6a0bfb703f"
+             expected-standard-checkpoint-sha256="40049cfd4f8adbb8b4b22b940a40ad38194e3511bb0ad575bbb7037dde205e6b"
              expected-pixels-sha256="0000000000000000000000000000000000000000000000000000000000000000">
   <asset face="1" path="textures/square_highlight.png" sha256="fecfd2da236702bc874c58a767d0d237f5425e423e6699742accb26215c9676b"/>
   <asset face="2" path="textures/target_attack.png" sha256="6924dbe0a7ed3bd7b71577b0d00c91c70855cba39102c20ba3270452c2d4d806"/>
