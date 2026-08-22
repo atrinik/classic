@@ -1429,6 +1429,124 @@ START_TEST(test_metaserver_publish_cadence_attempt_is_fail_closed) {
 }
 END_TEST
 
+START_TEST(test_metaserver_publish_error_code_is_bounded) {
+    char error_code[METASERVER_PUBLISH_ERROR_CODE_MAX + 1U];
+    static const char service_disabled[] =
+        "{\"error\":{\"code\":\"service_disabled\","
+        "\"message\":\"This service is temporarily unavailable.\"}}";
+    ck_assert(metaserver_publish_error_code(service_disabled,
+                                            strlen(service_disabled),
+                                            VS(error_code)));
+    ck_assert_str_eq(error_code, "service_disabled");
+
+    static const char other_code[] =
+        " { \"error\" : { \"message\": \"Try again later\", "
+        "\"code\": \"rate_limited\" } } ";
+    ck_assert(metaserver_publish_error_code(other_code,
+                                            strlen(other_code),
+                                            VS(error_code)));
+    ck_assert_str_eq(error_code, "rate_limited");
+
+    static const char replay[] =
+        "{\"error\":{\"code\":\"publish_replay\","
+        "\"minimumNextSequence\":\"42\"}}";
+    ck_assert(metaserver_publish_error_code(replay, strlen(replay), VS(error_code)));
+    ck_assert_str_eq(error_code, "publish_replay");
+
+    static const char escaped_message[] =
+        "{\"error\":{\"code\":\"temporary-error\","
+        "\"message\":\"Try \\\"again\\\"\\u0021\"}}";
+    ck_assert(metaserver_publish_error_code(escaped_message,
+                                            strlen(escaped_message),
+                                            VS(error_code)));
+    ck_assert_str_eq(error_code, "temporary-error");
+
+    static const char *invalid_bodies[] = {
+        "{\"errors\":{\"code\":\"service_disabled\",\"message\":\"x\"}}",
+        "{\"error\":{}}",
+        "{\"error\":{\"message\":\"x\"}}",
+        "{\"error\":{\"code\":\"service_disabled\"}}",
+        "{\"error\":{\"code\":\"service_disabled\",\"message\":\"x\","
+        "\"message\":\"y\"}}",
+        "{\"error\":{\"code\":\"service_disabled\",\"code\":\"x\","
+        "\"message\":\"y\"}}",
+        "{\"error\":{\"code\":\"service_disabled\",\"unknown\":\"x\","
+        "\"message\":\"y\"}}",
+        "{\"error\":{\"code\":\"service_disabled\",\"message\":\"x\",}}",
+        "{\"error\":{\"code\":\"service_disabled\" \"message\":\"x\"}}",
+        "{\"error\":{\"code\":\"service_disabled\",\"message\":\"x\"}]",
+        "{\"error\":{\"code\":\"service_disabled\",\"message\":\"x\"},"
+        "\"extra\":true}",
+        "{\"error\":{\"code\":\"service_disabled\",\"message\":\"x\"}}trailing",
+        "{\"error\":{\"code\":\"\",\"message\":\"x\"}}",
+        "{\"error\":{\"code\":\"bad\\u0020code\",\"message\":\"x\"}}",
+        "{\"error\":{\"code\":\"x\",\"message\":\"bad\\q\"}}",
+        "{\"error\":{\"code\":\"x\",\"message\":\"bad\\u12\"}}",
+        "{\"error\":{\"code\":\"x\",\"message\":\"bad\\u0g00\"}}",
+        "{\"error\":{\"code\":\"x\",\"message\":\"bad\x01\"}}",
+        "{\"error\":{\"code\":123,\"message\":\"x\"}}",
+        "{\"error\":\"not-an-object\"}",
+        "{\"error\":{\"code\":\"publish_replay\","
+        "\"minimumNextSequence\":\"0\"}}",
+        "{\"error\":{\"code\":\"publish_replay\","
+        "\"minimumNextSequence\":\"01\"}}",
+        "{\"error\":{\"code\":\"publish_replay\","
+        "\"minimumNextSequence\":\"not-a-number\"}}",
+        "{\"error\":{\"code\":\"publish_replay\","
+        "\"minimumNextSequence\":\"42\",\"message\":\"x\"}}",
+        "{\"error\":{\"code\":\"service_disabled\","
+        "\"minimumNextSequence\":\"42\"}}",
+        "{\"error\":{\"code\":\"publish_replay\","
+        "\"minimumNextSequence\":\"42\",\"minimumNextSequence\":\"43\"}}",
+    };
+    for (size_t index = 0; index < sizeof(invalid_bodies) / sizeof(invalid_bodies[0]); index++) {
+        ck_assert(!metaserver_publish_error_code(invalid_bodies[index],
+                                                 strlen(invalid_bodies[index]),
+                                                 VS(error_code)));
+        ck_assert_str_eq(error_code, "unavailable");
+    }
+
+    static const char malformed[] = "{\"error\":{\"code\":\"bad code\",\"message\":\"x\"}}";
+    ck_assert(!metaserver_publish_error_code(malformed, strlen(malformed), VS(error_code)));
+    ck_assert_str_eq(error_code, "unavailable");
+    static const char oversized_code[] =
+        "{\"error\":{\"code\":\"abcdefghijklmnopqrstuvwxyz"
+        "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopq\",\"message\":\"x\"}}";
+    ck_assert(!metaserver_publish_error_code(oversized_code,
+                                             strlen(oversized_code),
+                                             VS(error_code)));
+    ck_assert_str_eq(error_code, "unavailable");
+    ck_assert(!metaserver_publish_error_code("<html>503</html>", 16, VS(error_code)));
+    ck_assert_str_eq(error_code, "unavailable");
+    ck_assert(!metaserver_publish_error_code(NULL, 0, VS(error_code)));
+    ck_assert_str_eq(error_code, "unavailable");
+    ck_assert(!metaserver_publish_error_code(NULL, 1, VS(error_code)));
+    ck_assert_str_eq(error_code, "unavailable");
+
+    char oversized[METASERVER_PUBLISH_RESPONSE_BODY_MAX + 1U];
+    memset(oversized, 'x', sizeof(oversized));
+    ck_assert(!metaserver_publish_error_code(oversized, sizeof(oversized), VS(error_code)));
+    ck_assert_str_eq(error_code, "unavailable");
+
+    char short_code[4] = {0};
+    ck_assert(!metaserver_publish_error_code(service_disabled,
+                                             strlen(service_disabled),
+                                             VS(short_code)));
+    ck_assert_str_eq(short_code, "");
+
+    char fallback_only[METASERVER_PUBLISH_ERROR_CODE_MAX + 1U];
+    ck_assert(!metaserver_publish_error_code(service_disabled,
+                                             strlen(service_disabled),
+                                             fallback_only,
+                                             sizeof("unavailable")));
+    ck_assert_str_eq(fallback_only, "unavailable");
+    ck_assert(!metaserver_publish_error_code(service_disabled,
+                                             strlen(service_disabled),
+                                             fallback_only,
+                                             0));
+}
+END_TEST
+
 START_TEST(test_metaserver_publish_retry_and_daily_budget) {
     ck_assert_uint_eq(metaserver_publish_retry_delay_ms(0, 0, 0), 45000);
     ck_assert_uint_eq(metaserver_publish_retry_delay_ms(1, 0, 0), 90000);
@@ -2076,6 +2194,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_metaserver_rendezvous_retry_policy);
     tcase_add_test(tc_core, test_metaserver_publish_cadence);
     tcase_add_test(tc_core, test_metaserver_publish_cadence_attempt_is_fail_closed);
+    tcase_add_test(tc_core, test_metaserver_publish_error_code_is_bounded);
     tcase_add_test(tc_core, test_metaserver_publish_retry_and_daily_budget);
     tcase_add_test(tc_core, test_metaserver_rendezvous_ticket_isolation);
     tcase_add_test(tc_core, test_metaserver_generation_cancellation);
