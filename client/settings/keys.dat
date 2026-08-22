@@ -57,25 +57,25 @@ bind
 	# w
 	key 119
 	repeat 1
-	command ?MOVE_N
+	command ?MOVE_NW
 end
 bind
 	# a
 	key 97
 	repeat 1
-	command ?MOVE_W
+	command ?MOVE_SW
 end
 bind
 	# s
 	key 115
 	repeat 1
-	command ?MOVE_S
+	command ?MOVE_SE
 end
 bind
 	# d
 	key 100
 	repeat 1
-	command ?MOVE_E
+	command ?MOVE_NE
 end
 bind
 	# [
@@ -212,11 +212,6 @@ bind
 	command ?TARGET_FRIEND
 end
 bind
-	# p
-	key 112
-	command /pray
-end
-bind
 	# tab
 	key 9
 	command /widget_toggle inventory:main
@@ -296,30 +291,6 @@ bind
 	# 8
 	key 56
 	command ?QUICKSLOT_8
-end
-bind
-	# q
-	key 113
-	mod 3
-	command /invfilter all
-end
-bind
-	# w
-	key 119
-	mod 3
-	command /invfilter applied
-end
-bind
-	# e
-	key 101
-	mod 3
-	command /invfilter locked
-end
-bind
-	# r
-	key 114
-	mod 3
-	command /invfilter unidentified
 end
 bind
 	# c

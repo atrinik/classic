@@ -210,10 +210,10 @@ static void test_bundled_defaults(void) {
         {"?MOVE_W", SDLK_KP_7, SDL_KMOD_NONE, true},
         {"?MOVE_NW", SDLK_KP_8, SDL_KMOD_NONE, true},
         {"?MOVE_STAY", SDLK_KP_5, SDL_KMOD_NONE, true},
-        {"?MOVE_N", SDLK_W, SDL_KMOD_NONE, true},
-        {"?MOVE_W", SDLK_A, SDL_KMOD_NONE, true},
-        {"?MOVE_S", SDLK_S, SDL_KMOD_NONE, true},
-        {"?MOVE_E", SDLK_D, SDL_KMOD_NONE, true},
+        {"?MOVE_NW", SDLK_W, SDL_KMOD_NONE, true},
+        {"?MOVE_SW", SDLK_A, SDL_KMOD_NONE, true},
+        {"?MOVE_SE", SDLK_S, SDL_KMOD_NONE, true},
+        {"?MOVE_NE", SDLK_D, SDL_KMOD_NONE, true},
         {"/left", SDLK_LEFTBRACKET, SDL_KMOD_NONE, true},
         {"/right", SDLK_RIGHTBRACKET, SDL_KMOD_NONE, true},
         {"/push", SDLK_K, SDL_KMOD_NONE, true},
@@ -239,7 +239,6 @@ static void test_bundled_defaults(void) {
         {"?COMBAT", SDLK_C, SDL_KMOD_NONE, false},
         {"?TARGET_ENEMY", SDLK_X, SDL_KMOD_NONE, false},
         {"?TARGET_FRIEND", SDLK_Y, SDL_KMOD_NONE, false},
-        {"/pray", SDLK_P, SDL_KMOD_NONE, false},
         {"/widget_toggle inventory:main", SDLK_TAB, SDL_KMOD_NONE, false},
         {"/widget_focus inventory", SDLK_TAB, SDL_KMOD_SHIFT, false},
         {"?RUNON", SDLK_LALT, SDL_KMOD_NONE, false},
@@ -256,10 +255,6 @@ static void test_bundled_defaults(void) {
         {"?QUICKSLOT_6", SDLK_6, SDL_KMOD_NONE, false},
         {"?QUICKSLOT_7", SDLK_7, SDL_KMOD_NONE, false},
         {"?QUICKSLOT_8", SDLK_8, SDL_KMOD_NONE, false},
-        {"/invfilter all", SDLK_Q, SDL_KMOD_SHIFT, false},
-        {"/invfilter applied", SDLK_W, SDL_KMOD_SHIFT, false},
-        {"/invfilter locked", SDLK_E, SDL_KMOD_SHIFT, false},
-        {"/invfilter unidentified", SDLK_R, SDL_KMOD_SHIFT, false},
         {"?COPY", SDLK_C, SDL_KMOD_CTRL, false},
         {"?PASTE", SDLK_V, SDL_KMOD_CTRL, false},
         {"?HELLO", SDLK_T, SDL_KMOD_NONE, false},
@@ -927,10 +922,10 @@ static void test_keybind_event_cardinal_chords(void) {
         SDL_Keycode second_key;
         SDL_Scancode second_scancode;
     } cases[] = {
-        {"?MOVE_N", "?MOVE_E", 8, 6, 9, SDLK_W, SDL_SCANCODE_W, SDLK_D, SDL_SCANCODE_D},
-        {"?MOVE_E", "?MOVE_S", 6, 2, 3, SDLK_D, SDL_SCANCODE_D, SDLK_S, SDL_SCANCODE_S},
-        {"?MOVE_S", "?MOVE_W", 2, 4, 1, SDLK_S, SDL_SCANCODE_S, SDLK_A, SDL_SCANCODE_A},
-        {"?MOVE_W", "?MOVE_N", 4, 8, 7, SDLK_A, SDL_SCANCODE_A, SDLK_W, SDL_SCANCODE_W},
+        {"?MOVE_NW", "?MOVE_NE", 7, 9, 8, SDLK_W, SDL_SCANCODE_W, SDLK_D, SDL_SCANCODE_D},
+        {"?MOVE_NE", "?MOVE_SE", 9, 3, 6, SDLK_D, SDL_SCANCODE_D, SDLK_S, SDL_SCANCODE_S},
+        {"?MOVE_SE", "?MOVE_SW", 3, 1, 2, SDLK_S, SDL_SCANCODE_S, SDLK_A, SDL_SCANCODE_A},
+        {"?MOVE_SW", "?MOVE_NW", 1, 7, 4, SDLK_A, SDL_SCANCODE_A, SDLK_W, SDL_SCANCODE_W},
     };
 
     for (size_t i = 0; i < arraysize(cases); i++) {
