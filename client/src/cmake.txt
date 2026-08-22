@@ -26,6 +26,7 @@ set(SOURCES
 	src/client/lighting.c
 	src/client/lighting_transfer.c
 	src/client/main.c
+	src/client/network_graph_data.c
 	src/client/map_transform.c
 	src/client/map_visibility.c
 	src/client/menu.c
