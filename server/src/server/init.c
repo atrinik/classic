@@ -487,6 +487,19 @@ static bool clioptions_option_metaserver_publish_origin(const char *arg, char **
     return true;
 }
 
+/** Description of the --metaserver_hostname command. */
+static const char *clioptions_option_metaserver_hostname_desc =
+    "Optional canonical lowercase DNS hostname for the direct friend-join fallback.";
+/** @copydoc clioptions_handler_func */
+static bool clioptions_option_metaserver_hostname(const char *arg, char **errmsg) {
+    if (*arg != '\0' && !metaserver_hostname_valid(arg)) {
+        *errmsg = xstrdup("Expected a canonical lowercase DNS hostname");
+        return false;
+    }
+    snprintf(VS(settings.metaserver_hostname), "%s", arg);
+    return true;
+}
+
 /** Description of the --metaserver_rendezvous_origin command. */
 static const char *clioptions_option_metaserver_rendezvous_origin_desc =
     "Canonical HTTP(S) origin and profile prefix for ticket-scoped rendezvous signaling.";
@@ -1050,6 +1063,7 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli,
                                metaserver_publish_origin,
                                "Signed metaserver publisher origin");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, metaserver_hostname, "Direct metaserver fallback hostname");
     CLIOPTIONS_CREATE_ARGUMENT(cli, metaserver_rendezvous_origin, "Rendezvous signaling origin");
     CLIOPTIONS_CREATE_ARGUMENT(cli, metaserver_heartbeat, "Metaserver heartbeat interval");
     CLIOPTIONS_CREATE_ARGUMENT(cli, http_url, "Operator-managed HTTP asset origin");
