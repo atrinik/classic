@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <user_data.h>
 #include <wrapper.h>
 #include <toolkit/path.h>
 
@@ -314,7 +315,7 @@ static void widget_draw(widgetdata *widget) {
 
     /* The list doesn't exist yet, create it. */
     if (!list_mplayer) {
-        char version[MAX_BUF];
+        char user_data_directory[HUGE_BUF];
 
         /* Create the list and set up settings. */
         list_mplayer = list_create(12, 1, 8);
@@ -330,12 +331,15 @@ static void widget_draw(widgetdata *widget) {
         mplayer_list_init(list_mplayer, buf, 0);
 
         /* Now add custom ones, but ignore duplicates. */
-        snprintf(buf,
-                 sizeof(buf),
-                 "%s/.atrinik/%s/" DIRECTORY_MEDIA,
-                 get_config_dir(),
-                 package_get_version_partial(version, sizeof(version)));
-        mplayer_list_init(list_mplayer, buf, 1);
+        if (user_data_prepare(get_config_dir(), PACKAGE_VERSION_MAJOR, VS(user_data_directory))) {
+            size_t user_data_length = strlen(user_data_directory);
+            if (user_data_length + 1U + sizeof(DIRECTORY_MEDIA) - 1U < sizeof(buf)) {
+                memcpy(buf, user_data_directory, user_data_length);
+                buf[user_data_length] = '/';
+                memcpy(buf + user_data_length + 1U, DIRECTORY_MEDIA, sizeof(DIRECTORY_MEDIA));
+                mplayer_list_init(list_mplayer, buf, 1);
+            }
+        }
 
         /* If we added any, sort the list alphabetically and add an entry
          * to disable background music. */
