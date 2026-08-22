@@ -1222,7 +1222,8 @@ static void metaserver_update_request_locked(curl_request_t *request) {
     size_t headers_size = 0;
     char *headers = curl_request_get_header(request, &headers_size);
     uint32_t retry_after_seconds = 0;
-    metaserver_publish_retry_after(headers, headers_size, &retry_after_seconds);
+    bool has_retry_after =
+        metaserver_publish_retry_after(headers, headers_size, &retry_after_seconds);
 
     bool success = state == CURL_STATE_OK && http_code == 200;
 #if LIBCURL_VERSION_NUM >= 0x075600
@@ -1247,7 +1248,23 @@ static void metaserver_update_request_locked(curl_request_t *request) {
         pthread_mutex_unlock(&stats_lock);
     } else {
         metaserver_publish_failed_stat();
-        LOG(SYSTEM, "Failed to update metaserver information (HTTP code: %d)", http_code);
+        size_t body_size = 0;
+        char *body = curl_request_get_body(request, &body_size);
+        char error_code[METASERVER_PUBLISH_ERROR_CODE_MAX + 1U] = {0};
+        metaserver_publish_error_code(body, body_size, VS(error_code));
+        if (has_retry_after) {
+            LOG(SYSTEM,
+                "Failed to update metaserver information (HTTP code: %d, error: %s, "
+                "retry-after: %u)",
+                http_code,
+                error_code,
+                retry_after_seconds);
+        } else {
+            LOG(SYSTEM,
+                "Failed to update metaserver information (HTTP code: %d, error: %s)",
+                http_code,
+                error_code);
+        }
         metaserver_publish_failure_action_t action =
             metaserver_publish_failure_action(state, http_code);
         bool replay_recovered = action == METASERVER_PUBLISH_FAILURE_REPLAY &&
@@ -1369,7 +1386,7 @@ static curl_request_t *metaserver_publish_request_create(uint32_t players_count)
         goto out;
     }
     curl_request_set_follow_redirects(request, false);
-    curl_request_set_max_body(request, 1024);
+    curl_request_set_max_body(request, METASERVER_PUBLISH_RESPONSE_BODY_MAX);
     curl_request_set_max_header(request, 16384);
     curl_request_set_timeout(request, METASERVER_PUBLISH_TIMEOUT_MS);
     curl_request_set_cb(request, metaserver_update_request, NULL);
