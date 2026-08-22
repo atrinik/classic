@@ -1998,8 +1998,10 @@ static void map_animate_object(struct MapCell *cell, int layer) {
 }
 
 /** Advance presentation-only live alpha without mutating MAP2 authority. */
-static void map_animate_visibility(int depth, int x, int y, MapCell *cell) {
+static void map_animate_visibility(int depth, int cache_x, int cache_y, MapCell *cell) {
     bool changed = false;
+    int player_x = map_width * MAP_FOW_SIZE / 2;
+    int player_y = map_height * MAP_FOW_SIZE / 2;
     for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
         for (int object_layer = LAYER_ITEM; object_layer <= LAYER_EFFECT; object_layer++) {
             if (!map_visibility_transient_layer(object_layer)) {
@@ -2013,8 +2015,9 @@ static void map_animate_visibility(int depth, int x, int y, MapCell *cell) {
             if (!fade->authorized || cell->faces[layer] == 0 || cell->fow) {
                 map_visibility_fade_revoke(fade, LastTick);
             } else {
-                uint8_t target = map_visibility_field_alpha(map_visibility_field_weight(x, y));
-                bool local_player = depth == 0 && x == 0 && y == 0 &&
+                uint8_t target = map_visibility_field_alpha(
+                    map_visibility_field_weight(cache_x - player_x, cache_y - player_y));
+                bool local_player = depth == 0 && cache_x == player_x && cache_y == player_y &&
                                     object_layer == LAYER_LIVING &&
                                     sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
                 if (local_player) {
@@ -2117,7 +2120,7 @@ void map_animate(void) {
             for (y = 0; y < map_height; y++) {
                 cell = MAP_CELL_GET_MIDDLE(x, y);
 
-                map_animate_visibility(depth, x, y, cell);
+                map_animate_visibility(depth, x + MAP_STARTX, y + MAP_STARTY, cell);
 
                 if (cell->fow) {
                     continue;
@@ -5674,6 +5677,118 @@ bool widget_map_animation_test_end(bool expect_damage,
 
 void widget_map_animation_test_death_texture_set(SDL_Surface *texture) {
     map_animation_test_death_texture = texture;
+}
+
+bool widget_map_visibility_test(void) {
+    const uint32_t initial_tick = LastTick;
+    const int player_x = map_width * MAP_FOW_SIZE / 2;
+    const int player_y = map_height * MAP_FOW_SIZE / 2;
+    const int center_view_x = map_width - map_width / 2 - 1;
+    const int center_view_y = map_height - map_height / 2 - 1;
+    bool success = true;
+    bool center_item = false;
+    bool center_living = false;
+    bool center_effect = false;
+
+    map_animate();
+
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
+        if (!(map_level_mask & (UINT16_C(1) << MAP2_DEPTH_INDEX(depth))) ||
+            !map_select_level(depth, false)) {
+            continue;
+        }
+
+        for (int x = 0; x < map_width; x++) {
+            for (int y = 0; y < map_height; y++) {
+                MapCell *cell = MAP_CELL_GET_MIDDLE(x, y);
+                int cache_x = x + MAP_STARTX;
+                int cache_y = y + MAP_STARTY;
+
+                for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                    for (int object_layer = LAYER_ITEM; object_layer <= LAYER_EFFECT;
+                         object_layer++) {
+                        if (!map_visibility_transient_layer(object_layer)) {
+                            continue;
+                        }
+                        int layer = GET_MAP_LAYER(object_layer, sub_layer);
+                        const map_visibility_fade_t *fade = &cell->visibility[layer];
+                        if (!fade->initialized || !fade->authorized || cell->faces[layer] == 0) {
+                            continue;
+                        }
+
+                        uint8_t expected = map_visibility_field_alpha(
+                            map_visibility_field_weight(cache_x - player_x, cache_y - player_y));
+                        bool local_player = depth == 0 && cache_x == player_x &&
+                                            cache_y == player_y && object_layer == LAYER_LIVING &&
+                                            sub_layer == MIN(MapData.player_sub_layer,
+                                                             NUM_SUB_LAYERS - 1);
+                        if (local_player) {
+                            expected = UINT8_MAX;
+                        }
+                        if (fade->target_alpha != expected) {
+                            fprintf(stderr,
+                                    "map visibility test: target mismatch depth=%d x=%d y=%d "
+                                    "layer=%d expected=%u got=%u\n",
+                                    depth,
+                                    x,
+                                    y,
+                                    object_layer,
+                                    expected,
+                                    fade->target_alpha);
+                            success = false;
+                        }
+
+                        if (depth == 0 && x == center_view_x && y == center_view_y) {
+                            center_item |= object_layer == LAYER_ITEM;
+                            center_living |= object_layer == LAYER_LIVING;
+                            center_effect |= object_layer == LAYER_EFFECT;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (!center_item || !center_living || !center_effect) {
+        fprintf(stderr,
+                "map visibility test: center records item=%d living=%d effect=%d\n",
+                center_item,
+                center_living,
+                center_effect);
+        success = false;
+    }
+
+    LastTick = initial_tick + MAP_VISIBILITY_FADE_DURATION_MS;
+    map_animate();
+    if (!map_select_level(0, true)) {
+        return false;
+    }
+
+    MapCell *center = MAP_CELL_GET_MIDDLE(center_view_x, center_view_y);
+    for (int object_layer = LAYER_ITEM; object_layer <= LAYER_EFFECT; object_layer++) {
+        if (!map_visibility_transient_layer(object_layer)) {
+            continue;
+        }
+        int layer = GET_MAP_LAYER(object_layer, MIN(MapData.player_sub_layer,
+                                                    NUM_SUB_LAYERS - 1));
+        const map_visibility_fade_t *fade = &center->visibility[layer];
+        if (center->faces[layer] == 0) {
+            continue;
+        }
+        if (!fade->initialized || !fade->authorized || fade->alpha != UINT8_MAX) {
+            fprintf(stderr,
+                    "map visibility test: center layer %d did not remain opaque "
+                    "after static interval (initialized=%d authorized=%d alpha=%u)\n",
+                    object_layer,
+                    fade->initialized,
+                    fade->authorized,
+                    fade->alpha);
+            success = false;
+        }
+    }
+
+    /* Keep the simulated clock monotonic after advancing the fade interval. */
+    return success;
 }
 
 void widget_map_animation_test_add(int type,
