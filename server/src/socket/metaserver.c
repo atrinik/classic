@@ -89,7 +89,9 @@ static metaserver_publish_cadence_t publish_cadence;
 typedef struct metaserver_public_snapshot {
     char name[MAX_BUF];
     char description[MAX_BUF];
+    char hostname[MAX_BUF];
     uint32_t players_count;
+    uint16_t port;
     bool is_public;
     bool password_required;
 } metaserver_public_snapshot_t;
@@ -1024,6 +1026,10 @@ static void metaserver_public_snapshot(metaserver_public_snapshot_t *snapshot) {
     memset(snapshot, 0, sizeof(*snapshot));
     snprintf(VS(snapshot->name), "%s", settings.server_name);
     snprintf(VS(snapshot->description), "%s", settings.server_desc);
+    if (*settings.metaserver_hostname != '\0') {
+        snprintf(VS(snapshot->hostname), "%s", settings.metaserver_hostname);
+        snapshot->port = settings.port_quic;
+    }
     snapshot->is_public = settings.server_public;
     snapshot->password_required = *settings.join_password != '\0';
     for (player *pl = first_player; pl != NULL; pl = pl->next) {
@@ -1036,9 +1042,10 @@ static bool metaserver_public_snapshot_equal(const metaserver_public_snapshot_t 
     HARD_ASSERT(lhs != NULL);
     HARD_ASSERT(rhs != NULL);
 
-    return lhs->players_count == rhs->players_count && lhs->is_public == rhs->is_public &&
-           lhs->password_required == rhs->password_required && strcmp(lhs->name, rhs->name) == 0 &&
-           strcmp(lhs->description, rhs->description) == 0;
+    return lhs->players_count == rhs->players_count && lhs->port == rhs->port &&
+           lhs->is_public == rhs->is_public && lhs->password_required == rhs->password_required &&
+           strcmp(lhs->name, rhs->name) == 0 && strcmp(lhs->description, rhs->description) == 0 &&
+           strcmp(lhs->hostname, rhs->hostname) == 0;
 }
 
 #if LIBCURL_VERSION_NUM >= 0x075600
@@ -1326,6 +1333,8 @@ static curl_request_t *metaserver_publish_request_create(uint32_t players_count)
         .text_comment = settings.server_desc,
         .is_public = settings.server_public,
         .password_required = *settings.join_password != '\0',
+        .hostname = *settings.metaserver_hostname != '\0' ? settings.metaserver_hostname : NULL,
+        .port = *settings.metaserver_hostname != '\0' ? settings.port_quic : 0,
     };
     if (!metaserver_publisher_classic_body(&payload, body, &body_size)) {
         LOG(ERROR, "Server metadata cannot be represented by the signed publisher contract");
