@@ -121,8 +121,8 @@ bind
 	command ?LOCK
 end
 bind
-	# m
-	key 109
+	# b
+	key 98
 	command ?MARK
 end
 bind
@@ -192,8 +192,8 @@ bind
 	command ?QLIST
 end
 bind
-	# r
-	key 114
+	# m
+	key 109
 	command /region_map
 end
 bind
