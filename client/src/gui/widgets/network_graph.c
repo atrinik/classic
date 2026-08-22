@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -32,17 +32,15 @@
 #include <global.h>
 #include <surface_primitives.h>
 #include <network_graph.h>
+#include <network_graph_data.h>
 #include <toolkit/string.h>
 
 /**
  * Holds network graph data about a particular data type.
  */
 typedef struct network_graph_data {
-    size_t *data; ///< The actual data.
-    int width; ///< Number of entries in the data array.
-    int pos; ///< Position in the data array.
+    network_graph_series_t series; ///< The unit-aware graph history.
     Uint32 ticks; ///< When the data was last logged.
-    size_t max; ///< Peak.
 } network_graph_data_t;
 
 /**
@@ -72,7 +70,8 @@ typedef struct network_graph_work {
     struct network_graph_work *next; ///< Next entry.
     int type; ///< Data type.
     int traffic; ///< Traffic type.
-    size_t bytes; ///< Bytes.
+    uint64_t value; ///< Sample value.
+    bool sample; ///< Whether the current bucket has a sample.
 } network_graph_work_t;
 
 /**
@@ -82,6 +81,7 @@ static const char *const network_graph_types[NETWORK_GRAPH_TYPE_MAX] = {
     "Game data",
     "QUIC assets",
     "HTTP data",
+    "Latency (ms)",
 };
 
 /**
@@ -97,6 +97,7 @@ static const char *const network_graph_colors[NETWORK_GRAPH_TYPE_MAX] = {
     "#ff0000",
     "#0080ff",
     "#00ff00",
+    "#00ff00",
 };
 
 /**
@@ -110,7 +111,12 @@ static SDL_Mutex *network_graph_mutex = NULL;
 static network_graph_work_t *work_queue = NULL;
 
 /* Prototypes */
-static void widget_network_graph_update(widgetdata *widget, int type, int traffic, size_t bytes);
+static void
+widget_network_graph_update(widgetdata *widget, int type, int traffic, uint64_t value, bool sample);
+
+static size_t network_graph_series_count(int type) {
+    return type == NETWORK_GRAPH_TYPE_LATENCY ? 1 : NETWORK_GRAPH_TRAFFIC_MAX;
+}
 
 /** @copydoc widgetdata::draw_func */
 static void widget_draw(widgetdata *widget) {
@@ -123,7 +129,57 @@ static void widget_draw(widgetdata *widget) {
 
     SDL_FillSurfaceRect(widget->surface, NULL, 0);
 
-    if (data->data == NULL) {
+    if (data->series.values == NULL) {
+        return;
+    }
+
+    if (network_graph->type == NETWORK_GRAPH_TYPE_LATENCY) {
+        SDL_Color color;
+        if (!text_color_parse(network_graph_colors[NETWORK_GRAPH_TYPE_LATENCY], &color)) {
+            LOG(ERROR,
+                "Could not parse color: %s",
+                network_graph_colors[NETWORK_GRAPH_TYPE_LATENCY]);
+            return;
+        }
+
+        int previous_x = -1;
+        int previous_y = widget->h - 1;
+        for (size_t x = 0; x < data->series.pos && x < (size_t)widget->w; x++) {
+            if (!network_graph_series_is_valid(&data->series, x)) {
+                previous_x = -1;
+                continue;
+            }
+
+            uint64_t value = network_graph_series_value(&data->series, x, 0);
+            long double factor = data->series.max == 0
+                                     ? 0.0L
+                                     : value / (long double)data->series.max;
+            int y = (widget->h - 1) - (widget->h - 1) * factor;
+
+            if (previous_x >= 0) {
+                lineRGBA(widget->surface,
+                         previous_x,
+                         previous_y,
+                         (int)x,
+                         y,
+                         color.r,
+                         color.g,
+                         color.b,
+                         255);
+            } else {
+                lineRGBA(widget->surface,
+                         (int)x,
+                         y,
+                         (int)x,
+                         y,
+                         color.r,
+                         color.g,
+                         color.b,
+                         255);
+            }
+            previous_x = (int)x;
+            previous_y = y;
+        }
         return;
     }
 
@@ -139,17 +195,25 @@ static void widget_draw(widgetdata *widget) {
         }
 
         int ly = widget->h - 1;
-        for (int x = 0; x < data->pos && x < widget->w; x++) {
-            size_t bytes = data->data[NETWORK_GRAPH_TRAFFIC_MAX * x + i];
+        for (size_t x = 0; x < data->series.pos && x < (size_t)widget->w; x++) {
+            uint64_t bytes = network_graph_series_value(&data->series, x, i);
             long double factor;
-            if (data->max == 0) {
+            if (data->series.max == 0) {
                 factor = 0.0;
             } else {
-                factor = bytes / (long double)data->max;
+                factor = bytes / (long double)data->series.max;
             }
             int y = (widget->h - 1) - (widget->h - 1) * factor;
 
-            lineRGBA(widget->surface, MAX(0, x - 1), ly, x, y, color.r, color.g, color.b, 255);
+            lineRGBA(widget->surface,
+                     MAX(0, (int)x - 1),
+                     ly,
+                     (int)x,
+                     y,
+                     color.r,
+                     color.g,
+                     color.b,
+                     255);
             ly = y;
         }
     }
@@ -177,7 +241,11 @@ static void widget_background(widgetdata *widget, int draw) {
         network_graph_work_t *work = work_queue;
 
         for (widgetdata *tmp = cur_widget[NETWORK_GRAPH_ID]; tmp != NULL; tmp = tmp->type_next) {
-            widget_network_graph_update(tmp, work->type, work->traffic, work->bytes);
+            widget_network_graph_update(tmp,
+                                        work->type,
+                                        work->traffic,
+                                        work->value,
+                                        work->sample);
         }
 
         LL_DELETE(work_queue, work);
@@ -191,8 +259,13 @@ static void widget_background(widgetdata *widget, int draw) {
             continue;
         }
 
+        if (type == NETWORK_GRAPH_TYPE_LATENCY) {
+            widget_network_graph_update(widget, type, 0, 0, false);
+            continue;
+        }
+
         for (int traffic = 0; traffic < NETWORK_GRAPH_TRAFFIC_MAX; traffic++) {
-            widget_network_graph_update(widget, type, traffic, 0);
+            widget_network_graph_update(widget, type, traffic, 0, true);
         }
     }
 }
@@ -208,19 +281,36 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
             return 0;
         }
 
-        char buf[HUGE_BUF];
-        snprintf(VS(buf),
-                 "Maximum: %" PRIu64 " Bytes/s (%" PRIu64 " kB/s)",
-                 (uint64_t)data->max,
-                 (uint64_t)data->max / 1000);
+        if (data->series.values == NULL || (size_t)x >= data->series.width) {
+            return 0;
+        }
 
-        for (int i = 0; i < NETWORK_GRAPH_TRAFFIC_MAX; i++) {
-            size_t bytes = data->data[x * NETWORK_GRAPH_TRAFFIC_MAX + i];
-            snprintfcat(VS(buf),
-                        "\n%s: %" PRIu64 " Bytes/s (%" PRIu64 " kB/s)",
-                        network_graph_filters[i],
-                        (uint64_t)bytes,
-                        (uint64_t)bytes / 1000);
+        char buf[HUGE_BUF];
+        if (network_graph->type == NETWORK_GRAPH_TYPE_LATENCY) {
+            snprintf(VS(buf),
+                     "Maximum: %.3Lf ms",
+                     data->series.max / 1000.0L);
+            if (network_graph_series_is_valid(&data->series, (size_t)x)) {
+                snprintfcat(VS(buf),
+                            "\nApplication RTT: %.3Lf ms",
+                            network_graph_series_value(&data->series, (size_t)x, 0) / 1000.0L);
+            } else {
+                snprintfcat(VS(buf), "\nApplication RTT: no sample");
+            }
+        } else {
+            snprintf(VS(buf),
+                     "Maximum: %" PRIu64 " Bytes/s (%" PRIu64 " kB/s)",
+                     data->series.max,
+                     data->series.max / 1000);
+
+            for (int i = 0; i < NETWORK_GRAPH_TRAFFIC_MAX; i++) {
+                uint64_t bytes = network_graph_series_value(&data->series, (size_t)x, i);
+                snprintfcat(VS(buf),
+                            "\n%s: %" PRIu64 " Bytes/s (%" PRIu64 " kB/s)",
+                            network_graph_filters[i],
+                            bytes,
+                            bytes / 1000);
+            }
         }
 
         tooltip_create(event_mouse_x(event), event_mouse_y(event), FONT_ARIAL11, buf);
@@ -236,7 +326,7 @@ static void widget_deinit(widgetdata *widget) {
     network_graph_widget_t *network_graph = widget->subwidget;
 
     for (int i = 0; i < NETWORK_GRAPH_TYPE_MAX; i++) {
-        free(network_graph->data[i].data);
+        network_graph_series_free(&network_graph->data[i].series);
     }
 
     if (network_graph_mutex != NULL) {
@@ -338,12 +428,20 @@ static int widget_menu_handle(widgetdata *widget, SDL_Event *event) {
  * @param type
  * The network graph type.
  * @param traffic
- * The traffic type (tx/rx).
- * @param bytes
- * Bytes.
+ * The traffic type (tx/rx), or zero for latency.
+ * @param value
+ * Sample value.
+ * @param sample
+ * Whether to record a sample in the current bucket.
  */
-static void widget_network_graph_update(widgetdata *widget, int type, int traffic, size_t bytes) {
+static void widget_network_graph_update(widgetdata *widget,
+                                        int type,
+                                        int traffic,
+                                        uint64_t value,
+                                        bool sample) {
     HARD_ASSERT(widget != NULL);
+    HARD_ASSERT(type >= 0 && type < NETWORK_GRAPH_TYPE_MAX);
+    HARD_ASSERT(traffic >= 0 && (size_t)traffic < network_graph_series_count(type));
 
     if (!widget->show) {
         return;
@@ -353,77 +451,38 @@ static void widget_network_graph_update(widgetdata *widget, int type, int traffi
     network_graph_data_t *data = &network_graph->data[type];
 
     if (widget->w <= 0) {
-        free(data->data);
-        data->data = NULL;
-        data->width = 0;
-        data->pos = 0;
+        network_graph_series_resize(&data->series, 0);
+        data->ticks = LastTick;
         return;
     }
 
-    if (data->data == NULL || data->width != widget->w) {
-        size_t old_width = data->width > 0 ? (size_t)data->width : 0;
+    if (data->series.width != (size_t)widget->w) {
         size_t new_width = (size_t)widget->w;
 
-        if (data->data == NULL) {
+        if (data->series.width == 0) {
             data->ticks = LastTick;
         }
 
-        data->data =
-            xreallocarray(data->data, new_width, sizeof(*data->data) * NETWORK_GRAPH_TRAFFIC_MAX);
-        if (new_width > old_width) {
-            memset(data->data + old_width * NETWORK_GRAPH_TRAFFIC_MAX,
-                   0,
-                   (new_width - old_width) * NETWORK_GRAPH_TRAFFIC_MAX * sizeof(*data->data));
+        if (!network_graph_series_resize(&data->series, new_width)) {
+            LOG(ERROR, "Unable to resize network graph history to %zu buckets", new_width);
+            return;
         }
-        data->width = widget->w;
     }
 
-    if (data->width == 0) {
+    if (data->series.width == 0) {
         return;
     }
 
     if (LastTick - data->ticks > 1000) {
-        data->pos++;
+        network_graph_series_advance(&data->series);
         data->ticks = LastTick;
     }
 
-    if (data->pos == data->width) {
-        data->pos--;
-
-        bool recalc_max = false;
-        for (int i = 0; i < NETWORK_GRAPH_TRAFFIC_MAX; i++) {
-            if (data->data[i] >= data->max) {
-                recalc_max = true;
-            }
-        }
-
-        memmove(data->data,
-                data->data + NETWORK_GRAPH_TRAFFIC_MAX,
-                sizeof(*data->data) * (NETWORK_GRAPH_TRAFFIC_MAX * (data->width - 1)));
-
-        if (recalc_max) {
-            data->max = 0;
-        }
-
-        for (int i = 0; i < NETWORK_GRAPH_TRAFFIC_MAX; i++) {
-            data->data[data->pos * NETWORK_GRAPH_TRAFFIC_MAX + i] = 0;
-
-            if (recalc_max) {
-                for (int x = 0; x < data->pos; x++) {
-                    size_t bytes2 = data->data[x * NETWORK_GRAPH_TRAFFIC_MAX + i];
-                    if (bytes2 > data->max) {
-                        data->max = bytes2;
-                    }
-                }
-            }
-        }
-    }
-
-    size_t *dst = &data->data[data->pos * NETWORK_GRAPH_TRAFFIC_MAX + traffic];
-    *dst += bytes;
-
-    if (*dst > data->max) {
-        data->max = *dst;
+    if (sample) {
+        network_graph_series_add(&data->series,
+                                 (size_t)traffic,
+                                 value,
+                                 type != NETWORK_GRAPH_TYPE_LATENCY);
     }
 
     widget->redraw = 1;
@@ -450,7 +509,29 @@ void network_graph_update(int type, int traffic, size_t bytes) {
     network_graph_work_t *work = xcalloc(1, sizeof(*work));
     work->type = type;
     work->traffic = traffic;
-    work->bytes = bytes;
+    work->value = bytes;
+    work->sample = true;
+
+    SDL_LockMutex(network_graph_mutex);
+    LL_PREPEND(work_queue, work);
+    SDL_UnlockMutex(network_graph_mutex);
+}
+
+/**
+ * Updates all network graph widgets with a keepalive application RTT.
+ * @param rtt_us
+ * Matched keepalive round-trip time in microseconds.
+ * @note This function is thread-safe.
+ */
+void network_graph_update_latency(uint64_t rtt_us) {
+    if (network_graph_mutex == NULL) {
+        return;
+    }
+
+    network_graph_work_t *work = xcalloc(1, sizeof(*work));
+    work->type = NETWORK_GRAPH_TYPE_LATENCY;
+    work->value = rtt_us;
+    work->sample = true;
 
     SDL_LockMutex(network_graph_mutex);
     LL_PREPEND(work_queue, work);
@@ -465,6 +546,10 @@ void network_graph_update(int type, int traffic, size_t bytes) {
 void widget_network_graph_init(widgetdata *widget) {
     network_graph_widget_t *network_graph = xcalloc(1, sizeof(*network_graph));
     network_graph->filters = ~0U;
+    for (int type = 0; type < NETWORK_GRAPH_TYPE_MAX; type++) {
+        network_graph_series_init(&network_graph->data[type].series,
+                                  network_graph_series_count(type));
+    }
 
     widget->draw_func = widget_draw;
     widget->background_func = widget_background;
