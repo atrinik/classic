@@ -54,6 +54,30 @@ bind
 	command ?MOVE_STAY
 end
 bind
+	# w
+	key 119
+	repeat 1
+	command ?MOVE_NW
+end
+bind
+	# a
+	key 97
+	repeat 1
+	command ?MOVE_SW
+end
+bind
+	# s
+	key 115
+	repeat 1
+	command ?MOVE_SE
+end
+bind
+	# d
+	key 100
+	repeat 1
+	command ?MOVE_NE
+end
+bind
 	# [
 	key 91
 	repeat 1
@@ -82,8 +106,8 @@ bind
 	command ?CONSOLE
 end
 bind
-	# a
-	key 97
+	# f
+	key 102
 	command ?APPLY
 end
 bind
@@ -97,13 +121,13 @@ bind
 	command ?LOCK
 end
 bind
-	# m
-	key 109
+	# b
+	key 98
 	command ?MARK
 end
 bind
-	# d
-	key 100
+	# z
+	key 122
 	repeat 1
 	command ?DROP
 end
@@ -168,8 +192,8 @@ bind
 	command ?QLIST
 end
 bind
-	# r
-	key 114
+	# m
+	key 109
 	command /region_map
 end
 bind
@@ -183,14 +207,9 @@ bind
 	command ?TARGET_ENEMY
 end
 bind
-	# s
-	key 115
+	# y
+	key 121
 	command ?TARGET_FRIEND
-end
-bind
-	# p
-	key 112
-	command /pray
 end
 bind
 	# tab
@@ -274,30 +293,6 @@ bind
 	command ?QUICKSLOT_8
 end
 bind
-	# q
-	key 113
-	mod 3
-	command /invfilter all
-end
-bind
-	# w
-	key 119
-	mod 3
-	command /invfilter applied
-end
-bind
-	# e
-	key 101
-	mod 3
-	command /invfilter locked
-end
-bind
-	# r
-	key 114
-	mod 3
-	command /invfilter unidentified
-end
-bind
 	# c
 	key 99
 	mod 192
@@ -339,9 +334,4 @@ bind
     key 99
     mod 3
     command ?COMBAT_FORCE
-end
-bind
-    # c
-    key 99
-    command ?COMBAT
 end

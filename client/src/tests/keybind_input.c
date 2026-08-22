@@ -150,66 +150,129 @@ static void test_keybind_loader(void) {
         "keycode_format " KEYBIND_KEYCODE_FORMAT "\nbind\nkey 102\ncommand ?FIRE_READY\nend\n"
         "bind\nkey 103\nmod 3\nrepeat 1\ncommand ?FIRE_READY_CUSTOM\nend\n"
         "bind\nkey 104\ncommand ?FIRE_READY;?HELP\nend\n"
-        "bind\nkey 105\ncommand /custom\nend\n";
+        "bind\nkey 105\ncommand /custom\nend\n"
+        "bind\nkey 119\ncommand /custom-wasd\nend\n";
     keybind_load();
-    TEST_CHECK(keybindings_num == 3);
+    TEST_CHECK(keybindings_num == 4);
     TEST_CHECK(!strcmp(keybindings[0]->command, "?FIRE_READY_CUSTOM"));
     TEST_CHECK(keybindings[0]->key == SDLK_G);
     TEST_CHECK(keybindings[0]->mod == SDL_KMOD_SHIFT);
     TEST_CHECK(keybindings[0]->repeat == 1);
     TEST_CHECK(!strcmp(keybindings[1]->command, "?FIRE_READY;?HELP"));
     TEST_CHECK(!strcmp(keybindings[2]->command, "/custom"));
+    TEST_CHECK(!strcmp(keybindings[3]->command, "/custom-wasd") && keybindings[3]->key == SDLK_W);
 
     keybind_fixture = NULL;
     keybind_save();
     keybind_fixture_reset();
     keybind_load();
-    TEST_CHECK(keybindings_num == 3);
+    TEST_CHECK(keybindings_num == 4);
     TEST_CHECK(!strcmp(keybindings[0]->command, "?FIRE_READY_CUSTOM"));
     TEST_CHECK(keybindings[0]->key == SDLK_G);
     TEST_CHECK(keybindings[0]->mod == SDL_KMOD_SHIFT);
     TEST_CHECK(keybindings[0]->repeat == 1);
     TEST_CHECK(!strcmp(keybindings[1]->command, "?FIRE_READY;?HELP"));
     TEST_CHECK(!strcmp(keybindings[2]->command, "/custom"));
+    TEST_CHECK(!strcmp(keybindings[3]->command, "/custom-wasd") && keybindings[3]->key == SDLK_W);
     keybind_save();
     keybind_fixture_reset();
     TEST_CHECK(remove(ATRINIK_TEST_BINARY_DIR "/keybind-roundtrip.dat") == 0);
 }
 
+typedef struct bundled_binding {
+    const char *command;
+    SDL_Keycode key;
+    SDL_Keymod mod;
+    bool repeat;
+} bundled_binding;
+
+typedef struct parsed_bundled_binding {
+    char command[128];
+    SDL_Keycode key;
+    SDL_Keymod mod;
+    bool repeat;
+} parsed_bundled_binding;
+
+static bool bundled_binding_matches(const parsed_bundled_binding *actual,
+                                    const bundled_binding *expected) {
+    return !strcmp(actual->command, expected->command) && actual->key == expected->key &&
+           actual->mod == expected->mod && actual->repeat == expected->repeat;
+}
+
 static void test_bundled_defaults(void) {
-    static const struct {
-        const char *command;
-        SDL_Keycode key;
-    } expected[] = {
-        {"?MOVE_N", SDLK_KP_9},
-        {"?MOVE_NE", SDLK_KP_6},
-        {"?MOVE_E", SDLK_KP_3},
-        {"?MOVE_SE", SDLK_KP_2},
-        {"?MOVE_S", SDLK_KP_1},
-        {"?MOVE_SW", SDLK_KP_4},
-        {"?MOVE_W", SDLK_KP_7},
-        {"?MOVE_NW", SDLK_KP_8},
-        {"?MOVE_STAY", SDLK_KP_5},
-        {"?CONSOLE", SDLK_KP_ENTER},
-        {"?SPELL_LIST", SDLK_F9},
-        {"?SKILL_LIST", SDLK_F10},
-        {"?PARTY_LIST", SDLK_F11},
-        {"?HELP", SDLK_F12},
-        {"?UP", SDLK_UP},
-        {"?DOWN", SDLK_DOWN},
-        {"?LEFT", SDLK_LEFT},
-        {"?RIGHT", SDLK_RIGHT},
-        {"?RUNON", SDLK_LALT},
-        {"?RUNON", SDLK_RALT},
-        {"?FIREON", SDLK_RCTRL},
-        {"?FIREON", SDLK_LCTRL},
-        {"?QUICKSLOT_GROUP_NEXT", SDLK_END},
-        {"?QUICKSLOT_GROUP_PREV", SDLK_HOME},
-        {"?QUICKSLOT_SET_KEY", SDLK_LSHIFT},
+    static const bundled_binding expected[] = {
+        {"?MOVE_N", SDLK_KP_9, SDL_KMOD_NONE, true},
+        {"?MOVE_NE", SDLK_KP_6, SDL_KMOD_NONE, true},
+        {"?MOVE_E", SDLK_KP_3, SDL_KMOD_NONE, true},
+        {"?MOVE_SE", SDLK_KP_2, SDL_KMOD_NONE, true},
+        {"?MOVE_S", SDLK_KP_1, SDL_KMOD_NONE, true},
+        {"?MOVE_SW", SDLK_KP_4, SDL_KMOD_NONE, true},
+        {"?MOVE_W", SDLK_KP_7, SDL_KMOD_NONE, true},
+        {"?MOVE_NW", SDLK_KP_8, SDL_KMOD_NONE, true},
+        {"?MOVE_STAY", SDLK_KP_5, SDL_KMOD_NONE, true},
+        {"?MOVE_NW", SDLK_W, SDL_KMOD_NONE, true},
+        {"?MOVE_SW", SDLK_A, SDL_KMOD_NONE, true},
+        {"?MOVE_SE", SDLK_S, SDL_KMOD_NONE, true},
+        {"?MOVE_NE", SDLK_D, SDL_KMOD_NONE, true},
+        {"/left", SDLK_LEFTBRACKET, SDL_KMOD_NONE, true},
+        {"/right", SDLK_RIGHTBRACKET, SDL_KMOD_NONE, true},
+        {"/push", SDLK_K, SDL_KMOD_NONE, true},
+        {"?CONSOLE", SDLK_RETURN, SDL_KMOD_NONE, false},
+        {"?CONSOLE", SDLK_KP_ENTER, SDL_KMOD_NONE, false},
+        {"?APPLY", SDLK_F, SDL_KMOD_NONE, false},
+        {"?EXAMINE", SDLK_E, SDL_KMOD_NONE, false},
+        {"?LOCK", SDLK_L, SDL_KMOD_NONE, false},
+        {"?MARK", SDLK_B, SDL_KMOD_NONE, false},
+        {"?DROP", SDLK_Z, SDL_KMOD_NONE, true},
+        {"?GET", SDLK_G, SDL_KMOD_NONE, true},
+        {"/apply", SDLK_SPACE, SDL_KMOD_NONE, false},
+        {"?SPELL_LIST", SDLK_F9, SDL_KMOD_NONE, false},
+        {"?SKILL_LIST", SDLK_F10, SDL_KMOD_NONE, false},
+        {"?PARTY_LIST", SDLK_F11, SDL_KMOD_NONE, false},
+        {"?HELP", SDLK_F12, SDL_KMOD_NONE, false},
+        {"?UP", SDLK_UP, SDL_KMOD_NONE, true},
+        {"?DOWN", SDLK_DOWN, SDL_KMOD_NONE, true},
+        {"?LEFT", SDLK_LEFT, SDL_KMOD_NONE, true},
+        {"?RIGHT", SDLK_RIGHT, SDL_KMOD_NONE, true},
+        {"?QLIST", SDLK_Q, SDL_KMOD_NONE, false},
+        {"/region_map", SDLK_M, SDL_KMOD_NONE, false},
+        {"?COMBAT", SDLK_C, SDL_KMOD_NONE, false},
+        {"?TARGET_ENEMY", SDLK_X, SDL_KMOD_NONE, false},
+        {"?TARGET_FRIEND", SDLK_Y, SDL_KMOD_NONE, false},
+        {"/widget_toggle inventory:main", SDLK_TAB, SDL_KMOD_NONE, false},
+        {"/widget_focus inventory", SDLK_TAB, SDL_KMOD_SHIFT, false},
+        {"?RUNON", SDLK_LALT, SDL_KMOD_NONE, false},
+        {"?RUNON", SDLK_RALT, SDL_KMOD_NONE, false},
+        {"?FIREON", SDLK_RCTRL, SDL_KMOD_NONE, false},
+        {"?FIREON", SDLK_LCTRL, SDL_KMOD_NONE, false},
+        {"?QUICKSLOT_GROUP_PREV", SDLK_9, SDL_KMOD_NONE, false},
+        {"?QUICKSLOT_GROUP_NEXT", SDLK_0, SDL_KMOD_NONE, false},
+        {"?QUICKSLOT_1", SDLK_1, SDL_KMOD_NONE, false},
+        {"?QUICKSLOT_2", SDLK_2, SDL_KMOD_NONE, false},
+        {"?QUICKSLOT_3", SDLK_3, SDL_KMOD_NONE, false},
+        {"?QUICKSLOT_4", SDLK_4, SDL_KMOD_NONE, false},
+        {"?QUICKSLOT_5", SDLK_5, SDL_KMOD_NONE, false},
+        {"?QUICKSLOT_6", SDLK_6, SDL_KMOD_NONE, false},
+        {"?QUICKSLOT_7", SDLK_7, SDL_KMOD_NONE, false},
+        {"?QUICKSLOT_8", SDLK_8, SDL_KMOD_NONE, false},
+        {"?COPY", SDLK_C, SDL_KMOD_CTRL, false},
+        {"?PASTE", SDLK_V, SDL_KMOD_CTRL, false},
+        {"?HELLO", SDLK_T, SDL_KMOD_NONE, false},
+        {"?QUICKSLOT_GROUP_CYCLE", (SDL_Keycode)96, SDL_KMOD_NONE, false},
+        {"?QUICKSLOT_GROUP_NEXT", SDLK_END, SDL_KMOD_NONE, false},
+        {"?QUICKSLOT_GROUP_PREV", SDLK_HOME, SDL_KMOD_NONE, false},
+        {"?QUICKSLOT_SET_KEY", SDLK_LSHIFT, SDL_KMOD_NONE, false},
+        {"?COMBAT_FORCE", SDLK_C, SDL_KMOD_SHIFT, false},
     };
-    bool found[sizeof(expected) / sizeof(*expected)] = {false};
+    parsed_bundled_binding actual[128];
+    size_t actual_num = 0;
     char line[256];
+    char command[sizeof(actual[0].command)] = {0};
     SDL_Keycode key = SDLK_UNKNOWN;
+    SDL_Keymod mod = SDL_KMOD_NONE;
+    bool repeat = false;
+    bool in_bind = false;
+    bool have_key = false;
     bool marker = false;
     FILE *stream = fopen(ATRINIK_TEST_SOURCE_DIR "/settings/keys.dat", "r");
 
@@ -226,22 +289,55 @@ static void test_bundled_defaults(void) {
 
         if (!strcmp(text, "keycode_format " KEYBIND_KEYCODE_FORMAT)) {
             marker = true;
-        } else if (!strncmp(text, "key ", 4)) {
+        } else if (!strcmp(text, "bind")) {
+            TEST_CHECK(!in_bind);
+            in_bind = true;
+            command[0] = '\0';
+            key = SDLK_UNKNOWN;
+            mod = SDL_KMOD_NONE;
+            repeat = false;
+            have_key = false;
+        } else if (!strcmp(text, "end")) {
+            TEST_CHECK(in_bind && have_key && command[0] != '\0');
+            TEST_CHECK(actual_num < arraysize(actual));
+            snprintf(actual[actual_num].command, sizeof(actual[actual_num].command), "%s", command);
+            actual[actual_num].key = key;
+            actual[actual_num].mod = mod;
+            actual[actual_num].repeat = repeat;
+            actual_num++;
+            in_bind = false;
+        } else if (in_bind && !strncmp(text, "key ", 4)) {
             TEST_CHECK(keybind_keycode_parse(text + 4, false, &key));
-        } else if (!strncmp(text, "command ", 8)) {
-            TEST_CHECK(strcmp(text + 8, "?FIRE_READY"));
-            for (size_t i = 0; i < sizeof(expected) / sizeof(*expected); i++) {
-                if (!found[i] && key == expected[i].key && !strcmp(text + 8, expected[i].command)) {
-                    found[i] = true;
-                    break;
-                }
-            }
+            have_key = true;
+        } else if (in_bind && !strncmp(text, "mod ", 4)) {
+            uint32_t value;
+            TEST_CHECK(keybind_uint32_parse(text + 4, UINT16_MAX, &value));
+            mod = keybind_adjust_kmod((SDL_Keymod)value);
+        } else if (in_bind && !strncmp(text, "repeat ", 7)) {
+            uint32_t value;
+            TEST_CHECK(keybind_uint32_parse(text + 7, 1, &value));
+            repeat = value != 0;
+        } else if (in_bind && !strncmp(text, "command ", 8)) {
+            TEST_CHECK(strlen(text + 8) < sizeof(command));
+            snprintf(command, sizeof(command), "%s", text + 8);
         }
     }
     TEST_CHECK(fclose(stream) == 0);
-    TEST_CHECK(marker);
-    for (size_t i = 0; i < sizeof(found) / sizeof(*found); i++) {
-        TEST_CHECK(found[i]);
+    TEST_CHECK(marker && !in_bind);
+    TEST_CHECK(actual_num == arraysize(expected));
+
+    for (size_t i = 0; i < actual_num; i++) {
+        for (size_t j = 0; j < i; j++) {
+            TEST_CHECK(actual[i].key != actual[j].key || actual[i].mod != actual[j].mod);
+        }
+        bool found = false;
+        for (size_t j = 0; j < arraysize(expected); j++) {
+            if (bundled_binding_matches(&actual[i], &expected[j])) {
+                found = true;
+                break;
+            }
+        }
+        TEST_CHECK(found);
     }
 }
 
@@ -821,23 +917,33 @@ static void test_keybind_event_cardinal_chords(void) {
         uint8_t first_direction;
         uint8_t second_direction;
         uint8_t chord_direction;
+        SDL_Keycode first_key;
+        SDL_Scancode first_scancode;
+        SDL_Keycode second_key;
+        SDL_Scancode second_scancode;
     } cases[] = {
-        {"?MOVE_N", "?MOVE_E", 8, 6, 9},
-        {"?MOVE_E", "?MOVE_S", 6, 2, 3},
-        {"?MOVE_S", "?MOVE_W", 2, 4, 1},
-        {"?MOVE_W", "?MOVE_N", 4, 8, 7},
+        {"?MOVE_NW", "?MOVE_NE", 7, 9, 8, SDLK_W, SDL_SCANCODE_W, SDLK_D, SDL_SCANCODE_D},
+        {"?MOVE_NE", "?MOVE_SE", 9, 3, 6, SDLK_D, SDL_SCANCODE_D, SDLK_S, SDL_SCANCODE_S},
+        {"?MOVE_SE", "?MOVE_SW", 3, 1, 2, SDLK_S, SDL_SCANCODE_S, SDLK_A, SDL_SCANCODE_A},
+        {"?MOVE_SW", "?MOVE_NW", 1, 7, 4, SDLK_A, SDL_SCANCODE_A, SDLK_W, SDL_SCANCODE_W},
     };
 
     for (size_t i = 0; i < arraysize(cases); i++) {
         for (size_t reverse = 0; reverse < 2; reverse++) {
+            SDL_Keycode first_key = reverse ? cases[i].second_key : cases[i].first_key;
+            SDL_Scancode first_scancode =
+                reverse ? cases[i].second_scancode : cases[i].first_scancode;
+            SDL_Keycode second_key = reverse ? cases[i].first_key : cases[i].second_key;
+            SDL_Scancode second_scancode =
+                reverse ? cases[i].first_scancode : cases[i].second_scancode;
             keybind_struct first = {
                 .command = reverse ? cases[i].second_command : cases[i].first_command,
-                .key = SDLK_A,
+                .key = first_key,
                 .repeat = true,
             };
             keybind_struct second = {
                 .command = reverse ? cases[i].first_command : cases[i].second_command,
-                .key = SDLK_B,
+                .key = second_key,
                 .repeat = true,
             };
             uint8_t first_direction =
@@ -851,16 +957,16 @@ static void test_keybind_event_cardinal_chords(void) {
             keybind_event_handler handler = movement_sink_handler(&sink);
             SDL_KeyboardEvent event = {
                 .type = SDL_EVENT_KEY_DOWN,
-                .key = SDLK_A,
-                .scancode = SDL_SCANCODE_A,
+                .key = first_key,
+                .scancode = first_scancode,
             };
 
             /* Two downs in one poll produce only the composed direction. */
-            key_states[SDL_SCANCODE_A].pressed = true;
+            key_states[first_scancode].pressed = true;
             TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
-            event.key = SDLK_B;
-            event.scancode = SDL_SCANCODE_B;
-            key_states[SDL_SCANCODE_B].pressed = true;
+            event.key = second_key;
+            event.scancode = second_scancode;
+            key_states[second_scancode].pressed = true;
             TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
             movement_sink_flush(&sink);
             TEST_CHECK(sink.actions_num == 1);
@@ -870,8 +976,8 @@ static void test_keybind_event_cardinal_chords(void) {
             /* Either physical repeat retains one logical chord stream. */
             event.repeat = true;
             TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
-            event.key = SDLK_A;
-            event.scancode = SDL_SCANCODE_A;
+            event.key = first_key;
+            event.scancode = first_scancode;
             TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
             TEST_CHECK(sink.actions_num == 2);
             TEST_CHECK(sink.actions[1] == KEYBIND_MOVEMENT_ACTION_MOVE);
@@ -880,7 +986,9 @@ static void test_keybind_event_cardinal_chords(void) {
             /* Partial release resumes the other cardinal; final release stops once. */
             event.type = SDL_EVENT_KEY_UP;
             event.repeat = false;
-            key_states[SDL_SCANCODE_A].pressed = false;
+            event.key = first_key;
+            event.scancode = first_scancode;
+            key_states[first_scancode].pressed = false;
             keybind_event_reconcile_release(bindings,
                                             arraysize(bindings),
                                             &event,
@@ -892,9 +1000,9 @@ static void test_keybind_event_cardinal_chords(void) {
             TEST_CHECK(sink.actions[2] == KEYBIND_MOVEMENT_ACTION_REPLACE);
             TEST_CHECK(sink.directions[2] == second_direction);
 
-            event.key = SDLK_B;
-            event.scancode = SDL_SCANCODE_B;
-            key_states[SDL_SCANCODE_B].pressed = false;
+            event.key = second_key;
+            event.scancode = second_scancode;
+            key_states[second_scancode].pressed = false;
             keybind_event_reconcile_release(bindings,
                                             arraysize(bindings),
                                             &event,
@@ -912,18 +1020,18 @@ static void test_keybind_event_cardinal_chords(void) {
             movement_sink_reset(&sink);
             handler = movement_sink_handler(&sink);
             event.type = SDL_EVENT_KEY_DOWN;
-            event.key = SDLK_A;
-            event.scancode = SDL_SCANCODE_A;
-            key_states[SDL_SCANCODE_A].pressed = true;
+            event.key = first_key;
+            event.scancode = first_scancode;
+            key_states[first_scancode].pressed = true;
             TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
             movement_sink_flush(&sink);
             TEST_CHECK(sink.actions_num == 1);
             TEST_CHECK(sink.actions[0] == KEYBIND_MOVEMENT_ACTION_MOVE);
             TEST_CHECK(sink.directions[0] == first_direction);
 
-            event.key = SDLK_B;
-            event.scancode = SDL_SCANCODE_B;
-            key_states[SDL_SCANCODE_B].pressed = true;
+            event.key = second_key;
+            event.scancode = second_scancode;
+            key_states[second_scancode].pressed = true;
             TEST_CHECK(keybind_event_process(bindings, arraysize(bindings), &event, &handler));
             movement_sink_flush(&sink);
             TEST_CHECK(sink.actions_num == 2);
