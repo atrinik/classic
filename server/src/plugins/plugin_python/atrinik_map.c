@@ -34,6 +34,7 @@
 #include <server_main.h>
 #include <server.h>
 #include <player.h>
+#include <monster_data.h>
 
 /**
  * Map fields.
@@ -499,10 +500,11 @@ static PyObject *Atrinik_Map_CreateObject(Atrinik_Map *self, PyObject *args) {
     newobj = hooks->object_insert_map(newobj, self->map, NULL, 0);
 
     /* Map-created monsters bypass the map loader's normal living update.
-     * Initialize their runtime state after insertion so this API retains its
-     * existing map-insertion and active-list ordering. */
-    if (newobj != NULL && newobj->type == MONSTER) {
-        hooks->living_update(newobj);
+     * Give them the dialog state required by the active monster lifecycle,
+     * while leaving stat and speed recalculation to callers that explicitly
+     * request Object.Update(). */
+    if (newobj != NULL && newobj->type == MONSTER && newobj->custom_attrset == NULL) {
+        monster_data_init(newobj);
     }
 
     return wrap_object(newobj);
