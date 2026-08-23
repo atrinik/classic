@@ -495,6 +495,15 @@ static PyObject *Atrinik_Map_CreateObject(Atrinik_Map *self, PyObject *args) {
     object *newobj = hooks->arch_to_object(arch);
     newobj->x = x;
     newobj->y = y;
+
+    /* Map-created monsters bypass the map loader's normal living update.
+     * Match the loader's lifecycle by initializing their runtime state
+     * before insertion can expose them to map effects or the active list. */
+    newobj->map = self->map;
+    if (newobj->type == MONSTER) {
+        hooks->living_update(newobj);
+    }
+
     newobj = hooks->object_insert_map(newobj, self->map, NULL, 0);
 
     return wrap_object(newobj);
