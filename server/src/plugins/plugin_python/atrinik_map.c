@@ -34,7 +34,6 @@
 #include <server_main.h>
 #include <server.h>
 #include <player.h>
-#include <monster_data.h>
 
 /**
  * Map fields.
@@ -504,7 +503,7 @@ static PyObject *Atrinik_Map_CreateObject(Atrinik_Map *self, PyObject *args) {
      * while leaving stat and speed recalculation to callers that explicitly
      * request Object.Update(). */
     if (newobj != NULL && newobj->type == MONSTER && newobj->custom_attrset == NULL) {
-        monster_data_init(newobj);
+        hooks->monster_data_init(newobj);
     }
 
     return wrap_object(newobj);
