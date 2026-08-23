@@ -1,18 +1,18 @@
 # History and provenance
 
 Atrinik Classic was assembled on 2026-08-08 from the five public source
-repositories below. Each history was rewritten with `git-filter-repo` 2.47.0
-using `--to-subdirectory-filter`, then merged without squashing. Commit authors,
-dates, messages, parent topology, and file contents were retained; commit IDs
-necessarily changed because every path gained a prefix.
+repositories below. Each history was assembled with `git-filter-repo` 2.47.0
+using `--to-subdirectory-filter`, then merged without squashing. Dates,
+messages, parent topology, and file contents are preserved in the imported
+histories.
 
 | Source repository | Source main tip | Prefix | Rewritten tip | Integration commit |
 | --- | --- | --- | --- | --- |
-| `atrinik/legacy-client` | `a8d0ab66cafac894f6f9375eddb60fd02ed4c778` | `client/` | `8004d4420445ad717a364827944d8790e0a34062` | `6dc9f136336773fc4e5081e78323b0c489ca6446` |
-| `atrinik/legacy-server` | `b3c32b13a220fb9cc330133183de5b1818b29d41` | `server/` | `7cae183c396cd0855d4969092389c968c0d20f30` | `083c3fd64996d929c0d324e050449551b1922a7d` |
-| `atrinik/legacy-editor` | `ac547a5ba8259bbde649caabdabe51c2861352f4` | `editor/` | `26e9139ca3da0a3cea5903e8cd42e114ad9029a3` | `ae1a14dff80c8f4f06d8f046b630798e35ebe2e8` |
-| `atrinik/legacy-libatrinik` | `a5e161f5dae6896ae0ee218b807f547ffdeb49c8` | `libatrinik/` | `c23cf3a5777e15483ff7a5305f37dd9de8939b28` | `e143e832477b2bcd5e18dcd038b2ce0bb70b5d16` |
-| `atrinik/legacy-protocol` | `eebc3921f364108a0ddd6d4beb9e1f86a274c862` | `protocol/` | `89579d3b6ccea3a0978990cfe9189ce49282e22d` | `148486ab814839dec0ce3069b8205b660215bc29` |
+| `atrinik/legacy-client` | `a8d0ab66cafac894f6f9375eddb60fd02ed4c778` | `client/` | `f7a31731c374565650c90f333833af4b8148876c` | `093df61f9348aab482c0400c72c422dd48fe7627` |
+| `atrinik/legacy-server` | `b3c32b13a220fb9cc330133183de5b1818b29d41` | `server/` | `b35c0bd5f81d1fe4f3b8ba9890b9a8f9bcf6b213` | `1a4dd183c1b889c6fd69276ac6ab15becdefe13e` |
+| `atrinik/legacy-editor` | `ac547a5ba8259bbde649caabdabe51c2861352f4` | `editor/` | `5f6eabf3bb9122a19850d5b8ee9f930134a6d4a1` | `14f20bc6d4539954582864af7c6d37a498a1cf3e` |
+| `atrinik/legacy-libatrinik` | `a5e161f5dae6896ae0ee218b807f547ffdeb49c8` | `libatrinik/` | `0b89e9015c36d9f30ae5eb8c0b85f7bada43bac8` | `6116b66bb8e1f91385b31e16256ab36b4fb41fcc` |
+| `atrinik/legacy-protocol` | `eebc3921f364108a0ddd6d4beb9e1f86a274c862` | `protocol/` | `89579d3b6ccea3a0978990cfe9189ce49282e22d` | `a8c65e6eef38425e00cfdb8a97f8475a642a6086` |
 
 The exact machine-readable manifest, commit maps, tool digest, source trees,
 preserved `AGENTS.md` blobs, and retired branch targets are under
@@ -22,8 +22,8 @@ commit graphs. After import and local-workspace migration verification, classic
 retired the complete `history/*` branch namespace as well as every
 component-prefixed and tag-namespace archival ref. It rebuilt one unprefixed
 release sequence from `v5.0.19`; `docs/history/release-tags.json` records its
-exact targets. Historical component branches, tag objects, releases, notes,
-pull refs, and assets remain in the former repositories.
+exact targets. Only the explicitly retained releases and tags remain
+live.
 
 Atrinik-authored source throughout the classic monorepo, including the protocol
 module, is distributed under GPL-2.0-or-later through the root `LICENSE.md`.

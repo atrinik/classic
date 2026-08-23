@@ -2,7 +2,7 @@
   "schema_version": 1,
   "unified_release": {
     "first_tag": "v5.6.0",
-    "ancestry_floor": "6960d16988e6925d7e421dc549780ac5feb0914d",
+    "ancestry_floor": "cbaaa445d23ccafa7ca2f225654b51392f8e1a31",
     "repository": "atrinik/classic",
     "version_source": "semantic-release"
   },
@@ -12,7 +12,7 @@
       "archived_repository": "atrinik/legacy-client",
       "last_component_tag": "v5.3.1",
       "original_commit": "a8d0ab66cafac894f6f9375eddb60fd02ed4c778",
-      "rewritten_commit": "8004d4420445ad717a364827944d8790e0a34062",
+      "rewritten_commit": "f7a31731c374565650c90f333833af4b8148876c",
       "unified_artifact": "atrinik-classic-client-${version}.tar.gz"
     },
     {
@@ -20,7 +20,7 @@
       "archived_repository": "atrinik/legacy-server",
       "last_component_tag": "v5.5.1",
       "original_commit": "b3c32b13a220fb9cc330133183de5b1818b29d41",
-      "rewritten_commit": "7cae183c396cd0855d4969092389c968c0d20f30",
+      "rewritten_commit": "b35c0bd5f81d1fe4f3b8ba9890b9a8f9bcf6b213",
       "unified_artifact": "atrinik-classic-server-${version}.tar.gz"
     },
     {
@@ -28,7 +28,7 @@
       "archived_repository": "atrinik/legacy-editor",
       "last_component_tag": "v1.0.7",
       "original_commit": "ac547a5ba8259bbde649caabdabe51c2861352f4",
-      "rewritten_commit": "26e9139ca3da0a3cea5903e8cd42e114ad9029a3",
+      "rewritten_commit": "5f6eabf3bb9122a19850d5b8ee9f930134a6d4a1",
       "unified_artifact": "atrinik-classic-editor-${version}.tar.gz"
     },
     {
@@ -36,7 +36,7 @@
       "archived_repository": "atrinik/legacy-libatrinik",
       "last_component_tag": "v1.1.6",
       "original_commit": "a5e161f5dae6896ae0ee218b807f547ffdeb49c8",
-      "rewritten_commit": "c23cf3a5777e15483ff7a5305f37dd9de8939b28",
+      "rewritten_commit": "0b89e9015c36d9f30ae5eb8c0b85f7bada43bac8",
       "unified_artifact": "atrinik-classic-libatrinik-${version}.tar.gz"
     },
     {

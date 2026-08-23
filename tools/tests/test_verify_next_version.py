@@ -28,7 +28,8 @@ class VerifyNextVersionTests(unittest.TestCase):
                         "minimum_version": "v5.6.0",
                         "maximum_major": 5,
                     },
-                    "tags": {},
+                    "retired_tags": {},
+                    "retained_tags": {},
                 }
             ),
             encoding="utf-8",
@@ -47,7 +48,8 @@ class VerifyNextVersionTests(unittest.TestCase):
                         "minimum_version": "v8.0.0",
                         "maximum_major": 8,
                     },
-                    "tags": {},
+                    "retired_tags": {},
+                    "retained_tags": {},
                 }
             ),
             encoding="utf-8",
@@ -71,6 +73,36 @@ class VerifyNextVersionTests(unittest.TestCase):
             verify_next_version.VersionPolicyError, "patch zero|must exceed"
         ):
             verify_next_version.verify_next_version("5.6.1", self.policy, active)
+
+    def test_pruned_history_uses_retained_tags_as_the_live_baseline(self) -> None:
+        policy = Path(self.temporary.name) / "release-tags-pruned.json"
+        policy.write_text(
+            json.dumps(
+                {
+                    "future_tags": {
+                        "first_version": "v5.6.0",
+                        "minimum_version": "v5.6.0",
+                        "maximum_major": 5,
+                    },
+                    "retired_tags": {"v5.5.1": "0" * 40},
+                    "retained_tags": {"v5.46.2": "1" * 40},
+                }
+            ),
+            encoding="utf-8",
+        )
+        verify_next_version.verify_next_version(
+            "5.47.0", policy, {"v5.46.2"}
+        )
+        with self.assertRaisesRegex(
+            verify_next_version.VersionPolicyError, "retained release tags are missing"
+        ):
+            verify_next_version.verify_next_version("5.47.0", policy, set())
+        with self.assertRaisesRegex(
+            verify_next_version.VersionPolicyError, "retired release tags are present"
+        ):
+            verify_next_version.verify_next_version(
+                "5.47.0", policy, {"v5.5.1", "v5.46.2"}
+            )
 
     def test_rejects_versions_outside_the_unified_line(self) -> None:
         for version in ("5.5.9", "6.0.0", "4.99.0", "v5.6.0", "5.6"):

@@ -17,7 +17,7 @@ SPEC.loader.exec_module(resolve_pending_release)
 
 
 TAG = "v5.8.1"
-COMMIT = "4653cb0a5f8bb11f5f3b522008bdd28c39d8c14c"
+COMMIT = "76d9ece39f9fc141d485a4f68ba23134f8a3a2e8"
 RELEASE_ID = 367395490
 RUN_IDS = [31298735525, 31341539056]
 

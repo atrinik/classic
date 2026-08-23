@@ -1,23 +1,23 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "policy": "unified-classic",
   "retired_component_tag_count": 70,
   "retired_archival_tag_ref_count": 217,
   "baseline": {
     "tag": "v5.0.19",
-    "commit": "f2cdf68710d157d4fae44a0582972129e6c4db9e"
+    "commit": "97d9960ec87313bbbf5412910ca4a71a49de8832"
   },
   "future_tags": {
     "first_version": "v5.6.0",
     "minimum_version": "v5.6.0",
     "maximum_major": 5,
-    "ancestry_floor": "6960d16988e6925d7e421dc549780ac5feb0914d",
+    "ancestry_floor": "cbaaa445d23ccafa7ca2f225654b51392f8e1a31",
     "branch": "main",
     "driver": "semantic-release"
   },
   "failed_releases": {
     "v5.8.1": {
-      "commit": "4653cb0a5f8bb11f5f3b522008bdd28c39d8c14c",
+      "commit": "76d9ece39f9fc141d485a4f68ba23134f8a3a2e8",
       "disposition": "delete-empty-draft",
       "empty_draft_id": 367395490,
       "failed_package_run_ids": [31298735525, 31341539056],
@@ -25,7 +25,7 @@
       "server_image_conclusion": "failure"
     },
     "v5.10.0": {
-      "commit": "ebfe6588cf64f42c44715bcf45ec50cc056a91a5",
+      "commit": "0fe7cd14e89f1a59466bfe6173d4a956da0d7143",
       "disposition": "delete-empty-draft",
       "empty_draft_id": 368181077,
       "failed_package_run_ids": [31429488922],
@@ -33,7 +33,7 @@
       "server_image_conclusion": "success"
     },
     "v5.33.1": {
-      "commit": "1f98d430a03e6d9fbf6f27f4ca1356542d905d08",
+      "commit": "c470f85abc9827b90004ff6129f938ec8b321a5a",
       "disposition": "delete-empty-draft",
       "empty_draft_id": 370711804,
       "failed_package_run_ids": [
@@ -52,7 +52,7 @@
       "server_image_conclusion": "failure"
     },
     "v5.34.0": {
-      "commit": "458522ca74dd4c44d3d0502af341e5012560bd10",
+      "commit": "e850d809a202181069634a64494533792cff28ad",
       "disposition": "delete-empty-draft",
       "empty_draft_id": 371272859,
       "failed_package_run_ids": [31936701583],
@@ -60,26 +60,30 @@
       "server_image_conclusion": "failure"
     }
   },
-  "tags": {
-    "v5.0.19": "f2cdf68710d157d4fae44a0582972129e6c4db9e",
-    "v5.1.0": "ea01c95c5bf99e7044ca1082c9f40d8678911fa0",
-    "v5.1.1": "dc5d3be79701ceb84cd59f7972b37065e4e895e3",
-    "v5.1.2": "dadd77af5400ac8b9c454d59c31b4d8da59171ef",
-    "v5.1.3": "8fea025cfbc143cbd7122307f5033bfd694750a4",
-    "v5.1.4": "cdceeac735995f9a656368b3d527032a68f416f8",
-    "v5.1.5": "84ad46cf099a5328829c30f76848d881142a9be4",
-    "v5.1.6": "8fb84982d7b6550659af78a80513a7e692007855",
-    "v5.1.7": "6627eaa3da9d393760c424cb8235d8d412f8fe9c",
-    "v5.1.8": "4bbd6b53cdd5e86e1a2ac23974491b1b7d81a20e",
-    "v5.2.0": "e94b7723dcc2f50bdeb7c5fe0c9bd80024ae8536",
-    "v5.3.0": "a031b39b644112e50f4c023ea49dfc3228e99d52",
-    "v5.3.1": "43cf6ddb86fbe21496f37e6409fabdf0747754c9",
-    "v5.3.2": "672fd35fc6e3dc879dbd22578a4625912ab23750",
-    "v5.3.3": "884575e9aa40bab33329caf02543ead0a5751613",
-    "v5.4.0": "e38f1a8b416dac1d5f63277bd50876237ac4140f",
-    "v5.4.1": "3d89bf9eb2625e357ff242663e4deefbbddbc916",
-    "v5.4.2": "47d393a8c320e2ca4bc18ba23cec1fb42587bed4",
-    "v5.5.0": "98bd5cd261501095a19af09e0767d7baaee51579",
-    "v5.5.1": "7cae183c396cd0855d4969092389c968c0d20f30"
+  "retired_tags": {
+    "v5.0.19": "97d9960ec87313bbbf5412910ca4a71a49de8832",
+    "v5.1.0": "e136817494da28f57e621d44630c79d3e7e445ca",
+    "v5.1.1": "4389a0dace139397d04924ce4e3cd05bce6854e3",
+    "v5.1.2": "2949c81d6b716f5a9f61afa07907734ff6508a3b",
+    "v5.1.3": "fba0a7ebe9244b381f8cc2601cd0767fdbc7cf38",
+    "v5.1.4": "4a21689098c430c65b22edd95c7856436750061d",
+    "v5.1.5": "6656d832e2b967c0dc0a2725228b1eaa5b818034",
+    "v5.1.6": "0cdbce0b8fda12a71e011e40fdd649b16a758be1",
+    "v5.1.7": "ed0c13ce5200515c12ab3ebe7e396861f798cb88",
+    "v5.1.8": "ec2774d87dfe111c5922fb190c03150eaaf08f23",
+    "v5.2.0": "c1b1fa95a576a2ef90b4d8fc7474345b85c9d2ff",
+    "v5.3.0": "7e4a65169659adef5ec424944956761f688515fa",
+    "v5.3.1": "8ed0ea9667c84dccd903380f9df03e0c08cd0569",
+    "v5.3.2": "b7312405077eabe183ca51766dacd7660ec85240",
+    "v5.3.3": "0c7559e40080355b68167f2fcbc7813be49ef0d6",
+    "v5.4.0": "ffd65660dda4ce2ace4b0508302663b6439c8003",
+    "v5.4.1": "1f5dec7fc3cfc5582a89a845b254bd2ff743b0b3",
+    "v5.4.2": "aeca86ae635f0fb53fb8035f47914668a48aafd3",
+    "v5.5.0": "8cbcac413ec3d913fda2d0052a3c7e15b6648a0a",
+    "v5.5.1": "b35c0bd5f81d1fe4f3b8ba9890b9a8f9bcf6b213"
+  },
+  "retained_tags": {
+    "v5.34.4": "ae5776c1605fecdc3cb7633b1e9ac8ff1af9380f",
+    "v5.46.2": "47874217de15fee5fc0f21a7730cf8f12d50620b"
   }
 }

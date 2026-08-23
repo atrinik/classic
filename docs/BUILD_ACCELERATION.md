@@ -59,7 +59,7 @@ of each build log in stable JSON.
 
 ## 2026-08-10 measurements
 
-The benchmark used commit `19426a2076545676c4ac1246ce09ac36015179fa`, CMake
+The benchmark used commit `51fda5d9a73b168711cde67b0db56c7c6d2bf0d3`, CMake
 4.2.3, Ninja 1.13.2, an AMD Ryzen 9 5950X (16 cores/32 threads), 16 parallel
 jobs, GCC 15.2.0, and Clang 21.1.8. Values are medians of three runs. Peak RSS
 is the aggregate Linux process-group sample, not per-compiler RSS.
