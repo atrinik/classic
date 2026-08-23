@@ -4,20 +4,20 @@
     {
       "name": "content",
       "repository": "atrinik/content",
-      "tag": "v6.0.1",
-      "commit": "b8e0ee78e2530f6afe6edb04456fa786d2ba3636",
-      "url": "https://github.com/atrinik/content/releases/download/v6.0.1/atrinik-content-6.0.1-classic-runtime.tar.gz",
-      "sha256": "cee1b7d777bf95ac45f07181bc1a3c6ec592033b2e5b5fd8e2b0f975429d4174",
+      "tag": "v6.9.0",
+      "commit": "da04dba139663153acf9c18b6caf1ae9d14a1805",
+      "url": "https://github.com/atrinik/content/releases/download/v6.9.0/atrinik-content-6.9.0-classic-runtime.tar.gz",
+      "sha256": "595c35cc9c563406a4539f1e41312ba6b6fb2d6fd48c6abc95da471d7af3eccc",
       "destination": "runtime/content",
       "strip_components": 1
     },
     {
       "name": "resources",
       "repository": "atrinik/resources",
-      "tag": "v1.0.1",
-      "commit": "a3bd8c8a2b746d15b397a67d9f641af7d97a6078",
-      "url": "https://github.com/atrinik/resources/releases/download/v1.0.1/atrinik-resources-1.0.1.tar.gz",
-      "sha256": "4db9ecdd74aa570bc7e20eccac980844f3aba8d668230502728b22146d3b2c54",
+      "tag": "v1.2.0",
+      "commit": "a4a5b81a945fff9889a46117b91fbea2cd124675",
+      "url": "https://github.com/atrinik/resources/releases/download/v1.2.0/atrinik-resources-1.2.0.tar.gz",
+      "sha256": "e40797c522b55ea7fb0b48da5269325397bd875277069e53f96420c0b618cfca",
       "destination": "resources",
       "strip_components": 1
     }

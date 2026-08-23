@@ -61,6 +61,7 @@
 #include <light.h>
 #include <loader.h>
 #include <monster.h>
+#include <monster_data.h>
 #include <movement.h>
 #include <object_methods.h>
 #include <party.h>
@@ -140,6 +141,8 @@ struct plugin_hooklist
                 int,
                 living_update,
                 object *) PLUGIN_HOOK_FUNCTION(void,
+                                               monster_data_init,
+                                               object *) PLUGIN_HOOK_FUNCTION(void,
                                                adjust_light_source_color,
                                                mapstruct *,
                                                int,

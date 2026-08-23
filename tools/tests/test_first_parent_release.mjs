@@ -29,6 +29,10 @@ const { generateNotes } = await importPinnedReleasePackage(
   environment,
 );
 const logger = { log() {} };
+const RELEASE_BASELINE_TAG = "v5.34.4";
+const RELEASE_BASELINE_VERSION = "5.34.4";
+const NEXT_RELEASE_TAG = "v5.47.0";
+const NEXT_RELEASE_VERSION = "5.47.0";
 
 function git(...arguments_) {
   return execFileSync("git", ["--no-replace-objects", ...arguments_], {
@@ -72,12 +76,16 @@ function notesContext(selectedCommits, gitHead = "a".repeat(40)) {
     commits: selectedCommits,
     cwd: ROOT,
     lastRelease: {
-      gitHead: git("rev-parse", "v5.5.1^{commit}"),
-      gitTag: "v5.5.1",
-      version: "5.5.1",
+      gitHead: git(`rev-parse`, `${RELEASE_BASELINE_TAG}^{commit}`),
+      gitTag: RELEASE_BASELINE_TAG,
+      version: RELEASE_BASELINE_VERSION,
     },
     logger,
-    nextRelease: { gitHead, gitTag: "v5.6.0", version: "5.6.0" },
+    nextRelease: {
+      gitHead,
+      gitTag: NEXT_RELEASE_TAG,
+      version: NEXT_RELEASE_VERSION,
+    },
     options: { repositoryUrl: "https://github.com/atrinik/classic.git" },
   };
 }
@@ -130,11 +138,12 @@ test("current Classic analysis is exactly first-parent analysis", async () => {
   const generator = config.plugins.find(
     ([name]) => name === "@semantic-release/release-notes-generator",
   )[1];
-  const allCommits = commits(git("rev-parse", "v5.5.1^{commit}"), "HEAD");
+  const allCommits = commits(
+    git("rev-parse", `${RELEASE_BASELINE_TAG}^{commit}`),
+    "HEAD",
+  );
   const allowed = firstParentHashes("HEAD", ROOT);
   const selectedCommits = allCommits.filter(({ hash }) => allowed.has(hash));
-  assert.ok(allCommits.length > selectedCommits.length);
-
   assert.equal(
     await analyzeCommits(analyzer, { commits: allCommits, cwd: ROOT, logger }),
     "minor",

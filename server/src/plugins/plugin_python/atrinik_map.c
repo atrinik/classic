@@ -495,7 +495,16 @@ static PyObject *Atrinik_Map_CreateObject(Atrinik_Map *self, PyObject *args) {
     object *newobj = hooks->arch_to_object(arch);
     newobj->x = x;
     newobj->y = y;
+
     newobj = hooks->object_insert_map(newobj, self->map, NULL, 0);
+
+    /* Map-created monsters bypass the map loader's normal living update.
+     * Give them the dialog state required by the active monster lifecycle,
+     * while leaving stat and speed recalculation to callers that explicitly
+     * request Object.Update(). */
+    if (newobj != NULL && newobj->type == MONSTER && newobj->custom_attrset == NULL) {
+        hooks->monster_data_init(newobj);
+    }
 
     return wrap_object(newobj);
 }
