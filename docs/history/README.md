@@ -28,11 +28,12 @@ git fsck --full --strict
 
 The 70 prefixed component tags and 217 temporary tag-namespace archival refs
 used to verify the import were retired when classic adopted one release line.
-Historical tags are the exact unprefixed set recorded in `release-tags.json`,
-beginning with `v5.0.19` at
-`f2cdf68710d157d4fae44a0582972129e6c4db9e`. New automatic tags begin at
-`v5.6.0`, remain on the `v5.x.x` line, and must follow that file's
-post-consolidation ancestry and semantic ordering rules. The complete
+Retired release tags are the exact unprefixed evidence set recorded in
+`release-tags.json`, beginning with `v5.0.19` at
+`97d9960ec87313bbbf5412910ca4a71a49de8832`. The policy separately records the
+retained live tags `v5.34.4` and `v5.46.2`; new automatic tags remain on the
+`v5.x.x` line and must follow the post-consolidation ancestry and semantic
+ordering rules. The complete
 `history/*` branch namespace was retired after import and workspace-migration
 verification; `imports.json` preserves the final ref targets as evidence. The
 former repositories remain the authoritative home of original branches and

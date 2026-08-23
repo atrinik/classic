@@ -66,7 +66,8 @@ def verify_next_version(
     first_value = future.get("first_version")
     minimum_value = future.get("minimum_version")
     maximum_major = future.get("maximum_major")
-    historical = policy.get("tags")
+    retired = policy.get("retired_tags")
+    retained = policy.get("retained_tags")
     if (
         not isinstance(first_value, str)
         or not first_value.startswith("v")
@@ -76,10 +77,14 @@ def verify_next_version(
         raise VersionPolicyError("release-tag policy has no first/minimum version")
     if not isinstance(maximum_major, int):
         raise VersionPolicyError("release-tag policy has no maximum major")
-    if not isinstance(historical, dict) or not all(
-        isinstance(tag, str) for tag in historical
+    if not isinstance(retired, dict) or not all(
+        isinstance(tag, str) for tag in retired
     ):
-        raise VersionPolicyError("release-tag policy has no historical tag set")
+        raise VersionPolicyError("release-tag policy has no retired tag set")
+    if not isinstance(retained, dict) or not all(
+        isinstance(tag, str) for tag in retained
+    ):
+        raise VersionPolicyError("release-tag policy has no retained tag set")
     first = semantic_version(first_value.removeprefix("v"))
     minimum = semantic_version(minimum_value.removeprefix("v"))
     if proposed < minimum:
@@ -92,13 +97,19 @@ def verify_next_version(
         )
 
     present = local_tags() if active_tags is None else active_tags
-    missing_historical = set(historical) - present
-    if missing_historical:
+    missing_retained = set(retained) - present
+    if missing_retained:
         raise VersionPolicyError(
-            "historical release tags are missing: "
-            + ", ".join(sorted(missing_historical))
+            "retained release tags are missing: "
+            + ", ".join(sorted(missing_retained))
         )
-    future_tags = present - set(historical)
+    resurrected_retired = set(retired).intersection(present)
+    if resurrected_retired:
+        raise VersionPolicyError(
+            "retired release tags are present: "
+            + ", ".join(sorted(resurrected_retired))
+        )
+    future_tags = present - set(retired)
     try:
         future_versions = sorted(
             (semantic_version(tag.removeprefix("v")) for tag in future_tags)
@@ -130,7 +141,7 @@ def verify_next_version(
             "mainline releases must begin a new minor line with patch zero"
         )
     if future_versions:
-        if future_versions[0] != first:
+        if not retained and future_versions[0] != first:
             raise VersionPolicyError(f"the first unified tag must be {first_value}")
         if proposed <= future_versions[-1]:
             raise VersionPolicyError("next version must exceed every existing unified tag")

@@ -23,7 +23,7 @@ verified semantic-release image.
 - Embedded inventory SHA-256:
   `cbeb59d410f138631e1b997d68df98c24c881d13f2a99fea3cd64711185b82c0`
 - Embedded consumer validation: `atrinik/classic` at
-  `2d3ecad2117733b1262f5195c0dd414fef4b45f3`
+  `20efca54a997a3e96f25dfd92d8f9da7f1dbc678`
 - Candidate consumer source head:
   `934af663a1f0d5892026a366f12b907459f3cd50`
 - Pull-request merge ref commit used by Check:
@@ -53,7 +53,7 @@ verified semantic-release image.
 - Released-image cold and restored-cache evidence:
   [run 31443750204](https://github.com/atrinik/classic/actions/runs/31443750204),
   attempts 1 and 2 at Classic head
-  `1d0e802e2d154052f08ed758b69633c3e9262706`
+  `2c63db7dacc642dc8d6ec3b329112ec03742dcd6`
 
 The package is public and remains linked to `atrinik/devcontainer`. Anonymous
 manifest inspection resolved the released tag to the index digest above. The

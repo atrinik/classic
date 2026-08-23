@@ -185,7 +185,7 @@ Implementation and bulk content migration are deliberately separate changes.
 #### Pinned legacy inventory
 
 The audit below used Classic revision
-`e791a3b37103f74c83d5e06283dc9d9474c81291` and `content@main` revision
+`a9f02373382deea5dc8edcd4017e880a34a43270` and `content@main` revision
 `65a88167d3a2bedcc2dc21508d94d7ca009a76d2`.  Re-running a migration against a
 different revision requires a new inventory; these counts are evidence, not a
 schema default.
@@ -298,7 +298,7 @@ Its SHA-256 is
 A second oracle hashes the canonical saved object stream: the bytes begin with
 the first `arch` after the map-header `end` and continue through the final
 object `end` and its LF, excluding the header whose v1 fields are new.  At the
-Classic base `ca71ad3f6b374ed8d7f82f7ec75f7f17beaf0438` and content revision
+Classic base `e74fd3bd616046c61c27412235e4c5e4ea625483` and content revision
 `65a88167d3a2bedcc2dc21508d94d7ca009a76d2`, that stream is 89,370 bytes and
 has SHA-256
 `b12bcdccc0bc8503a05017a6910344c76428600dbb6e3f74fd305594f8bd3d43`;

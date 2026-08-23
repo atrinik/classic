@@ -130,6 +130,31 @@ def verify_release_targets(
         )
 
 
+def validate_tag_map(
+    name: str, value: object, *, allow_empty: bool = False
+) -> dict[str, str]:
+    require(
+        isinstance(value, dict) and (allow_empty or value),
+        f"no {name} release tags",
+    )
+    require(
+        all(isinstance(tag, str) and SEMVER_RE.fullmatch(tag) for tag in value),
+        f"{name} release tags must be unprefixed semantic versions",
+    )
+    require(
+        all(
+            isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit)
+            for commit in value.values()
+        ),
+        f"{name} release tag targets must be full lowercase commit IDs",
+    )
+    require(
+        len(value) == len(set(value.values())),
+        f"{name} release tags must have unique targets",
+    )
+    return {str(tag): str(commit) for tag, commit in value.items()}
+
+
 def verify_commits(name: str, commits: list[str]) -> None:
     result = subprocess.run(
         ["git", "-C", str(ROOT), "cat-file", "--batch-check=%(objectname) %(objecttype)"],
@@ -268,7 +293,7 @@ def verify_component_release_map(manifest: dict[str, Any]) -> None:
         value.get("unified_release")
         == {
             "first_tag": "v5.6.0",
-            "ancestry_floor": "6960d16988e6925d7e421dc549780ac5feb0914d",
+            "ancestry_floor": "cbaaa445d23ccafa7ca2f225654b51392f8e1a31",
             "repository": "atrinik/classic",
             "version_source": "semantic-release",
         },
@@ -301,35 +326,21 @@ def verify_component_release_map(manifest: dict[str, Any]) -> None:
 def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> None:
     policy_path = ROOT / manifest["active_release_tags"]
     policy = json.loads(policy_path.read_text(encoding="utf-8"))
-    require(policy.get("schema_version") == 3, "unsupported release-tag policy")
+    require(policy.get("schema_version") == 4, "unsupported release-tag policy")
     require(policy.get("policy") == "unified-classic", "unexpected release-tag policy")
-    historical_tags = policy.get("tags")
+    retired_tags = validate_tag_map("retired", policy.get("retired_tags"))
+    retained_tags = validate_tag_map("retained", policy.get("retained_tags"))
     require(
-        isinstance(historical_tags, dict) and historical_tags,
-        "no historical release tags",
+        not set(retired_tags).intersection(retained_tags),
+        "a release tag cannot be both retired and retained",
     )
     require(
         policy.get("baseline")
         == {
             "tag": "v5.0.19",
-            "commit": "f2cdf68710d157d4fae44a0582972129e6c4db9e",
+            "commit": "97d9960ec87313bbbf5412910ca4a71a49de8832",
         },
         "unexpected release-tag baseline",
-    )
-    require(
-        all(SEMVER_RE.fullmatch(tag) for tag in historical_tags),
-        "release tags must be unprefixed semantic versions",
-    )
-    require(
-        all(
-            isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit)
-            for commit in historical_tags.values()
-        ),
-        "release tag targets must be full lowercase commit IDs",
-    )
-    require(
-        len(historical_tags) == len(set(historical_tags.values())),
-        "historical release tags must have unique targets",
     )
 
     future_policy = policy.get("future_tags")
@@ -340,7 +351,7 @@ def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> N
             "first_version": "v5.6.0",
             "minimum_version": "v5.6.0",
             "maximum_major": 5,
-            "ancestry_floor": "6960d16988e6925d7e421dc549780ac5feb0914d",
+            "ancestry_floor": "cbaaa445d23ccafa7ca2f225654b51392f8e1a31",
             "branch": "main",
             "driver": "semantic-release",
         },
@@ -368,7 +379,7 @@ def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> N
         failed_releases
         == {
             "v5.8.1": {
-                "commit": "4653cb0a5f8bb11f5f3b522008bdd28c39d8c14c",
+                "commit": "76d9ece39f9fc141d485a4f68ba23134f8a3a2e8",
                 "disposition": "delete-empty-draft",
                 "empty_draft_id": 367395490,
                 "failed_package_run_ids": [31298735525, 31341539056],
@@ -376,7 +387,7 @@ def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> N
                 "server_image_conclusion": "failure",
             },
             "v5.10.0": {
-                "commit": "ebfe6588cf64f42c44715bcf45ec50cc056a91a5",
+                "commit": "0fe7cd14e89f1a59466bfe6173d4a956da0d7143",
                 "disposition": "delete-empty-draft",
                 "empty_draft_id": 368181077,
                 "failed_package_run_ids": [31429488922],
@@ -384,7 +395,7 @@ def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> N
                 "server_image_conclusion": "success",
             },
             "v5.33.1": {
-                "commit": "1f98d430a03e6d9fbf6f27f4ca1356542d905d08",
+                "commit": "c470f85abc9827b90004ff6129f938ec8b321a5a",
                 "disposition": "delete-empty-draft",
                 "empty_draft_id": 370711804,
                 "failed_package_run_ids": [
@@ -403,7 +414,7 @@ def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> N
                 "server_image_conclusion": "failure",
             },
             "v5.34.0": {
-                "commit": "458522ca74dd4c44d3d0502af341e5012560bd10",
+                "commit": "e850d809a202181069634a64494533792cff28ad",
                 "disposition": "delete-empty-draft",
                 "empty_draft_id": 371272859,
                 "failed_package_run_ids": [31936701583],
@@ -413,11 +424,11 @@ def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> N
         },
         "unexpected failed-release policy",
     )
+    verify_commits(
+        "failed release targets",
+        [record["commit"] for record in failed_releases.values()],
+    )
     for tag, record in failed_releases.items():
-        require(
-            git("rev-parse", f"{tag}^{{commit}}") == record["commit"],
-            f"{tag}: failed release target changed",
-        )
         require(
             is_ancestor(record["commit"], release_history_ref),
             f"{tag}: target is not in {release_history_ref}",
@@ -531,23 +542,34 @@ def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> N
         "for-each-ref", "--format=%(refname:short)", "refs/tags/"
     ).splitlines()
     actual = set(actual_refs)
-    historical = set(historical_tags)
-    require(historical <= actual, "an immutable historical release tag is missing")
-    for tag, commit in historical_tags.items():
+    retired = set(retired_tags)
+    retained = set(retained_tags)
+    require(
+        not retired.intersection(actual),
+        "a retired release tag is still present",
+    )
+    require(retained <= actual, "a retained release tag is missing")
+    verify_commits("retired release targets", list(retired_tags.values()))
+    for tag, commit in retired_tags.items():
+        require(
+            is_ancestor(commit, release_history_ref),
+            f"{tag}: retired target is not in {release_history_ref}",
+        )
+    for tag, commit in retained_tags.items():
         require(git("rev-parse", f"{tag}^{{commit}}") == commit, f"{tag}: target changed")
         require(
             is_ancestor(commit, release_history_ref),
             f"{tag}: target is not in {release_history_ref}",
         )
 
-    future_tags = sorted(actual - historical, key=semantic_version)
-    if future_tags:
+    future_tags = sorted(actual - retired, key=semantic_version)
+    if future_tags and not retained_tags:
         require(
             semantic_version(future_tags[0]) == first_version,
             "the first post-consolidation release must be v5.6.0",
         )
     previous_commit = floor
-    targets = set(historical_tags.values())
+    targets: set[str] = set()
     future_release_targets: list[tuple[str, str]] = []
     for tag in future_tags:
         require(

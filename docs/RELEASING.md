@@ -10,14 +10,15 @@ feature/breaking transitions fail closed instead of leaving the range.
 
 ## Historical boundary
 
-The immutable historical sequence begins with `v5.0.19` at
-`f2cdf68710d157d4fae44a0582972129e6c4db9e` and follows the classic server
-release line through `v5.5.1`. `docs/history/release-tags.json` fixes those
-names and targets, requires `v5.6.0` as the first new tag, and admits later
-unprefixed `v5.x.x` versions only on the post-consolidation first-parent main
-line. Version analysis and release notes select that same first-parent line by
-full commit ID; commits reachable only through imported component parents are
-provenance and never become unified release changes.
+The retired historical sequence begins with `v5.0.19` at
+`97d9960ec87313bbbf5412910ca4a71a49de8832` and follows the classic server
+release line through `v5.5.1`. `docs/history/release-tags.json` records those
+retired names and targets, plus the retained live tags `v5.34.4` and
+`v5.46.2`. New unprefixed `v5.x.x` versions remain on the
+post-consolidation first-parent main line. Version analysis and release notes
+select that same first-parent line by full commit ID; commits reachable only
+through imported component parents are provenance and never become unified
+release changes.
 `docs/history/component-release-map.json` maps the last five independent
 component releases to their imported commits and unified artifact names.
 
@@ -50,7 +51,7 @@ an older pending tag is checked against the complete current release history
 rather than running validation code and history policy frozen at that tag.
 Multiple drafts fail closed for manual investigation.
 
-The immutable `v5.8.1` and `v5.10.0` tags are the recorded exceptions to that
+The retired `v5.8.1` and `v5.10.0` coordinates are the recorded exceptions to that
 retry rule. Both `v5.8.1` Package Release attempts failed in the Release-only
 server build before finalizing a candidate, publishing an image, or uploading
 a draft asset. `docs/history/release-tags.json` records each exact tag commit,
@@ -67,19 +68,18 @@ candidate/publication job, unrecognized run, or additional draft fails closed.
 GitHub does not provide a conditional release DELETE, so operators must not
 manually mutate a policy-listed draft while Semantic Release is running; the
 single guarded helper minimizes the remaining read/delete interval.
-The tag and commit remain immutable historical evidence; `v5.8.1` is never
-published, downloadable, eligible for Latest, or used as an image alias. The
-next semantic version contains the server correction and all first-parent
-fixes after `v5.8.1`.
+Their commit targets are evidence only; they are never published, downloadable,
+eligible for Latest, or used as image aliases. The next semantic version
+contains the server correction and all first-parent fixes after `v5.8.1`.
 
 The `v5.10.0` Package Release failed while cross-compiling the Windows server:
 the tagged source called POSIX-only `lstat` and `S_ISLNK` from a shared server
 source file. Its server image build succeeded, but its Windows server build
 failed before candidate finalization, publication, or any draft asset upload.
 The policy records exact draft ID `368181077`, tag commit
-`ebfe6588cf64f42c44715bcf45ec50cc056a91a5`, and failed run `31429488922`.
-The tag remains immutable unpublished historical evidence and is never used as
-an image alias. The next semantic version includes the portable staging-path
+`0fe7cd14e89f1a59466bfe6173d4a956da0d7143`, and failed run `31429488922`.
+The commit remains unpublished historical evidence and is never used as an
+image alias. The next semantic version includes the portable staging-path
 correction.
 
 The `v5.33.1` Package Release failed after version metadata moved into the
@@ -90,22 +90,21 @@ job before complete-candidate validation, image publication, or draft asset
 upload. A later source fix added the missing Dockerfile copy, but recovery
 continued to build the immutable tagged source and therefore could not repair
 that draft. The policy records exact draft ID `370711804`, tag commit
-`1f98d430a03e6d9fbf6f27f4ca1356542d905d08`, every failed Package Release run,
-and both job conclusions. The tag remains immutable unpublished historical
-evidence; after the guarded empty-draft deletion, ordinary semantic analysis
-selects the next version containing the Dockerfile correction and all later
-first-parent changes.
+`c470f85abc9827b90004ff6129f938ec8b321a5a`, every failed Package Release run,
+and both job conclusions. The commit remains unpublished historical evidence.
+Ordinary semantic analysis selects the next version containing the Dockerfile
+correction and all later first-parent changes.
 
 The `v5.34.0` Package Release failed because the root `.dockerignore` still
 excluded `cmake/`, so BuildKit could not satisfy the server Dockerfile's
 `COPY cmake ./cmake` instruction. The Windows server package succeeded, but
 the server-image job failed before complete-candidate validation, image
 publication, or draft asset upload. The policy records exact draft ID
-`371272859`, tag commit `458522ca74dd4c44d3d0502af341e5012560bd10`,
-failed run `31936701583`, and both job conclusions. The tag remains immutable
-unpublished historical evidence; after the guarded empty-draft deletion,
-ordinary semantic analysis selects the next version containing the Docker
-context correction and all later first-parent changes.
+`371272859`, tag commit `e850d809a202181069634a64494533792cff28ad`,
+failed run `31936701583`, and both job conclusions. The commit remains
+unpublished historical evidence. Ordinary semantic analysis selects the next
+version containing the Docker context correction and all later first-parent
+changes.
 
 If a failed run reached complete-candidate validation but a defect in its
 publication code makes a job rerun impossible, the semantic-release guard
