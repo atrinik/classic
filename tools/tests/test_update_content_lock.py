@@ -445,6 +445,106 @@ class UpdateContentLockTests(unittest.TestCase):
         self.assertFalse(legacy)
         self.assertTrue(checksums.call_args.kwargs["classic_target"])
 
+    def test_unpublished_current_release_cannot_trigger_history_cutover(self) -> None:
+        current = {
+            "tag": "v6.9.0",
+            "commit": "a" * 40,
+            "url": (
+                "https://github.com/atrinik/content/releases/download/v6.9.0/"
+                "atrinik-content-6.9.0-classic-runtime.tar.gz"
+            ),
+            "sha256": "b" * 64,
+        }
+        release = {
+            "tag_name": "v6.9.0",
+            "draft": True,
+            "published_at": None,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(UPDATER.UpdateError, "not published"):
+                UPDATER.verify_current_coordinate(
+                    current, [release], mock.Mock(), Path(directory), mock.Mock()
+                )
+
+    def test_missing_current_release_allows_one_time_history_cutover(self) -> None:
+        current = {
+            "tag": "v6.9.0",
+            "commit": "a" * 40,
+            "url": (
+                "https://github.com/atrinik/content/releases/download/v6.9.0/"
+                "atrinik-content-6.9.0-classic-runtime.tar.gz"
+            ),
+            "sha256": "b" * 64,
+        }
+        candidate_release = {
+            "tag_name": "v1.0.0",
+            "draft": False,
+            "published_at": "now",
+        }
+        candidate = {
+            "tag": "v1.0.0",
+            "version": [1, 0, 0],
+            "commit": "c" * 40,
+            "url": "new",
+            "sha256": "d" * 64,
+        }
+        api = mock.Mock()
+        api.releases.return_value = [candidate_release]
+        mutation = {
+            "changed": True,
+            "old": {"tag": "v6.9.0"},
+            "new": {"tag": "v1.0.0"},
+        }
+        with (
+            mock.patch.object(UPDATER, "load_lock", return_value=({}, current)),
+            mock.patch.object(
+                UPDATER, "current_classic_version", return_value=(5, 47, 0)
+            ),
+            mock.patch.object(UPDATER, "verify_candidate", return_value=candidate),
+            mock.patch.object(UPDATER, "update_lock", return_value=mutation) as update,
+        ):
+            evidence = UPDATER.execute(ROOT, apply=False, api=api)
+        self.assertTrue(evidence["changed"])
+        self.assertEqual(evidence["lineage_mode"], "cutover")
+        self.assertEqual(update.call_args.args[3]["tag"], "v1.0.0")
+        api.compare.assert_not_called()
+
+    def test_history_cutover_still_rejects_missing_runtime_assets(self) -> None:
+        current = {
+            "tag": "v6.9.0",
+            "commit": "a" * 40,
+            "url": (
+                "https://github.com/atrinik/content/releases/download/v6.9.0/"
+                "atrinik-content-6.9.0-classic-runtime.tar.gz"
+            ),
+            "sha256": "b" * 64,
+        }
+        api = mock.Mock()
+        api.releases.return_value = [
+            {
+                "tag_name": "v1.0.0",
+                "draft": False,
+                "published_at": "now",
+                "assets": [],
+            }
+        ]
+        api.tag_commit.return_value = "c" * 40
+        with (
+            mock.patch.object(UPDATER, "load_lock", return_value=({}, current)),
+            mock.patch.object(
+                UPDATER, "current_classic_version", return_value=(5, 47, 0)
+            ),
+            mock.patch.object(UPDATER, "update_lock") as update,
+        ):
+            evidence = UPDATER.execute(ROOT, apply=False, api=api)
+        self.assertFalse(evidence["changed"])
+        self.assertEqual(evidence["lineage_mode"], "cutover")
+        self.assertEqual(
+            evidence["rejected"],
+            [{"tag": "v1.0.0", "reason": "v1.0.0: required runtime assets are missing"}],
+        )
+        update.assert_not_called()
+
     def test_generic_main_runtime_cannot_claim_the_legacy_migration_gate(self) -> None:
         current = {
             "tag": "v2.14.0",

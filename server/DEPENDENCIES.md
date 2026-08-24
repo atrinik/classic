@@ -44,11 +44,14 @@ complete published `atrinik/content` release history and accept only the
 `classic` target derived from `main`, after verifying its tag target, canonical
 assets, SHA256SUMS, bounded archive structure, schema-v2 target and source
 identity, Classic compatibility, complete file digests, and license
-attributions. After the one-time migration from the authenticated historical
-coordinate, every update must also be a strict descendant of the current
-`main` commit. It changes only `tag`, `commit`, `url`, and `sha256`, then
-re-runs this server's existing dependency loader before proposing a pull
-request.
+attributions. If the current coordinate is the authenticated legacy line or
+its release is no longer published, the verified lock coordinate is retained
+as historical evidence and the updater allows exactly one fully verified
+history cutover; it never treats a draft or unpublished matching tag as a
+cutover. Once a published coordinate is locked again, every later update must
+be a strict descendant of the current `main` commit. It changes only `tag`,
+`commit`, `url`, and `sha256`, then re-runs this server's existing dependency
+loader before proposing a pull request.
 
 Discovery uses the read-only workflow token. Only after verification and
 automation-branch ownership checks does the workflow mint the repository-only
