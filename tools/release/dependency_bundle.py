@@ -142,11 +142,13 @@ def archive_name(record: dict[str, object]) -> str:
 
 
 def acquire_archives(
-    root: Path, cache: Path, staging: Path
+    root: Path, cache: Path, staging: Path, trusted_bundle: Path | None = None
 ) -> list[tuple[dict[str, object], Path]]:
     fetcher = dependency_module(root)
     _locks, records = locked_material(root)
-    fetcher.stage_bundle(records, cache, staging)
+    fetcher.stage_bundle(
+        records, cache, staging, trusted_bundle=trusted_bundle
+    )
     fetcher.verify_bundle(records, staging)
     return [
         (record, staging / "downloads" / archive_name(record))
@@ -233,13 +235,18 @@ def descriptor_for(
     }
 
 
-def build_layout(root: Path, cache: Path, output: Path) -> dict[str, object]:
+def build_layout(
+    root: Path,
+    cache: Path,
+    output: Path,
+    trusted_bundle: Path | None = None,
+) -> dict[str, object]:
     if output.exists() and any(output.iterdir()):
         raise BundleError(f"output directory is not empty: {output}")
     output.mkdir(parents=True, exist_ok=True)
     material = material_document(root)
     staged_inputs = output / "staged-dependency-inputs"
-    acquired = acquire_archives(root, cache, staged_inputs)
+    acquired = acquire_archives(root, cache, staged_inputs, trusted_bundle)
     bundle = output / "bundle"
     archives = bundle / "archives"
     archives.mkdir(parents=True)
@@ -553,6 +560,7 @@ def parse_args() -> argparse.Namespace:
     build = subparsers.add_parser("build")
     build.add_argument("--cache", type=Path, required=True)
     build.add_argument("--output", type=Path, required=True)
+    build.add_argument("--trusted-bundle", type=Path)
     build.add_argument("--write-descriptor", action="store_true")
     verify = subparsers.add_parser("verify")
     verify.add_argument("--bundle", type=Path, required=True)
@@ -573,7 +581,12 @@ def main() -> int:
         descriptor_path = root / descriptor_path
     try:
         if arguments.command == "build":
-            descriptor = build_layout(root, arguments.cache, arguments.output)
+            descriptor = build_layout(
+                root,
+                arguments.cache,
+                arguments.output,
+                arguments.trusted_bundle,
+            )
             if arguments.write_descriptor:
                 descriptor_path.write_bytes(
                     json.dumps(descriptor, indent=2).encode() + b"\n"

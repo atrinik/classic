@@ -149,10 +149,14 @@ semantic release and emits machine-readable old/new evidence only after the
 release tag, checksums, archive, complete manifest, explicit `classic` target,
 `main` source identity, compatibility range, consumer contract, and license
 attributions all agree. Celestial-v1 manifests additionally bind the migration
-index and complete file-list digest when present. After the authenticated
-one-time cross-line cutover, commit ancestry must agree as well. Invalid
-candidates are recorded and skipped; incomplete discovery or an invalid current
-coordinate stops the run.
+index and complete file-list digest when present. If the current coordinate is
+the authenticated legacy line or its release has disappeared from the complete
+published history, the updater uses that historical evidence as a one-time
+cross-line cutover and still requires the replacement's complete release
+evidence before changing the lock. Once a published coordinate is restored,
+later candidates must be strict descendants of it. Draft, unpublished,
+incomplete, or invalid candidates are recorded and skipped; incomplete
+discovery or an invalid current coordinate stops the run.
 
 When a verified update exists, the workflow mints the narrowly installed
 GitHub App credential and creates or refreshes at most one App-owned pull
@@ -207,6 +211,17 @@ and verifies the exact pinned ORAS client, and publishes the layout with its
 digest preserved. It has package write access only in its publication job.
 Pull-request and other untrusted workflows have no publication trigger or
 credential. An existing material tag at a different digest fails closed.
+
+If an unchanged locked origin is temporarily unavailable during the Content
+history cutover, the workflow first runs
+`tools/release/recover_attested_dependency_bundle.sh` and passes its extracted
+directory as `--trusted-bundle`. The script verifies the exact prior OCI
+attestation. Before it runs, each workflow logs into GHCR with the scoped
+job token in a runner-temporary `DOCKER_CONFIG`; the Python staging boundary
+reuses only manifest-listed archives
+whose names and SHA-256 values still match the current locks. The new Content
+archive is still acquired and verified from its published release, and a
+missing or mismatched trusted file fails closed.
 
 The first merge containing this contract is the bootstrap: wait for `Publish
 Dependency Bundle` to publish and attest the checked descriptor before
