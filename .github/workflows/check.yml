@@ -64,6 +64,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Verify the published Sound lock coordinate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/release/update_sound_lock.py --verify
       - id: dependency-key
         name: Resolve complete immutable input key
         run: |
