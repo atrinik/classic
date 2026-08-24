@@ -211,6 +211,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("oras cp --from-oci-layout", workflow)
         self.assertIn("9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59", workflow)
         self.assertIn("dependency_bundle.py build", workflow)
+        self.assertIn("recover_attested_dependency_bundle.sh", workflow)
+        self.assertIn("--trusted-bundle", workflow)
         self.assertIn("immutable dependency material tag exists", workflow)
         self.assertIn("tools/release/check_registry_version.py", workflow)
         self.assertIn("steps.material-tag.outputs.package_exists", workflow)
@@ -847,6 +849,8 @@ class WorkflowContractTests(unittest.TestCase):
         for material in benchmark_materials:
             self.assertEqual(client_benchmark.count(f"--material {material}"), 1)
         self.assertIn("tools/ci/run_linux_check.sh server-benchmark", workflow)
+        self.assertIn("recover_attested_dependency_bundle.sh", workflow)
+        self.assertIn("--trusted-bundle", workflow)
         self.assertIn("github.event.pull_request.base.sha", workflow)
         self.assertIn("github.event.pull_request.head.sha", workflow)
         self.assertIn("--network none", workflow)
@@ -1201,6 +1205,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("name: Verified dependency inputs", staging)
         self.assertIn("bundle-key", staging)
         self.assertIn("bundle-stage", staging)
+        self.assertIn("recover_attested_dependency_bundle.sh", staging)
+        self.assertIn("--trusted-bundle", staging)
         for material in (
             "client/dependencies.lock.json",
             "server/dependencies.lock.json",
@@ -1281,6 +1287,8 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("bundle-key", benchmark)
         self.assertIn("bundle-stage", benchmark)
+        self.assertIn("recover_attested_dependency_bundle.sh", benchmark)
+        self.assertIn("--trusted-bundle", benchmark)
         self.assertIn("--output build/dependency-inputs", benchmark)
         self.assertIn("actions/cache/restore@", benchmark)
         self.assertIn("actions/cache/save@", benchmark)

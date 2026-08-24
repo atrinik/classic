@@ -212,6 +212,15 @@ digest preserved. It has package write access only in its publication job.
 Pull-request and other untrusted workflows have no publication trigger or
 credential. An existing material tag at a different digest fails closed.
 
+If an unchanged locked origin is temporarily unavailable during the Content
+history cutover, the workflow first runs
+`tools/release/recover_attested_dependency_bundle.sh` and passes its extracted
+directory as `--trusted-bundle`. The script verifies the exact prior OCI
+attestation; the Python staging boundary reuses only manifest-listed archives
+whose names and SHA-256 values still match the current locks. The new Content
+archive is still acquired and verified from its published release, and a
+missing or mismatched trusted file fails closed.
+
 The first merge containing this contract is the bootstrap: wait for `Publish
 Dependency Bundle` to publish and attest the checked descriptor before
 dispatching a rehearsal. Semantic Release also waits for and fully verifies

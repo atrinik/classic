@@ -79,6 +79,9 @@ jobs:
       (needs.changes.outputs.client == 'true' || needs.changes.outputs.server == 'true')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      attestations: read
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -98,6 +101,10 @@ jobs:
           key: classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}
           restore-keys: >-
             classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}-
+      - name: Recover attested unchanged dependency archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/release/recover_attested_dependency_bundle.sh "${RUNNER_TEMP}/classic-trusted-dependency-bundle"
       - id: dependency-stage
         name: Acquire and verify complete immutable input bundle
         run: |
@@ -106,6 +113,7 @@ jobs:
             --server-lock server/dependencies.lock.json \
             --source-lock server/cmake/immutable_sources.lock.json \
             --cache "${RUNNER_TEMP}/classic-dependency-archives" \
+            --trusted-bundle "${RUNNER_TEMP}/classic-trusted-dependency-bundle" \
             --output build/dependency-inputs \
             --github-output "${GITHUB_OUTPUT}"
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6

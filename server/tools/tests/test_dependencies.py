@@ -343,6 +343,92 @@ class DependencyTests(unittest.TestCase):
         bundle2 = self.root / "bundle2"
         self.assertFalse(dependencies.stage_bundle([material], cache, bundle2))
 
+    def test_stages_exact_archive_from_an_attested_bundle(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        material = {
+            "kind": "dependency",
+            "owner": "client",
+            **self.dependency(archive),
+        }
+        archive_name = f"sound-{material['sha256']}.tar.gz"
+        trusted = self.root / "trusted"
+        trusted_archives = trusted / "archives"
+        trusted_archives.mkdir(parents=True)
+        trusted_archive = trusted_archives / archive_name
+        trusted_archive.write_bytes(archive.read_bytes())
+        (trusted / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "material_digest": "sha256:" + "a" * 64,
+                    "source_locks": {},
+                    "acquisition_contracts": {},
+                    "verified_input_bundle_digest": "sha256:" + "b" * 64,
+                    "inputs": [],
+                    "artifacts": [
+                        {
+                            "name": "sound",
+                            "path": f"archives/{archive_name}",
+                            "sha256": material["sha256"],
+                            "size": trusted_archive.stat().st_size,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        bundle = self.root / "trusted-bundle"
+        cache = self.root / "trusted-cache"
+        self.assertTrue(
+            dependencies.stage_bundle(
+                [material], cache, bundle, trusted_bundle=trusted
+            )
+        )
+        dependencies.verify_bundle([material], bundle)
+        self.assertEqual(
+            (cache / "downloads" / archive_name).read_bytes(), archive.read_bytes()
+        )
+
+    def test_trusted_bundle_rejects_a_tampered_archive(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        material = {
+            "kind": "dependency",
+            "owner": "client",
+            **self.dependency(archive),
+        }
+        archive_name = f"sound-{material['sha256']}.tar.gz"
+        trusted = self.root / "trusted"
+        trusted_archives = trusted / "archives"
+        trusted_archives.mkdir(parents=True)
+        (trusted_archives / archive_name).write_bytes(b"tampered")
+        (trusted / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "material_digest": "sha256:" + "a" * 64,
+                    "source_locks": {},
+                    "acquisition_contracts": {},
+                    "verified_input_bundle_digest": "sha256:" + "b" * 64,
+                    "inputs": [],
+                    "artifacts": [
+                        {
+                            "name": "sound",
+                            "path": f"archives/{archive_name}",
+                            "sha256": material["sha256"],
+                            "size": len(b"tampered"),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            dependencies.DependencyError, "failed verification"
+        ):
+            dependencies.stage_bundle(
+                [material], self.root / "cache", self.root / "bundle", trusted_bundle=trusted
+            )
+
     def test_bundle_stage_canonicalizes_stale_and_linked_cache_entries(self) -> None:
         archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
         material = {
