@@ -1386,7 +1386,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(workflow.count("chmod 1777"), 4)
         self.assertIn("tools/ci/measure_linux_image.sh", workflow)
         self.assertNotIn("classic-client-sdl-mixer-ubuntu", workflow)
-        self.assertNotIn("packages: read", workflow)
+        dependency_inputs = workflow[
+            workflow.index("  dependency-inputs:") : workflow.index("  core:")
+        ]
+        self.assertEqual(workflow.count("packages: read"), 1)
+        self.assertIn("packages: read", dependency_inputs)
         self.assertNotIn("docker/login-action", workflow)
         self.assertNotIn("packages: read", self.text("codeql.yml"))
 
