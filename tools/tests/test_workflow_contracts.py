@@ -103,6 +103,41 @@ class WorkflowContractTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, workflow)
 
+    def test_sound_updater_and_check_gate_are_bound_to_verified_releases(self) -> None:
+        workflow = self.text("update-sound.yml")
+        check = self.text("check.yml")
+        self.assertIn("  schedule:\n", workflow)
+        self.assertIn("  workflow_dispatch:\n", workflow)
+        self.assertIn("group: classic-sound-lock-update", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+        self.assertIn(
+            "github.event_name == 'workflow_dispatch' || vars.DEPENDENCY_UPDATE_SCHEDULE_ENABLED == 'true'",
+            workflow,
+        )
+        self.assertEqual(workflow[: workflow.index("jobs:")].count("contents: read"), 1)
+        self.assertNotIn("\n  contents: write", workflow)
+        self.assertNotIn("\n  pull-requests: write", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("tools/release/update_sound_lock.py", workflow)
+        self.assertIn("client/dependencies.lock.json", workflow)
+        token = workflow.index("name: Mint the installation token")
+        verification = workflow.index("name: Verify all Sound releases")
+        ownership = workflow.index("name: Fail closed on unexpected automation")
+        mutation = workflow.index("name: Create or update the single App-owned")
+        self.assertLess(verification, ownership)
+        self.assertLess(ownership, token)
+        self.assertLess(token, mutation)
+        self.assertIn("permission-contents: write", workflow)
+        self.assertIn("permission-pull-requests: write", workflow)
+        self.assertIn("--force-with-lease=", workflow)
+        for forbidden in (
+            "gh pr review", "gh pr merge", "gh release", "git tag",
+            "workflow dispatch", "repos/${GITHUB_REPOSITORY}/branches/main",
+        ):
+            self.assertNotIn(forbidden, workflow)
+        self.assertIn("Verify the published Sound lock coordinate", check)
+        self.assertIn("python3 tools/release/update_sound_lock.py --verify", check)
+
     def test_nested_component_automation_remains_retired(self) -> None:
         for module in ("client", "editor", "libatrinik", "protocol", "server"):
             with self.subTest(module=module):

@@ -1,0 +1,199 @@
+name: Update verified sound lock
+
+on:
+  schedule:
+    - cron: "37 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: classic-sound-lock-update
+  cancel-in-progress: false
+
+env:
+  APP_SLUG: atrinik-classic-dependency-updater
+  UPDATE_BRANCH: automation/sound-update
+
+jobs:
+  update:
+    name: Verify release and propose lock update
+    if: github.event_name == 'workflow_dispatch' || vars.DEPENDENCY_UPDATE_SCHEDULE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Bind verification to current main
+        run: |
+          test "${GITHUB_REF}" = refs/heads/main
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/main)"
+      - id: update
+        name: Verify all Sound releases and stage the highest valid lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p build/sound-update
+          python3 tools/release/update_sound_lock.py \
+            --apply \
+            --evidence build/sound-update/evidence.json \
+            --pr-body build/sound-update/pull-request.md \
+            --github-output "${GITHUB_OUTPUT}"
+      - id: ownership
+        name: Fail closed on unexpected automation branch or pull request state
+        if: steps.update.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/git/matching-refs/heads/${UPDATE_BRANCH}" \
+            > build/sound-update/refs.json
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&head=atrinik:${UPDATE_BRANCH}&per_page=2" \
+            > build/sound-update/pulls.json
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          refs = json.loads(Path("build/sound-update/refs.json").read_text())
+          pulls = json.loads(Path("build/sound-update/pulls.json").read_text())
+          branch = os.environ["UPDATE_BRANCH"]
+          expected_ref = f"refs/heads/{branch}"
+          if len(refs) > 1 or any(item.get("ref") != expected_ref for item in refs):
+              raise SystemExit("unexpected automation refs")
+          if len(pulls) > 1:
+              raise SystemExit("more than one automation pull request exists")
+          if bool(refs) != bool(pulls):
+              raise SystemExit("automation branch and pull request ownership are inconsistent")
+          branch_sha = refs[0]["object"]["sha"] if refs else ""
+          pr_number = ""
+          if pulls:
+              pull = pulls[0]
+              if (
+                  pull.get("user", {}).get("login") != f'{os.environ["APP_SLUG"]}[bot]'
+                  or pull.get("base", {}).get("ref") != "main"
+                  or pull.get("head", {}).get("ref") != branch
+                  or pull.get("head", {}).get("repo", {}).get("full_name")
+                  != os.environ["GITHUB_REPOSITORY"]
+                  or pull.get("head", {}).get("sha") != branch_sha
+              ):
+                  raise SystemExit("automation pull request is not App-owned and bound")
+              pr_number = str(pull["number"])
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a", encoding="utf-8") as stream:
+              stream.write(f"branch_sha={branch_sha}\n")
+              stream.write(f"pr_number={pr_number}\n")
+          PY
+          branch_sha=$(jq -r \
+            --arg ref "refs/heads/${UPDATE_BRANCH}" \
+            'if length == 0 then "" elif length == 1 and .[0].ref == $ref then .[0].object.sha else error("unexpected refs") end' \
+            build/sound-update/refs.json)
+          if test -n "${branch_sha}"; then
+            git fetch --no-tags origin \
+              "+refs/heads/${UPDATE_BRANCH}:refs/remotes/origin/${UPDATE_BRANCH}"
+            test "$(git rev-parse "refs/remotes/origin/${UPDATE_BRANCH}")" = \
+              "${branch_sha}"
+            test "$(git diff --name-only --no-renames \
+              "refs/remotes/origin/main...refs/remotes/origin/${UPDATE_BRANCH}")" = \
+              client/dependencies.lock.json
+            app_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
+            expected_email="${app_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+            test -z "$(git log --format=%ae \
+              "refs/remotes/origin/main..refs/remotes/origin/${UPDATE_BRANCH}" \
+              | grep -vFx "${expected_email}" || true)"
+          fi
+      - id: app-token
+        name: Mint the installation token only for branch and pull-request mutation
+        if: steps.update.outputs.changed == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.DEPENDENCY_UPDATE_APP_ID }}
+          private-key: ${{ secrets.DEPENDENCY_UPDATE_APP_PRIVATE_KEY }}
+          owner: atrinik
+          repositories: classic
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Create or update the single App-owned pull request
+        if: steps.update.outputs.changed == 'true'
+        env:
+          APP_TOKEN_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          EXPECTED_BRANCH_SHA: ${{ steps.ownership.outputs.branch_sha }}
+          EXISTING_PR: ${{ steps.ownership.outputs.pr_number }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          NEW_TAG: ${{ steps.update.outputs.tag }}
+        run: |
+          test "${APP_TOKEN_SLUG}" = "${APP_SLUG}"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/git/matching-refs/heads/${UPDATE_BRANCH}" \
+            > build/sound-update/refs-after-token.json
+          actual_sha=$(jq -r \
+            --arg ref "refs/heads/${UPDATE_BRANCH}" \
+            'if length == 0 then "" elif length == 1 and .[0].ref == $ref then .[0].object.sha else error("unexpected refs") end' \
+            build/sound-update/refs-after-token.json)
+          test "${actual_sha}" = "${EXPECTED_BRANCH_SHA}"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&head=atrinik:${UPDATE_BRANCH}&per_page=2" \
+            > build/sound-update/pulls-after-token.json
+          actual_pr=$(jq -r \
+            'if length == 0 then "" elif length == 1 then (.[0].number | tostring) else error("unexpected pull requests") end' \
+            build/sound-update/pulls-after-token.json)
+          test "${actual_pr}" = "${EXISTING_PR}"
+          jq -e \
+            --arg login "${APP_SLUG}[bot]" \
+            --arg branch "${UPDATE_BRANCH}" \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg sha "${actual_sha}" \
+            'length == 0 or (length == 1 and .[0].user.login == $login and .[0].base.ref == "main" and .[0].head.ref == $branch and .[0].head.repo.full_name == $repository and .[0].head.sha == $sha)' \
+            build/sound-update/pulls-after-token.json >/dev/null
+          git config user.name "${APP_SLUG}[bot]"
+          app_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
+          git config user.email \
+            "${app_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git add client/dependencies.lock.json
+          git diff --cached --quiet && exit 0
+          git commit -m "chore(deps): update sound lock to ${NEW_TAG}"
+          gh auth setup-git
+          if test -n "${EXPECTED_BRANCH_SHA}"; then
+            git push \
+              --force-with-lease="refs/heads/${UPDATE_BRANCH}:${EXPECTED_BRANCH_SHA}" \
+              origin "HEAD:refs/heads/${UPDATE_BRANCH}"
+          else
+            git push origin "HEAD:refs/heads/${UPDATE_BRANCH}"
+          fi
+          title="chore(deps): update sound lock to ${NEW_TAG}"
+          if test -n "${EXISTING_PR}"; then
+            jq -n \
+              --arg title "${title}" \
+              --rawfile body build/sound-update/pull-request.md \
+              '{title: $title, body: $body}' \
+              > build/sound-update/pull-request.json
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/pulls/${EXISTING_PR}" \
+              --input build/sound-update/pull-request.json \
+              > build/sound-update/pull-response.json
+          else
+            jq -n \
+              --arg title "${title}" \
+              --arg head "${UPDATE_BRANCH}" \
+              --rawfile body build/sound-update/pull-request.md \
+              '{title: $title, head: $head, base: "main", body: $body}' \
+              > build/sound-update/pull-request.json
+            gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/pulls" \
+              --input build/sound-update/pull-request.json \
+              > build/sound-update/pull-response.json
+          fi
+          jq -e \
+            --arg login "${APP_SLUG}[bot]" \
+            --arg branch "${UPDATE_BRANCH}" \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            '.state == "open" and .user.login == $login and .base.ref == "main" and .head.ref == $branch and .head.repo.full_name == $repository' \
+            build/sound-update/pull-response.json >/dev/null

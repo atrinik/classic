@@ -9,6 +9,9 @@ The client consumes one revision-coupled source and two released inputs:
 - `cmake/dependencies.lock.json` pins the `libatrinik` source archive by release
   tag, commit, URL, and SHA-256.
 - `dependencies.lock.json` pins the sound archive with the same metadata.
+- `tools/release/update_sound_lock.py` is the repository-owned lock preflight and
+  updater. It accepts only a published, non-draft Sound release whose tag commit,
+  canonical archive URL, SHA256SUMS entry, and downloaded archive digest agree.
 - `tools/dependencies.py` delegates to the repository's authoritative
   immutable fetcher, which installs sound into the ignored `sound/` runtime
   directory and refuses unmanaged destinations or unsafe archive members.
