@@ -530,8 +530,152 @@ def bundle_digest(materials: list[dict[str, object]]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _trusted_bundle_archives(trusted_bundle: Path) -> dict[str, Path]:
+    if trusted_bundle.is_symlink() or not trusted_bundle.is_dir():
+        raise DependencyError(
+            f"trusted dependency bundle must be a regular directory: {trusted_bundle}"
+        )
+    archives = trusted_bundle / "archives"
+    if archives.is_symlink() or not archives.is_dir():
+        raise DependencyError(
+            f"trusted dependency bundle archives are missing: {archives}"
+        )
+    manifest_path = trusted_bundle / "manifest.json"
+    try:
+        with manifest_path.open(encoding="utf-8") as stream:
+            manifest = json.load(stream, object_pairs_hook=_reject_duplicate_keys)
+    except (OSError, json.JSONDecodeError) as error:
+        raise DependencyError(
+            f"cannot read trusted dependency bundle manifest: {error}"
+        ) from error
+    if not isinstance(manifest, dict):
+        raise DependencyError("trusted dependency bundle manifest must be an object")
+    _require_keys(
+        manifest,
+        {
+            "schema_version",
+            "material_digest",
+            "source_locks",
+            "acquisition_contracts",
+            "verified_input_bundle_digest",
+            "inputs",
+            "artifacts",
+        },
+        "trusted dependency bundle manifest",
+    )
+    if manifest["schema_version"] != BUNDLE_SCHEMA_VERSION:
+        raise DependencyError("trusted dependency bundle manifest has an unsupported schema")
+    artifacts = manifest["artifacts"]
+    if not isinstance(artifacts, list) or not artifacts:
+        raise DependencyError("trusted dependency bundle manifest has no artifacts")
+    records: dict[str, Path] = {}
+    seen_names: set[str] = set()
+    for index, item in enumerate(artifacts):
+        if not isinstance(item, dict):
+            raise DependencyError(
+                f"trusted dependency bundle artifact {index} must be an object"
+            )
+        _require_keys(
+            item,
+            {"name", "path", "sha256", "size"},
+            f"trusted dependency bundle artifact {index}",
+        )
+        name = item["name"]
+        relative = item["path"]
+        digest = item["sha256"]
+        size = item["size"]
+        if (
+            not isinstance(name, str)
+            or not name
+            or "/" in name
+            or not all(
+                character.islower() or character.isdigit() or character == "-"
+                for character in name
+            )
+            or not isinstance(relative, str)
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or size < 0
+            or name in seen_names
+            or relative != f"archives/{name}-{digest}.tar.gz"
+        ):
+            raise DependencyError(
+                f"trusted dependency bundle artifact {index} has invalid identity"
+            )
+        archive = archives / f"{name}-{digest}.tar.gz"
+        if archive.is_symlink() or not archive.is_file():
+            raise DependencyError(
+                f"trusted dependency bundle archive is not a regular file: {name}"
+            )
+        if archive.stat().st_size != size or size > MAX_ARCHIVE_BYTES:
+            raise DependencyError(
+                f"trusted dependency bundle archive size differs: {name}"
+            )
+        if sha256_file(archive) != digest:
+            raise DependencyError(
+                f"trusted dependency bundle archive failed verification: {name}"
+            )
+        seen_names.add(name)
+        records[archive.name] = archive
+    archive_entries = list(archives.iterdir())
+    if any(path.is_symlink() or not path.is_file() for path in archive_entries):
+        raise DependencyError(
+            "trusted dependency bundle archives must contain regular files only"
+        )
+    actual_names = {path.name for path in archive_entries}
+    if actual_names != set(records):
+        raise DependencyError(
+            "trusted dependency bundle archives contain unlisted files"
+        )
+    return records
+
+
+def seed_trusted_bundle(
+    materials: list[dict[str, object]],
+    cache_downloads: Path,
+    trusted_bundle: Path,
+) -> bool:
+    trusted_archives = _trusted_bundle_archives(trusted_bundle)
+    changed = False
+    for material in materials:
+        name = f"{material['name']}-{material['sha256']}.tar.gz"
+        source = trusted_archives.get(name)
+        if source is None:
+            continue
+        destination = cache_downloads / name
+        if (
+            destination.is_file()
+            and not destination.is_symlink()
+            and destination.stat().st_size <= MAX_ARCHIVE_BYTES
+            and sha256_file(destination) == str(material["sha256"])
+        ):
+            continue
+        if destination.is_symlink() or destination.exists():
+            destination.unlink()
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{material['name']}-trusted-", dir=cache_downloads
+        )
+        os.close(descriptor)
+        temporary = Path(temporary_name)
+        try:
+            shutil.copyfile(source, temporary)
+            if sha256_file(temporary) != str(material["sha256"]):
+                raise DependencyError(
+                    f"trusted dependency bundle archive does not match the current lock: {material['name']}"
+                )
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        changed = True
+    return changed
+
+
 def stage_bundle(
-    materials: list[dict[str, object]], cache_dir: Path, output_dir: Path
+    materials: list[dict[str, object]], cache_dir: Path, output_dir: Path,
+    *, trusted_bundle: Path | None = None,
 ) -> bool:
     if output_dir.exists():
         raise DependencyError(f"dependency bundle output already exists: {output_dir}")
@@ -558,6 +702,8 @@ def stage_bundle(
         else:
             path.unlink()
         cache_changed = True
+    if trusted_bundle is not None:
+        cache_changed |= seed_trusted_bundle(materials, cache_downloads, trusted_bundle)
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(
         tempfile.mkdtemp(prefix=f".{output_dir.name}-staging-", dir=output_dir.parent)
@@ -697,6 +843,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--client-lock", type=Path)
     parser.add_argument("--server-lock", type=Path)
     parser.add_argument("--bundle", type=Path)
+    parser.add_argument("--trusted-bundle", type=Path)
     parser.add_argument("--downloads", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--github-output", type=Path)
@@ -728,7 +875,12 @@ def main() -> int:
             if args.command == "bundle-stage":
                 if not args.cache or not args.output:
                     raise DependencyError("bundle-stage requires --cache and --output")
-                cache_changed = stage_bundle(materials, args.cache, args.output)
+                cache_changed = stage_bundle(
+                    materials,
+                    args.cache,
+                    args.output,
+                    trusted_bundle=args.trusted_bundle,
+                )
                 verify_bundle(materials, args.output)
                 if args.github_output:
                     with args.github_output.open("a", encoding="utf-8") as stream:

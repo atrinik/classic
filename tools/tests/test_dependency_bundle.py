@@ -123,6 +123,22 @@ class DependencyBundleTests(unittest.TestCase):
             "materials-" + str(actual["material_digest"]).removeprefix("sha256:"),
         )
 
+    def test_build_can_seed_exact_archives_from_a_trusted_bundle(self) -> None:
+        trusted = Path(self.temporary.name) / "trusted"
+        (trusted / "archives").mkdir(parents=True)
+        shutil.copyfile(self.bundle / "manifest.json", trusted / "manifest.json")
+        for archive in (self.bundle / "archives").iterdir():
+            shutil.copyfile(archive, trusted / "archives" / archive.name)
+        trusted_cache = Path(self.temporary.name) / "trusted-cache"
+        trusted_layout = Path(self.temporary.name) / "trusted-layout"
+        actual = dependency_bundle.build_layout(
+            self.root,
+            trusted_cache,
+            trusted_layout,
+            trusted_bundle=trusted,
+        )
+        self.assertEqual(actual, self.descriptor)
+
     def test_verifies_and_installs_every_archive_in_consumer_caches(self) -> None:
         manifest = dependency_bundle.verify_bundle(
             self.root, self.descriptor_path, self.bundle

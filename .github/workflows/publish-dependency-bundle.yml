@@ -42,6 +42,16 @@ jobs:
           git fetch --no-tags origin main
           test "$(git rev-parse HEAD)" = "${PUBLICATION_SHA}"
           test "$(git rev-parse refs/remotes/origin/main)" = "${PUBLICATION_SHA}"
+      - name: Recover attested unchanged dependency archives
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/classic-docker-config
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "${DOCKER_CONFIG}"
+          printf '%s' "${GH_TOKEN}" | docker login ghcr.io \
+            --username "${GITHUB_ACTOR}" --password-stdin
+          bash tools/release/recover_attested_dependency_bundle.sh \
+            "${RUNNER_TEMP}/classic-trusted-dependency-bundle"
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
@@ -49,7 +59,8 @@ jobs:
         run: |
           python3 tools/release/dependency_bundle.py build \
             --cache build/dependency-bundle-cache \
-            --output build/dependency-bundle-oci
+            --output build/dependency-bundle-oci \
+            --trusted-bundle "${RUNNER_TEMP}/classic-trusted-dependency-bundle"
       - name: Install the digest-pinned registry copy client
         env:
           GH_TOKEN: ${{ github.token }}

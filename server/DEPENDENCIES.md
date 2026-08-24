@@ -38,17 +38,34 @@ the fetcher's explicit `--refresh --offline` boundary; server CMake also uses
 the staged immutable-source cache. A missing or invalid entry fails without
 opening a network connection.
 
+During the Content history cutover, the workflows may also recover unchanged
+archives from the attested prior bundle
+`ghcr.io/atrinik/classic-dependencies@sha256:f71e7dce5893e3fa6734e067c02738925a3b5e31c201dc202c85eaaabd720685`.
+`tools/release/recover_attested_dependency_bundle.sh` verifies that image's
+GitHub attestation before extraction; workflows provide a runner-temporary
+Docker login using their scoped job token so the OCI registry can be read.
+The staging boundary then accepts only
+manifest-listed regular files whose names and SHA-256 values match the current
+lock; missing or changed material still goes through the normal bounded
+network acquisition path. This permits the new Content archive to be acquired
+while preserving exact Resources, Sound, and libpcpnatpmp inputs whose origin
+release assets are temporarily unavailable. It is not a substitute for
+verification or for publishing repaired upstream releases.
+
 The repository-root `Update verified content lock` workflow is the only
 automated writer for the content record. Daily and manual runs enumerate the
 complete published `atrinik/content` release history and accept only the
 `classic` target derived from `main`, after verifying its tag target, canonical
 assets, SHA256SUMS, bounded archive structure, schema-v2 target and source
 identity, Classic compatibility, complete file digests, and license
-attributions. After the one-time migration from the authenticated historical
-coordinate, every update must also be a strict descendant of the current
-`main` commit. It changes only `tag`, `commit`, `url`, and `sha256`, then
-re-runs this server's existing dependency loader before proposing a pull
-request.
+attributions. If the current coordinate is the authenticated legacy line or
+its release is no longer published, the verified lock coordinate is retained
+as historical evidence and the updater allows exactly one fully verified
+history cutover; it never treats a draft or unpublished matching tag as a
+cutover. Once a published coordinate is locked again, every later update must
+be a strict descendant of the current `main` commit. It changes only `tag`,
+`commit`, `url`, and `sha256`, then re-runs this server's existing dependency
+loader before proposing a pull request.
 
 Discovery uses the read-only workflow token. Only after verification and
 automation-branch ownership checks does the workflow mint the repository-only
