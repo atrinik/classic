@@ -216,7 +216,9 @@ If an unchanged locked origin is temporarily unavailable during the Content
 history cutover, the workflow first runs
 `tools/release/recover_attested_dependency_bundle.sh` and passes its extracted
 directory as `--trusted-bundle`. The script verifies the exact prior OCI
-attestation; the Python staging boundary reuses only manifest-listed archives
+attestation. Before it runs, each workflow logs into GHCR with the scoped
+job token in a runner-temporary `DOCKER_CONFIG`; the Python staging boundary
+reuses only manifest-listed archives
 whose names and SHA-256 values still match the current locks. The new Content
 archive is still acquired and verified from its published release, and a
 missing or mismatched trusted file fails closed.

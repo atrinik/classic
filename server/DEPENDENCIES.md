@@ -42,7 +42,9 @@ During the Content history cutover, the workflows may also recover unchanged
 archives from the attested prior bundle
 `ghcr.io/atrinik/classic-dependencies@sha256:f71e7dce5893e3fa6734e067c02738925a3b5e31c201dc202c85eaaabd720685`.
 `tools/release/recover_attested_dependency_bundle.sh` verifies that image's
-GitHub attestation before extraction. The staging boundary then accepts only
+GitHub attestation before extraction; workflows provide a runner-temporary
+Docker login using their scoped job token so the OCI registry can be read.
+The staging boundary then accepts only
 manifest-listed regular files whose names and SHA-256 values match the current
 lock; missing or changed material still goes through the normal bounded
 network acquisition path. This permits the new Content archive to be acquired
