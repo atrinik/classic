@@ -14,10 +14,10 @@
     {
       "name": "resources",
       "repository": "atrinik/resources",
-      "tag": "v1.2.0",
-      "commit": "a4a5b81a945fff9889a46117b91fbea2cd124675",
-      "url": "https://github.com/atrinik/resources/releases/download/v1.2.0/atrinik-resources-1.2.0.tar.gz",
-      "sha256": "e40797c522b55ea7fb0b48da5269325397bd875277069e53f96420c0b618cfca",
+      "tag": "v1.0.0",
+      "commit": "e792037d7153769ab69b670229be4869cc54b6fc",
+      "url": "https://github.com/atrinik/resources/releases/download/v1.0.0/atrinik-resources-1.0.0.tar.gz",
+      "sha256": "36ca90f78ffe8af01effa577adb364f0d6f9102078bb91e366afb6ac347ca70b",
       "destination": "resources",
       "strip_components": 1
     }
