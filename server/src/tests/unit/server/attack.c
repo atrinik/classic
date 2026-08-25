@@ -30,6 +30,7 @@
 #include <checkstd.h>
 #include <check_utils.h>
 #include <arch.h>
+#include <metrics.h>
 #include <monster_data.h>
 #include <object_methods.h>
 #include <player.h>
@@ -657,6 +658,72 @@ START_TEST(test_kill_experience_follows_damage_skill_participation) {
 }
 END_TEST
 
+START_TEST(test_monster_kill_metrics_separate_named_variants) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    memset(pl->attack, 0, sizeof(pl->attack));
+    pl->attack[ATNR_IMPACT] = 100;
+
+    object *ordinary = arch_get("goblin");
+    ordinary->x = pl->x + 1;
+    ordinary->y = pl->y;
+    ordinary->level = 1;
+    ordinary->stats.hp = 1;
+    ordinary->stats.maxhp = 1;
+    ordinary->stats.exp = 1000;
+    FREE_AND_COPY_HASH(ordinary->race, "goblin");
+    ordinary = object_insert_map(ordinary, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(ordinary);
+    monster_data_init(ordinary);
+    ordinary->enemy = pl;
+    ordinary->enemy_count = pl->count;
+    ck_assert_int_gt(attack_hit(ordinary, pl, 100), 0);
+
+    object *named = arch_get("goblin");
+    named->x = pl->x + 1;
+    named->y = pl->y;
+    named->level = 1;
+    named->stats.hp = 1;
+    named->stats.maxhp = 1;
+    named->stats.exp = 1000;
+    FREE_AND_COPY_HASH(named->race, "goblin");
+    FREE_AND_COPY_HASH(named->name, "Thrakir");
+    named = object_insert_map(named, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(named);
+    monster_data_init(named);
+    named->enemy = pl;
+    named->enemy_count = pl->count;
+    ck_assert_int_gt(attack_hit(named, pl, 100), 0);
+
+    char archetype_id[METRICS_UNIQUE_ID_MAX + 1];
+    char family_id[METRICS_UNIQUE_ID_MAX + 1];
+    char named_id[METRICS_UNIQUE_ID_MAX + 1];
+    ck_assert(metrics_format_content_id(VS(archetype_id), "archetype", "goblin"));
+    ck_assert(metrics_format_content_id(VS(family_id), "monster-family", "goblin"));
+    ck_assert(metrics_format_named_monster_id(VS(named_id), "goblin", "Thrakir"));
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_MONSTERS_KILLED), 2);
+    ck_assert_uint_eq(
+        metrics_keyed_get(&CONTR(pl)->metrics, METRIC_KEYED_CHARACTER_MONSTER_KILLS, archetype_id),
+        1);
+    ck_assert_uint_eq(metrics_keyed_get(&CONTR(pl)->metrics,
+                                        METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME,
+                                        named_id),
+                      1);
+    ck_assert_uint_eq(metrics_keyed_get(&CONTR(pl)->metrics,
+                                        METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_FAMILY,
+                                        family_id),
+                      2);
+    ck_assert_uint_eq(
+        metrics_keyed_count(&CONTR(pl)->metrics, METRIC_KEYED_CHARACTER_MONSTER_KILLS),
+        1);
+    ck_assert_uint_eq(
+        metrics_keyed_count(&CONTR(pl)->metrics, METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME),
+        1);
+}
+END_TEST
+
 START_TEST(test_targeted_melee_gets_one_unaware_opening_bonus) {
     mapstruct *map;
     object *pl;
@@ -819,6 +886,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_attack_roll_adjust_describes_positional_bonuses);
     tcase_add_test(tc_core, test_attack_roll_adjust_describes_moved_target_penalty);
     tcase_add_test(tc_core, test_kill_experience_follows_damage_skill_participation);
+    tcase_add_test(tc_core, test_monster_kill_metrics_separate_named_variants);
     tcase_add_test(tc_core, test_targeted_melee_gets_one_unaware_opening_bonus);
     tcase_add_test(tc_core, test_situational_bonus_excludes_living_pets_and_plugin_damage_api);
     tcase_add_test(tc_core, test_unaware_bonus_does_not_increase_status_effect_strength);

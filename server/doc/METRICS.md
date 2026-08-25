@@ -60,8 +60,9 @@ containers, traps, parties, scripted auctions/post, inscriptions, and quests. Ch
 sets cover stable quest and nested quest-part UIDs, canonical maps, acquired region maps,
 visited and savebed regions, book artifacts/archetypes, food/potion/scroll archetypes, learned
 spells and skills, explicit authored landmark/lore/boss tags, and UTC active dates. Bounded keyed
-series retain per-ID quest outcomes, monster-archetype/family kills, skill levels/experience/uses,
-construction archetypes, bounty factions, spell outcomes, and mana consumption.
+series retain per-ID quest outcomes, monster-archetype/family/name kills, skill
+levels/experience/uses, construction archetypes, bounty factions, spell outcomes, and mana
+consumption.
 
 Account metrics include successful authentication, successful character
 session starts/completions, active time, longest character session, roster facts, and the
@@ -80,9 +81,9 @@ account metric or collection.
 
 Serialized scalar, collection, and keyed-series names are registry-owned dotted IDs.
 Unique subjects accept at most 255 ASCII alphanumeric or `_./:-+` characters.
-Most collections and keyed series are bounded to 512 entries. Content-wide map, book, and
-monster-archetype dimensions retain up to 8192 IDs, while active UTC dates retain up to 4096
-days (more than eleven years). Inserting an existing entry is
+Most collections and keyed series are bounded to 512 entries. Content-wide map, book,
+monster-archetype, and named-monster dimensions retain up to 8192 IDs, while active UTC dates
+retain up to 4096 days (more than eleven years). Inserting an existing entry is
 idempotent and inserting beyond the bound fails without evicting an existing
 fact. Display names, localized labels, arbitrary chat, IP addresses,
 connection IDs, passwords, and failed credentials are never metric subjects.
@@ -90,12 +91,15 @@ connection IDs, passwords, and failed credentials are never metric subjects.
 Canonical map paths are recorded except generated `/random/` instance paths. Content-backed
 subjects are domain-qualified exactly as at catalog persistence and interchange boundaries.
 Examples include `map:/shattered_islands/world_0303`, `region:nawerhals`,
-`archetype:giant_ant`, `artifact:book_orthrack_1`, `skill:literacy`, `spell:magic_bullet`,
+`archetype:giant_ant`, `monster-name:lost_soul:546872616b6972`,
+`artifact:book_orthrack_1`, `skill:literacy`, `spell:magic_bullet`,
 `quest:lost_memories`, `quest-part:lost_memories::find_book`, and `faction:nawerhals_city`.
 Books prefer their applied artifact ID and fall back to their archetype ID. Runtime skill/spell
 indices are never serialized. Existing monster `race` groupings are stored under the explicit
-`monster-family:` telemetry domain. Content-ID renames are data migrations; silently changing
-an identifier starts a distinct fact.
+`monster-family:` telemetry domain. Named-monster subjects use the
+`monster-name:<archetype>:<hex-encoded-authored-name>` form; an overlong authored name uses a
+bounded `sha256-` suffix instead. Content-ID renames are data migrations; silently changing an
+identifier starts a distinct fact.
 
 The content catalog is a build-time identity and cross-reference validator, not a runtime tag
 database. Its emitted graph currently contains source locations and tens of thousands of
@@ -187,6 +191,11 @@ estimated rate before any journal producer is accepted.
 - Party active time is non-AFK monotonic time. Party kills and quest
   completions are credited to the character whose normal kill/quest hook fires;
   they are not duplicated onto every member.
+- Monster kills are classified at the authoritative death boundary from the
+  canonical object name and archetype clone fields. A name differing from
+  `arch->clone.name` is recorded only in `combat.monster_kills_by_name`; an
+  ordinary name is recorded only in `combat.monster_kills_by_archetype`. Total
+  monster kills and monster-family counts are updated for both cases.
 - Trusted guild and jail APIs record submitted membership applications,
   voluntary departures, jail placements, and finite sentenced time. Offline
   administrative approvals/removals are intentionally not attributed to a

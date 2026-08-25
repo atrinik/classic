@@ -248,6 +248,7 @@ typedef enum metric_keyed_id {
     METRIC_KEYED_CHARACTER_QUEST_PART_COMPLETIONS,
     METRIC_KEYED_CHARACTER_QUEST_FAILURES,
     METRIC_KEYED_CHARACTER_MONSTER_KILLS,
+    METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME,
     METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_FAMILY,
     METRIC_KEYED_CHARACTER_SKILL_CURRENT_LEVEL,
     METRIC_KEYED_CHARACTER_SKILL_HIGHEST_LEVEL,
@@ -336,6 +337,10 @@ const metric_keyed_metadata_t *metrics_keyed_metadata(metric_keyed_id_t id);
 const char *metrics_scope_name(metric_scope_t scope);
 const char *metrics_unit_name(metric_unit_t unit);
 bool metrics_format_content_id(char *buffer, size_t size, const char *domain, const char *key);
+bool metrics_format_named_monster_id(char *buffer,
+                                     size_t size,
+                                     const char *archetype_id,
+                                     const char *authored_name);
 
 void metrics_store_init(metric_store_t *store, metric_scope_t scope, uint64_t epoch);
 void metrics_store_free(metric_store_t *store);

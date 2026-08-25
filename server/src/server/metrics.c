@@ -22,6 +22,7 @@
 #include <toolkit/string.h>
 
 #include <ctype.h>
+#include <openssl/sha.h>
 
 #define CHARACTER(scope_name, category_name, name, description, kind, unit, aggregation) \
     {scope_name,                                                                         \
@@ -1382,6 +1383,16 @@ static const metric_keyed_metadata_t keyed_registry[METRIC_KEYED_COUNT] = {
                     METRIC_UNIT_COUNT,
                     METRIC_AGGREGATION_SUM,
                     METRICS_CONTENT_ID_LIMIT),
+    [METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME] =
+        KEYED_LIMIT("combat.monster_kills_by_name",
+                    "combat",
+                    "Monster kills by named variant",
+                    "Credited named monster kills grouped by canonical archetype ID and stable "
+                    "authored-name subject ID.",
+                    METRIC_KIND_COUNTER,
+                    METRIC_UNIT_COUNT,
+                    METRIC_AGGREGATION_SUM,
+                    METRICS_CONTENT_ID_LIMIT),
     [METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_FAMILY] =
         KEYED("combat.monster_kills_by_family",
               "combat",
@@ -1665,6 +1676,43 @@ bool metrics_format_content_id(char *buffer, size_t size, const char *domain, co
         }
     }
     int length = snprintf(buffer, size, "%s:%s", domain, key);
+    return length > 0 && (size_t)length < size && unique_id_valid(buffer);
+}
+
+bool metrics_format_named_monster_id(char *buffer,
+                                     size_t size,
+                                     const char *archetype_id,
+                                     const char *authored_name) {
+    if (buffer == NULL || size == 0 || archetype_id == NULL || *archetype_id == '\0' ||
+        authored_name == NULL || *authored_name == '\0') {
+        return false;
+    }
+
+    size_t name_length = strlen(authored_name);
+    char encoded_name[METRICS_UNIQUE_ID_MAX * 2 + 1];
+    if (name_length <= METRICS_UNIQUE_ID_MAX) {
+        for (size_t i = 0; i < name_length; i++) {
+            snprintf(encoded_name + i * 2, 3, "%02x", (unsigned char)authored_name[i]);
+        }
+        encoded_name[name_length * 2] = '\0';
+
+        int length = snprintf(buffer, size, "monster-name:%s:%s", archetype_id, encoded_name);
+        if (length > 0 && (size_t)length < size && unique_id_valid(buffer)) {
+            return true;
+        }
+    }
+
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    if (SHA256((const unsigned char *)authored_name, name_length, digest) == NULL) {
+        return false;
+    }
+    char digest_hex[SHA256_DIGEST_LENGTH * 2 + 1];
+    for (size_t i = 0; i < sizeof(digest); i++) {
+        snprintf(digest_hex + i * 2, 3, "%02x", digest[i]);
+    }
+    digest_hex[sizeof(digest) * 2] = '\0';
+
+    int length = snprintf(buffer, size, "monster-name:%s:sha256-%s", archetype_id, digest_hex);
     return length > 0 && (size_t)length < size && unique_id_valid(buffer);
 }
 
