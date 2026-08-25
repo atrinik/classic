@@ -1755,6 +1755,10 @@ int new_save_map(mapstruct *m, int flag) {
                 transaction_error);
         }
     }
+
+    /* Saving is non-destructive. Restore the lifecycle state so a subsequent
+     * reload still tears down the in-memory objects before reusing the map. */
+    m->in_memory = previous_in_memory;
     return 0;
 }
 
