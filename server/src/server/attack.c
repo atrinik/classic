@@ -1523,12 +1523,24 @@ bool attack_kill(object *op, object *hitter) {
         if (op->type == MONSTER) {
             metrics_add(&CONTR(owner)->metrics, METRIC_CHARACTER_MONSTERS_KILLED, 1);
             if (op->arch != NULL) {
-                char id[METRICS_UNIQUE_ID_MAX + 1];
-                if (metrics_format_content_id(VS(id), "archetype", op->arch->name)) {
-                    metrics_keyed_add(&CONTR(owner)->metrics,
-                                      METRIC_KEYED_CHARACTER_MONSTER_KILLS,
-                                      id,
-                                      1);
+                bool named = op->name != NULL && (op->arch->clone.name == NULL ||
+                                                  strcmp(op->name, op->arch->clone.name) != 0);
+                if (named) {
+                    char id[METRICS_UNIQUE_ID_MAX + 1];
+                    if (metrics_format_named_monster_id(VS(id), op->arch->name, op->name)) {
+                        metrics_keyed_add(&CONTR(owner)->metrics,
+                                          METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME,
+                                          id,
+                                          1);
+                    }
+                } else {
+                    char id[METRICS_UNIQUE_ID_MAX + 1];
+                    if (metrics_format_content_id(VS(id), "archetype", op->arch->name)) {
+                        metrics_keyed_add(&CONTR(owner)->metrics,
+                                          METRIC_KEYED_CHARACTER_MONSTER_KILLS,
+                                          id,
+                                          1);
+                    }
                 }
             }
             if (op->race != NULL) {

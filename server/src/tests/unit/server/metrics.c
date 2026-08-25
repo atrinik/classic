@@ -108,6 +108,31 @@ START_TEST(test_content_ids_are_domain_qualified_and_validated) {
 }
 END_TEST
 
+START_TEST(test_named_monster_ids_are_stable_bounded_and_collision_resistant) {
+    char lost_soul[METRICS_UNIQUE_ID_MAX + 1];
+    char treant_evil[METRICS_UNIQUE_ID_MAX + 1];
+    char same_name_other_archetype[METRICS_UNIQUE_ID_MAX + 1];
+    ck_assert(metrics_format_named_monster_id(VS(lost_soul), "lost_soul", "Thrakir"));
+    ck_assert(metrics_format_named_monster_id(VS(treant_evil), "treant_evil", "Fahrgorm"));
+    ck_assert(
+        metrics_format_named_monster_id(VS(same_name_other_archetype), "treant_evil", "Thrakir"));
+    ck_assert_str_eq(lost_soul, "monster-name:lost_soul:546872616b6972");
+    ck_assert_str_eq(treant_evil, "monster-name:treant_evil:46616872676f726d");
+    ck_assert_str_ne(lost_soul, treant_evil);
+    ck_assert_str_ne(lost_soul, same_name_other_archetype);
+    ck_assert(strlen(lost_soul) <= METRICS_UNIQUE_ID_MAX);
+
+    char long_name[METRICS_UNIQUE_ID_MAX + 1];
+    memset(long_name, 'x', sizeof(long_name) - 1);
+    long_name[sizeof(long_name) - 1] = '\0';
+    ck_assert(metrics_format_named_monster_id(VS(lost_soul), "lost_soul", long_name));
+    ck_assert(strlen(lost_soul) <= METRICS_UNIQUE_ID_MAX);
+    ck_assert(strstr(lost_soul, ":sha256-") != NULL);
+    ck_assert(!metrics_format_named_monster_id(VS(lost_soul), "", "Thrakir"));
+    ck_assert(!metrics_format_named_monster_id(VS(lost_soul), "lost_soul", ""));
+}
+END_TEST
+
 START_TEST(test_scalar_operations_scope_kinds_and_saturation) {
     metric_store_t character, account;
     metrics_store_init(&character, METRIC_SCOPE_CHARACTER, 10);
@@ -204,6 +229,27 @@ START_TEST(test_keyed_metrics_validate_kinds_sort_bound_and_saturate) {
     ck_assert(
         !metrics_keyed_add(&store, METRIC_KEYED_CHARACTER_QUEST_COMPLETIONS, "quest/overflow", 1));
 
+    char named_id[METRICS_UNIQUE_ID_MAX + 1];
+    ck_assert(metrics_format_named_monster_id(VS(named_id), "lost_soul", "Thrakir"));
+    ck_assert(metrics_keyed_add(&store, METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME, named_id, 1));
+    ck_assert_uint_eq(
+        metrics_keyed_get(&store, METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME, named_id),
+        1);
+    ck_assert_uint_eq(metrics_keyed_metadata(METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME)->limit,
+                      METRICS_CONTENT_ID_LIMIT);
+    for (size_t i = 1; i < METRICS_CONTENT_ID_LIMIT; i++) {
+        char name[32];
+        snprintf(VS(name), "variant_%" PRIuMAX, (uintmax_t)i);
+        ck_assert(metrics_format_named_monster_id(VS(named_id), "lost_soul", name));
+        ck_assert(
+            metrics_keyed_add(&store, METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME, named_id, 1));
+    }
+    ck_assert_uint_eq(metrics_keyed_count(&store, METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME),
+                      METRICS_CONTENT_ID_LIMIT);
+    ck_assert(metrics_format_named_monster_id(VS(named_id), "lost_soul", "overflow"));
+    ck_assert(
+        !metrics_keyed_add(&store, METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME, named_id, 1));
+
     metrics_store_free(&store);
 }
 END_TEST
@@ -269,6 +315,16 @@ START_TEST(test_serialization_round_trip_unknown_ids_and_malformed_preservation)
     metrics_set(&original, METRIC_CHARACTER_LAST_PLAYED_AT, 5678);
     metrics_mark_unique(&original, METRIC_COLLECTION_CHARACTER_REGIONS_VISITED, "nawerhals");
     metrics_keyed_add(&original, METRIC_KEYED_CHARACTER_QUEST_COMPLETIONS, "lost_memories", 3);
+    char historical_archetype_id[METRICS_UNIQUE_ID_MAX + 1];
+    ck_assert(metrics_format_content_id(VS(historical_archetype_id), "archetype", "lost_soul"));
+    ck_assert(metrics_keyed_add(&original,
+                                METRIC_KEYED_CHARACTER_MONSTER_KILLS,
+                                historical_archetype_id,
+                                7));
+    char named_id[METRICS_UNIQUE_ID_MAX + 1];
+    ck_assert(metrics_format_named_monster_id(VS(named_id), "lost_soul", "Thrakir"));
+    ck_assert(
+        metrics_keyed_add(&original, METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME, named_id, 4));
     ck_assert(metrics_save_file(&original, path));
     ck_assert(!original.dirty);
     struct stat statbuf;
@@ -283,6 +339,12 @@ START_TEST(test_serialization_round_trip_unknown_ids_and_malformed_preservation)
     ck_assert_uint_eq(
         metrics_keyed_get(&loaded, METRIC_KEYED_CHARACTER_QUEST_COMPLETIONS, "lost_memories"),
         3);
+    ck_assert_uint_eq(
+        metrics_keyed_get(&loaded, METRIC_KEYED_CHARACTER_MONSTER_KILLS, historical_archetype_id),
+        7);
+    ck_assert_uint_eq(
+        metrics_keyed_get(&loaded, METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME, named_id),
+        4);
 
     write_text(path,
                "metrics_version 1\nmetrics_epoch 1\nmetric future.unknown 12\n"
@@ -423,6 +485,7 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_test(tc_core, test_registry_is_complete_and_stable_names_are_unique);
     tcase_add_test(tc_core, test_content_ids_are_domain_qualified_and_validated);
+    tcase_add_test(tc_core, test_named_monster_ids_are_stable_bounded_and_collision_resistant);
     tcase_add_test(tc_core, test_scalar_operations_scope_kinds_and_saturation);
     tcase_add_test(tc_core, test_unique_collections_validate_deduplicate_and_bound);
     tcase_add_test(tc_core, test_keyed_metrics_validate_kinds_sort_bound_and_saturate);
