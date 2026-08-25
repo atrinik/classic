@@ -666,14 +666,14 @@ START_TEST(test_monster_kill_metrics_separate_named_variants) {
     memset(pl->attack, 0, sizeof(pl->attack));
     pl->attack[ATNR_IMPACT] = 100;
 
-    object *ordinary = arch_get("goblin");
+    object *ordinary = arch_get("lost_soul");
     ordinary->x = pl->x + 1;
     ordinary->y = pl->y;
     ordinary->level = 1;
     ordinary->stats.hp = 1;
     ordinary->stats.maxhp = 1;
     ordinary->stats.exp = 1000;
-    FREE_AND_COPY_HASH(ordinary->race, "goblin");
+    FREE_AND_COPY_HASH(ordinary->race, "undead");
     ordinary = object_insert_map(ordinary, map, NULL, INS_NO_MERGE);
     ck_assert_ptr_nonnull(ordinary);
     monster_data_init(ordinary);
@@ -681,14 +681,14 @@ START_TEST(test_monster_kill_metrics_separate_named_variants) {
     ordinary->enemy_count = pl->count;
     ck_assert_int_gt(attack_hit(ordinary, pl, 100), 0);
 
-    object *named = arch_get("goblin");
+    object *named = arch_get("lost_soul");
     named->x = pl->x + 1;
     named->y = pl->y;
     named->level = 1;
     named->stats.hp = 1;
     named->stats.maxhp = 1;
     named->stats.exp = 1000;
-    FREE_AND_COPY_HASH(named->race, "goblin");
+    FREE_AND_COPY_HASH(named->race, "undead");
     FREE_AND_COPY_HASH(named->name, "Thrakir");
     named = object_insert_map(named, map, NULL, INS_NO_MERGE);
     ck_assert_ptr_nonnull(named);
@@ -697,30 +697,64 @@ START_TEST(test_monster_kill_metrics_separate_named_variants) {
     named->enemy_count = pl->count;
     ck_assert_int_gt(attack_hit(named, pl, 100), 0);
 
+    object *other_named = arch_get("treant_evil");
+    other_named->x = pl->x + 1;
+    other_named->y = pl->y;
+    other_named->level = 1;
+    other_named->stats.hp = 1;
+    other_named->stats.maxhp = 1;
+    other_named->stats.exp = 1000;
+    FREE_AND_COPY_HASH(other_named->race, "tree");
+    FREE_AND_COPY_HASH(other_named->name, "Fahrgorm");
+    other_named = object_insert_map(other_named, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(other_named);
+    monster_data_init(other_named);
+    other_named->enemy = pl;
+    other_named->enemy_count = pl->count;
+    ck_assert_int_gt(attack_hit(other_named, pl, 100), 0);
+
     char archetype_id[METRICS_UNIQUE_ID_MAX + 1];
+    char other_archetype_id[METRICS_UNIQUE_ID_MAX + 1];
     char family_id[METRICS_UNIQUE_ID_MAX + 1];
+    char other_family_id[METRICS_UNIQUE_ID_MAX + 1];
     char named_id[METRICS_UNIQUE_ID_MAX + 1];
-    ck_assert(metrics_format_content_id(VS(archetype_id), "archetype", "goblin"));
-    ck_assert(metrics_format_content_id(VS(family_id), "monster-family", "goblin"));
-    ck_assert(metrics_format_named_monster_id(VS(named_id), "goblin", "Thrakir"));
-    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_MONSTERS_KILLED), 2);
+    char other_named_id[METRICS_UNIQUE_ID_MAX + 1];
+    ck_assert(metrics_format_content_id(VS(archetype_id), "archetype", "lost_soul"));
+    ck_assert(metrics_format_content_id(VS(other_archetype_id), "archetype", "treant_evil"));
+    ck_assert(metrics_format_content_id(VS(family_id), "monster-family", "undead"));
+    ck_assert(metrics_format_content_id(VS(other_family_id), "monster-family", "tree"));
+    ck_assert(metrics_format_named_monster_id(VS(named_id), "lost_soul", "Thrakir"));
+    ck_assert(metrics_format_named_monster_id(VS(other_named_id), "treant_evil", "Fahrgorm"));
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_MONSTERS_KILLED), 3);
     ck_assert_uint_eq(
         metrics_keyed_get(&CONTR(pl)->metrics, METRIC_KEYED_CHARACTER_MONSTER_KILLS, archetype_id),
         1);
+    ck_assert_uint_eq(metrics_keyed_get(&CONTR(pl)->metrics,
+                                        METRIC_KEYED_CHARACTER_MONSTER_KILLS,
+                                        other_archetype_id),
+                      0);
     ck_assert_uint_eq(metrics_keyed_get(&CONTR(pl)->metrics,
                                         METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME,
                                         named_id),
                       1);
     ck_assert_uint_eq(metrics_keyed_get(&CONTR(pl)->metrics,
+                                        METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME,
+                                        other_named_id),
+                      1);
+    ck_assert_uint_eq(metrics_keyed_get(&CONTR(pl)->metrics,
                                         METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_FAMILY,
                                         family_id),
                       2);
+    ck_assert_uint_eq(metrics_keyed_get(&CONTR(pl)->metrics,
+                                        METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_FAMILY,
+                                        other_family_id),
+                      1);
     ck_assert_uint_eq(
         metrics_keyed_count(&CONTR(pl)->metrics, METRIC_KEYED_CHARACTER_MONSTER_KILLS),
         1);
     ck_assert_uint_eq(
         metrics_keyed_count(&CONTR(pl)->metrics, METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME),
-        1);
+        2);
 }
 END_TEST
 
