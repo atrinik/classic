@@ -1481,6 +1481,37 @@ START_TEST(test_object_map_reload_preserves_active_list) {
 }
 END_TEST
 
+START_TEST(test_map_save_restores_active_objects_before_reload) {
+    ck_assert_ptr_eq(active_objects, NULL);
+
+    mapstruct *map = get_empty_map(1, 1);
+    ck_assert_ptr_nonnull(map);
+    FREE_AND_COPY_HASH(map->path, "/tests/map-save-restores-active-objects");
+
+    object *spawn = object_load_str("arch spawn_point\n"
+                                    "speed 1.0\n"
+                                    "arch lom_lobon\n"
+                                    "type 83\n"
+                                    "end\n"
+                                    "end\n");
+    ck_assert_ptr_nonnull(spawn);
+    spawn->x = 0;
+    spawn->y = 0;
+    ck_assert_ptr_eq(object_insert_map(spawn, map, NULL, 0), spawn);
+    object_update_speed(spawn);
+    ck_assert_ptr_eq(active_objects, spawn);
+
+    ck_assert_int_eq(new_save_map(map, 0), 0);
+    ck_assert_int_eq(map->in_memory, MAP_IN_MEMORY);
+
+    clean_tmp_map(map);
+    delete_map(map);
+
+    ck_assert(!active_list_contains(spawn));
+    ck_assert_ptr_eq(active_objects, NULL);
+}
+END_TEST
+
 START_TEST(test_underground_city_map_reloads_preserve_active_list) {
     static const char *path =
         "/shattered_islands/strakewood_island/underground_city/underground_city_5_3_-1";
@@ -1570,6 +1601,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_invalid_object_type_uses_base_method_fallback);
     tcase_add_test(tc_core, test_OBJECT_DESTROYED);
     tcase_add_test(tc_core, test_object_map_reload_preserves_active_list);
+    tcase_add_test(tc_core, test_map_save_restores_active_objects_before_reload);
     tcase_add_test(tc_core, test_underground_city_map_reloads_preserve_active_list);
 
     return s;
