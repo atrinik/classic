@@ -299,8 +299,8 @@ static SDL_Surface *create_indexed_alpha_surface(void) {
     return surface;
 }
 
-static void assert_rotation_transparency(SDL_Surface *source, int smooth) {
-    SDL_Surface *rotated = rotozoomSurface(source, -135.0, 1.0, smooth);
+static void assert_rotation_transparency(SDL_Surface *source, int zoom_filter) {
+    SDL_Surface *rotated = rotozoomSurface(source, -135.0, 1.0, zoom_filter);
     TEST_CHECK(rotated != NULL);
     TEST_CHECK(rotated->w > source->w || rotated->h > source->h);
 
@@ -376,6 +376,66 @@ static void assert_surface_pixel(SDL_Surface *surface,
     TEST_CHECK(SDL_ReadSurfacePixel(surface, x, y, &red, &green, &blue, &alpha));
     TEST_CHECK(red == expected_red && green == expected_green && blue == expected_blue &&
                alpha == expected_alpha);
+}
+
+static SDL_Surface *create_zoom_filter_surface(void) {
+    SDL_Surface *surface = SDL_CreateSurface(4, 3, SDL_PIXELFORMAT_RGBA32);
+    TEST_CHECK(surface != NULL);
+
+    for (int y = 0; y < surface->h; y++) {
+        for (int x = 0; x < surface->w; x++) {
+            TEST_CHECK(SDL_WriteSurfacePixel(surface,
+                                             x,
+                                             y,
+                                             (Uint8)(32 + x * 48),
+                                             (Uint8)(24 + y * 64),
+                                             (Uint8)(16 + (x + y) * 32),
+                                             SDL_ALPHA_OPAQUE));
+        }
+    }
+
+    return surface;
+}
+
+static void test_zoom_filter_modes(void) {
+    const struct {
+        int zoom_filter;
+        SDL_ScaleMode scale_mode;
+    } cases[] = {
+        {ZOOM_FILTER_OFF, SDL_SCALEMODE_NEAREST},
+        {ZOOM_FILTER_PIXELART, SDL_SCALEMODE_PIXELART},
+        {ZOOM_FILTER_LINEAR, SDL_SCALEMODE_LINEAR},
+    };
+    SDL_Surface *source = create_zoom_filter_surface();
+    int width, height;
+    zoomSurfaceSize(source->w, source->h, 1.5, 1.25, &width, &height);
+    TEST_CHECK(width > source->w && height > source->h);
+
+    for (size_t i = 0; i < arraysize(cases); i++) {
+        TEST_CHECK(zoom_filter_to_scale_mode(cases[i].zoom_filter) == cases[i].scale_mode);
+
+        /* Exercise the same non-100% scaling boundary used by the map surface. */
+        SDL_Surface *scaled = zoomSurface(source, 1.5, 1.25, cases[i].zoom_filter);
+        SDL_Surface *expected = SDL_ScaleSurface(source, width, height, cases[i].scale_mode);
+        SDL_Surface *repeat = zoomSurface(source, 1.5, 1.25, cases[i].zoom_filter);
+        TEST_CHECK(scaled != NULL && expected != NULL && repeat != NULL);
+        assert_surfaces_equal(scaled, expected);
+        assert_surfaces_equal(scaled, repeat);
+
+        /* A 100% map is not resampled, regardless of the selected filter. */
+        SDL_Surface *unchanged = zoomSurface(source, 1.0, 1.0, cases[i].zoom_filter);
+        TEST_CHECK(unchanged != NULL);
+        assert_surfaces_equal(unchanged, source);
+
+        SDL_DestroySurface(unchanged);
+        SDL_DestroySurface(repeat);
+        SDL_DestroySurface(expected);
+        SDL_DestroySurface(scaled);
+    }
+
+    TEST_CHECK(zoom_filter_to_scale_mode(-1) == SDL_SCALEMODE_NEAREST);
+    TEST_CHECK(zoom_filter_to_scale_mode(ZOOM_FILTER_NUM) == SDL_SCALEMODE_NEAREST);
+    SDL_DestroySurface(source);
 }
 
 static void test_authored_rotation_direction(void) {
@@ -463,9 +523,9 @@ static void test_authored_rotation_geometry(void) {
     }
 }
 
-static void test_indexed_alpha_rotation(int smooth) {
+static void test_indexed_alpha_rotation(int zoom_filter) {
     SDL_Surface *source = create_indexed_alpha_surface();
-    assert_rotation_transparency(source, smooth);
+    assert_rotation_transparency(source, zoom_filter);
     TEST_CHECK(source->format == SDL_PIXELFORMAT_INDEX8);
     SDL_DestroySurface(source);
 }
@@ -479,7 +539,7 @@ static void test_color_key_rotation(void) {
     TEST_CHECK(SDL_SetPaletteColors(palette, &transparent, 0, 1));
     TEST_CHECK(SDL_SetSurfaceColorKey(source, true, 0));
 
-    assert_rotation_transparency(source, 1);
+    assert_rotation_transparency(source, ZOOM_FILTER_PIXELART);
     SDL_DestroySurface(source);
 }
 
@@ -491,7 +551,8 @@ static void test_opaque_indexed_rotation(void) {
     transparent.a = SDL_ALPHA_OPAQUE;
     TEST_CHECK(SDL_SetPaletteColors(palette, &transparent, 0, 1));
 
-    SDL_Surface *rotated = rotozoomSurface(source, -135.0, 1.0, 1);
+    SDL_Surface *rotated =
+        rotozoomSurface(source, -135.0, 1.0, ZOOM_FILTER_PIXELART);
     TEST_CHECK(rotated != NULL);
     Uint8 red, green, blue, alpha;
     TEST_CHECK(
@@ -503,7 +564,8 @@ static void test_opaque_indexed_rotation(void) {
 
 static void test_indexed_alpha_without_rotation(void) {
     SDL_Surface *source = create_indexed_alpha_surface();
-    SDL_Surface *scaled = rotozoomSurface(source, 0.0, 1.0, 1);
+    SDL_Surface *scaled =
+        rotozoomSurface(source, 0.0, 1.0, ZOOM_FILTER_PIXELART);
     TEST_CHECK(scaled != NULL);
     TEST_CHECK(scaled->format == SDL_PIXELFORMAT_INDEX8);
 
@@ -600,8 +662,10 @@ static void test_map_marker_rotation_contract(void) {
         for (int direction = 0; direction < 8; direction++) {
             /* region_map_render_marker() passes the already-clockwise
              * direction through the compatibility inverse. */
-            SDL_Surface *transformed =
-                rotozoomSurface(converted, -(direction * 45.0), zooms[zoom], 1);
+            SDL_Surface *transformed = rotozoomSurface(converted,
+                                                       -(direction * 45.0),
+                                                       zooms[zoom],
+                                                       ZOOM_FILTER_PIXELART);
             TEST_CHECK(transformed != NULL);
             assert_map_marker_palette(transformed);
             SDL_DestroySurface(transformed);
@@ -618,8 +682,8 @@ int main(void) {
     test_safe_pixel_access();
     test_legacy_texture_transparency();
     test_mutable_color_key_surface_reuse();
-    test_indexed_alpha_rotation(0);
-    test_indexed_alpha_rotation(1);
+    test_indexed_alpha_rotation(ZOOM_FILTER_OFF);
+    test_indexed_alpha_rotation(ZOOM_FILTER_PIXELART);
     test_authored_rotation_direction();
     test_authored_rotation_geometry();
     test_color_key_rotation();
@@ -628,6 +692,7 @@ int main(void) {
     test_transform_invalid_input();
     test_true_color_alpha_rotation();
     test_darken_preserves_alpha();
+    test_zoom_filter_modes();
     test_map_marker_rotation_contract();
     return 0;
 }

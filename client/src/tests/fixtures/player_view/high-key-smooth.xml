@@ -3,7 +3,7 @@
              renderer="software"
              input-root="../../../.."
              settings="data/settings.txt"
-             settings-sha256="2e3a92c41d88219520e3fcbdbc34a53be6a72ca9c2a354c97d73d6fef83339e3"
+             settings-sha256="55fa202d877def22658e068142fda6d82886d3bae152a068d7d5d31beaa4f737"
              archdef="data/archdef.dat"
              archdef-sha256="977ce63e38f4795545f42bd2f4a9c62bd38fcdb4cfde7cb7fe3c2cd9fe73983e"
              snapshot="src/tests/fixtures/player_view/high-key-scene.map2.hex"

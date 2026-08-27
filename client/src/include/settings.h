@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -72,6 +72,24 @@ enum {
     OPT_SNAP_RADIUS
 };
 
+/** Zoom filtering modes stored by ::OPT_ZOOM_FILTER. */
+typedef enum zoom_filter_mode {
+    /** Use nearest-neighbor sampling without pixel-art correction. */
+    ZOOM_FILTER_OFF,
+    /** Use SDL's pixel-art scaler. */
+    ZOOM_FILTER_PIXELART,
+    /** Use linear interpolation. */
+    ZOOM_FILTER_LINEAR,
+    /** Number of zoom filtering modes. */
+    ZOOM_FILTER_NUM
+} zoom_filter_mode;
+
+/** The packaged default zoom filtering mode. */
+#define ZOOM_FILTER_DEFAULT ZOOM_FILTER_PIXELART
+
+/** The pre-473 persisted setting key. */
+#define SETTING_ZOOM_FILTER_LEGACY_NAME "Smooth zoom"
+
 /**
  * Options in the ::OPT_CAT_CLIENT category.
  */
@@ -80,8 +98,8 @@ enum {
     OPT_RESOLUTION,
     /** Fullscreen enabled? */
     OPT_FULLSCREEN,
-    /** Smooth zoom enabled? */
-    OPT_ZOOM_SMOOTH,
+    /** Zoom filtering mode. */
+    OPT_ZOOM_FILTER,
     /** Speed of key repeat. */
     OPT_KEY_REPEAT_SPEED,
     /** FPS limit. */
@@ -106,6 +124,9 @@ enum {
     /** Internal: stores the current resolution height. */
     OPT_RESOLUTION_Y
 };
+
+/** Compatibility alias for code using the former setting identifier. */
+#define OPT_ZOOM_SMOOTH OPT_ZOOM_FILTER
 
 /**
  * Options in the ::OPT_CAT_MAP category.

@@ -146,7 +146,7 @@ typedef struct player_view_manifest {
     int32_t animation_y_offset;
     uint32_t animation_sub_layer;
     bool smooth_lighting;
-    bool zoom_smoothing;
+    uint32_t zoom_filter;
     bool primary_surface;
     bool widget_render;
     bool player_names;
@@ -512,6 +512,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "map-zoom",
                                            "smooth-lighting",
                                            "zoom-smoothing",
+                                           "zoom-filter",
                                            "primary-surface",
                                            "widget-render",
                                            "widget-x",
@@ -567,6 +568,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
     char *map_zoom = success ? player_view_xml_property(root, "map-zoom") : NULL;
     char *smooth_lighting = success ? player_view_xml_property(root, "smooth-lighting") : NULL;
     char *zoom_smoothing = success ? player_view_xml_property(root, "zoom-smoothing") : NULL;
+    char *zoom_filter = success ? player_view_xml_property(root, "zoom-filter") : NULL;
     char *primary_surface = success ? player_view_xml_property(root, "primary-surface") : NULL;
     char *widget_render = success ? player_view_xml_property(root, "widget-render") : NULL;
     char *widget_x = success ? player_view_xml_property(root, "widget-x") : NULL;
@@ -598,6 +600,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
     char *expected = success ? player_view_xml_property(root, "expected-pixels-sha256") : NULL;
 
     uint32_t parsed_version;
+    bool legacy_zoom_smoothing = false;
     success =
         success &&
         player_view_parse_uint(version,
@@ -632,7 +635,13 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                MAP_DISPLAY_ZOOM_MAX,
                                &manifest->map_zoom) &&
         player_view_parse_bool(smooth_lighting, &manifest->smooth_lighting) &&
-        player_view_parse_bool(zoom_smoothing, &manifest->zoom_smoothing) &&
+        ((zoom_filter != NULL && zoom_smoothing == NULL &&
+          player_view_parse_uint(zoom_filter,
+                                 ZOOM_FILTER_OFF,
+                                 ZOOM_FILTER_NUM - 1,
+                                 &manifest->zoom_filter)) ||
+         (zoom_filter == NULL &&
+          player_view_parse_bool(zoom_smoothing, &legacy_zoom_smoothing))) &&
         (primary_surface == NULL ||
          player_view_parse_bool(primary_surface, &manifest->primary_surface)) &&
         (widget_render == NULL ||
@@ -677,6 +686,10 @@ static bool player_view_manifest_parse(const char *manifest_path,
         (expected_standard_checkpoint == NULL ||
          player_view_sha256_text_valid(expected_standard_checkpoint)) &&
         player_view_sha256_text_valid(expected);
+    if (success && zoom_filter == NULL) {
+        /* Keep existing fixtures on the old boolean manifest contract. */
+        manifest->zoom_filter = legacy_zoom_smoothing ? ZOOM_FILTER_PIXELART : ZOOM_FILTER_OFF;
+    }
     if (success && primary_surface == NULL) {
         manifest->primary_surface = true;
     }
@@ -901,6 +914,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(map_zoom);
     free(smooth_lighting);
     free(zoom_smoothing);
+    free(zoom_filter);
     free(primary_surface);
     free(widget_render);
     free(widget_x);
@@ -3378,7 +3392,7 @@ int player_view_main(int argc, char *argv[]) {
     setting_set_int(OPT_CAT_MAP, OPT_MAP_ZOOM, manifest.map_zoom);
     setting_set_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING, manifest.smooth_lighting);
     setting_set_int(OPT_CAT_MAP, OPT_PLAYER_NAMES, manifest.player_names ? 1 : 0);
-    setting_set_int(OPT_CAT_CLIENT, OPT_ZOOM_SMOOTH, manifest.zoom_smoothing);
+    setting_set_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER, manifest.zoom_filter);
 
     if (!SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "dummy", SDL_HINT_OVERRIDE)) {
         fprintf(stderr, "player-view: cannot select the offscreen SDL driver\n");

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -215,6 +215,7 @@ void settings_load(void) {
     char buf[HUGE_BUF], *cp;
     int64_t cat = 0, setting = 0;
     uint8_t is_setting_name = 1;
+    uint8_t legacy_zoom_filter = 0;
 
     fp = path_fopen(FILE_SETTINGS_DAT, "r");
 
@@ -249,15 +250,22 @@ void settings_load(void) {
         } else {
             if (is_setting_name) {
                 setting = setting_from_name(cp);
+                legacy_zoom_filter = cat == OPT_CAT_CLIENT && setting == OPT_ZOOM_FILTER &&
+                                     !strcmp(cp, SETTING_ZOOM_FILTER_LEGACY_NAME);
             } else {
                 if (cat != -1 && setting != -1) {
                     setting_struct *current = setting_categories[cat]->settings[setting];
-                    if (!setting_value_parse(current, cp)) {
+                    bool valid = legacy_zoom_filter
+                                     ? setting_value_parse_legacy_zoom_filter(current, cp)
+                                     : setting_value_parse(current, cp);
+                    if (!valid) {
                         LOG(ERROR,
                             "Ignoring invalid persisted value for setting '%s'.",
                             current->name);
                     }
                 }
+
+                legacy_zoom_filter = 0;
             }
 
             is_setting_name = !is_setting_name;
@@ -689,7 +697,9 @@ int64_t setting_from_name(const char *name) {
 
     for (cat = 0; cat < setting_categories_num; cat++) {
         for (setting = 0; setting < setting_categories[cat]->settings_num; setting++) {
-            if (!strcmp(setting_categories[cat]->settings[setting]->name, name)) {
+            if (!strcmp(setting_categories[cat]->settings[setting]->name, name) ||
+                (cat == OPT_CAT_CLIENT && setting == OPT_ZOOM_FILTER &&
+                 !strcmp(name, SETTING_ZOOM_FILTER_LEGACY_NAME))) {
                 return setting;
             }
         }

@@ -82,10 +82,13 @@ category Client
 		default off
 		desc Whether to use fullscreen mode or not.
 	end
-	setting Smooth zoom
-		type bool
-		default on
-		desc Use smooth zoom. This makes zoomed objects/playfield look better by using anti-aliasing, but also takes more resources.
+	setting Zoom filter
+		type select
+		option Off
+		option Pixel art
+		option Linear
+		default 1
+		desc Choose how zoomed graphics are filtered. Off uses nearest-neighbor sampling, Pixel art preserves hard pixel edges with SDL's pixel-art scaler, and Linear uses smooth interpolation.
 	end
 	setting Key repeat speed
 		type select

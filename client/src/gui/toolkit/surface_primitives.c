@@ -446,7 +446,21 @@ void rotozoomSurfaceSizeXY(int width,
     *destination_height = (int)ceil(maximum_y) - (int)floor(minimum_y);
 }
 
-SDL_Surface *zoomSurface(SDL_Surface *surface, double zoom_x, double zoom_y, int smooth) {
+SDL_ScaleMode zoom_filter_to_scale_mode(int zoom_filter) {
+    switch (zoom_filter) {
+        case ZOOM_FILTER_PIXELART:
+            return SDL_SCALEMODE_PIXELART;
+
+        case ZOOM_FILTER_LINEAR:
+            return SDL_SCALEMODE_LINEAR;
+
+        case ZOOM_FILTER_OFF:
+        default:
+            return SDL_SCALEMODE_NEAREST;
+    }
+}
+
+SDL_Surface *zoomSurface(SDL_Surface *surface, double zoom_x, double zoom_y, int zoom_filter) {
     if (surface == NULL || zoom_x == 0.0 || zoom_y == 0.0) {
         SDL_SetError("Invalid surface or zoom factor");
         return NULL;
@@ -457,7 +471,7 @@ SDL_Surface *zoomSurface(SDL_Surface *surface, double zoom_x, double zoom_y, int
     SDL_Surface *scaled = SDL_ScaleSurface(surface,
                                            width,
                                            height,
-                                           smooth ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+                                           zoom_filter_to_scale_mode(zoom_filter));
     if (scaled == NULL || (zoom_x > 0.0 && zoom_y > 0.0)) {
         return scaled;
     }
@@ -477,8 +491,8 @@ SDL_Surface *zoomSurface(SDL_Surface *surface, double zoom_x, double zoom_y, int
     return scaled;
 }
 
-SDL_Surface *rotozoomSurface(SDL_Surface *surface, double angle, double zoom, int smooth) {
-    return rotozoomSurfaceXY(surface, angle, zoom, zoom, smooth);
+SDL_Surface *rotozoomSurface(SDL_Surface *surface, double angle, double zoom, int zoom_filter) {
+    return rotozoomSurfaceXY(surface, angle, zoom, zoom, zoom_filter);
 }
 
 /** Return whether an indexed surface uses palette alpha instead of a color key. */
@@ -502,7 +516,11 @@ static bool surface_has_palette_alpha(SDL_Surface *surface) {
 }
 
 SDL_Surface *
-rotozoomSurfaceXY(SDL_Surface *surface, double angle, double zoom_x, double zoom_y, int smooth) {
+rotozoomSurfaceXY(SDL_Surface *surface,
+                  double angle,
+                  double zoom_x,
+                  double zoom_y,
+                  int zoom_filter) {
     if (surface == NULL) {
         SDL_SetError("Invalid surface");
         return NULL;
@@ -516,7 +534,7 @@ rotozoomSurfaceXY(SDL_Surface *surface, double angle, double zoom_x, double zoom
         }
     }
 
-    SDL_Surface *scaled = zoomSurface(source, zoom_x, zoom_y, smooth);
+    SDL_Surface *scaled = zoomSurface(source, zoom_x, zoom_y, zoom_filter);
     if (source != surface) {
         SDL_DestroySurface(source);
     }

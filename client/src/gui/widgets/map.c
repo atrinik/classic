@@ -5439,7 +5439,7 @@ static void widget_draw(widgetdata *widget) {
             zoomed = zoomSurface(widget->surface,
                                  setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0,
                                  setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0,
-                                 setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_SMOOTH));
+                                 setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER));
             if (zoomed == NULL) {
                 LOG(ERROR, "Could not resize map surface: %s", SDL_GetError());
             }
@@ -5460,7 +5460,7 @@ static void widget_draw(widgetdata *widget) {
             zoomed = zoomSurface(widget->surface,
                                  setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0,
                                  setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0,
-                                 setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_SMOOTH));
+                                 setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER));
             if (zoomed == NULL) {
                 LOG(ERROR, "Could not resize map surface: %s", SDL_GetError());
             }

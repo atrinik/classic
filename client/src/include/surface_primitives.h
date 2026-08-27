@@ -80,9 +80,16 @@ extern void zoomSurfaceSize(int width,
                             double zoom_y,
                             int *destination_width,
                             int *destination_height);
-extern SDL_Surface *zoomSurface(SDL_Surface *surface, double zoom_x, double zoom_y, int smooth);
-extern SDL_Surface *rotozoomSurface(SDL_Surface *surface, double angle, double zoom, int smooth);
+/** Convert a ::ZOOM_FILTER_xxx value to the corresponding SDL scale mode. */
+extern SDL_ScaleMode zoom_filter_to_scale_mode(int zoom_filter);
+/** Scale a surface using a ::ZOOM_FILTER_xxx value. */
+extern SDL_Surface *zoomSurface(SDL_Surface *surface, double zoom_x, double zoom_y, int zoom_filter);
+extern SDL_Surface *rotozoomSurface(SDL_Surface *surface, double angle, double zoom, int zoom_filter);
 extern SDL_Surface *
-rotozoomSurfaceXY(SDL_Surface *surface, double angle, double zoom_x, double zoom_y, int smooth);
+rotozoomSurfaceXY(SDL_Surface *surface,
+                  double angle,
+                  double zoom_x,
+                  double zoom_y,
+                  int zoom_filter);
 
 #endif
