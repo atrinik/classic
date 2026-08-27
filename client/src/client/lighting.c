@@ -1263,7 +1263,9 @@ void lighting_dirty_screen_rect(int depth, int x0, int y0, int x1, int y1) {
 }
 
 /** Translate cached screen-space lighting and dirty changed scroll edges. */
-void lighting_scroll(int screen_dx, int screen_dy) {
+/* Scroll work runs once for every active physical level on movement. Keep the
+ * bounded memmove/edge invalidation path optimized in Debug benchmark builds. */
+__attribute__((optimize("O2"))) void lighting_scroll(int screen_dx, int screen_dy) {
     if (screen_dx == 0 && screen_dy == 0) {
         return;
     }
@@ -1400,7 +1402,12 @@ lighting_edge(const lighting_vertex_t *a, const lighting_vertex_t *b, int x2, in
 }
 
 /** Rasterize one half of a quad while interpolating its four corner levels. */
-static void lighting_draw_triangle(const lighting_vertex_t vertices[4], bool first_half) {
+/* Keep the pixel arithmetic optimized in the Debug profile as well. The
+ * movement benchmark intentionally uses that profile, and this loop is the
+ * dominant cost of translated dense-map lighting; Release builds already
+ * optimize it through the normal target flags. */
+__attribute__((optimize("O2"))) static void
+lighting_draw_triangle(const lighting_vertex_t vertices[4], bool first_half) {
     const lighting_vertex_t *a = &vertices[0];
     const lighting_vertex_t *b = &vertices[first_half ? 1 : 2];
     const lighting_vertex_t *c = &vertices[first_half ? 2 : 3];
@@ -1433,6 +1440,30 @@ static void lighting_draw_triangle(const lighting_vertex_t vertices[4], bool fir
     int64_t step_y_a = orientation * -2 * (c->x - b->x);
     int64_t step_y_b = orientation * -2 * (a->x - c->x);
     int64_t step_y_c = orientation * -2 * (b->x - a->x);
+    bool scalar_constant = vertices[0].scalar == vertices[1].scalar &&
+                           vertices[0].scalar == vertices[2].scalar &&
+                           vertices[0].scalar == vertices[3].scalar;
+    bool red_constant = vertices[0].red == vertices[1].red &&
+                        vertices[0].red == vertices[2].red &&
+                        vertices[0].red == vertices[3].red;
+    bool green_constant = vertices[0].green == vertices[1].green &&
+                          vertices[0].green == vertices[2].green &&
+                          vertices[0].green == vertices[3].green;
+    bool blue_constant = vertices[0].blue == vertices[1].blue &&
+                         vertices[0].blue == vertices[2].blue &&
+                         vertices[0].blue == vertices[3].blue;
+    bool neutral = vertices[0].scalar == vertices[0].red &&
+                   vertices[0].scalar == vertices[0].green &&
+                   vertices[0].scalar == vertices[0].blue &&
+                   vertices[1].scalar == vertices[1].red &&
+                   vertices[1].scalar == vertices[1].green &&
+                   vertices[1].scalar == vertices[1].blue &&
+                   vertices[2].scalar == vertices[2].red &&
+                   vertices[2].scalar == vertices[2].green &&
+                   vertices[2].scalar == vertices[2].blue &&
+                   vertices[3].scalar == vertices[3].red &&
+                   vertices[3].scalar == vertices[3].green &&
+                   vertices[3].scalar == vertices[3].blue;
 
     for (int y = min_y; y <= max_y; y++) {
         lighting_dirty_span_t fallback_spans[LIGHTING_MAX_DIRTY_RECTS];
@@ -1484,10 +1515,21 @@ static void lighting_draw_triangle(const lighting_vertex_t vertices[4], bool fir
                               (uint64_t)u,           \
                               (uint64_t)v,           \
                               (uint64_t)area)
-                    sample->scalar = INTERPOLATE_CHANNEL(scalar);
-                    sample->red = INTERPOLATE_CHANNEL(red);
-                    sample->green = INTERPOLATE_CHANNEL(green);
-                    sample->blue = INTERPOLATE_CHANNEL(blue);
+                    uint16_t scalar = scalar_constant
+                                          ? vertices[0].scalar
+                                          : INTERPOLATE_CHANNEL(scalar);
+                    sample->scalar = scalar;
+                    if (neutral) {
+                        sample->red = scalar;
+                        sample->green = scalar;
+                        sample->blue = scalar;
+                    } else {
+                        sample->red = red_constant ? vertices[0].red : INTERPOLATE_CHANNEL(red);
+                        sample->green = green_constant ? vertices[0].green
+                                                       : INTERPOLATE_CHANNEL(green);
+                        sample->blue = blue_constant ? vertices[0].blue
+                                                      : INTERPOLATE_CHANNEL(blue);
+                    }
                     sample->present = 1;
                     sample->reserved = 0;
 #undef INTERPOLATE_CHANNEL
@@ -1518,6 +1560,22 @@ void lighting_draw_quad(const lighting_vertex_t vertices[4]) {
     int min_y = MIN(MIN(vertices[0].y, vertices[1].y), MIN(vertices[2].y, vertices[3].y));
     int max_y = MAX(MAX(vertices[0].y, vertices[1].y), MAX(vertices[2].y, vertices[3].y));
     if (max_x < 0 || min_x >= lighting_width || max_y < 0 || min_y >= lighting_height) {
+        return;
+    }
+
+    /* Scroll and localized field updates expose only a bounded union of
+     * pixels.  The triangle rasterizer repeats this test for each half, but
+     * most map quads miss the union entirely.  Reject those quads before
+     * taking benchmark timings or doing interpolation setup. */
+    int clipped_min_x = MAX(0, min_x);
+    int clipped_max_x = MIN(lighting_width - 1, max_x);
+    int clipped_min_y = MAX(0, min_y);
+    int clipped_max_y = MIN(lighting_height - 1, max_y);
+    if (!lighting_rect_intersects(lighting_context_current,
+                                  clipped_min_x,
+                                  clipped_min_y,
+                                  clipped_max_x + 1,
+                                  clipped_max_y + 1)) {
         return;
     }
 
@@ -1635,7 +1693,7 @@ static void lighting_extrapolate(void) {
 }
 
 /** Fill only newly exposed field regions from their nearest valid boundary. */
-static void lighting_extrapolate_dirty(void) {
+__attribute__((optimize("O2"))) static void lighting_extrapolate_dirty(void) {
     for (size_t rect_index = 0; rect_index < lighting_context_current->dirty_num; rect_index++) {
         const lighting_dirty_rect_t rect = lighting_context_current->dirty[rect_index];
         for (int y = rect.y0; y < rect.y1; y++) {

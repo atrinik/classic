@@ -3278,12 +3278,15 @@ static bool map_lighting_temporal_sample(const MapCell *cell,
  * ring. This extends the known field naturally at map and FOW boundaries and
  * prevents temporary dark bands from influencing nearby structures.
  */
-static void map_lighting_radiance(int x,
-                                  int y,
-                                  const struct MapCell *cell,
-                                  uint8_t sub_layer,
-                                  uint16_t *scalar,
-                                  uint16_t rgb[3]) {
+/* The lighting vertex grid is rebuilt on every changed field. Keep its
+ * bounded sample resolution optimized in Debug benchmark builds too. */
+__attribute__((optimize("O2"))) static void
+map_lighting_radiance(int x,
+                      int y,
+                      const struct MapCell *cell,
+                      uint8_t sub_layer,
+                      uint16_t *scalar,
+                      uint16_t rgb[3]) {
     int cache_width = map_width * MAP_FOW_SIZE;
     int cache_height = map_height * MAP_FOW_SIZE;
 
@@ -3346,7 +3349,7 @@ static void map_lighting_radiance(int x,
 }
 
 /** Project one cell's selected light sample into map-widget coordinates. */
-static lighting_vertex_t
+__attribute__((optimize("O2"))) static lighting_vertex_t
 map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, int y) {
     struct MapCell *cell = MAP_CELL_GET(x, y);
     uint8_t sub_layer = map_lighting_sub_layer(cell);
@@ -3414,13 +3417,14 @@ static uint64_t map_lighting_cache_key(SDL_Surface *surface,
 }
 
 /** Rasterize and composite the interpolated map light field. */
-static void map_draw_lighting(SDL_Surface *surface,
-                              SDL_Surface *destination,
-                              map_render_data_t *data,
-                              int x,
-                              int y,
-                              int w,
-                              int h) {
+__attribute__((optimize("O2"))) static void
+map_draw_lighting(SDL_Surface *surface,
+                  SDL_Surface *destination,
+                  map_render_data_t *data,
+                  int x,
+                  int y,
+                  int w,
+                  int h) {
     int cache_width = map_width * MAP_FOW_SIZE;
     int cache_height = map_height * MAP_FOW_SIZE;
     int start_x = MAX(0, x - 2);
