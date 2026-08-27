@@ -104,6 +104,10 @@ typedef struct lighting_context {
     size_t samples_num;
     int width;
     int height;
+    /* Logical screen coordinates are kept in a circular field.  Scrolling
+     * changes these origins instead of copying the complete viewport. */
+    int sample_origin_x;
+    int sample_origin_y;
     bool active;
     bool cache_valid;
     bool update_needed;
@@ -685,6 +689,64 @@ static void lighting_context_free(lighting_context *context) {
 #define lighting_cache_key (lighting_context_current->cache_key)
 #define lighting_pending_cache_key (lighting_context_current->pending_cache_key)
 
+/** Convert one valid logical screen coordinate to its circular-field column. */
+static inline int lighting_sample_physical_x(const lighting_context *context, int x) {
+    int physical_x = x + context->sample_origin_x;
+    if (physical_x >= context->width) {
+        physical_x -= context->width;
+    }
+    return physical_x;
+}
+
+/** Return the physical row containing one logical screen row. */
+static inline lighting_sample *lighting_sample_row_at(lighting_context *context, int y) {
+    int physical_y = y + context->sample_origin_y;
+    if (physical_y >= context->height) {
+        physical_y -= context->height;
+    }
+    return context->samples + (size_t)physical_y * (size_t)context->width;
+}
+
+/** Return the physical row containing one logical screen row for a const field. */
+static inline const lighting_sample *lighting_sample_row_at_const(const lighting_context *context,
+                                                                  int y) {
+    int physical_y = y + context->sample_origin_y;
+    if (physical_y >= context->height) {
+        physical_y -= context->height;
+    }
+    return context->samples + (size_t)physical_y * (size_t)context->width;
+}
+
+/** Return one sample using logical screen coordinates. */
+static inline lighting_sample *lighting_sample_at(lighting_context *context, int x, int y) {
+    return lighting_sample_row_at(context, y) + lighting_sample_physical_x(context, x);
+}
+
+/** Return one sample using logical coordinates for a const field. */
+static inline const lighting_sample *lighting_sample_at_const(const lighting_context *context,
+                                                               int x,
+                                                               int y) {
+    return lighting_sample_row_at_const(context, y) + lighting_sample_physical_x(context, x);
+}
+
+/** Clear a logical rectangle, splitting rows when the circular field wraps. */
+static void lighting_clear_context_rect(lighting_context *context,
+                                        const lighting_dirty_rect_t *rect) {
+    for (int y = rect->y0; y < rect->y1; y++) {
+        lighting_sample *row = lighting_sample_row_at(context, y);
+        int x = rect->x0;
+        while (x < rect->x1) {
+            int physical_x = x + context->sample_origin_x;
+            if (physical_x >= context->width) {
+                physical_x -= context->width;
+            }
+            int length = MIN(rect->x1 - x, context->width - physical_x);
+            memset(row + physical_x, 0, (size_t)length * sizeof(*row));
+            x += length;
+        }
+    }
+}
+
 _Static_assert(sizeof(lighting_sprite_cache_entry) + sizeof(SDL_Surface) <=
                    LIGHTING_SPRITE_CACHE_ENTRY_OVERHEAD,
                "lit-sprite cache entry accounting overhead is too small");
@@ -935,6 +997,8 @@ static bool lighting_surface_create(int width, int height) {
         light_samples_num = samples_num;
         lighting_width = width;
         lighting_height = height;
+        lighting_context_current->sample_origin_x = 0;
+        lighting_context_current->sample_origin_y = 0;
         lighting_cache_valid = false;
         lighting_dirty_full(lighting_context_current, LIGHTING_FULL_REBUILD_CACHE);
     }
@@ -1015,12 +1079,8 @@ bool lighting_begin(int width, int height, uint64_t cache_key) {
         lighting_benchmark_statistics.counters.field_dirty_pixels += dirty_pixels;
         uint64_t timing_started = lighting_benchmark_timing_start();
         for (size_t i = 0; i < lighting_context_current->dirty_num; i++) {
-            lighting_dirty_rect_t rect = lighting_context_current->dirty[i];
-            for (int y = rect.y0; y < rect.y1; y++) {
-                memset(light_samples + (size_t)y * (size_t)lighting_width + rect.x0,
-                       0,
-                       (size_t)(rect.x1 - rect.x0) * sizeof(*light_samples));
-            }
+            lighting_clear_context_rect(lighting_context_current,
+                                         &lighting_context_current->dirty[i]);
         }
         LIGHTING_BENCHMARK_TIMING_FINISH(lighting_context_current, dirty_clear, timing_started);
     } else {
@@ -1263,9 +1323,7 @@ void lighting_dirty_screen_rect(int depth, int x0, int y0, int x1, int y1) {
 }
 
 /** Translate cached screen-space lighting and dirty changed scroll edges. */
-/* Scroll work runs once for every active physical level on movement. Keep the
- * bounded memmove/edge invalidation path optimized in Debug benchmark builds. */
-__attribute__((optimize("O2"))) void lighting_scroll(int screen_dx, int screen_dy) {
+void lighting_scroll(int screen_dx, int screen_dy) {
     if (screen_dx == 0 && screen_dy == 0) {
         return;
     }
@@ -1287,6 +1345,8 @@ __attribute__((optimize("O2"))) void lighting_scroll(int screen_dx, int screen_d
             uint64_t timing_started = lighting_benchmark_timing_start();
             lighting_dirty_full(context, LIGHTING_FULL_REBUILD_CONTROL);
             memset(context->samples, 0, context->samples_num * sizeof(*context->samples));
+            context->sample_origin_x = 0;
+            context->sample_origin_y = 0;
             memset(context->rows_valid, 0, (size_t)context->height);
             memset(context->structure_illumination_valid,
                    0,
@@ -1298,14 +1358,13 @@ __attribute__((optimize("O2"))) void lighting_scroll(int screen_dx, int screen_d
         }
         const int width = context->width;
         const int height = context->height;
-        int source_x0 = MAX(0, -screen_dx);
-        int source_x1 = MIN(width, width - screen_dx);
-        int source_y0 = MAX(0, -screen_dy);
-        int source_y1 = MIN(height, height - screen_dy);
-        if (source_x0 >= source_x1 || source_y0 >= source_y1) {
+        if (screen_dx <= -width || screen_dx >= width || screen_dy <= -height ||
+            screen_dy >= height) {
             uint64_t timing_started = lighting_benchmark_timing_start();
             lighting_dirty_full(context, LIGHTING_FULL_REBUILD_BOUNDS);
             memset(context->samples, 0, context->samples_num * sizeof(*context->samples));
+            context->sample_origin_x = 0;
+            context->sample_origin_y = 0;
             memset(context->rows_valid, 0, (size_t)height);
             memset(context->structure_illumination_valid,
                    0,
@@ -1315,36 +1374,43 @@ __attribute__((optimize("O2"))) void lighting_scroll(int screen_dx, int screen_d
             LIGHTING_BENCHMARK_TIMING_FINISH(context, translation, timing_started);
             continue;
         }
+        int source_x0 = screen_dx < 0 ? -screen_dx : 0;
+        int source_x1 = screen_dx > 0 ? width - screen_dx : width;
+        int source_y0 = screen_dy < 0 ? -screen_dy : 0;
+        int source_y1 = screen_dy > 0 ? height - screen_dy : height;
 
         uint64_t timing_started = lighting_benchmark_timing_start();
-        int y = screen_dy > 0 ? source_y1 - 1 : source_y0;
-        int end_y = screen_dy > 0 ? source_y0 - 1 : source_y1;
-        int step_y = screen_dy > 0 ? -1 : 1;
-        for (; y != end_y; y += step_y) {
-            lighting_sample *source = context->samples + (size_t)y * (size_t)width;
-            lighting_sample *destination =
-                context->samples + (size_t)(y + screen_dy) * (size_t)width;
-            memmove(destination + source_x0 + screen_dx,
-                    source + source_x0,
-                    (size_t)(source_x1 - source_x0) * sizeof(*source));
+        context->sample_origin_x -= screen_dx;
+        if (context->sample_origin_x < 0) {
+            context->sample_origin_x += width;
+        } else if (context->sample_origin_x >= width) {
+            context->sample_origin_x -= width;
         }
-
-        for (int row = 0; row < height; row++) {
-            lighting_sample *samples = context->samples + (size_t)row * (size_t)width;
-            if (screen_dx > 0) {
-                memset(samples, 0, (size_t)screen_dx * sizeof(*samples));
-            } else if (screen_dx < 0) {
-                memset(samples + width + screen_dx, 0, (size_t)-screen_dx * sizeof(*samples));
-            }
+        context->sample_origin_y -= screen_dy;
+        if (context->sample_origin_y < 0) {
+            context->sample_origin_y += height;
+        } else if (context->sample_origin_y >= height) {
+            context->sample_origin_y -= height;
+        }
+        if (screen_dx > 0) {
+            lighting_clear_context_rect(context,
+                                        &(lighting_dirty_rect_t){0, 0, screen_dx, height});
+        } else if (screen_dx < 0) {
+            lighting_clear_context_rect(context,
+                                        &(lighting_dirty_rect_t){width + screen_dx,
+                                                                 0,
+                                                                 width,
+                                                                 height});
         }
         if (screen_dy > 0) {
-            memset(context->samples,
-                   0,
-                   (size_t)screen_dy * (size_t)width * sizeof(*context->samples));
+            lighting_clear_context_rect(context,
+                                        &(lighting_dirty_rect_t){0, 0, width, screen_dy});
         } else if (screen_dy < 0) {
-            memset(context->samples + (size_t)(height + screen_dy) * (size_t)width,
-                   0,
-                   (size_t)-screen_dy * (size_t)width * sizeof(*context->samples));
+            lighting_clear_context_rect(context,
+                                        &(lighting_dirty_rect_t){0,
+                                                                 height + screen_dy,
+                                                                 width,
+                                                                 height});
         }
 
         /* A translated field is not guaranteed to be a pure screen translation;
@@ -1402,12 +1468,8 @@ lighting_edge(const lighting_vertex_t *a, const lighting_vertex_t *b, int x2, in
 }
 
 /** Rasterize one half of a quad while interpolating its four corner levels. */
-/* Keep the pixel arithmetic optimized in the Debug profile as well. The
- * movement benchmark intentionally uses that profile, and this loop is the
- * dominant cost of translated dense-map lighting; Release builds already
- * optimize it through the normal target flags. */
-__attribute__((optimize("O2"))) static void
-lighting_draw_triangle(const lighting_vertex_t vertices[4], bool first_half) {
+static void lighting_draw_triangle(const lighting_vertex_t vertices[4], bool first_half) {
+    lighting_context *context = lighting_context_current;
     const lighting_vertex_t *a = &vertices[0];
     const lighting_vertex_t *b = &vertices[first_half ? 1 : 2];
     const lighting_vertex_t *c = &vertices[first_half ? 2 : 3];
@@ -1467,8 +1529,8 @@ lighting_draw_triangle(const lighting_vertex_t vertices[4], bool first_half) {
 
     for (int y = min_y; y <= max_y; y++) {
         lighting_dirty_span_t fallback_spans[LIGHTING_MAX_DIRTY_RECTS];
-        const lighting_dirty_span_t *spans;
-        size_t span_num;
+        const lighting_dirty_span_t *spans = NULL;
+        size_t span_num = 0;
         if (lighting_context_current->dirty_span_overflow) {
             span_num = 0;
             for (size_t dirty_index = 0; dirty_index < lighting_context_current->dirty_num;
@@ -1486,6 +1548,7 @@ lighting_draw_triangle(const lighting_vertex_t vertices[4], bool first_half) {
             span_num = lighting_context_current->dirty_span_num[y];
         }
 
+        lighting_sample *row = lighting_sample_row_at(context, y);
         for (size_t span_index = 0; span_index < span_num; span_index++) {
             const lighting_dirty_span_t *span = &spans[span_index];
             int x_start = MAX(min_x, span->x0);
@@ -1497,16 +1560,22 @@ lighting_draw_triangle(const lighting_vertex_t vertices[4], bool first_half) {
             int64_t weight_a = row_weight_a + step_x_a * (x_start - min_x);
             int64_t weight_b = row_weight_b + step_x_b * (x_start - min_x);
             int64_t weight_c = row_weight_c + step_x_c * (x_start - min_x);
-            for (int x = x_start; x <= x_end; x++) {
-                if (weight_a >= 0 && weight_b >= 0 && weight_c >= 0) {
-                    /* Recover the quad's logical U/V coordinates from this
-                     * triangle's barycentric weights, then blend all four light
-                     * samples. This removes the visible gradient crease created
-                     * by treating the two halves as unrelated planes. */
-                    int64_t u = first_half ? weight_b + weight_c : weight_b;
-                    int64_t v = first_half ? weight_c : weight_b + weight_c;
-                    lighting_sample *sample =
-                        &light_samples[(size_t)y * (size_t)lighting_width + (size_t)x];
+            int x = x_start;
+            while (x <= x_end) {
+                int physical_x = x + context->sample_origin_x;
+                if (physical_x >= context->width) {
+                    physical_x -= context->width;
+                }
+                int segment_end = MIN(x_end, x + context->width - physical_x - 1);
+                lighting_sample *samples = row + physical_x;
+                for (; x <= segment_end; x++, samples++) {
+                    if (weight_a >= 0 && weight_b >= 0 && weight_c >= 0) {
+                        /* Recover the quad's logical U/V coordinates from this
+                         * triangle's barycentric weights, then blend all four light
+                         * samples. This removes the visible gradient crease created
+                         * by treating the two halves as unrelated planes. */
+                        int64_t u = first_half ? weight_b + weight_c : weight_b;
+                        int64_t v = first_half ? weight_c : weight_b + weight_c;
 #define INTERPOLATE_CHANNEL(_channel_)               \
     lighting_bilinear_channel(vertices[0]._channel_, \
                               vertices[1]._channel_, \
@@ -1518,26 +1587,26 @@ lighting_draw_triangle(const lighting_vertex_t vertices[4], bool first_half) {
                     uint16_t scalar = scalar_constant
                                           ? vertices[0].scalar
                                           : INTERPOLATE_CHANNEL(scalar);
-                    sample->scalar = scalar;
+                    samples->scalar = scalar;
                     if (neutral) {
-                        sample->red = scalar;
-                        sample->green = scalar;
-                        sample->blue = scalar;
+                        samples->red = scalar;
+                        samples->green = scalar;
+                        samples->blue = scalar;
                     } else {
-                        sample->red = red_constant ? vertices[0].red : INTERPOLATE_CHANNEL(red);
-                        sample->green = green_constant ? vertices[0].green
-                                                       : INTERPOLATE_CHANNEL(green);
-                        sample->blue = blue_constant ? vertices[0].blue
-                                                      : INTERPOLATE_CHANNEL(blue);
+                        samples->red = red_constant ? vertices[0].red : INTERPOLATE_CHANNEL(red);
+                        samples->green = green_constant ? vertices[0].green
+                                                         : INTERPOLATE_CHANNEL(green);
+                        samples->blue = blue_constant ? vertices[0].blue
+                                                       : INTERPOLATE_CHANNEL(blue);
                     }
-                    sample->present = 1;
-                    sample->reserved = 0;
+                    samples->present = 1;
+                    samples->reserved = 0;
 #undef INTERPOLATE_CHANNEL
+                    }
+                    weight_a += step_x_a;
+                    weight_b += step_x_b;
+                    weight_c += step_x_c;
                 }
-
-                weight_a += step_x_a;
-                weight_b += step_x_b;
-                weight_c += step_x_c;
             }
         }
 
@@ -1595,39 +1664,40 @@ void lighting_draw_quad(const lighting_vertex_t vertices[4]) {
  * area as fully bright. Elevated sprites are drawn after this lightmap.
  */
 static void lighting_extrapolate(void) {
+    lighting_context *context = lighting_context_current;
     int first_sampled_row = -1;
     int previous_sampled_row = -1;
 
     for (int y = 0; y < lighting_height; y++) {
-        lighting_sample *samples = light_samples + (size_t)y * (size_t)lighting_width;
         int first_sample = -1;
         int previous_sample = -1;
 
         for (int x = 0; x < lighting_width; x++) {
-            if (!samples[x].present) {
+            lighting_sample *sample = lighting_sample_at(context, x, y);
+            if (!sample->present) {
                 continue;
             }
 
             if (first_sample == -1) {
                 first_sample = x;
                 for (int fill_x = 0; fill_x < x; fill_x++) {
-                    samples[fill_x] = samples[x];
+                    *lighting_sample_at(context, fill_x, y) = *sample;
                 }
             } else if (x > previous_sample + 1) {
                 int distance = x - previous_sample;
 
                 for (int fill_x = previous_sample + 1; fill_x < x; fill_x++) {
                     for (size_t channel = 0; channel < 4; channel++) {
-                        uint16_t first =
-                            lighting_sample_channel(&samples[previous_sample], channel);
-                        uint16_t last = lighting_sample_channel(&samples[x], channel);
+                        uint16_t first = lighting_sample_channel(
+                            lighting_sample_at(context, previous_sample, y), channel);
+                        uint16_t last = lighting_sample_channel(sample, channel);
                         lighting_sample_channel_set(
-                            &samples[fill_x],
+                            lighting_sample_at(context, fill_x, y),
                             channel,
                             (uint16_t)((int32_t)first + ((int32_t)last - first) *
                                                             (fill_x - previous_sample) / distance));
                     }
-                    samples[fill_x].present = 1;
+                    lighting_sample_at(context, fill_x, y)->present = 1;
                 }
             }
 
@@ -1638,38 +1708,39 @@ static void lighting_extrapolate(void) {
             continue;
         }
 
+        lighting_sample *last_sample = lighting_sample_at(context, previous_sample, y);
         for (int fill_x = previous_sample + 1; fill_x < lighting_width; fill_x++) {
-            samples[fill_x] = samples[previous_sample];
+            *lighting_sample_at(context, fill_x, y) = *last_sample;
         }
 
         if (first_sampled_row == -1) {
             first_sampled_row = y;
             for (int fill_y = 0; fill_y < y; fill_y++) {
-                memcpy(light_samples + (size_t)fill_y * (size_t)lighting_width,
-                       samples,
-                       (size_t)lighting_width * sizeof(*samples));
+                for (int fill_x = 0; fill_x < lighting_width; fill_x++) {
+                    *lighting_sample_at(context, fill_x, fill_y) =
+                        *lighting_sample_at(context, fill_x, y);
+                }
             }
         } else if (y > previous_sampled_row + 1) {
-            lighting_sample *first =
-                light_samples + (size_t)previous_sampled_row * (size_t)lighting_width;
             int distance = y - previous_sampled_row;
 
             for (int fill_y = previous_sampled_row + 1; fill_y < y; fill_y++) {
-                lighting_sample *destination =
-                    light_samples + (size_t)fill_y * (size_t)lighting_width;
-
                 for (int fill_x = 0; fill_x < lighting_width; fill_x++) {
+                    const lighting_sample *last = lighting_sample_at_const(context, fill_x, y);
+                    lighting_sample *destination = lighting_sample_at(context, fill_x, fill_y);
+                    const lighting_sample *first_sample =
+                        lighting_sample_at_const(context, fill_x, previous_sampled_row);
                     for (size_t channel = 0; channel < 4; channel++) {
-                        uint16_t first_value = lighting_sample_channel(&first[fill_x], channel);
-                        uint16_t last_value = lighting_sample_channel(&samples[fill_x], channel);
+                        uint16_t first_value = lighting_sample_channel(first_sample, channel);
+                        uint16_t last_value = lighting_sample_channel(last, channel);
                         lighting_sample_channel_set(
-                            &destination[fill_x],
+                            destination,
                             channel,
                             (uint16_t)((int32_t)first_value + ((int32_t)last_value - first_value) *
                                                                   (fill_y - previous_sampled_row) /
                                                                   distance));
                     }
-                    destination[fill_x].present = 1;
+                    destination->present = 1;
                 }
             }
         }
@@ -1678,85 +1749,106 @@ static void lighting_extrapolate(void) {
     }
 
     if (first_sampled_row == -1) {
-        for (size_t i = 0; i < light_samples_num; i++) {
-            light_samples[i] = (lighting_sample){2048, 2048, 2048, 2048, 1, 0};
+        for (int y = 0; y < lighting_height; y++) {
+            for (int x = 0; x < lighting_width; x++) {
+                *lighting_sample_at(context, x, y) = (lighting_sample){2048,
+                                                                       2048,
+                                                                       2048,
+                                                                       2048,
+                                                                       1,
+                                                                       0};
+            }
         }
         return;
     }
 
-    lighting_sample *last = light_samples + (size_t)previous_sampled_row * (size_t)lighting_width;
     for (int y = previous_sampled_row + 1; y < lighting_height; y++) {
-        memcpy(light_samples + (size_t)y * (size_t)lighting_width,
-               last,
-               (size_t)lighting_width * sizeof(*last));
+        for (int x = 0; x < lighting_width; x++) {
+            *lighting_sample_at(context, x, y) =
+                *lighting_sample_at(context, x, previous_sampled_row);
+        }
     }
 }
 
 /** Fill only newly exposed field regions from their nearest valid boundary. */
-__attribute__((optimize("O2"))) static void lighting_extrapolate_dirty(void) {
+static void lighting_extrapolate_dirty(void) {
+    lighting_context *context = lighting_context_current;
     for (size_t rect_index = 0; rect_index < lighting_context_current->dirty_num; rect_index++) {
-        const lighting_dirty_rect_t rect = lighting_context_current->dirty[rect_index];
+        const lighting_dirty_rect_t rect = context->dirty[rect_index];
         for (int y = rect.y0; y < rect.y1; y++) {
-            lighting_sample *row = light_samples + (size_t)y * (size_t)lighting_width;
             int previous = -1;
-            for (int x = rect.x0; x < rect.x1; x++) {
-                if (!row[x].present) {
-                    continue;
-                }
-                if (previous == -1) {
-                    for (int fill_x = rect.x0; fill_x < MIN(rect.x1, x); fill_x++) {
-                        row[fill_x] = row[x];
+            lighting_sample *previous_sample = NULL;
+            int x = rect.x0;
+            while (x < rect.x1) {
+                lighting_sample *row = lighting_sample_row_at(context, y);
+                int physical_x = lighting_sample_physical_x(context, x);
+                int segment_end = MIN(rect.x1, x + context->width - physical_x);
+                lighting_sample *samples = row + physical_x;
+                for (; x < segment_end; x++, samples++) {
+                    lighting_sample *sample = samples;
+                    if (!sample->present) {
+                        continue;
                     }
-                } else if (x > previous + 1) {
-                    int distance = x - previous;
-                    for (int fill_x = MAX(rect.x0, previous + 1); fill_x < MIN(rect.x1, x);
-                         fill_x++) {
-                        for (size_t channel = 0; channel < 4; channel++) {
-                            uint16_t first = lighting_sample_channel(&row[previous], channel);
-                            uint16_t last = lighting_sample_channel(&row[x], channel);
-                            lighting_sample_channel_set(
-                                &row[fill_x],
-                                channel,
-                                (uint16_t)((int32_t)first + ((int32_t)last - first) *
-                                                                (fill_x - previous) / distance));
+                    if (previous == -1) {
+                        for (int fill_x = rect.x0; fill_x < x; fill_x++) {
+                            *lighting_sample_at(context, fill_x, y) = *sample;
                         }
-                        row[fill_x].present = 1;
+                    } else if (x > previous + 1) {
+                        int distance = x - previous;
+                        for (int fill_x = previous + 1; fill_x < x; fill_x++) {
+                            for (size_t channel = 0; channel < 4; channel++) {
+                                uint16_t first =
+                                    lighting_sample_channel(previous_sample, channel);
+                                uint16_t last = lighting_sample_channel(sample, channel);
+                                lighting_sample_channel_set(
+                                    lighting_sample_at(context, fill_x, y),
+                                    channel,
+                                    (uint16_t)((int32_t)first + ((int32_t)last - first) *
+                                                                    (fill_x - previous) /
+                                                                    distance));
+                            }
+                            lighting_sample_at(context, fill_x, y)->present = 1;
+                        }
                     }
+                    previous = x;
+                    previous_sample = sample;
                 }
-                previous = x;
             }
             if (previous != -1) {
+                const lighting_sample *last = previous_sample;
                 for (int fill_x = MAX(rect.x0, previous + 1); fill_x < rect.x1; fill_x++) {
-                    row[fill_x] = row[previous];
+                    *lighting_sample_at(context, fill_x, y) = *last;
                 }
             } else {
                 int seed_x = rect.x0 > 0                ? rect.x0 - 1
                              : rect.x1 < lighting_width ? rect.x1
-                                                        : rect.x0;
+                             : rect.x0;
+                const lighting_sample *seed_sample = lighting_sample_at_const(context, seed_x, y);
                 for (int fill_x = rect.x0; fill_x < rect.x1; fill_x++) {
-                    row[fill_x] = row[seed_x];
+                    *lighting_sample_at(context, fill_x, y) = *seed_sample;
                 }
             }
         }
 
         for (int x = rect.x0; x < rect.x1; x++) {
             int previous = -1;
+            int physical_x = lighting_sample_physical_x(context, x);
+            const lighting_sample *previous_sample = NULL;
             for (int y = rect.y0; y < rect.y1; y++) {
-                lighting_sample *sample =
-                    &light_samples[(size_t)y * (size_t)lighting_width + (size_t)x];
+                lighting_sample *sample = lighting_sample_row_at(context, y) + physical_x;
                 if (!sample->present) {
                     continue;
                 }
                 if (previous != -1 && y > previous + 1) {
                     int distance = y - previous;
+                    const lighting_sample *first_sample =
+                        lighting_sample_row_at_const(context, previous) + physical_x;
                     for (int fill_y = MAX(rect.y0, previous + 1); fill_y < MIN(rect.y1, y);
                          fill_y++) {
                         lighting_sample *destination =
-                            &light_samples[(size_t)fill_y * (size_t)lighting_width + x];
+                            lighting_sample_row_at(context, fill_y) + physical_x;
                         for (size_t channel = 0; channel < 4; channel++) {
-                            uint16_t first = lighting_sample_channel(
-                                &light_samples[(size_t)previous * (size_t)lighting_width + x],
-                                channel);
+                            uint16_t first = lighting_sample_channel(first_sample, channel);
                             uint16_t last = lighting_sample_channel(sample, channel);
                             lighting_sample_channel_set(
                                 destination,
@@ -1768,27 +1860,66 @@ __attribute__((optimize("O2"))) static void lighting_extrapolate_dirty(void) {
                     }
                 }
                 previous = y;
+                previous_sample = sample;
             }
             if (previous != -1) {
+                const lighting_sample *last = previous_sample;
                 for (int fill_y = MAX(rect.y0, previous + 1); fill_y < rect.y1; fill_y++) {
-                    light_samples[(size_t)fill_y * (size_t)lighting_width + x] =
-                        light_samples[(size_t)previous * (size_t)lighting_width + x];
+                    *(lighting_sample_row_at(context, fill_y) + physical_x) = *last;
                 }
             } else {
                 int seed_y = rect.y0 > 0                 ? rect.y0 - 1
                              : rect.y1 < lighting_height ? rect.y1
                                                          : rect.y0;
+                const lighting_sample *seed_sample =
+                    lighting_sample_row_at_const(context, seed_y) + physical_x;
                 for (int fill_y = rect.y0; fill_y < rect.y1; fill_y++) {
-                    light_samples[(size_t)fill_y * (size_t)lighting_width + x] =
-                        light_samples[(size_t)seed_y * (size_t)lighting_width + x];
+                    *(lighting_sample_row_at(context, fill_y) + physical_x) = *seed_sample;
                 }
             }
         }
     }
 }
 
-/** Apply one horizontal box-blur pass to a light sample row. */
-static void lighting_blur_row(const lighting_sample *source, lighting_sample *destination) {
+/** Apply one horizontal box-blur pass to a logical light sample row. */
+static void lighting_blur_logical_row(int y, lighting_sample *destination) {
+    const int radius = LIGHT_STRUCTURE_BLUR_RADIUS;
+    const uint32_t diameter = radius * 2 + 1;
+    uint32_t sum[4] = {0};
+
+    for (int offset = -radius; offset <= radius; offset++) {
+        int source_x = MAX(0, MIN(lighting_width - 1, offset));
+        const lighting_sample *sample =
+            lighting_sample_at_const(lighting_context_current, source_x, y);
+        for (size_t channel = 0; channel < 4; channel++) {
+            sum[channel] += lighting_sample_channel(sample, channel);
+        }
+    }
+
+    for (int x = 0; x < lighting_width; x++) {
+        for (size_t channel = 0; channel < 4; channel++) {
+            lighting_sample_channel_set(&destination[x],
+                                        channel,
+                                        (uint16_t)((sum[channel] + diameter / 2) / diameter));
+        }
+        destination[x].present = 1;
+
+        int outgoing_x = MAX(0, MIN(lighting_width - 1, x - radius));
+        int incoming_x = MAX(0, MIN(lighting_width - 1, x + radius + 1));
+        const lighting_sample *outgoing =
+            lighting_sample_at_const(lighting_context_current, outgoing_x, y);
+        const lighting_sample *incoming =
+            lighting_sample_at_const(lighting_context_current, incoming_x, y);
+        for (size_t channel = 0; channel < 4; channel++) {
+            sum[channel] -= lighting_sample_channel(outgoing, channel);
+            sum[channel] += lighting_sample_channel(incoming, channel);
+        }
+    }
+}
+
+/** Apply one horizontal box-blur pass to a contiguous light sample row. */
+static void lighting_blur_contiguous_row(const lighting_sample *source,
+                                          lighting_sample *destination) {
     const int radius = LIGHT_STRUCTURE_BLUR_RADIUS;
     const uint32_t diameter = radius * 2 + 1;
     uint32_t sum[4] = {0};
@@ -1825,10 +1956,9 @@ static void lighting_blur_structure_row(int y) {
         return;
     }
 
-    const lighting_sample *source = light_samples + (size_t)y * (size_t)lighting_width;
     lighting_sample *destination = structure_samples + (size_t)y * (size_t)lighting_width;
-    lighting_blur_row(source, structure_blur_row);
-    lighting_blur_row(structure_blur_row, destination);
+    lighting_blur_logical_row(y, structure_blur_row);
+    lighting_blur_contiguous_row(structure_blur_row, destination);
 
     structure_rows_valid[y] = 1;
 }
@@ -1944,38 +2074,48 @@ void lighting_render(SDL_Surface *destination) {
     }
     SDL_Palette *palette = SDL_GetSurfacePalette(destination);
     bool direct_argb = destination->format == SDL_PIXELFORMAT_ARGB8888;
+    const lighting_context *context = lighting_context_current;
     uint64_t timing_started = lighting_benchmark_timing_start();
     for (int y = 0; y < lighting_height; y++) {
         Uint32 *pixels = (Uint32 *)((Uint8 *)destination->pixels + y * destination->pitch);
-        const lighting_sample *samples = light_samples + (size_t)y * (size_t)lighting_width;
-        for (int x = 0; x < lighting_width; x++) {
-            if (has_colorkey && pixels[x] == colorkey) {
-                continue;
+        const lighting_sample *row = lighting_sample_row_at_const(context, y);
+        int x = 0;
+        while (x < lighting_width) {
+            int physical_x = x + context->sample_origin_x;
+            if (physical_x >= context->width) {
+                physical_x -= context->width;
             }
-            uint8_t red, green, blue, alpha;
-            if (direct_argb) {
-                red = pixels[x] >> 16;
-                green = pixels[x] >> 8;
-                blue = pixels[x];
-                alpha = pixels[x] >> 24;
-            } else {
-                SDL_GetRGBA(pixels[x], format, palette, &red, &green, &blue, &alpha);
+            int length = MIN(lighting_width - x, context->width - physical_x);
+            const lighting_sample *samples = row + physical_x;
+            for (int offset = 0; offset < length; offset++) {
+                int destination_x = x + offset;
+                const lighting_sample *sample = &samples[offset];
+                if (has_colorkey && pixels[destination_x] == colorkey) {
+                    continue;
+                }
+                uint8_t red, green, blue, alpha;
+                if (direct_argb) {
+                    red = pixels[destination_x] >> 16;
+                    green = pixels[destination_x] >> 8;
+                    blue = pixels[destination_x];
+                    alpha = pixels[destination_x] >> 24;
+                } else {
+                    SDL_GetRGBA(pixels[destination_x], format, palette, &red, &green, &blue, &alpha);
+                }
+                const uint16_t radiance[3] = {sample->red, sample->green, sample->blue};
+                uint16_t illumination[3];
+                lighting_tone_map_linear(sample->scalar, radiance, illumination);
+                red = lighting_multiply_channel(red, illumination[0]);
+                green = lighting_multiply_channel(green, illumination[1]);
+                blue = lighting_multiply_channel(blue, illumination[2]);
+                if (direct_argb) {
+                    pixels[destination_x] =
+                        (Uint32)alpha << 24 | (Uint32)red << 16 | (Uint32)green << 8 | blue;
+                } else {
+                    pixels[destination_x] = SDL_MapRGBA(format, palette, red, green, blue, alpha);
+                }
             }
-            const uint16_t radiance[3] = {
-                samples[x].red,
-                samples[x].green,
-                samples[x].blue,
-            };
-            uint16_t illumination[3];
-            lighting_tone_map_linear(samples[x].scalar, radiance, illumination);
-            red = lighting_multiply_channel(red, illumination[0]);
-            green = lighting_multiply_channel(green, illumination[1]);
-            blue = lighting_multiply_channel(blue, illumination[2]);
-            if (direct_argb) {
-                pixels[x] = (Uint32)alpha << 24 | (Uint32)red << 16 | (Uint32)green << 8 | blue;
-            } else {
-                pixels[x] = SDL_MapRGBA(format, palette, red, green, blue, alpha);
-            }
+            x += length;
         }
     }
     LIGHTING_BENCHMARK_TIMING_FINISH(lighting_context_current, tone_map_multiply, timing_started);
@@ -2271,9 +2411,7 @@ __attribute__((optimize("O2"))) void lighting_scene_render(SDL_Surface *destinat
             sample_y = y;
         }
         sample_y = MAX(0, MIN(context->height - 1, sample_y));
-        const lighting_sample *sample = &context->samples[(size_t)sample_y *
-                                                               (size_t)context->width +
-                                                           (size_t)x];
+        const lighting_sample *sample = lighting_sample_at_const(context, x, sample_y);
         const uint16_t radiance[3] = {sample->red, sample->green, sample->blue};
         uint16_t illumination[3];
         if (sample->scalar == 0) {
@@ -2435,7 +2573,7 @@ static uint64_t lighting_projected_signature(int x, int y, const SDL_Rect *sourc
         for (int source_x = 0; source_x < source_rect->w; source_x++) {
             int light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
             const lighting_sample *sample =
-                &light_samples[(size_t)light_y * (size_t)lighting_width + (size_t)light_x];
+                lighting_sample_at_const(lighting_context_current, light_x, light_y);
             signature = lighting_signature_sample(signature, sample);
         }
     }
@@ -2562,17 +2700,10 @@ static bool lighting_sprite_cache_equivalent(const lighting_sprite_cache_entry *
     for (int source_y = 0; source_y < source_rect->h; source_y++) {
         int light_y = MAX(0, MIN(lighting_height - 1, y + source_y));
         int light_x = MAX(0, MIN(lighting_width - 1, x));
-        if (x >= 0 && x <= lighting_width - source_rect->w &&
-            lighting_samples_equal(
-                entry->illumination + (size_t)source_y * (size_t)source_rect->w,
-                light_samples + (size_t)light_y * (size_t)lighting_width + (size_t)light_x,
-                (size_t)source_rect->w)) {
-            continue;
-        }
         for (int source_x = 0; source_x < source_rect->w; source_x++) {
             light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
             const lighting_sample *sample =
-                &light_samples[(size_t)light_y * (size_t)lighting_width + (size_t)light_x];
+                lighting_sample_at_const(lighting_context_current, light_x, light_y);
             size_t index = (size_t)source_y * (size_t)source_rect->w + (size_t)source_x;
             if (!lighting_samples_equal(&entry->illumination[index], sample, 1U)) {
                 return false;
@@ -2601,16 +2732,10 @@ static lighting_sample *lighting_sprite_illumination_copy(int x,
 
     for (int source_y = 0; source_y < source_rect->h; source_y++) {
         int light_y = MAX(0, MIN(lighting_height - 1, y + source_y));
-        if (x >= 0 && x <= lighting_width - source_rect->w) {
-            memcpy(copy + (size_t)source_y * (size_t)source_rect->w,
-                   light_samples + (size_t)light_y * (size_t)lighting_width + (size_t)x,
-                   (size_t)source_rect->w * sizeof(*copy));
-            continue;
-        }
         for (int source_x = 0; source_x < source_rect->w; source_x++) {
             int light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
             size_t index = (size_t)source_y * (size_t)source_rect->w + (size_t)source_x;
-            copy[index] = light_samples[(size_t)light_y * (size_t)lighting_width + (size_t)light_x];
+            copy[index] = *lighting_sample_at_const(lighting_context_current, light_x, light_y);
         }
     }
     return copy;
@@ -2812,7 +2937,8 @@ void lighting_show_surface(SDL_Surface *destination,
             } else {
                 int light_x = MAX(0, MIN(lighting_width - 1, x + source_x));
                 int light_y = MAX(0, MIN(lighting_height - 1, y + source_y));
-                illumination = light_samples[(size_t)light_y * lighting_width + (size_t)light_x];
+                illumination =
+                    *lighting_sample_at_const(lighting_context_current, light_x, light_y);
             }
             const uint16_t radiance[3] = {
                 illumination.red,

@@ -86,7 +86,9 @@ typedef struct lighting_benchmark_counters {
     /** Quads accepted by the lighting rasterizer. */
     uint64_t field_rasterized_quads;
     uint64_t field_translations;
+    /** Logical field pixels remapped during scroll; the ring avoids copying them. */
     uint64_t field_translated_pixels;
+    /** Logical byte footprint of remapped pixels, not bytes physically copied. */
     uint64_t field_translated_bytes;
     uint64_t field_scroll_x_pixels;
     uint64_t field_scroll_y_pixels;
@@ -205,17 +207,13 @@ void lighting_tone_map_linear(uint16_t scalar, const uint16_t radiance[3], uint1
 uint8_t lighting_multiply_channel(uint8_t source, uint16_t illumination_linear);
 
 /** Bilinearly interpolate one Q5.11 channel without overflowing its bounds. */
-/* This helper runs once per channel for every dirty lighting pixel. Keep the
- * exact staged rounding below, but force it into the optimized rasterizer so
- * Debug benchmark builds do not pay four calls per pixel. */
-static inline __attribute__((always_inline)) uint16_t
-lighting_bilinear_channel(uint16_t upper_left,
-                          uint16_t upper_right,
-                          uint16_t lower_right,
-                          uint16_t lower_left,
-                          uint64_t u,
-                          uint64_t v,
-                          uint64_t scale) {
+static inline uint16_t lighting_bilinear_channel(uint16_t upper_left,
+                                                 uint16_t upper_right,
+                                                 uint16_t lower_right,
+                                                 uint16_t lower_left,
+                                                 uint64_t u,
+                                                 uint64_t v,
+                                                 uint64_t scale) {
     assert(scale != 0);
     assert(u <= scale);
     assert(v <= scale);
