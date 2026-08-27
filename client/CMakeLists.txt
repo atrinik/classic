@@ -866,6 +866,15 @@ if (BUILD_TESTING)
     add_test(NAME client-player-view-map-overlay-elevated
         COMMAND atrinik --player-view
             "${player_view_fixtures}/map-overlay-elevated.xml" -)
+    add_test(NAME client-player-view-zoom-filter-off
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/zoom-filter-off.xml" -)
+    add_test(NAME client-player-view-zoom-filter-pixelart
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/zoom-filter-pixelart.xml" -)
+    add_test(NAME client-player-view-zoom-filter-linear
+        COMMAND atrinik --player-view
+            "${player_view_fixtures}/zoom-filter-linear.xml" -)
     add_test(NAME client-player-view-living-outline-unobscured
         COMMAND atrinik --player-view
             "${player_view_fixtures}/living-outline-unobscured.xml" -)

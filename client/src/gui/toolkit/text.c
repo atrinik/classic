@@ -1505,13 +1505,17 @@ int text_show_character(font_struct **font,
                             rotate != 0) {
                             SDL_Surface *tmp_icon;
 
-                            bool smooth = false;
+                            int zoom_filter = ZOOM_FILTER_OFF;
                             if (icon_w != icon_orig_w || icon_h != icon_orig_h || rotate != 0) {
-                                smooth = setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_SMOOTH);
+                                zoom_filter = setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER);
                             }
 
                             tmp_icon =
-                                rotozoomSurfaceXY(icon_surface, rotate, zoom_x, zoom_y, smooth);
+                                rotozoomSurfaceXY(icon_surface,
+                                                  rotate,
+                                                  zoom_x,
+                                                  zoom_y,
+                                                  zoom_filter);
                             if (tmp_icon == NULL) {
                                 LOG(ERROR, "Could not transform markup icon: %s", SDL_GetError());
                             } else {

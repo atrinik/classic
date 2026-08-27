@@ -934,18 +934,18 @@ SDL_Surface *sprite_effects_create(SDL_Surface *surface, const sprite_effects_t 
     /* Apply zoom and/or rotate effects. */
     if ((effects->zoom_x != 0 && effects->zoom_x != 100) ||
         (effects->zoom_y != 0 && effects->zoom_y != 100) || effects->rotate != 0) {
-        bool smooth;
-        /* Figure out whether to use smoothing. */
+        int zoom_filter;
+        /* Exact-size transforms do not need filtering. */
         if (effects->rotate == 0 && (effects->zoom_x == 0 || abs(effects->zoom_x) == 100) &&
             (effects->zoom_y == 0 || abs(effects->zoom_y) == 100)) {
-            smooth = false;
+            zoom_filter = ZOOM_FILTER_OFF;
         } else {
-            smooth = setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_SMOOTH);
+            zoom_filter = setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER);
         }
 
         double zoom_x = effects->zoom_x != 0 ? effects->zoom_x / 100.0 : 1.0;
         double zoom_y = effects->zoom_y != 0 ? effects->zoom_y / 100.0 : 1.0;
-        surface = rotozoomSurfaceXY(surface, effects->rotate, zoom_x, zoom_y, smooth);
+        surface = rotozoomSurfaceXY(surface, effects->rotate, zoom_x, zoom_y, zoom_filter);
         if (surface == NULL) {
             goto done;
         }

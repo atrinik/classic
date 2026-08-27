@@ -20,4 +20,7 @@
 /** Parse and apply a setting value without changing the setting on failure. */
 bool setting_value_parse(setting_struct *setting, const char *text);
 
+/** Parse a pre-473 boolean zoom-filter value into the new select setting. */
+bool setting_value_parse_legacy_zoom_filter(setting_struct *setting, const char *text);
+
 #endif

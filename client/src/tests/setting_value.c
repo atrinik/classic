@@ -61,6 +61,42 @@ static void test_select(void) {
     check_rejected(&setting, "0");
 }
 
+static void test_zoom_filter_setting(void) {
+    char *options[] = {"Off", "Pixel art", "Linear"};
+    setting_select select = {
+        .options = options,
+        .options_len = ZOOM_FILTER_NUM,
+    };
+    setting_struct setting = {
+        .type = OPT_TYPE_SELECT,
+        .custom_attrset = &select,
+    };
+
+    /* These numeric values are the persisted compatibility contract. */
+    TEST_CHECK(ZOOM_FILTER_OFF == 0);
+    TEST_CHECK(ZOOM_FILTER_PIXELART == 1);
+    TEST_CHECK(ZOOM_FILTER_LINEAR == 2);
+    TEST_CHECK(ZOOM_FILTER_DEFAULT == ZOOM_FILTER_PIXELART);
+
+    check_value(&setting, "0", ZOOM_FILTER_OFF);
+    check_value(&setting, "1", ZOOM_FILTER_PIXELART);
+    check_value(&setting, "2", ZOOM_FILTER_LINEAR);
+    check_rejected(&setting, "3");
+
+    /* Old boolean settings map on to Pixel art and off to Off. */
+    check_value(&setting, "0", ZOOM_FILTER_OFF);
+    TEST_CHECK(setting_value_parse_legacy_zoom_filter(&setting, "1"));
+    TEST_CHECK(setting.val.i == ZOOM_FILTER_PIXELART);
+    TEST_CHECK(setting_value_parse_legacy_zoom_filter(&setting, "ON"));
+    TEST_CHECK(setting.val.i == ZOOM_FILTER_PIXELART);
+    TEST_CHECK(setting_value_parse_legacy_zoom_filter(&setting, "false"));
+    TEST_CHECK(setting.val.i == ZOOM_FILTER_OFF);
+    TEST_CHECK(setting_value_parse_legacy_zoom_filter(&setting, "yes"));
+    TEST_CHECK(setting.val.i == ZOOM_FILTER_PIXELART);
+    TEST_CHECK(!setting_value_parse_legacy_zoom_filter(&setting, "2"));
+    TEST_CHECK(setting.val.i == ZOOM_FILTER_PIXELART);
+}
+
 static void test_range(void) {
     setting_range range = {.min = 9, .max = 17, .advance = 2};
     setting_struct setting = {.type = OPT_TYPE_RANGE, .custom_attrset = &range};
@@ -109,6 +145,7 @@ static void test_text_and_unknown_types(void) {
 int main(void) {
     test_boolean();
     test_select();
+    test_zoom_filter_setting();
     test_range();
     test_integer_syntax_and_bounds();
     test_text_and_unknown_types();

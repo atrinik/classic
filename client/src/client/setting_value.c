@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <setting_value.h>
 #include <toolkit/memory.h>
@@ -82,4 +83,19 @@ bool setting_value_parse(setting_struct *setting, const char *text) {
 
     setting->val.i = value;
     return true;
+}
+
+bool setting_value_parse_legacy_zoom_filter(setting_struct *setting, const char *text) {
+    const char *value = text;
+
+    if (!strcasecmp(text, "yes") || !strcasecmp(text, "on") || !strcasecmp(text, "true")) {
+        value = "1";
+    } else if (!strcasecmp(text, "no") || !strcasecmp(text, "off") ||
+               !strcasecmp(text, "false")) {
+        value = "0";
+    } else if (strcmp(text, "0") != 0 && strcmp(text, "1") != 0) {
+        return false;
+    }
+
+    return setting_value_parse(setting, value);
 }

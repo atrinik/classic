@@ -170,7 +170,7 @@ static void widget_draw(widgetdata *widget) {
             minimap->textures[i] = zoomSurface(texture,
                                                (double)widget->w / texture->w + 0.001,
                                                (double)widget->h / texture->h + 0.001,
-                                               setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_SMOOTH));
+                                               setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER));
             if (minimap->textures[i] == NULL) {
                 LOG(ERROR, "Could not resize minimap texture: %s", SDL_GetError());
                 minimap->textures[i] = surface_to_display_alpha(texture);
@@ -284,7 +284,7 @@ static void widget_draw(widgetdata *widget) {
             zoomed = zoomSurface(minimap->surface,
                                  zoomx,
                                  zoomy,
-                                 setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_SMOOTH));
+                                 setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER));
             if (zoomed == NULL) {
                 LOG(ERROR, "Could not resize dynamic minimap: %s", SDL_GetError());
                 return;
