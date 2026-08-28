@@ -679,6 +679,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -738,7 +739,14 @@ jobs:
             "${CLASSIC_LINUX_IMAGE}" \
             tools/ci/run_linux_check.sh client /workspace
       - name: Exercise GPU renderer coverage
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/classic-gpu-coverage-docker-config
+          GH_TOKEN: ${{ github.token }}
         run: |
+          mkdir -p "${DOCKER_CONFIG}"
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          printf '%s' "${GH_TOKEN}" | docker login ghcr.io \
+            --username "${GITHUB_ACTOR}" --password-stdin
           docker pull "${CLASSIC_GPU_COVERAGE_IMAGE}"
           tools/ci/run_gpu_coverage.sh \
             "${GITHUB_WORKSPACE}" \
