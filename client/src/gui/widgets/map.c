@@ -774,7 +774,7 @@ bool widget_map_sparse_state_test(void) {
                 map_cell_layer_record(record, GET_MAP_LAYER(LAYER_LIVING, 0), true)->face = 4;
                 map_cell_actor_record_t *actor = map_cell_actor_record(record, 0, true);
                 actor->target_object_count = (uint32_t)tile + 1U;
-                snprintf(VS(actor->name), "actor-%zu", tile);
+                snprintf(VS(actor->name), "actor-%" PRIu64, (uint64_t)tile);
                 layer_records++;
                 actor_records++;
             }

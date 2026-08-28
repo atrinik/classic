@@ -567,13 +567,13 @@ static bool atlas_churn_plateau_checkpoint(void) {
     gpu_renderer_statistics_get(&plateau_statistics);
     if (peak_pages <= baseline_pages || plateau_pages > baseline_pages + 1U ||
         plateau_allocations != baseline_allocations) {
-        SDL_SetError("atlas churn did not reclaim empty pages: baseline=%zu peak=%zu retained=%zu "
-                     "allocations=%zu/%zu",
-                     baseline_pages,
-                     peak_pages,
-                     plateau_pages,
-                     plateau_allocations,
-                     baseline_allocations);
+        SDL_SetError("atlas churn did not reclaim empty pages: baseline=%" PRIu64 " peak=%" PRIu64
+                     " retained=%" PRIu64 " allocations=%" PRIu64 "/%" PRIu64,
+                     (uint64_t)baseline_pages,
+                     (uint64_t)peak_pages,
+                     (uint64_t)plateau_pages,
+                     (uint64_t)plateau_allocations,
+                     (uint64_t)baseline_allocations);
         return false;
     }
     for (unsigned int phase = 1; phase < 4; phase++) {

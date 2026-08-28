@@ -588,7 +588,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
         success ? player_view_xml_property(root, "transition-snapshot") : NULL;
     char *transition_snapshot_digest =
         success ? player_view_xml_property(root, "transition-snapshot-sha256") : NULL;
-    char *interface = success ? player_view_xml_property(root, "interface") : NULL;
+    char *interface_file = success ? player_view_xml_property(root, "interface") : NULL;
     char *interface_digest = success ? player_view_xml_property(root, "interface-sha256") : NULL;
     char *layout = success ? player_view_xml_property(root, "layout") : NULL;
     char *layout_digest = success ? player_view_xml_property(root, "layout-sha256") : NULL;
@@ -661,8 +661,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
         ((transition_snapshot == NULL && transition_snapshot_digest == NULL) ||
          (transition_snapshot != NULL &&
           player_view_sha256_text_valid(transition_snapshot_digest))) &&
-        ((interface == NULL && interface_digest == NULL) ||
-         (interface != NULL && player_view_sha256_text_valid(interface_digest))) &&
+        ((interface_file == NULL && interface_digest == NULL) ||
+         (interface_file != NULL && player_view_sha256_text_valid(interface_digest))) &&
         ((layout == NULL && layout_digest == NULL) ||
          (layout != NULL && player_view_sha256_text_valid(layout_digest))) &&
         ((font == NULL && font_digest == NULL) ||
@@ -750,7 +750,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
         success && (!manifest->widget_render || manifest->primary_surface) &&
         ((manifest->widget_x == 0 && manifest->widget_y == 0) || manifest->widget_render) &&
         manifest->player_names == manifest->target_ui &&
-        (!manifest->ui_closure || (manifest->widget_render && ui_test)) && interface != NULL &&
+        (!manifest->ui_closure || (manifest->widget_render && ui_test)) && interface_file != NULL &&
         layout != NULL &&
         ((ui_test && manifest->widget_render && font != NULL) || (!ui_test && font == NULL)) &&
         ((overlay_test && manifest->widget_render && mono_font != NULL) ||
@@ -792,9 +792,10 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                                                           transition_snapshot,
                                                                           manifest->input_root);
         }
-        if (interface != NULL) {
-            manifest->interface_path =
-                player_view_resolve_path(manifest->input_root, interface, manifest->input_root);
+        if (interface_file != NULL) {
+            manifest->interface_path = player_view_resolve_path(manifest->input_root,
+                                                                interface_file,
+                                                                manifest->input_root);
         }
         if (layout != NULL) {
             manifest->layout_path =
@@ -812,7 +813,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
                   manifest->snapshot_path != NULL &&
                   (next_snapshot == NULL || manifest->next_snapshot_path != NULL) &&
                   (transition_snapshot == NULL || manifest->transition_snapshot_path != NULL) &&
-                  (interface == NULL || manifest->interface_path != NULL) &&
+                  (interface_file == NULL || manifest->interface_path != NULL) &&
                   (layout == NULL || manifest->layout_path != NULL) &&
                   (font == NULL || manifest->font_path != NULL) &&
                   (mono_font == NULL || manifest->mono_font_path != NULL);
@@ -827,7 +828,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
         if (transition_snapshot != NULL) {
             snprintf(VS(manifest->transition_snapshot_digest), "%s", transition_snapshot_digest);
         }
-        if (interface != NULL) {
+        if (interface_file != NULL) {
             snprintf(VS(manifest->interface_digest), "%s", interface_digest);
         }
         if (layout != NULL) {
@@ -975,7 +976,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(next_snapshot_digest);
     free(transition_snapshot);
     free(transition_snapshot_digest);
-    free(interface);
+    free(interface_file);
     free(interface_digest);
     free(layout);
     free(layout_digest);
@@ -1710,13 +1711,13 @@ static bool gpu_player_view_ui_models_prepare(void) {
     }
     if (inventory == NULL || INVENTORY(inventory)->display != INVENTORY_DISPLAY_MAIN ||
         cpl.ob->inv == NULL || !textwin_valid || widget_party_test_rows() != 1 || !stats_valid) {
-        SDL_SetError(
-            "UI fixture models incomplete: inventory=%d object=%d text=%d party=%zu stats=%d",
-            inventory != NULL && INVENTORY(inventory)->display == INVENTORY_DISPLAY_MAIN,
-            cpl.ob->inv != NULL,
-            textwin_valid,
-            widget_party_test_rows(),
-            stats_valid);
+        SDL_SetError("UI fixture models incomplete: inventory=%d object=%d text=%d party=%" PRIu64
+                     " stats=%d",
+                     inventory != NULL && INVENTORY(inventory)->display == INVENTORY_DISPLAY_MAIN,
+                     cpl.ob->inv != NULL,
+                     textwin_valid,
+                     (uint64_t)widget_party_test_rows(),
+                     stats_valid);
         return false;
     }
     return true;
@@ -3468,11 +3469,12 @@ int gpu_player_view_main(int argc, char *argv[]) {
             retained_map.reused_render_commands == 0 ||
             retained_map.compiled_render_commands != 0) {
             fprintf(stderr,
-                    "gpu-player-view: retained smooth lighting changed: instances=%zu/%zu "
+                    "gpu-player-view: retained smooth lighting changed: instances=%" PRIu64
+                    "/%" PRIu64 " "
                     "uploads=%" PRIu64 " bytes=%" PRIu64 " compiled=%" PRIu64 " reused=%" PRIu64
                     "\n",
-                    retained_lit_instances,
-                    full_lit_instances,
+                    (uint64_t)retained_lit_instances,
+                    (uint64_t)full_lit_instances,
                     retained_lighting.light_upload_count,
                     retained_lighting.light_upload_bytes,
                     retained_map.compiled_render_commands,
