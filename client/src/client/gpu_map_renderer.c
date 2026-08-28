@@ -19,8 +19,9 @@
 
 #define GPU_MAP_SURFACE_GENERATION_PROPERTY "atrinik.gpu.map_surface_generation"
 #define GPU_MAP_SURFACE_ASSET_PROPERTY "atrinik.gpu.map_surface_asset"
-#define GPU_MAP_OWNER_TRANSPARENT UINT8_MAX
-#define GPU_MAP_OWNER_UNLIT (UINT8_MAX - 1)
+/* Integer target clears are backend-defined for nonzero float values. */
+#define GPU_MAP_OWNER_KEY_TRANSPARENT UINT8_C(0)
+#define GPU_MAP_OWNER_KEY_UNLIT UINT8_MAX
 #define GPU_MAP_LIGHT_QUAD_INITIAL_CAPACITY 1024U
 #define GPU_MAP_LIGHT_FORWARD_LUT_ENTRIES 256U
 #define GPU_MAP_LIGHT_INVERSE_LUT_ENTRIES 65536U
@@ -98,7 +99,7 @@ static Uint64 next_generation = 1;
 static int target_width;
 static int target_height;
 static bool targets_accounted;
-static uint32_t current_lighting_key = GPU_MAP_OWNER_UNLIT;
+static uint32_t current_lighting_key = GPU_MAP_OWNER_KEY_UNLIT;
 static bool world_pass_has_content;
 static gpu_map_light_quad_t *light_quads;
 static size_t light_quads_num;
@@ -541,7 +542,7 @@ static bool gpu_map_world_pass_begin(void) {
         },
         {
             .texture = owner_target,
-            .clear_color = {(float)GPU_MAP_OWNER_TRANSPARENT, 0.0f, 0.0f, 0.0f},
+            .clear_color = {(float)GPU_MAP_OWNER_KEY_TRANSPARENT, 0.0f, 0.0f, 0.0f},
             .load_op = world_pass_has_content ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR,
             .store_op = SDL_GPU_STOREOP_STORE,
         },
@@ -820,7 +821,7 @@ bool gpu_map_renderer_begin(int width, int height) {
     map_command_buffer = SDL_AcquireGPUCommandBuffer(map_device);
     world_pass = NULL;
     world_pass_has_content = false;
-    current_lighting_key = GPU_MAP_OWNER_UNLIT;
+    current_lighting_key = GPU_MAP_OWNER_KEY_UNLIT;
     light_quads_num = 0;
     map_clip_enabled = false;
     albedo_timing_started = gpu_renderer_timing_begin();
@@ -832,8 +833,11 @@ bool gpu_map_renderer_active(void) {
 }
 
 void gpu_map_renderer_set_owner(uint8_t owner, int sample_y) {
+    HARD_ASSERT(owner < MAP2_LEVELS || owner == GPU_RENDERER_OWNER_UNLIT);
     uint16_t encoded_y = (uint16_t)MAX(INT16_MIN, MIN(INT16_MAX, sample_y));
-    current_lighting_key = owner | (uint32_t)encoded_y << 8U;
+    uint8_t encoded_owner =
+        owner == GPU_RENDERER_OWNER_UNLIT ? GPU_MAP_OWNER_KEY_UNLIT : (uint8_t)(owner + UINT8_C(1));
+    current_lighting_key = encoded_owner | (uint32_t)encoded_y << 8U;
 }
 
 void gpu_map_renderer_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]) {

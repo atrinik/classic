@@ -140,14 +140,15 @@ uint final_channel(uint source, uint scalar, uint radiance) {
 
 float4 final_fragment(FinalVertexOutput input) : SV_Target0 {
     uint key = final_lighting_key.Load(int3(input.position.xy, 0));
-    uint owner = key & 255u;
+    uint encoded_owner = key & 255u;
     float4 albedo = final_albedo.Sample(final_sampler, input.uv);
-    if (owner == 255u) {
+    if (encoded_owner == 0u) {
         return float4(0.0, 0.0, 0.0, 0.0);
     }
-    if (owner == 254u) {
+    if (encoded_owner == 255u) {
         return albedo;
     }
+    uint owner = encoded_owner - 1u;
     int sample_y = int((key >> 8u) & 65535u);
     sample_y -= sample_y >= 32768 ? 65536 : 0;
     uint height;

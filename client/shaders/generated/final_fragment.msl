@@ -24,26 +24,26 @@ fragment main0_out main0(main0_in in [[stage_in]], const device type_StructuredB
     float4 _858;
     do
     {
-        int _97 = int(gl_FragCoord.x);
-        uint4 _102 = final_lighting_key.read(uint2(int3(_97, int(gl_FragCoord.y), 0).xy), 0);
-        uint _103 = _102.x;
-        uint _104 = _103 & 255u;
-        float4 _108 = final_albedo.sample(final_sampler, in.in_var_TEXCOORD0);
-        if (_104 == 255u)
+        int _96 = int(gl_FragCoord.x);
+        uint4 _101 = final_lighting_key.read(uint2(int3(_96, int(gl_FragCoord.y), 0).xy), 0);
+        uint _102 = _101.x;
+        uint _103 = _102 & 255u;
+        float4 _107 = final_albedo.sample(final_sampler, in.in_var_TEXCOORD0);
+        if (_103 == 0u)
         {
             _858 = float4(0.0);
             break;
         }
-        if (_104 == 254u)
+        if (_103 == 255u)
         {
-            _858 = _108;
+            _858 = _107;
             break;
         }
         bool _142;
-        int _117 = int((_103 >> 8u) & 65535u);
-        int3 _129 = int4(_97, clamp(_117 - ((_117 >= 32768) ? 65536 : 0), 0, int(uint3(final_light.get_width(), final_light.get_height(), final_light.get_array_size()).y) - 1), int(_104), 0).xyz;
+        int _117 = int((_102 >> 8u) & 65535u);
+        int3 _129 = int4(_96, clamp(_117 - ((_117 >= 32768) ? 65536 : 0), 0, int(uint3(final_light.get_width(), final_light.get_height(), final_light.get_array_size()).y) - 1), int(_103 - 1u), 0).xyz;
         uint4 _131 = final_light.read(uint2(_129.xy), uint(_129.z), 0);
-        uint4 _136 = uint4(floor((fast::clamp(_108, float4(0.0), float4(1.0)) * 255.0) + float4(0.5)));
+        uint4 _136 = uint4(floor((fast::clamp(_107, float4(0.0), float4(1.0)) * 255.0) + float4(0.5)));
         uint _137 = _136.x;
         uint _138 = _131.x;
         uint _139 = _131.y;
@@ -715,7 +715,7 @@ fragment main0_out main0(main0_in in [[stage_in]], const device type_StructuredB
             _849 = final_inverse_lut._m0[_812];
             break;
         } while(false);
-        _858 = float4(float3(uint3(_375, _612, _849)) * float3(0.0039215688593685626983642578125), _108.w);
+        _858 = float4(float3(uint3(_375, _612, _849)) * float3(0.0039215688593685626983642578125), _107.w);
         break;
     } while(false);
     out.out_var_SV_Target0 = _858;
