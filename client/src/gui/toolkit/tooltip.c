@@ -182,16 +182,15 @@ void tooltip_show(void) {
             255,
             255,
             tooltip_opacity);
-    text_show_format(OfflineRenderSurface,
-                     tooltip_font,
-                     box.x + 3,
-                     box.y,
-                     COLOR_BLACK,
-                     TEXT_MARKUP | TEXT_WORD_WRAP,
-                     &text_box,
-                     "[alpha=%d]%s[/alpha]",
-                     tooltip_opacity,
-                     tooltip_text);
+    text_show_format_root(tooltip_font,
+                          box.x + 3,
+                          box.y,
+                          COLOR_BLACK,
+                          TEXT_MARKUP | TEXT_WORD_WRAP,
+                          &text_box,
+                          "[alpha=%d]%s[/alpha]",
+                          tooltip_opacity,
+                          tooltip_text);
 
     if (tooltip_delay) {
         tooltip_opacity = MIN(255, tooltip_opacity + 25);

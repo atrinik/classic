@@ -2001,9 +2001,10 @@ static void process_widgets_rec(int draw, widgetdata *widget) {
 
                     texture = texture_surface(widget->texture);
                     widget->surface = SDL_ConvertSurface(texture, texture->format);
-                    if (widget->surface != NULL &&
-                        !gpu_renderer_canvas_register(widget->surface)) {
-                        LOG(ERROR, "Could not create retained GPU widget target: %s", SDL_GetError());
+                    if (widget->surface != NULL && !gpu_renderer_canvas_register(widget->surface)) {
+                        LOG(ERROR,
+                            "Could not create retained GPU widget target: %s",
+                            SDL_GetError());
                     }
                 }
 
@@ -2885,6 +2886,19 @@ void widget_redraw_all(int widget_type_id) {
     for (widget = cur_widget[widget_type_id]; widget; widget = widget->type_next) {
         widget->redraw = 1;
     }
+}
+
+static void widget_redraw_everything_rec(widgetdata *widget) {
+    for (; widget != NULL; widget = widget->next) {
+        widget->redraw = 1;
+        if (widget->inv != NULL) {
+            widget_redraw_everything_rec(widget->inv);
+        }
+    }
+}
+
+void widget_redraw_everything(void) {
+    widget_redraw_everything_rec(widget_list_head);
 }
 
 void widget_redraw_type_id(int type, const char *id) {

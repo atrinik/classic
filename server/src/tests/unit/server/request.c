@@ -1757,7 +1757,9 @@ START_TEST(test_map_exit_semantic_accepts_usable_destination_forms_without_loadi
     mapstruct *map;
     object *pl;
     check_setup_env_pl(&map, &pl);
-    request_move_player(&pl, map, 12, 12);
+    map = get_empty_map(MAP_CLIENT_X + 8, MAP_CLIENT_Y + 8);
+    ck_assert_ptr_nonnull(map);
+    request_move_player(&pl, map, map->width / 2, map->height / 2);
     SET_FLAG(pl, FLAG_XRAYS);
     FREE_AND_COPY_HASH(map->path, "/maps/request-exit-destination-forms");
 

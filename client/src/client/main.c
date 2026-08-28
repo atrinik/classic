@@ -41,9 +41,6 @@
 #include <window_title.h>
 #include <toolkit/path.h>
 #include <resources.h>
-#ifdef ATRINIK_WIDGET_TESTS
-#include <player_view.h>
-#endif
 #include <toolkit/signals.h>
 #include <toolkit/colorspace.h>
 #include <toolkit/binreloc.h>
@@ -181,21 +178,21 @@ void socket_command_keepalive(uint8_t *data, size_t len, size_t pos) {
     uint64_t rtt_us;
     client_keepalive_expire(&keepalive_state, now_us);
     switch (client_keepalive_receive(&keepalive_state, id, now_us, &rtt_us)) {
-    case CLIENT_KEEPALIVE_RESPONSE_MATCHED:
-        network_graph_update_latency(rtt_us);
-        return;
-    case CLIENT_KEEPALIVE_RESPONSE_LATE:
-        LOG(DEBUG, "Received late keepalive ID: %" PRIu32, id);
-        return;
-    case CLIENT_KEEPALIVE_RESPONSE_DUPLICATE:
-        LOG(DEBUG, "Received duplicate keepalive ID: %" PRIu32, id);
-        return;
-    case CLIENT_KEEPALIVE_RESPONSE_CLOCK_REGRESSION:
-        LOG(ERROR, "Ignoring keepalive ID after a monotonic clock regression: %" PRIu32, id);
-        return;
-    case CLIENT_KEEPALIVE_RESPONSE_UNKNOWN:
-        LOG(DEBUG, "Received unknown keepalive ID: %" PRIu32, id);
-        return;
+        case CLIENT_KEEPALIVE_RESPONSE_MATCHED:
+            network_graph_update_latency(rtt_us);
+            return;
+        case CLIENT_KEEPALIVE_RESPONSE_LATE:
+            LOG(DEBUG, "Received late keepalive ID: %" PRIu32, id);
+            return;
+        case CLIENT_KEEPALIVE_RESPONSE_DUPLICATE:
+            LOG(DEBUG, "Received duplicate keepalive ID: %" PRIu32, id);
+            return;
+        case CLIENT_KEEPALIVE_RESPONSE_CLOCK_REGRESSION:
+            LOG(ERROR, "Ignoring keepalive ID after a monotonic clock regression: %" PRIu32, id);
+            return;
+        case CLIENT_KEEPALIVE_RESPONSE_UNKNOWN:
+            LOG(DEBUG, "Received unknown keepalive ID: %" PRIu32, id);
+            return;
     }
 }
 
@@ -643,13 +640,18 @@ static bool gpu_renderer_recover_frame(unsigned int *attempts, const char *conte
     char driver[256];
     snprintf(backend_name, sizeof(backend_name), "%s", gpu_renderer_backend());
     snprintf(gpu_name, sizeof(gpu_name), "%s", gpu_renderer_device_name());
-    snprintf(driver, sizeof(driver), "%s %s", gpu_renderer_driver_name(),
+    snprintf(driver,
+             sizeof(driver),
+             "%s %s",
+             gpu_renderer_driver_name(),
              gpu_renderer_driver_version());
 
     if (*attempts < 1U) {
         (*attempts)++;
         if (gpu_renderer_recover(ScreenWindow)) {
             map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
+            widget_redraw_everything();
+            popup_redraw_all();
             return true;
         }
     }
@@ -708,15 +710,11 @@ int main(int argc, char *argv[]) {
     path_fopen = client_fopen_wrapper;
 
 #ifdef ATRINIK_WIDGET_TESTS
-    if (argc > 1 &&
-        (strcmp(argv[1], "--player-view") == 0 || strcmp(argv[1], "--player-view-benchmark") == 0 ||
-         strcmp(argv[1], "--player-view-movement-benchmark") == 0 ||
-         strcmp(argv[1], "--player-view-cursor-benchmark") == 0)) {
-        return player_view_main(argc - 1, &argv[1]);
+    if (argc == 2 && strcmp(argv[1], "--map-state-test") == 0) {
+        return widget_map_sparse_state_test() && widget_map_transaction_abort_test() ? EXIT_SUCCESS
+                                                                                     : EXIT_FAILURE;
     }
-#endif
 
-#ifdef ATRINIK_WIDGET_TESTS
     if (argc == 4 && strcmp(argv[1], "--widget-priority-test") == 0) {
         return widget_priority_integration_test(argv[2], argv[3]);
     }

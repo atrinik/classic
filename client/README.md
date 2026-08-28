@@ -33,8 +33,8 @@
  exactly WAV, STBVORBIS, OPUS, VOC, AIFF, AU, DRMP3, SINEWAVE, and RAW; MIDI and
  module decoders are deliberately absent. Sound effects and music are required
  on every supported platform. The production client requires a hardware GPU
- supported by SDL_GPU through Vulkan, Direct3D 12, or Metal, including RGBA8
- and R8_UINT render-target support. There is no software renderer or fallback;
+ supported by SDL_GPU through Vulkan, Direct3D 12, or Metal, including RGBA8,
+ R32_UINT, and RGBA16_UINT array render-target support. There is no software renderer or fallback;
  startup reports the selected backend, device, and driver failure and exits if
  the required GPU contract is unavailable.
 
@@ -240,59 +240,22 @@
  into the same bounded scheduler instead of downloading serially.
 
 =================================================
-= 2.1. Replaying an offline player view         =
+= 2.1. Frozen renderer evidence                 =
 =================================================
 
- Test-enabled builds can replay a bounded MAP command through the normal
- decoder and the frozen CPU reference oracle without opening a window,
- initializing audio, reading user settings, or connecting to a server:
-  $ build/linux-debug/atrinik --player-view \
-      src/tests/fixtures/player_view/smooth.xml \
-      build/linux-debug/player-view.png
+ The files under `src/tests/fixtures/player_view/` preserve the immutable MAP,
+ asset, ordering, and pixel evidence captured before the software renderer was
+ removed. They are inputs for schema checks and qualified GPU conformance jobs;
+ no client executable contains the former CPU renderer or `--player-view*`
+ command family.
 
- Use `-` as the output to verify the canonical RGBA hash without writing a PNG.
- Output files must not already exist and must be outside the manifest's frozen
- input tree. Publication uses an exclusive same-directory temporary file,
- verifies the encoded pixels, and then publishes atomically without replacing
- another file.
-
- The closed version-1 XML manifest pins the settings defaults, multipart
- geometry, exact MAP payload, and every sprite by SHA-256. It also freezes the
- viewport, logical map dimensions, test-only reference renderer, clock, zoom,
- and smooth or discrete lighting choice. Unknown fields, external XML declarations,
- missing or changed inputs, malformed packets, unavailable faces, and pixel
- drift fail before publishing an output. The maintained fixtures cover normal
- and stretched terrain, multipart and animated sprites, fog/cutaway behavior,
- lighting modes, and physical depths zero, +1, and +2.
-
- Release builds also expose the bounded lighting benchmark used by CI:
-  $ build/linux-release/atrinik --player-view-benchmark \
-      src/tests/fixtures/player_view/colored-smooth.xml standard
-
- The final argument is `standard` for the manifest's frozen viewport or
- `large` for 1920x1080. The harness warms five frames, measures 101 live
- `map_draw_map` calls, and emits one tab-separated median record. CI applies
- the same harness to the pull request base and candidate on one runner, records
- the raw samples as an artifact, and enforces the 10% standard and 15% large
- viewport regression budgets.
-
- Release builds additionally expose the stateful movement contract used by the
- movement regression workflow:
-  $ build/linux-release/atrinik --player-view-movement-benchmark \
-      src/tests/fixtures/player_view/movement-colored.xml standard translated
-
- The final reconstruction argument is `translated` (the production path) or
- `full` (the benchmark-only control); omitting it selects `translated`. An
- optional final `isolated` workload argument suppresses auxiliary local-minimap
- draws and is paired with `movement-lighting-isolated.xml` by CI. The
- JSON schema reports the sum of isolated lighting scopes accumulated from
- before queued MAP decode through the primary draw, separately from
- production-like total update work and local-minimap rendering, with operation and per-depth
- decisions, dirty/translated pixels and bytes, scroll offsets, fallbacks, and
- transformed-sprite cache timing. CI alternates translated/full Release runs
- over the exact same standard and large sustained streams and requires their
- lifecycle checkpoints and final state to match. The discrete manifest remains
- a separate correctness control.
+ GPU correctness and performance evidence must come from fenced production-path
+ runs on qualified Vulkan, Direct3D 12, and Metal hardware. Those runs record
+ exact revision and dirty identity, backend, driver, device, shader cohort,
+ viewport/depth workload, CPU submission, GPU completion, present wait, upload
+ and allocation counts, retained bytes, recovery events, and final readback
+ checkpoints. A software or CPU-emulated GPU may supplement conformance testing
+ but never satisfies release performance qualification.
 
 =================================================
 = 3.1. Licensing (Atrinik client)               =

@@ -68,6 +68,11 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
             x = packet_reader_read_uint8(&reader);
             y = packet_reader_read_uint8(&reader);
 
+            if (x < MAP_WIRE_SIZE_MIN || x > MAP_WIRE_SIZE_MAX || y < MAP_WIRE_SIZE_MIN ||
+                y > MAP_WIRE_SIZE_MAX) {
+                packet_reader_set_error(&reader, PACKET_ERROR_LIMIT_EXCEEDED);
+                break;
+            }
             setting_set_int(OPT_CAT_MAP, OPT_MAP_WIDTH, MAP_WIRE_TO_LOOK_SIZE(x));
             setting_set_int(OPT_CAT_MAP, OPT_MAP_HEIGHT, MAP_WIRE_TO_LOOK_SIZE(y));
         } else if (type == CMD_SETUP_DATA_URL) {
@@ -856,8 +861,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         MapData.light_keyframe_end_seconds = light_keyframe_end_seconds;
         MapData.light_keyframe_flags = light_keyframe_flags;
         MapData.light_keyframe_valid = true;
-    } else if (mapstat != MAP_UPDATE_CMD_PARTIAL &&
-               !map_light_keyframe_transaction_pending()) {
+    } else if (mapstat != MAP_UPDATE_CMD_PARTIAL && !map_light_keyframe_transaction_pending()) {
         MapData.light_keyframe_generation = 0;
         MapData.light_keyframe_start_seconds = 0;
         MapData.light_keyframe_end_seconds = 0;

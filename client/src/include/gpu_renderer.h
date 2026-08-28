@@ -78,7 +78,7 @@ bool gpu_renderer_begin_frame(void);
 bool gpu_renderer_present(void);
 bool gpu_renderer_frame_valid(void);
 bool gpu_renderer_map_begin(int width, int height);
-void gpu_renderer_map_set_owner(uint8_t owner);
+void gpu_renderer_map_set_owner(uint8_t owner, int sample_y);
 void gpu_renderer_map_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]);
 bool gpu_renderer_map_end(void);
 bool gpu_renderer_draw_map(float x, float y, float width, float height);

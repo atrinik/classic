@@ -132,10 +132,4 @@ set(SOURCES
 	src/gui/widgets/xp_tracker.c
 	${SOURCES_TOOLKIT})
 
-if (BUILD_TESTING AND NOT MINGW)
-	list(APPEND SOURCES
-		src/client/lighting.c
-		src/client/player_view.c)
-else ()
-	list(APPEND SOURCES src/client/gpu_lighting_runtime.c)
-endif ()
+list(APPEND SOURCES src/client/gpu_lighting_runtime.c)

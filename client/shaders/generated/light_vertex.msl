@@ -10,7 +10,7 @@ template<typename T, size_t Num>
 struct spvUnsafeArray
 {
     T elements[Num ? Num : 1];
-    
+
     thread T& operator [] (size_t pos) thread
     {
         return elements[pos];
@@ -19,7 +19,7 @@ struct spvUnsafeArray
     {
         return elements[pos];
     }
-    
+
     device T& operator [] (size_t pos) device
     {
         return elements[pos];
@@ -28,12 +28,12 @@ struct spvUnsafeArray
     {
         return elements[pos];
     }
-    
+
     constexpr const constant T& operator [] (size_t pos) const constant
     {
         return elements[pos];
     }
-    
+
     threadgroup T& operator [] (size_t pos) threadgroup
     {
         return elements[pos];
@@ -64,10 +64,11 @@ struct type_StructuredBuffer_LightQuad
 struct type_LightVertexUniforms
 {
     float2 light_viewport;
-    float2 light_vertex_padding;
+    uint light_first_quad;
+    uint light_vertex_padding;
 };
 
-constant spvUnsafeArray<uint, 6> _46 = spvUnsafeArray<uint, 6>({ 0u, 1u, 2u, 0u, 2u, 3u });
+constant spvUnsafeArray<uint, 6> _47 = spvUnsafeArray<uint, 6>({ 0u, 1u, 2u, 0u, 2u, 3u });
 
 struct main0_out
 {
@@ -79,11 +80,11 @@ struct main0_out
 vertex main0_out main0(const device type_StructuredBuffer_LightQuad& light_quads [[buffer(0)]], constant type_LightVertexUniforms& LightVertexUniforms [[buffer(1)]], uint gl_VertexIndex [[vertex_id]], uint gl_InstanceIndex [[instance_id]])
 {
     main0_out out = {};
-    int4 _50 = int4(light_quads._m0[gl_InstanceIndex].x);
-    int4 _49 = int4(light_quads._m0[gl_InstanceIndex].y);
-    out.gl_Position = float4(((float(_50[_46[gl_VertexIndex]]) * 2.0) / LightVertexUniforms.light_viewport.x) - 1.0, 1.0 - ((float(_49[_46[gl_VertexIndex]]) * 2.0) / LightVertexUniforms.light_viewport.y), 0.0, 1.0);
-    out.out_var_TEXCOORD0 = gl_InstanceIndex;
+    uint _58 = LightVertexUniforms.light_first_quad + gl_InstanceIndex;
+    int4 _51 = int4(light_quads._m0[_58].x);
+    int4 _50 = int4(light_quads._m0[_58].y);
+    out.gl_Position = float4(((float(_51[_47[gl_VertexIndex]]) * 2.0) / LightVertexUniforms.light_viewport.x) - 1.0, 1.0 - ((float(_50[_47[gl_VertexIndex]]) * 2.0) / LightVertexUniforms.light_viewport.y), 0.0, 1.0);
+    out.out_var_TEXCOORD0 = _58;
     out.out_var_TEXCOORD1 = gl_VertexIndex / 3u;
     return out;
 }
-

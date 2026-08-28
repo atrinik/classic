@@ -396,3 +396,10 @@ void popup_button_set_text(popup_button *button, const char *text) {
 int popup_need_redraw(void) {
     return popup_get_head() != NULL;
 }
+
+void popup_redraw_all(void) {
+    popup_struct *popup;
+    DL_FOREACH(popup_head, popup) {
+        popup->redraw = 1;
+    }
+}

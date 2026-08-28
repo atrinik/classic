@@ -286,63 +286,58 @@ void intro_show(void) {
      * description. */
     if (node) {
         snprintf(buf, sizeof(buf), "Version: %s", node->version);
-        text_show_shadow(OfflineRenderSurface,
-                         FONT_ARIAL10,
-                         buf,
-                         x + 13,
-                         y + 185,
-                         COLOR_HGOLD,
-                         COLOR_BLACK,
-                         0,
-                         NULL);
+        text_show_shadow_root(FONT_ARIAL10,
+                              buf,
+                              x + 13,
+                              y + 185,
+                              COLOR_HGOLD,
+                              COLOR_BLACK,
+                              0,
+                              NULL);
 
         snprintf(buf,
                  sizeof(buf),
                  "Preferred connection: %s",
                  socket_connection_preference_name(connection_preference_get(node)));
-        text_show_shadow(OfflineRenderSurface,
-                         FONT_ARIAL10,
-                         buf,
-                         x + 13,
-                         y + 197,
-                         COLOR_HGOLD,
-                         COLOR_BLACK,
-                         0,
-                         NULL);
+        text_show_shadow_root(FONT_ARIAL10,
+                              buf,
+                              x + 13,
+                              y + 197,
+                              COLOR_HGOLD,
+                              COLOR_BLACK,
+                              0,
+                              NULL);
 
         box.w = 410;
         box.h = 36;
-        text_show(OfflineRenderSurface,
-                  FONT_ARIAL10,
-                  node->desc,
-                  x + 13,
-                  y + 209,
-                  COLOR_WHITE,
-                  TEXT_WORD_WRAP | TEXT_MARKUP,
-                  &box);
+        text_show_root(FONT_ARIAL10,
+                       node->desc,
+                       x + 13,
+                       y + 209,
+                       COLOR_WHITE,
+                       TEXT_WORD_WRAP | TEXT_MARKUP,
+                       &box);
     }
 
     /* Show whether we are connecting to the metaserver or not. */
     if (ms_connecting(-1)) {
-        text_show_shadow(OfflineRenderSurface,
-                         FONT_ARIAL10,
-                         "Connecting to metaserver, please wait...",
-                         x + 105,
-                         y + 8,
-                         COLOR_HGOLD,
-                         COLOR_BLACK,
-                         0,
-                         NULL);
+        text_show_shadow_root(FONT_ARIAL10,
+                              "Connecting to metaserver, please wait...",
+                              x + 105,
+                              y + 8,
+                              COLOR_HGOLD,
+                              COLOR_BLACK,
+                              0,
+                              NULL);
     } else {
-        text_show_shadow(OfflineRenderSurface,
-                         FONT_ARIAL10,
-                         "Select a secure server.",
-                         x + 196,
-                         y + 8,
-                         COLOR_GREEN,
-                         COLOR_BLACK,
-                         0,
-                         NULL);
+        text_show_shadow_root(FONT_ARIAL10,
+                              "Select a secure server.",
+                              x + 196,
+                              y + 8,
+                              COLOR_GREEN,
+                              COLOR_BLACK,
+                              0,
+                              NULL);
     }
 
     texture = TEXTURE_CLIENT("servers_bg_over");
@@ -354,15 +349,14 @@ void intro_show(void) {
 
     box.w = texture->w;
     box.h = 0;
-    text_show_shadow(OfflineRenderSurface,
-                     FONT_SERIF12,
-                     "Game News",
-                     x,
-                     y + 10,
-                     COLOR_HGOLD,
-                     COLOR_BLACK,
-                     TEXT_ALIGN_CENTER,
-                     &box);
+    text_show_shadow_root(FONT_SERIF12,
+                          "Game News",
+                          x,
+                          y + 10,
+                          COLOR_HGOLD,
+                          COLOR_BLACK,
+                          TEXT_ALIGN_CENTER,
+                          &box);
 
     /* No list yet, make one and start downloading the data. */
     if (!list_news) {

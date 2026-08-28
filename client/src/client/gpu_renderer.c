@@ -17,13 +17,17 @@
 #include <global.h>
 
 #define GPU_RENDERER_SURFACE_GENERATION_PROPERTY "atrinik.gpu.surface_generation"
+#define GPU_RENDERER_SURFACE_TEXTURE_PROPERTY "atrinik.gpu.surface_texture"
 #define GPU_RENDERER_CANVAS_PROPERTY "atrinik.gpu.canvas"
 #define GPU_RENDERER_ATLAS_SIZE 2048
 #define GPU_RENDERER_ATLAS_ENTRY_LIMIT 512
 
+typedef struct gpu_texture_atlas gpu_texture_atlas_t;
+
 typedef struct gpu_surface_texture {
     SDL_Surface *surface;
     SDL_Texture *texture;
+    gpu_texture_atlas_t *atlas;
     Uint64 generation;
     size_t bytes;
     SDL_FRect atlas_source;
@@ -31,14 +35,17 @@ typedef struct gpu_surface_texture {
     struct gpu_surface_texture *next;
 } gpu_surface_texture_t;
 
-typedef struct gpu_texture_atlas {
+typedef struct gpu_atlas_region {
+    SDL_Rect rectangle;
+    struct gpu_atlas_region *next;
+} gpu_atlas_region_t;
+
+struct gpu_texture_atlas {
     SDL_Texture *texture;
-    int next_x;
-    int next_y;
-    int row_height;
+    gpu_atlas_region_t *free_regions;
     size_t bytes;
-    struct gpu_texture_atlas *next;
-} gpu_texture_atlas_t;
+    gpu_texture_atlas_t *next;
+};
 
 typedef struct gpu_canvas {
     SDL_Surface *surface;
@@ -91,9 +98,53 @@ static bool gpu_renderer_formats_supported(SDL_GPUDevice *candidate) {
                                         SDL_GPU_TEXTURETYPE_2D,
                                         usage) &&
            SDL_GPUTextureSupportsFormat(candidate,
-                                        SDL_GPU_TEXTUREFORMAT_R8_UINT,
+                                        SDL_GPU_TEXTUREFORMAT_R32_UINT,
                                         SDL_GPU_TEXTURETYPE_2D,
+                                        usage) &&
+           SDL_GPUTextureSupportsFormat(candidate,
+                                        SDL_GPU_TEXTUREFORMAT_R16G16B16A16_UINT,
+                                        SDL_GPU_TEXTURETYPE_2D_ARRAY,
                                         usage);
+}
+
+static void gpu_renderer_atlas_region_release(gpu_texture_atlas_t *atlas, SDL_Rect rectangle) {
+    gpu_atlas_region_t *region = xcalloc(1, sizeof(*region));
+    region->rectangle = rectangle;
+    bool merged;
+    do {
+        merged = false;
+        for (gpu_atlas_region_t **link = &atlas->free_regions; *link != NULL;
+             link = &(*link)->next) {
+            gpu_atlas_region_t *other = *link;
+            if (region->rectangle.y == other->rectangle.y &&
+                region->rectangle.h == other->rectangle.h &&
+                (region->rectangle.x + region->rectangle.w == other->rectangle.x ||
+                 other->rectangle.x + other->rectangle.w == region->rectangle.x)) {
+                int left = MIN(region->rectangle.x, other->rectangle.x);
+                int right = MAX(region->rectangle.x + region->rectangle.w,
+                                other->rectangle.x + other->rectangle.w);
+                region->rectangle.x = left;
+                region->rectangle.w = right - left;
+            } else if (region->rectangle.x == other->rectangle.x &&
+                       region->rectangle.w == other->rectangle.w &&
+                       (region->rectangle.y + region->rectangle.h == other->rectangle.y ||
+                        other->rectangle.y + other->rectangle.h == region->rectangle.y)) {
+                int top = MIN(region->rectangle.y, other->rectangle.y);
+                int bottom = MAX(region->rectangle.y + region->rectangle.h,
+                                 other->rectangle.y + other->rectangle.h);
+                region->rectangle.y = top;
+                region->rectangle.h = bottom - top;
+            } else {
+                continue;
+            }
+            *link = other->next;
+            free(other);
+            merged = true;
+            break;
+        }
+    } while (merged);
+    region->next = atlas->free_regions;
+    atlas->free_regions = region;
 }
 
 static void gpu_renderer_surface_texture_destroy(gpu_surface_texture_t *entry) {
@@ -101,8 +152,27 @@ static void gpu_renderer_surface_texture_destroy(gpu_surface_texture_t *entry) {
         SDL_DestroyTexture(entry->texture);
         statistics.resource_destructions++;
         statistics.retained_bytes -= entry->bytes;
+    } else if (entry->atlased && entry->atlas != NULL) {
+        gpu_renderer_atlas_region_release(entry->atlas,
+                                          (SDL_Rect){(int)entry->atlas_source.x,
+                                                     (int)entry->atlas_source.y,
+                                                     (int)entry->atlas_source.w,
+                                                     (int)entry->atlas_source.h});
     }
     free(entry);
+}
+
+static void SDLCALL gpu_renderer_surface_texture_cleanup(void *userdata, void *value) {
+    (void)userdata;
+    gpu_surface_texture_t *entry = value;
+    gpu_surface_texture_t **link = &surface_textures;
+    while (*link != NULL && *link != entry) {
+        link = &(*link)->next;
+    }
+    if (*link == entry) {
+        *link = entry->next;
+    }
+    gpu_renderer_surface_texture_destroy(entry);
 }
 
 static void gpu_renderer_texture_atlases_destroy(void) {
@@ -110,6 +180,11 @@ static void gpu_renderer_texture_atlases_destroy(void) {
         gpu_texture_atlas_t *atlas = texture_atlases;
         texture_atlases = atlas->next;
         SDL_DestroyTexture(atlas->texture);
+        while (atlas->free_regions != NULL) {
+            gpu_atlas_region_t *region = atlas->free_regions;
+            atlas->free_regions = region->next;
+            free(region);
+        }
         statistics.resource_destructions++;
         statistics.retained_bytes -= atlas->bytes;
         free(atlas);
@@ -119,8 +194,14 @@ static void gpu_renderer_texture_atlases_destroy(void) {
 static void gpu_renderer_surface_textures_destroy(void) {
     while (surface_textures != NULL) {
         gpu_surface_texture_t *entry = surface_textures;
-        surface_textures = entry->next;
-        gpu_renderer_surface_texture_destroy(entry);
+        SDL_PropertiesID properties = SDL_GetSurfaceProperties(entry->surface);
+        if (SDL_GetPointerProperty(properties, GPU_RENDERER_SURFACE_TEXTURE_PROPERTY, NULL) ==
+            entry) {
+            SDL_ClearProperty(properties, GPU_RENDERER_SURFACE_TEXTURE_PROPERTY);
+        } else {
+            surface_textures = entry->next;
+            gpu_renderer_surface_texture_destroy(entry);
+        }
     }
 }
 
@@ -189,12 +270,15 @@ bool gpu_renderer_create(SDL_Window *window) {
         return false;
     }
     bool configured =
-        SDL_SetBooleanProperty(properties, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_SPIRV_BOOLEAN, true) &&
+        SDL_SetBooleanProperty(properties,
+                               SDL_PROP_GPU_DEVICE_CREATE_SHADERS_SPIRV_BOOLEAN,
+                               true) &&
         SDL_SetBooleanProperty(properties, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_DXIL_BOOLEAN, true) &&
         SDL_SetBooleanProperty(properties, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_MSL_BOOLEAN, true) &&
-        SDL_SetBooleanProperty(properties,
-                               SDL_PROP_GPU_DEVICE_CREATE_VULKAN_REQUIRE_HARDWARE_ACCELERATION_BOOLEAN,
-                               true);
+        SDL_SetBooleanProperty(
+            properties,
+            SDL_PROP_GPU_DEVICE_CREATE_VULKAN_REQUIRE_HARDWARE_ACCELERATION_BOOLEAN,
+            true);
     if (configured) {
         device = SDL_CreateGPUDeviceWithProperties(properties);
     }
@@ -205,8 +289,10 @@ bool gpu_renderer_create(SDL_Window *window) {
     }
 
     const char *selected_backend = SDL_GetGPUDeviceDriver(device);
-    if (!gpu_renderer_backend_supported(selected_backend) || !gpu_renderer_formats_supported(device)) {
-        SDL_SetError("GPU renderer requires Vulkan, Direct3D 12, or Metal with RGBA8 and R8_UINT render targets");
+    if (!gpu_renderer_backend_supported(selected_backend) ||
+        !gpu_renderer_formats_supported(device)) {
+        SDL_SetError("GPU renderer requires Vulkan, Direct3D 12, or Metal with RGBA8 and R8_UINT "
+                     "render targets");
         gpu_renderer_device_destroy();
         return false;
     }
@@ -323,8 +409,7 @@ static bool gpu_renderer_frame_target_create(void) {
     frame_target_bytes = (size_t)width * (size_t)height * 4U;
     statistics.resource_creations++;
     statistics.retained_bytes += frame_target_bytes;
-    statistics.peak_retained_bytes = MAX(statistics.peak_retained_bytes,
-                                         statistics.retained_bytes);
+    statistics.peak_retained_bytes = MAX(statistics.peak_retained_bytes, statistics.retained_bytes);
     return true;
 }
 
@@ -342,11 +427,11 @@ bool gpu_renderer_present(void) {
         return false;
     }
     uint64_t started = gpu_renderer_timing_begin();
-    bool result = SDL_SetRenderTarget(renderer, NULL) &&
-                  SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_OPAQUE) &&
-                  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE) &&
-                  SDL_RenderClear(renderer) && SDL_RenderTexture(renderer, frame_target, NULL, NULL) &&
-                  SDL_RenderPresent(renderer);
+    bool result =
+        SDL_SetRenderTarget(renderer, NULL) &&
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_OPAQUE) &&
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE) && SDL_RenderClear(renderer) &&
+        SDL_RenderTexture(renderer, frame_target, NULL, NULL) && SDL_RenderPresent(renderer);
     statistics.draws++;
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_PRESENT_WAIT, started);
     return gpu_renderer_frame_result(result);
@@ -360,8 +445,8 @@ bool gpu_renderer_map_begin(int width, int height) {
     return gpu_renderer_frame_result(gpu_map_renderer_begin(width, height));
 }
 
-void gpu_renderer_map_set_owner(uint8_t owner) {
-    gpu_map_renderer_set_owner(owner);
+void gpu_renderer_map_set_owner(uint8_t owner, int sample_y) {
+    gpu_map_renderer_set_owner(owner, sample_y);
 }
 
 void gpu_renderer_map_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]) {
@@ -380,9 +465,9 @@ bool gpu_renderer_draw_map(float x, float y, float width, float height) {
     SDL_FRect destination = {x, y, width, height};
     statistics.draws++;
     return gpu_renderer_frame_result(
-        SDL_SetTextureScaleMode(map_target,
-                                zoom_filter_to_scale_mode(
-                                    setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER))) &&
+        SDL_SetTextureScaleMode(
+            map_target,
+            zoom_filter_to_scale_mode(setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER))) &&
         SDL_RenderTexture(renderer, map_target, NULL, &destination));
 }
 
@@ -399,16 +484,14 @@ static gpu_texture_atlas_t *gpu_renderer_texture_atlas_create(void) {
     if (previous_clip_enabled) {
         SDL_GetRenderClipRect(renderer, &previous_clip);
     }
-    bool success = atlas->texture != NULL &&
-                   SDL_SetTextureScaleMode(atlas->texture, SDL_SCALEMODE_NEAREST) &&
-                   SDL_SetTextureBlendMode(atlas->texture, SDL_BLENDMODE_BLEND) &&
-                   SDL_SetRenderTarget(renderer, atlas->texture) &&
-                   SDL_SetRenderClipRect(renderer, NULL) &&
-                   SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_TRANSPARENT) &&
-                   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE) &&
-                   SDL_RenderClear(renderer) && SDL_SetRenderTarget(renderer, previous) &&
-                   SDL_SetRenderClipRect(renderer,
-                                         previous_clip_enabled ? &previous_clip : NULL);
+    bool success =
+        atlas->texture != NULL && SDL_SetTextureScaleMode(atlas->texture, SDL_SCALEMODE_NEAREST) &&
+        SDL_SetTextureBlendMode(atlas->texture, SDL_BLENDMODE_BLEND) &&
+        SDL_SetRenderTarget(renderer, atlas->texture) && SDL_SetRenderClipRect(renderer, NULL) &&
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_TRANSPARENT) &&
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE) && SDL_RenderClear(renderer) &&
+        SDL_SetRenderTarget(renderer, previous) &&
+        SDL_SetRenderClipRect(renderer, previous_clip_enabled ? &previous_clip : NULL);
     if (!success) {
         SDL_SetRenderTarget(renderer, previous);
         SDL_SetRenderClipRect(renderer, previous_clip_enabled ? &previous_clip : NULL);
@@ -416,28 +499,33 @@ static gpu_texture_atlas_t *gpu_renderer_texture_atlas_create(void) {
         free(atlas);
         return NULL;
     }
+    atlas->free_regions = xcalloc(1, sizeof(*atlas->free_regions));
+    atlas->free_regions->rectangle =
+        (SDL_Rect){0, 0, GPU_RENDERER_ATLAS_SIZE, GPU_RENDERER_ATLAS_SIZE};
     atlas->bytes = (size_t)GPU_RENDERER_ATLAS_SIZE * GPU_RENDERER_ATLAS_SIZE * 4U;
     atlas->next = texture_atlases;
     texture_atlases = atlas;
     statistics.resource_creations++;
     statistics.retained_bytes += atlas->bytes;
-    statistics.peak_retained_bytes = MAX(statistics.peak_retained_bytes,
-                                         statistics.retained_bytes);
+    statistics.peak_retained_bytes = MAX(statistics.peak_retained_bytes, statistics.retained_bytes);
     return atlas;
 }
 
 static bool gpu_renderer_texture_atlas_place(SDL_Surface *surface,
                                              SDL_Texture **texture,
-                                             SDL_FRect *source) {
+                                             SDL_FRect *source,
+                                             gpu_texture_atlas_t **selected_atlas) {
     HARD_ASSERT(surface != NULL);
     HARD_ASSERT(texture != NULL);
     HARD_ASSERT(source != NULL);
+    HARD_ASSERT(selected_atlas != NULL);
     if (surface->w <= 0 || surface->h <= 0 || surface->w > GPU_RENDERER_ATLAS_ENTRY_LIMIT ||
         surface->h > GPU_RENDERER_ATLAS_ENTRY_LIMIT) {
         return false;
     }
 
     gpu_texture_atlas_t *atlas = texture_atlases;
+    gpu_atlas_region_t **available = NULL;
     for (;;) {
         if (atlas == NULL) {
             atlas = gpu_renderer_texture_atlas_create();
@@ -445,25 +533,51 @@ static bool gpu_renderer_texture_atlas_place(SDL_Surface *surface,
                 return false;
             }
         }
-        if (atlas->next_x + surface->w > GPU_RENDERER_ATLAS_SIZE) {
-            atlas->next_x = 0;
-            atlas->next_y += atlas->row_height;
-            atlas->row_height = 0;
+        for (gpu_atlas_region_t **link = &atlas->free_regions; *link != NULL;
+             link = &(*link)->next) {
+            if ((*link)->rectangle.w >= surface->w && (*link)->rectangle.h >= surface->h) {
+                available = link;
+                break;
+            }
         }
-        if (atlas->next_y + surface->h <= GPU_RENDERER_ATLAS_SIZE) {
+        if (available != NULL) {
             break;
         }
         atlas = atlas->next;
     }
 
+    gpu_atlas_region_t *region = *available;
+    SDL_Rect allocation = {region->rectangle.x, region->rectangle.y, surface->w, surface->h};
+    *available = region->next;
+    if (region->rectangle.w > surface->w) {
+        gpu_atlas_region_t *right = xcalloc(1, sizeof(*right));
+        right->rectangle = (SDL_Rect){region->rectangle.x + surface->w,
+                                      region->rectangle.y,
+                                      region->rectangle.w - surface->w,
+                                      surface->h};
+        right->next = atlas->free_regions;
+        atlas->free_regions = right;
+    }
+    if (region->rectangle.h > surface->h) {
+        gpu_atlas_region_t *below = xcalloc(1, sizeof(*below));
+        below->rectangle = (SDL_Rect){region->rectangle.x,
+                                      region->rectangle.y + surface->h,
+                                      region->rectangle.w,
+                                      region->rectangle.h - surface->h};
+        below->next = atlas->free_regions;
+        atlas->free_regions = below;
+    }
+    free(region);
+
     SDL_Texture *upload = SDL_CreateTextureFromSurface(renderer, surface);
     if (upload == NULL) {
+        gpu_renderer_atlas_region_release(atlas, allocation);
         return false;
     }
-    SDL_FRect destination = {(float)atlas->next_x,
-                             (float)atlas->next_y,
-                             (float)surface->w,
-                             (float)surface->h};
+    SDL_FRect destination = {(float)allocation.x,
+                             (float)allocation.y,
+                             (float)allocation.w,
+                             (float)allocation.h};
     SDL_Texture *previous = SDL_GetRenderTarget(renderer);
     SDL_Rect previous_clip;
     bool previous_clip_enabled = SDL_RenderClipEnabled(renderer);
@@ -475,45 +589,39 @@ static bool gpu_renderer_texture_atlas_place(SDL_Surface *surface,
                    SDL_SetRenderClipRect(renderer, NULL) &&
                    SDL_RenderTexture(renderer, upload, NULL, &destination) &&
                    SDL_SetRenderTarget(renderer, previous) &&
-                   SDL_SetRenderClipRect(renderer,
-                                         previous_clip_enabled ? &previous_clip : NULL);
+                   SDL_SetRenderClipRect(renderer, previous_clip_enabled ? &previous_clip : NULL);
     SDL_DestroyTexture(upload);
     if (!success) {
         SDL_SetRenderTarget(renderer, previous);
         SDL_SetRenderClipRect(renderer, previous_clip_enabled ? &previous_clip : NULL);
+        gpu_renderer_atlas_region_release(atlas, allocation);
         return false;
     }
 
-    atlas->next_x += surface->w;
-    atlas->row_height = MAX(atlas->row_height, surface->h);
     *texture = atlas->texture;
     *source = destination;
+    *selected_atlas = atlas;
     return true;
 }
 
 static gpu_surface_texture_t *gpu_renderer_surface_texture(SDL_Surface *surface) {
     SDL_PropertiesID properties = SDL_GetSurfaceProperties(surface);
-    Uint64 generation = SDL_GetNumberProperty(properties,
-                                              GPU_RENDERER_SURFACE_GENERATION_PROPERTY,
-                                              0);
-    gpu_surface_texture_t **link = &surface_textures;
-    while (*link != NULL) {
-        gpu_surface_texture_t *entry = *link;
-        if (entry->surface == surface) {
-            if (generation != 0 && entry->generation == generation) {
-                return entry;
-            }
-            *link = entry->next;
-            gpu_renderer_surface_texture_destroy(entry);
-            break;
-        }
-        link = &entry->next;
+    Uint64 generation =
+        SDL_GetNumberProperty(properties, GPU_RENDERER_SURFACE_GENERATION_PROPERTY, 0);
+    gpu_surface_texture_t *cached =
+        SDL_GetPointerProperty(properties, GPU_RENDERER_SURFACE_TEXTURE_PROPERTY, NULL);
+    if (cached != NULL && generation != 0 && cached->generation == generation) {
+        return cached;
+    }
+    if (cached != NULL) {
+        SDL_ClearProperty(properties, GPU_RENDERER_SURFACE_TEXTURE_PROPERTY);
     }
 
     gpu_surface_texture_t *entry = xcalloc(1, sizeof(*entry));
     entry->atlased = gpu_renderer_texture_atlas_place(surface,
                                                       &entry->texture,
-                                                      &entry->atlas_source);
+                                                      &entry->atlas_source,
+                                                      &entry->atlas);
     if (!entry->atlased) {
         entry->texture = SDL_CreateTextureFromSurface(renderer, surface);
         if (entry->texture == NULL) {
@@ -531,16 +639,29 @@ static gpu_surface_texture_t *gpu_renderer_surface_texture(SDL_Surface *surface)
     entry->bytes = entry->atlased ? 0 : upload_bytes;
     entry->next = surface_textures;
     surface_textures = entry;
-    SDL_SetNumberProperty(properties,
-                          GPU_RENDERER_SURFACE_GENERATION_PROPERTY,
-                          (Sint64)entry->generation);
+    if (!SDL_SetNumberProperty(properties,
+                               GPU_RENDERER_SURFACE_GENERATION_PROPERTY,
+                               (Sint64)entry->generation)) {
+        surface_textures = entry->next;
+        gpu_renderer_surface_texture_destroy(entry);
+        return NULL;
+    }
+    if (!SDL_SetPointerPropertyWithCleanup(properties,
+                                           GPU_RENDERER_SURFACE_TEXTURE_PROPERTY,
+                                           entry,
+                                           gpu_renderer_surface_texture_cleanup,
+                                           NULL)) {
+        /* SDL owns the failed value long enough to invoke the cleanup callback. */
+        SDL_SetNumberProperty(properties, GPU_RENDERER_SURFACE_GENERATION_PROPERTY, 0);
+        return NULL;
+    }
     statistics.upload_count++;
     statistics.upload_bytes += upload_bytes;
     if (!entry->atlased) {
         statistics.resource_creations++;
         statistics.retained_bytes += entry->bytes;
-        statistics.peak_retained_bytes = MAX(statistics.peak_retained_bytes,
-                                             statistics.retained_bytes);
+        statistics.peak_retained_bytes =
+            MAX(statistics.peak_retained_bytes, statistics.retained_bytes);
     }
     return entry;
 }
@@ -577,23 +698,31 @@ static bool gpu_renderer_canvas_texture_create(gpu_canvas_t *canvas) {
     canvas->bytes = (size_t)canvas->surface->w * (size_t)canvas->surface->h * 4U;
     statistics.resource_creations++;
     statistics.retained_bytes += canvas->bytes;
-    statistics.peak_retained_bytes = MAX(statistics.peak_retained_bytes,
-                                         statistics.retained_bytes);
+    statistics.peak_retained_bytes = MAX(statistics.peak_retained_bytes, statistics.retained_bytes);
 
     /* A widget's initial background is immutable upload data. Subsequent
      * widget composition targets this GPU texture directly. */
     SDL_Texture *bootstrap = SDL_CreateTextureFromSurface(renderer, canvas->surface);
     SDL_Texture *previous = SDL_GetRenderTarget(renderer);
-    bool success = bootstrap != NULL && SDL_SetRenderTarget(renderer, canvas->texture) &&
-                   SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_TRANSPARENT) &&
-                   SDL_RenderClear(renderer) &&
-                   SDL_RenderTexture(renderer, bootstrap, NULL, NULL) &&
-                   SDL_SetRenderTarget(renderer, previous);
+    SDL_Rect previous_clip;
+    bool previous_clip_enabled = SDL_RenderClipEnabled(renderer);
+    if (previous_clip_enabled) {
+        SDL_GetRenderClipRect(renderer, &previous_clip);
+    }
+    bool success =
+        bootstrap != NULL && SDL_SetTextureBlendMode(bootstrap, SDL_BLENDMODE_NONE) &&
+        SDL_SetRenderTarget(renderer, canvas->texture) && SDL_SetRenderClipRect(renderer, NULL) &&
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_TRANSPARENT) &&
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE) && SDL_RenderClear(renderer) &&
+        SDL_RenderTexture(renderer, bootstrap, NULL, NULL) &&
+        SDL_SetRenderTarget(renderer, previous) &&
+        SDL_SetRenderClipRect(renderer, previous_clip_enabled ? &previous_clip : NULL);
     if (bootstrap != NULL) {
         SDL_DestroyTexture(bootstrap);
     }
     if (!success) {
         SDL_SetRenderTarget(renderer, previous);
+        SDL_SetRenderClipRect(renderer, previous_clip_enabled ? &previous_clip : NULL);
         gpu_renderer_canvas_texture_destroy(canvas);
         return false;
     }
@@ -635,8 +764,7 @@ typedef struct gpu_renderer_target_scope {
     bool previous_clip_enabled;
 } gpu_renderer_target_scope_t;
 
-static bool gpu_renderer_target_begin(SDL_Surface *surface,
-                                      gpu_renderer_target_scope_t *scope) {
+static bool gpu_renderer_target_begin(SDL_Surface *surface, gpu_renderer_target_scope_t *scope) {
     HARD_ASSERT(surface != NULL);
     HARD_ASSERT(scope != NULL);
     gpu_canvas_t *canvas = gpu_renderer_canvas(surface);
@@ -650,14 +778,24 @@ static bool gpu_renderer_target_begin(SDL_Surface *surface,
     }
     SDL_Rect clip;
     SDL_GetSurfaceClipRect(surface, &clip);
-    return SDL_SetRenderTarget(renderer, canvas->texture) && SDL_SetRenderClipRect(renderer, &clip);
+    if (!SDL_SetRenderTarget(renderer, canvas->texture)) {
+        return false;
+    }
+    if (!SDL_SetRenderClipRect(renderer, &clip)) {
+        SDL_SetRenderTarget(renderer, scope->previous_target);
+        SDL_SetRenderClipRect(renderer,
+                              scope->previous_clip_enabled ? &scope->previous_clip : NULL);
+        return false;
+    }
+    return true;
 }
 
 static bool gpu_renderer_target_end(const gpu_renderer_target_scope_t *scope, bool success) {
-    bool restored = SDL_SetRenderTarget(renderer, scope->previous_target) &&
-                    SDL_SetRenderClipRect(renderer,
-                                          scope->previous_clip_enabled ? &scope->previous_clip
-                                                                      : NULL);
+    bool target_restored = SDL_SetRenderTarget(renderer, scope->previous_target);
+    bool clip_restored =
+        SDL_SetRenderClipRect(renderer,
+                              scope->previous_clip_enabled ? &scope->previous_clip : NULL);
+    bool restored = target_restored && clip_restored;
     return success && restored;
 }
 
@@ -698,8 +836,7 @@ static bool gpu_renderer_draw_surface_to_impl(SDL_Surface *target,
         !SDL_GetSurfaceBlendMode(surface, &blend_mode) ||
         !SDL_SetTextureScaleMode(texture, scale_mode) ||
         !SDL_SetTextureColorMod(texture, red, green, blue) ||
-        !SDL_SetTextureAlphaMod(texture, alpha) ||
-        !SDL_SetTextureBlendMode(texture, blend_mode)) {
+        !SDL_SetTextureAlphaMod(texture, alpha) || !SDL_SetTextureBlendMode(texture, blend_mode)) {
         return target == NULL ? false : gpu_renderer_target_end(&scope, false);
     }
     SDL_FRect source_float;
@@ -714,10 +851,8 @@ static bool gpu_renderer_draw_surface_to_impl(SDL_Surface *target,
         }
         source_pointer = &source_float;
     } else if (source != NULL) {
-        source_float = (SDL_FRect){(float)source->x,
-                                  (float)source->y,
-                                  (float)source->w,
-                                  (float)source->h};
+        source_float =
+            (SDL_FRect){(float)source->x, (float)source->y, (float)source->w, (float)source->h};
         source_pointer = &source_float;
     }
     statistics.draws++;
@@ -728,24 +863,22 @@ static bool gpu_renderer_draw_surface_to_impl(SDL_Surface *target,
 bool gpu_renderer_draw_surface(SDL_Surface *surface,
                                const SDL_Rect *source,
                                const SDL_FRect *destination) {
-    return gpu_renderer_frame_result(
-        gpu_renderer_draw_surface_to_impl(NULL,
-                                          surface,
-                                          source,
-                                          destination,
-                                          SDL_SCALEMODE_NEAREST));
+    return gpu_renderer_frame_result(gpu_renderer_draw_surface_to_impl(NULL,
+                                                                       surface,
+                                                                       source,
+                                                                       destination,
+                                                                       SDL_SCALEMODE_NEAREST));
 }
 
 bool gpu_renderer_draw_surface_to(SDL_Surface *target,
                                   SDL_Surface *surface,
                                   const SDL_Rect *source,
                                   const SDL_FRect *destination) {
-    return gpu_renderer_frame_result(
-        gpu_renderer_draw_surface_to_impl(target,
-                                          surface,
-                                          source,
-                                          destination,
-                                          SDL_SCALEMODE_NEAREST));
+    return gpu_renderer_frame_result(gpu_renderer_draw_surface_to_impl(target,
+                                                                       surface,
+                                                                       source,
+                                                                       destination,
+                                                                       SDL_SCALEMODE_NEAREST));
 }
 
 bool gpu_renderer_draw_surface_scaled_to(SDL_Surface *target,
@@ -775,10 +908,7 @@ bool gpu_renderer_canvas_fill(SDL_Surface *surface,
                                               (float)rectangle->y,
                                               (float)rectangle->w,
                                               (float)rectangle->h}
-                                : (SDL_FRect){0.0f,
-                                              0.0f,
-                                              (float)surface->w,
-                                              (float)surface->h};
+                                : (SDL_FRect){0.0f, 0.0f, (float)surface->w, (float)surface->h};
     bool success = SDL_SetRenderDrawColor(renderer, red, green, blue, alpha) &&
                    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE) &&
                    SDL_RenderFillRect(renderer, &destination);
@@ -800,9 +930,9 @@ bool gpu_renderer_canvas_draw_rect(SDL_Surface *surface,
     if (!gpu_renderer_target_begin(surface, &scope)) {
         return gpu_renderer_frame_result(false);
     }
-    bool success = gpu_renderer_draw_color(red, green, blue, alpha) &&
-                   (filled ? SDL_RenderFillRect(renderer, rectangle)
-                           : SDL_RenderRect(renderer, rectangle));
+    bool success =
+        gpu_renderer_draw_color(red, green, blue, alpha) &&
+        (filled ? SDL_RenderFillRect(renderer, rectangle) : SDL_RenderRect(renderer, rectangle));
     statistics.draws++;
     return gpu_renderer_frame_result(gpu_renderer_target_end(&scope, success));
 }
@@ -886,46 +1016,46 @@ bool gpu_renderer_set_clip(const SDL_Rect *rectangle) {
     if (gpu_map_renderer_active()) {
         return gpu_renderer_frame_result(gpu_map_renderer_set_clip(rectangle));
     }
-    return gpu_renderer_frame_result(renderer != NULL && SDL_SetRenderClipRect(renderer, rectangle));
+    return gpu_renderer_frame_result(renderer != NULL &&
+                                     SDL_SetRenderClipRect(renderer, rectangle));
 }
 
 void gpu_renderer_invalidate_surface(SDL_Surface *surface) {
+    if (surface == NULL) {
+        return;
+    }
     gpu_map_renderer_invalidate_surface(surface);
-    if (surface != NULL && gpu_renderer_canvas_registered(surface)) {
-        SDL_ClearProperty(SDL_GetSurfaceProperties(surface), GPU_RENDERER_CANVAS_PROPERTY);
-    }
-    gpu_surface_texture_t **link = &surface_textures;
-    while (*link != NULL) {
-        gpu_surface_texture_t *entry = *link;
-        if (entry->surface == surface) {
-            *link = entry->next;
-            gpu_renderer_surface_texture_destroy(entry);
-            return;
-        }
-        link = &entry->next;
-    }
+    SDL_PropertiesID properties = SDL_GetSurfaceProperties(surface);
+    SDL_ClearProperty(properties, GPU_RENDERER_CANVAS_PROPERTY);
+    SDL_ClearProperty(properties, GPU_RENDERER_SURFACE_TEXTURE_PROPERTY);
+    SDL_SetNumberProperty(properties, GPU_RENDERER_SURFACE_GENERATION_PROPERTY, 0);
 }
 
 void gpu_renderer_surface_changed(SDL_Surface *surface) {
     if (surface == NULL) {
         return;
     }
-    gpu_renderer_invalidate_surface(surface);
-    SDL_SetNumberProperty(SDL_GetSurfaceProperties(surface),
-                          GPU_RENDERER_SURFACE_GENERATION_PROPERTY,
-                          0);
+    gpu_map_renderer_invalidate_surface(surface);
+    SDL_PropertiesID properties = SDL_GetSurfaceProperties(surface);
+    gpu_canvas_t *canvas = gpu_renderer_canvas(surface);
+    if (canvas != NULL) {
+        gpu_renderer_canvas_texture_destroy(canvas);
+    }
+    SDL_ClearProperty(properties, GPU_RENDERER_SURFACE_TEXTURE_PROPERTY);
+    SDL_SetNumberProperty(properties, GPU_RENDERER_SURFACE_GENERATION_PROPERTY, 0);
 }
 
 SDL_Surface *gpu_renderer_readback(const SDL_Rect *rect) {
-    if (renderer == NULL || device == NULL || frame_target == NULL || !SDL_FlushRenderer(renderer)) {
+    if (renderer == NULL || device == NULL || frame_target == NULL ||
+        !SDL_FlushRenderer(renderer)) {
         return NULL;
     }
     float texture_width, texture_height;
     if (!SDL_GetTextureSize(frame_target, &texture_width, &texture_height)) {
         return NULL;
     }
-    SDL_Rect area = rect != NULL ? *rect
-                                 : (SDL_Rect){0, 0, (int)texture_width, (int)texture_height};
+    SDL_Rect area =
+        rect != NULL ? *rect : (SDL_Rect){0, 0, (int)texture_width, (int)texture_height};
     if (area.x < 0 || area.y < 0 || area.w <= 0 || area.h <= 0 ||
         area.x + area.w > (int)texture_width || area.y + area.h > (int)texture_height) {
         SDL_SetError("GPU screenshot rectangle is outside the completed frame");
@@ -1044,8 +1174,7 @@ void gpu_renderer_statistics_upload(size_t bytes) {
 void gpu_renderer_statistics_resource_create(size_t retained_bytes) {
     statistics.resource_creations++;
     statistics.retained_bytes += retained_bytes;
-    statistics.peak_retained_bytes = MAX(statistics.peak_retained_bytes,
-                                         statistics.retained_bytes);
+    statistics.peak_retained_bytes = MAX(statistics.peak_retained_bytes, statistics.retained_bytes);
 }
 
 void gpu_renderer_statistics_resource_destroy(size_t retained_bytes) {

@@ -56,16 +56,32 @@ bool surface_blit_scaled(SDL_Surface *source,
                                                    &gpu_destination,
                                                    scale_mode);
     }
-    return SDL_BlitSurfaceScaled(source,
-                                 source_rect,
-                                 destination,
-                                 destination_rect,
-                                 scale_mode);
+    return SDL_BlitSurfaceScaled(source, source_rect, destination, destination_rect, scale_mode);
 }
 
 bool surface_fill_rect(SDL_Surface *surface, const SDL_Rect *rectangle, Uint32 color) {
-    if (gpu_renderer_ready() && gpu_renderer_canvas_registered(surface)) {
+    if (gpu_renderer_ready() && (surface == NULL || gpu_renderer_canvas_registered(surface))) {
         Uint8 red, green, blue, alpha;
+        if (surface == NULL) {
+            SDL_GetRGBA(color,
+                        SDL_GetPixelFormatDetails(SDL_PIXELFORMAT_RGBA32),
+                        NULL,
+                        &red,
+                        &green,
+                        &blue,
+                        &alpha);
+            SDL_FRect destination = rectangle != NULL ? (SDL_FRect){(float)rectangle->x,
+                                                                    (float)rectangle->y,
+                                                                    (float)rectangle->w,
+                                                                    (float)rectangle->h}
+                                                      : (SDL_FRect){0.0f, 0.0f, 0.0f, 0.0f};
+            return gpu_renderer_draw_rect(rectangle != NULL ? &destination : NULL,
+                                          red,
+                                          green,
+                                          blue,
+                                          alpha,
+                                          true);
+        }
         surface_get_rgba(surface, color, &red, &green, &blue, &alpha);
         return gpu_renderer_canvas_fill(surface, rectangle, red, green, blue, alpha);
     }
@@ -338,27 +354,24 @@ int lineRGBA(SDL_Surface *surface,
              Uint8 blue,
              Uint8 alpha) {
     if (surface == NULL || (gpu_renderer_ready() && gpu_renderer_canvas_registered(surface))) {
-        bool success = surface == NULL
-                           ? gpu_renderer_draw_line((float)x1,
-                                                    (float)y1,
-                                                    (float)x2,
-                                                    (float)y2,
-                                                    red,
-                                                    green,
-                                                    blue,
-                                                    alpha)
-                           : gpu_renderer_canvas_draw_line(surface,
-                                                           (float)x1,
-                                                           (float)y1,
-                                                           (float)x2,
-                                                           (float)y2,
-                                                           red,
-                                                           green,
-                                                           blue,
-                                                           alpha);
-        return success
-                   ? 0
-                   : -1;
+        bool success = surface == NULL ? gpu_renderer_draw_line((float)x1,
+                                                                (float)y1,
+                                                                (float)x2,
+                                                                (float)y2,
+                                                                red,
+                                                                green,
+                                                                blue,
+                                                                alpha)
+                                       : gpu_renderer_canvas_draw_line(surface,
+                                                                       (float)x1,
+                                                                       (float)y1,
+                                                                       (float)x2,
+                                                                       (float)y2,
+                                                                       red,
+                                                                       green,
+                                                                       blue,
+                                                                       alpha);
+        return success ? 0 : -1;
     }
     int dx = abs(x2 - x1);
     int sx = x1 < x2 ? 1 : -1;
@@ -419,12 +432,7 @@ int boxRGBA(SDL_Surface *surface,
                                      (float)destination.w,
                                      (float)destination.h};
         bool success = surface == NULL
-                           ? gpu_renderer_draw_rect(&gpu_destination,
-                                                    red,
-                                                    green,
-                                                    blue,
-                                                    alpha,
-                                                    true)
+                           ? gpu_renderer_draw_rect(&gpu_destination, red, green, blue, alpha, true)
                            : gpu_renderer_canvas_draw_rect(surface,
                                                            &gpu_destination,
                                                            red,
@@ -432,9 +440,7 @@ int boxRGBA(SDL_Surface *surface,
                                                            blue,
                                                            alpha,
                                                            true);
-        return success
-                   ? 0
-                   : -1;
+        return success ? 0 : -1;
     }
     if (alpha == SDL_ALPHA_TRANSPARENT) {
         return 0;
@@ -454,8 +460,7 @@ int boxRGBA(SDL_Surface *surface,
         return -1;
     }
 
-    bool success =
-        surface_blit_scaled(source, NULL, surface, &destination, SDL_SCALEMODE_NEAREST);
+    bool success = surface_blit_scaled(source, NULL, surface, &destination, SDL_SCALEMODE_NEAREST);
     SDL_DestroySurface(source);
     return success ? 0 : -1;
 }
@@ -564,10 +569,8 @@ SDL_Surface *zoomSurface(SDL_Surface *surface, double zoom_x, double zoom_y, int
 
     int width, height;
     zoomSurfaceSize(surface->w, surface->h, zoom_x, zoom_y, &width, &height);
-    SDL_Surface *scaled = SDL_ScaleSurface(surface,
-                                           width,
-                                           height,
-                                           zoom_filter_to_scale_mode(zoom_filter));
+    SDL_Surface *scaled =
+        SDL_ScaleSurface(surface, width, height, zoom_filter_to_scale_mode(zoom_filter));
     if (scaled == NULL || (zoom_x > 0.0 && zoom_y > 0.0)) {
         return scaled;
     }
@@ -611,12 +614,11 @@ static bool surface_has_palette_alpha(SDL_Surface *surface) {
     return false;
 }
 
-SDL_Surface *
-rotozoomSurfaceXY(SDL_Surface *surface,
-                  double angle,
-                  double zoom_x,
-                  double zoom_y,
-                  int zoom_filter) {
+SDL_Surface *rotozoomSurfaceXY(SDL_Surface *surface,
+                               double angle,
+                               double zoom_x,
+                               double zoom_y,
+                               int zoom_filter) {
     if (surface == NULL) {
         SDL_SetError("Invalid surface");
         return NULL;

@@ -58,11 +58,20 @@
  */
 #define MAP_RENDER_OVERSCAN 2
 
+/** Supported user-visible look-size range. */
+#define MAP_LOOK_SIZE_MIN 9
+#define MAP_LOOK_SIZE_DEFAULT 25
+#define MAP_LOOK_SIZE_MAX 28
+
 /** Convert a user-selected logical look size to the map protocol size. */
 #define MAP_LOOK_TO_WIRE_SIZE(_size) ((_size) + MAP_RENDER_OVERSCAN * 2)
 
 /** Convert a map protocol size back to the user-selected logical look size. */
 #define MAP_WIRE_TO_LOOK_SIZE(_size) ((_size) - MAP_RENDER_OVERSCAN * 2)
+
+/** Supported MAP protocol-size range after adding render overscan. */
+#define MAP_WIRE_SIZE_MIN MAP_LOOK_TO_WIRE_SIZE(MAP_LOOK_SIZE_MIN)
+#define MAP_WIRE_SIZE_MAX MAP_LOOK_TO_WIRE_SIZE(MAP_LOOK_SIZE_MAX)
 
 /**
  * @defgroup LAYER_xxx Layer types
@@ -584,6 +593,8 @@ extern bool map_cell_changed(int x, int y, const MapCell *snapshot);
 #ifdef ATRINIK_WIDGET_TESTS
 /** Verify the 28x28/all-depth sparse empty-state and proportional-record bounds. */
 bool widget_map_sparse_state_test(void);
+/** Verify repeated MAP transaction abort restores compact headers and allocations. */
+bool widget_map_transaction_abort_test(void);
 #endif
 
 extern void map_level_scroll(int dz);
@@ -610,17 +621,17 @@ extern void map_set_light_keyframe(int x,
                                    uint8_t rgb_bitmap,
                                    const uint16_t rgb[NUM_SUB_LAYERS][3]);
 extern bool map_light_keyframe_transaction_begin(uint64_t generation,
-                                                  uint64_t start_seconds,
-                                                  uint64_t end_seconds,
-                                                  uint8_t flags);
+                                                 uint64_t start_seconds,
+                                                 uint64_t end_seconds,
+                                                 uint8_t flags);
 extern bool map_light_keyframe_transaction_pending(void);
 extern bool map_light_keyframe_transaction_stage(int depth,
-                                                  int x,
-                                                  int y,
-                                                  uint8_t scalar_bitmap,
-                                                  const uint16_t scalar[NUM_SUB_LAYERS],
-                                                  uint8_t rgb_bitmap,
-                                                  const uint16_t rgb[NUM_SUB_LAYERS][3]);
+                                                 int x,
+                                                 int y,
+                                                 uint8_t scalar_bitmap,
+                                                 const uint16_t scalar[NUM_SUB_LAYERS],
+                                                 uint8_t rgb_bitmap,
+                                                 const uint16_t rgb[NUM_SUB_LAYERS][3]);
 extern void map_light_keyframe_transaction_commit(void);
 extern void map_light_keyframe_transaction_abort(void);
 

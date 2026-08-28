@@ -585,6 +585,9 @@ extern void menu_finalize(widgetdata *widget);
 
 extern void widget_redraw_all(int widget_type_id);
 
+/** Mark every widget canvas dirty after GPU resource reconstruction. */
+extern void widget_redraw_everything(void);
+
 extern void widget_redraw_type_id(int type, const char *id);
 
 extern void widget_show(widgetdata *widget, int show);

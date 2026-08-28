@@ -37,8 +37,9 @@ bool gpu_map_renderer_begin(int width, int height) {
 bool gpu_map_renderer_active(void) {
     return false;
 }
-void gpu_map_renderer_set_owner(uint8_t owner) {
+void gpu_map_renderer_set_owner(uint8_t owner, int sample_y) {
     (void)owner;
+    (void)sample_y;
 }
 void gpu_map_renderer_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]) {
     (void)owner;

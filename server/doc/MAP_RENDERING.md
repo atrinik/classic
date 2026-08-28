@@ -9,7 +9,7 @@ The Classic production client has one mandatory GPU renderer. It creates one
 SDL GPU device and uses its GPU-backed 2D renderer for the complete window,
 with raw SDL_GPU passes for the ordered map albedo/owner and integer
 light/tone stages. Supported production backends are Vulkan, Direct3D 12, and
-Metal on hardware devices that provide RGBA8 and R8_UINT render targets. There
+Metal on hardware devices that provide RGBA8, R32_UINT, and RGBA16_UINT array render targets. There
 is no window-surface presentation, CPU-completed frame, renderer selection, or
 software fallback.
 
@@ -35,9 +35,9 @@ Resize, fullscreen, display migration, foreground resume, swapchain failure,
 and submission failure all use the same complete reconstruction path. A
 partial frame is never presented. Recovery gets one attempt; a second failure
 shows backend/device/driver diagnostics and terminates instead of selecting a
-CPU path. The frozen CPU renderer and its image fixtures remain available only
-in test-enabled builds as a conformance oracle and are not linked into the
-production executable.
+CPU path. The frozen image, MAP, asset, and ordering fixtures remain as
+immutable conformance inputs, but the CPU renderer and its executable replay
+harness have been removed from every build.
 
 ## Lighting
 
@@ -150,18 +150,12 @@ most 66,048 bytes total; and the standard and large-viewport lighting passes
 may regress no more than 10% and 15%,
 respectively, from their recorded v1077 medians.  CI must measure dense initial
 state packets, continuations, both cache sizes, and both frame-time baselines.
-Frame-time comparison uses the release `--player-view-benchmark` harness on
-the same runner for the v1077 base and candidate, with 5 warmups and the median
-of 101 live map draws at 320x240 and 1920x1080; three alternating process
-samples are retained in the CI evidence artifact.
-The test-only CPU oracle's widened raster sample is at most 10 bytes; each of
-its linked-depth contexts owns two viewport-sized fields and one row scratch
-field. Its lit-sprite cache remains capped at 8 MiB per retained depth context.
-These fields and caches are excluded from the production executable. Each
-oracle cache entry is charged its actual surface pitch times height plus a
-conservative 512-byte entry/surface/allocator allowance, and no context retains
-more than 8,192 entries, so tiny sprites cannot bypass the byte cap through
-metadata overhead.
+Historical frame-time records remain migration evidence only. Current
+qualification uses fenced production GPU frames on the documented reference
+and minimum-supported hardware, with three fresh processes per matrix row and
+separate CPU submission, GPU completion, and present-wait attribution. The
+client owns no viewport-sized CPU lighting fields or lit-sprite compositor
+cache.
 
 - `src/server/light.c` propagates source masks as spherical 3D volumes across
   horizontal and `TILED_UP`/`TILED_DOWN` links. Opaque cells stop rays after
@@ -1933,8 +1927,8 @@ The contract uses these terms:
 Classification is semantic and explicit. A layer or heuristic is not allowed to
 turn an interactive or temporary object into remembered geometry merely because
 it is drawn on a static-looking layer. The decoder records the classification
-with each authorized object and applies the same result to online and offline
-player-view paths.
+with each authorized object and applies the same result to live decoding and
+the frozen MAP fixture validators.
 
 | MAP2 object/layer | Remembered after soft clear | Current/live only | Required outcome |
 | --- | --- | --- | --- |

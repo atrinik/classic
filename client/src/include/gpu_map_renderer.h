@@ -27,7 +27,7 @@ bool gpu_map_renderer_create(SDL_GPUDevice *device, SDL_Renderer *renderer);
 void gpu_map_renderer_destroy(void);
 bool gpu_map_renderer_begin(int width, int height);
 bool gpu_map_renderer_active(void);
-void gpu_map_renderer_set_owner(uint8_t owner);
+void gpu_map_renderer_set_owner(uint8_t owner, int sample_y);
 void gpu_map_renderer_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]);
 bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
                                    const SDL_Rect *source,

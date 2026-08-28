@@ -54,39 +54,39 @@ function(atrinik_embed_gpu_shader name extension expected_sha256)
 endfunction()
 
 atrinik_embed_gpu_shader(final_fragment dxil
-    97523bb45fb3d8a3a4317a5c58a48c9401c17034eeb449328f50118dc5a8e15f)
+    60dc64c83fbe3a766cf60902c59d0f0e0fb04cf9d4ee5e4eb438f1182fee54d7)
 atrinik_embed_gpu_shader(final_vertex dxil
     280af65e0a86455e4da010b77449b305d07b9e6e1aa3ebfe362eaece55528584)
 atrinik_embed_gpu_shader(light_fragment dxil
-    65ff1dbd91d67f6d4775e92f931242027c14e2b405ae02969d3b29a956ae41f7)
+    e1a23d4d365775ab1e040bed8a50f4f1de9dbef6bfda675c4604b3b128c504a5)
 atrinik_embed_gpu_shader(light_vertex dxil
-    141a0ba6ea5a75835d84615d4f70bcfeed3c9706c1e801247ffd094e0f5b8c89)
+    c88300155cb5cb0e610708c67494e73f31b946d1171b59d306bb2869456bfa16)
 atrinik_embed_gpu_shader(world_fragment dxil
-    82dce2a3ce408eac31cb30f496efa794674744997c69802a9adba0eddb6b2b06)
+    de6efb386dc1147acb6ef71057242ba526b69f8910ade7e27d5143214f0e6234)
 atrinik_embed_gpu_shader(world_vertex dxil
     70d15a38251c9dcc3bcc313f354b6c352cd5f5f34287d4c5341a73e8beb02f0b)
 atrinik_embed_gpu_shader(final_fragment msl
-    9752eddb0064a442b874d7fb7d4f5a15355a6367b361e2a2323cdfaf60f1e65e)
+    d1cd4ceabc67d8da429875a718bea3e556d4eb86c82bd4b654b9e38d5f92ce80)
 atrinik_embed_gpu_shader(final_vertex msl
-    227d51faa3d0506e5ec7bd1e4a6cb0d4e1a6fad4d4727867d72178be527c2c9e)
+    c55f7aa26823f2066331070863acf450659a13e507184417a2b52ae9daee43f3)
 atrinik_embed_gpu_shader(light_fragment msl
-    6bd895f23d086acf6307b493c06bfc97da182a1e393217e6f863e6130a73e60b)
+    4252322eb742179ec04de4512df360f6390df2601be5b3f0bf09917479907051)
 atrinik_embed_gpu_shader(light_vertex msl
-    7f8e7944fb3d686020cce5d819c821f7f06b3bb07c84a14f8e6a6ab97c462a0a)
+    272e10d1cc63fe225b65b3a9919efc368f532c9612ed0238ea4e2a0849f5b10e)
 atrinik_embed_gpu_shader(world_fragment msl
-    e6a2b427b110376e569141c3e6c9f6879c929afe2411d8d92727c8496c620108)
+    804af07c4efd23ca2bf1b51ef9cac84736acc52eea93130aca5d4c0d043370f1)
 atrinik_embed_gpu_shader(world_vertex msl
-    0d406ea7573cbdf14f146610cb262d35003c94f847d617306ea5437960691b02)
+    04423e7437b7e33659f78b986cb81adac246cf4baaeba9533226fa38df1335aa)
 atrinik_embed_gpu_shader(final_fragment spv
-    7a408db6cca97c6df3fa453804203934cdf8a8921b7f0b0640af87677a5d19b1)
+    7d708d382733e543abaf17fdb09c66fb35e2904d9f75033cde332d351ce74dfc)
 atrinik_embed_gpu_shader(final_vertex spv
     40d6755e57a6854ef3b1928475a50e99a49859fbd49cb47d3514630ee291c7f4)
 atrinik_embed_gpu_shader(light_fragment spv
-    16ad8b5b40f566b86d2f0d91e82ed954371c7d959f11cf43e3749872baee9bce)
+    ccc20bbceae17a37ea641ac1eda89c301369423806ff9eda74f76e9f4ca40550)
 atrinik_embed_gpu_shader(light_vertex spv
-    4cc96dc4e4898bba5754047a128ad3e66e6740ed3d2138e41c4c3cc3c906ab39)
+    21ae3302e3cfc03386f9c0983e56f8e6f3cbfd01092694dbe1adccf8a27db823)
 atrinik_embed_gpu_shader(world_fragment spv
-    e85e0c67fc859b7ff2fadddaf8b5159ef00b44c1bedd4a1a93171e41ca73105a)
+    374fb5834114fb6f9bd7295231418dbf328dae7ab36b1f5e684aecfcd1141c15)
 atrinik_embed_gpu_shader(world_vertex spv
     4334bdd64d3968dc89f20c664f7903236f19b4358ef7ee2fce853d145d9d5877)
 file(APPEND "${ATRINIK_GPU_SHADER_HEADER}" "#endif\n")
@@ -903,233 +903,8 @@ if (BUILD_TESTING)
     set_tests_properties(client-widget-priority-integration PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
-    set(player_view_fixtures
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/player_view")
-    add_test(NAME client-player-view-smooth
-        COMMAND atrinik --player-view "${player_view_fixtures}/smooth.xml" -)
-    add_test(NAME client-player-view-smooth-player-sublayer
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/smooth-player-sublayer-1.xml" -)
-    add_test(NAME client-player-view-discrete
-        COMMAND atrinik --player-view "${player_view_fixtures}/discrete.xml" -)
-    add_test(NAME client-player-view-radial-light-smooth
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/radial-light-smooth.xml" -)
-    add_test(NAME client-player-view-radial-light-discrete
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/radial-light-discrete.xml" -)
-    add_test(NAME client-player-view-exit-cues
-        COMMAND atrinik --player-view "${player_view_fixtures}/exit-cues.xml" -)
-    add_test(NAME client-player-view-player-outline-unobscured
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/player-outline-unobscured.xml" -)
-    add_test(NAME client-player-view-player-outline-same-level
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/player-outline-same-level.xml" -)
-    add_test(NAME client-player-view-player-outline-upper-level
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/player-outline-upper-level.xml" -)
-    add_test(NAME client-player-view-player-outline-nearby-living
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/player-outline-nearby-living.xml" -)
-    add_test(NAME client-player-view-player-outline-non-primary
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/player-outline-non-primary.xml" -)
-    add_test(NAME client-player-view-player-outline-widget-state
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/player-outline-widget-state.xml" -)
-    add_test(NAME client-player-view-map-overlay-widget-state
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/map-overlay-widget-state.xml" -)
-    add_test(NAME client-player-view-map-overlay-linked-depth
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/map-overlay-linked-depth.xml" -)
-    add_test(NAME client-player-view-map-overlay-elevated
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/map-overlay-elevated.xml" -)
-    add_test(NAME client-player-view-zoom-filter-off
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/zoom-filter-off.xml" -)
-    add_test(NAME client-player-view-zoom-filter-pixelart
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/zoom-filter-pixelart.xml" -)
-    add_test(NAME client-player-view-zoom-filter-linear
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/zoom-filter-linear.xml" -)
-    add_test(NAME client-player-view-living-outline-unobscured
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-unobscured.xml" -)
-    add_test(NAME client-player-view-living-outline-same-level
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-same-level.xml" -)
-    add_test(NAME client-player-view-living-outline-upper-level
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-upper-level.xml" -)
-    add_test(NAME client-player-view-living-outline-nearby-wall
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-nearby-wall.xml" -)
-    add_test(NAME client-player-view-living-outline-translucent
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-translucent.xml" -)
-    add_test(NAME client-player-view-living-outline-double
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-double.xml" -)
-    add_test(NAME client-player-view-living-outline-dark-actor
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-dark-actor.xml" -)
-    add_test(NAME client-player-view-living-outline-dark-wall
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-dark-wall.xml" -)
-    add_test(NAME client-player-view-living-outline-multiple
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-multiple.xml" -)
-    add_test(NAME client-player-view-living-outline-crowded
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-crowded.xml" -)
-    add_test(NAME client-player-view-living-outline-crowded-unobscured
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-crowded-unobscured.xml" -)
-    add_test(NAME client-player-view-living-outline-retained-fow
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-retained-fow.xml" -)
-    add_test(NAME client-player-view-visibility-fades
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/visibility-fade-centered.xml" -)
-    add_test(NAME client-player-view-movement-benchmark-smooth
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/movement-colored.xml"
-            standard)
-    add_test(NAME client-player-view-movement-benchmark-discrete
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/movement-colored-discrete.xml"
-            standard)
-    add_test(NAME client-player-view-movement-benchmark-brynknot
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/brynknot-movement.xml"
-            brynknot)
-    add_test(NAME client-player-view-movement-benchmark-smooth-large
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/movement-colored.xml"
-            large)
-    add_test(NAME client-player-view-movement-benchmark-discrete-large
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/movement-colored-discrete.xml"
-            large)
-    add_test(NAME client-player-view-cursor-benchmark-smooth
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_cursor_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/dense-cursor.xml"
-            standard)
-    add_test(NAME client-player-view-cursor-benchmark-discrete
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_cursor_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/dense-cursor-discrete.xml"
-            standard)
-    add_test(NAME client-player-view-cursor-benchmark-smooth-large
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_cursor_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/dense-cursor.xml"
-            large)
-    add_test(NAME client-player-view-cursor-benchmark-discrete-large
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_cursor_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/dense-cursor-discrete.xml"
-            large)
-    add_test(NAME client-player-view-movement-fault-injection
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_fault_injection.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/colored-smooth.xml"
-            "${player_view_fixtures}/movement-colored.xml")
-    add_test(NAME client-player-view-movement-brynknot-fault-injection
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_fault_injection.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/colored-smooth.xml"
-            "${player_view_fixtures}/brynknot-movement.xml"
-            brynknot)
-    add_test(NAME client-player-view-movement-probe-control
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_probe_control.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/movement-lighting-isolated.xml")
-    set_tests_properties(
-        client-player-view-movement-benchmark-smooth
-        client-player-view-movement-benchmark-discrete
-        client-player-view-movement-benchmark-brynknot
-        client-player-view-cursor-benchmark-smooth
-        client-player-view-cursor-benchmark-discrete
-        PROPERTIES
-        LABELS "performance;standard-performance"
-        TIMEOUT 420)
-    set_tests_properties(
-        client-player-view-movement-benchmark-smooth-large
-        client-player-view-movement-benchmark-discrete-large
-        client-player-view-cursor-benchmark-smooth-large
-        client-player-view-cursor-benchmark-discrete-large
-        PROPERTIES
-        LABELS "performance;long-performance"
-        TIMEOUT 1900)
-    set_tests_properties(client-player-view-movement-benchmark-brynknot PROPERTIES
-        LABELS "performance;long-performance"
-        TIMEOUT 1900)
-    set_tests_properties(client-player-view-movement-fault-injection PROPERTIES
-        LABELS fault-injection
-        TIMEOUT 75)
-    set_tests_properties(client-player-view-movement-brynknot-fault-injection PROPERTIES
-        LABELS fault-injection
-        TIMEOUT 75)
-    set_tests_properties(client-player-view-movement-probe-control PROPERTIES
-        LABELS "performance;standard-performance"
-        TIMEOUT 420)
-    add_test(NAME client-player-view-colored-smooth
-        COMMAND atrinik --player-view "${player_view_fixtures}/colored-smooth.xml" -)
-    add_test(NAME client-player-view-colored-discrete
-        COMMAND atrinik --player-view "${player_view_fixtures}/colored-discrete.xml" -)
-    add_test(NAME client-player-view-timed-light
-        COMMAND atrinik --player-view "${player_view_fixtures}/timed-light.xml" -)
-    add_test(NAME client-player-view-high-key-smooth
-        COMMAND atrinik --player-view "${player_view_fixtures}/high-key-smooth.xml" -)
-    add_test(NAME client-player-view-high-key-discrete
-        COMMAND atrinik --player-view "${player_view_fixtures}/high-key-discrete.xml" -)
-    add_test(NAME client-player-view-output
-        COMMAND ${CMAKE_COMMAND}
-            "-DATRINIK_CLIENT=$<TARGET_FILE:atrinik>"
-            "-DPLAYER_VIEW_MANIFEST=${player_view_fixtures}/smooth.xml"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_player_view.cmake")
-    add_test(NAME client-player-view-malformed-snapshot
-        COMMAND atrinik --player-view "${player_view_fixtures}/malformed.xml" -)
-    add_test(NAME client-player-view-mismatched-asset
-        COMMAND atrinik --player-view "${player_view_fixtures}/mismatched-asset.xml" -)
-    add_test(NAME client-player-view-missing-face
-        COMMAND atrinik --player-view "${player_view_fixtures}/missing-face.xml" -)
-    add_test(NAME client-player-view-unknown-field
-        COMMAND atrinik --player-view "${player_view_fixtures}/unknown-field.xml" -)
-    add_test(NAME client-player-view-invalid-animation-depth
-        COMMAND ${CMAKE_COMMAND}
-            "-DATRINIK_CLIENT=$<TARGET_FILE:atrinik>"
-            "-DPLAYER_VIEW_MANIFEST=${player_view_fixtures}/invalid-animation-depth.xml"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_player_view_manifest_rejected.cmake")
-    set_tests_properties(
-        client-player-view-malformed-snapshot
-        client-player-view-mismatched-asset
-        client-player-view-missing-face
-        client-player-view-unknown-field
-        PROPERTIES WILL_FAIL TRUE)
+    add_test(NAME client-map-state-integration COMMAND atrinik --map-state-test)
+
     endif ()
 endif ()
 

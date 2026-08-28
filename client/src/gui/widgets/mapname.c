@@ -44,16 +44,15 @@ static void widget_draw(widgetdata *widget) {
 
     box.w = widget->w;
     box.h = 0;
-    text_show_format(OfflineRenderSurface,
-                     MAP_NAME_FONT,
-                     widget->x,
-                     widget->y,
-                     COLOR_HGOLD,
-                     TEXT_MARKUP,
-                     &box,
-                     "[alpha=%d]%s[/alpha]",
-                     widget_mapname->alpha,
-                     MapData.name);
+    text_show_format_root(MAP_NAME_FONT,
+                          widget->x,
+                          widget->y,
+                          COLOR_HGOLD,
+                          TEXT_MARKUP,
+                          &box,
+                          "[alpha=%d]%s[/alpha]",
+                          widget_mapname->alpha,
+                          MapData.name);
 }
 
 /** @copydoc widgetdata::background_func */

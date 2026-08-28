@@ -956,6 +956,7 @@ void region_map_fow_update(region_map_t *region_map) {
 
     SDL_SetSurfaceColorKey(region_map->fow->surface, true, color);
     SDL_SetSurfaceRLE(region_map->fow->surface, true);
+    gpu_renderer_surface_changed(region_map->fow->surface);
 }
 
 bool region_map_fow_set_visited(region_map_t *region_map,

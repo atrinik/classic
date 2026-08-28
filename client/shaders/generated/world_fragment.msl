@@ -6,7 +6,7 @@ using namespace metal;
 struct type_WorldFragmentUniforms
 {
     float4 world_modulation;
-    uint world_owner;
+    uint world_lighting_key;
     packed_uint3 world_fragment_padding;
 };
 
@@ -31,7 +31,6 @@ fragment main0_out main0(main0_in in [[stage_in]], constant type_WorldFragmentUn
         discard_fragment();
     }
     out.out_var_SV_Target0 = _40;
-    out.out_var_SV_Target1 = WorldFragmentUniforms.world_owner;
+    out.out_var_SV_Target1 = WorldFragmentUniforms.world_lighting_key;
     return out;
 }
-

@@ -11,7 +11,7 @@ ctest --preset linux-debug
 ```
 
 Running the production client requires a hardware GPU exposed through SDL_GPU
-using Vulkan, Direct3D 12, or Metal, with RGBA8 and R8_UINT render-target
+using Vulkan, Direct3D 12, or Metal, with RGBA8, R32_UINT, and RGBA16_UINT array render-target
 support. Software and CPU-emulated drivers are suitable only for test
 conformance and are not a supported runtime fallback. If device, format,
 shader, or swapchain initialization fails, the client reports the backend and

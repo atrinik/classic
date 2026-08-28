@@ -253,4 +253,7 @@ extern void popup_button_set_text(popup_button *button, const char *text);
 
 extern int popup_need_redraw(void);
 
+/** Mark every popup canvas dirty after GPU resource reconstruction. */
+extern void popup_redraw_all(void);
+
 #endif

@@ -48,8 +48,20 @@
  */
 typedef struct map_cell_store {
     MapCell **slots;
+    struct map_cell_header *headers;
     size_t count;
 } map_cell_store_t;
+
+/** Dense, compact state retained for every cache coordinate. */
+typedef struct map_cell_header {
+    uint32_t generation;
+    uint16_t revision;
+    int16_t support_height;
+    uint8_t occupancy;
+    uint8_t fow;
+    uint8_t structural_fow;
+    uint8_t reserved;
+} map_cell_header_t;
 
 static map_cell_store_t *cells;
 static map_cell_store_t *level_cells[MAP2_LEVELS];
@@ -60,6 +72,10 @@ static uint64_t map_cell_peak_retained_bytes;
 static uint64_t level_lighting_revision[MAP2_LEVELS];
 static size_t current_level_index = MAP2_DEPTH_INDEX(0);
 static uint16_t map_level_mask;
+static int map_width;
+static int map_height;
+static int map_cache_origin_x;
+static int map_cache_origin_y;
 static SDL_Surface *map_level_surfaces[2];
 static SDL_Surface *map_animation_base_surface;
 static bool map_animation_cache_valid;
@@ -162,10 +178,12 @@ void map_benchmark_statistics_present(bool success) {
 static map_cell_store_t *map_cell_store_create(size_t count);
 static void map_cell_store_destroy(map_cell_store_t *store);
 static MapCell *map_cell_store_slot(map_cell_store_t *store, size_t index, bool create);
+static void
+map_cell_store_set_fow(map_cell_store_t *store, size_t index, bool fow, bool structural_fow);
 
 #ifdef ATRINIK_WIDGET_TESTS
 bool widget_map_sparse_state_test(void) {
-    const size_t cache_side = 28U * MAP_FOW_SIZE;
+    const size_t cache_side = (size_t)MAP_WIRE_SIZE_MAX * MAP_FOW_SIZE;
     const size_t slots = cache_side * cache_side;
     map_cell_store_t *stores[MAP2_LEVELS] = {0};
     uint64_t saved_allocation_count = map_cell_allocation_count;
@@ -190,6 +208,14 @@ bool widget_map_sparse_state_test(void) {
     uint64_t populated_bytes = map_cell_retained_bytes - saved_retained_bytes;
     success = success && populated_bytes == empty_bytes + MAP2_LEVELS * sizeof(MapCell);
 
+    for (size_t level = 0; level < MAP2_LEVELS && success; level++) {
+        size_t index = MAP2_LEVELS + level;
+        map_cell_store_set_fow(stores[level], index, true, false);
+        success = map_cell_store_slot(stores[level], index, false) == NULL &&
+                  stores[level]->headers[index].fow != 0;
+    }
+    success = success && map_cell_retained_bytes - saved_retained_bytes == populated_bytes;
+
     for (size_t level = 0; level < MAP2_LEVELS; level++) {
         map_cell_store_destroy(stores[level]);
     }
@@ -198,6 +224,42 @@ bool widget_map_sparse_state_test(void) {
     map_cell_allocation_bytes = saved_allocation_bytes;
     map_cell_retained_bytes = saved_retained_bytes;
     map_cell_peak_retained_bytes = saved_peak_retained_bytes;
+    return success;
+}
+
+bool widget_map_transaction_abort_test(void) {
+    for (size_t level = 0; level < arraysize(level_cells); level++) {
+        if (level_cells[level] != NULL) {
+            return false;
+        }
+    }
+
+    map_width = 1;
+    map_height = 1;
+    map_cache_origin_x = 0;
+    map_cache_origin_y = 0;
+    current_level_index = MAP2_DEPTH_INDEX(0);
+    map_level_mask = UINT16_C(1) << current_level_index;
+    if (!map_select_level(0, true)) {
+        return false;
+    }
+    uint64_t initial_retained_bytes = map_cell_retained_bytes;
+    bool success = true;
+
+    for (size_t attempt = 0; attempt < 2; attempt++) {
+        map_state_transaction_begin(false);
+        map_set_fow(0, 0, true);
+        map_state_transaction_abort();
+        success =
+            success && !map_get_fow(0, 0) && map_cell_retained_bytes == initial_retained_bytes;
+    }
+
+    map_cell_store_destroy(level_cells[current_level_index]);
+    level_cells[current_level_index] = NULL;
+    cells = NULL;
+    map_width = 0;
+    map_height = 0;
+    map_level_mask = 0;
     return success;
 }
 
@@ -221,17 +283,13 @@ void map_benchmark_fault_clear(void) {
     memset(&map_benchmark_fault_status, 0, sizeof(map_benchmark_fault_status));
 }
 #endif
-static int map_width;
-static int map_height;
-static int map_cache_origin_x;
-static int map_cache_origin_y;
-
 static map_cell_store_t *map_cell_store_create(size_t count) {
     map_cell_store_t *store = xcalloc(1, sizeof(*store));
     store->slots = xcalloc(count, sizeof(*store->slots));
+    store->headers = xcalloc(count, sizeof(*store->headers));
     store->count = count;
-    size_t bytes = sizeof(*store) + count * sizeof(*store->slots);
-    map_cell_allocation_count += 2;
+    size_t bytes = sizeof(*store) + count * (sizeof(*store->slots) + sizeof(*store->headers));
+    map_cell_allocation_count += 3;
     map_cell_allocation_bytes += bytes;
     map_cell_retained_bytes += bytes;
     map_cell_peak_retained_bytes = MAX(map_cell_peak_retained_bytes, map_cell_retained_bytes);
@@ -248,7 +306,9 @@ static void map_cell_store_destroy(map_cell_store_t *store) {
             map_cell_retained_bytes -= sizeof(*store->slots[i]);
         }
     }
-    map_cell_retained_bytes -= sizeof(*store) + store->count * sizeof(*store->slots);
+    map_cell_retained_bytes -=
+        sizeof(*store) + store->count * (sizeof(*store->slots) + sizeof(*store->headers));
+    free(store->headers);
     free(store->slots);
     free(store);
 }
@@ -258,6 +318,7 @@ static map_cell_store_t *map_cell_store_clone(const map_cell_store_t *store) {
         return NULL;
     }
     map_cell_store_t *clone = map_cell_store_create(store->count);
+    memcpy(clone->headers, store->headers, store->count * sizeof(*store->headers));
     for (size_t i = 0; i < store->count; i++) {
         if (store->slots[i] != NULL) {
             clone->slots[i] = xmalloc(sizeof(*clone->slots[i]));
@@ -269,6 +330,7 @@ static map_cell_store_t *map_cell_store_clone(const map_cell_store_t *store) {
                 MAX(map_cell_peak_retained_bytes, map_cell_retained_bytes);
         }
     }
+    memcpy(clone->headers, store->headers, store->count * sizeof(*store->headers));
     return clone;
 }
 
@@ -277,6 +339,12 @@ static MapCell *map_cell_store_slot(map_cell_store_t *store, size_t index, bool 
     HARD_ASSERT(index < store->count);
     if (store->slots[index] == NULL && create) {
         store->slots[index] = xcalloc(1, sizeof(*store->slots[index]));
+        store->slots[index]->fow = store->headers[index].fow;
+        store->slots[index]->structural_fow = store->headers[index].structural_fow;
+        store->slots[index]->structural_support_height = store->headers[index].support_height;
+        store->headers[index].occupancy = 1;
+        store->headers[index].generation++;
+        store->headers[index].revision++;
         map_cell_allocation_count++;
         map_cell_allocation_bytes += sizeof(*store->slots[index]);
         map_cell_retained_bytes += sizeof(*store->slots[index]);
@@ -291,12 +359,34 @@ static void map_cell_store_clear_slot(map_cell_store_t *store, size_t index) {
     if (store->slots[index] != NULL) {
         free(store->slots[index]);
         store->slots[index] = NULL;
+        store->headers[index].occupancy = 0;
+        store->headers[index].revision++;
         map_cell_retained_bytes -= sizeof(*store->slots[index]);
+    }
+}
+
+static void
+map_cell_store_set_fow(map_cell_store_t *store, size_t index, bool fow, bool structural_fow) {
+    HARD_ASSERT(store != NULL);
+    HARD_ASSERT(index < store->count);
+    map_cell_header_t *header = &store->headers[index];
+    if ((header->fow != 0) == fow && (header->structural_fow != 0) == structural_fow) {
+        return;
+    }
+    header->fow = fow;
+    header->structural_fow = structural_fow;
+    header->generation++;
+    header->revision++;
+    if (store->slots[index] != NULL) {
+        store->slots[index]->fow = fow;
+        store->slots[index]->structural_fow = structural_fow;
     }
 }
 
 /** Shared immutable-by-convention value for an absent sparse cell. */
 static MapCell map_empty_cell;
+static MapCell map_fow_cell = {.fow = 1};
+static MapCell map_structural_fow_cell = {.fow = 1, .structural_fow = 1};
 
 /** Resolve one logical slot in the circular fog-of-war cache. */
 static struct MapCell *map_cache_cell_at(map_cell_store_t *level,
@@ -313,8 +403,15 @@ static struct MapCell *map_cache_cell_at(map_cell_store_t *level,
 
     int physical_x = (x + origin_x) % width;
     int physical_y = (y + origin_y) % height;
-    MapCell *cell = map_cell_store_slot(level, (size_t)physical_y * width + physical_x, create);
-    return cell != NULL ? cell : &map_empty_cell;
+    size_t index = (size_t)physical_y * width + physical_x;
+    MapCell *cell = map_cell_store_slot(level, index, create);
+    if (cell != NULL) {
+        return cell;
+    }
+    if (level->headers[index].structural_fow) {
+        return &map_structural_fow_cell;
+    }
+    return level->headers[index].fow ? &map_fow_cell : &map_empty_cell;
 }
 
 static struct MapCell *map_cache_cell(map_cell_store_t *level, int x, int y) {
@@ -337,6 +434,16 @@ static struct MapCell *map_cache_cell_mutable(map_cell_store_t *level, int x, in
                              map_cache_origin_x,
                              map_cache_origin_y,
                              true);
+}
+
+static size_t map_cache_physical_index(int x, int y) {
+    int width = map_width * MAP_FOW_SIZE;
+    int height = map_height * MAP_FOW_SIZE;
+    HARD_ASSERT(x >= 0 && x < width);
+    HARD_ASSERT(y >= 0 && y < height);
+    int physical_x = (x + map_cache_origin_x) % width;
+    int physical_y = (y + map_cache_origin_y) % height;
+    return (size_t)physical_y * (size_t)width + (size_t)physical_x;
 }
 
 static void map_clear_live_cell(struct MapCell *cell);
@@ -362,13 +469,15 @@ static void map_cache_mark_fow(map_cell_store_t *level,
     for (int x = x_start; x < x_end; x++) {
         for (int y = y_start; y < y_end; y++) {
             map_state_transaction_record_physical(level_index, x, y);
-            struct MapCell *cell = map_cache_cell_mutable(level, x, y);
-            if (!cell->fow || cell->structural_fow) {
+            int physical_x = (x + map_cache_origin_x) % width;
+            int physical_y = (y + map_cache_origin_y) % height;
+            size_t index = (size_t)physical_y * width + physical_x;
+            struct MapCell *cell = map_cell_store_slot(level, index, false);
+            if (cell != NULL && (!cell->fow || cell->structural_fow)) {
                 map_clear_live_cell(cell);
                 map_cell_clear_light_state(cell);
             }
-            cell->fow = 1;
-            cell->structural_fow = 0;
+            map_cell_store_set_fow(level, index, true, false);
         }
     }
 }
@@ -474,6 +583,7 @@ static struct {
         size_t level;
         size_t index;
         bool existed;
+        map_cell_header_t header;
         MapCell value;
     } *cells;
     size_t cells_count;
@@ -589,8 +699,7 @@ static void map_state_transaction_restore_region_fow(void) {
     }
     utarray_clear(region_map->fow->tiles);
     for (size_t i = 0; i < map_state_transaction.region_fow_tile_count; i++) {
-        utarray_push_back(region_map->fow->tiles,
-                          &map_state_transaction.region_fow_tiles[i]);
+        utarray_push_back(region_map->fow->tiles, &map_state_transaction.region_fow_tiles[i]);
         map_state_transaction.region_fow_tiles[i].path = NULL;
     }
 }
@@ -618,8 +727,7 @@ void map_state_transaction_begin(bool full_snapshot) {
             if (level_cells[i] == NULL) {
                 continue;
             }
-            map_state_transaction.full_snapshot_levels[i] =
-                map_cell_store_clone(level_cells[i]);
+            map_state_transaction.full_snapshot_levels[i] = map_cell_store_clone(level_cells[i]);
         }
     }
 
@@ -671,6 +779,7 @@ void map_state_transaction_abort(void) {
                 } else {
                     map_cell_store_clear_slot(level_cells[level], index);
                 }
+                level_cells[level]->headers[index] = map_state_transaction.cells[i].header;
             }
         }
         for (size_t i = 0; i < arraysize(level_cells); i++) {
@@ -698,6 +807,7 @@ void map_state_transaction_abort(void) {
     first_anim = map_state_transaction.animations;
     map_state_transaction.animations = NULL;
 
+    map_state_transaction_release_snapshot();
     map_state_transaction.active = false;
 }
 
@@ -726,15 +836,17 @@ static void map_state_transaction_record_physical(size_t level, int x, int y) {
     }
 
     if (map_state_transaction.cells_count == map_state_transaction.cells_capacity) {
-        map_state_transaction.cells_capacity =
-            map_state_transaction.cells_capacity == 0 ? 64 : map_state_transaction.cells_capacity * 2;
+        map_state_transaction.cells_capacity = map_state_transaction.cells_capacity == 0
+                                                   ? 64
+                                                   : map_state_transaction.cells_capacity * 2;
         map_state_transaction.cells = xreallocarray(map_state_transaction.cells,
-                                                     map_state_transaction.cells_capacity,
-                                                     sizeof(*map_state_transaction.cells));
+                                                    map_state_transaction.cells_capacity,
+                                                    sizeof(*map_state_transaction.cells));
     }
     size_t snapshot = map_state_transaction.cells_count++;
     map_state_transaction.cells[snapshot].level = level;
     map_state_transaction.cells[snapshot].index = index;
+    map_state_transaction.cells[snapshot].header = level_cells[level]->headers[index];
     MapCell *cell = map_cell_store_slot(level_cells[level], index, false);
     map_state_transaction.cells[snapshot].existed = cell != NULL;
     if (cell != NULL) {
@@ -747,9 +859,7 @@ static void map_state_transaction_record_physical(size_t level, int x, int y) {
 }
 
 static void map_state_transaction_record_cell(int x, int y) {
-    map_state_transaction_record_physical(current_level_index,
-                                           x + MAP_STARTX,
-                                           y + MAP_STARTY);
+    map_state_transaction_record_physical(current_level_index, x + MAP_STARTX, y + MAP_STARTY);
 }
 
 /**
@@ -944,6 +1054,7 @@ void clear_map(bool hard) {
         if (level_cells[i] != NULL) {
             for (size_t cell = 0; cell < level_cells[i]->count; cell++) {
                 map_cell_store_clear_slot(level_cells[i], cell);
+                memset(&level_cells[i]->headers[cell], 0, sizeof(level_cells[i]->headers[cell]));
             }
             level_lighting_revision[i]++;
         }
@@ -1035,9 +1146,10 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
                     int physical_x = (source_x + old_origin_x) % old_w;
                     int physical_y = (source_y + old_origin_y) % old_h;
                     size_t old_index = (size_t)physical_y * old_w + physical_x;
+                    size_t new_index = (size_t)y * width + x;
+                    new_cells->headers[new_index] = old_cells->headers[old_index];
                     MapCell *source = map_cell_store_slot(old_cells, old_index, false);
                     if (source != NULL) {
-                        size_t new_index = (size_t)y * width + x;
                         *map_cell_store_slot(new_cells, new_index, true) = *source;
                     }
                 }
@@ -1056,6 +1168,9 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
                 if (level_cells[level] != NULL) {
                     for (size_t cell = 0; cell < level_cells[level]->count; cell++) {
                         map_cell_store_clear_slot(level_cells[level], cell);
+                        memset(&level_cells[level]->headers[cell],
+                               0,
+                               sizeof(level_cells[level]->headers[cell]));
                     }
                     level_lighting_revision[level]++;
                 }
@@ -1087,6 +1202,9 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
                         int physical_y = (y + map_cache_origin_y) % height;
                         size_t index = (size_t)physical_y * width + physical_x;
                         map_cell_store_clear_slot(level_cells_current, index);
+                        memset(&level_cells_current->headers[index],
+                               0,
+                               sizeof(level_cells_current->headers[index]));
                     }
                 }
 
@@ -1099,6 +1217,9 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
                         int physical_y = (y + map_cache_origin_y) % height;
                         size_t index = (size_t)physical_y * width + physical_x;
                         map_cell_store_clear_slot(level_cells_current, index);
+                        memset(&level_cells_current->headers[index],
+                               0,
+                               sizeof(level_cells_current->headers[index]));
                     }
                 }
 
@@ -1560,9 +1681,7 @@ static bool map_visibility_transient_layer(int layer) {
 }
 
 /** Clear one expired live layer after its presentation fade reaches zero. */
-static void map_clear_expired_visibility_layer(MapCell *cell,
-                                               int sub_layer,
-                                               int object_layer) {
+static void map_clear_expired_visibility_layer(MapCell *cell, int sub_layer, int object_layer) {
     int layer = GET_MAP_LAYER(object_layer, sub_layer);
     uint8_t object_layer_mask = UINT8_C(1) << (object_layer - 1);
 
@@ -1681,9 +1800,8 @@ void map_set_data(int x,
                                     (cell->faces[layer] != face || cell->height[layer] != height);
     bool lighting_geometry_changed = object_layer == LAYER_FLOOR &&
                                      (cell->faces[layer] != face || cell->height[layer] != height);
-    bool render_height_changed =
-        (object_layer == LAYER_FLOOR || object_layer == LAYER_EFFECT) &&
-        cell->height[layer] != height;
+    bool render_height_changed = (object_layer == LAYER_FLOOR || object_layer == LAYER_EFFECT) &&
+                                 cell->height[layer] != height;
 
     if (anim_speed != 0 && cell->faces[layer] != face) {
         cell->anim_state[layer] = 0;
@@ -1700,9 +1818,8 @@ void map_set_data(int x,
     }
 
     bool retain_visibility_fade = face == 0 && map_visibility_transient_layer(object_layer) &&
-                                 cell->faces[layer] != 0 &&
-                                 cell->visibility[layer].initialized &&
-                                 cell->visibility[layer].alpha != 0;
+                                  cell->faces[layer] != 0 && cell->visibility[layer].initialized &&
+                                  cell->visibility[layer].alpha != 0;
     if (retain_visibility_fade) {
         map_visibility_fade_revoke(&cell->visibility[layer], LastTick);
         cell->door[sub_layer] &= (uint8_t)~object_layer_mask;
@@ -1822,9 +1939,13 @@ void map_set_data(int x,
  * @param hard Whether to discard cached geometry instead of retaining FOW.
  */
 void map_clear_cell(int x, int y, bool hard) {
-    struct MapCell *cell;
     map_state_transaction_record_cell(x, y);
-    cell = MAP_CELL_GET_MIDDLE_MUTABLE(x, y);
+    size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
+    struct MapCell *cell = map_cell_store_slot(cells, index, false);
+    if (cell == NULL) {
+        map_cell_store_set_fow(cells, index, true, false);
+        return;
+    }
     bool had_known_light = false;
     for (size_t sub_layer = 0; sub_layer < arraysize(cell->light_known); sub_layer++) {
         had_known_light |= cell->light_known[sub_layer] != 0;
@@ -1836,8 +1957,8 @@ void map_clear_cell(int x, int y, bool hard) {
             had_floor_geometry |= cell->faces[GET_MAP_LAYER(LAYER_FLOOR, sub_layer)] != 0;
         }
 
-        memset(cell, 0, sizeof(*cell));
-        cell->fow = 1;
+        map_cell_store_clear_slot(cells, index);
+        map_cell_store_set_fow(cells, index, true, false);
 
         if (had_floor_geometry) {
             map_mark_stretch_dirty(x, y);
@@ -1850,10 +1971,9 @@ void map_clear_cell(int x, int y, bool hard) {
         return;
     }
 
-    cell->fow = 1;
-    cell->structural_fow = 0;
     map_clear_live_cell(cell);
     map_cell_clear_light_state(cell);
+    map_cell_store_set_fow(cells, index, true, false);
 
     if (had_known_light) {
         level_lighting_revision[current_level_index]++;
@@ -1870,24 +1990,29 @@ void map_set_structural_support_height(int x, int y, int16_t height) {
     }
 
     cell->structural_support_height = height;
+    size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
+    cells->headers[index].support_height = height;
+    cells->headers[index].generation++;
+    cells->headers[index].revision++;
     level_lighting_revision[current_level_index]++;
 }
 
 /** Apply an explicit server visibility state after a tile's layer deltas. */
 void map_set_fow(int x, int y, bool fow) {
     map_state_transaction_record_cell(x, y);
-    struct MapCell *cell = MAP_CELL_GET_MIDDLE_MUTABLE(x, y);
+    size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
+    struct MapCell *cell = map_cell_store_slot(cells, index, false);
 
-    if (fow && !cell->fow) {
+    if (fow && cell != NULL && !cell->fow) {
         map_clear_cell(x, y, false);
     }
 
-    if ((cell->fow != 0) == fow && (cell->structural_fow != 0) == fow) {
+    map_cell_header_t *header = &cells->headers[index];
+    if ((header->fow != 0) == fow && (header->structural_fow != 0) == fow) {
         return;
     }
 
-    cell->fow = fow;
-    cell->structural_fow = fow;
+    map_cell_store_set_fow(cells, index, fow, fow);
     level_lighting_revision[current_level_index]++;
 }
 
@@ -1998,7 +2123,8 @@ void map_set_light_keyframe(int x,
         uint16_t next_scalar = (scalar_bitmap & (UINT8_C(1) << sub_layer))
                                    ? scalar[sub_layer]
                                    : cell->light_radiance[sub_layer];
-        if (!cell->light_next_known[sub_layer] || cell->light_next_radiance[sub_layer] != next_scalar) {
+        if (!cell->light_next_known[sub_layer] ||
+            cell->light_next_radiance[sub_layer] != next_scalar) {
             changed = true;
         }
         cell->light_next_radiance[sub_layer] = next_scalar;
@@ -2023,9 +2149,9 @@ void map_set_light_keyframe(int x,
 }
 
 bool map_light_keyframe_transaction_begin(uint64_t generation,
-                                           uint64_t start_seconds,
-                                           uint64_t end_seconds,
-                                           uint8_t flags) {
+                                          uint64_t start_seconds,
+                                          uint64_t end_seconds,
+                                          uint8_t flags) {
     if (generation == 0 || end_seconds <= start_seconds || flags == 0 ||
         (flags & ~(MAP2_LIGHT_KEYFRAME_CONTINUOUS | MAP2_LIGHT_KEYFRAME_SNAP)) != 0) {
         return false;
@@ -2046,12 +2172,12 @@ bool map_light_keyframe_transaction_pending(void) {
 }
 
 bool map_light_keyframe_transaction_stage(int depth,
-                                           int x,
-                                           int y,
-                                           uint8_t scalar_bitmap,
-                                           const uint16_t scalar[NUM_SUB_LAYERS],
-                                           uint8_t rgb_bitmap,
-                                           const uint16_t rgb[NUM_SUB_LAYERS][3]) {
+                                          int x,
+                                          int y,
+                                          uint8_t scalar_bitmap,
+                                          const uint16_t scalar[NUM_SUB_LAYERS],
+                                          uint8_t rgb_bitmap,
+                                          const uint16_t rgb[NUM_SUB_LAYERS][3]) {
     if (!map_light_keyframe_transaction.active || depth < -MAP2_MAX_DEPTH ||
         depth > MAP2_MAX_DEPTH || x < 0 || y < 0 ||
         map_light_keyframe_transaction.count >= MAP_LIGHT_KEYFRAME_STAGE_MAX) {
@@ -2193,8 +2319,8 @@ static void map_animate_visibility(int depth, int cache_x, int cache_y, MapCell 
  * deterministic.
  */
 static void map_temporal_lighting_update(void) {
-    if (!MapData.light_keyframe_valid || MapData.light_keyframe_end_seconds <=
-                                                     MapData.light_keyframe_start_seconds) {
+    if (!MapData.light_keyframe_valid ||
+        MapData.light_keyframe_end_seconds <= MapData.light_keyframe_start_seconds) {
         map_temporal_lighting_bucket = UINT64_MAX;
         return;
     }
@@ -2714,11 +2840,10 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
         };
         context->commands_num++;
     } else {
-        int scene_sample_y =
-            BIT_QUERY(effects.flags, SPRITE_FLAG_SMOOTH_DARK) ||
-                    BIT_QUERY(effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE)
-                ? effects.smooth_dark_y
-                : INT16_MIN;
+        int scene_sample_y = BIT_QUERY(effects.flags, SPRITE_FLAG_SMOOTH_DARK) ||
+                                     BIT_QUERY(effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE)
+                                 ? effects.smooth_dark_y
+                                 : INT16_MIN;
         if (map_scene_composition_active) {
             /* Fog, infravision, and grayscale remain explicit presentation
              * effects. Ordinary smooth lighting is deferred to the scene pass. */
@@ -2736,18 +2861,18 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
         }
         if (map_scene_composition_active) {
             lighting_scene_mark_surface(face_sprite->bitmap,
-                                         xl,
-                                         yl,
-                                         NULL,
-                                         data->depth,
-                                         scene_sample_y);
+                                        xl,
+                                        yl,
+                                        NULL,
+                                        data->depth,
+                                        scene_sample_y);
             if (data->cell->draw_double[map_layer]) {
                 lighting_scene_mark_surface(face_sprite->bitmap,
-                                             xl,
-                                             yl - 22,
-                                             NULL,
-                                             data->depth,
-                                             scene_sample_y);
+                                            xl,
+                                            yl - 22,
+                                            NULL,
+                                            data->depth,
+                                            scene_sample_y);
             }
         }
     }
@@ -2824,7 +2949,6 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
 
 /** Draw names and status icons after world lighting has been composited. */
 static void map_draw_annotations(SDL_Surface *surface, map_render_context_t *context) {
-    HARD_ASSERT(surface != NULL);
     HARD_ASSERT(context != NULL);
 
     for (size_t i = 0; i < context->annotations_num; i++) {
@@ -2852,16 +2976,27 @@ static void map_draw_annotations(SDL_Surface *surface, map_render_context_t *con
                     map_ui_test_names++;
                 }
 #endif
-                text_show(surface,
-                          FONT_SANS9,
-                          name,
-                          annotation->xoff + annotation->xoff2 +
-                              (annotation->xlen - annotation->xoff2 * 2) / 2 -
-                              text_get_width(FONT_SANS9, name, 0) / 2 - 2,
-                          annotation->yl - 24,
-                          cell->pcolor[sub_layer],
-                          TEXT_OUTLINE,
-                          NULL);
+                int x = annotation->xoff + annotation->xoff2 +
+                        (annotation->xlen - annotation->xoff2 * 2) / 2 -
+                        text_get_width(FONT_SANS9, name, 0) / 2 - 2;
+                if (surface != NULL) {
+                    text_show(surface,
+                              FONT_SANS9,
+                              name,
+                              x,
+                              annotation->yl - 24,
+                              cell->pcolor[sub_layer],
+                              TEXT_OUTLINE,
+                              NULL);
+                } else {
+                    text_show_root(FONT_SANS9,
+                                   name,
+                                   x,
+                                   annotation->yl - 24,
+                                   cell->pcolor[sub_layer],
+                                   TEXT_OUTLINE,
+                                   NULL);
+                }
             }
         }
 
@@ -3231,12 +3366,8 @@ static uint8_t map_lighting_sub_layer(const struct MapCell *cell) {
 }
 
 /** Dirty the lighting projection of one FOW boundary segment and its light halo. */
-static void map_dirty_lighting_fow_segment(size_t level,
-                                           int depth,
-                                           int x0,
-                                           int x1,
-                                           int y0,
-                                           int y1) {
+static void
+map_dirty_lighting_fow_segment(size_t level, int depth, int x0, int x1, int y0, int y1) {
     map_cell_store_t *level_cells_current = level_cells[level];
     if (level_cells_current == NULL) {
         return;
@@ -3294,12 +3425,7 @@ static void map_dirty_lighting_fow_segment(size_t level,
 }
 
 /** Dirty a short projected strip without widening its diagonal envelope. */
-static void map_dirty_lighting_fow_strip(size_t level,
-                                         int depth,
-                                         int x0,
-                                         int x1,
-                                         int y0,
-                                         int y1) {
+static void map_dirty_lighting_fow_strip(size_t level, int depth, int x0, int x1, int y0, int y1) {
     for (int x = x0; x < x1; x += MAP_LIGHTING_FOW_SEGMENT) {
         for (int y = y0; y < y1; y += MAP_LIGHTING_FOW_SEGMENT) {
             map_dirty_lighting_fow_segment(level,
@@ -3377,57 +3503,55 @@ static void map_dirty_lighting_fow(int dx, int dy) {
         if (dx > 0) {
             for (int y = shifted_view_y; y < shifted_view_y + map_height;
                  y += MAP_LIGHTING_FOW_SEGMENT) {
-                map_dirty_lighting_fow_segment(level,
-                                               depth,
-                                               shifted_view_x,
-                                               view_x,
-                                               y,
-                                               MIN(shifted_view_y + map_height,
-                                                   y + MAP_LIGHTING_FOW_SEGMENT));
+                map_dirty_lighting_fow_segment(
+                    level,
+                    depth,
+                    shifted_view_x,
+                    view_x,
+                    y,
+                    MIN(shifted_view_y + map_height, y + MAP_LIGHTING_FOW_SEGMENT));
             }
         } else if (dx < 0) {
             for (int y = shifted_view_y; y < shifted_view_y + map_height;
                  y += MAP_LIGHTING_FOW_SEGMENT) {
-                map_dirty_lighting_fow_segment(level,
-                                               depth,
-                                               view_x + map_width,
-                                               shifted_view_x + map_width,
-                                               y,
-                                               MIN(shifted_view_y + map_height,
-                                                   y + MAP_LIGHTING_FOW_SEGMENT));
+                map_dirty_lighting_fow_segment(
+                    level,
+                    depth,
+                    view_x + map_width,
+                    shifted_view_x + map_width,
+                    y,
+                    MIN(shifted_view_y + map_height, y + MAP_LIGHTING_FOW_SEGMENT));
             }
         }
 
         if (dy > 0) {
             for (int x = shifted_view_x; x < shifted_view_x + map_width;
                  x += MAP_LIGHTING_FOW_SEGMENT) {
-                map_dirty_lighting_fow_segment(level,
-                                               depth,
-                                               x,
-                                               MIN(shifted_view_x + map_width,
-                                                   x + MAP_LIGHTING_FOW_SEGMENT),
-                                               shifted_view_y,
-                                               view_y);
+                map_dirty_lighting_fow_segment(
+                    level,
+                    depth,
+                    x,
+                    MIN(shifted_view_x + map_width, x + MAP_LIGHTING_FOW_SEGMENT),
+                    shifted_view_y,
+                    view_y);
             }
         } else if (dy < 0) {
             for (int x = shifted_view_x; x < shifted_view_x + map_width;
                  x += MAP_LIGHTING_FOW_SEGMENT) {
-                map_dirty_lighting_fow_segment(level,
-                                               depth,
-                                               x,
-                                               MIN(shifted_view_x + map_width,
-                                                   x + MAP_LIGHTING_FOW_SEGMENT),
-                                               view_y + map_height,
-                                               shifted_view_y + map_height);
+                map_dirty_lighting_fow_segment(
+                    level,
+                    depth,
+                    x,
+                    MIN(shifted_view_x + map_width, x + MAP_LIGHTING_FOW_SEGMENT),
+                    view_y + map_height,
+                    shifted_view_y + map_height);
             }
         }
     }
 }
 
-static uint16_t map_lighting_interpolate(uint16_t current,
-                                         uint16_t next,
-                                         uint64_t progress,
-                                         uint64_t duration) {
+static uint16_t
+map_lighting_interpolate(uint16_t current, uint16_t next, uint64_t progress, uint64_t duration) {
     if (progress == 0 || current == next) {
         return current;
     }
@@ -3436,7 +3560,8 @@ static uint16_t map_lighting_interpolate(uint16_t current,
     }
     if (next > current) {
         uint64_t delta = (uint64_t)(next - current);
-        return (uint16_t)MIN(UINT16_MAX, (uint64_t)current + (delta * progress + duration / 2) / duration);
+        return (uint16_t)MIN(UINT16_MAX,
+                             (uint64_t)current + (delta * progress + duration / 2) / duration);
     }
     uint64_t delta = (uint64_t)(current - next);
     uint64_t reduction = (delta * progress + duration / 2) / duration;
@@ -3458,9 +3583,8 @@ static bool map_lighting_temporal_sample(const MapCell *cell,
         return false;
     }
     uint64_t duration = cell->light_keyframe_end_seconds - cell->light_keyframe_start_seconds;
-    uint64_t progress = now <= cell->light_keyframe_start_seconds
-                            ? 0
-                            : now - cell->light_keyframe_start_seconds;
+    uint64_t progress =
+        now <= cell->light_keyframe_start_seconds ? 0 : now - cell->light_keyframe_start_seconds;
     *scalar = map_lighting_interpolate(cell->light_radiance[sub_layer],
                                        cell->light_next_radiance[sub_layer],
                                        progress,
@@ -3696,8 +3820,8 @@ static bool map_ground_surface_bounds(SDL_Surface *surface, SDL_Rect *bounds) {
     int maximum_x = -1;
     int maximum_y = -1;
     for (int y = 0; y < surface->h; y++) {
-        const Uint32 *pixels = (const Uint32 *)((const Uint8 *)surface->pixels +
-                                                (size_t)y * (size_t)surface->pitch);
+        const Uint32 *pixels =
+            (const Uint32 *)((const Uint8 *)surface->pixels + (size_t)y * (size_t)surface->pitch);
         for (int x = 0; x < surface->w; x++) {
             if (pixels[x] == color_key) {
                 continue;
@@ -3713,10 +3837,8 @@ static bool map_ground_surface_bounds(SDL_Surface *surface, SDL_Rect *bounds) {
     if (maximum_x < minimum_x || maximum_y < minimum_y) {
         *bounds = (SDL_Rect){0, 0, 0, 0};
     } else {
-        *bounds = (SDL_Rect){minimum_x,
-                             minimum_y,
-                             maximum_x - minimum_x + 1,
-                             maximum_y - minimum_y + 1};
+        *bounds =
+            (SDL_Rect){minimum_x, minimum_y, maximum_x - minimum_x + 1, maximum_y - minimum_y + 1};
     }
     return true;
 }
@@ -3749,8 +3871,7 @@ static void map_draw_level(SDL_Surface *surface,
     size_t visible_tiles_num = 0;
     map_visible_tile_t *visible_tiles =
         map_visible_tiles_create(surface, &data, x, y, w, h, &visible_tiles_num);
-    data.smooth_lighting =
-        primary_surface && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING);
+    data.smooth_lighting = primary_surface && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING);
     if (data.smooth_lighting && !objects_only) {
         if (gpu_primary) {
             data.lightmap_pending = false;
@@ -4367,8 +4488,8 @@ static int map_exit_cue_key_compare(const void *left_ptr, const void *right_ptr)
     const map_exit_cue_key_t *left = left_ptr;
     const map_exit_cue_key_t *right = right_ptr;
 
-#define COMPARE_KEY_FIELD(_field) \
-    if (left->_field != right->_field) { \
+#define COMPARE_KEY_FIELD(_field)                     \
+    if (left->_field != right->_field) {              \
         return left->_field < right->_field ? -1 : 1; \
     }
     COMPARE_KEY_FIELD(tile_x);
@@ -4490,10 +4611,7 @@ static bool map_exit_cue_copy_geometry(SDL_Surface *mask,
         for (int y = 0; y < geometry->h; y++) {
             for (int x = 0; x < geometry->w; x++) {
                 if (surface_pixel_visible(geometry, x, y)) {
-                    putpixel(mask,
-                             command->x + x - mask_x,
-                             source_y + y - mask_y,
-                             visible);
+                    putpixel(mask, command->x + x - mask_x, source_y + y - mask_y, visible);
                 }
             }
         }
@@ -4542,9 +4660,8 @@ static bool map_exit_cue_group_build(map_exit_cue_t *group,
         return false;
     }
 
-    SDL_Surface *mask = SDL_CreateSurface(maximum_x - minimum_x,
-                                          maximum_y - minimum_y,
-                                          FormatHolder->format);
+    SDL_Surface *mask =
+        SDL_CreateSurface(maximum_x - minimum_x, maximum_y - minimum_y, FormatHolder->format);
     if (mask == NULL || !surface_set_transparent_black_mutable(mask) ||
         !surface_clear_transparent_black(mask)) {
         SDL_DestroySurface(mask);
@@ -4559,10 +4676,10 @@ static bool map_exit_cue_group_build(map_exit_cue_t *group,
 
     for (size_t i = 0; i < indices_num && success; i++) {
         success = map_exit_cue_copy_geometry(mask,
-                                              minimum_x,
-                                              minimum_y,
-                                              &context->commands[indices[i]],
-                                              geometries[i]);
+                                             minimum_x,
+                                             minimum_y,
+                                             &context->commands[indices[i]],
+                                             geometries[i]);
     }
     for (size_t i = 0; i < indices_num; i++) {
         if (geometries[i] != context->commands[indices[i]].source) {
@@ -4668,21 +4785,15 @@ static void map_render_command_draw_exit(SDL_Surface *surface,
     snprintf(VS(effects.outline), "%s", MAP_OUTLINE_COLOR);
     surface_show_effects(surface, command->x, command->y, NULL, command->source, &effects);
     if (command->draw_double) {
-        surface_show_effects(surface,
-                             command->x,
-                             command->y - 22,
-                             NULL,
-                             command->source,
-                             &effects);
+        surface_show_effects(surface, command->x, command->y - 22, NULL, command->source, &effects);
     }
 }
 
 /** Paint all projected sprites in one isometric order. */
-static void
-map_render_commands(SDL_Surface *surface,
-                    map_render_context_t *context,
-                    bool primary_surface,
-                    map_exit_cue_cache_t *exit_cues) {
+static void map_render_commands(SDL_Surface *surface,
+                                map_render_context_t *context,
+                                bool primary_surface,
+                                map_exit_cue_cache_t *exit_cues) {
     uint64_t profile_paint_started = render_profiler_begin();
     uint64_t profile_sort_started = render_profiler_begin();
     if (context->commands_num > 1) {
@@ -4726,7 +4837,8 @@ map_render_commands(SDL_Surface *surface,
                          BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
         if (surface == NULL) {
             gpu_renderer_map_set_owner(scene_lit ? (uint8_t)MAP2_DEPTH_INDEX(command->depth)
-                                                 : GPU_RENDERER_OWNER_UNLIT);
+                                                 : GPU_RENDERER_OWNER_UNLIT,
+                                       command->effects.smooth_dark_y);
         }
         sprite_effects_t effects = command->effects;
         if (map_scene_composition_active) {
@@ -4734,12 +4846,7 @@ map_render_commands(SDL_Surface *surface,
                           BIT_MASK(SPRITE_FLAG_SMOOTH_DARK) |
                               BIT_MASK(SPRITE_FLAG_SMOOTH_DARK_SURFACE));
         }
-        surface_show_effects(surface,
-                             command->x,
-                             command->y,
-                             NULL,
-                             command->source,
-                             &effects);
+        surface_show_effects(surface, command->x, command->y, NULL, command->source, &effects);
         if (command->draw_double) {
             surface_show_effects(surface,
                                  command->x,
@@ -4754,19 +4861,18 @@ map_render_commands(SDL_Surface *surface,
             int scene_sample_y = command->effects.smooth_dark_y;
             if (geometry != NULL) {
                 lighting_scene_mark_surface(geometry,
-                                             command->x,
-                                             command->y,
-                                             NULL,
-                                             command->depth,
-                                             scene_sample_y);
+                                            command->x,
+                                            command->y,
+                                            NULL,
+                                            command->depth,
+                                            scene_sample_y);
                 if (command->draw_double) {
-                    lighting_scene_mark_surface(
-                        geometry,
-                        command->x,
-                        command->y - 22,
-                        NULL,
-                        command->depth,
-                        scene_sample_y);
+                    lighting_scene_mark_surface(geometry,
+                                                command->x,
+                                                command->y - 22,
+                                                NULL,
+                                                command->depth,
+                                                scene_sample_y);
                 }
                 if (geometry != command->source) {
                     SDL_DestroySurface(geometry);
@@ -4777,7 +4883,7 @@ map_render_commands(SDL_Surface *surface,
     render_profiler_end(RENDER_PROFILE_MAP_SPRITE_EFFECTS, profile_effects_started);
 
     if (surface == NULL) {
-        gpu_renderer_map_set_owner(GPU_RENDERER_OWNER_UNLIT);
+        gpu_renderer_map_set_owner(GPU_RENDERER_OWNER_UNLIT, 0);
     }
 
     if (map_scene_composition_active) {
@@ -4869,16 +4975,28 @@ static void map_draw_ui(SDL_Surface *surface, map_render_context_t *context) {
             .w = MAP_TILE_POS_XOFF,
             .h = MAP_TILE_POS_YOFF,
         };
-        text_show_format(surface,
-                         FONT("arial", 9),
-                         box.x,
-                         box.y,
-                         COLOR_WHITE,
-                         TEXT_OUTLINE | TEXT_VALIGN_CENTER | TEXT_ALIGN_CENTER,
-                         &box,
-                         "%d,%d",
-                         context->tiles[i].w,
-                         context->tiles[i].h);
+        if (surface != NULL) {
+            text_show_format(surface,
+                             FONT("arial", 9),
+                             box.x,
+                             box.y,
+                             COLOR_WHITE,
+                             TEXT_OUTLINE | TEXT_VALIGN_CENTER | TEXT_ALIGN_CENTER,
+                             &box,
+                             "%d,%d",
+                             context->tiles[i].w,
+                             context->tiles[i].h);
+        } else {
+            text_show_format_root(FONT("arial", 9),
+                                  box.x,
+                                  box.y,
+                                  COLOR_WHITE,
+                                  TEXT_OUTLINE | TEXT_VALIGN_CENTER | TEXT_ALIGN_CENTER,
+                                  &box,
+                                  "%d,%d",
+                                  context->tiles[i].w,
+                                  context->tiles[i].h);
+        }
     }
     free(context->tiles);
     context->tiles = NULL;
@@ -4908,15 +5026,26 @@ static void map_draw_ui(SDL_Surface *surface, map_render_context_t *context) {
 
         if (!(setting_get_int(OPT_CAT_MAP, OPT_PLAYER_NAMES) &&
               context->target_cell->pname[context->target_sub_layer][0] != '\0')) {
-            text_show(surface,
-                      FONT_SANS9,
-                      cpl.target_name,
-                      context->target_rect.x + context->target_rect.w / 2 -
-                          text_get_width(FONT_SANS9, cpl.target_name, 0) / 2,
-                      context->target_rect.y - 15,
-                      cpl.target_color,
-                      TEXT_OUTLINE,
-                      NULL);
+            int x = context->target_rect.x + context->target_rect.w / 2 -
+                    text_get_width(FONT_SANS9, cpl.target_name, 0) / 2;
+            if (surface != NULL) {
+                text_show(surface,
+                          FONT_SANS9,
+                          cpl.target_name,
+                          x,
+                          context->target_rect.y - 15,
+                          cpl.target_color,
+                          TEXT_OUTLINE,
+                          NULL);
+            } else {
+                text_show_root(FONT_SANS9,
+                               cpl.target_name,
+                               x,
+                               context->target_rect.y - 15,
+                               cpl.target_color,
+                               TEXT_OUTLINE,
+                               NULL);
+            }
         }
 
         rectangle_create(surface,
@@ -5100,12 +5229,11 @@ void map_draw_map(SDL_Surface *surface) {
         return;
     }
 
-    map_scene_composition_active =
-        primary_surface && !gpu_primary && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) &&
-        lighting_scene_begin(surface->w, surface->h);
+    map_scene_composition_active = primary_surface && !gpu_primary &&
+                                   setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) &&
+                                   lighting_scene_begin(surface->w, surface->h);
 
-    uint64_t gpu_command_build_started =
-        gpu_primary ? gpu_renderer_timing_begin() : 0;
+    uint64_t gpu_command_build_started = gpu_primary ? gpu_renderer_timing_begin() : 0;
     uint64_t active_levels = 0;
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         uint16_t bit = UINT16_C(1) << MAP2_DEPTH_INDEX(depth);
@@ -5169,8 +5297,7 @@ void map_draw_map(SDL_Surface *surface) {
                         primary_surface,
                         primary_surface ? &map_animation_exit_cues : NULL);
     map_draw_ui(gpu_primary ? NULL : surface, &render_context);
-    gpu_renderer_timing_end(GPU_RENDERER_TIMING_COMMAND_BUILD,
-                            gpu_command_build_started);
+    gpu_renderer_timing_end(GPU_RENDERER_TIMING_COMMAND_BUILD, gpu_command_build_started);
     if (gpu_primary && !gpu_renderer_map_end()) {
         map_benchmark_statistics.render_failures++;
         LOG(ERROR, "Could not finish retained GPU map target: %s", SDL_GetError());
@@ -5199,9 +5326,8 @@ bool map_draw_animation(SDL_Surface *surface) {
         return false;
     }
 
-    map_scene_composition_active =
-        setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) &&
-        lighting_scene_begin(surface->w, surface->h);
+    map_scene_composition_active = setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) &&
+                                   lighting_scene_begin(surface->w, surface->h);
 
     map_render_context_t render_context = {0};
     if (map_animation_ground_commands_num != 0) {
@@ -5853,15 +5979,14 @@ static void widget_draw(widgetdata *widget) {
             cp = strtok(msg, "\n");
 
             while (cp) {
-                text_show(OfflineRenderSurface,
-                          FONT_SERIF16,
-                          cp,
-                          widget_x(widget) + displayed->w / 2 -
-                              text_get_width(FONT_SERIF16, cp, TEXT_OUTLINE) / 2,
-                          widget_y(widget) + 300 - bmoff + y_offset,
-                          msg_anim.color,
-                          TEXT_OUTLINE | TEXT_MARKUP,
-                          NULL);
+                text_show_root(FONT_SERIF16,
+                               cp,
+                               widget_x(widget) + displayed->w / 2 -
+                                   text_get_width(FONT_SERIF16, cp, TEXT_OUTLINE) / 2,
+                               widget_y(widget) + 300 - bmoff + y_offset,
+                               msg_anim.color,
+                               TEXT_OUTLINE | TEXT_MARKUP,
+                               NULL);
                 y_offset += FONT_HEIGHT(FONT_SERIF16);
                 cp = strtok(NULL, "\n");
             }
@@ -6043,10 +6168,10 @@ bool widget_map_visibility_test(void) {
 
                         uint8_t expected = map_visibility_field_alpha(
                             map_visibility_field_weight(cache_x - player_x, cache_y - player_y));
-                        bool local_player = depth == 0 && cache_x == player_x &&
-                                            cache_y == player_y && object_layer == LAYER_LIVING &&
-                                            sub_layer == MIN(MapData.player_sub_layer,
-                                                             NUM_SUB_LAYERS - 1);
+                        bool local_player =
+                            depth == 0 && cache_x == player_x && cache_y == player_y &&
+                            object_layer == LAYER_LIVING &&
+                            sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
                         if (local_player) {
                             expected = UINT8_MAX;
                         }
@@ -6094,8 +6219,7 @@ bool widget_map_visibility_test(void) {
         if (!map_visibility_transient_layer(object_layer)) {
             continue;
         }
-        int layer = GET_MAP_LAYER(object_layer, MIN(MapData.player_sub_layer,
-                                                    NUM_SUB_LAYERS - 1));
+        int layer = GET_MAP_LAYER(object_layer, MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1));
         const map_visibility_fade_t *fade = &center->visibility[layer];
         if (center->faces[layer] == 0) {
             continue;
@@ -6141,9 +6265,7 @@ void widget_map_animation_test_add(int type,
 }
 
 /** Find a screen point that the production hit-test resolves to one tile. */
-static bool widget_map_click_test_find_point(widgetdata *widget,
-                                             int target_x,
-                                             int target_y) {
+static bool widget_map_click_test_find_point(widgetdata *widget, int target_x, int target_y) {
     if (widget == NULL || widget->surface == NULL || cur_widget[MAP_ID] == NULL) {
         return false;
     }
@@ -6185,10 +6307,9 @@ static bool widget_map_click_test_find_point(widgetdata *widget,
     int displayed_height = MAX(1, (int)(widget->surface->h * zoom));
     int left = MAX(0, data.xpos);
     int top = MAX(0, data.ypos);
-    int right = MIN(displayed_width - 1,
-                    data.xpos + (int)(MAP_TILE_POS_XOFF * zoom));
-    int bottom = MIN(displayed_height - 1,
-                     data.ypos + (int)((MAP_TILE_YOFF + stretch_height) * zoom));
+    int right = MIN(displayed_width - 1, data.xpos + (int)(MAP_TILE_POS_XOFF * zoom));
+    int bottom =
+        MIN(displayed_height - 1, data.ypos + (int)((MAP_TILE_YOFF + stretch_height) * zoom));
 
     for (int local_x = left; local_x <= right; local_x++) {
         for (int local_y = top; local_y <= bottom; local_y++) {
@@ -6618,14 +6739,13 @@ void map_anims_play(void) {
                 int wd = text_get_width(FONT_MONO10, buf, TEXT_OUTLINE);
                 const char *color = anim->value < 0 ? COLOR_GREEN : COLOR_ORANGE;
 
-                text_show(OfflineRenderSurface,
-                          FONT_MONO10,
-                          buf,
-                          screen.x - wd / 2,
-                          screen.y,
-                          color,
-                          TEXT_OUTLINE,
-                          NULL);
+                text_show_root(FONT_MONO10,
+                               buf,
+                               screen.x - wd / 2,
+                               screen.y,
+                               color,
+                               TEXT_OUTLINE,
+                               NULL);
                 break;
             }
 
@@ -6651,14 +6771,13 @@ void map_anims_play(void) {
                              NULL,
                              texture);
 
-                text_show(OfflineRenderSurface,
-                          FONT_MONO10,
-                          buf,
-                          screen.x - wd / 2,
-                          screen.y,
-                          COLOR_ORANGE,
-                          TEXT_OUTLINE,
-                          NULL);
+                text_show_root(FONT_MONO10,
+                               buf,
+                               screen.x - wd / 2,
+                               screen.y,
+                               COLOR_ORANGE,
+                               TEXT_OUTLINE,
+                               NULL);
 
                 break;
             }

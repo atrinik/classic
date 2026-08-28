@@ -13,9 +13,9 @@
  * @file
  * Production lighting state hooks for the mandatory GPU renderer.
  *
- * The dense CPU field rasterizer and compositor are compiled only into
- * test-enabled oracle builds. Production retains compact Q5.11 samples in
- * map state and submits them directly to gpu_map_renderer.c.
+ * The dense CPU field rasterizer and compositor are not linked into client
+ * executables. The runtime retains compact Q5.11 samples in map state and
+ * submits them directly to gpu_map_renderer.c.
  */
 
 #include <global.h>
@@ -150,8 +150,23 @@ void lighting_benchmark_configure(bool timing_enabled,
     (void)reconstruction;
 }
 
-bool lighting_benchmark_level_statistics_get(
-    int depth, lighting_benchmark_level_statistics_t *statistics) {
+#ifdef ATRINIK_WIDGET_TESTS
+void lighting_benchmark_fault_configure(unsigned int fault) {
+    (void)fault;
+}
+
+bool lighting_benchmark_fault_complete(void) {
+    return false;
+}
+
+bool lighting_benchmark_source_address_retained(uintptr_t source_address) {
+    (void)source_address;
+    return false;
+}
+#endif
+
+bool lighting_benchmark_level_statistics_get(int depth,
+                                             lighting_benchmark_level_statistics_t *statistics) {
     if (depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH || statistics == NULL) {
         return false;
     }

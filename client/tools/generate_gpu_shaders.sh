@@ -26,6 +26,9 @@ compile_stage() {
     "$spirv_cross" "$output/$name.spv" --msl --msl-version 20200 \
         --rename-entry-point "$entry" main0 "$stage" \
         --output "$output/$name.msl"
+    awk '{ sub(/[[:space:]]+$/, ""); lines[NR] = $0 } END { last = NR; while (last > 0 && lines[last] == "") last--; for (i = 1; i <= last; i++) print lines[i] }' \
+        "$output/$name.msl" > "$output/$name.msl.normalized"
+    mv "$output/$name.msl.normalized" "$output/$name.msl"
 }
 
 compile_stage world_vertex vs_6_0 world_vertex vert
