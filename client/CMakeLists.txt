@@ -770,6 +770,19 @@ if (BUILD_TESTING)
         SDL3_ttf::SDL3_ttf)
     add_test(NAME client-render-profiler COMMAND client-render-profiler-tests)
 
+    add_executable(client-gpu-renderer-tests
+        src/tests/gpu_renderer.c
+        src/client/gpu_renderer.c)
+    atrinik_configure_target(client-gpu-renderer-tests)
+    target_compile_definitions(client-gpu-renderer-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-gpu-renderer-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-gpu-renderer-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-gpu-renderer COMMAND client-gpu-renderer-tests)
+
     add_executable(client-map-light-state-tests src/tests/map_light_state.c)
     atrinik_configure_target(client-map-light-state-tests)
     target_compile_definitions(client-map-light-state-tests PRIVATE SDL_DISABLE_OLD_NAMES)

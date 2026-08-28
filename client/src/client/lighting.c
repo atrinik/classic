@@ -732,6 +732,7 @@ static inline const lighting_sample *lighting_sample_at_const(const lighting_con
 /** Clear a logical rectangle, splitting rows when the circular field wraps. */
 static void lighting_clear_context_rect(lighting_context *context,
                                         const lighting_dirty_rect_t *rect) {
+    size_t cleared_bytes = 0;
     for (int y = rect->y0; y < rect->y1; y++) {
         lighting_sample *row = lighting_sample_row_at(context, y);
         int x = rect->x0;
@@ -742,9 +743,11 @@ static void lighting_clear_context_rect(lighting_context *context,
             }
             int length = MIN(rect->x1 - x, context->width - physical_x);
             memset(row + physical_x, 0, (size_t)length * sizeof(*row));
+            cleared_bytes += (size_t)length * sizeof(*row);
             x += length;
         }
     }
+    LIGHTING_BENCHMARK_ADD(context, field_physical_cleared_bytes, cleared_bytes);
 }
 
 _Static_assert(sizeof(lighting_sprite_cache_entry) + sizeof(SDL_Surface) <=
@@ -1345,6 +1348,9 @@ void lighting_scroll(int screen_dx, int screen_dy) {
             uint64_t timing_started = lighting_benchmark_timing_start();
             lighting_dirty_full(context, LIGHTING_FULL_REBUILD_CONTROL);
             memset(context->samples, 0, context->samples_num * sizeof(*context->samples));
+            LIGHTING_BENCHMARK_ADD(context,
+                                   field_physical_cleared_bytes,
+                                   context->samples_num * sizeof(*context->samples));
             context->sample_origin_x = 0;
             context->sample_origin_y = 0;
             memset(context->rows_valid, 0, (size_t)context->height);
@@ -1363,6 +1369,9 @@ void lighting_scroll(int screen_dx, int screen_dy) {
             uint64_t timing_started = lighting_benchmark_timing_start();
             lighting_dirty_full(context, LIGHTING_FULL_REBUILD_BOUNDS);
             memset(context->samples, 0, context->samples_num * sizeof(*context->samples));
+            LIGHTING_BENCHMARK_ADD(context,
+                                   field_physical_cleared_bytes,
+                                   context->samples_num * sizeof(*context->samples));
             context->sample_origin_x = 0;
             context->sample_origin_y = 0;
             memset(context->rows_valid, 0, (size_t)height);
@@ -1451,9 +1460,9 @@ void lighting_scroll(int screen_dx, int screen_dy) {
         LIGHTING_BENCHMARK_INCREMENT(context, field_translations);
         size_t translated_pixels =
             (size_t)(source_x1 - source_x0) * (size_t)(source_y1 - source_y0);
-        LIGHTING_BENCHMARK_ADD(context, field_translated_pixels, translated_pixels);
+        LIGHTING_BENCHMARK_ADD(context, field_translation_logical_pixels, translated_pixels);
         LIGHTING_BENCHMARK_ADD(context,
-                               field_translated_bytes,
+                               field_translation_logical_bytes,
                                translated_pixels * sizeof(*context->samples));
         LIGHTING_BENCHMARK_TIMING_FINISH(context, translation, timing_started);
     }
@@ -1527,6 +1536,7 @@ static void lighting_draw_triangle(const lighting_vertex_t vertices[4], bool fir
                    vertices[3].scalar == vertices[3].green &&
                    vertices[3].scalar == vertices[3].blue;
 
+    size_t written_samples = 0;
     for (int y = min_y; y <= max_y; y++) {
         lighting_dirty_span_t fallback_spans[LIGHTING_MAX_DIRTY_RECTS];
         const lighting_dirty_span_t *spans = NULL;
@@ -1601,6 +1611,7 @@ static void lighting_draw_triangle(const lighting_vertex_t vertices[4], bool fir
                     }
                     samples->present = 1;
                     samples->reserved = 0;
+                    written_samples++;
 #undef INTERPOLATE_CHANNEL
                     }
                     weight_a += step_x_a;
@@ -1614,6 +1625,9 @@ static void lighting_draw_triangle(const lighting_vertex_t vertices[4], bool fir
         row_weight_b += step_y_b;
         row_weight_c += step_y_c;
     }
+    LIGHTING_BENCHMARK_ADD(context,
+                           field_physical_written_bytes,
+                           written_samples * sizeof(*context->samples));
 }
 
 void lighting_draw_quad(const lighting_vertex_t vertices[4]) {
@@ -2076,6 +2090,7 @@ void lighting_render(SDL_Surface *destination) {
     bool direct_argb = destination->format == SDL_PIXELFORMAT_ARGB8888;
     const lighting_context *context = lighting_context_current;
     uint64_t timing_started = lighting_benchmark_timing_start();
+    size_t processed_samples = 0;
     for (int y = 0; y < lighting_height; y++) {
         Uint32 *pixels = (Uint32 *)((Uint8 *)destination->pixels + y * destination->pitch);
         const lighting_sample *row = lighting_sample_row_at_const(context, y);
@@ -2093,6 +2108,7 @@ void lighting_render(SDL_Surface *destination) {
                 if (has_colorkey && pixels[destination_x] == colorkey) {
                     continue;
                 }
+                processed_samples++;
                 uint8_t red, green, blue, alpha;
                 if (direct_argb) {
                     red = pixels[destination_x] >> 16;
@@ -2118,6 +2134,9 @@ void lighting_render(SDL_Surface *destination) {
             x += length;
         }
     }
+    LIGHTING_BENCHMARK_ADD(lighting_context_current,
+                           field_physical_read_bytes,
+                           processed_samples * sizeof(*context->samples));
     LIGHTING_BENCHMARK_TIMING_FINISH(lighting_context_current, tone_map_multiply, timing_started);
 
     SDL_UnlockSurface(destination);
@@ -2374,6 +2393,7 @@ __attribute__((optimize("O2"))) void lighting_scene_render(SDL_Surface *destinat
     lighting_context *benchmark_context = &lighting_contexts[MAP2_DEPTH_INDEX(0)];
     uint64_t timing_started = lighting_benchmark_timing_start();
     LIGHTING_BENCHMARK_INCREMENT(benchmark_context, whole_field_compositions);
+    size_t processed_samples = 0;
 
     for (size_t scene_pixel = 0; scene_pixel < lighting_scene_pixels_num; scene_pixel++) {
         LIGHTING_BENCHMARK_INCREMENT(benchmark_context, whole_field_processed_pixels);
@@ -2412,6 +2432,7 @@ __attribute__((optimize("O2"))) void lighting_scene_render(SDL_Surface *destinat
         }
         sample_y = MAX(0, MIN(context->height - 1, sample_y));
         const lighting_sample *sample = lighting_sample_at_const(context, x, sample_y);
+        processed_samples++;
         const uint16_t radiance[3] = {sample->red, sample->green, sample->blue};
         uint16_t illumination[3];
         if (sample->scalar == 0) {
@@ -2435,6 +2456,9 @@ __attribute__((optimize("O2"))) void lighting_scene_render(SDL_Surface *destinat
         }
         LIGHTING_BENCHMARK_INCREMENT(benchmark_context, whole_field_pixels);
     }
+    LIGHTING_BENCHMARK_ADD(benchmark_context,
+                           field_physical_read_bytes,
+                           processed_samples * sizeof(*lighting_contexts[0].samples));
     SDL_UnlockSurface(destination);
     LIGHTING_BENCHMARK_TIMING_FINISH(benchmark_context, tone_map_multiply, timing_started);
     lighting_scene_cancel();

@@ -56,7 +56,7 @@
 #define PLAYER_VIEW_MOVEMENT_RESUMED_TICKS 80U
 #define PLAYER_VIEW_MOVEMENT_PACKETS 5U
 #define PLAYER_VIEW_MOVEMENT_ACTIVE_PACKETS 4U
-#define PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION 10U
+#define PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION 11U
 #define PLAYER_VIEW_MOVEMENT_WINDOW_TICKS 32U
 #define PLAYER_VIEW_MOVEMENT_FIXTURE_SCHEMA 3U
 #define PLAYER_VIEW_MOVEMENT_CHECKPOINTS 12U
@@ -1472,8 +1472,15 @@ static void player_view_timing_json(const uint64_t *durations, size_t count) {
 static void player_view_lighting_counters_json(const lighting_benchmark_counters_t *counters) {
     printf("{\"field_begins\":%" PRIu64 ",\"field_dirty_marks\":%" PRIu64
            ",\"field_dirty_pixels\":%" PRIu64 ",\"field_rasterized_quads\":%" PRIu64
-           ",\"field_translations\":%" PRIu64 ",\"field_translated_pixels\":%" PRIu64
-           ",\"field_translated_bytes\":%" PRIu64 ",\"field_scroll_x_pixels\":%" PRIu64
+           ",\"field_translations\":%" PRIu64
+           ",\"field_translation_logical_pixels\":%" PRIu64
+           ",\"field_translation_logical_bytes\":%" PRIu64
+           ",\"field_physical_read_bytes\":%" PRIu64
+           ",\"field_physical_written_bytes\":%" PRIu64
+           ",\"field_physical_copied_bytes\":%" PRIu64
+           ",\"field_physical_cleared_bytes\":%" PRIu64
+           ",\"field_physical_uploaded_bytes\":%" PRIu64
+           ",\"field_scroll_x_pixels\":%" PRIu64
            ",\"field_scroll_y_pixels\":%" PRIu64 ",\"field_translation_fallback_active\":%" PRIu64
            ",\"field_translation_fallback_bounds\":%" PRIu64
            ",\"field_translation_fallback_control\":%" PRIu64 ",\"field_partial_rebuilds\":%" PRIu64
@@ -1493,8 +1500,13 @@ static void player_view_lighting_counters_json(const lighting_benchmark_counters
            counters->field_dirty_pixels,
            counters->field_rasterized_quads,
            counters->field_translations,
-           counters->field_translated_pixels,
-           counters->field_translated_bytes,
+           counters->field_translation_logical_pixels,
+           counters->field_translation_logical_bytes,
+           counters->field_physical_read_bytes,
+           counters->field_physical_written_bytes,
+           counters->field_physical_copied_bytes,
+           counters->field_physical_cleared_bytes,
+           counters->field_physical_uploaded_bytes,
            counters->field_scroll_x_pixels,
            counters->field_scroll_y_pixels,
            counters->field_translation_fallback_active,
@@ -2983,8 +2995,11 @@ static bool player_view_movement_benchmark(SDL_Surface *surface,
         reconstruction == LIGHTING_BENCHMARK_RECONSTRUCTION_FULL ? "full" : "translated";
     const char *workload_variant = isolated_lighting ? "isolated-lighting" : "production";
     bool dirty_known = strcmp(ATRINIK_BENCHMARK_DIRTY, "unknown") != 0;
-    const char *dirty =
-        !dirty_known ? "null" : (strcmp(ATRINIK_BENCHMARK_DIRTY, "true") == 0 ? "true" : "false");
+    if (strcmp(ATRINIK_BENCHMARK_REVISION, "unknown") == 0 || !dirty_known) {
+        fprintf(stderr, "player-view: benchmark source identity is unavailable\n");
+        goto cleanup;
+    }
+    const char *dirty = strcmp(ATRINIK_BENCHMARK_DIRTY, "true") == 0 ? "true" : "false";
     int sdl_version = SDL_GetVersion();
     int cpu_count = MAX(1, SDL_GetNumLogicalCPUCores());
     uint64_t peak_rss = player_view_process_peak_rss_bytes();

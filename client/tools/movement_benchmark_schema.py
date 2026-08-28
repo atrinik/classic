@@ -33,6 +33,7 @@ EXPECTED_CHECKPOINTS = (
     "transition",
 )
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+REVISION = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 STATE_DIGEST = re.compile(r"[0-9a-f]{16}\Z")
 DRAW_REASON_FIELDS = {
     "external",
@@ -57,8 +58,13 @@ LIGHTING_COUNTER_FIELDS = {
     "field_dirty_pixels",
     "field_rasterized_quads",
     "field_translations",
-    "field_translated_pixels",
-    "field_translated_bytes",
+    "field_translation_logical_pixels",
+    "field_translation_logical_bytes",
+    "field_physical_read_bytes",
+    "field_physical_written_bytes",
+    "field_physical_copied_bytes",
+    "field_physical_cleared_bytes",
+    "field_physical_uploaded_bytes",
     "field_scroll_x_pixels",
     "field_scroll_y_pixels",
     "field_translation_fallback_active",
@@ -521,7 +527,7 @@ def _visual_lifecycle_digest(checkpoints: list[dict[str, object]]) -> str:
 
 
 def validate_record(value: object) -> dict[str, object]:
-    """Validate and return one complete version-ten native record."""
+    """Validate and return one complete version-eleven native record."""
     record = _mapping(
         value,
         {
@@ -545,7 +551,7 @@ def validate_record(value: object) -> dict[str, object]:
         },
         "record",
     )
-    if record["schema_version"] != 10 or record["benchmark"] != "player-view-movement" \
+    if record["schema_version"] != 11 or record["benchmark"] != "player-view-movement" \
             or record["tick_ms"] != 125 or record["simulated_tick_hz"] != 8:
         raise ValueError("movement benchmark emitted an incompatible schema")
     checkpoint = _digest(record["checkpoint_sha256"], SHA256, "checkpoint")
@@ -629,10 +635,10 @@ def validate_record(value: object) -> dict[str, object]:
         "instrumentation identity",
     )
     if instrumentation != {
-        "schema_version": 10,
+        "schema_version": 11,
         "fixture_schema_version": 3,
         "workload": "pvm1-map2-lifecycle-v4",
-        "lighting_statistics_version": 7,
+        "lighting_statistics_version": 8,
         "map_statistics_version": 3,
         "render_profiler_statistics_version": 5,
         "sprite_cache_statistics_version": 3,
@@ -656,9 +662,9 @@ def validate_record(value: object) -> dict[str, object]:
     for field in implementation.keys() - {"dirty", "dirty_known"}:
         if not isinstance(implementation[field], str) or not implementation[field]:
             raise ValueError("movement benchmark implementation identity is invalid")
-    if type(implementation["dirty_known"]) is not bool or (
-        implementation["dirty_known"] and type(implementation["dirty"]) is not bool
-    ) or (not implementation["dirty_known"] and implementation["dirty"] is not None):
+    if not REVISION.fullmatch(implementation["revision"]):
+        raise ValueError("movement benchmark implementation revision is invalid")
+    if implementation["dirty_known"] is not True or type(implementation["dirty"]) is not bool:
         raise ValueError("movement benchmark implementation dirty identity is invalid")
     run = _mapping(
         identity["run"],
@@ -1201,10 +1207,15 @@ def validate_record(value: object) -> dict[str, object]:
                     or lighting_counters["field_full_rebuild_active"] != 0
                     or lighting_counters["field_full_rebuild_bounds"] != 0
                     or lighting_counters["field_full_rebuild_control"] != 0
-                    or lighting_counters["field_translated_pixels"] == 0
-                    or lighting_counters["field_translated_bytes"]
-                    != lighting_counters["field_translated_pixels"]
+                    or lighting_counters["field_translation_logical_pixels"] == 0
+                    or lighting_counters["field_translation_logical_bytes"]
+                    != lighting_counters["field_translation_logical_pixels"]
                     * LIGHTING_SAMPLE_BYTES
+                    or lighting_counters["field_physical_copied_bytes"] != 0
+                    or lighting_counters["field_physical_uploaded_bytes"] != 0
+                    or lighting_counters["field_physical_cleared_bytes"] == 0
+                    or lighting_counters["field_physical_read_bytes"] == 0
+                    or lighting_counters["field_physical_written_bytes"] == 0
                     or lighting_counters["field_dirty_pixels"] >= eligible_pixels
                 ):
                     raise ValueError(
@@ -1219,8 +1230,12 @@ def validate_record(value: object) -> dict[str, object]:
                     or lighting_counters["field_full_rebuild_active"] != 0
                     or lighting_counters["field_full_rebuild_bounds"] != 0
                     or lighting_counters["field_full_rebuild_control"] != eligible
-                    or lighting_counters["field_translated_pixels"] != 0
-                    or lighting_counters["field_translated_bytes"] != 0
+                    or lighting_counters["field_translation_logical_pixels"] != 0
+                    or lighting_counters["field_translation_logical_bytes"] != 0
+                    or lighting_counters["field_physical_copied_bytes"] != 0
+                    or lighting_counters["field_physical_uploaded_bytes"] != 0
+                    or lighting_counters["field_physical_read_bytes"] == 0
+                    or lighting_counters["field_physical_written_bytes"] == 0
                     or lighting_counters["field_dirty_pixels"] != eligible_pixels
                 ):
                     raise ValueError(

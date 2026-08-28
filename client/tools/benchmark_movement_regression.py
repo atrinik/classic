@@ -20,7 +20,7 @@ from movement_benchmark_schema import RENDER_STAGES, validate_record
 
 
 EVIDENCE_SCHEMA_VERSION = 7
-NATIVE_SCHEMA_VERSION = 10
+NATIVE_SCHEMA_VERSION = 11
 SUSTAINED_P95_LIMIT_NS = 33_300_000
 LARGE_SUSTAINED_P95_LIMIT_NS = 125_000_000
 DISPLAY_REFERENCE_FPS = 144
@@ -49,8 +49,13 @@ LIGHTING_FIELDS = {
     "field_reuses",
     "field_dirty_pixels",
     "field_translations",
-    "field_translated_pixels",
-    "field_translated_bytes",
+    "field_translation_logical_pixels",
+    "field_translation_logical_bytes",
+    "field_physical_read_bytes",
+    "field_physical_written_bytes",
+    "field_physical_copied_bytes",
+    "field_physical_cleared_bytes",
+    "field_physical_uploaded_bytes",
     "field_scroll_x_pixels",
     "field_scroll_y_pixels",
     "field_translation_fallback_active",
@@ -1569,7 +1574,7 @@ def _append_lighting_ab_report(
             "must not be added to these operation timings.",
             "",
             "| Viewport | Mode | Lighting work p50/p95 | Total work p95 | "
-            "Full/partial/reuse decisions | Dirty pixels (ratio) | Translated pixels/bytes | "
+            "Full/partial/reuse decisions | Dirty pixels (ratio) | Logical translated pixels/bytes | "
             "Full causes cache/active/bounds/control/other | Scroll offset X/Y |",
             "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
@@ -1589,8 +1594,8 @@ def _append_lighting_ab_report(
                 f"{summary['lighting_work_p95_ms']:.3f} ms | {summary['work_p95_ms']:.2f} ms | "
                 f"{lighting['field_full_rebuilds']}/{lighting['field_partial_rebuilds']}/"
                 f"{lighting['field_reuses']} | {dirty_pixels:,} ({dirty_ratio:.2f}%) | "
-                f"{lighting['field_translated_pixels']:,}/"
-                f"{_human_bytes(lighting['field_translated_bytes'])} | "
+                f"{lighting['field_translation_logical_pixels']:,}/"
+                f"{_human_bytes(lighting['field_translation_logical_bytes'])} | "
                 f"{lighting['field_full_rebuild_cache']}/"
                 f"{lighting['field_full_rebuild_active']}/"
                 f"{lighting['field_full_rebuild_bounds']}/"
@@ -1650,7 +1655,7 @@ def _append_lighting_ab_report(
                 f"| {level['depth']} | {mode} | {level['width']}×{level['height']} | "
                 f"{counters['field_full_rebuilds']}/{counters['field_partial_rebuilds']}/"
                 f"{counters['field_reuses']} | {ratio:.2f}% | "
-                f"{_human_bytes(counters['field_translated_bytes'])} | "
+                f"{_human_bytes(counters['field_translation_logical_bytes'])} | "
                 f"{counters['field_scroll_x_pixels']}/{counters['field_scroll_y_pixels']} px | "
                 f"{counters['field_full_rebuild_cache']}/"
                 f"{counters['field_full_rebuild_active']}/"
