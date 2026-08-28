@@ -1468,6 +1468,7 @@ class WorkflowContractTests(unittest.TestCase):
             "client": {
                 ".github/workflows/check.yml",
                 "tools/ci/run_linux_check.sh",
+                "tools/ci/run_gpu_coverage.sh",
                 "client/CMakeLists.txt",
                 "client/CMakePresets.json",
             },
@@ -1515,6 +1516,21 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("ccache --print-stats", runner)
         self.assertIn("ccache --show-config", runner)
         self.assertIn("ccache --show-stats", runner)
+
+        gpu_coverage = (ROOT / "tools" / "ci" / "run_gpu_coverage.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("ATRINIK_GPU_CONFORMANCE_REQUIRED=1", gpu_coverage)
+        self.assertIn("xvfb-run -a", gpu_coverage)
+        self.assertIn("^client-gpu-renderer-integration$", gpu_coverage)
+        self.assertIn("lvp_icd.json", gpu_coverage)
+        self.assertIn("--network none", gpu_coverage)
+        self.assertIn("tools/ci/run_gpu_coverage.sh", client)
+        self.assertIn(
+            "ghcr.io/atrinik/linux-build:1.3.0@sha256:"
+            "260658d2709e993b41148a9d8f724c2d2f7f1fd93543a139b00d139b10e7f31a",
+            workflow,
+        )
 
         measurement = (ROOT / "tools" / "ci" / "measure_linux_image.sh").read_text(
             encoding="utf-8"

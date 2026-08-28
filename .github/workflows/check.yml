@@ -27,6 +27,7 @@ concurrency:
 env:
   CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.2.3@sha256:d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f
   CLASSIC_LINUX_IMAGE_DIGEST: sha256:d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f
+  CLASSIC_GPU_COVERAGE_IMAGE: ghcr.io/atrinik/linux-build:1.3.0@sha256:260658d2709e993b41148a9d8f724c2d2f7f1fd93543a139b00d139b10e7f31a
   CLASSIC_LINUX_CCACHE_COMPILER: gcc-15.2.0
   CLASSIC_LINUX_CCACHE_EPOCH: "1"
 
@@ -703,6 +704,7 @@ jobs:
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/check.yml \
             --material tools/ci/run_linux_check.sh \
+            --material tools/ci/run_gpu_coverage.sh \
             --material client/CMakeLists.txt \
             --material client/CMakePresets.json \
             --github-output "${GITHUB_OUTPUT}"
@@ -735,6 +737,13 @@ jobs:
             --workdir /workspace \
             "${CLASSIC_LINUX_IMAGE}" \
             tools/ci/run_linux_check.sh client /workspace
+      - name: Exercise GPU renderer coverage
+        run: |
+          docker pull "${CLASSIC_GPU_COVERAGE_IMAGE}"
+          tools/ci/run_gpu_coverage.sh \
+            "${GITHUB_WORKSPACE}" \
+            "${CLASSIC_LINUX_IMAGE}" \
+            "${CLASSIC_GPU_COVERAGE_IMAGE}"
       - name: Upload coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:

@@ -3287,6 +3287,7 @@ int gpu_player_view_main(int argc, char *argv[]) {
             MapData.light_keyframe_start_seconds +
             (MapData.light_keyframe_end_seconds - MapData.light_keyframe_start_seconds) / 2;
         telemetry_game_time_sync(timed_midpoint_seconds, UINT32_MAX);
+        map_animate();
         map_benchmark_statistics_reset();
     }
 #ifdef ATRINIK_WIDGET_TESTS
@@ -3611,7 +3612,9 @@ int gpu_player_view_main(int argc, char *argv[]) {
     }
     if (timed_light_lifecycle) {
         telemetry_game_time_sync(MapData.light_keyframe_end_seconds, UINT32_MAX);
-        map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+        /* Follow the production frame lifecycle so the temporal bucket
+         * advances the retained lighting revision before the endpoint draw. */
+        map_animate();
         if (!gpu_player_view_render(map_widget, manifest.widget_render) ||
             !gpu_player_view_checkpoint(timed_endpoint_digest) ||
             strcmp(timed_endpoint_digest, initial_digest) == 0) {
@@ -3619,7 +3622,7 @@ int gpu_player_view_main(int argc, char *argv[]) {
             goto cleanup;
         }
         telemetry_game_time_sync(timed_midpoint_seconds, UINT32_MAX);
-        map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+        map_animate();
         if (!gpu_player_view_render(map_widget, manifest.widget_render)) {
             fprintf(stderr, "gpu-player-view: timed-light midpoint restore failed\n");
             goto cleanup;
