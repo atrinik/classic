@@ -32,6 +32,7 @@ typedef struct gpu_map_asset {
     uint32_t width;
     uint32_t height;
     size_t bytes;
+    bool accounted;
     struct gpu_map_asset *next;
 } gpu_map_asset_t;
 
@@ -495,7 +496,9 @@ static bool gpu_map_targets_create(int width, int height) {
 
 static void gpu_map_asset_destroy(gpu_map_asset_t *asset) {
     SDL_ReleaseGPUTexture(map_device, asset->texture);
-    gpu_renderer_statistics_resource_destroy(asset->bytes);
+    if (asset->accounted) {
+        gpu_renderer_statistics_resource_destroy(asset->bytes);
+    }
     free(asset);
 }
 
@@ -676,6 +679,9 @@ static gpu_map_asset_t *gpu_map_asset_create(SDL_Surface *surface) {
     asset->width = (uint32_t)surface->w;
     asset->height = (uint32_t)surface->h;
     asset->bytes = (size_t)surface->w * (size_t)surface->h * 4U;
+    gpu_renderer_statistics_upload(asset->bytes);
+    gpu_renderer_statistics_resource_create(asset->bytes);
+    asset->accounted = true;
     asset->generation = next_generation++;
     if (next_generation == 0) {
         next_generation = 1;
@@ -699,8 +705,6 @@ static gpu_map_asset_t *gpu_map_asset_create(SDL_Surface *surface) {
         SDL_SetNumberProperty(properties, GPU_MAP_SURFACE_GENERATION_PROPERTY, 0);
         return NULL;
     }
-    gpu_renderer_statistics_upload(asset->bytes);
-    gpu_renderer_statistics_resource_create(asset->bytes);
     return asset;
 }
 
@@ -966,6 +970,12 @@ bool gpu_map_renderer_end(void) {
         gpu_map_command_cancel();
         return false;
     }
+    /* An empty frame still has to clear both retained world targets before
+     * final composition, otherwise loading/FOW frames expose old pixels. */
+    if (world_pass == NULL && !gpu_map_world_pass_begin()) {
+        gpu_map_command_cancel();
+        return false;
+    }
     gpu_map_world_pass_end();
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_ALBEDO_OWNER, albedo_timing_started);
     uint64_t light_timing_started = gpu_renderer_timing_begin();
@@ -1064,7 +1074,7 @@ bool gpu_map_renderer_end(void) {
         light_forward_lut_buffer,
         light_inverse_lut_buffer,
     };
-    SDL_BindGPUFragmentStorageBuffers(final_pass, 1, tone_buffers, SDL_arraysize(tone_buffers));
+    SDL_BindGPUFragmentStorageBuffers(final_pass, 0, tone_buffers, SDL_arraysize(tone_buffers));
     SDL_DrawGPUPrimitives(final_pass, 3, 1, 0, 0);
     gpu_renderer_statistics_commands(1, 1, 1);
     SDL_EndGPURenderPass(final_pass);

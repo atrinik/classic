@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -43,9 +43,10 @@
  * .4 or less lets you see through walls.  .5 is about right.
  */
 #define SPACE_BLOCK 0.5
+#define BLOCK_LINKS_MAX 5
 
 typedef struct blstr {
-    int x[4], y[4];
+    int x[BLOCK_LINKS_MAX], y[BLOCK_LINKS_MAX];
     int index;
 } blocks;
 
@@ -159,6 +160,7 @@ void set_block(int x, int y, int bx, int by) {
         }
     }
 
+    HARD_ASSERT(idx < BLOCK_LINKS_MAX);
     block[x][y].x[idx] = bx;
     block[x][y].y[idx] = by;
     block[x][y].index++;

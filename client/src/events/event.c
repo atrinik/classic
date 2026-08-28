@@ -180,9 +180,11 @@ int Event_PollInputDevice(void) {
                     setting_set_int(OPT_CAT_CLIENT, OPT_RESOLUTION, 0);
                 }
                 int width, height;
-                if (!gpu_renderer_output_size(&width, &height)) {
-                    LOG(ERROR, "Unable to query GPU output after resize: %s", SDL_GetError());
-                    exit(1);
+                if (!SDL_GetWindowSizeInPixels(ScreenWindow, &width, &height)) {
+                    LOG(ERROR, "Unable to query window pixels after resize: %s", SDL_GetError());
+                    gpu_renderer_recreation_request();
+                    map_redraw_request(MAP_REDRAW_REASON_RESIZE);
+                    break;
                 }
                 resize_window(width, height);
                 gpu_renderer_recreation_request();

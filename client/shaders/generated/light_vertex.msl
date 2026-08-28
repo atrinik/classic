@@ -77,12 +77,12 @@ struct main0_out
     float4 gl_Position [[position]];
 };
 
-vertex main0_out main0(const device type_StructuredBuffer_LightQuad& light_quads [[buffer(0)]], constant type_LightVertexUniforms& LightVertexUniforms [[buffer(1)]], uint gl_VertexIndex [[vertex_id]], uint gl_InstanceIndex [[instance_id]])
+vertex main0_out main0(const device type_StructuredBuffer_LightQuad& vertex_light_quads [[buffer(0)]], constant type_LightVertexUniforms& LightVertexUniforms [[buffer(1)]], uint gl_VertexIndex [[vertex_id]], uint gl_InstanceIndex [[instance_id]])
 {
     main0_out out = {};
     uint _58 = LightVertexUniforms.light_first_quad + gl_InstanceIndex;
-    int4 _51 = int4(light_quads._m0[_58].x);
-    int4 _50 = int4(light_quads._m0[_58].y);
+    int4 _51 = int4(vertex_light_quads._m0[_58].x);
+    int4 _50 = int4(vertex_light_quads._m0[_58].y);
     out.gl_Position = float4(((float(_51[_47[gl_VertexIndex]]) * 2.0) / LightVertexUniforms.light_viewport.x) - 1.0, 1.0 - ((float(_50[_47[gl_VertexIndex]]) * 2.0) / LightVertexUniforms.light_viewport.y), 0.0, 1.0);
     out.out_var_TEXCOORD0 = _58;
     out.out_var_TEXCOORD1 = gl_VertexIndex / 3u;

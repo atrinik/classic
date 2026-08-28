@@ -650,6 +650,7 @@ static bool gpu_renderer_recover_frame(unsigned int *attempts, const char *conte
         (*attempts)++;
         if (gpu_renderer_recover(ScreenWindow)) {
             map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
+            minimap_redraw_flag = 1;
             widget_redraw_everything();
             popup_redraw_all();
             return true;
@@ -711,8 +712,10 @@ int main(int argc, char *argv[]) {
 
 #ifdef ATRINIK_WIDGET_TESTS
     if (argc == 2 && strcmp(argv[1], "--map-state-test") == 0) {
-        return widget_map_sparse_state_test() && widget_map_transaction_abort_test() ? EXIT_SUCCESS
-                                                                                     : EXIT_FAILURE;
+        return widget_map_sparse_state_test() && widget_map_transaction_abort_test() &&
+                       widget_map_light_keyframe_capacity_test()
+                   ? EXIT_SUCCESS
+                   : EXIT_FAILURE;
     }
 
     if (argc == 4 && strcmp(argv[1], "--widget-priority-test") == 0) {
@@ -977,7 +980,7 @@ int main(int argc, char *argv[]) {
         if (cpl.state == ST_PLAY && update) {
             map_draw_pointer_overlay();
         }
-        if (!setting_get_int(OPT_CAT_CLIENT, OPT_SYSTEM_CURSOR) && cursor_x != -1 &&
+        if (update && !setting_get_int(OPT_CAT_CLIENT, OPT_SYSTEM_CURSOR) && cursor_x != -1 &&
             cursor_y != -1 && SDL_GetWindowFlags(ScreenWindow) & SDL_WINDOW_MOUSE_FOCUS) {
             surface_show(OfflineRenderSurface,
                          cursor_x - texture_surface(cursor_texture)->w / 2,

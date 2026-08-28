@@ -615,7 +615,7 @@ def additional_contexts(
     return contexts
 
 
-class NativeV11RecordTests(unittest.TestCase):
+class NativeV12RecordTests(unittest.TestCase):
     @mock.patch.object(movement_verifier.subprocess, "run")
     def test_brynknot_verifier_covers_route_and_long_timeout(self, run: mock.Mock) -> None:
         record = native_record(viewport="brynknot")
@@ -631,7 +631,7 @@ class NativeV11RecordTests(unittest.TestCase):
         self.assertEqual(observed, record)
         self.assertEqual(run.call_args.kwargs["timeout"], 900)
 
-    def test_parse_accepts_closed_v11_record(self) -> None:
+    def test_parse_accepts_closed_v12_record(self) -> None:
         self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 12)
 
     def test_parse_accepts_same_workload_with_fine_timing_disabled(self) -> None:

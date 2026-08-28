@@ -87,8 +87,8 @@ SamplerState final_sampler : register(s0, space2);
 SamplerState final_lighting_key_sampler : register(s1, space2);
 SamplerState final_light_sampler : register(s2, space2);
 
-StructuredBuffer<uint> final_forward_lut : register(t1, space0);
-StructuredBuffer<uint> final_inverse_lut : register(t2, space0);
+StructuredBuffer<uint> final_forward_lut : register(t3, space2);
+StructuredBuffer<uint> final_inverse_lut : register(t4, space2);
 
 uint light_mul_divide(uint value, uint multiplier, uint divisor);
 
@@ -174,7 +174,8 @@ struct LightQuad {
     uint3 padding;
 };
 
-StructuredBuffer<LightQuad> light_quads : register(t0, space0);
+StructuredBuffer<LightQuad> vertex_light_quads : register(t0, space0);
+StructuredBuffer<LightQuad> fragment_light_quads : register(t0, space2);
 
 cbuffer LightVertexUniforms : register(b0, space1) {
     float2 light_viewport;
@@ -192,7 +193,7 @@ LightVertexOutput light_vertex(uint vertex_id : SV_VertexID, uint instance_id : 
     static const uint corners[6] = {0u, 1u, 2u, 0u, 2u, 3u};
     uint corner = corners[vertex_id];
     uint quad_id = light_first_quad + instance_id;
-    LightQuad quad = light_quads[quad_id];
+    LightQuad quad = vertex_light_quads[quad_id];
     float2 pixel = float2(quad.x[corner], quad.y[corner]);
     LightVertexOutput output;
     output.position = float4(pixel.x * 2.0 / light_viewport.x - 1.0,
@@ -289,7 +290,7 @@ uint light_bilinear(uint4 values, uint u, uint v, uint scale) {
 
 uint4 light_fragment(LightVertexOutput input) : SV_Target0 {
     int2 pixel = int2(input.position.xy);
-    LightQuad quad = light_quads[input.quad_id];
+    LightQuad quad = fragment_light_quads[input.quad_id];
 
     uint b_index = input.half_index == 0u ? 1u : 2u;
     uint c_index = input.half_index == 0u ? 2u : 3u;

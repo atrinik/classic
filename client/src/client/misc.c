@@ -128,7 +128,7 @@ void screenshot_create(SDL_Surface *surface) {
         snprintf(timebuf, sizeof(timebuf), "%s-%06" PRIu64, timebuf2, (uint64_t)tv.tv_usec);
     } else {
         draw_info(COLOR_RED, "Could not get time information.");
-        return;
+        goto cleanup;
     }
 
     snprintf(path,
@@ -143,6 +143,7 @@ void screenshot_create(SDL_Surface *surface) {
     } else {
         draw_info_format(COLOR_RED, "Failed to write screenshot data (path: %s).", path);
     }
+cleanup:
     if (gpu_readback) {
         SDL_DestroySurface(surface);
     }

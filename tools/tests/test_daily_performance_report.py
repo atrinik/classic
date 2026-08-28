@@ -62,6 +62,19 @@ class DailyReportTests(unittest.TestCase):
             sustained_map["map_draws"],
             sustained_map["primary_map_draws"] + sustained_map["auxiliary_map_draws"],
         )
+        sustained_lighting = point["phases"]["sustained"]["lighting"]
+        for field in (
+            "field_translation_logical_pixels",
+            "field_translation_logical_bytes",
+            "field_physical_read_bytes",
+            "field_physical_written_bytes",
+            "field_physical_copied_bytes",
+            "field_physical_cleared_bytes",
+            "field_physical_uploaded_bytes",
+        ):
+            self.assertIsInstance(sustained_lighting[field], int)
+        self.assertNotIn("field_translated_pixels", sustained_lighting)
+        self.assertNotIn("field_translated_bytes", sustained_lighting)
 
     def test_daily_stage_report_preserves_zero_call_as_na(self) -> None:
         phase = {

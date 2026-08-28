@@ -88,8 +88,6 @@ static bool map_animation_redraw_flag;
  * buckets, never by an exact per-frame clock value. */
 static uint64_t map_temporal_lighting_bucket = UINT64_MAX;
 
-#define MAP_LIGHT_KEYFRAME_STAGE_MAX 8192U
-
 typedef struct map_light_keyframe_stage {
     int depth;
     int x;
@@ -107,6 +105,7 @@ static struct {
     uint64_t end_seconds;
     uint8_t flags;
     size_t count;
+    size_t capacity;
     map_light_keyframe_stage_t *entries;
 } map_light_keyframe_transaction;
 #ifdef ATRINIK_WIDGET_TESTS
@@ -156,18 +155,12 @@ void map_benchmark_statistics_reset(void) {
     map_cell_allocation_count = 0;
     map_cell_allocation_bytes = 0;
     map_cell_peak_retained_bytes = map_cell_retained_bytes;
-    map_benchmark_statistics = (map_benchmark_statistics_t){
-        .renderer_allocation_statistics_available = true,
-    };
+    map_benchmark_statistics = (map_benchmark_statistics_t){0};
 }
 
 void map_benchmark_statistics_get(map_benchmark_statistics_t *statistics) {
     HARD_ASSERT(statistics != NULL);
     *statistics = map_benchmark_statistics;
-    statistics->renderer_allocations = map_cell_allocation_count;
-    statistics->renderer_allocation_bytes = map_cell_allocation_bytes;
-    statistics->renderer_retained_bytes = map_cell_retained_bytes;
-    statistics->renderer_peak_retained_bytes = map_cell_peak_retained_bytes;
 }
 
 void map_benchmark_statistics_present(bool success) {
@@ -180,6 +173,7 @@ static void map_cell_store_destroy(map_cell_store_t *store);
 static MapCell *map_cell_store_slot(map_cell_store_t *store, size_t index, bool create);
 static void
 map_cell_store_set_fow(map_cell_store_t *store, size_t index, bool fow, bool structural_fow);
+static void map_mark_stretch_dirty(int x, int y);
 
 #ifdef ATRINIK_WIDGET_TESTS
 bool widget_map_sparse_state_test(void) {
@@ -234,8 +228,8 @@ bool widget_map_transaction_abort_test(void) {
         }
     }
 
-    map_width = 1;
-    map_height = 1;
+    map_width = 3;
+    map_height = 3;
     map_cache_origin_x = 0;
     map_cache_origin_y = 0;
     current_level_index = MAP2_DEPTH_INDEX(0);
@@ -249,6 +243,7 @@ bool widget_map_transaction_abort_test(void) {
     for (size_t attempt = 0; attempt < 2; attempt++) {
         map_state_transaction_begin(false);
         map_set_fow(0, 0, true);
+        map_mark_stretch_dirty(1, 1);
         map_state_transaction_abort();
         success =
             success && !map_get_fow(0, 0) && map_cell_retained_bytes == initial_retained_bytes;
@@ -260,6 +255,33 @@ bool widget_map_transaction_abort_test(void) {
     map_width = 0;
     map_height = 0;
     map_level_mask = 0;
+    return success;
+}
+
+bool widget_map_light_keyframe_capacity_test(void) {
+    int saved_width = map_width;
+    int saved_height = map_height;
+    const int wire_ceiling = 32;
+    uint16_t scalar[NUM_SUB_LAYERS] = {0};
+    uint16_t rgb[NUM_SUB_LAYERS][3] = {{0}};
+
+    map_width = wire_ceiling;
+    map_height = wire_ceiling;
+    bool success = map_light_keyframe_transaction_begin(1, 1, 2, MAP2_LIGHT_KEYFRAME_SNAP);
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH && success; depth++) {
+        for (int x = 0; x < map_width && success; x++) {
+            for (int y = 0; y < map_height; y++) {
+                success = map_light_keyframe_transaction_stage(depth, x, y, 0, scalar, 0, rgb);
+                if (!success) {
+                    break;
+                }
+            }
+        }
+    }
+    success = success && !map_light_keyframe_transaction_stage(0, 0, 0, 0, scalar, 0, rgb);
+    map_light_keyframe_transaction_abort();
+    map_width = saved_width;
+    map_height = saved_height;
     return success;
 }
 
@@ -330,7 +352,6 @@ static map_cell_store_t *map_cell_store_clone(const map_cell_store_t *store) {
                 MAX(map_cell_peak_retained_bytes, map_cell_retained_bytes);
         }
     }
-    memcpy(clone->headers, store->headers, store->count * sizeof(*store->headers));
     return clone;
 }
 
@@ -1619,6 +1640,7 @@ static void map_mark_stretch_dirty(int x, int y) {
         for (int neighbor_y = cache_y - 1; neighbor_y <= cache_y + 1; neighbor_y++) {
             if (neighbor_x >= 0 && neighbor_x < cache_width && neighbor_y >= 0 &&
                 neighbor_y < cache_height) {
+                map_state_transaction_record_physical(current_level_index, neighbor_x, neighbor_y);
                 MAP_CELL_GET_MUTABLE(neighbor_x, neighbor_y)->stretch_dirty = 1;
             }
         }
@@ -2157,8 +2179,6 @@ bool map_light_keyframe_transaction_begin(uint64_t generation,
         return false;
     }
     map_light_keyframe_transaction_abort();
-    map_light_keyframe_transaction.entries =
-        xcalloc(MAP_LIGHT_KEYFRAME_STAGE_MAX, sizeof(*map_light_keyframe_transaction.entries));
     map_light_keyframe_transaction.active = true;
     map_light_keyframe_transaction.generation = generation;
     map_light_keyframe_transaction.start_seconds = start_seconds;
@@ -2179,9 +2199,23 @@ bool map_light_keyframe_transaction_stage(int depth,
                                           uint8_t rgb_bitmap,
                                           const uint16_t rgb[NUM_SUB_LAYERS][3]) {
     if (!map_light_keyframe_transaction.active || depth < -MAP2_MAX_DEPTH ||
-        depth > MAP2_MAX_DEPTH || x < 0 || y < 0 ||
-        map_light_keyframe_transaction.count >= MAP_LIGHT_KEYFRAME_STAGE_MAX) {
+        depth > MAP2_MAX_DEPTH || x < 0 || x >= map_width || y < 0 || y >= map_height ||
+        map_width <= 0 || map_height <= 0) {
         return false;
+    }
+    size_t maximum = (size_t)map_width * (size_t)map_height * MAP2_LEVELS;
+    if (map_light_keyframe_transaction.count >= maximum) {
+        return false;
+    }
+    if (map_light_keyframe_transaction.count == map_light_keyframe_transaction.capacity) {
+        size_t capacity = map_light_keyframe_transaction.capacity == 0
+                              ? MIN((size_t)256, maximum)
+                              : MIN(map_light_keyframe_transaction.capacity * 2, maximum);
+        map_light_keyframe_transaction.entries =
+            xreallocarray(map_light_keyframe_transaction.entries,
+                          capacity,
+                          sizeof(*map_light_keyframe_transaction.entries));
+        map_light_keyframe_transaction.capacity = capacity;
     }
     map_light_keyframe_stage_t *entry =
         &map_light_keyframe_transaction.entries[map_light_keyframe_transaction.count++];
@@ -5384,9 +5418,8 @@ bool map_pointer_overlay_visible_at(int x, int y) {
     /* The retained-frame path draws this cue after widgets and popups.  The
      * popup event path deliberately leaves the previous widget owner in
      * place, so refresh the hit-test here and explicitly reject popup-covered
-     * points before drawing over the UI.  A NULL widget owner is valid for
-     * the off-screen player-view benchmark, which has only a synthetic map
-     * widget and no widget tree. */
+     * points before drawing over the UI. A NULL widget owner is valid while
+     * the widget tree is being rebuilt after renderer recovery. */
     if (popup_covers_point(x, y)) {
         return false;
     }

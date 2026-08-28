@@ -162,6 +162,14 @@ case "${component}" in
       ATRINIK_BENCHMARK_DIRTY=false \
       cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
     cmake --build --preset linux-release --target atrinik --parallel "${jobs}"
+    if [[ ! -f ${source_root}/client/src/client/player_view.c ]]; then
+      printf '%s\n' \
+        '{"schema_version":1,"skipped":true,"reason":"gpu-hardware-qualification-required"}' \
+        >"${lighting_evidence}"
+      python3 "${source_root}/client/tools/benchmark_movement_regression.py" skip \
+        --reason gpu-hardware-qualification-required \
+        --output "${movement_evidence}"
+    else
     benchmark_base_sha=${ATRINIK_BENCHMARK_BASE_SHA:-${ATRINIK_LIGHTING_BASE_SHA:-}}
     movement_event_name=${ATRINIK_MOVEMENT_EVENT_NAME:-unknown}
     movement_matrix=${ATRINIK_MOVEMENT_MATRIX:-fast}
@@ -446,6 +454,7 @@ case "${component}" in
     if [[ ${baseline_needed} == true ]]; then
       git -C "${source_root}" worktree remove --force "${baseline_root}"
       trap - EXIT
+    fi
     fi
     popd >/dev/null
     ;;

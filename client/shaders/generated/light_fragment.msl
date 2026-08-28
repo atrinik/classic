@@ -31,11 +31,11 @@ struct main0_in
     uint in_var_TEXCOORD1 [[user(locn1)]];
 };
 
-fragment main0_out main0(main0_in in [[stage_in]], const device type_StructuredBuffer_LightQuad& light_quads [[buffer(0)]], float4 gl_FragCoord [[position]])
+fragment main0_out main0(main0_in in [[stage_in]], const device type_StructuredBuffer_LightQuad& fragment_light_quads [[buffer(0)]], float4 gl_FragCoord [[position]])
 {
     main0_out out = {};
-    int4 _52 = int4(light_quads._m0[in.in_var_TEXCOORD0].x);
-    int4 _51 = int4(light_quads._m0[in.in_var_TEXCOORD0].y);
+    int4 _52 = int4(fragment_light_quads._m0[in.in_var_TEXCOORD0].x);
+    int4 _51 = int4(fragment_light_quads._m0[in.in_var_TEXCOORD0].y);
     bool _71 = in.in_var_TEXCOORD1 == 0u;
     uint _72 = _71 ? 1u : 2u;
     uint _73 = _71 ? 2u : 3u;
@@ -79,8 +79,8 @@ fragment main0_out main0(main0_in in [[stage_in]], const device type_StructuredB
     }
     uint _138 = _107 - _132;
     uint _139 = _107 - _137;
-    uint _142 = light_quads._m0[in.in_var_TEXCOORD0].scalar[0] & 65535u;
-    uint _143 = light_quads._m0[in.in_var_TEXCOORD0].scalar[0] >> 16u;
+    uint _142 = fragment_light_quads._m0[in.in_var_TEXCOORD0].scalar[0] & 65535u;
+    uint _143 = fragment_light_quads._m0[in.in_var_TEXCOORD0].scalar[0] >> 16u;
     uint _144 = _138 & 65535u;
     uint _145 = _138 >> 16u;
     uint _146 = _142 * _144;
@@ -88,8 +88,8 @@ fragment main0_out main0(main0_in in [[stage_in]], const device type_StructuredB
     uint _148 = _143 * _144;
     uint _156 = _146 + ((_147 & 65535u) << 16u);
     uint _162 = _156 + ((_148 & 65535u) << 16u);
-    uint _166 = light_quads._m0[in.in_var_TEXCOORD0].scalar[1] & 65535u;
-    uint _167 = light_quads._m0[in.in_var_TEXCOORD0].scalar[1] >> 16u;
+    uint _166 = fragment_light_quads._m0[in.in_var_TEXCOORD0].scalar[1] & 65535u;
+    uint _167 = fragment_light_quads._m0[in.in_var_TEXCOORD0].scalar[1] >> 16u;
     uint _168 = _132 & 65535u;
     uint _169 = _132 >> 16u;
     uint _170 = _166 * _168;
@@ -137,15 +137,15 @@ fragment main0_out main0(main0_in in [[stage_in]], const device type_StructuredB
         }
         _202 = _245 ? _212 : _201;
     }
-    uint _248 = light_quads._m0[in.in_var_TEXCOORD0].scalar[3] & 65535u;
-    uint _249 = light_quads._m0[in.in_var_TEXCOORD0].scalar[3] >> 16u;
+    uint _248 = fragment_light_quads._m0[in.in_var_TEXCOORD0].scalar[3] & 65535u;
+    uint _249 = fragment_light_quads._m0[in.in_var_TEXCOORD0].scalar[3] >> 16u;
     uint _250 = _248 * _144;
     uint _251 = _248 * _145;
     uint _252 = _249 * _144;
     uint _260 = _250 + ((_251 & 65535u) << 16u);
     uint _266 = _260 + ((_252 & 65535u) << 16u);
-    uint _270 = light_quads._m0[in.in_var_TEXCOORD0].scalar[2] & 65535u;
-    uint _271 = light_quads._m0[in.in_var_TEXCOORD0].scalar[2] >> 16u;
+    uint _270 = fragment_light_quads._m0[in.in_var_TEXCOORD0].scalar[2] & 65535u;
+    uint _271 = fragment_light_quads._m0[in.in_var_TEXCOORD0].scalar[2] >> 16u;
     uint _272 = _270 * _168;
     uint _273 = _270 * _169;
     uint _274 = _271 * _168;
@@ -247,15 +247,15 @@ fragment main0_out main0(main0_in in [[stage_in]], const device type_StructuredB
         }
         _406 = _449 ? _416 : _405;
     }
-    uint _452 = light_quads._m0[in.in_var_TEXCOORD0].red[0] & 65535u;
-    uint _453 = light_quads._m0[in.in_var_TEXCOORD0].red[0] >> 16u;
+    uint _452 = fragment_light_quads._m0[in.in_var_TEXCOORD0].red[0] & 65535u;
+    uint _453 = fragment_light_quads._m0[in.in_var_TEXCOORD0].red[0] >> 16u;
     uint _454 = _452 * _144;
     uint _455 = _452 * _145;
     uint _456 = _453 * _144;
     uint _464 = _454 + ((_455 & 65535u) << 16u);
     uint _470 = _464 + ((_456 & 65535u) << 16u);
-    uint _474 = light_quads._m0[in.in_var_TEXCOORD0].red[1] & 65535u;
-    uint _475 = light_quads._m0[in.in_var_TEXCOORD0].red[1] >> 16u;
+    uint _474 = fragment_light_quads._m0[in.in_var_TEXCOORD0].red[1] & 65535u;
+    uint _475 = fragment_light_quads._m0[in.in_var_TEXCOORD0].red[1] >> 16u;
     uint _476 = _474 * _168;
     uint _477 = _474 * _169;
     uint _478 = _475 * _168;
@@ -300,15 +300,15 @@ fragment main0_out main0(main0_in in [[stage_in]], const device type_StructuredB
         }
         _507 = _550 ? _517 : _506;
     }
-    uint _553 = light_quads._m0[in.in_var_TEXCOORD0].red[3] & 65535u;
-    uint _554 = light_quads._m0[in.in_var_TEXCOORD0].red[3] >> 16u;
+    uint _553 = fragment_light_quads._m0[in.in_var_TEXCOORD0].red[3] & 65535u;
+    uint _554 = fragment_light_quads._m0[in.in_var_TEXCOORD0].red[3] >> 16u;
     uint _555 = _553 * _144;
     uint _556 = _553 * _145;
     uint _557 = _554 * _144;
     uint _565 = _555 + ((_556 & 65535u) << 16u);
     uint _571 = _565 + ((_557 & 65535u) << 16u);
-    uint _575 = light_quads._m0[in.in_var_TEXCOORD0].red[2] & 65535u;
-    uint _576 = light_quads._m0[in.in_var_TEXCOORD0].red[2] >> 16u;
+    uint _575 = fragment_light_quads._m0[in.in_var_TEXCOORD0].red[2] & 65535u;
+    uint _576 = fragment_light_quads._m0[in.in_var_TEXCOORD0].red[2] >> 16u;
     uint _577 = _575 * _168;
     uint _578 = _575 * _169;
     uint _579 = _576 * _168;
@@ -406,15 +406,15 @@ fragment main0_out main0(main0_in in [[stage_in]], const device type_StructuredB
         }
         _707 = _750 ? _717 : _706;
     }
-    uint _753 = light_quads._m0[in.in_var_TEXCOORD0].green[0] & 65535u;
-    uint _754 = light_quads._m0[in.in_var_TEXCOORD0].green[0] >> 16u;
+    uint _753 = fragment_light_quads._m0[in.in_var_TEXCOORD0].green[0] & 65535u;
+    uint _754 = fragment_light_quads._m0[in.in_var_TEXCOORD0].green[0] >> 16u;
     uint _755 = _753 * _144;
     uint _756 = _753 * _145;
     uint _757 = _754 * _144;
     uint _765 = _755 + ((_756 & 65535u) << 16u);
     uint _771 = _765 + ((_757 & 65535u) << 16u);
-    uint _775 = light_quads._m0[in.in_var_TEXCOORD0].green[1] & 65535u;
-    uint _776 = light_quads._m0[in.in_var_TEXCOORD0].green[1] >> 16u;
+    uint _775 = fragment_light_quads._m0[in.in_var_TEXCOORD0].green[1] & 65535u;
+    uint _776 = fragment_light_quads._m0[in.in_var_TEXCOORD0].green[1] >> 16u;
     uint _777 = _775 * _168;
     uint _778 = _775 * _169;
     uint _779 = _776 * _168;
@@ -459,15 +459,15 @@ fragment main0_out main0(main0_in in [[stage_in]], const device type_StructuredB
         }
         _808 = _851 ? _818 : _807;
     }
-    uint _854 = light_quads._m0[in.in_var_TEXCOORD0].green[3] & 65535u;
-    uint _855 = light_quads._m0[in.in_var_TEXCOORD0].green[3] >> 16u;
+    uint _854 = fragment_light_quads._m0[in.in_var_TEXCOORD0].green[3] & 65535u;
+    uint _855 = fragment_light_quads._m0[in.in_var_TEXCOORD0].green[3] >> 16u;
     uint _856 = _854 * _144;
     uint _857 = _854 * _145;
     uint _858 = _855 * _144;
     uint _866 = _856 + ((_857 & 65535u) << 16u);
     uint _872 = _866 + ((_858 & 65535u) << 16u);
-    uint _876 = light_quads._m0[in.in_var_TEXCOORD0].green[2] & 65535u;
-    uint _877 = light_quads._m0[in.in_var_TEXCOORD0].green[2] >> 16u;
+    uint _876 = fragment_light_quads._m0[in.in_var_TEXCOORD0].green[2] & 65535u;
+    uint _877 = fragment_light_quads._m0[in.in_var_TEXCOORD0].green[2] >> 16u;
     uint _878 = _876 * _168;
     uint _879 = _876 * _169;
     uint _880 = _877 * _168;
@@ -565,15 +565,15 @@ fragment main0_out main0(main0_in in [[stage_in]], const device type_StructuredB
         }
         _1008 = _1051 ? _1018 : _1007;
     }
-    uint _1054 = light_quads._m0[in.in_var_TEXCOORD0].blue[0] & 65535u;
-    uint _1055 = light_quads._m0[in.in_var_TEXCOORD0].blue[0] >> 16u;
+    uint _1054 = fragment_light_quads._m0[in.in_var_TEXCOORD0].blue[0] & 65535u;
+    uint _1055 = fragment_light_quads._m0[in.in_var_TEXCOORD0].blue[0] >> 16u;
     uint _1056 = _1054 * _144;
     uint _1057 = _1054 * _145;
     uint _1058 = _1055 * _144;
     uint _1066 = _1056 + ((_1057 & 65535u) << 16u);
     uint _1072 = _1066 + ((_1058 & 65535u) << 16u);
-    uint _1076 = light_quads._m0[in.in_var_TEXCOORD0].blue[1] & 65535u;
-    uint _1077 = light_quads._m0[in.in_var_TEXCOORD0].blue[1] >> 16u;
+    uint _1076 = fragment_light_quads._m0[in.in_var_TEXCOORD0].blue[1] & 65535u;
+    uint _1077 = fragment_light_quads._m0[in.in_var_TEXCOORD0].blue[1] >> 16u;
     uint _1078 = _1076 * _168;
     uint _1079 = _1076 * _169;
     uint _1080 = _1077 * _168;
@@ -618,15 +618,15 @@ fragment main0_out main0(main0_in in [[stage_in]], const device type_StructuredB
         }
         _1109 = _1152 ? _1119 : _1108;
     }
-    uint _1155 = light_quads._m0[in.in_var_TEXCOORD0].blue[3] & 65535u;
-    uint _1156 = light_quads._m0[in.in_var_TEXCOORD0].blue[3] >> 16u;
+    uint _1155 = fragment_light_quads._m0[in.in_var_TEXCOORD0].blue[3] & 65535u;
+    uint _1156 = fragment_light_quads._m0[in.in_var_TEXCOORD0].blue[3] >> 16u;
     uint _1157 = _1155 * _144;
     uint _1158 = _1155 * _145;
     uint _1159 = _1156 * _144;
     uint _1167 = _1157 + ((_1158 & 65535u) << 16u);
     uint _1173 = _1167 + ((_1159 & 65535u) << 16u);
-    uint _1177 = light_quads._m0[in.in_var_TEXCOORD0].blue[2] & 65535u;
-    uint _1178 = light_quads._m0[in.in_var_TEXCOORD0].blue[2] >> 16u;
+    uint _1177 = fragment_light_quads._m0[in.in_var_TEXCOORD0].blue[2] & 65535u;
+    uint _1178 = fragment_light_quads._m0[in.in_var_TEXCOORD0].blue[2] >> 16u;
     uint _1179 = _1177 * _168;
     uint _1180 = _1177 * _169;
     uint _1181 = _1178 * _168;

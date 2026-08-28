@@ -32,6 +32,7 @@ typedef struct gpu_surface_texture {
     size_t bytes;
     SDL_FRect atlas_source;
     bool atlased;
+    bool accounted;
     struct gpu_surface_texture *next;
 } gpu_surface_texture_t;
 
@@ -51,6 +52,7 @@ typedef struct gpu_canvas {
     SDL_Surface *surface;
     SDL_Texture *texture;
     size_t bytes;
+    bool accounted;
     struct gpu_canvas *next;
 } gpu_canvas_t;
 
@@ -150,8 +152,10 @@ static void gpu_renderer_atlas_region_release(gpu_texture_atlas_t *atlas, SDL_Re
 static void gpu_renderer_surface_texture_destroy(gpu_surface_texture_t *entry) {
     if (entry->texture != NULL && !entry->atlased) {
         SDL_DestroyTexture(entry->texture);
-        statistics.resource_destructions++;
-        statistics.retained_bytes -= entry->bytes;
+        if (entry->accounted) {
+            statistics.resource_destructions++;
+            statistics.retained_bytes -= entry->bytes;
+        }
     } else if (entry->atlased && entry->atlas != NULL) {
         gpu_renderer_atlas_region_release(entry->atlas,
                                           (SDL_Rect){(int)entry->atlas_source.x,
@@ -211,8 +215,12 @@ static void gpu_renderer_canvas_texture_destroy(gpu_canvas_t *canvas) {
     }
     SDL_DestroyTexture(canvas->texture);
     canvas->texture = NULL;
-    statistics.resource_destructions++;
-    statistics.retained_bytes -= canvas->bytes;
+    if (canvas->accounted) {
+        statistics.resource_destructions++;
+        statistics.retained_bytes -= canvas->bytes;
+        canvas->accounted = false;
+    }
+    canvas->bytes = 0;
 }
 
 static void SDLCALL gpu_renderer_canvas_cleanup(void *userdata, void *value) {
@@ -637,6 +645,15 @@ static gpu_surface_texture_t *gpu_renderer_surface_texture(SDL_Surface *surface)
     }
     size_t upload_bytes = (size_t)surface->w * (size_t)surface->h * 4U;
     entry->bytes = entry->atlased ? 0 : upload_bytes;
+    statistics.upload_count++;
+    statistics.upload_bytes += upload_bytes;
+    if (!entry->atlased) {
+        statistics.resource_creations++;
+        statistics.retained_bytes += entry->bytes;
+        statistics.peak_retained_bytes =
+            MAX(statistics.peak_retained_bytes, statistics.retained_bytes);
+        entry->accounted = true;
+    }
     entry->next = surface_textures;
     surface_textures = entry;
     if (!SDL_SetNumberProperty(properties,
@@ -654,14 +671,6 @@ static gpu_surface_texture_t *gpu_renderer_surface_texture(SDL_Surface *surface)
         /* SDL owns the failed value long enough to invoke the cleanup callback. */
         SDL_SetNumberProperty(properties, GPU_RENDERER_SURFACE_GENERATION_PROPERTY, 0);
         return NULL;
-    }
-    statistics.upload_count++;
-    statistics.upload_bytes += upload_bytes;
-    if (!entry->atlased) {
-        statistics.resource_creations++;
-        statistics.retained_bytes += entry->bytes;
-        statistics.peak_retained_bytes =
-            MAX(statistics.peak_retained_bytes, statistics.retained_bytes);
     }
     return entry;
 }
@@ -689,16 +698,19 @@ static bool gpu_renderer_canvas_texture_create(gpu_canvas_t *canvas) {
                                         SDL_TEXTUREACCESS_TARGET,
                                         canvas->surface->w,
                                         canvas->surface->h);
-    if (canvas->texture == NULL ||
-        !SDL_SetTextureScaleMode(canvas->texture, SDL_SCALEMODE_NEAREST) ||
-        !SDL_SetTextureBlendMode(canvas->texture, SDL_BLENDMODE_BLEND)) {
-        gpu_renderer_canvas_texture_destroy(canvas);
+    if (canvas->texture == NULL) {
         return false;
     }
     canvas->bytes = (size_t)canvas->surface->w * (size_t)canvas->surface->h * 4U;
     statistics.resource_creations++;
     statistics.retained_bytes += canvas->bytes;
     statistics.peak_retained_bytes = MAX(statistics.peak_retained_bytes, statistics.retained_bytes);
+    canvas->accounted = true;
+    if (!SDL_SetTextureScaleMode(canvas->texture, SDL_SCALEMODE_NEAREST) ||
+        !SDL_SetTextureBlendMode(canvas->texture, SDL_BLENDMODE_BLEND)) {
+        gpu_renderer_canvas_texture_destroy(canvas);
+        return false;
+    }
 
     /* A widget's initial background is immutable upload data. Subsequent
      * widget composition targets this GPU texture directly. */
@@ -746,8 +758,6 @@ bool gpu_renderer_canvas_register(SDL_Surface *surface) {
                                                canvas,
                                                gpu_renderer_canvas_cleanup,
                                                NULL)) {
-            canvases = canvas->next;
-            free(canvas);
             return false;
         }
     }

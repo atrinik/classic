@@ -54,13 +54,13 @@ function(atrinik_embed_gpu_shader name extension expected_sha256)
 endfunction()
 
 atrinik_embed_gpu_shader(final_fragment dxil
-    60dc64c83fbe3a766cf60902c59d0f0e0fb04cf9d4ee5e4eb438f1182fee54d7)
+    b4b8e49b67d27cd22f670bae6cc1ab9d561ee7eed7d01bd49719e03bca8c55ae)
 atrinik_embed_gpu_shader(final_vertex dxil
     280af65e0a86455e4da010b77449b305d07b9e6e1aa3ebfe362eaece55528584)
 atrinik_embed_gpu_shader(light_fragment dxil
-    e1a23d4d365775ab1e040bed8a50f4f1de9dbef6bfda675c4604b3b128c504a5)
+    d85ebbe7309029bb28c0e43a6f9791a72cb54911ab0766b2dbac341c709f1677)
 atrinik_embed_gpu_shader(light_vertex dxil
-    c88300155cb5cb0e610708c67494e73f31b946d1171b59d306bb2869456bfa16)
+    4321fc5b423e35a92f93c3cf6cf68ceaf36d320a154a2d8fc2f51c3e48d75891)
 atrinik_embed_gpu_shader(world_fragment dxil
     de6efb386dc1147acb6ef71057242ba526b69f8910ade7e27d5143214f0e6234)
 atrinik_embed_gpu_shader(world_vertex dxil
@@ -70,21 +70,21 @@ atrinik_embed_gpu_shader(final_fragment msl
 atrinik_embed_gpu_shader(final_vertex msl
     c55f7aa26823f2066331070863acf450659a13e507184417a2b52ae9daee43f3)
 atrinik_embed_gpu_shader(light_fragment msl
-    4252322eb742179ec04de4512df360f6390df2601be5b3f0bf09917479907051)
+    942b420c9f4b7f9b6db42ba51db7292ad3d8c0865ac7020fe78cda19dfc097dd)
 atrinik_embed_gpu_shader(light_vertex msl
-    272e10d1cc63fe225b65b3a9919efc368f532c9612ed0238ea4e2a0849f5b10e)
+    c243dd93a2692d13729e2062416ce3eb575afcc45700c67fc5b449ccb629e802)
 atrinik_embed_gpu_shader(world_fragment msl
     804af07c4efd23ca2bf1b51ef9cac84736acc52eea93130aca5d4c0d043370f1)
 atrinik_embed_gpu_shader(world_vertex msl
     04423e7437b7e33659f78b986cb81adac246cf4baaeba9533226fa38df1335aa)
 atrinik_embed_gpu_shader(final_fragment spv
-    7d708d382733e543abaf17fdb09c66fb35e2904d9f75033cde332d351ce74dfc)
+    70ab15642349a22a8a9d75d0fc75bc087311bd90d5015f95b82cb7626322c76c)
 atrinik_embed_gpu_shader(final_vertex spv
     40d6755e57a6854ef3b1928475a50e99a49859fbd49cb47d3514630ee291c7f4)
 atrinik_embed_gpu_shader(light_fragment spv
-    ccc20bbceae17a37ea641ac1eda89c301369423806ff9eda74f76e9f4ca40550)
+    a7677a391226844363e8de2f36c733cd88668b80ca666553a9d8cf6f4fc37d8b)
 atrinik_embed_gpu_shader(light_vertex spv
-    21ae3302e3cfc03386f9c0983e56f8e6f3cbfd01092694dbe1adccf8a27db823)
+    2543f6ee56b7c50d6e3d3cb2864d587905d776083d8141c9d2e955b6080a18d7)
 atrinik_embed_gpu_shader(world_fragment spv
     374fb5834114fb6f9bd7295231418dbf328dae7ab36b1f5e684aecfcd1141c15)
 atrinik_embed_gpu_shader(world_vertex spv

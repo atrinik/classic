@@ -60,8 +60,8 @@
 
 /** Supported user-visible look-size range. */
 #define MAP_LOOK_SIZE_MIN 9
-#define MAP_LOOK_SIZE_DEFAULT 25
-#define MAP_LOOK_SIZE_MAX 28
+#define MAP_LOOK_SIZE_DEFAULT 17
+#define MAP_LOOK_SIZE_MAX 17
 
 /** Convert a user-selected logical look size to the map protocol size. */
 #define MAP_LOOK_TO_WIRE_SIZE(_size) ((_size) + MAP_RENDER_OVERSCAN * 2)
@@ -591,10 +591,12 @@ extern void map_cell_snapshot(int x, int y, MapCell *snapshot);
 /** Return whether a decoded map cell differs from a prior snapshot. */
 extern bool map_cell_changed(int x, int y, const MapCell *snapshot);
 #ifdef ATRINIK_WIDGET_TESTS
-/** Verify the 28x28/all-depth sparse empty-state and proportional-record bounds. */
+/** Verify maximum configured/all-depth sparse empty-state and proportional-record bounds. */
 bool widget_map_sparse_state_test(void);
 /** Verify repeated MAP transaction abort restores compact headers and allocations. */
 bool widget_map_transaction_abort_test(void);
+/** Verify timed-light staging covers every tile at the protocol wire ceiling. */
+bool widget_map_light_keyframe_capacity_test(void);
 #endif
 
 extern void map_level_scroll(int dz);

@@ -201,17 +201,17 @@ category Map
 	end
 	setting Map width
 		type range
-		range 9 - 28
+		range 9 - 17
 		advance 1
-		default 25
-		desc Logical map width. Larger views require more bandwidth and GPU resources; 28 is the supported logical ceiling before overscan.
+		default 17
+		desc Logical map width. Larger views remain disabled until GPU memory and performance qualification is complete.
 	end
 	setting Map height
 		type range
-		range 9 - 28
+		range 9 - 17
 		advance 1
-		default 25
-		desc Logical map height. Larger views require more bandwidth and GPU resources; 28 is the supported logical ceiling before overscan.
+		default 17
+		desc Logical map height. Larger views remain disabled until GPU memory and performance qualification is complete.
 	end
 end
 
