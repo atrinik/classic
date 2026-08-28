@@ -86,7 +86,9 @@ typedef struct lighting_benchmark_counters {
     /** Quads accepted by the lighting rasterizer. */
     uint64_t field_rasterized_quads;
     uint64_t field_translations;
+    /** Logical field pixels remapped during scroll; the ring avoids copying them. */
     uint64_t field_translated_pixels;
+    /** Logical byte footprint of remapped pixels, not bytes physically copied. */
     uint64_t field_translated_bytes;
     uint64_t field_scroll_x_pixels;
     uint64_t field_scroll_y_pixels;
