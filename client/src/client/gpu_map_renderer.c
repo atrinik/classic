@@ -20,6 +20,9 @@
 #define GPU_MAP_SURFACE_GENERATION_PROPERTY "atrinik.gpu.map_surface_generation"
 #define GPU_MAP_OWNER_TRANSPARENT UINT8_MAX
 #define GPU_MAP_OWNER_UNLIT (UINT8_MAX - 1)
+#define GPU_MAP_LIGHT_QUAD_CAPACITY 32768U
+#define GPU_MAP_LIGHT_FORWARD_LUT_ENTRIES 256U
+#define GPU_MAP_LIGHT_INVERSE_LUT_ENTRIES 65536U
 
 typedef struct gpu_map_asset {
     SDL_Surface *surface;
@@ -51,11 +54,27 @@ typedef struct gpu_map_fragment_uniforms {
     uint32_t padding[3];
 } gpu_map_fragment_uniforms_t;
 
+typedef struct gpu_map_light_quad {
+    int32_t x[4];
+    int32_t y[4];
+    uint32_t scalar[4];
+    uint32_t red[4];
+    uint32_t green[4];
+    uint32_t blue[4];
+    uint32_t owner;
+    uint32_t padding[3];
+} gpu_map_light_quad_t;
+
 static SDL_GPUDevice *map_device;
 static SDL_Renderer *map_renderer;
 static SDL_GPUSampler *map_sampler;
 static SDL_GPUGraphicsPipeline *world_pipeline;
 static SDL_GPUGraphicsPipeline *final_pipeline;
+static SDL_GPUGraphicsPipeline *light_pipeline;
+static SDL_GPUBuffer *light_quad_buffer;
+static SDL_GPUTransferBuffer *light_quad_transfer;
+static SDL_GPUBuffer *light_forward_lut_buffer;
+static SDL_GPUBuffer *light_inverse_lut_buffer;
 static SDL_GPUTexture *albedo_target;
 static SDL_GPUTexture *owner_target;
 static SDL_GPUTexture *final_target;
@@ -69,6 +88,12 @@ static int target_width;
 static int target_height;
 static uint8_t current_owner = GPU_MAP_OWNER_UNLIT;
 static bool world_pass_has_content;
+static gpu_map_light_quad_t *light_quads;
+static size_t light_quads_num;
+static size_t light_quads_capacity;
+static bool light_quads_overflow;
+static SDL_Rect map_clip;
+static bool map_clip_enabled;
 
 static void gpu_map_world_pass_end(void);
 
@@ -111,6 +136,8 @@ static gpu_map_shader_blob_t gpu_map_shader_blob(const char *name,
     GPU_SHADER_SELECT(world_fragment);
     GPU_SHADER_SELECT(final_vertex);
     GPU_SHADER_SELECT(final_fragment);
+    GPU_SHADER_SELECT(light_vertex);
+    GPU_SHADER_SELECT(light_fragment);
 #undef GPU_SHADER_SELECT
 #undef GPU_SHADER_BLOB
     return (gpu_map_shader_blob_t){0};
@@ -120,6 +147,7 @@ static SDL_GPUShader *gpu_map_shader_create(const char *name,
                                             const char *entrypoint,
                                             SDL_GPUShaderStage stage,
                                             uint32_t samplers,
+                                            uint32_t storage_buffers,
                                             uint32_t uniforms) {
     gpu_map_shader_blob_t blob = gpu_map_shader_blob(name, entrypoint);
     if (blob.code == NULL) {
@@ -133,6 +161,7 @@ static SDL_GPUShader *gpu_map_shader_create(const char *name,
         .format = blob.format,
         .stage = stage,
         .num_samplers = samplers,
+        .num_storage_buffers = storage_buffers,
         .num_uniform_buffers = uniforms,
     };
     return SDL_CreateGPUShader(map_device, &info);
@@ -143,28 +172,46 @@ static bool gpu_map_pipelines_create(void) {
                                                         "world_vertex",
                                                         SDL_GPU_SHADERSTAGE_VERTEX,
                                                         0,
+                                                        0,
                                                         1);
     SDL_GPUShader *world_fragment = gpu_map_shader_create("world_fragment",
                                                           "world_fragment",
                                                           SDL_GPU_SHADERSTAGE_FRAGMENT,
                                                           1,
+                                                          0,
                                                           1);
     SDL_GPUShader *final_vertex = gpu_map_shader_create("final_vertex",
                                                         "final_vertex",
                                                         SDL_GPU_SHADERSTAGE_VERTEX,
+                                                        0,
                                                         0,
                                                         0);
     SDL_GPUShader *final_fragment = gpu_map_shader_create("final_fragment",
                                                           "final_fragment",
                                                           SDL_GPU_SHADERSTAGE_FRAGMENT,
                                                           2,
+                                                          0,
+                                                          0);
+    SDL_GPUShader *light_vertex = gpu_map_shader_create("light_vertex",
+                                                        "light_vertex",
+                                                        SDL_GPU_SHADERSTAGE_VERTEX,
+                                                        0,
+                                                        1,
+                                                        1);
+    SDL_GPUShader *light_fragment = gpu_map_shader_create("light_fragment",
+                                                          "light_fragment",
+                                                          SDL_GPU_SHADERSTAGE_FRAGMENT,
+                                                          2,
+                                                          3,
                                                           0);
     if (world_vertex == NULL || world_fragment == NULL || final_vertex == NULL ||
-        final_fragment == NULL) {
+        final_fragment == NULL || light_vertex == NULL || light_fragment == NULL) {
         SDL_ReleaseGPUShader(map_device, world_vertex);
         SDL_ReleaseGPUShader(map_device, world_fragment);
         SDL_ReleaseGPUShader(map_device, final_vertex);
         SDL_ReleaseGPUShader(map_device, final_fragment);
+        SDL_ReleaseGPUShader(map_device, light_vertex);
+        SDL_ReleaseGPUShader(map_device, light_fragment);
         return false;
     }
 
@@ -219,11 +266,85 @@ static bool gpu_map_pipelines_create(void) {
         },
     };
     final_pipeline = SDL_CreateGPUGraphicsPipeline(map_device, &final_info);
+
+    SDL_GPUGraphicsPipelineCreateInfo light_info = final_info;
+    light_info.vertex_shader = light_vertex;
+    light_info.fragment_shader = light_fragment;
+    light_pipeline = SDL_CreateGPUGraphicsPipeline(map_device, &light_info);
     SDL_ReleaseGPUShader(map_device, world_vertex);
     SDL_ReleaseGPUShader(map_device, world_fragment);
     SDL_ReleaseGPUShader(map_device, final_vertex);
     SDL_ReleaseGPUShader(map_device, final_fragment);
-    return world_pipeline != NULL && final_pipeline != NULL;
+    SDL_ReleaseGPUShader(map_device, light_vertex);
+    SDL_ReleaseGPUShader(map_device, light_fragment);
+    return world_pipeline != NULL && final_pipeline != NULL && light_pipeline != NULL;
+}
+
+static bool gpu_map_buffer_upload(SDL_GPUBuffer *buffer, const void *data, uint32_t size) {
+    SDL_GPUTransferBufferCreateInfo transfer_info = {
+        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+        .size = size,
+    };
+    SDL_GPUTransferBuffer *transfer = SDL_CreateGPUTransferBuffer(map_device, &transfer_info);
+    void *mapped = transfer != NULL ? SDL_MapGPUTransferBuffer(map_device, transfer, false) : NULL;
+    if (mapped == NULL) {
+        SDL_ReleaseGPUTransferBuffer(map_device, transfer);
+        return false;
+    }
+    memcpy(mapped, data, size);
+    SDL_UnmapGPUTransferBuffer(map_device, transfer);
+    SDL_GPUCommandBuffer *upload_commands = SDL_AcquireGPUCommandBuffer(map_device);
+    SDL_GPUCopyPass *copy =
+        upload_commands != NULL ? SDL_BeginGPUCopyPass(upload_commands) : NULL;
+    if (copy == NULL) {
+        if (upload_commands != NULL) {
+            SDL_CancelGPUCommandBuffer(upload_commands);
+        }
+        SDL_ReleaseGPUTransferBuffer(map_device, transfer);
+        return false;
+    }
+    SDL_GPUTransferBufferLocation source = {.transfer_buffer = transfer};
+    SDL_GPUBufferRegion destination = {.buffer = buffer, .size = size};
+    SDL_UploadToGPUBuffer(copy, &source, &destination, false);
+    SDL_EndGPUCopyPass(copy);
+    SDL_GPUFence *fence = SDL_SubmitGPUCommandBufferAndAcquireFence(upload_commands);
+    bool completed = fence != NULL && SDL_WaitForGPUFences(map_device, true, &fence, 1);
+    if (fence != NULL) {
+        SDL_ReleaseGPUFence(map_device, fence);
+    }
+    SDL_ReleaseGPUTransferBuffer(map_device, transfer);
+    return completed;
+}
+
+static bool gpu_map_light_buffers_create(void) {
+    const uint32_t quad_bytes = GPU_MAP_LIGHT_QUAD_CAPACITY * sizeof(gpu_map_light_quad_t);
+    SDL_GPUBufferCreateInfo info = {
+        .usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ,
+        .size = quad_bytes,
+    };
+    light_quad_buffer = SDL_CreateGPUBuffer(map_device, &info);
+    SDL_GPUTransferBufferCreateInfo transfer_info = {
+        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+        .size = quad_bytes,
+    };
+    light_quad_transfer = SDL_CreateGPUTransferBuffer(map_device, &transfer_info);
+
+    uint32_t forward[GPU_MAP_LIGHT_FORWARD_LUT_ENTRIES];
+    uint32_t inverse[GPU_MAP_LIGHT_INVERSE_LUT_ENTRIES];
+    for (size_t i = 0; i < SDL_arraysize(forward); i++) {
+        forward[i] = lighting_srgb8_to_linear((uint8_t)i);
+    }
+    for (size_t i = 0; i < SDL_arraysize(inverse); i++) {
+        inverse[i] = lighting_linear_to_srgb8((uint16_t)i);
+    }
+    info.size = sizeof(forward);
+    light_forward_lut_buffer = SDL_CreateGPUBuffer(map_device, &info);
+    info.size = sizeof(inverse);
+    light_inverse_lut_buffer = SDL_CreateGPUBuffer(map_device, &info);
+    return light_quad_buffer != NULL && light_quad_transfer != NULL &&
+           light_forward_lut_buffer != NULL && light_inverse_lut_buffer != NULL &&
+           gpu_map_buffer_upload(light_forward_lut_buffer, forward, sizeof(forward)) &&
+           gpu_map_buffer_upload(light_inverse_lut_buffer, inverse, sizeof(inverse));
 }
 
 static void gpu_map_targets_destroy(void) {
@@ -333,6 +454,9 @@ static bool gpu_map_world_pass_begin(void) {
         return false;
     }
     SDL_BindGPUGraphicsPipeline(world_pass, world_pipeline);
+    SDL_Rect scissor = map_clip_enabled ? map_clip
+                                        : (SDL_Rect){0, 0, target_width, target_height};
+    SDL_SetGPUScissor(world_pass, &scissor);
     return true;
 }
 
@@ -500,7 +624,7 @@ bool gpu_map_renderer_create(SDL_GPUDevice *device, SDL_Renderer *renderer) {
     map_sampler = SDL_CreateGPUSampler(map_device, &sampler_info);
     if (solid_surface == NULL ||
         !SDL_FillSurfaceRect(solid_surface, NULL, UINT32_MAX) || map_sampler == NULL ||
-        !gpu_map_pipelines_create()) {
+        !gpu_map_pipelines_create() || !gpu_map_light_buffers_create()) {
         gpu_map_renderer_destroy();
         return false;
     }
@@ -517,14 +641,28 @@ void gpu_map_renderer_destroy(void) {
         map_command_buffer = NULL;
     }
     gpu_map_assets_destroy();
+    free(light_quads);
+    light_quads = NULL;
+    light_quads_num = 0;
+    light_quads_capacity = 0;
     SDL_DestroySurface(solid_surface);
     solid_surface = NULL;
     gpu_map_targets_destroy();
     SDL_ReleaseGPUGraphicsPipeline(map_device, world_pipeline);
     SDL_ReleaseGPUGraphicsPipeline(map_device, final_pipeline);
+    SDL_ReleaseGPUGraphicsPipeline(map_device, light_pipeline);
+    SDL_ReleaseGPUBuffer(map_device, light_quad_buffer);
+    SDL_ReleaseGPUTransferBuffer(map_device, light_quad_transfer);
+    SDL_ReleaseGPUBuffer(map_device, light_forward_lut_buffer);
+    SDL_ReleaseGPUBuffer(map_device, light_inverse_lut_buffer);
     SDL_ReleaseGPUSampler(map_device, map_sampler);
     world_pipeline = NULL;
     final_pipeline = NULL;
+    light_pipeline = NULL;
+    light_quad_buffer = NULL;
+    light_quad_transfer = NULL;
+    light_forward_lut_buffer = NULL;
+    light_inverse_lut_buffer = NULL;
     map_sampler = NULL;
     map_device = NULL;
     map_renderer = NULL;
@@ -539,6 +677,9 @@ bool gpu_map_renderer_begin(int width, int height) {
     world_pass = NULL;
     world_pass_has_content = false;
     current_owner = GPU_MAP_OWNER_UNLIT;
+    light_quads_num = 0;
+    light_quads_overflow = false;
+    map_clip_enabled = false;
     return map_command_buffer != NULL;
 }
 
@@ -548,6 +689,35 @@ bool gpu_map_renderer_active(void) {
 
 void gpu_map_renderer_set_owner(uint8_t owner) {
     current_owner = owner;
+}
+
+void gpu_map_renderer_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]) {
+    HARD_ASSERT(vertices != NULL);
+    if (map_command_buffer == NULL) {
+        return;
+    }
+    if (light_quads_num >= GPU_MAP_LIGHT_QUAD_CAPACITY) {
+        light_quads_overflow = true;
+        SDL_SetError("GPU map compact light-grid capacity exceeded");
+        return;
+    }
+    if (light_quads_num == light_quads_capacity) {
+        light_quads_capacity = light_quads_capacity == 0 ? 1024 : light_quads_capacity * 2;
+        light_quads = xreallocarray(light_quads,
+                                    light_quads_capacity,
+                                    sizeof(*light_quads));
+    }
+    gpu_map_light_quad_t *quad = &light_quads[light_quads_num++];
+    for (size_t i = 0; i < 4; i++) {
+        quad->x[i] = vertices[i].x;
+        quad->y[i] = vertices[i].y;
+        quad->scalar[i] = vertices[i].scalar;
+        quad->red[i] = vertices[i].red;
+        quad->green[i] = vertices[i].green;
+        quad->blue[i] = vertices[i].blue;
+    }
+    quad->owner = owner;
+    memset(quad->padding, 0, sizeof(quad->padding));
 }
 
 bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
@@ -638,11 +808,46 @@ bool gpu_map_renderer_draw_rect(const SDL_FRect *destination,
     return drawn && color_restored && alpha_restored;
 }
 
-bool gpu_map_renderer_end(void) {
+bool gpu_map_renderer_set_clip(const SDL_Rect *rectangle) {
     if (map_command_buffer == NULL) {
         return false;
     }
+    map_clip_enabled = rectangle != NULL;
+    map_clip = rectangle != NULL ? *rectangle : (SDL_Rect){0, 0, target_width, target_height};
+    if (world_pass != NULL) {
+        SDL_SetGPUScissor(world_pass, &map_clip);
+    }
+    return true;
+}
+
+bool gpu_map_renderer_end(void) {
+    if (map_command_buffer == NULL || light_quads_overflow) {
+        gpu_map_command_cancel();
+        return false;
+    }
     gpu_map_world_pass_end();
+    if (light_quads_num != 0) {
+        size_t light_bytes = light_quads_num * sizeof(*light_quads);
+        void *mapped = SDL_MapGPUTransferBuffer(map_device, light_quad_transfer, true);
+        if (mapped == NULL) {
+            gpu_map_command_cancel();
+            return false;
+        }
+        memcpy(mapped, light_quads, light_bytes);
+        SDL_UnmapGPUTransferBuffer(map_device, light_quad_transfer);
+        SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(map_command_buffer);
+        if (copy == NULL) {
+            gpu_map_command_cancel();
+            return false;
+        }
+        SDL_GPUTransferBufferLocation source = {.transfer_buffer = light_quad_transfer};
+        SDL_GPUBufferRegion destination = {
+            .buffer = light_quad_buffer,
+            .size = (uint32_t)light_bytes,
+        };
+        SDL_UploadToGPUBuffer(copy, &source, &destination, true);
+        SDL_EndGPUCopyPass(copy);
+    }
     SDL_GPUColorTargetInfo final_info = {
         .texture = final_target,
         .clear_color = {0.0f, 0.0f, 0.0f, 0.0f},
@@ -663,6 +868,36 @@ bool gpu_map_renderer_end(void) {
     SDL_BindGPUFragmentSamplers(final_pass, 0, bindings, SDL_arraysize(bindings));
     SDL_DrawGPUPrimitives(final_pass, 3, 1, 0, 0);
     SDL_EndGPURenderPass(final_pass);
+
+    if (light_quads_num != 0) {
+        final_info.load_op = SDL_GPU_LOADOP_LOAD;
+        SDL_GPURenderPass *light_pass =
+            SDL_BeginGPURenderPass(map_command_buffer, &final_info, 1, NULL);
+        if (light_pass == NULL) {
+            gpu_map_command_cancel();
+            return false;
+        }
+        SDL_BindGPUGraphicsPipeline(light_pass, light_pipeline);
+        SDL_BindGPUFragmentSamplers(light_pass, 0, bindings, SDL_arraysize(bindings));
+        SDL_GPUBuffer *vertex_buffers[] = {light_quad_buffer};
+        SDL_GPUBuffer *fragment_buffers[] = {
+            light_quad_buffer,
+            light_forward_lut_buffer,
+            light_inverse_lut_buffer,
+        };
+        SDL_BindGPUVertexStorageBuffers(light_pass,
+                                        0,
+                                        vertex_buffers,
+                                        SDL_arraysize(vertex_buffers));
+        SDL_BindGPUFragmentStorageBuffers(light_pass,
+                                          0,
+                                          fragment_buffers,
+                                          SDL_arraysize(fragment_buffers));
+        float viewport[4] = {(float)target_width, (float)target_height, 0.0f, 0.0f};
+        SDL_PushGPUVertexUniformData(map_command_buffer, 0, viewport, sizeof(viewport));
+        SDL_DrawGPUPrimitives(light_pass, 6, (uint32_t)light_quads_num, 0, 0);
+        SDL_EndGPURenderPass(light_pass);
+    }
 
     SDL_GPUFence *fence = SDL_SubmitGPUCommandBufferAndAcquireFence(map_command_buffer);
     map_command_buffer = NULL;

@@ -173,7 +173,7 @@ void tooltip_show(void) {
         box.y -= (box.y + box.h + 1) - video_get_height();
     }
 
-    boxRGBA(ScreenSurface,
+    boxRGBA(OfflineRenderSurface,
             box.x,
             box.y,
             box.x + box.w,
@@ -182,7 +182,7 @@ void tooltip_show(void) {
             255,
             255,
             tooltip_opacity);
-    text_show_format(ScreenSurface,
+    text_show_format(OfflineRenderSurface,
                      tooltip_font,
                      box.x + 3,
                      box.y,

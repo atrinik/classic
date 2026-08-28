@@ -1381,6 +1381,30 @@ void border_create_sdl_color(SDL_Surface *surface,
                              SDL_Rect *coords,
                              int thickness,
                              SDL_Color *color) {
+    if (surface == NULL) {
+        SDL_FRect rectangle = {
+            .x = (float)coords->x,
+            .y = (float)coords->y,
+            .w = (float)coords->w,
+            .h = (float)coords->h,
+        };
+        for (int i = 0; i < thickness; i++) {
+            if (!gpu_renderer_draw_rect(&rectangle,
+                                        color->r,
+                                        color->g,
+                                        color->b,
+                                        color->a,
+                                        false)) {
+                LOG(ERROR, "Could not draw retained GPU border: %s", SDL_GetError());
+                return;
+            }
+            rectangle.x += 1.0f;
+            rectangle.y += 1.0f;
+            rectangle.w -= 2.0f;
+            rectangle.h -= 2.0f;
+        }
+        return;
+    }
     uint32_t color_mapped = pixel_format_map_rgb(surface->format, color->r, color->g, color->b);
 
     BORDER_CREATE_TOP(surface, coords->x, coords->y, coords->w, coords->h, color_mapped, thickness);
@@ -1488,6 +1512,19 @@ void rectangle_create(SDL_Surface *surface,
     SDL_Color color;
     if (!text_color_parse(color_notation, &color)) {
         LOG(BUG, "Invalid color: %s", color_notation);
+        return;
+    }
+
+    if (surface == NULL) {
+        SDL_FRect rectangle = {(float)x, (float)y, (float)w, (float)h};
+        if (!gpu_renderer_draw_rect(&rectangle,
+                                    color.r,
+                                    color.g,
+                                    color.b,
+                                    color.a,
+                                    true)) {
+            LOG(ERROR, "Could not draw retained GPU rectangle: %s", SDL_GetError());
+        }
         return;
     }
 

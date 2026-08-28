@@ -56,7 +56,7 @@
 #define PLAYER_VIEW_MOVEMENT_RESUMED_TICKS 80U
 #define PLAYER_VIEW_MOVEMENT_PACKETS 5U
 #define PLAYER_VIEW_MOVEMENT_ACTIVE_PACKETS 4U
-#define PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION 11U
+#define PLAYER_VIEW_MOVEMENT_SCHEMA_VERSION 12U
 #define PLAYER_VIEW_MOVEMENT_WINDOW_TICKS 32U
 #define PLAYER_VIEW_MOVEMENT_FIXTURE_SCHEMA 3U
 #define PLAYER_VIEW_MOVEMENT_CHECKPOINTS 12U
@@ -1675,7 +1675,9 @@ static void player_view_map_json(const map_benchmark_statistics_t *statistics) {
            ",\"level_draws\":%" PRIu64 ",\"render_commands\":%" PRIu64 ",\"annotations\":%" PRIu64
            ",\"ui_tiles\":%" PRIu64 ",\"peak_render_commands\":%" PRIu64
            ",\"peak_active_levels\":%" PRIu64 ",\"renderer_allocation_statistics_available\":%s"
-           ",\"renderer_allocations\":%" PRIu64 ",\"renderer_allocation_bytes\":%" PRIu64 "}",
+           ",\"renderer_allocations\":%" PRIu64 ",\"renderer_allocation_bytes\":%" PRIu64
+           ",\"renderer_retained_bytes\":%" PRIu64
+           ",\"renderer_peak_retained_bytes\":%" PRIu64 "}",
            statistics->map_draws,
            statistics->primary_map_draws,
            statistics->auxiliary_map_draws,
@@ -1694,7 +1696,9 @@ static void player_view_map_json(const map_benchmark_statistics_t *statistics) {
            statistics->peak_active_levels,
            statistics->renderer_allocation_statistics_available ? "true" : "false",
            statistics->renderer_allocations,
-           statistics->renderer_allocation_bytes);
+           statistics->renderer_allocation_bytes,
+           statistics->renderer_retained_bytes,
+           statistics->renderer_peak_retained_bytes);
 }
 
 static void player_view_render_stages_json(const render_profile_snapshot_t *statistics) {
@@ -2399,7 +2403,7 @@ static bool player_view_movement_lifecycle(player_view_movement_replay_t *replay
     map_widget->surface = resized;
     map_widget->w = resized->w;
     map_widget->h = resized->h;
-    ScreenSurface = resized;
+    OfflineRenderSurface = resized;
     bool success = player_view_movement_lifecycle_draw(replay,
                                                        resized,
                                                        manifest,
@@ -2409,7 +2413,7 @@ static bool player_view_movement_lifecycle(player_view_movement_replay_t *replay
     map_widget->surface = surface;
     map_widget->w = original_width;
     map_widget->h = original_height;
-    ScreenSurface = surface;
+    OfflineRenderSurface = surface;
     if (success) {
         success = player_view_movement_lifecycle_draw(replay,
                                                       surface,
@@ -3488,7 +3492,7 @@ int player_view_main(int argc, char *argv[]) {
         .h = (int)manifest.viewport_height,
     };
     cur_widget[MAP_ID] = &map_widget;
-    ScreenSurface = surface;
+    OfflineRenderSurface = surface;
     LastTick = manifest.clock_ms;
     image_missing_faces_reset();
 #ifdef ATRINIK_WIDGET_TESTS
@@ -3676,7 +3680,7 @@ int player_view_main(int argc, char *argv[]) {
 
 cleanup:
     cur_widget[MAP_ID] = NULL;
-    ScreenSurface = NULL;
+    OfflineRenderSurface = NULL;
     if (map_widget_surface != surface) {
         SDL_DestroySurface(map_widget_surface);
     }

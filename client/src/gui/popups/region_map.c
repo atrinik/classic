@@ -152,7 +152,7 @@ static int popup_draw_post_func(popup_struct *popup) {
     box.h = popup->surface->h;
 
     /* Show direction markers. */
-    text_show(ScreenSurface,
+    text_show(OfflineRenderSurface,
               FONT_SERIF14,
               "N",
               popup->x,
@@ -160,7 +160,7 @@ static int popup_draw_post_func(popup_struct *popup) {
               COLOR_HGOLD,
               TEXT_ALIGN_CENTER | TEXT_OUTLINE,
               &box);
-    text_show(ScreenSurface,
+    text_show(OfflineRenderSurface,
               FONT_SERIF14,
               "E",
               popup->x + popup->surface->w - RM_BORDER_SIZE / 2 -
@@ -169,7 +169,7 @@ static int popup_draw_post_func(popup_struct *popup) {
               COLOR_HGOLD,
               TEXT_OUTLINE | TEXT_VALIGN_CENTER,
               &box);
-    text_show(ScreenSurface,
+    text_show(OfflineRenderSurface,
               FONT_SERIF14,
               "S",
               popup->x,
@@ -177,7 +177,7 @@ static int popup_draw_post_func(popup_struct *popup) {
               COLOR_HGOLD,
               TEXT_ALIGN_CENTER | TEXT_OUTLINE,
               &box);
-    text_show(ScreenSurface,
+    text_show(OfflineRenderSurface,
               FONT_SERIF14,
               "W",
               popup->x + RM_BORDER_SIZE / 2 - text_get_width(FONT_SERIF14, "W", 0) / 2,
@@ -188,7 +188,7 @@ static int popup_draw_post_func(popup_struct *popup) {
 
     box.w = RM_TITLE_WIDTH;
     box.h = RM_TITLE_HEIGHT;
-    text_show(ScreenSurface,
+    text_show(OfflineRenderSurface,
               FONT_SERIF14,
               MapData.region_longname,
               popup->x + RM_TITLE_STARTX,
@@ -205,7 +205,7 @@ static int popup_draw_post_func(popup_struct *popup) {
     if (!region_map_ready(MapData.region_map)) {
         const char *error = region_map_error(MapData.region_map);
         if (error != NULL) {
-            text_show(ScreenSurface,
+            text_show(OfflineRenderSurface,
                       FONT_SERIF14,
                       error,
                       box.x,
@@ -216,7 +216,7 @@ static int popup_draw_post_func(popup_struct *popup) {
         } else if (MapData.region_map->source_png != NULL &&
                    MapData.region_map->source_def != NULL) {
             char buf[MAX_BUF];
-            text_show_format(ScreenSurface,
+            text_show_format(OfflineRenderSurface,
                              FONT_SERIF14,
                              box.x,
                              box.y,
@@ -226,7 +226,7 @@ static int popup_draw_post_func(popup_struct *popup) {
                              "Downloading the map, please wait...\n%s",
                              asset_source_speedinfo(MapData.region_map->source_png, VS(buf)));
         } else {
-            text_show(ScreenSurface,
+            text_show(OfflineRenderSurface,
                       FONT_SERIF14,
                       "No region-map download transport is available.",
                       box.x,
@@ -269,11 +269,11 @@ static int popup_draw_post_func(popup_struct *popup) {
     }
 
     scrollbar_show(&scrollbar,
-                   ScreenSurface,
+                   OfflineRenderSurface,
                    popup->x + RM_SCROLLBAR_STARTX,
                    popup->y + RM_SCROLLBAR_STARTY);
     scrollbar_show(&scrollbar_horizontal,
-                   ScreenSurface,
+                   OfflineRenderSurface,
                    popup->x + RM_SCROLLBARH_STARTX,
                    popup->y + RM_SCROLLBARH_STARTY);
 
@@ -281,9 +281,9 @@ static int popup_draw_post_func(popup_struct *popup) {
     dest.y = box.y;
 
     /* Actually draw the map. */
-    surface_show(ScreenSurface, dest.x, dest.y, &region_map->pos, surface);
-    region_map_render_fow(region_map, ScreenSurface, dest.x, dest.y);
-    region_map_render_marker(region_map, ScreenSurface, dest.x, dest.y);
+    surface_show(OfflineRenderSurface, dest.x, dest.y, &region_map->pos, surface);
+    region_map_render_fow(region_map, OfflineRenderSurface, dest.x, dest.y);
+    region_map_render_marker(region_map, OfflineRenderSurface, dest.x, dest.y);
 
     return 1;
 }

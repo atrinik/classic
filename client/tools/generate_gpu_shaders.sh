@@ -23,7 +23,7 @@ compile_stage() {
     "$dxc" -T "$profile" -E "$entry" -O3 -Ges -spirv \
         -fspv-target-env=vulkan1.1 -fvk-use-dx-layout \
         -Fo "$output/$name.spv" "$shader"
-    "$spirv_cross" "$output/$name.spv" --msl --msl-version 20100 \
+    "$spirv_cross" "$output/$name.spv" --msl --msl-version 20200 \
         --rename-entry-point "$entry" main0 "$stage" \
         --output "$output/$name.msl"
 }
@@ -32,6 +32,8 @@ compile_stage world_vertex vs_6_0 world_vertex vert
 compile_stage world_fragment ps_6_0 world_fragment frag
 compile_stage final_vertex vs_6_0 final_vertex vert
 compile_stage final_fragment ps_6_0 final_fragment frag
+compile_stage light_vertex vs_6_0 light_vertex vert
+compile_stage light_fragment ps_6_0 light_fragment frag
 
 (
     cd "$output"

@@ -11,7 +11,41 @@
 
 #include <global.h>
 
-SDL_Surface *ScreenSurface = NULL;
+SDL_Surface *OfflineRenderSurface = NULL;
+
+bool gpu_renderer_draw_rect(const SDL_FRect *rectangle,
+                            Uint8 red,
+                            Uint8 green,
+                            Uint8 blue,
+                            Uint8 alpha,
+                            bool filled) {
+    (void)rectangle;
+    (void)red;
+    (void)green;
+    (void)blue;
+    (void)alpha;
+    (void)filled;
+    return false;
+}
+
+bool gpu_renderer_draw_line(float x1,
+                            float y1,
+                            float x2,
+                            float y2,
+                            Uint8 red,
+                            Uint8 green,
+                            Uint8 blue,
+                            Uint8 alpha) {
+    (void)x1;
+    (void)y1;
+    (void)x2;
+    (void)y2;
+    (void)red;
+    (void)green;
+    (void)blue;
+    (void)alpha;
+    return false;
+}
 
 #define TEST_CHECK(condition) \
     do {                      \

@@ -211,7 +211,7 @@ static int popup_draw_func(popup_struct *popup) {
 
 /** @copydoc popup_struct::draw_post_func */
 static int popup_draw_post_func(popup_struct *popup) {
-    scrollbar_show(&interface_data->scrollbar, ScreenSurface, popup->x + 432, popup->y + 71);
+    scrollbar_show(&interface_data->scrollbar, OfflineRenderSurface, popup->x + 432, popup->y + 71);
 
     button_hello.x = popup->x + INTERFACE_BUTTON_HELLO_STARTX;
     button_hello.y = popup->y + INTERFACE_BUTTON_HELLO_STARTY;
@@ -223,12 +223,12 @@ static int popup_draw_post_func(popup_struct *popup) {
 
     if (interface_data->text_input) {
         text_input_show(&text_input,
-                        ScreenSurface,
+                        OfflineRenderSurface,
                         popup->x + popup->surface->w / 2 - text_input.coords.w / 2,
                         popup->y + popup->surface->h - text_input.coords.h - 15);
     }
 
-    surface_show(ScreenSurface, popup->x, popup->y, NULL, TEXTURE_CLIENT("interface_border"));
+    surface_show(OfflineRenderSurface, popup->x, popup->y, NULL, TEXTURE_CLIENT("interface_border"));
     return 1;
 }
 

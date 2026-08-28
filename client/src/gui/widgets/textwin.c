@@ -670,7 +670,7 @@ static void widget_draw(widgetdata *widget) {
                              &bg_color)) {
             Uint32 color = ((uint32_t)bg_color.r << 24) | ((uint32_t)bg_color.g << 16) |
                            ((uint32_t)bg_color.b << 8) | (uint32_t)alpha;
-            filledRectAlpha(ScreenSurface,
+            filledRectAlpha(OfflineRenderSurface,
                             widget->x,
                             widget->y,
                             widget->x + widget->w - 1,
@@ -791,13 +791,13 @@ static void widget_draw(widgetdata *widget) {
 
     box.x = widget->x;
     box.y = widget->y;
-    surface_show(ScreenSurface, box.x, box.y, NULL, widget->surface);
+    surface_show(OfflineRenderSurface, box.x, box.y, NULL, widget->surface);
 
     box.x = widget->x;
     box.y = widget->y;
     box.w = widget->w;
     box.h = widget->h;
-    border_create_texture(ScreenSurface, &box, 1, TEXTURE_CLIENT("widget_border"));
+    border_create_texture(OfflineRenderSurface, &box, 1, TEXTURE_CLIENT("widget_border"));
 }
 
 /** @copydoc widgetdata::background_func */

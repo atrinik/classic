@@ -178,8 +178,8 @@ void intro_show(void) {
     texture = TEXTURE_CLIENT("intro");
 
     /* Background */
-    surface_show(ScreenSurface, 0, 0, NULL, texture);
-    textwin_show(ScreenSurface,
+    surface_show(OfflineRenderSurface, 0, 0, NULL, texture);
+    textwin_show(OfflineRenderSurface,
                  texture->w,
                  1,
                  video_get_width() - texture->w - 2,
@@ -200,7 +200,7 @@ void intro_show(void) {
         src_box.y = eyes_draw - 1;
         src_box.w = TEXTURE_CLIENT("eyes")->w;
         src_box.h = TEXTURE_CLIENT("eyes")->h;
-        surface_show(ScreenSurface,
+        surface_show(OfflineRenderSurface,
                      texture->w - 90,
                      310 + src_box.y,
                      &src_box,
@@ -218,7 +218,7 @@ void intro_show(void) {
     texture = TEXTURE_CLIENT("servers_bg");
     x = 15;
     y = video_get_height() - texture->h - 5;
-    surface_show(ScreenSurface, x, y, NULL, texture);
+    surface_show(OfflineRenderSurface, x, y, NULL, texture);
 
     server_count = server_get_count();
 
@@ -286,7 +286,7 @@ void intro_show(void) {
      * description. */
     if (node) {
         snprintf(buf, sizeof(buf), "Version: %s", node->version);
-        text_show_shadow(ScreenSurface,
+        text_show_shadow(OfflineRenderSurface,
                          FONT_ARIAL10,
                          buf,
                          x + 13,
@@ -300,7 +300,7 @@ void intro_show(void) {
                  sizeof(buf),
                  "Preferred connection: %s",
                  socket_connection_preference_name(connection_preference_get(node)));
-        text_show_shadow(ScreenSurface,
+        text_show_shadow(OfflineRenderSurface,
                          FONT_ARIAL10,
                          buf,
                          x + 13,
@@ -312,7 +312,7 @@ void intro_show(void) {
 
         box.w = 410;
         box.h = 36;
-        text_show(ScreenSurface,
+        text_show(OfflineRenderSurface,
                   FONT_ARIAL10,
                   node->desc,
                   x + 13,
@@ -324,7 +324,7 @@ void intro_show(void) {
 
     /* Show whether we are connecting to the metaserver or not. */
     if (ms_connecting(-1)) {
-        text_show_shadow(ScreenSurface,
+        text_show_shadow(OfflineRenderSurface,
                          FONT_ARIAL10,
                          "Connecting to metaserver, please wait...",
                          x + 105,
@@ -334,7 +334,7 @@ void intro_show(void) {
                          0,
                          NULL);
     } else {
-        text_show_shadow(ScreenSurface,
+        text_show_shadow(OfflineRenderSurface,
                          FONT_ARIAL10,
                          "Select a secure server.",
                          x + 196,
@@ -346,15 +346,15 @@ void intro_show(void) {
     }
 
     texture = TEXTURE_CLIENT("servers_bg_over");
-    surface_show(ScreenSurface, x, y, NULL, texture);
+    surface_show(OfflineRenderSurface, x, y, NULL, texture);
 
     x += texture->w + 20;
     texture = TEXTURE_CLIENT("news_bg");
-    surface_show(ScreenSurface, x, y, NULL, texture);
+    surface_show(OfflineRenderSurface, x, y, NULL, texture);
 
     box.w = texture->w;
     box.h = 0;
-    text_show_shadow(ScreenSurface,
+    text_show_shadow(OfflineRenderSurface,
                      FONT_SERIF12,
                      "Game News",
                      x,

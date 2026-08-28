@@ -11,6 +11,64 @@
 
 #include <global.h>
 
+bool gpu_map_renderer_create(SDL_GPUDevice *device, SDL_Renderer *renderer) {
+    (void)device;
+    (void)renderer;
+    return true;
+}
+
+void gpu_map_renderer_destroy(void) {}
+bool gpu_map_renderer_begin(int width, int height) {
+    (void)width;
+    (void)height;
+    return false;
+}
+bool gpu_map_renderer_active(void) {
+    return false;
+}
+void gpu_map_renderer_set_owner(uint8_t owner) {
+    (void)owner;
+}
+void gpu_map_renderer_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]) {
+    (void)owner;
+    (void)vertices;
+}
+bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
+                                   const SDL_Rect *source,
+                                   const SDL_FRect *destination) {
+    (void)surface;
+    (void)source;
+    (void)destination;
+    return false;
+}
+bool gpu_map_renderer_draw_rect(const SDL_FRect *destination,
+                                uint8_t red,
+                                uint8_t green,
+                                uint8_t blue,
+                                uint8_t alpha,
+                                bool filled) {
+    (void)destination;
+    (void)red;
+    (void)green;
+    (void)blue;
+    (void)alpha;
+    (void)filled;
+    return false;
+}
+bool gpu_map_renderer_set_clip(const SDL_Rect *rectangle) {
+    (void)rectangle;
+    return false;
+}
+bool gpu_map_renderer_end(void) {
+    return false;
+}
+SDL_Texture *gpu_map_renderer_texture(void) {
+    return NULL;
+}
+void gpu_map_renderer_invalidate_surface(SDL_Surface *surface) {
+    (void)surface;
+}
+
 int main(void) {
     gpu_renderer_statistics_t statistics;
 

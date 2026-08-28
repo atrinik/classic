@@ -21,12 +21,14 @@ typedef struct SDL_Rect SDL_Rect;
 typedef struct SDL_Renderer SDL_Renderer;
 typedef struct SDL_Surface SDL_Surface;
 typedef struct SDL_Texture SDL_Texture;
+typedef struct lighting_vertex lighting_vertex_t;
 
 bool gpu_map_renderer_create(SDL_GPUDevice *device, SDL_Renderer *renderer);
 void gpu_map_renderer_destroy(void);
 bool gpu_map_renderer_begin(int width, int height);
 bool gpu_map_renderer_active(void);
 void gpu_map_renderer_set_owner(uint8_t owner);
+void gpu_map_renderer_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]);
 bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
                                    const SDL_Rect *source,
                                    const SDL_FRect *destination);
@@ -36,6 +38,7 @@ bool gpu_map_renderer_draw_rect(const SDL_FRect *destination,
                                 uint8_t blue,
                                 uint8_t alpha,
                                 bool filled);
+bool gpu_map_renderer_set_clip(const SDL_Rect *rectangle);
 bool gpu_map_renderer_end(void);
 SDL_Texture *gpu_map_renderer_texture(void);
 void gpu_map_renderer_invalidate_surface(SDL_Surface *surface);

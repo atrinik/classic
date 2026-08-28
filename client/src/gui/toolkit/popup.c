@@ -177,7 +177,7 @@ void popup_render(popup_struct *popup) {
     /* Show the popup in the middle of the screen. */
     box.x = popup->x;
     box.y = popup->y;
-    surface_show(ScreenSurface, box.x, box.y, NULL, popup->surface);
+    surface_show(OfflineRenderSurface, box.x, box.y, NULL, popup->surface);
 
     popup_button_show(popup, &popup->button_left);
     popup_button_show(popup, &popup->button_right);

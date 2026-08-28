@@ -57,6 +57,10 @@ atrinik_embed_gpu_shader(final_fragment dxil
     97523bb45fb3d8a3a4317a5c58a48c9401c17034eeb449328f50118dc5a8e15f)
 atrinik_embed_gpu_shader(final_vertex dxil
     280af65e0a86455e4da010b77449b305d07b9e6e1aa3ebfe362eaece55528584)
+atrinik_embed_gpu_shader(light_fragment dxil
+    65ff1dbd91d67f6d4775e92f931242027c14e2b405ae02969d3b29a956ae41f7)
+atrinik_embed_gpu_shader(light_vertex dxil
+    141a0ba6ea5a75835d84615d4f70bcfeed3c9706c1e801247ffd094e0f5b8c89)
 atrinik_embed_gpu_shader(world_fragment dxil
     82dce2a3ce408eac31cb30f496efa794674744997c69802a9adba0eddb6b2b06)
 atrinik_embed_gpu_shader(world_vertex dxil
@@ -65,14 +69,22 @@ atrinik_embed_gpu_shader(final_fragment msl
     9752eddb0064a442b874d7fb7d4f5a15355a6367b361e2a2323cdfaf60f1e65e)
 atrinik_embed_gpu_shader(final_vertex msl
     227d51faa3d0506e5ec7bd1e4a6cb0d4e1a6fad4d4727867d72178be527c2c9e)
+atrinik_embed_gpu_shader(light_fragment msl
+    6bd895f23d086acf6307b493c06bfc97da182a1e393217e6f863e6130a73e60b)
+atrinik_embed_gpu_shader(light_vertex msl
+    7f8e7944fb3d686020cce5d819c821f7f06b3bb07c84a14f8e6a6ab97c462a0a)
 atrinik_embed_gpu_shader(world_fragment msl
     e6a2b427b110376e569141c3e6c9f6879c929afe2411d8d92727c8496c620108)
 atrinik_embed_gpu_shader(world_vertex msl
     0d406ea7573cbdf14f146610cb262d35003c94f847d617306ea5437960691b02)
 atrinik_embed_gpu_shader(final_fragment spv
-    8ed54dd40b619bee3b2d7bb93bd896e6750c7d7b14ac6be15513ed7c48f23329)
+    7a408db6cca97c6df3fa453804203934cdf8a8921b7f0b0640af87677a5d19b1)
 atrinik_embed_gpu_shader(final_vertex spv
     40d6755e57a6854ef3b1928475a50e99a49859fbd49cb47d3514630ee291c7f4)
+atrinik_embed_gpu_shader(light_fragment spv
+    16ad8b5b40f566b86d2f0d91e82ed954371c7d959f11cf43e3749872baee9bce)
+atrinik_embed_gpu_shader(light_vertex spv
+    4cc96dc4e4898bba5754047a128ad3e66e6740ed3d2138e41c4c3cc3c906ab39)
 atrinik_embed_gpu_shader(world_fragment spv
     e85e0c67fc859b7ff2fadddaf8b5159ef00b44c1bedd4a1a93171e41ca73105a)
 atrinik_embed_gpu_shader(world_vertex spv

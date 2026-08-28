@@ -405,7 +405,7 @@ void text_deinit(void) {
 }
 
 /**
- * If text_show() is called on surface that is not ScreenSurface, you
+ * For drawing to an offscreen surface rather than the GPU root target, you
  * must use this to set mouse X/Y detection offset, so things like links
  * will work correctly.
  *
@@ -596,7 +596,7 @@ static int text_adjust_coords(SDL_Surface *surface, int *mx, int *my) {
         return 0;
     }
 
-    if (surface == ScreenSurface) {
+    if (surface == OfflineRenderSurface) {
         return 1;
     }
 

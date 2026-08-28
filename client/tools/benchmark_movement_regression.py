@@ -20,7 +20,7 @@ from movement_benchmark_schema import RENDER_STAGES, validate_record
 
 
 EVIDENCE_SCHEMA_VERSION = 7
-NATIVE_SCHEMA_VERSION = 11
+NATIVE_SCHEMA_VERSION = 12
 SUSTAINED_P95_LIMIT_NS = 33_300_000
 LARGE_SUSTAINED_P95_LIMIT_NS = 125_000_000
 DISPLAY_REFERENCE_FPS = 144
@@ -544,6 +544,16 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
             ),
             "renderer_allocation_bytes": (
                 _median_integer([item["renderer_allocation_bytes"] for item in map_records])
+                if allocation_available
+                else 0
+            ),
+            "renderer_retained_bytes": (
+                _median_integer([item["renderer_retained_bytes"] for item in map_records])
+                if allocation_available
+                else 0
+            ),
+            "renderer_peak_retained_bytes": (
+                _median_integer([item["renderer_peak_retained_bytes"] for item in map_records])
                 if allocation_available
                 else 0
             ),
@@ -2590,7 +2600,8 @@ def _render_complete_evidence(
                 "local_minimap_update_interval_ms", "local_minimap_surface_width",
                 "local_minimap_surface_height",
                 "renderer_allocation_statistics_available", "renderer_allocations",
-                "renderer_allocation_bytes",
+                "renderer_allocation_bytes", "renderer_retained_bytes",
+                "renderer_peak_retained_bytes",
             },
             f"{viewport} {name} map summary",
         )
@@ -2612,7 +2623,9 @@ def _render_complete_evidence(
             raise BenchmarkError(f"invalid queue summary: {viewport} {name}")
         allocations = (
             f"{map_stats['renderer_allocations']} / "
-            f"{_human_bytes(map_stats['renderer_allocation_bytes'])}"
+            f"{_human_bytes(map_stats['renderer_allocation_bytes'])} / "
+            f"{_human_bytes(map_stats['renderer_retained_bytes'])} retained / "
+            f"{_human_bytes(map_stats['renderer_peak_retained_bytes'])} peak"
             if map_stats["renderer_allocation_statistics_available"]
             else "unavailable"
         )

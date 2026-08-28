@@ -140,7 +140,7 @@ static void widget_draw(widgetdata *widget) {
 
     box.x = widget->x;
     box.y = widget->y;
-    surface_show(ScreenSurface, box.x, box.y, NULL, widget->surface);
+    surface_show(OfflineRenderSurface, box.x, box.y, NULL, widget->surface);
 }
 
 /** @copydoc widgetdata::event_func */

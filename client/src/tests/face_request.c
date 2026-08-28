@@ -61,7 +61,7 @@ struct asset_request {
 
 _face_struct FaceList[MAX_FACE_TILES];
 Client_Player cpl;
-SDL_Surface *ScreenSurface;
+SDL_Surface *OfflineRenderSurface;
 int map_redraw_flag;
 int minimap_redraw_flag;
 

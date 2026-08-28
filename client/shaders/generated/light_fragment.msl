@@ -1,0 +1,494 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct LightQuad
+{
+    packed_int4 x;
+    packed_int4 y;
+    packed_uint4 scalar;
+    packed_uint4 red;
+    packed_uint4 green;
+    packed_uint4 blue;
+    uint owner;
+    packed_uint3 padding;
+};
+
+struct type_StructuredBuffer_LightQuad
+{
+    LightQuad _m0[1];
+};
+
+struct type_StructuredBuffer_uint
+{
+    uint _m0[1];
+};
+
+struct main0_out
+{
+    float4 out_var_SV_Target0 [[color(0)]];
+};
+
+struct main0_in
+{
+    uint in_var_TEXCOORD0 [[user(locn0)]];
+    uint in_var_TEXCOORD1 [[user(locn1)]];
+};
+
+fragment main0_out main0(main0_in in [[stage_in]], const device type_StructuredBuffer_LightQuad& light_quads [[buffer(0)]], const device type_StructuredBuffer_uint& light_forward_lut [[buffer(1)]], const device type_StructuredBuffer_uint& light_inverse_lut [[buffer(2)]], texture2d<float> light_albedo [[texture(0)]], texture2d<uint> light_owner [[texture(1)]], float4 gl_FragCoord [[position]])
+{
+    main0_out out = {};
+    int2 _104 = int2(gl_FragCoord.xy);
+    int4 _99 = int4(light_quads._m0[in.in_var_TEXCOORD0].x);
+    int4 _98 = int4(light_quads._m0[in.in_var_TEXCOORD0].y);
+    int2 _123 = int3(_104, 0).xy;
+    if (light_owner.read(uint2(_123), 0).x != light_quads._m0[in.in_var_TEXCOORD0].owner)
+    {
+        discard_fragment();
+    }
+    bool _130 = in.in_var_TEXCOORD1 == 0u;
+    uint _131 = _130 ? 1u : 2u;
+    uint _132 = _130 ? 2u : 3u;
+    int2 _147 = int2(_99[_132], _98[_132]) * int2(2);
+    int2 _148 = int2(_99.x, _98.x) * int2(2);
+    int _149 = _147.x;
+    int _150 = _148.x;
+    int _152 = _98[_131] - _98.x;
+    int _154 = _147.y;
+    int _155 = _148.y;
+    int _157 = _99[_131] - _99.x;
+    int _159 = ((_149 - _150) * _152) - ((_154 - _155) * _157);
+    int _161 = (_159 < 0) ? (-1) : 1;
+    ulong _164 = ulong(long(abs(_159)));
+    int2 _166 = (_104 * int2(2)) + int2(1);
+    int _167 = _166.x;
+    int _171 = _166.y;
+    ulong _178 = ulong(long(_161 * (((_167 - _149) * (_98.x - _98[_132])) - ((_171 - _154) * (_99.x - _99[_132])))));
+    ulong _186 = ulong(long(_161 * (((_167 - _150) * _152) - ((_171 - _155) * _157))));
+    ulong _191;
+    if (_130)
+    {
+        _191 = _178 + _186;
+    }
+    else
+    {
+        _191 = _178;
+    }
+    ulong _196;
+    if (_130)
+    {
+        _196 = _186;
+    }
+    else
+    {
+        _196 = _178 + _186;
+    }
+    bool _306;
+    ulong _197 = _164 - _191;
+    ulong _198 = _164 - _196;
+    ulong _206 = _164 / 2ul;
+    uint _223 = uint((((((((ulong(light_quads._m0[in.in_var_TEXCOORD0].scalar[0]) * _197) + (ulong(light_quads._m0[in.in_var_TEXCOORD0].scalar[1]) * _191)) + _206) / _164) * _198) + (((((ulong(light_quads._m0[in.in_var_TEXCOORD0].scalar[3]) * _197) + (ulong(light_quads._m0[in.in_var_TEXCOORD0].scalar[2]) * _191)) + _206) / _164) * _196)) + _206) / _164);
+    float4 _297 = light_albedo.read(uint2(_123), 0);
+    uint4 _302 = uint4(floor((fast::clamp(_297, float4(0.0), float4(1.0)) * 255.0) + float4(0.5)));
+    uint _406;
+    do
+    {
+        _306 = _223 == 0u;
+        if (_306)
+        {
+            _406 = 0u;
+            break;
+        }
+        uint _388;
+        do
+        {
+            if (_223 > 2048u)
+            {
+                _388 = 65535u;
+                break;
+            }
+            uint _355;
+            uint _356;
+            uint _357;
+            uint _358;
+            if (_223 <= 32u)
+            {
+                _355 = 45u;
+                _356 = 0u;
+                _357 = 0u;
+                _358 = 5u;
+            }
+            else
+            {
+                uint _351;
+                uint _352;
+                uint _353;
+                uint _354;
+                if (_223 <= 64u)
+                {
+                    _351 = 35u;
+                    _352 = 32u;
+                    _353 = 45u;
+                    _354 = 5u;
+                }
+                else
+                {
+                    uint _347;
+                    uint _348;
+                    uint _349;
+                    uint _350;
+                    if (_223 <= 128u)
+                    {
+                        _347 = 40u;
+                        _348 = 64u;
+                        _349 = 80u;
+                        _350 = 6u;
+                    }
+                    else
+                    {
+                        uint _343;
+                        uint _344;
+                        uint _345;
+                        uint _346;
+                        if (_223 <= 256u)
+                        {
+                            _343 = 45u;
+                            _344 = 128u;
+                            _345 = 120u;
+                            _346 = 7u;
+                        }
+                        else
+                        {
+                            uint _339;
+                            uint _340;
+                            uint _341;
+                            uint _342;
+                            if (_223 <= 512u)
+                            {
+                                _339 = 50u;
+                                _340 = 256u;
+                                _341 = 165u;
+                                _342 = 8u;
+                            }
+                            else
+                            {
+                                bool _334 = _223 <= 1024u;
+                                _339 = _334 ? 30u : 10u;
+                                _340 = _334 ? 512u : 1024u;
+                                _341 = _334 ? 215u : 245u;
+                                _342 = _334 ? 9u : 10u;
+                            }
+                            _343 = _339;
+                            _344 = _340;
+                            _345 = _341;
+                            _346 = _342;
+                        }
+                        _347 = _343;
+                        _348 = _344;
+                        _349 = _345;
+                        _350 = _346;
+                    }
+                    _351 = _347;
+                    _352 = _348;
+                    _353 = _349;
+                    _354 = _350;
+                }
+                _355 = _351;
+                _356 = _352;
+                _357 = _353;
+                _358 = _354;
+            }
+            uint _359 = _358 & 31u;
+            uint _360 = 1u << _359;
+            uint _364 = (_357 << _359) + ((_223 - _356) * _355);
+            uint _365 = _364 >> _359;
+            uint _367 = _364 & (_360 - 1u);
+            bool _372;
+            if (_365 < 255u)
+            {
+                _372 = _367 == 0u;
+            }
+            else
+            {
+                _372 = true;
+            }
+            if (_372)
+            {
+                _388 = light_forward_lut._m0[_365];
+                break;
+            }
+            _388 = light_forward_lut._m0[_365] + (((_367 * (light_forward_lut._m0[_365 + 1u] - light_forward_lut._m0[_365])) + (_360 / 2u)) / _360);
+            break;
+        } while(false);
+        _406 = light_inverse_lut._m0[((light_forward_lut._m0[_302.x] * min(65535u, uint(((ulong(uint((((((((ulong(light_quads._m0[in.in_var_TEXCOORD0].red[0]) * _197) + (ulong(light_quads._m0[in.in_var_TEXCOORD0].red[1]) * _191)) + _206) / _164) * _198) + (((((ulong(light_quads._m0[in.in_var_TEXCOORD0].red[3]) * _197) + (ulong(light_quads._m0[in.in_var_TEXCOORD0].red[2]) * _191)) + _206) / _164) * _196)) + _206) / _164)) * ulong(_388)) + ulong(_223 / 2u)) / ulong(_223)))) + 32767u) / 65535u];
+        break;
+    } while(false);
+    uint _509;
+    do
+    {
+        if (_306)
+        {
+            _509 = 0u;
+            break;
+        }
+        uint _491;
+        do
+        {
+            if (_223 > 2048u)
+            {
+                _491 = 65535u;
+                break;
+            }
+            uint _458;
+            uint _459;
+            uint _460;
+            uint _461;
+            if (_223 <= 32u)
+            {
+                _458 = 45u;
+                _459 = 0u;
+                _460 = 0u;
+                _461 = 5u;
+            }
+            else
+            {
+                uint _454;
+                uint _455;
+                uint _456;
+                uint _457;
+                if (_223 <= 64u)
+                {
+                    _454 = 35u;
+                    _455 = 32u;
+                    _456 = 45u;
+                    _457 = 5u;
+                }
+                else
+                {
+                    uint _450;
+                    uint _451;
+                    uint _452;
+                    uint _453;
+                    if (_223 <= 128u)
+                    {
+                        _450 = 40u;
+                        _451 = 64u;
+                        _452 = 80u;
+                        _453 = 6u;
+                    }
+                    else
+                    {
+                        uint _446;
+                        uint _447;
+                        uint _448;
+                        uint _449;
+                        if (_223 <= 256u)
+                        {
+                            _446 = 45u;
+                            _447 = 128u;
+                            _448 = 120u;
+                            _449 = 7u;
+                        }
+                        else
+                        {
+                            uint _442;
+                            uint _443;
+                            uint _444;
+                            uint _445;
+                            if (_223 <= 512u)
+                            {
+                                _442 = 50u;
+                                _443 = 256u;
+                                _444 = 165u;
+                                _445 = 8u;
+                            }
+                            else
+                            {
+                                bool _437 = _223 <= 1024u;
+                                _442 = _437 ? 30u : 10u;
+                                _443 = _437 ? 512u : 1024u;
+                                _444 = _437 ? 215u : 245u;
+                                _445 = _437 ? 9u : 10u;
+                            }
+                            _446 = _442;
+                            _447 = _443;
+                            _448 = _444;
+                            _449 = _445;
+                        }
+                        _450 = _446;
+                        _451 = _447;
+                        _452 = _448;
+                        _453 = _449;
+                    }
+                    _454 = _450;
+                    _455 = _451;
+                    _456 = _452;
+                    _457 = _453;
+                }
+                _458 = _454;
+                _459 = _455;
+                _460 = _456;
+                _461 = _457;
+            }
+            uint _462 = _461 & 31u;
+            uint _463 = 1u << _462;
+            uint _467 = (_460 << _462) + ((_223 - _459) * _458);
+            uint _468 = _467 >> _462;
+            uint _470 = _467 & (_463 - 1u);
+            bool _475;
+            if (_468 < 255u)
+            {
+                _475 = _470 == 0u;
+            }
+            else
+            {
+                _475 = true;
+            }
+            if (_475)
+            {
+                _491 = light_forward_lut._m0[_468];
+                break;
+            }
+            _491 = light_forward_lut._m0[_468] + (((_470 * (light_forward_lut._m0[_468 + 1u] - light_forward_lut._m0[_468])) + (_463 / 2u)) / _463);
+            break;
+        } while(false);
+        _509 = light_inverse_lut._m0[((light_forward_lut._m0[_302.y] * min(65535u, uint(((ulong(uint((((((((ulong(light_quads._m0[in.in_var_TEXCOORD0].green[0]) * _197) + (ulong(light_quads._m0[in.in_var_TEXCOORD0].green[1]) * _191)) + _206) / _164) * _198) + (((((ulong(light_quads._m0[in.in_var_TEXCOORD0].green[3]) * _197) + (ulong(light_quads._m0[in.in_var_TEXCOORD0].green[2]) * _191)) + _206) / _164) * _196)) + _206) / _164)) * ulong(_491)) + ulong(_223 / 2u)) / ulong(_223)))) + 32767u) / 65535u];
+        break;
+    } while(false);
+    uint _612;
+    do
+    {
+        if (_306)
+        {
+            _612 = 0u;
+            break;
+        }
+        uint _594;
+        do
+        {
+            if (_223 > 2048u)
+            {
+                _594 = 65535u;
+                break;
+            }
+            uint _561;
+            uint _562;
+            uint _563;
+            uint _564;
+            if (_223 <= 32u)
+            {
+                _561 = 45u;
+                _562 = 0u;
+                _563 = 0u;
+                _564 = 5u;
+            }
+            else
+            {
+                uint _557;
+                uint _558;
+                uint _559;
+                uint _560;
+                if (_223 <= 64u)
+                {
+                    _557 = 35u;
+                    _558 = 32u;
+                    _559 = 45u;
+                    _560 = 5u;
+                }
+                else
+                {
+                    uint _553;
+                    uint _554;
+                    uint _555;
+                    uint _556;
+                    if (_223 <= 128u)
+                    {
+                        _553 = 40u;
+                        _554 = 64u;
+                        _555 = 80u;
+                        _556 = 6u;
+                    }
+                    else
+                    {
+                        uint _549;
+                        uint _550;
+                        uint _551;
+                        uint _552;
+                        if (_223 <= 256u)
+                        {
+                            _549 = 45u;
+                            _550 = 128u;
+                            _551 = 120u;
+                            _552 = 7u;
+                        }
+                        else
+                        {
+                            uint _545;
+                            uint _546;
+                            uint _547;
+                            uint _548;
+                            if (_223 <= 512u)
+                            {
+                                _545 = 50u;
+                                _546 = 256u;
+                                _547 = 165u;
+                                _548 = 8u;
+                            }
+                            else
+                            {
+                                bool _540 = _223 <= 1024u;
+                                _545 = _540 ? 30u : 10u;
+                                _546 = _540 ? 512u : 1024u;
+                                _547 = _540 ? 215u : 245u;
+                                _548 = _540 ? 9u : 10u;
+                            }
+                            _549 = _545;
+                            _550 = _546;
+                            _551 = _547;
+                            _552 = _548;
+                        }
+                        _553 = _549;
+                        _554 = _550;
+                        _555 = _551;
+                        _556 = _552;
+                    }
+                    _557 = _553;
+                    _558 = _554;
+                    _559 = _555;
+                    _560 = _556;
+                }
+                _561 = _557;
+                _562 = _558;
+                _563 = _559;
+                _564 = _560;
+            }
+            uint _565 = _564 & 31u;
+            uint _566 = 1u << _565;
+            uint _570 = (_563 << _565) + ((_223 - _562) * _561);
+            uint _571 = _570 >> _565;
+            uint _573 = _570 & (_566 - 1u);
+            bool _578;
+            if (_571 < 255u)
+            {
+                _578 = _573 == 0u;
+            }
+            else
+            {
+                _578 = true;
+            }
+            if (_578)
+            {
+                _594 = light_forward_lut._m0[_571];
+                break;
+            }
+            _594 = light_forward_lut._m0[_571] + (((_573 * (light_forward_lut._m0[_571 + 1u] - light_forward_lut._m0[_571])) + (_566 / 2u)) / _566);
+            break;
+        } while(false);
+        _612 = light_inverse_lut._m0[((light_forward_lut._m0[_302.z] * min(65535u, uint(((ulong(uint((((((((ulong(light_quads._m0[in.in_var_TEXCOORD0].blue[0]) * _197) + (ulong(light_quads._m0[in.in_var_TEXCOORD0].blue[1]) * _191)) + _206) / _164) * _198) + (((((ulong(light_quads._m0[in.in_var_TEXCOORD0].blue[3]) * _197) + (ulong(light_quads._m0[in.in_var_TEXCOORD0].blue[2]) * _191)) + _206) / _164) * _196)) + _206) / _164)) * ulong(_594)) + ulong(_223 / 2u)) / ulong(_223)))) + 32767u) / 65535u];
+        break;
+    } while(false);
+    out.out_var_SV_Target0 = float4(float3(uint3(_406, _509, _612)) * float3(0.0039215688593685626983642578125), _297.w);
+    return out;
+}
+

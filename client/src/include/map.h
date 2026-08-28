@@ -676,7 +676,7 @@ extern void map_draw_pointer_overlay(void);
  */
 extern bool map_pointer_overlay_visible_at(int x, int y);
 
-#define MAP_BENCHMARK_STATISTICS_VERSION UINT8_C(3)
+#define MAP_BENCHMARK_STATISTICS_VERSION UINT8_C(4)
 
 /** Map renderer work accumulated since the last benchmark reset. */
 typedef struct map_benchmark_statistics {
@@ -700,6 +700,8 @@ typedef struct map_benchmark_statistics {
     bool renderer_allocation_statistics_available;
     uint64_t renderer_allocations;
     uint64_t renderer_allocation_bytes;
+    uint64_t renderer_retained_bytes;
+    uint64_t renderer_peak_retained_bytes;
 } map_benchmark_statistics_t;
 
 void map_benchmark_statistics_reset(void);

@@ -95,7 +95,7 @@ void system_end(void) {
     gpu_renderer_destroy();
     SDL_DestroyWindow(ScreenWindow);
     ScreenWindow = NULL;
-    ScreenSurface = NULL;
+    OfflineRenderSurface = NULL;
     SDL_Quit();
 }
 

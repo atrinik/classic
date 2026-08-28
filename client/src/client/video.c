@@ -45,9 +45,9 @@ int video_get_bpp(void) {
 static void video_get_output_size(int *width, int *height) {
     HARD_ASSERT(width != NULL);
     HARD_ASSERT(height != NULL);
-    if (ScreenSurface != NULL) {
-        *width = ScreenSurface->w;
-        *height = ScreenSurface->h;
+    if (OfflineRenderSurface != NULL) {
+        *width = OfflineRenderSurface->w;
+        *height = OfflineRenderSurface->h;
         return;
     }
     if (!gpu_renderer_output_size(width, height)) {
@@ -93,7 +93,7 @@ int video_set_size(void) {
         ScreenWindow = NULL;
         return 0;
     }
-    ScreenSurface = NULL;
+    OfflineRenderSurface = NULL;
 
     return 1;
 }

@@ -223,6 +223,10 @@ void gpu_renderer_map_set_owner(uint8_t owner) {
     gpu_map_renderer_set_owner(owner);
 }
 
+void gpu_renderer_map_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]) {
+    gpu_map_renderer_light_quad(owner, vertices);
+}
+
 bool gpu_renderer_map_end(void) {
     return gpu_map_renderer_end();
 }
@@ -351,7 +355,10 @@ bool gpu_renderer_draw_line(float x1,
                             Uint8 green,
                             Uint8 blue,
                             Uint8 alpha) {
-    if (gpu_map_renderer_active() && (x1 == x2 || y1 == y2)) {
+    if (gpu_map_renderer_active()) {
+        if (x1 != x2 && y1 != y2) {
+            return SDL_SetError("Diagonal raw GPU map lines are unsupported");
+        }
         SDL_FRect rectangle = {
             .x = MIN(x1, x2),
             .y = MIN(y1, y2),
@@ -368,6 +375,9 @@ bool gpu_renderer_draw_line(float x1,
 }
 
 bool gpu_renderer_set_clip(const SDL_Rect *rectangle) {
+    if (gpu_map_renderer_active()) {
+        return gpu_map_renderer_set_clip(rectangle);
+    }
     return renderer != NULL && SDL_SetRenderClipRect(renderer, rectangle);
 }
 

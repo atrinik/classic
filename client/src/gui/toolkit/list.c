@@ -129,7 +129,7 @@ list_struct *list_create(uint32_t max_rows, uint32_t cols, int spacing) {
     list->max_rows = max_rows;
     list->cols = cols;
     list->spacing = spacing;
-    list->surface = ScreenSurface;
+    list->surface = OfflineRenderSurface;
     list->focus = 1;
 
     /* Initialize defaults. */

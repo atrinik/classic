@@ -59,8 +59,8 @@ typedef struct popup_button {
 /** A single popup. */
 typedef struct popup_struct {
     /**
-     * Surface the popup uses for drawing. This surface is then copied
-     * to ::ScreenSurface.
+     * Surface the popup uses for immutable content construction. It is then
+     * submitted as a retained GPU texture.
      */
     SDL_Surface *surface;
 

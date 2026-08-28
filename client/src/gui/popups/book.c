@@ -108,10 +108,10 @@ static int popup_draw_func(popup_struct *popup) {
 /** @copydoc popup_struct::draw_post_func */
 static int popup_draw_post_func(popup_struct *popup) {
     scrollbar_show(&scrollbar,
-                   ScreenSurface,
+                   OfflineRenderSurface,
                    popup->x + BOOK_SCROLLBAR_STARTX,
                    popup->y + BOOK_SCROLLBAR_STARTY);
-    surface_show(ScreenSurface, popup->x, popup->y, NULL, TEXTURE_CLIENT("book_border"));
+    surface_show(OfflineRenderSurface, popup->x, popup->y, NULL, TEXTURE_CLIENT("book_border"));
 
     return 1;
 }

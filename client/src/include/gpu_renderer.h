@@ -22,6 +22,7 @@ typedef struct SDL_Rect SDL_Rect;
 typedef struct SDL_Renderer SDL_Renderer;
 typedef struct SDL_Surface SDL_Surface;
 typedef struct SDL_Window SDL_Window;
+typedef struct lighting_vertex lighting_vertex_t;
 
 #define GPU_RENDERER_STATISTICS_VERSION UINT8_C(1)
 #define GPU_RENDERER_OWNER_UNLIT (UINT8_MAX - UINT8_C(1))
@@ -74,6 +75,7 @@ bool gpu_renderer_begin_frame(void);
 bool gpu_renderer_present(void);
 bool gpu_renderer_map_begin(int width, int height);
 void gpu_renderer_map_set_owner(uint8_t owner);
+void gpu_renderer_map_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]);
 bool gpu_renderer_map_end(void);
 bool gpu_renderer_draw_map(float x, float y, float width, float height);
 bool gpu_renderer_draw_surface(SDL_Surface *surface,

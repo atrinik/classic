@@ -2035,7 +2035,7 @@ static void process_widgets_rec(int draw, widgetdata *widget) {
                 if (redraw != 0) {
                     gpu_renderer_surface_changed(widget->surface);
                 }
-                surface_show(ScreenSurface, box.x, box.y, NULL, widget->surface);
+                surface_show(OfflineRenderSurface, box.x, box.y, NULL, widget->surface);
             }
 
             if (redraw != 0 && widget_render_debug) {
@@ -2047,7 +2047,7 @@ static void process_widgets_rec(int draw, widgetdata *widget) {
 
                 texture_debug =
                     texture_get(TEXTURE_TYPE_SOFTWARE, "rectangle:50,50,127;[bar=#ff66ff]");
-                surface_show_fill(ScreenSurface,
+                surface_show_fill(OfflineRenderSurface,
                                   widget->x,
                                   widget->y,
                                   NULL,

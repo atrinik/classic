@@ -52,8 +52,8 @@
 #include <cmake.h>
 #include <openssl/crypto.h>
 
-/** The main screen surface. */
-SDL_Surface *ScreenSurface;
+/** Test-only CPU destination for deterministic offline renderer fixtures. */
+SDL_Surface *OfflineRenderSurface;
 SDL_Window *ScreenWindow;
 /** Server's attributes */
 struct sockaddr_in insock;
@@ -916,7 +916,7 @@ int main(int argc, char *argv[]) {
                 int mx, my;
 
                 mouse_get_state(&mx, &my);
-                object_show_centered(ScreenSurface,
+                object_show_centered(OfflineRenderSurface,
                                      object_find(cpl.dragging_tag),
                                      mx,
                                      my,
@@ -933,7 +933,7 @@ int main(int argc, char *argv[]) {
         }
         if (!setting_get_int(OPT_CAT_CLIENT, OPT_SYSTEM_CURSOR) && cursor_x != -1 &&
             cursor_y != -1 && SDL_GetWindowFlags(ScreenWindow) & SDL_WINDOW_MOUSE_FOCUS) {
-            surface_show(ScreenSurface,
+            surface_show(OfflineRenderSurface,
                          cursor_x - texture_surface(cursor_texture)->w / 2,
                          cursor_y - texture_surface(cursor_texture)->h / 2,
                          NULL,

@@ -39,7 +39,7 @@ static void widget_draw(widgetdata *widget) {
     label = widget->subwidget;
 
     if (label->text) {
-        text_show(ScreenSurface,
+        text_show(OfflineRenderSurface,
                   label->font,
                   label->text,
                   widget->x,

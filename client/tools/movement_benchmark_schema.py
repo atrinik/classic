@@ -527,7 +527,7 @@ def _visual_lifecycle_digest(checkpoints: list[dict[str, object]]) -> str:
 
 
 def validate_record(value: object) -> dict[str, object]:
-    """Validate and return one complete version-eleven native record."""
+    """Validate and return one complete version-twelve native record."""
     record = _mapping(
         value,
         {
@@ -551,7 +551,7 @@ def validate_record(value: object) -> dict[str, object]:
         },
         "record",
     )
-    if record["schema_version"] != 11 or record["benchmark"] != "player-view-movement" \
+    if record["schema_version"] != 12 or record["benchmark"] != "player-view-movement" \
             or record["tick_ms"] != 125 or record["simulated_tick_hz"] != 8:
         raise ValueError("movement benchmark emitted an incompatible schema")
     checkpoint = _digest(record["checkpoint_sha256"], SHA256, "checkpoint")
@@ -635,11 +635,11 @@ def validate_record(value: object) -> dict[str, object]:
         "instrumentation identity",
     )
     if instrumentation != {
-        "schema_version": 11,
+        "schema_version": 12,
         "fixture_schema_version": 3,
         "workload": "pvm1-map2-lifecycle-v4",
         "lighting_statistics_version": 8,
-        "map_statistics_version": 3,
+        "map_statistics_version": 4,
         "render_profiler_statistics_version": 5,
         "sprite_cache_statistics_version": 3,
     }:
@@ -1051,6 +1051,8 @@ def validate_record(value: object) -> dict[str, object]:
                 "renderer_allocation_statistics_available",
                 "renderer_allocations",
                 "renderer_allocation_bytes",
+                "renderer_retained_bytes",
+                "renderer_peak_retained_bytes",
             },
             f"phase {name} map",
         )
@@ -1068,7 +1070,12 @@ def validate_record(value: object) -> dict[str, object]:
                 ) \
                 or any(map_stats[field] != 0 for field in ("presents", "present_failures", "render_failures", "fault_injections", "fault_detections")) \
                 or (not map_stats["renderer_allocation_statistics_available"] and any(
-                    map_stats[field] != 0 for field in ("renderer_allocations", "renderer_allocation_bytes")
+                    map_stats[field] != 0 for field in (
+                        "renderer_allocations",
+                        "renderer_allocation_bytes",
+                        "renderer_retained_bytes",
+                        "renderer_peak_retained_bytes",
+                    )
                 )):
             raise ValueError(f"movement benchmark phase {name} map accounting is invalid")
 

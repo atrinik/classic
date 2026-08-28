@@ -369,6 +369,8 @@ def native_record(
                     "renderer_allocation_statistics_available": False,
                     "renderer_allocations": 0,
                     "renderer_allocation_bytes": 0,
+                    "renderer_retained_bytes": 0,
+                    "renderer_peak_retained_bytes": 0,
                 },
                 "render_stages": {
                     stage: {
@@ -451,17 +453,17 @@ def native_record(
     ]
     standard_checkpoint_sha = visual_lifecycle_digest(standard_checkpoints)
     return {
-        "schema_version": 11,
+        "schema_version": 12,
         "benchmark": "player-view-movement",
         "tick_ms": 125,
         "simulated_tick_hz": 8,
         "identity": {
             "instrumentation": {
-                "schema_version": 11,
+                "schema_version": 12,
                 "fixture_schema_version": 3,
                 "workload": "pvm1-map2-lifecycle-v4",
                 "lighting_statistics_version": 8,
-                "map_statistics_version": 3,
+                "map_statistics_version": 4,
                 "render_profiler_statistics_version": 5,
                 "sprite_cache_statistics_version": 3,
             },
@@ -630,7 +632,7 @@ class NativeV11RecordTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["timeout"], 900)
 
     def test_parse_accepts_closed_v11_record(self) -> None:
-        self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 11)
+        self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 12)
 
     def test_parse_accepts_same_workload_with_fine_timing_disabled(self) -> None:
         record = native_record(fine_timing=False)
@@ -685,8 +687,8 @@ class NativeV11RecordTests(unittest.TestCase):
         encoded = json.dumps(native_record())
         with self.assertRaisesRegex(benchmark.BenchmarkError, "exactly one"):
             benchmark.parse_result(encoded + "\nnoise\n")
-        duplicate = encoded.replace('"schema_version": 11,',
-                                    '"schema_version": 11, "schema_version": 11,', 1)
+        duplicate = encoded.replace('"schema_version": 12,',
+                                    '"schema_version": 12, "schema_version": 12,', 1)
         with self.assertRaisesRegex(benchmark.BenchmarkError, "repeated JSON field"):
             benchmark.parse_result(duplicate)
         with self.assertRaisesRegex(ValueError, "repeated JSON field"):

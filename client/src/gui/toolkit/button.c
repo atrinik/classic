@@ -63,7 +63,7 @@ void button_create(button_struct *button) {
     memset(button, 0, sizeof(*button));
 
     /* Initialize default values. */
-    button->surface = ScreenSurface;
+    button->surface = OfflineRenderSurface;
     button->x = button->y = 0;
     button->texture = texture_get(TEXTURE_TYPE_CLIENT, "button");
     button->texture_pressed = texture_get(TEXTURE_TYPE_CLIENT, "button_down");

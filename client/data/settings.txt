@@ -201,17 +201,17 @@ category Map
 	end
 	setting Map width
 		type range
-		range 9 - 17
+		range 9 - 28
 		advance 1
-		default 17
-		desc Width of the map. If you have very low bandwidth, you may want to consider lowering this somewhat.
+		default 25
+		desc Logical map width. Larger views require more bandwidth and GPU resources; 28 is the MAP wire ceiling with overscan.
 	end
 	setting Map height
 		type range
-		range 9 - 17
+		range 9 - 28
 		advance 1
-		default 17
-		desc Height of the map. If you have very low bandwidth, you may want to consider lowering this somewhat.
+		default 25
+		desc Logical map height. Larger views require more bandwidth and GPU resources; 28 is the MAP wire ceiling with overscan.
 	end
 end
 
