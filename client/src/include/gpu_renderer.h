@@ -24,6 +24,7 @@ typedef struct SDL_Surface SDL_Surface;
 typedef struct SDL_Window SDL_Window;
 
 #define GPU_RENDERER_STATISTICS_VERSION UINT8_C(1)
+#define GPU_RENDERER_OWNER_UNLIT (UINT8_MAX - UINT8_C(1))
 
 typedef enum gpu_renderer_timing_stage {
     GPU_RENDERER_TIMING_COMMAND_BUILD,
@@ -72,6 +73,7 @@ bool gpu_renderer_output_size(int *width, int *height);
 bool gpu_renderer_begin_frame(void);
 bool gpu_renderer_present(void);
 bool gpu_renderer_map_begin(int width, int height);
+void gpu_renderer_map_set_owner(uint8_t owner);
 bool gpu_renderer_map_end(void);
 bool gpu_renderer_draw_map(float x, float y, float width, float height);
 bool gpu_renderer_draw_surface(SDL_Surface *surface,

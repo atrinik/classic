@@ -23,6 +23,62 @@ endif ()
 include(CTest)
 include(FetchContent)
 
+set(ATRINIK_GPU_SHADER_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/shaders/generated")
+set(ATRINIK_GPU_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/src/include/gpu_shader_data.h")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/src/include")
+file(WRITE "${ATRINIK_GPU_SHADER_HEADER}"
+    "/* Generated from checked-in, offline-compiled shader artifacts. */\n"
+    "#ifndef GPU_SHADER_DATA_H\n#define GPU_SHADER_DATA_H\n#include <stddef.h>\n")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/map.hlsl"
+    "${ATRINIK_GPU_SHADER_DIRECTORY}/SHA256SUMS")
+
+function(atrinik_embed_gpu_shader name extension expected_sha256)
+    set(path "${ATRINIK_GPU_SHADER_DIRECTORY}/${name}.${extension}")
+    if (NOT EXISTS "${path}")
+        message(FATAL_ERROR "Missing precompiled GPU shader: ${path}")
+    endif ()
+    file(SHA256 "${path}" actual_sha256)
+    if (NOT actual_sha256 STREQUAL expected_sha256)
+        message(FATAL_ERROR
+            "Precompiled GPU shader digest mismatch for ${name}.${extension}: "
+            "expected ${expected_sha256}, got ${actual_sha256}")
+    endif ()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${path}")
+    file(READ "${path}" shader_hex HEX)
+    string(REGEX REPLACE "(..)" "0x\\1," shader_bytes "${shader_hex}")
+    file(APPEND "${ATRINIK_GPU_SHADER_HEADER}"
+        "static const unsigned char gpu_shader_${name}_${extension}[] = {${shader_bytes}};\n"
+        "static const size_t gpu_shader_${name}_${extension}_size = "
+        "sizeof(gpu_shader_${name}_${extension});\n")
+endfunction()
+
+atrinik_embed_gpu_shader(final_fragment dxil
+    97523bb45fb3d8a3a4317a5c58a48c9401c17034eeb449328f50118dc5a8e15f)
+atrinik_embed_gpu_shader(final_vertex dxil
+    280af65e0a86455e4da010b77449b305d07b9e6e1aa3ebfe362eaece55528584)
+atrinik_embed_gpu_shader(world_fragment dxil
+    82dce2a3ce408eac31cb30f496efa794674744997c69802a9adba0eddb6b2b06)
+atrinik_embed_gpu_shader(world_vertex dxil
+    70d15a38251c9dcc3bcc313f354b6c352cd5f5f34287d4c5341a73e8beb02f0b)
+atrinik_embed_gpu_shader(final_fragment msl
+    9752eddb0064a442b874d7fb7d4f5a15355a6367b361e2a2323cdfaf60f1e65e)
+atrinik_embed_gpu_shader(final_vertex msl
+    227d51faa3d0506e5ec7bd1e4a6cb0d4e1a6fad4d4727867d72178be527c2c9e)
+atrinik_embed_gpu_shader(world_fragment msl
+    e6a2b427b110376e569141c3e6c9f6879c929afe2411d8d92727c8496c620108)
+atrinik_embed_gpu_shader(world_vertex msl
+    0d406ea7573cbdf14f146610cb262d35003c94f847d617306ea5437960691b02)
+atrinik_embed_gpu_shader(final_fragment spv
+    8ed54dd40b619bee3b2d7bb93bd896e6750c7d7b14ac6be15513ed7c48f23329)
+atrinik_embed_gpu_shader(final_vertex spv
+    40d6755e57a6854ef3b1928475a50e99a49859fbd49cb47d3514630ee291c7f4)
+atrinik_embed_gpu_shader(world_fragment spv
+    e85e0c67fc859b7ff2fadddaf8b5159ef00b44c1bedd4a1a93171e41ca73105a)
+atrinik_embed_gpu_shader(world_vertex spv
+    4334bdd64d3968dc89f20c664f7903236f19b4358ef7ee2fce853d145d9d5877)
+file(APPEND "${ATRINIK_GPU_SHADER_HEADER}" "#endif\n")
+
 function(atrinik_find_root_document output filename)
     file(REAL_PATH "${CMAKE_CURRENT_LIST_FILE}" ATRINIK_REAL_CMAKE_FILE)
     get_filename_component(ATRINIK_REAL_SOURCE_DIR

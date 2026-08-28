@@ -4560,6 +4560,10 @@ map_render_commands(SDL_Surface *surface,
 
         bool scene_lit = BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK) ||
                          BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
+        if (surface == NULL) {
+            gpu_renderer_map_set_owner(scene_lit ? (uint8_t)MAP2_DEPTH_INDEX(command->depth)
+                                                 : GPU_RENDERER_OWNER_UNLIT);
+        }
         sprite_effects_t effects = command->effects;
         if (map_scene_composition_active) {
             BITMASK_CLEAR(effects.flags,
@@ -4607,6 +4611,10 @@ map_render_commands(SDL_Surface *surface,
         }
     }
     render_profiler_end(RENDER_PROFILE_MAP_SPRITE_EFFECTS, profile_effects_started);
+
+    if (surface == NULL) {
+        gpu_renderer_map_set_owner(GPU_RENDERER_OWNER_UNLIT);
+    }
 
     if (map_scene_composition_active) {
         lighting_scene_render(surface);

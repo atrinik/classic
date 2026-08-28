@@ -28,9 +28,6 @@ typedef struct gpu_surface_texture {
 
 static SDL_Renderer *renderer;
 static SDL_GPUDevice *device;
-static SDL_Texture *map_target;
-static int map_target_width;
-static int map_target_height;
 static gpu_surface_texture_t *surface_textures;
 static Uint64 next_surface_generation = 1;
 static gpu_renderer_statistics_t statistics;
@@ -83,14 +80,8 @@ static void gpu_renderer_surface_textures_destroy(void) {
 }
 
 static void gpu_renderer_device_destroy(void) {
+    gpu_map_renderer_destroy();
     gpu_renderer_surface_textures_destroy();
-    if (map_target != NULL) {
-        SDL_DestroyTexture(map_target);
-        map_target = NULL;
-        statistics.resource_destructions++;
-    }
-    map_target_width = 0;
-    map_target_height = 0;
     if (renderer != NULL) {
         SDL_DestroyRenderer(renderer);
         renderer = NULL;
@@ -141,7 +132,11 @@ bool gpu_renderer_create(SDL_Window *window) {
         gpu_renderer_device_destroy();
         return false;
     }
-    SDL_SetDefaultTextureScaleMode(renderer, SDL_SCALEMODE_NEAREST);
+    if (!SDL_SetDefaultTextureScaleMode(renderer, SDL_SCALEMODE_NEAREST) ||
+        !gpu_map_renderer_create(device, renderer)) {
+        gpu_renderer_device_destroy();
+        return false;
+    }
 
     snprintf(backend, sizeof(backend), "%s", selected_backend);
     SDL_PropertiesID device_properties = SDL_GetGPUDeviceProperties(device);
@@ -221,44 +216,19 @@ bool gpu_renderer_present(void) {
 }
 
 bool gpu_renderer_map_begin(int width, int height) {
-    if (renderer == NULL || width <= 0 || height <= 0) {
-        return false;
-    }
-    if (map_target == NULL || map_target_width != width || map_target_height != height) {
-        if (map_target != NULL) {
-            SDL_DestroyTexture(map_target);
-            statistics.resource_destructions++;
-        }
-        map_target = SDL_CreateTexture(renderer,
-                                       SDL_PIXELFORMAT_RGBA32,
-                                       SDL_TEXTUREACCESS_TARGET,
-                                       width,
-                                       height);
-        if (map_target == NULL || !SDL_SetTextureScaleMode(map_target, SDL_SCALEMODE_NEAREST) ||
-            !SDL_SetTextureBlendMode(map_target, SDL_BLENDMODE_BLEND)) {
-            SDL_DestroyTexture(map_target);
-            map_target = NULL;
-            map_target_width = 0;
-            map_target_height = 0;
-            return false;
-        }
-        map_target_width = width;
-        map_target_height = height;
-        statistics.resource_creations++;
-    }
-    if (!SDL_SetRenderTarget(renderer, map_target) ||
-        !SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_TRANSPARENT) ||
-        !SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE)) {
-        return false;
-    }
-    return SDL_RenderClear(renderer);
+    return gpu_map_renderer_begin(width, height);
+}
+
+void gpu_renderer_map_set_owner(uint8_t owner) {
+    gpu_map_renderer_set_owner(owner);
 }
 
 bool gpu_renderer_map_end(void) {
-    return renderer != NULL && SDL_SetRenderTarget(renderer, NULL);
+    return gpu_map_renderer_end();
 }
 
 bool gpu_renderer_draw_map(float x, float y, float width, float height) {
+    SDL_Texture *map_target = gpu_map_renderer_texture();
     if (renderer == NULL || map_target == NULL || width <= 0.0f || height <= 0.0f) {
         return false;
     }
@@ -319,6 +289,9 @@ bool gpu_renderer_draw_surface(SDL_Surface *surface,
     if (renderer == NULL || surface == NULL || destination == NULL) {
         return false;
     }
+    if (gpu_map_renderer_active()) {
+        return gpu_map_renderer_draw_surface(surface, source, destination);
+    }
     gpu_surface_texture_t *entry = gpu_renderer_surface_texture(surface);
     if (entry == NULL) {
         return false;
@@ -359,6 +332,9 @@ bool gpu_renderer_draw_rect(const SDL_FRect *rectangle,
                             Uint8 blue,
                             Uint8 alpha,
                             bool filled) {
+    if (gpu_map_renderer_active()) {
+        return gpu_map_renderer_draw_rect(rectangle, red, green, blue, alpha, filled);
+    }
     if (rectangle == NULL || !gpu_renderer_draw_color(red, green, blue, alpha)) {
         return false;
     }
@@ -375,6 +351,15 @@ bool gpu_renderer_draw_line(float x1,
                             Uint8 green,
                             Uint8 blue,
                             Uint8 alpha) {
+    if (gpu_map_renderer_active() && (x1 == x2 || y1 == y2)) {
+        SDL_FRect rectangle = {
+            .x = MIN(x1, x2),
+            .y = MIN(y1, y2),
+            .w = x1 == x2 ? 1.0f : fabsf(x2 - x1) + 1.0f,
+            .h = y1 == y2 ? 1.0f : fabsf(y2 - y1) + 1.0f,
+        };
+        return gpu_map_renderer_draw_rect(&rectangle, red, green, blue, alpha, true);
+    }
     if (!gpu_renderer_draw_color(red, green, blue, alpha)) {
         return false;
     }
@@ -387,6 +372,7 @@ bool gpu_renderer_set_clip(const SDL_Rect *rectangle) {
 }
 
 void gpu_renderer_invalidate_surface(SDL_Surface *surface) {
+    gpu_map_renderer_invalidate_surface(surface);
     gpu_surface_texture_t **link = &surface_textures;
     while (*link != NULL) {
         gpu_surface_texture_t *entry = *link;
