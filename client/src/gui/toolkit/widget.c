@@ -2001,6 +2001,10 @@ static void process_widgets_rec(int draw, widgetdata *widget) {
 
                     texture = texture_surface(widget->texture);
                     widget->surface = SDL_ConvertSurface(texture, texture->format);
+                    if (widget->surface != NULL &&
+                        !gpu_renderer_canvas_register(widget->surface)) {
+                        LOG(ERROR, "Could not create retained GPU widget target: %s", SDL_GetError());
+                    }
                 }
 
                 if (widget->redraw) {
@@ -2032,9 +2036,6 @@ static void process_widgets_rec(int draw, widgetdata *widget) {
                 box.y = widget->y;
                 box.w = 0;
                 box.h = 0;
-                if (redraw != 0) {
-                    gpu_renderer_surface_changed(widget->surface);
-                }
                 surface_show(OfflineRenderSurface, box.x, box.y, NULL, widget->surface);
             }
 

@@ -3507,6 +3507,10 @@ int player_view_main(int argc, char *argv[]) {
             goto cleanup;
         }
 #ifdef ATRINIK_WIDGET_TESTS
+        if (mode == PLAYER_VIEW_RENDER && !widget_map_sparse_state_test()) {
+            fprintf(stderr, "player-view: sparse map-state regression failed\n");
+            goto cleanup;
+        }
         if (mode == PLAYER_VIEW_RENDER && manifest.visibility_fade_test &&
             !widget_map_visibility_test()) {
             fprintf(stderr, "player-view: visibility fade regression failed\n");

@@ -181,7 +181,7 @@ static void list_post_column(list_struct *list, uint32_t row, uint32_t col) {
 
 /** @copydoc list_struct::row_color_func */
 static void list_row_color(list_struct *list, int row, SDL_Rect box) {
-    SDL_FillSurfaceRect(list->surface,
+    surface_fill_rect(list->surface,
                         &box,
                         pixel_format_map_rgb(list->surface->format, 25, 25, 25));
 }

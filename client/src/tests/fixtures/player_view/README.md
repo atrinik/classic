@@ -1,7 +1,7 @@
 # Offline player-view fixture
 
-The XML manifests freeze the software-renderer viewport, logical map size,
-lighting mode, zoom behavior, clock, settings defaults, multipart geometry,
+The XML manifests freeze the test-only CPU reference viewport, logical map
+size, lighting mode, zoom behavior, clock, settings defaults, multipart geometry,
 MAP command, and every image by SHA-256. The same bounded MAP command covers
 ordinary and stretched terrain, a multipart sprite, a protocol animation,
 fog, roof/cutaway data, smooth and discrete lighting, and physical depths
@@ -44,8 +44,8 @@ and assets while assigning a distinct map name and path to a second validated
 `MAP_UPDATE_CMD_NEW` packet. Both movement manifests pin that transition and a
 32-by-24-pixel resize delta so reset, resized, restored, and map-transition
 checkpoints remain deterministic. The movement replay clears its offscreen
-frame target before every map draw, matching the software renderer's per-frame
-compositor contract; frame timing therefore includes that clear and the full
+frame target before every map draw, matching the test-only CPU oracle's
+per-frame compositor contract; frame timing therefore includes that clear and the full
 primary map draw. It also renders the map core into the production
 1700-by-1200 local-minimap surface whenever the real 250-millisecond
 dynamic-minimap cadence is due. Retaining the production surface extent keeps
@@ -53,8 +53,10 @@ every supported zoom, widget size, scale mode, centered crop, mask, and border
 on the existing display path; the performance change is the bounded redraw
 cadence rather than a change to the visible world footprint. Main-map and
 local-minimap calls and timings remain separate, while the complete
-update-frame work measurement includes both. Minimap zoom/masking and the
-remaining UI/widget work are outside this map-focused measurement.
+update-frame work measurement includes both. This executable oracle is built
+only when testing is enabled and is absent from the production client. Minimap
+zoom/masking and the remaining UI/widget work are outside this map-focused
+measurement.
 
 The `brynknot-movement` manifest is the roof-heavy companion workload for
 dense Brynknot-style movement. It uses the same sanitized 17-by-17 MAP2

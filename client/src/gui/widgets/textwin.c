@@ -570,7 +570,7 @@ void textwin_show(SDL_Surface *surface, int x, int y, int w, int h) {
                 box.y = y;
                 box.w = w;
                 box.h = h;
-                SDL_FillSurfaceRect(surface, &box, pixel_format_map_rgb(surface->format, 0, 0, 0));
+                surface_fill_rect(surface, &box, pixel_format_map_rgb(surface->format, 0, 0, 0));
                 draw_frame(surface, x, y, box.w, box.h);
 
                 box.w = w - 3;
@@ -658,6 +658,9 @@ static void widget_draw(widgetdata *widget) {
                                              0,
                                              0,
                                              0);
+        if (widget->surface != NULL && !gpu_renderer_canvas_register(widget->surface)) {
+            LOG(ERROR, "Could not create retained GPU text-window target: %s", SDL_GetError());
+        }
         SDL_SetSurfaceColorKey(widget->surface, true, 0);
         textwin_readjust(widget);
     }
@@ -681,7 +684,7 @@ static void widget_draw(widgetdata *widget) {
 
     /* Let's draw the widgets in the backbuffer */
     if (widget->redraw) {
-        SDL_FillSurfaceRect(widget->surface, NULL, 0);
+        surface_fill_rect(widget->surface, NULL, 0);
 
         if (textwin->tabs) {
             int yadjust;

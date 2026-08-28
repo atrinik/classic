@@ -129,7 +129,7 @@ static void widget_draw(widgetdata *widget) {
     network_graph_widget_t *network_graph = widget->subwidget;
     network_graph_data_t *data = &network_graph->data[network_graph->type];
 
-    SDL_FillSurfaceRect(widget->surface, NULL, 0);
+    surface_fill_rect(widget->surface, NULL, 0);
 
     if (network_graph->type == NETWORK_GRAPH_TYPE_LATENCY) {
         network_graph_series_t *series = &data->latency;

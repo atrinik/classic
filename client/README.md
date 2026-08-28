@@ -32,8 +32,11 @@
  or newer, and SDL3_mixer 3.2.4 or newer. The supported mixer contract contains
  exactly WAV, STBVORBIS, OPUS, VOC, AIFF, AU, DRMP3, SINEWAVE, and RAW; MIDI and
  module decoders are deliberately absent. Sound effects and music are required
- on every supported platform. The client uses an SDL window-backed CPU
- surface; it does not require a hardware renderer.
+ on every supported platform. The production client requires a hardware GPU
+ supported by SDL_GPU through Vulkan, Direct3D 12, or Metal, including RGBA8
+ and R8_UINT render-target support. There is no software renderer or fallback;
+ startup reports the selected backend, device, and driver failure and exits if
+ the required GPU contract is unavailable.
 
  Releases are produced from every squash merge to main. semantic-release
  parses the Conventional Commits pull-request title. Classic stays on the
@@ -240,9 +243,9 @@
 = 2.1. Replaying an offline player view         =
 =================================================
 
- The client can replay a bounded MAP command through its normal decoder and
- software map renderer without opening a window, initializing audio, reading
- user settings, or connecting to a server:
+ Test-enabled builds can replay a bounded MAP command through the normal
+ decoder and the frozen CPU reference oracle without opening a window,
+ initializing audio, reading user settings, or connecting to a server:
   $ build/linux-debug/atrinik --player-view \
       src/tests/fixtures/player_view/smooth.xml \
       build/linux-debug/player-view.png
@@ -255,8 +258,8 @@
 
  The closed version-1 XML manifest pins the settings defaults, multipart
  geometry, exact MAP payload, and every sprite by SHA-256. It also freezes the
- viewport, logical map dimensions, software renderer, clock, zoom, and smooth
- or discrete lighting choice. Unknown fields, external XML declarations,
+ viewport, logical map dimensions, test-only reference renderer, clock, zoom,
+ and smooth or discrete lighting choice. Unknown fields, external XML declarations,
  missing or changed inputs, malformed packets, unavailable faces, and pixel
  drift fail before publishing an output. The maintained fixtures cover normal
  and stretched terrain, multipart and animated sprites, fog/cutaway behavior,

@@ -581,6 +581,10 @@ extern void map_cell_snapshot(int x, int y, MapCell *snapshot);
 
 /** Return whether a decoded map cell differs from a prior snapshot. */
 extern bool map_cell_changed(int x, int y, const MapCell *snapshot);
+#ifdef ATRINIK_WIDGET_TESTS
+/** Verify the 28x28/all-depth sparse empty-state and proportional-record bounds. */
+bool widget_map_sparse_state_test(void);
+#endif
 
 extern void map_level_scroll(int dz);
 

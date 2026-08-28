@@ -185,10 +185,21 @@ int Event_PollInputDevice(void) {
                     exit(1);
                 }
                 resize_window(width, height);
+                gpu_renderer_recreation_request();
                 map_redraw_request(MAP_REDRAW_REASON_RESIZE);
                 break;
 
             case SDL_EVENT_WINDOW_EXPOSED:
+                map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
+                break;
+
+            case SDL_EVENT_WINDOW_RESTORED:
+            case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+            case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+            case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
+            case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
+            case SDL_EVENT_DID_ENTER_FOREGROUND:
+                gpu_renderer_recreation_request();
                 map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
                 break;
 

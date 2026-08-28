@@ -21,6 +21,25 @@
 char *render_profiler_widget_text_for_test(const render_profile_snapshot_t *snapshot);
 void render_profiler_set_completed_generation_for_test(uint32_t generation);
 
+void gpu_renderer_statistics_get(gpu_renderer_statistics_t *statistics) {
+    *statistics = (gpu_renderer_statistics_t){
+        .timings = {
+            [GPU_RENDERER_TIMING_COMMAND_BUILD] = {.calls = 2, .elapsed_ns = UINT64_C(4000000)},
+        },
+        .commands = 101,
+        .batches = 23,
+        .draws = 47,
+        .upload_count = 7,
+        .upload_bytes = UINT64_C(2097152),
+        .resource_creations = 13,
+        .resource_destructions = 5,
+        .retained_bytes = UINT64_C(3145728),
+        .peak_retained_bytes = UINT64_C(4194304),
+        .device_recoveries = 2,
+        .recovery_failures = 1,
+    };
+}
+
 /* The formatter test does not execute the widget's SDL/scrollbar paths. */
 Uint32 pixel_format_map_rgba(SDL_PixelFormat format,
                              Uint8 red,
@@ -33,6 +52,10 @@ Uint32 pixel_format_map_rgba(SDL_PixelFormat format,
     (void)blue;
     (void)alpha;
     return 0;
+}
+
+bool surface_fill_rect(SDL_Surface *surface, const SDL_Rect *rectangle, Uint32 color) {
+    return SDL_FillSurfaceRect(surface, rectangle, color);
 }
 
 font_struct *font_get_weak(const char *name, uint8_t size) {
@@ -115,6 +138,8 @@ static void test_stage_metadata_is_rendered(void) {
 
     char *text = render_profiler_widget_text_for_test(&snapshot);
     TEST_CHECK(strstr(text, "[c=#ffd060]Stage breakdown[/c]") != NULL);
+    TEST_CHECK(strstr(text, "commands 101  batches 23  draws 47") != NULL);
+    TEST_CHECK(strstr(text, "command  2.00") != NULL);
 
     for (render_profile_stage_t stage = 0; stage < RENDER_PROFILE_STAGE_NUM; stage++) {
         render_profile_stage_metadata_t metadata = {0};

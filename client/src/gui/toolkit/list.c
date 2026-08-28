@@ -56,11 +56,11 @@ static void list_draw_frame(list_struct *list) {
  */
 static void list_row_color(list_struct *list, int row, SDL_Rect box) {
     if (row & 1) {
-        SDL_FillSurfaceRect(list->surface,
+        surface_fill_rect(list->surface,
                             &box,
                             pixel_format_map_rgb(list->surface->format, 0x55, 0x55, 0x55));
     } else {
-        SDL_FillSurfaceRect(list->surface,
+        surface_fill_rect(list->surface,
                             &box,
                             pixel_format_map_rgb(list->surface->format, 0x45, 0x45, 0x45));
     }
@@ -74,7 +74,7 @@ static void list_row_color(list_struct *list, int row, SDL_Rect box) {
  * Contains base x/y/width/height information to use.
  */
 static void list_row_highlight(list_struct *list, SDL_Rect box) {
-    SDL_FillSurfaceRect(list->surface,
+    surface_fill_rect(list->surface,
                         &box,
                         pixel_format_map_rgb(list->surface->format, 0x00, 0x80, 0x00));
 }
@@ -87,7 +87,7 @@ static void list_row_highlight(list_struct *list, SDL_Rect box) {
  * Contains base x/y/width/height information to use.
  */
 static void list_row_selected(list_struct *list, SDL_Rect box) {
-    SDL_FillSurfaceRect(list->surface,
+    surface_fill_rect(list->surface,
                         &box,
                         pixel_format_map_rgb(list->surface->format, 0x00, 0x00, 0xef));
 }

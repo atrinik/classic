@@ -10,6 +10,13 @@ cmake --build --preset linux-debug
 ctest --preset linux-debug
 ```
 
+Running the production client requires a hardware GPU exposed through SDL_GPU
+using Vulkan, Direct3D 12, or Metal, with RGBA8 and R8_UINT render-target
+support. Software and CPU-emulated drivers are suitable only for test
+conformance and are not a supported runtime fallback. If device, format,
+shader, or swapchain initialization fails, the client reports the backend and
+driver diagnostics and exits without entering play.
+
 Release builds use the same configure-time interface as the integrated and
 server builds: `-DATRINIK_PACKAGE_VERSION=MAJOR.MINOR.PATCH`. Without it,
 CMake uses the packaged `VERSION` file, an exact release tag, or the shared

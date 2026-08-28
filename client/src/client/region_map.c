@@ -509,7 +509,7 @@ void region_map_render_marker(region_map_t *region_map, SDL_Surface *surface, in
     box.x += srcbox.x;
     box.y += srcbox.y;
 
-    SDL_BlitSurface(marker, &srcbox, surface, &box);
+    surface_blit(marker, &srcbox, surface, &box);
     SDL_DestroySurface(marker);
 }
 
@@ -522,7 +522,7 @@ void region_map_render_fow(region_map_t *region_map, SDL_Surface *surface, int x
 
     box.x = x;
     box.y = y;
-    SDL_BlitSurface(region_map_fow_surface(region_map), &region_map->pos, surface, &box);
+    surface_blit(region_map_fow_surface(region_map), &region_map->pos, surface, &box);
 }
 
 /**

@@ -11,6 +11,17 @@
 
 #include <global.h>
 
+int64_t setting_get_int(int category, int setting) {
+    (void)category;
+    (void)setting;
+    return ZOOM_FILTER_OFF;
+}
+
+SDL_ScaleMode zoom_filter_to_scale_mode(int zoom_filter) {
+    (void)zoom_filter;
+    return SDL_SCALEMODE_NEAREST;
+}
+
 bool gpu_map_renderer_create(SDL_GPUDevice *device, SDL_Renderer *renderer) {
     (void)device;
     (void)renderer;
@@ -73,10 +84,19 @@ int main(void) {
     gpu_renderer_statistics_t statistics;
 
     HARD_ASSERT(!gpu_renderer_ready());
+    HARD_ASSERT(!gpu_renderer_frame_valid());
     HARD_ASSERT(strcmp(gpu_renderer_backend(), "") == 0);
+    HARD_ASSERT(!gpu_renderer_recreation_take_request());
+    gpu_renderer_recreation_request();
+    gpu_renderer_recreation_request();
+    HARD_ASSERT(gpu_renderer_recreation_take_request());
+    HARD_ASSERT(!gpu_renderer_recreation_take_request());
 
     gpu_renderer_statistics_reset();
     gpu_renderer_statistics_commands(17, 5, 7);
+    gpu_renderer_statistics_upload(4096);
+    gpu_renderer_statistics_resource_create(8192);
+    gpu_renderer_statistics_resource_destroy(8192);
     gpu_renderer_statistics_recovery(true);
     gpu_renderer_statistics_recovery(false);
     uint64_t started = gpu_renderer_timing_begin();
@@ -86,6 +106,12 @@ int main(void) {
     HARD_ASSERT(statistics.commands == 17);
     HARD_ASSERT(statistics.batches == 5);
     HARD_ASSERT(statistics.draws == 7);
+    HARD_ASSERT(statistics.upload_count == 1);
+    HARD_ASSERT(statistics.upload_bytes == 4096);
+    HARD_ASSERT(statistics.resource_creations == 1);
+    HARD_ASSERT(statistics.resource_destructions == 1);
+    HARD_ASSERT(statistics.retained_bytes == 0);
+    HARD_ASSERT(statistics.peak_retained_bytes == 8192);
     HARD_ASSERT(statistics.device_recoveries == 2);
     HARD_ASSERT(statistics.recovery_failures == 1);
     HARD_ASSERT(statistics.fallbacks == 0);

@@ -77,7 +77,7 @@ static void scrollbar_element_render_background(SDL_Surface *surface,
                                                 uint8_t horizontal) {
     (void)elem;
     (void)horizontal;
-    SDL_FillSurfaceRect(surface,
+    surface_fill_rect(surface,
                         box,
                         pixel_format_map_rgb(surface->format,
                                              scrollbar_color_bg.r,
@@ -241,7 +241,7 @@ static void scrollbar_element_render_slider(SDL_Surface *surface,
                                             uint8_t horizontal) {
     (void)horizontal;
 
-    SDL_FillSurfaceRect(surface,
+    surface_fill_rect(surface,
                         box,
                         pixel_format_map_rgb(surface->format,
                                              scrollbar_color_fg.r,

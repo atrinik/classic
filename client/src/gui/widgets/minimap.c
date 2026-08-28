@@ -158,6 +158,10 @@ static void widget_draw(widgetdata *widget) {
             LOG(ERROR, "Could not create minimap widget surface: %s", SDL_GetError());
             return;
         }
+        if (!gpu_renderer_canvas_register(widget->surface)) {
+            LOG(ERROR, "Could not create retained GPU minimap target: %s", SDL_GetError());
+            return;
+        }
         minimap_redraw_flag = 1;
         minimap->dynamic_redraw_ticks = 0;
 
@@ -185,8 +189,8 @@ static void widget_draw(widgetdata *widget) {
 
     if (minimap_redraw_due()) {
         minimap_redraw_flag = 0;
-        SDL_FillSurfaceRect(widget->surface, NULL, 0);
-        SDL_BlitSurface(minimap->textures[MINIMAP_TEXTURE_BG], NULL, widget->surface, NULL);
+        surface_fill_rect(widget->surface, NULL, 0);
+        surface_blit(minimap->textures[MINIMAP_TEXTURE_BG], NULL, widget->surface, NULL);
 
         /* Determine which version of the minimap to show based on the user's
          * preferences. */
@@ -228,7 +232,7 @@ static void widget_draw(widgetdata *widget) {
 
                 surface = region_map_surface(MapData.region_map);
 
-                SDL_BlitSurface(surface, &MapData.region_map->pos, widget->surface, NULL);
+                surface_blit(surface, &MapData.region_map->pos, widget->surface, NULL);
                 region_map_render_fow(MapData.region_map, widget->surface, 0, 0);
                 region_map_render_marker(MapData.region_map, widget->surface, 0, 0);
             } else {
@@ -246,8 +250,8 @@ static void widget_draw(widgetdata *widget) {
                           &tmp);
             }
 
-            SDL_BlitSurface(minimap->textures[MINIMAP_TEXTURE_MASK], NULL, widget->surface, NULL);
-            SDL_BlitSurface(minimap->textures[MINIMAP_TEXTURE_BORDER_ROTATED],
+            surface_blit(minimap->textures[MINIMAP_TEXTURE_MASK], NULL, widget->surface, NULL);
+            surface_blit(minimap->textures[MINIMAP_TEXTURE_BORDER_ROTATED],
                             NULL,
                             widget->surface,
                             NULL);
@@ -275,7 +279,7 @@ static void widget_draw(widgetdata *widget) {
             double zoomy = (double)widget->h / minimap->surface->h *
                            (minimap->surface->h / (MAP_FOW_SIZE + 1.0));
 
-            SDL_FillSurfaceRect(minimap->surface, NULL, 0);
+            surface_fill_rect(minimap->surface, NULL, 0);
             map_draw_map(minimap->surface);
             minimap->dynamic_redraw_ticks = SDL_GetTicks();
 
@@ -293,11 +297,11 @@ static void widget_draw(widgetdata *widget) {
             zoomedbox.y = zoomed->h / 2 - widget->surface->h / 2;
             zoomedbox.w = widget->surface->w;
             zoomedbox.h = widget->surface->h;
-            SDL_BlitSurface(zoomed, &zoomedbox, widget->surface, NULL);
+            surface_blit(zoomed, &zoomedbox, widget->surface, NULL);
             SDL_DestroySurface(zoomed);
 
-            SDL_BlitSurface(minimap->textures[MINIMAP_TEXTURE_MASK], NULL, widget->surface, NULL);
-            SDL_BlitSurface(minimap->textures[MINIMAP_TEXTURE_BORDER], NULL, widget->surface, NULL);
+            surface_blit(minimap->textures[MINIMAP_TEXTURE_MASK], NULL, widget->surface, NULL);
+            surface_blit(minimap->textures[MINIMAP_TEXTURE_BORDER], NULL, widget->surface, NULL);
         }
 
         SDL_SetSurfaceColorKey(widget->surface, true, getpixel(widget->surface, 0, 0));

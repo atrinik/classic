@@ -98,7 +98,7 @@ static void list_handle_enter(list_struct *list, SDL_Event *event) {
  * Dimensions for the row.
  */
 static void list_row_highlight(list_struct *list, SDL_Rect box) {
-    SDL_FillSurfaceRect(list->surface,
+    surface_fill_rect(list->surface,
                         &box,
                         pixel_format_map_rgb(list->surface->format, 0x00, 0x80, 0x00));
 }
@@ -111,7 +111,7 @@ static void list_row_highlight(list_struct *list, SDL_Rect box) {
  * Dimensions for the row.
  */
 static void list_row_selected(list_struct *list, SDL_Rect box) {
-    SDL_FillSurfaceRect(list->surface,
+    surface_fill_rect(list->surface,
                         &box,
                         pixel_format_map_rgb(list->surface->format, 0x00, 0x00, 0xef));
 }

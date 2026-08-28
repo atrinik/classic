@@ -161,7 +161,7 @@ static void widget_draw(widgetdata *widget) {
         box.y = WIDGET_BORDER_SIZE;
         box.w = widget->w - WIDGET_BORDER_SIZE * 2;
         box.h = widget->h - WIDGET_BORDER_SIZE * 2;
-        SDL_FillSurfaceRect(widget->surface,
+        surface_fill_rect(widget->surface,
                             &box,
                             pixel_format_map_rgb(widget->surface->format, 0, 0, 0));
         border_create_texture(widget->surface, &box, thickness, TEXTURE_CLIENT("stat_border"));

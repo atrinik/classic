@@ -54,6 +54,9 @@ popup_struct *popup_create(texture_struct *texture) {
     /* Create the surface used by the popup. */
     popup->surface = SDL_ConvertSurface(texture_surface(popup->texture),
                                         texture_surface(popup->texture)->format);
+    if (popup->surface != NULL && !gpu_renderer_canvas_register(popup->surface)) {
+        LOG(ERROR, "Could not create retained GPU popup target: %s", SDL_GetError());
+    }
     DL_PREPEND(popup_head, popup);
 
     mouse_get_state(&mx, &my);

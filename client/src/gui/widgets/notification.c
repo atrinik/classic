@@ -235,7 +235,7 @@ void socket_command_notification(uint8_t *data, size_t len, size_t pos) {
 
     /* Fill the surface with the background color. */
     if (text_color_parse("e6e796", &color)) {
-        SDL_FillSurfaceRect(cur_widget[NOTIFICATION_ID]->surface,
+        surface_fill_rect(cur_widget[NOTIFICATION_ID]->surface,
                             &box,
                             pixel_format_map_rgb(cur_widget[NOTIFICATION_ID]->surface->format,
                                                  color.r,

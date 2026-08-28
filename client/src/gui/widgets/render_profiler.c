@@ -166,9 +166,20 @@ static double render_profile_rate(const render_profile_snapshot_t *snapshot, uin
     return snapshot->interval_us == 0 ? 0.0 : count * 1000000.0 / snapshot->interval_us;
 }
 
+static double gpu_timing_average_ms(const gpu_renderer_statistics_t *statistics,
+                                    gpu_renderer_timing_stage_t stage) {
+    return statistics->timings[stage].calls == 0
+               ? 0.0
+               : statistics->timings[stage].elapsed_ns / 1000000.0 /
+                     statistics->timings[stage].calls;
+}
+
 static char *render_profiler_widget_text(const render_profile_snapshot_t *snapshot) {
     StringBuffer *sb = stringbuffer_new();
     render_profile_stage_t stage;
+    gpu_renderer_statistics_t gpu_statistics;
+
+    gpu_renderer_statistics_get(&gpu_statistics);
 
     stringbuffer_append_printf(sb,
                                "[c=#ffd060]Render profiler[/c] (last %.2fs)\n"
@@ -183,6 +194,16 @@ static char *render_profiler_widget_text(const render_profile_snapshot_t *snapsh
                                " objects/level %4.2f  paint/draw %4.2f\n"
                                " sort %4.2f  living %4.2f  sprites %4.2f  hints %4.2f\n"
                                " UI/draw %4.2f\n"
+                               "[c=#ffd060]GPU totals[/c]\n"
+                               " commands %" PRIu64 "  batches %" PRIu64 "  draws %" PRIu64 "\n"
+                               " uploads %" PRIu64 " / %.2f MiB\n"
+                               " retained %.2f MiB  peak %.2f MiB\n"
+                               " resources +%" PRIu64 " -%" PRIu64 "\n"
+                               " recoveries %" PRIu64 "  failures %" PRIu64
+                               "  fallbacks %" PRIu64 "\n"
+                               "[c=#ffd060]GPU timing[/c] (average ms)\n"
+                               " command %5.2f  albedo %5.2f  light %5.2f  UI %5.2f\n"
+                               " submit %5.2f  complete %5.2f  present-wait %5.2f\n"
                                "[c=#ffd060]Stage breakdown[/c] (average, calls, rate)\n",
                                snapshot->interval_us / 1000000.0,
                                render_profile_rate(snapshot, snapshot->frames),
@@ -213,7 +234,32 @@ static char *render_profiler_widget_text(const render_profile_snapshot_t *snapsh
                                render_profile_average_ms(snapshot,
                                                          RENDER_PROFILE_MAP_SPRITE_EFFECTS),
                                render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_HINT_REPLAY),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_UI));
+                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_UI),
+                               gpu_statistics.commands,
+                               gpu_statistics.batches,
+                               gpu_statistics.draws,
+                               gpu_statistics.upload_count,
+                               gpu_statistics.upload_bytes / 1048576.0,
+                               gpu_statistics.retained_bytes / 1048576.0,
+                               gpu_statistics.peak_retained_bytes / 1048576.0,
+                               gpu_statistics.resource_creations,
+                               gpu_statistics.resource_destructions,
+                               gpu_statistics.device_recoveries,
+                               gpu_statistics.recovery_failures,
+                               gpu_statistics.fallbacks,
+                               gpu_timing_average_ms(&gpu_statistics,
+                                                     GPU_RENDERER_TIMING_COMMAND_BUILD),
+                               gpu_timing_average_ms(&gpu_statistics,
+                                                     GPU_RENDERER_TIMING_ALBEDO_OWNER),
+                               gpu_timing_average_ms(&gpu_statistics,
+                                                     GPU_RENDERER_TIMING_LIGHT_TONE),
+                               gpu_timing_average_ms(&gpu_statistics, GPU_RENDERER_TIMING_UI),
+                               gpu_timing_average_ms(&gpu_statistics,
+                                                     GPU_RENDERER_TIMING_SUBMISSION),
+                               gpu_timing_average_ms(&gpu_statistics,
+                                                     GPU_RENDERER_TIMING_COMPLETION),
+                               gpu_timing_average_ms(&gpu_statistics,
+                                                     GPU_RENDERER_TIMING_PRESENT_WAIT));
 
     for (stage = 0; stage < RENDER_PROFILE_STAGE_NUM; stage++) {
         render_profile_stage_metadata_t metadata = {0};
@@ -261,7 +307,7 @@ static void widget_draw(widgetdata *widget) {
 
     const render_profile_snapshot_t *snapshot = render_profiler_snapshot();
     text = render_profiler_widget_text(snapshot);
-    SDL_FillSurfaceRect(widget->surface,
+    surface_fill_rect(widget->surface,
                         NULL,
                         pixel_format_map_rgba(widget->surface->format, 0, 0, 0, SDL_ALPHA_OPAQUE));
 

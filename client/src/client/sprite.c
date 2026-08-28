@@ -1011,14 +1011,14 @@ done:
  * Source surface to render.
  */
 void surface_show(SDL_Surface *surface, int x, int y, SDL_Rect *srcrect, SDL_Surface *src) {
-    if (surface == NULL) {
+    if (surface == NULL || (gpu_renderer_ready() && gpu_renderer_canvas_registered(surface))) {
         SDL_FRect destination = {
             .x = (float)x,
             .y = (float)y,
             .w = (float)(srcrect != NULL ? srcrect->w : src->w),
             .h = (float)(srcrect != NULL ? srcrect->h : src->h),
         };
-        if (!gpu_renderer_draw_surface(src, srcrect, &destination)) {
+        if (!gpu_renderer_draw_surface_to(surface, src, srcrect, &destination)) {
             LOG(ERROR, "Could not submit retained GPU surface: %s", SDL_GetError());
         }
         return;
@@ -1026,7 +1026,7 @@ void surface_show(SDL_Surface *surface, int x, int y, SDL_Rect *srcrect, SDL_Sur
     SDL_Rect dstrect;
     dstrect.x = x;
     dstrect.y = y;
-    SDL_BlitSurface(src, srcrect, surface, &dstrect);
+    surface_blit(src, srcrect, surface, &dstrect);
     gpu_renderer_surface_changed(surface);
 }
 
@@ -1280,18 +1280,18 @@ void draw_frame(SDL_Surface *surface, int x, int y, int w, int h) {
     box.y = y;
     box.h = h;
     box.w = 1;
-    SDL_FillSurfaceRect(surface, &box, pixel_format_map_rgb(surface->format, 0x60, 0x60, 0x60));
+    surface_fill_rect(surface, &box, pixel_format_map_rgb(surface->format, 0x60, 0x60, 0x60));
     box.x = x + w;
     box.h++;
-    SDL_FillSurfaceRect(surface, &box, pixel_format_map_rgb(surface->format, 0x55, 0x55, 0x55));
+    surface_fill_rect(surface, &box, pixel_format_map_rgb(surface->format, 0x55, 0x55, 0x55));
     box.x = x;
     box.y += h;
     box.w = w;
     box.h = 1;
-    SDL_FillSurfaceRect(surface, &box, pixel_format_map_rgb(surface->format, 0x60, 0x60, 0x60));
+    surface_fill_rect(surface, &box, pixel_format_map_rgb(surface->format, 0x60, 0x60, 0x60));
     box.x++;
     box.y = y;
-    SDL_FillSurfaceRect(surface, &box, pixel_format_map_rgb(surface->format, 0x55, 0x55, 0x55));
+    surface_fill_rect(surface, &box, pixel_format_map_rgb(surface->format, 0x55, 0x55, 0x55));
 }
 
 /**
@@ -1320,22 +1320,22 @@ void border_create(SDL_Surface *surface, int x, int y, int w, int h, int color, 
     box.y = y;
     box.h = h;
     box.w = size;
-    SDL_FillSurfaceRect(surface, &box, color);
+    surface_fill_rect(surface, &box, color);
 
     /* Right border. */
     box.x = x + w - size;
-    SDL_FillSurfaceRect(surface, &box, color);
+    surface_fill_rect(surface, &box, color);
 
     /* Top border. */
     box.x = x + size;
     box.y = y;
     box.w = w - size * 2;
     box.h = size;
-    SDL_FillSurfaceRect(surface, &box, color);
+    surface_fill_rect(surface, &box, color);
 
     /* Bottom border. */
     box.y = y + h - size;
-    SDL_FillSurfaceRect(surface, &box, color);
+    surface_fill_rect(surface, &box, color);
 }
 
 /**
@@ -1362,7 +1362,7 @@ void border_create_line(SDL_Surface *surface, int x, int y, int w, int h, uint32
     dst.y = y;
     dst.w = w;
     dst.h = h;
-    SDL_FillSurfaceRect(surface, &dst, color);
+    surface_fill_rect(surface, &dst, color);
 }
 
 /**

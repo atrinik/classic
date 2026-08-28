@@ -75,6 +75,9 @@ static void widget_draw(widgetdata *widget) {
                                              0,
                                              0,
                                              0);
+        if (widget->surface != NULL && !gpu_renderer_canvas_register(widget->surface)) {
+            LOG(ERROR, "Could not create retained GPU active-effects target: %s", SDL_GetError());
+        }
         SDL_SetSurfaceColorKey(widget->surface, true, 0);
         SDL_SetSurfaceRLE(widget->surface, true);
     }
@@ -85,7 +88,7 @@ static void widget_draw(widgetdata *widget) {
 
         x = y = 0;
 
-        SDL_FillSurfaceRect(widget->surface, NULL, 0);
+        surface_fill_rect(widget->surface, NULL, 0);
 
         for (status = active_effects_model_rows(); status != NULL; status = status->next) {
             sprite = image_get_sprite(status->face);

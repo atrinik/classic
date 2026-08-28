@@ -41,7 +41,9 @@
 #include <window_title.h>
 #include <toolkit/path.h>
 #include <resources.h>
+#ifdef ATRINIK_WIDGET_TESTS
 #include <player_view.h>
+#endif
 #include <toolkit/signals.h>
 #include <toolkit/colorspace.h>
 #include <toolkit/binreloc.h>
@@ -632,6 +634,44 @@ static bool clioptions_option_reconnect(const char *arg, char **errmsg) {
     return true;
 }
 
+static bool gpu_renderer_recover_frame(unsigned int *attempts, const char *context) {
+    HARD_ASSERT(attempts != NULL);
+    HARD_ASSERT(context != NULL);
+
+    char backend_name[32];
+    char gpu_name[256];
+    char driver[256];
+    snprintf(backend_name, sizeof(backend_name), "%s", gpu_renderer_backend());
+    snprintf(gpu_name, sizeof(gpu_name), "%s", gpu_renderer_device_name());
+    snprintf(driver, sizeof(driver), "%s %s", gpu_renderer_driver_name(),
+             gpu_renderer_driver_version());
+
+    if (*attempts < 1U) {
+        (*attempts)++;
+        if (gpu_renderer_recover(ScreenWindow)) {
+            map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
+            return true;
+        }
+    }
+
+    char message[HUGE_BUF];
+    snprintf(message,
+             sizeof(message),
+             "The GPU renderer could not recover after %s.\n\n"
+             "Backend: %s\nDevice: %s\nDriver: %s\nError: %s",
+             context,
+             backend_name[0] != '\0' ? backend_name : "unavailable",
+             gpu_name[0] != '\0' ? gpu_name : "unavailable",
+             driver[0] != '\0' ? driver : "unavailable",
+             SDL_GetError());
+    LOG(ERROR, "%s", message);
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                             "Atrinik GPU renderer failure",
+                             message,
+                             ScreenWindow);
+    return false;
+}
+
 /**
  * The main function.
  * @param argc
@@ -645,6 +685,7 @@ int main(int argc, char *argv[]) {
     char *path;
     int done = 0, update, frames;
     int old_cursor_x = -1, old_cursor_y = -1;
+    unsigned int gpu_recovery_attempts = 0;
     uint32_t anim_tick, frame_start_time, elapsed_time, fps_limit, last_frame_ticks;
     int fps_limits[] = {30, 60, 120, 0};
 
@@ -666,12 +707,14 @@ int main(int argc, char *argv[]) {
 
     path_fopen = client_fopen_wrapper;
 
+#ifdef ATRINIK_WIDGET_TESTS
     if (argc > 1 &&
         (strcmp(argv[1], "--player-view") == 0 || strcmp(argv[1], "--player-view-benchmark") == 0 ||
          strcmp(argv[1], "--player-view-movement-benchmark") == 0 ||
          strcmp(argv[1], "--player-view-cursor-benchmark") == 0)) {
         return player_view_main(argc - 1, &argv[1]);
     }
+#endif
 
 #ifdef ATRINIK_WIDGET_TESTS
     if (argc == 4 && strcmp(argv[1], "--widget-priority-test") == 0) {
@@ -800,6 +843,11 @@ int main(int argc, char *argv[]) {
         done = Event_PollInputDevice();
         render_profiler_end(RENDER_PROFILE_EVENTS, profile_events_started);
 
+        if (gpu_renderer_recreation_take_request() &&
+            !gpu_renderer_recover_frame(&gpu_recovery_attempts, "a window or display change")) {
+            break;
+        }
+
         uint64_t profile_game_started = render_profiler_begin();
 
         /* Have we been shutdown? */
@@ -888,13 +936,13 @@ int main(int argc, char *argv[]) {
 
         if (update && !gpu_renderer_begin_frame()) {
             LOG(ERROR, "Could not begin GPU frame: %s", SDL_GetError());
-            if (!gpu_renderer_recover(ScreenWindow)) {
-                LOG(ERROR, "GPU renderer recovery failed: %s", SDL_GetError());
+            if (!gpu_renderer_recover_frame(&gpu_recovery_attempts, "beginning a frame")) {
                 break;
             }
-            map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
             continue;
         }
+
+        uint64_t gpu_ui_started = update ? gpu_renderer_timing_begin() : 0;
 
         uint64_t profile_widgets_started = render_profiler_begin();
         if (update) {
@@ -944,6 +992,7 @@ int main(int argc, char *argv[]) {
             old_cursor_y = cursor_y;
         }
         render_profiler_end(RENDER_PROFILE_POINTER, profile_pointer_started);
+        gpu_renderer_timing_end(GPU_RENDERER_TIMING_UI, gpu_ui_started);
 
         uint64_t profile_maintenance_started = render_profiler_begin();
         texture_gc();
@@ -957,6 +1006,11 @@ int main(int argc, char *argv[]) {
             map_benchmark_statistics_present(presented);
             if (!presented) {
                 LOG(ERROR, "Could not present the GPU frame: %s", SDL_GetError());
+                if (!gpu_renderer_recover_frame(&gpu_recovery_attempts, "presenting a frame")) {
+                    done = 1;
+                }
+            } else {
+                gpu_recovery_attempts = 0;
             }
         }
         render_profiler_end(RENDER_PROFILE_PRESENT, profile_present_started);

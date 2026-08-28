@@ -3,6 +3,42 @@
 This design contract applies when changing classic server lighting,
 `draw_client_map2()`, linked-map depth, or structural camera visibility.
 
+## Classic production GPU renderer
+
+The Classic production client has one mandatory GPU renderer. It creates one
+SDL GPU device and uses its GPU-backed 2D renderer for the complete window,
+with raw SDL_GPU passes for the ordered map albedo/owner and integer
+light/tone stages. Supported production backends are Vulkan, Direct3D 12, and
+Metal on hardware devices that provide RGBA8 and R8_UINT render targets. There
+is no window-surface presentation, CPU-completed frame, renderer selection, or
+software fallback.
+
+Decoded faces, immutable effects, glyphs, region maps, minimap output, and
+widget canvases become retained GPU resources. Small compatible sources and
+glyphs share retained atlases; exceptional sources use standalone textures.
+Widget composition targets retained GPU canvases, and the completed window is
+kept in a GPU render target until presentation. An unchanged warm scene must
+create, destroy, or upload no source resources. A screenshot is the only
+ordinary full-frame transfer: it explicitly copies the completed GPU target
+to a download transfer buffer and waits for that transfer's fence before PNG
+encoding. It does not establish a retained CPU framebuffer.
+
+The primary map keeps semantic state in sparse pointer slots and allocates a
+cell only when a validated generation publishes content for that coordinate.
+The GPU albedo pass preserves painter order and writes an exact integer owner;
+the light pass consumes compact Q5.11 vertices and the checked tone/LUT rules.
+It does not allocate viewport-pixel light fields per physical depth. The
+logical setting defaults to 25 and is capped at the existing 28-cell wire
+ceiling; empty state for 28 by 28 across all 13 depths remains below 64 MiB.
+
+Resize, fullscreen, display migration, foreground resume, swapchain failure,
+and submission failure all use the same complete reconstruction path. A
+partial frame is never presented. Recovery gets one attempt; a second failure
+shows backend/device/driver diagnostics and terminates instead of selecting a
+CPU path. The frozen CPU renderer and its image fixtures remain available only
+in test-enabled builds as a conformance oracle and are not linked into the
+production executable.
+
 ## Lighting
 
 ### v1078 radiance contract
@@ -63,8 +99,9 @@ is forbidden because valid peaks 40,960..65,535 require a gain above one.  This
 single rational rounding makes the fixed overflow vectors exact while
 preserving chromaticity. The scalar is encoded independently.
 
-The client caches and interpolates the Q5.11 fields before filtering or tone
-mapping.  It derives one common gain/shoulder from the interpolated scalar,
+The production client retains and interpolates compact Q5.11 map-space
+vertices in the integer GPU light pass before filtering or tone mapping. It
+derives one common gain/shoulder from the interpolated scalar,
 using the existing raw anchors as the neutral display response.  That gain is
 applied to the complete linear RGB vector, followed by a single gamut clamp,
 the inverse LUT, and gamma-aware multiplication with sRGB texture pixels.
@@ -117,12 +154,14 @@ Frame-time comparison uses the release `--player-view-benchmark` harness on
 the same runner for the v1077 base and candidate, with 5 warmups and the median
 of 101 live map draws at 320x240 and 1920x1080; three alternating process
 samples are retained in the CI evidence artifact.
-The widened client raster sample is at most 10 bytes; each linked-depth context
-owns two viewport-sized fields and one row scratch field. Lit-sprite cache
-storage remains capped at 8 MiB per retained depth context. Each entry is
-charged its actual surface pitch times height plus a conservative 512-byte
-entry/surface/allocator allowance, and no context retains more than 8,192
-entries, so tiny sprites cannot bypass the byte cap through metadata overhead.
+The test-only CPU oracle's widened raster sample is at most 10 bytes; each of
+its linked-depth contexts owns two viewport-sized fields and one row scratch
+field. Its lit-sprite cache remains capped at 8 MiB per retained depth context.
+These fields and caches are excluded from the production executable. Each
+oracle cache entry is charged its actual surface pitch times height plus a
+conservative 512-byte entry/surface/allocator allowance, and no context retains
+more than 8,192 entries, so tiny sprites cannot bypass the byte cap through
+metadata overhead.
 
 - `src/server/light.c` propagates source masks as spherical 3D volumes across
   horizontal and `TILED_UP`/`TILED_DOWN` links. Opaque cells stop rays after

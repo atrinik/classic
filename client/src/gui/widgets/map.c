@@ -159,7 +159,48 @@ void map_benchmark_statistics_present(bool success) {
     map_benchmark_statistics.present_failures += !success;
 }
 
+static map_cell_store_t *map_cell_store_create(size_t count);
+static void map_cell_store_destroy(map_cell_store_t *store);
+static MapCell *map_cell_store_slot(map_cell_store_t *store, size_t index, bool create);
+
 #ifdef ATRINIK_WIDGET_TESTS
+bool widget_map_sparse_state_test(void) {
+    const size_t cache_side = 28U * MAP_FOW_SIZE;
+    const size_t slots = cache_side * cache_side;
+    map_cell_store_t *stores[MAP2_LEVELS] = {0};
+    uint64_t saved_allocation_count = map_cell_allocation_count;
+    uint64_t saved_allocation_bytes = map_cell_allocation_bytes;
+    uint64_t saved_retained_bytes = map_cell_retained_bytes;
+    uint64_t saved_peak_retained_bytes = map_cell_peak_retained_bytes;
+
+    bool success = true;
+    for (size_t level = 0; level < MAP2_LEVELS; level++) {
+        stores[level] = map_cell_store_create(slots);
+    }
+    uint64_t empty_bytes = map_cell_retained_bytes - saved_retained_bytes;
+    success = empty_bytes < 64U * 1024U * 1024U;
+
+    for (size_t level = 0; level < MAP2_LEVELS && success; level++) {
+        MapCell *record = map_cell_store_slot(stores[level], level, true);
+        success = record != NULL;
+        if (record != NULL) {
+            record->faces[0] = (uint16_t)(level + 1U);
+        }
+    }
+    uint64_t populated_bytes = map_cell_retained_bytes - saved_retained_bytes;
+    success = success && populated_bytes == empty_bytes + MAP2_LEVELS * sizeof(MapCell);
+
+    for (size_t level = 0; level < MAP2_LEVELS; level++) {
+        map_cell_store_destroy(stores[level]);
+    }
+    success = success && map_cell_retained_bytes == saved_retained_bytes;
+    map_cell_allocation_count = saved_allocation_count;
+    map_cell_allocation_bytes = saved_allocation_bytes;
+    map_cell_retained_bytes = saved_retained_bytes;
+    map_cell_peak_retained_bytes = saved_peak_retained_bytes;
+    return success;
+}
+
 void map_benchmark_fault_configure(map_benchmark_fault_t fault) {
     HARD_ASSERT(fault == MAP_BENCHMARK_FAULT_NONE || fault == MAP_BENCHMARK_FAULT_MUTABLE_RLE);
     map_benchmark_fault_clear();
@@ -4270,7 +4311,7 @@ static void map_render_commands_find_living_occlusion(map_render_context_t *cont
                 ? pixel_format_map_rgba(living->living_occlusion_mask->format, 0, 0, 0, 0)
                 : 0;
         if (living->living_occlusion_mask == NULL ||
-            !SDL_FillSurfaceRect(living->living_occlusion_mask, NULL, transparent)) {
+            !surface_fill_rect(living->living_occlusion_mask, NULL, transparent)) {
             SDL_DestroySurface(living->living_occlusion_mask);
             living->living_occlusion_mask = NULL;
             if (living_geometry != living->source) {
@@ -4953,7 +4994,7 @@ static bool map_animation_base_capture(SDL_Surface *surface) {
         !SDL_SetSurfaceBlendMode(surface, SDL_BLENDMODE_NONE)) {
         return false;
     }
-    bool copied = SDL_BlitSurface(surface, NULL, map_animation_base_surface, NULL);
+    bool copied = surface_blit(surface, NULL, map_animation_base_surface, NULL);
     if (!SDL_SetSurfaceBlendMode(surface, blend_mode)) {
         return false;
     }
@@ -5063,6 +5104,8 @@ void map_draw_map(SDL_Surface *surface) {
         primary_surface && !gpu_primary && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) &&
         lighting_scene_begin(surface->w, surface->h);
 
+    uint64_t gpu_command_build_started =
+        gpu_primary ? gpu_renderer_timing_begin() : 0;
     uint64_t active_levels = 0;
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         uint16_t bit = UINT16_C(1) << MAP2_DEPTH_INDEX(depth);
@@ -5126,6 +5169,8 @@ void map_draw_map(SDL_Surface *surface) {
                         primary_surface,
                         primary_surface ? &map_animation_exit_cues : NULL);
     map_draw_ui(gpu_primary ? NULL : surface, &render_context);
+    gpu_renderer_timing_end(GPU_RENDERER_TIMING_COMMAND_BUILD,
+                            gpu_command_build_started);
     if (gpu_primary && !gpu_renderer_map_end()) {
         map_benchmark_statistics.render_failures++;
         LOG(ERROR, "Could not finish retained GPU map target: %s", SDL_GetError());
@@ -5147,7 +5192,7 @@ bool map_draw_animation(SDL_Surface *surface) {
     }
 
     uint64_t profile_map_started = render_profiler_begin();
-    if (!SDL_BlitSurface(map_animation_base_surface, NULL, surface, NULL)) {
+    if (!surface_blit(map_animation_base_surface, NULL, surface, NULL)) {
         map_benchmark_statistics.render_failures++;
         LOG(ERROR, "Could not restore lit map ground: %s", SDL_GetError());
         render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
@@ -5692,7 +5737,7 @@ static void widget_draw(widgetdata *widget) {
      * ticks restore the cached lit ground and repaint object/UI layers. */
     if (map_redraw_due()) {
         if (!gpu_renderer_ready()) {
-            SDL_FillSurfaceRect(widget->surface, NULL, 0);
+            surface_fill_rect(widget->surface, NULL, 0);
         }
         map_draw_map(widget->surface);
         map_redraw_consume();

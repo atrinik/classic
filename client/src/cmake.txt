@@ -25,7 +25,6 @@ set(SOURCES
 	src/client/keybind_event.c
 	src/client/keybind_input.c
 	src/client/keybind_storage.c
-	src/client/lighting.c
 	src/client/lighting_transfer.c
 	src/client/main.c
 	src/client/network_graph_data.c
@@ -41,7 +40,6 @@ set(SOURCES
 	src/client/packet_payload.c
 	src/client/player.c
 	src/client/player_status.c
-	src/client/player_view.c
 	src/client/region_map.c
 	src/client/rich_presence.c
 	src/client/rich_presence_policy.c
@@ -133,3 +131,11 @@ set(SOURCES
 	src/gui/widgets/textwin_event.c
 	src/gui/widgets/xp_tracker.c
 	${SOURCES_TOOLKIT})
+
+if (BUILD_TESTING AND NOT MINGW)
+	list(APPEND SOURCES
+		src/client/lighting.c
+		src/client/player_view.c)
+else ()
+	list(APPEND SOURCES src/client/gpu_lighting_runtime.c)
+endif ()

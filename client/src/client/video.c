@@ -23,6 +23,10 @@ void video_init(void) {
 
     if (!video_set_size()) {
         LOG(ERROR, "Couldn't create the game window: %s", SDL_GetError());
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                 "Atrinik GPU initialization failed",
+                                 SDL_GetError(),
+                                 ScreenWindow);
         exit(1);
     }
 }
@@ -117,6 +121,7 @@ int video_fullscreen_toggle(SDL_Surface **surface, uint32_t *flags) {
     }
 
     *surface = NULL;
+    gpu_renderer_recreation_request();
 
     if (flags != NULL) {
         *flags = SDL_WINDOW_RESIZABLE;

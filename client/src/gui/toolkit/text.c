@@ -100,6 +100,118 @@ text_render_glyph(TTF_Font *font, const char *glyph, uint64_t flags, SDL_Color c
                               : TTF_RenderText_Blended(font, glyph, 0, color);
 }
 
+typedef struct text_glyph_cache_entry {
+    TTF_Font *font;
+    Uint32 codepoint;
+    int style;
+    uint64_t render_flags;
+    Uint32 color;
+    Uint8 alpha;
+    Uint8 flip;
+    bool strikethrough;
+    bool solid_alpha_conversion;
+    SDL_Surface *surface;
+    struct text_glyph_cache_entry *next;
+} text_glyph_cache_entry_t;
+
+static text_glyph_cache_entry_t *glyph_cache;
+
+static void text_glyph_cache_remove_font(TTF_Font *font) {
+    text_glyph_cache_entry_t **link = &glyph_cache;
+    while (*link != NULL) {
+        text_glyph_cache_entry_t *entry = *link;
+        if (font == NULL || entry->font == font) {
+            *link = entry->next;
+            gpu_renderer_invalidate_surface(entry->surface);
+            SDL_DestroySurface(entry->surface);
+            free(entry);
+            continue;
+        }
+        link = &entry->next;
+    }
+}
+
+static SDL_Surface *text_glyph_cache_get(TTF_Font *font,
+                                         Uint32 codepoint,
+                                         const char *glyph,
+                                         uint64_t flags,
+                                         SDL_Color color,
+                                         Uint8 alpha,
+                                         bool strikethrough,
+                                         Uint8 flip,
+                                         bool solid_alpha_conversion) {
+    Uint32 packed_color = ((Uint32)color.r << 24U) | ((Uint32)color.g << 16U) |
+                          ((Uint32)color.b << 8U) | color.a;
+    int style = TTF_GetFontStyle(font);
+    uint64_t render_flags = flags & TEXT_SOLID;
+    for (text_glyph_cache_entry_t *entry = glyph_cache; entry != NULL; entry = entry->next) {
+        if (entry->font == font && entry->codepoint == codepoint && entry->style == style &&
+            entry->render_flags == render_flags && entry->color == packed_color &&
+            entry->alpha == alpha && entry->strikethrough == strikethrough &&
+            entry->flip == flip && entry->solid_alpha_conversion == solid_alpha_conversion) {
+            return entry->surface;
+        }
+    }
+
+    SDL_Surface *surface = text_render_glyph(font, glyph, flags, color);
+    if (surface == NULL) {
+        return NULL;
+    }
+    if (solid_alpha_conversion && flags & TEXT_SOLID && alpha != SDL_ALPHA_OPAQUE) {
+        SDL_SetSurfaceColorKey(surface, true, 0);
+        SDL_SetSurfaceRLE(surface, true);
+        surface_set_alpha(surface, alpha);
+        SDL_Surface *converted = surface_to_display_alpha(surface);
+        SDL_DestroySurface(surface);
+        surface = converted;
+        if (surface == NULL) {
+            return NULL;
+        }
+    } else if (alpha != SDL_ALPHA_OPAQUE) {
+        surface_set_alpha(surface, alpha);
+    }
+    if (strikethrough) {
+        int font_height = TTF_GetFontHeight(font);
+        lineRGBA(surface,
+                 0,
+                 font_height / 2,
+                 surface->w - 1,
+                 font_height / 2,
+                 color.r,
+                 color.g,
+                 color.b,
+                 SDL_ALPHA_OPAQUE);
+    }
+    if (flip != 0) {
+        SDL_Surface *flipped = zoomSurface(surface,
+                                           flip & TEXT_FLIP_HORIZONTAL ? -1.0 : 1.0,
+                                           flip & TEXT_FLIP_VERTICAL ? -1.0 : 1.0,
+                                           0);
+        SDL_DestroySurface(surface);
+        surface = flipped;
+        if (surface == NULL) {
+            return NULL;
+        }
+    }
+
+    text_glyph_cache_entry_t *entry = xcalloc(1, sizeof(*entry));
+    *entry = (text_glyph_cache_entry_t){
+        .font = font,
+        .codepoint = codepoint,
+        .style = style,
+        .render_flags = render_flags,
+        .color = packed_color,
+        .alpha = alpha,
+        .flip = flip,
+        .strikethrough = strikethrough,
+        .solid_alpha_conversion = solid_alpha_conversion,
+        .surface = surface,
+        .next = glyph_cache,
+    };
+    glyph_cache = entry;
+    return surface;
+}
+
 /**
  * The usable fonts.
  */
@@ -324,6 +436,7 @@ void font_free(font_struct *font) {
     }
 #endif
 
+    text_glyph_cache_remove_font(font->font);
     free(font->name);
     free(font->key);
     TTF_CloseFont(font->font);
@@ -375,6 +488,7 @@ void text_init(void) {
         exit(EXIT_FAILURE);
     }
     fonts = NULL;
+    glyph_cache = NULL;
 
     text_link_color = text_link_color_default;
 }
@@ -400,6 +514,8 @@ void text_deinit(void) {
 
         font_free(font);
     }
+
+    text_glyph_cache_remove_font(NULL);
 
     TTF_Quit();
 }
@@ -1180,26 +1296,26 @@ int text_show_character(font_struct **font,
                 rect.w = 1;
                 rect.h = 3;
                 rect.x = dest->x;
-                SDL_FillSurfaceRect(surface,
+                surface_fill_rect(surface,
                                     &rect,
                                     pixel_format_map_rgb(surface->format, 96, 96, 96));
                 rect.x += box->w;
-                SDL_FillSurfaceRect(surface,
+                surface_fill_rect(surface,
                                     &rect,
                                     pixel_format_map_rgb(surface->format, 96, 96, 96));
 
                 rect.x = dest->x + 1;
                 rect.w = box->w - 1;
                 rect.h = 1;
-                SDL_FillSurfaceRect(surface,
+                surface_fill_rect(surface,
                                     &rect,
                                     pixel_format_map_rgb(surface->format, 96, 96, 96));
                 rect.y++;
-                SDL_FillSurfaceRect(surface,
+                surface_fill_rect(surface,
                                     &rect,
                                     pixel_format_map_rgb(surface->format, 110, 110, 110));
                 rect.y++;
-                SDL_FillSurfaceRect(surface,
+                surface_fill_rect(surface,
                                     &rect,
                                     pixel_format_map_rgb(surface->format, 96, 96, 96));
             }
@@ -1255,7 +1371,7 @@ int text_show_character(font_struct **font,
                     bar_dst.h = box && bar_h == -1 ? box->h : bar_h;
 
                     if (*texture == '#' && text_color_parse(texture, &bar_color)) {
-                        SDL_FillSurfaceRect(surface,
+                        surface_fill_rect(surface,
                                             &bar_dst,
                                             pixel_format_map_rgb(surface->format,
                                                                  bar_color.r,
@@ -1519,11 +1635,11 @@ int text_show_character(font_struct **font,
                             if (tmp_icon == NULL) {
                                 LOG(ERROR, "Could not transform markup icon: %s", SDL_GetError());
                             } else {
-                                SDL_BlitSurface(tmp_icon, &icon_box, surface, &icon_dst);
+                                surface_blit(tmp_icon, &icon_box, surface, &icon_dst);
                                 SDL_DestroySurface(tmp_icon);
                             }
                         } else {
-                            SDL_BlitSurface(icon_surface, &icon_box, surface, &icon_dst);
+                            surface_blit(icon_surface, &icon_box, surface, &icon_dst);
                         }
                     }
                 }
@@ -1860,16 +1976,19 @@ int text_show_character(font_struct **font,
         if (info->outline_show || flags & TEXT_OUTLINE) {
             int outline_x, outline_y;
             SDL_Rect outline_box;
-            SDL_Surface *outline_surface =
-                text_render_glyph((*font)->font, glyph_text, flags, info->outline_color);
+            SDL_Surface *outline_surface = text_glyph_cache_get((*font)->font,
+                                                               codepoint,
+                                                               glyph_text,
+                                                               flags,
+                                                               info->outline_color,
+                                                               info->used_alpha,
+                                                               false,
+                                                               0,
+                                                               false);
 
             if (outline_surface == NULL) {
                 LOG(ERROR, "Could not render text outline: %s", SDL_GetError());
             } else {
-                if (info->used_alpha != 255) {
-                    surface_set_alpha(outline_surface, info->used_alpha);
-                }
-
                 for (outline_x = -1; outline_x < 2; outline_x++) {
                     for (outline_y = -1; outline_y < 2; outline_y++) {
                         if (outline_x == 0 && outline_y == 0) {
@@ -1889,74 +2008,25 @@ int text_show_character(font_struct **font,
                                               0)
                                         : outline_surface->h;
 
-                        SDL_BlitSurface(outline_surface, &srcrect, surface, &outline_box);
+                        surface_blit(outline_surface, &srcrect, surface, &outline_box);
                     }
                 }
-                SDL_DestroySurface(outline_surface);
             }
         }
 
         /* Render the character. */
-        ttf_surface = text_render_glyph((*font)->font, glyph_text, flags, *use_color);
+        ttf_surface = text_glyph_cache_get((*font)->font,
+                                          codepoint,
+                                          glyph_text,
+                                          flags,
+                                          *use_color,
+                                          info->used_alpha,
+                                          info->in_strikethrough,
+                                          info->flip,
+                                          true);
         if (ttf_surface == NULL) {
             LOG(ERROR, "Could not render text glyph: %s", SDL_GetError());
             goto rendered;
-        }
-
-        if (flags & TEXT_SOLID) {
-            /* Opacity. */
-            if (info->used_alpha != 255) {
-                SDL_Surface *new_ttf_surface;
-
-                /* Remove black border. */
-                SDL_SetSurfaceColorKey(ttf_surface, true, 0);
-                SDL_SetSurfaceRLE(ttf_surface, true);
-                /* Set the opacity. */
-                surface_set_alpha(ttf_surface, info->used_alpha);
-                /* Create new surface to blit. */
-                new_ttf_surface = surface_to_display_alpha(ttf_surface);
-                /* Free the old one. */
-                SDL_DestroySurface(ttf_surface);
-                ttf_surface = new_ttf_surface;
-                if (ttf_surface == NULL) {
-                    LOG(ERROR, "Could not convert text glyph: %s", SDL_GetError());
-                    goto rendered;
-                }
-            }
-        } else {
-            if (info->used_alpha != 255) {
-                surface_set_alpha(ttf_surface, info->used_alpha);
-            }
-        }
-
-        if (info->in_strikethrough) {
-            int font_height;
-
-            font_height = TTF_GetFontHeight((*font)->font);
-            lineRGBA(ttf_surface,
-                     0,
-                     font_height / 2,
-                     ttf_surface->w - 1,
-                     font_height / 2,
-                     use_color->r,
-                     use_color->g,
-                     use_color->b,
-                     255);
-        }
-
-        if (info->flip) {
-            SDL_Surface *ttf_surface_orig;
-
-            ttf_surface_orig = ttf_surface;
-            ttf_surface = zoomSurface(ttf_surface_orig,
-                                      info->flip & TEXT_FLIP_HORIZONTAL ? -1.0 : 1.0,
-                                      info->flip & TEXT_FLIP_VERTICAL ? -1.0 : 1.0,
-                                      0);
-            SDL_DestroySurface(ttf_surface_orig);
-            if (ttf_surface == NULL) {
-                LOG(ERROR, "Could not flip text glyph: %s", SDL_GetError());
-                goto rendered;
-            }
         }
 
         /* Output the rendered character to the screen and free the
@@ -1970,8 +2040,7 @@ int text_show_character(font_struct **font,
                         ? MAX(MIN(box->h - (dstrect.y - info->start_y), ttf_surface->h), 0)
                         : ttf_surface->h;
 
-        SDL_BlitSurface(ttf_surface, &srcrect, surface, &dstrect);
-        SDL_DestroySurface(ttf_surface);
+        surface_blit(ttf_surface, &srcrect, surface, &dstrect);
     }
 
 rendered:
@@ -2098,7 +2167,7 @@ int glyph_get_height(font_struct *font, char c) {
                                                          &x_adjust,                  \
                                                          &info);                     \
                 if (selected_bytes == 1 || (unsigned char)*cp >= 0x80) {             \
-                    SDL_FillSurfaceRect(surface, &selection_box, -1);                \
+                    surface_fill_rect(surface, &selection_box, -1);                \
                                                                                      \
                     select_color_orig = color;                                       \
                     color.r = color.g = color.b = 0;                                 \
