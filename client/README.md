@@ -306,6 +306,19 @@
  backend, hardware tier, and the recorded output-pixel display mode; changing a
  runner's display mode therefore requires a fresh human-reviewed golden.
 
+ An unmerged candidate cannot dispatch a newly added standalone workflow
+ through GitHub's default-branch workflow registry. Before this qualification
+ workflow reaches the default branch, dispatch the existing `Check` workflow
+ at the exact candidate ref with `gpu_qualification=true`; its reusable
+ qualification job executes the same six backend/hardware-tier rows from that
+ ref. For example:
+
+     gh workflow run check.yml --ref CANDIDATE_REF -f gpu_qualification=true
+
+ After the standalone workflow exists on the default branch, it may also be
+ dispatched directly at an exact candidate ref. In both cases, preserve every
+ uploaded JSONL and PNG artifact for human review before approving goldens.
+
  Every production fixture pins the shared widget defaults and saved layout.
  The collection also includes `gpu-ui-closure.xml`; its named state sweep
  covers the intro server browser, the ready account/password login form,

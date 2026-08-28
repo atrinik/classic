@@ -10,6 +10,12 @@ on:
       - main
   merge_group:
   workflow_dispatch:
+    inputs:
+      gpu_qualification:
+        description: Run the qualified GPU renderer matrix on the selected ref
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -25,6 +31,13 @@ env:
   CLASSIC_LINUX_CCACHE_EPOCH: "1"
 
 jobs:
+  gpu-qualification:
+    name: GPU renderer qualification
+    if: github.event_name == 'workflow_dispatch' && inputs.gpu_qualification
+    permissions:
+      contents: read
+    uses: ./.github/workflows/gpu-qualification.yml
+
   changes:
     name: Change classification
     runs-on: ubuntu-24.04
