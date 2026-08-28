@@ -50,13 +50,13 @@ void server_settings_test_init(void) {
     }
     for (size_t index = 0; index < arraysize(s_settings->protection_groups); index++) {
         char value[32];
-        snprintf(VS(value), "Protection group %zu", index + 1U);
+        snprintf(VS(value), "Protection group %" PRIu64, (uint64_t)(index + 1U));
         s_settings->protection_groups[index] = xstrdup(value);
     }
     for (size_t index = 0; index < arraysize(s_settings->protection_letters); index++) {
         s_settings->protection_letters[index] = xstrdup("PR");
         char value[32];
-        snprintf(VS(value), "Protection %zu", index + 1U);
+        snprintf(VS(value), "Protection %" PRIu64, (uint64_t)(index + 1U));
         s_settings->protection_full[index] = xstrdup(value);
     }
     for (size_t index = 0; index < arraysize(s_settings->spell_paths); index++) {
