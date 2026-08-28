@@ -1969,8 +1969,8 @@ int text_show_character(font_struct **font,
                         if (state == SDL_BUTTON_MASK(SDL_BUTTON_LEFT) &&
                             (!selection_start || !selection_end || *selection_start == -1 ||
                              *selection_end == -1) &&
-                            (!ticks || SDL_GetTicks() - ticks > 125)) {
-                            ticks = SDL_GetTicks();
+                            (!ticks || client_ui_ticks() - ticks > 125)) {
+                            ticks = client_ui_ticks();
                             text_anchor_execute(info, NULL);
                         } else {
                             cursor_texture = texture_get(TEXTURE_TYPE_CLIENT, "cursor_pointer");

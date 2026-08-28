@@ -33,8 +33,9 @@
  exactly WAV, STBVORBIS, OPUS, VOC, AIFF, AU, DRMP3, SINEWAVE, and RAW; MIDI and
  module decoders are deliberately absent. Sound effects and music are required
  on every supported platform. The production client requires a hardware GPU
- supported by SDL_GPU through Vulkan, Direct3D 12, or Metal, including RGBA8,
- R32_UINT, and RGBA16_UINT array render-target support. There is no software renderer or fallback;
+ supported by SDL_GPU through Vulkan, Direct3D 12, or Metal, including RGBA8
+ and R32_UINT render-target support plus fragment storage buffers. There is no
+ software renderer or fallback;
  startup reports the selected backend, device, and driver failure and exits if
  the required GPU contract is unavailable.
 
@@ -244,10 +245,14 @@
 =================================================
 
  The files under `src/tests/fixtures/player_view/` preserve the immutable MAP,
- asset, ordering, and pixel evidence captured before the software renderer was
- removed. They are inputs for schema checks and qualified GPU conformance jobs;
- no client executable contains the former CPU renderer or `--player-view*`
- command family.
+ asset, ordering, settings, and pixel evidence captured before the software
+ renderer was removed. Test builds expose `--gpu-player-view MANIFEST`, which
+ verifies those inputs and feeds them through the normal MAP/MAP2 decoder,
+ `map_draw_map()`, production GPU composition, presentation fence, and explicit
+ final-frame readback. The deleted CPU renderer and former `--player-view*`
+ software command family are not linked. Movement manifests additionally replay
+ the frozen closed MAP2 stream and an A-to-B-to-A map lifecycle; the returned A
+ checkpoint must be byte-identical to the initial completed GPU frame.
 
  GPU correctness and performance evidence must come from fenced production-path
  runs on qualified Vulkan, Direct3D 12, and Metal hardware. Those runs record
@@ -256,6 +261,72 @@
  and allocation counts, retained bytes, recovery events, and final readback
  checkpoints. A software or CPU-emulated GPU may supplement conformance testing
  but never satisfies release performance qualification.
+
+ Configure a Release test build, then run `--gpu-player-view-benchmark MANIFEST
+ WORKLOAD` from the client data directory. Set `ATRINIK_GPU_CONFORMANCE_OUTPUT`
+ to the destination JSONL artifact and `ATRINIK_GPU_CONFORMANCE_DRIVER` to the
+ backend under test. Controlled runners on the documented reference or
+ minimum-supported GPU additionally set
+ `ATRINIK_GPU_CONFORMANCE_QUALIFIED_HARDWARE=1` and
+ `ATRINIK_GPU_CONFORMANCE_HARDWARE_TIER=reference|minimum`. This entry point
+ uses the production widget, popup, tooltip, minimap, map, and presentation
+ path; backend-native attestation, not the environment request, establishes
+ hardware qualification. It rejects dirty builds and unknown revision
+ identity. Run every workload row three times in a fresh process. Each record
+ contains raw frame windows and separate stage, cold-upload, steady-state
+ churn, retained-resource, and changing animation checkpoints. Upload evidence
+ attributes immutable source textures, changed painter instances, compact
+ light data, and per-batch stable-slot uniforms independently. Static plateaus
+ require the first three classes to remain zero and bound slot uniforms to one
+ 16 to 1024-byte push per world batch; animation rows additionally permit only
+ bounded changed-instance deltas.
+
+ The client deliberately uses a 1:1 logical-to-output-pixel window contract.
+ High-density backing stores are not requested: one SDL window coordinate is
+ one renderer output pixel, which preserves nearest-neighbor pixel-art sampling
+ and makes fixture, screenshot, fullscreen, and benchmark coordinates
+ identical. Qualification rejects a workload when the queried logical window
+ or renderer output size differs from its declared pixel dimensions.
+
+ Run `--gpu-player-view-lifecycle
+ src/tests/fixtures/player_view/brynknot-movement.xml` with
+ `ATRINIK_GPU_CONFORMANCE_LIFECYCLE_OUTPUT` set to record production-path cold
+ upload, resize/restore, teleport, reconnect state cleanup, foreground resume, fullscreen,
+ display migration, swapchain recreation, device loss, and screenshot
+ readback. Each action records its own elapsed time, uploads, resource churn,
+ and bounded recovery result before the statistics reset for 40 fenced
+ complete-client frames. Lifecycle mode uses a visible headful window and real
+ SDL window transitions; hidden windows remain confined to fixture and
+ benchmark collection. Every event is followed by those 40 frames and
+ must return to the applicable steady-state row budget without source, light,
+ or instance upload, readback, fallback, or resource churn; slot uniforms stay
+ within the same per-world-batch bound. The manual `GPU qualification`
+ workflow runs and validates both contracts for Vulkan, Direct3D 12, and Metal
+ on reference and minimum hardware tiers. Fullscreen approval is keyed by GPU
+ backend, hardware tier, and the recorded output-pixel display mode; changing a
+ runner's display mode therefore requires a fresh human-reviewed golden.
+
+ Every production fixture pins the shared widget defaults and saved layout.
+ The collection also includes `gpu-ui-closure.xml`; its named state sweep
+ covers the intro server browser, the ready account/password login form,
+ gameplay widgets and text, overlays,
+ popup families (character selection, settings, color picker, connection and
+ credential modals, credits, book, painting, and region map), region-map/minimap
+ FOW updates, and both player screenshot
+ commands. Screenshot copies are enqueued asynchronously and completed by
+ later event-loop fence polling; synchronous readback is reserved for the
+ qualification checkpoint helper. Qualification writes hash-bound PNG review
+ artifacts for the initial/final frames, every UI state, and every lifecycle
+ event; the verifier rehashes them and validates their PNG dimensions before
+ the workflow uploads them for human approval. `--collect-lifecycle` checks the
+ complete structural artifact without consuming the pixel contract;
+ `--lifecycle` is the later closure gate that requires human-approved goldens.
+
+ Map records carry stable sparse-cell identities and semantic draw variants.
+ Each primary or auxiliary target retains its own command snapshot and instance
+ buffer, compares the next painter stream by identity, and uploads only changed
+ contiguous instance ranges. Queued commands retain their source asset through
+ submission, including when a surface cache entry is invalidated or evicted.
 
 =================================================
 = 3.1. Licensing (Atrinik client)               =

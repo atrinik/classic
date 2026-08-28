@@ -9,9 +9,9 @@ The Classic production client has one mandatory GPU renderer. It creates one
 SDL GPU device and uses its GPU-backed 2D renderer for the complete window,
 with raw SDL_GPU passes for the ordered map albedo/owner and integer
 light/tone stages. Supported production backends are Vulkan, Direct3D 12, and
-Metal on hardware devices that provide RGBA8, R32_UINT, and RGBA16_UINT array render targets. There
-is no window-surface presentation, CPU-completed frame, renderer selection, or
-software fallback.
+Metal on hardware devices that provide RGBA8 and R32_UINT render targets plus
+fragment storage buffers. There is no window-surface presentation,
+CPU-completed frame, renderer selection, or software fallback.
 
 Decoded faces, immutable effects, glyphs, region maps, minimap output, and
 widget canvases become retained GPU resources. Small compatible sources and
@@ -25,9 +25,10 @@ encoding. It does not establish a retained CPU framebuffer.
 
 The primary map keeps semantic state in sparse pointer slots and allocates a
 cell only when a validated generation publishes content for that coordinate.
-The GPU albedo pass preserves painter order and writes an exact integer owner;
-the light pass consumes compact Q5.11 vertices and the checked tone/LUT rules.
-It does not allocate viewport-pixel light fields per physical depth. The
+The GPU albedo pass preserves painter order and writes an exact integer owner
+and compact-light index; the final pass consumes compact Q5.11 quad vertices
+directly with the checked tone/LUT rules. It does not allocate viewport-pixel
+light fields per physical depth. The
 logical setting defaults to 25 and is capped at the existing 28-cell wire
 ceiling; empty state for 28 by 28 across all 13 depths remains below 64 MiB.
 
@@ -2076,10 +2077,12 @@ Color-key pixels remain transparent and write no owner. True alpha and surface
 alpha modulate the final albedo contribution; they do not discard the owner
 metadata of a partially transparent surface unless the existing painter marks
 the span transparent. Outlines and glows use the same owner/light result as
-their source sprite. UI annotations are unlit. A lock, texture, allocation,
-surface, or output failure discards the partial frame and presents the existing
-deterministic readable fallback; it never displays a partially composed or
-previous-map frame.
+their source sprite. UI annotations are unlit. A texture, allocation, shader,
+target, submission, swapchain, device, or output failure discards the partial
+frame, stops presentation, and performs at most one complete GPU
+device/resource reconstruction followed by a complete scene republish. It
+never displays a partially composed, stale, or previous-map frame and never
+selects a software fallback.
 
 For viewport pixel count `N = width * height`, active physical depths `D` are
 bounded by `MAP2_LEVELS` and the configured viewport limit. Retained buffers
@@ -2087,21 +2090,26 @@ must satisfy these hard formulas, including pitch and allocator overhead:
 
 | Resource | Bound |
 | --- | --- |
-| Albedo/output surface | one `N`-pixel surface each; no per-sprite lit surface |
-| Owner/elevation metadata | at most one record per output pixel plus one bounded row scratch buffer |
-| Interpolated scalar/RGB field | at most one field per active physical depth and one translation scratch field |
+| Albedo target | one RGBA8 `N`-pixel GPU texture |
+| Owner/sample target | one R32_UINT `N`-pixel GPU texture |
+| Final map target | one RGBA8 `N`-pixel GPU texture |
+| Compact scalar/RGB light data | one record per projected populated light cell; record-count proportional and never `N * D` |
+| Compact spatial lookup | one coarse viewport bucket table plus bounded quad/bucket overlaps |
 | Static transformed/effect cache | existing explicit byte/entry cap; no uncapped fallback cache |
 | Live records | at most the bounded MAP2 command/object count for the active generation |
+| Painter submission | retained primary/auxiliary command arrays plus one persistent, cycled GPU instance stream; only adjacent equal texture/scissor state is batched |
 | Retained physical depths | `D <= MAP2_LEVELS == 2 * MAP2_MAX_DEPTH + 1` |
-| Compositions | exactly one complete primary-field composition for a complete primary draw |
+| Compositions | one ordered albedo/owner pass and one final integer light/tone pass per complete primary draw |
 
-The implementation must expose counters for whole-field compositions, processed
-pixels/spans, dirty area, field builds/translations/reuses, owner writes,
-per-visible-sprite lit-surface constructions, allocations, lock failures,
-fallbacks, live records, fade redraws, and retained bytes. A complete primary
-draw has exactly one whole-field composition and zero per-visible-sprite
-lit-surface constructions. Idle after fades and timed buckets settle has zero
-visibility, field, shadow, and map reconstruction work.
+The implementation exposes GPU counters for command construction,
+batches/draws, source and compact-light uploads, resource creation/destruction,
+albedo/owner work, final light/tone work, UI, submission, fenced completion,
+present wait, retained bytes, recovery, and fallbacks. After warmup an unchanged
+scene has no source/effect upload or resource churn. Idle after fades and timed
+buckets settle has no visibility, shadow, or map-state reconstruction work.
+Player screenshots enqueue a completed-frame GPU copy and return immediately;
+the client polls its fence on later iterations before PNG encoding. Synchronous
+readback exists only for explicit conformance checkpoints.
 
 ### Optional shadows and dependency gates
 

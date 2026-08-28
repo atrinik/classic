@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -49,6 +49,9 @@ typedef struct resource {
     asset_source_t *source;
 
     bool loaded : 1;
+#ifdef ATRINIK_WIDGET_TESTS
+    char *fixture_path;
+#endif
 } resource_t;
 
 /* Function prototypes */
@@ -60,5 +63,9 @@ resource_t *resources_find(const char *name);
 resource_t *resources_find_by_md(const unsigned char *md);
 void socket_command_resource(uint8_t *data, size_t len, size_t pos);
 bool resources_is_ready(resource_t *resource);
+char *resources_file_path(const resource_t *resource, char *path, size_t path_size);
+#ifdef ATRINIK_WIDGET_TESTS
+bool resources_test_bind_loaded_file(const char *name, const char *path);
+#endif
 
 #endif

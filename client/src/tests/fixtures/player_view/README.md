@@ -9,6 +9,38 @@ ordinary and stretched terrain, a multipart sprite, a protocol animation,
 fog, roof/cutaway data, smooth and discrete lighting, and physical depths
 zero, +1, and +2.
 
+The generated `gpu-qualification-town-25x25` snapshot supplies seven active
+depths, nearly three thousand ordered sprite layers, mixed owner depths,
+roof/door/exit/FOW and transform semantics, plus exactly 64 animated live
+actors through the normal MAP2 decoder. Its zero expected hash is an explicit
+pending-hardware marker: qualified runs record `golden_verified:false` until
+reviewers approve and pin the cross-backend rendering contract.
+
+Every GPU manifest pins the shared `data/interface.cfg` defaults and
+`gpu-interface.cfg` saved layout in addition to its scene inputs. The
+`gpu-ui-closure` manifest runs a named nineteen-state production-screen sweep
+over the same renderer. It separately warms and checkpoints the intro server
+browser, ready account/password login form, character selection, populated
+gameplay widgets and text windows, a context menu, tooltip, opaque and fading
+notification, generic input controls, book, settings, color picker, connection
+preference, join-password, credits, painting and region-map popups, the
+minimap, an observable zoomed region-map FOW update followed by an unchanged
+retained frame, and the real `/screenshot` and `/screenshot map` commands.
+Every non-readback state requires zero source upload, fallback, and
+resource creation/destruction after warmup. Blink and notification-fade clocks
+are frozen by the fixture, while inventory, party-list, text-window,
+music-player, and render-profiler models are populated deterministically. The
+fixture disables the normal user-data hierarchy, so no account, buddy, media,
+or blacklist state is read or written. The screenshot states require one
+asynchronously enqueued completed-frame readback with exact dimensions. The
+map screenshot must equal the exact centered 75%-viewport rectangle of the
+immediately preceding window screenshot, including its nonzero crop origin.
+Their named backend hashes are part of the human-approved GPU golden contract.
+The display-dependent fullscreen checkpoint is nested under
+`fullscreen.<hardware-tier>.<pixel-width>x<pixel-height>` so reference and
+minimum runners approve the exact 1:1 logical/output pixel mode they actually
+exercised.
+
 The separate player-sub-layer fixture leaves a positive-depth roof cell
 without floor geometry and gives only its canonical object sub-layer a light
 sample. It guards against shading such roofs with an unrelated empty player
@@ -49,16 +81,15 @@ checkpoints remain deterministic. The captured movement evidence cleared its
 offscreen frame target before every map draw, matching the retired reference
 compositor's per-frame contract; historical frame timing therefore includes
 that clear and the full primary map draw. It also rendered the map core into the production
-1700-by-1200 local-minimap surface whenever the real 250-millisecond
-dynamic-minimap cadence is due. Retaining the production surface extent keeps
-every supported zoom, widget size, scale mode, centered crop, mask, and border
-on the existing display path; the performance change is the bounded redraw
-cadence rather than a change to the visible world footprint. Main-map and
-local-minimap calls and timings remain separate, while the complete
-update-frame work measurement includes both. Current GPU qualification reuses
-the pinned inputs and compares explicit fenced readbacks on supported hardware;
-the historical executable oracle is no longer built. Minimap zoom/masking and
-the remaining UI/widget work were outside this map-focused measurement.
+1700-by-1200 local-minimap view whenever the real 250-millisecond dynamic
+minimap cadence is due. The current renderer builds that auxiliary world into
+its retained GPU map target and applies the centered crop, scale, mask, and
+border in the GPU widget path; it does not paint or scale a CPU minimap image.
+Main-map and local-minimap calls and timings remain separate, while the fenced
+complete-client frame includes the production widget tree, popup/tooltip
+layers, and both map views. Current GPU qualification reuses the pinned inputs
+and compares explicit readbacks on supported hardware; the historical
+executable oracle is no longer built.
 
 The `brynknot-movement` manifest is the roof-heavy companion workload for
 dense Brynknot-style movement. It uses the same sanitized 17-by-17 MAP2
@@ -70,8 +101,9 @@ snapshot with `generate_movement_five_depth.py --roof-heavy`; the manifest's
 deterministic simulated receive/apply timestamps. Those timestamps document
 queue ordering and application timing only; they are not character-speed
 measurements. The manifest is archival input for the qualified GPU conformance
-harness; the former `--player-view-movement-benchmark` executable path no
-longer exists.
+harness. Test builds replay ordinary immutable MAP/MAP2 snapshots through
+`--gpu-player-view`; the former CPU `--player-view-movement-benchmark`
+executable path no longer exists.
 
 The `dense-cursor` manifests reuse the frozen five-depth roof stack as a
 Brynknot-style dense multi-depth fixture. The cursor replay records stationary,
@@ -115,8 +147,11 @@ The process then records resize, restored-size, reset, and the distinct map
 transition checkpoints and repeats the complete replay in the same process. A
 fresh-process verifier runs the selected viewport twice.
 
-`expected-standard-checkpoint-sha256` pins the ordered visual lifecycle for the
-standard viewport. The digest is SHA-256 over the ASCII prefix
+`expected-standard-checkpoint-sha256` identifies the archived software
+renderer's ordered visual lifecycle for the standard viewport. GPU evidence
+records and cohorts this immutable identity, while the separately
+human-approved per-backend exact-RGBA8 contract governs completed GPU frames.
+The archived digest is SHA-256 over the ASCII prefix
 `pvm-checkpoints-v1\n`, followed by one line per checkpoint in replay order:
 `name<TAB>pixels-sha256<TAB>map-x<TAB>map-y<TAB>viewport-width<TAB>viewport-height<NL>`.
 Internal state digests are deliberately excluded, so implementation-only state
@@ -247,6 +282,7 @@ linked depths are rejected before replay.
 `expected-pixels-sha256` and the widget scene's
 `expected-ui-pixels-sha256` hash the viewport width and height as big-endian
 32-bit integers followed by canonical RGBA bytes in row-major order. Except for
-the explicit non-primary regression scene, these are pixel-exact references
-from the same primary software map surface that `/screenshot map` saves; PNG
-encoder metadata is deliberately excluded.
+the explicit non-primary regression scene, these are pixel-exact references for
+the completed map output. `/screenshot map` asynchronously enqueues an explicit
+GPU readback of that map-widget rectangle and polls its fence on later client
+iterations; PNG encoder metadata is deliberately excluded.

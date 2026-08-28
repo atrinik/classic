@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -61,6 +61,17 @@ static button_struct button_play, button_refresh, button_server, button_settings
 
 /** The news list. */
 static list_struct *list_news = NULL;
+#ifdef ATRINIK_WIDGET_TESTS
+static bool intro_test_mode;
+
+void intro_test_begin(void) {
+    intro_test_mode = true;
+    eyes_blink_ticks = 0;
+    eyes_draw = 1;
+}
+#else
+#define intro_test_mode false
+#endif
 /** The servers list. */
 static list_struct *list_servers = NULL;
 
@@ -159,6 +170,9 @@ void intro_deinit(void) {
 
     list_remove(list_news);
     list_news = NULL;
+#ifdef ATRINIK_WIDGET_TESTS
+    intro_test_mode = false;
+#endif
 }
 
 /**
@@ -188,8 +202,9 @@ void intro_show(void) {
     /* Calculate whether to show the eyes or not. Blinks every
      * EYES_BLINK_TIME ticks, then waits EYES_BLINK_DELAY ticks until
      * showing the eyes again. */
-    if (SDL_GetTicks() - eyes_blink_ticks >= (eyes_draw ? EYES_BLINK_TIME : EYES_BLINK_DELAY)) {
-        eyes_blink_ticks = SDL_GetTicks();
+    if (!intro_test_mode &&
+        client_ui_ticks() - eyes_blink_ticks >= (eyes_draw ? EYES_BLINK_TIME : EYES_BLINK_DELAY)) {
+        eyes_blink_ticks = client_ui_ticks();
         eyes_draw++;
     }
 
@@ -361,9 +376,14 @@ void intro_show(void) {
     /* No list yet, make one and start downloading the data. */
     if (!list_news) {
         /* Start downloading. */
-        news_request =
-            curl_request_create(clioption_settings.game_news_url, CURL_PKEY_TRUST_ULTIMATE);
-        curl_request_start_get(news_request);
+#ifdef ATRINIK_WIDGET_TESTS
+        if (!intro_test_mode)
+#endif
+        {
+            news_request =
+                curl_request_create(clioption_settings.game_news_url, CURL_PKEY_TRUST_ULTIMATE);
+            curl_request_start_get(news_request);
+        }
 
         list_news = list_create(18, 1, 8);
         list_news->focus = 0;

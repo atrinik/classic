@@ -1,12 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Sanitized, generated Brynknot-style roof-heavy movement workload. -->
 <player-view version="1"
-             renderer="software"
+             renderer="gpu"
              input-root="../../../.."
-             settings="data/settings.txt"
+             settings="src/tests/fixtures/player_view/settings.txt"
              settings-sha256="c2f0eaf25a8a7f0f0fb453722fb8ad7bf7eacba95e3e57b6ea8ff25e888f5ad6"
              archdef="data/archdef.dat"
              archdef-sha256="977ce63e38f4795545f42bd2f4a9c62bd38fcdb4cfde7cb7fe3c2cd9fe73983e"
+             interface="data/interface.cfg"
+             interface-sha256="cb3bccde141390f8e016a988f1c3b8c13fcf72f54d0e1ef4305cd7716f0a2302"
+             layout="src/tests/fixtures/player_view/gpu-interface.cfg"
+             layout-sha256="8f2fc77fead14655d039c9cd7e52c6767e942603eb06646f427f87d25cb8a3d2"
              snapshot="src/tests/fixtures/player_view/brynknot-movement-five-depth.map2.hex"
              snapshot-sha256="9c8b969183be2932cbead2104941083cbe9ecc5950a92092c81c16a087e91ac9"
              next-snapshot="src/tests/fixtures/player_view/brynknot-movement-delta.map2.hex"

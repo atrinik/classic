@@ -46,7 +46,7 @@ int video_get_bpp(void) {
     return 32;
 }
 
-static void video_get_output_size(int *width, int *height) {
+static void video_get_logical_size(int *width, int *height) {
     HARD_ASSERT(width != NULL);
     HARD_ASSERT(height != NULL);
     if (OfflineRenderSurface != NULL) {
@@ -54,7 +54,7 @@ static void video_get_output_size(int *width, int *height) {
         *height = OfflineRenderSurface->h;
         return;
     }
-    if (!gpu_renderer_output_size(width, height)) {
+    if (ScreenWindow == NULL || !SDL_GetWindowSize(ScreenWindow, width, height)) {
         *width = setting_get_int(OPT_CAT_CLIENT, OPT_RESOLUTION_X);
         *height = setting_get_int(OPT_CAT_CLIENT, OPT_RESOLUTION_Y);
     }
@@ -62,13 +62,13 @@ static void video_get_output_size(int *width, int *height) {
 
 int video_get_width(void) {
     int width, height;
-    video_get_output_size(&width, &height);
+    video_get_logical_size(&width, &height);
     return width;
 }
 
 int video_get_height(void) {
     int width, height;
-    video_get_output_size(&width, &height);
+    video_get_logical_size(&width, &height);
     return height;
 }
 
@@ -104,6 +104,9 @@ int video_set_size(void) {
 }
 
 uint32_t get_video_flags(void) {
+    /* The client deliberately uses a 1:1 logical-to-output pixel contract.
+     * Pixel-art layout, mouse input, map targets, and screenshot rectangles
+     * therefore share one coordinate space on every platform. */
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
 
     if (setting_get_int(OPT_CAT_CLIENT, OPT_FULLSCREEN)) {

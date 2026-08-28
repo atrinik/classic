@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -56,13 +56,9 @@ static void list_draw_frame(list_struct *list) {
  */
 static void list_row_color(list_struct *list, int row, SDL_Rect box) {
     if (row & 1) {
-        surface_fill_rect(list->surface,
-                            &box,
-                            pixel_format_map_rgb(list->surface->format, 0x55, 0x55, 0x55));
+        surface_fill_rect(list->surface, &box, surface_map_rgb(list->surface, 0x55, 0x55, 0x55));
     } else {
-        surface_fill_rect(list->surface,
-                            &box,
-                            pixel_format_map_rgb(list->surface->format, 0x45, 0x45, 0x45));
+        surface_fill_rect(list->surface, &box, surface_map_rgb(list->surface, 0x45, 0x45, 0x45));
     }
 }
 
@@ -74,9 +70,7 @@ static void list_row_color(list_struct *list, int row, SDL_Rect box) {
  * Contains base x/y/width/height information to use.
  */
 static void list_row_highlight(list_struct *list, SDL_Rect box) {
-    surface_fill_rect(list->surface,
-                        &box,
-                        pixel_format_map_rgb(list->surface->format, 0x00, 0x80, 0x00));
+    surface_fill_rect(list->surface, &box, surface_map_rgb(list->surface, 0x00, 0x80, 0x00));
 }
 
 /**
@@ -87,9 +81,7 @@ static void list_row_highlight(list_struct *list, SDL_Rect box) {
  * Contains base x/y/width/height information to use.
  */
 static void list_row_selected(list_struct *list, SDL_Rect box) {
-    surface_fill_rect(list->surface,
-                        &box,
-                        pixel_format_map_rgb(list->surface->format, 0x00, 0x00, 0xef));
+    surface_fill_rect(list->surface, &box, surface_map_rgb(list->surface, 0x00, 0x00, 0xef));
 }
 
 /**
@@ -765,7 +757,7 @@ int list_handle_mouse(list_struct *list, SDL_Event *event) {
         if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN && event->button.button == SDL_BUTTON_LEFT) {
             /* See if we clicked on this row earlier, and whether this
              * should be considered a double click. */
-            if (SDL_GetTicks() - list->click_tick < DOUBLE_CLICK_DELAY) {
+            if (client_ui_ticks() - list->click_tick < DOUBLE_CLICK_DELAY) {
                 /* Double click, handle it as if enter was used. */
                 if (list->handle_enter_func) {
                     list->handle_enter_func(list, event);
@@ -780,7 +772,7 @@ int list_handle_mouse(list_struct *list, SDL_Event *event) {
                 /* Update selected row and click ticks for above
                  * double click calculation. */
                 list->row_selected = row + 1;
-                list->click_tick = SDL_GetTicks();
+                list->click_tick = client_ui_ticks();
             }
         } else {
             /* Not a mouse click, so update highlighted row. */

@@ -157,6 +157,12 @@ void popup_render(popup_struct *popup) {
     SDL_Rect box;
 
     if (!popup->disable_texture_drawing) {
+        /* Popup chrome contains translucent edge pixels. Rebuilding it over the
+         * previous frame accumulates alpha and makes an otherwise unchanged
+         * retained popup brighten on every presentation. */
+        surface_fill_rect(popup->surface,
+                          NULL,
+                          surface_map_rgba(popup->surface, 0, 0, 0, SDL_ALPHA_TRANSPARENT));
         surface_show(popup->surface, 0, 0, NULL, texture_surface(popup->texture));
     }
 

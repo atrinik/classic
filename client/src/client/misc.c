@@ -31,6 +31,32 @@
 #include <image_codec.h>
 #include <wrapper.h>
 
+#ifdef ATRINIK_WIDGET_TESTS
+static bool ui_test_clock_enabled;
+static uint32_t ui_test_clock_ticks;
+#endif
+
+uint32_t client_ui_ticks(void) {
+#ifdef ATRINIK_WIDGET_TESTS
+    if (ui_test_clock_enabled) {
+        return ui_test_clock_ticks;
+    }
+#endif
+    return SDL_GetTicks();
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+void client_ui_test_clock_set(uint32_t ticks) {
+    ui_test_clock_enabled = true;
+    ui_test_clock_ticks = ticks;
+}
+
+void client_ui_test_clock_reset(void) {
+    ui_test_clock_enabled = false;
+    ui_test_clock_ticks = 0;
+}
+#endif
+
 /**
  * Opens an url in the system's default browser.
  * @param url
@@ -96,26 +122,80 @@ char *package_get_version_partial(char *dst, size_t dstlen) {
     return dst;
 }
 
+typedef struct screenshot_job {
+    char path[HUGE_BUF];
+} screenshot_job_t;
+
+#ifdef ATRINIK_WIDGET_TESTS
+static bool screenshot_test_active;
+static SDL_Surface *screenshot_test_surface;
+
+void screenshot_test_begin(void) {
+    SDL_DestroySurface(screenshot_test_surface);
+    screenshot_test_surface = NULL;
+    screenshot_test_active = true;
+}
+
+SDL_Surface *screenshot_test_take(void) {
+    SDL_Surface *surface = screenshot_test_surface;
+    screenshot_test_surface = NULL;
+    return surface;
+}
+#endif
+
+static void screenshot_complete(SDL_Surface *surface, void *userdata) {
+    screenshot_job_t *job = userdata;
+#ifdef ATRINIK_WIDGET_TESTS
+    if (screenshot_test_active) {
+        screenshot_test_active = false;
+        screenshot_test_surface = surface;
+        free(job);
+        return;
+    }
+#endif
+    if (surface == NULL) {
+        draw_info_format(COLOR_RED, "Failed to read back GPU screenshot: %s", SDL_GetError());
+    } else if (image_codec_save_png(surface, job->path)) {
+        draw_info_format(COLOR_GREEN, "Saved screenshot as %s successfully.", job->path);
+    } else {
+        draw_info_format(COLOR_RED, "Failed to write screenshot data (path: %s).", job->path);
+    }
+    SDL_DestroySurface(surface);
+    free(job);
+}
+
+static void screenshot_cancel(void *userdata) {
+    free(userdata);
+}
+
 /**
- * Create a screenshot of the specified surface, or explicitly read back the
- * completed GPU frame when surface is NULL.
- * @param surface
- * The surface to take a screenshot of.
+ * Enqueue a screenshot readback of the completed GPU frame.
+ * @param rect
+ * Optional completed-frame rectangle. NULL captures the complete window.
  */
-void screenshot_create(SDL_Surface *surface) {
-    char path[HUGE_BUF], timebuf[64];
+void screenshot_create(const SDL_Rect *rect) {
+    char timebuf[64];
     struct timeval tv;
     struct tm *tm;
     time_t seconds;
-
-    bool gpu_readback = surface == NULL;
-    if (gpu_readback) {
-        surface = gpu_renderer_readback(NULL);
-        if (surface == NULL) {
-            draw_info_format(COLOR_RED, "Failed to read back GPU screenshot: %s", SDL_GetError());
-            return;
-        }
+    screenshot_job_t *job = calloc(1, sizeof(*job));
+    if (job == NULL) {
+        draw_info(COLOR_RED, "Could not allocate GPU screenshot request.");
+        return;
     }
+
+#ifdef ATRINIK_WIDGET_TESTS
+    /* Test interception still exercises the production asynchronous GPU
+     * readback and callbacks, but it must not inspect time or create host
+     * directories before that command is enqueued. */
+    if (screenshot_test_active) {
+        if (!gpu_renderer_readback_async(rect, screenshot_complete, screenshot_cancel, job)) {
+            draw_info_format(COLOR_RED, "Failed to enqueue GPU screenshot: %s", SDL_GetError());
+            free(job);
+        }
+        return;
+    }
+#endif
 
     gettimeofday(&tv, NULL);
     seconds = tv.tv_sec;
@@ -128,23 +208,18 @@ void screenshot_create(SDL_Surface *surface) {
         snprintf(timebuf, sizeof(timebuf), "%s-%06" PRIu64, timebuf2, (uint64_t)tv.tv_usec);
     } else {
         draw_info(COLOR_RED, "Could not get time information.");
-        goto cleanup;
+        free(job);
+        return;
     }
 
-    snprintf(path,
-             sizeof(path),
+    snprintf(job->path,
+             sizeof(job->path),
              "%s/.atrinik/screenshots/Atrinik-%s.png",
              get_config_dir(),
              timebuf);
-    mkdir_ensure(path);
-
-    if (image_codec_save_png(surface, path)) {
-        draw_info_format(COLOR_GREEN, "Saved screenshot as %s successfully.", path);
-    } else {
-        draw_info_format(COLOR_RED, "Failed to write screenshot data (path: %s).", path);
-    }
-cleanup:
-    if (gpu_readback) {
-        SDL_DestroySurface(surface);
+    mkdir_ensure(job->path);
+    if (!gpu_renderer_readback_async(rect, screenshot_complete, screenshot_cancel, job)) {
+        draw_info_format(COLOR_RED, "Failed to enqueue GPU screenshot: %s", SDL_GetError());
+        free(job);
     }
 }

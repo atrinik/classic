@@ -1280,18 +1280,18 @@ void draw_frame(SDL_Surface *surface, int x, int y, int w, int h) {
     box.y = y;
     box.h = h;
     box.w = 1;
-    surface_fill_rect(surface, &box, pixel_format_map_rgb(surface->format, 0x60, 0x60, 0x60));
+    surface_fill_rect(surface, &box, surface_map_rgb(surface, 0x60, 0x60, 0x60));
     box.x = x + w;
     box.h++;
-    surface_fill_rect(surface, &box, pixel_format_map_rgb(surface->format, 0x55, 0x55, 0x55));
+    surface_fill_rect(surface, &box, surface_map_rgb(surface, 0x55, 0x55, 0x55));
     box.x = x;
     box.y += h;
     box.w = w;
     box.h = 1;
-    surface_fill_rect(surface, &box, pixel_format_map_rgb(surface->format, 0x60, 0x60, 0x60));
+    surface_fill_rect(surface, &box, surface_map_rgb(surface, 0x60, 0x60, 0x60));
     box.x++;
     box.y = y;
-    surface_fill_rect(surface, &box, pixel_format_map_rgb(surface->format, 0x55, 0x55, 0x55));
+    surface_fill_rect(surface, &box, surface_map_rgb(surface, 0x55, 0x55, 0x55));
 }
 
 /**
@@ -1517,12 +1517,7 @@ void rectangle_create(SDL_Surface *surface,
 
     if (surface == NULL) {
         SDL_FRect rectangle = {(float)x, (float)y, (float)w, (float)h};
-        if (!gpu_renderer_draw_rect(&rectangle,
-                                    color.r,
-                                    color.g,
-                                    color.b,
-                                    color.a,
-                                    true)) {
+        if (!gpu_renderer_draw_rect(&rectangle, color.r, color.g, color.b, color.a, true)) {
             LOG(ERROR, "Could not draw retained GPU rectangle: %s", SDL_GetError());
         }
         return;

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -56,6 +56,9 @@ static void resources_free(void) {
         asset_source_free(resource->source);
 
         free(resource->name);
+#ifdef ATRINIK_WIDGET_TESTS
+        free(resource->fixture_path);
+#endif
         free(resource);
     }
 
@@ -204,3 +207,35 @@ out:
     resource->source = NULL;
     return ret;
 }
+
+char *resources_file_path(const resource_t *resource, char *path, size_t path_size) {
+    HARD_ASSERT(resource != NULL && path != NULL && path_size != 0);
+#ifdef ATRINIK_WIDGET_TESTS
+    if (resource->fixture_path != NULL) {
+        return resource->fixture_path;
+    }
+#endif
+    snprintf(path, path_size, "resources/%s", resource->digest);
+    return path;
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+bool resources_test_bind_loaded_file(const char *name, const char *path) {
+    resource_t *resource = resources_find(name);
+    size_t size = 0;
+    void *contents = resource != NULL ? SDL_LoadFile(path, &size) : NULL;
+    unsigned char digest[SHA512_DIGEST_LENGTH];
+    bool valid = contents != NULL && SHA512(contents, size, digest) != NULL &&
+                 memcmp(digest, resource->md, sizeof(digest)) == 0;
+    SDL_free(contents);
+    if (!valid) {
+        return false;
+    }
+    free(resource->fixture_path);
+    resource->fixture_path = xstrdup(path);
+    asset_source_free(resource->source);
+    resource->source = NULL;
+    resource->loaded = true;
+    return true;
+}
+#endif

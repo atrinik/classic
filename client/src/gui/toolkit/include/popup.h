@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -175,6 +175,9 @@ extern void game_news_open(const char *title);
 /** Public API implemented in src/gui/misc/intro.c. */
 
 extern void intro_deinit(void);
+#ifdef ATRINIK_WIDGET_TESTS
+extern void intro_test_begin(void);
+#endif
 
 extern void intro_show(void);
 
@@ -189,6 +192,9 @@ extern void socket_command_characters(uint8_t *data, size_t len, size_t pos);
 /** Public API implemented in src/gui/popups/credits.c. */
 
 extern void credits_show(void);
+#ifdef ATRINIK_WIDGET_TESTS
+extern void credits_test_show(const char *message);
+#endif
 
 /** Public API implemented in src/gui/popups/help.c. */
 
@@ -209,10 +215,16 @@ extern void join_password_open(server_struct *server);
 /** Public API implemented in src/gui/popups/login.c. */
 
 extern void login_start(void);
+#ifdef ATRINIK_WIDGET_TESTS
+extern bool login_test_form_rendered(void);
+#endif
 
 /** Public API implemented in src/gui/popups/painting.c. */
 
 void socket_command_painting(uint8_t *data, size_t len, size_t pos);
+#ifdef ATRINIK_WIDGET_TESTS
+extern bool popup_painting_test_viewport_rendered(void);
+#endif
 
 /** Public API implemented in src/gui/popups/server_add.c. */
 

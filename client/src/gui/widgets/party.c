@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -76,6 +76,12 @@ static list_struct *list_party = NULL;
  */
 static int8_t list_contents = -1;
 
+#ifdef ATRINIK_WIDGET_TESTS
+size_t widget_party_test_rows(void) {
+    return list_party != NULL ? list_party->rows : 0;
+}
+#endif
+
 /**
  * Handle enter/double click for the party list.
  * @param list
@@ -98,9 +104,7 @@ static void list_handle_enter(list_struct *list, SDL_Event *event) {
  * Dimensions for the row.
  */
 static void list_row_highlight(list_struct *list, SDL_Rect box) {
-    surface_fill_rect(list->surface,
-                        &box,
-                        pixel_format_map_rgb(list->surface->format, 0x00, 0x80, 0x00));
+    surface_fill_rect(list->surface, &box, surface_map_rgb(list->surface, 0x00, 0x80, 0x00));
 }
 
 /**
@@ -111,9 +115,7 @@ static void list_row_highlight(list_struct *list, SDL_Rect box) {
  * Dimensions for the row.
  */
 static void list_row_selected(list_struct *list, SDL_Rect box) {
-    surface_fill_rect(list->surface,
-                        &box,
-                        pixel_format_map_rgb(list->surface->format, 0x00, 0x00, 0xef));
+    surface_fill_rect(list->surface, &box, surface_map_rgb(list->surface, 0x00, 0x00, 0xef));
 }
 
 /** @copydoc socket_command_struct::handle_func */

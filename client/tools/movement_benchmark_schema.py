@@ -639,7 +639,7 @@ def validate_record(value: object) -> dict[str, object]:
         "fixture_schema_version": 3,
         "workload": "pvm1-map2-lifecycle-v4",
         "lighting_statistics_version": 8,
-        "map_statistics_version": 4,
+        "map_statistics_version": 6,
         "render_profiler_statistics_version": 5,
         "sprite_cache_statistics_version": 3,
     }:

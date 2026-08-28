@@ -29,9 +29,10 @@ bool gpu_map_renderer_create(SDL_GPUDevice *device, SDL_Renderer *renderer) {
 }
 
 void gpu_map_renderer_destroy(void) {}
-bool gpu_map_renderer_begin(int width, int height) {
+bool gpu_map_renderer_begin(int width, int height, bool auxiliary) {
     (void)width;
     (void)height;
+    (void)auxiliary;
     return false;
 }
 bool gpu_map_renderer_active(void) {
@@ -40,6 +41,10 @@ bool gpu_map_renderer_active(void) {
 void gpu_map_renderer_set_owner(uint8_t owner, int sample_y) {
     (void)owner;
     (void)sample_y;
+}
+void gpu_map_renderer_set_instance_identity(uint64_t record_identity, uint32_t draw_variant) {
+    (void)record_identity;
+    (void)draw_variant;
 }
 void gpu_map_renderer_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]) {
     (void)owner;
@@ -74,7 +79,8 @@ bool gpu_map_renderer_set_clip(const SDL_Rect *rectangle) {
 bool gpu_map_renderer_end(void) {
     return false;
 }
-SDL_Texture *gpu_map_renderer_texture(void) {
+SDL_Texture *gpu_map_renderer_texture(bool auxiliary) {
+    (void)auxiliary;
     return NULL;
 }
 void gpu_map_renderer_invalidate_surface(SDL_Surface *surface) {
@@ -95,7 +101,10 @@ int main(void) {
 
     gpu_renderer_statistics_reset();
     gpu_renderer_statistics_commands(17, 5, 7);
-    gpu_renderer_statistics_upload(4096);
+    gpu_renderer_statistics_source_upload(1024);
+    gpu_renderer_statistics_instance_upload(2048);
+    gpu_renderer_statistics_light_upload(1024);
+    gpu_renderer_statistics_slot_uniform_upload(256);
     gpu_renderer_statistics_resource_create(8192);
     gpu_renderer_statistics_resource_destroy(8192);
     gpu_renderer_statistics_recovery(true);
@@ -107,8 +116,16 @@ int main(void) {
     HARD_ASSERT(statistics.commands == 17);
     HARD_ASSERT(statistics.batches == 5);
     HARD_ASSERT(statistics.draws == 7);
-    HARD_ASSERT(statistics.upload_count == 1);
-    HARD_ASSERT(statistics.upload_bytes == 4096);
+    HARD_ASSERT(statistics.upload_count == 4);
+    HARD_ASSERT(statistics.upload_bytes == 4352);
+    HARD_ASSERT(statistics.source_upload_count == 1);
+    HARD_ASSERT(statistics.source_upload_bytes == 1024);
+    HARD_ASSERT(statistics.instance_upload_count == 1);
+    HARD_ASSERT(statistics.instance_upload_bytes == 2048);
+    HARD_ASSERT(statistics.light_upload_count == 1);
+    HARD_ASSERT(statistics.light_upload_bytes == 1024);
+    HARD_ASSERT(statistics.slot_uniform_upload_count == 1);
+    HARD_ASSERT(statistics.slot_uniform_upload_bytes == 256);
     HARD_ASSERT(statistics.resource_creations == 1);
     HARD_ASSERT(statistics.resource_destructions == 1);
     HARD_ASSERT(statistics.retained_bytes == 0);

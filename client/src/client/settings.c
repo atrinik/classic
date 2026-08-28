@@ -507,8 +507,8 @@ static void setting_apply_runtime(int cat, int setting) {
                                "%dx%d",
                                &w,
                                &h) == 2 &&
-                        (!gpu_renderer_output_size(&current_w, &current_h) || current_w != w ||
-                         current_h != h)) {
+                        (!SDL_GetWindowSize(ScreenWindow, &current_w, &current_h) ||
+                         current_w != w || current_h != h)) {
                         resize_window(w, h);
                         video_set_size();
                     }

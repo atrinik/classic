@@ -53,6 +53,14 @@ typedef struct popup_painting {
     Uint32 last_redraw; ///< Last redraw time.
 } popup_painting_t;
 
+#ifdef ATRINIK_WIDGET_TESTS
+static bool painting_test_viewport_rendered;
+
+bool popup_painting_test_viewport_rendered(void) {
+    return painting_test_viewport_rendered;
+}
+#endif
+
 /**
  * Acquire the surface to use for rendering the painting.
  *
@@ -171,8 +179,8 @@ static int popup_draw_func(popup_struct *popup) {
 
     if (painting_data->sprite == NULL) {
         char path[HUGE_BUF];
-        snprintf(VS(path), "resources/%s", resource->digest);
-        painting_data->sprite = sprite_tryload_file(path, 0, NULL);
+        painting_data->sprite =
+            sprite_tryload_file(resources_file_path(resource, VS(path)), 0, NULL);
         if (painting_data->sprite == NULL) {
             return 1;
         }
@@ -206,6 +214,9 @@ static int popup_draw_func(popup_struct *popup) {
                  60,
                  &painting_data->coords,
                  popup_painting_data_surface(painting_data));
+#ifdef ATRINIK_WIDGET_TESTS
+    painting_test_viewport_rendered = true;
+#endif
 
     return 1;
 }
@@ -220,8 +231,8 @@ static int popup_draw_post_func(popup_struct *popup) {
     }
 
     if (!resources_is_ready(resource)) {
-        if (SDL_GetTicks() - painting_data->last_redraw > 200) {
-            painting_data->last_redraw = SDL_GetTicks();
+        if (client_ui_ticks() - painting_data->last_redraw > 200) {
+            painting_data->last_redraw = client_ui_ticks();
             popup->redraw = 1;
         }
     } else if (painting_data->sprite == NULL) {
@@ -286,6 +297,9 @@ void socket_command_painting(uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     popup_painting_t *painting_data = xcalloc(1, sizeof(*painting_data));
+#ifdef ATRINIK_WIDGET_TESTS
+    painting_test_viewport_rendered = false;
+#endif
 
     painting_data->coords.w = 750;
     painting_data->coords.h = 500;

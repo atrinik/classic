@@ -738,6 +738,49 @@ static void socket_command_map_abort_timed_light(void) {
     map_state_transaction_abort();
 }
 
+static void socket_command_map_descriptor_absent(int mapstat, bool transaction_pending) {
+    if (mapstat == MAP_UPDATE_CMD_SAME || mapstat == MAP_UPDATE_CMD_PARTIAL ||
+        transaction_pending) {
+        return;
+    }
+    MapData.light_keyframe_generation = 0;
+    MapData.light_keyframe_start_seconds = 0;
+    MapData.light_keyframe_end_seconds = 0;
+    MapData.light_keyframe_flags = 0;
+    MapData.light_keyframe_valid = false;
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+bool socket_command_map_timed_light_same_test(void) {
+    uint64_t saved_generation = MapData.light_keyframe_generation;
+    uint64_t saved_start = MapData.light_keyframe_start_seconds;
+    uint64_t saved_end = MapData.light_keyframe_end_seconds;
+    uint8_t saved_flags = MapData.light_keyframe_flags;
+    bool saved_valid = MapData.light_keyframe_valid;
+
+    MapData.light_keyframe_generation = 7;
+    MapData.light_keyframe_start_seconds = 120;
+    MapData.light_keyframe_end_seconds = 180;
+    MapData.light_keyframe_flags = MAP2_LIGHT_KEYFRAME_SNAP;
+    MapData.light_keyframe_valid = true;
+    socket_command_map_descriptor_absent(MAP_UPDATE_CMD_SAME, false);
+    bool success = MapData.light_keyframe_valid && MapData.light_keyframe_generation == 7 &&
+                   MapData.light_keyframe_start_seconds == 120 &&
+                   MapData.light_keyframe_end_seconds == 180;
+    socket_command_map_descriptor_absent(MAP_UPDATE_CMD_PARTIAL, false);
+    success = success && MapData.light_keyframe_valid;
+    socket_command_map_descriptor_absent(MAP_UPDATE_CMD_NEW, false);
+    success = success && !MapData.light_keyframe_valid && MapData.light_keyframe_generation == 0;
+
+    MapData.light_keyframe_generation = saved_generation;
+    MapData.light_keyframe_start_seconds = saved_start;
+    MapData.light_keyframe_end_seconds = saved_end;
+    MapData.light_keyframe_flags = saved_flags;
+    MapData.light_keyframe_valid = saved_valid;
+    return success;
+}
+#endif
+
 /** @copydoc socket_command_struct::handle_func */
 void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
@@ -861,12 +904,8 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         MapData.light_keyframe_end_seconds = light_keyframe_end_seconds;
         MapData.light_keyframe_flags = light_keyframe_flags;
         MapData.light_keyframe_valid = true;
-    } else if (mapstat != MAP_UPDATE_CMD_PARTIAL && !map_light_keyframe_transaction_pending()) {
-        MapData.light_keyframe_generation = 0;
-        MapData.light_keyframe_start_seconds = 0;
-        MapData.light_keyframe_end_seconds = 0;
-        MapData.light_keyframe_flags = 0;
-        MapData.light_keyframe_valid = false;
+    } else {
+        socket_command_map_descriptor_absent(mapstat, map_light_keyframe_transaction_pending());
     }
 
     if (pos >= len) {
@@ -962,7 +1001,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
 
             /* Clear the whole cell? */
             if (mask & MAP2_MASK_CLEAR) {
-                MapCell before;
+                map_cell_snapshot_t before;
 
                 map_cell_snapshot(x, y, &before);
                 map_clear_cell(x, y, (mask & MAP2_MASK_HARD_CLEAR) != 0);
@@ -970,7 +1009,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
                 continue;
             }
 
-            MapCell before;
+            map_cell_snapshot_t before;
             map_cell_snapshot(x, y, &before);
 
             size_t tile_values = 0;

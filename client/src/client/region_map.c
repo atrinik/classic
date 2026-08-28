@@ -39,6 +39,13 @@
 #include <toolkit/path.h>
 
 static UT_icd icd = {sizeof(region_map_fow_tile_t), NULL, NULL, NULL};
+#ifdef ATRINIK_WIDGET_TESTS
+static bool region_map_test_fow_persistence = true;
+
+void region_map_test_fow_persistence_set(bool enabled) {
+    region_map_test_fow_persistence = enabled;
+}
+#endif
 
 static region_map_def_t *region_map_def_new(void);
 static void region_map_def_load(region_map_def_t *def, const char *str);
@@ -426,6 +433,14 @@ void region_map_resize(region_map_t *region_map, int adjust) {
     SDL_Surface *zoomed = NULL;
     SDL_Surface *fow_zoomed = NULL;
 
+    /* A zero adjustment is the minimap's layout refresh, not a request to
+     * regenerate immutable zoom resources. */
+    if (adjust == 0 && zoom == region_map->zoom &&
+        ((zoom == 100 && region_map->zoomed == NULL && region_map->fow_zoomed == NULL) ||
+         (zoom != 100 && region_map->zoomed != NULL && region_map->fow_zoomed != NULL))) {
+        return;
+    }
+
     if (zoom != 100) {
         /* Zoom the surface. */
         zoomed = zoomSurface(region_map->surface, zoom / 100.0, zoom / 100.0, 0);
@@ -471,7 +486,6 @@ void region_map_resize(region_map_t *region_map, int adjust) {
  * Y coordinate.
  */
 void region_map_render_marker(region_map_t *region_map, SDL_Surface *surface, int x, int y) {
-    SDL_Surface *marker;
     SDL_Rect box, srcbox;
     region_map_def_map_t *map;
 
@@ -481,36 +495,33 @@ void region_map_render_marker(region_map_t *region_map, SDL_Surface *surface, in
         return;
     }
 
-    /* TODO: Could cache this */
-    /* Region-map directions already use SDL3's clockwise facing order.  The
-     * shared transform restores the legacy counterclockwise authored contract,
-     * so negate this pre-adjusted angle to preserve the #172 behavior. */
-    marker = rotozoomSurface(TEXTURE_CLIENT("map_marker"),
-                             -((map_get_player_direction() - 1) * 45), /* GCOVR_EXCL_LINE */
-                             region_map->zoom / 100.0,
-                             1);
-    if (marker == NULL) {
-        LOG(ERROR, "Could not transform region map marker: %s", SDL_GetError());
-        return;
-    }
+    SDL_Surface *marker = TEXTURE_CLIENT("map_marker");
+    int angle = -((map_get_player_direction() - 1) * 45); /* GCOVR_EXCL_LINE */
+    double zoom = region_map->zoom / 100.0;
+    int marker_width, marker_height;
+    rotozoomSurfaceSizeXY(marker->w, marker->h, angle, zoom, zoom, &marker_width, &marker_height);
     /* Calculate the player's marker position. */
     box.x = x +
             (map->xpos + MapData.posx * region_map->def->pixel_size) * (region_map->zoom / 100.0) -
-            marker->w / 2.0 + region_map->def->pixel_size / 2.0 - region_map->pos.x;
+            marker_width / 2.0 + region_map->def->pixel_size / 2.0 - region_map->pos.x;
     box.y = y +
             (map->ypos + MapData.posy * region_map->def->pixel_size) * (region_map->zoom / 100.0) -
-            marker->h / 2.0 + region_map->def->pixel_size / 2.0 - region_map->pos.y;
+            marker_height / 2.0 + region_map->def->pixel_size / 2.0 - region_map->pos.y;
 
     srcbox.x = MAX(0, x - box.x);
     srcbox.y = MAX(0, y - box.y);
-    srcbox.w = MAX(0, region_map->pos.w - (box.x - x));
-    srcbox.h = MAX(0, region_map->pos.h - (box.y - y));
+    srcbox.w = MAX(0, MIN(marker_width - srcbox.x, region_map->pos.w - (box.x - x)));
+    srcbox.h = MAX(0, MIN(marker_height - srcbox.y, region_map->pos.h - (box.y - y)));
 
     box.x += srcbox.x;
     box.y += srcbox.y;
 
-    surface_blit(marker, &srcbox, surface, &box);
-    SDL_DestroySurface(marker);
+    sprite_effects_t effects = {
+        .zoom_x = region_map->zoom,
+        .zoom_y = region_map->zoom,
+        .rotate = angle,
+    };
+    surface_show_effects(surface, box.x, box.y, &srcbox, marker, &effects);
 }
 
 void region_map_render_fow(region_map_t *region_map, SDL_Surface *surface, int x, int y) {
@@ -812,7 +823,14 @@ static void region_map_fow_reset(region_map_t *region_map) {
         HARD_ASSERT(region_map->surface != NULL);
         HARD_ASSERT(region_map->fow->path != NULL);
 
-        fp = path_fopen(region_map->fow->path, "w");
+        fp = NULL;
+#ifdef ATRINIK_WIDGET_TESTS
+        if (region_map_test_fow_persistence) {
+#endif
+            fp = path_fopen(region_map->fow->path, "w");
+#ifdef ATRINIK_WIDGET_TESTS
+        }
+#endif
 
         if (fp != NULL) {
             fwrite(region_map->fow->bitmap, 1, RM_MAP_FOW_BITMAP_SIZE(region_map), fp);
@@ -924,7 +942,9 @@ void region_map_fow_update(region_map_t *region_map) {
         }
     }
 
-    SDL_FillSurfaceRect(region_map->fow->surface, NULL, 0);
+    SDL_FillSurfaceRect(region_map->fow->surface,
+                        NULL,
+                        surface_map_rgb(region_map->fow->surface, 0, 0, 0));
     rowsize = (region_map->surface->w / region_map->def->pixel_size + 31) / 32;
     color = surface_map_rgb(region_map->fow->surface, 255, 255, 255);
 
@@ -957,6 +977,15 @@ void region_map_fow_update(region_map_t *region_map) {
     SDL_SetSurfaceColorKey(region_map->fow->surface, true, color);
     SDL_SetSurfaceRLE(region_map->fow->surface, true);
     gpu_renderer_surface_changed(region_map->fow->surface);
+
+    /* The zoomed fog surface is derived upload data.  A visited-state
+     * generation must invalidate it so the next layout refresh rebuilds the
+     * derived pixels once instead of presenting stale fog indefinitely. */
+    if (region_map->fow_zoomed != NULL) {
+        gpu_renderer_invalidate_surface(region_map->fow_zoomed);
+        SDL_DestroySurface(region_map->fow_zoomed);
+        region_map->fow_zoomed = NULL;
+    }
 }
 
 bool region_map_fow_set_visited(region_map_t *region_map,

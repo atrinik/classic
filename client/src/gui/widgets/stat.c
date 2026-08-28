@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -79,6 +79,19 @@ static bool stat_get_data(widgetdata *widget, int64_t *curr, int64_t *max, doubl
 
     return false;
 }
+
+#ifdef ATRINIK_WIDGET_TESTS
+bool widget_stat_test_valid(widgetdata *widget) {
+    if (widget == NULL || widget->id == NULL || widget->subwidget == NULL) {
+        return false;
+    }
+    widget_stat_t *stat = widget->subwidget;
+    int64_t current, maximum;
+    double regeneration;
+    return stat->texture != NULL && *stat->texture != '\0' &&
+           stat_get_data(widget, &current, &maximum, &regeneration);
+}
+#endif
 
 /** @copydoc widgetdata::draw_func */
 static void widget_draw(widgetdata *widget) {
@@ -162,8 +175,8 @@ static void widget_draw(widgetdata *widget) {
         box.w = widget->w - WIDGET_BORDER_SIZE * 2;
         box.h = widget->h - WIDGET_BORDER_SIZE * 2;
         surface_fill_rect(widget->surface,
-                            &box,
-                            pixel_format_map_rgb(widget->surface->format, 0, 0, 0));
+                          &box,
+                          pixel_format_map_rgb(widget->surface->format, 0, 0, 0));
         border_create_texture(widget->surface, &box, thickness, TEXTURE_CLIENT("stat_border"));
 
         box.x += thickness;

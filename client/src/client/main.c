@@ -41,6 +41,7 @@
 #include <window_title.h>
 #include <toolkit/path.h>
 #include <resources.h>
+#include <gpu_player_view.h>
 #include <toolkit/signals.h>
 #include <toolkit/colorspace.h>
 #include <toolkit/binreloc.h>
@@ -631,6 +632,60 @@ static bool clioptions_option_reconnect(const char *arg, char **errmsg) {
     return true;
 }
 
+static bool gpu_renderer_recovery_apply_window(void *userdata) {
+    (void)userdata;
+    return resize_window_recovery_apply();
+}
+
+static bool gpu_renderer_recovery_republish(void *userdata) {
+    (void)userdata;
+    map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
+    minimap_redraw_force();
+    widget_redraw_everything();
+    popup_redraw_all();
+
+    if (!gpu_renderer_begin_frame()) {
+        return false;
+    }
+    uint64_t gpu_ui_started = gpu_renderer_timing_begin();
+    if (cpl.state <= ST_WAITFORPLAY) {
+        intro_show();
+    } else if (cpl.state == ST_PLAY) {
+        process_widgets(1);
+    }
+    popup_render_all();
+    tooltip_show();
+    if (event_dragging_check()) {
+        int mx, my;
+        mouse_get_state(&mx, &my);
+        object_show_centered(OfflineRenderSurface,
+                             object_find(cpl.dragging_tag),
+                             mx,
+                             my,
+                             INVENTORY_ICON_SIZE,
+                             INVENTORY_ICON_SIZE,
+                             false);
+    }
+    if (cpl.state == ST_PLAY) {
+        map_draw_pointer_overlay();
+    }
+    if (!setting_get_int(OPT_CAT_CLIENT, OPT_SYSTEM_CURSOR) && cursor_x != -1 && cursor_y != -1 &&
+        SDL_GetWindowFlags(ScreenWindow) & SDL_WINDOW_MOUSE_FOCUS) {
+        surface_show(OfflineRenderSurface,
+                     cursor_x - texture_surface(cursor_texture)->w / 2,
+                     cursor_y - texture_surface(cursor_texture)->h / 2,
+                     NULL,
+                     texture_surface(cursor_texture));
+    }
+    gpu_renderer_timing_end(GPU_RENDERER_TIMING_UI, gpu_ui_started);
+    if (!gpu_renderer_frame_valid()) {
+        return false;
+    }
+    bool presented = gpu_renderer_present();
+    map_benchmark_statistics_present(presented);
+    return presented;
+}
+
 static bool gpu_renderer_recover_frame(unsigned int *attempts, const char *context) {
     HARD_ASSERT(attempts != NULL);
     HARD_ASSERT(context != NULL);
@@ -646,17 +701,16 @@ static bool gpu_renderer_recover_frame(unsigned int *attempts, const char *conte
              gpu_renderer_driver_name(),
              gpu_renderer_driver_version());
 
-    if (*attempts < 1U) {
-        (*attempts)++;
-        if (gpu_renderer_recover(ScreenWindow)) {
-            if (resize_window_recovery_apply()) {
-                map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
-                minimap_redraw_flag = 1;
-                widget_redraw_everything();
-                popup_redraw_all();
-                return true;
-            }
-        }
+    if (gpu_renderer_recover_and_republish(ScreenWindow,
+                                           attempts,
+                                           false,
+                                           gpu_renderer_recovery_apply_window,
+                                           gpu_renderer_recovery_republish,
+                                           NULL)) {
+        /* The complete republished frame ended this failure incident. A later
+         * independent device/window failure receives its own bounded attempt. */
+        *attempts = 0;
+        return true;
     }
 
     char message[HUGE_BUF];
@@ -713,9 +767,21 @@ int main(int argc, char *argv[]) {
     path_fopen = client_fopen_wrapper;
 
 #ifdef ATRINIK_WIDGET_TESTS
+    if (argc == 3 && strcmp(argv[1], "--gpu-player-view") == 0) {
+        return gpu_player_view_main(argc - 1, &argv[1]);
+    }
+    if (argc == 4 && strcmp(argv[1], "--gpu-player-view-benchmark") == 0) {
+        return gpu_player_view_main(argc - 1, &argv[1]);
+    }
+    if (argc == 3 && strcmp(argv[1], "--gpu-player-view-lifecycle") == 0) {
+        return gpu_player_view_main(argc - 1, &argv[1]);
+    }
+
     if (argc == 2 && strcmp(argv[1], "--map-state-test") == 0) {
         return widget_map_sparse_state_test() && widget_map_transaction_abort_test() &&
-                       widget_map_light_keyframe_capacity_test()
+                       widget_map_light_keyframe_capacity_test() &&
+                       widget_map_temporal_lighting_test() &&
+                       socket_command_map_timed_light_same_test()
                    ? EXIT_SUCCESS
                    : EXIT_FAILURE;
     }
@@ -845,6 +911,9 @@ int main(int argc, char *argv[]) {
         uint64_t profile_events_started = render_profiler_begin();
         done = Event_PollInputDevice();
         render_profiler_end(RENDER_PROFILE_EVENTS, profile_events_started);
+
+        /* Screenshot copies complete independently of the render loop. */
+        gpu_renderer_readback_poll();
 
         if (gpu_renderer_recreation_take_request() &&
             !gpu_renderer_recover_frame(&gpu_recovery_attempts, "a window or display change")) {

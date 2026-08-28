@@ -78,6 +78,14 @@ static scrollbar_info_struct scrollbar_progress_info;
  * The music player list.
  */
 static list_struct *list_mplayer = NULL;
+#ifdef ATRINIK_WIDGET_TESTS
+static bool test_isolated;
+
+void widget_mplayer_test_isolated_set(bool enabled) {
+    HARD_ASSERT(list_mplayer == NULL);
+    test_isolated = enabled;
+}
+#endif
 
 /**
  * Handle music list double-click and "Play" button.
@@ -326,18 +334,27 @@ static void widget_draw(widgetdata *widget) {
         list_set_column(list_mplayer, 0, 130, 7, NULL, -1);
         list_set_font(list_mplayer, FONT_ARIAL10);
 
-        /* Add default media directory songs. */
-        get_data_dir_file(buf, sizeof(buf), DIRECTORY_MEDIA);
-        mplayer_list_init(list_mplayer, buf, 0);
+#ifdef ATRINIK_WIDGET_TESTS
+        if (test_isolated) {
+            list_add(list_mplayer, 0, 0, "Frozen qualification track");
+        } else
+#endif
+        {
+            /* Add default media directory songs. */
+            get_data_dir_file(buf, sizeof(buf), DIRECTORY_MEDIA);
+            mplayer_list_init(list_mplayer, buf, 0);
 
-        /* Now add custom ones, but ignore duplicates. */
-        if (user_data_prepare(get_config_dir(), PACKAGE_VERSION_MAJOR, VS(user_data_directory))) {
-            size_t user_data_length = strlen(user_data_directory);
-            if (user_data_length + 1U + sizeof(DIRECTORY_MEDIA) - 1U < sizeof(buf)) {
-                memcpy(buf, user_data_directory, user_data_length);
-                buf[user_data_length] = '/';
-                memcpy(buf + user_data_length + 1U, DIRECTORY_MEDIA, sizeof(DIRECTORY_MEDIA));
-                mplayer_list_init(list_mplayer, buf, 1);
+            /* Now add custom ones, but ignore duplicates. */
+            if (user_data_prepare(get_config_dir(),
+                                  PACKAGE_VERSION_MAJOR,
+                                  VS(user_data_directory))) {
+                size_t user_data_length = strlen(user_data_directory);
+                if (user_data_length + 1U + sizeof(DIRECTORY_MEDIA) - 1U < sizeof(buf)) {
+                    memcpy(buf, user_data_directory, user_data_length);
+                    buf[user_data_length] = '/';
+                    memcpy(buf + user_data_length + 1U, DIRECTORY_MEDIA, sizeof(DIRECTORY_MEDIA));
+                    mplayer_list_init(list_mplayer, buf, 1);
+                }
             }
         }
 
@@ -355,8 +372,12 @@ static void widget_draw(widgetdata *widget) {
             /* Sort the list. */
             list_sort(list_mplayer, LIST_SORT_ALPHA);
 
-            /* Read the blacklist file contents. */
+            /* Read the blacklist file contents outside isolated fixtures. */
+#ifdef ATRINIK_WIDGET_TESTS
+            fp = test_isolated ? NULL : path_fopen(FILE_MPLAYER_BLACKLIST, "r");
+#else
             fp = path_fopen(FILE_MPLAYER_BLACKLIST, "r");
+#endif
 
             if (fp) {
                 size_t row;
@@ -522,10 +543,10 @@ static void widget_background(widgetdata *widget, int draw) {
     /* Do mass blacklist status change if the button has been held for
      * some time. */
     if (buttons[BUTTON_BLACKLIST].pressed &&
-        SDL_GetTicks() - buttons[BUTTON_BLACKLIST].pressed_ticks > BLACKLIST_ALL_DELAY) {
+        client_ui_ticks() - buttons[BUTTON_BLACKLIST].pressed_ticks > BLACKLIST_ALL_DELAY) {
         mplayer_blacklist_mass_toggle(list_mplayer, mplayer_blacklisted(list_mplayer));
         mplayer_blacklist_save(list_mplayer);
-        buttons[BUTTON_BLACKLIST].pressed_ticks = SDL_GetTicks();
+        buttons[BUTTON_BLACKLIST].pressed_ticks = client_ui_ticks();
     }
 
     if (!widget->redraw) {

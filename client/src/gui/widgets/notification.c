@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -47,10 +47,33 @@
  */
 static notification_struct *notification = NULL;
 
+#ifdef ATRINIK_WIDGET_TESTS
+static bool notification_test_elapsed_valid;
+static uint32_t notification_test_elapsed_ms;
+static uint64_t notification_test_compositions;
+
+bool notification_test_fade(uint32_t elapsed_ms) {
+    if (notification == NULL || elapsed_ms >= NOTIFICATION_DEFAULT_FADEOUT) {
+        return false;
+    }
+    notification_test_elapsed_valid = true;
+    notification_test_elapsed_ms = elapsed_ms;
+    return true;
+}
+
+uint64_t notification_test_canvas_compositions(void) {
+    return notification_test_compositions;
+}
+#endif
+
 /**
  * Destroy notification data.
  */
 void notification_destroy(void) {
+#ifdef ATRINIK_WIDGET_TESTS
+    notification_test_elapsed_valid = false;
+    notification_test_elapsed_ms = 0;
+#endif
     if (!notification) {
         return;
     }
@@ -58,6 +81,8 @@ void notification_destroy(void) {
     free(notification->action);
 
     free(notification->shortcut);
+
+    free(notification->message);
 
     free(notification);
     notification = NULL;
@@ -103,6 +128,37 @@ bool notification_keybind_matches(const char *cmd) {
            !strcmp(notification->shortcut, cmd);
 }
 
+/** Recompose the complete notification into its retained GPU canvas. */
+static void notification_canvas_compose(widgetdata *widget) {
+    HARD_ASSERT(widget != NULL);
+    HARD_ASSERT(notification != NULL);
+    HARD_ASSERT(notification->message != NULL);
+    HARD_ASSERT(widget->surface != NULL);
+
+    SDL_Rect box = {0, 0, widget->surface->w, widget->surface->h};
+    SDL_Color color;
+    if (text_color_parse("e6e796", &color)) {
+        surface_fill_rect(widget->surface,
+                          &box,
+                          surface_map_rgb(widget->surface, color.r, color.g, color.b));
+    }
+    border_create_color(widget->surface, &box, 1, "606060");
+
+    box.w = MAX(0, widget->surface->w - 6);
+    box.h = MAX(0, widget->surface->h - 6);
+    text_show(widget->surface,
+              NOTIFICATION_DEFAULT_FONT,
+              notification->message,
+              3,
+              3,
+              COLOR_BLACK,
+              TEXT_MARKUP | TEXT_WORD_WRAP,
+              &box);
+#ifdef ATRINIK_WIDGET_TESTS
+    notification_test_compositions++;
+#endif
+}
+
 /** @copydoc socket_command_struct::handle_func */
 void socket_command_notification(uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
@@ -111,7 +167,6 @@ void socket_command_notification(uint8_t *data, size_t len, size_t pos) {
     char type, *cp;
     SDL_Rect box;
     StringBuffer *sb;
-    SDL_Color color;
 
     /* Destroy previous notification, if any. */
     notification_destroy();
@@ -120,7 +175,7 @@ void socket_command_notification(uint8_t *data, size_t len, size_t pos) {
     SetPriorityWidget(cur_widget[NOTIFICATION_ID]);
     /* Create the data structure and initialize default values. */
     notification = xcalloc(1, sizeof(*notification));
-    notification->start_ticks = SDL_GetTicks();
+    notification->start_ticks = client_ui_ticks();
     notification->alpha = 255;
     notification->delay = NOTIFICATION_DEFAULT_DELAY;
     sb = stringbuffer_new();
@@ -188,6 +243,7 @@ void socket_command_notification(uint8_t *data, size_t len, size_t pos) {
     }
 
     cp = stringbuffer_finish(sb);
+    notification->message = cp;
 
     /* Calculate the maximum height the text will need. */
     box.x = 0;
@@ -232,33 +288,14 @@ void socket_command_notification(uint8_t *data, size_t len, size_t pos) {
     /* Create a new surface. */
     cur_widget[NOTIFICATION_ID]->surface =
         surface_create_rgb(get_video_flags(), box.w, box.h, video_get_bpp(), 0, 0, 0, 0);
-
-    /* Fill the surface with the background color. */
-    if (text_color_parse("e6e796", &color)) {
-        surface_fill_rect(cur_widget[NOTIFICATION_ID]->surface,
-                            &box,
-                            pixel_format_map_rgb(cur_widget[NOTIFICATION_ID]->surface->format,
-                                                 color.r,
-                                                 color.g,
-                                                 color.b));
+    if (cur_widget[NOTIFICATION_ID]->surface == NULL ||
+        !gpu_renderer_canvas_register(cur_widget[NOTIFICATION_ID]->surface)) {
+        LOG(ERROR, "Could not create retained GPU notification canvas: %s", SDL_GetError());
+        notification_destroy();
+        return;
     }
 
-    /* Create a border. */
-    border_create_color(cur_widget[NOTIFICATION_ID]->surface, &box, 1, "606060");
-
-    /* Render the text. */
-    box.w = wd;
-    box.h = ht;
-    text_show(cur_widget[NOTIFICATION_ID]->surface,
-              NOTIFICATION_DEFAULT_FONT,
-              cp,
-              3,
-              3,
-              COLOR_BLACK,
-              TEXT_MARKUP | TEXT_WORD_WRAP,
-              &box);
-
-    free(cp);
+    notification_canvas_compose(cur_widget[NOTIFICATION_ID]);
 }
 
 /** @copydoc widgetdata::draw_func */
@@ -270,18 +307,27 @@ static void widget_draw(widgetdata *widget) {
         return;
     }
 
+    if (widget->redraw) {
+        notification_canvas_compose(widget);
+    }
+
     /* Update the widget's position to below map name. */
     widget->x = cur_widget[MAPNAME_ID]->x;
     widget->y = cur_widget[MAPNAME_ID]->y + cur_widget[MAPNAME_ID]->h;
 
+    uint32_t elapsed = client_ui_ticks() - notification->start_ticks;
+#ifdef ATRINIK_WIDGET_TESTS
+    if (notification_test_elapsed_valid) {
+        elapsed = notification->delay - NOTIFICATION_DEFAULT_FADEOUT + notification_test_elapsed_ms;
+    }
+#endif
+
     /* Check whether we should do fade out. */
-    if (SDL_GetTicks() - notification->start_ticks >
-        notification->delay - NOTIFICATION_DEFAULT_FADEOUT) {
+    if (elapsed > notification->delay - NOTIFICATION_DEFAULT_FADEOUT) {
         int fade;
 
         /* Calculate how far into the fading animation we are. */
-        fade = SDL_GetTicks() - notification->start_ticks -
-               (notification->delay - NOTIFICATION_DEFAULT_FADEOUT);
+        fade = elapsed - (notification->delay - NOTIFICATION_DEFAULT_FADEOUT);
 
         /* Completed the fading animation? */
         if (fade > NOTIFICATION_DEFAULT_FADEOUT) {

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -83,8 +83,8 @@ void tooltip_create(int mx, int my, font_struct *font, const char *text) {
 void tooltip_enable_delay(uint32_t delay) {
     tooltip_delay = delay;
 
-    if (tooltip_created + delay < SDL_GetTicks()) {
-        tooltip_created = SDL_GetTicks();
+    if (tooltip_created + delay < client_ui_ticks()) {
+        tooltip_created = client_ui_ticks();
     }
 }
 
@@ -135,12 +135,12 @@ void tooltip_show(void) {
     }
 
     if (tooltip_delay) {
-        if (SDL_GetTicks() - tooltip_created < tooltip_delay) {
+        if (client_ui_ticks() - tooltip_created < tooltip_delay) {
             tooltip_opacity = 0;
             return;
         }
 
-        tooltip_created = SDL_GetTicks() + tooltip_delay;
+        tooltip_created = client_ui_ticks() + tooltip_delay;
     } else {
         tooltip_opacity = 255;
     }

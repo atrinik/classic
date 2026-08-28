@@ -25,7 +25,7 @@ typedef struct SDL_Surface SDL_Surface;
 typedef struct SDL_Window SDL_Window;
 typedef struct lighting_vertex lighting_vertex_t;
 
-#define GPU_RENDERER_STATISTICS_VERSION UINT8_C(1)
+#define GPU_RENDERER_STATISTICS_VERSION UINT8_C(2)
 #define GPU_RENDERER_OWNER_UNLIT (UINT8_MAX - UINT8_C(1))
 
 typedef enum gpu_renderer_timing_stage {
@@ -52,21 +52,73 @@ typedef struct gpu_renderer_statistics {
     uint64_t draws;
     uint64_t upload_count;
     uint64_t upload_bytes;
+    uint64_t source_upload_count;
+    uint64_t source_upload_bytes;
+    uint64_t instance_upload_count;
+    uint64_t instance_upload_bytes;
+    uint64_t light_upload_count;
+    uint64_t light_upload_bytes;
+    uint64_t slot_uniform_upload_count;
+    uint64_t slot_uniform_upload_bytes;
     uint64_t resource_creations;
     uint64_t resource_destructions;
     uint64_t retained_bytes;
     uint64_t peak_retained_bytes;
     uint64_t device_recoveries;
     uint64_t recovery_failures;
+    uint64_t readbacks;
     uint64_t fallbacks;
 } gpu_renderer_statistics_t;
 
 bool gpu_renderer_create(SDL_Window *window);
 bool gpu_renderer_recover(SDL_Window *window);
+/** Perform at most one complete device reconstruction for the current failure. */
+bool gpu_renderer_recover_bounded(SDL_Window *window,
+                                  unsigned int *attempts,
+                                  bool conformance_device);
+typedef bool (*gpu_renderer_recovery_step_fn)(void *userdata);
+/**
+ * Recreate the device, reapply window state, and publish one complete frame
+ * as a single bounded recovery transaction.
+ */
+bool gpu_renderer_recover_and_republish(SDL_Window *window,
+                                        unsigned int *attempts,
+                                        bool conformance_device,
+                                        gpu_renderer_recovery_step_fn apply_window_state,
+                                        gpu_renderer_recovery_step_fn republish_complete_frame,
+                                        void *userdata);
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+typedef enum gpu_renderer_conformance_fault {
+    GPU_RENDERER_CONFORMANCE_FAULT_NONE,
+    GPU_RENDERER_CONFORMANCE_FAULT_ALLOCATION,
+    GPU_RENDERER_CONFORMANCE_FAULT_SHADER,
+    GPU_RENDERER_CONFORMANCE_FAULT_TARGET,
+    GPU_RENDERER_CONFORMANCE_FAULT_UPLOAD,
+    GPU_RENDERER_CONFORMANCE_FAULT_SUBMISSION,
+    GPU_RENDERER_CONFORMANCE_FAULT_SWAPCHAIN,
+    GPU_RENDERER_CONFORMANCE_FAULT_DEVICE_LOSS,
+    GPU_RENDERER_CONFORMANCE_FAULT_READBACK,
+    GPU_RENDERER_CONFORMANCE_FAULT_UI_ATLAS_UPLOAD,
+} gpu_renderer_conformance_fault_t;
+
+/** Test-only CPU-emulated GPU entry point; production always requires hardware. */
+bool gpu_renderer_conformance_available(void);
+bool gpu_renderer_create_conformance(SDL_Window *window);
+bool gpu_renderer_recover_conformance(SDL_Window *window);
+bool gpu_renderer_conformance_wait_idle(void);
+void gpu_renderer_conformance_fault_set(gpu_renderer_conformance_fault_t fault);
+bool gpu_renderer_conformance_fault_take(gpu_renderer_conformance_fault_t fault);
+size_t gpu_renderer_atlas_page_count(void);
+size_t gpu_renderer_atlas_allocation_count(void);
+#endif
 void gpu_renderer_recreation_request(void);
 bool gpu_renderer_recreation_take_request(void);
 void gpu_renderer_destroy(void);
 bool gpu_renderer_ready(void);
+/** True only when production creation authoritatively rejected software adapters. */
+bool gpu_renderer_hardware_verified(void);
+/** Flush all submitted 2D work and wait for the shared GPU device to become idle. */
+bool gpu_renderer_wait_idle(void);
 SDL_Renderer *gpu_renderer_sdl(void);
 SDL_GPUDevice *gpu_renderer_device(void);
 const char *gpu_renderer_backend(void);
@@ -78,10 +130,18 @@ bool gpu_renderer_begin_frame(void);
 bool gpu_renderer_present(void);
 bool gpu_renderer_frame_valid(void);
 bool gpu_renderer_map_begin(int width, int height);
+/** Begin the independently retained auxiliary/minimap map target. */
+bool gpu_renderer_map_begin_auxiliary(int width, int height);
 void gpu_renderer_map_set_owner(uint8_t owner, int sample_y);
+/** Bind the stable semantic map-record identity for the next painter draw. */
+void gpu_renderer_map_set_instance_identity(uint64_t record_identity, uint32_t draw_variant);
 void gpu_renderer_map_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]);
 bool gpu_renderer_map_end(void);
 bool gpu_renderer_draw_map(float x, float y, float width, float height);
+bool gpu_renderer_draw_map_to(SDL_Surface *target,
+                              const SDL_FRect *source,
+                              const SDL_FRect *destination,
+                              SDL_ScaleMode scale_mode);
 bool gpu_renderer_draw_surface(SDL_Surface *surface,
                                const SDL_Rect *source,
                                const SDL_FRect *destination);
@@ -135,14 +195,32 @@ bool gpu_renderer_draw_line(float x1,
 bool gpu_renderer_set_clip(const SDL_Rect *rectangle);
 void gpu_renderer_invalidate_surface(SDL_Surface *surface);
 void gpu_renderer_surface_changed(SDL_Surface *surface);
+/** Callback for a completed asynchronous frame readback; owns surface. */
+typedef void (*gpu_renderer_readback_callback_t)(SDL_Surface *surface, void *userdata);
+/** Callback for an asynchronous frame readback canceled by renderer teardown. */
+typedef void (*gpu_renderer_readback_cancel_callback_t)(void *userdata);
+/** Enqueue a completed-frame readback without waiting for GPU completion. */
+bool gpu_renderer_readback_async(const SDL_Rect *rect,
+                                 gpu_renderer_readback_callback_t callback,
+                                 gpu_renderer_readback_cancel_callback_t cancel_callback,
+                                 void *userdata);
+/** Dispatch completed asynchronous readbacks from the client thread. */
+void gpu_renderer_readback_poll(void);
+/** Explicit synchronous readback reserved for checkpoints and conformance. */
 SDL_Surface *gpu_renderer_readback(const SDL_Rect *rect);
+
+/** Return the retained upload generation associated with a source surface. */
+Uint64 gpu_renderer_surface_generation(SDL_Surface *surface);
 
 void gpu_renderer_statistics_reset(void);
 void gpu_renderer_statistics_get(gpu_renderer_statistics_t *statistics);
 uint64_t gpu_renderer_timing_begin(void);
 void gpu_renderer_timing_end(gpu_renderer_timing_stage_t stage, uint64_t started_ns);
 void gpu_renderer_statistics_commands(uint64_t commands, uint64_t batches, uint64_t draws);
-void gpu_renderer_statistics_upload(size_t bytes);
+void gpu_renderer_statistics_source_upload(size_t bytes);
+void gpu_renderer_statistics_instance_upload(size_t bytes);
+void gpu_renderer_statistics_light_upload(size_t bytes);
+void gpu_renderer_statistics_slot_uniform_upload(size_t bytes);
 void gpu_renderer_statistics_resource_create(size_t retained_bytes);
 void gpu_renderer_statistics_resource_destroy(size_t retained_bytes);
 void gpu_renderer_statistics_recovery(bool succeeded);

@@ -40,6 +40,20 @@ extern char *package_get_version_full(char *dst, size_t dstlen);
 
 extern char *package_get_version_partial(char *dst, size_t dstlen);
 
-extern void screenshot_create(SDL_Surface *surface);
+extern void screenshot_create(const SDL_Rect *rect);
+
+/** Monotonic clock used by visual UI state. */
+extern uint32_t client_ui_ticks(void);
+
+#ifdef ATRINIK_WIDGET_TESTS
+/** Freeze every visual UI animation at a deterministic fixture time. */
+extern void client_ui_test_clock_set(uint32_t ticks);
+/** Restore the production monotonic UI clock. */
+extern void client_ui_test_clock_reset(void);
+/** Redirect the next player-facing screenshot completion to the fixture. */
+extern void screenshot_test_begin(void);
+/** Take ownership of the completed player-facing screenshot, if ready. */
+extern SDL_Surface *screenshot_test_take(void);
+#endif
 
 #endif

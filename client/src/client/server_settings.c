@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -34,6 +34,36 @@
 
 /** The server settings. */
 server_settings *s_settings = NULL;
+
+#ifdef ATRINIK_WIDGET_TESTS
+void server_settings_test_init(void) {
+    server_settings_deinit();
+    s_settings = xcalloc(1, sizeof(*s_settings));
+    s_settings->max_level = 2;
+    s_settings->level_exp = xcalloc(4, sizeof(*s_settings->level_exp));
+    s_settings->level_exp[1] = 100;
+    s_settings->level_exp[2] = 300;
+    s_settings->level_exp[3] = 600;
+    for (size_t index = 0; index < arraysize(s_settings->text); index++) {
+        s_settings->text[index] =
+            xstrdup("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+    }
+    for (size_t index = 0; index < arraysize(s_settings->protection_groups); index++) {
+        char value[32];
+        snprintf(VS(value), "Protection group %zu", index + 1U);
+        s_settings->protection_groups[index] = xstrdup(value);
+    }
+    for (size_t index = 0; index < arraysize(s_settings->protection_letters); index++) {
+        s_settings->protection_letters[index] = xstrdup("PR");
+        char value[32];
+        snprintf(VS(value), "Protection %zu", index + 1U);
+        s_settings->protection_full[index] = xstrdup(value);
+    }
+    for (size_t index = 0; index < arraysize(s_settings->spell_paths); index++) {
+        s_settings->spell_paths[index] = xstrdup("Path");
+    }
+}
+#endif
 
 /**
  * Initialize the server settings from the srv file.

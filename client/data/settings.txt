@@ -201,17 +201,17 @@ category Map
 	end
 	setting Map width
 		type range
-		range 9 - 17
+		range 9 - 28
 		advance 1
-		default 17
-		desc Logical map width. Larger views remain disabled until GPU memory and performance qualification is complete.
+		default 25
+		desc Logical map width. The validated wire ceiling is 28.
 	end
 	setting Map height
 		type range
-		range 9 - 17
+		range 9 - 28
 		advance 1
-		default 17
-		desc Logical map height. Larger views remain disabled until GPU memory and performance qualification is complete.
+		default 25
+		desc Logical map height. The validated wire ceiling is 28.
 	end
 end
 

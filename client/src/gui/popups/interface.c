@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -97,7 +97,7 @@ static void interface_destroy(interface_struct *data) {
 static int
 text_anchor_handle(const char *anchor_action, const char *buf, size_t len, void *custom_data) {
     if (anchor_action[0] == '\0' && buf[0] != '/') {
-        if (!interface_data->progressed || SDL_GetTicks() >= interface_data->progressed_ticks) {
+        if (!interface_data->progressed || client_ui_ticks() >= interface_data->progressed_ticks) {
             StringBuffer *sb = stringbuffer_new();
             char *cp;
 
@@ -107,7 +107,7 @@ text_anchor_handle(const char *anchor_action, const char *buf, size_t len, void 
             free(cp);
 
             interface_data->progressed = 1;
-            interface_data->progressed_ticks = SDL_GetTicks() + INTERFACE_PROGRESSED_TICKS;
+            interface_data->progressed_ticks = client_ui_ticks() + INTERFACE_PROGRESSED_TICKS;
         }
 
         return 1;
@@ -137,8 +137,8 @@ static void interface_execute_link(size_t link_id) {
 
 /** @copydoc popup_struct::draw_func */
 static int popup_draw_func(popup_struct *popup) {
-    if (interface_data->anim != NULL && SDL_GetTicks() - interface_data->last_anim > 125) {
-        interface_data->last_anim = SDL_GetTicks();
+    if (interface_data->anim != NULL && client_ui_ticks() - interface_data->last_anim > 125) {
+        interface_data->last_anim = client_ui_ticks();
 
         if (object_animate(interface_data->anim)) {
             popup->redraw = 1;
@@ -228,7 +228,11 @@ static int popup_draw_post_func(popup_struct *popup) {
                         popup->y + popup->surface->h - text_input.coords.h - 15);
     }
 
-    surface_show(OfflineRenderSurface, popup->x, popup->y, NULL, TEXTURE_CLIENT("interface_border"));
+    surface_show(OfflineRenderSurface,
+                 popup->x,
+                 popup->y,
+                 NULL,
+                 TEXTURE_CLIENT("interface_border"));
     return 1;
 }
 
@@ -258,10 +262,10 @@ static int popup_button_event_func(popup_button *button) {
  * Handles clicking the 'hello' button.
  */
 static void button_hello_event(void) {
-    if (!interface_data->progressed || SDL_GetTicks() >= interface_data->progressed_ticks) {
+    if (!interface_data->progressed || client_ui_ticks() >= interface_data->progressed_ticks) {
         keybind_process_command("?HELLO");
         interface_data->progressed = 1;
-        interface_data->progressed_ticks = SDL_GetTicks() + INTERFACE_PROGRESSED_TICKS;
+        interface_data->progressed_ticks = client_ui_ticks() + INTERFACE_PROGRESSED_TICKS;
     }
 }
 

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -259,6 +259,10 @@ region_map_t *region_map_clone(region_map_t *region_map);
 void region_map_free(region_map_t *region_map);
 void region_map_update(region_map_t *region_map, const char *region_name);
 void region_map_fow_update(region_map_t *region_map);
+#ifdef ATRINIK_WIDGET_TESTS
+/** Disable or restore fixture FOW persistence. */
+void region_map_test_fow_persistence_set(bool enabled);
+#endif
 bool region_map_fow_set_visited(region_map_t *region_map,
                                 region_map_def_map_t *map,
                                 const char *map_path,

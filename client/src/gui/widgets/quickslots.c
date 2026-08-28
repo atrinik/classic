@@ -273,11 +273,11 @@ static void list_post_column(list_struct *list, uint32_t row, uint32_t col) {
 
 /** @copydoc list_struct::row_color_func */
 static void list_row_color(list_struct *list, int row, SDL_Rect box) {
-    Uint32 color = pixel_format_map_rgb(list->surface->format, 25, 25, 25);
+    Uint32 color = surface_map_rgb(list->surface, 25, 25, 25);
     surface_fill_rect(list->surface, &box, color);
     box.w = 1;
 
-    color = pixel_format_map_rgb(list->surface->format, 130, 130, 130);
+    color = surface_map_rgb(list->surface, 130, 130, 130);
     for (int i = 0; i < MAX_QUICK_SLOTS; i++) {
         box.x = (INVENTORY_ICON_SIZE + 1) * i + 1;
         surface_fill_rect(list->surface, &box, color);

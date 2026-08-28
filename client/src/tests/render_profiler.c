@@ -10,12 +10,13 @@
  ************************************************************************/
 
 #include <global.h>
+#include <toolkit/stringbuffer.h>
 
 #define TEST_CHECK(condition) \
-    do {                       \
-        if (!(condition)) {    \
+    do {                      \
+        if (!(condition)) {   \
             abort();          \
-        }                      \
+        }                     \
     } while (0)
 
 char *render_profiler_widget_text_for_test(const render_profile_snapshot_t *snapshot);
@@ -23,9 +24,10 @@ void render_profiler_set_completed_generation_for_test(uint32_t generation);
 
 void gpu_renderer_statistics_get(gpu_renderer_statistics_t *statistics) {
     *statistics = (gpu_renderer_statistics_t){
-        .timings = {
-            [GPU_RENDERER_TIMING_COMMAND_BUILD] = {.calls = 2, .elapsed_ns = UINT64_C(4000000)},
-        },
+        .timings =
+            {
+                [GPU_RENDERER_TIMING_COMMAND_BUILD] = {.calls = 2, .elapsed_ns = UINT64_C(4000000)},
+            },
         .commands = 101,
         .batches = 23,
         .draws = 47,
@@ -41,11 +43,8 @@ void gpu_renderer_statistics_get(gpu_renderer_statistics_t *statistics) {
 }
 
 /* The formatter test does not execute the widget's SDL/scrollbar paths. */
-Uint32 pixel_format_map_rgba(SDL_PixelFormat format,
-                             Uint8 red,
-                             Uint8 green,
-                             Uint8 blue,
-                             Uint8 alpha) {
+Uint32
+pixel_format_map_rgba(SDL_PixelFormat format, Uint8 red, Uint8 green, Uint8 blue, Uint8 alpha) {
     (void)format;
     (void)red;
     (void)green;
@@ -155,7 +154,7 @@ static void test_zero_interval_and_calls_are_safe(void) {
     render_profile_snapshot_t snapshot = {0};
     char *text = render_profiler_widget_text_for_test(&snapshot);
 
-    TEST_CHECK(strstr(text, "frame [per_frame] 0.00 ms, 0 calls, 0.0/s") != NULL);
+    TEST_CHECK(strstr(text, "frame &lsqb;per_frame&rsqb; 0.00 ms, 0 calls, 0.0/s") != NULL);
     TEST_CHECK(render_profiler_scope_name((render_profile_scope_t)-1) == NULL);
     TEST_CHECK(!render_profiler_stage_metadata_get(-1, NULL));
     TEST_CHECK(!render_profiler_stage_metadata_get(RENDER_PROFILE_STAGE_NUM, NULL));
@@ -197,13 +196,16 @@ static void test_widget_navigation_and_resize(void) {
     widget.redraw = 0;
     widget.background_func(&widget, 0);
     TEST_CHECK(widget.redraw == 1);
-    widget.deinit_func(&widget);
+    TEST_CHECK(widget.deinit_func == NULL);
+    free(widget.subwidget);
     SDL_DestroySurface(surface);
 }
 
 int main(void) {
+    toolkit_import(stringbuffer);
     test_stage_metadata_is_rendered();
     test_zero_interval_and_calls_are_safe();
     test_widget_navigation_and_resize();
+    toolkit_deinit();
     return 0;
 }

@@ -23,8 +23,12 @@ endif ()
 include(CTest)
 include(FetchContent)
 
+option(ATRINIK_GPU_CONFORMANCE_REQUIRED
+    "Require a runnable supported GPU for the production conformance test" OFF)
+
 set(ATRINIK_GPU_SHADER_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/shaders/generated")
 set(ATRINIK_GPU_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/src/include/gpu_shader_data.h")
+file(SHA256 "${ATRINIK_GPU_SHADER_DIRECTORY}/SHA256SUMS" ATRINIK_GPU_SHADER_COHORT)
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/src/include")
 file(WRITE "${ATRINIK_GPU_SHADER_HEADER}"
     "/* Generated from checked-in, offline-compiled shader artifacts. */\n"
@@ -54,41 +58,41 @@ function(atrinik_embed_gpu_shader name extension expected_sha256)
 endfunction()
 
 atrinik_embed_gpu_shader(final_fragment dxil
-    a0e3e43083c0d6dde4cc0e55b9de4549816892dff1f8ac040c7e5feaf88a6ac4)
+    99fb6faee6ef1ba69bbc4fd2a987a1487d12b95016b31614b479d0b49dcf5384)
 atrinik_embed_gpu_shader(final_vertex dxil
-    280af65e0a86455e4da010b77449b305d07b9e6e1aa3ebfe362eaece55528584)
+    08eae78595fba775ff14ba070c72ffe64d37cf01771042b2a487701ca4bee46c)
 atrinik_embed_gpu_shader(light_fragment dxil
-    d85ebbe7309029bb28c0e43a6f9791a72cb54911ab0766b2dbac341c709f1677)
+    c1551668ab6b3568b0f7f9d9ee6b8c0f59e32df5816f131ad8160a04c5f4d319)
 atrinik_embed_gpu_shader(light_vertex dxil
-    4321fc5b423e35a92f93c3cf6cf68ceaf36d320a154a2d8fc2f51c3e48d75891)
+    14690461069ae95f2fa10d7282332225ce5d0be6c821099baa984aa959e5ec2a)
 atrinik_embed_gpu_shader(world_fragment dxil
-    de6efb386dc1147acb6ef71057242ba526b69f8910ade7e27d5143214f0e6234)
+    687a0d6991ad9ab99e9aad0982a6fff086a93fcaa232451cc7ff71a50d36398e)
 atrinik_embed_gpu_shader(world_vertex dxil
-    70d15a38251c9dcc3bcc313f354b6c352cd5f5f34287d4c5341a73e8beb02f0b)
+    d24c66e4fb41598b7e34371a02f6b552a87de1e0ccacaf201f77d107f56375bf)
 atrinik_embed_gpu_shader(final_fragment msl
-    f3e301982f76f36296d7b3f5690b391466bcc9d4b514b5b2f98082e0ca1ffcc5)
+    001b7cefc8a99bc70fa63840ad8f76d572b379e2a180e5dbfc76f1db808ece0b)
 atrinik_embed_gpu_shader(final_vertex msl
-    c55f7aa26823f2066331070863acf450659a13e507184417a2b52ae9daee43f3)
+    a8119c063891ce118e40f4ff6e1bcfc351fb2a82de6312e3b0c269ebc316c7a6)
 atrinik_embed_gpu_shader(light_fragment msl
-    942b420c9f4b7f9b6db42ba51db7292ad3d8c0865ac7020fe78cda19dfc097dd)
+    86d1600fd4c3514cf659b28297983ef638faab5f47c952a9819e5c49100cfd3d)
 atrinik_embed_gpu_shader(light_vertex msl
-    c243dd93a2692d13729e2062416ce3eb575afcc45700c67fc5b449ccb629e802)
+    62416e9df59d3f40bb66dd9f3cd6d4eafa9d727497736b6269b38285d708d58e)
 atrinik_embed_gpu_shader(world_fragment msl
-    804af07c4efd23ca2bf1b51ef9cac84736acc52eea93130aca5d4c0d043370f1)
+    55db0dea217b59ca22bbdcfdfb166b3cd928adce111ba7686c9e1e050827285b)
 atrinik_embed_gpu_shader(world_vertex msl
-    04423e7437b7e33659f78b986cb81adac246cf4baaeba9533226fa38df1335aa)
+    711c4ad3579cd4ab44f10c8f03fde4ad00bc0bf69171dfc03ab767b25bb75a93)
 atrinik_embed_gpu_shader(final_fragment spv
-    f62b752db5ce0e72508c2abc81406ae3a1f787f586f6ab118d617e381430b56d)
+    7d407f04b24fa08d5ec9db34801296c80c1c68f8a3566cc54941de43efda09fd)
 atrinik_embed_gpu_shader(final_vertex spv
-    40d6755e57a6854ef3b1928475a50e99a49859fbd49cb47d3514630ee291c7f4)
+    0ceecbb3a333a6419ca646ce567c0fe130ba87872d0f3e6937c578751c5e5211)
 atrinik_embed_gpu_shader(light_fragment spv
-    a7677a391226844363e8de2f36c733cd88668b80ca666553a9d8cf6f4fc37d8b)
+    8a5905039cafd0746f274c6c805d5b3ebaf20c8a254202b3e5d806d84514007d)
 atrinik_embed_gpu_shader(light_vertex spv
-    2543f6ee56b7c50d6e3d3cb2864d587905d776083d8141c9d2e955b6080a18d7)
+    575abeb5529ec9b84e42c42fd8c8dc59aa1c088d3677f1d47da4994a34fd871f)
 atrinik_embed_gpu_shader(world_fragment spv
-    374fb5834114fb6f9bd7295231418dbf328dae7ab36b1f5e684aecfcd1141c15)
+    c26c7e8d03bb41050b3ce20ed2b981a0474ced290e942bbef13b837f93e55cc0)
 atrinik_embed_gpu_shader(world_vertex spv
-    4334bdd64d3968dc89f20c664f7903236f19b4358ef7ee2fce853d145d9d5877)
+    bf1ca045f6c0aa5bfcc170e08d8a19c41ab1bc1d939476975a004fe2ec8a75db)
 file(APPEND "${ATRINIK_GPU_SHADER_HEADER}" "#endif\n")
 
 function(atrinik_find_root_document output filename)
@@ -308,6 +312,7 @@ set(HAVE_SDL_TTF true)
 
 # LibXML2 is required.
 find_package(LibXml2 REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 # Sound effects and music are core client functionality on every platform.
 find_package(SDL3_mixer 3.2.4 CONFIG REQUIRED)
@@ -331,7 +336,9 @@ atrinik_configure_target(${EXECUTABLE})
 if (ATRINIK_CLIENT_ENABLE_PRECOMPILED_HEADERS)
     target_precompile_headers(${EXECUTABLE} PRIVATE src/include/global.h)
 endif ()
-target_compile_definitions(${EXECUTABLE} PRIVATE SDL_DISABLE_OLD_NAMES)
+target_compile_definitions(${EXECUTABLE} PRIVATE
+    "ATRINIK_GPU_SHADER_COHORT=\"${ATRINIK_GPU_SHADER_COHORT}\""
+    SDL_DISABLE_OLD_NAMES)
 target_include_directories(${EXECUTABLE} BEFORE PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/src/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src/include
@@ -346,6 +353,9 @@ target_link_libraries(${EXECUTABLE} PRIVATE
     SDL3::SDL3
     SDL3_image::SDL3_image
     SDL3_ttf::SDL3_ttf)
+if (WIN32)
+    target_link_libraries(${EXECUTABLE} PRIVATE d3d12 dxgi)
+endif ()
 if (TARGET LibXml2::LibXml2)
     target_link_libraries(${EXECUTABLE} PRIVATE LibXml2::LibXml2)
 else ()
@@ -451,10 +461,48 @@ if (BUILD_TESTING)
     add_test(NAME client-rich-presence COMMAND client-rich-presence-tests)
     set_tests_properties(client-rich-presence PROPERTIES TIMEOUT 10)
 
+    add_executable(client-gpu-renderer-integration-tests
+        src/tests/gpu_renderer_integration.c
+        src/client/gpu_renderer.c
+        src/client/gpu_map_renderer.c
+        src/client/lighting_transfer.c)
+    atrinik_configure_target(client-gpu-renderer-integration-tests)
+    target_compile_definitions(client-gpu-renderer-integration-tests PRIVATE
+        ATRINIK_GPU_CONFORMANCE_TESTS
+        "ATRINIK_GPU_SHADER_COHORT=\"${ATRINIK_GPU_SHADER_COHORT}\""
+        SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-gpu-renderer-integration-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-gpu-renderer-integration-tests PRIVATE
+        Atrinik::Core
+        OpenSSL::Crypto
+        SDL3::SDL3)
+    if (WIN32)
+        target_link_libraries(client-gpu-renderer-integration-tests PRIVATE d3d12 dxgi)
+    endif ()
+    add_test(NAME client-gpu-renderer-integration
+        COMMAND client-gpu-renderer-integration-tests)
+    if (ATRINIK_GPU_CONFORMANCE_REQUIRED)
+        set_tests_properties(client-gpu-renderer-integration PROPERTIES
+            ENVIRONMENT "ATRINIK_GPU_CONFORMANCE_REQUIRED=1"
+            LABELS gpu-conformance)
+    else ()
+        set_tests_properties(client-gpu-renderer-integration PROPERTIES
+            LABELS gpu-conformance
+            SKIP_RETURN_CODE 77)
+    endif ()
+
+    # The production GPU replay and its semantic assertions are portable and
+    # must compile on every supported backend, including MinGW/D3D12 runners.
+    target_compile_definitions(${EXECUTABLE} PRIVATE
+        ATRINIK_GPU_CONFORMANCE_TESTS
+        ATRINIK_WIDGET_TESTS)
+
     if (NOT MINGW)
-        target_compile_definitions(${EXECUTABLE} PRIVATE
-            ATRINIK_SOUND_TESTS
-            ATRINIK_WIDGET_TESTS)
+        target_compile_definitions(${EXECUTABLE} PRIVATE ATRINIK_SOUND_TESTS)
 
         add_test(NAME client-sound
             COMMAND atrinik --sound-test
@@ -906,6 +954,32 @@ if (BUILD_TESTING)
     add_test(NAME client-map-state-integration COMMAND atrinik --map-state-test)
 
     endif ()
+
+    set(gpu_player_view_fixtures
+        smooth
+        radial-light-smooth
+        exit-cues
+        living-outline-translucent
+        living-outline-retained-fow
+        timed-light
+        map-overlay-linked-depth
+        map-overlay-widget-state
+        map-overlay-elevated
+        visibility-fade-centered
+        brynknot-movement
+        gpu-qualification-town-25x25
+        gpu-ui-closure)
+    foreach (fixture IN LISTS gpu_player_view_fixtures)
+        add_test(NAME client-gpu-player-view-${fixture}
+            COMMAND atrinik --gpu-player-view
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/player_view/${fixture}.xml")
+        set_tests_properties(client-gpu-player-view-${fixture} PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            ENVIRONMENT "SDL_VIDEODRIVER=offscreen"
+            LABELS "gpu-conformance;production-fixture"
+            SKIP_RETURN_CODE 77
+            TIMEOUT 60)
+    endforeach ()
 endif ()
 
 # Installer.

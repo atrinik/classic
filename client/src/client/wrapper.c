@@ -199,7 +199,20 @@ void copy_file(const char *filename, const char *filename_out) {
  * @return
  * The configuration directory.
  */
+#ifdef ATRINIK_WIDGET_TESTS
+static bool test_user_data_isolated;
+
+void wrapper_test_user_data_isolated_set(bool enabled) {
+    test_user_data_isolated = enabled;
+}
+#endif
+
 const char *get_config_dir(void) {
+#ifdef ATRINIK_WIDGET_TESTS
+    if (test_user_data_isolated) {
+        return "";
+    }
+#endif
     const char *desc = getenv("ATRINIK_CONFIG_DIR");
 
     if (desc && *desc) {
@@ -274,8 +287,6 @@ char *file_path(const char *path, const char *mode) {
     HARD_ASSERT(path != NULL);
     HARD_ASSERT(mode != NULL);
 
-    SOFT_ASSERT_RC(path[0] != '/', xstrdup(path), "Path is already absolute: %s", path);
-
     is_write = is_append = false;
 
     if (strchr(mode, 'w') != NULL) {
@@ -283,6 +294,21 @@ char *file_path(const char *path, const char *mode) {
     } else if (strchr(mode, '+') != NULL || strchr(mode, 'a') != NULL) {
         is_append = true;
     }
+
+#ifdef ATRINIK_WIDGET_TESTS
+    if (test_user_data_isolated) {
+        if (is_write || is_append) {
+            return NULL;
+        }
+        if (path[0] == '/') {
+            return xstrdup(path);
+        }
+        get_data_dir_file(VS(client_path), path);
+        return xstrdup(client_path);
+    }
+#endif
+
+    SOFT_ASSERT_RC(path[0] != '/', xstrdup(path), "Path is already absolute: %s", path);
 
     if (!user_data_prepare(get_config_dir(), PACKAGE_VERSION_MAJOR, VS(user_data_directory))) {
         LOG(ERROR, "Could not prepare the client user-data directory.");

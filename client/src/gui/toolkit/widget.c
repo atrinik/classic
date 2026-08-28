@@ -120,6 +120,7 @@ static widgetresize widget_event_resize = {0, NULL, 0, 0};
  *
  */
 static int IsMouseExclusive = 0;
+static bool widget_fixture_read_only;
 
 #ifdef ATRINIK_WIDGET_TESTS
 static bool widget_priority_test_mode;
@@ -148,7 +149,9 @@ static int widget_load(const char *path, uint8_t defaults, widgetdata *widgets[]
     widgetdata *widget;
     int depth, old_depth;
 
-    fp = path_fopen(path, "r");
+    /* Frozen fixture inputs are already closed, hash-verified absolute paths;
+     * never route them through the mutable user-data overlay. */
+    fp = widget_fixture_read_only ? fopen(path, "r") : path_fopen(path, "r");
 
     if (!fp) {
         return 0;
@@ -270,7 +273,7 @@ static int widget_load_layout(const char *path, widgetdata *widgets[]) {
  * Try to load the main interface file and initialize the priority list
  * On failure, initialize the widgets with init_widgets_fromDefault()
  */
-void toolkit_widget_init(void) {
+static void toolkit_widget_init_from(const char *interface_path) {
     widgetdata *widgets[100];
 
     widget_initializers[ACTIVE_EFFECTS_ID] = widget_active_effects_init;
@@ -310,12 +313,14 @@ void toolkit_widget_init(void) {
     }
 #endif
 
-    if (!widget_load("data/interface.cfg", 1, widgets)) {
-        LOG(ERROR, "Could not load widget defaults from data/interface.cfg.");
+    if (!widget_load(interface_path, 1, widgets)) {
+        LOG(ERROR, "Could not load widget defaults from '%s'.", interface_path);
         exit(1);
     }
 
-    widget_load_layout("settings/interface.cfg", widgets);
+    if (!widget_fixture_read_only) {
+        widget_load_layout("settings/interface.cfg", widgets);
+    }
 
 #ifdef ATRINIK_WIDGET_TESTS
     if (widget_priority_test_mode) {
@@ -343,6 +348,56 @@ void toolkit_widget_init(void) {
 
     widget_enforce_map_priority();
     widgets_ensure_onscreen();
+}
+
+void toolkit_widget_init(void) {
+    toolkit_widget_init_from("data/interface.cfg");
+}
+
+void toolkit_widget_fixture_init(const char *interface_path, const char *layout_path) {
+    HARD_ASSERT(interface_path != NULL);
+    HARD_ASSERT(layout_path != NULL);
+    widget_fixture_read_only = true;
+    toolkit_widget_init_from(interface_path);
+
+    /* The separately hashed saved layout gives repeated widgets their IDs,
+     * tabs, and type-specific settings. */
+    widgetdata *widgets[100];
+    if (!widget_load_layout(layout_path, widgets)) {
+        LOG(ERROR, "Could not load immutable widget fixture layout '%s'.", layout_path);
+        exit(1);
+    }
+
+    /* Materialize any singleton added after the pinned layout was authored. */
+    for (int type = 0; type < TOTAL_WIDGETS; type++) {
+        if (def_widget[type].required && cur_widget[type] == NULL) {
+            widgetdata *widget = create_widget_object(type);
+            HARD_ASSERT(widget != NULL);
+            SetPriorityWidget(widget);
+        }
+    }
+    widget_enforce_map_priority();
+    widgets_ensure_onscreen();
+}
+
+void toolkit_widget_fixture_deinit(void) {
+    kill_widgets();
+    widget_fixture_read_only = false;
+}
+
+bool toolkit_widget_fixture_is_read_only(void) {
+    return widget_fixture_read_only;
+}
+
+void toolkit_widget_fixture_show_all(void) {
+    HARD_ASSERT(widget_fixture_read_only);
+    for (size_t type = 0; type < TOTAL_SUBWIDGETS; type++) {
+        for (widgetdata *widget = cur_widget[type]; widget != NULL; widget = widget->type_next) {
+            widget->show = 1;
+            widget->hidden = 0;
+            widget->redraw = 1;
+        }
+    }
 }
 
 /** @copydoc widgetdata::menu_handle_func */
@@ -2927,7 +2982,7 @@ void widget_show(widgetdata *widget, int show) {
     widget->show = show;
 
     if (show) {
-        widget->showed_ticks = SDL_GetTicks();
+        widget->showed_ticks = client_ui_ticks();
     }
 
     /* So that containers can factor in the widget's visibility */

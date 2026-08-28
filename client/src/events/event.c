@@ -199,8 +199,10 @@ int Event_PollInputDevice(void) {
                     setting_set_int(OPT_CAT_CLIENT, OPT_RESOLUTION, 0);
                 }
                 int width, height;
-                if (!SDL_GetWindowSizeInPixels(ScreenWindow, &width, &height)) {
-                    LOG(ERROR, "Unable to query window pixels after resize: %s", SDL_GetError());
+                if (!SDL_GetWindowSize(ScreenWindow, &width, &height)) {
+                    LOG(ERROR,
+                        "Unable to query logical window size after resize: %s",
+                        SDL_GetError());
                     resize_window_recovery_request();
                     gpu_renderer_recreation_request();
                     map_redraw_request(MAP_REDRAW_REASON_RESIZE);

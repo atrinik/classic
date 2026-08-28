@@ -149,7 +149,121 @@ def dense_records(payload: bytes) -> tuple[list[dict[str, object]], int]:
     return records, cursor
 
 
+def qualification_floor_heights(payload: bytes) -> dict[tuple[int, int], int]:
+    """Decode floor heights from the closed qualification encoder subset."""
+    cursor = 0
+    heights: dict[tuple[int, int], int] = {}
+    for _ in range(len(generator.QUALIFICATION_COORDINATES) ** 2):
+        mask = struct.unpack_from(">H", payload, cursor)[0]
+        cursor += 2
+        if mask & 0x01:
+            cursor += 2
+        if mask & 0x20:
+            cursor += 1
+        cursor += 2  # scalar light
+        layer_count = payload[cursor]
+        cursor += 1
+        for _ in range(layer_count):
+            socket_layer, _face, object_flags, flags = struct.unpack_from(">BHBB", payload, cursor)
+            cursor += 5
+            if object_flags != 0:
+                raise ValueError("qualification object flags are not closed")
+            if flags & 0x02:
+                cursor = payload.index(b"\0", cursor) + 1
+                cursor = payload.index(b"\0", cursor) + 1
+            if flags & 0x04:
+                cursor += 3
+            if flags & 0x08:
+                height = struct.unpack_from(">h", payload, cursor)[0]
+                cursor += 2
+                if socket_layer == 0:
+                    heights[((mask >> 11) & 0x1F, (mask >> 6) & 0x1F)] = height
+            if flags & 0x80:
+                flags2 = struct.unpack_from(">I", payload, cursor)[0]
+                cursor += 4
+                cursor += bool(flags2 & 0x00000001)
+                cursor += 2 * bool(flags2 & 0x00000002)
+                cursor += 4 * bool(flags2 & 0x00000004)
+                cursor += 5 * bool(flags2 & 0x00000008)
+        if payload[cursor] != 0:
+            raise ValueError("qualification extended cell flags are not closed")
+        cursor += 1
+    if cursor != len(payload):
+        raise ValueError("qualification payload has trailing bytes")
+    return heights
+
+
 class MovementFixtureTests(unittest.TestCase):
+    def test_gpu_manifests_pin_shared_widget_inputs(self) -> None:
+        expected = {
+            "interface": (
+                "data/interface.cfg",
+                "cb3bccde141390f8e016a988f1c3b8c13fcf72f54d0e1ef4305cd7716f0a2302",
+            ),
+            "layout": (
+                "src/tests/fixtures/player_view/gpu-interface.cfg",
+                "8f2fc77fead14655d039c9cd7e52c6767e942603eb06646f427f87d25cb8a3d2",
+            ),
+        }
+        for manifest in FIXTURES.glob("*.xml"):
+            root = ElementTree.parse(manifest).getroot()
+            if root.get("renderer") != "gpu":
+                continue
+            for name, (relative, digest) in expected.items():
+                with self.subTest(manifest=manifest.name, input=name):
+                    self.assertEqual(root.get(name), relative)
+                    self.assertEqual(root.get(f"{name}-sha256"), digest)
+                    path = FIXTURES / root.get("input-root", "") / relative
+                    self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), digest)
+
+    def test_generated_gpu_benchmark_scenes_are_pinned(self) -> None:
+        source = bytes.fromhex((FIXTURES / "scene.map2.hex").read_text(encoding="ascii"))
+        cases = (
+            (17, "gpu-benchmark-17x17-five-depth.map2.hex", (21, 21, 10, 10),
+             list(generator.BENCHMARK_17_DEPTHS),
+             "eef02084f57ef9bf8e511a3019a3ae911efa0c2808cd93bf3e4ba0919c17b0ef"),
+            (28, "gpu-benchmark-28x28-thirteen-depth.map2.hex", (32, 32, 16, 16),
+             list(generator.BENCHMARK_28_DEPTHS),
+             "513833c7e8ab46b94c9914f7e26b0b66d8db63bccb24833ec92d89bff06c8975"),
+        )
+        for logical_size, filename, geometry, depths, text_digest in cases:
+            with self.subTest(logical_size=logical_size):
+                path = FIXTURES / filename
+                text = path.read_bytes()
+                pinned = bytes.fromhex(text.decode("ascii"))
+                self.assertEqual(generator.benchmark_scene(source, logical_size), pinned)
+                self.assertEqual(new_packet_geometry(pinned), geometry)
+                self.assertEqual([depth for depth, _ in new_packet_levels(pinned)], depths)
+                self.assertEqual(pinned.count(b"Actor "), 64)
+                self.assertLessEqual(len(pinned), 65535)
+                self.assertEqual(hashlib.sha256(text).hexdigest(), text_digest)
+
+    def test_generated_gpu_qualification_town_is_pinned(self) -> None:
+        source = bytes.fromhex(
+            (FIXTURES / "colored-scene.map2.hex").read_text(encoding="ascii")
+        )
+        generated = generator.qualification_scene(source)
+        pinned_path = FIXTURES / "gpu-qualification-town-25x25-seven-depth.map2.hex"
+        pinned = bytes.fromhex(pinned_path.read_text(encoding="ascii"))
+        self.assertEqual(generated, pinned)
+        self.assertEqual(new_packet_geometry(pinned), (29, 29, 14, 14))
+        levels = new_packet_levels(pinned)
+        self.assertEqual(
+            [depth for depth, _ in levels], list(generator.QUALIFICATION_DEPTHS)
+        )
+        self.assertEqual(pinned.count(b"Actor "), 64)
+        self.assertGreater(len(pinned), 50_000)
+        zero_depth = dict(levels)[0]
+        heights = qualification_floor_heights(zero_depth)
+        self.assertGreaterEqual(len(heights), 50)
+        self.assertTrue(
+            any(
+                heights.get((x + 1, y)) not in (None, height)
+                or heights.get((x, y + 1)) not in (None, height)
+                for (x, y), height in heights.items()
+            )
+        )
+
     def test_roof_heavy_generator_direct_paths(self) -> None:
         source = FIXTURES / "colored-scene.map2.hex"
         with tempfile.TemporaryDirectory() as temporary:

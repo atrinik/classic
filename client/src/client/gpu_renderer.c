@@ -14,6 +14,13 @@
  * Mandatory SDL_GPU-backed renderer device and retained upload cache.
  */
 
+#ifdef WIN32
+#define COBJMACROS
+#include <windows.h>
+#include <d3d12.h>
+#include <dxgi1_6.h>
+#endif
+
 #include <global.h>
 
 #define GPU_RENDERER_SURFACE_GENERATION_PROPERTY "atrinik.gpu.surface_generation"
@@ -44,6 +51,7 @@ typedef struct gpu_atlas_region {
 struct gpu_texture_atlas {
     SDL_Texture *texture;
     gpu_atlas_region_t *free_regions;
+    size_t allocations;
     size_t bytes;
     gpu_texture_atlas_t *next;
 };
@@ -56,6 +64,17 @@ typedef struct gpu_canvas {
     struct gpu_canvas *next;
 } gpu_canvas_t;
 
+typedef struct gpu_pending_readback {
+    SDL_GPUTransferBuffer *transfer;
+    SDL_GPUFence *fence;
+    SDL_Rect area;
+    Uint32 row_pitch;
+    gpu_renderer_readback_callback_t callback;
+    gpu_renderer_readback_cancel_callback_t cancel_callback;
+    void *userdata;
+    struct gpu_pending_readback *next;
+} gpu_pending_readback_t;
+
 static SDL_Renderer *renderer;
 static SDL_GPUDevice *device;
 static SDL_Texture *frame_target;
@@ -63,14 +82,19 @@ static size_t frame_target_bytes;
 static gpu_surface_texture_t *surface_textures;
 static gpu_texture_atlas_t *texture_atlases;
 static gpu_canvas_t *canvases;
+static gpu_pending_readback_t *pending_readbacks;
 static Uint64 next_surface_generation = 1;
 static gpu_renderer_statistics_t statistics;
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+static gpu_renderer_conformance_fault_t conformance_fault;
+#endif
 static char backend[32];
 static char device_name[256];
 static char driver_name[256];
 static char driver_version[256];
 static bool frame_failed;
 static bool recreation_requested;
+static bool hardware_verified;
 
 static bool gpu_renderer_draw_color(Uint8 red, Uint8 green, Uint8 blue, Uint8 alpha);
 
@@ -92,24 +116,141 @@ static bool gpu_renderer_backend_supported(const char *name) {
                             strcmp(name, "metal") == 0);
 }
 
+#ifdef WIN32
+static bool gpu_renderer_qualification_requested(void) {
+    const char *value = SDL_GetEnvironmentVariable(SDL_GetEnvironment(),
+                                                   "ATRINIK_GPU_CONFORMANCE_QUALIFIED_HARDWARE");
+    return value != NULL && strcmp(value, "1") == 0;
+}
+#endif
+
+static bool gpu_renderer_d3d12_hardware_verified(void) {
+#ifdef WIN32
+    IDXGIFactory1 *factory1 = NULL;
+    HRESULT result = CreateDXGIFactory1(&IID_IDXGIFactory1, (void **)&factory1);
+    if (FAILED(result)) {
+        SDL_SetError("could not create DXGI factory for D3D12 hardware attestation");
+        return false;
+    }
+    unsigned int hardware_adapters = 0;
+    for (UINT index = 0;; index++) {
+        IDXGIAdapter1 *adapter = NULL;
+        result = IDXGIFactory1_EnumAdapters1(factory1, index, &adapter);
+        if (result == DXGI_ERROR_NOT_FOUND) {
+            break;
+        }
+        if (FAILED(result) || adapter == NULL) {
+            IDXGIFactory1_Release(factory1);
+            SDL_SetError("could not enumerate DXGI adapters for D3D12 hardware attestation");
+            return false;
+        }
+        DXGI_ADAPTER_DESC1 description;
+        ID3D12Device *candidate_device = NULL;
+        bool hardware = SUCCEEDED(IDXGIAdapter1_GetDesc1(adapter, &description)) &&
+                        !(description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) &&
+                        SUCCEEDED(D3D12CreateDevice((IUnknown *)adapter,
+                                                    D3D_FEATURE_LEVEL_11_0,
+                                                    &IID_ID3D12Device,
+                                                    (void **)&candidate_device));
+        if (candidate_device != NULL) {
+            ID3D12Device_Release(candidate_device);
+        }
+        IDXGIAdapter1_Release(adapter);
+        hardware_adapters += hardware;
+    }
+    IDXGIFactory1_Release(factory1);
+    bool unique_required = gpu_renderer_qualification_requested();
+    if (hardware_adapters == 0U || (unique_required && hardware_adapters != 1U)) {
+        SDL_SetError("D3D12 hardware attestation requires %s hardware-capable DXGI adapter "
+                     "(found %u)",
+                     unique_required ? "exactly one" : "at least one",
+                     hardware_adapters);
+        return false;
+    }
+    /* SDL 3.4 does not expose the selected ID3D12Device/LUID. Qualification
+     * runners are constrained to one D3D12-capable non-software adapter so
+     * SDL's successful selection is unambiguous. Normal production accepts
+     * hybrid/multi-GPU systems when at least one hardware adapter qualifies. */
+    return true;
+#else
+    SDL_SetError("D3D12 hardware attestation is unavailable on this platform");
+    return false;
+#endif
+}
+
+static bool gpu_renderer_hardware_attest(const char *name, bool require_hardware) {
+    if (!require_hardware) {
+        return false;
+    }
+    if (strcmp(name, "vulkan") == 0 || strcmp(name, "metal") == 0) {
+        return true;
+    }
+    return strcmp(name, "direct3d12") == 0 && gpu_renderer_d3d12_hardware_verified();
+}
+
 static bool gpu_renderer_formats_supported(SDL_GPUDevice *candidate) {
-    const SDL_GPUTextureUsageFlags usage =
+    const SDL_GPUTextureUsageFlags sampled_usage =
         SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    const SDL_GPUTextureUsageFlags integer_usage =
+        SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_GRAPHICS_STORAGE_READ;
     return SDL_GPUTextureSupportsFormat(candidate,
                                         SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
                                         SDL_GPU_TEXTURETYPE_2D,
-                                        usage) &&
+                                        sampled_usage) &&
            SDL_GPUTextureSupportsFormat(candidate,
                                         SDL_GPU_TEXTUREFORMAT_R32_UINT,
                                         SDL_GPU_TEXTURETYPE_2D,
-                                        usage) &&
-           SDL_GPUTextureSupportsFormat(candidate,
-                                        SDL_GPU_TEXTUREFORMAT_R16G16B16A16_UINT,
-                                        SDL_GPU_TEXTURETYPE_2D_ARRAY,
-                                        usage);
+                                        integer_usage);
+}
+
+static void gpu_renderer_atlas_regions_destroy(gpu_texture_atlas_t *atlas) {
+    while (atlas->free_regions != NULL) {
+        gpu_atlas_region_t *region = atlas->free_regions;
+        atlas->free_regions = region->next;
+        free(region);
+    }
+}
+
+static void gpu_renderer_texture_atlas_destroy(gpu_texture_atlas_t *atlas) {
+    SDL_DestroyTexture(atlas->texture);
+    gpu_renderer_atlas_regions_destroy(atlas);
+    statistics.resource_destructions++;
+    statistics.retained_bytes -= atlas->bytes;
+    free(atlas);
+}
+
+static void gpu_renderer_texture_atlas_reset(gpu_texture_atlas_t *atlas) {
+    HARD_ASSERT(atlas->allocations == 0);
+    gpu_renderer_atlas_regions_destroy(atlas);
+    atlas->free_regions = xcalloc(1, sizeof(*atlas->free_regions));
+    atlas->free_regions->rectangle =
+        (SDL_Rect){0, 0, GPU_RENDERER_ATLAS_SIZE, GPU_RENDERER_ATLAS_SIZE};
+}
+
+/** Keep one pristine empty page warm and reclaim every additional empty page. */
+static void gpu_renderer_texture_atlas_empty_pages_trim(void) {
+    bool warm_page_retained = false;
+    gpu_texture_atlas_t **link = &texture_atlases;
+    while (*link != NULL) {
+        gpu_texture_atlas_t *atlas = *link;
+        if (atlas->allocations != 0) {
+            link = &atlas->next;
+            continue;
+        }
+        if (!warm_page_retained) {
+            gpu_renderer_texture_atlas_reset(atlas);
+            warm_page_retained = true;
+            link = &atlas->next;
+            continue;
+        }
+        *link = atlas->next;
+        atlas->next = NULL;
+        gpu_renderer_texture_atlas_destroy(atlas);
+    }
 }
 
 static void gpu_renderer_atlas_region_release(gpu_texture_atlas_t *atlas, SDL_Rect rectangle) {
+    HARD_ASSERT(atlas->allocations != 0);
     gpu_atlas_region_t *region = xcalloc(1, sizeof(*region));
     region->rectangle = rectangle;
     bool merged;
@@ -147,6 +288,8 @@ static void gpu_renderer_atlas_region_release(gpu_texture_atlas_t *atlas, SDL_Re
     } while (merged);
     region->next = atlas->free_regions;
     atlas->free_regions = region;
+    atlas->allocations--;
+    gpu_renderer_texture_atlas_empty_pages_trim();
 }
 
 static void gpu_renderer_surface_texture_destroy(gpu_surface_texture_t *entry) {
@@ -183,15 +326,9 @@ static void gpu_renderer_texture_atlases_destroy(void) {
     while (texture_atlases != NULL) {
         gpu_texture_atlas_t *atlas = texture_atlases;
         texture_atlases = atlas->next;
-        SDL_DestroyTexture(atlas->texture);
-        while (atlas->free_regions != NULL) {
-            gpu_atlas_region_t *region = atlas->free_regions;
-            atlas->free_regions = region->next;
-            free(region);
-        }
-        statistics.resource_destructions++;
-        statistics.retained_bytes -= atlas->bytes;
-        free(atlas);
+        HARD_ASSERT(atlas->allocations == 0);
+        atlas->next = NULL;
+        gpu_renderer_texture_atlas_destroy(atlas);
     }
 }
 
@@ -243,7 +380,27 @@ static void gpu_renderer_canvas_textures_destroy(void) {
     }
 }
 
+static void gpu_renderer_readbacks_cancel(void) {
+    while (pending_readbacks != NULL) {
+        gpu_pending_readback_t *pending = pending_readbacks;
+        pending_readbacks = pending->next;
+        if (pending->fence != NULL) {
+            SDL_ReleaseGPUFence(device, pending->fence);
+        }
+        if (pending->transfer != NULL) {
+            SDL_ReleaseGPUTransferBuffer(device, pending->transfer);
+        }
+        if (pending->cancel_callback != NULL) {
+            pending->cancel_callback(pending->userdata);
+        }
+        free(pending);
+    }
+}
+
 static void gpu_renderer_device_destroy(void) {
+    if (device != NULL) {
+        gpu_renderer_readbacks_cancel();
+    }
     gpu_map_renderer_destroy();
     gpu_renderer_canvas_textures_destroy();
     gpu_renderer_surface_textures_destroy();
@@ -270,6 +427,7 @@ static void gpu_renderer_identity_clear(void) {
     device_name[0] = '\0';
     driver_name[0] = '\0';
     driver_version[0] = '\0';
+    hardware_verified = false;
 }
 
 static void gpu_renderer_failure_preserve(const char *context) {
@@ -285,7 +443,7 @@ static void gpu_renderer_failure_preserve(const char *context) {
                  error[0] != '\0' ? error : "unspecified failure");
 }
 
-bool gpu_renderer_create(SDL_Window *window) {
+static bool gpu_renderer_create_internal(SDL_Window *window, bool require_hardware) {
     HARD_ASSERT(window != NULL);
     gpu_renderer_device_destroy();
 
@@ -303,7 +461,23 @@ bool gpu_renderer_create(SDL_Window *window) {
         SDL_SetBooleanProperty(
             properties,
             SDL_PROP_GPU_DEVICE_CREATE_VULKAN_REQUIRE_HARDWARE_ACCELERATION_BOOLEAN,
-            true);
+            require_hardware);
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+    if (configured) {
+        if (!require_hardware) {
+            configured = SDL_SetBooleanProperty(properties,
+                                                SDL_PROP_GPU_DEVICE_CREATE_DEBUGMODE_BOOLEAN,
+                                                true);
+        }
+        const char *conformance_driver =
+            SDL_GetEnvironmentVariable(SDL_GetEnvironment(), "ATRINIK_GPU_CONFORMANCE_DRIVER");
+        if (configured && conformance_driver != NULL && *conformance_driver != '\0') {
+            configured = SDL_SetStringProperty(properties,
+                                               SDL_PROP_GPU_DEVICE_CREATE_NAME_STRING,
+                                               conformance_driver);
+        }
+    }
+#endif
     if (configured) {
         device = SDL_CreateGPUDeviceWithProperties(properties);
     }
@@ -336,9 +510,12 @@ bool gpu_renderer_create(SDL_Window *window) {
                                device_properties,
                                SDL_PROP_GPU_DEVICE_DRIVER_VERSION_STRING);
     if (!gpu_renderer_backend_supported(selected_backend) ||
-        !gpu_renderer_formats_supported(device)) {
+        !gpu_renderer_formats_supported(device) ||
+        (require_hardware &&
+         !(hardware_verified = gpu_renderer_hardware_attest(selected_backend, true)))) {
         SDL_SetError("GPU renderer requires Vulkan, Direct3D 12, or Metal with "
-                     "R8G8B8A8_UNORM, R32_UINT, and R16G16B16A16_UINT render targets");
+                     "verified hardware acceleration plus R8G8B8A8_UNORM and R32_UINT "
+                     "render targets");
         gpu_renderer_failure_preserve("unsupported GPU renderer capabilities");
         return false;
     }
@@ -356,11 +533,139 @@ bool gpu_renderer_create(SDL_Window *window) {
     return true;
 }
 
+bool gpu_renderer_create(SDL_Window *window) {
+    return gpu_renderer_create_internal(window, true);
+}
+
 bool gpu_renderer_recover(SDL_Window *window) {
     bool succeeded = gpu_renderer_create(window);
     gpu_renderer_statistics_recovery(succeeded);
     return succeeded;
 }
+
+bool gpu_renderer_recover_bounded(SDL_Window *window,
+                                  unsigned int *attempts,
+                                  bool conformance_device) {
+    HARD_ASSERT(window != NULL);
+    HARD_ASSERT(attempts != NULL);
+    if (*attempts >= 1U) {
+        SDL_SetError("GPU renderer recovery retry limit reached");
+        return false;
+    }
+    (*attempts)++;
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+    if (conformance_device) {
+        return gpu_renderer_create_internal(window, false);
+    }
+#else
+    if (conformance_device) {
+        SDL_SetError("CPU-emulated GPU recovery is unavailable in production builds");
+        return false;
+    }
+#endif
+    return gpu_renderer_create_internal(window, true);
+}
+
+bool gpu_renderer_recover_and_republish(SDL_Window *window,
+                                        unsigned int *attempts,
+                                        bool conformance_device,
+                                        gpu_renderer_recovery_step_fn apply_window_state,
+                                        gpu_renderer_recovery_step_fn republish_complete_frame,
+                                        void *userdata) {
+    HARD_ASSERT(republish_complete_frame != NULL);
+    unsigned int attempts_before = *attempts;
+    bool succeeded = gpu_renderer_recover_bounded(window, attempts, conformance_device) &&
+                     (apply_window_state == NULL || apply_window_state(userdata)) &&
+                     republish_complete_frame(userdata);
+    if (*attempts != attempts_before) {
+        gpu_renderer_statistics_recovery(succeeded);
+    }
+    if (!succeeded) {
+        /* Never leave a recreated device available with an incomplete scene.
+         * The caller may make a new, separately bounded recovery decision. */
+        gpu_renderer_destroy();
+        return false;
+    }
+    return true;
+}
+
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+void gpu_renderer_conformance_fault_set(gpu_renderer_conformance_fault_t fault) {
+    conformance_fault = fault;
+}
+
+bool gpu_renderer_conformance_fault_take(gpu_renderer_conformance_fault_t fault) {
+    if (conformance_fault != fault) {
+        return false;
+    }
+    conformance_fault = GPU_RENDERER_CONFORMANCE_FAULT_NONE;
+    SDL_SetError("injected GPU conformance fault %d", (int)fault);
+    return true;
+}
+
+bool gpu_renderer_conformance_available(void) {
+    SDL_PropertiesID properties = SDL_CreateProperties();
+    if (properties == 0) {
+        return false;
+    }
+    bool configured =
+        SDL_SetBooleanProperty(properties,
+                               SDL_PROP_GPU_DEVICE_CREATE_SHADERS_SPIRV_BOOLEAN,
+                               true) &&
+        SDL_SetBooleanProperty(properties, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_DXIL_BOOLEAN, true) &&
+        SDL_SetBooleanProperty(properties, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_MSL_BOOLEAN, true) &&
+        SDL_SetBooleanProperty(
+            properties,
+            SDL_PROP_GPU_DEVICE_CREATE_VULKAN_REQUIRE_HARDWARE_ACCELERATION_BOOLEAN,
+            false) &&
+        SDL_SetBooleanProperty(properties, SDL_PROP_GPU_DEVICE_CREATE_DEBUGMODE_BOOLEAN, true);
+    const char *driver =
+        SDL_GetEnvironmentVariable(SDL_GetEnvironment(), "ATRINIK_GPU_CONFORMANCE_DRIVER");
+    if (configured && driver != NULL && *driver != '\0') {
+        configured =
+            SDL_SetStringProperty(properties, SDL_PROP_GPU_DEVICE_CREATE_NAME_STRING, driver);
+    }
+    SDL_GPUDevice *candidate = configured ? SDL_CreateGPUDeviceWithProperties(properties) : NULL;
+    SDL_DestroyProperties(properties);
+    if (candidate == NULL) {
+        return false;
+    }
+    bool available = gpu_renderer_backend_supported(SDL_GetGPUDeviceDriver(candidate)) &&
+                     gpu_renderer_formats_supported(candidate);
+    SDL_DestroyGPUDevice(candidate);
+    return available;
+}
+
+bool gpu_renderer_create_conformance(SDL_Window *window) {
+    return gpu_renderer_create_internal(window, false);
+}
+
+bool gpu_renderer_recover_conformance(SDL_Window *window) {
+    bool succeeded = gpu_renderer_create_internal(window, false);
+    gpu_renderer_statistics_recovery(succeeded);
+    return succeeded;
+}
+
+bool gpu_renderer_conformance_wait_idle(void) {
+    return gpu_renderer_wait_idle();
+}
+
+size_t gpu_renderer_atlas_page_count(void) {
+    size_t count = 0;
+    for (gpu_texture_atlas_t *atlas = texture_atlases; atlas != NULL; atlas = atlas->next) {
+        count++;
+    }
+    return count;
+}
+
+size_t gpu_renderer_atlas_allocation_count(void) {
+    size_t count = 0;
+    for (gpu_texture_atlas_t *atlas = texture_atlases; atlas != NULL; atlas = atlas->next) {
+        count += atlas->allocations;
+    }
+    return count;
+}
+#endif
 
 void gpu_renderer_recreation_request(void) {
     recreation_requested = true;
@@ -372,6 +677,16 @@ bool gpu_renderer_recreation_take_request(void) {
     return requested;
 }
 
+bool gpu_renderer_wait_idle(void) {
+    if (renderer == NULL || device == NULL || !SDL_FlushRenderer(renderer)) {
+        return false;
+    }
+    uint64_t started = gpu_renderer_timing_begin();
+    bool succeeded = SDL_WaitForGPUIdle(device);
+    gpu_renderer_timing_end(GPU_RENDERER_TIMING_COMPLETION, started);
+    return succeeded;
+}
+
 void gpu_renderer_destroy(void) {
     gpu_renderer_device_destroy();
     gpu_renderer_identity_clear();
@@ -379,6 +694,10 @@ void gpu_renderer_destroy(void) {
 
 bool gpu_renderer_ready(void) {
     return renderer != NULL && device != NULL;
+}
+
+bool gpu_renderer_hardware_verified(void) {
+    return device != NULL && hardware_verified;
 }
 
 SDL_Renderer *gpu_renderer_sdl(void) {
@@ -410,6 +729,11 @@ bool gpu_renderer_output_size(int *width, int *height) {
 }
 
 static bool gpu_renderer_frame_target_create(void) {
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+    if (gpu_renderer_conformance_fault_take(GPU_RENDERER_CONFORMANCE_FAULT_ALLOCATION)) {
+        return false;
+    }
+#endif
     int width, height;
     if (renderer == NULL || !SDL_GetRenderOutputSize(renderer, &width, &height) || width <= 0 ||
         height <= 0) {
@@ -458,6 +782,12 @@ bool gpu_renderer_present(void) {
     if (renderer == NULL || frame_failed) {
         return false;
     }
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+    if (gpu_renderer_conformance_fault_take(GPU_RENDERER_CONFORMANCE_FAULT_SWAPCHAIN) ||
+        gpu_renderer_conformance_fault_take(GPU_RENDERER_CONFORMANCE_FAULT_DEVICE_LOSS)) {
+        return gpu_renderer_frame_result(false);
+    }
+#endif
     uint64_t started = gpu_renderer_timing_begin();
     bool result =
         SDL_SetRenderTarget(renderer, NULL) &&
@@ -474,11 +804,19 @@ bool gpu_renderer_frame_valid(void) {
 }
 
 bool gpu_renderer_map_begin(int width, int height) {
-    return gpu_renderer_frame_result(gpu_map_renderer_begin(width, height));
+    return gpu_renderer_frame_result(gpu_map_renderer_begin(width, height, false));
+}
+
+bool gpu_renderer_map_begin_auxiliary(int width, int height) {
+    return gpu_renderer_frame_result(gpu_map_renderer_begin(width, height, true));
 }
 
 void gpu_renderer_map_set_owner(uint8_t owner, int sample_y) {
     gpu_map_renderer_set_owner(owner, sample_y);
+}
+
+void gpu_renderer_map_set_instance_identity(uint64_t record_identity, uint32_t draw_variant) {
+    gpu_map_renderer_set_instance_identity(record_identity, draw_variant);
 }
 
 void gpu_renderer_map_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]) {
@@ -490,7 +828,7 @@ bool gpu_renderer_map_end(void) {
 }
 
 bool gpu_renderer_draw_map(float x, float y, float width, float height) {
-    SDL_Texture *map_target = gpu_map_renderer_texture();
+    SDL_Texture *map_target = gpu_map_renderer_texture(false);
     if (renderer == NULL || map_target == NULL || width <= 0.0f || height <= 0.0f) {
         return false;
     }
@@ -546,15 +884,19 @@ static gpu_texture_atlas_t *gpu_renderer_texture_atlas_create(void) {
 static bool gpu_renderer_texture_atlas_place(SDL_Surface *surface,
                                              SDL_Texture **texture,
                                              SDL_FRect *source,
-                                             gpu_texture_atlas_t **selected_atlas) {
+                                             gpu_texture_atlas_t **selected_atlas,
+                                             bool *attempted) {
     HARD_ASSERT(surface != NULL);
     HARD_ASSERT(texture != NULL);
     HARD_ASSERT(source != NULL);
     HARD_ASSERT(selected_atlas != NULL);
+    HARD_ASSERT(attempted != NULL);
+    *attempted = false;
     if (surface->w <= 0 || surface->h <= 0 || surface->w > GPU_RENDERER_ATLAS_ENTRY_LIMIT ||
         surface->h > GPU_RENDERER_ATLAS_ENTRY_LIMIT) {
         return false;
     }
+    *attempted = true;
 
     gpu_texture_atlas_t *atlas = texture_atlases;
     gpu_atlas_region_t **available = NULL;
@@ -600,6 +942,14 @@ static bool gpu_renderer_texture_atlas_place(SDL_Surface *surface,
         atlas->free_regions = below;
     }
     free(region);
+    atlas->allocations++;
+
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+    if (gpu_renderer_conformance_fault_take(GPU_RENDERER_CONFORMANCE_FAULT_UI_ATLAS_UPLOAD)) {
+        gpu_renderer_atlas_region_release(atlas, allocation);
+        return false;
+    }
+#endif
 
     SDL_Texture *upload = SDL_CreateTextureFromSurface(renderer, surface);
     if (upload == NULL) {
@@ -650,11 +1000,17 @@ static gpu_surface_texture_t *gpu_renderer_surface_texture(SDL_Surface *surface)
     }
 
     gpu_surface_texture_t *entry = xcalloc(1, sizeof(*entry));
+    bool atlas_attempted;
     entry->atlased = gpu_renderer_texture_atlas_place(surface,
                                                       &entry->texture,
                                                       &entry->atlas_source,
-                                                      &entry->atlas);
+                                                      &entry->atlas,
+                                                      &atlas_attempted);
     if (!entry->atlased) {
+        if (atlas_attempted) {
+            free(entry);
+            return NULL;
+        }
         entry->texture = SDL_CreateTextureFromSurface(renderer, surface);
         if (entry->texture == NULL) {
             free(entry);
@@ -669,8 +1025,7 @@ static gpu_surface_texture_t *gpu_renderer_surface_texture(SDL_Surface *surface)
     }
     size_t upload_bytes = (size_t)surface->w * (size_t)surface->h * 4U;
     entry->bytes = entry->atlased ? 0 : upload_bytes;
-    statistics.upload_count++;
-    statistics.upload_bytes += upload_bytes;
+    gpu_renderer_statistics_source_upload(upload_bytes);
     if (!entry->atlased) {
         statistics.resource_creations++;
         statistics.retained_bytes += entry->bytes;
@@ -762,8 +1117,7 @@ static bool gpu_renderer_canvas_texture_create(gpu_canvas_t *canvas) {
         gpu_renderer_canvas_texture_destroy(canvas);
         return false;
     }
-    statistics.upload_count++;
-    statistics.upload_bytes += canvas->bytes;
+    gpu_renderer_statistics_source_upload(canvas->bytes);
     return true;
 }
 
@@ -831,6 +1185,26 @@ static bool gpu_renderer_target_end(const gpu_renderer_target_scope_t *scope, bo
                               scope->previous_clip_enabled ? &scope->previous_clip : NULL);
     bool restored = target_restored && clip_restored;
     return success && restored;
+}
+
+bool gpu_renderer_draw_map_to(SDL_Surface *target,
+                              const SDL_FRect *source,
+                              const SDL_FRect *destination,
+                              SDL_ScaleMode scale_mode) {
+    SDL_Texture *map_target = gpu_map_renderer_texture(true);
+    if (renderer == NULL || map_target == NULL || target == NULL || destination == NULL ||
+        destination->w <= 0.0f || destination->h <= 0.0f ||
+        !gpu_renderer_canvas_registered(target)) {
+        return gpu_renderer_frame_result(false);
+    }
+    gpu_renderer_target_scope_t scope;
+    if (!gpu_renderer_target_begin(target, &scope)) {
+        return gpu_renderer_frame_result(false);
+    }
+    bool success = SDL_SetTextureScaleMode(map_target, scale_mode) &&
+                   SDL_RenderTexture(renderer, map_target, source, destination);
+    statistics.draws++;
+    return gpu_renderer_frame_result(gpu_renderer_target_end(&scope, success));
 }
 
 static bool gpu_renderer_draw_surface_to_impl(SDL_Surface *target,
@@ -1079,7 +1453,7 @@ void gpu_renderer_surface_changed(SDL_Surface *surface) {
     SDL_SetNumberProperty(properties, GPU_RENDERER_SURFACE_GENERATION_PROPERTY, 0);
 }
 
-SDL_Surface *gpu_renderer_readback(const SDL_Rect *rect) {
+static gpu_pending_readback_t *gpu_renderer_readback_submit(const SDL_Rect *rect) {
     if (renderer == NULL || device == NULL || frame_target == NULL ||
         !SDL_FlushRenderer(renderer)) {
         return NULL;
@@ -1090,8 +1464,9 @@ SDL_Surface *gpu_renderer_readback(const SDL_Rect *rect) {
     }
     SDL_Rect area =
         rect != NULL ? *rect : (SDL_Rect){0, 0, (int)texture_width, (int)texture_height};
-    if (area.x < 0 || area.y < 0 || area.w <= 0 || area.h <= 0 ||
-        area.x + area.w > (int)texture_width || area.y + area.h > (int)texture_height) {
+    if (area.x < 0 || area.y < 0 || area.w <= 0 || area.h <= 0 || area.x > (int)texture_width ||
+        area.y > (int)texture_height || area.w > (int)texture_width - area.x ||
+        area.h > (int)texture_height - area.y) {
         SDL_SetError("GPU screenshot rectangle is outside the completed frame");
         return NULL;
     }
@@ -1103,26 +1478,42 @@ SDL_Surface *gpu_renderer_readback(const SDL_Rect *rect) {
         return NULL;
     }
 
-    Uint32 row_pitch = ((Uint32)area.w * 4U + 255U) & ~UINT32_C(255);
-    if ((Uint64)row_pitch * (Uint64)area.h > UINT32_MAX) {
+    size_t row_bytes;
+    size_t row_pitch_size;
+    if ((size_t)area.w > (SIZE_MAX - 255U) / 4U) {
+        SDL_SetError("GPU screenshot row is too large");
+        return NULL;
+    }
+    row_bytes = (size_t)area.w * 4U;
+    row_pitch_size = (row_bytes + 255U) & ~(size_t)255U;
+    if (row_pitch_size > UINT32_MAX || (size_t)area.h > UINT32_MAX / row_pitch_size) {
         SDL_SetError("GPU screenshot is too large");
         return NULL;
     }
+    Uint32 row_pitch = (Uint32)row_pitch_size;
     Uint32 transfer_size = row_pitch * (Uint32)area.h;
     SDL_GPUTransferBufferCreateInfo create_info = {
         .usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD,
         .size = transfer_size,
     };
-    SDL_GPUTransferBuffer *transfer = SDL_CreateGPUTransferBuffer(device, &create_info);
-    SDL_GPUCommandBuffer *commands = transfer != NULL ? SDL_AcquireGPUCommandBuffer(device) : NULL;
+    gpu_pending_readback_t *pending = calloc(1, sizeof(*pending));
+    if (pending == NULL) {
+        return NULL;
+    }
+    pending->area = area;
+    pending->row_pitch = row_pitch;
+    pending->transfer = SDL_CreateGPUTransferBuffer(device, &create_info);
+    SDL_GPUCommandBuffer *commands =
+        pending->transfer != NULL ? SDL_AcquireGPUCommandBuffer(device) : NULL;
     SDL_GPUCopyPass *copy = commands != NULL ? SDL_BeginGPUCopyPass(commands) : NULL;
     if (copy == NULL) {
         if (commands != NULL) {
             SDL_CancelGPUCommandBuffer(commands);
         }
-        if (transfer != NULL) {
-            SDL_ReleaseGPUTransferBuffer(device, transfer);
+        if (pending->transfer != NULL) {
+            SDL_ReleaseGPUTransferBuffer(device, pending->transfer);
         }
+        free(pending);
         return NULL;
     }
     SDL_GPUTextureRegion source = {
@@ -1134,39 +1525,113 @@ SDL_Surface *gpu_renderer_readback(const SDL_Rect *rect) {
         .d = 1,
     };
     SDL_GPUTextureTransferInfo destination = {
-        .transfer_buffer = transfer,
+        .transfer_buffer = pending->transfer,
         .pixels_per_row = row_pitch / 4U,
         .rows_per_layer = (Uint32)area.h,
     };
     SDL_DownloadFromGPUTexture(copy, &source, &destination);
     SDL_EndGPUCopyPass(copy);
-    SDL_GPUFence *fence = SDL_SubmitGPUCommandBufferAndAcquireFence(commands);
-    if (fence == NULL || !SDL_WaitForGPUFences(device, true, &fence, 1)) {
-        if (fence != NULL) {
-            SDL_ReleaseGPUFence(device, fence);
-        }
-        SDL_ReleaseGPUTransferBuffer(device, transfer);
+    pending->fence = SDL_SubmitGPUCommandBufferAndAcquireFence(commands);
+    if (pending->fence == NULL) {
+        SDL_ReleaseGPUTransferBuffer(device, pending->transfer);
+        free(pending);
         return NULL;
     }
+    return pending;
+}
 
-    SDL_Surface *surface = SDL_CreateSurface(area.w, area.h, SDL_PIXELFORMAT_RGBA32);
-    void *pixels = SDL_MapGPUTransferBuffer(device, transfer, false);
+static SDL_Surface *gpu_renderer_readback_finish(gpu_pending_readback_t *pending) {
+    SDL_Surface *surface =
+        SDL_CreateSurface(pending->area.w, pending->area.h, SDL_PIXELFORMAT_RGBA32);
+    void *pixels = SDL_MapGPUTransferBuffer(device, pending->transfer, false);
     if (surface != NULL && pixels != NULL) {
-        for (int y = 0; y < area.h; y++) {
+        for (int y = 0; y < pending->area.h; y++) {
             memcpy((Uint8 *)surface->pixels + (size_t)y * (size_t)surface->pitch,
-                   (const Uint8 *)pixels + (size_t)y * row_pitch,
-                   (size_t)area.w * 4U);
+                   (const Uint8 *)pixels + (size_t)y * pending->row_pitch,
+                   (size_t)pending->area.w * 4U);
         }
     } else {
         SDL_DestroySurface(surface);
         surface = NULL;
     }
     if (pixels != NULL) {
-        SDL_UnmapGPUTransferBuffer(device, transfer);
+        SDL_UnmapGPUTransferBuffer(device, pending->transfer);
     }
-    SDL_ReleaseGPUFence(device, fence);
-    SDL_ReleaseGPUTransferBuffer(device, transfer);
+    SDL_ReleaseGPUFence(device, pending->fence);
+    SDL_ReleaseGPUTransferBuffer(device, pending->transfer);
+    free(pending);
     return surface;
+}
+
+bool gpu_renderer_readback_async(const SDL_Rect *rect,
+                                 gpu_renderer_readback_callback_t callback,
+                                 gpu_renderer_readback_cancel_callback_t cancel_callback,
+                                 void *userdata) {
+    HARD_ASSERT(callback != NULL);
+    statistics.readbacks++;
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+    if (gpu_renderer_conformance_fault_take(GPU_RENDERER_CONFORMANCE_FAULT_READBACK)) {
+        return false;
+    }
+#endif
+    gpu_pending_readback_t *pending = gpu_renderer_readback_submit(rect);
+    if (pending == NULL) {
+        return false;
+    }
+    pending->callback = callback;
+    pending->cancel_callback = cancel_callback;
+    pending->userdata = userdata;
+    gpu_pending_readback_t **tail = &pending_readbacks;
+    while (*tail != NULL) {
+        tail = &(*tail)->next;
+    }
+    *tail = pending;
+    return true;
+}
+
+void gpu_renderer_readback_poll(void) {
+    gpu_pending_readback_t **link = &pending_readbacks;
+    while (*link != NULL) {
+        gpu_pending_readback_t *pending = *link;
+        if (!SDL_QueryGPUFence(device, pending->fence)) {
+            link = &pending->next;
+            continue;
+        }
+        *link = pending->next;
+        gpu_renderer_readback_callback_t callback = pending->callback;
+        void *userdata = pending->userdata;
+        SDL_Surface *surface = gpu_renderer_readback_finish(pending);
+        callback(surface, userdata);
+    }
+}
+
+SDL_Surface *gpu_renderer_readback(const SDL_Rect *rect) {
+    statistics.readbacks++;
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+    if (gpu_renderer_conformance_fault_take(GPU_RENDERER_CONFORMANCE_FAULT_READBACK)) {
+        return NULL;
+    }
+#endif
+    gpu_pending_readback_t *pending = gpu_renderer_readback_submit(rect);
+    if (pending == NULL) {
+        return NULL;
+    }
+    if (!SDL_WaitForGPUFences(device, true, &pending->fence, 1)) {
+        SDL_ReleaseGPUFence(device, pending->fence);
+        SDL_ReleaseGPUTransferBuffer(device, pending->transfer);
+        free(pending);
+        return NULL;
+    }
+    return gpu_renderer_readback_finish(pending);
+}
+
+Uint64 gpu_renderer_surface_generation(SDL_Surface *surface) {
+    if (surface == NULL) {
+        return 0;
+    }
+    return (Uint64)SDL_GetNumberProperty(SDL_GetSurfaceProperties(surface),
+                                         GPU_RENDERER_SURFACE_GENERATION_PROPERTY,
+                                         0);
 }
 
 void gpu_renderer_statistics_reset(void) {
@@ -1200,9 +1665,33 @@ void gpu_renderer_statistics_commands(uint64_t commands, uint64_t batches, uint6
     statistics.draws += draws;
 }
 
-void gpu_renderer_statistics_upload(size_t bytes) {
+static void gpu_renderer_statistics_upload(size_t bytes) {
     statistics.upload_count++;
     statistics.upload_bytes += bytes;
+}
+
+void gpu_renderer_statistics_source_upload(size_t bytes) {
+    gpu_renderer_statistics_upload(bytes);
+    statistics.source_upload_count++;
+    statistics.source_upload_bytes += bytes;
+}
+
+void gpu_renderer_statistics_instance_upload(size_t bytes) {
+    gpu_renderer_statistics_upload(bytes);
+    statistics.instance_upload_count++;
+    statistics.instance_upload_bytes += bytes;
+}
+
+void gpu_renderer_statistics_light_upload(size_t bytes) {
+    gpu_renderer_statistics_upload(bytes);
+    statistics.light_upload_count++;
+    statistics.light_upload_bytes += bytes;
+}
+
+void gpu_renderer_statistics_slot_uniform_upload(size_t bytes) {
+    gpu_renderer_statistics_upload(bytes);
+    statistics.slot_uniform_upload_count++;
+    statistics.slot_uniform_upload_bytes += bytes;
 }
 
 void gpu_renderer_statistics_resource_create(size_t retained_bytes) {

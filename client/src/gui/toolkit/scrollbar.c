@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -77,12 +77,10 @@ static void scrollbar_element_render_background(SDL_Surface *surface,
                                                 uint8_t horizontal) {
     (void)elem;
     (void)horizontal;
-    surface_fill_rect(surface,
-                        box,
-                        pixel_format_map_rgb(surface->format,
-                                             scrollbar_color_bg.r,
-                                             scrollbar_color_bg.g,
-                                             scrollbar_color_bg.b));
+    surface_fill_rect(
+        surface,
+        box,
+        surface_map_rgb(surface, scrollbar_color_bg.r, scrollbar_color_bg.g, scrollbar_color_bg.b));
     border_create_sdl_color(surface, box, 1, &scrollbar_color_fg);
 }
 
@@ -241,12 +239,10 @@ static void scrollbar_element_render_slider(SDL_Surface *surface,
                                             uint8_t horizontal) {
     (void)horizontal;
 
-    surface_fill_rect(surface,
-                        box,
-                        pixel_format_map_rgb(surface->format,
-                                             scrollbar_color_fg.r,
-                                             scrollbar_color_fg.g,
-                                             scrollbar_color_fg.b));
+    surface_fill_rect(
+        surface,
+        box,
+        surface_map_rgb(surface, scrollbar_color_fg.r, scrollbar_color_fg.g, scrollbar_color_fg.b));
 
     /* If highlighted, create highlighted border around the edges of the
      * slider. */
@@ -574,9 +570,9 @@ void scrollbar_show(scrollbar_struct *scrollbar, SDL_Surface *surface, int x, in
 
     /* Handle click repeating. */
     if (mouse_get_state(NULL, NULL) == SDL_BUTTON_MASK(SDL_BUTTON_LEFT) &&
-        SDL_GetTicks() - scrollbar->click_ticks > scrollbar->click_repeat_ticks) {
+        client_ui_ticks() - scrollbar->click_ticks > scrollbar->click_repeat_ticks) {
         if (scrollbar_click_scroll(scrollbar, 0)) {
-            scrollbar->click_ticks = SDL_GetTicks();
+            scrollbar->click_ticks = client_ui_ticks();
             scrollbar->click_repeat_ticks = 35;
         }
     }
@@ -760,7 +756,7 @@ int scrollbar_event(scrollbar_struct *scrollbar, SDL_Event *event) {
         }
 
         if (scrollbar_click_scroll(scrollbar, 0)) {
-            scrollbar->click_ticks = SDL_GetTicks();
+            scrollbar->click_ticks = client_ui_ticks();
             scrollbar->click_repeat_ticks = 400;
             return 1;
         }

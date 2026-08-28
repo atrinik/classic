@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -33,6 +33,14 @@
 #include <client_socket.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
+
+#ifdef ATRINIK_WIDGET_TESTS
+static bool test_form_rendered;
+
+bool login_test_form_rendered(void) {
+    return test_form_rendered;
+}
+#endif
 
 enum {
     LOGIN_TEXT_INPUT_NAME,
@@ -188,6 +196,9 @@ static int popup_draw(popup_struct *popup) {
                     texture_surface(button_done.texture)->w;
     button_done.y = button_tab_register.pressed_forced ? 210 : 170;
     button_show(&button_done, "Done");
+#ifdef ATRINIK_WIDGET_TESTS
+    test_form_rendered = true;
+#endif
 
     return 1;
 }
@@ -336,6 +347,9 @@ void login_start(void) {
     size_t i;
 
     progress_dots_create(&progress);
+#ifdef ATRINIK_WIDGET_TESTS
+    test_form_rendered = false;
+#endif
 
     popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));
     popup->draw_func = popup_draw;

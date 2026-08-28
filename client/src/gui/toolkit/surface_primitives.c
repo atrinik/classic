@@ -273,16 +273,18 @@ bool surface_darken_preserve_alpha(SDL_Surface *surface, Uint8 alpha) {
 }
 
 Uint32 surface_map_rgb(SDL_Surface *surface, Uint8 red, Uint8 green, Uint8 blue) {
-    return SDL_MapRGB(SDL_GetPixelFormatDetails(surface->format),
-                      SDL_GetSurfacePalette(surface),
+    SDL_PixelFormat format = surface != NULL ? surface->format : SDL_PIXELFORMAT_RGBA32;
+    return SDL_MapRGB(SDL_GetPixelFormatDetails(format),
+                      surface != NULL ? SDL_GetSurfacePalette(surface) : NULL,
                       red,
                       green,
                       blue);
 }
 
 Uint32 surface_map_rgba(SDL_Surface *surface, Uint8 red, Uint8 green, Uint8 blue, Uint8 alpha) {
-    return SDL_MapRGBA(SDL_GetPixelFormatDetails(surface->format),
-                       SDL_GetSurfacePalette(surface),
+    SDL_PixelFormat format = surface != NULL ? surface->format : SDL_PIXELFORMAT_RGBA32;
+    return SDL_MapRGBA(SDL_GetPixelFormatDetails(format),
+                       surface != NULL ? SDL_GetSurfacePalette(surface) : NULL,
                        red,
                        green,
                        blue,
