@@ -158,6 +158,18 @@ class VerifyGpuQualificationTests(unittest.TestCase):
         with self.assertRaisesRegex(ArtifactError, "distinct"):
             validate_production_record(value)
         value["transition_pixels_sha256"] = "5" * 64
+        timed = copy.deepcopy(value)
+        timed["fixture"] = "timed-light"
+        timed["movement_lifecycle"] = False
+        timed["transition_pixels_sha256"] = ""
+        timed["archived_software_lifecycle_sha256"] = ""
+        timed["timed_light_lifecycle"] = True
+        timed["timed_endpoint_pixels_sha256"] = "5" * 64
+        timed["borrowed_temporal_light_samples"] = 1
+        self.assertFalse(validate_production_record(timed))
+        timed["pixels_sha256"] = "6" * 64
+        with self.assertRaisesRegex(ArtifactError, "restore the initial midpoint"):
+            validate_production_record(timed)
         value["movement_lifecycle"] = False
         value["archived_software_lifecycle_sha256"] = ""
         value["fixture"] = "gpu-qualification-town-25x25"

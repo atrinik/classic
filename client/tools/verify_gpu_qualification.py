@@ -696,6 +696,8 @@ def validate_production_record(record: dict) -> bool:
                  "timed-light endpoint checkpoint is absent")
         _require(record["timed_endpoint_pixels_sha256"] != record["initial_pixels_sha256"],
                  "timed-light midpoint and endpoint are indistinguishable")
+        _require(record["pixels_sha256"] == record["initial_pixels_sha256"],
+                 "timed-light lifecycle did not restore the initial midpoint")
         _require(record["borrowed_temporal_light_samples"] > 0,
                  "timed FOW borrowing was not exercised")
     else:

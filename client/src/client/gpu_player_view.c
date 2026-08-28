@@ -3623,7 +3623,10 @@ int gpu_player_view_main(int argc, char *argv[]) {
         }
         telemetry_game_time_sync(timed_midpoint_seconds, UINT32_MAX);
         map_animate();
-        if (!gpu_player_view_render(map_widget, manifest.widget_render)) {
+        char timed_restored_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
+        if (!gpu_player_view_render(map_widget, manifest.widget_render) ||
+            !gpu_player_view_checkpoint(timed_restored_digest) ||
+            strcmp(timed_restored_digest, initial_digest) != 0) {
             fprintf(stderr, "gpu-player-view: timed-light midpoint restore failed\n");
             goto cleanup;
         }
