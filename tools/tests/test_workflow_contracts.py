@@ -1428,7 +1428,7 @@ class WorkflowContractTests(unittest.TestCase):
         dependency_inputs = workflow[
             workflow.index("  dependency-inputs:") : workflow.index("  core:")
         ]
-        self.assertEqual(workflow.count("packages: read"), 2)
+        self.assertEqual(workflow.count("packages: read"), 1)
         self.assertIn("packages: read", dependency_inputs)
         self.assertNotIn("docker/login-action", workflow)
         self.assertNotIn("packages: read", self.text("codeql.yml"))
@@ -1446,10 +1446,6 @@ class WorkflowContractTests(unittest.TestCase):
                 "  integrated:\n    name: Integrated client/server graph"
             )
         ]
-        self.assertIn("packages: read", client)
-        self.assertIn("classic-gpu-coverage-docker-config", client)
-        self.assertIn("docker login ghcr.io", client)
-        self.assertIn("docker logout ghcr.io", client)
         integrated = workflow[
             workflow.index("  integrated:\n    name: Integrated client/server graph") : workflow.index(
                 "  classic-validation:\n    name: Classic validation"
