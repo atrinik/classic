@@ -11,7 +11,7 @@
 
 /**
  * @file
- * SDL3 window and software-surface presentation.
+ * SDL3 window and mandatory GPU presentation.
  */
 
 #include <global.h>
@@ -39,12 +39,33 @@ void video_set_icon(SDL_Surface *icon) {
 }
 
 int video_get_bpp(void) {
-    if (ScreenSurface == NULL) {
-        return 32;
-    }
+    return 32;
+}
 
-    const SDL_PixelFormatDetails *format = SDL_GetPixelFormatDetails(ScreenSurface->format);
-    return format != NULL ? format->bits_per_pixel : 32;
+static void video_get_output_size(int *width, int *height) {
+    HARD_ASSERT(width != NULL);
+    HARD_ASSERT(height != NULL);
+    if (ScreenSurface != NULL) {
+        *width = ScreenSurface->w;
+        *height = ScreenSurface->h;
+        return;
+    }
+    if (!gpu_renderer_output_size(width, height)) {
+        *width = setting_get_int(OPT_CAT_CLIENT, OPT_RESOLUTION_X);
+        *height = setting_get_int(OPT_CAT_CLIENT, OPT_RESOLUTION_Y);
+    }
+}
+
+int video_get_width(void) {
+    int width, height;
+    video_get_output_size(&width, &height);
+    return width;
+}
+
+int video_get_height(void) {
+    int width, height;
+    video_get_output_size(&width, &height);
+    return height;
 }
 
 int video_set_size(void) {
@@ -64,12 +85,15 @@ int video_set_size(void) {
         }
     }
 
-    ScreenSurface = SDL_GetWindowSurface(ScreenWindow);
-    if (ScreenSurface == NULL) {
+    if (!gpu_renderer_ready() && !gpu_renderer_create(ScreenWindow)) {
+        LOG(ERROR,
+            "No supported hardware GPU renderer is available: %s",
+            SDL_GetError());
         SDL_DestroyWindow(ScreenWindow);
         ScreenWindow = NULL;
         return 0;
     }
+    ScreenSurface = NULL;
 
     return 1;
 }
@@ -92,10 +116,7 @@ int video_fullscreen_toggle(SDL_Surface **surface, uint32_t *flags) {
         return 0;
     }
 
-    *surface = SDL_GetWindowSurface(ScreenWindow);
-    if (*surface == NULL) {
-        return 0;
-    }
+    *surface = NULL;
 
     if (flags != NULL) {
         *flags = SDL_WINDOW_RESIZABLE;

@@ -791,7 +791,7 @@ static void widget_draw(widgetdata *widget) {
 
     box.x = widget->x;
     box.y = widget->y;
-    SDL_BlitSurface(widget->surface, NULL, ScreenSurface, &box);
+    surface_show(ScreenSurface, box.x, box.y, NULL, widget->surface);
 
     box.x = widget->x;
     box.y = widget->y;

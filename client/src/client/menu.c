@@ -149,12 +149,7 @@ int client_command_check(const char *cmd) {
         if (!strncasecmp(cmd, " map", 4)) {
             surface_save = cur_widget[MAP_ID]->surface;
         } else {
-            surface_save = ScreenSurface;
-        }
-
-        if (!surface_save) {
-            draw_info(COLOR_RED, "No surface to save.");
-            return 1;
+            surface_save = NULL;
         }
 
         screenshot_create(surface_save);

@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <video.h>
 #include <surface_primitives.h>
 
 /** Tooltip's text. */
@@ -164,12 +165,12 @@ void tooltip_show(void) {
 
     /* Push the tooltip to the left if it would go beyond maximum screen
      * size. */
-    if (box.x + box.w >= ScreenSurface->w) {
-        box.x -= (box.x + box.w + 1) - ScreenSurface->w;
+    if (box.x + box.w >= video_get_width()) {
+        box.x -= (box.x + box.w + 1) - video_get_width();
     }
 
-    if (box.y + box.h >= ScreenSurface->h) {
-        box.y -= (box.y + box.h + 1) - ScreenSurface->h;
+    if (box.y + box.h >= video_get_height()) {
+        box.y -= (box.y + box.h + 1) - video_get_height();
     }
 
     boxRGBA(ScreenSurface,

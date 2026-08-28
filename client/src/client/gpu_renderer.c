@@ -28,6 +28,9 @@ typedef struct gpu_surface_texture {
 
 static SDL_Renderer *renderer;
 static SDL_GPUDevice *device;
+static SDL_Texture *map_target;
+static int map_target_width;
+static int map_target_height;
 static gpu_surface_texture_t *surface_textures;
 static Uint64 next_surface_generation = 1;
 static gpu_renderer_statistics_t statistics;
@@ -81,6 +84,13 @@ static void gpu_renderer_surface_textures_destroy(void) {
 
 static void gpu_renderer_device_destroy(void) {
     gpu_renderer_surface_textures_destroy();
+    if (map_target != NULL) {
+        SDL_DestroyTexture(map_target);
+        map_target = NULL;
+        statistics.resource_destructions++;
+    }
+    map_target_width = 0;
+    map_target_height = 0;
     if (renderer != NULL) {
         SDL_DestroyRenderer(renderer);
         renderer = NULL;
@@ -210,6 +220,53 @@ bool gpu_renderer_present(void) {
     return result;
 }
 
+bool gpu_renderer_map_begin(int width, int height) {
+    if (renderer == NULL || width <= 0 || height <= 0) {
+        return false;
+    }
+    if (map_target == NULL || map_target_width != width || map_target_height != height) {
+        if (map_target != NULL) {
+            SDL_DestroyTexture(map_target);
+            statistics.resource_destructions++;
+        }
+        map_target = SDL_CreateTexture(renderer,
+                                       SDL_PIXELFORMAT_RGBA32,
+                                       SDL_TEXTUREACCESS_TARGET,
+                                       width,
+                                       height);
+        if (map_target == NULL || !SDL_SetTextureScaleMode(map_target, SDL_SCALEMODE_NEAREST) ||
+            !SDL_SetTextureBlendMode(map_target, SDL_BLENDMODE_BLEND)) {
+            SDL_DestroyTexture(map_target);
+            map_target = NULL;
+            map_target_width = 0;
+            map_target_height = 0;
+            return false;
+        }
+        map_target_width = width;
+        map_target_height = height;
+        statistics.resource_creations++;
+    }
+    if (!SDL_SetRenderTarget(renderer, map_target) ||
+        !SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_TRANSPARENT) ||
+        !SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE)) {
+        return false;
+    }
+    return SDL_RenderClear(renderer);
+}
+
+bool gpu_renderer_map_end(void) {
+    return renderer != NULL && SDL_SetRenderTarget(renderer, NULL);
+}
+
+bool gpu_renderer_draw_map(float x, float y, float width, float height) {
+    if (renderer == NULL || map_target == NULL || width <= 0.0f || height <= 0.0f) {
+        return false;
+    }
+    SDL_FRect destination = {x, y, width, height};
+    statistics.draws++;
+    return SDL_RenderTexture(renderer, map_target, NULL, &destination);
+}
+
 static gpu_surface_texture_t *gpu_renderer_surface_texture(SDL_Surface *surface) {
     SDL_PropertiesID properties = SDL_GetSurfaceProperties(surface);
     Uint64 generation = SDL_GetNumberProperty(properties,
@@ -289,6 +346,46 @@ bool gpu_renderer_draw_surface(SDL_Surface *surface,
     return SDL_RenderTexture(renderer, entry->texture, source_pointer, destination);
 }
 
+static bool gpu_renderer_draw_color(Uint8 red, Uint8 green, Uint8 blue, Uint8 alpha) {
+    return renderer != NULL && SDL_SetRenderDrawColor(renderer, red, green, blue, alpha) &&
+           SDL_SetRenderDrawBlendMode(renderer,
+                                      alpha == SDL_ALPHA_OPAQUE ? SDL_BLENDMODE_NONE
+                                                                : SDL_BLENDMODE_BLEND);
+}
+
+bool gpu_renderer_draw_rect(const SDL_FRect *rectangle,
+                            Uint8 red,
+                            Uint8 green,
+                            Uint8 blue,
+                            Uint8 alpha,
+                            bool filled) {
+    if (rectangle == NULL || !gpu_renderer_draw_color(red, green, blue, alpha)) {
+        return false;
+    }
+    statistics.draws++;
+    return filled ? SDL_RenderFillRect(renderer, rectangle)
+                  : SDL_RenderRect(renderer, rectangle);
+}
+
+bool gpu_renderer_draw_line(float x1,
+                            float y1,
+                            float x2,
+                            float y2,
+                            Uint8 red,
+                            Uint8 green,
+                            Uint8 blue,
+                            Uint8 alpha) {
+    if (!gpu_renderer_draw_color(red, green, blue, alpha)) {
+        return false;
+    }
+    statistics.draws++;
+    return SDL_RenderLine(renderer, x1, y1, x2, y2);
+}
+
+bool gpu_renderer_set_clip(const SDL_Rect *rectangle) {
+    return renderer != NULL && SDL_SetRenderClipRect(renderer, rectangle);
+}
+
 void gpu_renderer_invalidate_surface(SDL_Surface *surface) {
     gpu_surface_texture_t **link = &surface_textures;
     while (*link != NULL) {
@@ -300,6 +397,16 @@ void gpu_renderer_invalidate_surface(SDL_Surface *surface) {
         }
         link = &entry->next;
     }
+}
+
+void gpu_renderer_surface_changed(SDL_Surface *surface) {
+    if (surface == NULL) {
+        return;
+    }
+    gpu_renderer_invalidate_surface(surface);
+    SDL_SetNumberProperty(SDL_GetSurfaceProperties(surface),
+                          GPU_RENDERER_SURFACE_GENERATION_PROPERTY,
+                          0);
 }
 
 SDL_Surface *gpu_renderer_readback(const SDL_Rect *rect) {

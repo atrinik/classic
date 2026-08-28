@@ -92,6 +92,7 @@ void system_end(void) {
     image_deinit();
     asset_requests_deinit();
     toolkit_deinit();
+    gpu_renderer_destroy();
     SDL_DestroyWindow(ScreenWindow);
     ScreenWindow = NULL;
     ScreenSurface = NULL;

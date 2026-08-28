@@ -97,7 +97,8 @@ char *package_get_version_partial(char *dst, size_t dstlen) {
 }
 
 /**
- * Create a screenshot of the specified surface.
+ * Create a screenshot of the specified surface, or explicitly read back the
+ * completed GPU frame when surface is NULL.
  * @param surface
  * The surface to take a screenshot of.
  */
@@ -107,8 +108,13 @@ void screenshot_create(SDL_Surface *surface) {
     struct tm *tm;
     time_t seconds;
 
-    if (!surface) {
-        return;
+    bool gpu_readback = surface == NULL;
+    if (gpu_readback) {
+        surface = gpu_renderer_readback(NULL);
+        if (surface == NULL) {
+            draw_info_format(COLOR_RED, "Failed to read back GPU screenshot: %s", SDL_GetError());
+            return;
+        }
     }
 
     gettimeofday(&tv, NULL);
@@ -136,5 +142,8 @@ void screenshot_create(SDL_Surface *surface) {
         draw_info_format(COLOR_GREEN, "Saved screenshot as %s successfully.", path);
     } else {
         draw_info_format(COLOR_RED, "Failed to write screenshot data (path: %s).", path);
+    }
+    if (gpu_readback) {
+        SDL_DestroySurface(surface);
     }
 }

@@ -71,10 +71,29 @@ const char *gpu_renderer_driver_version(void);
 bool gpu_renderer_output_size(int *width, int *height);
 bool gpu_renderer_begin_frame(void);
 bool gpu_renderer_present(void);
+bool gpu_renderer_map_begin(int width, int height);
+bool gpu_renderer_map_end(void);
+bool gpu_renderer_draw_map(float x, float y, float width, float height);
 bool gpu_renderer_draw_surface(SDL_Surface *surface,
                                const SDL_Rect *source,
                                const SDL_FRect *destination);
+bool gpu_renderer_draw_rect(const SDL_FRect *rectangle,
+                            Uint8 red,
+                            Uint8 green,
+                            Uint8 blue,
+                            Uint8 alpha,
+                            bool filled);
+bool gpu_renderer_draw_line(float x1,
+                            float y1,
+                            float x2,
+                            float y2,
+                            Uint8 red,
+                            Uint8 green,
+                            Uint8 blue,
+                            Uint8 alpha);
+bool gpu_renderer_set_clip(const SDL_Rect *rectangle);
 void gpu_renderer_invalidate_surface(SDL_Surface *surface);
+void gpu_renderer_surface_changed(SDL_Surface *surface);
 SDL_Surface *gpu_renderer_readback(const SDL_Rect *rect);
 
 void gpu_renderer_statistics_reset(void);

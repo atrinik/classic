@@ -32,7 +32,7 @@ SDL_Surface *surface_create_rgb(Uint32 flags,
     } else if (depth == 8) {
         format = SDL_PIXELFORMAT_INDEX8;
     } else {
-        format = ScreenSurface != NULL ? ScreenSurface->format : SDL_PIXELFORMAT_RGBA32;
+        format = SDL_PIXELFORMAT_RGBA32;
     }
 
     return SDL_CreateSurface(width, height, format);
@@ -66,9 +66,7 @@ void pixel_format_get_rgba(Uint32 pixel,
 
 SDL_Surface *surface_to_display(SDL_Surface *surface) {
     HARD_ASSERT(surface != NULL);
-    HARD_ASSERT(ScreenSurface != NULL);
-
-    return SDL_ConvertSurface(surface, ScreenSurface->format);
+    return SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA32);
 }
 
 SDL_Surface *surface_to_display_alpha(SDL_Surface *surface) {
@@ -283,6 +281,18 @@ int lineRGBA(SDL_Surface *surface,
              Uint8 green,
              Uint8 blue,
              Uint8 alpha) {
+    if (surface == NULL) {
+        return gpu_renderer_draw_line((float)x1,
+                                      (float)y1,
+                                      (float)x2,
+                                      (float)y2,
+                                      red,
+                                      green,
+                                      blue,
+                                      alpha)
+                   ? 0
+                   : -1;
+    }
     int dx = abs(x2 - x1);
     int sx = x1 < x2 ? 1 : -1;
     int dy = -abs(y2 - y1);
@@ -319,10 +329,6 @@ int boxRGBA(SDL_Surface *surface,
             Uint8 green,
             Uint8 blue,
             Uint8 alpha) {
-    if (surface == NULL) {
-        return -1;
-    }
-
     if (x1 > x2) {
         Sint16 tmp = x1;
         x1 = x2;
@@ -340,6 +346,20 @@ int boxRGBA(SDL_Surface *surface,
         .w = x2 - x1 + 1,
         .h = y2 - y1 + 1,
     };
+    if (surface == NULL) {
+        SDL_FRect gpu_destination = {(float)destination.x,
+                                     (float)destination.y,
+                                     (float)destination.w,
+                                     (float)destination.h};
+        return gpu_renderer_draw_rect(&gpu_destination,
+                                      red,
+                                      green,
+                                      blue,
+                                      alpha,
+                                      true)
+                   ? 0
+                   : -1;
+    }
     if (alpha == SDL_ALPHA_TRANSPARENT) {
         return 0;
     }

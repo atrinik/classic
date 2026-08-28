@@ -158,8 +158,8 @@ void popup_render(popup_struct *popup) {
     }
 
     /* Calculate the popup's X/Y positions. */
-    popup->x = ScreenSurface->w / 2 - popup->surface->w / 2;
-    popup->y = ScreenSurface->h / 2 - popup->surface->h / 2;
+    popup->x = video_get_width() / 2 - popup->surface->w / 2;
+    popup->y = video_get_height() / 2 - popup->surface->h / 2;
 
     /* Handle drawing inside the popup. */
     if (popup->draw_func) {
@@ -177,7 +177,7 @@ void popup_render(popup_struct *popup) {
     /* Show the popup in the middle of the screen. */
     box.x = popup->x;
     box.y = popup->y;
-    SDL_BlitSurface(popup->surface, NULL, ScreenSurface, &box);
+    surface_show(ScreenSurface, box.x, box.y, NULL, popup->surface);
 
     popup_button_show(popup, &popup->button_left);
     popup_button_show(popup, &popup->button_right);

@@ -167,7 +167,7 @@ int Event_PollInputDevice(void) {
         }
 
         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_PRINTSCREEN) {
-            screenshot_create(ScreenSurface);
+            screenshot_create(NULL);
             continue;
         }
 
@@ -175,24 +175,21 @@ int Event_PollInputDevice(void) {
                 /* Screen has been resized, update screen size. */
             case SDL_EVENT_WINDOW_RESIZED:
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-                ScreenSurface = SDL_GetWindowSurface(ScreenWindow);
-
-                if (!ScreenSurface) {
-                    LOG(ERROR, "Unable to grab surface after resize event: %s", SDL_GetError());
-                    exit(1);
-                }
-
                 if (event.type == SDL_EVENT_WINDOW_RESIZED) {
                     /* Set resolution to custom. */
                     setting_set_int(OPT_CAT_CLIENT, OPT_RESOLUTION, 0);
                 }
-                resize_window(ScreenSurface->w, ScreenSurface->h);
+                int width, height;
+                if (!gpu_renderer_output_size(&width, &height)) {
+                    LOG(ERROR, "Unable to query GPU output after resize: %s", SDL_GetError());
+                    exit(1);
+                }
+                resize_window(width, height);
+                map_redraw_request(MAP_REDRAW_REASON_RESIZE);
                 break;
 
             case SDL_EVENT_WINDOW_EXPOSED:
-                if (!SDL_UpdateWindowSurface(ScreenWindow)) {
-                    LOG(ERROR, "Could not repaint the exposed window surface: %s", SDL_GetError());
-                }
+                map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
                 break;
 
             case SDL_EVENT_MOUSE_BUTTON_DOWN:

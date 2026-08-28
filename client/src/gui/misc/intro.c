@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <video.h>
 #include <metaserver.h>
 #include <connection_preferences.h>
 #include <toolkit/string.h>
@@ -181,8 +182,8 @@ void intro_show(void) {
     textwin_show(ScreenSurface,
                  texture->w,
                  1,
-                 ScreenSurface->w - texture->w - 2,
-                 ScreenSurface->h - 3);
+                 video_get_width() - texture->w - 2,
+                 video_get_height() - 3);
 
     /* Calculate whether to show the eyes or not. Blinks every
      * EYES_BLINK_TIME ticks, then waits EYES_BLINK_DELAY ticks until
@@ -216,7 +217,7 @@ void intro_show(void) {
 
     texture = TEXTURE_CLIENT("servers_bg");
     x = 15;
-    y = ScreenSurface->h - texture->h - 5;
+    y = video_get_height() - texture->h - 5;
     surface_show(ScreenSurface, x, y, NULL, texture);
 
     server_count = server_get_count();

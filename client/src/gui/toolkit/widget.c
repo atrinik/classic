@@ -42,6 +42,7 @@
  */
 
 #include <global.h>
+#include <video.h>
 #include <wrapper.h>
 #include <surface_primitives.h>
 #include <notification.h>
@@ -2031,7 +2032,10 @@ static void process_widgets_rec(int draw, widgetdata *widget) {
                 box.y = widget->y;
                 box.w = 0;
                 box.h = 0;
-                SDL_BlitSurface(widget->surface, NULL, ScreenSurface, &box);
+                if (redraw != 0) {
+                    gpu_renderer_surface_changed(widget->surface);
+                }
+                surface_show(ScreenSurface, box.x, box.y, NULL, widget->surface);
             }
 
             if (redraw != 0 && widget_render_debug) {
@@ -2848,7 +2852,7 @@ void menu_finalize(widgetdata *widget) {
     int xoff = 0, yoff = 0;
 
     /* Would the menu go over the maximum screen width? */
-    if (widget->x + widget->w > ScreenSurface->w) {
+    if (widget->x + widget->w > video_get_width()) {
         /* Will appear to the left of the cursor instead of right of it. */
         xoff = -widget->w;
 
@@ -2860,10 +2864,10 @@ void menu_finalize(widgetdata *widget) {
     }
 
     /* Similar checks for screen height. */
-    if (widget->y + widget->h > ScreenSurface->h) {
+    if (widget->y + widget->h > video_get_height()) {
         /* Submenu, shift it up, so all of it can appear. */
         if (widget->type_prev && widget->type_prev->sub_type == MENU_ID) {
-            yoff = ScreenSurface->h - widget->h - widget->y - 1;
+            yoff = video_get_height() - widget->h - widget->y - 1;
         } else {
             /* Will appear above the cursor. */
             yoff = -widget->h;

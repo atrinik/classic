@@ -297,7 +297,7 @@ static void widget_draw(widgetdata *widget) {
     dst.x = widget->x;
     dst.y = widget->y;
     surface_set_alpha(widget->surface, notification->alpha);
-    SDL_BlitSurface(widget->surface, NULL, ScreenSurface, &dst);
+    surface_show(ScreenSurface, dst.x, dst.y, NULL, widget->surface);
 
     /* Do highlight. */
     if (widget_mouse_event.owner == widget && notification->action) {

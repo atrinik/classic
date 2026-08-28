@@ -281,7 +281,7 @@ static int popup_draw_post_func(popup_struct *popup) {
     dest.y = box.y;
 
     /* Actually draw the map. */
-    SDL_BlitSurface(surface, &region_map->pos, ScreenSurface, &dest);
+    surface_show(ScreenSurface, dest.x, dest.y, &region_map->pos, surface);
     region_map_render_fow(region_map, ScreenSurface, dest.x, dest.y);
     region_map_render_marker(region_map, ScreenSurface, dest.x, dest.y);
 

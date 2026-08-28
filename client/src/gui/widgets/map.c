@@ -3575,7 +3575,8 @@ static void map_draw_level(SDL_Surface *surface,
                            bool objects_only,
                            map_render_context_t *render_context) {
     HARD_ASSERT(surface != NULL);
-    HARD_ASSERT(objects_only || ground_surface != NULL);
+    bool gpu_primary = primary_surface && gpu_renderer_ready();
+    HARD_ASSERT(objects_only || ground_surface != NULL || gpu_primary);
 
     map_render_data_t data = {
         .world_surface = true,
@@ -3588,7 +3589,8 @@ static void map_draw_level(SDL_Surface *surface,
     size_t visible_tiles_num = 0;
     map_visible_tile_t *visible_tiles =
         map_visible_tiles_create(surface, &data, x, y, w, h, &visible_tiles_num);
-    data.smooth_lighting = primary_surface && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING);
+    data.smooth_lighting = primary_surface && !gpu_primary &&
+                           setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING);
     if (data.smooth_lighting && !objects_only) {
         uint64_t cache_key = map_lighting_cache_key(surface, &data, x, y, w, h);
         data.smooth_lighting = lighting_begin(surface->w, surface->h, cache_key);
@@ -3622,7 +3624,7 @@ static void map_draw_level(SDL_Surface *surface,
                 }
 
                 ground_present |= data.cell->faces[GET_MAP_LAYER(data.layer, data.sub_layer)] != 0;
-                if (primary_level) {
+                if (primary_level && !gpu_primary) {
                     draw_map_object(ground_surface, &data);
                 } else {
                     data.defer_rendering = true;
@@ -3651,7 +3653,7 @@ static void map_draw_level(SDL_Surface *surface,
             data.lightmap_pending = false;
         }
 
-        if (primary_level && ground_present) {
+        if (primary_level && ground_present && !gpu_primary) {
             uint64_t profile_composite_started = render_profiler_begin();
             SDL_Rect ground_bounds;
             bool ground_bounds_available =
@@ -4834,6 +4836,7 @@ void map_draw_map(SDL_Surface *surface) {
     uint64_t profile_map_started = render_profiler_begin();
 
     bool primary_surface = cur_widget[MAP_ID] != NULL && surface == cur_widget[MAP_ID]->surface;
+    bool gpu_primary = primary_surface && gpu_renderer_ready();
     bool animation_base_captured = false;
     if (primary_surface) {
         map_animation_cache_valid = false;
@@ -4849,8 +4852,8 @@ void map_draw_map(SDL_Surface *surface) {
     SDL_Surface **level_surface = &map_level_surfaces[surface_index];
     map_render_context_t render_context = {0};
 
-    if (*level_surface == NULL || (*level_surface)->w != surface->w ||
-        (*level_surface)->h != surface->h) {
+    if (!gpu_primary && (*level_surface == NULL || (*level_surface)->w != surface->w ||
+                         (*level_surface)->h != surface->h)) {
         if (*level_surface != NULL) {
             SDL_DestroySurface(*level_surface);
         }
@@ -4873,7 +4876,7 @@ void map_draw_map(SDL_Surface *surface) {
     }
 
     uint64_t profile_scratch_clear_started = render_profiler_begin();
-    bool scratch_cleared = surface_clear_transparent_black(*level_surface);
+    bool scratch_cleared = gpu_primary || surface_clear_transparent_black(*level_surface);
     render_profiler_end(RENDER_PROFILE_MAP_SCRATCH_CLEAR, profile_scratch_clear_started);
     if (!scratch_cleared) {
         map_benchmark_statistics.render_failures++;
@@ -4892,7 +4895,7 @@ void map_draw_map(SDL_Surface *surface) {
     }
 
 #ifdef ATRINIK_WIDGET_TESTS
-    if (map_benchmark_fault == MAP_BENCHMARK_FAULT_MUTABLE_RLE &&
+    if (!gpu_primary && map_benchmark_fault == MAP_BENCHMARK_FAULT_MUTABLE_RLE &&
         !map_benchmark_fault_status.injected) {
         if (SDL_SetSurfaceRLE(*level_surface, true)) {
             map_benchmark_mutable_rle_fault_armed = true;
@@ -4918,8 +4921,15 @@ void map_draw_map(SDL_Surface *surface) {
     }
 #endif
 
+    if (gpu_primary && !gpu_renderer_map_begin(surface->w, surface->h)) {
+        map_benchmark_statistics.render_failures++;
+        LOG(ERROR, "Could not begin retained GPU map target: %s", SDL_GetError());
+        render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
+        return;
+    }
+
     map_scene_composition_active =
-        primary_surface && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) &&
+        primary_surface && !gpu_primary && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) &&
         lighting_scene_begin(surface->w, surface->h);
 
     uint64_t active_levels = 0;
@@ -4933,7 +4943,7 @@ void map_draw_map(SDL_Surface *surface) {
         active_levels++;
         map_benchmark_statistics.level_draws++;
         map_draw_level(surface,
-                       *level_surface,
+                       gpu_primary ? NULL : *level_surface,
                        depth,
                        depth == 0,
                        primary_surface,
@@ -4941,7 +4951,7 @@ void map_draw_map(SDL_Surface *surface) {
                        &render_context);
     }
 
-    if (primary_surface) {
+    if (primary_surface && !gpu_primary) {
         animation_base_captured = map_animation_base_capture(surface);
         if (!animation_base_captured) {
             map_benchmark_statistics.render_failures++;
@@ -4980,11 +4990,15 @@ void map_draw_map(SDL_Surface *surface) {
     map_benchmark_statistics.peak_active_levels =
         MAX(map_benchmark_statistics.peak_active_levels, active_levels);
 
-    map_render_commands(surface,
+    map_render_commands(gpu_primary ? NULL : surface,
                         &render_context,
                         primary_surface,
                         primary_surface ? &map_animation_exit_cues : NULL);
-    map_draw_ui(surface, &render_context);
+    map_draw_ui(gpu_primary ? NULL : surface, &render_context);
+    if (gpu_primary && !gpu_renderer_map_end()) {
+        map_benchmark_statistics.render_failures++;
+        LOG(ERROR, "Could not finish retained GPU map target: %s", SDL_GetError());
+    }
     map_select_level(0, true);
     lighting_select_level(0);
     render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
@@ -5546,12 +5560,14 @@ static void widget_draw(widgetdata *widget) {
     /* Rebuild static map state only for a full invalidation. Animation-only
      * ticks restore the cached lit ground and repaint object/UI layers. */
     if (map_redraw_due()) {
-        SDL_FillSurfaceRect(widget->surface, NULL, 0);
+        if (!gpu_renderer_ready()) {
+            SDL_FillSurfaceRect(widget->surface, NULL, 0);
+        }
         map_draw_map(widget->surface);
         map_redraw_consume();
         effect_sprites_play();
 
-        if (setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) != 100) {
+        if (!gpu_renderer_ready() && setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) != 100) {
             if (zoomed) {
                 SDL_DestroySurface(zoomed);
             }
@@ -5565,14 +5581,18 @@ static void widget_draw(widgetdata *widget) {
             }
         }
     } else if (map_animation_redraw_due()) {
-        if (map_draw_animation(widget->surface)) {
+        if (gpu_renderer_ready()) {
+            map_draw_map(widget->surface);
+            map_animation_redraw_consume();
+            effect_sprites_play();
+        } else if (map_draw_animation(widget->surface)) {
             map_animation_redraw_consume();
             effect_sprites_play();
         } else {
             map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
         }
 
-        if (setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) != 100) {
+        if (!gpu_renderer_ready() && setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) != 100) {
             if (zoomed) {
                 SDL_DestroySurface(zoomed);
             }
@@ -5591,7 +5611,16 @@ static void widget_draw(widgetdata *widget) {
     box.y = widget_y(widget);
 
     SDL_Surface *displayed = map_displayed_surface(widget);
-    SDL_BlitSurface(displayed, NULL, ScreenSurface, &box);
+    if (gpu_renderer_ready()) {
+        if (!gpu_renderer_draw_map((float)widget_x(widget),
+                                   (float)widget_y(widget),
+                                   (float)widget_w(widget),
+                                   (float)widget_h(widget))) {
+            LOG(ERROR, "Could not submit retained GPU map target: %s", SDL_GetError());
+        }
+    } else {
+        surface_show(ScreenSurface, box.x, box.y, NULL, displayed);
+    }
 
     /* The damage numbers */
     map_anims_play();
