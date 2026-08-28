@@ -90,11 +90,12 @@ int video_set_size(void) {
     }
 
     if (!gpu_renderer_ready() && !gpu_renderer_create(ScreenWindow)) {
-        LOG(ERROR,
-            "No supported hardware GPU renderer is available: %s",
-            SDL_GetError());
+        char error[HUGE_BUF];
+        snprintf(error, sizeof(error), "%s", SDL_GetError());
+        LOG(ERROR, "No supported hardware GPU renderer is available: %s", error);
         SDL_DestroyWindow(ScreenWindow);
         ScreenWindow = NULL;
+        SDL_SetError("%s", error);
         return 0;
     }
     OfflineRenderSurface = NULL;

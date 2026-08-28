@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -33,6 +33,7 @@
 
 /** @copydoc event_drag_cb_fnc */
 static event_drag_cb_fnc event_drag_cb = NULL;
+static bool resize_recovery_pending;
 
 static int dragging_old_mx = -1, dragging_old_my = -1;
 
@@ -116,6 +117,24 @@ void resize_window(int width, int height) {
     }
 }
 
+void resize_window_recovery_request(void) {
+    resize_recovery_pending = true;
+}
+
+bool resize_window_recovery_apply(void) {
+    if (!resize_recovery_pending) {
+        return true;
+    }
+
+    int width, height;
+    if (!gpu_renderer_output_size(&width, &height) || width <= 0 || height <= 0) {
+        return false;
+    }
+    resize_window(width, height);
+    resize_recovery_pending = false;
+    return true;
+}
+
 /**
  * Poll input device like mouse, keys, etc.
  * @return
@@ -182,6 +201,7 @@ int Event_PollInputDevice(void) {
                 int width, height;
                 if (!SDL_GetWindowSizeInPixels(ScreenWindow, &width, &height)) {
                     LOG(ERROR, "Unable to query window pixels after resize: %s", SDL_GetError());
+                    resize_window_recovery_request();
                     gpu_renderer_recreation_request();
                     map_redraw_request(MAP_REDRAW_REASON_RESIZE);
                     break;

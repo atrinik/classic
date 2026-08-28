@@ -11,6 +11,14 @@ import sys
 from movement_benchmark_schema import validate_record
 
 
+def require_legacy_player_view() -> None:
+    if not (Path(__file__).resolve().parents[1] / "src/client/player_view.c").is_file():
+        raise SystemExit(
+            "legacy player-view benchmark is unavailable on GPU-only revisions; "
+            "use the production GPU conformance harness"
+        )
+
+
 def run(client: Path, manifest: Path, probe_mode: str) -> dict[str, object]:
     result = subprocess.run(
         [
@@ -99,6 +107,7 @@ def verify(timed: dict[str, object], untimed: dict[str, object]) -> None:
 def main() -> int:
     if len(sys.argv) != 3:
         raise SystemExit("usage: verify_movement_probe_control.py CLIENT MANIFEST")
+    require_legacy_player_view()
     client = Path(sys.argv[1])
     manifest = Path(sys.argv[2])
     verify(run(client, manifest, "timed"), run(client, manifest, "untimed"))

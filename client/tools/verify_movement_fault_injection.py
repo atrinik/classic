@@ -10,6 +10,14 @@ import subprocess
 import sys
 
 
+def require_legacy_player_view() -> None:
+    if not (Path(__file__).resolve().parents[1] / "src/client/player_view.c").is_file():
+        raise SystemExit(
+            "legacy player-view benchmark is unavailable on GPU-only revisions; "
+            "use the production GPU conformance harness"
+        )
+
+
 FAULT = "mutable-rle"
 FAULT_DIAGNOSTIC = "player-view: movement fault mutable-rle was injected and detected"
 CLOCK_FAULT = "sprite-cache-clock"
@@ -110,6 +118,7 @@ def main() -> int:
             "usage: verify_movement_fault_injection.py CLIENT FROZEN_MANIFEST "
             "MOVEMENT_MANIFEST [standard|brynknot]"
         )
+    require_legacy_player_view()
     client = Path(sys.argv[1])
     verify_frozen(client, Path(sys.argv[2]))
     movement_manifest = Path(sys.argv[3])

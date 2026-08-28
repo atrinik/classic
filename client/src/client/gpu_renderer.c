@@ -263,10 +263,26 @@ static void gpu_renderer_device_destroy(void) {
         SDL_DestroyGPUDevice(device);
         device = NULL;
     }
+}
+
+static void gpu_renderer_identity_clear(void) {
     backend[0] = '\0';
     device_name[0] = '\0';
     driver_name[0] = '\0';
     driver_version[0] = '\0';
+}
+
+static void gpu_renderer_failure_preserve(const char *context) {
+    char error[512];
+    snprintf(error, sizeof(error), "%s", SDL_GetError());
+    gpu_renderer_device_destroy();
+    SDL_SetError("%s (backend: %s; device: %s; driver: %s %s): %s",
+                 context,
+                 backend[0] != '\0' ? backend : "unavailable",
+                 device_name[0] != '\0' ? device_name : "unavailable",
+                 driver_name[0] != '\0' ? driver_name : "unavailable",
+                 driver_version[0] != '\0' ? driver_version : "unavailable",
+                 error[0] != '\0' ? error : "unspecified failure");
 }
 
 bool gpu_renderer_create(SDL_Window *window) {
@@ -275,6 +291,7 @@ bool gpu_renderer_create(SDL_Window *window) {
 
     SDL_PropertiesID properties = SDL_CreateProperties();
     if (properties == 0) {
+        gpu_renderer_failure_preserve("unable to create GPU device properties");
         return false;
     }
     bool configured =
@@ -291,32 +308,20 @@ bool gpu_renderer_create(SDL_Window *window) {
         device = SDL_CreateGPUDeviceWithProperties(properties);
     }
     SDL_DestroyProperties(properties);
-    if (!configured || device == NULL) {
-        gpu_renderer_device_destroy();
+    if (!configured) {
+        gpu_renderer_failure_preserve("unable to configure the hardware GPU device");
+        return false;
+    }
+    if (device == NULL) {
+        gpu_renderer_failure_preserve("unable to create the hardware GPU device");
         return false;
     }
 
     const char *selected_backend = SDL_GetGPUDeviceDriver(device);
-    if (!gpu_renderer_backend_supported(selected_backend) ||
-        !gpu_renderer_formats_supported(device)) {
-        SDL_SetError("GPU renderer requires Vulkan, Direct3D 12, or Metal with RGBA8 and R8_UINT "
-                     "render targets");
-        gpu_renderer_device_destroy();
-        return false;
-    }
-
-    renderer = SDL_CreateGPURenderer(device, window);
-    if (renderer == NULL || SDL_GetGPURendererDevice(renderer) != device) {
-        gpu_renderer_device_destroy();
-        return false;
-    }
-    if (!SDL_SetDefaultTextureScaleMode(renderer, SDL_SCALEMODE_NEAREST) ||
-        !gpu_map_renderer_create(device, renderer)) {
-        gpu_renderer_device_destroy();
-        return false;
-    }
-
-    snprintf(backend, sizeof(backend), "%s", selected_backend);
+    snprintf(backend,
+             sizeof(backend),
+             "%s",
+             selected_backend != NULL ? selected_backend : "unavailable");
     SDL_PropertiesID device_properties = SDL_GetGPUDeviceProperties(device);
     gpu_renderer_copy_property(device_name,
                                sizeof(device_name),
@@ -330,6 +335,24 @@ bool gpu_renderer_create(SDL_Window *window) {
                                sizeof(driver_version),
                                device_properties,
                                SDL_PROP_GPU_DEVICE_DRIVER_VERSION_STRING);
+    if (!gpu_renderer_backend_supported(selected_backend) ||
+        !gpu_renderer_formats_supported(device)) {
+        SDL_SetError("GPU renderer requires Vulkan, Direct3D 12, or Metal with "
+                     "R8G8B8A8_UNORM, R32_UINT, and R16G16B16A16_UINT render targets");
+        gpu_renderer_failure_preserve("unsupported GPU renderer capabilities");
+        return false;
+    }
+
+    renderer = SDL_CreateGPURenderer(device, window);
+    if (renderer == NULL || SDL_GetGPURendererDevice(renderer) != device) {
+        gpu_renderer_failure_preserve("unable to create the SDL GPU renderer");
+        return false;
+    }
+    if (!SDL_SetDefaultTextureScaleMode(renderer, SDL_SCALEMODE_NEAREST) ||
+        !gpu_map_renderer_create(device, renderer)) {
+        gpu_renderer_failure_preserve("unable to create the GPU map pipeline");
+        return false;
+    }
     return true;
 }
 
@@ -351,6 +374,7 @@ bool gpu_renderer_recreation_take_request(void) {
 
 void gpu_renderer_destroy(void) {
     gpu_renderer_device_destroy();
+    gpu_renderer_identity_clear();
 }
 
 bool gpu_renderer_ready(void) {

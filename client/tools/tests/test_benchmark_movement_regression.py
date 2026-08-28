@@ -1977,9 +1977,11 @@ class CommentTests(unittest.TestCase):
             manifest.write_text("x")
             discrete.write_text("x")
             output = root / "evidence.json"
-            with mock.patch.object(benchmark, "candidate_only", return_value={
-                "schema_version": 7, "status": "passed", "failed": False
-            }) as candidate:
+            with mock.patch.object(benchmark, "require_legacy_player_view"), mock.patch.object(
+                benchmark,
+                "candidate_only",
+                return_value={"schema_version": 7, "status": "passed", "failed": False},
+            ) as candidate:
                 result = benchmark.main(
                     [
                         "candidate-only", "--candidate-client", str(client),
@@ -2011,7 +2013,7 @@ class CommentTests(unittest.TestCase):
                 path.write_text("input")
             files[2].write_text("def validate_record(value):\n    return value\n")
             output = root / "evidence.json"
-            with mock.patch.object(
+            with mock.patch.object(benchmark, "require_legacy_player_view"), mock.patch.object(
                 benchmark, "compare", side_effect=benchmark.BenchmarkError("injected failure")
             ):
                 result = benchmark.main(
@@ -2055,7 +2057,7 @@ class CommentTests(unittest.TestCase):
                 "--comparison-note", benchmark.COMPARE_FOUNDATION_NOTE,
                 "--output", str(output),
             ]
-            with mock.patch.object(
+            with mock.patch.object(benchmark, "require_legacy_player_view"), mock.patch.object(
                 benchmark,
                 "compare",
                 return_value={"schema_version": 7, "status": "passed", "failed": False},
@@ -2067,8 +2069,38 @@ class CommentTests(unittest.TestCase):
             )
 
             unpaired = [item for item in arguments if item != "--informational-performance"]
-            self.assertEqual(benchmark.main(unpaired), 2)
+            with mock.patch.object(benchmark, "require_legacy_player_view"):
+                self.assertEqual(benchmark.main(unpaired), 2)
             self.assertIn("must be used together", json.loads(output.read_text())["error"])
+
+    def test_gpu_only_cli_rejects_retired_candidate_entrypoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            files = [root / name for name in ("client", "manifest.xml", "discrete.xml")]
+            for path in files:
+                path.write_text("input")
+            output = root / "evidence.json"
+            self.assertEqual(
+                benchmark.main(
+                    [
+                        "candidate-only",
+                        "--candidate-client",
+                        str(files[0]),
+                        "--candidate-manifest",
+                        str(files[1]),
+                        "--discrete-manifest",
+                        str(files[2]),
+                        "--lighting-manifest",
+                        str(files[2]),
+                        "--output",
+                        str(output),
+                    ]
+                ),
+                2,
+            )
+            self.assertIn(
+                "unavailable on GPU-only revisions", json.loads(output.read_text())["error"]
+            )
 
 
 if __name__ == "__main__":

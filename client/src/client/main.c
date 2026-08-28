@@ -649,6 +649,10 @@ static bool gpu_renderer_recover_frame(unsigned int *attempts, const char *conte
     if (*attempts < 1U) {
         (*attempts)++;
         if (gpu_renderer_recover(ScreenWindow)) {
+            if (!resize_window_recovery_apply()) {
+                SDL_SetError("unable to query the recovered GPU output size");
+                return false;
+            }
             map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
             minimap_redraw_flag = 1;
             widget_redraw_everything();

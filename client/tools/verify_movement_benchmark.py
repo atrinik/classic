@@ -12,6 +12,14 @@ from pathlib import Path
 from movement_benchmark_schema import validate_record
 
 
+def require_legacy_player_view() -> None:
+    if not (Path(__file__).resolve().parents[1] / "src/client/player_view.c").is_file():
+        raise SystemExit(
+            "legacy player-view benchmark is unavailable on GPU-only revisions; "
+            "use the production GPU conformance harness"
+        )
+
+
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
     for key, value in pairs:
@@ -82,6 +90,7 @@ def main() -> int:
         raise SystemExit(
             "usage: verify_movement_benchmark.py CLIENT MANIFEST standard|large|brynknot"
         )
+    require_legacy_player_view()
     client = Path(sys.argv[1])
     manifest = Path(sys.argv[2])
     viewport = sys.argv[3]

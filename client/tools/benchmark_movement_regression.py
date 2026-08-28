@@ -115,6 +115,14 @@ class BenchmarkError(RuntimeError):
     """A movement benchmark command or its JSON contract failed."""
 
 
+def require_legacy_player_view() -> None:
+    if not (Path(__file__).resolve().parents[1] / "src/client/player_view.c").is_file():
+        raise BenchmarkError(
+            "legacy player-view benchmark is unavailable on GPU-only revisions; "
+            "use the production GPU conformance harness"
+        )
+
+
 RecordValidator = Callable[[object], dict[str, object]]
 
 
@@ -2942,6 +2950,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
+        require_legacy_player_view()
         if arguments.command == "compare":
             expected_informational = (
                 arguments.comparison_note in INFORMATIONAL_COMPARISON_NOTES

@@ -31,7 +31,7 @@ class MovementFaultInjectionTests(unittest.TestCase):
         verify_movement_fault: mock.Mock,
         verify_cursor: mock.Mock,
     ) -> None:
-        with mock.patch.object(
+        with mock.patch.object(fault_verifier, "require_legacy_player_view"), mock.patch.object(
             sys,
             "argv",
             [
@@ -53,6 +53,10 @@ class MovementFaultInjectionTests(unittest.TestCase):
             all(call.args[-1] == "brynknot" for call in verify_movement_fault.call_args_list)
         )
         verify_cursor.assert_called_once_with(Path("client"), Path("movement.xml"))
+
+    def test_gpu_only_revision_rejects_retired_entrypoint(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "unavailable on GPU-only revisions"):
+            fault_verifier.require_legacy_player_view()
 
     @mock.patch.object(fault_verifier.subprocess, "run")
     def test_invoke_scopes_fault_to_child_process(self, run: mock.Mock) -> None:
