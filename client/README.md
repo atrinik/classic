@@ -2,7 +2,7 @@
 =                Atrinik Client                 =
 =================================================
 
-[![Coverage](https://codecov.io/gh/atrinik/classic/graph/badge.svg?branch=main&flag=client)](https://codecov.io/gh/atrinik/classic)
+[![Coverage](https://codecov.io/gh/atrinik/classic/graph/badge.svg?branch=main&flag=client-gpu)](https://codecov.io/gh/atrinik/classic)
 
  Website: http://www.atrinik.org/
 
