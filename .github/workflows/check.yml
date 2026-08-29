@@ -714,7 +714,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -777,20 +776,6 @@ jobs:
             --workdir /workspace \
             "${CLASSIC_LINUX_IMAGE}" \
             tools/ci/run_linux_check.sh client /workspace
-      - id: gpu-coverage-image-repository
-        name: Pull the GPU coverage image with repository package access
-        if: >-
-          github.event_name != 'pull_request' ||
-          github.event.pull_request.head.repo.full_name == github.repository
-        env:
-          GHCR_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
-          printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io \
-            --username "${GITHUB_ACTOR}" --password-stdin
-          docker pull "${CLASSIC_GPU_COVERAGE_IMAGE}"
-          echo "available=true" >>"${GITHUB_OUTPUT}"
       - id: gpu-coverage-image-public
         name: Probe public GPU coverage image access for fork pull requests
         if: >-
@@ -804,9 +789,7 @@ jobs:
             echo "::notice::GPU coverage image is not publicly pullable; hardware qualification remains required"
           fi
       - name: Exercise GPU renderer coverage
-        if: >-
-          steps.gpu-coverage-image-repository.outputs.available == 'true' ||
-          steps.gpu-coverage-image-public.outputs.available == 'true'
+        if: steps.gpu-coverage-image-public.outputs.available == 'true'
         run: |
           tools/ci/run_gpu_coverage.sh \
             "${GITHUB_WORKSPACE}" \
@@ -826,6 +809,57 @@ jobs:
           path: build/ci-evidence/ccache-client.tsv
           if-no-files-found: error
           retention-days: 14
+
+  gpu-coverage:
+    name: Trusted GPU renderer coverage
+    needs: [changes, dependency-inputs, gpu-shaders]
+    if: >-
+      needs.changes.outputs.client == 'true' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: classic-dependency-inputs
+          path: build/dependency-inputs
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: classic-gpu-shaders
+          path: build/gpu-shaders
+      - name: Pull pinned build and GPU coverage environments
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io \
+            --username "${GITHUB_ACTOR}" --password-stdin
+          docker pull "${CLASSIC_LINUX_IMAGE}"
+          docker pull "${CLASSIC_GPU_COVERAGE_IMAGE}"
+      - name: Build and exercise complete GPU coverage
+        run: |
+          tools/ci/run_gpu_coverage.sh \
+            "${GITHUB_WORKSPACE}" \
+            "${CLASSIC_LINUX_IMAGE}" \
+            "${CLASSIC_GPU_COVERAGE_IMAGE}"
+      - name: Upload GPU-complete client coverage
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        with:
+          disable_search: true
+          fail_ci_if_error: false
+          files: client/coverage.xml
+          flags: client
+          use_oidc: true
 
   integrated:
     name: Integrated client/server graph
@@ -913,6 +947,7 @@ jobs:
       - core
       - server
       - client
+      - gpu-coverage
       - integrated
       - windows-test
     runs-on: ubuntu-24.04
@@ -928,6 +963,8 @@ jobs:
             --core-result '${{ needs.core.result }}' \
             --client-required '${{ needs.changes.outputs.client }}' \
             --client-result '${{ needs.client.result }}' \
+            --gpu-coverage-required "${{ needs.changes.outputs.client == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}" \
+            --gpu-coverage-result '${{ needs.gpu-coverage.result }}' \
             --server-required '${{ needs.changes.outputs.server }}' \
             --server-result '${{ needs.server.result }}' \
             --integrated-required "${{ needs.changes.outputs.client == 'true' || needs.changes.outputs.server == 'true' }}" \

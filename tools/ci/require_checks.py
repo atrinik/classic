@@ -38,6 +38,8 @@ def main() -> int:
     classic.add_argument("--core-result", required=True)
     classic.add_argument("--client-required", required=True)
     classic.add_argument("--client-result", required=True)
+    classic.add_argument("--gpu-coverage-required", required=True)
+    classic.add_argument("--gpu-coverage-result", required=True)
     classic.add_argument("--server-required", required=True)
     classic.add_argument("--server-result", required=True)
     classic.add_argument("--integrated-required", required=True)
@@ -61,6 +63,11 @@ def main() -> int:
             require_success("core validation", arguments.core_result)
             require_component(
                 "client", arguments.client_required, arguments.client_result
+            )
+            require_component(
+                "trusted GPU coverage",
+                arguments.gpu_coverage_required,
+                arguments.gpu_coverage_result,
             )
             require_component(
                 "server", arguments.server_required, arguments.server_result

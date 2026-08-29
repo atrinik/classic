@@ -37,6 +37,12 @@ class RequireChecksTests(unittest.TestCase):
         with self.assertRaisesRegex(require_checks.CheckResultError, "did not succeed"):
             require_checks.require_component("integrated", "true", "failure")
 
+    def test_trusted_gpu_coverage_is_required_only_when_selected(self) -> None:
+        require_checks.require_component("trusted GPU coverage", "true", "success")
+        require_checks.require_component("trusted GPU coverage", "false", "skipped")
+        with self.assertRaisesRegex(require_checks.CheckResultError, "did not succeed"):
+            require_checks.require_component("trusted GPU coverage", "true", "failure")
+
     def test_classic_aggregator_accepts_integrated_success(self) -> None:
         arguments = [
             "require_checks.py",
@@ -52,6 +58,10 @@ class RequireChecksTests(unittest.TestCase):
             "--client-required",
             "true",
             "--client-result",
+            "success",
+            "--gpu-coverage-required",
+            "true",
+            "--gpu-coverage-result",
             "success",
             "--server-required",
             "true",

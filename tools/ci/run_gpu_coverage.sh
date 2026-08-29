@@ -21,12 +21,42 @@ if [[ ! ${gpu_image} =~ ^ghcr\.io/atrinik/linux-build:[0-9]+\.[0-9]+\.[0-9]+@sha
   echo "GPU image must be an immutable versioned Atrinik Linux digest" >&2
   exit 2
 fi
+command -v docker >/dev/null
+
 if [[ ! -x ${coverage_build}/client-gpu-renderer-integration-tests ||
       ! -x ${coverage_build}/atrinik ]]; then
-  echo "the complete client coverage build must exist before GPU coverage" >&2
+  docker run --rm \
+    --user "$(id -u):$(id -g)" \
+    --network none \
+    --volume "${source_root}:/workspace" \
+    --workdir /workspace \
+    "${build_image}" \
+    sh -c '
+      set -eu
+      python3 server/tools/dependencies.py bundle-verify \
+        --client-lock client/dependencies.lock.json \
+        --server-lock server/dependencies.lock.json \
+        --source-lock server/cmake/immutable_sources.lock.json \
+        --bundle build/dependency-inputs
+      python3 client/tools/dependencies.py sync \
+        --cache build/dependency-inputs/downloads --refresh --offline
+      python3 client/tools/dependencies.py verify
+      cd client
+      cmake --preset linux-coverage \
+        -DENABLE_PRECOMPILED_HEADERS=OFF \
+        -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
+        -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik \
+        -DATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders
+      cmake --build --preset linux-coverage --parallel "$(nproc)"
+      ctest --preset linux-coverage --output-on-failure --no-tests=error -LE performance
+    '
+fi
+
+if [[ ! -x ${coverage_build}/client-gpu-renderer-integration-tests ||
+      ! -x ${coverage_build}/atrinik ]]; then
+  echo "the complete client coverage build is unavailable after GPU coverage setup" >&2
   exit 2
 fi
-command -v docker >/dev/null
 
 compiled_home=$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' \
   "${coverage_build}/CMakeCache.txt")
@@ -53,7 +83,10 @@ docker run --rm \
   --volume "${source_root}:${compiled_root}" \
   --workdir "${compiled_home}" \
   "${gpu_image}" \
-  sh -c "xvfb-run -a ctest --test-dir build/linux-coverage --output-on-failure --no-tests=error -R '^client-gpu-renderer-integration$'"
+  sh -c "xvfb-run -a sh -c 'set -eu; \
+    ./build/linux-coverage/client-gpu-renderer-integration-tests; \
+    ./build/linux-coverage/atrinik --gpu-player-view \
+      src/tests/fixtures/player_view/gpu-ui-closure.xml'"
 
 docker run --rm \
   --user "$(id -u):$(id -g)" \

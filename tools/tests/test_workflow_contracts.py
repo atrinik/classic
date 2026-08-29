@@ -1476,6 +1476,11 @@ class WorkflowContractTests(unittest.TestCase):
         ]
         client = workflow[
             workflow.index("  client:\n    name: Client validation") : workflow.index(
+                "  gpu-coverage:\n    name: Trusted GPU renderer coverage"
+            )
+        ]
+        gpu_coverage_job = workflow[
+            workflow.index("  gpu-coverage:\n    name: Trusted GPU renderer coverage") : workflow.index(
                 "  integrated:\n    name: Integrated client/server graph"
             )
         ]
@@ -1490,33 +1495,36 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("tools/ci/prepare_gpu_shaders.sh", gpu_shaders)
         self.assertIn("client/shaders/toolchain.lock.json", gpu_shaders)
         self.assertIn("name: classic-gpu-shaders", gpu_shaders)
-        self.assertIn("packages: read", client)
+        self.assertNotIn("packages: read", client)
         self.assertNotIn("GH_TOKEN", client)
-        self.assertIn("GHCR_TOKEN: ${{ github.token }}", client)
+        self.assertNotIn("GHCR_TOKEN: ${{ github.token }}", client)
+        self.assertIn("packages: read", gpu_coverage_job)
+        self.assertIn("GHCR_TOKEN: ${{ github.token }}", gpu_coverage_job)
         self.assertIn(
-            "name: Pull the GPU coverage image with repository package access",
-            client,
+            "name: Pull pinned build and GPU coverage environments",
+            gpu_coverage_job,
         )
         self.assertIn(
             "github.event.pull_request.head.repo.full_name == github.repository",
-            client,
+            gpu_coverage_job[: gpu_coverage_job.index("    steps:")],
         )
-        self.assertIn("docker login ghcr.io", client)
-        self.assertIn("docker logout ghcr.io", client)
+        self.assertIn("docker login ghcr.io", gpu_coverage_job)
+        self.assertIn("docker logout ghcr.io", gpu_coverage_job)
         self.assertIn(
             "name: Probe public GPU coverage image access for fork pull requests",
             client,
         )
         self.assertIn("if docker pull \"${CLASSIC_GPU_COVERAGE_IMAGE}\"", client)
         self.assertIn(
-            "steps.gpu-coverage-image-repository.outputs.available == 'true'",
-            client,
-        )
-        self.assertIn(
             "steps.gpu-coverage-image-public.outputs.available == 'true'", client
         )
         self.assertIn("name: classic-gpu-shaders", client)
+        self.assertIn("name: classic-gpu-shaders", gpu_coverage_job)
         self.assertIn("name: classic-gpu-shaders", integrated)
+        aggregate = workflow[workflow.index("  classic-validation:") :]
+        self.assertIn("- gpu-coverage", aggregate)
+        self.assertIn("--gpu-coverage-required", aggregate)
+        self.assertIn("--gpu-coverage-result '${{ needs.gpu-coverage.result }}'", aggregate)
         expected_materials = {
             "core": {
                 ".github/workflows/check.yml",
@@ -1588,10 +1596,14 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("ATRINIK_GPU_CONFORMANCE_REQUIRED=1", gpu_coverage)
         self.assertIn("xvfb-run -a", gpu_coverage)
-        self.assertIn("^client-gpu-renderer-integration$", gpu_coverage)
+        self.assertIn("client-gpu-renderer-integration-tests", gpu_coverage)
+        self.assertIn("gpu-ui-closure.xml", gpu_coverage)
+        self.assertIn("cmake --preset linux-coverage", gpu_coverage)
+        self.assertIn("ctest --preset linux-coverage", gpu_coverage)
         self.assertIn("lvp_icd.json", gpu_coverage)
         self.assertIn("--network none", gpu_coverage)
         self.assertIn("tools/ci/run_gpu_coverage.sh", client)
+        self.assertIn("tools/ci/run_gpu_coverage.sh", gpu_coverage_job)
         self.assertIn(
             "ghcr.io/atrinik/linux-build:1.3.0@sha256:"
             "260658d2709e993b41148a9d8f724c2d2f7f1fd93543a139b00d139b10e7f31a",
