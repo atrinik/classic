@@ -76,11 +76,13 @@ jobs:
           path: build/gpu-shaders
       - name: Configure clean Release qualification build
         shell: bash
+        env:
+          ATRINIK_QUALIFICATION_SHADER_DIRECTORY: ${{ github.workspace }}/build/gpu-shaders
         run: >-
           cmake -S client -B client/build/gpu-qualification -G Ninja
           -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
           -DATRINIK_GPU_CONFORMANCE_REQUIRED=ON -DPACKAGE_TYPE=none
-          -DATRINIK_GPU_SHADER_DIRECTORY=${{ github.workspace }}/build/gpu-shaders
+          "-DATRINIK_GPU_SHADER_DIRECTORY=${ATRINIK_QUALIFICATION_SHADER_DIRECTORY}"
       - name: Build production client and GPU harness
         shell: bash
         run: >-

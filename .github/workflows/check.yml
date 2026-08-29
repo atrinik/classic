@@ -714,7 +714,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -777,18 +776,18 @@ jobs:
             --workdir /workspace \
             "${CLASSIC_LINUX_IMAGE}" \
             tools/ci/run_linux_check.sh client /workspace
-      - name: Exercise GPU renderer coverage
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - id: gpu-coverage-image
+        name: Probe the public GPU coverage image
         run: |
-          gpu_docker_config=$(mktemp -d)
-          trap 'rm -rf "${gpu_docker_config}"' EXIT
-          printf '%s' "${GH_TOKEN}" | docker --config "${gpu_docker_config}" \
-            login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
-          docker --config "${gpu_docker_config}" pull "${CLASSIC_GPU_COVERAGE_IMAGE}"
-          docker --config "${gpu_docker_config}" logout ghcr.io
-          rm -rf "${gpu_docker_config}"
-          trap - EXIT
+          if docker pull "${CLASSIC_GPU_COVERAGE_IMAGE}"; then
+            echo "available=true" >>"${GITHUB_OUTPUT}"
+          else
+            echo "available=false" >>"${GITHUB_OUTPUT}"
+            echo "::notice::GPU coverage image is not publicly pullable; hardware qualification remains required"
+          fi
+      - name: Exercise GPU renderer coverage
+        if: steps.gpu-coverage-image.outputs.available == 'true'
+        run: |
           tools/ci/run_gpu_coverage.sh \
             "${GITHUB_WORKSPACE}" \
             "${CLASSIC_LINUX_IMAGE}" \
@@ -904,6 +903,7 @@ jobs:
         run: |
           python3 tools/ci/require_checks.py classic \
             --classifier-result '${{ needs.changes.result }}' \
+            --gpu-shaders-result '${{ needs.gpu-shaders.result }}' \
             --dependency-inputs-result '${{ needs.dependency-inputs.result }}' \
             --core-result '${{ needs.core.result }}' \
             --client-required '${{ needs.changes.outputs.client }}' \

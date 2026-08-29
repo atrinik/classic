@@ -98,9 +98,15 @@ else ()
         "${ATRINIK_GPU_SHADER_DIRECTORY}/SHA256SUMS")
     set(ATRINIK_GPU_SHADER_GENERATOR_COMMAND)
     if (ATRINIK_DXC_LIBRARY_DIRECTORY)
-        list(APPEND ATRINIK_GPU_SHADER_GENERATOR_COMMAND
-            "${CMAKE_COMMAND}" -E env
-            "LD_LIBRARY_PATH=${ATRINIK_DXC_LIBRARY_DIRECTORY}:$ENV{LD_LIBRARY_PATH}")
+        if (APPLE)
+            list(APPEND ATRINIK_GPU_SHADER_GENERATOR_COMMAND
+                "${CMAKE_COMMAND}" -E env
+                "DYLD_LIBRARY_PATH=${ATRINIK_DXC_LIBRARY_DIRECTORY}:$ENV{DYLD_LIBRARY_PATH}")
+        elseif (UNIX)
+            list(APPEND ATRINIK_GPU_SHADER_GENERATOR_COMMAND
+                "${CMAKE_COMMAND}" -E env
+                "LD_LIBRARY_PATH=${ATRINIK_DXC_LIBRARY_DIRECTORY}:$ENV{LD_LIBRARY_PATH}")
+        endif ()
     endif ()
     list(APPEND ATRINIK_GPU_SHADER_GENERATOR_COMMAND
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_gpu_shaders.sh"
@@ -113,6 +119,7 @@ else ()
         DEPENDS
             "${CMAKE_CURRENT_SOURCE_DIR}/shaders/map.hlsl"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_gpu_shaders.sh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/write_gpu_shader_manifest.py"
             "${ATRINIK_DXC_EXECUTABLE}"
             "${ATRINIK_SPIRV_CROSS_EXECUTABLE}"
         COMMENT "Compiling Atrinik GPU shaders"

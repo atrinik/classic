@@ -80,7 +80,5 @@ compile_stage final_fragment ps_6_0 final_fragment frag
 compile_stage light_vertex vs_6_0 light_vertex vert
 compile_stage light_fragment ps_6_0 light_fragment frag
 
-(
-    cd "$output"
-    sha256sum ./*.dxil ./*.msl ./*.spv
-) > "$output/SHA256SUMS"
+python3 "$source_dir/tools/write_gpu_shader_manifest.py" \
+    --input "$output" --output "$output/SHA256SUMS"

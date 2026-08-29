@@ -149,16 +149,18 @@ case "${component}" in
     python3 tools/dependencies.py verify
     cmake --preset linux-coverage \
       -DENABLE_PRECOMPILED_HEADERS=OFF \
-      "${launcher[@]}" "${sibling_sources[@]}"
+      "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build --preset linux-coverage --parallel "${jobs}"
     ctest --preset linux-coverage -LE performance
     gcovr --root . --filter 'src/' --exclude 'src/tests/' \
       --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
       --print-summary --xml coverage.xml
-    cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
+    cmake --preset linux-release \
+      "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build --preset linux-release --parallel "${jobs}"
     ctest --preset linux-release -LE performance
-    cmake --preset linux-sanitizers "${launcher[@]}" "${sibling_sources[@]}"
+    cmake --preset linux-sanitizers \
+      "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build --preset linux-sanitizers --parallel "${jobs}"
     env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
       ctest --preset linux-sanitizers -LE performance

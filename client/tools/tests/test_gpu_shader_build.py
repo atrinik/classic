@@ -24,6 +24,10 @@ toolchain = load_module(
     "prepare_gpu_shader_toolchain",
     CLIENT_ROOT / "tools/prepare_gpu_shader_toolchain.py",
 )
+manifest_writer = load_module(
+    "write_gpu_shader_manifest",
+    CLIENT_ROOT / "tools/write_gpu_shader_manifest.py",
+)
 
 
 class GPUShaderBuildTests(unittest.TestCase):
@@ -62,10 +66,24 @@ class GPUShaderBuildTests(unittest.TestCase):
             manifest.write_text("\n".join((*lines, lines[0])) + "\n", encoding="ascii")
             with self.assertRaisesRegex(embed.ShaderError, "duplicate"):
                 embed.load_manifest(manifest)
-            manifest.write_text(lines[0].replace("final_fragment", "unknown") + "\n",
-                                encoding="ascii")
+            manifest.write_text(
+                lines[0].replace("final_fragment", "unknown") + "\n",
+                encoding="ascii",
+            )
             with self.assertRaisesRegex(embed.ShaderError, "membership mismatch"):
                 embed.load_manifest(manifest)
+
+    def test_manifest_writer_is_portable_and_matches_the_embed_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            expected = self.write_cohort(root).read_bytes()
+
+            self.assertEqual(manifest_writer.manifest_bytes(root), expected)
+            (root / manifest_writer.EXPECTED_NAMES[0]).unlink()
+            with self.assertRaisesRegex(
+                manifest_writer.ManifestError, "missing regular generated shader"
+            ):
+                manifest_writer.manifest_bytes(root)
 
     def test_toolchain_lock_pins_governed_upstreams_and_selected_files(self) -> None:
         lock_path = CLIENT_ROOT / "shaders/toolchain.lock.json"
@@ -89,6 +107,29 @@ class GPUShaderBuildTests(unittest.TestCase):
             "9c3c8e2cefdd8194b193bb8ed2fdff4d5527e382",
         )
         self.assertEqual(len(json.loads(lock_path.read_text())["dxc"]["sha256"]), 64)
+
+    def test_toolchain_lock_rejects_urls_outside_the_governed_coordinates(self) -> None:
+        source = json.loads(
+            (CLIENT_ROOT / "shaders/toolchain.lock.json").read_text(encoding="utf-8")
+        )
+        cases = (
+            ("dxc", "https://example.com/dxc.tar.gz", "dxc.url"),
+            (
+                "spirv_cross",
+                "https://example.com/spirv-cross.tar.gz",
+                "spirv_cross.url",
+            ),
+        )
+        for section, url, message in cases:
+            with self.subTest(
+                section=section
+            ), tempfile.TemporaryDirectory() as directory:
+                lock = json.loads(json.dumps(source))
+                lock[section]["url"] = url
+                path = Path(directory) / "toolchain.lock.json"
+                path.write_text(json.dumps(lock), encoding="utf-8")
+                with self.assertRaisesRegex(toolchain.ToolchainError, message):
+                    toolchain.load_lock(path)
 
     def test_cmake_generates_into_the_binary_tree_or_accepts_one_cohort(self) -> None:
         cmake = (CLIENT_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")

@@ -16,6 +16,33 @@ class WorkflowContractTests(unittest.TestCase):
     def text(self, name: str) -> str:
         return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
+    def test_client_linux_presets_consume_the_validated_shader_cohort(self) -> None:
+        runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
+            encoding="utf-8"
+        )
+        client_case = runner[
+            runner.index("  client)\n") : runner.index("  client-benchmark)\n")
+        ]
+
+        self.assertEqual(client_case.count('"${shader_arguments[@]}"'), 3)
+
+    def test_gpu_qualification_quotes_the_cross_platform_shader_path(self) -> None:
+        workflow = self.text("gpu-qualification.yml")
+
+        self.assertIn(
+            "ATRINIK_QUALIFICATION_SHADER_DIRECTORY: "
+            "${{ github.workspace }}/build/gpu-shaders",
+            workflow,
+        )
+        self.assertIn(
+            '"-DATRINIK_GPU_SHADER_DIRECTORY='
+            '${ATRINIK_QUALIFICATION_SHADER_DIRECTORY}"',
+            workflow,
+        )
+        self.assertNotIn(
+            "-DATRINIK_GPU_SHADER_DIRECTORY=${{ github.workspace }}", workflow
+        )
+
     def test_release_builds_use_one_cmake_version_interface(self) -> None:
         check = self.text("check.yml")
         candidate = self.text("build-release-candidate.yml")
@@ -1312,6 +1339,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("FETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP", runner)
         aggregate = workflow[workflow.index("  classic-validation:") :]
         self.assertIn("- dependency-inputs", aggregate)
+        self.assertIn("- gpu-shaders", aggregate)
+        self.assertIn(
+            "--gpu-shaders-result '${{ needs.gpu-shaders.result }}'", aggregate
+        )
         self.assertIn("--dependency-inputs-result", aggregate)
 
     def test_daily_report_stages_verified_inputs_and_keeps_timing_informational(
@@ -1430,7 +1461,7 @@ class WorkflowContractTests(unittest.TestCase):
         dependency_inputs = workflow[
             workflow.index("  dependency-inputs:") : workflow.index("  core:")
         ]
-        self.assertEqual(workflow.count("packages: read"), 2)
+        self.assertEqual(workflow.count("packages: read"), 1)
         self.assertIn("packages: read", dependency_inputs)
         self.assertNotIn("docker/login-action", workflow)
         self.assertNotIn("packages: read", self.text("codeql.yml"))
@@ -1459,10 +1490,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("tools/ci/prepare_gpu_shaders.sh", gpu_shaders)
         self.assertIn("client/shaders/toolchain.lock.json", gpu_shaders)
         self.assertIn("name: classic-gpu-shaders", gpu_shaders)
-        self.assertIn("packages: read", client)
-        self.assertIn('docker --config "${gpu_docker_config}" \\', client)
-        self.assertIn('login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin', client)
-        self.assertIn('docker --config "${gpu_docker_config}" logout ghcr.io', client)
+        self.assertNotIn("packages: read", client)
+        self.assertNotIn("GH_TOKEN", client)
+        self.assertIn("name: Probe the public GPU coverage image", client)
+        self.assertIn("if docker pull \"${CLASSIC_GPU_COVERAGE_IMAGE}\"", client)
+        self.assertIn(
+            "if: steps.gpu-coverage-image.outputs.available == 'true'", client
+        )
         self.assertIn("name: classic-gpu-shaders", client)
         self.assertIn("name: classic-gpu-shaders", integrated)
         expected_materials = {

@@ -17,8 +17,8 @@ The pinned toolchain is:
 update it, while every build rejects compiler output that does not reproduce the
 locked cohort.
 
-For a local build without system `dxc` and `spirv-cross`, prepare the pinned
-tools once:
+For an x86-64 Linux build without system `dxc` and `spirv-cross`, prepare the
+pinned tools once:
 
 ```sh
 python3 tools/prepare_gpu_shader_toolchain.py \
@@ -27,5 +27,7 @@ python3 tools/prepare_gpu_shader_toolchain.py \
 ```
 
 CMake discovers that default location and generates shaders in its binary
-directory. CI and packaging generate one validated cohort and pass its absolute
-directory through `ATRINIK_GPU_SHADER_DIRECTORY` to isolated offline builds.
+directory. On macOS and other development hosts, install compatible system
+`dxc` and `spirv-cross` tools or pass a validated external cohort. CI and
+packaging generate one validated cohort and pass its absolute directory through
+`ATRINIK_GPU_SHADER_DIRECTORY` to isolated offline builds.

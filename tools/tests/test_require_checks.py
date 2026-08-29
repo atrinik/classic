@@ -43,6 +43,8 @@ class RequireChecksTests(unittest.TestCase):
             "classic",
             "--classifier-result",
             "success",
+            "--gpu-shaders-result",
+            "success",
             "--dependency-inputs-result",
             "success",
             "--core-result",

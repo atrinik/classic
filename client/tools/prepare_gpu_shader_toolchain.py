@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import platform
 import shutil
 import stat
 import subprocess
@@ -107,9 +108,25 @@ def load_lock(path: Path) -> dict[str, object]:
             raise ToolchainError(f"{context}.url must be a canonical HTTPS URL")
     if locked_text(dxc["tag"], "dxc.tag") != "v1.9.2607":
         raise ToolchainError("dxc.tag is not the qualified release")
+    if dxc["commit"] != "0d3ee6b551b8fa768fbf825300ebab81047ef6a8":
+        raise ToolchainError("dxc.commit is not the qualified release commit")
     archive_root = locked_text(dxc["archive_root"], "dxc.archive_root")
     if "/" in archive_root or archive_root in {".", ".."}:
         raise ToolchainError("dxc.archive_root must be one safe path component")
+    expected_dxc_url = (
+        "https://github.com/microsoft/DirectXShaderCompiler/releases/download/"
+        f"{dxc['tag']}/{archive_root}.tar.gz"
+    )
+    if dxc["url"] != expected_dxc_url:
+        raise ToolchainError("dxc.url does not match its governed release coordinate")
+    expected_spirv_cross_url = (
+        "https://codeload.github.com/KhronosGroup/SPIRV-Cross/tar.gz/"
+        f"{spirv_cross['commit']}"
+    )
+    if spirv_cross["url"] != expected_spirv_cross_url:
+        raise ToolchainError(
+            "spirv_cross.url does not match its governed commit coordinate"
+        )
     files = dxc["files"]
     if not isinstance(files, dict) or not files:
         raise ToolchainError("dxc.files must be a non-empty object")
@@ -360,6 +377,14 @@ def main() -> int:
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
+    if platform.system() != "Linux" or platform.machine() not in {
+        "x86_64",
+        "AMD64",
+    }:
+        parser.error(
+            "the pinned downloadable shader toolchain targets x86-64 Linux; "
+            "use system dxc and spirv-cross or a validated external cohort"
+        )
     try:
         prepare(arguments.lock, arguments.cache.resolve(), arguments.output.resolve())
     except (OSError, subprocess.CalledProcessError, ToolchainError) as error:
