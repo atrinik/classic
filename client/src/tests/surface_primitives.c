@@ -136,6 +136,19 @@ bool gpu_renderer_draw_line(float x1,
         }                     \
     } while (0)
 
+static void test_null_gpu_canvas_color_mapping(void) {
+    Uint32 color = surface_map_rgb(NULL, 12, 34, 56);
+    Uint8 red, green, blue, alpha;
+    SDL_GetRGBA(color,
+                SDL_GetPixelFormatDetails(SDL_PIXELFORMAT_RGBA32),
+                NULL,
+                &red,
+                &green,
+                &blue,
+                &alpha);
+    TEST_CHECK(red == 12 && green == 34 && blue == 56 && alpha == SDL_ALPHA_OPAQUE);
+}
+
 static void test_packed_indexed_conversion(void) {
     SDL_Surface *surface = SDL_CreateSurface(2, 1, SDL_PIXELFORMAT_INDEX4MSB);
     TEST_CHECK(surface != NULL);
@@ -792,6 +805,7 @@ static void test_map_marker_rotation_contract(void) {
 }
 
 int main(void) {
+    test_null_gpu_canvas_color_mapping();
     test_packed_indexed_conversion();
     test_index8_visible_bounds();
     test_truecolor_pixel_visibility();

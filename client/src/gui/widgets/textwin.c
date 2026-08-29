@@ -570,7 +570,7 @@ void textwin_show(SDL_Surface *surface, int x, int y, int w, int h) {
                 box.y = y;
                 box.w = w;
                 box.h = h;
-                surface_fill_rect(surface, &box, pixel_format_map_rgb(surface->format, 0, 0, 0));
+                surface_fill_rect(surface, &box, surface_map_rgb(surface, 0, 0, 0));
                 draw_frame(surface, x, y, box.w, box.h);
 
                 box.w = w - 3;
