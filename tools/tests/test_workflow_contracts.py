@@ -1311,7 +1311,7 @@ class WorkflowContractTests(unittest.TestCase):
             ],
             "client": workflow[
                 workflow.index("  client:\n    name: Client validation") : workflow.index(
-                    "  integrated:\n    name: Integrated client/server graph"
+                    "  gpu-coverage:\n    name: Trusted GPU renderer coverage"
                 )
             ],
             "integrated": workflow[
@@ -1501,6 +1501,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("packages: read", gpu_coverage_job)
         self.assertIn("GHCR_TOKEN: ${{ github.token }}", gpu_coverage_job)
         self.assertIn(
+            "needs: [changes, dependency-inputs, gpu-shaders, client]",
+            gpu_coverage_job,
+        )
+        self.assertIn(
             "name: Pull pinned build and GPU coverage environments",
             gpu_coverage_job,
         )
@@ -1521,6 +1525,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("name: classic-gpu-shaders", client)
         self.assertIn("name: classic-gpu-shaders", gpu_coverage_job)
         self.assertIn("name: classic-gpu-shaders", integrated)
+        self.assertIn(
+            "name: Wait for complete client coverage processing",
+            gpu_coverage_job,
+        )
+        self.assertIn("api.codecov.io/api/v2/github/", gpu_coverage_job)
+        self.assertIn('"flag=client"', gpu_coverage_job)
+        self.assertIn("'.commit_totals.sessions // 0'", gpu_coverage_job)
+        self.assertIn('[ "${sessions}" -ge 2 ]', gpu_coverage_job)
         aggregate = workflow[workflow.index("  classic-validation:") :]
         self.assertIn("- gpu-coverage", aggregate)
         self.assertIn("--gpu-coverage-required", aggregate)

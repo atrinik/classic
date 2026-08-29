@@ -812,7 +812,7 @@ jobs:
 
   gpu-coverage:
     name: Trusted GPU renderer coverage
-    needs: [changes, dependency-inputs, gpu-shaders]
+    needs: [changes, dependency-inputs, gpu-shaders, client]
     if: >-
       needs.changes.outputs.client == 'true' &&
       (github.event_name != 'pull_request' ||
@@ -860,6 +860,27 @@ jobs:
           files: client/coverage.xml
           flags: client
           use_oidc: true
+      - name: Wait for complete client coverage processing
+        env:
+          CODECOV_REPORT_API: >-
+            https://api.codecov.io/api/v2/github/${{ github.repository_owner }}/repos/${{ github.event.repository.name }}/totals/
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            if sessions=$(
+              curl --fail --silent --show-error --retry 2 --get \
+                --data-urlencode "sha=${GITHUB_SHA}" \
+                --data-urlencode "flag=client" \
+                "${CODECOV_REPORT_API}" | jq -er '.commit_totals.sessions // 0'
+            ) && [ "${sessions}" -ge 2 ]; then
+              echo "Codecov processed both client coverage reports."
+              exit 0
+            fi
+            echo "Waiting for Codecov client coverage processing (${attempt}/30)..."
+            sleep 10
+          done
+          echo "Codecov did not process both client coverage reports within five minutes." >&2
+          exit 1
 
   integrated:
     name: Integrated client/server graph
