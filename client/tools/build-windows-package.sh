@@ -55,6 +55,14 @@ fi
 mkdir -p "${output_directory}"
 
 dependency_arguments=()
+shader_directory=${ATRINIK_GPU_SHADER_DIRECTORY:-}
+if [[ -n ${shader_directory} ]]; then
+  if [[ ! -d ${shader_directory} || -L ${shader_directory} ]]; then
+    echo "ATRINIK_GPU_SHADER_DIRECTORY does not identify a regular directory" >&2
+    exit 1
+  fi
+  dependency_arguments+=("-DATRINIK_GPU_SHADER_DIRECTORY=${shader_directory}")
+fi
 discord_config_file=${ATRINIK_DISCORD_APPLICATION_ID_FILE:-}
 if [[ -n ${ATRINIK_DISCORD_APPLICATION_ID_FILE:-} ]]; then
   if [[ ! -f ${ATRINIK_DISCORD_APPLICATION_ID_FILE} ]]; then

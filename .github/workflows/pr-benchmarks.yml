@@ -135,6 +135,27 @@ jobs:
           path: build/dependency-inputs
           if-no-files-found: error
           retention-days: 1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        if: needs.changes.outputs.client == 'true'
+        with:
+          path: ${{ runner.temp }}/gpu-shader-downloads
+          key: >-
+            gpu-shader-inputs-v1-${{ hashFiles('client/shaders/toolchain.lock.json',
+            'client/tools/prepare_gpu_shader_toolchain.py') }}
+      - name: Compile the requested benchmark shader cohort
+        if: needs.changes.outputs.client == 'true'
+        run: >-
+          tools/ci/prepare_gpu_shaders.sh
+          "${GITHUB_WORKSPACE}"
+          "${RUNNER_TEMP}/gpu-shader-downloads"
+          "${GITHUB_WORKSPACE}/build/gpu-shaders"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: needs.changes.outputs.client == 'true'
+        with:
+          name: pr-benchmark-gpu-shaders
+          path: build/gpu-shaders
+          if-no-files-found: error
+          retention-days: 1
 
   client:
     name: Requested client benchmarks
@@ -154,6 +175,10 @@ jobs:
         with:
           name: pr-benchmark-dependency-inputs
           path: build/dependency-inputs
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: pr-benchmark-gpu-shaders
+          path: build/gpu-shaders
       - id: linux-cache
         name: Resolve isolated client benchmark compiler cache key
         env:

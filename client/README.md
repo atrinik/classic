@@ -16,6 +16,7 @@
 
  From the repository root, build a Linux debug client with:
   $ python3 tools/dependencies.py sync
+  $ python3 tools/prepare_gpu_shader_toolchain.py --cache build/gpu-shader-downloads --output build/gpu-shader-toolchain
   $ cmake --preset linux-debug
   $ cmake --build --preset linux-debug
   $ ctest --preset linux-debug

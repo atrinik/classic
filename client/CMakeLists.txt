@@ -22,78 +22,117 @@ endif ()
 
 include(CTest)
 include(FetchContent)
+find_package(Python3 3.11 COMPONENTS Interpreter REQUIRED)
 
 option(ATRINIK_GPU_CONFORMANCE_REQUIRED
     "Require a runnable supported GPU for the production conformance test" OFF)
 
-set(ATRINIK_GPU_SHADER_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/shaders/generated")
+set(ATRINIK_GPU_SHADER_DIRECTORY "" CACHE PATH
+    "Optional directory containing a pre-generated, validated GPU shader cohort")
+set(ATRINIK_DXC_EXECUTABLE "" CACHE FILEPATH
+    "DirectX Shader Compiler used to generate GPU shaders")
+set(ATRINIK_SPIRV_CROSS_EXECUTABLE "" CACHE FILEPATH
+    "SPIRV-Cross executable used to generate Metal shaders")
+set(ATRINIK_DXC_LIBRARY_DIRECTORY "" CACHE PATH
+    "Optional directory containing the DXC shared libraries")
+set(ATRINIK_GPU_SHADER_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/SHA256SUMS")
 set(ATRINIK_GPU_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/src/include/gpu_shader_data.h")
-file(SHA256 "${ATRINIK_GPU_SHADER_DIRECTORY}/SHA256SUMS" ATRINIK_GPU_SHADER_COHORT)
-file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/src/include")
-file(WRITE "${ATRINIK_GPU_SHADER_HEADER}"
-    "/* Generated from checked-in, offline-compiled shader artifacts. */\n"
-    "#ifndef GPU_SHADER_DATA_H\n#define GPU_SHADER_DATA_H\n#include <stddef.h>\n")
+file(SHA256 "${ATRINIK_GPU_SHADER_MANIFEST}" ATRINIK_GPU_SHADER_COHORT)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/map.hlsl"
-    "${ATRINIK_GPU_SHADER_DIRECTORY}/SHA256SUMS")
+    "${ATRINIK_GPU_SHADER_MANIFEST}")
+set(ATRINIK_GPU_SHADER_NAMES
+    final_fragment final_vertex
+    light_fragment light_vertex
+    world_fragment world_vertex)
+set(ATRINIK_GPU_SHADER_ARTIFACTS)
+foreach (name IN LISTS ATRINIK_GPU_SHADER_NAMES)
+    foreach (extension IN ITEMS dxil msl spv)
+        list(APPEND ATRINIK_GPU_SHADER_ARTIFACTS "${name}.${extension}")
+    endforeach ()
+endforeach ()
 
-function(atrinik_embed_gpu_shader name extension expected_sha256)
-    set(path "${ATRINIK_GPU_SHADER_DIRECTORY}/${name}.${extension}")
-    if (NOT EXISTS "${path}")
-        message(FATAL_ERROR "Missing precompiled GPU shader: ${path}")
+if (ATRINIK_GPU_SHADER_DIRECTORY)
+    get_filename_component(ATRINIK_GPU_SHADER_DIRECTORY
+        "${ATRINIK_GPU_SHADER_DIRECTORY}" ABSOLUTE)
+    set(ATRINIK_GPU_SHADER_OUTPUTS)
+    foreach (artifact IN LISTS ATRINIK_GPU_SHADER_ARTIFACTS)
+        list(APPEND ATRINIK_GPU_SHADER_OUTPUTS
+            "${ATRINIK_GPU_SHADER_DIRECTORY}/${artifact}")
+    endforeach ()
+    list(APPEND ATRINIK_GPU_SHADER_OUTPUTS
+        "${ATRINIK_GPU_SHADER_DIRECTORY}/SHA256SUMS")
+else ()
+    set(ATRINIK_GPU_SHADER_DIRECTORY
+        "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated")
+    if (NOT ATRINIK_DXC_EXECUTABLE)
+        find_program(ATRINIK_DXC_DISCOVERED_EXECUTABLE NAMES dxc
+            HINTS "${CMAKE_CURRENT_SOURCE_DIR}/build/gpu-shader-toolchain/dxc/bin")
+        set(ATRINIK_DXC_EXECUTABLE "${ATRINIK_DXC_DISCOVERED_EXECUTABLE}"
+            CACHE FILEPATH "DirectX Shader Compiler used to generate GPU shaders" FORCE)
     endif ()
-    file(SHA256 "${path}" actual_sha256)
-    if (NOT actual_sha256 STREQUAL expected_sha256)
+    if (NOT ATRINIK_SPIRV_CROSS_EXECUTABLE)
+        find_program(ATRINIK_SPIRV_CROSS_DISCOVERED_EXECUTABLE NAMES spirv-cross
+            HINTS "${CMAKE_CURRENT_SOURCE_DIR}/build/gpu-shader-toolchain/spirv-cross/bin")
+        set(ATRINIK_SPIRV_CROSS_EXECUTABLE
+            "${ATRINIK_SPIRV_CROSS_DISCOVERED_EXECUTABLE}" CACHE FILEPATH
+            "SPIRV-Cross executable used to generate Metal shaders" FORCE)
+    endif ()
+    if (NOT ATRINIK_DXC_EXECUTABLE OR NOT ATRINIK_SPIRV_CROSS_EXECUTABLE)
         message(FATAL_ERROR
-            "Precompiled GPU shader digest mismatch for ${name}.${extension}: "
-            "expected ${expected_sha256}, got ${actual_sha256}")
+            "GPU shader build tools are unavailable. Install dxc and spirv-cross, "
+            "run client/tools/prepare_gpu_shader_toolchain.py, or set "
+            "ATRINIK_GPU_SHADER_DIRECTORY to a generated cohort.")
     endif ()
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${path}")
-    file(READ "${path}" shader_hex HEX)
-    string(REGEX REPLACE "(..)" "0x\\1," shader_bytes "${shader_hex}")
-    file(APPEND "${ATRINIK_GPU_SHADER_HEADER}"
-        "static const unsigned char gpu_shader_${name}_${extension}[] = {${shader_bytes}};\n"
-        "static const size_t gpu_shader_${name}_${extension}_size = "
-        "sizeof(gpu_shader_${name}_${extension});\n")
-endfunction()
+    if (NOT ATRINIK_DXC_LIBRARY_DIRECTORY AND
+            EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/build/gpu-shader-toolchain/dxc/lib")
+        set(ATRINIK_DXC_LIBRARY_DIRECTORY
+            "${CMAKE_CURRENT_SOURCE_DIR}/build/gpu-shader-toolchain/dxc/lib")
+    endif ()
+    set(ATRINIK_GPU_SHADER_OUTPUTS)
+    foreach (artifact IN LISTS ATRINIK_GPU_SHADER_ARTIFACTS)
+        list(APPEND ATRINIK_GPU_SHADER_OUTPUTS
+            "${ATRINIK_GPU_SHADER_DIRECTORY}/${artifact}")
+    endforeach ()
+    list(APPEND ATRINIK_GPU_SHADER_OUTPUTS
+        "${ATRINIK_GPU_SHADER_DIRECTORY}/SHA256SUMS")
+    set(ATRINIK_GPU_SHADER_GENERATOR_COMMAND)
+    if (ATRINIK_DXC_LIBRARY_DIRECTORY)
+        list(APPEND ATRINIK_GPU_SHADER_GENERATOR_COMMAND
+            "${CMAKE_COMMAND}" -E env
+            "LD_LIBRARY_PATH=${ATRINIK_DXC_LIBRARY_DIRECTORY}:$ENV{LD_LIBRARY_PATH}")
+    endif ()
+    list(APPEND ATRINIK_GPU_SHADER_GENERATOR_COMMAND
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_gpu_shaders.sh"
+        "${ATRINIK_DXC_EXECUTABLE}"
+        "${ATRINIK_SPIRV_CROSS_EXECUTABLE}"
+        "${ATRINIK_GPU_SHADER_DIRECTORY}")
+    add_custom_command(
+        OUTPUT ${ATRINIK_GPU_SHADER_OUTPUTS}
+        COMMAND ${ATRINIK_GPU_SHADER_GENERATOR_COMMAND}
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/map.hlsl"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_gpu_shaders.sh"
+            "${ATRINIK_DXC_EXECUTABLE}"
+            "${ATRINIK_SPIRV_CROSS_EXECUTABLE}"
+        COMMENT "Compiling Atrinik GPU shaders"
+        VERBATIM)
+endif ()
 
-atrinik_embed_gpu_shader(final_fragment dxil
-    99fb6faee6ef1ba69bbc4fd2a987a1487d12b95016b31614b479d0b49dcf5384)
-atrinik_embed_gpu_shader(final_vertex dxil
-    08eae78595fba775ff14ba070c72ffe64d37cf01771042b2a487701ca4bee46c)
-atrinik_embed_gpu_shader(light_fragment dxil
-    c1551668ab6b3568b0f7f9d9ee6b8c0f59e32df5816f131ad8160a04c5f4d319)
-atrinik_embed_gpu_shader(light_vertex dxil
-    14690461069ae95f2fa10d7282332225ce5d0be6c821099baa984aa959e5ec2a)
-atrinik_embed_gpu_shader(world_fragment dxil
-    687a0d6991ad9ab99e9aad0982a6fff086a93fcaa232451cc7ff71a50d36398e)
-atrinik_embed_gpu_shader(world_vertex dxil
-    d24c66e4fb41598b7e34371a02f6b552a87de1e0ccacaf201f77d107f56375bf)
-atrinik_embed_gpu_shader(final_fragment msl
-    001b7cefc8a99bc70fa63840ad8f76d572b379e2a180e5dbfc76f1db808ece0b)
-atrinik_embed_gpu_shader(final_vertex msl
-    a8119c063891ce118e40f4ff6e1bcfc351fb2a82de6312e3b0c269ebc316c7a6)
-atrinik_embed_gpu_shader(light_fragment msl
-    86d1600fd4c3514cf659b28297983ef638faab5f47c952a9819e5c49100cfd3d)
-atrinik_embed_gpu_shader(light_vertex msl
-    62416e9df59d3f40bb66dd9f3cd6d4eafa9d727497736b6269b38285d708d58e)
-atrinik_embed_gpu_shader(world_fragment msl
-    55db0dea217b59ca22bbdcfdfb166b3cd928adce111ba7686c9e1e050827285b)
-atrinik_embed_gpu_shader(world_vertex msl
-    711c4ad3579cd4ab44f10c8f03fde4ad00bc0bf69171dfc03ab767b25bb75a93)
-atrinik_embed_gpu_shader(final_fragment spv
-    7d407f04b24fa08d5ec9db34801296c80c1c68f8a3566cc54941de43efda09fd)
-atrinik_embed_gpu_shader(final_vertex spv
-    0ceecbb3a333a6419ca646ce567c0fe130ba87872d0f3e6937c578751c5e5211)
-atrinik_embed_gpu_shader(light_fragment spv
-    8a5905039cafd0746f274c6c805d5b3ebaf20c8a254202b3e5d806d84514007d)
-atrinik_embed_gpu_shader(light_vertex spv
-    575abeb5529ec9b84e42c42fd8c8dc59aa1c088d3677f1d47da4994a34fd871f)
-atrinik_embed_gpu_shader(world_fragment spv
-    c26c7e8d03bb41050b3ce20ed2b981a0474ced290e942bbef13b837f93e55cc0)
-atrinik_embed_gpu_shader(world_vertex spv
-    bf1ca045f6c0aa5bfcc170e08d8a19c41ab1bc1d939476975a004fe2ec8a75db)
-file(APPEND "${ATRINIK_GPU_SHADER_HEADER}" "#endif\n")
+add_custom_command(
+    OUTPUT "${ATRINIK_GPU_SHADER_HEADER}"
+    COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_gpu_shaders.py"
+        --input "${ATRINIK_GPU_SHADER_DIRECTORY}"
+        --manifest "${ATRINIK_GPU_SHADER_MANIFEST}"
+        --output "${ATRINIK_GPU_SHADER_HEADER}"
+    DEPENDS
+        ${ATRINIK_GPU_SHADER_OUTPUTS}
+        "${ATRINIK_GPU_SHADER_MANIFEST}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_gpu_shaders.py"
+    COMMENT "Embedding validated Atrinik GPU shaders"
+    VERBATIM)
+add_custom_target(atrinik-gpu-shaders DEPENDS "${ATRINIK_GPU_SHADER_HEADER}")
 
 function(atrinik_find_root_document output filename)
     file(REAL_PATH "${CMAKE_CURRENT_LIST_FILE}" ATRINIK_REAL_CMAKE_FILE)
@@ -332,6 +371,7 @@ endif ()
 
 # Compile the sources into an executable.
 add_executable(${EXECUTABLE} WIN32 ${SOURCES})
+add_dependencies(${EXECUTABLE} atrinik-gpu-shaders)
 atrinik_configure_target(${EXECUTABLE})
 if (ATRINIK_CLIENT_ENABLE_PRECOMPILED_HEADERS)
     target_precompile_headers(${EXECUTABLE} PRIVATE src/include/global.h)
@@ -385,7 +425,7 @@ if (MINGW)
 endif ()
 
 if (BUILD_TESTING)
-    find_program(ATRINIK_PYTHON3_EXECUTABLE python3 REQUIRED)
+    set(ATRINIK_PYTHON3_EXECUTABLE "${Python3_EXECUTABLE}")
 
     add_executable(client-audio-log-tests
         src/tests/audio_log.c
@@ -466,6 +506,7 @@ if (BUILD_TESTING)
         src/client/gpu_renderer.c
         src/client/gpu_map_renderer.c
         src/client/lighting_transfer.c)
+    add_dependencies(client-gpu-renderer-integration-tests atrinik-gpu-shaders)
     atrinik_configure_target(client-gpu-renderer-integration-tests)
     target_compile_definitions(client-gpu-renderer-integration-tests PRIVATE
         ATRINIK_GPU_CONFORMANCE_TESTS

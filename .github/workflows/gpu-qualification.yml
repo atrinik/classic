@@ -12,8 +12,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  shaders:
+    name: Build qualification shader cohort
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/gpu-shader-downloads
+          key: >-
+            gpu-shader-inputs-v1-${{ hashFiles('client/shaders/toolchain.lock.json',
+            'client/tools/prepare_gpu_shader_toolchain.py') }}
+      - name: Compile and validate the qualification shader cohort
+        run: >-
+          tools/ci/prepare_gpu_shaders.sh
+          "${GITHUB_WORKSPACE}"
+          "${RUNNER_TEMP}/gpu-shader-downloads"
+          "${GITHUB_WORKSPACE}/build/gpu-shaders"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: qualification-gpu-shaders
+          path: build/gpu-shaders
+          if-no-files-found: error
+          retention-days: 1
+
   qualify:
     name: ${{ matrix.backend }} / ${{ matrix.hardware }}
+    needs: shaders
     strategy:
       fail-fast: false
       matrix:
@@ -42,12 +70,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: qualification-gpu-shaders
+          path: build/gpu-shaders
       - name: Configure clean Release qualification build
         shell: bash
         run: >-
           cmake -S client -B client/build/gpu-qualification -G Ninja
           -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
           -DATRINIK_GPU_CONFORMANCE_REQUIRED=ON -DPACKAGE_TYPE=none
+          -DATRINIK_GPU_SHADER_DIRECTORY=${{ github.workspace }}/build/gpu-shaders
       - name: Build production client and GPU harness
         shell: bash
         run: >-

@@ -919,7 +919,9 @@ class WorkflowContractTests(unittest.TestCase):
         cache_action = (
             "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
         )
-        self.assertEqual(candidate.count(cache_action), 2)
+        self.assertEqual(candidate.count(cache_action), 3)
+        self.assertIn("name: Build release GPU shader cohort", candidate)
+        self.assertIn("candidate-gpu-shaders-${{ needs.metadata.outputs.tag }}", candidate)
         client_job = candidate[
             candidate.index("  client-windows:") : candidate.index("  server-windows:")
         ]
@@ -1416,7 +1418,7 @@ class WorkflowContractTests(unittest.TestCase):
 
         self.assertEqual(workflow.count(image), 1)
         self.assertEqual(workflow.count(f"sha256:{digest}"), 2)
-        self.assertEqual(workflow.count(cache_action), 4)
+        self.assertEqual(workflow.count(cache_action), 5)
         self.assertEqual(workflow.count(f"actions/cache/restore@{cache_action.split('@')[1]}"), 1)
         self.assertEqual(workflow.count(f"actions/cache/save@{cache_action.split('@')[1]}"), 1)
         self.assertEqual(workflow.count("tools/ci/linux_cache_key.py"), 4)
@@ -1428,7 +1430,7 @@ class WorkflowContractTests(unittest.TestCase):
         dependency_inputs = workflow[
             workflow.index("  dependency-inputs:") : workflow.index("  core:")
         ]
-        self.assertEqual(workflow.count("packages: read"), 1)
+        self.assertEqual(workflow.count("packages: read"), 2)
         self.assertIn("packages: read", dependency_inputs)
         self.assertNotIn("docker/login-action", workflow)
         self.assertNotIn("packages: read", self.text("codeql.yml"))
@@ -1451,6 +1453,18 @@ class WorkflowContractTests(unittest.TestCase):
                 "  classic-validation:\n    name: Classic validation"
             )
         ]
+        gpu_shaders = workflow[
+            workflow.index("  gpu-shaders:") : workflow.index("  gpu-qualification:")
+        ]
+        self.assertIn("tools/ci/prepare_gpu_shaders.sh", gpu_shaders)
+        self.assertIn("client/shaders/toolchain.lock.json", gpu_shaders)
+        self.assertIn("name: classic-gpu-shaders", gpu_shaders)
+        self.assertIn("packages: read", client)
+        self.assertIn('docker --config "${gpu_docker_config}" \\', client)
+        self.assertIn('login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin', client)
+        self.assertIn('docker --config "${gpu_docker_config}" logout ghcr.io', client)
+        self.assertIn("name: classic-gpu-shaders", client)
+        self.assertIn("name: classic-gpu-shaders", integrated)
         expected_materials = {
             "core": {
                 ".github/workflows/check.yml",

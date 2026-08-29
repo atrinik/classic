@@ -312,7 +312,7 @@ static SDL_GPUShader *gpu_map_shader_create(const char *name,
                                             uint32_t uniforms) {
     gpu_map_shader_blob_t blob = gpu_map_shader_blob(name, entrypoint);
     if (blob.code == NULL) {
-        SDL_SetError("No supported precompiled format for GPU shader %s", name);
+        SDL_SetError("No supported embedded format for GPU shader %s", name);
         return NULL;
     }
     SDL_GPUShaderCreateInfo info = {
