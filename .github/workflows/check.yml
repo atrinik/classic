@@ -714,6 +714,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -776,8 +777,25 @@ jobs:
             --workdir /workspace \
             "${CLASSIC_LINUX_IMAGE}" \
             tools/ci/run_linux_check.sh client /workspace
-      - id: gpu-coverage-image
-        name: Probe the public GPU coverage image
+      - id: gpu-coverage-image-repository
+        name: Pull the GPU coverage image with repository package access
+        if: >-
+          github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io \
+            --username "${GITHUB_ACTOR}" --password-stdin
+          docker pull "${CLASSIC_GPU_COVERAGE_IMAGE}"
+          echo "available=true" >>"${GITHUB_OUTPUT}"
+      - id: gpu-coverage-image-public
+        name: Probe public GPU coverage image access for fork pull requests
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name != github.repository
         run: |
           if docker pull "${CLASSIC_GPU_COVERAGE_IMAGE}"; then
             echo "available=true" >>"${GITHUB_OUTPUT}"
@@ -786,7 +804,9 @@ jobs:
             echo "::notice::GPU coverage image is not publicly pullable; hardware qualification remains required"
           fi
       - name: Exercise GPU renderer coverage
-        if: steps.gpu-coverage-image.outputs.available == 'true'
+        if: >-
+          steps.gpu-coverage-image-repository.outputs.available == 'true' ||
+          steps.gpu-coverage-image-public.outputs.available == 'true'
         run: |
           tools/ci/run_gpu_coverage.sh \
             "${GITHUB_WORKSPACE}" \

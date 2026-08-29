@@ -1461,7 +1461,7 @@ class WorkflowContractTests(unittest.TestCase):
         dependency_inputs = workflow[
             workflow.index("  dependency-inputs:") : workflow.index("  core:")
         ]
-        self.assertEqual(workflow.count("packages: read"), 1)
+        self.assertEqual(workflow.count("packages: read"), 2)
         self.assertIn("packages: read", dependency_inputs)
         self.assertNotIn("docker/login-action", workflow)
         self.assertNotIn("packages: read", self.text("codeql.yml"))
@@ -1490,12 +1490,30 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("tools/ci/prepare_gpu_shaders.sh", gpu_shaders)
         self.assertIn("client/shaders/toolchain.lock.json", gpu_shaders)
         self.assertIn("name: classic-gpu-shaders", gpu_shaders)
-        self.assertNotIn("packages: read", client)
+        self.assertIn("packages: read", client)
         self.assertNotIn("GH_TOKEN", client)
-        self.assertIn("name: Probe the public GPU coverage image", client)
+        self.assertIn("GHCR_TOKEN: ${{ github.token }}", client)
+        self.assertIn(
+            "name: Pull the GPU coverage image with repository package access",
+            client,
+        )
+        self.assertIn(
+            "github.event.pull_request.head.repo.full_name == github.repository",
+            client,
+        )
+        self.assertIn("docker login ghcr.io", client)
+        self.assertIn("docker logout ghcr.io", client)
+        self.assertIn(
+            "name: Probe public GPU coverage image access for fork pull requests",
+            client,
+        )
         self.assertIn("if docker pull \"${CLASSIC_GPU_COVERAGE_IMAGE}\"", client)
         self.assertIn(
-            "if: steps.gpu-coverage-image.outputs.available == 'true'", client
+            "steps.gpu-coverage-image-repository.outputs.available == 'true'",
+            client,
+        )
+        self.assertIn(
+            "steps.gpu-coverage-image-public.outputs.available == 'true'", client
         )
         self.assertIn("name: classic-gpu-shaders", client)
         self.assertIn("name: classic-gpu-shaders", integrated)
