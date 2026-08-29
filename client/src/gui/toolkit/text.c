@@ -230,6 +230,27 @@ static font_struct *fonts;
 #ifdef ATRINIK_WIDGET_TESTS
 static const char *text_test_font_path;
 static const char *text_test_mono_font_path;
+static text_root_glyph_statistics_t text_root_glyph_statistics;
+
+static void text_root_glyph_hash_u32(uint32_t value) {
+    for (size_t shift = 0; shift < sizeof(value) * CHAR_BIT; shift += CHAR_BIT) {
+        text_root_glyph_statistics.semantic_hash ^= (value >> shift) & UINT8_MAX;
+        text_root_glyph_statistics.semantic_hash *= UINT64_C(1099511628211);
+    }
+}
+
+static void text_root_glyph_hash_u64(uint64_t value) {
+    for (size_t shift = 0; shift < sizeof(value) * CHAR_BIT; shift += CHAR_BIT) {
+        text_root_glyph_statistics.semantic_hash ^= (value >> shift) & UINT8_MAX;
+        text_root_glyph_statistics.semantic_hash *= UINT64_C(1099511628211);
+    }
+}
+
+static void text_root_glyph_record(uint32_t codepoint, uint64_t flags) {
+    text_root_glyph_statistics.count++;
+    text_root_glyph_hash_u32(codepoint);
+    text_root_glyph_hash_u64(flags);
+}
 
 void text_test_font_path_set(const char *path) {
     text_test_font_path = path;
@@ -237,6 +258,17 @@ void text_test_font_path_set(const char *path) {
 
 void text_test_mono_font_path_set(const char *path) {
     text_test_mono_font_path = path;
+}
+
+void text_root_glyph_statistics_reset(void) {
+    text_root_glyph_statistics = (text_root_glyph_statistics_t){
+        .semantic_hash = UINT64_C(14695981039346656037),
+    };
+}
+
+void text_root_glyph_statistics_get(text_root_glyph_statistics_t *statistics) {
+    HARD_ASSERT(statistics != NULL);
+    *statistics = text_root_glyph_statistics;
 }
 #endif
 
@@ -2062,6 +2094,11 @@ int text_show_character(font_struct **font,
                         ? MAX(MIN(box->h - (dstrect.y - info->start_y), ttf_surface->h), 0)
                         : ttf_surface->h;
 
+#ifdef ATRINIK_WIDGET_TESTS
+        if (surface == NULL) {
+            text_root_glyph_record(codepoint, flags);
+        }
+#endif
         surface_blit(ttf_surface, &srcrect, surface, &dstrect);
     }
 

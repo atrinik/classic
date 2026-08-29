@@ -368,8 +368,15 @@ extern void text_init(void);
 extern void text_deinit(void);
 
 #ifdef ATRINIK_WIDGET_TESTS
+typedef struct text_root_glyph_statistics {
+    uint64_t count;
+    uint64_t semantic_hash;
+} text_root_glyph_statistics_t;
+
 extern void text_test_font_path_set(const char *path);
 extern void text_test_mono_font_path_set(const char *path);
+extern void text_root_glyph_statistics_reset(void);
+extern void text_root_glyph_statistics_get(text_root_glyph_statistics_t *statistics);
 #endif
 
 extern void text_offset_set(int x, int y);

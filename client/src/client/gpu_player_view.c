@@ -1514,6 +1514,7 @@ typedef struct gpu_player_view_ui_state {
     int width;
     int height;
     gpu_renderer_statistics_t steady;
+    text_root_glyph_statistics_t root_glyphs;
     const char *command;
     bool asynchronous;
     char artifact[PLAYER_VIEW_ARTIFACT_PATH_SIZE];
@@ -1541,6 +1542,7 @@ static bool gpu_player_view_ui_capture(const char *name, bool notification_fade)
         return false;
     }
     gpu_renderer_statistics_reset();
+    text_root_glyph_statistics_reset();
     if (notification_fade && !notification_test_fade(2500)) {
         SDL_SetError("could not advance notification fade for steady %s", name);
         return false;
@@ -1553,6 +1555,7 @@ static bool gpu_player_view_ui_capture(const char *name, bool notification_fade)
         &gpu_player_view_ui_closure.states[gpu_player_view_ui_closure.states_num++];
     state->name = name;
     gpu_renderer_statistics_get(&state->steady);
+    text_root_glyph_statistics_get(&state->root_glyphs);
     if (state->steady.upload_count != state->steady.slot_uniform_upload_count ||
         state->steady.upload_bytes != state->steady.slot_uniform_upload_bytes ||
         !gpu_player_view_slot_uniform_uploads_bounded(&state->steady) ||
@@ -2044,7 +2047,9 @@ static void gpu_player_view_ui_closure_write(void) {
                state->height);
         gpu_player_view_json_string(state->command != NULL ? state->command : "");
         printf(",\"artifact\":\"%s\",\"artifact_sha256\":\"%s\","
-               "\"asynchronous\":%s,\"steady_state\":{"
+               "\"asynchronous\":%s,\"root_glyphs\":{"
+               "\"count\":%" PRIu64 ",\"semantic_hash\":\"%016" PRIx64 "\"},"
+               "\"steady_state\":{"
                "\"uploads\":%" PRIu64 ",\"upload_bytes\":%" PRIu64
                ",\"slot_uniform_uploads\":%" PRIu64 ",\"slot_uniform_upload_bytes\":%" PRIu64
                ",\"resource_creations\":%" PRIu64 ",\"resource_destructions\":%" PRIu64
@@ -2052,6 +2057,8 @@ static void gpu_player_view_ui_closure_write(void) {
                state->artifact,
                state->artifact_digest,
                state->asynchronous ? "true" : "false",
+               state->root_glyphs.count,
+               state->root_glyphs.semantic_hash,
                state->steady.upload_count,
                state->steady.upload_bytes,
                state->steady.slot_uniform_upload_count,

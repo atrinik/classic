@@ -43,6 +43,11 @@ UI_CLOSURE_STATES = (
     "region_map_fow_transition",
     "region_map_fow_retained", "screenshot_window", "screenshot_map",
 )
+ROOT_GLYPH_CONTRACTS = {
+    "intro_server_browser": (383, "29c427a4eff9acbd"),
+    "login_popup": (385, "4266544b0b8b6fbd"),
+    "popup_character_selection": (385, "4266544b0b8b6fbd"),
+}
 ASSERTION_ATTRIBUTES = {
     "ui_names_targets": ("player-names", "target-ui"),
     "visibility_fade": ("visibility-fade-test",),
@@ -729,6 +734,12 @@ def validate_production_record(record: dict) -> bool:
                  [state.get("name") for state in ui_closure] == list(UI_CLOSURE_STATES),
                  "complete-screen GPU state sweep is incomplete")
         by_name = {state["name"]: state for state in ui_closure}
+        for name, (expected_count, expected_hash) in ROOT_GLYPH_CONTRACTS.items():
+            root_glyphs = by_name[name].get("root_glyphs", {})
+            _require(root_glyphs == {
+                "count": expected_count,
+                "semantic_hash": expected_hash,
+            }, f"{name} root glyph submission contract changed")
         for state in ui_closure:
             _require(bool(HEX_64.fullmatch(str(state.get("pixels_sha256", "")))),
                      f"{state['name']} UI checkpoint is invalid")

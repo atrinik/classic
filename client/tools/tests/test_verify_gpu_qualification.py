@@ -10,6 +10,7 @@ from pathlib import Path
 from tools.verify_gpu_qualification import (
     ArtifactError,
     LIFECYCLE_EVENTS,
+    ROOT_GLYPH_CONTRACTS,
     UI_CLOSURE_STATES,
     WORKLOAD_CONTRACTS,
     WORKLOADS,
@@ -197,6 +198,10 @@ class VerifyGpuQualificationTests(unittest.TestCase):
                 "asynchronous": screenshot,
                 "artifact": f"review/{name}.png",
                 "artifact_sha256": "f" * 64,
+                "root_glyphs": {
+                    "count": ROOT_GLYPH_CONTRACTS.get(name, (0, "0" * 16))[0],
+                    "semantic_hash": ROOT_GLYPH_CONTRACTS.get(name, (0, "0" * 16))[1],
+                },
                 "steady_state": {"uploads": 0, "upload_bytes": 0,
                                  "slot_uniform_uploads": 0,
                                  "slot_uniform_upload_bytes": 0,
@@ -205,6 +210,12 @@ class VerifyGpuQualificationTests(unittest.TestCase):
             })
         value["ui_closure"] = states
         self.assertFalse(validate_production_record(value))
+        for field, replacement in (("count", 0), ("semantic_hash", "0" * 16)):
+            with self.subTest(root_glyph_field=field):
+                invalid = copy.deepcopy(value)
+                invalid["ui_closure"][0]["root_glyphs"][field] = replacement
+                with self.assertRaisesRegex(ArtifactError, "root glyph submission"):
+                    validate_production_record(invalid)
         for dimension in range(2):
             with self.subTest(dimension=dimension):
                 invalid = copy.deepcopy(value)
