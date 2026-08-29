@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -156,6 +156,9 @@ extern void draw_info(const char *color, const char *str);
 extern void textwin_handle_copy(widgetdata *widget);
 
 extern void textwin_show(SDL_Surface *surface, int x, int y, int w, int h);
+
+/** Render the message text window directly on the GPU root canvas. */
+extern void textwin_show_root(int x, int y, int w, int h);
 
 extern int textwin_tabs_height(widgetdata *widget);
 

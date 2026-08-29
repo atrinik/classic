@@ -334,7 +334,7 @@ int list_need_redraw(list_struct *list) {
  * @param y
  * Y position.
  */
-void list_show(list_struct *list, int x, int y) {
+static void list_show_impl(list_struct *list, int x, int y, bool render_root) {
     uint32_t row, col;
     int w = 0, extra_width = 0;
     SDL_Rect box;
@@ -363,15 +363,26 @@ void list_show(list_struct *list, int x, int y) {
 
         /* Actually draw the column name. */
         if (list->col_names[col]) {
-            text_show_shadow(list->surface,
-                             list->font,
-                             list->col_names[col],
-                             list->x + w + extra_width,
-                             list->y,
-                             list->focus ? COLOR_WHITE : COLOR_GRAY,
-                             COLOR_BLACK,
-                             0,
-                             NULL);
+            if (render_root) {
+                text_show_shadow_root(list->font,
+                                      list->col_names[col],
+                                      list->x + w + extra_width,
+                                      list->y,
+                                      list->focus ? COLOR_WHITE : COLOR_GRAY,
+                                      COLOR_BLACK,
+                                      0,
+                                      NULL);
+            } else {
+                text_show_shadow(list->surface,
+                                 list->font,
+                                 list->col_names[col],
+                                 list->x + w + extra_width,
+                                 list->y,
+                                 list->focus ? COLOR_WHITE : COLOR_GRAY,
+                                 COLOR_BLACK,
+                                 0,
+                                 NULL);
+            }
         }
 
         w += list->col_widths[col] + list->col_spacings[col];
@@ -447,7 +458,16 @@ void list_show(list_struct *list, int x, int y) {
                 text_rect.h = LIST_ROW_HEIGHT(list);
 
                 /* Output the text. */
-                if (text_color_shadow) {
+                if (text_color_shadow && render_root) {
+                    text_show_shadow_root(list->font,
+                                          list->text[row][col],
+                                          text_rect.x,
+                                          text_rect.y,
+                                          text_color,
+                                          text_color_shadow,
+                                          TEXT_WORD_WRAP | list->text_flags,
+                                          &text_rect);
+                } else if (text_color_shadow) {
                     text_show_shadow(list->surface,
                                      list->font,
                                      list->text[row][col],
@@ -457,6 +477,14 @@ void list_show(list_struct *list, int x, int y) {
                                      text_color_shadow,
                                      TEXT_WORD_WRAP | list->text_flags,
                                      &text_rect);
+                } else if (text_color && render_root) {
+                    text_show_root(list->font,
+                                   list->text[row][col],
+                                   text_rect.x,
+                                   text_rect.y,
+                                   text_color,
+                                   TEXT_WORD_WRAP | list->text_flags,
+                                   &text_rect);
                 } else if (text_color) {
                     text_show(list->surface,
                               list->font,
@@ -476,6 +504,14 @@ void list_show(list_struct *list, int x, int y) {
             w += list->col_widths[col] + list->col_spacings[col];
         }
     }
+}
+
+void list_show(list_struct *list, int x, int y) {
+    list_show_impl(list, x, y, false);
+}
+
+void list_show_root(list_struct *list, int x, int y) {
+    list_show_impl(list, x, y, true);
 }
 
 /**

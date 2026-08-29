@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -540,7 +540,7 @@ void textwin_handle_copy(widgetdata *widget) {
  * @param h
  * Maximum height.
  */
-void textwin_show(SDL_Surface *surface, int x, int y, int w, int h) {
+static void textwin_show_impl(SDL_Surface *surface, bool render_root, int x, int y, int w, int h) {
     widgetdata *widget;
     textwin_struct *textwin;
     size_t i;
@@ -578,18 +578,36 @@ void textwin_show(SDL_Surface *surface, int x, int y, int w, int h) {
 
                 box.y = MAX(0, scroll - (h / FONT_HEIGHT(textwin->font)));
 
-                text_show(surface,
-                          textwin->font,
-                          textwin->tabs[i].entries,
-                          x + 3,
-                          y + 1,
-                          COLOR_BLACK,
-                          TEXTWIN_TEXT_FLAGS(widget) | TEXT_LINES_SKIP,
-                          &box);
+                if (render_root) {
+                    text_show_root(textwin->font,
+                                   textwin->tabs[i].entries,
+                                   x + 3,
+                                   y + 1,
+                                   COLOR_BLACK,
+                                   TEXTWIN_TEXT_FLAGS(widget) | TEXT_LINES_SKIP,
+                                   &box);
+                } else {
+                    text_show(surface,
+                              textwin->font,
+                              textwin->tabs[i].entries,
+                              x + 3,
+                              y + 1,
+                              COLOR_BLACK,
+                              TEXTWIN_TEXT_FLAGS(widget) | TEXT_LINES_SKIP,
+                              &box);
+                }
                 break;
             }
         }
     }
+}
+
+void textwin_show(SDL_Surface *surface, int x, int y, int w, int h) {
+    textwin_show_impl(surface, false, x, y, w, h);
+}
+
+void textwin_show_root(int x, int y, int w, int h) {
+    textwin_show_impl(NULL, true, x, y, w, h);
 }
 
 int textwin_tabs_height(widgetdata *widget) {

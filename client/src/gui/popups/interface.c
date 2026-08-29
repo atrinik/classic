@@ -215,17 +215,16 @@ static int popup_draw_post_func(popup_struct *popup) {
 
     button_hello.x = popup->x + INTERFACE_BUTTON_HELLO_STARTX;
     button_hello.y = popup->y + INTERFACE_BUTTON_HELLO_STARTY;
-    button_show(&button_hello, "Hello");
+    button_show_root(&button_hello, "Hello");
 
     button_close.x = popup->x + INTERFACE_BUTTON_CLOSE_STARTX;
     button_close.y = popup->y + INTERFACE_BUTTON_CLOSE_STARTY;
-    button_show(&button_close, "Close");
+    button_show_root(&button_close, "Close");
 
     if (interface_data->text_input) {
-        text_input_show(&text_input,
-                        OfflineRenderSurface,
-                        popup->x + popup->surface->w / 2 - text_input.coords.w / 2,
-                        popup->y + popup->surface->h - text_input.coords.h - 15);
+        text_input_show_root(&text_input,
+                             popup->x + popup->surface->w / 2 - text_input.coords.w / 2,
+                             popup->y + popup->surface->h - text_input.coords.h - 15);
     }
 
     surface_show(OfflineRenderSurface,

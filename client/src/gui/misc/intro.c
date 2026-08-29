@@ -193,11 +193,7 @@ void intro_show(void) {
 
     /* Background */
     surface_show(OfflineRenderSurface, 0, 0, NULL, texture);
-    textwin_show(OfflineRenderSurface,
-                 texture->w,
-                 1,
-                 video_get_width() - texture->w - 2,
-                 video_get_height() - 3);
+    textwin_show_root(texture->w, 1, video_get_width() - texture->w - 2, video_get_height() - 3);
 
     /* Calculate whether to show the eyes or not. Blinks every
      * EYES_BLINK_TIME ticks, then waits EYES_BLINK_DELAY ticks until
@@ -294,7 +290,7 @@ void intro_show(void) {
     }
 
     /* Actually draw the list. */
-    list_show(list_servers, x + 12, y + 8);
+    list_show_root(list_servers, x + 12, y + 8);
     node = server_get_id(list_servers->row_selected - 1);
 
     /* Do we have any selected server? If so, show its version and
@@ -418,35 +414,35 @@ void intro_show(void) {
     }
 
     /* Show the news list. */
-    list_show(list_news, x + 13, y + 10);
+    list_show_root(list_news, x + 13, y + 10);
 
     button_play.x = button_refresh.x = button_server.x = button_settings.x = button_help.x =
         button_credits.x = button_connection.x = button_quit.x = 489;
     y += 2;
 
     button_play.y = y + 10;
-    button_show(&button_play, "Play");
+    button_show_root(&button_play, "Play");
 
     button_refresh.y = y + 35;
-    button_show(&button_refresh, "Refresh");
+    button_show_root(&button_refresh, "Refresh");
 
     button_server.y = y + 60;
-    button_show(&button_server, "Server");
+    button_show_root(&button_server, "Server");
 
     button_settings.y = y + 86;
-    button_show(&button_settings, "Settings");
+    button_show_root(&button_settings, "Settings");
 
     button_help.y = y + 110;
-    button_show(&button_help, "Help");
+    button_show_root(&button_help, "Help");
 
     button_credits.y = y + 135;
-    button_show(&button_credits, "Credits");
+    button_show_root(&button_credits, "Credits");
 
     button_connection.y = y + 160;
-    button_show(&button_connection, "Route");
+    button_show_root(&button_connection, "Route");
 
     button_quit.y = y + 224;
-    button_show(&button_quit, "Quit");
+    button_show_root(&button_quit, "Quit");
 
     if (clioption_settings.connect[0] && cpl.state < ST_STARTCONNECT) {
         size_t i;

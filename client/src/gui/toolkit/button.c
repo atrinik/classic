@@ -151,7 +151,7 @@ int button_need_redraw(button_struct *button) {
  * @param text
  * Optional text to render.
  */
-void button_show(button_struct *button, const char *text) {
+static void button_show_impl(button_struct *button, const char *text, bool render_root) {
     SDL_Surface *texture;
 
     (void)button_need_redraw(button);
@@ -187,7 +187,20 @@ void button_show(button_struct *button, const char *text) {
         }
 
         if (!color_shadow) {
-            text_show(button->surface, button->font, text, x, y, color, button->flags, NULL);
+            if (render_root) {
+                text_show_root(button->font, text, x, y, color, button->flags, NULL);
+            } else {
+                text_show(button->surface, button->font, text, x, y, color, button->flags, NULL);
+            }
+        } else if (render_root) {
+            text_show_shadow_root(button->font,
+                                  text,
+                                  x,
+                                  y - 2,
+                                  color,
+                                  color_shadow,
+                                  button->flags,
+                                  NULL);
         } else {
             text_show_shadow(button->surface,
                              button->font,
@@ -209,6 +222,14 @@ void button_show(button_struct *button, const char *text) {
     }
 
     button->redraw = 0;
+}
+
+void button_show(button_struct *button, const char *text) {
+    button_show_impl(button, text, false);
+}
+
+void button_show_root(button_struct *button, const char *text) {
+    button_show_impl(button, text, true);
 }
 
 /**

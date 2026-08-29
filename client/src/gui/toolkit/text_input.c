@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -253,7 +253,11 @@ int text_input_number_character_check(text_input_struct *text_input, char c) {
     return isdigit((unsigned char)c);
 }
 
-void text_input_show(text_input_struct *text_input, SDL_Surface *surface, int x, int y) {
+static void text_input_show_impl(text_input_struct *text_input,
+                                 SDL_Surface *surface,
+                                 bool render_root,
+                                 int x,
+                                 int y) {
     text_info_struct info;
     int underscore_width;
     size_t pos;
@@ -339,20 +343,38 @@ void text_input_show(text_input_struct *text_input, SDL_Surface *surface, int x,
     box.h = text_input->coords.h - TEXT_INPUT_PADDING * 2;
 
     cp2 = stringbuffer_finish(sb);
-    text_show(surface,
-              text_input->font,
-              cp2,
-              text_input->coords.x + TEXT_INPUT_PADDING,
-              text_input->coords.y + TEXT_INPUT_PADDING,
-              COLOR_WHITE,
-              text_input->text_flags | TEXT_WIDTH,
-              &box);
+    if (render_root) {
+        text_show_root(text_input->font,
+                       cp2,
+                       text_input->coords.x + TEXT_INPUT_PADDING,
+                       text_input->coords.y + TEXT_INPUT_PADDING,
+                       COLOR_WHITE,
+                       text_input->text_flags | TEXT_WIDTH,
+                       &box);
+    } else {
+        text_show(surface,
+                  text_input->font,
+                  cp2,
+                  text_input->coords.x + TEXT_INPUT_PADDING,
+                  text_input->coords.y + TEXT_INPUT_PADDING,
+                  COLOR_WHITE,
+                  text_input->text_flags | TEXT_WIDTH,
+                  &box);
+    }
     free(cp2);
 
     if (cp) {
         text_input_set(text_input, cp);
         free(cp);
     }
+}
+
+void text_input_show(text_input_struct *text_input, SDL_Surface *surface, int x, int y) {
+    text_input_show_impl(text_input, surface, false, x, y);
+}
+
+void text_input_show_root(text_input_struct *text_input, int x, int y) {
+    text_input_show_impl(text_input, NULL, true, x, y);
 }
 
 void text_input_add_char(text_input_struct *text_input, char c) {

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -322,6 +322,9 @@ extern void list_scrollbar_enable(list_struct *list);
 extern int list_need_redraw(list_struct *list);
 
 extern void list_show(list_struct *list, int x, int y);
+
+/** Render a list directly on the GPU root canvas. */
+extern void list_show_root(list_struct *list, int x, int y);
 
 extern void list_clear_rows(list_struct *list);
 
