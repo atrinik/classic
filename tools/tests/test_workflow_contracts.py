@@ -1531,7 +1531,7 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("api.codecov.io/api/v2/github/", gpu_coverage_job)
         self.assertIn('"flag=client"', gpu_coverage_job)
-        self.assertIn("'.commit_totals.sessions // 0'", gpu_coverage_job)
+        self.assertIn("'.totals.sessions // 0'", gpu_coverage_job)
         self.assertIn('[ "${sessions}" -ge 2 ]', gpu_coverage_job)
         aggregate = workflow[workflow.index("  classic-validation:") :]
         self.assertIn("- gpu-coverage", aggregate)

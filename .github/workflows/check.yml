@@ -871,7 +871,7 @@ jobs:
               curl --fail --silent --show-error --retry 2 --get \
                 --data-urlencode "sha=${GITHUB_SHA}" \
                 --data-urlencode "flag=client" \
-                "${CODECOV_REPORT_API}" | jq -er '.commit_totals.sessions // 0'
+                "${CODECOV_REPORT_API}" | jq -er '.totals.sessions // 0'
             ) && [ "${sessions}" -ge 2 ]; then
               echo "Codecov processed both client coverage reports."
               exit 0
