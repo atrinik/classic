@@ -1412,6 +1412,17 @@ static bool gpu_player_view_render_complete(void) {
     }
     popup_render_all();
     tooltip_show();
+    if (event_dragging_check()) {
+        int mx, my;
+        mouse_get_state(&mx, &my);
+        object_show_centered(OfflineRenderSurface,
+                             object_find(cpl.dragging_tag),
+                             mx,
+                             my,
+                             INVENTORY_ICON_SIZE,
+                             INVENTORY_ICON_SIZE,
+                             false);
+    }
     if (cpl.state == ST_PLAY) {
         map_draw_pointer_overlay();
     }
@@ -1678,6 +1689,7 @@ static bool gpu_player_view_ui_models_prepare(void) {
     item->nrof = 12;
     snprintf(VS(item->s_name), "%s", "Retained GPU qualification tokens");
     draw_info(COLOR_GREEN, "The complete retained GPU interface is active.");
+    draw_info(COLOR_GREEN, "Root object markup: [obj=477 32 32 0]");
 
     /* The first draw initializes model-owning widget backgrounds such as the
      * party list. Populate those models only after that production init path. */
@@ -1810,13 +1822,17 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
     if (!gpu_player_view_ui_models_prepare()) {
         return false;
     }
+    event_dragging_start(477, -100, -100);
     if (!gpu_player_view_ui_capture("gameplay_widgets_text_windows", false)) {
+        event_dragging_stop();
         return false;
     }
     if (!gpu_player_view_ui_delayed_repeat(
             &gpu_player_view_ui_closure.states[gpu_player_view_ui_closure.states_num - 1U])) {
+        event_dragging_stop();
         return false;
     }
+    event_dragging_stop();
 
     widgetdata *menu = create_menu(40, 40, map_widget);
     add_menuitem(menu, "Inspect retained GPU state", NULL, MENU_NORMAL, 0);

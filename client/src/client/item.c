@@ -531,7 +531,7 @@ void animate_objects(void) {
  * animation.
  *
  * @param surface
- * Surface to render on.
+ * Surface to render on, or NULL to render into the active GPU root frame.
  * @param tmp
  * Object to show.
  * @param x
@@ -547,7 +547,6 @@ void animate_objects(void) {
  * zooming it as necessary.
  */
 void object_show_centered(SDL_Surface *surface, object *tmp, int x, int y, int w, int h, bool fit) {
-    HARD_ASSERT(surface != NULL);
     HARD_ASSERT(tmp != NULL);
 
     sprite_struct *sprite = image_get_sprite(tmp->face);
