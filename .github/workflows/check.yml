@@ -801,7 +801,7 @@ jobs:
           disable_search: true
           fail_ci_if_error: false
           files: client/coverage.xml
-          flags: client
+          flags: client-unit
           use_oidc: true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -858,7 +858,7 @@ jobs:
           disable_search: true
           fail_ci_if_error: false
           files: client/coverage.xml
-          flags: client
+          flags: client-gpu
           use_oidc: true
       - name: Wait for complete client coverage processing
         env:
@@ -867,12 +867,19 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in {1..30}; do
-            if sessions=$(
-              curl --fail --silent --show-error --retry 2 --get \
-                --data-urlencode "sha=${GITHUB_SHA}" \
-                --data-urlencode "flag=client" \
-                "${CODECOV_REPORT_API}" | jq -er '.totals.sessions // 0'
-            ) && [ "${sessions}" -ge 2 ]; then
+            reports_ready=true
+            for flag in client-unit client-gpu; do
+              if ! sessions=$(
+                curl --fail --silent --show-error --retry 2 --get \
+                  --data-urlencode "sha=${GITHUB_SHA}" \
+                  --data-urlencode "flag=${flag}" \
+                  "${CODECOV_REPORT_API}" | jq -er '.totals.sessions // 0'
+              ) || [ "${sessions}" -lt 1 ]; then
+                reports_ready=false
+                break
+              fi
+            done
+            if [ "${reports_ready}" = true ]; then
               echo "Codecov processed both client coverage reports."
               exit 0
             fi
