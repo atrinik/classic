@@ -130,8 +130,11 @@ def lighting_level(
                 "field_dirty_pixels": rebuilds * (320 * 240 if full_control else 1024),
                 "field_rasterized_quads": rebuilds,
                 "field_translations": rebuilds if translated else 0,
-                "field_translated_pixels": rebuilds * 512 if translated else 0,
-                "field_translated_bytes": rebuilds * 5120 if translated else 0,
+                "field_translation_logical_pixels": rebuilds * 512 if translated else 0,
+                "field_translation_logical_bytes": rebuilds * 5120 if translated else 0,
+                "field_physical_read_bytes": draws * 1024,
+                "field_physical_written_bytes": rebuilds * 1024,
+                "field_physical_cleared_bytes": rebuilds * 640 if translated else 0,
                 "field_scroll_x_pixels": rebuilds * 24 if name == "sustained" else 0,
                 "field_scroll_y_pixels": rebuilds * 12 if name == "sustained" else 0,
                 "field_translation_fallback_control": rebuilds if full_control else 0,
@@ -366,6 +369,8 @@ def native_record(
                     "renderer_allocation_statistics_available": False,
                     "renderer_allocations": 0,
                     "renderer_allocation_bytes": 0,
+                    "renderer_retained_bytes": 0,
+                    "renderer_peak_retained_bytes": 0,
                 },
                 "render_stages": {
                     stage: {
@@ -448,17 +453,17 @@ def native_record(
     ]
     standard_checkpoint_sha = visual_lifecycle_digest(standard_checkpoints)
     return {
-        "schema_version": 10,
+        "schema_version": 12,
         "benchmark": "player-view-movement",
         "tick_ms": 125,
         "simulated_tick_hz": 8,
         "identity": {
             "instrumentation": {
-                "schema_version": 10,
+                "schema_version": 12,
                 "fixture_schema_version": 3,
                 "workload": "pvm1-map2-lifecycle-v4",
-                "lighting_statistics_version": 7,
-                "map_statistics_version": 3,
+                "lighting_statistics_version": 8,
+                "map_statistics_version": 6,
                 "render_profiler_statistics_version": 5,
                 "sprite_cache_statistics_version": 3,
             },
@@ -610,7 +615,7 @@ def additional_contexts(
     return contexts
 
 
-class NativeV7RecordTests(unittest.TestCase):
+class NativeV12RecordTests(unittest.TestCase):
     @mock.patch.object(movement_verifier.subprocess, "run")
     def test_brynknot_verifier_covers_route_and_long_timeout(self, run: mock.Mock) -> None:
         record = native_record(viewport="brynknot")
@@ -626,8 +631,8 @@ class NativeV7RecordTests(unittest.TestCase):
         self.assertEqual(observed, record)
         self.assertEqual(run.call_args.kwargs["timeout"], 900)
 
-    def test_parse_accepts_closed_v7_record(self) -> None:
-        self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 10)
+    def test_parse_accepts_closed_v12_record(self) -> None:
+        self.assertEqual(benchmark.parse_result(json.dumps(native_record()))["schema_version"], 12)
 
     def test_parse_accepts_same_workload_with_fine_timing_disabled(self) -> None:
         record = native_record(fine_timing=False)
@@ -682,8 +687,8 @@ class NativeV7RecordTests(unittest.TestCase):
         encoded = json.dumps(native_record())
         with self.assertRaisesRegex(benchmark.BenchmarkError, "exactly one"):
             benchmark.parse_result(encoded + "\nnoise\n")
-        duplicate = encoded.replace('"schema_version": 10,',
-                                    '"schema_version": 10, "schema_version": 10,', 1)
+        duplicate = encoded.replace('"schema_version": 12,',
+                                    '"schema_version": 12, "schema_version": 12,', 1)
         with self.assertRaisesRegex(benchmark.BenchmarkError, "repeated JSON field"):
             benchmark.parse_result(duplicate)
         with self.assertRaisesRegex(ValueError, "repeated JSON field"):
@@ -734,7 +739,7 @@ class NativeV7RecordTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "local minimap is invalid"):
             benchmark.validate_record(isolated)
 
-    def test_rejects_queue_reordering_and_coherently_accepts_unknown_dirty(self) -> None:
+    def test_rejects_queue_reordering_and_unknown_dirty(self) -> None:
         malformed = native_record()
         malformed["phases"][1]["queue"]["dequeued_order_digest"] = "f" * 16
         with self.assertRaisesRegex(ValueError, "queue accounting"):
@@ -745,8 +750,6 @@ class NativeV7RecordTests(unittest.TestCase):
             benchmark.validate_record(malformed)
         unknown = native_record()
         unknown["identity"]["implementation"].update({"dirty": None, "dirty_known": False})
-        benchmark.validate_record(unknown)
-        unknown["identity"]["implementation"]["dirty"] = False
         with self.assertRaisesRegex(ValueError, "dirty identity"):
             benchmark.validate_record(unknown)
 
@@ -877,7 +880,10 @@ class NativeV7RecordTests(unittest.TestCase):
     def test_expected_revision_rejects_dirty_or_unknown_source(
         self, run: mock.Mock
     ) -> None:
-        for dirty, dirty_known in ((True, True), (None, False)):
+        for dirty, dirty_known, message in (
+            (True, True, "clean expected source"),
+            (None, False, "dirty identity"),
+        ):
             with self.subTest(dirty=dirty, dirty_known=dirty_known):
                 record = native_record()
                 record["identity"]["implementation"].update(
@@ -887,7 +893,7 @@ class NativeV7RecordTests(unittest.TestCase):
                     [], 0, json.dumps(record) + "\n", ""
                 )
                 with self.assertRaisesRegex(
-                    benchmark.BenchmarkError, "clean expected source"
+                    benchmark.BenchmarkError, message
                 ):
                     benchmark.run_benchmark(
                         Path("candidate"), Path("manifest.xml"), "standard", "a" * 40
@@ -1148,7 +1154,7 @@ class NativeV7RecordTests(unittest.TestCase):
     def test_rejects_incomplete_raster_translation_and_scroll_telemetry(self) -> None:
         for field, value, message in (
             ("field_rasterized_quads", 0, "lighting timing is incomplete"),
-            ("field_translated_bytes", 5, "exercise every eligible translation"),
+            ("field_translation_logical_bytes", 5, "exercise every eligible translation"),
             ("field_scroll_x_pixels", 0, "isolated scroll offsets are incomplete"),
             ("field_scroll_y_pixels", 0, "isolated scroll offsets are incomplete"),
         ):
@@ -1971,9 +1977,11 @@ class CommentTests(unittest.TestCase):
             manifest.write_text("x")
             discrete.write_text("x")
             output = root / "evidence.json"
-            with mock.patch.object(benchmark, "candidate_only", return_value={
-                "schema_version": 7, "status": "passed", "failed": False
-            }) as candidate:
+            with mock.patch.object(benchmark, "require_legacy_player_view"), mock.patch.object(
+                benchmark,
+                "candidate_only",
+                return_value={"schema_version": 7, "status": "passed", "failed": False},
+            ) as candidate:
                 result = benchmark.main(
                     [
                         "candidate-only", "--candidate-client", str(client),
@@ -2005,7 +2013,7 @@ class CommentTests(unittest.TestCase):
                 path.write_text("input")
             files[2].write_text("def validate_record(value):\n    return value\n")
             output = root / "evidence.json"
-            with mock.patch.object(
+            with mock.patch.object(benchmark, "require_legacy_player_view"), mock.patch.object(
                 benchmark, "compare", side_effect=benchmark.BenchmarkError("injected failure")
             ):
                 result = benchmark.main(
@@ -2049,7 +2057,7 @@ class CommentTests(unittest.TestCase):
                 "--comparison-note", benchmark.COMPARE_FOUNDATION_NOTE,
                 "--output", str(output),
             ]
-            with mock.patch.object(
+            with mock.patch.object(benchmark, "require_legacy_player_view"), mock.patch.object(
                 benchmark,
                 "compare",
                 return_value={"schema_version": 7, "status": "passed", "failed": False},
@@ -2061,8 +2069,38 @@ class CommentTests(unittest.TestCase):
             )
 
             unpaired = [item for item in arguments if item != "--informational-performance"]
-            self.assertEqual(benchmark.main(unpaired), 2)
+            with mock.patch.object(benchmark, "require_legacy_player_view"):
+                self.assertEqual(benchmark.main(unpaired), 2)
             self.assertIn("must be used together", json.loads(output.read_text())["error"])
+
+    def test_gpu_only_cli_rejects_retired_candidate_entrypoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            files = [root / name for name in ("client", "manifest.xml", "discrete.xml")]
+            for path in files:
+                path.write_text("input")
+            output = root / "evidence.json"
+            self.assertEqual(
+                benchmark.main(
+                    [
+                        "candidate-only",
+                        "--candidate-client",
+                        str(files[0]),
+                        "--candidate-manifest",
+                        str(files[1]),
+                        "--discrete-manifest",
+                        str(files[2]),
+                        "--lighting-manifest",
+                        str(files[2]),
+                        "--output",
+                        str(output),
+                    ]
+                ),
+                2,
+            )
+            self.assertIn(
+                "unavailable on GPU-only revisions", json.loads(output.read_text())["error"]
+            )
 
 
 if __name__ == "__main__":

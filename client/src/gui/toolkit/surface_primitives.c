@@ -16,6 +16,78 @@
 
 #include <global.h>
 
+bool surface_blit(SDL_Surface *source,
+                  const SDL_Rect *source_rect,
+                  SDL_Surface *destination,
+                  SDL_Rect *destination_rect) {
+    if (gpu_renderer_ready() &&
+        (destination == NULL || gpu_renderer_canvas_registered(destination))) {
+        SDL_FRect gpu_destination = {
+            .x = destination_rect != NULL ? (float)destination_rect->x : 0.0f,
+            .y = destination_rect != NULL ? (float)destination_rect->y : 0.0f,
+            .w = (float)(source_rect != NULL ? source_rect->w : source->w),
+            .h = (float)(source_rect != NULL ? source_rect->h : source->h),
+        };
+        return gpu_renderer_draw_surface_to(destination, source, source_rect, &gpu_destination);
+    }
+    return SDL_BlitSurface(source, source_rect, destination, destination_rect);
+}
+
+bool surface_blit_scaled(SDL_Surface *source,
+                         const SDL_Rect *source_rect,
+                         SDL_Surface *destination,
+                         SDL_Rect *destination_rect,
+                         SDL_ScaleMode scale_mode) {
+    if (gpu_renderer_ready() &&
+        (destination == NULL || gpu_renderer_canvas_registered(destination))) {
+        SDL_FRect gpu_destination = {
+            .x = destination_rect != NULL ? (float)destination_rect->x : 0.0f,
+            .y = destination_rect != NULL ? (float)destination_rect->y : 0.0f,
+            .w = (float)(destination_rect != NULL
+                             ? destination_rect->w
+                             : (source_rect != NULL ? source_rect->w : source->w)),
+            .h = (float)(destination_rect != NULL
+                             ? destination_rect->h
+                             : (source_rect != NULL ? source_rect->h : source->h)),
+        };
+        return gpu_renderer_draw_surface_scaled_to(destination,
+                                                   source,
+                                                   source_rect,
+                                                   &gpu_destination,
+                                                   scale_mode);
+    }
+    return SDL_BlitSurfaceScaled(source, source_rect, destination, destination_rect, scale_mode);
+}
+
+bool surface_fill_rect(SDL_Surface *surface, const SDL_Rect *rectangle, Uint32 color) {
+    if (gpu_renderer_ready() && (surface == NULL || gpu_renderer_canvas_registered(surface))) {
+        Uint8 red, green, blue, alpha;
+        if (surface == NULL) {
+            SDL_GetRGBA(color,
+                        SDL_GetPixelFormatDetails(SDL_PIXELFORMAT_RGBA32),
+                        NULL,
+                        &red,
+                        &green,
+                        &blue,
+                        &alpha);
+            SDL_FRect destination = rectangle != NULL ? (SDL_FRect){(float)rectangle->x,
+                                                                    (float)rectangle->y,
+                                                                    (float)rectangle->w,
+                                                                    (float)rectangle->h}
+                                                      : (SDL_FRect){0.0f, 0.0f, 0.0f, 0.0f};
+            return gpu_renderer_draw_rect(rectangle != NULL ? &destination : NULL,
+                                          red,
+                                          green,
+                                          blue,
+                                          alpha,
+                                          true);
+        }
+        surface_get_rgba(surface, color, &red, &green, &blue, &alpha);
+        return gpu_renderer_canvas_fill(surface, rectangle, red, green, blue, alpha);
+    }
+    return SDL_FillSurfaceRect(surface, rectangle, color);
+}
+
 SDL_Surface *surface_create_rgb(Uint32 flags,
                                 int width,
                                 int height,
@@ -32,7 +104,7 @@ SDL_Surface *surface_create_rgb(Uint32 flags,
     } else if (depth == 8) {
         format = SDL_PIXELFORMAT_INDEX8;
     } else {
-        format = ScreenSurface != NULL ? ScreenSurface->format : SDL_PIXELFORMAT_RGBA32;
+        format = SDL_PIXELFORMAT_RGBA32;
     }
 
     return SDL_CreateSurface(width, height, format);
@@ -66,9 +138,7 @@ void pixel_format_get_rgba(Uint32 pixel,
 
 SDL_Surface *surface_to_display(SDL_Surface *surface) {
     HARD_ASSERT(surface != NULL);
-    HARD_ASSERT(ScreenSurface != NULL);
-
-    return SDL_ConvertSurface(surface, ScreenSurface->format);
+    return SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA32);
 }
 
 SDL_Surface *surface_to_display_alpha(SDL_Surface *surface) {
@@ -203,16 +273,18 @@ bool surface_darken_preserve_alpha(SDL_Surface *surface, Uint8 alpha) {
 }
 
 Uint32 surface_map_rgb(SDL_Surface *surface, Uint8 red, Uint8 green, Uint8 blue) {
-    return SDL_MapRGB(SDL_GetPixelFormatDetails(surface->format),
-                      SDL_GetSurfacePalette(surface),
+    SDL_PixelFormat format = surface != NULL ? surface->format : SDL_PIXELFORMAT_RGBA32;
+    return SDL_MapRGB(SDL_GetPixelFormatDetails(format),
+                      surface != NULL ? SDL_GetSurfacePalette(surface) : NULL,
                       red,
                       green,
                       blue);
 }
 
 Uint32 surface_map_rgba(SDL_Surface *surface, Uint8 red, Uint8 green, Uint8 blue, Uint8 alpha) {
-    return SDL_MapRGBA(SDL_GetPixelFormatDetails(surface->format),
-                       SDL_GetSurfacePalette(surface),
+    SDL_PixelFormat format = surface != NULL ? surface->format : SDL_PIXELFORMAT_RGBA32;
+    return SDL_MapRGBA(SDL_GetPixelFormatDetails(format),
+                       surface != NULL ? SDL_GetSurfacePalette(surface) : NULL,
                        red,
                        green,
                        blue,
@@ -283,6 +355,26 @@ int lineRGBA(SDL_Surface *surface,
              Uint8 green,
              Uint8 blue,
              Uint8 alpha) {
+    if (surface == NULL || (gpu_renderer_ready() && gpu_renderer_canvas_registered(surface))) {
+        bool success = surface == NULL ? gpu_renderer_draw_line((float)x1,
+                                                                (float)y1,
+                                                                (float)x2,
+                                                                (float)y2,
+                                                                red,
+                                                                green,
+                                                                blue,
+                                                                alpha)
+                                       : gpu_renderer_canvas_draw_line(surface,
+                                                                       (float)x1,
+                                                                       (float)y1,
+                                                                       (float)x2,
+                                                                       (float)y2,
+                                                                       red,
+                                                                       green,
+                                                                       blue,
+                                                                       alpha);
+        return success ? 0 : -1;
+    }
     int dx = abs(x2 - x1);
     int sx = x1 < x2 ? 1 : -1;
     int dy = -abs(y2 - y1);
@@ -319,10 +411,6 @@ int boxRGBA(SDL_Surface *surface,
             Uint8 green,
             Uint8 blue,
             Uint8 alpha) {
-    if (surface == NULL) {
-        return -1;
-    }
-
     if (x1 > x2) {
         Sint16 tmp = x1;
         x1 = x2;
@@ -340,13 +428,29 @@ int boxRGBA(SDL_Surface *surface,
         .w = x2 - x1 + 1,
         .h = y2 - y1 + 1,
     };
+    if (surface == NULL || (gpu_renderer_ready() && gpu_renderer_canvas_registered(surface))) {
+        SDL_FRect gpu_destination = {(float)destination.x,
+                                     (float)destination.y,
+                                     (float)destination.w,
+                                     (float)destination.h};
+        bool success = surface == NULL
+                           ? gpu_renderer_draw_rect(&gpu_destination, red, green, blue, alpha, true)
+                           : gpu_renderer_canvas_draw_rect(surface,
+                                                           &gpu_destination,
+                                                           red,
+                                                           green,
+                                                           blue,
+                                                           alpha,
+                                                           true);
+        return success ? 0 : -1;
+    }
     if (alpha == SDL_ALPHA_TRANSPARENT) {
         return 0;
     }
     if (alpha == SDL_ALPHA_OPAQUE) {
-        return SDL_FillSurfaceRect(surface,
-                                   &destination,
-                                   surface_map_rgba(surface, red, green, blue, alpha))
+        return surface_fill_rect(surface,
+                                 &destination,
+                                 surface_map_rgba(surface, red, green, blue, alpha))
                    ? 0
                    : -1;
     }
@@ -358,8 +462,7 @@ int boxRGBA(SDL_Surface *surface,
         return -1;
     }
 
-    bool success =
-        SDL_BlitSurfaceScaled(source, NULL, surface, &destination, SDL_SCALEMODE_NEAREST);
+    bool success = surface_blit_scaled(source, NULL, surface, &destination, SDL_SCALEMODE_NEAREST);
     SDL_DestroySurface(source);
     return success ? 0 : -1;
 }
@@ -468,10 +571,8 @@ SDL_Surface *zoomSurface(SDL_Surface *surface, double zoom_x, double zoom_y, int
 
     int width, height;
     zoomSurfaceSize(surface->w, surface->h, zoom_x, zoom_y, &width, &height);
-    SDL_Surface *scaled = SDL_ScaleSurface(surface,
-                                           width,
-                                           height,
-                                           zoom_filter_to_scale_mode(zoom_filter));
+    SDL_Surface *scaled =
+        SDL_ScaleSurface(surface, width, height, zoom_filter_to_scale_mode(zoom_filter));
     if (scaled == NULL || (zoom_x > 0.0 && zoom_y > 0.0)) {
         return scaled;
     }
@@ -515,12 +616,11 @@ static bool surface_has_palette_alpha(SDL_Surface *surface) {
     return false;
 }
 
-SDL_Surface *
-rotozoomSurfaceXY(SDL_Surface *surface,
-                  double angle,
-                  double zoom_x,
-                  double zoom_y,
-                  int zoom_filter) {
+SDL_Surface *rotozoomSurfaceXY(SDL_Surface *surface,
+                               double angle,
+                               double zoom_x,
+                               double zoom_y,
+                               int zoom_filter) {
     if (surface == NULL) {
         SDL_SetError("Invalid surface");
         return NULL;

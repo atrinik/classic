@@ -1,14 +1,32 @@
 # Building Atrinik client
 
-Install CMake 3.21 or newer, a C17 compiler, SDL 3, SDL3_image, SDL3_ttf,
-SDL3_mixer, and LibXml2. Then run:
+Install Python 3.11 or newer, CMake 3.21 or newer, Ninja, a C17 compiler,
+SDL 3, SDL3_image, SDL3_ttf, SDL3_mixer, and LibXml2. Client builds also need
+DXC and SPIRV-Cross to compile the authoritative HLSL source. Install those
+tools system-wide or prepare the pinned versions once, then build:
 
 ```sh
 python3 tools/dependencies.py sync
+python3 tools/prepare_gpu_shader_toolchain.py \
+  --cache build/gpu-shader-downloads \
+  --output build/gpu-shader-toolchain
 cmake --preset linux-debug
 cmake --build --preset linux-debug
 ctest --preset linux-debug
 ```
+
+Running the production client requires a hardware GPU exposed through SDL_GPU
+using Vulkan, Direct3D 12, or Metal, with RGBA8 and R32_UINT render-target
+support. Software and CPU-emulated drivers are suitable only for test
+conformance and are not a supported runtime fallback. If device, format,
+shader, or swapchain initialization fails, the client reports the backend and
+driver diagnostics and exits without entering play.
+
+Generated DXIL, SPIR-V, and MSL are embedded at build time and never compiled
+on the player's machine. `shaders/SHA256SUMS` locks the expected output cohort;
+an intentional `shaders/map.hlsl` change must regenerate and review that small
+manifest. CI and release packaging reuse one validated cohort through the
+`ATRINIK_GPU_SHADER_DIRECTORY` CMake cache variable.
 
 Release builds use the same configure-time interface as the integrated and
 server builds: `-DATRINIK_PACKAGE_VERSION=MAJOR.MINOR.PATCH`. Without it,

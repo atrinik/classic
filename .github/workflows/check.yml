@@ -10,6 +10,12 @@ on:
       - main
   merge_group:
   workflow_dispatch:
+    inputs:
+      gpu_qualification:
+        description: Run the qualified GPU renderer matrix on the selected ref
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -19,12 +25,50 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  COVERAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.2.3@sha256:d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f
   CLASSIC_LINUX_IMAGE_DIGEST: sha256:d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f
+  CLASSIC_GPU_COVERAGE_IMAGE: ghcr.io/atrinik/linux-build:1.3.0@sha256:260658d2709e993b41148a9d8f724c2d2f7f1fd93543a139b00d139b10e7f31a
   CLASSIC_LINUX_CCACHE_COMPILER: gcc-15.2.0
   CLASSIC_LINUX_CCACHE_EPOCH: "1"
 
 jobs:
+  gpu-shaders:
+    name: Build GPU shader cohort
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/gpu-shader-downloads
+          key: >-
+            gpu-shader-inputs-v1-${{ hashFiles('client/shaders/toolchain.lock.json',
+            'client/tools/prepare_gpu_shader_toolchain.py') }}
+      - name: Compile and validate the locked GPU shader cohort
+        run: >-
+          tools/ci/prepare_gpu_shaders.sh
+          "${GITHUB_WORKSPACE}"
+          "${RUNNER_TEMP}/gpu-shader-downloads"
+          "${GITHUB_WORKSPACE}/build/gpu-shaders"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: classic-gpu-shaders
+          path: build/gpu-shaders
+          if-no-files-found: error
+          retention-days: 1
+
+  gpu-qualification:
+    name: GPU renderer qualification
+    if: github.event_name == 'workflow_dispatch' && inputs.gpu_qualification
+    permissions:
+      contents: read
+    uses: ./.github/workflows/gpu-qualification.yml
+
   changes:
     name: Change classification
     runs-on: ubuntu-24.04
@@ -249,7 +293,7 @@ jobs:
 
   windows-test-build:
     name: Build native Windows tests
-    needs: [changes, dependency-inputs]
+    needs: [changes, dependency-inputs, gpu-shaders]
     if: needs.changes.outputs.windows == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -258,11 +302,20 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.COVERAGE_SHA }}
           persist-credentials: false
+      - name: Bind Windows artifacts to the exact selected revision
+        run: |
+          test "$(git rev-parse HEAD)" = "${COVERAGE_SHA}"
+          test -z "$(git status --short)"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: classic-dependency-inputs
           path: build/dependency-inputs
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: classic-gpu-shaders
+          path: build/gpu-shaders
       - name: Verify and stage deterministic package inputs offline
         run: |
           python3 server/tools/dependencies.py bundle-verify \
@@ -296,6 +349,9 @@ jobs:
             --env CCACHE_TEMPDIR=/tmp/atrinik-libatrinik-ccache-tmp \
             --env CCACHE_MAXSIZE=250M \
             --env ATRINIK_PACKAGE_VERSION=0.0.0 \
+            --env ATRINIK_BENCHMARK_REVISION="${COVERAGE_SHA}" \
+            --env ATRINIK_BENCHMARK_DIRTY=false \
+            --env ATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders \
             --env ATRINIK_DISCORD_APPLICATION_ID_FILE=/workspace/build/discord-test-application-id \
             --env PATH=/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
@@ -350,11 +406,25 @@ jobs:
                 -DBUILD_TESTING=OFF \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DATRINIK_PACKAGE_VERSION=0.0.0 \
+                -DATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders \
                 -DENABLE_PYTHON_PLUGIN=OFF \
                 -DPACKAGE_TYPE=none \
                 -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-mingw-source
               cmake --build build/windows-integrated \
                 --target atrinik atrinik-server --parallel "$(nproc)"
+              x86_64-w64-mingw32.shared-cmake \
+                -S client \
+                -B client/build/windows-tests \
+                -G Ninja \
+                -DBUILD_TESTING=ON \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DPACKAGE_TYPE=none \
+                -DATRINIK_PACKAGE_VERSION=0.0.0 \
+                -DATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders \
+                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
+                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
+              cmake --build client/build/windows-tests \
+                --target client-rich-presence-tests --parallel "$(nproc)"
               stage=libatrinik/build/windows-test-bundle
               cmake -E remove_directory "${stage}"
               python3 tools/ci/stage_windows_runtime.py \
@@ -369,9 +439,10 @@ jobs:
                 libatrinik/build/windows-tests/libatrinik-socket-address.exe \
                 libatrinik/build/windows-tests/libatrinik-socket-quic.exe \
                 libatrinik/build/windows-tests/libatrinik-stun.exe \
-                client/build/windows-release/client-rich-presence-tests.exe
+                client/build/windows-tests/client-rich-presence-tests.exe
               cmake -E copy_directory libatrinik/tests/fixtures "${stage}/fixtures"
               cmake -E copy tools/ci/smoke_windows_server_package.ps1 "${stage}"
+              cmake -E copy tools/ci/smoke_windows_review_bundle.ps1 "${stage}"
             '
       - name: Cross-build Windows server
         run: |
@@ -410,6 +481,8 @@ jobs:
             --user "$(id -u):$(id -g)" \
             --network none \
             --env ATRINIK_PACKAGE_VERSION=0.0.0 \
+            --env ATRINIK_BENCHMARK_REVISION="${COVERAGE_SHA}" \
+            --env ATRINIK_BENCHMARK_DIRTY=false \
             --env ATRINIK_DEPENDENCY_DOWNLOADS=/workspace/build/dependency-inputs/downloads \
             --env ATRINIK_DEPENDENCY_CACHE_DIR=/workspace/build/dependency-source-cache \
             --env CCACHE_DIR=/workspace/server/build/ccache \
@@ -422,6 +495,17 @@ jobs:
             bash tools/build-windows-package.sh build/windows-pr-package
           cp server/build/windows-pr-package/*.zip \
             libatrinik/build/windows-test-bundle/
+          mapfile -t client_packages < <(find client/build/windows-pr-package \
+            -maxdepth 1 -type f -name 'atrinik-classic-client-*-windows-x86_64.zip' -print)
+          mapfile -t server_packages < <(find server/build/windows-pr-package \
+            -maxdepth 1 -type f -name 'atrinik-classic-server-*-windows-x86_64.zip' -print)
+          test "${#client_packages[@]}" -eq 1
+          test "${#server_packages[@]}" -eq 1
+          python3 tools/release/compose_windows_review_bundle.py \
+            --client-package "${client_packages[0]}" \
+            --server-package "${server_packages[0]}" \
+            --output "libatrinik/build/windows-test-bundle/atrinik-classic-issue-477-windows-one-click-${COVERAGE_SHA:0:7}.zip" \
+            --revision "${COVERAGE_SHA}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: native-windows-tests
@@ -573,6 +657,14 @@ jobs:
             throw "client-rich-presence-tests.exe failed with exit code ${LASTEXITCODE}"
           }
 
+          $reviewPackages = @(Get-ChildItem -LiteralPath $bundle -File `
+            -Filter "atrinik-classic-issue-477-windows-one-click-*.zip")
+          if ($reviewPackages.Count -ne 1) {
+            throw "Expected exactly one Windows review bundle, found $($reviewPackages.Count)"
+          }
+          & (Join-Path $bundle "smoke_windows_review_bundle.ps1") `
+            -Package $reviewPackages[0].FullName -Revision $env:COVERAGE_SHA
+
           $packages = @(Get-ChildItem -LiteralPath $bundle -File `
             -Filter "atrinik-classic-server-*-windows-x86_64.zip")
           if ($packages.Count -ne 1) {
@@ -650,6 +742,7 @@ jobs:
       - name: Upload coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
+          override_commit: ${{ env.COVERAGE_SHA }}
           disable_search: true
           fail_ci_if_error: false
           files: server/coverage.xml
@@ -658,7 +751,7 @@ jobs:
 
   client:
     name: Client validation
-    needs: [changes, dependency-inputs]
+    needs: [changes, dependency-inputs, gpu-shaders]
     if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 120 || 30 }}
@@ -674,6 +767,10 @@ jobs:
         with:
           name: classic-dependency-inputs
           path: build/dependency-inputs
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: classic-gpu-shaders
+          path: build/gpu-shaders
       - id: linux-cache
         name: Resolve isolated client compiler cache key
         env:
@@ -690,6 +787,7 @@ jobs:
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/check.yml \
             --material tools/ci/run_linux_check.sh \
+            --material tools/ci/run_gpu_coverage.sh \
             --material client/CMakeLists.txt \
             --material client/CMakePresets.json \
             --github-output "${GITHUB_OUTPUT}"
@@ -722,13 +820,33 @@ jobs:
             --workdir /workspace \
             "${CLASSIC_LINUX_IMAGE}" \
             tools/ci/run_linux_check.sh client /workspace
+      - id: gpu-coverage-image-public
+        name: Probe public GPU coverage image access for fork pull requests
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          if docker pull "${CLASSIC_GPU_COVERAGE_IMAGE}"; then
+            echo "available=true" >>"${GITHUB_OUTPUT}"
+          else
+            echo "available=false" >>"${GITHUB_OUTPUT}"
+            echo "::notice::GPU coverage image is not publicly pullable; hardware qualification remains required"
+          fi
+      - name: Exercise GPU renderer coverage
+        if: steps.gpu-coverage-image-public.outputs.available == 'true'
+        run: |
+          tools/ci/run_gpu_coverage.sh \
+            "${GITHUB_WORKSPACE}" \
+            "${CLASSIC_LINUX_IMAGE}" \
+            "${CLASSIC_GPU_COVERAGE_IMAGE}"
       - name: Upload coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
+          override_commit: ${{ env.COVERAGE_SHA }}
           disable_search: true
           fail_ci_if_error: false
           files: client/coverage.xml
-          flags: client
+          flags: client-unit
           use_oidc: true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -737,9 +855,89 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  gpu-coverage:
+    name: Trusted GPU renderer coverage
+    needs: [changes, dependency-inputs, gpu-shaders, client]
+    if: >-
+      needs.changes.outputs.client == 'true' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: classic-dependency-inputs
+          path: build/dependency-inputs
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: classic-gpu-shaders
+          path: build/gpu-shaders
+      - name: Pull pinned build and GPU coverage environments
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io \
+            --username "${GITHUB_ACTOR}" --password-stdin
+          docker pull "${CLASSIC_LINUX_IMAGE}"
+          docker pull "${CLASSIC_GPU_COVERAGE_IMAGE}"
+      - name: Build and exercise complete GPU coverage
+        run: |
+          tools/ci/run_gpu_coverage.sh \
+            "${GITHUB_WORKSPACE}" \
+            "${CLASSIC_LINUX_IMAGE}" \
+            "${CLASSIC_GPU_COVERAGE_IMAGE}"
+      - name: Upload GPU-complete client coverage
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        with:
+          override_commit: ${{ env.COVERAGE_SHA }}
+          disable_search: true
+          fail_ci_if_error: false
+          files: client/coverage.xml
+          flags: client-gpu
+          use_oidc: true
+      - name: Wait for complete client coverage processing
+        env:
+          CODECOV_REPORT_API: >-
+            https://api.codecov.io/api/v2/github/${{ github.repository_owner }}/repos/${{ github.event.repository.name }}/totals/
+        run: |
+          set -euo pipefail
+          for attempt in {1..90}; do
+            reports_ready=true
+            for flag in client-unit client-gpu; do
+              if ! sessions=$(
+                curl --fail --silent --show-error --retry 2 --get \
+                  --data-urlencode "sha=${COVERAGE_SHA}" \
+                  --data-urlencode "flag=${flag}" \
+                  "${CODECOV_REPORT_API}" | jq -er '.totals.sessions // 0'
+              ) || [ "${sessions}" -lt 1 ]; then
+                reports_ready=false
+                break
+              fi
+            done
+            if [ "${reports_ready}" = true ]; then
+              echo "Codecov processed both client coverage reports."
+              exit 0
+            fi
+            echo "Waiting for Codecov client coverage processing (${attempt}/90)..."
+            sleep 10
+          done
+          echo "Codecov did not process both client coverage reports within 15 minutes." >&2
+          exit 1
+
   integrated:
     name: Integrated client/server graph
-    needs: [changes, dependency-inputs]
+    needs: [changes, dependency-inputs, gpu-shaders]
     if: >-
       needs.changes.outputs.client == 'true' ||
       needs.changes.outputs.server == 'true'
@@ -755,6 +953,10 @@ jobs:
         with:
           name: classic-dependency-inputs
           path: build/dependency-inputs
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: classic-gpu-shaders
+          path: build/gpu-shaders
       - id: linux-cache
         name: Resolve isolated integrated compiler cache key
         env:
@@ -814,10 +1016,12 @@ jobs:
     if: always()
     needs:
       - changes
+      - gpu-shaders
       - dependency-inputs
       - core
       - server
       - client
+      - gpu-coverage
       - integrated
       - windows-test
     runs-on: ubuntu-24.04
@@ -828,10 +1032,13 @@ jobs:
         run: |
           python3 tools/ci/require_checks.py classic \
             --classifier-result '${{ needs.changes.result }}' \
+            --gpu-shaders-result '${{ needs.gpu-shaders.result }}' \
             --dependency-inputs-result '${{ needs.dependency-inputs.result }}' \
             --core-result '${{ needs.core.result }}' \
             --client-required '${{ needs.changes.outputs.client }}' \
             --client-result '${{ needs.client.result }}' \
+            --gpu-coverage-required "${{ needs.changes.outputs.client == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}" \
+            --gpu-coverage-result '${{ needs.gpu-coverage.result }}' \
             --server-required '${{ needs.changes.outputs.server }}' \
             --server-result '${{ needs.server.result }}' \
             --integrated-required "${{ needs.changes.outputs.client == 'true' || needs.changes.outputs.server == 'true' }}" \

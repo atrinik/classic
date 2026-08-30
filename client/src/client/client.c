@@ -61,9 +61,30 @@ static socket_command_struct commands[CLIENT_CMD_NROF] = {
 };
 CASSERT_ARRAY(commands, CLIENT_CMD_NROF);
 
+static const uint8_t *current_command_data;
+static size_t current_command_len;
+static command_buffer *deferred_command;
+
+bool client_command_retry_current(void) {
+    if (current_command_data == NULL || current_command_len == 0 || deferred_command != NULL) {
+        return false;
+    }
+    deferred_command = command_buffer_new(current_command_len, (uint8_t *)current_command_data);
+    return true;
+}
+
+void client_command_retry_clear(void) {
+    command_buffer_free(deferred_command);
+    deferred_command = NULL;
+}
+
 /** Dispatch one complete server command envelope through the production table. */
-static void client_command_dispatch(uint8_t *data, size_t len, void *user_data) {
+static bool client_command_dispatch(uint8_t *data, size_t len, void *user_data) {
     (void)user_data;
+
+    HARD_ASSERT(current_command_data == NULL);
+    current_command_data = data;
+    current_command_len = len;
 
     size_t pos = 0;
     packet_reader_t reader;
@@ -79,6 +100,12 @@ static void client_command_dispatch(uint8_t *data, size_t len, void *user_data) 
         packet_reader_scope_begin(&scope);
         packet_reader_init_at(&reader, data, len, pos);
         commands[type].handle_func(data, len, pos);
+        if (deferred_command != NULL) {
+            /* The exact envelope is retained for replay, so this dispatch
+             * intentionally owns the unread suffix without classifying it as
+             * malformed input. */
+            (void)packet_reader_skip(&reader, packet_reader_remaining(&reader));
+        }
         packet_error_t error = packet_reader_scope_finish(&scope);
         if (error != PACKET_ERROR_NONE) {
             LOG(ERROR,
@@ -87,6 +114,32 @@ static void client_command_dispatch(uint8_t *data, size_t len, void *user_data) 
                 packet_error_string(error));
         }
     }
+
+    current_command_data = NULL;
+    current_command_len = 0;
+    return deferred_command == NULL;
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+bool client_command_dispatch_test(uint8_t *data, size_t len) {
+    return client_command_dispatch(data, len, NULL);
+}
+
+bool client_command_retry_test_pending(void) {
+    return deferred_command != NULL;
+}
+#endif
+
+bool client_command_retry_deferred(void) {
+    if (deferred_command == NULL) {
+        return true;
+    }
+
+    command_buffer *command = deferred_command;
+    deferred_command = NULL;
+    bool complete = client_command_dispatch(command->data, command->len, NULL);
+    command_buffer_free(command);
+    return complete && deferred_command == NULL;
 }
 
 void client_commands_drain_with_clock(uint64_t budget_us,

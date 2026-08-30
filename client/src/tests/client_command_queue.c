@@ -30,6 +30,7 @@ typedef struct fake_dispatch {
     uint64_t command_cost_us;
     uint8_t order[8];
     size_t count;
+    bool continue_dispatch;
 } fake_dispatch_t;
 
 static uint64_t fake_clock(void *user_data) {
@@ -37,13 +38,14 @@ static uint64_t fake_clock(void *user_data) {
     return fake->now_us;
 }
 
-static void fake_map_dispatch(uint8_t *data, size_t len, void *user_data) {
+static bool fake_map_dispatch(uint8_t *data, size_t len, void *user_data) {
     fake_dispatch_t *fake = user_data;
     TEST_CHECK(len == 2);
     TEST_CHECK(data[0] == CLIENT_CMD_MAP);
     TEST_CHECK(fake->count < arraysize(fake->order));
     fake->order[fake->count++] = data[1];
     fake->now_us += fake->command_cost_us;
+    return fake->continue_dispatch;
 }
 
 static void enqueue_map(uint8_t sequence, uint64_t arrival_us) {
@@ -52,7 +54,7 @@ static void enqueue_map(uint8_t sequence, uint64_t arrival_us) {
 }
 
 static void test_empty_tick_and_validation(void) {
-    fake_dispatch_t fake = {.now_us = 100};
+    fake_dispatch_t fake = {.now_us = 100, .continue_dispatch = true};
     client_command_queue_drain_result_t result;
     client_command_queue_statistics_t statistics;
 
@@ -83,6 +85,7 @@ static void test_ordered_budget_yield_and_recovery(void) {
     fake_dispatch_t fake = {
         .now_us = 100,
         .command_cost_us = 2500,
+        .continue_dispatch = true,
     };
     client_command_queue_drain_result_t result;
     client_command_queue_statistics_t statistics;
@@ -157,6 +160,7 @@ static void test_prepend_marks_streaming_digests_incomparable(void) {
     fake_dispatch_t fake = {
         .now_us = 1000,
         .command_cost_us = 1,
+        .continue_dispatch = true,
     };
     client_command_queue_drain_result_t result;
     client_command_queue_statistics_t statistics;
@@ -189,6 +193,7 @@ static void test_unbounded_drain_and_clear(void) {
     fake_dispatch_t fake = {
         .now_us = 1000,
         .command_cost_us = 9000,
+        .continue_dispatch = true,
     };
     client_command_queue_drain_result_t result;
     client_command_queue_statistics_t statistics;
@@ -217,6 +222,33 @@ static void test_unbounded_drain_and_clear(void) {
     TEST_CHECK(statistics.dequeued_order_digest == 0);
 }
 
+static void test_dispatch_pause_preserves_remaining_commands(void) {
+    fake_dispatch_t fake = {
+        .now_us = 1000,
+        .command_cost_us = 1,
+        .continue_dispatch = false,
+    };
+    client_command_queue_drain_result_t result;
+    client_command_queue_statistics_t statistics;
+
+    TEST_CHECK(client_command_queue_statistics_reset());
+    enqueue_map(1, 900);
+    enqueue_map(2, 950);
+    client_command_queue_drain(0, fake_clock, &fake, fake_map_dispatch, &fake, &result);
+    TEST_CHECK(result.commands == 1);
+    TEST_CHECK(fake.count == 1);
+    client_command_queue_statistics_get(fake.now_us, &statistics);
+    TEST_CHECK(statistics.depth == 1);
+
+    fake.continue_dispatch = true;
+    client_command_queue_drain(0, fake_clock, &fake, fake_map_dispatch, &fake, &result);
+    TEST_CHECK(result.commands == 1);
+    TEST_CHECK(fake.count == 2);
+    TEST_CHECK(fake.order[0] == 1);
+    TEST_CHECK(fake.order[1] == 2);
+    TEST_CHECK(client_command_queue_statistics_reset());
+}
+
 static void test_deinitialize_resets_reconnect_state(void) {
     client_command_queue_statistics_t statistics;
     enqueue_map(7, 1);
@@ -236,6 +268,7 @@ int main(void) {
     test_ordered_budget_yield_and_recovery();
     test_prepend_marks_streaming_digests_incomparable();
     test_unbounded_drain_and_clear();
+    test_dispatch_pause_preserves_remaining_commands();
     test_deinitialize_resets_reconnect_state();
     client_command_queue_deinitialize();
     toolkit_deinit();

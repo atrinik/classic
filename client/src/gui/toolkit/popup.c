@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -38,6 +38,14 @@
  */
 static popup_struct *popup_head = NULL;
 
+#ifdef ATRINIK_WIDGET_TESTS
+static bool popup_test_surface_allocation_failure;
+
+void popup_test_surface_allocation_fail_once(void) {
+    popup_test_surface_allocation_failure = true;
+}
+#endif
+
 /**
  * Create a new popup.
  * @param texture
@@ -52,8 +60,21 @@ popup_struct *popup_create(texture_struct *texture) {
     popup = xcalloc(1, sizeof(popup_struct));
     popup->texture = texture;
     /* Create the surface used by the popup. */
-    popup->surface = SDL_ConvertSurface(texture_surface(popup->texture),
-                                        texture_surface(popup->texture)->format);
+#ifdef ATRINIK_WIDGET_TESTS
+    if (popup_test_surface_allocation_failure) {
+        popup_test_surface_allocation_failure = false;
+        SDL_SetError("injected popup surface allocation failure");
+    } else
+#endif
+    {
+        popup->surface = SDL_ConvertSurface(texture_surface(popup->texture),
+                                            texture_surface(popup->texture)->format);
+    }
+    if (!gpu_renderer_canvas_register(&popup->surface)) {
+        LOG(ERROR, "Could not create retained GPU popup target: %s", SDL_GetError());
+        free(popup);
+        return NULL;
+    }
     DL_PREPEND(popup_head, popup);
 
     mouse_get_state(&mx, &my);
@@ -141,7 +162,7 @@ static void popup_button_show(popup_struct *popup, popup_button *button) {
     if (button->button.texture) {
         button->button.x = popup->x + button->x;
         button->button.y = popup->y + button->y;
-        button_show(&button->button, button->text ? button->text : "");
+        button_show_root(&button->button, button->text ? button->text : "");
     }
 }
 
@@ -154,12 +175,18 @@ void popup_render(popup_struct *popup) {
     SDL_Rect box;
 
     if (!popup->disable_texture_drawing) {
+        /* Popup chrome contains translucent edge pixels. Rebuilding it over the
+         * previous frame accumulates alpha and makes an otherwise unchanged
+         * retained popup brighten on every presentation. */
+        surface_fill_rect(popup->surface,
+                          NULL,
+                          surface_map_rgba(popup->surface, 0, 0, 0, SDL_ALPHA_TRANSPARENT));
         surface_show(popup->surface, 0, 0, NULL, texture_surface(popup->texture));
     }
 
     /* Calculate the popup's X/Y positions. */
-    popup->x = ScreenSurface->w / 2 - popup->surface->w / 2;
-    popup->y = ScreenSurface->h / 2 - popup->surface->h / 2;
+    popup->x = video_get_width() / 2 - popup->surface->w / 2;
+    popup->y = video_get_height() / 2 - popup->surface->h / 2;
 
     /* Handle drawing inside the popup. */
     if (popup->draw_func) {
@@ -177,7 +204,7 @@ void popup_render(popup_struct *popup) {
     /* Show the popup in the middle of the screen. */
     box.x = popup->x;
     box.y = popup->y;
-    SDL_BlitSurface(popup->surface, NULL, ScreenSurface, &box);
+    surface_show(OfflineRenderSurface, box.x, box.y, NULL, popup->surface);
 
     popup_button_show(popup, &popup->button_left);
     popup_button_show(popup, &popup->button_right);
@@ -392,4 +419,11 @@ void popup_button_set_text(popup_button *button, const char *text) {
  */
 int popup_need_redraw(void) {
     return popup_get_head() != NULL;
+}
+
+void popup_redraw_all(void) {
+    popup_struct *popup;
+    DL_FOREACH(popup_head, popup) {
+        popup->redraw = 1;
+    }
 }

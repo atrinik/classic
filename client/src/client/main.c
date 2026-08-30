@@ -41,7 +41,7 @@
 #include <window_title.h>
 #include <toolkit/path.h>
 #include <resources.h>
-#include <player_view.h>
+#include <gpu_player_view.h>
 #include <toolkit/signals.h>
 #include <toolkit/colorspace.h>
 #include <toolkit/binreloc.h>
@@ -52,8 +52,8 @@
 #include <cmake.h>
 #include <openssl/crypto.h>
 
-/** The main screen surface. */
-SDL_Surface *ScreenSurface;
+/** Test-only CPU destination for deterministic offline renderer fixtures. */
+SDL_Surface *OfflineRenderSurface;
 SDL_Window *ScreenWindow;
 /** Server's attributes */
 struct sockaddr_in insock;
@@ -70,77 +70,9 @@ texture_struct *cursor_texture;
 int cursor_x = -1;
 int cursor_y = -1;
 
-/* Completed screen without the transient custom cursor or world-pointer cue.
- * Cursor motion restores only a bounded dirty rectangle from this frame. */
-static SDL_Surface *screen_completed_frame;
-
-#define POINTER_DIRTY_RADIUS 128
-
 void screen_completed_frame_deinit(void) {
-    SDL_DestroySurface(screen_completed_frame);
-    screen_completed_frame = NULL;
-}
-
-static bool screen_completed_frame_ready(void) {
-    return screen_completed_frame != NULL && ScreenSurface != NULL &&
-           screen_completed_frame->w == ScreenSurface->w &&
-           screen_completed_frame->h == ScreenSurface->h &&
-           screen_completed_frame->format == ScreenSurface->format;
-}
-
-static bool screen_completed_frame_capture(void) {
-    if (ScreenSurface == NULL) {
-        return false;
-    }
-
-    if (!screen_completed_frame_ready()) {
-        screen_completed_frame_deinit();
-        screen_completed_frame =
-            SDL_CreateSurface(ScreenSurface->w, ScreenSurface->h, ScreenSurface->format);
-        if (screen_completed_frame == NULL ||
-            !SDL_SetSurfaceBlendMode(screen_completed_frame, SDL_BLENDMODE_NONE)) {
-            screen_completed_frame_deinit();
-            return false;
-        }
-    }
-
-    return SDL_BlitSurface(ScreenSurface, NULL, screen_completed_frame, NULL);
-}
-
-static SDL_Rect screen_pointer_dirty_rect(int old_x, int old_y, int new_x, int new_y) {
-    int left = MIN(old_x, new_x) - POINTER_DIRTY_RADIUS;
-    int top = MIN(old_y, new_y) - POINTER_DIRTY_RADIUS;
-    int right = MAX(old_x, new_x) + POINTER_DIRTY_RADIUS + 1;
-    int bottom = MAX(old_y, new_y) + POINTER_DIRTY_RADIUS + 1;
-    SDL_Rect rect = {.x = left, .y = top, .w = right - left, .h = bottom - top};
-
-    if (rect.x < 0) {
-        rect.w += rect.x;
-        rect.x = 0;
-    }
-    if (rect.y < 0) {
-        rect.h += rect.y;
-        rect.y = 0;
-    }
-    if (rect.x + rect.w > ScreenSurface->w) {
-        rect.w = ScreenSurface->w - rect.x;
-    }
-    if (rect.y + rect.h > ScreenSurface->h) {
-        rect.h = ScreenSurface->h - rect.y;
-    }
-    return rect;
-}
-
-static bool screen_completed_frame_restore(int old_x, int old_y, int new_x, int new_y) {
-    if (!screen_completed_frame_ready()) {
-        return false;
-    }
-
-    SDL_Rect rect = screen_pointer_dirty_rect(old_x, old_y, new_x, new_y);
-    if (rect.w <= 0 || rect.h <= 0) {
-        return true;
-    }
-    return SDL_BlitSurface(screen_completed_frame, &rect, ScreenSurface, &rect);
+    /* Compatibility entry point for tests built against the old lifecycle.
+     * The GPU renderer retains no CPU copy of a completed frame. */
 }
 
 /* update map area */
@@ -247,21 +179,21 @@ void socket_command_keepalive(uint8_t *data, size_t len, size_t pos) {
     uint64_t rtt_us;
     client_keepalive_expire(&keepalive_state, now_us);
     switch (client_keepalive_receive(&keepalive_state, id, now_us, &rtt_us)) {
-    case CLIENT_KEEPALIVE_RESPONSE_MATCHED:
-        network_graph_update_latency(rtt_us);
-        return;
-    case CLIENT_KEEPALIVE_RESPONSE_LATE:
-        LOG(DEBUG, "Received late keepalive ID: %" PRIu32, id);
-        return;
-    case CLIENT_KEEPALIVE_RESPONSE_DUPLICATE:
-        LOG(DEBUG, "Received duplicate keepalive ID: %" PRIu32, id);
-        return;
-    case CLIENT_KEEPALIVE_RESPONSE_CLOCK_REGRESSION:
-        LOG(ERROR, "Ignoring keepalive ID after a monotonic clock regression: %" PRIu32, id);
-        return;
-    case CLIENT_KEEPALIVE_RESPONSE_UNKNOWN:
-        LOG(DEBUG, "Received unknown keepalive ID: %" PRIu32, id);
-        return;
+        case CLIENT_KEEPALIVE_RESPONSE_MATCHED:
+            network_graph_update_latency(rtt_us);
+            return;
+        case CLIENT_KEEPALIVE_RESPONSE_LATE:
+            LOG(DEBUG, "Received late keepalive ID: %" PRIu32, id);
+            return;
+        case CLIENT_KEEPALIVE_RESPONSE_DUPLICATE:
+            LOG(DEBUG, "Received duplicate keepalive ID: %" PRIu32, id);
+            return;
+        case CLIENT_KEEPALIVE_RESPONSE_CLOCK_REGRESSION:
+            LOG(ERROR, "Ignoring keepalive ID after a monotonic clock regression: %" PRIu32, id);
+            return;
+        case CLIENT_KEEPALIVE_RESPONSE_UNKNOWN:
+            LOG(DEBUG, "Received unknown keepalive ID: %" PRIu32, id);
+            return;
     }
 }
 
@@ -491,8 +423,42 @@ static void sound_background_hook(void) {
 /** Whether the window is available for normal-rate rendering. */
 static bool window_is_active(void) {
     SDL_WindowFlags flags = SDL_GetWindowFlags(ScreenWindow);
-    return (flags & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) == 0;
+    return (flags & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) == 0 &&
+           (flags & SDL_WINDOW_INPUT_FOCUS) != 0;
 }
+
+typedef struct presentation_clock {
+    uint32_t tick;
+    uint32_t wall_tick;
+    bool active;
+} presentation_clock_t;
+
+static presentation_clock_t presentation_clock_start(uint32_t wall_tick, bool active) {
+    return (presentation_clock_t){.tick = wall_tick, .wall_tick = wall_tick, .active = active};
+}
+
+/** Advance only the interval that began while presentation was active. */
+static void presentation_clock_step(presentation_clock_t *clock,
+                                    uint32_t wall_tick,
+                                    bool active) {
+    if (clock->active) {
+        clock->tick += wall_tick - clock->wall_tick;
+    }
+    clock->wall_tick = wall_tick;
+    clock->active = active;
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+static bool presentation_clock_suspend_test(void) {
+    presentation_clock_t clock = presentation_clock_start(500, true);
+    presentation_clock_step(&clock, 600, false);
+    bool success = clock.tick == 600;
+    presentation_clock_step(&clock, 5000, true);
+    success = success && clock.tick == 600;
+    presentation_clock_step(&clock, 5050, true);
+    return success && clock.tick == 650;
+}
+#endif
 
 void clioption_settings_deinit(void) {
     size_t i;
@@ -700,6 +666,134 @@ static bool clioptions_option_reconnect(const char *arg, char **errmsg) {
     return true;
 }
 
+static bool gpu_renderer_recovery_apply_window(void *userdata) {
+    (void)userdata;
+    return resize_window_recovery_apply();
+}
+
+static bool gpu_renderer_recovery_republish(void *userdata) {
+    (void)userdata;
+    if (client_socket_shutdown_pending()) {
+        SDL_SetError("connection closed before GPU recovery republish");
+        return false;
+    }
+    if (map_state_transaction_active() || MapData.continuation.pending) {
+        socket_command_map_abort_pending();
+    }
+    if (!client_command_retry_deferred() || !connection_preference_recover()) {
+        return false;
+    }
+    map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
+    minimap_redraw_force();
+    widget_redraw_everything();
+    popup_redraw_all();
+
+    if (!gpu_renderer_begin_frame()) {
+        return false;
+    }
+    uint64_t gpu_ui_started = gpu_renderer_timing_begin();
+    if (cpl.state <= ST_WAITFORPLAY) {
+        intro_show();
+    } else if (cpl.state == ST_PLAY) {
+        process_widgets(1);
+    }
+    popup_render_all();
+    tooltip_show();
+    if (event_dragging_check()) {
+        int mx, my;
+        mouse_get_state(&mx, &my);
+        object_show_centered(OfflineRenderSurface,
+                             object_find(cpl.dragging_tag),
+                             mx,
+                             my,
+                             INVENTORY_ICON_SIZE,
+                             INVENTORY_ICON_SIZE,
+                             false);
+    }
+    if (cpl.state == ST_PLAY) {
+        map_draw_pointer_overlay();
+    }
+    if (!setting_get_int(OPT_CAT_CLIENT, OPT_SYSTEM_CURSOR) && cursor_x != -1 && cursor_y != -1 &&
+        SDL_GetWindowFlags(ScreenWindow) & SDL_WINDOW_MOUSE_FOCUS) {
+        surface_show(OfflineRenderSurface,
+                     cursor_x - texture_surface(cursor_texture)->w / 2,
+                     cursor_y - texture_surface(cursor_texture)->h / 2,
+                     NULL,
+                     texture_surface(cursor_texture));
+    }
+    gpu_renderer_timing_end(GPU_RENDERER_TIMING_UI, gpu_ui_started);
+    if (!gpu_renderer_frame_valid()) {
+        return false;
+    }
+    if (client_socket_shutdown_pending()) {
+        SDL_SetError("connection closed during GPU recovery republish");
+        return false;
+    }
+    bool presented = gpu_renderer_present();
+    map_benchmark_statistics_present(presented);
+    return presented;
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+bool gpu_renderer_recovery_republish_test(void) {
+    return gpu_renderer_recovery_republish(NULL);
+}
+#endif
+
+static bool gpu_renderer_recover_frame(unsigned int *attempts, const char *context) {
+    HARD_ASSERT(attempts != NULL);
+    HARD_ASSERT(context != NULL);
+
+    /* A resource failure can be raised after the loop's initial request poll.
+     * Consume that exact incident before the recovery transaction republishes. */
+    (void)gpu_renderer_recreation_take_request();
+
+    char backend_name[32];
+    char gpu_name[256];
+    char driver[256];
+    snprintf(backend_name, sizeof(backend_name), "%s", gpu_renderer_backend());
+    snprintf(gpu_name, sizeof(gpu_name), "%s", gpu_renderer_device_name());
+    snprintf(driver,
+             sizeof(driver),
+             "%s %s",
+             gpu_renderer_driver_name(),
+             gpu_renderer_driver_version());
+
+    if (gpu_renderer_recover_and_republish(ScreenWindow,
+                                           attempts,
+                                           false,
+                                           gpu_renderer_recovery_apply_window,
+                                           gpu_renderer_recovery_republish,
+                                           NULL)) {
+        /* The complete republished frame ended this failure incident. A later
+         * independent device/window failure receives its own bounded attempt. */
+        *attempts = 0;
+        return true;
+    }
+
+    if (client_socket_shutdown_pending()) {
+        *attempts = 0;
+        return true;
+    }
+
+    char message[HUGE_BUF];
+    snprintf(message,
+             sizeof(message),
+             "The GPU renderer could not recover after %s.\n\n"
+             "Backend: %s\nDevice: %s\nDriver: %s\nError: %s",
+             context,
+             backend_name[0] != '\0' ? backend_name : "unavailable",
+             gpu_name[0] != '\0' ? gpu_name : "unavailable",
+             driver[0] != '\0' ? driver : "unavailable",
+             SDL_GetError());
+    LOG(ERROR, "%s", message);
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                             "Atrinik GPU renderer failure",
+                             message,
+                             ScreenWindow);
+    return false;
+}
+
 /**
  * The main function.
  * @param argc
@@ -713,8 +807,9 @@ int main(int argc, char *argv[]) {
     char *path;
     int done = 0, update, frames;
     int old_cursor_x = -1, old_cursor_y = -1;
-    int rendered_cursor_x = -1, rendered_cursor_y = -1;
+    unsigned int gpu_recovery_attempts = 0;
     uint32_t anim_tick, frame_start_time, elapsed_time, fps_limit, last_frame_ticks;
+    presentation_clock_t presentation_clock;
     int fps_limits[] = {30, 60, 120, 0};
 
     toolkit_import(signals);
@@ -735,14 +830,44 @@ int main(int argc, char *argv[]) {
 
     path_fopen = client_fopen_wrapper;
 
-    if (argc > 1 &&
-        (strcmp(argv[1], "--player-view") == 0 || strcmp(argv[1], "--player-view-benchmark") == 0 ||
-         strcmp(argv[1], "--player-view-movement-benchmark") == 0 ||
-         strcmp(argv[1], "--player-view-cursor-benchmark") == 0)) {
-        return player_view_main(argc - 1, &argv[1]);
+#ifdef ATRINIK_WIDGET_TESTS
+    if (argc == 3 && strcmp(argv[1], "--gpu-player-view") == 0) {
+        return gpu_player_view_main(argc - 1, &argv[1]);
+    }
+    if (argc == 4 && strcmp(argv[1], "--gpu-player-view-benchmark") == 0) {
+        return gpu_player_view_main(argc - 1, &argv[1]);
+    }
+    if (argc == 3 && strcmp(argv[1], "--gpu-player-view-lifecycle") == 0) {
+        return gpu_player_view_main(argc - 1, &argv[1]);
     }
 
-#ifdef ATRINIK_WIDGET_TESTS
+    if (argc == 2 && strcmp(argv[1], "--map-state-test") == 0) {
+        bool sparse = widget_map_sparse_state_test();
+        bool transaction = widget_map_transaction_abort_test();
+        bool capacity = widget_map_light_keyframe_capacity_test();
+        bool temporal = widget_map_temporal_lighting_test();
+        bool projection = widget_map_projection_contract_test();
+        bool descriptor = socket_command_map_timed_light_same_test();
+        bool continuation = socket_command_map_continuation_transaction_test();
+        bool clock_suspend = presentation_clock_suspend_test();
+        if (!(sparse && transaction && capacity && temporal && projection && descriptor &&
+              continuation && clock_suspend)) {
+            fprintf(stderr,
+                    "map state test failed: sparse=%d transaction=%d capacity=%d temporal=%d "
+                    "projection=%d descriptor=%d continuation=%d presentation-clock=%d\n",
+                    sparse,
+                    transaction,
+                    capacity,
+                    temporal,
+                    projection,
+                    descriptor,
+                    continuation,
+                    clock_suspend);
+            return EXIT_FAILURE;
+        }
+        return EXIT_SUCCESS;
+    }
+
     if (argc == 4 && strcmp(argv[1], "--widget-priority-test") == 0) {
         return widget_priority_integration_test(argv[2], argv[3]);
     }
@@ -813,6 +938,10 @@ int main(int argc, char *argv[]) {
 
     logger_open_log(LOG_FILE);
     LOG(INFO,
+        "Build identity: revision=%s dirty=%s",
+        ATRINIK_BENCHMARK_REVISION,
+        ATRINIK_BENCHMARK_DIRTY);
+    LOG(INFO,
         "Direct rendezvous STUN discovery: %s",
         client_stun_source_name(clioption_settings.stun.source));
 
@@ -858,7 +987,8 @@ int main(int argc, char *argv[]) {
 
     sound_background_hook_register(sound_background_hook);
 
-    LastTick = anim_tick = last_frame_ticks = SDL_GetTicks();
+    presentation_clock = presentation_clock_start(SDL_GetTicks(), window_is_active());
+    LastTick = anim_tick = last_frame_ticks = presentation_clock.tick;
     frames = 0;
 
     while (!done && !signals_termination_requested()) {
@@ -868,6 +998,12 @@ int main(int argc, char *argv[]) {
         uint64_t profile_events_started = render_profiler_begin();
         done = Event_PollInputDevice();
         render_profiler_end(RENDER_PROFILE_EVENTS, profile_events_started);
+
+        presentation_clock_step(&presentation_clock, SDL_GetTicks(), window_is_active());
+        LastTick = presentation_clock.tick;
+
+        /* Screenshot copies complete independently of the render loop. */
+        gpu_renderer_readback_poll();
 
         uint64_t profile_game_started = render_profiler_begin();
 
@@ -890,6 +1026,11 @@ int main(int argc, char *argv[]) {
             render_profiler_end(RENDER_PROFILE_FRAME, profile_frame_started);
             render_profiler_frame_finished(false);
             continue;
+        }
+
+        if (gpu_renderer_recreation_take_request() &&
+            !gpu_renderer_recover_frame(&gpu_recovery_attempts, "a window or display change")) {
+            break;
         }
 
         if (cpl.state > ST_CONNECT) {
@@ -931,14 +1072,12 @@ int main(int argc, char *argv[]) {
 
         update = 0;
 
-        bool pointer_overlay_only = false;
         if (window_is_active()) {
             if (cpl.state == ST_PLAY) {
                 if (widgets_need_redraw()) {
                     update = 1;
                 } else if (cursor_x != old_cursor_x || cursor_y != old_cursor_y) {
                     update = 1;
-                    pointer_overlay_only = screen_completed_frame_ready();
                     old_cursor_x = cursor_x;
                     old_cursor_y = cursor_y;
                 } else if (event_dragging_need_redraw()) {
@@ -957,12 +1096,18 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        if (update && !pointer_overlay_only) {
-            SDL_FillSurfaceRect(ScreenSurface, NULL, 0);
+        if (update && !gpu_renderer_begin_frame()) {
+            LOG(ERROR, "Could not begin GPU frame: %s", SDL_GetError());
+            if (!gpu_renderer_recover_frame(&gpu_recovery_attempts, "beginning a frame")) {
+                break;
+            }
+            continue;
         }
 
+        uint64_t gpu_ui_started = update ? gpu_renderer_timing_begin() : 0;
+
         uint64_t profile_widgets_started = render_profiler_begin();
-        if (!pointer_overlay_only) {
+        if (update) {
             if (cpl.state <= ST_WAITFORPLAY) {
                 intro_show();
             } else if (cpl.state == ST_PLAY) {
@@ -972,7 +1117,7 @@ int main(int argc, char *argv[]) {
         render_profiler_end(RENDER_PROFILE_WIDGETS, profile_widgets_started);
 
         uint64_t profile_overlays_started = render_profiler_begin();
-        if (!pointer_overlay_only) {
+        if (update) {
             popup_render_all();
             tooltip_show();
 
@@ -981,7 +1126,7 @@ int main(int argc, char *argv[]) {
                 int mx, my;
 
                 mouse_get_state(&mx, &my);
-                object_show_centered(ScreenSurface,
+                object_show_centered(OfflineRenderSurface,
                                      object_find(cpl.dragging_tag),
                                      mx,
                                      my,
@@ -993,33 +1138,12 @@ int main(int argc, char *argv[]) {
         render_profiler_end(RENDER_PROFILE_OVERLAYS, profile_overlays_started);
 
         uint64_t profile_pointer_started = render_profiler_begin();
-        if (pointer_overlay_only) {
-            if (!screen_completed_frame_restore(rendered_cursor_x,
-                                                rendered_cursor_y,
-                                                cursor_x,
-                                                cursor_y)) {
-                pointer_overlay_only = false;
-                SDL_FillSurfaceRect(ScreenSurface, NULL, 0);
-                if (cpl.state <= ST_WAITFORPLAY) {
-                    intro_show();
-                } else if (cpl.state == ST_PLAY) {
-                    process_widgets(update);
-                }
-                popup_render_all();
-                tooltip_show();
-            }
-        }
-        if (!pointer_overlay_only && update && cpl.state == ST_PLAY) {
-            if (!screen_completed_frame_capture()) {
-                LOG(ERROR, "Could not retain completed screen frame: %s", SDL_GetError());
-            }
-        }
         if (cpl.state == ST_PLAY && update) {
             map_draw_pointer_overlay();
         }
-        if (!setting_get_int(OPT_CAT_CLIENT, OPT_SYSTEM_CURSOR) && cursor_x != -1 &&
+        if (update && !setting_get_int(OPT_CAT_CLIENT, OPT_SYSTEM_CURSOR) && cursor_x != -1 &&
             cursor_y != -1 && SDL_GetWindowFlags(ScreenWindow) & SDL_WINDOW_MOUSE_FOCUS) {
-            surface_show(ScreenSurface,
+            surface_show(OfflineRenderSurface,
                          cursor_x - texture_surface(cursor_texture)->w / 2,
                          cursor_y - texture_surface(cursor_texture)->h / 2,
                          NULL,
@@ -1028,10 +1152,9 @@ int main(int argc, char *argv[]) {
         if (cpl.state == ST_PLAY && update) {
             old_cursor_x = cursor_x;
             old_cursor_y = cursor_y;
-            rendered_cursor_x = cursor_x;
-            rendered_cursor_y = cursor_y;
         }
         render_profiler_end(RENDER_PROFILE_POINTER, profile_pointer_started);
+        gpu_renderer_timing_end(GPU_RENDERER_TIMING_UI, gpu_ui_started);
 
         uint64_t profile_maintenance_started = render_profiler_begin();
         texture_gc();
@@ -1041,15 +1164,18 @@ int main(int argc, char *argv[]) {
 
         uint64_t profile_present_started = render_profiler_begin();
         if (update) {
-            bool presented = SDL_UpdateWindowSurface(ScreenWindow);
+            bool presented = gpu_renderer_present();
             map_benchmark_statistics_present(presented);
             if (!presented) {
-                LOG(ERROR, "Could not present the window surface: %s", SDL_GetError());
+                LOG(ERROR, "Could not present the GPU frame: %s", SDL_GetError());
+                if (!gpu_renderer_recover_frame(&gpu_recovery_attempts, "presenting a frame")) {
+                    done = 1;
+                }
+            } else {
+                gpu_recovery_attempts = 0;
             }
         }
         render_profiler_end(RENDER_PROFILE_PRESENT, profile_present_started);
-
-        LastTick = SDL_GetTicks();
 
         if (window_is_active()) {
             frames++;

@@ -16,6 +16,37 @@ class WorkflowContractTests(unittest.TestCase):
     def text(self, name: str) -> str:
         return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
+    def test_client_linux_presets_consume_the_validated_shader_cohort(self) -> None:
+        runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
+            encoding="utf-8"
+        )
+        client_case = runner[
+            runner.index("  client)\n") : runner.index("  client-benchmark)\n")
+        ]
+
+        self.assertEqual(client_case.count('"${shader_arguments[@]}"'), 3)
+
+    def test_gpu_qualification_quotes_the_cross_platform_shader_path(self) -> None:
+        workflow = self.text("gpu-qualification.yml")
+
+        self.assertIn(
+            "ATRINIK_QUALIFICATION_SHADER_DIRECTORY: "
+            "${{ github.workspace }}/build/gpu-shaders",
+            workflow,
+        )
+        self.assertIn(
+            '"-DATRINIK_GPU_SHADER_DIRECTORY='
+            '${ATRINIK_QUALIFICATION_SHADER_DIRECTORY}"',
+            workflow,
+        )
+        self.assertNotIn(
+            "-DATRINIK_GPU_SHADER_DIRECTORY=${{ github.workspace }}", workflow
+        )
+        self.assertIn("name: Bind qualification source identity", workflow)
+        self.assertIn("revision=$(git rev-parse --verify HEAD)", workflow)
+        self.assertIn("ATRINIK_BENCHMARK_REVISION=${revision}", workflow)
+        self.assertIn("ATRINIK_BENCHMARK_DIRTY=false", workflow)
+
     def test_release_builds_use_one_cmake_version_interface(self) -> None:
         check = self.text("check.yml")
         candidate = self.text("build-release-candidate.yml")
@@ -919,7 +950,9 @@ class WorkflowContractTests(unittest.TestCase):
         cache_action = (
             "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
         )
-        self.assertEqual(candidate.count(cache_action), 2)
+        self.assertEqual(candidate.count(cache_action), 3)
+        self.assertIn("name: Build release GPU shader cohort", candidate)
+        self.assertIn("candidate-gpu-shaders-${{ needs.metadata.outputs.tag }}", candidate)
         client_job = candidate[
             candidate.index("  client-windows:") : candidate.index("  server-windows:")
         ]
@@ -1068,6 +1101,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", build)
         self.assertEqual(build.count("--network none"), 3)
         self.assertIn("persist-credentials: false", build)
+        self.assertIn("ref: ${{ env.COVERAGE_SHA }}", build)
+        self.assertIn('test "$(git rev-parse HEAD)" = "${COVERAGE_SHA}"', build)
+        self.assertIn('test -z "$(git status --short)"', build)
         self.assertIn("Verify and stage deterministic package inputs offline", build)
         self.assertIn("bundle-verify", build)
         self.assertIn("server/tools/dependencies.py source", build)
@@ -1128,6 +1164,10 @@ class WorkflowContractTests(unittest.TestCase):
             "libatrinik/build/windows-tests/libatrinik-signals.exe", build
         )
         self.assertIn("client-rich-presence-tests.exe", build)
+        self.assertIn("-B client/build/windows-tests", build)
+        self.assertIn("cmake --build client/build/windows-tests \\", build)
+        self.assertIn("client/build/windows-tests/client-rich-presence-tests.exe", build)
+        self.assertNotIn("client/build/windows-release/client-rich-presence-tests.exe", build)
         self.assertIn("python3 tools/ci/stage_windows_runtime.py", build)
         self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", build)
         self.assertIn("Build portable Windows server package", build)
@@ -1142,6 +1182,11 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("smoke_windows_server_package.ps1", build)
         self.assertIn("server/build/windows-pr-package/*.zip", build)
+        self.assertEqual(build.count('--env ATRINIK_BENCHMARK_REVISION="${COVERAGE_SHA}"'), 2)
+        self.assertEqual(build.count("--env ATRINIK_BENCHMARK_DIRTY=false"), 2)
+        self.assertIn("tools/release/compose_windows_review_bundle.py", build)
+        self.assertIn("--revision \"${COVERAGE_SHA}\"", build)
+        self.assertIn("windows-one-click-${COVERAGE_SHA:0:7}.zip", build)
 
         self.assertIn("runs-on: windows-2025", run)
         self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", run)
@@ -1171,6 +1216,45 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"libatrinik-socket-quic.exe"', run)
         self.assertIn('"libatrinik-stun.exe"', run)
         self.assertIn('"client-rich-presence-tests.exe"', run)
+        self.assertIn('"atrinik-classic-issue-477-windows-one-click-*.zip"', run)
+        self.assertIn('"smoke_windows_review_bundle.ps1"', run)
+        self.assertIn("-Revision $env:COVERAGE_SHA", run)
+        review_smoke = (
+            ROOT / "tools" / "ci" / "smoke_windows_review_bundle.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("BUNDLE-MANIFEST.json", review_smoke)
+        self.assertIn("Language.Parser]::ParseFile", review_smoke)
+        self.assertIn("Get-FileHash -Algorithm SHA256", review_smoke)
+        self.assertIn("Get-NetUDPEndpoint -LocalPort $serverPort", review_smoke)
+        self.assertIn("$_.OwningProcess -eq $process.Id", review_smoke)
+        self.assertIn('"atrinik-server.exe"', review_smoke)
+        self.assertIn("$launcherStartInfo.FileName = $env:ComSpec", review_smoke)
+        self.assertIn('$launcherStartInfo.ArgumentList.Add("/d")', review_smoke)
+        self.assertIn('$launcherStartInfo.ArgumentList.Add("/c")', review_smoke)
+        self.assertIn('$launcherStartInfo.ArgumentList.Add("call")', review_smoke)
+        self.assertIn("$launcherStartInfo.ArgumentList.Add($launchers[0].FullName)", review_smoke)
+        self.assertNotIn("& $launcherPath", review_smoke)
+        self.assertIn('"atrinik.exe"', review_smoke)
+        self.assertIn("Get-NetUDPEndpoint -LocalPort 1731", review_smoke)
+        self.assertIn("One-click launcher server or client exited", review_smoke)
+        review_shutdown_loop = review_smoke[
+            review_smoke.index("$shutdownDeadline =") : review_smoke.index(
+                'if ($process.ExitCode -ne 0)',
+                review_smoke.index("$shutdownDeadline ="),
+            )
+        ]
+        self.assertIn("AddSeconds(30)", review_shutdown_loop)
+        self.assertIn("while (-not $process.HasExited", review_shutdown_loop)
+        self.assertIn('$process.StandardInput.WriteLine("shutdown")', review_shutdown_loop)
+        self.assertIn("$process.WaitForExit(1000)", review_shutdown_loop)
+        self.assertIn("$shutdownTimedOut", review_shutdown_loop)
+        self.assertIn("$process.Kill($true)", review_shutdown_loop)
+        self.assertLess(
+            review_smoke.index("$remainderTask.Result"),
+            review_smoke.index(
+                '"Flat review-bundle server did not shut down after $shutdownAttempts "'
+            ),
+        )
         self.assertIn('"atrinik-classic-server-*-windows-x86_64.zip"', run)
         self.assertIn('"smoke_windows_server_package.ps1"', run)
         smoke = (ROOT / "tools" / "ci" / "smoke_windows_server_package.ps1").read_text(
@@ -1282,7 +1366,7 @@ class WorkflowContractTests(unittest.TestCase):
             ],
             "client": workflow[
                 workflow.index("  client:\n    name: Client validation") : workflow.index(
-                    "  integrated:\n    name: Integrated client/server graph"
+                    "  gpu-coverage:\n    name: Trusted GPU renderer coverage"
                 )
             ],
             "integrated": workflow[
@@ -1310,6 +1394,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("FETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP", runner)
         aggregate = workflow[workflow.index("  classic-validation:") :]
         self.assertIn("- dependency-inputs", aggregate)
+        self.assertIn("- gpu-shaders", aggregate)
+        self.assertIn(
+            "--gpu-shaders-result '${{ needs.gpu-shaders.result }}'", aggregate
+        )
         self.assertIn("--dependency-inputs-result", aggregate)
 
     def test_daily_report_stages_verified_inputs_and_keeps_timing_informational(
@@ -1416,7 +1504,7 @@ class WorkflowContractTests(unittest.TestCase):
 
         self.assertEqual(workflow.count(image), 1)
         self.assertEqual(workflow.count(f"sha256:{digest}"), 2)
-        self.assertEqual(workflow.count(cache_action), 4)
+        self.assertEqual(workflow.count(cache_action), 5)
         self.assertEqual(workflow.count(f"actions/cache/restore@{cache_action.split('@')[1]}"), 1)
         self.assertEqual(workflow.count(f"actions/cache/save@{cache_action.split('@')[1]}"), 1)
         self.assertEqual(workflow.count("tools/ci/linux_cache_key.py"), 4)
@@ -1428,7 +1516,7 @@ class WorkflowContractTests(unittest.TestCase):
         dependency_inputs = workflow[
             workflow.index("  dependency-inputs:") : workflow.index("  core:")
         ]
-        self.assertEqual(workflow.count("packages: read"), 1)
+        self.assertEqual(workflow.count("packages: read"), 2)
         self.assertIn("packages: read", dependency_inputs)
         self.assertNotIn("docker/login-action", workflow)
         self.assertNotIn("packages: read", self.text("codeql.yml"))
@@ -1443,6 +1531,11 @@ class WorkflowContractTests(unittest.TestCase):
         ]
         client = workflow[
             workflow.index("  client:\n    name: Client validation") : workflow.index(
+                "  gpu-coverage:\n    name: Trusted GPU renderer coverage"
+            )
+        ]
+        gpu_coverage_job = workflow[
+            workflow.index("  gpu-coverage:\n    name: Trusted GPU renderer coverage") : workflow.index(
                 "  integrated:\n    name: Integrated client/server graph"
             )
         ]
@@ -1451,6 +1544,75 @@ class WorkflowContractTests(unittest.TestCase):
                 "  classic-validation:\n    name: Classic validation"
             )
         ]
+        gpu_shaders = workflow[
+            workflow.index("  gpu-shaders:") : workflow.index("  gpu-qualification:")
+        ]
+        self.assertIn("tools/ci/prepare_gpu_shaders.sh", gpu_shaders)
+        self.assertIn("client/shaders/toolchain.lock.json", gpu_shaders)
+        self.assertIn("name: classic-gpu-shaders", gpu_shaders)
+        self.assertNotIn("packages: read", client)
+        self.assertNotIn("GH_TOKEN", client)
+        self.assertNotIn("GHCR_TOKEN: ${{ github.token }}", client)
+        self.assertIn("packages: read", gpu_coverage_job)
+        self.assertIn("GHCR_TOKEN: ${{ github.token }}", gpu_coverage_job)
+        self.assertIn(
+            "needs: [changes, dependency-inputs, gpu-shaders, client]",
+            gpu_coverage_job,
+        )
+        self.assertIn(
+            "name: Pull pinned build and GPU coverage environments",
+            gpu_coverage_job,
+        )
+        self.assertIn(
+            "github.event.pull_request.head.repo.full_name == github.repository",
+            gpu_coverage_job[: gpu_coverage_job.index("    steps:")],
+        )
+        self.assertIn("docker login ghcr.io", gpu_coverage_job)
+        self.assertIn("docker logout ghcr.io", gpu_coverage_job)
+        self.assertIn(
+            "name: Probe public GPU coverage image access for fork pull requests",
+            client,
+        )
+        self.assertIn("if docker pull \"${CLASSIC_GPU_COVERAGE_IMAGE}\"", client)
+        self.assertIn(
+            "steps.gpu-coverage-image-public.outputs.available == 'true'", client
+        )
+        self.assertIn("name: classic-gpu-shaders", client)
+        self.assertIn("name: classic-gpu-shaders", gpu_coverage_job)
+        self.assertIn("name: classic-gpu-shaders", integrated)
+        self.assertIn(
+            "name: Wait for complete client coverage processing",
+            gpu_coverage_job,
+        )
+        self.assertIn("api.codecov.io/api/v2/github/", gpu_coverage_job)
+        self.assertIn("flags: client-unit", client)
+        self.assertIn("flags: client-gpu", gpu_coverage_job)
+        self.assertIn(
+            "COVERAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
+            workflow,
+        )
+        self.assertIn("override_commit: ${{ env.COVERAGE_SHA }}", server)
+        self.assertIn("override_commit: ${{ env.COVERAGE_SHA }}", client)
+        self.assertIn("override_commit: ${{ env.COVERAGE_SHA }}", gpu_coverage_job)
+        self.assertNotIn("\n          commit:", workflow)
+        self.assertIn('"sha=${COVERAGE_SHA}"', gpu_coverage_job)
+        self.assertNotIn('"sha=${GITHUB_SHA}"', gpu_coverage_job)
+        client_readme = (ROOT / "client" / "README.md").read_text(encoding="utf-8")
+        self.assertEqual(client_readme.count("flag=client-gpu"), 1)
+        self.assertNotIn("flag=client)]", client_readme)
+        self.assertIn("for flag in client-unit client-gpu", gpu_coverage_job)
+        self.assertIn("for attempt in {1..90}", gpu_coverage_job)
+        self.assertIn("(${attempt}/90)", gpu_coverage_job)
+        self.assertIn("within 15 minutes", gpu_coverage_job)
+        self.assertNotIn("for attempt in {1..30}", gpu_coverage_job)
+        self.assertIn('"flag=${flag}"', gpu_coverage_job)
+        self.assertIn("'.totals.sessions // 0'", gpu_coverage_job)
+        self.assertIn('[ "${sessions}" -lt 1 ]', gpu_coverage_job)
+        self.assertIn('[ "${reports_ready}" = true ]', gpu_coverage_job)
+        aggregate = workflow[workflow.index("  classic-validation:") :]
+        self.assertIn("- gpu-coverage", aggregate)
+        self.assertIn("--gpu-coverage-required", aggregate)
+        self.assertIn("--gpu-coverage-result '${{ needs.gpu-coverage.result }}'", aggregate)
         expected_materials = {
             "core": {
                 ".github/workflows/check.yml",
@@ -1468,6 +1630,7 @@ class WorkflowContractTests(unittest.TestCase):
             "client": {
                 ".github/workflows/check.yml",
                 "tools/ci/run_linux_check.sh",
+                "tools/ci/run_gpu_coverage.sh",
                 "client/CMakeLists.txt",
                 "client/CMakePresets.json",
             },
@@ -1515,6 +1678,29 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("ccache --print-stats", runner)
         self.assertIn("ccache --show-config", runner)
         self.assertIn("ccache --show-stats", runner)
+
+        gpu_coverage = (ROOT / "tools" / "ci" / "run_gpu_coverage.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("ATRINIK_GPU_CONFORMANCE_REQUIRED=1", gpu_coverage)
+        self.assertIn("xvfb-run -a", gpu_coverage)
+        self.assertIn("client-gpu-renderer-integration-tests", gpu_coverage)
+        self.assertIn("gpu-ui-closure.xml", gpu_coverage)
+        self.assertIn('expected_revision=$(git -C "${source_root}" rev-parse', gpu_coverage)
+        self.assertIn('--env ATRINIK_BENCHMARK_REVISION="${expected_revision}"', gpu_coverage)
+        self.assertIn("verify_gpu_coverage_record.py", gpu_coverage)
+        self.assertIn("ATRINIK_GPU_CONFORMANCE_TEST_SUPPRESS_ROOT_GLYPH", gpu_coverage)
+        self.assertIn("cmake --preset linux-coverage", gpu_coverage)
+        self.assertIn("ctest --preset linux-coverage", gpu_coverage)
+        self.assertIn("lvp_icd.json", gpu_coverage)
+        self.assertIn("--network none", gpu_coverage)
+        self.assertIn("tools/ci/run_gpu_coverage.sh", client)
+        self.assertIn("tools/ci/run_gpu_coverage.sh", gpu_coverage_job)
+        self.assertIn(
+            "ghcr.io/atrinik/linux-build:1.3.0@sha256:"
+            "260658d2709e993b41148a9d8f724c2d2f7f1fd93543a139b00d139b10e7f31a",
+            workflow,
+        )
 
         measurement = (ROOT / "tools" / "ci" / "measure_linux_image.sh").read_text(
             encoding="utf-8"

@@ -93,6 +93,18 @@ jobs:
             --trusted-bundle "${RUNNER_TEMP}/classic-trusted-dependency-bundle" \
             --output build/dependency-inputs \
             --github-output "${GITHUB_OUTPUT}"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/gpu-shader-downloads
+          key: >-
+            gpu-shader-inputs-v1-${{ hashFiles('client/shaders/toolchain.lock.json',
+            'client/tools/prepare_gpu_shader_toolchain.py') }}
+      - name: Compile the scheduled benchmark shader cohort
+        run: >-
+          tools/ci/prepare_gpu_shaders.sh
+          "${GITHUB_WORKSPACE}"
+          "${RUNNER_TEMP}/gpu-shader-downloads"
+          "${GITHUB_WORKSPACE}/build/gpu-shaders"
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         if: steps.dependency-stage.outputs.cache_changed == 'true'
         with:

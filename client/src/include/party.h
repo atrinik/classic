@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -69,5 +69,8 @@
 extern void socket_command_party(uint8_t *data, size_t len, size_t pos);
 
 extern void widget_party_init(widgetdata *widget);
+#ifdef ATRINIK_WIDGET_TESTS
+extern size_t widget_party_test_rows(void);
+#endif
 
 #endif

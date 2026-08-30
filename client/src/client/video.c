@@ -11,7 +11,7 @@
 
 /**
  * @file
- * SDL3 window and software-surface presentation.
+ * SDL3 window and mandatory GPU presentation.
  */
 
 #include <global.h>
@@ -23,6 +23,10 @@ void video_init(void) {
 
     if (!video_set_size()) {
         LOG(ERROR, "Couldn't create the game window: %s", SDL_GetError());
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                 "Atrinik GPU initialization failed",
+                                 SDL_GetError(),
+                                 ScreenWindow);
         exit(1);
     }
 }
@@ -39,12 +43,33 @@ void video_set_icon(SDL_Surface *icon) {
 }
 
 int video_get_bpp(void) {
-    if (ScreenSurface == NULL) {
-        return 32;
-    }
+    return 32;
+}
 
-    const SDL_PixelFormatDetails *format = SDL_GetPixelFormatDetails(ScreenSurface->format);
-    return format != NULL ? format->bits_per_pixel : 32;
+static void video_get_logical_size(int *width, int *height) {
+    HARD_ASSERT(width != NULL);
+    HARD_ASSERT(height != NULL);
+    if (OfflineRenderSurface != NULL) {
+        *width = OfflineRenderSurface->w;
+        *height = OfflineRenderSurface->h;
+        return;
+    }
+    if (ScreenWindow == NULL || !SDL_GetWindowSize(ScreenWindow, width, height)) {
+        *width = setting_get_int(OPT_CAT_CLIENT, OPT_RESOLUTION_X);
+        *height = setting_get_int(OPT_CAT_CLIENT, OPT_RESOLUTION_Y);
+    }
+}
+
+int video_get_width(void) {
+    int width, height;
+    video_get_logical_size(&width, &height);
+    return width;
+}
+
+int video_get_height(void) {
+    int width, height;
+    video_get_logical_size(&width, &height);
+    return height;
 }
 
 int video_set_size(void) {
@@ -64,17 +89,24 @@ int video_set_size(void) {
         }
     }
 
-    ScreenSurface = SDL_GetWindowSurface(ScreenWindow);
-    if (ScreenSurface == NULL) {
+    if (!gpu_renderer_ready() && !gpu_renderer_create(ScreenWindow)) {
+        char error[HUGE_BUF];
+        snprintf(error, sizeof(error), "%s", SDL_GetError());
+        LOG(ERROR, "No supported hardware GPU renderer is available: %s", error);
         SDL_DestroyWindow(ScreenWindow);
         ScreenWindow = NULL;
+        SDL_SetError("%s", error);
         return 0;
     }
+    OfflineRenderSurface = NULL;
 
     return 1;
 }
 
 uint32_t get_video_flags(void) {
+    /* The client deliberately uses a 1:1 logical-to-output pixel contract.
+     * Pixel-art layout, mouse input, map targets, and screenshot rectangles
+     * therefore share one coordinate space on every platform. */
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
 
     if (setting_get_int(OPT_CAT_CLIENT, OPT_FULLSCREEN)) {
@@ -92,10 +124,8 @@ int video_fullscreen_toggle(SDL_Surface **surface, uint32_t *flags) {
         return 0;
     }
 
-    *surface = SDL_GetWindowSurface(ScreenWindow);
-    if (*surface == NULL) {
-        return 0;
-    }
+    *surface = NULL;
+    gpu_renderer_recreation_request();
 
     if (flags != NULL) {
         *flags = SDL_WINDOW_RESIZABLE;

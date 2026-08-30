@@ -142,22 +142,31 @@ int client_command_check(const char *cmd) {
         inventory_filter_set_names(cmd + 11);
         return 1;
     } else if (!strncasecmp(cmd, "/screenshot", 11)) {
-        SDL_Surface *surface_save;
+        SDL_Rect map_rect;
+        const SDL_Rect *screenshot_rect = NULL;
 
         cmd += 11;
 
         if (!strncasecmp(cmd, " map", 4)) {
-            surface_save = cur_widget[MAP_ID]->surface;
-        } else {
-            surface_save = ScreenSurface;
+            widgetdata *map = cur_widget[MAP_ID];
+            int output_width, output_height;
+            if (map == NULL || !gpu_renderer_output_size(&output_width, &output_height)) {
+                draw_info(COLOR_RED, "Map screenshot is unavailable.");
+                return 1;
+            }
+            int left = MAX(0, widget_x(map));
+            int top = MAX(0, widget_y(map));
+            int right = MIN(output_width, widget_x(map) + widget_w(map));
+            int bottom = MIN(output_height, widget_y(map) + widget_h(map));
+            if (right <= left || bottom <= top) {
+                draw_info(COLOR_RED, "Map screenshot lies outside the completed frame.");
+                return 1;
+            }
+            map_rect = (SDL_Rect){left, top, right - left, bottom - top};
+            screenshot_rect = &map_rect;
         }
 
-        if (!surface_save) {
-            draw_info(COLOR_RED, "No surface to save.");
-            return 1;
-        }
-
-        screenshot_create(surface_save);
+        screenshot_create(screenshot_rect);
         return 1;
     } else if (!strncasecmp(cmd, "/console-load ", 14)) {
         FILE *fp;

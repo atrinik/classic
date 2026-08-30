@@ -9,6 +9,14 @@ import sys
 from pathlib import Path
 
 
+def require_legacy_player_view() -> None:
+    if not (Path(__file__).resolve().parents[1] / "src/client/player_view.c").is_file():
+        raise SystemExit(
+            "legacy player-view benchmark is unavailable on GPU-only revisions; "
+            "use the production GPU conformance harness"
+        )
+
+
 def run(client: Path, manifest: Path, viewport: str) -> dict[str, object]:
     result = subprocess.run(
         [client, "--player-view-cursor-benchmark", manifest, viewport],
@@ -91,6 +99,7 @@ def deterministic_projection(record: dict[str, object]) -> object:
 def main() -> int:
     if len(sys.argv) != 4 or sys.argv[3] not in ("standard", "large"):
         raise SystemExit("usage: verify_cursor_benchmark.py CLIENT MANIFEST standard|large")
+    require_legacy_player_view()
     client = Path(sys.argv[1])
     manifest = Path(sys.argv[2])
     viewport = sys.argv[3]

@@ -26,9 +26,6 @@ int main(void) {
     CHECK(map_visibility_field_weight(3, 4) == 208);
     CHECK(map_visibility_add_player_radiance(1280, 256) == 2304);
     CHECK(map_visibility_add_player_radiance(UINT16_MAX, 256) == UINT16_MAX);
-    CHECK(map_visibility_field_alpha(256) == 255);
-    CHECK(map_visibility_field_alpha(128) == 128);
-
     map_visibility_fade_t fade;
     map_visibility_fade_init(&fade);
     map_visibility_fade_authorize(&fade, 255, 1000);
@@ -51,9 +48,9 @@ int main(void) {
     CHECK(map_visibility_fade_advance(&fade, 2250));
     CHECK(fade.alpha == 255);
     CHECK(!map_visibility_fade_advance(&fade, 2500));
-    CHECK(!fade.authorized);
-    CHECK(map_visibility_fade_advance(&fade, 2750));
-    CHECK(fade.alpha == 0);
-    CHECK(!fade.authorized);
+    CHECK(fade.authorized);
+    CHECK(!map_visibility_fade_advance(&fade, 2750));
+    CHECK(fade.alpha == 255);
+    CHECK(fade.authorized);
     return EXIT_SUCCESS;
 }

@@ -43,6 +43,20 @@ sibling_sources=(
   -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL="${source_root}/protocol"
   -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK="${source_root}/libatrinik"
 )
+shader_arguments=()
+if [[ ${component} == client || ${component} == client-benchmark ||
+      ${component} == integrated ]]; then
+  shader_directory=${ATRINIK_GPU_SHADER_DIRECTORY:-${source_root}/build/gpu-shaders}
+  if [[ ! -d ${shader_directory} || -L ${shader_directory} ]]; then
+    echo "validated GPU shader directory is unavailable: ${shader_directory}" >&2
+    exit 2
+  fi
+  python3 "${source_root}/client/tools/embed_gpu_shaders.py" \
+    --input "${shader_directory}" \
+    --manifest "${source_root}/client/shaders/SHA256SUMS" \
+    --output "${source_root}/build/gpu-shader-validation.h"
+  shader_arguments+=("-DATRINIK_GPU_SHADER_DIRECTORY=${shader_directory}")
+fi
 
 dependency_bundle=${source_root}/build/dependency-inputs
 dependency_downloads=${dependency_bundle}/downloads
@@ -110,16 +124,18 @@ case "${component}" in
     python3 tools/dependencies.py verify
     cmake --preset linux-coverage \
       -DENABLE_PRECOMPILED_HEADERS=OFF \
-      "${launcher[@]}" "${sibling_sources[@]}"
+      "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build --preset linux-coverage --parallel "${jobs}"
     ctest --preset linux-coverage --parallel 4 -LE performance
     gcovr --root . --filter 'src/' --exclude 'src/tests/' \
       --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
       --print-summary --xml coverage.xml
-    cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
+    cmake --preset linux-release \
+      "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build --preset linux-release --parallel "${jobs}"
     ctest --preset linux-release --parallel 4 -LE performance
-    cmake --preset linux-sanitizers "${launcher[@]}" "${sibling_sources[@]}"
+    cmake --preset linux-sanitizers \
+      "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build --preset linux-sanitizers --parallel "${jobs}"
     env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
       ctest --preset linux-sanitizers --parallel 4 -LE performance
@@ -133,16 +149,18 @@ case "${component}" in
     python3 tools/dependencies.py verify
     cmake --preset linux-coverage \
       -DENABLE_PRECOMPILED_HEADERS=OFF \
-      "${launcher[@]}" "${sibling_sources[@]}"
+      "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build --preset linux-coverage --parallel "${jobs}"
     ctest --preset linux-coverage -LE performance
     gcovr --root . --filter 'src/' --exclude 'src/tests/' \
       --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
       --print-summary --xml coverage.xml
-    cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
+    cmake --preset linux-release \
+      "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build --preset linux-release --parallel "${jobs}"
     ctest --preset linux-release -LE performance
-    cmake --preset linux-sanitizers "${launcher[@]}" "${sibling_sources[@]}"
+    cmake --preset linux-sanitizers \
+      "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build --preset linux-sanitizers --parallel "${jobs}"
     env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
       ctest --preset linux-sanitizers -LE performance
@@ -160,8 +178,17 @@ case "${component}" in
     python3 tools/dependencies.py verify
     env ATRINIK_BENCHMARK_REVISION="${ATRINIK_BENCHMARK_REVISION:-unknown}" \
       ATRINIK_BENCHMARK_DIRTY=false \
-      cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
+      cmake --preset linux-release \
+        "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build --preset linux-release --target atrinik --parallel "${jobs}"
+    if [[ ! -f ${source_root}/client/src/client/player_view.c ]]; then
+      printf '%s\n' \
+        '{"schema_version":1,"skipped":true,"reason":"gpu-hardware-qualification-required"}' \
+        >"${lighting_evidence}"
+      python3 "${source_root}/client/tools/benchmark_movement_regression.py" skip \
+        --reason gpu-hardware-qualification-required \
+        --output "${movement_evidence}"
+    else
     benchmark_base_sha=${ATRINIK_BENCHMARK_BASE_SHA:-${ATRINIK_LIGHTING_BASE_SHA:-}}
     movement_event_name=${ATRINIK_MOVEMENT_EVENT_NAME:-unknown}
     movement_matrix=${ATRINIK_MOVEMENT_MATRIX:-fast}
@@ -447,6 +474,7 @@ case "${component}" in
       git -C "${source_root}" worktree remove --force "${baseline_root}"
       trap - EXIT
     fi
+    fi
     popd >/dev/null
     ;;
   server-benchmark)
@@ -524,7 +552,7 @@ case "${component}" in
     pushd "${source_root}" >/dev/null
     cmake --preset linux-release \
       -DBUILD_TESTING=OFF \
-      "${launcher[@]}" "${sibling_sources[@]}"
+      "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build --preset linux-release --parallel "${jobs}"
     popd >/dev/null
     ;;

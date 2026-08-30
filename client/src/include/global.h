@@ -105,6 +105,8 @@ struct packet_reader;
 #include <sound.h>
 #include <map.h>
 #include <lighting.h>
+#include <gpu_renderer.h>
+#include <gpu_map_renderer.h>
 #include <render_profiler.h>
 #include <inventory.h>
 #include <menu.h>

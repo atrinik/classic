@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -56,13 +56,9 @@ static void list_draw_frame(list_struct *list) {
  */
 static void list_row_color(list_struct *list, int row, SDL_Rect box) {
     if (row & 1) {
-        SDL_FillSurfaceRect(list->surface,
-                            &box,
-                            pixel_format_map_rgb(list->surface->format, 0x55, 0x55, 0x55));
+        surface_fill_rect(list->surface, &box, surface_map_rgb(list->surface, 0x55, 0x55, 0x55));
     } else {
-        SDL_FillSurfaceRect(list->surface,
-                            &box,
-                            pixel_format_map_rgb(list->surface->format, 0x45, 0x45, 0x45));
+        surface_fill_rect(list->surface, &box, surface_map_rgb(list->surface, 0x45, 0x45, 0x45));
     }
 }
 
@@ -74,9 +70,7 @@ static void list_row_color(list_struct *list, int row, SDL_Rect box) {
  * Contains base x/y/width/height information to use.
  */
 static void list_row_highlight(list_struct *list, SDL_Rect box) {
-    SDL_FillSurfaceRect(list->surface,
-                        &box,
-                        pixel_format_map_rgb(list->surface->format, 0x00, 0x80, 0x00));
+    surface_fill_rect(list->surface, &box, surface_map_rgb(list->surface, 0x00, 0x80, 0x00));
 }
 
 /**
@@ -87,9 +81,7 @@ static void list_row_highlight(list_struct *list, SDL_Rect box) {
  * Contains base x/y/width/height information to use.
  */
 static void list_row_selected(list_struct *list, SDL_Rect box) {
-    SDL_FillSurfaceRect(list->surface,
-                        &box,
-                        pixel_format_map_rgb(list->surface->format, 0x00, 0x00, 0xef));
+    surface_fill_rect(list->surface, &box, surface_map_rgb(list->surface, 0x00, 0x00, 0xef));
 }
 
 /**
@@ -129,7 +121,7 @@ list_struct *list_create(uint32_t max_rows, uint32_t cols, int spacing) {
     list->max_rows = max_rows;
     list->cols = cols;
     list->spacing = spacing;
-    list->surface = ScreenSurface;
+    list->surface = OfflineRenderSurface;
     list->focus = 1;
 
     /* Initialize defaults. */
@@ -342,7 +334,7 @@ int list_need_redraw(list_struct *list) {
  * @param y
  * Y position.
  */
-void list_show(list_struct *list, int x, int y) {
+static void list_show_impl(list_struct *list, int x, int y, bool render_root) {
     uint32_t row, col;
     int w = 0, extra_width = 0;
     SDL_Rect box;
@@ -371,15 +363,26 @@ void list_show(list_struct *list, int x, int y) {
 
         /* Actually draw the column name. */
         if (list->col_names[col]) {
-            text_show_shadow(list->surface,
-                             list->font,
-                             list->col_names[col],
-                             list->x + w + extra_width,
-                             list->y,
-                             list->focus ? COLOR_WHITE : COLOR_GRAY,
-                             COLOR_BLACK,
-                             0,
-                             NULL);
+            if (render_root) {
+                text_show_shadow_root(list->font,
+                                      list->col_names[col],
+                                      list->x + w + extra_width,
+                                      list->y,
+                                      list->focus ? COLOR_WHITE : COLOR_GRAY,
+                                      COLOR_BLACK,
+                                      0,
+                                      NULL);
+            } else {
+                text_show_shadow(list->surface,
+                                 list->font,
+                                 list->col_names[col],
+                                 list->x + w + extra_width,
+                                 list->y,
+                                 list->focus ? COLOR_WHITE : COLOR_GRAY,
+                                 COLOR_BLACK,
+                                 0,
+                                 NULL);
+            }
         }
 
         w += list->col_widths[col] + list->col_spacings[col];
@@ -455,7 +458,16 @@ void list_show(list_struct *list, int x, int y) {
                 text_rect.h = LIST_ROW_HEIGHT(list);
 
                 /* Output the text. */
-                if (text_color_shadow) {
+                if (text_color_shadow && render_root) {
+                    text_show_shadow_root(list->font,
+                                          list->text[row][col],
+                                          text_rect.x,
+                                          text_rect.y,
+                                          text_color,
+                                          text_color_shadow,
+                                          TEXT_WORD_WRAP | list->text_flags,
+                                          &text_rect);
+                } else if (text_color_shadow) {
                     text_show_shadow(list->surface,
                                      list->font,
                                      list->text[row][col],
@@ -465,6 +477,14 @@ void list_show(list_struct *list, int x, int y) {
                                      text_color_shadow,
                                      TEXT_WORD_WRAP | list->text_flags,
                                      &text_rect);
+                } else if (text_color && render_root) {
+                    text_show_root(list->font,
+                                   list->text[row][col],
+                                   text_rect.x,
+                                   text_rect.y,
+                                   text_color,
+                                   TEXT_WORD_WRAP | list->text_flags,
+                                   &text_rect);
                 } else if (text_color) {
                     text_show(list->surface,
                               list->font,
@@ -484,6 +504,14 @@ void list_show(list_struct *list, int x, int y) {
             w += list->col_widths[col] + list->col_spacings[col];
         }
     }
+}
+
+void list_show(list_struct *list, int x, int y) {
+    list_show_impl(list, x, y, false);
+}
+
+void list_show_root(list_struct *list, int x, int y) {
+    list_show_impl(list, x, y, true);
 }
 
 /**
@@ -765,7 +793,7 @@ int list_handle_mouse(list_struct *list, SDL_Event *event) {
         if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN && event->button.button == SDL_BUTTON_LEFT) {
             /* See if we clicked on this row earlier, and whether this
              * should be considered a double click. */
-            if (SDL_GetTicks() - list->click_tick < DOUBLE_CLICK_DELAY) {
+            if (client_ui_ticks() - list->click_tick < DOUBLE_CLICK_DELAY) {
                 /* Double click, handle it as if enter was used. */
                 if (list->handle_enter_func) {
                     list->handle_enter_func(list, event);
@@ -780,7 +808,7 @@ int list_handle_mouse(list_struct *list, SDL_Event *event) {
                 /* Update selected row and click ticks for above
                  * double click calculation. */
                 list->row_selected = row + 1;
-                list->click_tick = SDL_GetTicks();
+                list->click_tick = client_ui_ticks();
             }
         } else {
             /* Not a mouse click, so update highlighted row. */

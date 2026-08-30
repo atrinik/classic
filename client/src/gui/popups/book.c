@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -48,6 +48,31 @@ UT_array *book_help_history = NULL;
 static uint8_t book_help_history_enabled = 0;
 /** Scrollbar in the book GUI. */
 static scrollbar_struct scrollbar;
+
+static popup_struct *book_popup_get(void) {
+    popup_struct *popup;
+
+    for (popup = popup_get_head(); popup != NULL; popup = popup->next) {
+        if (popup->texture == texture_get(TEXTURE_TYPE_CLIENT, "book")) {
+            return popup;
+        }
+    }
+
+    return NULL;
+}
+
+static void book_state_clear(void) {
+    if (book_help_history != NULL) {
+        utarray_free(book_help_history);
+        book_help_history = NULL;
+    }
+    book_help_history_enabled = 0;
+    free(book_content);
+    book_content = NULL;
+    book_lines = 0;
+    book_scroll_lines = 0;
+    book_scroll = 0;
+}
 
 /**
  * Change the book's displayed name.
@@ -108,10 +133,10 @@ static int popup_draw_func(popup_struct *popup) {
 /** @copydoc popup_struct::draw_post_func */
 static int popup_draw_post_func(popup_struct *popup) {
     scrollbar_show(&scrollbar,
-                   ScreenSurface,
+                   OfflineRenderSurface,
                    popup->x + BOOK_SCROLLBAR_STARTX,
                    popup->y + BOOK_SCROLLBAR_STARTY);
-    surface_show(ScreenSurface, popup->x, popup->y, NULL, TEXTURE_CLIENT("book_border"));
+    surface_show(OfflineRenderSurface, popup->x, popup->y, NULL, TEXTURE_CLIENT("book_border"));
 
     return 1;
 }
@@ -189,17 +214,7 @@ static int popup_event_func(popup_struct *popup, SDL_Event *event) {
 /** @copydoc popup_struct::destroy_callback_func */
 static int popup_destroy_callback(popup_struct *popup) {
     (void)popup;
-
-    if (book_help_history) {
-        utarray_free(book_help_history);
-        book_help_history = NULL;
-    }
-
-    book_help_history_enabled = 0;
-
-    free(book_content);
-    book_content = NULL;
-
+    book_state_clear();
     return 1;
 }
 
@@ -216,13 +231,14 @@ static const char *popup_clipboard_copy_func(popup_struct *popup) {
  * @param len
  * Length of 'data'.
  */
-void book_load(const char *data, int len) {
+bool book_load(const char *data, int len) {
     SDL_Rect box;
     int pos;
+    popup_struct *popup;
 
     /* Nothing to do. */
     if (!data || !len) {
-        return;
+        return true;
     }
 
     /* Free old book data and reset the values. */
@@ -247,7 +263,14 @@ void book_load(const char *data, int len) {
 
     /* No data... */
     if (book_content[0] == '\0') {
-        return;
+        popup = book_popup_get();
+
+        if (popup != NULL) {
+            popup_destroy(popup);
+        } else {
+            book_state_clear();
+        }
+        return true;
     }
 
     /* Calculate the line numbers. */
@@ -265,11 +288,13 @@ void book_load(const char *data, int len) {
     book_scroll_lines = box.y;
 
     /* Create the book popup if it doesn't exist yet. */
-    if (!popup_get_head() ||
-        popup_get_head()->texture != texture_get(TEXTURE_TYPE_CLIENT, "book")) {
-        popup_struct *popup;
-
+    popup = book_popup_get();
+    if (popup == NULL) {
         popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "book"));
+        if (popup == NULL) {
+            book_state_clear();
+            return false;
+        }
         popup->draw_func = popup_draw_func;
         popup->draw_post_func = popup_draw_post_func;
         popup->event_func = popup_event_func;
@@ -295,17 +320,26 @@ void book_load(const char *data, int len) {
                      &book_scroll,
                      &book_lines,
                      book_scroll_lines);
-    scrollbar.redraw = &popup_get_head()->redraw;
+    scrollbar.redraw = &popup->redraw;
 
-    popup_get_head()->redraw = 1;
+    popup->redraw = 1;
+    return true;
 }
+
+#ifdef ATRINIK_WIDGET_TESTS
+bool book_test_content_retained(void) {
+    return book_content != NULL;
+}
+#endif
 
 /**
  * Redraw the book GUI.
  */
 void book_redraw(void) {
-    if (popup_get_head() && popup_get_head()->texture == texture_get(TEXTURE_TYPE_CLIENT, "book")) {
-        popup_get_head()->redraw = 1;
+    popup_struct *popup = book_popup_get();
+
+    if (popup != NULL) {
+        popup->redraw = 1;
     }
 }
 

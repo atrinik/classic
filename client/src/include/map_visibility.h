@@ -16,7 +16,6 @@
 #define MAP_VISIBILITY_OUTER_RADIUS_SQUARED UINT16_C(64)
 #define MAP_VISIBILITY_PLAYER_RADIANCE UINT16_C(640)
 #define MAP_VISIBILITY_FADE_DURATION_MS UINT32_C(250)
-#define MAP_VISIBILITY_STALE_BOUND_MS UINT32_C(500)
 #define MAP_VISIBILITY_INTERACTION_CUTOFF UINT8_C(192)
 
 /** One presentation-only alpha transition for a live MAP2 record. */
@@ -25,7 +24,6 @@ typedef struct map_visibility_fade {
     uint8_t from_alpha;
     uint8_t target_alpha;
     uint32_t transition_started;
-    uint32_t last_authoritative_update;
     bool initialized;
     bool authorized;
 } map_visibility_fade_t;
@@ -39,16 +37,11 @@ uint16_t map_visibility_field_weight_squared(uint32_t distance_squared);
 /** Add the presentation-only player contribution to one radiance sample. */
 uint16_t map_visibility_add_player_radiance(uint16_t radiance, uint16_t weight);
 
-/** Convert a field weight into the corresponding presentation alpha. */
-uint8_t map_visibility_field_alpha(uint16_t weight);
-
 /** Initialize a presentation transition. */
 void map_visibility_fade_init(map_visibility_fade_t *fade);
 
 /** Record one authoritative live MAP2 update and begin/continue fade-in. */
-void map_visibility_fade_authorize(map_visibility_fade_t *fade,
-                                   uint8_t target_alpha,
-                                   uint32_t now);
+void map_visibility_fade_authorize(map_visibility_fade_t *fade, uint8_t target_alpha, uint32_t now);
 
 /** Change the presentation target without fabricating authoritative state. */
 void map_visibility_fade_set_target(map_visibility_fade_t *fade,

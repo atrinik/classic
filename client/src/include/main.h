@@ -309,7 +309,8 @@ enum {
 
 /** Public API implemented in src/client/main.c. */
 
-extern SDL_Surface *ScreenSurface;
+/** NULL in production; non-NULL only while executing offline CPU fixtures. */
+extern SDL_Surface *OfflineRenderSurface;
 
 extern SDL_Window *ScreenWindow;
 

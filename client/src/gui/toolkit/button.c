@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -63,7 +63,7 @@ void button_create(button_struct *button) {
     memset(button, 0, sizeof(*button));
 
     /* Initialize default values. */
-    button->surface = ScreenSurface;
+    button->surface = OfflineRenderSurface;
     button->x = button->y = 0;
     button->texture = texture_get(TEXTURE_TYPE_CLIENT, "button");
     button->texture_pressed = texture_get(TEXTURE_TYPE_CLIENT, "button_down");
@@ -151,7 +151,7 @@ int button_need_redraw(button_struct *button) {
  * @param text
  * Optional text to render.
  */
-void button_show(button_struct *button, const char *text) {
+static void button_show_impl(button_struct *button, const char *text, bool render_root) {
     SDL_Surface *texture;
 
     (void)button_need_redraw(button);
@@ -187,7 +187,20 @@ void button_show(button_struct *button, const char *text) {
         }
 
         if (!color_shadow) {
-            text_show(button->surface, button->font, text, x, y, color, button->flags, NULL);
+            if (render_root) {
+                text_show_root(button->font, text, x, y, color, button->flags, NULL);
+            } else {
+                text_show(button->surface, button->font, text, x, y, color, button->flags, NULL);
+            }
+        } else if (render_root) {
+            text_show_shadow_root(button->font,
+                                  text,
+                                  x,
+                                  y - 2,
+                                  color,
+                                  color_shadow,
+                                  button->flags,
+                                  NULL);
         } else {
             text_show_shadow(button->surface,
                              button->font,
@@ -202,13 +215,21 @@ void button_show(button_struct *button, const char *text) {
     }
 
     if (button->repeat_func && button->pressed &&
-        SDL_GetTicks() - button->pressed_ticks > button->pressed_repeat_ticks) {
+        client_ui_ticks() - button->pressed_ticks > button->pressed_repeat_ticks) {
         button->repeat_func(button);
-        button->pressed_ticks = SDL_GetTicks();
+        button->pressed_ticks = client_ui_ticks();
         button->pressed_repeat_ticks = 150;
     }
 
     button->redraw = 0;
+}
+
+void button_show(button_struct *button, const char *text) {
+    button_show_impl(button, text, false);
+}
+
+void button_show_root(button_struct *button, const char *text) {
+    button_show_impl(button, text, true);
 }
 
 /**
@@ -255,7 +276,7 @@ int button_event(button_struct *button, SDL_Event *event) {
         /* Left mouse click, the button has been pressed. */
         if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN && event->button.button == SDL_BUTTON_LEFT) {
             button->pressed = 1;
-            button->pressed_ticks = SDL_GetTicks();
+            button->pressed_ticks = client_ui_ticks();
             button->pressed_repeat_ticks = 750;
             button->redraw = 1;
             return 1;
@@ -265,7 +286,7 @@ int button_event(button_struct *button, SDL_Event *event) {
             /* Do not reset hover ticks if the previous state was already
              * in highlight mode. */
             if (!old_mouse_over) {
-                button->hover_ticks = SDL_GetTicks();
+                button->hover_ticks = client_ui_ticks();
             }
         }
     }

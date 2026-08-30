@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -464,6 +464,19 @@ extern widgetevent widget_mouse_event;
 extern int widget_id_from_name(const char *name);
 
 extern void toolkit_widget_init(void);
+/** Load the canonical interface without mutable per-user layout state. */
+extern void toolkit_widget_fixture_init(const char *interface_path, const char *layout_path);
+/** Destroy the canonical fixture tree without persisting layout state. */
+extern void toolkit_widget_fixture_deinit(void);
+/** Return whether the immutable fixture tree forbids user-data persistence. */
+extern bool toolkit_widget_fixture_is_read_only(void);
+/** Make every canonical fixture widget family visible for GPU closure. */
+extern void toolkit_widget_fixture_show_all(void);
+#ifdef ATRINIK_WIDGET_TESTS
+extern bool widget_stat_test_valid(widgetdata *widget);
+extern void widget_mplayer_test_isolated_set(bool enabled);
+extern void widget_render_profiler_test_isolated_set(bool enabled);
+#endif
 
 extern void menu_container_move(widgetdata *widget, widgetdata *menuitem, SDL_Event *event);
 
@@ -527,6 +540,14 @@ extern widgetdata *get_widget_owner_rec(int x, int y, widgetdata *widget, widget
 extern int widgets_need_redraw(void);
 
 extern void process_widgets(int draw);
+#ifdef ATRINIK_WIDGET_TESTS
+/** Draw one minimap through its production retained widget path. */
+extern void widget_minimap_draw_test(widgetdata *widget);
+/** Draw the first minimap canvas through the dynamic path for cold-start proof. */
+extern void widget_minimap_cold_start_draw_test(widgetdata *widget);
+#endif
+/** Force one deterministic dynamic-minimap refresh for a closed fixture. */
+extern void widget_minimap_refresh_test(widgetdata *widget);
 
 extern void SetPriorityWidget(widgetdata *node);
 
@@ -584,6 +605,9 @@ extern void add_separator(widgetdata *widget);
 extern void menu_finalize(widgetdata *widget);
 
 extern void widget_redraw_all(int widget_type_id);
+
+/** Mark every widget canvas dirty after GPU resource reconstruction. */
+extern void widget_redraw_everything(void);
 
 extern void widget_redraw_type_id(int type, const char *id);
 

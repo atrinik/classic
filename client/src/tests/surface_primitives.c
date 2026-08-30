@@ -11,7 +11,123 @@
 
 #include <global.h>
 
-SDL_Surface *ScreenSurface = NULL;
+SDL_Surface *OfflineRenderSurface = NULL;
+
+bool gpu_renderer_ready(void) {
+    return false;
+}
+
+bool gpu_renderer_canvas_registered(SDL_Surface *surface) {
+    (void)surface;
+    return false;
+}
+
+bool gpu_renderer_draw_surface_to(SDL_Surface *target,
+                                  SDL_Surface *surface,
+                                  const SDL_Rect *source,
+                                  const SDL_FRect *destination) {
+    (void)target;
+    (void)surface;
+    (void)source;
+    (void)destination;
+    return false;
+}
+
+bool gpu_renderer_draw_surface_scaled_to(SDL_Surface *target,
+                                         SDL_Surface *surface,
+                                         const SDL_Rect *source,
+                                         const SDL_FRect *destination,
+                                         SDL_ScaleMode scale_mode) {
+    (void)scale_mode;
+    return gpu_renderer_draw_surface_to(target, surface, source, destination);
+}
+
+bool gpu_renderer_canvas_fill(SDL_Surface *surface,
+                              const SDL_Rect *rectangle,
+                              Uint8 red,
+                              Uint8 green,
+                              Uint8 blue,
+                              Uint8 alpha) {
+    (void)surface;
+    (void)rectangle;
+    (void)red;
+    (void)green;
+    (void)blue;
+    (void)alpha;
+    return false;
+}
+
+bool gpu_renderer_canvas_draw_rect(SDL_Surface *surface,
+                                   const SDL_FRect *rectangle,
+                                   Uint8 red,
+                                   Uint8 green,
+                                   Uint8 blue,
+                                   Uint8 alpha,
+                                   bool filled) {
+    (void)surface;
+    (void)rectangle;
+    (void)red;
+    (void)green;
+    (void)blue;
+    (void)alpha;
+    (void)filled;
+    return false;
+}
+
+bool gpu_renderer_canvas_draw_line(SDL_Surface *surface,
+                                   float x1,
+                                   float y1,
+                                   float x2,
+                                   float y2,
+                                   Uint8 red,
+                                   Uint8 green,
+                                   Uint8 blue,
+                                   Uint8 alpha) {
+    (void)surface;
+    (void)x1;
+    (void)y1;
+    (void)x2;
+    (void)y2;
+    (void)red;
+    (void)green;
+    (void)blue;
+    (void)alpha;
+    return false;
+}
+
+bool gpu_renderer_draw_rect(const SDL_FRect *rectangle,
+                            Uint8 red,
+                            Uint8 green,
+                            Uint8 blue,
+                            Uint8 alpha,
+                            bool filled) {
+    (void)rectangle;
+    (void)red;
+    (void)green;
+    (void)blue;
+    (void)alpha;
+    (void)filled;
+    return false;
+}
+
+bool gpu_renderer_draw_line(float x1,
+                            float y1,
+                            float x2,
+                            float y2,
+                            Uint8 red,
+                            Uint8 green,
+                            Uint8 blue,
+                            Uint8 alpha) {
+    (void)x1;
+    (void)y1;
+    (void)x2;
+    (void)y2;
+    (void)red;
+    (void)green;
+    (void)blue;
+    (void)alpha;
+    return false;
+}
 
 #define TEST_CHECK(condition) \
     do {                      \
@@ -19,6 +135,19 @@ SDL_Surface *ScreenSurface = NULL;
             abort();          \
         }                     \
     } while (0)
+
+static void test_null_gpu_canvas_color_mapping(void) {
+    Uint32 color = surface_map_rgb(NULL, 12, 34, 56);
+    Uint8 red, green, blue, alpha;
+    SDL_GetRGBA(color,
+                SDL_GetPixelFormatDetails(SDL_PIXELFORMAT_RGBA32),
+                NULL,
+                &red,
+                &green,
+                &blue,
+                &alpha);
+    TEST_CHECK(red == 12 && green == 34 && blue == 56 && alpha == SDL_ALPHA_OPAQUE);
+}
 
 static void test_packed_indexed_conversion(void) {
     SDL_Surface *surface = SDL_CreateSurface(2, 1, SDL_PIXELFORMAT_INDEX4MSB);
@@ -676,6 +805,7 @@ static void test_map_marker_rotation_contract(void) {
 }
 
 int main(void) {
+    test_null_gpu_canvas_color_mapping();
     test_packed_indexed_conversion();
     test_index8_visible_bounds();
     test_truecolor_pixel_visibility();

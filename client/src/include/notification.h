@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -36,6 +36,9 @@
 typedef struct notification_struct {
     /** Current alpha value of the notification surface. */
     int alpha;
+
+    /** Owned markup text used to reconstruct the retained GPU canvas. */
+    char *message;
 
     /** Macro or command to execute when the notification is clicked. */
     char *action;
@@ -95,5 +98,13 @@ extern bool notification_keybind_matches(const char *cmd);
 extern void socket_command_notification(uint8_t *data, size_t len, size_t pos);
 
 extern void widget_notification_init(widgetdata *widget);
+
+#ifdef ATRINIK_WIDGET_TESTS
+/** Place the active notification at a deterministic fade offset. */
+extern bool notification_test_fade(uint32_t elapsed_ms);
+
+/** Return the number of retained notification canvas compositions. */
+extern uint64_t notification_test_canvas_compositions(void);
+#endif
 
 #endif

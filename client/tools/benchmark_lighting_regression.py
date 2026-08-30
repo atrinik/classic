@@ -19,6 +19,14 @@ class BenchmarkError(RuntimeError):
     """A benchmark command or its closed output contract failed."""
 
 
+def require_legacy_player_view() -> None:
+    if not (Path(__file__).resolve().parents[1] / "src/client/player_view.c").is_file():
+        raise SystemExit(
+            "legacy player-view benchmark is unavailable on GPU-only revisions; "
+            "use the production GPU conformance harness"
+        )
+
+
 def parse_result(output: str, expected_mode: str) -> int:
     lines = [line for line in output.splitlines() if line]
     if len(lines) != 1:
@@ -108,6 +116,7 @@ def main() -> int:
     parser.add_argument("--output", required=True, type=Path)
     arguments = parser.parse_args()
 
+    require_legacy_player_view()
     try:
         evidence = compare(
             arguments.baseline_client,

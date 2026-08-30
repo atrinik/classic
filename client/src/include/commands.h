@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -75,6 +75,16 @@ extern void socket_command_player_status(uint8_t *data, size_t len, size_t pos);
 extern void socket_command_mapstats(uint8_t *data, size_t len, size_t pos);
 
 extern void socket_command_map(uint8_t *data, size_t len, size_t pos);
+/** Roll back an unpublished multi-envelope MAP2 update. */
+extern void socket_command_map_abort_pending(void);
+#ifdef ATRINIK_WIDGET_TESTS
+bool socket_command_map_timed_light_same_test(void);
+/** Verify complete-to-partial MAP2 publication and malformed-sequence rollback. */
+bool socket_command_map_continuation_transaction_test(void);
+/** Seed/query a buffered MAP2 generation at lifecycle reset boundaries. */
+bool socket_command_map_buffered_generation_test_begin(void);
+bool socket_command_map_buffered_generation_test_pending(void);
+#endif
 
 extern void socket_command_version(uint8_t *data, size_t len, size_t pos);
 

@@ -24,6 +24,16 @@ static render_profile_snapshot_t completed;
 static render_profile_snapshot_t statistics;
 static uint64_t interval_started_us;
 static uint64_t statistics_started_us;
+#ifdef ATRINIK_WIDGET_TESTS
+static bool test_isolated;
+
+void widget_render_profiler_test_isolated_set(bool enabled) {
+    test_isolated = enabled;
+    if (enabled) {
+        memset(&completed, 0, sizeof(completed));
+    }
+}
+#endif
 
 typedef struct render_profiler_widget {
     uint32_t generation;
@@ -166,54 +176,97 @@ static double render_profile_rate(const render_profile_snapshot_t *snapshot, uin
     return snapshot->interval_us == 0 ? 0.0 : count * 1000000.0 / snapshot->interval_us;
 }
 
+static double gpu_timing_average_ms(const gpu_renderer_statistics_t *statistics,
+                                    gpu_renderer_timing_stage_t stage) {
+    return statistics->timings[stage].calls == 0 ? 0.0
+                                                 : statistics->timings[stage].elapsed_ns /
+                                                       1000000.0 / statistics->timings[stage].calls;
+}
+
 static char *render_profiler_widget_text(const render_profile_snapshot_t *snapshot) {
     StringBuffer *sb = stringbuffer_new();
     render_profile_stage_t stage;
+    gpu_renderer_statistics_t gpu_statistics;
 
-    stringbuffer_append_printf(sb,
-                               "[c=#ffd060]Render profiler[/c] (last %.2fs)\n"
-                               "Loop %.1f fps, drawn %.1f fps\n"
-                               "Frame %6.2f ms  work %6.2f  wait %6.2f\n"
-                               "Events %5.2f  game %5.2f\n"
-                               "Widgets %5.2f  overlays %5.2f\n"
-                               "GC %8.2f  present %5.2f\n"
-                               "[c=#ffd060]Map/draw[/c] %5.2f ms @ %.1f/s\n"
-                               " scratch/draw %4.2f  ground/level %4.2f\n"
-                               " composite/draw %4.2f  lighting/level %4.2f\n"
-                               " objects/level %4.2f  paint/draw %4.2f\n"
-                               " sort %4.2f  living %4.2f  sprites %4.2f  hints %4.2f\n"
-                               " UI/draw %4.2f\n"
-                               "[c=#ffd060]Stage breakdown[/c] (average, calls, rate)\n",
-                               snapshot->interval_us / 1000000.0,
-                               render_profile_rate(snapshot, snapshot->frames),
-                               render_profile_rate(snapshot, snapshot->drawn_frames),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_FRAME),
-                               MAX(0.0,
-                                   render_profile_average_ms(snapshot, RENDER_PROFILE_FRAME) -
-                                       render_profile_average_ms(snapshot, RENDER_PROFILE_WAIT)),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_WAIT),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_EVENTS),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_GAME),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_WIDGETS),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_OVERLAYS),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAINTENANCE),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_PRESENT),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP),
-                               render_profile_rate(snapshot, snapshot->calls[RENDER_PROFILE_MAP]),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_SCRATCH_CLEAR),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_GROUND),
-                               render_profile_average_ms(snapshot,
-                                                         RENDER_PROFILE_MAP_GROUND_COMPOSITE),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_LIGHTING),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_OBJECTS),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_PAINT),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_COMMAND_SORT),
-                               render_profile_average_ms(snapshot,
-                                                         RENDER_PROFILE_MAP_LIVING_OCCLUSION),
-                               render_profile_average_ms(snapshot,
-                                                         RENDER_PROFILE_MAP_SPRITE_EFFECTS),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_HINT_REPLAY),
-                               render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_UI));
+#ifdef ATRINIK_WIDGET_TESTS
+    if (test_isolated) {
+        memset(&gpu_statistics, 0, sizeof(gpu_statistics));
+    } else
+#endif
+    {
+        gpu_renderer_statistics_get(&gpu_statistics);
+    }
+
+    stringbuffer_append_printf(
+        sb,
+        "[c=#ffd060]Render profiler[/c] (last %.2fs)\n"
+        "Loop %.1f fps, drawn %.1f fps\n"
+        "Frame %6.2f ms  work %6.2f  wait %6.2f\n"
+        "Events %5.2f  game %5.2f\n"
+        "Widgets %5.2f  overlays %5.2f\n"
+        "GC %8.2f  present %5.2f\n"
+        "[c=#ffd060]Map/draw[/c] %5.2f ms @ %.1f/s\n"
+        " scratch/draw %4.2f  ground/level %4.2f\n"
+        " composite/draw %4.2f  lighting/level %4.2f\n"
+        " objects/level %4.2f  paint/draw %4.2f\n"
+        " sort %4.2f  living %4.2f  sprites %4.2f  hints %4.2f\n"
+        " UI/draw %4.2f\n"
+        "[c=#ffd060]GPU totals[/c]\n"
+        " commands %" PRIu64 "  batches %" PRIu64 "  draws %" PRIu64 "\n"
+        " uploads %" PRIu64 " / %.2f MiB\n"
+        " retained %.2f MiB  peak %.2f MiB\n"
+        " resources +%" PRIu64 " -%" PRIu64 "\n"
+        " recoveries %" PRIu64 "  failures %" PRIu64 "  fallbacks %" PRIu64 "\n"
+        "[c=#ffd060]GPU timing[/c] (average ms)\n"
+        " command %5.2f  albedo %5.2f  light %5.2f  UI %5.2f\n"
+        " submit %5.2f  complete %5.2f  present-wait %5.2f\n"
+        "[c=#ffd060]Stage breakdown[/c] (average, calls, rate)\n",
+        snapshot->interval_us / 1000000.0,
+        render_profile_rate(snapshot, snapshot->frames),
+        render_profile_rate(snapshot, snapshot->drawn_frames),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_FRAME),
+        MAX(0.0,
+            render_profile_average_ms(snapshot, RENDER_PROFILE_FRAME) -
+                render_profile_average_ms(snapshot, RENDER_PROFILE_WAIT)),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_WAIT),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_EVENTS),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_GAME),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_WIDGETS),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_OVERLAYS),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_MAINTENANCE),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_PRESENT),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_MAP),
+        render_profile_rate(snapshot, snapshot->calls[RENDER_PROFILE_MAP]),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_SCRATCH_CLEAR),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_GROUND),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_GROUND_COMPOSITE),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_LIGHTING),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_OBJECTS),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_PAINT),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_COMMAND_SORT),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_LIVING_OCCLUSION),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_SPRITE_EFFECTS),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_HINT_REPLAY),
+        render_profile_average_ms(snapshot, RENDER_PROFILE_MAP_UI),
+        gpu_statistics.commands,
+        gpu_statistics.batches,
+        gpu_statistics.draws,
+        gpu_statistics.upload_count,
+        gpu_statistics.upload_bytes / 1048576.0,
+        gpu_statistics.retained_bytes / 1048576.0,
+        gpu_statistics.peak_retained_bytes / 1048576.0,
+        gpu_statistics.resource_creations,
+        gpu_statistics.resource_destructions,
+        gpu_statistics.device_recoveries,
+        gpu_statistics.recovery_failures,
+        gpu_statistics.fallbacks,
+        gpu_timing_average_ms(&gpu_statistics, GPU_RENDERER_TIMING_COMMAND_BUILD),
+        gpu_timing_average_ms(&gpu_statistics, GPU_RENDERER_TIMING_ALBEDO_OWNER),
+        gpu_timing_average_ms(&gpu_statistics, GPU_RENDERER_TIMING_LIGHT_TONE),
+        gpu_timing_average_ms(&gpu_statistics, GPU_RENDERER_TIMING_UI),
+        gpu_timing_average_ms(&gpu_statistics, GPU_RENDERER_TIMING_SUBMISSION),
+        gpu_timing_average_ms(&gpu_statistics, GPU_RENDERER_TIMING_COMPLETION),
+        gpu_timing_average_ms(&gpu_statistics, GPU_RENDERER_TIMING_PRESENT_WAIT));
 
     for (stage = 0; stage < RENDER_PROFILE_STAGE_NUM; stage++) {
         render_profile_stage_metadata_t metadata = {0};
@@ -225,7 +278,7 @@ static char *render_profiler_widget_text(const render_profile_snapshot_t *snapsh
         scope = render_profiler_scope_name(metadata.scope);
         HARD_ASSERT(scope != NULL);
         stringbuffer_append_printf(sb,
-                                   "%s [%s] %.2f ms, %" PRIu32 " calls, %.1f/s\n",
+                                   "%s &lsqb;%s&rsqb; %.2f ms, %" PRIu32 " calls, %.1f/s\n",
                                    metadata.name,
                                    scope,
                                    render_profile_average_ms(snapshot, stage),
@@ -261,9 +314,9 @@ static void widget_draw(widgetdata *widget) {
 
     const render_profile_snapshot_t *snapshot = render_profiler_snapshot();
     text = render_profiler_widget_text(snapshot);
-    SDL_FillSurfaceRect(widget->surface,
-                        NULL,
-                        pixel_format_map_rgba(widget->surface->format, 0, 0, 0, SDL_ALPHA_OPAQUE));
+    surface_fill_rect(widget->surface,
+                      NULL,
+                      pixel_format_map_rgba(widget->surface->format, 0, 0, 0, SDL_ALPHA_OPAQUE));
 
     content_width = MAX(1, widget->w - 10 - scrollbar_width);
     content_height = MAX(1, widget->h - 8);
@@ -290,8 +343,7 @@ static void widget_draw(widgetdata *widget) {
 
     profiler_widget->scrollbar.max_lines = MAX(1, box.y);
     profiler_widget->scrollbar_info.num_lines = box.h;
-    scrollbar_scroll_to(&profiler_widget->scrollbar,
-                        profiler_widget->scrollbar_info.scroll_offset);
+    scrollbar_scroll_to(&profiler_widget->scrollbar, profiler_widget->scrollbar_info.scroll_offset);
 
     box.x = 5;
     box.y = profiler_widget->scrollbar_info.scroll_offset;
@@ -340,12 +392,12 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
     if (event->type == SDL_EVENT_KEY_DOWN) {
         if (event->key.key == SDLK_PAGEUP) {
             scrollbar_scroll_adjust(&profiler_widget->scrollbar,
-                                     -(int)profiler_widget->scrollbar.max_lines);
+                                    -(int)profiler_widget->scrollbar.max_lines);
             WIDGET_REDRAW(widget);
             return 1;
         } else if (event->key.key == SDLK_PAGEDOWN) {
             scrollbar_scroll_adjust(&profiler_widget->scrollbar,
-                                     profiler_widget->scrollbar.max_lines);
+                                    profiler_widget->scrollbar.max_lines);
             WIDGET_REDRAW(widget);
             return 1;
         }
@@ -371,18 +423,12 @@ static void widget_background(widgetdata *widget, int draw) {
     }
 }
 
-/** @copydoc widgetdata::deinit_func */
-static void widget_deinit(widgetdata *widget) {
-    free(widget->subwidget);
-}
-
 void widget_render_profiler_init(widgetdata *widget) {
     render_profiler_widget_t *profiler_widget = xcalloc(1, sizeof(*profiler_widget));
 
     widget->draw_func = widget_draw;
     widget->background_func = widget_background;
     widget->event_func = widget_event;
-    widget->deinit_func = widget_deinit;
     scrollbar_info_create(&profiler_widget->scrollbar_info);
     scrollbar_create(&profiler_widget->scrollbar,
                      11,

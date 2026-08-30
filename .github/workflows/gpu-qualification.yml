@@ -1,0 +1,214 @@
+name: GPU renderer qualification
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: classic-gpu-qualification-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  shaders:
+    name: Build qualification shader cohort
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/gpu-shader-downloads
+          key: >-
+            gpu-shader-inputs-v1-${{ hashFiles('client/shaders/toolchain.lock.json',
+            'client/tools/prepare_gpu_shader_toolchain.py') }}
+      - name: Compile and validate the qualification shader cohort
+        run: >-
+          tools/ci/prepare_gpu_shaders.sh
+          "${GITHUB_WORKSPACE}"
+          "${RUNNER_TEMP}/gpu-shader-downloads"
+          "${GITHUB_WORKSPACE}/build/gpu-shaders"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: qualification-gpu-shaders
+          path: build/gpu-shaders
+          if-no-files-found: error
+          retention-days: 1
+
+  qualify:
+    name: ${{ matrix.backend }} / ${{ matrix.hardware }}
+    needs: shaders
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: vulkan
+            hardware: reference
+            runner: '["self-hosted","gpu-qualification","linux","reference"]'
+          - backend: vulkan
+            hardware: minimum
+            runner: '["self-hosted","gpu-qualification","linux","minimum"]'
+          - backend: direct3d12
+            hardware: reference
+            runner: '["self-hosted","gpu-qualification","windows","reference"]'
+          - backend: direct3d12
+            hardware: minimum
+            runner: '["self-hosted","gpu-qualification","windows","minimum"]'
+          - backend: metal
+            hardware: reference
+            runner: '["self-hosted","gpu-qualification","macos","reference"]'
+          - backend: metal
+            hardware: minimum
+            runner: '["self-hosted","gpu-qualification","macos","minimum"]'
+    runs-on: ${{ fromJSON(matrix.runner) }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: qualification-gpu-shaders
+          path: build/gpu-shaders
+      - name: Bind qualification source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision=$(git rev-parse --verify HEAD)
+          test "${#revision}" -eq 40
+          test -z "$(git status --porcelain=v1 --untracked-files=normal)"
+          echo "ATRINIK_BENCHMARK_REVISION=${revision}" >>"${GITHUB_ENV}"
+          echo "ATRINIK_BENCHMARK_DIRTY=false" >>"${GITHUB_ENV}"
+      - name: Configure clean Release qualification build
+        shell: bash
+        env:
+          ATRINIK_QUALIFICATION_SHADER_DIRECTORY: ${{ github.workspace }}/build/gpu-shaders
+        run: >-
+          cmake -S client -B client/build/gpu-qualification -G Ninja
+          -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          -DATRINIK_GPU_CONFORMANCE_REQUIRED=ON -DPACKAGE_TYPE=none
+          "-DATRINIK_GPU_SHADER_DIRECTORY=${ATRINIK_QUALIFICATION_SHADER_DIRECTORY}"
+      - name: Build production client and GPU harness
+        shell: bash
+        run: >-
+          cmake --build client/build/gpu-qualification --config Release
+          --target atrinik client-gpu-renderer-integration-tests
+      - name: Run GPU integration and conformance checks
+        shell: bash
+        env:
+          ATRINIK_GPU_CONFORMANCE_DRIVER: ${{ matrix.backend }}
+          ATRINIK_GPU_CONFORMANCE_HARDWARE_TIER: ${{ matrix.hardware }}
+          ATRINIK_GPU_CONFORMANCE_QUALIFIED_HARDWARE: "1"
+        working-directory: client
+        run: |
+          executable=build/gpu-qualification/client-gpu-renderer-integration-tests
+          if test "${RUNNER_OS}" = Windows; then executable="${executable}.exe"; fi
+          "${executable}"
+      - name: Run three fresh processes for every stress row
+        shell: bash
+        env:
+          ATRINIK_GPU_CONFORMANCE_DRIVER: ${{ matrix.backend }}
+          ATRINIK_GPU_CONFORMANCE_HARDWARE_TIER: ${{ matrix.hardware }}
+          ATRINIK_GPU_CONFORMANCE_QUALIFIED_HARDWARE: "1"
+        working-directory: client
+        run: |
+          executable=build/gpu-qualification/atrinik
+          if test "${RUNNER_OS}" = Windows; then executable="${executable}.exe"; fi
+          mkdir -p ../build/gpu-qualification
+          for workload in \
+            dense-17x17-five-depth-1080p \
+            dense-25x25-seven-depth-1440p \
+            wire-ceiling-28x28-thirteen-depth-1440p \
+            wire-ceiling-28x28-thirteen-depth-4k \
+            actor-door-roof-animation-25x25; do
+            case "${workload}" in
+              dense-17x17-five-depth-1080p)
+                fixture=gpu-benchmark-dense-17x17-five-depth-1080p ;;
+              dense-25x25-seven-depth-1440p)
+                fixture=gpu-qualification-town-25x25 ;;
+              wire-ceiling-28x28-thirteen-depth-1440p)
+                fixture=gpu-benchmark-wire-ceiling-28x28-thirteen-depth-1440p ;;
+              wire-ceiling-28x28-thirteen-depth-4k)
+                fixture=gpu-benchmark-wire-ceiling-28x28-thirteen-depth-4k ;;
+              actor-door-roof-animation-25x25)
+                fixture=gpu-benchmark-actor-door-roof-animation-25x25 ;;
+            esac
+            for run in 1 2 3; do
+              output="../build/gpu-qualification/${workload}-${run}.jsonl"
+              ATRINIK_GPU_CONFORMANCE_OUTPUT="${output}" \
+                "${executable}" --gpu-player-view-benchmark \
+                  "src/tests/fixtures/player_view/${fixture}.xml" "${workload}"
+            done
+          done
+      - name: Validate complete qualification contract
+        shell: bash
+        run: >-
+          python3 client/tools/verify_gpu_qualification.py --require-complete
+          build/gpu-qualification/*.jsonl
+      - name: Run bounded production recovery lifecycle
+        shell: bash
+        env:
+          ATRINIK_GPU_CONFORMANCE_DRIVER: ${{ matrix.backend }}
+          ATRINIK_GPU_CONFORMANCE_HARDWARE_TIER: ${{ matrix.hardware }}
+          ATRINIK_GPU_CONFORMANCE_QUALIFIED_HARDWARE: "1"
+          ATRINIK_GPU_CONFORMANCE_LIFECYCLE_OUTPUT: ../build/gpu-qualification/lifecycle.jsonl
+          ATRINIK_GPU_CONFORMANCE_REVIEW_DIRECTORY: ../build/gpu-qualification/review
+        working-directory: client
+        run: |
+          executable=build/gpu-qualification/atrinik
+          if test "${RUNNER_OS}" = Windows; then executable="${executable}.exe"; fi
+          "${executable}" --gpu-player-view-lifecycle \
+            src/tests/fixtures/player_view/brynknot-movement.xml
+      - name: Validate bounded recovery artifact collection
+        shell: bash
+        run: >-
+          python3 client/tools/verify_gpu_qualification.py --collect-lifecycle
+          build/gpu-qualification/lifecycle.jsonl
+      - name: Run frozen production MAP/MAP2 checkpoints
+        shell: bash
+        env:
+          ATRINIK_GPU_CONFORMANCE_DRIVER: ${{ matrix.backend }}
+          ATRINIK_GPU_CONFORMANCE_HARDWARE_TIER: ${{ matrix.hardware }}
+          ATRINIK_GPU_CONFORMANCE_QUALIFIED_HARDWARE: "1"
+          ATRINIK_GPU_CONFORMANCE_REVIEW_DIRECTORY: ../build/gpu-qualification/review
+        working-directory: client
+        run: |
+          executable=build/gpu-qualification/atrinik
+          if test "${RUNNER_OS}" = Windows; then executable="${executable}.exe"; fi
+          for fixture in smooth radial-light-smooth exit-cues \
+            living-outline-translucent living-outline-retained-fow timed-light \
+            map-overlay-linked-depth map-overlay-widget-state map-overlay-elevated \
+            visibility-fade-centered brynknot-movement \
+            gpu-qualification-town-25x25 gpu-ui-closure; do
+            "${executable}" --gpu-player-view \
+              "src/tests/fixtures/player_view/${fixture}.xml" \
+              >>"../build/gpu-qualification/production-fixtures.jsonl"
+          done
+      - name: Validate exact production fixture collection
+        shell: bash
+        run: >-
+          python3 client/tools/verify_gpu_qualification.py --collect-production-fixtures
+          build/gpu-qualification/production-fixtures.jsonl
+      - name: Enforce human-approved lifecycle goldens
+        shell: bash
+        run: >-
+          python3 client/tools/verify_gpu_qualification.py --lifecycle
+          build/gpu-qualification/lifecycle.jsonl
+      - name: Enforce human-approved backend goldens
+        shell: bash
+        run: >-
+          python3 client/tools/verify_gpu_qualification.py --production-fixtures
+          build/gpu-qualification/production-fixtures.jsonl
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: gpu-qualification-${{ matrix.backend }}-${{ matrix.hardware }}
+          path: |
+            build/gpu-qualification/*.jsonl
+            build/gpu-qualification/review/*.png
+          if-no-files-found: error
+          retention-days: 30

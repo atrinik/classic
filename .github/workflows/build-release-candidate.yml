@@ -132,6 +132,35 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  gpu-shaders:
+    name: Build release GPU shader cohort
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/gpu-shader-downloads
+          key: >-
+            gpu-shader-inputs-v1-${{ hashFiles('client/shaders/toolchain.lock.json',
+            'client/tools/prepare_gpu_shader_toolchain.py') }}
+      - name: Compile and validate the locked release shader cohort
+        run: >-
+          tools/ci/prepare_gpu_shaders.sh
+          "${GITHUB_WORKSPACE}"
+          "${RUNNER_TEMP}/gpu-shader-downloads"
+          "${GITHUB_WORKSPACE}/build/gpu-shaders"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: candidate-gpu-shaders-${{ needs.metadata.outputs.tag }}
+          path: build/gpu-shaders
+          if-no-files-found: error
+          retention-days: 1
+
   sources:
     name: Build source packages and protocol wheel
     needs: metadata
@@ -197,7 +226,7 @@ jobs:
 
   client-windows:
     name: Build Windows client package
-    needs: [metadata, dependencies]
+    needs: [metadata, dependencies, gpu-shaders]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -208,6 +237,10 @@ jobs:
         with:
           name: candidate-dependencies-${{ needs.metadata.outputs.tag }}
           path: .
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: candidate-gpu-shaders-${{ needs.metadata.outputs.tag }}
+          path: build/gpu-shaders
       - name: Retrieve release-only Discord configuration
         if: inputs.rehearsal != true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -243,6 +276,7 @@ jobs:
             --network none \
             --user "$(id -u):$(id -g)" \
             --env ATRINIK_PACKAGE_VERSION="${RELEASE_VERSION}" \
+            --env ATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders \
             --env ATRINIK_DEPENDENCY_DOWNLOADS=/workspace/client/build/dependencies/downloads \
             --env ATRINIK_DISCORD_APPLICATION_ID_FILE="${DISCORD_CONFIG_FILE}" \
             --env CCACHE_DIR=/workspace/client/build/ccache \
@@ -374,6 +408,7 @@ jobs:
     needs:
       - metadata
       - sources
+      - gpu-shaders
       - client-windows
       - server-windows
       - server-image

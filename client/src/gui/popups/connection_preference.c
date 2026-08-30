@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -24,6 +24,17 @@ static server_struct *preference_server;
 #define PREFERENCE_CONTENT_Y 100
 #define PREFERENCE_LIST_WIDTH 180
 #define PREFERENCE_CONTENT_GAP 18
+
+static void preference_server_free(void) {
+    if (preference_server == NULL) {
+        return;
+    }
+    free(preference_server->name);
+    free(preference_server->hostname);
+    free(preference_server->server_id);
+    free(preference_server);
+    preference_server = NULL;
+}
 
 static const char *preference_description(socket_connection_preference_t preference) {
     switch (preference) {
@@ -104,9 +115,7 @@ static int popup_draw(popup_struct *popup) {
                      popup->surface->w - PREFERENCE_CONTENT_X * 2 - PREFERENCE_LIST_WIDTH -
                          PREFERENCE_CONTENT_GAP,
                      LIST_ROWS_HEIGHT(preference_list)};
-    SDL_FillSurfaceRect(popup->surface,
-                        &help,
-                        pixel_format_map_rgb(popup->surface->format, 0x45, 0x45, 0x45));
+    surface_fill_rect(popup->surface, &help, surface_map_rgb(popup->surface, 0x45, 0x45, 0x45));
     draw_frame(popup->surface, help.x, help.y, help.w, help.h);
 
     box.x = help.x + 12;
@@ -160,27 +169,19 @@ static int popup_destroy_callback(popup_struct *popup) {
     preference_list = NULL;
     button_destroy(&button_use);
     preference_popup = NULL;
-    free(preference_server->name);
-    free(preference_server->hostname);
-    free(preference_server->server_id);
-    free(preference_server);
-    preference_server = NULL;
+    preference_server_free();
     return 1;
 }
 
-void connection_preference_open(server_struct *server) {
-    HARD_ASSERT(server != NULL);
+bool connection_preference_recover(void) {
+    if (preference_server == NULL || preference_popup != NULL) {
+        return true;
+    }
 
-    preference_server = xcalloc(1, sizeof(*preference_server));
-    preference_server->name = xstrdup(server->name);
-    if (server->hostname != NULL) {
-        preference_server->hostname = xstrdup(server->hostname);
-    }
-    if (server->server_id != NULL) {
-        preference_server->server_id = xstrdup(server->server_id);
-    }
-    preference_server->port = server->port;
     preference_popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));
+    if (preference_popup == NULL) {
+        return false;
+    }
     preference_popup->draw_func = popup_draw;
     preference_popup->event_func = popup_event;
     preference_popup->destroy_callback_func = popup_destroy_callback;
@@ -199,9 +200,49 @@ void connection_preference_open(server_struct *server) {
                  0,
                  socket_connection_preference_name((socket_connection_preference_t)i));
     }
-    preference_list->row_selected = connection_preference_get(server) + 1;
+    preference_list->row_selected = connection_preference_get(preference_server) + 1;
     button_create(&button_use);
     button_use.texture = texture_get(TEXTURE_TYPE_CLIENT, "button_large");
     button_use.texture_over = texture_get(TEXTURE_TYPE_CLIENT, "button_large_over");
     button_use.texture_pressed = texture_get(TEXTURE_TYPE_CLIENT, "button_large_down");
+    return true;
+}
+
+void connection_preference_popup_deinit(void) {
+    if (preference_popup != NULL) {
+        popup_destroy(preference_popup);
+    } else {
+        preference_server_free();
+    }
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+bool connection_preference_test_pending(void) {
+    return preference_server != NULL && preference_popup == NULL;
+}
+
+bool connection_preference_test_active(void) {
+    return preference_server != NULL && preference_popup != NULL;
+}
+#endif
+
+void connection_preference_open(server_struct *server) {
+    HARD_ASSERT(server != NULL);
+
+    if (preference_popup != NULL) {
+        popup_destroy(preference_popup);
+    } else {
+        preference_server_free();
+    }
+
+    preference_server = xcalloc(1, sizeof(*preference_server));
+    preference_server->name = xstrdup(server->name);
+    if (server->hostname != NULL) {
+        preference_server->hostname = xstrdup(server->hostname);
+    }
+    if (server->server_id != NULL) {
+        preference_server->server_id = xstrdup(server->server_id);
+    }
+    preference_server->port = server->port;
+    (void)connection_preference_recover();
 }

@@ -365,9 +365,7 @@ static void list_post_column(list_struct *list, uint32_t row, uint32_t col) {
         dst.w = 150;
         dst.h = LIST_ROW_HEIGHT(list) - 2;
 
-        SDL_FillSurfaceRect(list->surface,
-                            &dst,
-                            pixel_format_map_rgb(list->surface->format, 0, 0, 0));
+        surface_fill_rect(list->surface, &dst, surface_map_rgb(list->surface, 0, 0, 0));
 
         if (setting->type == OPT_TYPE_SELECT) {
             text_show(list->surface,
@@ -804,6 +802,9 @@ void settings_client_open(void) {
     setting_category_selected = 0;
 
     popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));
+    if (popup == NULL) {
+        return;
+    }
     popup->draw_func = popup_draw;
     popup->event_func = popup_event;
     popup->destroy_callback_func = popup_destroy_callback;

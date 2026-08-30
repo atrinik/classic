@@ -36,6 +36,10 @@ extern void video_init(void);
 
 extern int video_get_bpp(void);
 
+extern int video_get_width(void);
+
+extern int video_get_height(void);
+
 extern void video_set_icon(SDL_Surface *icon);
 
 extern int video_set_size(void);

@@ -58,11 +58,20 @@
  */
 #define MAP_RENDER_OVERSCAN 2
 
+/** Supported user-visible look-size range. */
+#define MAP_LOOK_SIZE_MIN 9
+#define MAP_LOOK_SIZE_DEFAULT 17
+#define MAP_LOOK_SIZE_MAX 17
+
 /** Convert a user-selected logical look size to the map protocol size. */
 #define MAP_LOOK_TO_WIRE_SIZE(_size) ((_size) + MAP_RENDER_OVERSCAN * 2)
 
 /** Convert a map protocol size back to the user-selected logical look size. */
 #define MAP_WIRE_TO_LOOK_SIZE(_size) ((_size) - MAP_RENDER_OVERSCAN * 2)
+
+/** Supported MAP protocol-size range after adding render overscan. */
+#define MAP_WIRE_SIZE_MIN MAP_LOOK_TO_WIRE_SIZE(MAP_LOOK_SIZE_MIN)
+#define MAP_WIRE_SIZE_MAX MAP_LOOK_TO_WIRE_SIZE(MAP_LOOK_SIZE_MAX)
 
 /**
  * @defgroup LAYER_xxx Layer types
@@ -204,227 +213,13 @@ typedef struct _mapdata {
     struct region_map *region_map;
 } _mapdata;
 
-/**
- * Map cell structure.
- */
-typedef struct MapCell {
-    /** Name of the living object on each sub-layer. */
-    char pname[NUM_SUB_LAYERS][64];
-
-    /** Living-object name color on each sub-layer. */
-    char pcolor[NUM_SUB_LAYERS][COLOR_BUF];
-
-    /** Position. */
-    uint8_t quick_pos[NUM_REAL_LAYERS];
-
-    /** Target HP percentage for the living object on each sub-layer. */
-    uint8_t probe[NUM_SUB_LAYERS];
-
-    /** Pre-tone Q5.11 scalar radiance for each sub-layer. */
-    uint16_t light_radiance[NUM_SUB_LAYERS];
-
-    /** Whether each light level has been received from the server. */
-    uint8_t light_known[NUM_SUB_LAYERS];
-
-    /** Pre-tone Q5.11 RGB radiance for each sub-layer. */
-    uint16_t light_rgb_radiance[NUM_SUB_LAYERS][3];
-
-    /** Bitmap of sub-layers whose RGB state is explicitly colored. */
-    uint8_t light_rgb_explicit;
-
-    /** Next authoritative scalar endpoint for each sub-layer. */
-    uint16_t light_next_radiance[NUM_SUB_LAYERS];
-
-    /** Whether each next endpoint is explicitly established. */
-    uint8_t light_next_known[NUM_SUB_LAYERS];
-
-    /** Next authoritative RGB endpoint for each sub-layer. */
-    uint16_t light_next_rgb_radiance[NUM_SUB_LAYERS][3];
-
-    /** Bitmap of sub-layers with explicitly colored next endpoints. */
-    uint8_t light_next_rgb_explicit;
-
-    /** Timed-light generation and absolute interpolation interval. */
-    uint64_t light_keyframe_generation;
-    uint64_t light_keyframe_start_seconds;
-    uint64_t light_keyframe_end_seconds;
-    uint8_t light_keyframe_flags;
-    uint8_t light_keyframe_valid;
-
-    /** Object flags. */
-    uint8_t flags[NUM_REAL_LAYERS];
-
-    /** Whether fogged geometry is an authoritative structural boundary. */
-    uint8_t structural_fow;
-
-    /** Whether terrain stretch must be recomputed for this cell. */
-    uint8_t stretch_dirty;
-
-    /** Topmost nonzero floor height, cached for negative terrain seams. */
-    int16_t stretch_top_height;
-
-    /** Topmost nonzero floor height above the base sub-layer. */
-    int16_t stretch_upper_height;
-
-    /** Maximum nonnegative floor elevation supporting linked upper levels. */
-    int16_t level_support_height;
-
-    /** Server-provided base-map elevation used to project linked upper levels. */
-    int16_t structural_support_height;
-
-    /** Maximum floor/effect elevation used for screen-space rejection. */
-    int16_t render_max_height;
-
-    /** Whether a wall-layer object is a roof/camera surface. */
-    uint8_t roof[NUM_REAL_LAYERS];
-
-    /** Door bits for each object layer, grouped by sub-layer. */
-    uint8_t door[NUM_SUB_LAYERS];
-
-    /** Object-layer bitmap identifying visible map transitions. */
-    uint8_t exit[NUM_SUB_LAYERS];
-
-    /** Double drawing. */
-    uint8_t draw_double[NUM_REAL_LAYERS];
-
-    /** Alpha value. */
-    uint8_t alpha[NUM_REAL_LAYERS];
-
-    /** Presentation-only visibility transitions for transient layers. */
-    map_visibility_fade_t visibility[NUM_REAL_LAYERS];
-
-    /** Faces. */
-    int16_t faces[NUM_REAL_LAYERS];
-
-    /** Height of this maptile. */
-    int16_t height[NUM_REAL_LAYERS];
-
-    /** Zoom X. */
-    int16_t zoom_x[NUM_REAL_LAYERS];
-
-    /** Zoom Y. */
-    int16_t zoom_y[NUM_REAL_LAYERS];
-
-    /** Align. */
-    int16_t align[NUM_REAL_LAYERS];
-
-    /** Rotate. */
-    int16_t rotate[NUM_REAL_LAYERS];
-
-    /** Whether to show the object in red. */
-    uint8_t infravision[NUM_REAL_LAYERS];
-
-    /** How we stretch this is really 8 char for N S E W. */
-    int32_t stretch[NUM_SUB_LAYERS];
-
-    /** Targetable living-object ID on each sub-layer. */
-    uint32_t target_object_count[NUM_SUB_LAYERS];
-
-    /** Whether the targetable living object on each sub-layer is a friend. */
-    uint8_t target_is_friend[NUM_SUB_LAYERS];
-
-    uint8_t anim_last[NUM_REAL_LAYERS];
-
-    uint8_t anim_speed[NUM_REAL_LAYERS];
-
-    uint8_t anim_facing[NUM_REAL_LAYERS];
-
-    uint8_t anim_state[NUM_REAL_LAYERS];
-
-    uint8_t anim_flags[NUM_SUB_LAYERS];
-
-    /**
-     * Whether Fog of War is enabled on this cell.
-     */
+/** Opaque change token for one decoded cache coordinate. */
+typedef struct map_cell_snapshot {
+    uint64_t content_hash;
+    int16_t support_height;
     uint8_t fow;
-
-    uint8_t priority[NUM_SUB_LAYERS];
-
-    uint8_t secondpass[NUM_SUB_LAYERS];
-
-    char glow[NUM_REAL_LAYERS][COLOR_BUF];
-    uint8_t glow_speed[NUM_REAL_LAYERS];
-    uint8_t glow_state[NUM_REAL_LAYERS];
-} MapCell;
-
-/** Clear live presentation while retaining all remembered map geometry. */
-static inline void map_cell_clear_live_state(MapCell *cell) {
-    HARD_ASSERT(cell != NULL);
-    uint8_t remembered_layer_mask = 0;
-
-    for (int object_layer = 1; object_layer <= NUM_LAYERS; object_layer++) {
-        if (map_layer_is_remembered((uint8_t)object_layer)) {
-            remembered_layer_mask |= UINT8_C(1) << (object_layer - 1);
-        }
-    }
-    uint8_t live_layer_mask = (uint8_t)~remembered_layer_mask;
-
-    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-        cell->door[sub_layer] &= (uint8_t)~live_layer_mask;
-        cell->exit[sub_layer] &= (uint8_t)~live_layer_mask;
-        cell->priority[sub_layer] &= (uint8_t)~live_layer_mask;
-        cell->secondpass[sub_layer] &= (uint8_t)~live_layer_mask;
-        cell->anim_flags[sub_layer] = 0;
-        cell->probe[sub_layer] = 0;
-        cell->target_object_count[sub_layer] = 0;
-        cell->target_is_friend[sub_layer] = 0;
-        cell->pname[sub_layer][0] = '\0';
-        cell->pcolor[sub_layer][0] = '\0';
-    }
-
-    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-        for (int object_layer = 1; object_layer <= NUM_LAYERS; object_layer++) {
-            if (map_layer_is_remembered((uint8_t)object_layer)) {
-                continue;
-            }
-
-            int layer = GET_MAP_LAYER(object_layer, sub_layer);
-            /* A live transient may be in its bounded fade-out window after
-             * the authoritative record was cleared. Keep its presentation
-             * payload until the visibility clock expires it. */
-            if (cell->visibility[layer].initialized && cell->visibility[layer].alpha != 0) {
-                continue;
-            }
-            cell->faces[layer] = 0;
-            cell->flags[layer] = 0;
-            cell->roof[layer] = 0;
-            cell->quick_pos[layer] = 0;
-            cell->height[layer] = 0;
-            cell->zoom_x[layer] = 0;
-            cell->zoom_y[layer] = 0;
-            cell->align[layer] = 0;
-            cell->rotate[layer] = 0;
-            cell->infravision[layer] = 0;
-            cell->draw_double[layer] = 0;
-            cell->alpha[layer] = 0;
-            memset(&cell->visibility[layer], 0, sizeof(cell->visibility[layer]));
-            cell->anim_last[layer] = 0;
-            cell->anim_speed[layer] = 0;
-            cell->anim_facing[layer] = 0;
-            cell->anim_state[layer] = 0;
-            cell->glow[layer][0] = '\0';
-            cell->glow_speed[layer] = 0;
-            cell->glow_state[layer] = 0;
-        }
-    }
-}
-
-/** Discard presentation light knowledge while retaining the scalar cache value. */
-static inline void map_cell_clear_light_state(MapCell *cell) {
-    HARD_ASSERT(cell != NULL);
-    memset(cell->light_known, 0, sizeof(cell->light_known));
-    memset(cell->light_rgb_radiance, 0, sizeof(cell->light_rgb_radiance));
-    cell->light_rgb_explicit = 0;
-    memset(cell->light_next_radiance, 0, sizeof(cell->light_next_radiance));
-    memset(cell->light_next_known, 0, sizeof(cell->light_next_known));
-    memset(cell->light_next_rgb_radiance, 0, sizeof(cell->light_next_rgb_radiance));
-    cell->light_next_rgb_explicit = 0;
-    cell->light_keyframe_generation = 0;
-    cell->light_keyframe_start_seconds = 0;
-    cell->light_keyframe_end_seconds = 0;
-    cell->light_keyframe_flags = 0;
-    cell->light_keyframe_valid = 0;
-}
+    uint8_t structural_fow;
+} map_cell_snapshot_t;
 
 #define MAP_STARTX map_width *(MAP_FOW_SIZE / 2)
 #define MAP_STARTY map_height *(MAP_FOW_SIZE / 2)
@@ -575,12 +370,28 @@ extern void map_set_data(int x,
 extern bool map_select_level(int depth, bool create);
 
 extern void map_set_level_mask(uint16_t mask);
+/** Return the published/staged physical-level mask. */
+extern uint16_t map_get_level_mask(void);
+/** Return the number of physical levels in the published map generation. */
+extern unsigned int map_active_level_count(void);
 
 /** Copy one decoded map cell for packet change detection. */
-extern void map_cell_snapshot(int x, int y, MapCell *snapshot);
+extern void map_cell_snapshot(int x, int y, map_cell_snapshot_t *snapshot);
 
 /** Return whether a decoded map cell differs from a prior snapshot. */
-extern bool map_cell_changed(int x, int y, const MapCell *snapshot);
+extern bool map_cell_changed(int x, int y, const map_cell_snapshot_t *snapshot);
+#ifdef ATRINIK_WIDGET_TESTS
+/** Verify maximum configured/all-depth sparse empty-state and proportional-record bounds. */
+bool widget_map_sparse_state_test(void);
+/** Verify repeated MAP transaction abort restores compact headers and allocations. */
+bool widget_map_transaction_abort_test(void);
+/** Verify timed-light staging covers every tile at the protocol wire ceiling. */
+bool widget_map_light_keyframe_capacity_test(void);
+/** Verify timed-light redraw and FOW extension use the interpolated endpoint. */
+bool widget_map_temporal_lighting_test(void);
+/** Verify the complete negotiated overscan window remains a render candidate. */
+bool widget_map_projection_contract_test(void);
+#endif
 
 extern void map_level_scroll(int dz);
 
@@ -606,17 +417,17 @@ extern void map_set_light_keyframe(int x,
                                    uint8_t rgb_bitmap,
                                    const uint16_t rgb[NUM_SUB_LAYERS][3]);
 extern bool map_light_keyframe_transaction_begin(uint64_t generation,
-                                                  uint64_t start_seconds,
-                                                  uint64_t end_seconds,
-                                                  uint8_t flags);
+                                                 uint64_t start_seconds,
+                                                 uint64_t end_seconds,
+                                                 uint8_t flags);
 extern bool map_light_keyframe_transaction_pending(void);
 extern bool map_light_keyframe_transaction_stage(int depth,
-                                                  int x,
-                                                  int y,
-                                                  uint8_t scalar_bitmap,
-                                                  const uint16_t scalar[NUM_SUB_LAYERS],
-                                                  uint8_t rgb_bitmap,
-                                                  const uint16_t rgb[NUM_SUB_LAYERS][3]);
+                                                 int x,
+                                                 int y,
+                                                 uint8_t scalar_bitmap,
+                                                 const uint16_t scalar[NUM_SUB_LAYERS],
+                                                 uint8_t rgb_bitmap,
+                                                 const uint16_t rgb[NUM_SUB_LAYERS][3]);
 extern void map_light_keyframe_transaction_commit(void);
 extern void map_light_keyframe_transaction_abort(void);
 
@@ -624,6 +435,8 @@ extern void map_light_keyframe_transaction_abort(void);
 extern void map_state_transaction_begin(bool full_snapshot);
 extern void map_state_transaction_commit(void);
 extern void map_state_transaction_abort(void);
+/** Return whether a multi-envelope MAP2 publication is still staged. */
+extern bool map_state_transaction_active(void);
 
 extern void map_animate(void);
 
@@ -644,7 +457,7 @@ extern void map_redraw_request(map_redraw_reason_t reason);
 /** Return whether the production widget would rebuild its primary map surface. */
 extern bool map_redraw_due(void);
 
-/** Return whether changed animation output needs an object-only map pass. */
+/** Return whether changed animation output needs a GPU map pass. */
 extern bool map_animation_redraw_due(void);
 
 /** Return the reasons accumulated for the pending primary-map redraw. */
@@ -653,13 +466,12 @@ extern uint32_t map_redraw_pending_reasons(void);
 /** Mark the pending primary-map redraw as consumed. */
 extern void map_redraw_consume(void);
 
-/** Mark an object-only animation pass as consumed. */
+/** Mark an animation-only invalidation as consumed. */
 extern void map_animation_redraw_consume(void);
 
 extern void map_draw_map(SDL_Surface *surface);
-
-/** Repaint map objects over the cached lit ground without rebuilding static levels. */
-extern bool map_draw_animation(SDL_Surface *surface);
+/** Draw an auxiliary view through the mandatory raw GPU map path. */
+void map_draw_map_gpu_auxiliary(SDL_Surface *surface);
 
 /** Draw the current world-pointer cue over the completed map composition. */
 extern void map_draw_pointer_overlay(void);
@@ -676,7 +488,7 @@ extern void map_draw_pointer_overlay(void);
  */
 extern bool map_pointer_overlay_visible_at(int x, int y);
 
-#define MAP_BENCHMARK_STATISTICS_VERSION UINT8_C(3)
+#define MAP_BENCHMARK_STATISTICS_VERSION UINT8_C(7)
 
 /** Map renderer work accumulated since the last benchmark reset. */
 typedef struct map_benchmark_statistics {
@@ -694,12 +506,36 @@ typedef struct map_benchmark_statistics {
     uint64_t render_commands;
     uint64_t annotations;
     uint64_t ui_tiles;
+    uint64_t temporal_light_samples;
+    uint64_t borrowed_light_samples;
+    uint64_t borrowed_temporal_light_samples;
+    uint64_t stretched_commands;
+    uint64_t double_commands;
+    uint64_t living_commands;
+    uint64_t door_commands;
+    uint64_t roof_commands;
+    uint64_t primary_frames_with_stretch;
+    uint64_t primary_frames_with_living;
+    uint64_t primary_frames_with_door;
+    uint64_t primary_frames_with_roof;
+    uint64_t animation_reason_draws;
+    uint64_t animation_command_transitions;
+    /** Records compiled because their cell/projection cohort changed. */
+    uint64_t compiled_render_commands;
+    /** Stable records reused directly by animation-only frames. */
+    uint64_t reused_render_commands;
+    uint16_t command_depth_mask;
+    uint16_t living_depth_mask;
+    uint16_t door_depth_mask;
+    uint16_t roof_depth_mask;
     uint64_t peak_render_commands;
     uint64_t peak_active_levels;
     /** False until the complete renderer allocation graph can be observed safely. */
     bool renderer_allocation_statistics_available;
     uint64_t renderer_allocations;
     uint64_t renderer_allocation_bytes;
+    uint64_t renderer_retained_bytes;
+    uint64_t renderer_peak_retained_bytes;
 } map_benchmark_statistics_t;
 
 void map_benchmark_statistics_reset(void);
@@ -718,23 +554,6 @@ extern bool map_mouse_fire(void);
 extern void widget_map_init(widgetdata *widget);
 
 #ifdef ATRINIK_WIDGET_TESTS
-typedef enum map_benchmark_fault {
-    MAP_BENCHMARK_FAULT_NONE,
-    MAP_BENCHMARK_FAULT_MUTABLE_RLE,
-} map_benchmark_fault_t;
-
-typedef struct map_benchmark_fault_status {
-    bool injected;
-    bool detected;
-} map_benchmark_fault_status_t;
-
-/** Configure one movement-benchmark-only renderer fault. */
-extern void map_benchmark_fault_configure(map_benchmark_fault_t fault);
-/** Read fault state independently of per-phase telemetry resets. */
-extern void map_benchmark_fault_status_get(map_benchmark_fault_status_t *status);
-/** Remove any armed mutation and restore normal renderer state. */
-extern void map_benchmark_fault_clear(void);
-
 extern bool widget_map_interaction_test(widgetdata *widget);
 /** Verify click-to-move hit-testing across fogged and empty map cells. */
 extern bool widget_map_fog_click_test(widgetdata *widget);
@@ -750,6 +569,8 @@ extern bool widget_map_animation_test_end(bool expect_damage,
 extern void widget_map_animation_test_death_texture_set(SDL_Surface *texture);
 /** Verify player-centered transient visibility targets in the real map path. */
 extern bool widget_map_visibility_test(void);
+/** Toggle the centered transient cohort for retained insertion/deletion evidence. */
+extern bool widget_map_retained_visibility_test_set(bool visible);
 /** Set the synthetic pointer owner used by the cursor redraw benchmark. */
 extern void widget_map_pointer_test_set(int x, int y, bool world_pointer);
 extern void widget_map_animation_test_add(int type,
@@ -774,6 +595,11 @@ extern void widget_map_animation_test_add(int type,
 #define MINIMAP_DYNAMIC_SURFACE_HEIGHT MINIMAP_DYNAMIC_LEGACY_SURFACE_HEIGHT
 
 extern bool minimap_redraw_due(void);
+
+/** Force the next minimap draw to rebuild its retained GPU canvas. */
+extern void minimap_redraw_force(void);
+/** Hide any retained minimap from a superseded map/session generation. */
+extern void minimap_invalidate_map_generation(void);
 
 extern void widget_minimap_init(widgetdata *widget);
 

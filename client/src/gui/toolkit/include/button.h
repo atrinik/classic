@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -148,6 +148,9 @@ extern void button_set_font(button_struct *button, font_struct *font);
 extern int button_need_redraw(button_struct *button);
 
 extern void button_show(button_struct *button, const char *text);
+
+/** Render a button directly on the GPU root canvas. */
+extern void button_show_root(button_struct *button, const char *text);
 
 extern int button_event(button_struct *button, SDL_Event *event);
 

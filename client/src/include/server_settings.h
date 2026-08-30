@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -101,5 +101,9 @@ extern server_settings *s_settings;
 extern void server_settings_init(void);
 
 extern void server_settings_deinit(void);
+#ifdef ATRINIK_WIDGET_TESTS
+/** Install deterministic complete server metadata for production UI fixtures. */
+extern void server_settings_test_init(void);
+#endif
 
 #endif

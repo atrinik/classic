@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -540,7 +540,7 @@ void textwin_handle_copy(widgetdata *widget) {
  * @param h
  * Maximum height.
  */
-void textwin_show(SDL_Surface *surface, int x, int y, int w, int h) {
+static void textwin_show_impl(SDL_Surface *surface, bool render_root, int x, int y, int w, int h) {
     widgetdata *widget;
     textwin_struct *textwin;
     size_t i;
@@ -570,7 +570,7 @@ void textwin_show(SDL_Surface *surface, int x, int y, int w, int h) {
                 box.y = y;
                 box.w = w;
                 box.h = h;
-                SDL_FillSurfaceRect(surface, &box, pixel_format_map_rgb(surface->format, 0, 0, 0));
+                surface_fill_rect(surface, &box, surface_map_rgb(surface, 0, 0, 0));
                 draw_frame(surface, x, y, box.w, box.h);
 
                 box.w = w - 3;
@@ -578,18 +578,36 @@ void textwin_show(SDL_Surface *surface, int x, int y, int w, int h) {
 
                 box.y = MAX(0, scroll - (h / FONT_HEIGHT(textwin->font)));
 
-                text_show(surface,
-                          textwin->font,
-                          textwin->tabs[i].entries,
-                          x + 3,
-                          y + 1,
-                          COLOR_BLACK,
-                          TEXTWIN_TEXT_FLAGS(widget) | TEXT_LINES_SKIP,
-                          &box);
+                if (render_root) {
+                    text_show_root(textwin->font,
+                                   textwin->tabs[i].entries,
+                                   x + 3,
+                                   y + 1,
+                                   COLOR_BLACK,
+                                   TEXTWIN_TEXT_FLAGS(widget) | TEXT_LINES_SKIP,
+                                   &box);
+                } else {
+                    text_show(surface,
+                              textwin->font,
+                              textwin->tabs[i].entries,
+                              x + 3,
+                              y + 1,
+                              COLOR_BLACK,
+                              TEXTWIN_TEXT_FLAGS(widget) | TEXT_LINES_SKIP,
+                              &box);
+                }
                 break;
             }
         }
     }
+}
+
+void textwin_show(SDL_Surface *surface, int x, int y, int w, int h) {
+    textwin_show_impl(surface, false, x, y, w, h);
+}
+
+void textwin_show_root(int x, int y, int w, int h) {
+    textwin_show_impl(NULL, true, x, y, w, h);
 }
 
 int textwin_tabs_height(widgetdata *widget) {
@@ -658,6 +676,10 @@ static void widget_draw(widgetdata *widget) {
                                              0,
                                              0,
                                              0);
+        if (!gpu_renderer_canvas_register(&widget->surface)) {
+            LOG(ERROR, "Could not create retained GPU text-window target: %s", SDL_GetError());
+            return;
+        }
         SDL_SetSurfaceColorKey(widget->surface, true, 0);
         textwin_readjust(widget);
     }
@@ -670,7 +692,7 @@ static void widget_draw(widgetdata *widget) {
                              &bg_color)) {
             Uint32 color = ((uint32_t)bg_color.r << 24) | ((uint32_t)bg_color.g << 16) |
                            ((uint32_t)bg_color.b << 8) | (uint32_t)alpha;
-            filledRectAlpha(ScreenSurface,
+            filledRectAlpha(OfflineRenderSurface,
                             widget->x,
                             widget->y,
                             widget->x + widget->w - 1,
@@ -681,7 +703,7 @@ static void widget_draw(widgetdata *widget) {
 
     /* Let's draw the widgets in the backbuffer */
     if (widget->redraw) {
-        SDL_FillSurfaceRect(widget->surface, NULL, 0);
+        surface_fill_rect(widget->surface, NULL, 0);
 
         if (textwin->tabs) {
             int yadjust;
@@ -791,13 +813,13 @@ static void widget_draw(widgetdata *widget) {
 
     box.x = widget->x;
     box.y = widget->y;
-    SDL_BlitSurface(widget->surface, NULL, ScreenSurface, &box);
+    surface_show(OfflineRenderSurface, box.x, box.y, NULL, widget->surface);
 
     box.x = widget->x;
     box.y = widget->y;
     box.w = widget->w;
     box.h = widget->h;
-    border_create_texture(ScreenSurface, &box, 1, TEXTURE_CLIENT("widget_border"));
+    border_create_texture(OfflineRenderSurface, &box, 1, TEXTURE_CLIENT("widget_border"));
 }
 
 /** @copydoc widgetdata::background_func */

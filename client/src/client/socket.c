@@ -312,6 +312,7 @@ int handle_socket_shutdown(void) {
         SDL_UnlockMutex(socket_mutex);
 
         /* Empty all queues */
+        client_command_retry_clear();
         client_command_queue_clear();
         bool input_statistics_reset = client_command_queue_statistics_reset();
         HARD_ASSERT(input_statistics_reset);
@@ -327,6 +328,22 @@ int handle_socket_shutdown(void) {
 
     return 0;
 }
+
+bool client_socket_shutdown_pending(void) {
+    return socket_mutex != NULL && socket_thread_aborted();
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+void client_socket_shutdown_test_set(bool pending) {
+    if (socket_mutex == NULL) {
+        socket_mutex = SDL_CreateMutex();
+        HARD_ASSERT(socket_mutex != NULL);
+    }
+    SDL_LockMutex(socket_mutex);
+    abort_thread = pending;
+    SDL_UnlockMutex(socket_mutex);
+}
+#endif
 
 bool client_socket_active(void) {
     if (socket_mutex == NULL) {
@@ -393,6 +410,7 @@ void client_socket_deinitialize(void) {
     } else if (csocket.sc != NULL) {
         client_socket_close(&csocket);
     }
+    client_command_retry_clear();
     client_command_queue_deinitialize();
     if (output_buffer_mutex != NULL) {
         SDL_DestroyMutex(output_buffer_mutex);

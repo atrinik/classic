@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -59,8 +59,8 @@ typedef struct popup_button {
 /** A single popup. */
 typedef struct popup_struct {
     /**
-     * Surface the popup uses for drawing. This surface is then copied
-     * to ::ScreenSurface.
+     * Surface the popup uses for immutable content construction. It is then
+     * submitted as a retained GPU texture.
      */
     SDL_Surface *surface;
 
@@ -175,6 +175,9 @@ extern void game_news_open(const char *title);
 /** Public API implemented in src/gui/misc/intro.c. */
 
 extern void intro_deinit(void);
+#ifdef ATRINIK_WIDGET_TESTS
+extern void intro_test_begin(void);
+#endif
 
 extern void intro_show(void);
 
@@ -182,13 +185,17 @@ extern int intro_event(SDL_Event *event);
 
 /** Public API implemented in src/gui/popups/characters.c. */
 
-extern void characters_open(void);
+/** Open a fully initialized character chooser, or return false on canvas failure. */
+extern bool characters_open(void);
 
 extern void socket_command_characters(uint8_t *data, size_t len, size_t pos);
 
 /** Public API implemented in src/gui/popups/credits.c. */
 
 extern void credits_show(void);
+#ifdef ATRINIK_WIDGET_TESTS
+extern void credits_test_show(const char *message);
+#endif
 
 /** Public API implemented in src/gui/popups/help.c. */
 
@@ -209,10 +216,16 @@ extern void join_password_open(server_struct *server);
 /** Public API implemented in src/gui/popups/login.c. */
 
 extern void login_start(void);
+#ifdef ATRINIK_WIDGET_TESTS
+extern bool login_test_form_rendered(void);
+#endif
 
 /** Public API implemented in src/gui/popups/painting.c. */
 
 void socket_command_painting(uint8_t *data, size_t len, size_t pos);
+#ifdef ATRINIK_WIDGET_TESTS
+extern bool popup_painting_test_viewport_rendered(void);
+#endif
 
 /** Public API implemented in src/gui/popups/server_add.c. */
 
@@ -222,9 +235,24 @@ extern void server_add_open(void);
 
 extern void connection_preference_open(server_struct *server);
 
+/** Release active or pending connection-preference popup state. */
+extern void connection_preference_popup_deinit(void);
+
+/** Recreate a pending connection-preference popup after GPU recovery. */
+extern bool connection_preference_recover(void);
+#ifdef ATRINIK_WIDGET_TESTS
+extern bool connection_preference_test_pending(void);
+extern bool connection_preference_test_active(void);
+#endif
+
 /** Public API implemented in src/gui/toolkit/popup.c. */
 
+/** Create a popup, or return NULL when its retained GPU canvas cannot be created. */
 extern popup_struct *popup_create(texture_struct *texture);
+#ifdef ATRINIK_WIDGET_TESTS
+/** Make the next production popup take its surface-allocation failure path. */
+extern void popup_test_surface_allocation_fail_once(void);
+#endif
 
 extern void popup_destroy(popup_struct *popup);
 
@@ -252,5 +280,8 @@ extern popup_struct *popup_get_head(void);
 extern void popup_button_set_text(popup_button *button, const char *text);
 
 extern int popup_need_redraw(void);
+
+/** Mark every popup canvas dirty after GPU resource reconstruction. */
+extern void popup_redraw_all(void);
 
 #endif

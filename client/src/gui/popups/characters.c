@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -150,8 +150,8 @@ static void list_post_column(list_struct *list, uint32_t row, uint32_t col) {
         }
         idx = list->row_selected - 1 == row ? 1 : 0;
 
-        if (SDL_GetTicks() - ticks[idx] > 500) {
-            ticks[idx] = SDL_GetTicks();
+        if (client_ui_ticks() - ticks[idx] > 500) {
+            ticks[idx] = client_ui_ticks();
             state[idx]++;
         }
 
@@ -623,13 +623,15 @@ static int popup_destroy_callback(popup_struct *popup) {
 /**
  * Open the characters chooser popup.
  */
-void characters_open(void) {
+bool characters_open(void) {
     popup_struct *popup;
     size_t i;
 
-    progress_dots_create(&progress);
-
     popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));
+    if (popup == NULL) {
+        return false;
+    }
+    progress_dots_create(&progress);
     popup->draw_func = popup_draw;
     popup->event_func = popup_event;
     popup->destroy_callback_func = popup_destroy_callback;
@@ -687,6 +689,7 @@ void characters_open(void) {
     list_set_column(list_characters, 0, 55, 0, NULL, -1);
     list_set_column(list_characters, 1, 150, 0, NULL, -1);
     list_scrollbar_enable(list_characters);
+    return true;
 }
 
 /**
@@ -813,7 +816,12 @@ void socket_command_characters(uint8_t *data, size_t len, size_t pos) {
     }
 
     if (cpl.state != ST_CHARACTERS) {
-        characters_open();
+        if (!characters_open()) {
+            if (!client_command_retry_current()) {
+                LOG(ERROR, "Could not retain CHARACTERS command for GPU recovery");
+            }
+            return;
+        }
         cpl.state = ST_CHARACTERS;
     }
 

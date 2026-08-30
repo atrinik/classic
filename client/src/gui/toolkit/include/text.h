@@ -368,8 +368,17 @@ extern void text_init(void);
 extern void text_deinit(void);
 
 #ifdef ATRINIK_WIDGET_TESTS
+typedef struct text_root_glyph_statistics {
+    uint64_t count;
+    uint64_t semantic_hash;
+} text_root_glyph_statistics_t;
+
 extern void text_test_font_path_set(const char *path);
 extern void text_test_mono_font_path_set(const char *path);
+extern void text_root_glyph_statistics_reset(void);
+extern void text_root_glyph_statistics_get(text_root_glyph_statistics_t *statistics);
+extern void text_root_glyph_test_suppress_once(void);
+extern bool text_test_measurement_preserves_selection(font_struct *font);
 #endif
 
 extern void text_offset_set(int x, int y);
@@ -397,6 +406,7 @@ extern void text_show_character_init(text_info_struct *info);
 extern int text_show_character(font_struct **font,
                                font_struct *orig_font,
                                SDL_Surface *surface,
+                               bool render,
                                SDL_Rect *dest,
                                const char *cp,
                                SDL_Color *color,
@@ -421,6 +431,14 @@ extern void text_show(SDL_Surface *surface,
                       uint64_t flags,
                       SDL_Rect *box);
 
+extern void text_show_root(font_struct *font,
+                           const char *text,
+                           int x,
+                           int y,
+                           const char *color_notation,
+                           uint64_t flags,
+                           SDL_Rect *box);
+
 extern void text_show_shadow(SDL_Surface *surface,
                              font_struct *font,
                              const char *text,
@@ -430,6 +448,15 @@ extern void text_show_shadow(SDL_Surface *surface,
                              const char *color_shadow_notation,
                              uint64_t flags,
                              SDL_Rect *box);
+
+extern void text_show_shadow_root(font_struct *font,
+                                  const char *text,
+                                  int x,
+                                  int y,
+                                  const char *color_notation,
+                                  const char *color_shadow_notation,
+                                  uint64_t flags,
+                                  SDL_Rect *box);
 
 extern void text_show_format(SDL_Surface *surface,
                              font_struct *font,
@@ -441,6 +468,15 @@ extern void text_show_format(SDL_Surface *surface,
                              const char *format,
                              ...) __attribute__((format(printf, 8, 9)));
 
+extern void text_show_format_root(font_struct *font,
+                                  int x,
+                                  int y,
+                                  const char *color_notation,
+                                  uint64_t flags,
+                                  SDL_Rect *box,
+                                  const char *format,
+                                  ...) __attribute__((format(printf, 7, 8)));
+
 extern void text_show_shadow_format(SDL_Surface *surface,
                                     font_struct *font,
                                     int x,
@@ -451,6 +487,16 @@ extern void text_show_shadow_format(SDL_Surface *surface,
                                     SDL_Rect *box,
                                     const char *format,
                                     ...) __attribute__((format(printf, 9, 10)));
+
+extern void text_show_shadow_format_root(font_struct *font,
+                                         int x,
+                                         int y,
+                                         const char *color_notation,
+                                         const char *color_shadow_notation,
+                                         uint64_t flags,
+                                         SDL_Rect *box,
+                                         const char *format,
+                                         ...) __attribute__((format(printf, 8, 9)));
 
 extern int text_get_width(font_struct *font, const char *text, uint64_t flags);
 

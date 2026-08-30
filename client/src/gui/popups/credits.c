@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -80,9 +80,9 @@ static int popup_draw_func(popup_struct *popup) {
               TEXT_WORD_WRAP | TEXT_MARKUP | TEXT_HEIGHT,
               &box);
 
-    if (SDL_GetTicks() - credits_ticks > CREDITS_SCROLL_TICKS) {
+    if (client_ui_ticks() - credits_ticks > CREDITS_SCROLL_TICKS) {
         credits_scroll++;
-        credits_ticks = SDL_GetTicks();
+        credits_ticks = client_ui_ticks();
     }
 
     return credits_scroll < credits_height;
@@ -103,7 +103,7 @@ void credits_show(void) {
     }
 
     credits_scroll = 0;
-    credits_ticks = SDL_GetTicks();
+    credits_ticks = client_ui_ticks();
 
     /* Calculate the height. */
     box.w = CREDITS_WIDTH;
@@ -119,5 +119,36 @@ void credits_show(void) {
     credits_height = box.h;
 
     popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));
+    if (popup == NULL) {
+        return;
+    }
     popup->draw_func = popup_draw_func;
 }
+
+#ifdef ATRINIK_WIDGET_TESTS
+void credits_test_show(const char *message) {
+    static hfile_struct test_contributors;
+    HARD_ASSERT(message != NULL);
+    test_contributors.msg = (char *)message;
+    test_contributors.msg_len = strlen(message);
+    hfile_contributors = &test_contributors;
+
+    SDL_Rect box = {.w = CREDITS_WIDTH, .h = CREDITS_HEIGHT};
+    credits_scroll = 0;
+    credits_ticks = client_ui_ticks();
+    text_show(NULL,
+              FONT_ARIAL11,
+              hfile_contributors->msg,
+              0,
+              0,
+              COLOR_BLACK,
+              TEXT_WORD_WRAP | TEXT_MARKUP | TEXT_HEIGHT,
+              &box);
+    credits_height = box.h;
+    popup_struct *popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));
+    if (popup == NULL) {
+        return;
+    }
+    popup->draw_func = popup_draw_func;
+}
+#endif

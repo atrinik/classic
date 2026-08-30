@@ -62,21 +62,46 @@ macro(atrinik_initialize_version_metadata)
 
     set(ATRINIK_BENCHMARK_REVISION "$ENV{ATRINIK_BENCHMARK_REVISION}")
     if (ATRINIK_BENCHMARK_REVISION STREQUAL "")
-        set(ATRINIK_BENCHMARK_REVISION "unknown")
+        execute_process(
+            COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}"
+                rev-parse --verify HEAD
+            OUTPUT_VARIABLE ATRINIK_BENCHMARK_REVISION
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+            RESULT_VARIABLE benchmark_revision_result)
+        if (NOT benchmark_revision_result EQUAL 0)
+            set(ATRINIK_BENCHMARK_REVISION "unknown")
+        endif ()
     endif ()
     string(LENGTH "${ATRINIK_BENCHMARK_REVISION}"
         ATRINIK_BENCHMARK_REVISION_LENGTH)
     if (NOT ATRINIK_BENCHMARK_REVISION STREQUAL "unknown" AND
             (NOT ATRINIK_BENCHMARK_REVISION MATCHES "^[0-9A-Fa-f]+$" OR
-             ATRINIK_BENCHMARK_REVISION_LENGTH LESS 7 OR
-             ATRINIK_BENCHMARK_REVISION_LENGTH GREATER 64))
+             (NOT ATRINIK_BENCHMARK_REVISION_LENGTH EQUAL 40 AND
+              NOT ATRINIK_BENCHMARK_REVISION_LENGTH EQUAL 64)))
         message(FATAL_ERROR
-            "ATRINIK_BENCHMARK_REVISION must be unknown or a hexadecimal revision")
+            "ATRINIK_BENCHMARK_REVISION must be unknown or an exact hexadecimal revision")
     endif ()
+    string(TOLOWER "${ATRINIK_BENCHMARK_REVISION}" ATRINIK_BENCHMARK_REVISION)
 
     set(ATRINIK_BENCHMARK_DIRTY "$ENV{ATRINIK_BENCHMARK_DIRTY}")
     if (ATRINIK_BENCHMARK_DIRTY STREQUAL "")
-        set(ATRINIK_BENCHMARK_DIRTY "unknown")
+        execute_process(
+            COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}"
+                status --porcelain=v1 --untracked-files=normal
+            OUTPUT_VARIABLE benchmark_status
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+            RESULT_VARIABLE benchmark_status_result)
+        if (benchmark_status_result EQUAL 0)
+            if (benchmark_status STREQUAL "")
+                set(ATRINIK_BENCHMARK_DIRTY "false")
+            else ()
+                set(ATRINIK_BENCHMARK_DIRTY "true")
+            endif ()
+        else ()
+            set(ATRINIK_BENCHMARK_DIRTY "unknown")
+        endif ()
     endif ()
     if (NOT ATRINIK_BENCHMARK_DIRTY MATCHES "^(unknown|true|false)$")
         message(FATAL_ERROR

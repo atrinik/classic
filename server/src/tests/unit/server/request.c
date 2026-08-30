@@ -1757,7 +1757,9 @@ START_TEST(test_map_exit_semantic_accepts_usable_destination_forms_without_loadi
     mapstruct *map;
     object *pl;
     check_setup_env_pl(&map, &pl);
-    request_move_player(&pl, map, 12, 12);
+    map = get_empty_map(MAP_CLIENT_X + 8, MAP_CLIENT_Y + 8);
+    ck_assert_ptr_nonnull(map);
+    request_move_player(&pl, map, map->width / 2, map->height / 2);
     SET_FLAG(pl, FLAG_XRAYS);
     FREE_AND_COPY_HASH(map->path, "/maps/request-exit-destination-forms");
 
@@ -1889,9 +1891,40 @@ START_TEST(test_dense_colored_level_splits_at_tile_boundaries) {
 }
 END_TEST
 
+START_TEST(test_odd_view_los_matches_emitted_map_coordinates) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    mapstruct *map = get_empty_map(MAP_CLIENT_X + 8, MAP_CLIENT_Y + 8);
+    request_move_player(&pl, map, map->width / 2, map->height / 2);
+
+    socket_struct *cs = CONTR(pl)->cs;
+    cs->mapx = 21;
+    cs->mapy = 21;
+    cs->mapx_2 = cs->mapx / 2;
+    cs->mapy_2 = cs->mapy / 2;
+
+    object *wall = arch_get("wall_wood_1");
+    ck_assert_ptr_nonnull(wall);
+    wall->x = pl->x + 1;
+    wall->y = pl->y;
+    wall = object_insert_map(wall, map, NULL, 0);
+    ck_assert_ptr_nonnull(wall);
+    ck_assert(QUERY_FLAG(wall, FLAG_BLOCKSVIEW));
+
+    update_los(pl);
+
+    ck_assert_uint_ne(CONTR(pl)->blocked_los[cs->mapx_2 + 1][cs->mapy_2] & BLOCKED_LOS_BLOCKSVIEW,
+                      0);
+    ck_assert_uint_eq(CONTR(pl)->blocked_los[cs->mapx_2 + 2][cs->mapy_2] & BLOCKED_LOS_BLOCKSVIEW,
+                      0);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("request");
     TCase *tc_core = tcase_create("Core");
+    tcase_set_timeout(tc_core, 30);
 
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
@@ -1940,6 +1973,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core,
                    test_map_exit_semantic_accepts_usable_destination_forms_without_loading);
     tcase_add_test(tc_core, test_dense_colored_level_splits_at_tile_boundaries);
+    tcase_add_test(tc_core, test_odd_view_los_matches_emitted_map_coordinates);
     return s;
 }
 

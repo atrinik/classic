@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -44,16 +44,15 @@ static void widget_draw(widgetdata *widget) {
 
     box.w = widget->w;
     box.h = 0;
-    text_show_format(ScreenSurface,
-                     MAP_NAME_FONT,
-                     widget->x,
-                     widget->y,
-                     COLOR_HGOLD,
-                     TEXT_MARKUP,
-                     &box,
-                     "[alpha=%d]%s[/alpha]",
-                     widget_mapname->alpha,
-                     MapData.name);
+    text_show_format_root(MAP_NAME_FONT,
+                          widget->x,
+                          widget->y,
+                          COLOR_HGOLD,
+                          TEXT_MARKUP,
+                          &box,
+                          "[alpha=%d]%s[/alpha]",
+                          widget_mapname->alpha,
+                          MapData.name);
 }
 
 /** @copydoc widgetdata::background_func */
@@ -67,7 +66,7 @@ static void widget_background(widgetdata *widget, int draw) {
     if (MapData.name_fadeout_start || MapData.name[0] == '\0') {
         uint32_t time_passed;
 
-        time_passed = SDL_GetTicks() - MapData.name_fadeout_start;
+        time_passed = client_ui_ticks() - MapData.name_fadeout_start;
 
         if (time_passed > MAP_NAME_FADEOUT || MapData.name[0] == '\0') {
             if (MapData.name[0] != '\0') {
@@ -98,7 +97,7 @@ static void widget_background(widgetdata *widget, int draw) {
         }
     } else if (MapData.name_new[0] != '\0') {
         if (strcmp(MapData.name_new, MapData.name) != 0) {
-            MapData.name_fadeout_start = SDL_GetTicks();
+            MapData.name_fadeout_start = client_ui_ticks();
             widget->redraw = 1;
         } else {
             MapData.name_new[0] = '\0';

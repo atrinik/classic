@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -37,7 +37,7 @@
  * Where to store indicator data.
  */
 void progress_dots_create(progress_dots *progress) {
-    progress->ticks = SDL_GetTicks();
+    progress->ticks = client_ui_ticks();
     progress->dot = 0;
     progress->done = 0;
 }
@@ -64,8 +64,8 @@ void progress_dots_show(progress_dots *progress, SDL_Surface *surface, int x, in
     }
 
     /* Progress the lit dot. */
-    if (!progress->done && SDL_GetTicks() - progress->ticks > PROGRESS_DOTS_TICKS) {
-        progress->ticks = SDL_GetTicks();
+    if (!progress->done && client_ui_ticks() - progress->ticks > PROGRESS_DOTS_TICKS) {
+        progress->ticks = client_ui_ticks();
         progress->dot++;
 
         /* More than maximum, back to the first one. */

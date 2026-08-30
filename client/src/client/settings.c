@@ -500,13 +500,15 @@ static void setting_apply_runtime(int cat, int setting) {
                     /* Resolution change. */
                 case OPT_RESOLUTION: {
                     int w, h;
+                    int current_w = 0, current_h = 0;
 
                     if (sscanf(SETTING_SELECT(setting_categories[cat]->settings[setting])
                                    ->options[setting_get_int(cat, setting)],
                                "%dx%d",
                                &w,
                                &h) == 2 &&
-                        (ScreenSurface->w != w || ScreenSurface->h != h)) {
+                        (!SDL_GetWindowSize(ScreenWindow, &current_w, &current_h) ||
+                         current_w != w || current_h != h)) {
                         resize_window(w, h);
                         video_set_size();
                     }
@@ -521,7 +523,8 @@ static void setting_apply_runtime(int cat, int setting) {
                          !(SDL_GetWindowFlags(ScreenWindow) & SDL_WINDOW_FULLSCREEN)) ||
                         (!setting_get_int(cat, setting) &&
                          SDL_GetWindowFlags(ScreenWindow) & SDL_WINDOW_FULLSCREEN)) {
-                        video_fullscreen_toggle(&ScreenSurface, NULL);
+                        SDL_Surface *unused = NULL;
+                        video_fullscreen_toggle(&unused, NULL);
                     }
 
                     break;

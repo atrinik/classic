@@ -162,8 +162,11 @@ def _record_summary(records: list[dict[str, Any]], name: str) -> dict[str, Any]:
             field: _integer(lighting_summary.get(field), f"{name}.lighting.{field}")
             for field in ("field_rebuilds", "field_reuses", "field_translations",
                           "field_partial_rebuilds", "field_full_rebuilds",
-                          "field_dirty_pixels", "field_translated_pixels",
-                          "field_translated_bytes", "field_scroll_x_pixels",
+                          "field_dirty_pixels", "field_translation_logical_pixels",
+                          "field_translation_logical_bytes", "field_physical_read_bytes",
+                          "field_physical_written_bytes", "field_physical_copied_bytes",
+                          "field_physical_cleared_bytes", "field_physical_uploaded_bytes",
+                          "field_scroll_x_pixels",
                           "field_scroll_y_pixels", "field_translation_fallback_active",
                           "field_translation_fallback_bounds",
                           "field_translation_fallback_control", "field_full_rebuild_cache",
@@ -539,8 +542,9 @@ def render_summary(point: dict[str, Any], trend: dict[str, Any]) -> str:
         "with parent profiler stages.",
         "",
         "| Viewport | Mode | Lighting work p50/p95 | Full/partial/reuse | Dirty pixels | "
-        "Translated bytes | Full causes cache/active/bounds/control/other |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+        "Logical translated bytes | Physical read/written/cleared bytes | "
+        "Full causes cache/active/bounds/control/other |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ])
     for viewport, translated_name, full_name in (
         ("Standard", "standard_lighting_translated", "standard_full"),
@@ -557,7 +561,10 @@ def render_summary(point: dict[str, Any], trend: dict[str, Any]) -> str:
                 f"{context_lighting['field_partial_rebuilds']}/"
                 f"{context_lighting['field_reuses']} | "
                 f"{context_lighting['field_dirty_pixels']:,} | "
-                f"{context_lighting['field_translated_bytes']:,} | "
+                f"{context_lighting['field_translation_logical_bytes']:,} | "
+                f"{context_lighting['field_physical_read_bytes']:,}/"
+                f"{context_lighting['field_physical_written_bytes']:,}/"
+                f"{context_lighting['field_physical_cleared_bytes']:,} | "
                 f"{context_lighting['field_full_rebuild_cache']}/"
                 f"{context_lighting['field_full_rebuild_active']}/"
                 f"{context_lighting['field_full_rebuild_bounds']}/"

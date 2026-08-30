@@ -39,14 +39,13 @@ static void widget_draw(widgetdata *widget) {
     label = widget->subwidget;
 
     if (label->text) {
-        text_show(ScreenSurface,
-                  label->font,
-                  label->text,
-                  widget->x,
-                  widget->y,
-                  label->color,
-                  TEXT_MARKUP,
-                  NULL);
+        text_show_root(label->font,
+                       label->text,
+                       widget->x,
+                       widget->y,
+                       label->color,
+                       TEXT_MARKUP,
+                       NULL);
     }
 }
 

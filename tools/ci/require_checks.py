@@ -33,10 +33,13 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     classic = commands.add_parser("classic")
     classic.add_argument("--classifier-result", required=True)
+    classic.add_argument("--gpu-shaders-result", required=True)
     classic.add_argument("--dependency-inputs-result", required=True)
     classic.add_argument("--core-result", required=True)
     classic.add_argument("--client-required", required=True)
     classic.add_argument("--client-result", required=True)
+    classic.add_argument("--gpu-coverage-required", required=True)
+    classic.add_argument("--gpu-coverage-result", required=True)
     classic.add_argument("--server-required", required=True)
     classic.add_argument("--server-result", required=True)
     classic.add_argument("--integrated-required", required=True)
@@ -53,12 +56,18 @@ def main() -> int:
     try:
         require_success("change classification", arguments.classifier_result)
         if arguments.command == "classic":
+            require_success("GPU shader cohort", arguments.gpu_shaders_result)
             require_success(
                 "verified dependency inputs", arguments.dependency_inputs_result
             )
             require_success("core validation", arguments.core_result)
             require_component(
                 "client", arguments.client_required, arguments.client_result
+            )
+            require_component(
+                "trusted GPU coverage",
+                arguments.gpu_coverage_required,
+                arguments.gpu_coverage_result,
             )
             require_component(
                 "server", arguments.server_required, arguments.server_result

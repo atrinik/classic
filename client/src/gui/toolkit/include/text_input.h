@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -150,6 +150,9 @@ extern void text_input_show_edit_password(text_input_struct *text_input);
 extern int text_input_number_character_check(text_input_struct *text_input, char c);
 
 extern void text_input_show(text_input_struct *text_input, SDL_Surface *surface, int x, int y);
+
+/** Render a text input directly on the GPU root canvas. */
+extern void text_input_show_root(text_input_struct *text_input, int x, int y);
 
 extern void text_input_add_char(text_input_struct *text_input, char c);
 

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -43,9 +43,10 @@
  * .4 or less lets you see through walls.  .5 is about right.
  */
 #define SPACE_BLOCK 0.5
+#define BLOCK_LINKS_MAX 5
 
 typedef struct blstr {
-    int x[4], y[4];
+    int x[BLOCK_LINKS_MAX], y[BLOCK_LINKS_MAX];
     int index;
 } blocks;
 
@@ -159,6 +160,7 @@ void set_block(int x, int y, int bx, int by) {
         }
     }
 
+    HARD_ASSERT(idx < BLOCK_LINKS_MAX);
     block[x][y].x[idx] = bx;
     block[x][y].y[idx] = by;
     block[x][y].index++;
@@ -183,8 +185,8 @@ void set_block(int x, int y, int bx, int by) {
 static void set_wall(object *op, int x, int y) {
     int i, xt, yt;
 
-    xt = (MAP_CLIENT_X - CONTR(op)->cs->mapx) / 2;
-    yt = (MAP_CLIENT_Y - CONTR(op)->cs->mapy) / 2;
+    xt = MAP_CLIENT_X / 2 - CONTR(op)->cs->mapx_2;
+    yt = MAP_CLIENT_Y / 2 - CONTR(op)->cs->mapy_2;
 
     for (i = 0; i < block[x][y].index; i++) {
         int dx = block[x][y].x[i], dy = block[x][y].y[i], ax, ay;
@@ -227,8 +229,8 @@ static void check_wall(object *op, int x, int y) {
     int ax, ay, flags;
 
     /* ax, ay are coordinates as indexed into the look window */
-    ax = x - (MAP_CLIENT_X - CONTR(op)->cs->mapx) / 2;
-    ay = y - (MAP_CLIENT_Y - CONTR(op)->cs->mapy) / 2;
+    ax = x - (MAP_CLIENT_X / 2 - CONTR(op)->cs->mapx_2);
+    ay = y - (MAP_CLIENT_Y / 2 - CONTR(op)->cs->mapy_2);
 
     /* this skips the "edges" of view area, the border tiles.
      * Naturally, this tiles can't block any view - there is
@@ -335,11 +337,10 @@ void update_los(object *op) {
      * used the chaining of the block array.  Since many space views could
      * be blocked by different spaces in front, this mean that a lot of spaces
      * could be examined multile times, as each path would be looked at. */
-    for (x = (MAP_CLIENT_X - CONTR(op)->cs->mapx) / 2; x < (MAP_CLIENT_X + CONTR(op)->cs->mapx) / 2;
-         x++) {
-        for (y = (MAP_CLIENT_Y - CONTR(op)->cs->mapy) / 2;
-             y < (MAP_CLIENT_Y + CONTR(op)->cs->mapy) / 2;
-             y++) {
+    int x_offset = MAP_CLIENT_X / 2 - dx;
+    int y_offset = MAP_CLIENT_Y / 2 - dy;
+    for (x = x_offset; x < x_offset + CONTR(op)->cs->mapx; x++) {
+        for (y = y_offset; y < y_offset + CONTR(op)->cs->mapy; y++) {
             check_wall(op, x, y);
         }
     }

@@ -46,24 +46,131 @@
 /**
  * Map cells.
  */
-static struct MapCell *cells;
-static struct MapCell *level_cells[MAP2_LEVELS];
+typedef struct map_cell_layer_record {
+    struct map_cell_layer_record *next;
+    uint8_t layer;
+    uint8_t quick_pos;
+    uint8_t flags;
+    uint8_t roof;
+    uint8_t draw_double;
+    uint8_t alpha;
+    uint8_t infravision;
+    uint8_t anim_last;
+    uint8_t anim_speed;
+    uint8_t anim_facing;
+    uint8_t anim_state;
+    uint8_t glow_speed;
+    uint8_t glow_state;
+    int16_t face;
+    int16_t height;
+    int16_t zoom_x;
+    int16_t zoom_y;
+    int16_t align;
+    int16_t rotate;
+    map_visibility_fade_t visibility;
+    char glow[COLOR_BUF];
+} map_cell_layer_record_t;
+
+typedef struct map_cell_sublayer_record {
+    struct map_cell_sublayer_record *next;
+    uint8_t sub_layer;
+    uint8_t door;
+    uint8_t exit;
+    uint8_t priority;
+    uint8_t secondpass;
+    int32_t stretch;
+} map_cell_sublayer_record_t;
+
+typedef struct map_cell_actor_record {
+    struct map_cell_actor_record *next;
+    uint8_t sub_layer;
+    uint8_t probe;
+    uint8_t target_is_friend;
+    uint8_t anim_flags;
+    uint32_t target_object_count;
+    char name[64];
+    char color[COLOR_BUF];
+} map_cell_actor_record_t;
+
+typedef struct map_cell_light_record {
+    struct map_cell_light_record *next;
+    uint8_t sub_layer;
+    uint8_t known;
+    uint8_t rgb_explicit;
+    uint8_t next_known;
+    uint8_t next_rgb_explicit;
+    uint16_t radiance;
+    uint16_t rgb_radiance[3];
+    uint16_t next_radiance;
+    uint16_t next_rgb_radiance[3];
+} map_cell_light_record_t;
+
+typedef struct map_cell_light_keyframe_record {
+    uint64_t generation;
+    uint64_t start_seconds;
+    uint64_t end_seconds;
+    uint8_t flags;
+    uint8_t valid;
+} map_cell_light_keyframe_record_t;
+
+/** Compact owner for sparse records associated with one populated coordinate. */
+typedef struct map_cell {
+    map_cell_layer_record_t *layers;
+    map_cell_sublayer_record_t *sub_layers;
+    map_cell_actor_record_t *actors;
+    map_cell_light_record_t *lights;
+    map_cell_light_keyframe_record_t *light_keyframe;
+    /** Monotonic identity retained across transaction clones for painter reuse. */
+    uint64_t painter_identity;
+    uint8_t fow;
+    uint8_t structural_fow;
+    uint8_t stretch_dirty;
+    int16_t stretch_top_height;
+    int16_t stretch_upper_height;
+    int16_t level_support_height;
+    int16_t render_max_height;
+} map_cell_t;
+
+typedef struct map_cell_store {
+    map_cell_t **slots;
+    struct map_cell_header *headers;
+    size_t count;
+} map_cell_store_t;
+
+/** Dense, compact state retained for every cache coordinate. */
+typedef struct map_cell_header {
+    uint32_t generation;
+    uint16_t revision;
+    int16_t support_height;
+    uint8_t occupancy;
+    uint8_t fow;
+    uint8_t structural_fow;
+    uint8_t reserved;
+} map_cell_header_t;
+
+static map_cell_store_t *cells;
+static map_cell_store_t *level_cells[MAP2_LEVELS];
+static uint64_t map_cell_allocation_count;
+static uint64_t map_cell_allocation_bytes;
+static uint64_t map_cell_retained_bytes;
+static uint64_t map_cell_peak_retained_bytes;
+static uint64_t map_cell_next_painter_identity = 1;
 static uint64_t level_lighting_revision[MAP2_LEVELS];
 static size_t current_level_index = MAP2_DEPTH_INDEX(0);
 static uint16_t map_level_mask;
-static SDL_Surface *map_level_surfaces[2];
-static SDL_Surface *map_animation_base_surface;
-static bool map_animation_cache_valid;
-/* Paint the primary world first, then apply one final field composition. */
-static bool map_scene_composition_active;
+static int map_width;
+static int map_height;
+static int map_cache_origin_x;
+static int map_cache_origin_y;
 static map_benchmark_statistics_t map_benchmark_statistics;
+static uint64_t map_benchmark_animation_command_digest;
+static bool map_benchmark_animation_command_digest_valid;
 static uint32_t map_pending_redraw_reasons;
 static bool map_animation_redraw_flag;
 /* The temporal light presentation is invalidated at one-minute game-time
  * buckets, never by an exact per-frame clock value. */
 static uint64_t map_temporal_lighting_bucket = UINT64_MAX;
-
-#define MAP_LIGHT_KEYFRAME_STAGE_MAX 8192U
+static void map_hard_clear_abort_pending(void);
 
 typedef struct map_light_keyframe_stage {
     int depth;
@@ -82,13 +189,9 @@ static struct {
     uint64_t end_seconds;
     uint8_t flags;
     size_t count;
+    size_t capacity;
     map_light_keyframe_stage_t *entries;
 } map_light_keyframe_transaction;
-#ifdef ATRINIK_WIDGET_TESTS
-static bool map_benchmark_mutable_rle_fault_armed;
-static map_benchmark_fault_t map_benchmark_fault;
-static map_benchmark_fault_status_t map_benchmark_fault_status;
-#endif
 
 void map_redraw_request(map_redraw_reason_t reason) {
     HARD_ASSERT(reason != 0);
@@ -128,11 +231,12 @@ void map_animation_redraw_consume(void) {
 }
 
 void map_benchmark_statistics_reset(void) {
-    map_benchmark_statistics = (map_benchmark_statistics_t){
-        /* SDL and sprite-effect helpers own allocations outside this module,
-         * so a partial renderer total would be misleading. */
-        .renderer_allocation_statistics_available = false,
-    };
+    map_cell_allocation_count = 0;
+    map_cell_allocation_bytes = 0;
+    map_cell_peak_retained_bytes = map_cell_retained_bytes;
+    map_benchmark_statistics = (map_benchmark_statistics_t){0};
+    map_benchmark_animation_command_digest = 0;
+    map_benchmark_animation_command_digest_valid = false;
 }
 
 void map_benchmark_statistics_get(map_benchmark_statistics_t *statistics) {
@@ -145,67 +249,925 @@ void map_benchmark_statistics_present(bool success) {
     map_benchmark_statistics.present_failures += !success;
 }
 
-#ifdef ATRINIK_WIDGET_TESTS
-void map_benchmark_fault_configure(map_benchmark_fault_t fault) {
-    HARD_ASSERT(fault == MAP_BENCHMARK_FAULT_NONE || fault == MAP_BENCHMARK_FAULT_MUTABLE_RLE);
-    map_benchmark_fault_clear();
-    map_benchmark_fault = fault;
+static map_cell_store_t *map_cell_store_create(size_t count);
+static void map_cell_store_destroy(map_cell_store_t *store);
+static map_cell_t *map_cell_store_slot(map_cell_store_t *store, size_t index, bool create);
+static void map_cell_store_clear_slot(map_cell_store_t *store, size_t index);
+static void map_cell_store_trim_slot(map_cell_store_t *store, size_t index);
+static bool
+map_cell_store_set_support_height(map_cell_store_t *store, size_t index, int16_t height);
+static void
+map_cell_store_set_fow(map_cell_store_t *store, size_t index, bool fow, bool structural_fow);
+static void map_mark_stretch_dirty(int x, int y);
+static int map_level_support_height(int x, int y, int depth);
+
+static void *map_cell_record_allocate(size_t size) {
+    void *record = xcalloc(1, size);
+    map_cell_allocation_count++;
+    map_cell_allocation_bytes += size;
+    map_cell_retained_bytes += size;
+    map_cell_peak_retained_bytes = MAX(map_cell_peak_retained_bytes, map_cell_retained_bytes);
+    return record;
 }
 
-void map_benchmark_fault_status_get(map_benchmark_fault_status_t *status) {
-    HARD_ASSERT(status != NULL);
-    *status = map_benchmark_fault_status;
-}
-
-void map_benchmark_fault_clear(void) {
-    if (map_benchmark_mutable_rle_fault_armed && map_level_surfaces[0] != NULL) {
-        SDL_SetSurfaceRLE(map_level_surfaces[0], false);
+static void map_cell_record_release(void *record, size_t size) {
+    if (record == NULL) {
+        return;
     }
-    map_benchmark_mutable_rle_fault_armed = false;
-    map_benchmark_fault = MAP_BENCHMARK_FAULT_NONE;
-    memset(&map_benchmark_fault_status, 0, sizeof(map_benchmark_fault_status));
+    HARD_ASSERT(map_cell_retained_bytes >= size);
+    map_cell_retained_bytes -= size;
+    free(record);
 }
-#endif
-static int map_width;
-static int map_height;
-static int map_cache_origin_x;
-static int map_cache_origin_y;
 
-/** Return a logical cell from the circular fog-of-war cache. */
-static struct MapCell *map_cache_cell_at(struct MapCell *level,
-                                         int x,
-                                         int y,
-                                         int width,
-                                         int height,
-                                         int origin_x,
-                                         int origin_y) {
+static map_cell_layer_record_t *map_cell_layer_record(map_cell_t *cell, int layer, bool create) {
+    HARD_ASSERT(cell != NULL);
+    HARD_ASSERT(layer >= 0 && layer < NUM_REAL_LAYERS);
+    for (map_cell_layer_record_t *record = cell->layers; record != NULL; record = record->next) {
+        if (record->layer == layer) {
+            return record;
+        }
+    }
+    if (!create) {
+        return NULL;
+    }
+    map_cell_layer_record_t *record = map_cell_record_allocate(sizeof(*record));
+    record->layer = (uint8_t)layer;
+    record->next = cell->layers;
+    cell->layers = record;
+    return record;
+}
+
+static const map_cell_layer_record_t *map_cell_layer_record_read(const map_cell_t *cell,
+                                                                 int layer) {
+    static const map_cell_layer_record_t empty;
+    map_cell_layer_record_t *record = map_cell_layer_record((map_cell_t *)cell, layer, false);
+    return record != NULL ? record : &empty;
+}
+
+static void map_cell_layer_record_remove(map_cell_t *cell, int layer) {
+    map_cell_layer_record_t **link = &cell->layers;
+    while (*link != NULL) {
+        map_cell_layer_record_t *record = *link;
+        if (record->layer == layer) {
+            *link = record->next;
+            map_cell_record_release(record, sizeof(*record));
+            return;
+        }
+        link = &record->next;
+    }
+}
+
+static bool map_cell_layer_record_empty(const map_cell_layer_record_t *record) {
+    return record->quick_pos == 0 && record->flags == 0 && record->roof == 0 &&
+           record->draw_double == 0 && record->alpha == 0 && record->infravision == 0 &&
+           record->anim_last == 0 && record->anim_speed == 0 && record->anim_facing == 0 &&
+           record->anim_state == 0 && record->glow_speed == 0 && record->glow_state == 0 &&
+           record->face == 0 && record->height == 0 && record->zoom_x == 0 && record->zoom_y == 0 &&
+           record->align == 0 && record->rotate == 0 && !record->visibility.initialized &&
+           record->glow[0] == '\0';
+}
+
+static map_cell_sublayer_record_t *
+map_cell_sublayer_record(map_cell_t *cell, int sub_layer, bool create) {
+    HARD_ASSERT(cell != NULL);
+    HARD_ASSERT(sub_layer >= 0 && sub_layer < NUM_SUB_LAYERS);
+    for (map_cell_sublayer_record_t *record = cell->sub_layers; record != NULL;
+         record = record->next) {
+        if (record->sub_layer == sub_layer) {
+            return record;
+        }
+    }
+    if (!create) {
+        return NULL;
+    }
+    map_cell_sublayer_record_t *record = map_cell_record_allocate(sizeof(*record));
+    record->sub_layer = (uint8_t)sub_layer;
+    record->next = cell->sub_layers;
+    cell->sub_layers = record;
+    return record;
+}
+
+static const map_cell_sublayer_record_t *map_cell_sublayer_record_read(const map_cell_t *cell,
+                                                                       int sub_layer) {
+    static const map_cell_sublayer_record_t empty;
+    map_cell_sublayer_record_t *record =
+        map_cell_sublayer_record((map_cell_t *)cell, sub_layer, false);
+    return record != NULL ? record : &empty;
+}
+
+static void map_cell_sublayer_record_trim(map_cell_t *cell, int sub_layer) {
+    map_cell_sublayer_record_t **link = &cell->sub_layers;
+    while (*link != NULL) {
+        map_cell_sublayer_record_t *record = *link;
+        if (record->sub_layer != sub_layer) {
+            link = &record->next;
+            continue;
+        }
+        if (record->door == 0 && record->exit == 0 && record->priority == 0 &&
+            record->secondpass == 0 && record->stretch == 0) {
+            *link = record->next;
+            map_cell_record_release(record, sizeof(*record));
+        }
+        return;
+    }
+}
+
+static map_cell_actor_record_t *
+map_cell_actor_record(map_cell_t *cell, int sub_layer, bool create) {
+    HARD_ASSERT(cell != NULL);
+    HARD_ASSERT(sub_layer >= 0 && sub_layer < NUM_SUB_LAYERS);
+    for (map_cell_actor_record_t *record = cell->actors; record != NULL; record = record->next) {
+        if (record->sub_layer == sub_layer) {
+            return record;
+        }
+    }
+    if (!create) {
+        return NULL;
+    }
+    map_cell_actor_record_t *record = map_cell_record_allocate(sizeof(*record));
+    record->sub_layer = (uint8_t)sub_layer;
+    record->next = cell->actors;
+    cell->actors = record;
+    return record;
+}
+
+static const map_cell_actor_record_t *map_cell_actor_record_read(const map_cell_t *cell,
+                                                                 int sub_layer) {
+    static const map_cell_actor_record_t empty;
+    map_cell_actor_record_t *record = map_cell_actor_record((map_cell_t *)cell, sub_layer, false);
+    return record != NULL ? record : &empty;
+}
+
+static void map_cell_actor_record_trim(map_cell_t *cell, int sub_layer) {
+    map_cell_actor_record_t **link = &cell->actors;
+    while (*link != NULL) {
+        map_cell_actor_record_t *record = *link;
+        if (record->sub_layer != sub_layer) {
+            link = &record->next;
+            continue;
+        }
+        if (record->probe == 0 && record->target_is_friend == 0 && record->anim_flags == 0 &&
+            record->target_object_count == 0 && record->name[0] == '\0' &&
+            record->color[0] == '\0') {
+            *link = record->next;
+            map_cell_record_release(record, sizeof(*record));
+        }
+        return;
+    }
+}
+
+static map_cell_light_record_t *
+map_cell_light_record(map_cell_t *cell, int sub_layer, bool create) {
+    HARD_ASSERT(cell != NULL);
+    HARD_ASSERT(sub_layer >= 0 && sub_layer < NUM_SUB_LAYERS);
+    for (map_cell_light_record_t *record = cell->lights; record != NULL; record = record->next) {
+        if (record->sub_layer == sub_layer) {
+            return record;
+        }
+    }
+    if (!create) {
+        return NULL;
+    }
+    map_cell_light_record_t *record = map_cell_record_allocate(sizeof(*record));
+    record->sub_layer = (uint8_t)sub_layer;
+    record->next = cell->lights;
+    cell->lights = record;
+    return record;
+}
+
+static const map_cell_light_record_t *map_cell_light_record_read(const map_cell_t *cell,
+                                                                 int sub_layer) {
+    static const map_cell_light_record_t empty;
+    map_cell_light_record_t *record = map_cell_light_record((map_cell_t *)cell, sub_layer, false);
+    return record != NULL ? record : &empty;
+}
+
+static void map_cell_light_record_trim(map_cell_t *cell, int sub_layer) {
+    map_cell_light_record_t **link = &cell->lights;
+    while (*link != NULL) {
+        map_cell_light_record_t *record = *link;
+        if (record->sub_layer != sub_layer) {
+            link = &record->next;
+            continue;
+        }
+        if (record->known == 0 && record->rgb_explicit == 0 && record->next_known == 0 &&
+            record->next_rgb_explicit == 0 && record->radiance == 0 &&
+            record->rgb_radiance[0] == 0 && record->rgb_radiance[1] == 0 &&
+            record->rgb_radiance[2] == 0 && record->next_radiance == 0 &&
+            record->next_rgb_radiance[0] == 0 && record->next_rgb_radiance[1] == 0 &&
+            record->next_rgb_radiance[2] == 0) {
+            *link = record->next;
+            map_cell_record_release(record, sizeof(*record));
+        }
+        return;
+    }
+}
+
+static map_cell_light_keyframe_record_t *map_cell_light_keyframe_record(map_cell_t *cell,
+                                                                        bool create) {
+    HARD_ASSERT(cell != NULL);
+    if (cell->light_keyframe == NULL && create) {
+        cell->light_keyframe = map_cell_record_allocate(sizeof(*cell->light_keyframe));
+    }
+    return cell->light_keyframe;
+}
+
+static const map_cell_light_keyframe_record_t *
+map_cell_light_keyframe_record_read(const map_cell_t *cell) {
+    static const map_cell_light_keyframe_record_t empty;
+    return cell->light_keyframe != NULL ? cell->light_keyframe : &empty;
+}
+
+static uint64_t map_cell_hash_bytes(uint64_t hash, const void *data, size_t size) {
+    const uint8_t *bytes = data;
+    for (size_t i = 0; i < size; i++) {
+        hash ^= bytes[i];
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+/** Stable semantic fingerprint used by compact MAP packet change tokens. */
+static uint64_t map_cell_content_hash(const map_cell_t *cell) {
+    if (cell == NULL) {
+        return 0;
+    }
+
+    bool has_sparse_content = cell->layers != NULL || cell->sub_layers != NULL ||
+                              cell->actors != NULL || cell->lights != NULL ||
+                              cell->light_keyframe != NULL || cell->stretch_dirty != 0 ||
+                              cell->stretch_top_height != 0 || cell->stretch_upper_height != 0 ||
+                              cell->level_support_height != 0 || cell->render_max_height != 0;
+    if (!has_sparse_content) {
+        return 0;
+    }
+
+    uint64_t hash = UINT64_C(14695981039346656037);
+    hash = map_cell_hash_bytes(hash, &cell->stretch_dirty, sizeof(cell->stretch_dirty));
+    hash = map_cell_hash_bytes(hash, &cell->stretch_top_height, sizeof(cell->stretch_top_height));
+    hash =
+        map_cell_hash_bytes(hash, &cell->stretch_upper_height, sizeof(cell->stretch_upper_height));
+    hash =
+        map_cell_hash_bytes(hash, &cell->level_support_height, sizeof(cell->level_support_height));
+    hash = map_cell_hash_bytes(hash, &cell->render_max_height, sizeof(cell->render_max_height));
+    for (int layer = 0; layer < NUM_REAL_LAYERS; layer++) {
+        const map_cell_layer_record_t *record =
+            map_cell_layer_record((map_cell_t *)cell, layer, false);
+        if (record != NULL) {
+            hash = map_cell_hash_bytes(hash,
+                                       (const uint8_t *)record +
+                                           offsetof(map_cell_layer_record_t, layer),
+                                       sizeof(*record) - offsetof(map_cell_layer_record_t, layer));
+        }
+    }
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        const map_cell_sublayer_record_t *sub_record =
+            map_cell_sublayer_record((map_cell_t *)cell, sub_layer, false);
+        if (sub_record != NULL) {
+            hash = map_cell_hash_bytes(
+                hash,
+                (const uint8_t *)sub_record + offsetof(map_cell_sublayer_record_t, sub_layer),
+                sizeof(*sub_record) - offsetof(map_cell_sublayer_record_t, sub_layer));
+        }
+        const map_cell_actor_record_t *actor_record =
+            map_cell_actor_record((map_cell_t *)cell, sub_layer, false);
+        if (actor_record != NULL) {
+            hash = map_cell_hash_bytes(
+                hash,
+                (const uint8_t *)actor_record + offsetof(map_cell_actor_record_t, sub_layer),
+                sizeof(*actor_record) - offsetof(map_cell_actor_record_t, sub_layer));
+        }
+        const map_cell_light_record_t *light_record =
+            map_cell_light_record((map_cell_t *)cell, sub_layer, false);
+        if (light_record != NULL) {
+            hash = map_cell_hash_bytes(
+                hash,
+                (const uint8_t *)light_record + offsetof(map_cell_light_record_t, sub_layer),
+                sizeof(*light_record) - offsetof(map_cell_light_record_t, sub_layer));
+        }
+    }
+    if (cell->light_keyframe != NULL) {
+        hash = map_cell_hash_bytes(hash, cell->light_keyframe, sizeof(*cell->light_keyframe));
+    }
+    return hash;
+}
+
+static uint8_t map_cell_light_rgb_bitmap(const map_cell_t *cell) {
+    uint8_t bitmap = 0;
+    for (const map_cell_light_record_t *record = cell->lights; record != NULL;
+         record = record->next) {
+        if (record->rgb_explicit) {
+            bitmap |= UINT8_C(1) << record->sub_layer;
+        }
+    }
+    return bitmap;
+}
+
+static void map_cell_release_contents(map_cell_t *cell) {
+    map_cell_layer_record_t *layer = cell->layers;
+    while (layer != NULL) {
+        map_cell_layer_record_t *next = layer->next;
+        map_cell_record_release(layer, sizeof(*layer));
+        layer = next;
+    }
+    map_cell_sublayer_record_t *sub_layer = cell->sub_layers;
+    while (sub_layer != NULL) {
+        map_cell_sublayer_record_t *next = sub_layer->next;
+        map_cell_record_release(sub_layer, sizeof(*sub_layer));
+        sub_layer = next;
+    }
+    map_cell_actor_record_t *actor = cell->actors;
+    while (actor != NULL) {
+        map_cell_actor_record_t *next = actor->next;
+        map_cell_record_release(actor, sizeof(*actor));
+        actor = next;
+    }
+    map_cell_light_record_t *light = cell->lights;
+    while (light != NULL) {
+        map_cell_light_record_t *next = light->next;
+        map_cell_record_release(light, sizeof(*light));
+        light = next;
+    }
+    map_cell_record_release(cell->light_keyframe, sizeof(*cell->light_keyframe));
+    cell->layers = NULL;
+    cell->sub_layers = NULL;
+    cell->actors = NULL;
+    cell->lights = NULL;
+    cell->light_keyframe = NULL;
+}
+
+static void map_cell_release(map_cell_t *cell) {
+    if (cell == NULL) {
+        return;
+    }
+    map_cell_release_contents(cell);
+    map_cell_record_release(cell, sizeof(*cell));
+}
+
+static map_cell_t *map_cell_clone(const map_cell_t *source) {
+    if (source == NULL) {
+        return NULL;
+    }
+    map_cell_t *clone = map_cell_record_allocate(sizeof(*clone));
+    clone->painter_identity = source->painter_identity;
+    clone->fow = source->fow;
+    clone->structural_fow = source->structural_fow;
+    clone->stretch_dirty = source->stretch_dirty;
+    clone->stretch_top_height = source->stretch_top_height;
+    clone->stretch_upper_height = source->stretch_upper_height;
+    clone->level_support_height = source->level_support_height;
+    clone->render_max_height = source->render_max_height;
+
+    for (const map_cell_layer_record_t *record = source->layers; record != NULL;
+         record = record->next) {
+        map_cell_layer_record_t *copy = map_cell_record_allocate(sizeof(*copy));
+        *copy = *record;
+        copy->next = clone->layers;
+        clone->layers = copy;
+    }
+    for (const map_cell_sublayer_record_t *record = source->sub_layers; record != NULL;
+         record = record->next) {
+        map_cell_sublayer_record_t *copy = map_cell_record_allocate(sizeof(*copy));
+        *copy = *record;
+        copy->next = clone->sub_layers;
+        clone->sub_layers = copy;
+    }
+    for (const map_cell_actor_record_t *record = source->actors; record != NULL;
+         record = record->next) {
+        map_cell_actor_record_t *copy = map_cell_record_allocate(sizeof(*copy));
+        *copy = *record;
+        copy->next = clone->actors;
+        clone->actors = copy;
+    }
+    for (const map_cell_light_record_t *record = source->lights; record != NULL;
+         record = record->next) {
+        map_cell_light_record_t *copy = map_cell_record_allocate(sizeof(*copy));
+        *copy = *record;
+        copy->next = clone->lights;
+        clone->lights = copy;
+    }
+    if (source->light_keyframe != NULL) {
+        clone->light_keyframe = map_cell_record_allocate(sizeof(*clone->light_keyframe));
+        *clone->light_keyframe = *source->light_keyframe;
+    }
+    return clone;
+}
+
+/** Clear live presentation while retaining remembered static geometry. */
+static void map_cell_clear_live_state(map_cell_t *cell) {
+    HARD_ASSERT(cell != NULL);
+    uint8_t remembered_layer_mask = 0;
+    for (int object_layer = 1; object_layer <= NUM_LAYERS; object_layer++) {
+        if (map_layer_is_remembered((uint8_t)object_layer)) {
+            remembered_layer_mask |= UINT8_C(1) << (object_layer - 1);
+        }
+    }
+    uint8_t live_layer_mask = (uint8_t)~remembered_layer_mask;
+
+    map_cell_sublayer_record_t **sub_link = &cell->sub_layers;
+    while (*sub_link != NULL) {
+        map_cell_sublayer_record_t *record = *sub_link;
+        record->door &= (uint8_t)~live_layer_mask;
+        record->exit &= (uint8_t)~live_layer_mask;
+        record->priority &= (uint8_t)~live_layer_mask;
+        record->secondpass &= (uint8_t)~live_layer_mask;
+        if (record->door == 0 && record->exit == 0 && record->priority == 0 &&
+            record->secondpass == 0 && record->stretch == 0) {
+            *sub_link = record->next;
+            map_cell_record_release(record, sizeof(*record));
+        } else {
+            sub_link = &record->next;
+        }
+    }
+
+    map_cell_actor_record_t *actor = cell->actors;
+    while (actor != NULL) {
+        map_cell_actor_record_t *next = actor->next;
+        map_cell_record_release(actor, sizeof(*actor));
+        actor = next;
+    }
+    cell->actors = NULL;
+
+    map_cell_layer_record_t **layer_link = &cell->layers;
+    while (*layer_link != NULL) {
+        map_cell_layer_record_t *record = *layer_link;
+        int object_layer = record->layer % NUM_LAYERS + 1;
+        if (map_layer_is_remembered((uint8_t)object_layer) ||
+            (record->visibility.initialized && record->visibility.alpha != 0)) {
+            layer_link = &record->next;
+            continue;
+        }
+        *layer_link = record->next;
+        map_cell_record_release(record, sizeof(*record));
+    }
+}
+
+/** Discard presentation light knowledge while retaining scalar cache values. */
+static void map_cell_clear_light_state(map_cell_t *cell) {
+    HARD_ASSERT(cell != NULL);
+    map_cell_light_record_t **link = &cell->lights;
+    while (*link != NULL) {
+        map_cell_light_record_t *record = *link;
+        record->known = 0;
+        memset(record->rgb_radiance, 0, sizeof(record->rgb_radiance));
+        record->rgb_explicit = 0;
+        record->next_radiance = 0;
+        record->next_known = 0;
+        memset(record->next_rgb_radiance, 0, sizeof(record->next_rgb_radiance));
+        record->next_rgb_explicit = 0;
+        if (record->radiance == 0) {
+            *link = record->next;
+            map_cell_record_release(record, sizeof(*record));
+        } else {
+            link = &record->next;
+        }
+    }
+    map_cell_record_release(cell->light_keyframe, sizeof(*cell->light_keyframe));
+    cell->light_keyframe = NULL;
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+bool widget_map_sparse_state_test(void) {
+    const size_t cache_side = (MAP_MAX_SIZE + MAP_RENDER_OVERSCAN * 2U) * MAP_FOW_SIZE;
+    const size_t slots = cache_side * cache_side;
+    map_cell_store_t *stores[MAP2_LEVELS] = {0};
+    uint64_t saved_allocation_count = map_cell_allocation_count;
+    uint64_t saved_allocation_bytes = map_cell_allocation_bytes;
+    uint64_t saved_retained_bytes = map_cell_retained_bytes;
+    uint64_t saved_peak_retained_bytes = map_cell_peak_retained_bytes;
+
+    bool success = true;
+    for (size_t level = 0; level < MAP2_LEVELS; level++) {
+        stores[level] = map_cell_store_create(slots);
+    }
+    uint64_t empty_bytes = map_cell_retained_bytes - saved_retained_bytes;
+    uint64_t expected_empty_bytes =
+        MAP2_LEVELS *
+        (sizeof(map_cell_store_t) + slots * (sizeof(map_cell_t *) + sizeof(map_cell_header_t)));
+    success = empty_bytes == expected_empty_bytes && empty_bytes < 64U * 1024U * 1024U;
+
+    const size_t logical_cells = MAP_MAX_SIZE * MAP_MAX_SIZE;
+    size_t populated_cells = 0;
+    size_t layer_records = 0;
+    size_t sublayer_records = 0;
+    size_t actor_records = 0;
+    size_t light_records = 0;
+    size_t keyframe_records = 0;
+    for (size_t level = 0; level < MAP2_LEVELS && success; level++) {
+        for (size_t tile = 0; tile < logical_cells; tile++) {
+            map_cell_t *record = map_cell_store_slot(stores[level], tile, true);
+            success = record != NULL;
+            if (record == NULL) {
+                break;
+            }
+            populated_cells++;
+            map_cell_layer_record(record, GET_MAP_LAYER(LAYER_FLOOR, 0), true)->face = 1;
+            layer_records++;
+            if (tile % 4U == 0) {
+                map_cell_layer_record(record, GET_MAP_LAYER(LAYER_WALL, 0), true)->face = 2;
+                layer_records++;
+            }
+            if (tile < 10U) {
+                map_cell_layer_record(record, GET_MAP_LAYER(LAYER_EFFECT, 0), true)->face = 3;
+                layer_records++;
+            }
+            if (level == MAP2_DEPTH_INDEX(0) && tile < 64U) {
+                map_cell_layer_record(record, GET_MAP_LAYER(LAYER_LIVING, 0), true)->face = 4;
+                map_cell_actor_record_t *actor = map_cell_actor_record(record, 0, true);
+                actor->target_object_count = (uint32_t)tile + 1U;
+                snprintf(VS(actor->name), "actor-%" PRIu64, (uint64_t)tile);
+                layer_records++;
+                actor_records++;
+            }
+            if (tile % 16U == 0) {
+                map_cell_sublayer_record(record, 0, true)->door = UINT8_C(1) << (LAYER_WALL - 1);
+                sublayer_records++;
+            }
+            map_cell_light_record_t *light = map_cell_light_record(record, 0, true);
+            light->radiance = 128;
+            light->known = 1;
+            light_records++;
+            if (tile % 32U == 0) {
+                map_cell_light_keyframe_record(record, true)->valid = 1;
+                keyframe_records++;
+            }
+        }
+    }
+    uint64_t populated_bytes = map_cell_retained_bytes - saved_retained_bytes;
+    uint64_t expected_populated_bytes = empty_bytes + populated_cells * sizeof(map_cell_t) +
+                                        layer_records * sizeof(map_cell_layer_record_t) +
+                                        sublayer_records * sizeof(map_cell_sublayer_record_t) +
+                                        actor_records * sizeof(map_cell_actor_record_t) +
+                                        light_records * sizeof(map_cell_light_record_t) +
+                                        keyframe_records * sizeof(map_cell_light_keyframe_record_t);
+    success = success && populated_bytes == expected_populated_bytes;
+
+    map_cell_t *clear_record = map_cell_store_slot(stores[MAP2_DEPTH_INDEX(0)], 0, false);
+    map_cell_clear_live_state(clear_record);
+    map_cell_clear_light_state(clear_record);
+    success = success &&
+              map_cell_layer_record(clear_record, GET_MAP_LAYER(LAYER_FLOOR, 0), false) != NULL &&
+              map_cell_layer_record(clear_record, GET_MAP_LAYER(LAYER_LIVING, 0), false) == NULL &&
+              map_cell_layer_record(clear_record, GET_MAP_LAYER(LAYER_EFFECT, 0), false) == NULL &&
+              map_cell_actor_record(clear_record, 0, false) == NULL &&
+              map_cell_light_record_read(clear_record, 0)->radiance == 128 &&
+              !map_cell_light_record_read(clear_record, 0)->known &&
+              clear_record->light_keyframe == NULL;
+    populated_bytes = map_cell_retained_bytes - saved_retained_bytes;
+    expected_populated_bytes -= 2U * sizeof(map_cell_layer_record_t) +
+                                sizeof(map_cell_actor_record_t) +
+                                sizeof(map_cell_light_keyframe_record_t);
+    success = success && populated_bytes == expected_populated_bytes;
+
+    for (size_t level = 0; level < MAP2_LEVELS && success; level++) {
+        size_t index = logical_cells + level;
+        map_cell_store_set_fow(stores[level], index, true, false);
+        bool support_changed = map_cell_store_set_support_height(stores[level], index, 17);
+        support_changed &= map_cell_store_set_support_height(stores[level], index, 0);
+        success = map_cell_store_slot(stores[level], index, false) == NULL &&
+                  stores[level]->headers[index].fow != 0 &&
+                  stores[level]->headers[index].support_height == 0 && support_changed;
+    }
+    success = success && map_cell_retained_bytes - saved_retained_bytes == populated_bytes;
+
+    size_t trim_index = logical_cells + MAP2_LEVELS + 1U;
+    uint64_t before_trim = map_cell_retained_bytes;
+    map_cell_t *trim_owner = map_cell_store_slot(stores[MAP2_DEPTH_INDEX(0)], trim_index, true);
+    map_cell_layer_record_t *trim_layer =
+        map_cell_layer_record(trim_owner, GET_MAP_LAYER(LAYER_EFFECT, 0), true);
+    success = success && trim_layer != NULL && map_cell_retained_bytes > before_trim;
+    map_cell_layer_record_remove(trim_owner, GET_MAP_LAYER(LAYER_EFFECT, 0));
+    map_cell_store_trim_slot(stores[MAP2_DEPTH_INDEX(0)], trim_index);
+    success = success && map_cell_retained_bytes == before_trim &&
+              stores[MAP2_DEPTH_INDEX(0)]->headers[trim_index].occupancy == 0;
+
+    for (size_t level = 0; level < MAP2_LEVELS; level++) {
+        map_cell_store_destroy(stores[level]);
+    }
+    success = success && map_cell_retained_bytes == saved_retained_bytes;
+    map_cell_allocation_count = saved_allocation_count;
+    map_cell_allocation_bytes = saved_allocation_bytes;
+    map_cell_retained_bytes = saved_retained_bytes;
+    map_cell_peak_retained_bytes = saved_peak_retained_bytes;
+    return success;
+}
+
+bool widget_map_transaction_abort_test(void) {
+    for (size_t level = 0; level < arraysize(level_cells); level++) {
+        if (level_cells[level] != NULL) {
+            return false;
+        }
+    }
+
+    map_width = 3;
+    map_height = 3;
+    map_cache_origin_x = 0;
+    map_cache_origin_y = 0;
+    current_level_index = MAP2_DEPTH_INDEX(0);
+    map_level_mask = UINT16_C(1) << current_level_index;
+    if (!map_select_level(0, true)) {
+        return false;
+    }
+    uint64_t initial_retained_bytes = map_cell_retained_bytes;
+    bool success = true;
+
+    map_cell_snapshot_t empty_snapshot;
+    map_cell_snapshot(0, 0, &empty_snapshot);
+    size_t middle_index = (size_t)MAP_STARTY * (map_width * MAP_FOW_SIZE) + MAP_STARTX;
+    map_cell_t *empty_owner = map_cell_store_slot(cells, middle_index, true);
+    success = success && !map_cell_changed(0, 0, &empty_snapshot);
+    map_cell_snapshot(0, 0, &empty_snapshot);
+    map_cell_layer_record(empty_owner, GET_MAP_LAYER(LAYER_FLOOR, 0), true)->face = 1;
+    success = success && map_cell_changed(0, 0, &empty_snapshot);
+    map_cell_store_clear_slot(cells, middle_index);
+    success = success && map_cell_retained_bytes == initial_retained_bytes;
+
+    map_set_structural_support_height(0, 0, 37);
+    success = success && map_cell_store_slot(cells, middle_index, false) == NULL &&
+              map_level_support_height(MAP_STARTX, MAP_STARTY, 1) == 37 &&
+              map_cell_retained_bytes == initial_retained_bytes;
+    map_state_transaction_begin(false);
+    map_clear_cell(0, 0, true);
+    map_cell_t *replacement = map_cell_store_slot(cells, middle_index, true);
+    map_cell_layer_record(replacement, GET_MAP_LAYER(LAYER_EFFECT, 0), true)->face = 2;
+    success = success && map_level_support_height(MAP_STARTX, MAP_STARTY, 1) == 0;
+    map_state_transaction_abort();
+    success = success && map_cell_store_slot(cells, middle_index, false) == NULL &&
+              map_level_support_height(MAP_STARTX, MAP_STARTY, 1) == 37 &&
+              map_cell_retained_bytes == initial_retained_bytes;
+    map_set_structural_support_height(0, 0, 0);
+
+    map_mark_stretch_dirty(1, 1);
+    adjust_tile_stretch();
+    success = success && map_cell_retained_bytes == initial_retained_bytes;
+
+    for (size_t attempt = 0; attempt < 2; attempt++) {
+        map_state_transaction_begin(false);
+        map_set_fow(0, 0, true);
+        map_mark_stretch_dirty(1, 1);
+        map_state_transaction_abort();
+        success =
+            success && !map_get_fow(0, 0) && map_cell_retained_bytes == initial_retained_bytes;
+    }
+
+    map_cell_t *baseline = map_cell_store_slot(cells, middle_index, true);
+    map_cell_layer_record_t *baseline_floor =
+        map_cell_layer_record(baseline, GET_MAP_LAYER(LAYER_FLOOR, 0), true);
+    baseline_floor->face = 7;
+    map_state_transaction_begin(true);
+    baseline_floor->face = 8;
+    MapData.continuation.pending = true;
+    MapData.continuation.total = 2;
+    MapData.continuation.next = 1;
+    success = success && map_state_transaction_active() && baseline_floor->face == 8;
+    baseline_floor->face = 9;
+    map_state_transaction_abort();
+    baseline = map_cell_store_slot(cells, middle_index, false);
+    success = success && !map_state_transaction_active() && !MapData.continuation.pending &&
+              baseline != NULL &&
+              map_cell_layer_record_read(baseline, GET_MAP_LAYER(LAYER_FLOOR, 0))->face == 7;
+
+    map_state_transaction_begin(false);
+    MapData.continuation.pending = true;
+    MapData.continuation.total = 2;
+    MapData.continuation.next = 1;
+    map_hard_clear_abort_pending();
+    success = success && !map_state_transaction_active() && !MapData.continuation.pending;
+    success = success && socket_command_map_buffered_generation_test_begin();
+    map_hard_clear_abort_pending();
+    success = success && !socket_command_map_buffered_generation_test_pending();
+    map_cell_store_clear_slot(cells, middle_index);
+    success = success && map_cell_retained_bytes == initial_retained_bytes;
+
+    map_cell_store_destroy(level_cells[current_level_index]);
+    level_cells[current_level_index] = NULL;
+    cells = NULL;
+    map_width = 0;
+    map_height = 0;
+    map_level_mask = 0;
+    return success;
+}
+
+bool widget_map_light_keyframe_capacity_test(void) {
+    int saved_width = map_width;
+    int saved_height = map_height;
+    const int wire_ceiling = 32;
+    uint16_t scalar[NUM_SUB_LAYERS] = {0};
+    uint16_t rgb[NUM_SUB_LAYERS][3] = {{0}};
+
+    map_width = wire_ceiling;
+    map_height = wire_ceiling;
+    bool success = map_light_keyframe_transaction_begin(1, 1, 2, MAP2_LIGHT_KEYFRAME_SNAP);
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH && success; depth++) {
+        for (int x = 0; x < map_width && success; x++) {
+            for (int y = 0; y < map_height; y++) {
+                success = map_light_keyframe_transaction_stage(depth, x, y, 0, scalar, 0, rgb);
+                if (!success) {
+                    break;
+                }
+            }
+        }
+    }
+    success = success && !map_light_keyframe_transaction_stage(0, 0, 0, 0, scalar, 0, rgb);
+    map_light_keyframe_transaction_abort();
+    map_width = saved_width;
+    map_height = saved_height;
+    return success;
+}
+
+#endif
+static map_cell_store_t *map_cell_store_create(size_t count) {
+    map_cell_store_t *store = xcalloc(1, sizeof(*store));
+    store->slots = xcalloc(count, sizeof(*store->slots));
+    store->headers = xcalloc(count, sizeof(*store->headers));
+    store->count = count;
+    size_t bytes = sizeof(*store) + count * (sizeof(*store->slots) + sizeof(*store->headers));
+    map_cell_allocation_count += 3;
+    map_cell_allocation_bytes += bytes;
+    map_cell_retained_bytes += bytes;
+    map_cell_peak_retained_bytes = MAX(map_cell_peak_retained_bytes, map_cell_retained_bytes);
+    return store;
+}
+
+static void map_cell_store_destroy(map_cell_store_t *store) {
+    if (store == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < store->count; i++) {
+        map_cell_release(store->slots[i]);
+    }
+    map_cell_retained_bytes -=
+        sizeof(*store) + store->count * (sizeof(*store->slots) + sizeof(*store->headers));
+    free(store->headers);
+    free(store->slots);
+    free(store);
+}
+
+static map_cell_store_t *map_cell_store_clone(const map_cell_store_t *store) {
+    if (store == NULL) {
+        return NULL;
+    }
+    map_cell_store_t *clone = map_cell_store_create(store->count);
+    memcpy(clone->headers, store->headers, store->count * sizeof(*store->headers));
+    for (size_t i = 0; i < store->count; i++) {
+        clone->slots[i] = map_cell_clone(store->slots[i]);
+    }
+    return clone;
+}
+
+static map_cell_t *map_cell_store_slot(map_cell_store_t *store, size_t index, bool create) {
+    HARD_ASSERT(store != NULL);
+    HARD_ASSERT(index < store->count);
+    if (store->slots[index] == NULL && create) {
+        store->slots[index] = map_cell_record_allocate(sizeof(*store->slots[index]));
+        store->slots[index]->painter_identity = map_cell_next_painter_identity++;
+        if (map_cell_next_painter_identity == 0) {
+            map_cell_next_painter_identity = 1;
+        }
+        store->slots[index]->fow = store->headers[index].fow;
+        store->slots[index]->structural_fow = store->headers[index].structural_fow;
+        store->headers[index].occupancy = 1;
+        store->headers[index].generation++;
+        store->headers[index].revision++;
+    }
+    return store->slots[index];
+}
+
+static void map_cell_store_clear_slot(map_cell_store_t *store, size_t index) {
+    HARD_ASSERT(store != NULL);
+    HARD_ASSERT(index < store->count);
+    if (store->slots[index] != NULL) {
+        map_cell_release(store->slots[index]);
+        store->slots[index] = NULL;
+        store->headers[index].occupancy = 0;
+        store->headers[index].revision++;
+    }
+}
+
+static bool map_cell_sparse_empty(const map_cell_t *cell) {
+    return cell != NULL && cell->layers == NULL && cell->sub_layers == NULL &&
+           cell->actors == NULL && cell->lights == NULL && cell->light_keyframe == NULL &&
+           cell->stretch_dirty == 0 && cell->stretch_top_height == 0 &&
+           cell->stretch_upper_height == 0 && cell->level_support_height == 0 &&
+           cell->render_max_height == 0;
+}
+
+static void map_cell_store_trim_slot(map_cell_store_t *store, size_t index) {
+    HARD_ASSERT(store != NULL);
+    HARD_ASSERT(index < store->count);
+    if (map_cell_sparse_empty(store->slots[index])) {
+        map_cell_store_clear_slot(store, index);
+    }
+}
+
+static bool
+map_cell_store_set_support_height(map_cell_store_t *store, size_t index, int16_t height) {
+    HARD_ASSERT(store != NULL);
+    HARD_ASSERT(index < store->count);
+    map_cell_header_t *header = &store->headers[index];
+    if (header->support_height == height) {
+        return false;
+    }
+    header->support_height = height;
+    header->generation++;
+    header->revision++;
+    return true;
+}
+
+static void
+map_cell_store_set_fow(map_cell_store_t *store, size_t index, bool fow, bool structural_fow) {
+    HARD_ASSERT(store != NULL);
+    HARD_ASSERT(index < store->count);
+    map_cell_header_t *header = &store->headers[index];
+    if ((header->fow != 0) == fow && (header->structural_fow != 0) == structural_fow) {
+        return;
+    }
+    header->fow = fow;
+    header->structural_fow = structural_fow;
+    header->generation++;
+    header->revision++;
+    if (store->slots[index] != NULL) {
+        store->slots[index]->fow = fow;
+        store->slots[index]->structural_fow = structural_fow;
+    }
+}
+
+/** Shared immutable-by-convention value for an absent sparse cell. */
+static map_cell_t map_empty_cell;
+static map_cell_t map_fow_cell = {.fow = 1};
+static map_cell_t map_structural_fow_cell = {.fow = 1, .structural_fow = 1};
+
+/** Resolve one logical slot in the circular fog-of-war cache. */
+static map_cell_t *map_cache_cell_at(map_cell_store_t *level,
+                                     int x,
+                                     int y,
+                                     int width,
+                                     int height,
+                                     int origin_x,
+                                     int origin_y,
+                                     bool create) {
     HARD_ASSERT(level != NULL);
     HARD_ASSERT(x >= 0 && x < width);
     HARD_ASSERT(y >= 0 && y < height);
 
     int physical_x = (x + origin_x) % width;
     int physical_y = (y + origin_y) % height;
-    return &level[(size_t)physical_y * width + physical_x];
+    size_t index = (size_t)physical_y * width + physical_x;
+    bool existed = level->slots[index] != NULL;
+    map_cell_t *cell = map_cell_store_slot(level, index, create);
+    if (cell != NULL) {
+        if (create && existed) {
+            level->headers[index].generation++;
+            level->headers[index].revision++;
+        }
+        return cell;
+    }
+    if (level->headers[index].structural_fow) {
+        return &map_structural_fow_cell;
+    }
+    return level->headers[index].fow ? &map_fow_cell : &map_empty_cell;
 }
 
-static struct MapCell *map_cache_cell(struct MapCell *level, int x, int y) {
+static map_cell_t *map_cache_cell(map_cell_store_t *level, int x, int y) {
     return map_cache_cell_at(level,
                              x,
                              y,
                              map_width * MAP_FOW_SIZE,
                              map_height * MAP_FOW_SIZE,
                              map_cache_origin_x,
-                             map_cache_origin_y);
+                             map_cache_origin_y,
+                             false);
 }
 
-static void map_clear_live_cell(struct MapCell *cell);
+static map_cell_t *map_cache_cell_mutable(map_cell_store_t *level, int x, int y) {
+    return map_cache_cell_at(level,
+                             x,
+                             y,
+                             map_width * MAP_FOW_SIZE,
+                             map_height * MAP_FOW_SIZE,
+                             map_cache_origin_x,
+                             map_cache_origin_y,
+                             true);
+}
+
+static size_t map_cache_physical_index(int x, int y) {
+    int width = map_width * MAP_FOW_SIZE;
+    int height = map_height * MAP_FOW_SIZE;
+    HARD_ASSERT(x >= 0 && x < width);
+    HARD_ASSERT(y >= 0 && y < height);
+    int physical_x = (x + map_cache_origin_x) % width;
+    int physical_y = (y + map_cache_origin_y) % height;
+    return (size_t)physical_y * (size_t)width + (size_t)physical_x;
+}
+
+static void map_clear_live_cell(map_cell_t *cell);
 static void map_state_transaction_record_physical(size_t level, int x, int y);
 static void map_state_transaction_record_cell(int x, int y);
 static bool map_state_transaction_should_defer_level_free(void);
 static void map_dirty_lighting_fow(int dx, int dy);
 
 /** Mark the clipped logical rectangle as explored fog. */
-static void map_cache_mark_fow(struct MapCell *level,
+static void map_cache_mark_fow(map_cell_store_t *level,
                                size_t level_index,
                                int x_start,
                                int x_end,
@@ -221,19 +1183,25 @@ static void map_cache_mark_fow(struct MapCell *level,
     for (int x = x_start; x < x_end; x++) {
         for (int y = y_start; y < y_end; y++) {
             map_state_transaction_record_physical(level_index, x, y);
-            struct MapCell *cell = map_cache_cell(level, x, y);
-            if (!cell->fow || cell->structural_fow) {
+            int physical_x = (x + map_cache_origin_x) % width;
+            int physical_y = (y + map_cache_origin_y) % height;
+            size_t index = (size_t)physical_y * width + physical_x;
+            map_cell_t *cell = map_cell_store_slot(level, index, false);
+            if (cell != NULL && (!cell->fow || cell->structural_fow)) {
                 map_clear_live_cell(cell);
                 map_cell_clear_light_state(cell);
             }
-            cell->fow = 1;
-            cell->structural_fow = 0;
+            map_cell_store_set_fow(level, index, true, false);
+            map_cell_store_trim_slot(level, index);
         }
     }
 }
 
 #define MAP_CELL_GET(_x, _y) map_cache_cell(cells, (_x), (_y))
 #define MAP_CELL_GET_MIDDLE(_x, _y) MAP_CELL_GET((_x) + MAP_STARTX, (_y) + MAP_STARTY)
+#define MAP_CELL_GET_MUTABLE(_x, _y) map_cache_cell_mutable(cells, (_x), (_y))
+#define MAP_CELL_GET_MIDDLE_MUTABLE(_x, _y) \
+    MAP_CELL_GET_MUTABLE((_x) + MAP_STARTX, (_y) + MAP_STARTY)
 
 /** Vertical screen projection of one linked physical map level. */
 #define MAP_LEVEL_PIXEL_HEIGHT 46
@@ -259,7 +1227,7 @@ bool map_select_level(int depth, bool create) {
     size_t index = (size_t)MAP2_DEPTH_INDEX(depth);
     if (level_cells[index] == NULL && create) {
         size_t count = (size_t)map_width * MAP_FOW_SIZE * (size_t)map_height * MAP_FOW_SIZE;
-        level_cells[index] = xcalloc(count, sizeof(*level_cells[index]));
+        level_cells[index] = map_cell_store_create(count);
     }
 
     current_level_index = index;
@@ -279,7 +1247,7 @@ void map_set_level_mask(uint16_t mask) {
                 level_lighting_revision[index]++;
                 continue;
             }
-            free(level_cells[index]);
+            map_cell_store_destroy(level_cells[index]);
             level_cells[index] = NULL;
             level_lighting_revision[index]++;
         }
@@ -288,10 +1256,18 @@ void map_set_level_mask(uint16_t mask) {
     lighting_set_level_mask(mask);
     map_select_level(0, true);
 }
-/**
- * Zoomed map.
- */
-static SDL_Surface *zoomed = NULL;
+
+uint16_t map_get_level_mask(void) {
+    return map_level_mask;
+}
+
+unsigned int map_active_level_count(void) {
+    unsigned int count = 0;
+    for (unsigned int index = 0; index < MAP2_LEVELS; index++) {
+        count += (map_level_mask & (UINT16_C(1) << index)) != 0;
+    }
+    return count;
+}
 /**
  * Map animation queue.
  */
@@ -318,8 +1294,8 @@ static struct {
     size_t current_level_index;
     uint16_t level_mask;
     uint64_t lighting_revision[MAP2_LEVELS];
-    MapCell *original_levels[MAP2_LEVELS];
-    MapCell *full_snapshot_levels[MAP2_LEVELS];
+    map_cell_store_t *original_levels[MAP2_LEVELS];
+    map_cell_store_t *full_snapshot_levels[MAP2_LEVELS];
     map_anim_t *animations;
     _mapdata map_data;
     uint32_t *region_fow_bitmap;
@@ -329,23 +1305,25 @@ static struct {
     struct {
         size_t level;
         size_t index;
-        MapCell value;
+        bool existed;
+        map_cell_header_t header;
+        map_cell_t *value;
     } *cells;
     size_t cells_count;
     size_t cells_capacity;
+    bool ambient_clear;
+    int ambient_scroll_x;
+    int ambient_scroll_y;
+    bool clear_target;
 } map_state_transaction;
 
 static bool map_state_transaction_should_defer_level_free(void) {
     return map_state_transaction.active && !map_state_transaction.full_snapshot;
 }
 
-static size_t map_cache_cell_count(int width, int height) {
-    return (size_t)width * MAP_FOW_SIZE * (size_t)height * MAP_FOW_SIZE;
-}
-
 static void map_state_transaction_release_snapshot(void) {
     for (size_t i = 0; i < arraysize(map_state_transaction.full_snapshot_levels); i++) {
-        free(map_state_transaction.full_snapshot_levels[i]);
+        map_cell_store_destroy(map_state_transaction.full_snapshot_levels[i]);
         map_state_transaction.full_snapshot_levels[i] = NULL;
     }
     map_anim_t *animation = map_state_transaction.animations;
@@ -364,6 +1342,9 @@ static void map_state_transaction_release_snapshot(void) {
     free(map_state_transaction.region_fow_tiles);
     map_state_transaction.region_fow_tiles = NULL;
     map_state_transaction.region_fow_tile_count = 0;
+    for (size_t i = 0; i < map_state_transaction.cells_count; i++) {
+        map_cell_release(map_state_transaction.cells[i].value);
+    }
     free(map_state_transaction.cells);
     map_state_transaction.cells = NULL;
     map_state_transaction.cells_count = 0;
@@ -448,8 +1429,7 @@ static void map_state_transaction_restore_region_fow(void) {
     }
     utarray_clear(region_map->fow->tiles);
     for (size_t i = 0; i < map_state_transaction.region_fow_tile_count; i++) {
-        utarray_push_back(region_map->fow->tiles,
-                          &map_state_transaction.region_fow_tiles[i]);
+        utarray_push_back(region_map->fow->tiles, &map_state_transaction.region_fow_tiles[i]);
         map_state_transaction.region_fow_tiles[i].path = NULL;
     }
 }
@@ -471,23 +1451,25 @@ void map_state_transaction_begin(bool full_snapshot) {
     memcpy(map_state_transaction.lighting_revision,
            level_lighting_revision,
            sizeof(level_lighting_revision));
+    map_state_transaction.ambient_clear = false;
+    map_state_transaction.ambient_scroll_x = 0;
+    map_state_transaction.ambient_scroll_y = 0;
+    map_state_transaction.clear_target = false;
 
     if (full_snapshot) {
-        size_t count = map_cache_cell_count(map_width, map_height);
         for (size_t i = 0; i < arraysize(level_cells); i++) {
-            if (level_cells[i] == NULL || count == 0) {
+            if (level_cells[i] == NULL) {
                 continue;
             }
-
-            map_state_transaction.full_snapshot_levels[i] =
-                xmalloc(count * sizeof(*level_cells[i]));
-            memcpy(map_state_transaction.full_snapshot_levels[i],
-                   level_cells[i],
-                   count * sizeof(*level_cells[i]));
+            map_state_transaction.full_snapshot_levels[i] = map_cell_store_clone(level_cells[i]);
         }
     }
 
     map_state_transaction.active = true;
+}
+
+bool map_state_transaction_active(void) {
+    return map_state_transaction.active;
 }
 
 void map_state_transaction_commit(void) {
@@ -498,7 +1480,7 @@ void map_state_transaction_commit(void) {
     if (!map_state_transaction.full_snapshot) {
         for (size_t i = 0; i < arraysize(level_cells); i++) {
             if (!(map_level_mask & (UINT16_C(1) << i))) {
-                free(level_cells[i]);
+                map_cell_store_destroy(level_cells[i]);
                 level_cells[i] = NULL;
             }
         }
@@ -506,10 +1488,22 @@ void map_state_transaction_commit(void) {
 
     bool region_changed =
         strcmp(map_state_transaction.map_data.region_name, MapData.region_name) != 0;
+    bool ambient_clear = map_state_transaction.ambient_clear;
+    int ambient_scroll_x = map_state_transaction.ambient_scroll_x;
+    int ambient_scroll_y = map_state_transaction.ambient_scroll_y;
+    bool clear_target = map_state_transaction.clear_target;
     map_state_transaction_release_snapshot();
     map_state_transaction.active = false;
     if (region_changed) {
         region_map_update(MapData.region_map, MapData.region_name);
+    }
+    if (ambient_clear) {
+        sound_ambient_clear();
+    } else if (ambient_scroll_x != 0 || ambient_scroll_y != 0) {
+        sound_ambient_mapcroll(ambient_scroll_x, ambient_scroll_y);
+    }
+    if (clear_target) {
+        cpl.target_object_index = 0;
     }
 }
 
@@ -520,7 +1514,7 @@ void map_state_transaction_abort(void) {
 
     if (map_state_transaction.full_snapshot) {
         for (size_t i = 0; i < arraysize(level_cells); i++) {
-            free(level_cells[i]);
+            map_cell_store_destroy(level_cells[i]);
             level_cells[i] = map_state_transaction.full_snapshot_levels[i];
             map_state_transaction.full_snapshot_levels[i] = NULL;
         }
@@ -529,12 +1523,19 @@ void map_state_transaction_abort(void) {
             size_t level = map_state_transaction.cells[i].level;
             size_t index = map_state_transaction.cells[i].index;
             if (level_cells[level] != NULL) {
-                level_cells[level][index] = map_state_transaction.cells[i].value;
+                if (map_state_transaction.cells[i].existed) {
+                    map_cell_release(level_cells[level]->slots[index]);
+                    level_cells[level]->slots[index] =
+                        map_cell_clone(map_state_transaction.cells[i].value);
+                } else {
+                    map_cell_store_clear_slot(level_cells[level], index);
+                }
+                level_cells[level]->headers[index] = map_state_transaction.cells[i].header;
             }
         }
         for (size_t i = 0; i < arraysize(level_cells); i++) {
             if (level_cells[i] != map_state_transaction.original_levels[i]) {
-                free(level_cells[i]);
+                map_cell_store_destroy(level_cells[i]);
                 level_cells[i] = map_state_transaction.original_levels[i];
             }
         }
@@ -557,6 +1558,7 @@ void map_state_transaction_abort(void) {
     first_anim = map_state_transaction.animations;
     map_state_transaction.animations = NULL;
 
+    map_state_transaction_release_snapshot();
     map_state_transaction.active = false;
 }
 
@@ -585,22 +1587,24 @@ static void map_state_transaction_record_physical(size_t level, int x, int y) {
     }
 
     if (map_state_transaction.cells_count == map_state_transaction.cells_capacity) {
-        map_state_transaction.cells_capacity =
-            map_state_transaction.cells_capacity == 0 ? 64 : map_state_transaction.cells_capacity * 2;
+        map_state_transaction.cells_capacity = map_state_transaction.cells_capacity == 0
+                                                   ? 64
+                                                   : map_state_transaction.cells_capacity * 2;
         map_state_transaction.cells = xreallocarray(map_state_transaction.cells,
-                                                     map_state_transaction.cells_capacity,
-                                                     sizeof(*map_state_transaction.cells));
+                                                    map_state_transaction.cells_capacity,
+                                                    sizeof(*map_state_transaction.cells));
     }
     size_t snapshot = map_state_transaction.cells_count++;
     map_state_transaction.cells[snapshot].level = level;
     map_state_transaction.cells[snapshot].index = index;
-    map_state_transaction.cells[snapshot].value = level_cells[level][index];
+    map_state_transaction.cells[snapshot].header = level_cells[level]->headers[index];
+    map_cell_t *cell = map_cell_store_slot(level_cells[level], index, false);
+    map_state_transaction.cells[snapshot].existed = cell != NULL;
+    map_state_transaction.cells[snapshot].value = map_cell_clone(cell);
 }
 
 static void map_state_transaction_record_cell(int x, int y) {
-    map_state_transaction_record_physical(current_level_index,
-                                           x + MAP_STARTX,
-                                           y + MAP_STARTY);
+    map_state_transaction_record_physical(current_level_index, x + MAP_STARTX, y + MAP_STARTY);
 }
 
 /**
@@ -642,7 +1646,7 @@ static int map_animation_test_expected_sub_layer;
 static SDL_Surface *map_animation_test_death_texture;
 #endif
 
-static int get_top_floor_height(struct MapCell *cell, int sub_layer);
+static int get_top_floor_height(map_cell_t *cell, int sub_layer);
 
 /**
  * Description of the --tiles_debug command.
@@ -748,14 +1752,25 @@ bool load_mapdef_file(const char *path) {
     return success;
 }
 
-void map_cell_snapshot(int x, int y, MapCell *snapshot) {
+void map_cell_snapshot(int x, int y, map_cell_snapshot_t *snapshot) {
     HARD_ASSERT(snapshot != NULL);
-    *snapshot = *MAP_CELL_GET_MIDDLE(x, y);
+    size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
+    const map_cell_header_t *header = &cells->headers[index];
+    *snapshot = (map_cell_snapshot_t){
+        .content_hash = map_cell_content_hash(cells->slots[index]),
+        .support_height = header->support_height,
+        .fow = header->fow,
+        .structural_fow = header->structural_fow,
+    };
 }
 
-bool map_cell_changed(int x, int y, const MapCell *snapshot) {
+bool map_cell_changed(int x, int y, const map_cell_snapshot_t *snapshot) {
     HARD_ASSERT(snapshot != NULL);
-    return memcmp(snapshot, MAP_CELL_GET_MIDDLE(x, y), sizeof(*snapshot)) != 0;
+    map_cell_snapshot_t current;
+    map_cell_snapshot(x, y, &current);
+    return snapshot->content_hash != current.content_hash ||
+           snapshot->support_height != current.support_height || snapshot->fow != current.fow ||
+           snapshot->structural_fow != current.structural_fow;
 }
 
 /**
@@ -784,20 +1799,30 @@ void load_mapdef_dat(void) {
  * @param hard
  * Hard reset
  */
-void clear_map(bool hard) {
-    size_t cells_size;
+static void map_hard_clear_abort_pending(void) {
+    socket_command_map_abort_pending();
+    gpu_map_renderer_invalidate_target(false);
+    gpu_map_renderer_invalidate_target(true);
+    minimap_invalidate_map_generation();
+}
 
-    map_light_keyframe_transaction_abort();
+void clear_map(bool hard) {
+    if (hard) {
+        map_hard_clear_abort_pending();
+    } else {
+        map_light_keyframe_transaction_abort();
+    }
 
     /* Cache the map width and height. */
     map_width = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_WIDTH));
     map_height = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT));
 
-    cells_size = sizeof(*cells) * map_width * MAP_FOW_SIZE * map_height * MAP_FOW_SIZE;
-
     for (size_t i = 0; i < arraysize(level_cells); i++) {
         if (level_cells[i] != NULL) {
-            memset(level_cells[i], 0, cells_size);
+            for (size_t cell = 0; cell < level_cells[i]->count; cell++) {
+                map_cell_store_clear_slot(level_cells[i], cell);
+                memset(&level_cells[i]->headers[cell], 0, sizeof(level_cells[i]->headers[cell]));
+            }
             level_lighting_revision[i]++;
         }
     }
@@ -813,7 +1838,13 @@ void clear_map(bool hard) {
     map_cache_origin_x = 0;
     map_cache_origin_y = 0;
     map_select_level(0, true);
-    sound_ambient_clear();
+    if (map_state_transaction.active) {
+        map_state_transaction.ambient_clear = true;
+        map_state_transaction.ambient_scroll_x = 0;
+        map_state_transaction.ambient_scroll_y = 0;
+    } else {
+        sound_ambient_clear();
+    }
     map_anims_clear();
 
     if (hard) {
@@ -875,8 +1906,8 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
                 continue;
             }
 
-            struct MapCell *old_cells = level_cells[level];
-            struct MapCell *new_cells = xcalloc((size_t)width * height, sizeof(*new_cells));
+            map_cell_store_t *old_cells = level_cells[level];
+            map_cell_store_t *new_cells = map_cell_store_create((size_t)width * height);
             for (int x = 0; x < width; x++) {
                 for (int y = 0; y < height; y++) {
                     int source_x = x + dx;
@@ -885,17 +1916,19 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
                         continue;
                     }
 
-                    new_cells[(size_t)y * width + x] = *map_cache_cell_at(old_cells,
-                                                                          source_x,
-                                                                          source_y,
-                                                                          old_w,
-                                                                          old_h,
-                                                                          old_origin_x,
-                                                                          old_origin_y);
+                    int physical_x = (source_x + old_origin_x) % old_w;
+                    int physical_y = (source_y + old_origin_y) % old_h;
+                    size_t old_index = (size_t)physical_y * old_w + physical_x;
+                    size_t new_index = (size_t)y * width + x;
+                    new_cells->headers[new_index] = old_cells->headers[old_index];
+                    map_cell_t *source = map_cell_store_slot(old_cells, old_index, false);
+                    if (source != NULL) {
+                        new_cells->slots[new_index] = map_cell_clone(source);
+                    }
                 }
             }
 
-            free(old_cells);
+            map_cell_store_destroy(old_cells);
             level_cells[level] = new_cells;
             level_lighting_revision[level]++;
         }
@@ -906,9 +1939,12 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
         if (abs(dx) >= width || abs(dy) >= height) {
             for (size_t level = 0; level < arraysize(level_cells); level++) {
                 if (level_cells[level] != NULL) {
-                    memset(level_cells[level],
-                           0,
-                           (size_t)width * height * sizeof(*level_cells[level]));
+                    for (size_t cell = 0; cell < level_cells[level]->count; cell++) {
+                        map_cell_store_clear_slot(level_cells[level], cell);
+                        memset(&level_cells[level]->headers[cell],
+                               0,
+                               sizeof(level_cells[level]->headers[cell]));
+                    }
                     level_lighting_revision[level]++;
                 }
             }
@@ -925,7 +1961,7 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
                     continue;
                 }
 
-                struct MapCell *level_cells_current = level_cells[level];
+                map_cell_store_t *level_cells_current = level_cells[level];
 
                 /* Clear only the cache strips newly exposed by the scroll.
                  * The old implementation allocated and copied the complete
@@ -935,9 +1971,13 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
                 for (int x = clear_x_start; x < clear_x_end; x++) {
                     for (int y = 0; y < height; y++) {
                         map_state_transaction_record_physical(level, x, y);
-                        memset(map_cache_cell(level_cells_current, x, y),
+                        int physical_x = (x + map_cache_origin_x) % width;
+                        int physical_y = (y + map_cache_origin_y) % height;
+                        size_t index = (size_t)physical_y * width + physical_x;
+                        map_cell_store_clear_slot(level_cells_current, index);
+                        memset(&level_cells_current->headers[index],
                                0,
-                               sizeof(struct MapCell));
+                               sizeof(level_cells_current->headers[index]));
                     }
                 }
 
@@ -946,9 +1986,13 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
                 for (int y = clear_y_start; y < clear_y_end; y++) {
                     for (int x = 0; x < width; x++) {
                         map_state_transaction_record_physical(level, x, y);
-                        memset(map_cache_cell(level_cells_current, x, y),
+                        int physical_x = (x + map_cache_origin_x) % width;
+                        int physical_y = (y + map_cache_origin_y) % height;
+                        size_t index = (size_t)physical_y * width + physical_x;
+                        map_cell_store_clear_slot(level_cells_current, index);
+                        memset(&level_cells_current->headers[index],
                                0,
-                               sizeof(struct MapCell));
+                               sizeof(level_cells_current->headers[index]));
                     }
                 }
 
@@ -986,9 +2030,17 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
 
     map_select_level(0, true);
 
-    sound_ambient_mapcroll(dx, dy);
+    if (map_state_transaction.active) {
+        if (!map_state_transaction.ambient_clear) {
+            map_state_transaction.ambient_scroll_x += dx;
+            map_state_transaction.ambient_scroll_y += dy;
+        }
+        map_state_transaction.clear_target = true;
+    } else {
+        sound_ambient_mapcroll(dx, dy);
+        cpl.target_object_index = 0;
+    }
     map_anims_mapscroll(dx, dy);
-    cpl.target_object_index = 0;
 }
 
 /** Shift independently cached levels after moving through an up/down link. */
@@ -997,7 +2049,7 @@ void map_level_scroll(int dz) {
         return;
     }
 
-    struct MapCell *shifted[MAP2_LEVELS] = {0};
+    map_cell_store_t *shifted[MAP2_LEVELS] = {0};
     uint64_t shifted_revisions[MAP2_LEVELS] = {0};
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         int source_depth = depth + dz;
@@ -1011,7 +2063,7 @@ void map_level_scroll(int dz) {
     }
 
     for (size_t i = 0; i < arraysize(level_cells); i++) {
-        free(level_cells[i]);
+        map_cell_store_destroy(level_cells[i]);
         level_cells[i] = shifted[i];
         level_lighting_revision[i] = shifted_revisions[i];
     }
@@ -1093,12 +2145,14 @@ void update_map_path(const char *map_path) {
  * Player's direction.
  */
 int map_get_player_direction(void) {
-    struct MapCell *cell;
+    map_cell_t *cell;
     int direction;
 
     cell = MAP_CELL_GET_MIDDLE(map_width - (map_width / 2) - 1, map_height - (map_height / 2) - 1);
 
-    direction = cell->anim_facing[GET_MAP_LAYER(LAYER_LIVING, MapData.player_sub_layer)];
+    direction =
+        map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_LIVING, MapData.player_sub_layer))
+            ->anim_facing;
 
     if (direction == 0) {
         return 1;
@@ -1159,7 +2213,7 @@ static int map_cell_stretch_height(int x, int y, int w, int h, int sub_layer, in
         return 0;
     }
 
-    struct MapCell *cell = map_cache_cell(cells, x, y);
+    map_cell_t *cell = map_cache_cell(cells, x, y);
 
     /* A negative floor beside stacked terrain joins to that terrain's top
      * floor. This used to infer stacked terrain from LAYER_EFFECT objects;
@@ -1174,7 +2228,7 @@ static int map_cell_stretch_height(int x, int y, int w, int h, int sub_layer, in
         }
     }
 
-    return cell->height[GET_MAP_LAYER(LAYER_FLOOR, sub_layer)];
+    return map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_FLOOR, sub_layer))->height;
 }
 
 /**
@@ -1304,7 +2358,12 @@ static void align_tile_stretch(int x, int y, int w, int h, int sub_layer) {
     right -= min_ht;
 
     stretch = abs(bottom) + (abs(left) << 8) + (abs(right) << 16) + (abs(top) << 24);
-    map_cache_cell(cells, x, y)->stretch[sub_layer] = stretch;
+    map_cell_t *cell = map_cache_cell_mutable(cells, x, y);
+    map_cell_sublayer_record_t *record = map_cell_sublayer_record(cell, sub_layer, stretch != 0);
+    if (record != NULL) {
+        record->stretch = stretch;
+        map_cell_sublayer_record_trim(cell, sub_layer);
+    }
 }
 
 /**
@@ -1324,7 +2383,7 @@ void adjust_tile_stretch(void) {
 
     for (x = xoff; x < xoff + map_width; x++) {
         for (y = yoff; y < yoff + map_height; y++) {
-            struct MapCell *cell = MAP_CELL_GET(x, y);
+            map_cell_t *cell = MAP_CELL_GET(x, y);
             if (!cell->stretch_dirty) {
                 continue;
             }
@@ -1333,6 +2392,7 @@ void adjust_tile_stretch(void) {
                 align_tile_stretch(x, y, w, h, sub_layer);
             }
             cell->stretch_dirty = 0;
+            map_cell_store_trim_slot(cells, map_cache_physical_index(x, y));
         }
     }
 }
@@ -1348,20 +2408,22 @@ static void map_mark_stretch_dirty(int x, int y) {
         for (int neighbor_y = cache_y - 1; neighbor_y <= cache_y + 1; neighbor_y++) {
             if (neighbor_x >= 0 && neighbor_x < cache_width && neighbor_y >= 0 &&
                 neighbor_y < cache_height) {
-                MAP_CELL_GET(neighbor_x, neighbor_y)->stretch_dirty = 1;
+                map_state_transaction_record_physical(current_level_index, neighbor_x, neighbor_y);
+                MAP_CELL_GET_MUTABLE(neighbor_x, neighbor_y)->stretch_dirty = 1;
             }
         }
     }
 }
 
 /** Refresh the floor-only geometry summary used by the tilestretcher. */
-static void map_update_stretch_geometry(struct MapCell *cell) {
+static void map_update_stretch_geometry(map_cell_t *cell) {
     cell->stretch_top_height = 0;
     cell->stretch_upper_height = 0;
     cell->level_support_height = 0;
 
     for (int sub_layer = NUM_SUB_LAYERS - 1; sub_layer >= 0; sub_layer--) {
-        int16_t height = cell->height[GET_MAP_LAYER(LAYER_FLOOR, sub_layer)];
+        int16_t height =
+            map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_FLOOR, sub_layer))->height;
         cell->level_support_height = MAX(cell->level_support_height, height);
         if (height == 0) {
             continue;
@@ -1378,23 +2440,29 @@ static void map_update_stretch_geometry(struct MapCell *cell) {
 }
 
 /** Refresh the maximum elevation used for whole-cell screen rejection. */
-static void map_update_render_height(struct MapCell *cell) {
+static void map_update_render_height(map_cell_t *cell) {
     cell->render_max_height = 0;
 
     for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
         cell->render_max_height =
-            MAX(cell->render_max_height, cell->height[GET_MAP_LAYER(LAYER_FLOOR, sub_layer)]);
+            MAX(cell->render_max_height,
+                map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_FLOOR, sub_layer))->height);
         cell->render_max_height =
-            MAX(cell->render_max_height, cell->height[GET_MAP_LAYER(LAYER_EFFECT, sub_layer)]);
+            MAX(cell->render_max_height,
+                map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_EFFECT, sub_layer))->height);
     }
 }
 
 /** Clear live MAP2 presentation while retaining remembered static geometry. */
-static void map_clear_live_cell(struct MapCell *cell) {
+static void map_clear_live_cell(map_cell_t *cell) {
     for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
         for (int object_layer = LAYER_ITEM; object_layer <= LAYER_EFFECT; object_layer++) {
             int layer = GET_MAP_LAYER(object_layer, sub_layer);
-            map_visibility_fade_t *fade = &cell->visibility[layer];
+            map_cell_layer_record_t *record = map_cell_layer_record(cell, layer, false);
+            if (record == NULL) {
+                continue;
+            }
+            map_visibility_fade_t *fade = &record->visibility;
             if (fade->initialized && fade->authorized) {
                 map_visibility_fade_revoke(fade, LastTick);
             }
@@ -1409,52 +2477,64 @@ static bool map_visibility_transient_layer(int layer) {
            layer == LAYER_EFFECT;
 }
 
+/** Return whether a decoded transient is the local player's living record. */
+static bool map_visibility_is_local_player(int x, int y, int object_layer, int sub_layer) {
+    return x == map_width - map_width / 2 - 1 && y == map_height - map_height / 2 - 1 &&
+           object_layer == LAYER_LIVING &&
+           sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
+}
+
+/** Authorize one decoded transient while distinguishing baseline from re-entry. */
+static void map_visibility_authorize_record(map_cell_layer_record_t *record, bool force_opaque) {
+    map_visibility_fade_t *fade = &record->visibility;
+    bool complete_snapshot_baseline =
+        !fade->initialized && map_state_transaction.active && map_state_transaction.full_snapshot;
+    map_visibility_fade_authorize(fade, UINT8_MAX, LastTick);
+    /* The first complete MAP2 snapshot is the renderer's baseline;
+     * transitions apply to later visibility enters/reappearances. */
+    if (complete_snapshot_baseline || force_opaque) {
+        fade->alpha = UINT8_MAX;
+        fade->from_alpha = UINT8_MAX;
+        fade->target_alpha = UINT8_MAX;
+        fade->transition_started = LastTick;
+    }
+}
+
 /** Clear one expired live layer after its presentation fade reaches zero. */
-static void map_clear_expired_visibility_layer(MapCell *cell,
-                                               int sub_layer,
-                                               int object_layer) {
+static void map_clear_expired_visibility_layer(map_cell_t *cell, int sub_layer, int object_layer) {
     int layer = GET_MAP_LAYER(object_layer, sub_layer);
     uint8_t object_layer_mask = UINT8_C(1) << (object_layer - 1);
 
-    cell->door[sub_layer] &= (uint8_t)~object_layer_mask;
-    cell->exit[sub_layer] &= (uint8_t)~object_layer_mask;
-    cell->priority[sub_layer] &= (uint8_t)~object_layer_mask;
-    cell->secondpass[sub_layer] &= (uint8_t)~object_layer_mask;
+    map_cell_sublayer_record_t *sub_record = map_cell_sublayer_record(cell, sub_layer, false);
+    if (sub_record != NULL) {
+        sub_record->door &= (uint8_t)~object_layer_mask;
+        sub_record->exit &= (uint8_t)~object_layer_mask;
+        sub_record->priority &= (uint8_t)~object_layer_mask;
+        sub_record->secondpass &= (uint8_t)~object_layer_mask;
+        map_cell_sublayer_record_trim(cell, sub_layer);
+    }
     if (object_layer == LAYER_LIVING) {
-        cell->anim_flags[sub_layer] = 0;
-        cell->probe[sub_layer] = 0;
-        cell->target_object_count[sub_layer] = 0;
-        cell->target_is_friend[sub_layer] = 0;
-        cell->pname[sub_layer][0] = '\0';
-        cell->pcolor[sub_layer][0] = '\0';
+        map_cell_actor_record_t *actor = map_cell_actor_record(cell, sub_layer, false);
+        if (actor != NULL) {
+            actor->anim_flags = 0;
+            actor->probe = 0;
+            actor->target_object_count = 0;
+            actor->target_is_friend = 0;
+            actor->name[0] = '\0';
+            actor->color[0] = '\0';
+            map_cell_actor_record_trim(cell, sub_layer);
+        }
     }
 
-    cell->faces[layer] = 0;
-    cell->flags[layer] = 0;
-    cell->roof[layer] = 0;
-    cell->quick_pos[layer] = 0;
-    cell->height[layer] = 0;
-    cell->zoom_x[layer] = 0;
-    cell->zoom_y[layer] = 0;
-    cell->align[layer] = 0;
-    cell->rotate[layer] = 0;
-    cell->infravision[layer] = 0;
-    cell->draw_double[layer] = 0;
-    cell->alpha[layer] = 0;
-    cell->visibility[layer].alpha = 0;
-    cell->visibility[layer].from_alpha = 0;
-    cell->visibility[layer].target_alpha = 0;
-    cell->visibility[layer].transition_started = LastTick;
-    cell->visibility[layer].last_authoritative_update = LastTick;
-    cell->visibility[layer].initialized = true;
-    cell->visibility[layer].authorized = false;
-    cell->anim_last[layer] = 0;
-    cell->anim_speed[layer] = 0;
-    cell->anim_facing[layer] = 0;
-    cell->anim_state[layer] = 0;
-    cell->glow[layer][0] = '\0';
-    cell->glow_speed[layer] = 0;
-    cell->glow_state[layer] = 0;
+    map_cell_layer_record_t *record = map_cell_layer_record(cell, layer, false);
+    if (record != NULL) {
+        /* Preserve a zero-alpha tombstone for this cache generation.  A later
+         * authoritative reappearance can then fade in from zero instead of
+         * being mistaken for the initial complete-snapshot baseline. */
+        map_visibility_fade_t visibility = record->visibility;
+        memset(record, 0, sizeof(*record));
+        record->visibility = visibility;
+    }
 }
 
 /**
@@ -1520,98 +2600,95 @@ void map_set_data(int x,
                   uint8_t exit,
                   const char *glow,
                   uint8_t glow_speed) {
-    struct MapCell *cell;
+    map_cell_t *cell;
     int sub_layer;
 
     map_state_transaction_record_cell(x, y);
-    cell = MAP_CELL_GET_MIDDLE(x, y);
+    cell = MAP_CELL_GET_MIDDLE_MUTABLE(x, y);
     sub_layer = layer / NUM_LAYERS;
     int object_layer = (layer % NUM_LAYERS) + 1;
-    bool stretch_geometry_changed = object_layer == LAYER_FLOOR &&
-                                    (cell->faces[layer] != face || cell->height[layer] != height);
-    bool lighting_geometry_changed = object_layer == LAYER_FLOOR &&
-                                     (cell->faces[layer] != face || cell->height[layer] != height);
-    bool render_height_changed =
-        (object_layer == LAYER_FLOOR || object_layer == LAYER_EFFECT) &&
-        cell->height[layer] != height;
+    const map_cell_layer_record_t *old_layer = map_cell_layer_record_read(cell, layer);
+    bool stretch_geometry_changed =
+        object_layer == LAYER_FLOOR && (old_layer->face != face || old_layer->height != height);
+    bool lighting_geometry_changed =
+        object_layer == LAYER_FLOOR && (old_layer->face != face || old_layer->height != height);
+    bool render_height_changed = (object_layer == LAYER_FLOOR || object_layer == LAYER_EFFECT) &&
+                                 old_layer->height != height;
+    map_cell_layer_record_t *layer_record = map_cell_layer_record(cell, layer, true);
+    map_cell_sublayer_record_t *sub_record = map_cell_sublayer_record(cell, sub_layer, true);
+    map_cell_actor_record_t *actor_record =
+        object_layer == LAYER_LIVING ? map_cell_actor_record(cell, sub_layer, true) : NULL;
 
-    if (anim_speed != 0 && cell->faces[layer] != face) {
-        cell->anim_state[layer] = 0;
+    if (anim_speed != 0 && old_layer->face != face) {
+        layer_record->anim_state = 0;
     }
 
     uint8_t object_layer_mask = UINT8_C(1) << (object_layer - 1);
-    cell->priority[sub_layer] &= ~object_layer_mask;
-    cell->secondpass[sub_layer] &= ~object_layer_mask;
+    sub_record->priority &= (uint8_t)~object_layer_mask;
+    sub_record->secondpass &= (uint8_t)~object_layer_mask;
     if (priority) {
-        cell->priority[sub_layer] |= object_layer_mask;
+        sub_record->priority |= object_layer_mask;
     }
     if (secondpass) {
-        cell->secondpass[sub_layer] |= object_layer_mask;
+        sub_record->secondpass |= object_layer_mask;
     }
 
     bool retain_visibility_fade = face == 0 && map_visibility_transient_layer(object_layer) &&
-                                 cell->faces[layer] != 0 &&
-                                 cell->visibility[layer].initialized &&
-                                 cell->visibility[layer].alpha != 0;
+                                  old_layer->face != 0 && old_layer->visibility.initialized &&
+                                  old_layer->visibility.alpha != 0;
     if (retain_visibility_fade) {
-        map_visibility_fade_revoke(&cell->visibility[layer], LastTick);
-        cell->door[sub_layer] &= (uint8_t)~object_layer_mask;
-        cell->exit[sub_layer] &= (uint8_t)~object_layer_mask;
-        cell->priority[sub_layer] &= (uint8_t)~object_layer_mask;
-        cell->secondpass[sub_layer] &= (uint8_t)~object_layer_mask;
+        map_visibility_fade_revoke(&layer_record->visibility, LastTick);
+        sub_record->door &= (uint8_t)~object_layer_mask;
+        sub_record->exit &= (uint8_t)~object_layer_mask;
+        sub_record->priority &= (uint8_t)~object_layer_mask;
+        sub_record->secondpass &= (uint8_t)~object_layer_mask;
         if (object_layer == LAYER_LIVING) {
-            cell->anim_flags[sub_layer] = 0;
-            cell->probe[sub_layer] = 0;
-            cell->target_object_count[sub_layer] = 0;
-            cell->target_is_friend[sub_layer] = 0;
-            cell->pname[sub_layer][0] = '\0';
-            cell->pcolor[sub_layer][0] = '\0';
+            actor_record->probe = 0;
+            actor_record->target_is_friend = 0;
+            actor_record->anim_flags = 0;
+            actor_record->target_object_count = 0;
+            actor_record->name[0] = '\0';
+            actor_record->color[0] = '\0';
+            map_cell_actor_record_trim(cell, sub_layer);
         }
+        map_cell_sublayer_record_trim(cell, sub_layer);
+        map_cell_store_trim_slot(cells, map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY));
         return;
     }
 
-    cell->faces[layer] = face;
-    cell->flags[layer] = obj_flags;
-    cell->roof[layer] = roof;
-    cell->door[sub_layer] &= ~object_layer_mask;
+    layer_record->face = face;
+    layer_record->flags = obj_flags;
+    layer_record->roof = roof;
+    sub_record->door &= (uint8_t)~object_layer_mask;
     if (door) {
-        cell->door[sub_layer] |= object_layer_mask;
+        sub_record->door |= object_layer_mask;
     }
-    cell->exit[sub_layer] &= ~object_layer_mask;
+    sub_record->exit &= (uint8_t)~object_layer_mask;
     if (exit) {
-        cell->exit[sub_layer] |= object_layer_mask;
+        sub_record->exit |= object_layer_mask;
     }
 
-    cell->quick_pos[layer] = quick_pos;
-
-    snprintf(VS(cell->glow[layer]), "%s", glow);
-
-    cell->height[layer] = height;
-    cell->zoom_x[layer] = zoom_x;
-    cell->zoom_y[layer] = zoom_y;
-    cell->align[layer] = align;
-    cell->draw_double[layer] = draw_double;
-    cell->alpha[layer] = alpha;
+    layer_record->quick_pos = quick_pos;
+    snprintf(VS(layer_record->glow), "%s", glow);
+    layer_record->height = height;
+    layer_record->zoom_x = zoom_x;
+    layer_record->zoom_y = zoom_y;
+    layer_record->align = align;
+    layer_record->draw_double = draw_double;
+    layer_record->alpha = alpha;
     if (map_visibility_transient_layer(object_layer)) {
-        map_visibility_fade_t *fade = &cell->visibility[layer];
+        map_visibility_fade_t *fade = &layer_record->visibility;
         if (face == 0) {
             map_visibility_fade_revoke(fade, LastTick);
         } else {
-            bool first_authoritative_record = !fade->initialized;
-            map_visibility_fade_authorize(fade, UINT8_MAX, LastTick);
-            /* The first complete MAP2 snapshot is the renderer's baseline;
-             * transitions apply to later visibility enters/reappearances. */
-            if (first_authoritative_record) {
-                fade->alpha = UINT8_MAX;
-                fade->from_alpha = UINT8_MAX;
-                fade->target_alpha = UINT8_MAX;
-                fade->transition_started = LastTick;
-            }
+            map_visibility_authorize_record(
+                layer_record,
+                map_visibility_is_local_player(x, y, object_layer, sub_layer));
         }
     }
-    cell->rotate[layer] = rotate;
-    cell->infravision[layer] = infravision;
-    cell->glow_speed[layer] = glow_speed;
+    layer_record->rotate = rotate;
+    layer_record->infravision = infravision;
+    layer_record->glow_speed = glow_speed;
 
     if (stretch_geometry_changed) {
         map_update_stretch_geometry(cell);
@@ -1622,40 +2699,52 @@ void map_set_data(int x,
         map_update_render_height(cell);
     }
 
-    cell->anim_speed[layer] = anim_speed;
-    cell->anim_facing[layer] = anim_facing;
+    layer_record->anim_speed = anim_speed;
+    layer_record->anim_facing = anim_facing;
 
     if (object_layer == LAYER_LIVING) {
-        if (cell->target_object_count[sub_layer] != target_object_count ||
-            cell->target_is_friend[sub_layer] != target_is_friend) {
+        if (actor_record->target_object_count != target_object_count ||
+            actor_record->target_is_friend != target_is_friend) {
             cpl.target_object_index = 0;
         }
 
-        cell->probe[sub_layer] = probe;
-        cell->target_object_count[sub_layer] = target_object_count;
-        cell->target_is_friend[sub_layer] = target_is_friend;
-        snprintf(VS(cell->pcolor[sub_layer]), "%s", name_color);
-        snprintf(VS(cell->pname[sub_layer]), "%s", name);
+        actor_record->probe = probe;
+        actor_record->target_object_count = target_object_count;
+        actor_record->target_is_friend = target_is_friend;
+        snprintf(VS(actor_record->color), "%s", name_color);
+        snprintf(VS(actor_record->name), "%s", name);
 
-        if (anim_flags & ANIM_FLAG_ATTACKING &&
-            !(cell->anim_flags[sub_layer] & ANIM_FLAG_ATTACKING)) {
-            cell->anim_state[layer] = 0;
+        if (anim_flags & ANIM_FLAG_ATTACKING && !(actor_record->anim_flags & ANIM_FLAG_ATTACKING)) {
+            layer_record->anim_state = 0;
         } else if (anim_flags & ANIM_FLAG_MOVING &&
-                   !(cell->anim_flags[sub_layer] & ANIM_FLAG_MOVING)) {
-            cell->anim_state[layer] = anim_state;
+                   !(actor_record->anim_flags & ANIM_FLAG_MOVING)) {
+            layer_record->anim_state = anim_state;
         }
 
-        cell->anim_flags[sub_layer] = anim_flags;
+        actor_record->anim_flags = anim_flags;
     }
 
     if (anim_speed != 0) {
         if (!check_animation_status(face)) {
-            cell->faces[layer] = 0;
-            cell->anim_speed[layer] = 0;
+            layer_record->face = 0;
+            layer_record->anim_speed = 0;
         }
     } else {
         image_request_face(face);
     }
+
+    if (face == 0 && layer_record->visibility.initialized && !layer_record->visibility.authorized &&
+        layer_record->visibility.alpha == 0) {
+        memset(&layer_record->visibility, 0, sizeof(layer_record->visibility));
+    }
+    if (object_layer == LAYER_LIVING) {
+        map_cell_actor_record_trim(cell, sub_layer);
+    }
+    map_cell_sublayer_record_trim(cell, sub_layer);
+    if (map_cell_layer_record_empty(layer_record)) {
+        map_cell_layer_record_remove(cell, layer);
+    }
+    map_cell_store_trim_slot(cells, map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY));
 
     if (lighting_geometry_changed) {
         level_lighting_revision[current_level_index]++;
@@ -1672,22 +2761,31 @@ void map_set_data(int x,
  * @param hard Whether to discard cached geometry instead of retaining FOW.
  */
 void map_clear_cell(int x, int y, bool hard) {
-    struct MapCell *cell;
     map_state_transaction_record_cell(x, y);
-    cell = MAP_CELL_GET_MIDDLE(x, y);
+    size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
+    map_cell_t *cell = map_cell_store_slot(cells, index, false);
+    if (cell == NULL) {
+        if (hard) {
+            map_cell_store_set_support_height(cells, index, 0);
+        }
+        map_cell_store_set_fow(cells, index, true, false);
+        return;
+    }
     bool had_known_light = false;
-    for (size_t sub_layer = 0; sub_layer < arraysize(cell->light_known); sub_layer++) {
-        had_known_light |= cell->light_known[sub_layer] != 0;
+    for (size_t sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        had_known_light |= map_cell_light_record_read(cell, sub_layer)->known != 0;
     }
 
     if (hard) {
         bool had_floor_geometry = false;
         for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-            had_floor_geometry |= cell->faces[GET_MAP_LAYER(LAYER_FLOOR, sub_layer)] != 0;
+            had_floor_geometry |=
+                map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_FLOOR, sub_layer))->face != 0;
         }
 
-        memset(cell, 0, sizeof(*cell));
-        cell->fow = 1;
+        map_cell_store_clear_slot(cells, index);
+        map_cell_store_set_support_height(cells, index, 0);
+        map_cell_store_set_fow(cells, index, true, false);
 
         if (had_floor_geometry) {
             map_mark_stretch_dirty(x, y);
@@ -1700,10 +2798,10 @@ void map_clear_cell(int x, int y, bool hard) {
         return;
     }
 
-    cell->fow = 1;
-    cell->structural_fow = 0;
     map_clear_live_cell(cell);
     map_cell_clear_light_state(cell);
+    map_cell_store_set_fow(cells, index, true, false);
+    map_cell_store_trim_slot(cells, index);
 
     if (had_known_light) {
         level_lighting_revision[current_level_index]++;
@@ -1713,31 +2811,29 @@ void map_clear_cell(int x, int y, bool hard) {
 /** Store base-map elevation needed to project independently cached upper levels. */
 void map_set_structural_support_height(int x, int y, int16_t height) {
     map_state_transaction_record_cell(x, y);
-    struct MapCell *cell = MAP_CELL_GET_MIDDLE(x, y);
-
-    if (cell->structural_support_height == height) {
+    size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
+    if (!map_cell_store_set_support_height(cells, index, height)) {
         return;
     }
-
-    cell->structural_support_height = height;
     level_lighting_revision[current_level_index]++;
 }
 
 /** Apply an explicit server visibility state after a tile's layer deltas. */
 void map_set_fow(int x, int y, bool fow) {
     map_state_transaction_record_cell(x, y);
-    struct MapCell *cell = MAP_CELL_GET_MIDDLE(x, y);
+    size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
+    map_cell_t *cell = map_cell_store_slot(cells, index, false);
 
-    if (fow && !cell->fow) {
+    if (fow && cell != NULL && !cell->fow) {
         map_clear_cell(x, y, false);
     }
 
-    if ((cell->fow != 0) == fow && (cell->structural_fow != 0) == fow) {
+    map_cell_header_t *header = &cells->headers[index];
+    if ((header->fow != 0) == fow && (header->structural_fow != 0) == fow) {
         return;
     }
 
-    cell->fow = fow;
-    cell->structural_fow = fow;
+    map_cell_store_set_fow(cells, index, fow, fow);
     level_lighting_revision[current_level_index]++;
 }
 
@@ -1758,26 +2854,25 @@ bool map_get_fow(int x, int y) {
  * Q5.11 scalar radiance to set.
  */
 void map_set_light_radiance(int x, int y, int sub_layer, uint16_t radiance) {
-    struct MapCell *cell;
+    map_cell_t *cell;
 
     map_state_transaction_record_cell(x, y);
-    cell = MAP_CELL_GET_MIDDLE(x, y);
-    bool changed = !cell->light_known[sub_layer] || cell->light_radiance[sub_layer] != radiance;
-    cell->light_radiance[sub_layer] = radiance;
-    cell->light_known[sub_layer] = 1;
-    if (!(cell->light_rgb_explicit & (UINT8_C(1) << sub_layer))) {
+    cell = MAP_CELL_GET_MIDDLE_MUTABLE(x, y);
+    map_cell_light_record_t *light = map_cell_light_record(cell, sub_layer, true);
+    bool changed = !light->known || light->radiance != radiance;
+    light->radiance = radiance;
+    light->known = 1;
+    if (!light->rgb_explicit) {
         for (size_t channel = 0; channel < 3; channel++) {
-            cell->light_rgb_radiance[sub_layer][channel] = radiance;
+            light->rgb_radiance[channel] = radiance;
         }
     }
     /* A current endpoint without a timed extension is an authoritative
      * snap/rebase. The following keyframe extension, when present, replaces
      * this provisional target in the same tile transaction. */
-    cell->light_next_radiance[sub_layer] = radiance;
-    cell->light_next_known[sub_layer] = 0;
-    memcpy(cell->light_next_rgb_radiance[sub_layer],
-           cell->light_rgb_radiance[sub_layer],
-           sizeof(cell->light_next_rgb_radiance[sub_layer]));
+    light->next_radiance = radiance;
+    light->next_known = 0;
+    memcpy(light->next_rgb_radiance, light->rgb_radiance, sizeof(light->next_rgb_radiance));
     if (changed && !cell->fow) {
         level_lighting_revision[current_level_index]++;
     }
@@ -1789,31 +2884,40 @@ void map_set_light_rgb_radiance(int x,
                                 uint8_t bitmap,
                                 const uint16_t rgb[NUM_SUB_LAYERS][3]) {
     map_state_transaction_record_cell(x, y);
-    struct MapCell *cell = MAP_CELL_GET_MIDDLE(x, y);
-    bool changed = cell->light_rgb_explicit != bitmap;
+    size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
+    map_cell_t *cell = map_cell_store_slot(cells, index, bitmap != 0);
+    if (cell == NULL) {
+        return;
+    }
+    bool changed = map_cell_light_rgb_bitmap(cell) != bitmap;
 
     for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        bool explicit_rgb = (bitmap & (UINT8_C(1) << sub_layer)) != 0;
+        map_cell_light_record_t *light = map_cell_light_record(cell, sub_layer, explicit_rgb);
+        if (light == NULL) {
+            continue;
+        }
         uint16_t resolved[3];
-        if (bitmap & (UINT8_C(1) << sub_layer)) {
+        if (explicit_rgb) {
             memcpy(resolved, rgb[sub_layer], sizeof(resolved));
         } else {
             for (size_t channel = 0; channel < 3; channel++) {
-                resolved[channel] = cell->light_radiance[sub_layer];
+                resolved[channel] = light->radiance;
             }
         }
 
-        if (memcmp(cell->light_rgb_radiance[sub_layer], resolved, sizeof(resolved)) != 0) {
-            memcpy(cell->light_rgb_radiance[sub_layer], resolved, sizeof(resolved));
+        if (memcmp(light->rgb_radiance, resolved, sizeof(resolved)) != 0) {
+            memcpy(light->rgb_radiance, resolved, sizeof(resolved));
             changed = true;
         }
+        light->rgb_explicit = explicit_rgb;
+        memcpy(light->next_rgb_radiance, light->rgb_radiance, sizeof(light->next_rgb_radiance));
+        light->next_rgb_explicit = light->rgb_explicit;
+        map_cell_light_record_trim(cell, sub_layer);
     }
-
-    cell->light_rgb_explicit = bitmap;
-    memcpy(cell->light_next_rgb_radiance,
-           cell->light_rgb_radiance,
-           sizeof(cell->light_next_rgb_radiance));
-    cell->light_next_rgb_explicit = bitmap;
-    if (changed && !cell->fow) {
+    bool visible = !cell->fow;
+    map_cell_store_trim_slot(cells, index);
+    if (changed && visible) {
         level_lighting_revision[current_level_index]++;
     }
 }
@@ -1829,60 +2933,66 @@ void map_set_light_keyframe(int x,
                             uint8_t rgb_bitmap,
                             const uint16_t rgb[NUM_SUB_LAYERS][3]) {
     map_state_transaction_record_cell(x, y);
-    struct MapCell *cell = MAP_CELL_GET_MIDDLE(x, y);
-    if (generation == 0 || start_seconds >= end_seconds ||
-        (cell->light_keyframe_valid && generation < cell->light_keyframe_generation)) {
+    if (generation == 0 || start_seconds >= end_seconds) {
         return;
     }
+    size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
+    map_cell_t *cell = map_cell_store_slot(cells, index, false);
+    if (cell != NULL && map_cell_light_keyframe_record_read(cell)->valid &&
+        generation < map_cell_light_keyframe_record_read(cell)->generation) {
+        return;
+    }
+    cell = map_cell_store_slot(cells, index, true);
 
-    bool changed = !cell->light_keyframe_valid || cell->light_keyframe_generation != generation ||
-                   cell->light_keyframe_start_seconds != start_seconds ||
-                   cell->light_keyframe_end_seconds != end_seconds ||
-                   cell->light_keyframe_flags != flags;
-    cell->light_keyframe_generation = generation;
-    cell->light_keyframe_start_seconds = start_seconds;
-    cell->light_keyframe_end_seconds = end_seconds;
-    cell->light_keyframe_flags = flags;
-    cell->light_keyframe_valid = 1;
+    map_cell_light_keyframe_record_t *keyframe = map_cell_light_keyframe_record(cell, true);
+    bool changed = !keyframe->valid || keyframe->generation != generation ||
+                   keyframe->start_seconds != start_seconds ||
+                   keyframe->end_seconds != end_seconds || keyframe->flags != flags;
+    keyframe->generation = generation;
+    keyframe->start_seconds = start_seconds;
+    keyframe->end_seconds = end_seconds;
+    keyframe->flags = flags;
+    keyframe->valid = 1;
     for (uint8_t sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-        uint16_t next_scalar = (scalar_bitmap & (UINT8_C(1) << sub_layer))
-                                   ? scalar[sub_layer]
-                                   : cell->light_radiance[sub_layer];
-        if (!cell->light_next_known[sub_layer] || cell->light_next_radiance[sub_layer] != next_scalar) {
+        bool scalar_present = (scalar_bitmap & (UINT8_C(1) << sub_layer)) != 0;
+        bool rgb_present = (rgb_bitmap & (UINT8_C(1) << sub_layer)) != 0;
+        map_cell_light_record_t *light =
+            map_cell_light_record(cell, sub_layer, scalar_present || rgb_present);
+        if (light == NULL) {
+            continue;
+        }
+        uint16_t next_scalar =
+            (scalar_bitmap & (UINT8_C(1) << sub_layer)) ? scalar[sub_layer] : light->radiance;
+        if (!light->next_known || light->next_radiance != next_scalar) {
             changed = true;
         }
-        cell->light_next_radiance[sub_layer] = next_scalar;
-        cell->light_next_known[sub_layer] = 1;
+        light->next_radiance = next_scalar;
+        light->next_known = 1;
         for (size_t channel = 0; channel < 3; channel++) {
             uint16_t next_rgb = (rgb_bitmap & (UINT8_C(1) << sub_layer))
                                     ? rgb[sub_layer][channel]
-                                    : cell->light_rgb_radiance[sub_layer][channel];
-            if (cell->light_next_rgb_radiance[sub_layer][channel] != next_rgb) {
+                                    : light->rgb_radiance[channel];
+            if (light->next_rgb_radiance[channel] != next_rgb) {
                 changed = true;
             }
-            cell->light_next_rgb_radiance[sub_layer][channel] = next_rgb;
+            light->next_rgb_radiance[channel] = next_rgb;
         }
+        light->next_rgb_explicit = (rgb_bitmap & (UINT8_C(1) << sub_layer)) != 0;
     }
-    if (cell->light_next_rgb_explicit != rgb_bitmap) {
-        changed = true;
-    }
-    cell->light_next_rgb_explicit = rgb_bitmap;
     if (changed && !cell->fow) {
         level_lighting_revision[current_level_index]++;
     }
 }
 
 bool map_light_keyframe_transaction_begin(uint64_t generation,
-                                           uint64_t start_seconds,
-                                           uint64_t end_seconds,
-                                           uint8_t flags) {
+                                          uint64_t start_seconds,
+                                          uint64_t end_seconds,
+                                          uint8_t flags) {
     if (generation == 0 || end_seconds <= start_seconds || flags == 0 ||
         (flags & ~(MAP2_LIGHT_KEYFRAME_CONTINUOUS | MAP2_LIGHT_KEYFRAME_SNAP)) != 0) {
         return false;
     }
     map_light_keyframe_transaction_abort();
-    map_light_keyframe_transaction.entries =
-        xcalloc(MAP_LIGHT_KEYFRAME_STAGE_MAX, sizeof(*map_light_keyframe_transaction.entries));
     map_light_keyframe_transaction.active = true;
     map_light_keyframe_transaction.generation = generation;
     map_light_keyframe_transaction.start_seconds = start_seconds;
@@ -1896,16 +3006,30 @@ bool map_light_keyframe_transaction_pending(void) {
 }
 
 bool map_light_keyframe_transaction_stage(int depth,
-                                           int x,
-                                           int y,
-                                           uint8_t scalar_bitmap,
-                                           const uint16_t scalar[NUM_SUB_LAYERS],
-                                           uint8_t rgb_bitmap,
-                                           const uint16_t rgb[NUM_SUB_LAYERS][3]) {
+                                          int x,
+                                          int y,
+                                          uint8_t scalar_bitmap,
+                                          const uint16_t scalar[NUM_SUB_LAYERS],
+                                          uint8_t rgb_bitmap,
+                                          const uint16_t rgb[NUM_SUB_LAYERS][3]) {
     if (!map_light_keyframe_transaction.active || depth < -MAP2_MAX_DEPTH ||
-        depth > MAP2_MAX_DEPTH || x < 0 || y < 0 ||
-        map_light_keyframe_transaction.count >= MAP_LIGHT_KEYFRAME_STAGE_MAX) {
+        depth > MAP2_MAX_DEPTH || x < 0 || x >= map_width || y < 0 || y >= map_height ||
+        map_width <= 0 || map_height <= 0) {
         return false;
+    }
+    size_t maximum = (size_t)map_width * (size_t)map_height * MAP2_LEVELS;
+    if (map_light_keyframe_transaction.count >= maximum) {
+        return false;
+    }
+    if (map_light_keyframe_transaction.count == map_light_keyframe_transaction.capacity) {
+        size_t capacity = map_light_keyframe_transaction.capacity == 0
+                              ? MIN((size_t)256, maximum)
+                              : MIN(map_light_keyframe_transaction.capacity * 2, maximum);
+        map_light_keyframe_transaction.entries =
+            xreallocarray(map_light_keyframe_transaction.entries,
+                          capacity,
+                          sizeof(*map_light_keyframe_transaction.entries));
+        map_light_keyframe_transaction.capacity = capacity;
     }
     map_light_keyframe_stage_t *entry =
         &map_light_keyframe_transaction.entries[map_light_keyframe_transaction.count++];
@@ -1957,10 +3081,10 @@ void map_light_keyframe_transaction_abort(void) {
  * @return
  * The height.
  */
-static int get_top_floor_height(struct MapCell *cell, int sub_layer) {
+static int get_top_floor_height(map_cell_t *cell, int sub_layer) {
     int16_t height;
 
-    height = cell->height[GET_MAP_LAYER(LAYER_FLOOR, sub_layer)];
+    height = map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_FLOOR, sub_layer))->height;
 
     return MAX(0, height);
 }
@@ -1972,33 +3096,38 @@ static void map_animation_redraw_request(int layer) {
     }
 }
 
-static void map_animate_object(struct MapCell *cell, int layer) {
+static bool map_animate_object(map_cell_t *cell, int layer) {
     Animations *animation;
+    map_cell_layer_record_t *record = map_cell_layer_record(cell, layer, false);
 
-    if (cell->faces[layer] == 0 || cell->anim_speed[layer] == 0 || cell->anim_facing[layer] == 0) {
-        return;
+    if (record == NULL || record->face == 0 || record->anim_speed == 0 ||
+        record->anim_facing == 0) {
+        return false;
     }
 
-    animation = animation_get(cell->faces[layer]);
+    animation = animation_get(record->face);
     if (animation == NULL) {
-        cell->faces[layer] = 0;
-        cell->anim_speed[layer] = 0;
-        return;
+        record->face = 0;
+        record->anim_speed = 0;
+        return true;
     }
 
-    if (!(cell->flags[layer] & FFLAG_SLEEP) && !(cell->flags[layer] & FFLAG_PARALYZED)) {
-        cell->anim_state[layer]++;
+    if (!(record->flags & FFLAG_SLEEP) && !(record->flags & FFLAG_PARALYZED)) {
+        record->anim_state++;
         map_animation_redraw_request(layer);
+    } else {
+        return false;
     }
 
     /* If beyond drawable states, reset */
-    if (cell->anim_state[layer] >= animation->frame) {
-        cell->anim_state[layer] = 0;
+    if (record->anim_state >= animation->frame) {
+        record->anim_state = 0;
     }
+    return true;
 }
 
 /** Advance presentation-only live alpha without mutating MAP2 authority. */
-static void map_animate_visibility(int depth, int cache_x, int cache_y, MapCell *cell) {
+static bool map_animate_visibility(int depth, int cache_x, int cache_y, map_cell_t *cell) {
     bool changed = false;
     int player_x = map_width * MAP_FOW_SIZE / 2;
     int player_y = map_height * MAP_FOW_SIZE / 2;
@@ -2008,31 +3137,50 @@ static void map_animate_visibility(int depth, int cache_x, int cache_y, MapCell 
                 continue;
             }
             int layer = GET_MAP_LAYER(object_layer, sub_layer);
-            map_visibility_fade_t *fade = &cell->visibility[layer];
+            map_cell_layer_record_t *record = map_cell_layer_record(cell, layer, false);
+            if (record == NULL) {
+                continue;
+            }
+            map_visibility_fade_t *fade = &record->visibility;
             if (!fade->initialized) {
                 continue;
             }
-            if (!fade->authorized || cell->faces[layer] == 0 || cell->fow) {
+            bool local_player = depth == 0 && cache_x == player_x && cache_y == player_y &&
+                                object_layer == LAYER_LIVING &&
+                                sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
+            if (!fade->authorized || record->face == 0 || cell->fow) {
                 map_visibility_fade_revoke(fade, LastTick);
             } else {
-                uint8_t target = map_visibility_field_alpha(
-                    map_visibility_field_weight(cache_x - player_x, cache_y - player_y));
-                bool local_player = depth == 0 && cache_x == player_x && cache_y == player_y &&
-                                    object_layer == LAYER_LIVING &&
-                                    sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
                 if (local_player) {
-                    target = UINT8_MAX;
+                    changed |= fade->alpha != UINT8_MAX || fade->target_alpha != UINT8_MAX;
+                    fade->alpha = UINT8_MAX;
+                    fade->from_alpha = UINT8_MAX;
+                    fade->target_alpha = UINT8_MAX;
+                    fade->transition_started = LastTick;
+                } else {
+                    map_visibility_fade_set_target(fade, UINT8_MAX, LastTick);
                 }
-                map_visibility_fade_set_target(fade, target, LastTick);
             }
-            changed |= map_visibility_fade_advance(fade, LastTick);
-            if (!fade->authorized && fade->alpha == 0 && cell->faces[layer] != 0) {
+            if (!local_player || !fade->authorized || record->face == 0 || cell->fow) {
+                changed |= map_visibility_fade_advance(fade, LastTick);
+            }
+            if (!fade->authorized && fade->alpha == 0 && record->face != 0) {
                 map_clear_expired_visibility_layer(cell, sub_layer, object_layer);
             }
         }
     }
     if (changed) {
         map_animation_redraw_request(LAYER_LIVING);
+    }
+    return changed;
+}
+
+/** Publish a presentation-only record change to retained painter cohorts. */
+static void map_cell_presentation_changed(size_t physical_index) {
+    map_cell_header_t *header = &cells->headers[physical_index];
+    header->revision++;
+    if (header->revision == 0) {
+        header->generation++;
     }
 }
 
@@ -2043,8 +3191,8 @@ static void map_animate_visibility(int depth, int cache_x, int cache_y, MapCell 
  * deterministic.
  */
 static void map_temporal_lighting_update(void) {
-    if (!MapData.light_keyframe_valid || MapData.light_keyframe_end_seconds <=
-                                                     MapData.light_keyframe_start_seconds) {
+    if (!MapData.light_keyframe_valid ||
+        MapData.light_keyframe_end_seconds <= MapData.light_keyframe_start_seconds) {
         map_temporal_lighting_bucket = UINT64_MAX;
         return;
     }
@@ -2072,21 +3220,25 @@ static void map_temporal_lighting_update(void) {
             continue;
         }
         for (size_t index = 0; index < cell_count && !endpoint_differs; index++) {
-            const MapCell *cell = &level_cells[level][index];
-            if (!cell->light_keyframe_valid) {
+            const map_cell_t *cell = map_cell_store_slot(level_cells[level], index, false);
+            if (cell == NULL) {
+                continue;
+            }
+            if (!map_cell_light_keyframe_record_read(cell)->valid) {
                 continue;
             }
             for (uint8_t sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                if (!cell->light_next_known[sub_layer]) {
+                if (!map_cell_light_record_read(cell, sub_layer)->next_known) {
                     continue;
                 }
-                if (cell->light_radiance[sub_layer] != cell->light_next_radiance[sub_layer]) {
+                if (map_cell_light_record_read(cell, sub_layer)->radiance !=
+                    map_cell_light_record_read(cell, sub_layer)->next_radiance) {
                     endpoint_differs = true;
                     break;
                 }
                 for (size_t channel = 0; channel < 3; channel++) {
-                    if (cell->light_rgb_radiance[sub_layer][channel] !=
-                        cell->light_next_rgb_radiance[sub_layer][channel]) {
+                    if (map_cell_light_record_read(cell, sub_layer)->rgb_radiance[channel] !=
+                        map_cell_light_record_read(cell, sub_layer)->next_rgb_radiance[channel]) {
                         endpoint_differs = true;
                         break;
                     }
@@ -2106,7 +3258,7 @@ static void map_temporal_lighting_update(void) {
 
 void map_animate(void) {
     int x, y, layer;
-    struct MapCell *cell;
+    map_cell_t *cell;
 
     map_temporal_lighting_update();
 
@@ -2119,33 +3271,47 @@ void map_animate(void) {
         for (x = 0; x < map_width; x++) {
             for (y = 0; y < map_height; y++) {
                 cell = MAP_CELL_GET_MIDDLE(x, y);
-
-                map_animate_visibility(depth, x + MAP_STARTX, y + MAP_STARTY, cell);
+                size_t physical_index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
+                bool cell_changed =
+                    map_animate_visibility(depth, x + MAP_STARTX, y + MAP_STARTY, cell);
 
                 if (cell->fow) {
+                    map_cell_store_trim_slot(cells, physical_index);
+                    if (cell_changed) {
+                        map_cell_presentation_changed(physical_index);
+                    }
                     continue;
                 }
 
                 for (layer = 0; layer < NUM_REAL_LAYERS; layer++) {
-                    if (cell->glow_speed[layer] > 1) {
-                        cell->glow_state[layer]++;
+                    map_cell_layer_record_t *record = map_cell_layer_record(cell, layer, false);
+                    if (record == NULL) {
+                        continue;
+                    }
+                    if (record->glow_speed > 1) {
+                        record->glow_state++;
                         map_animation_redraw_request(layer);
+                        cell_changed = true;
 
-                        if (cell->glow_state[layer] > cell->glow_speed[layer]) {
-                            cell->glow_state[layer] = 0;
+                        if (record->glow_state > record->glow_speed) {
+                            record->glow_state = 0;
                         }
                     }
 
-                    if (cell->anim_speed[layer] == 0) {
+                    if (record->anim_speed == 0) {
                         continue;
                     }
 
-                    if (cell->anim_last[layer] >= cell->anim_speed[layer]) {
-                        map_animate_object(cell, layer);
-                        cell->anim_last[layer] = 1;
+                    if (record->anim_last >= record->anim_speed) {
+                        cell_changed |= map_animate_object(cell, layer);
+                        record->anim_last = 1;
                     } else {
-                        cell->anim_last[layer]++;
+                        record->anim_last++;
                     }
+                }
+                map_cell_store_trim_slot(cells, physical_index);
+                if (cell_changed) {
+                    map_cell_presentation_changed(physical_index);
                 }
             }
         }
@@ -2154,37 +3320,38 @@ void map_animate(void) {
     map_select_level(0, true);
 }
 
-static uint16_t map_object_get_face(struct MapCell *cell, int layer) {
+static uint16_t map_object_get_face(map_cell_t *cell, int layer) {
     int sub_layer, dir;
     Animations *animation;
     uint16_t face;
 
-    if (cell->anim_speed[layer] == 0) {
-        return cell->faces[layer];
+    const map_cell_layer_record_t *record = map_cell_layer_record_read(cell, layer);
+    if (record->anim_speed == 0) {
+        return record->face;
     }
 
-    animation = animation_get(cell->faces[layer]);
-    if (animation == NULL || cell->anim_facing[layer] == 0) {
+    animation = animation_get(record->face);
+    if (animation == NULL || record->anim_facing == 0) {
         return 0;
     }
 
     sub_layer = layer / NUM_LAYERS;
-    dir = cell->anim_facing[layer] - 1;
+    dir = record->anim_facing - 1;
 
     if (animation->facings >= 25) {
-        if (cell->anim_flags[sub_layer] & ANIM_FLAG_ATTACKING) {
+        if (map_cell_actor_record_read(cell, sub_layer)->anim_flags & ANIM_FLAG_ATTACKING) {
             dir += 16;
-        } else if (cell->anim_flags[sub_layer] & ANIM_FLAG_MOVING) {
+        } else if (map_cell_actor_record_read(cell, sub_layer)->anim_flags & ANIM_FLAG_MOVING) {
             dir += 8;
         }
     }
 
-    return animation_get_face(cell->faces[layer], dir, cell->anim_state[layer], &face) ? face : 0;
+    return animation_get_face(record->face, dir, record->anim_state, &face) ? face : 0;
 }
 
 /** Deferred UI annotation associated with a rendered map object. */
 typedef struct map_annotation {
-    struct MapCell *cell;
+    map_cell_t *cell;
     sprite_effects_t effects;
     int32_t xl;
     int32_t yl;
@@ -2192,6 +3359,12 @@ typedef struct map_annotation {
     int32_t xoff2;
     int32_t xlen;
     int32_t bitmap_w;
+    uint64_t record_identity;
+    uint32_t cell_generation;
+    uint16_t cell_revision;
+    int16_t tile_x;
+    int16_t tile_y;
+    int8_t depth;
     uint8_t map_layer;
     uint8_t sub_layer;
 } map_annotation_t;
@@ -2211,36 +3384,165 @@ typedef struct map_render_command {
     int16_t tile_x;
     int16_t tile_y;
     size_t sequence;
+    uint64_t record_identity;
+    uint32_t cell_generation;
+    uint16_t cell_revision;
+    uint8_t record_layer;
     uint8_t object_layer;
+    uint8_t sub_layer;
     int8_t depth;
+    int16_t midx;
+    int16_t midy;
+    int32_t projection_y;
+    int32_t player_height_offset;
+    int32_t level_support_height;
     int32_t elevation;
     bool draw_double;
     bool door;
+    bool roof;
     bool door_hint;
     bool exit;
     bool local_player;
     bool fogged; ///< The cached tile is outside the current visible area.
     bool ground;
+    bool smooth_lighting;
+    bool primary_level;
     SDL_Surface *living_occlusion_mask;
     bool transformed;
 } map_render_command_t;
+
+/** One deferred draw invocation retained even when it currently emits nothing. */
+typedef struct map_render_candidate {
+    size_t sequence;
+    int16_t x;
+    int16_t y;
+    int16_t midx;
+    int16_t midy;
+    int32_t xpos;
+    int32_t ypos;
+    int32_t player_height_offset;
+    int32_t level_support_height;
+    uint8_t layer;
+    uint8_t sub_layer;
+    uint8_t alpha_forced;
+    int8_t depth;
+    bool smooth_lighting;
+    bool lightmap_pending;
+    bool ground_pass;
+    bool primary_level;
+} map_render_candidate_t;
+
+/** Contiguous retained output and candidate ranges for one projected cell pass. */
+typedef struct map_render_cohort {
+    size_t candidates_first;
+    size_t candidates_num;
+    size_t commands_first;
+    size_t commands_num;
+    size_t annotations_first;
+    size_t annotations_num;
+    size_t tiles_first;
+    size_t tiles_num;
+    uint64_t record_identity;
+    uint32_t cell_generation;
+    uint16_t cell_revision;
+    int16_t tile_x;
+    int16_t tile_y;
+    int8_t depth;
+} map_render_cohort_t;
 
 /** Output accumulated while traversing independently cached map levels. */
 typedef struct map_render_context {
     map_render_command_t *commands;
     map_annotation_t *annotations;
     SDL_Rect *tiles;
+    map_render_candidate_t *candidates;
+    map_render_cohort_t *cohorts;
     size_t commands_num;
     size_t commands_capacity;
     size_t annotations_num;
     size_t annotations_capacity;
     size_t tiles_num;
     size_t tiles_capacity;
+    size_t candidates_num;
+    size_t candidates_capacity;
+    size_t cohorts_num;
+    size_t cohorts_capacity;
     size_t next_sequence;
-    struct MapCell *target_cell;
+    map_cell_t *target_cell;
     SDL_Rect target_rect;
+    uint64_t target_identity;
+    uint32_t target_generation;
+    uint16_t target_revision;
+    int16_t target_tile_x;
+    int16_t target_tile_y;
+    int8_t target_depth;
     uint8_t target_sub_layer;
+    bool commands_sorted;
+    bool capture_candidates;
 } map_render_context_t;
+
+static void map_render_context_sort(map_render_context_t *context);
+
+static void map_benchmark_commands_accumulate(const map_render_command_t *commands,
+                                              size_t commands_num,
+                                              bool primary_surface,
+                                              bool animation_only) {
+    bool frame_stretch = false;
+    bool frame_living = false;
+    bool frame_door = false;
+    bool frame_roof = false;
+    uint64_t animation_digest = UINT64_C(14695981039346656037);
+    for (size_t index = 0; index < commands_num; index++) {
+        const map_render_command_t *command = &commands[index];
+        bool stretch = command->effects.stretch != 0;
+        bool living = command->object_layer == LAYER_LIVING;
+        map_benchmark_statistics.stretched_commands += stretch;
+        map_benchmark_statistics.double_commands += command->draw_double;
+        map_benchmark_statistics.living_commands += living;
+        map_benchmark_statistics.door_commands += command->door;
+        map_benchmark_statistics.roof_commands += command->roof;
+        if (!primary_surface) {
+            continue;
+        }
+        uint16_t depth_bit = UINT16_C(1) << MAP2_DEPTH_INDEX(command->depth);
+        map_benchmark_statistics.command_depth_mask |= depth_bit;
+        if (living)
+            map_benchmark_statistics.living_depth_mask |= depth_bit;
+        if (command->door)
+            map_benchmark_statistics.door_depth_mask |= depth_bit;
+        if (command->roof)
+            map_benchmark_statistics.roof_depth_mask |= depth_bit;
+        frame_stretch |= stretch;
+        frame_living |= living;
+        frame_door |= command->door;
+        frame_roof |= command->roof;
+        if (animation_only && (living || command->door || command->roof)) {
+            animation_digest =
+                map_cell_hash_bytes(animation_digest, &command->source, sizeof(command->source));
+            animation_digest =
+                map_cell_hash_bytes(animation_digest, &command->x, sizeof(command->x));
+            animation_digest =
+                map_cell_hash_bytes(animation_digest, &command->y, sizeof(command->y));
+            animation_digest =
+                map_cell_hash_bytes(animation_digest, &command->effects, sizeof(command->effects));
+        }
+    }
+    if (primary_surface) {
+        map_benchmark_statistics.primary_frames_with_stretch += frame_stretch;
+        map_benchmark_statistics.primary_frames_with_living += frame_living;
+        map_benchmark_statistics.primary_frames_with_door += frame_door;
+        map_benchmark_statistics.primary_frames_with_roof += frame_roof;
+    }
+    if (animation_only) {
+        map_benchmark_statistics.animation_reason_draws++;
+        if (map_benchmark_animation_command_digest_valid &&
+            animation_digest != map_benchmark_animation_command_digest) {
+            map_benchmark_statistics.animation_command_transitions++;
+        }
+        map_benchmark_animation_command_digest = animation_digest;
+        map_benchmark_animation_command_digest_valid = true;
+    }
+}
 
 /** Stable geometry identity for one visible exit cue member. */
 typedef struct map_exit_cue_key {
@@ -2254,6 +3556,7 @@ typedef struct map_exit_cue_key {
     int16_t zoom_y;
     int16_t rotate;
     SDL_Surface *source;
+    Uint64 source_generation;
     bool draw_double;
 } map_exit_cue_key_t;
 
@@ -2275,10 +3578,43 @@ typedef struct map_exit_cue_cache {
     bool valid;
 } map_exit_cue_cache_t;
 
-static map_render_command_t *map_animation_ground_commands;
-static size_t map_animation_ground_commands_num;
-static size_t map_animation_object_sequences[MAP2_LEVELS];
+/** Geometry/effect identity that controls one living-occlusion result. */
+typedef struct map_living_outline_key {
+    SDL_Surface *source;
+    Uint64 source_generation;
+    int32_t x;
+    int32_t y;
+    uint32_t flags;
+    uint32_t stretch;
+    int16_t zoom_x;
+    int16_t zoom_y;
+    int16_t rotate;
+    uint8_t dark_level;
+    uint8_t alpha;
+    uint8_t object_layer;
+    bool draw_double;
+    bool local_player;
+    bool fogged;
+} map_living_outline_key_t;
+
+/** One retained final outline submitted without rebuilding a CPU effect. */
+typedef struct map_living_outline {
+    SDL_Surface *surface;
+    int32_t x;
+    int32_t y;
+} map_living_outline_t;
+
+/** Living silhouettes retained while their complete geometry cohort is stable. */
+typedef struct map_living_outline_cache {
+    map_living_outline_key_t *keys;
+    size_t keys_num;
+    map_living_outline_t *outlines;
+    size_t outlines_num;
+    bool valid;
+} map_living_outline_cache_t;
+
 static map_exit_cue_cache_t map_animation_exit_cues;
+static map_living_outline_cache_t map_animation_living_outlines;
 
 /**
  * Structure used to pass data between the rendering loops in map_draw_map()
@@ -2298,7 +3634,7 @@ typedef struct map_render_data {
     int32_t player_height_offset; ///< Player height offset.
     int32_t level_support_height; ///< Ground elevation supporting an upper level.
 
-    struct MapCell *cell; ///< Cell that is being rendered.
+    map_cell_t *cell; ///< Cell that is being rendered.
     map_render_context_t *render_context; ///< Unified output for every physical level.
 
     uint8_t layer; ///< Layer to render on.
@@ -2320,7 +3656,7 @@ typedef struct map_visible_tile {
     int32_t xpos;
     int32_t ypos;
     int32_t level_support_height;
-    struct MapCell *cell;
+    map_cell_t *cell;
 } map_visible_tile_t;
 
 /**
@@ -2331,9 +3667,45 @@ typedef struct map_visible_tile {
  * @param data
  * Rendering data. May be modified.
  */
+static bool map_object_uses_projected_lighting(const map_render_data_t *data,
+                                               const map_cell_layer_record_t *record) {
+    return data->ground_pass || record->roof;
+}
+
 static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     HARD_ASSERT(surface != NULL);
     HARD_ASSERT(data != NULL);
+
+    map_render_context_t *capture = data->render_context;
+    if (capture != NULL && capture->capture_candidates) {
+        if (capture->candidates_num == capture->candidates_capacity) {
+            capture->candidates_capacity =
+                capture->candidates_capacity == 0 ? 512 : capture->candidates_capacity * 2;
+            capture->candidates = xreallocarray(capture->candidates,
+                                                capture->candidates_capacity,
+                                                sizeof(*capture->candidates));
+        }
+        size_t candidate_index = capture->candidates_num++;
+        capture->candidates[candidate_index] = (map_render_candidate_t){
+            .sequence = candidate_index,
+            .x = data->x,
+            .y = data->y,
+            .midx = data->midx,
+            .midy = data->midy,
+            .xpos = data->xpos,
+            .ypos = data->ypos,
+            .player_height_offset = data->player_height_offset,
+            .level_support_height = data->level_support_height,
+            .layer = data->layer,
+            .sub_layer = data->sub_layer,
+            .alpha_forced = data->alpha_forced,
+            .depth = data->depth,
+            .smooth_lighting = data->smooth_lighting,
+            .lightmap_pending = data->lightmap_pending,
+            .ground_pass = data->ground_pass,
+            .primary_level = data->primary_level,
+        };
+    }
 
     uint8_t map_layer = GET_MAP_LAYER(data->layer, data->sub_layer);
     bool remembered = map_layer_is_remembered(data->layer);
@@ -2360,9 +3732,9 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     int bitmap_w = face_sprite->bitmap->w;
 
     sprite_effects_t effects = {0};
-    effects.rotate = data->cell->rotate[map_layer];
-    effects.zoom_x = data->cell->zoom_x[map_layer];
-    effects.zoom_y = data->cell->zoom_y[map_layer];
+    effects.rotate = map_cell_layer_record_read(data->cell, map_layer)->rotate;
+    effects.zoom_x = map_cell_layer_record_read(data->cell, map_layer)->zoom_x;
+    effects.zoom_y = map_cell_layer_record_read(data->cell, map_layer)->zoom_y;
 
     if (effects.rotate != 0) {
         rotozoomSurfaceSizeXY(bitmap_w,
@@ -2387,8 +3759,8 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     int yl;
     int xl;
     /* Multi-part object? */
-    if (data->cell->quick_pos[map_layer]) {
-        uint8_t mnr = data->cell->quick_pos[map_layer];
+    if (map_cell_layer_record_read(data->cell, map_layer)->quick_pos) {
+        uint8_t mnr = map_cell_layer_record_read(data->cell, map_layer)->quick_pos;
         uint8_t mid = mnr >> 4;
         mnr &= 0x0f;
         xlen = MultiArchs[mid].xlen;
@@ -2413,11 +3785,11 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
         }
     }
 
-    xl += data->cell->align[map_layer];
+    xl += map_cell_layer_record_read(data->cell, map_layer)->align;
 
-    snprintf(VS(effects.glow), "%s", data->cell->glow[map_layer]);
-    effects.glow_speed = data->cell->glow_speed[map_layer];
-    effects.glow_state = data->cell->glow_state[map_layer];
+    snprintf(VS(effects.glow), "%s", map_cell_layer_record_read(data->cell, map_layer)->glow);
+    effects.glow_speed = map_cell_layer_record_read(data->cell, map_layer)->glow_speed;
+    effects.glow_state = map_cell_layer_record_read(data->cell, map_layer)->glow_state;
 
     if (effect_has_overlay()) {
         BIT_SET(effects.flags, SPRITE_FLAG_EFFECTS);
@@ -2426,18 +3798,20 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     if (data->cell->fow && !remembered &&
         (!data->cell->structural_fow || data->layer <= LAYER_FMASK)) {
         BIT_SET(effects.flags, SPRITE_FLAG_FOW);
-    } else if (data->cell->infravision[map_layer]) {
+    } else if (map_cell_layer_record_read(data->cell, map_layer)->infravision) {
         BIT_SET(effects.flags, SPRITE_FLAG_RED);
-    } else if (data->cell->flags[map_layer] & FFLAG_INVISIBLE) {
+    } else if (map_cell_layer_record_read(data->cell, map_layer)->flags & FFLAG_INVISIBLE) {
         BIT_SET(effects.flags, SPRITE_FLAG_GRAY);
     } else if (data->world_surface && data->smooth_lighting && !data->lightmap_pending) {
-        if (data->cell->roof[map_layer]) {
+        if (map_object_uses_projected_lighting(data,
+                                               map_cell_layer_record_read(data->cell, map_layer))) {
             BIT_SET(effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
         } else {
             BIT_SET(effects.flags, SPRITE_FLAG_SMOOTH_DARK);
             effects.smooth_dark_y =
                 data->ypos + MAP_TILE_POS_YOFF -
-                data->cell->height[GET_MAP_LAYER(LAYER_FLOOR, data->sub_layer)] +
+                map_cell_layer_record_read(data->cell, GET_MAP_LAYER(LAYER_FLOOR, data->sub_layer))
+                    ->height +
                 data->player_height_offset;
         }
     } else if (!data->lightmap_pending) {
@@ -2451,13 +3825,15 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
 
     if (BIT_QUERY(effects.flags, SPRITE_FLAG_DARK)) {
         effects.dark_level =
-            (UINT8_MAX - lighting_radiance_to_level(data->cell->light_radiance[data->sub_layer])) *
+            (UINT8_MAX - lighting_radiance_to_level(
+                             map_cell_light_record_read(data->cell, data->sub_layer)->radiance)) *
             DARK_LEVELS / UINT8_MAX;
     }
 
-    effects.alpha = data->cell->alpha[map_layer];
+    effects.alpha = map_cell_layer_record_read(data->cell, map_layer)->alpha;
     bool transient = map_visibility_transient_layer(data->layer);
-    const map_visibility_fade_t *fade = &data->cell->visibility[map_layer];
+    const map_visibility_fade_t *fade =
+        &map_cell_layer_record_read(data->cell, map_layer)->visibility;
     if (transient) {
         if (!fade->initialized || fade->alpha == 0) {
             return;
@@ -2479,14 +3855,15 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
 
     /* Stretch floor and floor mask layers. */
     if (data->layer <= LAYER_FMASK) {
-        effects.stretch = data->cell->stretch[data->sub_layer];
+        effects.stretch = map_cell_sublayer_record_read(data->cell, data->sub_layer)->stretch;
     }
 
     if (data->layer == LAYER_LIVING || data->layer == LAYER_EFFECT || data->layer == LAYER_ITEM ||
         data->layer == LAYER_ITEM2) {
         yl -= get_top_floor_height(data->cell, data->sub_layer);
     } else {
-        yl -= data->cell->height[GET_MAP_LAYER(LAYER_FLOOR, data->sub_layer)];
+        yl -= map_cell_layer_record_read(data->cell, GET_MAP_LAYER(LAYER_FLOOR, data->sub_layer))
+                  ->height;
     }
 
     yl += data->player_height_offset;
@@ -2494,10 +3871,13 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     /* Move the object up/down depending on its height, but only for
      * non-floor layers. */
     if (data->layer > LAYER_FLOOR) {
-        yl -= data->cell->height[map_layer];
+        yl -= map_cell_layer_record_read(data->cell, map_layer)->height;
     }
 
-    if (data->defer_rendering) {
+    const map_cell_header_t *cell_header =
+        &cells->headers[map_cache_physical_index(data->x, data->y)];
+    HARD_ASSERT(data->defer_rendering);
+    {
         map_render_context_t *context = data->render_context;
         HARD_ASSERT(context != NULL);
         if (context->commands_num == context->commands_capacity) {
@@ -2519,11 +3899,10 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
             bounds_w -= face_sprite->border_left + face_sprite->border_right;
             bounds_h -= face_sprite->border_up + face_sprite->border_down;
         }
-        if (data->cell->draw_double[map_layer]) {
+        if (map_cell_layer_record_read(data->cell, map_layer)->draw_double) {
             bounds_y -= 22;
             bounds_h += 22;
         }
-
         context->commands[context->commands_num] = (map_render_command_t){
             .source = face_sprite->bitmap,
             .effects = effects,
@@ -2540,63 +3919,47 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
              * same world diagonal retain their low-to-high queue sequence. */
             .sort_y =
                 data->ypos + data->depth * MAP_LEVEL_PIXEL_HEIGHT + data->level_support_height,
-            .sequence = context->next_sequence++,
+            .sequence =
+                context->capture_candidates ? context->candidates_num - 1U : context->next_sequence,
+            .record_identity = data->cell->painter_identity,
+            .cell_generation = cell_header->generation,
+            .cell_revision = cell_header->revision,
+            .record_layer = map_layer,
             .tile_x = data->x,
             .tile_y = data->y,
             .object_layer = data->layer,
+            .sub_layer = data->sub_layer,
             .depth = data->depth,
-            .elevation = data->level_support_height +
-                         data->cell->height[GET_MAP_LAYER(LAYER_FLOOR, data->sub_layer)] +
-                         (data->layer > LAYER_FLOOR ? data->cell->height[map_layer] : 0),
-            .draw_double = data->cell->draw_double[map_layer],
-            .door = (data->cell->door[data->sub_layer] & (UINT8_C(1) << (data->layer - 1))) != 0,
+            .midx = data->midx,
+            .midy = data->midy,
+            .projection_y = data->ypos,
+            .player_height_offset = data->player_height_offset,
+            .level_support_height = data->level_support_height,
+            .elevation =
+                data->level_support_height +
+                map_cell_layer_record_read(data->cell, GET_MAP_LAYER(LAYER_FLOOR, data->sub_layer))
+                    ->height +
+                (data->layer > LAYER_FLOOR
+                     ? map_cell_layer_record_read(data->cell, map_layer)->height
+                     : 0),
+            .draw_double = map_cell_layer_record_read(data->cell, map_layer)->draw_double,
+            .door = (map_cell_sublayer_record_read(data->cell, data->sub_layer)->door &
+                     (UINT8_C(1) << (data->layer - 1))) != 0,
+            .roof = map_cell_layer_record_read(data->cell, map_layer)->roof != 0,
             .exit = !data->cell->fow &&
-                    (data->cell->exit[data->sub_layer] & (UINT8_C(1) << (data->layer - 1))) != 0,
+                    (map_cell_sublayer_record_read(data->cell, data->sub_layer)->exit &
+                     (UINT8_C(1) << (data->layer - 1))) != 0,
             .local_player = data->primary_level && data->x == data->midx && data->y == data->midy &&
                             data->layer == LAYER_LIVING &&
                             data->sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1),
             .fogged = data->cell->fow && !remembered,
             .ground = data->ground_pass,
+            .smooth_lighting = data->smooth_lighting,
+            .primary_level = data->primary_level,
             .transformed = transformed,
         };
+        context->next_sequence++;
         context->commands_num++;
-    } else {
-        int scene_sample_y =
-            BIT_QUERY(effects.flags, SPRITE_FLAG_SMOOTH_DARK) ||
-                    BIT_QUERY(effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE)
-                ? effects.smooth_dark_y
-                : INT16_MIN;
-        if (map_scene_composition_active) {
-            /* Fog, infravision, and grayscale remain explicit presentation
-             * effects. Ordinary smooth lighting is deferred to the scene pass. */
-            BITMASK_CLEAR(effects.flags,
-                          BIT_MASK(SPRITE_FLAG_SMOOTH_DARK) |
-                              BIT_MASK(SPRITE_FLAG_SMOOTH_DARK_SURFACE));
-        }
-        surface_show_effects(surface, xl, yl, NULL, face_sprite->bitmap, &effects);
-
-        /* Double faces are shown twice, one above the other, when not lower
-         * on the screen than the player. This simulates high walls without
-         * obscuring the user's view. */
-        if (data->cell->draw_double[map_layer]) {
-            surface_show_effects(surface, xl, yl - 22, NULL, face_sprite->bitmap, &effects);
-        }
-        if (map_scene_composition_active) {
-            lighting_scene_mark_surface(face_sprite->bitmap,
-                                         xl,
-                                         yl,
-                                         NULL,
-                                         data->depth,
-                                         scene_sample_y);
-            if (data->cell->draw_double[map_layer]) {
-                lighting_scene_mark_surface(face_sprite->bitmap,
-                                             xl,
-                                             yl - 22,
-                                             NULL,
-                                             data->depth,
-                                             scene_sample_y);
-            }
-        }
     }
 
     /* Rest of the code deals with rendering on the map widget. */
@@ -2612,8 +3975,9 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     }
 
     if ((!transient || map_visibility_fade_interactive(fade)) &&
-        ((data->layer == LAYER_LIVING && data->cell->pname[data->sub_layer][0] != '\0') ||
-         data->cell->flags[map_layer] != 0)) {
+        ((data->layer == LAYER_LIVING &&
+          map_cell_actor_record_read(data->cell, data->sub_layer)->name[0] != '\0') ||
+         map_cell_layer_record_read(data->cell, map_layer)->flags != 0)) {
         map_render_context_t *context = data->render_context;
         if (context->annotations_num == context->annotations_capacity) {
             context->annotations_capacity =
@@ -2631,6 +3995,12 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
             .xoff2 = xoff2,
             .xlen = xlen,
             .bitmap_w = bitmap_w,
+            .record_identity = data->cell->painter_identity,
+            .cell_generation = cell_header->generation,
+            .cell_revision = cell_header->revision,
+            .tile_x = data->x,
+            .tile_y = data->y,
+            .depth = data->depth,
             .map_layer = map_layer,
             .sub_layer = data->sub_layer,
         };
@@ -2658,9 +4028,15 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
 
     if (data->primary_level && data->layer == LAYER_LIVING && !data->cell->fow &&
         (!transient || map_visibility_fade_interactive(fade)) &&
-        data->cell->probe[data->sub_layer] != 0) {
+        map_cell_actor_record_read(data->cell, data->sub_layer)->probe != 0) {
         map_render_context_t *context = data->render_context;
         context->target_cell = data->cell;
+        context->target_identity = data->cell->painter_identity;
+        context->target_generation = cell_header->generation;
+        context->target_revision = cell_header->revision;
+        context->target_tile_x = data->x;
+        context->target_tile_y = data->y;
+        context->target_depth = data->depth;
         context->target_sub_layer = data->sub_layer;
         context->target_rect.x = xoff + xoff2;
         context->target_rect.y = yl - 9;
@@ -2671,26 +4047,26 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
 
 /** Draw names and status icons after world lighting has been composited. */
 static void map_draw_annotations(SDL_Surface *surface, map_render_context_t *context) {
-    HARD_ASSERT(surface != NULL);
     HARD_ASSERT(context != NULL);
 
     for (size_t i = 0; i < context->annotations_num; i++) {
         map_annotation_t *annotation = &context->annotations[i];
-        struct MapCell *cell = annotation->cell;
+        map_cell_t *cell = annotation->cell;
         uint8_t map_layer = annotation->map_layer;
         uint8_t sub_layer = annotation->sub_layer;
 
-        if ((map_layer % NUM_LAYERS) + 1 == LAYER_LIVING && cell->pname[sub_layer][0] != '\0' &&
+        if ((map_layer % NUM_LAYERS) + 1 == LAYER_LIVING &&
+            map_cell_actor_record_read(cell, sub_layer)->name[0] != '\0' &&
             setting_get_int(OPT_CAT_MAP, OPT_PLAYER_NAMES)) {
             bool draw_name = false;
-            char *name = cell->pname[sub_layer];
+            const char *name = map_cell_actor_record_read(cell, sub_layer)->name;
 
             if (setting_get_int(OPT_CAT_MAP, OPT_PLAYER_NAMES) == 1) {
                 draw_name = true;
             } else if (setting_get_int(OPT_CAT_MAP, OPT_PLAYER_NAMES) == 2) {
-                draw_name = cell->target_object_count[sub_layer] != 0;
+                draw_name = map_cell_actor_record_read(cell, sub_layer)->target_object_count != 0;
             } else if (setting_get_int(OPT_CAT_MAP, OPT_PLAYER_NAMES) == 3) {
-                draw_name = cell->target_object_count[sub_layer] == 0;
+                draw_name = map_cell_actor_record_read(cell, sub_layer)->target_object_count == 0;
             }
 
             if (draw_name) {
@@ -2699,20 +4075,31 @@ static void map_draw_annotations(SDL_Surface *surface, map_render_context_t *con
                     map_ui_test_names++;
                 }
 #endif
-                text_show(surface,
-                          FONT_SANS9,
-                          name,
-                          annotation->xoff + annotation->xoff2 +
-                              (annotation->xlen - annotation->xoff2 * 2) / 2 -
-                              text_get_width(FONT_SANS9, name, 0) / 2 - 2,
-                          annotation->yl - 24,
-                          cell->pcolor[sub_layer],
-                          TEXT_OUTLINE,
-                          NULL);
+                int x = annotation->xoff + annotation->xoff2 +
+                        (annotation->xlen - annotation->xoff2 * 2) / 2 -
+                        text_get_width(FONT_SANS9, name, 0) / 2 - 2;
+                if (surface != NULL) {
+                    text_show(surface,
+                              FONT_SANS9,
+                              name,
+                              x,
+                              annotation->yl - 24,
+                              map_cell_actor_record_read(cell, sub_layer)->color,
+                              TEXT_OUTLINE,
+                              NULL);
+                } else {
+                    text_show_root(FONT_SANS9,
+                                   name,
+                                   x,
+                                   annotation->yl - 24,
+                                   map_cell_actor_record_read(cell, sub_layer)->color,
+                                   TEXT_OUTLINE,
+                                   NULL);
+                }
             }
         }
 
-        if (cell->flags[map_layer] & FFLAG_SLEEP) {
+        if (map_cell_layer_record_read(cell, map_layer)->flags & FFLAG_SLEEP) {
             surface_show_effects(surface,
                                  annotation->xl + annotation->bitmap_w / 2,
                                  annotation->yl - 5,
@@ -2721,7 +4108,7 @@ static void map_draw_annotations(SDL_Surface *surface, map_render_context_t *con
                                  &annotation->effects);
         }
 
-        if (cell->flags[map_layer] & FFLAG_CONFUSED) {
+        if (map_cell_layer_record_read(cell, map_layer)->flags & FFLAG_CONFUSED) {
             surface_show_effects(surface,
                                  annotation->xl + annotation->bitmap_w / 2 - 1,
                                  annotation->yl - 4,
@@ -2730,7 +4117,7 @@ static void map_draw_annotations(SDL_Surface *surface, map_render_context_t *con
                                  &annotation->effects);
         }
 
-        if (cell->flags[map_layer] & FFLAG_SCARED) {
+        if (map_cell_layer_record_read(cell, map_layer)->flags & FFLAG_SCARED) {
             surface_show_effects(surface,
                                  annotation->xl + annotation->bitmap_w / 2 + 10,
                                  annotation->yl - 4,
@@ -2739,7 +4126,7 @@ static void map_draw_annotations(SDL_Surface *surface, map_render_context_t *con
                                  &annotation->effects);
         }
 
-        if (cell->flags[map_layer] & FFLAG_BLINDED) {
+        if (map_cell_layer_record_read(cell, map_layer)->flags & FFLAG_BLINDED) {
             surface_show_effects(surface,
                                  annotation->xl + annotation->bitmap_w / 2 + 3,
                                  annotation->yl - 6,
@@ -2748,7 +4135,7 @@ static void map_draw_annotations(SDL_Surface *surface, map_render_context_t *con
                                  &annotation->effects);
         }
 
-        if (cell->flags[map_layer] & FFLAG_PARALYZED) {
+        if (map_cell_layer_record_read(cell, map_layer)->flags & FFLAG_PARALYZED) {
             surface_show_effects(surface,
                                  annotation->xl + annotation->bitmap_w / 2 + 3,
                                  annotation->yl + 3,
@@ -2758,8 +4145,6 @@ static void map_draw_annotations(SDL_Surface *surface, map_render_context_t *con
         }
     }
 
-    free(context->annotations);
-    context->annotations = NULL;
     context->annotations_num = 0;
 }
 
@@ -2795,9 +4180,9 @@ static bool obj_is_behind_wall(int dx, int dy, int sx, int sy) {
         }
 
         for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-            MapCell *cell = MAP_CELL_GET_MIDDLE(x, y);
+            map_cell_t *cell = MAP_CELL_GET_MIDDLE(x, y);
 
-            if (cell->faces[GET_MAP_LAYER(LAYER_WALL, sub_layer)] != 0) {
+            if (map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_WALL, sub_layer))->face != 0) {
                 return true;
             }
         }
@@ -2812,14 +4197,15 @@ static int map_level_support_height(int x, int y, int depth) {
         return 0;
     }
 
-    struct MapCell *base_cells = level_cells[MAP2_DEPTH_INDEX(0)];
+    map_cell_store_t *base_cells = level_cells[MAP2_DEPTH_INDEX(0)];
     int cache_width = map_width * MAP_FOW_SIZE;
     int cache_height = map_height * MAP_FOW_SIZE;
     if (base_cells == NULL || x < 0 || x >= cache_width || y < 0 || y >= cache_height) {
         return 0;
     }
 
-    return map_cache_cell(base_cells, x, y)->structural_support_height;
+    size_t index = map_cache_physical_index(x, y);
+    return base_cells->headers[index].support_height;
 }
 
 /**
@@ -2851,7 +4237,8 @@ static bool map_should_cull(SDL_Surface *surface, map_render_data_t *data) {
     int range = 2;
 
     for (int sub_layer2 = NUM_SUB_LAYERS - 1; sub_layer2 > 0; sub_layer2--) {
-        int16_t height = data->cell->height[GET_MAP_LAYER(LAYER_EFFECT, sub_layer2)];
+        int16_t height =
+            map_cell_layer_record_read(data->cell, GET_MAP_LAYER(LAYER_EFFECT, sub_layer2))->height;
         if (height - data->player_height_offset > 50) {
             range = 0;
         }
@@ -2863,10 +4250,11 @@ static bool map_should_cull(SDL_Surface *surface, map_render_data_t *data) {
 
     for (int nx = data->x - range; nx <= data->x && !cull; nx++) {
         for (int ny = data->y - range; ny <= data->y && !cull; ny++) {
-            MapCell *cell2 = MAP_CELL_GET(nx, ny);
+            map_cell_t *cell2 = MAP_CELL_GET(nx, ny);
 
             for (int sub_layer2 = 0; sub_layer2 < NUM_SUB_LAYERS; sub_layer2++) {
-                if (cell2->secondpass[sub_layer2] & (1 << (LAYER_WALL - 1)) &&
+                if (map_cell_sublayer_record_read(cell2, sub_layer2)->secondpass &
+                        (1 << (LAYER_WALL - 1)) &&
                     !obj_is_behind_wall(nx,
                                         ny,
                                         map_width * MAP_FOW_SIZE / 2,
@@ -2910,17 +4298,7 @@ static bool map_should_draw(SDL_Surface *surface, map_render_data_t *data) {
         data->ypos -= map_height * MAP_TILE_YOFF;
     }
 
-    if (data->xpos > surface->w || data->xpos + MAP_TILE_POS_XOFF < 0 ||
-        data->ypos + MAP_TILE_POS_YOFF < 0) {
-        return false;
-    }
-
     data->cell = MAP_CELL_GET(data->x, data->y);
-
-    if (data->ypos - data->cell->render_max_height > surface->h) {
-        return false;
-    }
-
     return true;
 }
 
@@ -2989,9 +4367,9 @@ static void map_setup_render_data(SDL_Surface *surface,
     data->x = map_width - (map_width / 2) - 1;
     data->y = map_height - (map_height / 2) - 1;
     data->cell = MAP_CELL_GET_MIDDLE(data->x, data->y);
-    struct MapCell *base_cells = level_cells[MAP2_DEPTH_INDEX(0)];
+    map_cell_store_t *base_cells = level_cells[MAP2_DEPTH_INDEX(0)];
     if (data->world_surface && base_cells != NULL) {
-        struct MapCell *base_cell =
+        map_cell_t *base_cell =
             map_cache_cell(base_cells, data->x + MAP_STARTX, data->y + MAP_STARTY);
         data->player_height_offset = get_top_floor_height(base_cell, MapData.player_sub_layer);
     } else {
@@ -3002,36 +4380,29 @@ static void map_setup_render_data(SDL_Surface *surface,
         data->midx = map_width * MAP_FOW_SIZE / 2;
         data->midy = map_height * MAP_FOW_SIZE / 2;
 
-        int maxw = surface->w / 2.0 / (MAP_TILE_POS_XOFF / 2.0);
-        int maxh = surface->h / 2.0 / (MAP_TILE_POS_YOFF / 2.0);
-        int maxtiles = MAX(maxh, maxw);
+        /* The negotiated wire window already includes MAP_RENDER_OVERSCAN on
+         * every edge. Traverse that complete bounded window and let the GPU
+         * scissor actual sprite bounds; anchor-only culling drops wide/tall
+         * sprites whose owning tile lies just outside the viewport. */
+        int first_x = data->midx - map_width / 2;
+        int first_y = data->midy - map_height / 2;
+        int end_x = first_x + map_width;
+        int end_y = first_y + map_height;
 
         if (x != NULL) {
-            *x = data->midx - maxtiles;
-            if (*x < 0) {
-                *x = 0;
-            }
+            *x = MAX(0, first_x);
         }
 
         if (y != NULL) {
-            *y = data->midy - maxtiles;
-            if (*y < 0) {
-                *y = 0;
-            }
+            *y = MAX(0, first_y);
         }
 
         if (w != NULL) {
-            *w = data->midx + maxtiles;
-            if (*w > map_width * MAP_FOW_SIZE) {
-                *w = map_width * MAP_FOW_SIZE;
-            }
+            *w = MIN(map_width * MAP_FOW_SIZE, end_x);
         }
 
         if (h != NULL) {
-            *h = data->midy + maxtiles;
-            if (*h > map_height * MAP_FOW_SIZE) {
-                *h = map_height * MAP_FOW_SIZE;
-            }
+            *h = MIN(map_height * MAP_FOW_SIZE, end_y);
         }
     } else {
         if (x != NULL) {
@@ -3053,17 +4424,18 @@ static void map_setup_render_data(SDL_Surface *surface,
 }
 
 /** Choose the visible floor, or canonical no-floor sample, representing a cell. */
-static uint8_t map_lighting_sub_layer(const struct MapCell *cell) {
+static uint8_t map_lighting_sub_layer(const map_cell_t *cell) {
     uint8_t selected = MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
     uint8_t selected_floor_layer = GET_MAP_LAYER(LAYER_FLOOR, selected);
-    bool selected_has_floor = cell->faces[selected_floor_layer] != 0;
-    int selected_height = cell->height[selected_floor_layer];
+    bool selected_has_floor = map_cell_layer_record_read(cell, selected_floor_layer)->face != 0;
+    int selected_height = map_cell_layer_record_read(cell, selected_floor_layer)->height;
 
     for (uint8_t sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
         uint8_t floor_layer = GET_MAP_LAYER(LAYER_FLOOR, sub_layer);
-        int height = cell->height[floor_layer];
+        int height = map_cell_layer_record_read(cell, floor_layer)->height;
 
-        if (cell->faces[floor_layer] != 0 && (!selected_has_floor || height >= selected_height)) {
+        if (map_cell_layer_record_read(cell, floor_layer)->face != 0 &&
+            (!selected_has_floor || height >= selected_height)) {
             selected = sub_layer;
             selected_height = height;
             selected_has_floor = true;
@@ -3078,13 +4450,9 @@ static uint8_t map_lighting_sub_layer(const struct MapCell *cell) {
 }
 
 /** Dirty the lighting projection of one FOW boundary segment and its light halo. */
-static void map_dirty_lighting_fow_segment(size_t level,
-                                           int depth,
-                                           int x0,
-                                           int x1,
-                                           int y0,
-                                           int y1) {
-    struct MapCell *level_cells_current = level_cells[level];
+static void
+map_dirty_lighting_fow_segment(size_t level, int depth, int x0, int x1, int y0, int y1) {
+    map_cell_store_t *level_cells_current = level_cells[level];
     if (level_cells_current == NULL) {
         return;
     }
@@ -3108,9 +4476,11 @@ static void map_dirty_lighting_fow_segment(size_t level,
     bool found = false;
     for (int x = x0; x < x1; x++) {
         for (int y = y0; y < y1; y++) {
-            struct MapCell *cell = map_cache_cell(level_cells_current, x, y);
+            map_cell_t *cell = map_cache_cell(level_cells_current, x, y);
             uint8_t sub_layer = map_lighting_sub_layer(cell);
-            int floor_height = MAX(0, cell->height[GET_MAP_LAYER(LAYER_FLOOR, sub_layer)]);
+            int floor_height = MAX(
+                0,
+                map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_FLOOR, sub_layer))->height);
             int support_height = depth > 0 ? map_level_support_height(x, y, depth) : 0;
             int screen_x = (x - mid_x) * MAP_TILE_YOFF - (y - mid_y) * MAP_TILE_YOFF;
             int screen_y = (x - mid_x) * MAP_TILE_XOFF + (y - mid_y) * MAP_TILE_XOFF -
@@ -3141,12 +4511,7 @@ static void map_dirty_lighting_fow_segment(size_t level,
 }
 
 /** Dirty a short projected strip without widening its diagonal envelope. */
-static void map_dirty_lighting_fow_strip(size_t level,
-                                         int depth,
-                                         int x0,
-                                         int x1,
-                                         int y0,
-                                         int y1) {
+static void map_dirty_lighting_fow_strip(size_t level, int depth, int x0, int x1, int y0, int y1) {
     for (int x = x0; x < x1; x += MAP_LIGHTING_FOW_SEGMENT) {
         for (int y = y0; y < y1; y += MAP_LIGHTING_FOW_SEGMENT) {
             map_dirty_lighting_fow_segment(level,
@@ -3224,57 +4589,55 @@ static void map_dirty_lighting_fow(int dx, int dy) {
         if (dx > 0) {
             for (int y = shifted_view_y; y < shifted_view_y + map_height;
                  y += MAP_LIGHTING_FOW_SEGMENT) {
-                map_dirty_lighting_fow_segment(level,
-                                               depth,
-                                               shifted_view_x,
-                                               view_x,
-                                               y,
-                                               MIN(shifted_view_y + map_height,
-                                                   y + MAP_LIGHTING_FOW_SEGMENT));
+                map_dirty_lighting_fow_segment(
+                    level,
+                    depth,
+                    shifted_view_x,
+                    view_x,
+                    y,
+                    MIN(shifted_view_y + map_height, y + MAP_LIGHTING_FOW_SEGMENT));
             }
         } else if (dx < 0) {
             for (int y = shifted_view_y; y < shifted_view_y + map_height;
                  y += MAP_LIGHTING_FOW_SEGMENT) {
-                map_dirty_lighting_fow_segment(level,
-                                               depth,
-                                               view_x + map_width,
-                                               shifted_view_x + map_width,
-                                               y,
-                                               MIN(shifted_view_y + map_height,
-                                                   y + MAP_LIGHTING_FOW_SEGMENT));
+                map_dirty_lighting_fow_segment(
+                    level,
+                    depth,
+                    view_x + map_width,
+                    shifted_view_x + map_width,
+                    y,
+                    MIN(shifted_view_y + map_height, y + MAP_LIGHTING_FOW_SEGMENT));
             }
         }
 
         if (dy > 0) {
             for (int x = shifted_view_x; x < shifted_view_x + map_width;
                  x += MAP_LIGHTING_FOW_SEGMENT) {
-                map_dirty_lighting_fow_segment(level,
-                                               depth,
-                                               x,
-                                               MIN(shifted_view_x + map_width,
-                                                   x + MAP_LIGHTING_FOW_SEGMENT),
-                                               shifted_view_y,
-                                               view_y);
+                map_dirty_lighting_fow_segment(
+                    level,
+                    depth,
+                    x,
+                    MIN(shifted_view_x + map_width, x + MAP_LIGHTING_FOW_SEGMENT),
+                    shifted_view_y,
+                    view_y);
             }
         } else if (dy < 0) {
             for (int x = shifted_view_x; x < shifted_view_x + map_width;
                  x += MAP_LIGHTING_FOW_SEGMENT) {
-                map_dirty_lighting_fow_segment(level,
-                                               depth,
-                                               x,
-                                               MIN(shifted_view_x + map_width,
-                                                   x + MAP_LIGHTING_FOW_SEGMENT),
-                                               view_y + map_height,
-                                               shifted_view_y + map_height);
+                map_dirty_lighting_fow_segment(
+                    level,
+                    depth,
+                    x,
+                    MIN(shifted_view_x + map_width, x + MAP_LIGHTING_FOW_SEGMENT),
+                    view_y + map_height,
+                    shifted_view_y + map_height);
             }
         }
     }
 }
 
-static uint16_t map_lighting_interpolate(uint16_t current,
-                                         uint16_t next,
-                                         uint64_t progress,
-                                         uint64_t duration) {
+static uint16_t
+map_lighting_interpolate(uint16_t current, uint16_t next, uint64_t progress, uint64_t duration) {
     if (progress == 0 || current == next) {
         return current;
     }
@@ -3283,7 +4646,8 @@ static uint16_t map_lighting_interpolate(uint16_t current,
     }
     if (next > current) {
         uint64_t delta = (uint64_t)(next - current);
-        return (uint16_t)MIN(UINT16_MAX, (uint64_t)current + (delta * progress + duration / 2) / duration);
+        return (uint16_t)MIN(UINT16_MAX,
+                             (uint64_t)current + (delta * progress + duration / 2) / duration);
     }
     uint64_t delta = (uint64_t)(current - next);
     uint64_t reduction = (delta * progress + duration / 2) / duration;
@@ -3291,12 +4655,13 @@ static uint16_t map_lighting_interpolate(uint16_t current,
 }
 
 /** Resolve one cell's temporal aggregate endpoint before spatial filtering. */
-static bool map_lighting_temporal_sample(const MapCell *cell,
+static bool map_lighting_temporal_sample(const map_cell_t *cell,
                                          uint8_t sub_layer,
                                          uint16_t *scalar,
                                          uint16_t rgb[3]) {
-    if (!cell->light_keyframe_valid || !cell->light_known[sub_layer] ||
-        !cell->light_next_known[sub_layer]) {
+    if (!map_cell_light_keyframe_record_read(cell)->valid ||
+        !map_cell_light_record_read(cell, sub_layer)->known ||
+        !map_cell_light_record_read(cell, sub_layer)->next_known) {
         return false;
     }
 
@@ -3304,20 +4669,23 @@ static bool map_lighting_temporal_sample(const MapCell *cell,
     if (!telemetry_game_time_seconds(&now)) {
         return false;
     }
-    uint64_t duration = cell->light_keyframe_end_seconds - cell->light_keyframe_start_seconds;
-    uint64_t progress = now <= cell->light_keyframe_start_seconds
+    uint64_t duration = map_cell_light_keyframe_record_read(cell)->end_seconds -
+                        map_cell_light_keyframe_record_read(cell)->start_seconds;
+    uint64_t progress = now <= map_cell_light_keyframe_record_read(cell)->start_seconds
                             ? 0
-                            : now - cell->light_keyframe_start_seconds;
-    *scalar = map_lighting_interpolate(cell->light_radiance[sub_layer],
-                                       cell->light_next_radiance[sub_layer],
+                            : now - map_cell_light_keyframe_record_read(cell)->start_seconds;
+    *scalar = map_lighting_interpolate(map_cell_light_record_read(cell, sub_layer)->radiance,
+                                       map_cell_light_record_read(cell, sub_layer)->next_radiance,
                                        progress,
                                        duration);
     for (size_t channel = 0; channel < 3; channel++) {
-        rgb[channel] = map_lighting_interpolate(cell->light_rgb_radiance[sub_layer][channel],
-                                                cell->light_next_rgb_radiance[sub_layer][channel],
-                                                progress,
-                                                duration);
+        rgb[channel] = map_lighting_interpolate(
+            map_cell_light_record_read(cell, sub_layer)->rgb_radiance[channel],
+            map_cell_light_record_read(cell, sub_layer)->next_rgb_radiance[channel],
+            progress,
+            duration);
     }
+    map_benchmark_statistics.temporal_light_samples++;
     return true;
 }
 
@@ -3331,17 +4699,19 @@ static bool map_lighting_temporal_sample(const MapCell *cell,
  */
 static void map_lighting_radiance(int x,
                                   int y,
-                                  const struct MapCell *cell,
+                                  const map_cell_t *cell,
                                   uint8_t sub_layer,
                                   uint16_t *scalar,
                                   uint16_t rgb[3]) {
     int cache_width = map_width * MAP_FOW_SIZE;
     int cache_height = map_height * MAP_FOW_SIZE;
 
-    if (cell->light_known[sub_layer]) {
+    if (map_cell_light_record_read(cell, sub_layer)->known) {
         if (!map_lighting_temporal_sample(cell, sub_layer, scalar, rgb)) {
-            *scalar = cell->light_radiance[sub_layer];
-            memcpy(rgb, cell->light_rgb_radiance[sub_layer], sizeof(cell->light_rgb_radiance[0]));
+            *scalar = map_cell_light_record_read(cell, sub_layer)->radiance;
+            memcpy(rgb,
+                   map_cell_light_record_read(cell, sub_layer)->rgb_radiance,
+                   sizeof(map_cell_light_record_read(cell, 0)->rgb_radiance));
         }
         return;
     }
@@ -3354,6 +4724,7 @@ static void map_lighting_radiance(int x,
     for (int radius = 1; radius <= search_radius; radius++) {
         uint32_t total[4] = {0};
         unsigned int samples = 0;
+        unsigned int temporal_samples = 0;
 
         for (int offset_x = -radius; offset_x <= radius; offset_x++) {
             for (int offset_y = -radius; offset_y <= radius; offset_y++) {
@@ -3368,22 +4739,37 @@ static void map_lighting_radiance(int x,
                     continue;
                 }
 
-                struct MapCell *sample_cell = MAP_CELL_GET(sample_x, sample_y);
+                map_cell_t *sample_cell = MAP_CELL_GET(sample_x, sample_y);
                 uint8_t sample_sub_layer = map_lighting_sub_layer(sample_cell);
-                if (!sample_cell->light_known[sample_sub_layer]) {
+                if (!map_cell_light_record_read(sample_cell, sample_sub_layer)->known) {
                     continue;
                 }
 
-                total[0] += sample_cell->light_radiance[sample_sub_layer];
+                uint16_t sample_scalar;
+                uint16_t sample_rgb[3];
+                if (!map_lighting_temporal_sample(sample_cell,
+                                                  sample_sub_layer,
+                                                  &sample_scalar,
+                                                  sample_rgb)) {
+                    sample_scalar =
+                        map_cell_light_record_read(sample_cell, sample_sub_layer)->radiance;
+                    memcpy(sample_rgb,
+                           map_cell_light_record_read(sample_cell, sample_sub_layer)->rgb_radiance,
+                           sizeof(sample_rgb));
+                } else {
+                    temporal_samples++;
+                }
+                total[0] += sample_scalar;
                 for (size_t channel = 0; channel < 3; channel++) {
-                    total[channel + 1] +=
-                        sample_cell->light_rgb_radiance[sample_sub_layer][channel];
+                    total[channel + 1] += sample_rgb[channel];
                 }
                 samples++;
             }
         }
 
         if (samples != 0) {
+            map_benchmark_statistics.borrowed_light_samples++;
+            map_benchmark_statistics.borrowed_temporal_light_samples += temporal_samples != 0;
             *scalar = (uint16_t)((total[0] + samples / 2) / samples);
             for (size_t channel = 0; channel < 3; channel++) {
                 rgb[channel] = (uint16_t)((total[channel + 1] + samples / 2) / samples);
@@ -3396,12 +4782,87 @@ static void map_lighting_radiance(int x,
     memset(rgb, 0, sizeof(uint16_t) * 3);
 }
 
+#ifdef ATRINIK_WIDGET_TESTS
+bool widget_map_temporal_lighting_test(void) {
+    for (size_t level = 0; level < arraysize(level_cells); level++) {
+        if (level_cells[level] != NULL) {
+            return false;
+        }
+    }
+
+    uint64_t saved_generation = MapData.light_keyframe_generation;
+    uint64_t saved_start = MapData.light_keyframe_start_seconds;
+    uint64_t saved_end = MapData.light_keyframe_end_seconds;
+    uint8_t saved_flags = MapData.light_keyframe_flags;
+    bool saved_valid = MapData.light_keyframe_valid;
+    map_width = 3;
+    map_height = 3;
+    map_cache_origin_x = 0;
+    map_cache_origin_y = 0;
+    current_level_index = MAP2_DEPTH_INDEX(0);
+    map_level_mask = UINT16_C(1) << current_level_index;
+    if (!map_select_level(0, true)) {
+        return false;
+    }
+
+    map_cell_t *neighbor = MAP_CELL_GET_MIDDLE_MUTABLE(1, 0);
+    map_cell_light_record_t *light = map_cell_light_record(neighbor, 0, true);
+    light->known = 1;
+    light->radiance = 100;
+    light->next_known = 1;
+    light->next_radiance = 300;
+    for (size_t channel = 0; channel < 3; channel++) {
+        light->rgb_radiance[channel] = 200;
+        light->next_rgb_radiance[channel] = 400;
+    }
+    map_cell_light_keyframe_record_t *keyframe = map_cell_light_keyframe_record(neighbor, true);
+    keyframe->generation = 9;
+    keyframe->start_seconds = 100;
+    keyframe->end_seconds = 200;
+    keyframe->valid = 1;
+
+    MapData.light_keyframe_generation = 9;
+    MapData.light_keyframe_start_seconds = 100;
+    MapData.light_keyframe_end_seconds = 200;
+    MapData.light_keyframe_flags = MAP2_LIGHT_KEYFRAME_SNAP;
+    MapData.light_keyframe_valid = true;
+    telemetry_game_time_sync(150, 60000);
+    uint16_t scalar = 0;
+    uint16_t rgb[3] = {0};
+    map_lighting_radiance(MAP_STARTX, MAP_STARTY, MAP_CELL_GET_MIDDLE(0, 0), 0, &scalar, rgb);
+    bool success = scalar == 200 && rgb[0] == 300 && rgb[1] == 300 && rgb[2] == 300;
+
+    uint64_t revision = level_lighting_revision[current_level_index];
+    map_temporal_lighting_bucket = UINT64_MAX;
+    map_redraw_consume();
+    map_temporal_lighting_update();
+    success = success && level_lighting_revision[current_level_index] == revision + 1 &&
+              (map_redraw_pending_reasons() & MAP_REDRAW_REASON_LIGHTING) != 0;
+    map_redraw_consume();
+
+    map_cell_store_destroy(level_cells[current_level_index]);
+    level_cells[current_level_index] = NULL;
+    cells = NULL;
+    map_width = 0;
+    map_height = 0;
+    map_level_mask = 0;
+    map_temporal_lighting_bucket = UINT64_MAX;
+    MapData.light_keyframe_generation = saved_generation;
+    MapData.light_keyframe_start_seconds = saved_start;
+    MapData.light_keyframe_end_seconds = saved_end;
+    MapData.light_keyframe_flags = saved_flags;
+    MapData.light_keyframe_valid = saved_valid;
+    return success;
+}
+#endif
+
 /** Project one cell and resolve its light sample for the lighting grid. */
 static lighting_vertex_t
 map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, int y) {
-    struct MapCell *cell = MAP_CELL_GET(x, y);
+    map_cell_t *cell = MAP_CELL_GET(x, y);
     uint8_t sub_layer = map_lighting_sub_layer(cell);
-    int height = MAX(0, cell->height[GET_MAP_LAYER(LAYER_FLOOR, sub_layer)]);
+    int height =
+        MAX(0, map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_FLOOR, sub_layer))->height);
 
     lighting_vertex_t vertex = {
         .x = surface->w / 2 + (x - data->midx) * MAP_TILE_YOFF - (y - data->midy) * MAP_TILE_YOFF,
@@ -3424,141 +4885,111 @@ map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, 
     return vertex;
 }
 
-/** Add one integer to a stable FNV-1a lightmap cache key. */
-static uint64_t map_lighting_hash_value(uint64_t hash, uint64_t value) {
-    for (size_t i = 0; i < sizeof(value); i++) {
-        hash ^= value & UINT8_MAX;
-        hash *= UINT64_C(1099511628211);
-        value >>= 8;
-    }
-
-    return hash;
-}
-
-/** Build a constant-time key from explicit map-lighting invalidation state. */
-static uint64_t map_lighting_cache_key(SDL_Surface *surface,
-                                       const map_render_data_t *data,
-                                       int x,
-                                       int y,
-                                       int w,
-                                       int h) {
-    uint64_t hash = UINT64_C(14695981039346656037);
-
-    hash = map_lighting_hash_value(hash, LIGHTING_TRANSFER_VERSION);
-    hash = map_lighting_hash_value(hash, level_lighting_revision[current_level_index]);
-    if (data->depth > 0) {
-        hash = map_lighting_hash_value(hash, level_lighting_revision[MAP2_DEPTH_INDEX(0)]);
-    }
-    hash = map_lighting_hash_value(hash, (uint32_t)surface->w);
-    hash = map_lighting_hash_value(hash, (uint32_t)surface->h);
-    hash = map_lighting_hash_value(hash, (uint32_t)map_width);
-    hash = map_lighting_hash_value(hash, (uint32_t)map_height);
-    hash = map_lighting_hash_value(hash, (uint32_t)data->player_height_offset);
-    hash = map_lighting_hash_value(hash, (uint8_t)data->depth);
-    hash = map_lighting_hash_value(hash, MapData.player_sub_layer);
-    hash = map_lighting_hash_value(hash, (uint32_t)x);
-    hash = map_lighting_hash_value(hash, (uint32_t)y);
-    hash = map_lighting_hash_value(hash, (uint32_t)w);
-    hash = map_lighting_hash_value(hash, (uint32_t)h);
-
-    return hash;
-}
-
 /** Rasterize and composite the interpolated map light field. */
-static void map_draw_lighting(SDL_Surface *surface,
-                              SDL_Surface *destination,
-                              map_render_data_t *data,
-                              int x,
-                              int y,
-                              int w,
-                              int h) {
+static void
+map_draw_lighting(SDL_Surface *surface, map_render_data_t *data, int x, int y, int w, int h) {
     int cache_width = map_width * MAP_FOW_SIZE;
     int cache_height = map_height * MAP_FOW_SIZE;
     int start_x = MAX(0, x - 2);
     int start_y = MAX(0, y - 2);
     int end_x = MIN(cache_width - 1, w + 1);
     int end_y = MIN(cache_height - 1, h + 1);
-
-    if (lighting_needs_update()) {
-        int vertex_width = end_x - start_x + 1;
-        int vertex_height = end_y - start_y + 1;
-        lighting_vertex_t *vertices =
-            xmalloc((size_t)vertex_width * (size_t)vertex_height * sizeof(*vertices));
-        for (int vertex_x = start_x; vertex_x <= end_x; vertex_x++) {
-            for (int vertex_y = start_y; vertex_y <= end_y; vertex_y++) {
-                vertices[(size_t)(vertex_x - start_x) * (size_t)vertex_height +
-                         (size_t)(vertex_y - start_y)] =
-                    map_lighting_vertex(surface, data, vertex_x, vertex_y);
-            }
+    HARD_ASSERT(gpu_renderer_ready());
+    int vertex_width = end_x - start_x + 1;
+    int vertex_height = end_y - start_y + 1;
+    lighting_vertex_t *vertices =
+        xmalloc((size_t)vertex_width * (size_t)vertex_height * sizeof(*vertices));
+    for (int vertex_x = start_x; vertex_x <= end_x; vertex_x++) {
+        for (int vertex_y = start_y; vertex_y <= end_y; vertex_y++) {
+            vertices[(size_t)(vertex_x - start_x) * (size_t)vertex_height +
+                     (size_t)(vertex_y - start_y)] =
+                map_lighting_vertex(surface, data, vertex_x, vertex_y);
         }
-
-        for (int cell_x = start_x; cell_x < end_x; cell_x++) {
-            for (int cell_y = start_y; cell_y < end_y; cell_y++) {
-                int left = surface->w / 2 + (cell_x - data->midx) * MAP_TILE_YOFF -
-                           (cell_y + 1 - data->midy) * MAP_TILE_YOFF;
-                int right = surface->w / 2 + (cell_x + 1 - data->midx) * MAP_TILE_YOFF -
-                            (cell_y - data->midy) * MAP_TILE_YOFF;
-                if (right < 0 || left >= surface->w) {
-                    continue;
-                }
-
-                size_t vertex =
-                    (size_t)(cell_x - start_x) * (size_t)vertex_height + (size_t)(cell_y - start_y);
-                lighting_vertex_t quad[4] = {
-                    vertices[vertex],
-                    vertices[vertex + (size_t)vertex_height],
-                    vertices[vertex + (size_t)vertex_height + 1],
-                    vertices[vertex + 1],
-                };
-                lighting_draw_quad(quad);
-            }
-        }
-        free(vertices);
     }
 
-    lighting_render(destination);
-}
-
-/** Find the written extent of a color-keyed ground surface. */
-static bool map_ground_surface_bounds(SDL_Surface *surface, SDL_Rect *bounds) {
-    HARD_ASSERT(surface != NULL);
-    HARD_ASSERT(bounds != NULL);
-
-    Uint32 color_key;
-    const SDL_PixelFormatDetails *format = SDL_GetPixelFormatDetails(surface->format);
-    if (format == NULL || format->bytes_per_pixel != sizeof(Uint32) ||
-        !SDL_GetSurfaceColorKey(surface, &color_key) || !SDL_LockSurface(surface)) {
-        return false;
-    }
-
-    int minimum_x = surface->w;
-    int minimum_y = surface->h;
-    int maximum_x = -1;
-    int maximum_y = -1;
-    for (int y = 0; y < surface->h; y++) {
-        const Uint32 *pixels = (const Uint32 *)((const Uint8 *)surface->pixels +
-                                                (size_t)y * (size_t)surface->pitch);
-        for (int x = 0; x < surface->w; x++) {
-            if (pixels[x] == color_key) {
+    for (int cell_x = start_x; cell_x < end_x; cell_x++) {
+        for (int cell_y = start_y; cell_y < end_y; cell_y++) {
+            int left = surface->w / 2 + (cell_x - data->midx) * MAP_TILE_YOFF -
+                       (cell_y + 1 - data->midy) * MAP_TILE_YOFF;
+            int right = surface->w / 2 + (cell_x + 1 - data->midx) * MAP_TILE_YOFF -
+                        (cell_y - data->midy) * MAP_TILE_YOFF;
+            if (right < 0 || left >= surface->w) {
                 continue;
             }
-            minimum_x = MIN(minimum_x, x);
-            minimum_y = MIN(minimum_y, y);
-            maximum_x = MAX(maximum_x, x);
-            maximum_y = MAX(maximum_y, y);
+
+            size_t vertex =
+                (size_t)(cell_x - start_x) * (size_t)vertex_height + (size_t)(cell_y - start_y);
+            lighting_vertex_t quad[4] = {
+                vertices[vertex],
+                vertices[vertex + (size_t)vertex_height],
+                vertices[vertex + (size_t)vertex_height + 1],
+                vertices[vertex + 1],
+            };
+            gpu_renderer_map_light_quad((uint8_t)MAP2_DEPTH_INDEX(data->depth), quad);
         }
     }
-    SDL_UnlockSurface(surface);
+    free(vertices);
+}
 
-    if (maximum_x < minimum_x || maximum_y < minimum_y) {
-        *bounds = (SDL_Rect){0, 0, 0, 0};
-    } else {
-        *bounds = (SDL_Rect){minimum_x,
-                             minimum_y,
-                             maximum_x - minimum_x + 1,
-                             maximum_y - minimum_y + 1};
+/** Rebuild only the compact light grid consumed by retained painter commands. */
+static void map_draw_retained_lighting(SDL_Surface *surface) {
+    if (!setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING)) {
+        return;
     }
-    return true;
+
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
+        uint16_t bit = UINT16_C(1) << MAP2_DEPTH_INDEX(depth);
+        if (!(map_level_mask & bit) || !map_select_level(depth, false) ||
+            !lighting_select_level(depth)) {
+            continue;
+        }
+
+        map_render_data_t data = {
+            .world_surface = true,
+            .primary_level = depth == 0,
+            .depth = depth,
+        };
+        int x, y, w, h;
+        map_setup_render_data(surface, &data, &x, &y, &w, &h);
+        uint64_t profile_lighting_started = render_profiler_begin();
+        map_draw_lighting(surface, &data, x, y, w, h);
+        render_profiler_end(RENDER_PROFILE_LIGHTING, profile_lighting_started);
+    }
+}
+
+static void map_render_cohort_append(map_render_context_t *context,
+                                     const map_visible_tile_t *tile,
+                                     int depth,
+                                     size_t candidates_first,
+                                     size_t commands_first,
+                                     size_t annotations_first,
+                                     size_t tiles_first) {
+    if (!context->capture_candidates) {
+        return;
+    }
+    if (context->cohorts_num == context->cohorts_capacity) {
+        context->cohorts_capacity =
+            context->cohorts_capacity == 0 ? 256 : context->cohorts_capacity * 2;
+        context->cohorts =
+            xreallocarray(context->cohorts, context->cohorts_capacity, sizeof(*context->cohorts));
+    }
+    const map_cell_header_t *header = &cells->headers[map_cache_physical_index(tile->x, tile->y)];
+    context->cohorts[context->cohorts_num++] = (map_render_cohort_t){
+        .candidates_first = candidates_first,
+        .candidates_num = context->candidates_num - candidates_first,
+        .commands_first = commands_first,
+        .commands_num = context->commands_num - commands_first,
+        .annotations_first = annotations_first,
+        .annotations_num = context->annotations_num - annotations_first,
+        .tiles_first = tiles_first,
+        .tiles_num = context->tiles_num - tiles_first,
+        .record_identity = tile->cell->painter_identity,
+        .cell_generation = header->generation,
+        .cell_revision = header->revision,
+        .tile_x = tile->x,
+        .tile_y = tile->y,
+        .depth = (int8_t)depth,
+    };
 }
 
 /**
@@ -3575,7 +5006,8 @@ static void map_draw_level(SDL_Surface *surface,
                            bool objects_only,
                            map_render_context_t *render_context) {
     HARD_ASSERT(surface != NULL);
-    HARD_ASSERT(objects_only || ground_surface != NULL);
+    HARD_ASSERT(gpu_renderer_ready());
+    HARD_ASSERT(ground_surface == NULL);
 
     map_render_data_t data = {
         .world_surface = true,
@@ -3590,26 +5022,19 @@ static void map_draw_level(SDL_Surface *surface,
         map_visible_tiles_create(surface, &data, x, y, w, h, &visible_tiles_num);
     data.smooth_lighting = primary_surface && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING);
     if (data.smooth_lighting && !objects_only) {
-        uint64_t cache_key = map_lighting_cache_key(surface, &data, x, y, w, h);
-        data.smooth_lighting = lighting_begin(surface->w, surface->h, cache_key);
-        data.lightmap_pending = data.smooth_lighting;
-
-        /* Positive-depth ground is composited through a color-keyed scratch
-         * surface. Light each sprite through the transparency-preserving
-         * high-precision path so untouched background pixels cannot erase
-         * lower levels. */
-        if (!primary_level) {
-            data.lightmap_pending = false;
-        }
+        data.lightmap_pending = false;
     }
 
     if (!objects_only) {
         /* Draw floor and fmasks. */
-        bool ground_present = false;
         data.ground_pass = true;
         uint64_t profile_ground_started = render_profiler_begin();
         for (size_t tile_index = 0; tile_index < visible_tiles_num; tile_index++) {
             const map_visible_tile_t *tile = &visible_tiles[tile_index];
+            size_t candidates_first = render_context->candidates_num;
+            size_t commands_first = render_context->commands_num;
+            size_t annotations_first = render_context->annotations_num;
+            size_t tiles_first = render_context->tiles_num;
             data.x = tile->x;
             data.y = tile->y;
             data.xpos = tile->xpos;
@@ -3617,19 +5042,22 @@ static void map_draw_level(SDL_Surface *surface,
             data.level_support_height = tile->level_support_height;
             data.cell = tile->cell;
             for (data.layer = LAYER_FLOOR; data.layer <= LAYER_FMASK; data.layer++) {
-                if (data.cell->priority[0] & (1 << (data.layer - 1))) {
+                if (map_cell_sublayer_record_read(data.cell, 0)->priority &
+                    (1 << (data.layer - 1))) {
                     continue;
                 }
 
-                ground_present |= data.cell->faces[GET_MAP_LAYER(data.layer, data.sub_layer)] != 0;
-                if (primary_level) {
-                    draw_map_object(ground_surface, &data);
-                } else {
-                    data.defer_rendering = true;
-                    draw_map_object(surface, &data);
-                    data.defer_rendering = false;
-                }
+                data.defer_rendering = true;
+                draw_map_object(surface, &data);
+                data.defer_rendering = false;
             }
+            map_render_cohort_append(render_context,
+                                     tile,
+                                     depth,
+                                     candidates_first,
+                                     commands_first,
+                                     annotations_first,
+                                     tiles_first);
         }
         render_profiler_end(RENDER_PROFILE_MAP_GROUND, profile_ground_started);
 
@@ -3638,45 +5066,9 @@ static void map_draw_level(SDL_Surface *surface,
          * tile's level instead of applying the ground field over them. */
         if (data.smooth_lighting) {
             uint64_t profile_lighting_started = render_profiler_begin();
-            map_draw_lighting(surface,
-                              map_scene_composition_active
-                                  ? NULL
-                                  : (primary_level && ground_present ? ground_surface : NULL),
-                              &data,
-                              x,
-                              y,
-                              w,
-                              h);
+            map_draw_lighting(surface, &data, x, y, w, h);
             render_profiler_end(RENDER_PROFILE_LIGHTING, profile_lighting_started);
             data.lightmap_pending = false;
-        }
-
-        if (primary_level && ground_present) {
-            uint64_t profile_composite_started = render_profiler_begin();
-            SDL_Rect ground_bounds;
-            bool ground_bounds_available =
-                map_ground_surface_bounds(ground_surface, &ground_bounds);
-            if (!ground_bounds_available) {
-                surface_show(surface, 0, 0, NULL, ground_surface);
-                if (map_scene_composition_active) {
-                    lighting_scene_mark_surface(ground_surface, 0, 0, NULL, depth, INT16_MIN);
-                }
-            } else if (ground_bounds.w > 0 && ground_bounds.h > 0) {
-                surface_show(surface,
-                             ground_bounds.x,
-                             ground_bounds.y,
-                             &ground_bounds,
-                             ground_surface);
-                if (map_scene_composition_active) {
-                    lighting_scene_mark_surface(ground_surface,
-                                                ground_bounds.x,
-                                                ground_bounds.y,
-                                                &ground_bounds,
-                                                depth,
-                                                INT16_MIN);
-                }
-            }
-            render_profiler_end(RENDER_PROFILE_MAP_GROUND_COMPOSITE, profile_composite_started);
         }
         data.ground_pass = false;
     }
@@ -3684,13 +5076,14 @@ static void map_draw_level(SDL_Surface *surface,
     uint8_t floor_layer_pl = GET_MAP_LAYER(LAYER_FLOOR, MapData.player_sub_layer);
 
     /* Now draw everything else. */
-    if (!objects_only) {
-        map_animation_object_sequences[current_level_index] = render_context->next_sequence;
-    }
     data.defer_rendering = true;
     uint64_t profile_objects_started = render_profiler_begin();
     for (size_t tile_index = 0; tile_index < visible_tiles_num; tile_index++) {
         const map_visible_tile_t *tile = &visible_tiles[tile_index];
+        size_t candidates_first = render_context->candidates_num;
+        size_t commands_first = render_context->commands_num;
+        size_t annotations_first = render_context->annotations_num;
+        size_t tiles_first = render_context->tiles_num;
         data.x = tile->x;
         data.y = tile->y;
         data.xpos = tile->xpos;
@@ -3710,12 +5103,14 @@ static void map_draw_level(SDL_Surface *surface,
                 if (data.layer == LAYER_EFFECT && data.sub_layer != 0) {
                     uint8_t effect_layer = GET_MAP_LAYER(LAYER_EFFECT, data.sub_layer);
                     uint8_t floor_layer = GET_MAP_LAYER(LAYER_FLOOR, MapData.player_sub_layer);
-                    if (data.cell->height[effect_layer] >= data.cell->height[floor_layer]) {
+                    if (map_cell_layer_record_read(data.cell, effect_layer)->height >=
+                        map_cell_layer_record_read(data.cell, floor_layer)->height) {
                         continue;
                     }
                 }
 
-                if (data.cell->priority[data.sub_layer] & (1 << (data.layer - 1))) {
+                if (map_cell_sublayer_record_read(data.cell, data.sub_layer)->priority &
+                    (1 << (data.layer - 1))) {
                     continue;
                 }
 
@@ -3725,18 +5120,21 @@ static void map_draw_level(SDL_Surface *surface,
 
         for (data.sub_layer = 0; data.sub_layer < NUM_SUB_LAYERS; data.sub_layer++) {
             uint8_t map_layer = GET_MAP_LAYER(LAYER_FLOOR, data.sub_layer);
-            if (data.cell->height[map_layer] > data.cell->height[floor_layer_pl]) {
+            if (map_cell_layer_record_read(data.cell, map_layer)->height >
+                map_cell_layer_record_read(data.cell, floor_layer_pl)->height) {
                 continue;
             }
 
             for (data.layer = LAYER_FLOOR; data.layer <= NUM_LAYERS; data.layer++) {
-                if (!(data.cell->priority[data.sub_layer] & (1 << (data.layer - 1)))) {
+                if (!(map_cell_sublayer_record_read(data.cell, data.sub_layer)->priority &
+                      (1 << (data.layer - 1)))) {
                     continue;
                 }
 
                 if (data.layer == LAYER_EFFECT && data.sub_layer != 0) {
                     map_layer = GET_MAP_LAYER(LAYER_EFFECT, data.sub_layer);
-                    if (data.cell->height[map_layer] >= data.cell->height[floor_layer_pl]) {
+                    if (map_cell_layer_record_read(data.cell, map_layer)->height >=
+                        map_cell_layer_record_read(data.cell, floor_layer_pl)->height) {
                         continue;
                     }
                 }
@@ -3746,7 +5144,8 @@ static void map_draw_level(SDL_Surface *surface,
         }
 
         for (data.layer = LAYER_FLOOR; data.layer <= NUM_LAYERS; data.layer++) {
-            if (!(data.cell->priority[0] & (1 << (data.layer - 1)))) {
+            if (!(map_cell_sublayer_record_read(data.cell, 0)->priority &
+                  (1 << (data.layer - 1)))) {
                 continue;
             }
 
@@ -3756,12 +5155,14 @@ static void map_draw_level(SDL_Surface *surface,
         data.layer = LAYER_EFFECT;
 
         for (data.sub_layer = NUM_SUB_LAYERS - 1; data.sub_layer >= 1; data.sub_layer--) {
-            if (data.cell->priority[data.sub_layer] & (1 << (LAYER_EFFECT - 1))) {
+            if (map_cell_sublayer_record_read(data.cell, data.sub_layer)->priority &
+                (1 << (LAYER_EFFECT - 1))) {
                 continue;
             }
 
             uint8_t map_layer = GET_MAP_LAYER(LAYER_EFFECT, data.sub_layer);
-            if (data.cell->height[map_layer] < data.cell->height[floor_layer_pl]) {
+            if (map_cell_layer_record_read(data.cell, map_layer)->height <
+                map_cell_layer_record_read(data.cell, floor_layer_pl)->height) {
                 continue;
             }
 
@@ -3774,12 +5175,14 @@ static void map_draw_level(SDL_Surface *surface,
 
         for (data.sub_layer = 0; data.sub_layer < NUM_SUB_LAYERS; data.sub_layer++) {
             uint8_t map_layer = GET_MAP_LAYER(LAYER_FLOOR, data.sub_layer);
-            if (data.cell->height[map_layer] <= data.cell->height[floor_layer_pl]) {
+            if (map_cell_layer_record_read(data.cell, map_layer)->height <=
+                map_cell_layer_record_read(data.cell, floor_layer_pl)->height) {
                 continue;
             }
 
             for (data.layer = LAYER_FLOOR; data.layer <= NUM_LAYERS; data.layer++) {
-                if (!(data.cell->priority[data.sub_layer] & (1 << (data.layer - 1)))) {
+                if (!(map_cell_sublayer_record_read(data.cell, data.sub_layer)->priority &
+                      (1 << (data.layer - 1)))) {
                     continue;
                 }
 
@@ -3791,17 +5194,20 @@ static void map_draw_level(SDL_Surface *surface,
 
         for (data.sub_layer = NUM_SUB_LAYERS - 1; data.sub_layer >= 1; data.sub_layer--) {
             uint8_t map_layer = GET_MAP_LAYER(LAYER_EFFECT, data.sub_layer);
-            if (data.cell->height[map_layer] < data.cell->height[floor_layer_pl]) {
+            if (map_cell_layer_record_read(data.cell, map_layer)->height <
+                map_cell_layer_record_read(data.cell, floor_layer_pl)->height) {
                 continue;
             }
 
             uint8_t map_layer2 = GET_MAP_LAYER(LAYER_FLOOR, data.sub_layer - 1);
-            if (data.cell->height[map_layer] <= data.cell->height[map_layer2]) {
+            if (map_cell_layer_record_read(data.cell, map_layer)->height <=
+                map_cell_layer_record_read(data.cell, map_layer2)->height) {
                 continue;
             }
 
             map_layer2 = GET_MAP_LAYER(LAYER_EFFECT, data.sub_layer - 1);
-            if (data.cell->height[map_layer] <= data.cell->height[map_layer2]) {
+            if (map_cell_layer_record_read(data.cell, map_layer)->height <=
+                map_cell_layer_record_read(data.cell, map_layer2)->height) {
                 continue;
             }
 
@@ -3812,12 +5218,19 @@ static void map_draw_level(SDL_Surface *surface,
             draw_map_object(surface, &data);
         }
 
-        if (data.cell->priority[0] & (1 << (LAYER_WALL - 1)) &&
-            data.cell->height[GET_MAP_LAYER(LAYER_WALL, 0)] > 0) {
+        if (map_cell_sublayer_record_read(data.cell, 0)->priority & (1 << (LAYER_WALL - 1)) &&
+            map_cell_layer_record_read(data.cell, GET_MAP_LAYER(LAYER_WALL, 0))->height > 0) {
             data.layer = LAYER_WALL;
             data.sub_layer = 0;
             draw_map_object(surface, &data);
         }
+        map_render_cohort_append(render_context,
+                                 tile,
+                                 depth,
+                                 candidates_first,
+                                 commands_first,
+                                 annotations_first,
+                                 tiles_first);
     }
 
     /* Preserve the legacy living cue on secondary destinations such as the
@@ -3835,7 +5248,8 @@ static void map_draw_level(SDL_Surface *surface,
 
             for (data.sub_layer = NUM_SUB_LAYERS - 1; data.sub_layer >= 1; data.sub_layer--) {
                 uint8_t map_layer = GET_MAP_LAYER(LAYER_EFFECT, data.sub_layer);
-                if (data.cell->height[map_layer] != 0 && data.cell->faces[map_layer] != 0) {
+                if (map_cell_layer_record_read(data.cell, map_layer)->height != 0 &&
+                    map_cell_layer_record_read(data.cell, map_layer)->face != 0) {
                     data.cell = NULL;
                     break;
                 }
@@ -4145,7 +5559,7 @@ static void map_render_commands_find_living_occlusion(map_render_context_t *cont
                 ? pixel_format_map_rgba(living->living_occlusion_mask->format, 0, 0, 0, 0)
                 : 0;
         if (living->living_occlusion_mask == NULL ||
-            !SDL_FillSurfaceRect(living->living_occlusion_mask, NULL, transparent)) {
+            !surface_fill_rect(living->living_occlusion_mask, NULL, transparent)) {
             SDL_DestroySurface(living->living_occlusion_mask);
             living->living_occlusion_mask = NULL;
             if (living_geometry != living->source) {
@@ -4174,6 +5588,133 @@ static void map_render_commands_find_living_occlusion(map_render_context_t *cont
     }
 }
 
+/** Return whether a command affects a living silhouette cache result. */
+static bool map_living_outline_command(const map_render_command_t *command) {
+    return command->object_layer == LAYER_LIVING || command->object_layer == LAYER_WALL;
+}
+
+/** Capture the exact command fields used by occlusion geometry and selection. */
+static map_living_outline_key_t map_living_outline_key(const map_render_command_t *command) {
+    return (map_living_outline_key_t){
+        .source = command->source,
+        .source_generation = gpu_renderer_surface_generation(command->source),
+        .x = command->x,
+        .y = command->y,
+        .flags = command->effects.flags,
+        .stretch = command->effects.stretch,
+        .zoom_x = command->effects.zoom_x,
+        .zoom_y = command->effects.zoom_y,
+        .rotate = command->effects.rotate,
+        .dark_level = command->effects.dark_level,
+        .alpha = command->effects.alpha,
+        .object_layer = command->object_layer,
+        .draw_double = command->draw_double,
+        .local_player = command->local_player,
+        .fogged = command->fogged,
+    };
+}
+
+/** Compare cache keys field-by-field without depending on structure padding. */
+static bool map_living_outline_key_equal(const map_living_outline_key_t *left,
+                                         const map_living_outline_key_t *right) {
+    return left->source == right->source && left->source_generation == right->source_generation &&
+           left->x == right->x && left->y == right->y && left->flags == right->flags &&
+           left->stretch == right->stretch && left->zoom_x == right->zoom_x &&
+           left->zoom_y == right->zoom_y && left->rotate == right->rotate &&
+           left->dark_level == right->dark_level && left->alpha == right->alpha &&
+           left->object_layer == right->object_layer && left->draw_double == right->draw_double &&
+           left->local_player == right->local_player && left->fogged == right->fogged;
+}
+
+/** Release retained silhouettes and their complete geometry identity. */
+static void map_living_outline_cache_clear(map_living_outline_cache_t *cache) {
+    for (size_t i = 0; i < cache->outlines_num; i++) {
+        SDL_DestroySurface(cache->outlines[i].surface);
+    }
+    free(cache->outlines);
+    free(cache->keys);
+    memset(cache, 0, sizeof(*cache));
+}
+
+/** Collect the ordered cohort whose geometry determines all living masks. */
+static map_living_outline_key_t *map_living_outline_keys_create(const map_render_context_t *context,
+                                                                size_t *keys_num) {
+    size_t count = 0;
+    for (size_t i = 0; i < context->commands_num; i++) {
+        count += map_living_outline_command(&context->commands[i]);
+    }
+    map_living_outline_key_t *keys = count == 0 ? NULL : xmallocarray(count, sizeof(*keys));
+    size_t output = 0;
+    for (size_t i = 0; i < context->commands_num; i++) {
+        if (map_living_outline_command(&context->commands[i])) {
+            keys[output++] = map_living_outline_key(&context->commands[i]);
+        }
+    }
+    *keys_num = count;
+    return keys;
+}
+
+/** Return whether retained silhouettes describe this complete painter cohort. */
+static bool map_living_outline_cache_matches(const map_living_outline_cache_t *cache,
+                                             const map_render_context_t *context) {
+    if (!cache->valid) {
+        return false;
+    }
+    size_t keys_num;
+    map_living_outline_key_t *keys = map_living_outline_keys_create(context, &keys_num);
+    bool matches = keys_num == cache->keys_num;
+    for (size_t i = 0; matches && i < keys_num; i++) {
+        matches = map_living_outline_key_equal(&keys[i], &cache->keys[i]);
+    }
+    free(keys);
+    return matches;
+}
+
+/** Consume newly computed masks into retained final outline surfaces. */
+static void map_living_outline_cache_build(map_living_outline_cache_t *cache,
+                                           map_render_context_t *context) {
+    map_living_outline_cache_clear(cache);
+    cache->keys = map_living_outline_keys_create(context, &cache->keys_num);
+    for (size_t i = 0; i < context->commands_num; i++) {
+        map_render_command_t *command = &context->commands[i];
+        if (command->living_occlusion_mask == NULL) {
+            continue;
+        }
+        SDL_Color color;
+        const char *outline_color =
+            command->local_player ? MAP_OUTLINE_COLOR : MAP_LIVING_OUTLINE_COLOR;
+        SDL_Surface *outline = NULL;
+        if (text_color_parse(outline_color, &color)) {
+            outline = sprite_outline_create(command->living_occlusion_mask, &color);
+        }
+        SDL_DestroySurface(command->living_occlusion_mask);
+        command->living_occlusion_mask = NULL;
+        if (outline == NULL) {
+            continue;
+        }
+        cache->outlines =
+            xreallocarray(cache->outlines, cache->outlines_num + 1, sizeof(*cache->outlines));
+        cache->outlines[cache->outlines_num++] = (map_living_outline_t){
+            .surface = outline,
+            .x = command->x - SPRITE_GLOW_SIZE,
+            .y = command->y - (command->draw_double ? 22 : 0) - SPRITE_GLOW_SIZE,
+        };
+    }
+    cache->valid = true;
+}
+
+/** Submit retained living silhouettes after the world painter pass. */
+static void map_living_outline_cache_draw(SDL_Surface *surface,
+                                          const map_living_outline_cache_t *cache) {
+    for (size_t i = 0; i < cache->outlines_num; i++) {
+        surface_show(surface,
+                     cache->outlines[i].x,
+                     cache->outlines[i].y,
+                     NULL,
+                     cache->outlines[i].surface);
+    }
+}
+
 /** Return whether a command participates in the visible exit cue. */
 static bool map_exit_cue_command(const map_render_command_t *command) {
     return command->exit && command->depth == 0;
@@ -4192,6 +5733,7 @@ static map_exit_cue_key_t map_exit_cue_key(const map_render_command_t *command) 
         .zoom_y = command->effects.zoom_y,
         .rotate = command->effects.rotate,
         .source = command->source,
+        .source_generation = gpu_renderer_surface_generation(command->source),
         .draw_double = command->draw_double,
     };
 }
@@ -4201,8 +5743,8 @@ static int map_exit_cue_key_compare(const void *left_ptr, const void *right_ptr)
     const map_exit_cue_key_t *left = left_ptr;
     const map_exit_cue_key_t *right = right_ptr;
 
-#define COMPARE_KEY_FIELD(_field) \
-    if (left->_field != right->_field) { \
+#define COMPARE_KEY_FIELD(_field)                     \
+    if (left->_field != right->_field) {              \
         return left->_field < right->_field ? -1 : 1; \
     }
     COMPARE_KEY_FIELD(tile_x);
@@ -4219,6 +5761,7 @@ static int map_exit_cue_key_compare(const void *left_ptr, const void *right_ptr)
         uintptr_t right_source = (uintptr_t)right->source;
         return left_source < right_source ? -1 : 1;
     }
+    COMPARE_KEY_FIELD(source_generation);
     COMPARE_KEY_FIELD(draw_double);
 #undef COMPARE_KEY_FIELD
     return 0;
@@ -4324,10 +5867,7 @@ static bool map_exit_cue_copy_geometry(SDL_Surface *mask,
         for (int y = 0; y < geometry->h; y++) {
             for (int x = 0; x < geometry->w; x++) {
                 if (surface_pixel_visible(geometry, x, y)) {
-                    putpixel(mask,
-                             command->x + x - mask_x,
-                             source_y + y - mask_y,
-                             visible);
+                    putpixel(mask, command->x + x - mask_x, source_y + y - mask_y, visible);
                 }
             }
         }
@@ -4376,9 +5916,8 @@ static bool map_exit_cue_group_build(map_exit_cue_t *group,
         return false;
     }
 
-    SDL_Surface *mask = SDL_CreateSurface(maximum_x - minimum_x,
-                                          maximum_y - minimum_y,
-                                          FormatHolder->format);
+    SDL_Surface *mask =
+        SDL_CreateSurface(maximum_x - minimum_x, maximum_y - minimum_y, FormatHolder->format);
     if (mask == NULL || !surface_set_transparent_black_mutable(mask) ||
         !surface_clear_transparent_black(mask)) {
         SDL_DestroySurface(mask);
@@ -4393,10 +5932,10 @@ static bool map_exit_cue_group_build(map_exit_cue_t *group,
 
     for (size_t i = 0; i < indices_num && success; i++) {
         success = map_exit_cue_copy_geometry(mask,
-                                              minimum_x,
-                                              minimum_y,
-                                              &context->commands[indices[i]],
-                                              geometries[i]);
+                                             minimum_x,
+                                             minimum_y,
+                                             &context->commands[indices[i]],
+                                             geometries[i]);
     }
     for (size_t i = 0; i < indices_num; i++) {
         if (geometries[i] != context->commands[indices[i]].source) {
@@ -4409,7 +5948,16 @@ static bool map_exit_cue_group_build(map_exit_cue_t *group,
         return false;
     }
 
-    group->surface = mask;
+    SDL_Color color;
+    if (!text_color_parse(MAP_OUTLINE_COLOR, &color)) {
+        SDL_DestroySurface(mask);
+        return false;
+    }
+    group->surface = sprite_outline_create(mask, &color);
+    SDL_DestroySurface(mask);
+    if (group->surface == NULL) {
+        return false;
+    }
     group->x = minimum_x;
     group->y = minimum_y;
     group->keys_num = indices_num;
@@ -4474,21 +6022,12 @@ static bool map_exit_cue_cache_build(map_exit_cue_cache_t *cache,
 
 /** Draw all cached grouped exit perimeters after the world painter pass. */
 static void map_exit_cue_cache_draw(SDL_Surface *surface, const map_exit_cue_cache_t *cache) {
-    SDL_Color color;
-    if (!text_color_parse(MAP_OUTLINE_COLOR, &color)) {
-        return;
-    }
     for (size_t i = 0; i < cache->groups_num; i++) {
-        SDL_Surface *outline = sprite_outline_create(cache->groups[i].surface, &color);
-        if (outline == NULL) {
-            continue;
-        }
         surface_show(surface,
                      cache->groups[i].x - SPRITE_GLOW_SIZE,
                      cache->groups[i].y - SPRITE_GLOW_SIZE,
                      NULL,
-                     outline);
-        SDL_DestroySurface(outline);
+                     cache->groups[i].surface);
     }
 }
 
@@ -4502,38 +6041,31 @@ static void map_render_command_draw_exit(SDL_Surface *surface,
     snprintf(VS(effects.outline), "%s", MAP_OUTLINE_COLOR);
     surface_show_effects(surface, command->x, command->y, NULL, command->source, &effects);
     if (command->draw_double) {
-        surface_show_effects(surface,
-                             command->x,
-                             command->y - 22,
-                             NULL,
-                             command->source,
-                             &effects);
+        surface_show_effects(surface, command->x, command->y - 22, NULL, command->source, &effects);
     }
 }
 
 /** Paint all projected sprites in one isometric order. */
-static void
-map_render_commands(SDL_Surface *surface,
-                    map_render_context_t *context,
-                    bool primary_surface,
-                    map_exit_cue_cache_t *exit_cues) {
+static void map_render_commands(SDL_Surface *surface,
+                                map_render_context_t *context,
+                                bool primary_surface,
+                                map_exit_cue_cache_t *exit_cues) {
+    HARD_ASSERT(surface == NULL);
     uint64_t profile_paint_started = render_profiler_begin();
     uint64_t profile_sort_started = render_profiler_begin();
-    if (context->commands_num > 1) {
-        qsort(context->commands,
-              context->commands_num,
-              sizeof(*context->commands),
-              map_render_command_compare);
-    }
+    map_render_context_sort(context);
     render_profiler_end(RENDER_PROFILE_MAP_COMMAND_SORT, profile_sort_started);
 
     if (primary_surface) {
         uint64_t profile_hint_started = render_profiler_begin();
         map_render_commands_find_door_hints(context);
         render_profiler_end(RENDER_PROFILE_MAP_HINT_REPLAY, profile_hint_started);
-        uint64_t profile_occlusion_started = render_profiler_begin();
-        map_render_commands_find_living_occlusion(context);
-        render_profiler_end(RENDER_PROFILE_MAP_LIVING_OCCLUSION, profile_occlusion_started);
+        if (!map_living_outline_cache_matches(&map_animation_living_outlines, context)) {
+            uint64_t profile_occlusion_started = render_profiler_begin();
+            map_render_commands_find_living_occlusion(context);
+            map_living_outline_cache_build(&map_animation_living_outlines, context);
+            render_profiler_end(RENDER_PROFILE_MAP_LIVING_OCCLUSION, profile_occlusion_started);
+        }
     }
 
     bool grouped_exit_cues = false;
@@ -4558,58 +6090,33 @@ map_render_commands(SDL_Surface *surface,
 
         bool scene_lit = BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK) ||
                          BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
-        sprite_effects_t effects = command->effects;
-        if (map_scene_composition_active) {
-            BITMASK_CLEAR(effects.flags,
-                          BIT_MASK(SPRITE_FLAG_SMOOTH_DARK) |
-                              BIT_MASK(SPRITE_FLAG_SMOOTH_DARK_SURFACE));
-        }
+        bool projected_light = BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
+        gpu_renderer_map_set_owner(scene_lit ? (uint8_t)MAP2_DEPTH_INDEX(command->depth)
+                                             : GPU_RENDERER_OWNER_UNLIT,
+                                   command->effects.smooth_dark_y,
+                                   projected_light);
+        gpu_renderer_map_set_instance_identity(command->record_identity,
+                                               (uint32_t)command->record_layer << 2U);
         surface_show_effects(surface,
                              command->x,
                              command->y,
                              NULL,
                              command->source,
-                             &effects);
+                             &command->effects);
         if (command->draw_double) {
+            gpu_renderer_map_set_instance_identity(command->record_identity,
+                                                   ((uint32_t)command->record_layer << 2U) | 1U);
             surface_show_effects(surface,
                                  command->x,
                                  command->y - 22,
                                  NULL,
                                  command->source,
-                                 &effects);
-        }
-
-        if (map_scene_composition_active && scene_lit) {
-            SDL_Surface *geometry = map_render_command_geometry(command);
-            int scene_sample_y = command->effects.smooth_dark_y;
-            if (geometry != NULL) {
-                lighting_scene_mark_surface(geometry,
-                                             command->x,
-                                             command->y,
-                                             NULL,
-                                             command->depth,
-                                             scene_sample_y);
-                if (command->draw_double) {
-                    lighting_scene_mark_surface(
-                        geometry,
-                        command->x,
-                        command->y - 22,
-                        NULL,
-                        command->depth,
-                        scene_sample_y);
-                }
-                if (geometry != command->source) {
-                    SDL_DestroySurface(geometry);
-                }
-            }
+                                 &command->effects);
         }
     }
     render_profiler_end(RENDER_PROFILE_MAP_SPRITE_EFFECTS, profile_effects_started);
 
-    if (map_scene_composition_active) {
-        lighting_scene_render(surface);
-        map_scene_composition_active = false;
-    }
+    gpu_renderer_map_set_owner(GPU_RENDERER_OWNER_UNLIT, 0, false);
 
     if (primary_surface) {
         /* Draw grouped cues after the world painter, matching the legacy
@@ -4617,40 +6124,23 @@ map_render_commands(SDL_Surface *surface,
         if (grouped_exit_cues) {
             map_exit_cue_cache_draw(surface, exit_cues);
         }
+        map_living_outline_cache_draw(surface, &map_animation_living_outlines);
 
         for (size_t i = 0; i < context->commands_num; i++) {
             map_render_command_t *command = &context->commands[i];
-            if (command->living_occlusion_mask == NULL && !command->door_hint) {
+            if (!command->door_hint) {
                 continue;
             }
 
             sprite_effects_t effects = {0};
-            if (command->living_occlusion_mask != NULL) {
-                SDL_Color color;
-                const char *outline_color =
-                    command->local_player ? MAP_OUTLINE_COLOR : MAP_LIVING_OUTLINE_COLOR;
-                if (text_color_parse(outline_color, &color)) {
-                    SDL_Surface *outline =
-                        sprite_outline_create(command->living_occlusion_mask, &color);
-                    if (outline != NULL) {
-                        surface_show(surface,
-                                     command->x - SPRITE_GLOW_SIZE,
-                                     command->y - (command->draw_double ? 22 : 0) -
-                                         SPRITE_GLOW_SIZE,
-                                     NULL,
-                                     outline);
-                        SDL_DestroySurface(outline);
-                    }
-                }
-                SDL_DestroySurface(command->living_occlusion_mask);
-                command->living_occlusion_mask = NULL;
-            }
-
             if (command->door_hint) {
                 effects.zoom_x = command->effects.zoom_x;
                 effects.zoom_y = command->effects.zoom_y;
                 effects.rotate = command->effects.rotate;
                 snprintf(VS(effects.outline), "%s", MAP_OUTLINE_COLOR);
+                gpu_renderer_map_set_instance_identity(command->record_identity,
+                                                       ((uint32_t)command->record_layer << 2U) |
+                                                           2U);
                 surface_show_effects(surface,
                                      command->x,
                                      command->y,
@@ -4658,6 +6148,9 @@ map_render_commands(SDL_Surface *surface,
                                      command->source,
                                      &effects);
                 if (command->draw_double) {
+                    gpu_renderer_map_set_instance_identity(command->record_identity,
+                                                           ((uint32_t)command->record_layer << 2U) |
+                                                               3U);
                     surface_show_effects(surface,
                                          command->x,
                                          command->y - 22,
@@ -4677,8 +6170,6 @@ map_render_commands(SDL_Surface *surface,
         }
     }
 
-    free(context->commands);
-    context->commands = NULL;
     context->commands_num = 0;
     render_profiler_end(RENDER_PROFILE_MAP_PAINT, profile_paint_started);
 }
@@ -4695,19 +6186,29 @@ static void map_draw_ui(SDL_Surface *surface, map_render_context_t *context) {
             .w = MAP_TILE_POS_XOFF,
             .h = MAP_TILE_POS_YOFF,
         };
-        text_show_format(surface,
-                         FONT("arial", 9),
-                         box.x,
-                         box.y,
-                         COLOR_WHITE,
-                         TEXT_OUTLINE | TEXT_VALIGN_CENTER | TEXT_ALIGN_CENTER,
-                         &box,
-                         "%d,%d",
-                         context->tiles[i].w,
-                         context->tiles[i].h);
+        if (surface != NULL) {
+            text_show_format(surface,
+                             FONT("arial", 9),
+                             box.x,
+                             box.y,
+                             COLOR_WHITE,
+                             TEXT_OUTLINE | TEXT_VALIGN_CENTER | TEXT_ALIGN_CENTER,
+                             &box,
+                             "%d,%d",
+                             context->tiles[i].w,
+                             context->tiles[i].h);
+        } else {
+            text_show_format_root(FONT("arial", 9),
+                                  box.x,
+                                  box.y,
+                                  COLOR_WHITE,
+                                  TEXT_OUTLINE | TEXT_VALIGN_CENTER | TEXT_ALIGN_CENTER,
+                                  &box,
+                                  "%d,%d",
+                                  context->tiles[i].w,
+                                  context->tiles[i].h);
+        }
     }
-    free(context->tiles);
-    context->tiles = NULL;
     context->tiles_num = 0;
 
     if (context->target_cell != NULL && cpl.target_code != 0) {
@@ -4733,16 +6234,28 @@ static void map_draw_ui(SDL_Surface *surface, map_render_context_t *context) {
         }
 
         if (!(setting_get_int(OPT_CAT_MAP, OPT_PLAYER_NAMES) &&
-              context->target_cell->pname[context->target_sub_layer][0] != '\0')) {
-            text_show(surface,
-                      FONT_SANS9,
-                      cpl.target_name,
-                      context->target_rect.x + context->target_rect.w / 2 -
-                          text_get_width(FONT_SANS9, cpl.target_name, 0) / 2,
-                      context->target_rect.y - 15,
-                      cpl.target_color,
-                      TEXT_OUTLINE,
-                      NULL);
+              map_cell_actor_record_read(context->target_cell, context->target_sub_layer)
+                      ->name[0] != '\0')) {
+            int x = context->target_rect.x + context->target_rect.w / 2 -
+                    text_get_width(FONT_SANS9, cpl.target_name, 0) / 2;
+            if (surface != NULL) {
+                text_show(surface,
+                          FONT_SANS9,
+                          cpl.target_name,
+                          x,
+                          context->target_rect.y - 15,
+                          cpl.target_color,
+                          TEXT_OUTLINE,
+                          NULL);
+            } else {
+                text_show_root(FONT_SANS9,
+                               cpl.target_name,
+                               x,
+                               context->target_rect.y - 15,
+                               cpl.target_color,
+                               TEXT_OUTLINE,
+                               NULL);
+            }
         }
 
         rectangle_create(surface,
@@ -4783,7 +6296,8 @@ static void map_draw_ui(SDL_Surface *surface, map_render_context_t *context) {
                          hp_color);
 
         context->target_rect.w =
-            context->target_rect.w / 100.0 * context->target_cell->probe[context->target_sub_layer];
+            context->target_rect.w / 100.0 *
+            map_cell_actor_record_read(context->target_cell, context->target_sub_layer)->probe;
         context->target_rect.w = MAX(1, MIN(100, context->target_rect.w));
         rectangle_create(surface,
                          context->target_rect.x,
@@ -4796,35 +6310,335 @@ static void map_draw_ui(SDL_Surface *surface, map_render_context_t *context) {
     render_profiler_end(RENDER_PROFILE_MAP_UI, profile_ui_started);
 }
 
-/** Preserve the fully lit primary ground for object-only animation passes. */
-static bool map_animation_base_capture(SDL_Surface *surface) {
-    if (map_animation_base_surface == NULL || map_animation_base_surface->w != surface->w ||
-        map_animation_base_surface->h != surface->h ||
-        map_animation_base_surface->format != surface->format) {
-        if (map_animation_base_surface != NULL) {
-            SDL_DestroySurface(map_animation_base_surface);
-        }
-        map_animation_base_surface = SDL_CreateSurface(surface->w, surface->h, surface->format);
-        if (map_animation_base_surface == NULL) {
-            return false;
-        }
-        if (!SDL_SetSurfaceBlendMode(map_animation_base_surface, SDL_BLENDMODE_NONE)) {
-            SDL_DestroySurface(map_animation_base_surface);
-            map_animation_base_surface = NULL;
-            return false;
-        }
+/** Projection invariants for one retained primary painter compilation. */
+typedef struct map_retained_projection {
+    int surface_width;
+    int surface_height;
+    int map_width;
+    int map_height;
+    int origin_x;
+    int origin_y;
+    uint16_t level_mask;
+    uint8_t player_sub_layer;
+    bool smooth_lighting;
+    bool valid;
+} map_retained_projection_t;
+
+static void map_render_context_copy(map_render_context_t *destination,
+                                    const map_render_context_t *source) {
+    if (destination->commands_capacity < source->commands_num) {
+        destination->commands_capacity = source->commands_num;
+        destination->commands = xreallocarray(destination->commands,
+                                              destination->commands_capacity,
+                                              sizeof(*destination->commands));
+    }
+    if (destination->annotations_capacity < source->annotations_num) {
+        destination->annotations_capacity = source->annotations_num;
+        destination->annotations = xreallocarray(destination->annotations,
+                                                 destination->annotations_capacity,
+                                                 sizeof(*destination->annotations));
+    }
+    if (destination->tiles_capacity < source->tiles_num) {
+        destination->tiles_capacity = source->tiles_num;
+        destination->tiles = xreallocarray(destination->tiles,
+                                           destination->tiles_capacity,
+                                           sizeof(*destination->tiles));
+    }
+    if (destination->candidates_capacity < source->candidates_num) {
+        destination->candidates_capacity = source->candidates_num;
+        destination->candidates = xreallocarray(destination->candidates,
+                                                destination->candidates_capacity,
+                                                sizeof(*destination->candidates));
+    }
+    if (destination->cohorts_capacity < source->cohorts_num) {
+        destination->cohorts_capacity = source->cohorts_num;
+        destination->cohorts = xreallocarray(destination->cohorts,
+                                             destination->cohorts_capacity,
+                                             sizeof(*destination->cohorts));
+    }
+    if (source->commands_num != 0) {
+        memcpy(destination->commands,
+               source->commands,
+               source->commands_num * sizeof(*destination->commands));
+    }
+    if (source->annotations_num != 0) {
+        memcpy(destination->annotations,
+               source->annotations,
+               source->annotations_num * sizeof(*destination->annotations));
+    }
+    if (source->tiles_num != 0) {
+        memcpy(destination->tiles, source->tiles, source->tiles_num * sizeof(*destination->tiles));
+    }
+    if (source->candidates_num != 0) {
+        memcpy(destination->candidates,
+               source->candidates,
+               source->candidates_num * sizeof(*destination->candidates));
+    }
+    if (source->cohorts_num != 0) {
+        memcpy(destination->cohorts,
+               source->cohorts,
+               source->cohorts_num * sizeof(*destination->cohorts));
+    }
+    destination->commands_num = source->commands_num;
+    destination->annotations_num = source->annotations_num;
+    destination->tiles_num = source->tiles_num;
+    destination->candidates_num = source->candidates_num;
+    destination->cohorts_num = source->cohorts_num;
+    destination->next_sequence = source->next_sequence;
+    destination->target_cell = source->target_cell;
+    destination->target_rect = source->target_rect;
+    destination->target_identity = source->target_identity;
+    destination->target_generation = source->target_generation;
+    destination->target_revision = source->target_revision;
+    destination->target_tile_x = source->target_tile_x;
+    destination->target_tile_y = source->target_tile_y;
+    destination->target_depth = source->target_depth;
+    destination->target_sub_layer = source->target_sub_layer;
+    destination->commands_sorted = source->commands_sorted;
+    destination->capture_candidates = source->capture_candidates;
+}
+
+/** Resolve a retained cell only while both its sparse slot and revision match. */
+static bool map_retained_cell_matches(int depth,
+                                      int x,
+                                      int y,
+                                      uint64_t identity,
+                                      uint32_t generation,
+                                      uint16_t revision,
+                                      map_cell_t **cell_out) {
+    if (!map_select_level(depth, false)) {
+        return false;
+    }
+    size_t physical_index = map_cache_physical_index(x, y);
+    map_cell_t *cell = MAP_CELL_GET(x, y);
+    const map_cell_header_t *header = &cells->headers[physical_index];
+    if (cell->painter_identity != identity || header->generation != generation ||
+        header->revision != revision) {
+        return false;
+    }
+    if (cell_out != NULL) {
+        *cell_out = cell;
+    }
+    return true;
+}
+
+static void map_render_context_ranges_reserve(map_render_context_t *context,
+                                              size_t commands,
+                                              size_t annotations,
+                                              size_t tiles,
+                                              size_t candidates,
+                                              size_t cohorts) {
+    if (context->commands_capacity < commands) {
+        context->commands_capacity = commands;
+        context->commands = xreallocarray(context->commands, commands, sizeof(*context->commands));
+    }
+    if (context->annotations_capacity < annotations) {
+        context->annotations_capacity = annotations;
+        context->annotations =
+            xreallocarray(context->annotations, annotations, sizeof(*context->annotations));
+    }
+    if (context->tiles_capacity < tiles) {
+        context->tiles_capacity = tiles;
+        context->tiles = xreallocarray(context->tiles, tiles, sizeof(*context->tiles));
+    }
+    if (context->candidates_capacity < candidates) {
+        context->candidates_capacity = candidates;
+        context->candidates =
+            xreallocarray(context->candidates, candidates, sizeof(*context->candidates));
+    }
+    if (context->cohorts_capacity < cohorts) {
+        context->cohorts_capacity = cohorts;
+        context->cohorts = xreallocarray(context->cohorts, cohorts, sizeof(*context->cohorts));
+    }
+}
+
+static void map_retained_candidate_replay(map_render_context_t *context,
+                                          const map_render_candidate_t *candidate,
+                                          map_cell_t *cell) {
+    map_render_data_t data = {
+        .x = candidate->x,
+        .y = candidate->y,
+        .midx = candidate->midx,
+        .midy = candidate->midy,
+        .xpos = candidate->xpos,
+        .ypos = candidate->ypos,
+        .player_height_offset = candidate->player_height_offset,
+        .level_support_height = candidate->level_support_height,
+        .cell = cell,
+        .render_context = context,
+        .layer = candidate->layer,
+        .sub_layer = candidate->sub_layer,
+        .alpha_forced = candidate->alpha_forced,
+        .smooth_lighting = candidate->smooth_lighting,
+        .lightmap_pending = candidate->lightmap_pending,
+        .defer_rendering = true,
+        .ground_pass = candidate->ground_pass,
+        .world_surface = true,
+        .primary_level = candidate->primary_level,
+        .depth = candidate->depth,
+    };
+    size_t before = context->commands_num;
+    draw_map_object(cur_widget[MAP_ID]->surface, &data);
+    if (context->commands_num != before) {
+        context->commands[before].sequence = candidate->sequence;
+    }
+}
+
+/** Materialize complete changed-cell cohorts, including insertions and deletions. */
+static void map_retained_animation_prepare(map_render_context_t *context,
+                                           const map_render_context_t *retained) {
+    context->commands_num = 0;
+    context->annotations_num = 0;
+    context->tiles_num = 0;
+    context->candidates_num = 0;
+    context->cohorts_num = 0;
+    context->next_sequence = retained->next_sequence;
+    context->target_cell = NULL;
+    context->capture_candidates = false;
+    map_render_context_ranges_reserve(context,
+                                      retained->commands_num,
+                                      retained->annotations_num,
+                                      retained->tiles_num,
+                                      retained->candidates_num,
+                                      retained->cohorts_num);
+
+    map_cell_t *target_cell;
+    if (retained->target_cell != NULL && map_retained_cell_matches(retained->target_depth,
+                                                                   retained->target_tile_x,
+                                                                   retained->target_tile_y,
+                                                                   retained->target_identity,
+                                                                   retained->target_generation,
+                                                                   retained->target_revision,
+                                                                   &target_cell)) {
+        context->target_cell = target_cell;
+        context->target_rect = retained->target_rect;
+        context->target_identity = retained->target_identity;
+        context->target_generation = retained->target_generation;
+        context->target_revision = retained->target_revision;
+        context->target_tile_x = retained->target_tile_x;
+        context->target_tile_y = retained->target_tile_y;
+        context->target_depth = retained->target_depth;
+        context->target_sub_layer = retained->target_sub_layer;
     }
 
-    SDL_BlendMode blend_mode;
-    if (!SDL_GetSurfaceBlendMode(surface, &blend_mode) ||
-        !SDL_SetSurfaceBlendMode(surface, SDL_BLENDMODE_NONE)) {
-        return false;
+    for (size_t index = 0; index < retained->cohorts_num; index++) {
+        const map_render_cohort_t *old = &retained->cohorts[index];
+        size_t candidates_first = context->candidates_num;
+        size_t commands_first = context->commands_num;
+        size_t annotations_first = context->annotations_num;
+        size_t tiles_first = context->tiles_num;
+        if (old->candidates_num != 0) {
+            memcpy(&context->candidates[context->candidates_num],
+                   &retained->candidates[old->candidates_first],
+                   old->candidates_num * sizeof(*context->candidates));
+        }
+        context->candidates_num += old->candidates_num;
+
+        map_cell_t *cell = NULL;
+        bool stable = map_retained_cell_matches(old->depth,
+                                                old->tile_x,
+                                                old->tile_y,
+                                                old->record_identity,
+                                                old->cell_generation,
+                                                old->cell_revision,
+                                                &cell);
+        if (stable) {
+            if (old->commands_num != 0) {
+                memcpy(&context->commands[context->commands_num],
+                       &retained->commands[old->commands_first],
+                       old->commands_num * sizeof(*context->commands));
+            }
+            context->commands_num += old->commands_num;
+            for (size_t annotation = 0; annotation < old->annotations_num; annotation++) {
+                map_annotation_t copy = retained->annotations[old->annotations_first + annotation];
+                copy.cell = cell;
+                context->annotations[context->annotations_num++] = copy;
+            }
+            if (old->tiles_num != 0) {
+                memcpy(&context->tiles[context->tiles_num],
+                       &retained->tiles[old->tiles_first],
+                       old->tiles_num * sizeof(*context->tiles));
+            }
+            context->tiles_num += old->tiles_num;
+            map_benchmark_statistics.reused_render_commands += old->commands_num;
+        } else if (map_select_level(old->depth, false)) {
+            cell = MAP_CELL_GET(old->tile_x, old->tile_y);
+            for (size_t candidate = 0; candidate < old->candidates_num; candidate++) {
+                map_retained_candidate_replay(
+                    context,
+                    &retained->candidates[old->candidates_first + candidate],
+                    cell);
+            }
+            map_benchmark_statistics.compiled_render_commands += old->candidates_num;
+        }
+
+        const map_cell_header_t *header =
+            &cells->headers[map_cache_physical_index(old->tile_x, old->tile_y)];
+        context->cohorts[context->cohorts_num++] = (map_render_cohort_t){
+            .candidates_first = candidates_first,
+            .candidates_num = context->candidates_num - candidates_first,
+            .commands_first = commands_first,
+            .commands_num = context->commands_num - commands_first,
+            .annotations_first = annotations_first,
+            .annotations_num = context->annotations_num - annotations_first,
+            .tiles_first = tiles_first,
+            .tiles_num = context->tiles_num - tiles_first,
+            .record_identity = cell != NULL ? cell->painter_identity : 0,
+            .cell_generation = header->generation,
+            .cell_revision = header->revision,
+            .tile_x = old->tile_x,
+            .tile_y = old->tile_y,
+            .depth = old->depth,
+        };
     }
-    bool copied = SDL_BlitSurface(surface, NULL, map_animation_base_surface, NULL);
-    if (!SDL_SetSurfaceBlendMode(surface, blend_mode)) {
-        return false;
+    context->commands_sorted = false;
+}
+
+static void map_render_context_sort(map_render_context_t *context) {
+    if (!context->commands_sorted && context->commands_num > 1) {
+        qsort(context->commands,
+              context->commands_num,
+              sizeof(*context->commands),
+              map_render_command_compare);
     }
-    return copied;
+    context->commands_sorted = true;
+}
+
+/** Force one auxiliary surface through the raw GPU map compositor. */
+static bool map_gpu_auxiliary;
+/** Persistent painter storage for the primary and auxiliary projections. */
+static map_render_context_t map_render_contexts[2];
+/** Immutable pre-paint primary compilation used by animation-only frames. */
+static map_render_context_t map_retained_primary_context;
+static map_retained_projection_t map_retained_primary_projection;
+
+static bool map_retained_projection_matches(SDL_Surface *surface) {
+    return map_retained_primary_projection.valid &&
+           map_retained_primary_projection.surface_width == surface->w &&
+           map_retained_primary_projection.surface_height == surface->h &&
+           map_retained_primary_projection.map_width == map_width &&
+           map_retained_primary_projection.map_height == map_height &&
+           map_retained_primary_projection.origin_x == map_cache_origin_x &&
+           map_retained_primary_projection.origin_y == map_cache_origin_y &&
+           map_retained_primary_projection.level_mask == map_level_mask &&
+           map_retained_primary_projection.player_sub_layer == MapData.player_sub_layer &&
+           map_retained_primary_projection.smooth_lighting ==
+               (setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0);
+}
+
+static void map_retained_projection_commit(SDL_Surface *surface) {
+    map_retained_primary_projection = (map_retained_projection_t){
+        .surface_width = surface->w,
+        .surface_height = surface->h,
+        .map_width = map_width,
+        .map_height = map_height,
+        .origin_x = map_cache_origin_x,
+        .origin_y = map_cache_origin_y,
+        .level_mask = map_level_mask,
+        .player_sub_layer = MapData.player_sub_layer,
+        .smooth_lighting = setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0,
+        .valid = true,
+    };
 }
 
 /** Draw independently cached levels through one projected painter order. */
@@ -4834,10 +6648,14 @@ void map_draw_map(SDL_Surface *surface) {
     uint64_t profile_map_started = render_profiler_begin();
 
     bool primary_surface = cur_widget[MAP_ID] != NULL && surface == cur_widget[MAP_ID]->surface;
-    bool animation_base_captured = false;
-    if (primary_surface) {
-        map_animation_cache_valid = false;
-        map_exit_cue_cache_clear(&map_animation_exit_cues);
+    bool gpu_output = gpu_renderer_ready() && (primary_surface || map_gpu_auxiliary);
+    bool animation_only = primary_surface && !map_redraw_due() && map_animation_redraw_due() &&
+                          map_redraw_pending_reasons() == MAP_REDRAW_REASON_ANIMATION;
+    bool reuse_retained = animation_only && map_retained_projection_matches(surface);
+    if (animation_only && !reuse_retained) {
+        /* A missing/stale compilation is safe to recover with one full build;
+         * never reinterpret it as an animation delta. */
+        animation_only = false;
     }
     map_benchmark_statistics.map_draws++;
     if (primary_surface) {
@@ -4845,213 +6663,111 @@ void map_draw_map(SDL_Surface *surface) {
     } else {
         map_benchmark_statistics.auxiliary_map_draws++;
     }
-    size_t surface_index = primary_surface ? 0 : 1;
-    SDL_Surface **level_surface = &map_level_surfaces[surface_index];
-    map_render_context_t render_context = {0};
+    map_render_context_t *render_context = &map_render_contexts[map_gpu_auxiliary ? 1 : 0];
+    render_context->commands_num = 0;
+    render_context->annotations_num = 0;
+    render_context->tiles_num = 0;
+    render_context->candidates_num = 0;
+    render_context->cohorts_num = 0;
+    render_context->next_sequence = 0;
+    render_context->target_cell = NULL;
+    render_context->commands_sorted = false;
+    render_context->capture_candidates = primary_surface && !reuse_retained;
 
-    if (*level_surface == NULL || (*level_surface)->w != surface->w ||
-        (*level_surface)->h != surface->h) {
-        if (*level_surface != NULL) {
-            SDL_DestroySurface(*level_surface);
-        }
-
-        *level_surface = SDL_CreateSurface(surface->w, surface->h, surface->format);
-        if (*level_surface == NULL) {
-            map_benchmark_statistics.render_failures++;
-            LOG(ERROR, "Could not create map level surface: %s", SDL_GetError());
-            render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
-            return;
-        }
-        if (!surface_set_transparent_black_mutable(*level_surface)) {
-            map_benchmark_statistics.render_failures++;
-            LOG(ERROR, "Could not prepare map level surface: %s", SDL_GetError());
-            SDL_DestroySurface(*level_surface);
-            *level_surface = NULL;
-            render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
-            return;
-        }
-    }
-
-    uint64_t profile_scratch_clear_started = render_profiler_begin();
-    bool scratch_cleared = surface_clear_transparent_black(*level_surface);
-    render_profiler_end(RENDER_PROFILE_MAP_SCRATCH_CLEAR, profile_scratch_clear_started);
-    if (!scratch_cleared) {
+    if (!gpu_output) {
         map_benchmark_statistics.render_failures++;
-#ifdef ATRINIK_WIDGET_TESTS
-        if (map_benchmark_mutable_rle_fault_armed) {
-            map_benchmark_statistics.fault_detections++;
-            map_benchmark_fault_status.detected = true;
-            SDL_SetSurfaceRLE(*level_surface, false);
-            map_benchmark_mutable_rle_fault_armed = false;
-        }
-#endif
-        map_select_level(0, true);
-        lighting_select_level(0);
+        SDL_SetError("mandatory GPU map renderer is unavailable");
+        LOG(ERROR, "%s", SDL_GetError());
+        render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
+        return;
+    }
+    bool began = map_gpu_auxiliary ? gpu_renderer_map_begin_auxiliary(surface->w, surface->h)
+                                   : gpu_renderer_map_begin(surface->w, surface->h);
+    if (!began) {
+        map_benchmark_statistics.render_failures++;
+        LOG(ERROR, "Could not begin retained GPU map target: %s", SDL_GetError());
         render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
         return;
     }
 
-#ifdef ATRINIK_WIDGET_TESTS
-    if (map_benchmark_fault == MAP_BENCHMARK_FAULT_MUTABLE_RLE &&
-        !map_benchmark_fault_status.injected) {
-        if (SDL_SetSurfaceRLE(*level_surface, true)) {
-            map_benchmark_mutable_rle_fault_armed = true;
-            map_benchmark_fault_status.injected = true;
-            map_benchmark_statistics.fault_injections++;
-            if (!surface_clear_transparent_black(*level_surface)) {
-                map_benchmark_statistics.render_failures++;
-            }
-            /* The injected surface has been exercised by the clear seam. Do
-             * not enter a full large-viewport painter pass for a fault-only
-             * replay; the production renderer remains on the path below. */
-            map_benchmark_statistics.fault_detections++;
-            map_benchmark_fault_status.detected = true;
-            SDL_SetSurfaceRLE(*level_surface, false);
-            map_benchmark_mutable_rle_fault_armed = false;
-            map_select_level(0, true);
-            lighting_select_level(0);
-            render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
-            return;
-        } else {
-            map_benchmark_statistics.render_failures++;
-        }
-    }
-#endif
-
-    map_scene_composition_active =
-        primary_surface && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) &&
-        lighting_scene_begin(surface->w, surface->h);
-
+    uint64_t gpu_command_build_started = gpu_renderer_timing_begin();
     uint64_t active_levels = 0;
-    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
-        uint16_t bit = UINT16_C(1) << MAP2_DEPTH_INDEX(depth);
-        if (!(map_level_mask & bit) || !map_select_level(depth, false) ||
-            !lighting_select_level(depth)) {
-            continue;
-        }
-
-        active_levels++;
-        map_benchmark_statistics.level_draws++;
-        map_draw_level(surface,
-                       *level_surface,
-                       depth,
-                       depth == 0,
-                       primary_surface,
-                       false,
-                       &render_context);
-    }
-
-    if (primary_surface) {
-        animation_base_captured = map_animation_base_capture(surface);
-        if (!animation_base_captured) {
-            map_benchmark_statistics.render_failures++;
-            LOG(ERROR, "Could not cache lit map ground: %s", SDL_GetError());
-        }
-    }
-
-    if (primary_surface) {
-        free(map_animation_ground_commands);
-        map_animation_ground_commands = NULL;
-        map_animation_ground_commands_num = 0;
-        for (size_t i = 0; i < render_context.commands_num; i++) {
-            if (!render_context.commands[i].ground) {
+    if (reuse_retained) {
+        /* GPU begin resets the frame-local row/span lookup. Re-emit only the
+         * compact light field so unchanged records retain their owner keys and
+         * are rejected by the GPU dirty-range uploader. */
+        map_draw_retained_lighting(surface);
+        map_retained_animation_prepare(render_context, &map_retained_primary_context);
+        active_levels = map_active_level_count();
+        map_benchmark_statistics.animation_level_draws += active_levels;
+    } else {
+        for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
+            uint16_t bit = UINT16_C(1) << MAP2_DEPTH_INDEX(depth);
+            if (!(map_level_mask & bit) || !map_select_level(depth, false) ||
+                !lighting_select_level(depth)) {
                 continue;
             }
-            map_animation_ground_commands_num++;
+
+            active_levels++;
+            map_benchmark_statistics.level_draws++;
+            map_draw_level(surface,
+                           NULL,
+                           depth,
+                           depth == 0,
+                           primary_surface,
+                           false,
+                           render_context);
         }
-        if (map_animation_ground_commands_num != 0) {
-            map_animation_ground_commands = xmallocarray(map_animation_ground_commands_num,
-                                                         sizeof(*map_animation_ground_commands));
-            size_t output = 0;
-            for (size_t i = 0; i < render_context.commands_num; i++) {
-                if (render_context.commands[i].ground) {
-                    map_animation_ground_commands[output++] = render_context.commands[i];
-                }
-            }
-        }
-        map_animation_cache_valid = animation_base_captured;
+        map_benchmark_statistics.compiled_render_commands += render_context->commands_num;
     }
 
-    map_benchmark_statistics.render_commands += render_context.commands_num;
-    map_benchmark_statistics.annotations += render_context.annotations_num;
-    map_benchmark_statistics.ui_tiles += render_context.tiles_num;
+    map_benchmark_statistics.animation_draws += animation_only;
+
+    if (primary_surface) {
+        /* Cohort ranges address traversal-order output, so retain the
+         * compilation before sorting the working painter list. */
+        render_context->commands_sorted = false;
+        map_render_context_copy(&map_retained_primary_context, render_context);
+        map_retained_projection_commit(surface);
+    }
+    map_render_context_sort(render_context);
+
+    map_benchmark_statistics.render_commands += render_context->commands_num;
+    map_benchmark_commands_accumulate(render_context->commands,
+                                      render_context->commands_num,
+                                      primary_surface,
+                                      animation_only);
+    map_benchmark_statistics.annotations += render_context->annotations_num;
+    map_benchmark_statistics.ui_tiles += render_context->tiles_num;
     map_benchmark_statistics.peak_render_commands =
-        MAX(map_benchmark_statistics.peak_render_commands, render_context.commands_num);
+        MAX(map_benchmark_statistics.peak_render_commands, render_context->commands_num);
     map_benchmark_statistics.peak_active_levels =
         MAX(map_benchmark_statistics.peak_active_levels, active_levels);
 
-    map_render_commands(surface,
-                        &render_context,
+    map_render_commands(NULL,
+                        render_context,
                         primary_surface,
                         primary_surface ? &map_animation_exit_cues : NULL);
-    map_draw_ui(surface, &render_context);
+    map_draw_ui(NULL, render_context);
+    gpu_renderer_timing_end(GPU_RENDERER_TIMING_COMMAND_BUILD, gpu_command_build_started);
+    if (!gpu_renderer_map_end()) {
+        map_benchmark_statistics.render_failures++;
+        if (primary_surface) {
+            map_retained_primary_projection.valid = false;
+        }
+        LOG(ERROR, "Could not finish retained GPU map target: %s", SDL_GetError());
+    }
     map_select_level(0, true);
     lighting_select_level(0);
     render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
 }
 
-bool map_draw_animation(SDL_Surface *surface) {
+void map_draw_map_gpu_auxiliary(SDL_Surface *surface) {
     HARD_ASSERT(surface != NULL);
-
-    bool primary_surface = cur_widget[MAP_ID] != NULL && surface == cur_widget[MAP_ID]->surface;
-    if (!primary_surface || !map_animation_cache_valid || map_animation_base_surface == NULL ||
-        map_animation_base_surface->w != surface->w ||
-        map_animation_base_surface->h != surface->h ||
-        map_animation_base_surface->format != surface->format) {
-        return false;
-    }
-
-    uint64_t profile_map_started = render_profiler_begin();
-    if (!SDL_BlitSurface(map_animation_base_surface, NULL, surface, NULL)) {
-        map_benchmark_statistics.render_failures++;
-        LOG(ERROR, "Could not restore lit map ground: %s", SDL_GetError());
-        render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
-        return false;
-    }
-
-    map_scene_composition_active =
-        setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) &&
-        lighting_scene_begin(surface->w, surface->h);
-
-    map_render_context_t render_context = {0};
-    if (map_animation_ground_commands_num != 0) {
-        render_context.commands_capacity = map_animation_ground_commands_num + 256;
-        render_context.commands =
-            xmallocarray(render_context.commands_capacity, sizeof(*render_context.commands));
-        memcpy(render_context.commands,
-               map_animation_ground_commands,
-               map_animation_ground_commands_num * sizeof(*render_context.commands));
-        render_context.commands_num = map_animation_ground_commands_num;
-    }
-    uint64_t active_levels = 0;
-    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
-        uint16_t bit = UINT16_C(1) << MAP2_DEPTH_INDEX(depth);
-        if (!(map_level_mask & bit) || !map_select_level(depth, false) ||
-            !lighting_select_level(depth)) {
-            continue;
-        }
-
-        active_levels++;
-        map_benchmark_statistics.animation_level_draws++;
-        render_context.next_sequence = map_animation_object_sequences[MAP2_DEPTH_INDEX(depth)];
-        map_draw_level(surface, NULL, depth, depth == 0, true, true, &render_context);
-    }
-
-    map_benchmark_statistics.animation_draws++;
-    map_benchmark_statistics.render_commands += render_context.commands_num;
-    map_benchmark_statistics.annotations += render_context.annotations_num;
-    map_benchmark_statistics.ui_tiles += render_context.tiles_num;
-    map_benchmark_statistics.peak_render_commands =
-        MAX(map_benchmark_statistics.peak_render_commands, render_context.commands_num);
-    map_benchmark_statistics.peak_active_levels =
-        MAX(map_benchmark_statistics.peak_active_levels, active_levels);
-
-    map_render_commands(surface, &render_context, true, &map_animation_exit_cues);
-    map_draw_ui(surface, &render_context);
-    map_select_level(0, true);
-    lighting_select_level(0);
-    render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
-    return true;
+    HARD_ASSERT(!map_gpu_auxiliary);
+    map_gpu_auxiliary = true;
+    map_draw_map(surface);
+    map_gpu_auxiliary = false;
 }
 
 /**
@@ -5068,9 +6784,8 @@ bool map_pointer_overlay_visible_at(int x, int y) {
     /* The retained-frame path draws this cue after widgets and popups.  The
      * popup event path deliberately leaves the previous widget owner in
      * place, so refresh the hit-test here and explicitly reject popup-covered
-     * points before drawing over the UI.  A NULL widget owner is valid for
-     * the off-screen player-view benchmark, which has only a synthetic map
-     * widget and no widget tree. */
+     * points before drawing over the UI. A NULL widget owner is valid while
+     * the widget tree is being rebuilt after renderer recovery. */
     if (popup_covers_point(x, y)) {
         return false;
     }
@@ -5094,12 +6809,8 @@ void map_draw_pointer_overlay(void) {
     map_draw_one(tx, ty, TEXTURE_CLIENT("square_highlight"));
 }
 
-/** Return the exact source or scaled surface selected by the map blit. */
+/** Return the logical map surface used to derive GPU presentation geometry. */
 static SDL_Surface *map_displayed_surface(widgetdata *widget) {
-    if (setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) != 100 && zoomed != NULL) {
-        return zoomed;
-    }
-
     return widget->surface;
 }
 
@@ -5126,7 +6837,7 @@ void map_draw_one(int x, int y, SDL_Surface *surface) {
         data.xpos -= (surface->w - MAP_TILE_POS_XOFF) / 2;
     }
 
-    if (data.cell->faces[0] != 0) {
+    if (map_cell_layer_record_read(data.cell, 0)->face != 0) {
         data.ypos -= get_top_floor_height(data.cell, MapData.player_sub_layer);
         data.ypos += data.player_height_offset;
     }
@@ -5155,7 +6866,7 @@ void map_draw_one(int x, int y, SDL_Surface *surface) {
         BIT_SET(effects.flags, SPRITE_FLAG_FOW);
     }
 
-    surface_show_effects(ScreenSurface, screen.x, screen.y, NULL, surface, &effects);
+    surface_show_effects(OfflineRenderSurface, screen.x, screen.y, NULL, surface, &effects);
 }
 
 /**
@@ -5259,7 +6970,7 @@ static int map_target_cmp(const void *a, const void *b) {
  */
 void map_target_handle(uint8_t is_friend) {
     int x, y, layer;
-    struct MapCell *cell;
+    map_cell_t *cell;
     UT_array *targets;
     UT_icd icd = {sizeof(map_target_struct), NULL, NULL, NULL};
     map_target_struct *p;
@@ -5282,16 +6993,17 @@ void map_target_handle(uint8_t is_friend) {
 
             for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                 layer = GET_MAP_LAYER(LAYER_LIVING, sub_layer);
-                if (cell->faces[layer] && cell->target_object_count[sub_layer] &&
-                    cell->target_is_friend[sub_layer] == is_friend) {
+                if (map_cell_layer_record_read(cell, layer)->face &&
+                    map_cell_actor_record_read(cell, sub_layer)->target_object_count &&
+                    map_cell_actor_record_read(cell, sub_layer)->target_is_friend == is_friend) {
                     map_target_struct target;
 
-                    target.count = cell->target_object_count[sub_layer];
+                    target.count = map_cell_actor_record_read(cell, sub_layer)->target_object_count;
                     target.x = x;
                     target.y = y;
                     utarray_push_back(targets, &target);
 
-                    if (cell->probe[sub_layer] != 0) {
+                    if (map_cell_actor_record_read(cell, sub_layer)->probe != 0) {
                         curr_target = target.count;
                     }
                 }
@@ -5384,7 +7096,7 @@ bool mouse_to_tile_coords(int mx, int my, int *tx, int *ty) {
             data.xpos *= zoom;
             data.ypos *= zoom;
 
-            if (data.cell->faces[0] != 0) {
+            if (map_cell_layer_record_read(data.cell, 0)->face != 0) {
                 int height = get_top_floor_height(data.cell, MapData.player_sub_layer);
                 data.ypos = (data.ypos - height * zoom) + data.player_height_offset * zoom;
             }
@@ -5393,10 +7105,11 @@ bool mouse_to_tile_coords(int mx, int my, int *tx, int *ty) {
             int16_t max_height = 0;
 
             for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                int16_t height = data.cell->height[sub_layer * NUM_LAYERS];
+                int16_t height =
+                    map_cell_layer_record_read(data.cell, sub_layer * NUM_LAYERS)->height;
                 if (height > max_height) {
                     max_height = height;
-                    stretch = data.cell->stretch[sub_layer];
+                    stretch = map_cell_sublayer_record_read(data.cell, sub_layer)->stretch;
                 }
             }
 
@@ -5511,7 +7224,6 @@ static const map_menu_action map_menu_actions[] = {
 /** @copydoc widgetdata::draw_func */
 static void widget_draw(widgetdata *widget) {
     static int gfx_toggle = 0;
-    SDL_Rect box;
     int mx, my;
 
     if (widget->surface == NULL || widget->surface->w != widget->w ||
@@ -5543,58 +7255,31 @@ static void widget_draw(widgetdata *widget) {
         map_redraw_request(MAP_REDRAW_REASON_RESIZE);
     }
 
-    /* Rebuild static map state only for a full invalidation. Animation-only
-     * ticks restore the cached lit ground and repaint object/UI layers. */
-    if (map_redraw_due()) {
-        SDL_FillSurfaceRect(widget->surface, NULL, 0);
+    /* A complete GPU redraw remains the sole map compositor. Animation-only
+     * invalidation is retained as evidence about why this redraw occurred. */
+    if (!map_state_transaction_active() && map_redraw_due()) {
         map_draw_map(widget->surface);
         map_redraw_consume();
         effect_sprites_play();
-
-        if (setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) != 100) {
-            if (zoomed) {
-                SDL_DestroySurface(zoomed);
-            }
-
-            zoomed = zoomSurface(widget->surface,
-                                 setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0,
-                                 setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0,
-                                 setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER));
-            if (zoomed == NULL) {
-                LOG(ERROR, "Could not resize map surface: %s", SDL_GetError());
-            }
-        }
-    } else if (map_animation_redraw_due()) {
-        if (map_draw_animation(widget->surface)) {
-            map_animation_redraw_consume();
-            effect_sprites_play();
-        } else {
-            map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
-        }
-
-        if (setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) != 100) {
-            if (zoomed) {
-                SDL_DestroySurface(zoomed);
-            }
-
-            zoomed = zoomSurface(widget->surface,
-                                 setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0,
-                                 setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0,
-                                 setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER));
-            if (zoomed == NULL) {
-                LOG(ERROR, "Could not resize map surface: %s", SDL_GetError());
-            }
-        }
+    } else if (!map_state_transaction_active() && map_animation_redraw_due()) {
+        map_draw_map(widget->surface);
+        map_animation_redraw_consume();
+        effect_sprites_play();
     }
 
-    box.x = widget_x(widget);
-    box.y = widget_y(widget);
-
     SDL_Surface *displayed = map_displayed_surface(widget);
-    SDL_BlitSurface(displayed, NULL, ScreenSurface, &box);
+    if (gpu_renderer_map_available() &&
+        !gpu_renderer_draw_map((float)widget_x(widget),
+                               (float)widget_y(widget),
+                               (float)widget_w(widget),
+                               (float)widget_h(widget))) {
+        LOG(ERROR, "Could not submit retained GPU map target: %s", SDL_GetError());
+    }
 
     /* The damage numbers */
-    map_anims_play();
+    if (!map_state_transaction_active()) {
+        map_anims_play();
+    }
 
     map_render_data_t data = {0};
     map_setup_render_data(widget->surface, &data, NULL, NULL, NULL, NULL);
@@ -5611,7 +7296,7 @@ static void widget_draw(widgetdata *widget) {
         double hp_percent = (double)cpl.stats.hp / cpl.stats.maxhp * 100.0;
         if (warn != 0 && warn >= hp_percent) {
             SDL_Surface *texture = TEXTURE_CLIENT("warn_hp");
-            surface_show(ScreenSurface,
+            surface_show(OfflineRenderSurface,
                          xpos - texture->w / 2,
                          ypos - texture->h / 2,
                          NULL,
@@ -5622,7 +7307,7 @@ static void widget_draw(widgetdata *widget) {
         double food_percent = (double)cpl.stats.food / 1000.0 * 100.0;
         if (warn != 0 && warn >= food_percent) {
             SDL_Surface *texture = TEXTURE_CLIENT("warn_food");
-            surface_show(ScreenSurface,
+            surface_show(OfflineRenderSurface,
                          xpos - texture->w / 2,
                          ypos - texture->h / 2,
                          NULL,
@@ -5648,15 +7333,14 @@ static void widget_draw(widgetdata *widget) {
             cp = strtok(msg, "\n");
 
             while (cp) {
-                text_show(ScreenSurface,
-                          FONT_SERIF16,
-                          cp,
-                          widget_x(widget) + displayed->w / 2 -
-                              text_get_width(FONT_SERIF16, cp, TEXT_OUTLINE) / 2,
-                          widget_y(widget) + 300 - bmoff + y_offset,
-                          msg_anim.color,
-                          TEXT_OUTLINE | TEXT_MARKUP,
-                          NULL);
+                text_show_root(FONT_SERIF16,
+                               cp,
+                               widget_x(widget) + displayed->w / 2 -
+                                   text_get_width(FONT_SERIF16, cp, TEXT_OUTLINE) / 2,
+                               widget_y(widget) + 300 - bmoff + y_offset,
+                               msg_anim.color,
+                               TEXT_OUTLINE | TEXT_MARKUP,
+                               NULL);
                 y_offset += FONT_HEIGHT(FONT_SERIF16);
                 cp = strtok(NULL, "\n");
             }
@@ -5670,7 +7354,7 @@ static void widget_draw(widgetdata *widget) {
 
     /* Holding the right mouse button for some time, create a menu. */
     if (mouse_get_state(&mx, &my) == SDL_BUTTON_MASK(SDL_BUTTON_RIGHT) && right_click_ticks != -1 &&
-        SDL_GetTicks() - right_click_ticks > 500) {
+        client_ui_ticks() - right_click_ticks > 500) {
         widgetdata *menu;
 
         menu = create_menu(mx, my, widget);
@@ -5705,7 +7389,8 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
     if (event->type == SDL_EVENT_MOUSE_BUTTON_UP) {
         /* Send target command if we released the right button in time;
          * otherwise the widget menu will be created. */
-        if (event->button.button == SDL_BUTTON_RIGHT && SDL_GetTicks() - right_click_ticks < 500) {
+        if (event->button.button == SDL_BUTTON_RIGHT &&
+            client_ui_ticks() - right_click_ticks < 500) {
             send_target(rx, ry, 0);
         }
 
@@ -5713,7 +7398,7 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
         return 1;
     } else if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
         if (event->button.button == SDL_BUTTON_RIGHT) {
-            right_click_ticks = SDL_GetTicks();
+            right_click_ticks = client_ui_ticks();
         } else if (mouse_get_state(NULL, NULL) == SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) {
             /* Running */
 
@@ -5759,7 +7444,13 @@ void widget_map_ui_test_begin(void) {
 
 bool widget_map_ui_test_end(void) {
     map_ui_test_active = false;
-    return map_ui_test_names > 0 && map_ui_test_targets > 0;
+    if (map_ui_test_names == 0 || map_ui_test_targets == 0) {
+        SDL_SetError("map UI fixture draws missing: names=%d targets=%d",
+                     map_ui_test_names,
+                     map_ui_test_targets);
+        return false;
+    }
+    return true;
 }
 
 void widget_map_animation_test_begin(void) {
@@ -5801,14 +7492,29 @@ void widget_map_animation_test_death_texture_set(SDL_Surface *texture) {
 
 bool widget_map_visibility_test(void) {
     const uint32_t initial_tick = LastTick;
-    const int player_x = map_width * MAP_FOW_SIZE / 2;
-    const int player_y = map_height * MAP_FOW_SIZE / 2;
     const int center_view_x = map_width - map_width / 2 - 1;
     const int center_view_y = map_height - map_height / 2 - 1;
     bool success = true;
     bool center_item = false;
     bool center_living = false;
     bool center_effect = false;
+
+    map_cell_t *initial_center = MAP_CELL_GET_MIDDLE(center_view_x, center_view_y);
+    int player_layer = GET_MAP_LAYER(LAYER_LIVING,
+                                     MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1));
+    const map_cell_layer_record_t *initial_player =
+        map_cell_layer_record_read(initial_center, player_layer);
+    if (initial_player->face == 0 || !initial_player->visibility.initialized ||
+        !initial_player->visibility.authorized || initial_player->visibility.alpha != UINT8_MAX) {
+        fprintf(stderr,
+                "map visibility test: local player was not opaque before first animation "
+                "(face=%u initialized=%d authorized=%d alpha=%u)\n",
+                initial_player->face,
+                initial_player->visibility.initialized,
+                initial_player->visibility.authorized,
+                initial_player->visibility.alpha);
+        success = false;
+    }
 
     map_animate();
 
@@ -5820,10 +7526,7 @@ bool widget_map_visibility_test(void) {
 
         for (int x = 0; x < map_width; x++) {
             for (int y = 0; y < map_height; y++) {
-                MapCell *cell = MAP_CELL_GET_MIDDLE(x, y);
-                int cache_x = x + MAP_STARTX;
-                int cache_y = y + MAP_STARTY;
-
+                map_cell_t *cell = MAP_CELL_GET_MIDDLE(x, y);
                 for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                     for (int object_layer = LAYER_ITEM; object_layer <= LAYER_EFFECT;
                          object_layer++) {
@@ -5831,20 +7534,14 @@ bool widget_map_visibility_test(void) {
                             continue;
                         }
                         int layer = GET_MAP_LAYER(object_layer, sub_layer);
-                        const map_visibility_fade_t *fade = &cell->visibility[layer];
-                        if (!fade->initialized || !fade->authorized || cell->faces[layer] == 0) {
+                        const map_visibility_fade_t *fade =
+                            &map_cell_layer_record_read(cell, layer)->visibility;
+                        if (!fade->initialized || !fade->authorized ||
+                            map_cell_layer_record_read(cell, layer)->face == 0) {
                             continue;
                         }
 
-                        uint8_t expected = map_visibility_field_alpha(
-                            map_visibility_field_weight(cache_x - player_x, cache_y - player_y));
-                        bool local_player = depth == 0 && cache_x == player_x &&
-                                            cache_y == player_y && object_layer == LAYER_LIVING &&
-                                            sub_layer == MIN(MapData.player_sub_layer,
-                                                             NUM_SUB_LAYERS - 1);
-                        if (local_player) {
-                            expected = UINT8_MAX;
-                        }
+                        uint8_t expected = UINT8_MAX;
                         if (fade->target_alpha != expected) {
                             fprintf(stderr,
                                     "map visibility test: target mismatch depth=%d x=%d y=%d "
@@ -5884,15 +7581,14 @@ bool widget_map_visibility_test(void) {
         return false;
     }
 
-    MapCell *center = MAP_CELL_GET_MIDDLE(center_view_x, center_view_y);
+    map_cell_t *center = MAP_CELL_GET_MIDDLE(center_view_x, center_view_y);
     for (int object_layer = LAYER_ITEM; object_layer <= LAYER_EFFECT; object_layer++) {
         if (!map_visibility_transient_layer(object_layer)) {
             continue;
         }
-        int layer = GET_MAP_LAYER(object_layer, MIN(MapData.player_sub_layer,
-                                                    NUM_SUB_LAYERS - 1));
-        const map_visibility_fade_t *fade = &center->visibility[layer];
-        if (center->faces[layer] == 0) {
+        int layer = GET_MAP_LAYER(object_layer, MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1));
+        const map_visibility_fade_t *fade = &map_cell_layer_record_read(center, layer)->visibility;
+        if (map_cell_layer_record_read(center, layer)->face == 0) {
             continue;
         }
         if (!fade->initialized || !fade->authorized || fade->alpha != UINT8_MAX) {
@@ -5907,8 +7603,206 @@ bool widget_map_visibility_test(void) {
         }
     }
 
+    int item_sub_layer = 0;
+    int item_layer = GET_MAP_LAYER(LAYER_ITEM, item_sub_layer);
+    map_cell_layer_record_t *item = map_cell_layer_record(center, item_layer, false);
+    while ((item == NULL || item->face == 0) && ++item_sub_layer < NUM_SUB_LAYERS) {
+        item_layer = GET_MAP_LAYER(LAYER_ITEM, item_sub_layer);
+        item = map_cell_layer_record(center, item_layer, false);
+    }
+    if (item == NULL || item->face == 0) {
+        fprintf(stderr, "map visibility test: no center item for re-entry coverage\n");
+        success = false;
+    } else {
+        uint16_t face = item->face;
+        map_visibility_fade_revoke(&item->visibility, LastTick);
+        LastTick += MAP_VISIBILITY_FADE_DURATION_MS;
+        map_visibility_fade_advance(&item->visibility, LastTick);
+        map_clear_expired_visibility_layer(center, item_sub_layer, LAYER_ITEM);
+        item = map_cell_layer_record(center, item_layer, false);
+        if (item == NULL || item->face != 0 || !item->visibility.initialized ||
+            item->visibility.authorized || item->visibility.alpha != 0) {
+            fprintf(stderr, "map visibility test: expired item tombstone was not retained\n");
+            success = false;
+        } else {
+            item->face = face;
+            map_visibility_authorize_record(item, false);
+            if (item->visibility.alpha != 0 || item->visibility.target_alpha != UINT8_MAX) {
+                fprintf(stderr, "map visibility test: re-entry did not begin at zero alpha\n");
+                success = false;
+            }
+            LastTick += MAP_VISIBILITY_FADE_DURATION_MS / 2U;
+            map_visibility_fade_advance(&item->visibility, LastTick);
+            if (item->visibility.alpha != 128) {
+                fprintf(stderr,
+                        "map visibility test: half re-entry alpha expected 128 got %u\n",
+                        item->visibility.alpha);
+                success = false;
+            }
+        }
+    }
+
     /* Keep the simulated clock monotonic after advancing the fade interval. */
     return success;
+}
+
+bool widget_map_projection_contract_test(void) {
+    int saved_width = map_width;
+    int saved_height = map_height;
+    size_t saved_level = current_level_index;
+    uint16_t saved_mask = map_level_mask;
+    map_cell_store_t *saved_cells = cells;
+    map_cell_store_t *saved_base = level_cells[MAP2_DEPTH_INDEX(0)];
+
+    map_render_data_t classification = {.ground_pass = true};
+    map_cell_layer_record_t classification_record = {0};
+    bool success = map_object_uses_projected_lighting(&classification, &classification_record);
+    classification.ground_pass = false;
+    success =
+        success && !map_object_uses_projected_lighting(&classification, &classification_record);
+    classification_record.roof = true;
+    success =
+        success && map_object_uses_projected_lighting(&classification, &classification_record);
+
+    map_width = MAP_WIRE_SIZE_MAX;
+    map_height = MAP_WIRE_SIZE_MAX;
+    current_level_index = MAP2_DEPTH_INDEX(0);
+    map_level_mask = UINT16_C(1) << current_level_index;
+    level_cells[current_level_index] = NULL;
+    success = success && map_select_level(0, true);
+    SDL_Surface *surface = success ? SDL_CreateSurface(320, 240, SDL_PIXELFORMAT_RGBA32) : NULL;
+    if (surface == NULL) {
+        success = false;
+    } else {
+        map_render_data_t data = {.world_surface = true};
+        int x, y, w, h;
+        map_setup_render_data(surface, &data, &x, &y, &w, &h);
+        success = x == data.midx - map_width / 2 && y == data.midy - map_height / 2 &&
+                  w - x == map_width && h - y == map_height;
+        const int corners[4][2] = {{x, y}, {x, h - 1}, {w - 1, y}, {w - 1, h - 1}};
+        for (size_t i = 0; i < arraysize(corners) && success; i++) {
+            data.x = corners[i][0];
+            data.y = corners[i][1];
+            success = map_should_draw(surface, &data);
+        }
+
+        SDL_Surface *tile = SDL_CreateSurface(32, 32, SDL_PIXELFORMAT_RGBA32);
+        sprite_struct sprite = {.bitmap = tile};
+        sprite_struct *saved_sprite = FaceList[1].sprite;
+        uint8_t saved_height_diff = MapData.height_diff;
+        map_render_context_t context = {0};
+        size_t physical_index =
+            (size_t)MAP_STARTY * (map_width * MAP_FOW_SIZE) + (size_t)MAP_STARTX;
+        map_cell_t *cell = map_cell_store_slot(cells, physical_index, true);
+        map_cell_layer_record_t *floor =
+            map_cell_layer_record(cell, GET_MAP_LAYER(LAYER_FLOOR, 0), true);
+        map_cell_layer_record_t *wall =
+            map_cell_layer_record(cell, GET_MAP_LAYER(LAYER_WALL, 0), true);
+        map_cell_layer_record_t *roof =
+            map_cell_layer_record(cell, GET_MAP_LAYER(LAYER_ITEM, 0), true);
+        if (tile == NULL || cell == NULL || floor == NULL || wall == NULL || roof == NULL) {
+            success = false;
+        } else {
+            FaceList[1].sprite = &sprite;
+            MapData.height_diff = 0;
+            floor->face = 1;
+            wall->face = 1;
+            roof->face = 1;
+            roof->roof = 1;
+            roof->visibility = (map_visibility_fade_t){
+                .initialized = true,
+                .authorized = true,
+                .alpha = UINT8_MAX,
+                .from_alpha = UINT8_MAX,
+                .target_alpha = UINT8_MAX,
+            };
+            map_render_data_t production = {
+                .cell = cell,
+                .render_context = &context,
+                .x = MAP_STARTX,
+                .y = MAP_STARTY,
+                .xpos = 64,
+                .ypos = 64,
+                .midx = MAP_STARTX,
+                .midy = MAP_STARTY,
+                .sub_layer = 0,
+                .smooth_lighting = true,
+                .defer_rendering = true,
+                .world_surface = true,
+                .primary_level = true,
+            };
+            production.layer = LAYER_FLOOR;
+            production.ground_pass = true;
+            draw_map_object(surface, &production);
+            production.layer = LAYER_ITEM;
+            production.ground_pass = false;
+            draw_map_object(surface, &production);
+            production.layer = LAYER_WALL;
+            draw_map_object(surface, &production);
+            success = success && context.commands_num == 3 &&
+                      BIT_QUERY(context.commands[0].effects.flags,
+                                SPRITE_FLAG_SMOOTH_DARK_SURFACE) &&
+                      BIT_QUERY(context.commands[1].effects.flags,
+                                SPRITE_FLAG_SMOOTH_DARK_SURFACE) &&
+                      BIT_QUERY(context.commands[2].effects.flags, SPRITE_FLAG_SMOOTH_DARK) &&
+                      !BIT_QUERY(context.commands[2].effects.flags,
+                                 SPRITE_FLAG_SMOOTH_DARK_SURFACE);
+        }
+        FaceList[1].sprite = saved_sprite;
+        MapData.height_diff = saved_height_diff;
+        free(context.commands);
+        map_cell_store_clear_slot(cells, physical_index);
+        SDL_DestroySurface(tile);
+        SDL_DestroySurface(surface);
+    }
+
+    map_cell_store_destroy(level_cells[current_level_index]);
+    level_cells[current_level_index] = saved_base;
+    cells = saved_cells;
+    map_width = saved_width;
+    map_height = saved_height;
+    current_level_index = saved_level;
+    map_level_mask = saved_mask;
+    return success;
+}
+
+bool widget_map_retained_visibility_test_set(bool visible) {
+    if (!map_select_level(0, false)) {
+        return false;
+    }
+
+    int x = map_width * MAP_FOW_SIZE / 2;
+    int y = map_height * MAP_FOW_SIZE / 2;
+    map_cell_t *cell = MAP_CELL_GET(x, y);
+    uint8_t expected_layers = 0;
+    bool changed = false;
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        for (int object_layer = LAYER_ITEM; object_layer <= LAYER_EFFECT; object_layer++) {
+            if (!map_visibility_transient_layer(object_layer)) {
+                continue;
+            }
+            int layer = GET_MAP_LAYER(object_layer, sub_layer);
+            map_cell_layer_record_t *record = map_cell_layer_record(cell, layer, false);
+            if (record == NULL || record->face == 0 || !record->visibility.initialized ||
+                !record->visibility.authorized) {
+                continue;
+            }
+            expected_layers |= UINT8_C(1) << (object_layer - LAYER_ITEM);
+            uint8_t alpha = visible ? UINT8_MAX : 0;
+            changed |= record->visibility.alpha != alpha;
+            record->visibility.alpha = alpha;
+        }
+    }
+    uint8_t required_layers = (UINT8_C(1) << (LAYER_ITEM - LAYER_ITEM)) |
+                              (UINT8_C(1) << (LAYER_LIVING - LAYER_ITEM)) |
+                              (UINT8_C(1) << (LAYER_EFFECT - LAYER_ITEM));
+    if ((expected_layers & required_layers) != required_layers || !changed) {
+        return false;
+    }
+
+    map_cell_presentation_changed(map_cache_physical_index(x, y));
+    map_animation_redraw_request(LAYER_LIVING);
+    return true;
 }
 
 void widget_map_animation_test_add(int type,
@@ -5936,9 +7830,7 @@ void widget_map_animation_test_add(int type,
 }
 
 /** Find a screen point that the production hit-test resolves to one tile. */
-static bool widget_map_click_test_find_point(widgetdata *widget,
-                                             int target_x,
-                                             int target_y) {
+static bool widget_map_click_test_find_point(widgetdata *widget, int target_x, int target_y) {
     if (widget == NULL || widget->surface == NULL || cur_widget[MAP_ID] == NULL) {
         return false;
     }
@@ -5960,7 +7852,7 @@ static bool widget_map_click_test_find_point(widgetdata *widget,
     data.xpos *= zoom;
     data.ypos *= zoom;
 
-    if (data.cell->faces[0] != 0) {
+    if (map_cell_layer_record_read(data.cell, 0)->face != 0) {
         int height = get_top_floor_height(data.cell, MapData.player_sub_layer);
         data.ypos = (data.ypos - height * zoom) + data.player_height_offset * zoom;
     }
@@ -5968,10 +7860,10 @@ static bool widget_map_click_test_find_point(widgetdata *widget,
     uint32_t stretch = 0;
     int16_t max_height = 0;
     for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-        int16_t height = data.cell->height[sub_layer * NUM_LAYERS];
+        int16_t height = map_cell_layer_record_read(data.cell, sub_layer * NUM_LAYERS)->height;
         if (height > max_height) {
             max_height = height;
-            stretch = data.cell->stretch[sub_layer];
+            stretch = map_cell_sublayer_record_read(data.cell, sub_layer)->stretch;
         }
     }
 
@@ -5980,10 +7872,9 @@ static bool widget_map_click_test_find_point(widgetdata *widget,
     int displayed_height = MAX(1, (int)(widget->surface->h * zoom));
     int left = MAX(0, data.xpos);
     int top = MAX(0, data.ypos);
-    int right = MIN(displayed_width - 1,
-                    data.xpos + (int)(MAP_TILE_POS_XOFF * zoom));
-    int bottom = MIN(displayed_height - 1,
-                     data.ypos + (int)((MAP_TILE_YOFF + stretch_height) * zoom));
+    int right = MIN(displayed_width - 1, data.xpos + (int)(MAP_TILE_POS_XOFF * zoom));
+    int bottom =
+        MIN(displayed_height - 1, data.ypos + (int)((MAP_TILE_YOFF + stretch_height) * zoom));
 
     for (int local_x = left; local_x <= right; local_x++) {
         for (int local_y = top; local_y <= bottom; local_y++) {
@@ -6021,7 +7912,8 @@ bool widget_map_fog_click_test(widgetdata *widget) {
     }
 
     size_t saved_level_index = current_level_index;
-    MapCell *saved_cells_pointer = cells;
+    map_cell_store_t *saved_cells_pointer = cells;
+    map_cell_store_t *saved_base_cells = level_cells[MAP2_DEPTH_INDEX(0)];
     if (!map_select_level(0, false)) {
         return false;
     }
@@ -6029,10 +7921,10 @@ bool widget_map_fog_click_test(widgetdata *widget) {
     const int target_x = map_width * (MAP_FOW_SIZE / 2) + 7;
     const int target_y = map_height * (MAP_FOW_SIZE / 2) + 7;
     size_t cell_count = (size_t)map_width * MAP_FOW_SIZE * (size_t)map_height * MAP_FOW_SIZE;
-    MapCell *saved_cells = xmalloc(cell_count * sizeof(*saved_cells));
-    memcpy(saved_cells, cells, cell_count * sizeof(*saved_cells));
-    memset(cells, 0, cell_count * sizeof(*cells));
-    MapCell *cell = MAP_CELL_GET(target_x, target_y);
+    map_cell_store_t *test_cells = map_cell_store_create(cell_count);
+    level_cells[MAP2_DEPTH_INDEX(0)] = test_cells;
+    cells = test_cells;
+    map_cell_t *cell = MAP_CELL_GET_MUTABLE(target_x, target_y);
     bool saved_height_diff = MapData.height_diff;
     int64_t saved_zoom = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM);
     double saved_widget_zoom = widget->zoom;
@@ -6057,16 +7949,20 @@ bool widget_map_fog_click_test(widgetdata *widget) {
             setting_set_int(OPT_CAT_MAP, OPT_MAP_ZOOM, zooms[zoom_index]);
             widget_set_zoom(widget, zooms[zoom_index] / 100.0);
 
+            map_cell_release_contents(cell);
             memset(cell, 0, sizeof(*cell));
             cell->fow = test_case->fow;
             cell->structural_fow = test_case->structural_fow;
-            cell->faces[GET_MAP_LAYER(LAYER_FLOOR, 0)] = test_case->face ? 1 : 0;
-            cell->height[GET_MAP_LAYER(LAYER_FLOOR, 0)] = test_case->height;
+            map_cell_layer_record_t *floor =
+                map_cell_layer_record(cell, GET_MAP_LAYER(LAYER_FLOOR, 0), true);
+            floor->face = test_case->face ? 1 : 0;
+            floor->height = test_case->height;
             cell->render_max_height = test_case->height;
-            cell->stretch[0] = test_case->stretch;
+            map_cell_sublayer_record(cell, 0, true)->stretch = test_case->stretch;
             if (test_case->black) {
-                cell->light_known[0] = 1;
-                cell->light_radiance[0] = 0;
+                map_cell_light_record_t *light = map_cell_light_record(cell, 0, true);
+                light->known = 1;
+                light->radiance = 0;
             }
             MapData.height_diff = test_case->height_diff;
 
@@ -6103,8 +7999,8 @@ bool widget_map_fog_click_test(widgetdata *widget) {
     widget->zoom_x = saved_widget_zoom_x;
     widget->zoom_y = saved_widget_zoom_y;
     MapData.height_diff = saved_height_diff;
-    memcpy(cells, saved_cells, cell_count * sizeof(*cells));
-    free(saved_cells);
+    map_cell_store_destroy(test_cells);
+    level_cells[MAP2_DEPTH_INDEX(0)] = saved_base_cells;
     cur_widget[MAP_ID] = saved_map_widget;
     current_level_index = saved_level_index;
     cells = saved_cells_pointer;
@@ -6129,9 +8025,9 @@ bool widget_map_interaction_test(widgetdata *widget) {
 
     event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
     event.button.button = SDL_BUTTON_RIGHT;
-    bool success = widget->event_func(widget, &event) == 1;
+    bool success = widget_event(widget, &event) == 1;
     event.type = SDL_EVENT_MOUSE_BUTTON_UP;
-    success = success && widget->event_func(widget, &event) == 1;
+    success = success && widget_event(widget, &event) == 1;
     success = success && arraysize(map_menu_actions) == 2;
     success = success && strcmp(map_menu_actions[0].name, "Walk Here") == 0;
     success = success && strcmp(map_menu_actions[1].name, "Talk To NPC") == 0;
@@ -6168,25 +8064,26 @@ void map_runtime_deinit(void) {
     map_anims_clear();
     lighting_deinit();
 
-    for (size_t i = 0; i < arraysize(map_level_surfaces); i++) {
-        if (map_level_surfaces[i] != NULL) {
-            SDL_DestroySurface(map_level_surfaces[i]);
-            map_level_surfaces[i] = NULL;
-        }
-    }
-
-    if (map_animation_base_surface != NULL) {
-        SDL_DestroySurface(map_animation_base_surface);
-        map_animation_base_surface = NULL;
-    }
-    free(map_animation_ground_commands);
-    map_animation_ground_commands = NULL;
-    map_animation_ground_commands_num = 0;
     map_exit_cue_cache_clear(&map_animation_exit_cues);
-    map_animation_cache_valid = false;
+    map_living_outline_cache_clear(&map_animation_living_outlines);
+    for (size_t index = 0; index < arraysize(map_render_contexts); index++) {
+        free(map_render_contexts[index].commands);
+        free(map_render_contexts[index].annotations);
+        free(map_render_contexts[index].tiles);
+        free(map_render_contexts[index].candidates);
+        free(map_render_contexts[index].cohorts);
+        memset(&map_render_contexts[index], 0, sizeof(map_render_contexts[index]));
+    }
+    free(map_retained_primary_context.commands);
+    free(map_retained_primary_context.annotations);
+    free(map_retained_primary_context.tiles);
+    free(map_retained_primary_context.candidates);
+    free(map_retained_primary_context.cohorts);
+    memset(&map_retained_primary_context, 0, sizeof(map_retained_primary_context));
+    memset(&map_retained_primary_projection, 0, sizeof(map_retained_primary_projection));
 
     for (size_t i = 0; i < arraysize(level_cells); i++) {
-        free(level_cells[i]);
+        map_cell_store_destroy(level_cells[i]);
         level_cells[i] = NULL;
     }
     cells = NULL;
@@ -6372,7 +8269,8 @@ void map_anims_play(void) {
             if (anim->depth == map_animation_test_expected_depth &&
                 data.sub_layer == map_animation_test_expected_sub_layer &&
                 source_floor_height != 0 &&
-                data.cell->faces[GET_MAP_LAYER(LAYER_LIVING, data.sub_layer)] != 0) {
+                map_cell_layer_record_read(data.cell, GET_MAP_LAYER(LAYER_LIVING, data.sub_layer))
+                        ->face != 0) {
                 map_animation_test_layer_content_draws++;
             }
         }
@@ -6412,14 +8310,13 @@ void map_anims_play(void) {
                 int wd = text_get_width(FONT_MONO10, buf, TEXT_OUTLINE);
                 const char *color = anim->value < 0 ? COLOR_GREEN : COLOR_ORANGE;
 
-                text_show(ScreenSurface,
-                          FONT_MONO10,
-                          buf,
-                          screen.x - wd / 2,
-                          screen.y,
-                          color,
-                          TEXT_OUTLINE,
-                          NULL);
+                text_show_root(FONT_MONO10,
+                               buf,
+                               screen.x - wd / 2,
+                               screen.y,
+                               color,
+                               TEXT_OUTLINE,
+                               NULL);
                 break;
             }
 
@@ -6439,20 +8336,19 @@ void map_anims_play(void) {
                 SDL_Surface *texture = TEXTURE_CLIENT("death");
 #endif
                 HARD_ASSERT(texture != NULL);
-                surface_show(ScreenSurface,
+                surface_show(OfflineRenderSurface,
                              screen.x - texture->w / 2,
                              screen.y - ht / 2 + 2,
                              NULL,
                              texture);
 
-                text_show(ScreenSurface,
-                          FONT_MONO10,
-                          buf,
-                          screen.x - wd / 2,
-                          screen.y,
-                          COLOR_ORANGE,
-                          TEXT_OUTLINE,
-                          NULL);
+                text_show_root(FONT_MONO10,
+                               buf,
+                               screen.x - wd / 2,
+                               screen.y,
+                               COLOR_ORANGE,
+                               TEXT_OUTLINE,
+                               NULL);
 
                 break;
             }

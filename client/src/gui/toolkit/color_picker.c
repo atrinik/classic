@@ -303,7 +303,7 @@ static int color_picker_element_show(SDL_Surface *surface,
                 b = 255 - b;
             }
 
-            SDL_FillSurfaceRect(surface, &dest, pixel_format_map_rgb(surface->format, r, g, b));
+            surface_fill_rect(surface, &dest, pixel_format_map_rgb(surface->format, r, g, b));
         }
     }
 

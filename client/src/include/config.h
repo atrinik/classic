@@ -49,7 +49,7 @@
 #define MAX_FACE_TILES 32767
 
 /** Maximum map size. */
-#define MAP_MAX_SIZE 17
+#define MAP_MAX_SIZE 28
 
 /**
  * Size of the Fog of War cache. Setting this to 1 will decrease memory usage

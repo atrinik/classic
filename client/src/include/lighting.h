@@ -53,7 +53,7 @@ typedef struct lighting_vertex {
 } lighting_vertex_t;
 
 /** Increment when the statistics-only benchmark API changes. */
-#define LIGHTING_BENCHMARK_STATISTICS_VERSION UINT8_C(7)
+#define LIGHTING_BENCHMARK_STATISTICS_VERSION UINT8_C(8)
 
 typedef enum lighting_benchmark_reconstruction {
     LIGHTING_BENCHMARK_RECONSTRUCTION_TRANSLATED,
@@ -87,9 +87,19 @@ typedef struct lighting_benchmark_counters {
     uint64_t field_rasterized_quads;
     uint64_t field_translations;
     /** Logical field pixels remapped during scroll; the ring avoids copying them. */
-    uint64_t field_translated_pixels;
+    uint64_t field_translation_logical_pixels;
     /** Logical byte footprint of remapped pixels, not bytes physically copied. */
-    uint64_t field_translated_bytes;
+    uint64_t field_translation_logical_bytes;
+    /** Bytes physically read from retained lighting samples. */
+    uint64_t field_physical_read_bytes;
+    /** Bytes physically written to retained lighting samples. */
+    uint64_t field_physical_written_bytes;
+    /** Lighting-sample bytes physically copied while moving a retained field. */
+    uint64_t field_physical_copied_bytes;
+    /** Lighting-sample bytes physically cleared while invalidating field storage. */
+    uint64_t field_physical_cleared_bytes;
+    /** Lighting-field bytes uploaded to graphics storage. */
+    uint64_t field_physical_uploaded_bytes;
     uint64_t field_scroll_x_pixels;
     uint64_t field_scroll_y_pixels;
     uint64_t field_translation_fallback_active;

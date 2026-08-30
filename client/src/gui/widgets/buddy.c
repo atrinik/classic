@@ -444,9 +444,13 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
 static void widget_deinit(widgetdata *widget) {
     buddy_struct *tmp;
 
-    widget_buddy_save(widget);
-
     tmp = WIDGET_BUDDY(widget);
+    if (toolkit_widget_fixture_is_read_only()) {
+        free(tmp->path);
+        tmp->path = NULL;
+    } else {
+        widget_buddy_save(widget);
+    }
     utarray_free(tmp->names);
     list_remove(tmp->list);
 

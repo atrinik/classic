@@ -7,9 +7,7 @@
 #include <global.h>
 #include <map_visibility.h>
 
-static uint8_t map_visibility_fade_value(uint8_t from,
-                                         uint8_t target,
-                                         uint32_t elapsed) {
+static uint8_t map_visibility_fade_value(uint8_t from, uint8_t target, uint32_t elapsed) {
     if (elapsed >= MAP_VISIBILITY_FADE_DURATION_MS || from == target) {
         return target;
     }
@@ -46,17 +44,10 @@ uint16_t map_visibility_field_weight(int dx, int dy) {
 uint16_t map_visibility_add_player_radiance(uint16_t radiance, uint16_t weight) {
     /* MAP2 samples and lighting vertices are Q5.11.  The contract's raw
      * player contribution is 640, which encodes exactly as 1024. */
-    const uint32_t player_radiance_q5_11 =
-        (MAP_VISIBILITY_PLAYER_RADIANCE * 8U) / 5U;
+    const uint32_t player_radiance_q5_11 = (MAP_VISIBILITY_PLAYER_RADIANCE * 8U) / 5U;
     uint32_t addition = (player_radiance_q5_11 * weight + MAP_VISIBILITY_FIELD_UNIT / 2U) /
                         MAP_VISIBILITY_FIELD_UNIT;
     return (uint16_t)MIN(UINT16_MAX, (uint32_t)radiance + addition);
-}
-
-uint8_t map_visibility_field_alpha(uint16_t weight) {
-    return (uint8_t)MIN(UINT8_MAX,
-                        (weight * (uint32_t)UINT8_MAX + MAP_VISIBILITY_FIELD_UNIT / 2U) /
-                            MAP_VISIBILITY_FIELD_UNIT);
 }
 
 void map_visibility_fade_init(map_visibility_fade_t *fade) {
@@ -91,7 +82,6 @@ void map_visibility_fade_authorize(map_visibility_fade_t *fade,
         fade->initialized = true;
     }
     fade->authorized = true;
-    fade->last_authoritative_update = now;
     map_visibility_fade_set_target(fade, target_alpha, now);
 }
 
@@ -109,11 +99,6 @@ bool map_visibility_fade_advance(map_visibility_fade_t *fade, uint32_t now) {
     if (!fade->initialized) {
         return false;
     }
-    if (fade->authorized && now - fade->last_authoritative_update >=
-                                MAP_VISIBILITY_STALE_BOUND_MS) {
-        map_visibility_fade_revoke(fade, now);
-    }
-
     uint8_t before = fade->alpha;
     fade->alpha = map_visibility_fade_value(fade->from_alpha,
                                             fade->target_alpha,

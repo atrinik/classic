@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -78,7 +78,13 @@ extern UT_array *book_help_history;
 
 extern void book_name_change(const char *name, size_t len);
 
-extern void book_load(const char *data, int len);
+/** Load book state and create its popup, returning false on canvas failure. */
+extern bool book_load(const char *data, int len);
+
+#ifdef ATRINIK_WIDGET_TESTS
+/** Whether book content remains owned after an allocation-failure path. */
+extern bool book_test_content_retained(void);
+#endif
 
 extern void book_redraw(void);
 

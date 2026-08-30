@@ -64,6 +64,28 @@ static int64_t *selection_end = NULL;
 /** If 1, selection start has been set, and the end should be updated next. */
 static uint8_t *selection_started = NULL;
 
+#ifdef ATRINIK_WIDGET_TESTS
+static bool text_test_mouse_override;
+static SDL_MouseButtonFlags text_test_mouse_state;
+static int text_test_mouse_x;
+static int text_test_mouse_y;
+#endif
+
+static SDL_MouseButtonFlags text_mouse_get_state(int *x, int *y) {
+#ifdef ATRINIK_WIDGET_TESTS
+    if (text_test_mouse_override) {
+        if (x != NULL) {
+            *x = text_test_mouse_x;
+        }
+        if (y != NULL) {
+            *y = text_test_mouse_y;
+        }
+        return text_test_mouse_state;
+    }
+#endif
+    return mouse_get_state(x, y);
+}
+
 /** Default link color. */
 static SDL_Color text_link_color_default = {96, 160, 255, 0};
 /** Current text link color. */
@@ -100,6 +122,128 @@ text_render_glyph(TTF_Font *font, const char *glyph, uint64_t flags, SDL_Color c
                               : TTF_RenderText_Blended(font, glyph, 0, color);
 }
 
+typedef struct text_glyph_cache_entry {
+    TTF_Font *font;
+    Uint32 codepoint;
+    int style;
+    uint64_t render_flags;
+    Uint32 color;
+    Uint8 alpha;
+    Uint8 flip;
+    bool strikethrough;
+    bool solid_alpha_conversion;
+    SDL_Surface *surface;
+    struct text_glyph_cache_entry *next;
+} text_glyph_cache_entry_t;
+
+static text_glyph_cache_entry_t *glyph_cache;
+
+static void text_show_impl(SDL_Surface *surface,
+                           bool render_root,
+                           font_struct *font,
+                           const char *text,
+                           int x,
+                           int y,
+                           const char *color_notation,
+                           uint64_t flags,
+                           SDL_Rect *box);
+
+static void text_glyph_cache_remove_font(TTF_Font *font) {
+    text_glyph_cache_entry_t **link = &glyph_cache;
+    while (*link != NULL) {
+        text_glyph_cache_entry_t *entry = *link;
+        if (font == NULL || entry->font == font) {
+            *link = entry->next;
+            gpu_renderer_invalidate_surface(entry->surface);
+            SDL_DestroySurface(entry->surface);
+            free(entry);
+            continue;
+        }
+        link = &entry->next;
+    }
+}
+
+static SDL_Surface *text_glyph_cache_get(TTF_Font *font,
+                                         Uint32 codepoint,
+                                         const char *glyph,
+                                         uint64_t flags,
+                                         SDL_Color color,
+                                         Uint8 alpha,
+                                         bool strikethrough,
+                                         Uint8 flip,
+                                         bool solid_alpha_conversion) {
+    Uint32 packed_color =
+        ((Uint32)color.r << 24U) | ((Uint32)color.g << 16U) | ((Uint32)color.b << 8U) | color.a;
+    int style = TTF_GetFontStyle(font);
+    uint64_t render_flags = flags & TEXT_SOLID;
+    for (text_glyph_cache_entry_t *entry = glyph_cache; entry != NULL; entry = entry->next) {
+        if (entry->font == font && entry->codepoint == codepoint && entry->style == style &&
+            entry->render_flags == render_flags && entry->color == packed_color &&
+            entry->alpha == alpha && entry->strikethrough == strikethrough && entry->flip == flip &&
+            entry->solid_alpha_conversion == solid_alpha_conversion) {
+            return entry->surface;
+        }
+    }
+
+    SDL_Surface *surface = text_render_glyph(font, glyph, flags, color);
+    if (surface == NULL) {
+        return NULL;
+    }
+    if (solid_alpha_conversion && flags & TEXT_SOLID && alpha != SDL_ALPHA_OPAQUE) {
+        SDL_SetSurfaceColorKey(surface, true, 0);
+        SDL_SetSurfaceRLE(surface, true);
+        surface_set_alpha(surface, alpha);
+        SDL_Surface *converted = surface_to_display_alpha(surface);
+        SDL_DestroySurface(surface);
+        surface = converted;
+        if (surface == NULL) {
+            return NULL;
+        }
+    } else if (alpha != SDL_ALPHA_OPAQUE) {
+        surface_set_alpha(surface, alpha);
+    }
+    if (strikethrough) {
+        int font_height = TTF_GetFontHeight(font);
+        lineRGBA(surface,
+                 0,
+                 font_height / 2,
+                 surface->w - 1,
+                 font_height / 2,
+                 color.r,
+                 color.g,
+                 color.b,
+                 SDL_ALPHA_OPAQUE);
+    }
+    if (flip != 0) {
+        SDL_Surface *flipped = zoomSurface(surface,
+                                           flip & TEXT_FLIP_HORIZONTAL ? -1.0 : 1.0,
+                                           flip & TEXT_FLIP_VERTICAL ? -1.0 : 1.0,
+                                           0);
+        SDL_DestroySurface(surface);
+        surface = flipped;
+        if (surface == NULL) {
+            return NULL;
+        }
+    }
+
+    text_glyph_cache_entry_t *entry = xcalloc(1, sizeof(*entry));
+    *entry = (text_glyph_cache_entry_t){
+        .font = font,
+        .codepoint = codepoint,
+        .style = style,
+        .render_flags = render_flags,
+        .color = packed_color,
+        .alpha = alpha,
+        .flip = flip,
+        .strikethrough = strikethrough,
+        .solid_alpha_conversion = solid_alpha_conversion,
+        .surface = surface,
+        .next = glyph_cache,
+    };
+    glyph_cache = entry;
+    return surface;
+}
+
 /**
  * The usable fonts.
  */
@@ -108,6 +252,28 @@ static font_struct *fonts;
 #ifdef ATRINIK_WIDGET_TESTS
 static const char *text_test_font_path;
 static const char *text_test_mono_font_path;
+static text_root_glyph_statistics_t text_root_glyph_statistics;
+static bool text_root_glyph_suppress_once;
+
+static void text_root_glyph_hash_u32(uint32_t value) {
+    for (size_t shift = 0; shift < sizeof(value) * CHAR_BIT; shift += CHAR_BIT) {
+        text_root_glyph_statistics.semantic_hash ^= (value >> shift) & UINT8_MAX;
+        text_root_glyph_statistics.semantic_hash *= UINT64_C(1099511628211);
+    }
+}
+
+static void text_root_glyph_hash_u64(uint64_t value) {
+    for (size_t shift = 0; shift < sizeof(value) * CHAR_BIT; shift += CHAR_BIT) {
+        text_root_glyph_statistics.semantic_hash ^= (value >> shift) & UINT8_MAX;
+        text_root_glyph_statistics.semantic_hash *= UINT64_C(1099511628211);
+    }
+}
+
+static void text_root_glyph_record(uint32_t codepoint, uint64_t flags) {
+    text_root_glyph_statistics.count++;
+    text_root_glyph_hash_u32(codepoint);
+    text_root_glyph_hash_u64(flags);
+}
 
 void text_test_font_path_set(const char *path) {
     text_test_font_path = path;
@@ -115,6 +281,21 @@ void text_test_font_path_set(const char *path) {
 
 void text_test_mono_font_path_set(const char *path) {
     text_test_mono_font_path = path;
+}
+
+void text_root_glyph_statistics_reset(void) {
+    text_root_glyph_statistics = (text_root_glyph_statistics_t){
+        .semantic_hash = UINT64_C(14695981039346656037),
+    };
+}
+
+void text_root_glyph_statistics_get(text_root_glyph_statistics_t *statistics) {
+    HARD_ASSERT(statistics != NULL);
+    *statistics = text_root_glyph_statistics;
+}
+
+void text_root_glyph_test_suppress_once(void) {
+    text_root_glyph_suppress_once = true;
 }
 #endif
 
@@ -324,6 +505,7 @@ void font_free(font_struct *font) {
     }
 #endif
 
+    text_glyph_cache_remove_font(font->font);
     free(font->name);
     free(font->key);
     TTF_CloseFont(font->font);
@@ -375,8 +557,30 @@ void text_init(void) {
         exit(EXIT_FAILURE);
     }
     fonts = NULL;
+    glyph_cache = NULL;
 
     text_link_color = text_link_color_default;
+}
+
+void text_show(SDL_Surface *surface,
+               font_struct *font,
+               const char *text,
+               int x,
+               int y,
+               const char *color_notation,
+               uint64_t flags,
+               SDL_Rect *box) {
+    text_show_impl(surface, false, font, text, x, y, color_notation, flags, box);
+}
+
+void text_show_root(font_struct *font,
+                    const char *text,
+                    int x,
+                    int y,
+                    const char *color_notation,
+                    uint64_t flags,
+                    SDL_Rect *box) {
+    text_show_impl(NULL, true, font, text, x, y, color_notation, flags, box);
 }
 
 /**
@@ -401,11 +605,13 @@ void text_deinit(void) {
         font_free(font);
     }
 
+    text_glyph_cache_remove_font(NULL);
+
     TTF_Quit();
 }
 
 /**
- * If text_show() is called on surface that is not ScreenSurface, you
+ * For drawing to an offscreen surface rather than the GPU root target, you
  * must use this to set mouse X/Y detection offset, so things like links
  * will work correctly.
  *
@@ -591,12 +797,15 @@ char *text_escape_markup(const char *buf) {
  * @return
  * 1 if mouse-related checks can happen, 0 otherwise.
  */
-static int text_adjust_coords(SDL_Surface *surface, int *mx, int *my) {
+static int text_adjust_coords(SDL_Surface *surface, bool render_root, int *mx, int *my) {
+    if (surface == NULL && !render_root) {
+        return 0;
+    }
     if (popup_get_head() && surface != popup_get_head()->surface) {
         return 0;
     }
 
-    if (surface == ScreenSurface) {
+    if (surface == OfflineRenderSurface) {
         return 1;
     }
 
@@ -751,9 +960,15 @@ void text_show_character_init(text_info_struct *info) {
  * case of markup tags that need to be jumped over, since they are not
  * actually drawn.
  */
+static Uint32 text_map_rgb(SDL_Surface *surface, Uint8 red, Uint8 green, Uint8 blue) {
+    SDL_PixelFormat format = surface != NULL ? surface->format : SDL_PIXELFORMAT_RGBA32;
+    return pixel_format_map_rgb(format, red, green, blue);
+}
+
 int text_show_character(font_struct **font,
                         font_struct *orig_font,
                         SDL_Surface *surface,
+                        bool render,
                         SDL_Rect *dest,
                         const char *cp,
                         SDL_Color *color,
@@ -790,7 +1005,7 @@ int text_show_character(font_struct **font,
         } else if (tag_len >= 3 && strncmp(tag, "c=#", 3) == 0) {
             /* Color tag: [c=#RRGGBB] */
 
-            if (color && (surface || info->obscured) && !(flags & TEXT_NO_COLOR_CHANGE)) {
+            if (color && (render || info->obscured) && !(flags & TEXT_NO_COLOR_CHANGE)) {
                 uint32_t r, g, b;
                 int change_orig = 0;
 
@@ -808,67 +1023,67 @@ int text_show_character(font_struct **font,
         } else if (tag_len == 2 && strncmp(tag, "/c", tag_len) == 0) {
             /* End of color tag. */
 
-            if (color && (surface || info->obscured)) {
+            if (color && (render || info->obscured)) {
                 SDL_color_copy(color, orig_color);
             }
         } else if (tag_len == 5 && strncmp(tag, "green", tag_len) == 0) {
             /* Convenience tag to make string green. */
 
-            if (color && (surface || info->obscured) && !(flags & TEXT_NO_COLOR_CHANGE)) {
+            if (color && (render || info->obscured) && !(flags & TEXT_NO_COLOR_CHANGE)) {
                 color->r = 0;
                 color->g = 255;
                 color->b = 0;
             }
         } else if (tag_len == 6 && strncmp(tag, "/green", tag_len) == 0) {
-            if (color && (surface || info->obscured)) {
+            if (color && (render || info->obscured)) {
                 SDL_color_copy(color, orig_color);
             }
         } else if (tag_len == 6 && strncmp(tag, "yellow", tag_len) == 0) {
             /* Convenience tag to make string yellow. */
 
-            if (color && (surface || info->obscured) && !(flags & TEXT_NO_COLOR_CHANGE)) {
+            if (color && (render || info->obscured) && !(flags & TEXT_NO_COLOR_CHANGE)) {
                 color->r = 255;
                 color->g = 255;
                 color->b = 0;
             }
         } else if (tag_len == 7 && strncmp(tag, "/yellow", tag_len) == 0) {
-            if (color && (surface || info->obscured)) {
+            if (color && (render || info->obscured)) {
                 SDL_color_copy(color, orig_color);
             }
         } else if (tag_len == 3 && strncmp(tag, "red", tag_len) == 0) {
             /* Convenience tag to make string red. */
 
-            if (color && (surface || info->obscured) && !(flags & TEXT_NO_COLOR_CHANGE)) {
+            if (color && (render || info->obscured) && !(flags & TEXT_NO_COLOR_CHANGE)) {
                 color->r = 255;
                 color->g = 0;
                 color->b = 0;
             }
         } else if (tag_len == 4 && strncmp(tag, "/red", tag_len) == 0) {
-            if (color && (surface || info->obscured)) {
+            if (color && (render || info->obscured)) {
                 SDL_color_copy(color, orig_color);
             }
         } else if (tag_len == 4 && strncmp(tag, "blue", tag_len) == 0) {
             /* Convenience tag to make string blue. */
 
-            if (color && (surface || info->obscured) && !(flags & TEXT_NO_COLOR_CHANGE)) {
+            if (color && (render || info->obscured) && !(flags & TEXT_NO_COLOR_CHANGE)) {
                 color->r = 0;
                 color->g = 0;
                 color->b = 255;
             }
         } else if (tag_len == 5 && strncmp(tag, "/blue", tag_len) == 0) {
-            if (color && (surface || info->obscured)) {
+            if (color && (render || info->obscured)) {
                 SDL_color_copy(color, orig_color);
             }
         } else if (tag_len == 1 && strncmp(tag, "b", tag_len) == 0) {
             /* Bold. */
 
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 info->in_bold = 1;
             } else {
                 info->calc_bold = 1;
             }
         } else if (tag_len == 2 && strncmp(tag, "/b", tag_len) == 0) {
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 info->in_bold = 0;
             } else {
                 info->calc_bold = 0;
@@ -876,31 +1091,31 @@ int text_show_character(font_struct **font,
         } else if (tag_len == 1 && strncmp(tag, "i", tag_len) == 0) {
             /* Italic. */
 
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 info->in_italic = 1;
             }
         } else if (tag_len == 2 && strncmp(tag, "/i", tag_len) == 0) {
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 info->in_italic = 0;
             }
         } else if (tag_len == 1 && strncmp(tag, "u", tag_len) == 0) {
             /* Underscore. */
 
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 info->in_underline = 1;
             }
         } else if (tag_len == 2 && strncmp(tag, "/u", tag_len) == 0) {
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 info->in_underline = 0;
             }
         } else if (tag_len == 1 && strncmp(tag, "s", tag_len) == 0) {
             /* Strikethrough. */
 
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 info->in_strikethrough = 1;
             }
         } else if (tag_len == 2 && strncmp(tag, "/s", tag_len) == 0) {
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 info->in_strikethrough = 0;
             }
         } else if (tag_len >= 5 && strncmp(tag, "font=", 5) == 0) {
@@ -914,7 +1129,7 @@ int text_show_character(font_struct **font,
                 font_struct *font_new = font_get_weak(font_name, font_size);
 
                 if (font_new != NULL) {
-                    if (surface || info->obscured) {
+                    if (render || info->obscured) {
                         *font = font_new;
                     } else {
                         info->calc_font = font_new;
@@ -932,7 +1147,7 @@ int text_show_character(font_struct **font,
                 }
 
                 if (font_new != NULL) {
-                    if (surface || info->obscured) {
+                    if (render || info->obscured) {
                         *font = font_new;
                     } else {
                         info->calc_font = font_new;
@@ -941,7 +1156,7 @@ int text_show_character(font_struct **font,
             }
         } else if (tag_len == 5 &&
                    (strncmp(tag, "/font", tag_len) == 0 || strncmp(tag, "/size", tag_len) == 0)) {
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 *font = orig_font;
             } else {
                 info->calc_font = NULL;
@@ -959,7 +1174,7 @@ int text_show_character(font_struct **font,
                 int text_width = text_get_width(*font, buf, flags);
                 free(buf);
 
-                if (surface != NULL && text_width < box->w - dest->x) {
+                if (render && text_width < box->w - dest->x) {
                     dest->x += box->w / 2 - text_width / 2;
                 }
             }
@@ -979,7 +1194,7 @@ int text_show_character(font_struct **font,
                 w = info->start_x + box->w - text_get_width(*font, buf, flags);
                 free(buf);
 
-                if (surface) {
+                if (render) {
                     if (w > dest->x) {
                         dest->x = w;
                     }
@@ -993,7 +1208,7 @@ int text_show_character(font_struct **font,
                 info->anchor_action[0] = '\0';
             }
 
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 /* Change to light blue only if no custom color was
                  * specified. */
                 if (color && color->r == orig_color->r && color->g == orig_color->g &&
@@ -1007,7 +1222,7 @@ int text_show_character(font_struct **font,
                 info->anchor_tag = pos + 1;
             }
         } else if (tag_len == 2 && strncmp(tag, "/a", tag_len) == 0) {
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 if (color) {
                     SDL_color_copy(color, orig_color);
                 }
@@ -1015,7 +1230,7 @@ int text_show_character(font_struct **font,
                 info->anchor_tag = NULL;
             }
         } else if (tag_len >= 2 && strncmp(tag, "y=", 2) == 0) {
-            if (surface) {
+            if (render) {
                 int height;
 
                 if (sscanf(tag, "y=%d", &height) == 1) {
@@ -1023,7 +1238,7 @@ int text_show_character(font_struct **font,
                 }
             }
         } else if (tag_len >= 2 && !strncmp(tag, "x=", 2)) {
-            if (surface) {
+            if (render) {
                 int w;
 
                 if (sscanf(tag, "x=%d", &w) == 1) {
@@ -1031,7 +1246,7 @@ int text_show_character(font_struct **font,
                 }
             }
         } else if (tag_len >= 4 && strncmp(tag, "img=", 4) == 0) {
-            if (surface) {
+            if (render) {
                 char face[MAX_BUF];
                 int x = 0, y = 0, align = 0, wd = 0, ht = 0, quick_pos = 0;
                 uint16_t dark_level = 0, alpha = 0;
@@ -1147,12 +1362,12 @@ int text_show_character(font_struct **font,
                 info->outline_show = 1;
             }
         } else if (tag_len == 2 && strncmp(tag, "/o", tag_len) == 0) {
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 info->outline_color.r = info->outline_color.g = info->outline_color.b = 0;
                 info->outline_show = 0;
             }
         } else if (tag_len >= 6 && strncmp(tag, "alpha=", 6) == 0) {
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 int alpha;
 
                 if (sscanf(tag, "alpha=%d", &alpha) == 1) {
@@ -1173,50 +1388,40 @@ int text_show_character(font_struct **font,
             }
         } else if (tag_len == 5 && strncmp(tag, "/book", tag_len) == 0) {
         } else if (tag_len == 1 && strncmp(tag, "p", tag_len) == 0) {
-            if (surface && box && box->w) {
+            if (render && box && box->w) {
                 SDL_Rect rect;
 
                 rect.y = dest->y + FONT_HEIGHT(*font) / 2;
                 rect.w = 1;
                 rect.h = 3;
                 rect.x = dest->x;
-                SDL_FillSurfaceRect(surface,
-                                    &rect,
-                                    pixel_format_map_rgb(surface->format, 96, 96, 96));
+                surface_fill_rect(surface, &rect, text_map_rgb(surface, 96, 96, 96));
                 rect.x += box->w;
-                SDL_FillSurfaceRect(surface,
-                                    &rect,
-                                    pixel_format_map_rgb(surface->format, 96, 96, 96));
+                surface_fill_rect(surface, &rect, text_map_rgb(surface, 96, 96, 96));
 
                 rect.x = dest->x + 1;
                 rect.w = box->w - 1;
                 rect.h = 1;
-                SDL_FillSurfaceRect(surface,
-                                    &rect,
-                                    pixel_format_map_rgb(surface->format, 96, 96, 96));
+                surface_fill_rect(surface, &rect, text_map_rgb(surface, 96, 96, 96));
                 rect.y++;
-                SDL_FillSurfaceRect(surface,
-                                    &rect,
-                                    pixel_format_map_rgb(surface->format, 110, 110, 110));
+                surface_fill_rect(surface, &rect, text_map_rgb(surface, 110, 110, 110));
                 rect.y++;
-                SDL_FillSurfaceRect(surface,
-                                    &rect,
-                                    pixel_format_map_rgb(surface->format, 96, 96, 96));
+                surface_fill_rect(surface, &rect, text_map_rgb(surface, 96, 96, 96));
             }
         } else if (tag_len == 5 && strncmp(tag, "title", tag_len) == 0) {
             if (!(flags & TEXT_NO_FONT_CHANGE)) {
-                if (surface || info->obscured) {
+                if (render || info->obscured) {
                     *font = FONT_SERIF14;
                 } else {
                     info->calc_font = FONT_SERIF14;
                 }
             }
 
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 info->in_underline = 1;
             }
         } else if (tag_len == 6 && strncmp(tag, "/title", tag_len) == 0) {
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 info->in_underline = 0;
                 *font = orig_font;
             } else {
@@ -1226,7 +1431,7 @@ int text_show_character(font_struct **font,
             int val;
 
             if (x_adjust && sscanf(tag + 8, "%d", &val) == 1) {
-                if (surface) {
+                if (render) {
                     dest->x += val;
                 }
 
@@ -1238,7 +1443,7 @@ int text_show_character(font_struct **font,
                 *x_adjust = 0;
             }
         } else if (tag_len >= 4 && strncmp(tag, "bar=", 4) == 0) {
-            if (surface && !(flags & TEXT_NO_COLOR_CHANGE)) {
+            if (render && !(flags & TEXT_NO_COLOR_CHANGE)) {
                 char texture[MAX_BUF];
                 int bar_w, bar_h;
 
@@ -1255,12 +1460,10 @@ int text_show_character(font_struct **font,
                     bar_dst.h = box && bar_h == -1 ? box->h : bar_h;
 
                     if (*texture == '#' && text_color_parse(texture, &bar_color)) {
-                        SDL_FillSurfaceRect(surface,
-                                            &bar_dst,
-                                            pixel_format_map_rgb(surface->format,
-                                                                 bar_color.r,
-                                                                 bar_color.g,
-                                                                 bar_color.b));
+                        surface_fill_rect(
+                            surface,
+                            &bar_dst,
+                            text_map_rgb(surface, bar_color.r, bar_color.g, bar_color.b));
                     } else {
                         surface_show_fill(surface,
                                           bar_dst.x,
@@ -1272,7 +1475,7 @@ int text_show_character(font_struct **font,
                 }
             }
         } else if (tag_len >= 7 && strncmp(tag, "border=", 7) == 0) {
-            if (surface && !(flags & TEXT_NO_COLOR_CHANGE)) {
+            if (render && !(flags & TEXT_NO_COLOR_CHANGE)) {
                 char texture[MAX_BUF];
                 int wd, ht, thickness = 1;
 
@@ -1289,16 +1492,14 @@ int text_show_character(font_struct **font,
                     border_dst.h = box && ht == -1 ? box->h : ht;
 
                     if (*texture == '#' && text_color_parse(texture, &border_color)) {
-                        border_create(surface,
-                                      border_dst.x,
-                                      border_dst.y,
-                                      border_dst.w,
-                                      border_dst.h,
-                                      pixel_format_map_rgb(surface->format,
-                                                           border_color.r,
-                                                           border_color.g,
-                                                           border_color.b),
-                                      thickness);
+                        border_create(
+                            surface,
+                            border_dst.x,
+                            border_dst.y,
+                            border_dst.w,
+                            border_dst.h,
+                            text_map_rgb(surface, border_color.r, border_color.g, border_color.b),
+                            thickness);
                     } else {
                         border_create_texture(surface,
                                               &border_dst,
@@ -1308,7 +1509,7 @@ int text_show_character(font_struct **font,
                 }
             }
         } else if (tag_len >= 8 && strncmp(tag, "hcenter=", 8) == 0) {
-            if (surface) {
+            if (render) {
                 int ht;
 
                 tag2 = strstr(tag + tag_len, "[/hcenter]");
@@ -1340,11 +1541,11 @@ int text_show_character(font_struct **font,
                 }
             }
         } else if (tag_len == 8 && strncmp(tag, "/hcenter", tag_len) == 0) {
-            if (surface) {
+            if (render) {
                 dest->y += info->hcenter_y;
             }
         } else if (tag_len >= 5 && strncmp(tag, "icon=", 5) == 0) {
-            if (surface) {
+            if (render) {
                 char face[MAX_BUF];
                 int wd, ht, fit_to_size, flip;
                 float show_percentage;
@@ -1510,26 +1711,25 @@ int text_show_character(font_struct **font,
                                 zoom_filter = setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER);
                             }
 
-                            tmp_icon =
-                                rotozoomSurfaceXY(icon_surface,
-                                                  rotate,
-                                                  zoom_x,
-                                                  zoom_y,
-                                                  zoom_filter);
+                            tmp_icon = rotozoomSurfaceXY(icon_surface,
+                                                         rotate,
+                                                         zoom_x,
+                                                         zoom_y,
+                                                         zoom_filter);
                             if (tmp_icon == NULL) {
                                 LOG(ERROR, "Could not transform markup icon: %s", SDL_GetError());
                             } else {
-                                SDL_BlitSurface(tmp_icon, &icon_box, surface, &icon_dst);
+                                surface_blit(tmp_icon, &icon_box, surface, &icon_dst);
                                 SDL_DestroySurface(tmp_icon);
                             }
                         } else {
-                            SDL_BlitSurface(icon_surface, &icon_box, surface, &icon_dst);
+                            surface_blit(icon_surface, &icon_box, surface, &icon_dst);
                         }
                     }
                 }
             }
         } else if (tag_len >= 4 && strncmp(tag, "obj=", 4) == 0) {
-            if (surface) {
+            if (render) {
                 tag_t id;
                 int wd, ht;
                 int fit = 0;
@@ -1545,14 +1745,15 @@ int text_show_character(font_struct **font,
                 }
             }
         } else if (tag_len >= 9 && strncmp(tag, "ctooltip=", 9) == 0) {
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 int mx, my;
                 char tooltip_width[MAX_BUF], tooltip_height[MAX_BUF], tooltip_text[HUGE_BUF];
                 int tooltip_max_width;
 
-                mouse_get_state(&mx, &my);
+                text_mouse_get_state(&mx, &my);
 
-                if (text_adjust_coords(surface, &mx, &my) && mx >= dest->x && my >= dest->y &&
+                if (text_adjust_coords(surface, render, &mx, &my) && mx >= dest->x &&
+                    my >= dest->y &&
                     sscanf(tag + 9,
                            "%64s %64s %d %512[^]>]",
                            tooltip_width,
@@ -1588,7 +1789,7 @@ int text_show_character(font_struct **font,
                     }
 
                     if (mx < dest->x + wd && my < dest->y + ht) {
-                        mouse_get_state(&mx, &my);
+                        text_mouse_get_state(&mx, &my);
                         tooltip_create(mx, my, *font, tooltip_text);
 
                         if (tooltip_max_width >= 0) {
@@ -1598,19 +1799,19 @@ int text_show_character(font_struct **font,
                 }
             }
         } else if (tag_len >= 8 && strncmp(tag, "tooltip=", 8) == 0) {
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 if (sscanf(tag + 8, "%512[^]>]", info->tooltip_text) == 1) {
                     info->tooltip_font = *font;
                 }
             }
         } else if (tag_len == 8 && strncmp(tag, "/tooltip", tag_len) == 0) {
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 info->tooltip_text[0] = '\0';
             }
         } else if (tag_len >= 3 && strncmp(tag, "h=#", 3) == 0) {
             unsigned int r, g, b;
 
-            if ((surface || info->obscured) && sscanf(tag + 3, "%2X%2X%2X", &r, &g, &b) == 3) {
+            if ((render || info->obscured) && sscanf(tag + 3, "%2X%2X%2X", &r, &g, &b) == 3) {
                 /* Find the ending tag. */
                 tag2 = strstr(tag + tag_len, "[/h]");
 
@@ -1633,20 +1834,20 @@ int text_show_character(font_struct **font,
                 }
             }
         } else if (tag_len == 2 && strncmp(tag, "/h", tag_len) == 0) {
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 info->highlight = 0;
             }
         } else if (tag_len >= 5 && strncmp(tag, "line=", 5) == 0) {
             int x, y, x2, y2;
 
-            if ((surface || info->obscured) &&
+            if ((render || info->obscured) &&
                 sscanf(tag + 5, "%d,%d,%d,%d", &x, &y, &x2, &y2) == 4) {
                 if (info->obscured) {
                     y = MAX(0, y - info->height);
                     y2 = MAX(1, y2 - info->height);
                 }
 
-                if (surface) {
+                if (render) {
                     lineRGBA(surface,
                              dest->x + x,
                              dest->y + y,
@@ -1659,7 +1860,7 @@ int text_show_character(font_struct **font,
                 }
             }
         } else if (tag_len >= 5 && strncmp(tag, "flip=", 5) == 0) {
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 char flip_type[MAX_BUF];
 
                 if (sscanf(tag + 5, "%64[^]>]", flip_type) == 1) {
@@ -1673,11 +1874,11 @@ int text_show_character(font_struct **font,
                 }
             }
         } else if (tag_len == 5 && strncmp(tag, "/flip", tag_len) == 0) {
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 info->flip = 0;
             }
         } else if (tag_len >= 13 && strncmp(tag, "tooltip_conf=", 13) == 0) {
-            if (surface || info->obscured) {
+            if (render || info->obscured) {
                 if (sscanf(tag + 13,
                            "%" SCNu32 " %d",
                            &info->tooltip_delay,
@@ -1725,7 +1926,7 @@ int text_show_character(font_struct **font,
     new_style = 0;
 
     /* Try to set applicable font style. */
-    if (surface || info->obscured) {
+    if (render || info->obscured) {
         if (info->in_bold) {
             new_style |= TTF_STYLE_BOLD;
         }
@@ -1802,8 +2003,8 @@ int text_show_character(font_struct **font,
     /* Draw the character (unless it's a space, since there's no point in
      * drawing whitespace [but only if underline style is not active,
      * since we do want the underline below the space]). */
-    if (surface && ((codepoint != ' ' && codepoint != '\t') || info->in_underline ||
-                    info->anchor_tag || info->highlight || *info->tooltip_text != '\0')) {
+    if (render && ((codepoint != ' ' && codepoint != '\t') || info->in_underline ||
+                   info->anchor_tag || info->highlight || *info->tooltip_text != '\0')) {
         SDL_Surface *ttf_surface;
         SDL_Color *use_color;
         SDL_Rect dstrect, srcrect;
@@ -1818,11 +2019,11 @@ int text_show_character(font_struct **font,
                 text_anchor_execute(info, text_anchor_info_ptr);
             }
 
-            state = mouse_get_state(&mx, &my);
+            state = text_mouse_get_state(&mx, &my);
             orig_mx = mx;
             orig_my = my;
 
-            if (text_adjust_coords(surface, &mx, &my)) {
+            if (text_adjust_coords(surface, render, &mx, &my)) {
                 if (mx >= dest->x && mx < dest->x + width && my >= dest->y &&
                     my < dest->y + FONT_HEIGHT(*font)) {
                     static uint32_t ticks = 0;
@@ -1831,8 +2032,8 @@ int text_show_character(font_struct **font,
                         if (state == SDL_BUTTON_MASK(SDL_BUTTON_LEFT) &&
                             (!selection_start || !selection_end || *selection_start == -1 ||
                              *selection_end == -1) &&
-                            (!ticks || SDL_GetTicks() - ticks > 125)) {
-                            ticks = SDL_GetTicks();
+                            (!ticks || client_ui_ticks() - ticks > 125)) {
+                            ticks = client_ui_ticks();
                             text_anchor_execute(info, NULL);
                         } else {
                             cursor_texture = texture_get(TEXTURE_TYPE_CLIENT, "cursor_pointer");
@@ -1860,16 +2061,19 @@ int text_show_character(font_struct **font,
         if (info->outline_show || flags & TEXT_OUTLINE) {
             int outline_x, outline_y;
             SDL_Rect outline_box;
-            SDL_Surface *outline_surface =
-                text_render_glyph((*font)->font, glyph_text, flags, info->outline_color);
+            SDL_Surface *outline_surface = text_glyph_cache_get((*font)->font,
+                                                                codepoint,
+                                                                glyph_text,
+                                                                flags,
+                                                                info->outline_color,
+                                                                info->used_alpha,
+                                                                false,
+                                                                0,
+                                                                false);
 
             if (outline_surface == NULL) {
                 LOG(ERROR, "Could not render text outline: %s", SDL_GetError());
             } else {
-                if (info->used_alpha != 255) {
-                    surface_set_alpha(outline_surface, info->used_alpha);
-                }
-
                 for (outline_x = -1; outline_x < 2; outline_x++) {
                     for (outline_y = -1; outline_y < 2; outline_y++) {
                         if (outline_x == 0 && outline_y == 0) {
@@ -1889,74 +2093,25 @@ int text_show_character(font_struct **font,
                                               0)
                                         : outline_surface->h;
 
-                        SDL_BlitSurface(outline_surface, &srcrect, surface, &outline_box);
+                        surface_blit(outline_surface, &srcrect, surface, &outline_box);
                     }
                 }
-                SDL_DestroySurface(outline_surface);
             }
         }
 
         /* Render the character. */
-        ttf_surface = text_render_glyph((*font)->font, glyph_text, flags, *use_color);
+        ttf_surface = text_glyph_cache_get((*font)->font,
+                                           codepoint,
+                                           glyph_text,
+                                           flags,
+                                           *use_color,
+                                           info->used_alpha,
+                                           info->in_strikethrough,
+                                           info->flip,
+                                           true);
         if (ttf_surface == NULL) {
             LOG(ERROR, "Could not render text glyph: %s", SDL_GetError());
             goto rendered;
-        }
-
-        if (flags & TEXT_SOLID) {
-            /* Opacity. */
-            if (info->used_alpha != 255) {
-                SDL_Surface *new_ttf_surface;
-
-                /* Remove black border. */
-                SDL_SetSurfaceColorKey(ttf_surface, true, 0);
-                SDL_SetSurfaceRLE(ttf_surface, true);
-                /* Set the opacity. */
-                surface_set_alpha(ttf_surface, info->used_alpha);
-                /* Create new surface to blit. */
-                new_ttf_surface = surface_to_display_alpha(ttf_surface);
-                /* Free the old one. */
-                SDL_DestroySurface(ttf_surface);
-                ttf_surface = new_ttf_surface;
-                if (ttf_surface == NULL) {
-                    LOG(ERROR, "Could not convert text glyph: %s", SDL_GetError());
-                    goto rendered;
-                }
-            }
-        } else {
-            if (info->used_alpha != 255) {
-                surface_set_alpha(ttf_surface, info->used_alpha);
-            }
-        }
-
-        if (info->in_strikethrough) {
-            int font_height;
-
-            font_height = TTF_GetFontHeight((*font)->font);
-            lineRGBA(ttf_surface,
-                     0,
-                     font_height / 2,
-                     ttf_surface->w - 1,
-                     font_height / 2,
-                     use_color->r,
-                     use_color->g,
-                     use_color->b,
-                     255);
-        }
-
-        if (info->flip) {
-            SDL_Surface *ttf_surface_orig;
-
-            ttf_surface_orig = ttf_surface;
-            ttf_surface = zoomSurface(ttf_surface_orig,
-                                      info->flip & TEXT_FLIP_HORIZONTAL ? -1.0 : 1.0,
-                                      info->flip & TEXT_FLIP_VERTICAL ? -1.0 : 1.0,
-                                      0);
-            SDL_DestroySurface(ttf_surface_orig);
-            if (ttf_surface == NULL) {
-                LOG(ERROR, "Could not flip text glyph: %s", SDL_GetError());
-                goto rendered;
-            }
         }
 
         /* Output the rendered character to the screen and free the
@@ -1970,13 +2125,23 @@ int text_show_character(font_struct **font,
                         ? MAX(MIN(box->h - (dstrect.y - info->start_y), ttf_surface->h), 0)
                         : ttf_surface->h;
 
-        SDL_BlitSurface(ttf_surface, &srcrect, surface, &dstrect);
-        SDL_DestroySurface(ttf_surface);
+#ifdef ATRINIK_WIDGET_TESTS
+        bool suppress_root_glyph = surface == NULL && text_root_glyph_suppress_once;
+        if (suppress_root_glyph) {
+            text_root_glyph_suppress_once = false;
+        } else if (surface == NULL) {
+            text_root_glyph_record(codepoint, flags);
+        }
+        if (!suppress_root_glyph)
+#endif
+        {
+            surface_blit(ttf_surface, &srcrect, surface, &dstrect);
+        }
     }
 
 rendered:
     /* Update the x/w of the destination with the character's width. */
-    if (surface) {
+    if (render) {
         dest->x += width;
     }
 
@@ -2066,46 +2231,47 @@ int glyph_get_height(font_struct *font, char c) {
 /**
  * Begin handling text mouse-based selection.
  */
-#define TEXT_SHOW_SELECT_BEGIN()                                                     \
-    {                                                                                \
-        if (!skip && selection_start && selection_end && surface != NULL) {          \
-            select_start = *selection_start;                                         \
-            select_end = *selection_end;                                             \
-                                                                                     \
-            if (select_end < select_start) {                                         \
-                select_start = *selection_end;                                       \
-                select_end = *selection_start;                                       \
-            }                                                                        \
-                                                                                     \
-            if (select_start >= 0 && select_end >= 0 && cp - text >= select_start && \
-                cp - text <= select_end) {                                           \
-                SDL_Rect selection_box;                                              \
-                                                                                     \
-                selection_box.x = dest.x;                                            \
-                selection_box.y = dest.y;                                            \
-                selection_box.w = 0;                                                 \
-                selection_box.h = FONT_HEIGHT(FONT_TRY_INFO(font, info, surface));   \
-                                                                                     \
-                int selected_bytes = text_show_character(&font,                      \
-                                                         orig_font,                  \
-                                                         NULL,                       \
-                                                         &selection_box,             \
-                                                         cp,                         \
-                                                         &color,                     \
-                                                         &orig_color,                \
-                                                         flags,                      \
-                                                         box,                        \
-                                                         &x_adjust,                  \
-                                                         &info);                     \
-                if (selected_bytes == 1 || (unsigned char)*cp >= 0x80) {             \
-                    SDL_FillSurfaceRect(surface, &selection_box, -1);                \
-                                                                                     \
-                    select_color_orig = color;                                       \
-                    color.r = color.g = color.b = 0;                                 \
-                    select_color_changed = 1;                                        \
-                }                                                                    \
-            }                                                                        \
-        }                                                                            \
+#define TEXT_SHOW_SELECT_BEGIN()                                                         \
+    {                                                                                    \
+        if (!skip && selection_start && selection_end && render_target) {                \
+            select_start = *selection_start;                                             \
+            select_end = *selection_end;                                                 \
+                                                                                         \
+            if (select_end < select_start) {                                             \
+                select_start = *selection_end;                                           \
+                select_end = *selection_start;                                           \
+            }                                                                            \
+                                                                                         \
+            if (select_start >= 0 && select_end >= 0 && cp - text >= select_start &&     \
+                cp - text <= select_end) {                                               \
+                SDL_Rect selection_box;                                                  \
+                                                                                         \
+                selection_box.x = dest.x;                                                \
+                selection_box.y = dest.y;                                                \
+                selection_box.w = 0;                                                     \
+                selection_box.h = FONT_HEIGHT(FONT_TRY_INFO(font, info, render_target)); \
+                                                                                         \
+                int selected_bytes = text_show_character(&font,                          \
+                                                         orig_font,                      \
+                                                         NULL,                           \
+                                                         false,                          \
+                                                         &selection_box,                 \
+                                                         cp,                             \
+                                                         &color,                         \
+                                                         &orig_color,                    \
+                                                         flags,                          \
+                                                         box,                            \
+                                                         &x_adjust,                      \
+                                                         &info);                         \
+                if (selected_bytes == 1 || (unsigned char)*cp >= 0x80) {                 \
+                    surface_fill_rect(surface, &selection_box, -1);                      \
+                                                                                         \
+                    select_color_orig = color;                                           \
+                    color.r = color.g = color.b = 0;                                     \
+                    select_color_changed = 1;                                            \
+                }                                                                        \
+            }                                                                            \
+        }                                                                                \
     }
 
 /**
@@ -2117,10 +2283,13 @@ int glyph_get_height(font_struct *font, char c) {
             color = select_color_orig;                                                            \
             select_color_changed = 0;                                                             \
         }                                                                                         \
-        if (selection_start && selection_end && mstate == SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) {     \
-            if (my >= dest.y && my <= dest.y + FONT_HEIGHT(FONT_TRY_INFO(font, info, surface)) && \
+        if (render_target && selection_start && selection_end &&                                  \
+            mstate == SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) {                                         \
+            if (my >= dest.y &&                                                                   \
+                my <= dest.y + FONT_HEIGHT(FONT_TRY_INFO(font, info, render_target)) &&           \
                 mx >= old_x &&                                                                    \
-                mx <= old_x + glyph_get_utf8_width(FONT_TRY_INFO(font, info, surface), cp)) {     \
+                mx <=                                                                             \
+                    old_x + glyph_get_utf8_width(FONT_TRY_INFO(font, info, render_target), cp)) { \
                 if (*selection_started) {                                                         \
                     *selection_end = cp - text;                                                   \
                 } else {                                                                          \
@@ -2152,14 +2321,15 @@ int glyph_get_height(font_struct *font, char c) {
  * if word wrap is disabled, this is used to get the max height from, if
  * set (both box->w and box->h can be 0 to indicate unlimited).
  */
-void text_show(SDL_Surface *surface,
-               font_struct *font,
-               const char *text,
-               int x,
-               int y,
-               const char *color_notation,
-               uint64_t flags,
-               SDL_Rect *box) {
+static void text_show_impl(SDL_Surface *surface,
+                           bool render_root,
+                           font_struct *font,
+                           const char *text,
+                           int x,
+                           int y,
+                           const char *color_notation,
+                           uint64_t flags,
+                           SDL_Rect *box) {
     const char *cp = text;
     SDL_Rect dest;
     int pos = 0, last_space = 0, is_lf, ret, skip, max_height, max_width, height = 0;
@@ -2174,6 +2344,7 @@ void text_show(SDL_Surface *surface,
     uint8_t select_color_changed = 0;
     text_info_struct info;
     font_struct *orig_font = font;
+    bool render_target = surface != NULL || render_root;
 
     if (text_color_parse(color_notation, &color)) {
         orig_color = color;
@@ -2186,7 +2357,7 @@ void text_show(SDL_Surface *surface,
     info.start_x = x;
     info.start_y = y;
 
-    if (text_debug && box && surface) {
+    if (text_debug && box && render_target) {
         draw_frame(surface, x, y, box->w, box->h);
     }
 
@@ -2210,10 +2381,10 @@ void text_show(SDL_Surface *surface,
         }
     }
 
-    if (selection_start && selection_end) {
-        mstate = mouse_get_state(&mx, &my);
+    if (render_target && selection_start && selection_end) {
+        mstate = text_mouse_get_state(&mx, &my);
 
-        if (!text_adjust_coords(surface, &mx, &my)) {
+        if (!text_adjust_coords(surface, render_root, &mx, &my)) {
             mstate = 0;
         }
 
@@ -2238,7 +2409,7 @@ void text_show(SDL_Surface *surface,
         if (box && box->h &&
             dest.y +
                     (flags & (TEXT_LINES_CALC | TEXT_LINES_SKIP)
-                         ? FONT_HEIGHT(FONT_TRY_INFO(font, info, surface))
+                         ? FONT_HEIGHT(FONT_TRY_INFO(font, info, render_target))
                          : 0) -
                     y >
                 box->h) {
@@ -2246,6 +2417,7 @@ void text_show(SDL_Surface *surface,
              * any more drawing. */
             if ((flags & TEXT_LINES_CALC) || (flags & TEXT_HEIGHT && box->y == 0)) {
                 surface = NULL;
+                render_target = false;
             } else {
                 return;
             }
@@ -2255,12 +2427,12 @@ void text_show(SDL_Surface *surface,
 
         /* Is this a newline, or word wrap was set and we are over
          * maximum width? */
-        if (is_lf ||
-            (flags & TEXT_WORD_WRAP && box && box->w &&
-             dest.w + (flags & TEXT_MARKUP && cp[pos] == '['
-                           ? 0
-                           : glyph_get_utf8_width(FONT_TRY_INFO(font, info, surface), cp + pos)) >
-                 box->w)) {
+        if (is_lf || (flags & TEXT_WORD_WRAP && box && box->w &&
+                      dest.w + (flags & TEXT_MARKUP && cp[pos] == '['
+                                    ? 0
+                                    : glyph_get_utf8_width(FONT_TRY_INFO(font, info, render_target),
+                                                           cp + pos)) >
+                          box->w)) {
             /* Store the last space. */
             if (is_lf || last_space == 0) {
                 last_space = pos;
@@ -2293,6 +2465,7 @@ void text_show(SDL_Surface *surface,
                 ret = text_show_character(&font,
                                           orig_font,
                                           skip ? NULL : surface,
+                                          !skip && render_target,
                                           &dest,
                                           cp,
                                           &color,
@@ -2308,15 +2481,15 @@ void text_show(SDL_Surface *surface,
                 cp += ret;
                 last_space -= ret;
 
-                if (FONT_HEIGHT(FONT_TRY_INFO(font, info, surface)) > max_height) {
-                    max_height = FONT_HEIGHT(FONT_TRY_INFO(font, info, surface));
+                if (FONT_HEIGHT(FONT_TRY_INFO(font, info, render_target)) > max_height) {
+                    max_height = FONT_HEIGHT(FONT_TRY_INFO(font, info, render_target));
                 }
             }
 
-            if (selection_start && selection_end && mstate == SDL_BUTTON_MASK(SDL_BUTTON_LEFT) &&
-                box && my >= dest.y &&
-                my <= dest.y + FONT_HEIGHT(FONT_TRY_INFO(font, info, surface)) && mx >= dest.x &&
-                mx <= dest.x + (box->w - (dest.x - info.start_x))) {
+            if (render_target && selection_start && selection_end &&
+                mstate == SDL_BUTTON_MASK(SDL_BUTTON_LEFT) && box && my >= dest.y &&
+                my <= dest.y + FONT_HEIGHT(FONT_TRY_INFO(font, info, render_target)) &&
+                mx >= dest.x && mx <= dest.x + (box->w - (dest.x - info.start_x))) {
                 if (*selection_started) {
                     *selection_end = cp - text;
                 } else {
@@ -2325,7 +2498,7 @@ void text_show(SDL_Surface *surface,
             }
 
             if (!max_height) {
-                max_height = FONT_HEIGHT(FONT_TRY_INFO(font, info, surface));
+                max_height = FONT_HEIGHT(FONT_TRY_INFO(font, info, render_target));
             }
 
             /* Update the Y position. */
@@ -2372,6 +2545,7 @@ void text_show(SDL_Surface *surface,
             pos += text_show_character(&font,
                                        orig_font,
                                        NULL,
+                                       false,
                                        &dest,
                                        cp + pos,
                                        &color,
@@ -2404,6 +2578,7 @@ void text_show(SDL_Surface *surface,
         cp += text_show_character(&font,
                                   orig_font,
                                   surface,
+                                  render_target,
                                   &dest,
                                   cp,
                                   &color,
@@ -2415,13 +2590,13 @@ void text_show(SDL_Surface *surface,
 
         TEXT_SHOW_SELECT_END();
 
-        if (FONT_HEIGHT(FONT_TRY_INFO(font, info, surface)) > max_height) {
-            max_height = FONT_HEIGHT(FONT_TRY_INFO(font, info, surface));
+        if (FONT_HEIGHT(FONT_TRY_INFO(font, info, render_target)) > max_height) {
+            max_height = FONT_HEIGHT(FONT_TRY_INFO(font, info, render_target));
         }
     }
 
-    if (selection_start && selection_end && mstate == SDL_BUTTON_MASK(SDL_BUTTON_LEFT) && box &&
-        my >= dest.y + max_height &&
+    if (render_target && selection_start && selection_end &&
+        mstate == SDL_BUTTON_MASK(SDL_BUTTON_LEFT) && box && my >= dest.y + max_height &&
         my <= dest.y + max_height + (box->h - ((dest.y + max_height) - info.start_y))) {
         if (*selection_started) {
             *selection_end = cp - text;
@@ -2431,7 +2606,7 @@ void text_show(SDL_Surface *surface,
     }
 
     if (!max_height) {
-        max_height = FONT_HEIGHT(FONT_TRY_INFO(font, info, surface));
+        max_height = FONT_HEIGHT(FONT_TRY_INFO(font, info, render_target));
     }
 
     if (flags & TEXT_MAX_WIDTH && dest.w / 2 > max_width) {
@@ -2523,6 +2698,24 @@ void text_show_shadow(SDL_Surface *surface,
     text_show(surface, font, text, x, y, color_notation, flags, box);
 }
 
+void text_show_shadow_root(font_struct *font,
+                           const char *text,
+                           int x,
+                           int y,
+                           const char *color_notation,
+                           const char *color_shadow_notation,
+                           uint64_t flags,
+                           SDL_Rect *box) {
+    text_show_root(font,
+                   text,
+                   x + 1,
+                   y + 1,
+                   color_shadow_notation,
+                   flags | TEXT_NO_COLOR_CHANGE,
+                   box);
+    text_show_root(font, text, x, y, color_notation, flags, box);
+}
+
 /**
  * Like text_show(), but allows using printf-like format specifiers.
  *
@@ -2543,6 +2736,23 @@ void text_show_format(SDL_Surface *surface,
     va_start(ap, format);
     vsnprintf(buf, sizeof(buf), format, ap);
     text_show(surface, font, buf, x, y, color_notation, flags, box);
+    va_end(ap);
+}
+
+void text_show_format_root(font_struct *font,
+                           int x,
+                           int y,
+                           const char *color_notation,
+                           uint64_t flags,
+                           SDL_Rect *box,
+                           const char *format,
+                           ...) {
+    char buf[HUGE_BUF * 4];
+    va_list ap;
+
+    va_start(ap, format);
+    vsnprintf(buf, sizeof(buf), format, ap);
+    text_show_root(font, buf, x, y, color_notation, flags, box);
     va_end(ap);
 }
 
@@ -2567,6 +2777,24 @@ void text_show_shadow_format(SDL_Surface *surface,
     va_start(ap, format);
     vsnprintf(buf, sizeof(buf), format, ap);
     text_show_shadow(surface, font, buf, x, y, color_notation, color_shadow_notation, flags, box);
+    va_end(ap);
+}
+
+void text_show_shadow_format_root(font_struct *font,
+                                  int x,
+                                  int y,
+                                  const char *color_notation,
+                                  const char *color_shadow_notation,
+                                  uint64_t flags,
+                                  SDL_Rect *box,
+                                  const char *format,
+                                  ...) {
+    char buf[HUGE_BUF * 4];
+    va_list ap;
+
+    va_start(ap, format);
+    vsnprintf(buf, sizeof(buf), format, ap);
+    text_show_shadow_root(font, buf, x, y, color_notation, color_shadow_notation, flags, box);
     va_end(ap);
 }
 
@@ -2595,8 +2823,18 @@ int text_get_width(font_struct *font, const char *text, uint64_t flags) {
     dest.y = 0;
 
     while (*cp != '\0') {
-        cp +=
-            text_show_character(&font, font, NULL, &dest, cp, NULL, NULL, flags, NULL, NULL, &info);
+        cp += text_show_character(&font,
+                                  font,
+                                  NULL,
+                                  false,
+                                  &dest,
+                                  cp,
+                                  NULL,
+                                  NULL,
+                                  flags,
+                                  NULL,
+                                  NULL,
+                                  &info);
     }
 
     return dest.w;
@@ -2639,8 +2877,18 @@ int text_get_height(font_struct *font, const char *text, uint64_t flags) {
     dest.y = 0;
 
     while (*cp != '\0') {
-        cp +=
-            text_show_character(&font, font, NULL, &dest, cp, NULL, NULL, flags, NULL, NULL, &info);
+        cp += text_show_character(&font,
+                                  font,
+                                  NULL,
+                                  false,
+                                  &dest,
+                                  cp,
+                                  NULL,
+                                  NULL,
+                                  flags,
+                                  NULL,
+                                  NULL,
+                                  &info);
 
         if (FONT_HEIGHT(font) > max_height) {
             max_height = FONT_HEIGHT(font);
@@ -2695,6 +2943,31 @@ void text_get_width_height(font_struct *font,
     }
 }
 
+#ifdef ATRINIK_WIDGET_TESTS
+bool text_test_measurement_preserves_selection(font_struct *font) {
+    int64_t start = 7;
+    int64_t end = 11;
+    uint8_t started = 1;
+    SDL_Rect box = {.w = 256, .h = 64};
+    int width;
+    int height;
+    text_set_selection(&start, &end, &started);
+    text_test_mouse_override = true;
+    text_test_mouse_state = SDL_BUTTON_MASK(SDL_BUTTON_LEFT);
+    text_test_mouse_x = 0;
+    text_test_mouse_y = 0;
+    text_get_width_height(font,
+                          "[h=#ff0000]selectable highlighted text[/h]",
+                          TEXT_MARKUP,
+                          &box,
+                          &width,
+                          &height);
+    text_test_mouse_override = false;
+    text_set_selection(NULL, NULL, NULL);
+    return start == 7 && end == 11 && started == 1 && width > 0 && height > 0;
+}
+#endif
+
 /**
  * Truncate a text string if overflow would occur when rendering it.
  * @param font
@@ -2745,6 +3018,7 @@ void text_anchor_parse(text_info_struct *info, const char *text) {
         cp += text_show_character(&font,
                                   font,
                                   NULL,
+                                  false,
                                   &dest,
                                   cp,
                                   NULL,

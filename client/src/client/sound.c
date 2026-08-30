@@ -1565,7 +1565,8 @@ int sound_test_main(const char *fixture_root) {
     printf("SDL3_mixer decoder contract: %s\n", decoders);
     SOUND_TEST_CHECK(sound_test_decode_fixture(fixture, &decoded_bytes));
     SOUND_TEST_CHECK(decoded_bytes == 23040);
-    printf("decoded %zu nonzero PCM bytes from Opus content at legacy .mid path\n", decoded_bytes);
+    printf("decoded %" PRIu64 " nonzero PCM bytes from Opus content at legacy .mid path\n",
+           (uint64_t)decoded_bytes);
     sound_background_hook_register(sound_test_background_hook);
 
     /* Uncached/cached starts, same-track policy updates, and explicit stop. */

@@ -2,7 +2,7 @@
 =                Atrinik Client                 =
 =================================================
 
-[![Coverage](https://codecov.io/gh/atrinik/classic/graph/badge.svg?branch=main&flag=client)](https://codecov.io/gh/atrinik/classic)
+[![Coverage](https://codecov.io/gh/atrinik/classic/graph/badge.svg?branch=main&flag=client-gpu)](https://codecov.io/gh/atrinik/classic)
 
  Website: http://www.atrinik.org/
 
@@ -16,6 +16,7 @@
 
  From the repository root, build a Linux debug client with:
   $ python3 tools/dependencies.py sync
+  $ python3 tools/prepare_gpu_shader_toolchain.py --cache build/gpu-shader-downloads --output build/gpu-shader-toolchain
   $ cmake --preset linux-debug
   $ cmake --build --preset linux-debug
   $ ctest --preset linux-debug
@@ -32,8 +33,12 @@
  or newer, and SDL3_mixer 3.2.4 or newer. The supported mixer contract contains
  exactly WAV, STBVORBIS, OPUS, VOC, AIFF, AU, DRMP3, SINEWAVE, and RAW; MIDI and
  module decoders are deliberately absent. Sound effects and music are required
- on every supported platform. The client uses an SDL window-backed CPU
- surface; it does not require a hardware renderer.
+ on every supported platform. The production client requires a hardware GPU
+ supported by SDL_GPU through Vulkan, Direct3D 12, or Metal, including RGBA8
+ and R32_UINT render-target support plus fragment storage buffers. There is no
+ software renderer or fallback;
+ startup reports the selected backend, device, and driver failure and exits if
+ the required GPU contract is unavailable.
 
  Releases are produced from every squash merge to main. semantic-release
  parses the Conventional Commits pull-request title. Classic stays on the
@@ -237,59 +242,105 @@
  into the same bounded scheduler instead of downloading serially.
 
 =================================================
-= 2.1. Replaying an offline player view         =
+= 2.1. Frozen renderer evidence                 =
 =================================================
 
- The client can replay a bounded MAP command through its normal decoder and
- software map renderer without opening a window, initializing audio, reading
- user settings, or connecting to a server:
-  $ build/linux-debug/atrinik --player-view \
-      src/tests/fixtures/player_view/smooth.xml \
-      build/linux-debug/player-view.png
+ The files under `src/tests/fixtures/player_view/` preserve the immutable MAP,
+ asset, ordering, settings, and pixel evidence captured before the software
+ renderer was removed. Test builds expose `--gpu-player-view MANIFEST`, which
+ verifies those inputs and feeds them through the normal MAP/MAP2 decoder,
+ `map_draw_map()`, production GPU composition, presentation fence, and explicit
+ final-frame readback. The deleted CPU renderer and former `--player-view*`
+ software command family are not linked. Movement manifests additionally replay
+ the frozen closed MAP2 stream and an A-to-B-to-A map lifecycle; the returned A
+ checkpoint must be byte-identical to the initial completed GPU frame.
 
- Use `-` as the output to verify the canonical RGBA hash without writing a PNG.
- Output files must not already exist and must be outside the manifest's frozen
- input tree. Publication uses an exclusive same-directory temporary file,
- verifies the encoded pixels, and then publishes atomically without replacing
- another file.
+ GPU correctness and performance evidence must come from fenced production-path
+ runs on qualified Vulkan, Direct3D 12, and Metal hardware. Those runs record
+ exact revision and dirty identity, backend, driver, device, shader cohort,
+ viewport/depth workload, CPU submission, GPU completion, present wait, upload
+ and allocation counts, retained bytes, recovery events, and final readback
+ checkpoints. A software or CPU-emulated GPU may supplement conformance testing
+ but never satisfies release performance qualification.
 
- The closed version-1 XML manifest pins the settings defaults, multipart
- geometry, exact MAP payload, and every sprite by SHA-256. It also freezes the
- viewport, logical map dimensions, software renderer, clock, zoom, and smooth
- or discrete lighting choice. Unknown fields, external XML declarations,
- missing or changed inputs, malformed packets, unavailable faces, and pixel
- drift fail before publishing an output. The maintained fixtures cover normal
- and stretched terrain, multipart and animated sprites, fog/cutaway behavior,
- lighting modes, and physical depths zero, +1, and +2.
+ Configure a Release test build, then run `--gpu-player-view-benchmark MANIFEST
+ WORKLOAD` from the client data directory. Set `ATRINIK_GPU_CONFORMANCE_OUTPUT`
+ to the destination JSONL artifact and `ATRINIK_GPU_CONFORMANCE_DRIVER` to the
+ backend under test. Controlled runners on the documented reference or
+ minimum-supported GPU additionally set
+ `ATRINIK_GPU_CONFORMANCE_QUALIFIED_HARDWARE=1` and
+ `ATRINIK_GPU_CONFORMANCE_HARDWARE_TIER=reference|minimum`. This entry point
+ uses the production widget, popup, tooltip, minimap, map, and presentation
+ path; backend-native attestation, not the environment request, establishes
+ hardware qualification. It rejects dirty builds and unknown revision
+ identity. Run every workload row three times in a fresh process. Each record
+ contains raw frame windows and separate stage, cold-upload, steady-state
+ churn, retained-resource, and changing animation checkpoints. Upload evidence
+ attributes immutable source textures, changed painter instances, compact
+ light data, and per-batch stable-slot uniforms independently. Static plateaus
+ require the first three classes to remain zero and bound slot uniforms to one
+ 16 to 1024-byte push per world batch; animation rows additionally permit only
+ bounded changed-instance deltas.
 
- Release builds also expose the bounded lighting benchmark used by CI:
-  $ build/linux-release/atrinik --player-view-benchmark \
-      src/tests/fixtures/player_view/colored-smooth.xml standard
+ The client deliberately uses a 1:1 logical-to-output-pixel window contract.
+ High-density backing stores are not requested: one SDL window coordinate is
+ one renderer output pixel, which preserves nearest-neighbor pixel-art sampling
+ and makes fixture, screenshot, fullscreen, and benchmark coordinates
+ identical. Qualification rejects a workload when the queried logical window
+ or renderer output size differs from its declared pixel dimensions.
 
- The final argument is `standard` for the manifest's frozen viewport or
- `large` for 1920x1080. The harness warms five frames, measures 101 live
- `map_draw_map` calls, and emits one tab-separated median record. CI applies
- the same harness to the pull request base and candidate on one runner, records
- the raw samples as an artifact, and enforces the 10% standard and 15% large
- viewport regression budgets.
+ Run `--gpu-player-view-lifecycle
+ src/tests/fixtures/player_view/brynknot-movement.xml` with
+ `ATRINIK_GPU_CONFORMANCE_LIFECYCLE_OUTPUT` set to record production-path cold
+ upload, resize/restore, teleport, reconnect state cleanup, foreground resume, fullscreen,
+ display migration, swapchain recreation, device loss, and screenshot
+ readback. Each action records its own elapsed time, uploads, resource churn,
+ and bounded recovery result before the statistics reset for 40 fenced
+ complete-client frames. Lifecycle mode uses a visible headful window and real
+ SDL window transitions; hidden windows remain confined to fixture and
+ benchmark collection. Every event is followed by those 40 frames and
+ must return to the applicable steady-state row budget without source, light,
+ or instance upload, readback, fallback, or resource churn; slot uniforms stay
+ within the same per-world-batch bound. The manual `GPU qualification`
+ workflow runs and validates both contracts for Vulkan, Direct3D 12, and Metal
+ on reference and minimum hardware tiers. Fullscreen approval is keyed by GPU
+ backend, hardware tier, and the recorded output-pixel display mode; changing a
+ runner's display mode therefore requires a fresh human-reviewed golden.
 
- Release builds additionally expose the stateful movement contract used by the
- movement regression workflow:
-  $ build/linux-release/atrinik --player-view-movement-benchmark \
-      src/tests/fixtures/player_view/movement-colored.xml standard translated
+ An unmerged candidate cannot dispatch a newly added standalone workflow
+ through GitHub's default-branch workflow registry. Before this qualification
+ workflow reaches the default branch, dispatch the existing `Check` workflow
+ at the exact candidate ref with `gpu_qualification=true`; its reusable
+ qualification job executes the same six backend/hardware-tier rows from that
+ ref. For example:
 
- The final reconstruction argument is `translated` (the production path) or
- `full` (the benchmark-only control); omitting it selects `translated`. An
- optional final `isolated` workload argument suppresses auxiliary local-minimap
- draws and is paired with `movement-lighting-isolated.xml` by CI. The
- JSON schema reports the sum of isolated lighting scopes accumulated from
- before queued MAP decode through the primary draw, separately from
- production-like total update work and local-minimap rendering, with operation and per-depth
- decisions, dirty/translated pixels and bytes, scroll offsets, fallbacks, and
- transformed-sprite cache timing. CI alternates translated/full Release runs
- over the exact same standard and large sustained streams and requires their
- lifecycle checkpoints and final state to match. The discrete manifest remains
- a separate correctness control.
+     gh workflow run check.yml --ref CANDIDATE_REF -f gpu_qualification=true
+
+ After the standalone workflow exists on the default branch, it may also be
+ dispatched directly at an exact candidate ref. In both cases, preserve every
+ uploaded JSONL and PNG artifact for human review before approving goldens.
+
+ Every production fixture pins the shared widget defaults and saved layout.
+ The collection also includes `gpu-ui-closure.xml`; its named state sweep
+ covers the intro server browser, the ready account/password login form,
+ gameplay widgets and text, overlays,
+ popup families (character selection, settings, color picker, connection and
+ credential modals, credits, book, painting, and region map), region-map/minimap
+ FOW updates, and both player screenshot
+ commands. Screenshot copies are enqueued asynchronously and completed by
+ later event-loop fence polling; synchronous readback is reserved for the
+ qualification checkpoint helper. Qualification writes hash-bound PNG review
+ artifacts for the initial/final frames, every UI state, and every lifecycle
+ event; the verifier rehashes them and validates their PNG dimensions before
+ the workflow uploads them for human approval. `--collect-lifecycle` checks the
+ complete structural artifact without consuming the pixel contract;
+ `--lifecycle` is the later closure gate that requires human-approved goldens.
+
+ Map records carry stable sparse-cell identities and semantic draw variants.
+ Each primary or auxiliary target retains its own command snapshot and instance
+ buffer, compares the next painter stream by identity, and uploads only changed
+ contiguous instance ranges. Queued commands retain their source asset through
+ submission, including when a surface cache entry is invalidated or evicted.
 
 =================================================
 = 3.1. Licensing (Atrinik client)               =

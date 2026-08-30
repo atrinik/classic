@@ -41,6 +41,10 @@ extern void mkdir_ensure(const char *path);
 extern void copy_file(const char *filename, const char *filename_out);
 
 extern const char *get_config_dir(void);
+#ifdef ATRINIK_WIDGET_TESTS
+/** Prevent fixture replays from resolving the normal user-data hierarchy. */
+extern void wrapper_test_user_data_isolated_set(bool enabled);
+#endif
 
 extern void get_data_dir_file(char *buf, size_t len, const char *fname);
 

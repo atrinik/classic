@@ -1011,10 +1011,23 @@ done:
  * Source surface to render.
  */
 void surface_show(SDL_Surface *surface, int x, int y, SDL_Rect *srcrect, SDL_Surface *src) {
+    if (surface == NULL || (gpu_renderer_ready() && gpu_renderer_canvas_registered(surface))) {
+        SDL_FRect destination = {
+            .x = (float)x,
+            .y = (float)y,
+            .w = (float)(srcrect != NULL ? srcrect->w : src->w),
+            .h = (float)(srcrect != NULL ? srcrect->h : src->h),
+        };
+        if (!gpu_renderer_draw_surface_to(surface, src, srcrect, &destination)) {
+            LOG(ERROR, "Could not submit retained GPU surface: %s", SDL_GetError());
+        }
+        return;
+    }
     SDL_Rect dstrect;
     dstrect.x = x;
     dstrect.y = y;
-    SDL_BlitSurface(src, srcrect, surface, &dstrect);
+    surface_blit(src, srcrect, surface, &dstrect);
+    gpu_renderer_surface_changed(surface);
 }
 
 /**
@@ -1077,7 +1090,6 @@ void surface_show_effects(SDL_Surface *surface,
                           SDL_Rect *srcrect,
                           SDL_Surface *src,
                           const sprite_effects_t *effects) {
-    HARD_ASSERT(surface != NULL);
     bool temporary_effect_surface = false;
 
     if (src == NULL) {
@@ -1146,21 +1158,30 @@ void surface_show_effects(SDL_Surface *surface,
     }
 
     if (effects != NULL && BIT_QUERY(effects->flags, SPRITE_FLAG_SMOOTH_DARK)) {
-        lighting_show_surface(surface,
-                              x,
-                              y,
-                              srcrect,
-                              src,
-                              effects->smooth_dark_y,
-                              LIGHTING_SURFACE_STRUCTURE);
+        if (surface == NULL) {
+            surface_show(surface, x, y, srcrect, src);
+        } else {
+            lighting_show_surface(surface,
+                                  x,
+                                  y,
+                                  srcrect,
+                                  src,
+                                  effects->smooth_dark_y,
+                                  LIGHTING_SURFACE_STRUCTURE);
+        }
     } else if (effects != NULL && BIT_QUERY(effects->flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE)) {
-        lighting_show_surface(surface, x, y, srcrect, src, 0, LIGHTING_SURFACE_PROJECTED);
+        if (surface == NULL) {
+            surface_show(surface, x, y, srcrect, src);
+        } else {
+            lighting_show_surface(surface, x, y, srcrect, src, 0, LIGHTING_SURFACE_PROJECTED);
+        }
     } else {
         surface_show(surface, x, y, srcrect, src);
     }
 
     if (temporary_effect_surface) {
         lighting_invalidate_surface(src);
+        gpu_renderer_invalidate_surface(src);
         SDL_DestroySurface(src);
     }
 }
@@ -1259,18 +1280,18 @@ void draw_frame(SDL_Surface *surface, int x, int y, int w, int h) {
     box.y = y;
     box.h = h;
     box.w = 1;
-    SDL_FillSurfaceRect(surface, &box, pixel_format_map_rgb(surface->format, 0x60, 0x60, 0x60));
+    surface_fill_rect(surface, &box, surface_map_rgb(surface, 0x60, 0x60, 0x60));
     box.x = x + w;
     box.h++;
-    SDL_FillSurfaceRect(surface, &box, pixel_format_map_rgb(surface->format, 0x55, 0x55, 0x55));
+    surface_fill_rect(surface, &box, surface_map_rgb(surface, 0x55, 0x55, 0x55));
     box.x = x;
     box.y += h;
     box.w = w;
     box.h = 1;
-    SDL_FillSurfaceRect(surface, &box, pixel_format_map_rgb(surface->format, 0x60, 0x60, 0x60));
+    surface_fill_rect(surface, &box, surface_map_rgb(surface, 0x60, 0x60, 0x60));
     box.x++;
     box.y = y;
-    SDL_FillSurfaceRect(surface, &box, pixel_format_map_rgb(surface->format, 0x55, 0x55, 0x55));
+    surface_fill_rect(surface, &box, surface_map_rgb(surface, 0x55, 0x55, 0x55));
 }
 
 /**
@@ -1299,22 +1320,22 @@ void border_create(SDL_Surface *surface, int x, int y, int w, int h, int color, 
     box.y = y;
     box.h = h;
     box.w = size;
-    SDL_FillSurfaceRect(surface, &box, color);
+    surface_fill_rect(surface, &box, color);
 
     /* Right border. */
     box.x = x + w - size;
-    SDL_FillSurfaceRect(surface, &box, color);
+    surface_fill_rect(surface, &box, color);
 
     /* Top border. */
     box.x = x + size;
     box.y = y;
     box.w = w - size * 2;
     box.h = size;
-    SDL_FillSurfaceRect(surface, &box, color);
+    surface_fill_rect(surface, &box, color);
 
     /* Bottom border. */
     box.y = y + h - size;
-    SDL_FillSurfaceRect(surface, &box, color);
+    surface_fill_rect(surface, &box, color);
 }
 
 /**
@@ -1341,7 +1362,7 @@ void border_create_line(SDL_Surface *surface, int x, int y, int w, int h, uint32
     dst.y = y;
     dst.w = w;
     dst.h = h;
-    SDL_FillSurfaceRect(surface, &dst, color);
+    surface_fill_rect(surface, &dst, color);
 }
 
 /**
@@ -1360,6 +1381,30 @@ void border_create_sdl_color(SDL_Surface *surface,
                              SDL_Rect *coords,
                              int thickness,
                              SDL_Color *color) {
+    if (surface == NULL) {
+        SDL_FRect rectangle = {
+            .x = (float)coords->x,
+            .y = (float)coords->y,
+            .w = (float)coords->w,
+            .h = (float)coords->h,
+        };
+        for (int i = 0; i < thickness; i++) {
+            if (!gpu_renderer_draw_rect(&rectangle,
+                                        color->r,
+                                        color->g,
+                                        color->b,
+                                        color->a,
+                                        false)) {
+                LOG(ERROR, "Could not draw retained GPU border: %s", SDL_GetError());
+                return;
+            }
+            rectangle.x += 1.0f;
+            rectangle.y += 1.0f;
+            rectangle.w -= 2.0f;
+            rectangle.h -= 2.0f;
+        }
+        return;
+    }
     uint32_t color_mapped = pixel_format_map_rgb(surface->format, color->r, color->g, color->b);
 
     BORDER_CREATE_TOP(surface, coords->x, coords->y, coords->w, coords->h, color_mapped, thickness);
@@ -1467,6 +1512,14 @@ void rectangle_create(SDL_Surface *surface,
     SDL_Color color;
     if (!text_color_parse(color_notation, &color)) {
         LOG(BUG, "Invalid color: %s", color_notation);
+        return;
+    }
+
+    if (surface == NULL) {
+        SDL_FRect rectangle = {(float)x, (float)y, (float)w, (float)h};
+        if (!gpu_renderer_draw_rect(&rectangle, color.r, color.g, color.b, color.a, true)) {
+            LOG(ERROR, "Could not draw retained GPU rectangle: %s", SDL_GetError());
+        }
         return;
     }
 

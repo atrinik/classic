@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -64,22 +64,22 @@ int range_buttons_show(int x, int y, int *val, int advance) {
     texture_right = texture_surface(texture_get(TEXTURE_TYPE_CLIENT, "texture_right"));
 
     /* Show the two range buttons. */
-    surface_show(ScreenSurface, x, y, NULL, texture_off);
+    surface_show(OfflineRenderSurface, x, y, NULL, texture_off);
 
     /* Check the Y position. */
     if (my > y && my < y + texture_off->h && state == SDL_BUTTON_MASK(SDL_BUTTON_LEFT) &&
-        (!ticks || SDL_GetTicks() - ticks > 125)) {
+        (!ticks || client_ui_ticks() - ticks > 125)) {
         /* If the left range button was clicked, decrease the value. */
         if (mx > x && mx < x + texture_left->w) {
-            surface_show(ScreenSurface, x, y, NULL, texture_left);
+            surface_show(OfflineRenderSurface, x, y, NULL, texture_left);
             *val -= advance;
-            ticks = SDL_GetTicks();
+            ticks = client_ui_ticks();
             return 1;
         } else if (mx > x + texture_left->w && mx < x + texture_left->w + texture_right->w) {
             /* Otherwise increase it. */
-            surface_show(ScreenSurface, x + texture_left->w, y, NULL, texture_right);
+            surface_show(OfflineRenderSurface, x + texture_left->w, y, NULL, texture_right);
             *val += advance;
-            ticks = SDL_GetTicks();
+            ticks = client_ui_ticks();
             return 1;
         }
     }

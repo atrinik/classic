@@ -152,50 +152,46 @@ static int popup_draw_post_func(popup_struct *popup) {
     box.h = popup->surface->h;
 
     /* Show direction markers. */
-    text_show(ScreenSurface,
-              FONT_SERIF14,
-              "N",
-              popup->x,
-              popup->y + RM_BORDER_SIZE / 2 - FONT_HEIGHT(FONT_SERIF14) / 2,
-              COLOR_HGOLD,
-              TEXT_ALIGN_CENTER | TEXT_OUTLINE,
-              &box);
-    text_show(ScreenSurface,
-              FONT_SERIF14,
-              "E",
-              popup->x + popup->surface->w - RM_BORDER_SIZE / 2 -
-                  text_get_width(FONT_SERIF14, "E", 0) / 2,
-              popup->y,
-              COLOR_HGOLD,
-              TEXT_OUTLINE | TEXT_VALIGN_CENTER,
-              &box);
-    text_show(ScreenSurface,
-              FONT_SERIF14,
-              "S",
-              popup->x,
-              popup->y + popup->surface->h - RM_BORDER_SIZE / 2 - FONT_HEIGHT(FONT_SERIF14) / 2,
-              COLOR_HGOLD,
-              TEXT_ALIGN_CENTER | TEXT_OUTLINE,
-              &box);
-    text_show(ScreenSurface,
-              FONT_SERIF14,
-              "W",
-              popup->x + RM_BORDER_SIZE / 2 - text_get_width(FONT_SERIF14, "W", 0) / 2,
-              popup->y,
-              COLOR_HGOLD,
-              TEXT_OUTLINE | TEXT_VALIGN_CENTER,
-              &box);
+    text_show_root(FONT_SERIF14,
+                   "N",
+                   popup->x,
+                   popup->y + RM_BORDER_SIZE / 2 - FONT_HEIGHT(FONT_SERIF14) / 2,
+                   COLOR_HGOLD,
+                   TEXT_ALIGN_CENTER | TEXT_OUTLINE,
+                   &box);
+    text_show_root(FONT_SERIF14,
+                   "E",
+                   popup->x + popup->surface->w - RM_BORDER_SIZE / 2 -
+                       text_get_width(FONT_SERIF14, "E", 0) / 2,
+                   popup->y,
+                   COLOR_HGOLD,
+                   TEXT_OUTLINE | TEXT_VALIGN_CENTER,
+                   &box);
+    text_show_root(FONT_SERIF14,
+                   "S",
+                   popup->x,
+                   popup->y + popup->surface->h - RM_BORDER_SIZE / 2 -
+                       FONT_HEIGHT(FONT_SERIF14) / 2,
+                   COLOR_HGOLD,
+                   TEXT_ALIGN_CENTER | TEXT_OUTLINE,
+                   &box);
+    text_show_root(FONT_SERIF14,
+                   "W",
+                   popup->x + RM_BORDER_SIZE / 2 - text_get_width(FONT_SERIF14, "W", 0) / 2,
+                   popup->y,
+                   COLOR_HGOLD,
+                   TEXT_OUTLINE | TEXT_VALIGN_CENTER,
+                   &box);
 
     box.w = RM_TITLE_WIDTH;
     box.h = RM_TITLE_HEIGHT;
-    text_show(ScreenSurface,
-              FONT_SERIF14,
-              MapData.region_longname,
-              popup->x + RM_TITLE_STARTX,
-              popup->y + RM_TITLE_STARTY,
-              COLOR_HGOLD,
-              TEXT_ALIGN_CENTER | TEXT_VALIGN_CENTER,
-              &box);
+    text_show_root(FONT_SERIF14,
+                   MapData.region_longname,
+                   popup->x + RM_TITLE_STARTX,
+                   popup->y + RM_TITLE_STARTY,
+                   COLOR_HGOLD,
+                   TEXT_ALIGN_CENTER | TEXT_VALIGN_CENTER,
+                   &box);
 
     box.x = popup->x + RM_MAP_STARTX;
     box.y = popup->y + RM_MAP_STARTY;
@@ -205,35 +201,32 @@ static int popup_draw_post_func(popup_struct *popup) {
     if (!region_map_ready(MapData.region_map)) {
         const char *error = region_map_error(MapData.region_map);
         if (error != NULL) {
-            text_show(ScreenSurface,
-                      FONT_SERIF14,
-                      error,
-                      box.x,
-                      box.y,
-                      COLOR_WHITE,
-                      TEXT_ALIGN_CENTER | TEXT_VALIGN_CENTER | TEXT_OUTLINE | TEXT_WORD_WRAP,
-                      &box);
+            text_show_root(FONT_SERIF14,
+                           error,
+                           box.x,
+                           box.y,
+                           COLOR_WHITE,
+                           TEXT_ALIGN_CENTER | TEXT_VALIGN_CENTER | TEXT_OUTLINE | TEXT_WORD_WRAP,
+                           &box);
         } else if (MapData.region_map->source_png != NULL &&
                    MapData.region_map->source_def != NULL) {
             char buf[MAX_BUF];
-            text_show_format(ScreenSurface,
-                             FONT_SERIF14,
-                             box.x,
-                             box.y,
-                             COLOR_WHITE,
-                             TEXT_ALIGN_CENTER | TEXT_VALIGN_CENTER | TEXT_OUTLINE,
-                             &box,
-                             "Downloading the map, please wait...\n%s",
-                             asset_source_speedinfo(MapData.region_map->source_png, VS(buf)));
+            text_show_format_root(FONT_SERIF14,
+                                  box.x,
+                                  box.y,
+                                  COLOR_WHITE,
+                                  TEXT_ALIGN_CENTER | TEXT_VALIGN_CENTER | TEXT_OUTLINE,
+                                  &box,
+                                  "Downloading the map, please wait...\n%s",
+                                  asset_source_speedinfo(MapData.region_map->source_png, VS(buf)));
         } else {
-            text_show(ScreenSurface,
-                      FONT_SERIF14,
-                      "No region-map download transport is available.",
-                      box.x,
-                      box.y,
-                      COLOR_WHITE,
-                      TEXT_ALIGN_CENTER | TEXT_VALIGN_CENTER | TEXT_OUTLINE,
-                      &box);
+            text_show_root(FONT_SERIF14,
+                           "No region-map download transport is available.",
+                           box.x,
+                           box.y,
+                           COLOR_WHITE,
+                           TEXT_ALIGN_CENTER | TEXT_VALIGN_CENTER | TEXT_OUTLINE,
+                           &box);
         }
 
         return 1;
@@ -269,11 +262,11 @@ static int popup_draw_post_func(popup_struct *popup) {
     }
 
     scrollbar_show(&scrollbar,
-                   ScreenSurface,
+                   OfflineRenderSurface,
                    popup->x + RM_SCROLLBAR_STARTX,
                    popup->y + RM_SCROLLBAR_STARTY);
     scrollbar_show(&scrollbar_horizontal,
-                   ScreenSurface,
+                   OfflineRenderSurface,
                    popup->x + RM_SCROLLBARH_STARTX,
                    popup->y + RM_SCROLLBARH_STARTY);
 
@@ -281,9 +274,9 @@ static int popup_draw_post_func(popup_struct *popup) {
     dest.y = box.y;
 
     /* Actually draw the map. */
-    SDL_BlitSurface(surface, &region_map->pos, ScreenSurface, &dest);
-    region_map_render_fow(region_map, ScreenSurface, dest.x, dest.y);
-    region_map_render_marker(region_map, ScreenSurface, dest.x, dest.y);
+    surface_show(OfflineRenderSurface, dest.x, dest.y, &region_map->pos, surface);
+    region_map_render_fow(region_map, OfflineRenderSurface, dest.x, dest.y);
+    region_map_render_marker(region_map, OfflineRenderSurface, dest.x, dest.y);
 
     return 1;
 }
@@ -496,6 +489,9 @@ void region_map_open(void) {
     }
 
     popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "region_map"));
+    if (popup == NULL) {
+        return;
+    }
     popup->draw_post_func = popup_draw_post_func;
     popup->event_func = popup_event_func;
     popup->destroy_callback_func = popup_destroy_callback;

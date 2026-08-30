@@ -204,14 +204,14 @@ category Map
 		range 9 - 17
 		advance 1
 		default 17
-		desc Width of the map. If you have very low bandwidth, you may want to consider lowering this somewhat.
+		desc Logical map width. Larger qualification views remain unavailable until their release gates pass.
 	end
 	setting Map height
 		type range
 		range 9 - 17
 		advance 1
 		default 17
-		desc Height of the map. If you have very low bandwidth, you may want to consider lowering this somewhat.
+		desc Logical map height. Larger qualification views remain unavailable until their release gates pass.
 	end
 end
 

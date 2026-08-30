@@ -205,6 +205,16 @@ extern void sprite_cache_statistics_reset(void);
 extern void sprite_cache_statistics_get(sprite_cache_statistics_t *statistics);
 
 extern void surface_show(SDL_Surface *surface, int x, int y, SDL_Rect *srcrect, SDL_Surface *src);
+extern bool surface_blit(SDL_Surface *source,
+                         const SDL_Rect *source_rect,
+                         SDL_Surface *destination,
+                         SDL_Rect *destination_rect);
+extern bool surface_blit_scaled(SDL_Surface *source,
+                                const SDL_Rect *source_rect,
+                                SDL_Surface *destination,
+                                SDL_Rect *destination_rect,
+                                SDL_ScaleMode scale_mode);
+extern bool surface_fill_rect(SDL_Surface *surface, const SDL_Rect *rectangle, Uint32 color);
 
 extern void surface_show_fill(SDL_Surface *surface,
                               int x,

@@ -99,6 +99,7 @@ static const char *const minimap_texture_names[MINIMAP_TEXTURE_NUM] = {"minimap_
 static const char *const minimap_display_modes[MINIMAP_TYPE_NUM] = {"Prefer region maps",
                                                                     "Only region maps",
                                                                     "Only dynamic maps"};
+static bool minimap_generation_valid;
 
 /** Return whether this minimap currently uses the dynamic world renderer. */
 static bool minimap_is_dynamic(const minimap_widget_t *minimap) {
@@ -108,7 +109,7 @@ static bool minimap_is_dynamic(const minimap_widget_t *minimap) {
 
 /** Return whether a requested minimap refresh should run this frame. */
 bool minimap_redraw_due(void) {
-    if (!minimap_redraw_flag) {
+    if (!minimap_redraw_flag || map_state_transaction_active()) {
         return false;
     }
 
@@ -125,7 +126,24 @@ bool minimap_redraw_due(void) {
         return true;
     }
 
-    return SDL_GetTicks() - minimap->dynamic_redraw_ticks >= MINIMAP_DYNAMIC_REDRAW_INTERVAL;
+    return client_ui_ticks() - minimap->dynamic_redraw_ticks >= MINIMAP_DYNAMIC_REDRAW_INTERVAL;
+}
+
+void minimap_redraw_force(void) {
+    minimap_redraw_flag = 1;
+
+    widgetdata *widget = cur_widget[MINIMAP_ID];
+    if (widget == NULL || widget->subwidget == NULL) {
+        return;
+    }
+
+    minimap_widget_t *minimap = widget->subwidget;
+    minimap->dynamic_redraw_ticks = client_ui_ticks() - MINIMAP_DYNAMIC_REDRAW_INTERVAL;
+}
+
+void minimap_invalidate_map_generation(void) {
+    minimap_generation_valid = false;
+    minimap_redraw_flag = 1;
 }
 
 /** @copydoc widgetdata::draw_func */
@@ -154,12 +172,15 @@ static void widget_draw(widgetdata *widget) {
                                              0,
                                              0,
                                              0);
-        if (widget->surface == NULL) {
-            LOG(ERROR, "Could not create minimap widget surface: %s", SDL_GetError());
+        if (!gpu_renderer_canvas_register(&widget->surface)) {
+            LOG(ERROR, "Could not create retained GPU minimap target: %s", SDL_GetError());
             return;
         }
+        minimap_generation_valid = false;
         minimap_redraw_flag = 1;
-        minimap->dynamic_redraw_ticks = 0;
+        /* A newly allocated canvas has no composed minimap to throttle. Make
+         * its first dynamic draw due even during the first 250 ms of uptime. */
+        minimap->dynamic_redraw_ticks = client_ui_ticks() - MINIMAP_DYNAMIC_REDRAW_INTERVAL;
 
         for (i = 0; i < MINIMAP_TEXTURE_NUM; i++) {
             if (minimap->textures[i] != NULL) {
@@ -185,8 +206,8 @@ static void widget_draw(widgetdata *widget) {
 
     if (minimap_redraw_due()) {
         minimap_redraw_flag = 0;
-        SDL_FillSurfaceRect(widget->surface, NULL, 0);
-        SDL_BlitSurface(minimap->textures[MINIMAP_TEXTURE_BG], NULL, widget->surface, NULL);
+        surface_fill_rect(widget->surface, NULL, 0);
+        surface_blit(minimap->textures[MINIMAP_TEXTURE_BG], NULL, widget->surface, NULL);
 
         /* Determine which version of the minimap to show based on the user's
          * preferences. */
@@ -228,7 +249,7 @@ static void widget_draw(widgetdata *widget) {
 
                 surface = region_map_surface(MapData.region_map);
 
-                SDL_BlitSurface(surface, &MapData.region_map->pos, widget->surface, NULL);
+                surface_blit(surface, &MapData.region_map->pos, widget->surface, NULL);
                 region_map_render_fow(MapData.region_map, widget->surface, 0, 0);
                 region_map_render_marker(MapData.region_map, widget->surface, 0, 0);
             } else {
@@ -246,15 +267,12 @@ static void widget_draw(widgetdata *widget) {
                           &tmp);
             }
 
-            SDL_BlitSurface(minimap->textures[MINIMAP_TEXTURE_MASK], NULL, widget->surface, NULL);
-            SDL_BlitSurface(minimap->textures[MINIMAP_TEXTURE_BORDER_ROTATED],
-                            NULL,
-                            widget->surface,
-                            NULL);
+            surface_blit(minimap->textures[MINIMAP_TEXTURE_MASK], NULL, widget->surface, NULL);
+            surface_blit(minimap->textures[MINIMAP_TEXTURE_BORDER_ROTATED],
+                         NULL,
+                         widget->surface,
+                         NULL);
         } else {
-            SDL_Surface *zoomed;
-            SDL_Rect zoomedbox;
-
             if (minimap->surface == NULL) {
                 minimap->surface = surface_create_rgb(get_video_flags(),
                                                       MINIMAP_DYNAMIC_SURFACE_WIDTH,
@@ -270,43 +288,76 @@ static void widget_draw(widgetdata *widget) {
                 }
             }
 
-            double zoomx = (double)widget->w / minimap->surface->w *
-                           (minimap->surface->w / (MAP_FOW_SIZE + 1.0));
-            double zoomy = (double)widget->h / minimap->surface->h *
-                           (minimap->surface->h / (MAP_FOW_SIZE + 1.0));
+            map_draw_map_gpu_auxiliary(minimap->surface);
+            minimap->dynamic_redraw_ticks = client_ui_ticks();
 
-            SDL_FillSurfaceRect(minimap->surface, NULL, 0);
-            map_draw_map(minimap->surface);
-            minimap->dynamic_redraw_ticks = SDL_GetTicks();
-
-            zoomx = (MapData.region_map->zoom) / 100.0 * (zoomx / 100.0);
-            zoomy = (MapData.region_map->zoom) / 100.0 * (zoomy / 100.0);
-            zoomed = zoomSurface(minimap->surface,
-                                 zoomx,
-                                 zoomy,
-                                 setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER));
-            if (zoomed == NULL) {
-                LOG(ERROR, "Could not resize dynamic minimap: %s", SDL_GetError());
+            float source_width =
+                (float)(MAP_FOW_SIZE + 1) * 10000.0f / (float)MapData.region_map->zoom;
+            float source_height = source_width;
+            source_width = MIN(source_width, (float)minimap->surface->w);
+            source_height = MIN(source_height, (float)minimap->surface->h);
+            SDL_FRect source = {
+                ((float)minimap->surface->w - source_width) / 2.0f,
+                ((float)minimap->surface->h - source_height) / 2.0f,
+                source_width,
+                source_height,
+            };
+            SDL_FRect destination = {0.0f, 0.0f, (float)widget->w, (float)widget->h};
+            if (!gpu_renderer_draw_map_to(
+                    widget->surface,
+                    &source,
+                    &destination,
+                    zoom_filter_to_scale_mode(setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER)))) {
+                LOG(ERROR, "Could not compose dynamic GPU minimap: %s", SDL_GetError());
                 return;
             }
-            zoomedbox.x = zoomed->w / 2 - widget->surface->w / 2;
-            zoomedbox.y = zoomed->h / 2 - widget->surface->h / 2;
-            zoomedbox.w = widget->surface->w;
-            zoomedbox.h = widget->surface->h;
-            SDL_BlitSurface(zoomed, &zoomedbox, widget->surface, NULL);
-            SDL_DestroySurface(zoomed);
 
-            SDL_BlitSurface(minimap->textures[MINIMAP_TEXTURE_MASK], NULL, widget->surface, NULL);
-            SDL_BlitSurface(minimap->textures[MINIMAP_TEXTURE_BORDER], NULL, widget->surface, NULL);
+            surface_blit(minimap->textures[MINIMAP_TEXTURE_MASK], NULL, widget->surface, NULL);
+            surface_blit(minimap->textures[MINIMAP_TEXTURE_BORDER], NULL, widget->surface, NULL);
         }
 
         SDL_SetSurfaceColorKey(widget->surface, true, getpixel(widget->surface, 0, 0));
         SDL_SetSurfaceRLE(widget->surface, true);
+        minimap_generation_valid = true;
     }
 
     box.x = widget->x;
     box.y = widget->y;
-    SDL_BlitSurface(widget->surface, NULL, ScreenSurface, &box);
+    if (minimap_generation_valid) {
+        surface_show(OfflineRenderSurface, box.x, box.y, NULL, widget->surface);
+    }
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+void widget_minimap_draw_test(widgetdata *widget) {
+    widget_draw(widget);
+}
+
+void widget_minimap_cold_start_draw_test(widgetdata *widget) {
+    HARD_ASSERT(widget != NULL);
+    HARD_ASSERT(widget->subwidget != NULL);
+
+    minimap_widget_t *minimap = widget->subwidget;
+    minimap_type_t type = minimap->type;
+    uint8_t hidden = widget->hidden;
+    SDL_DestroySurface(widget->surface);
+    widget->surface = NULL;
+    SDL_DestroySurface(minimap->surface);
+    minimap->surface = NULL;
+    minimap_redraw_flag = 0;
+    minimap->type = MINIMAP_TYPE_DYNAMIC;
+    widget->hidden = 0;
+    widget_draw(widget);
+    widget->hidden = hidden;
+    minimap->type = type;
+}
+#endif
+
+void widget_minimap_refresh_test(widgetdata *widget) {
+    HARD_ASSERT(widget != NULL);
+    HARD_ASSERT(widget->subwidget != NULL);
+    HARD_ASSERT(widget == cur_widget[MINIMAP_ID]);
+    minimap_redraw_force();
 }
 
 /** @copydoc widgetdata::event_func */

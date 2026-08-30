@@ -20,7 +20,7 @@ from movement_benchmark_schema import RENDER_STAGES, validate_record
 
 
 EVIDENCE_SCHEMA_VERSION = 7
-NATIVE_SCHEMA_VERSION = 10
+NATIVE_SCHEMA_VERSION = 12
 SUSTAINED_P95_LIMIT_NS = 33_300_000
 LARGE_SUSTAINED_P95_LIMIT_NS = 125_000_000
 DISPLAY_REFERENCE_FPS = 144
@@ -49,8 +49,13 @@ LIGHTING_FIELDS = {
     "field_reuses",
     "field_dirty_pixels",
     "field_translations",
-    "field_translated_pixels",
-    "field_translated_bytes",
+    "field_translation_logical_pixels",
+    "field_translation_logical_bytes",
+    "field_physical_read_bytes",
+    "field_physical_written_bytes",
+    "field_physical_copied_bytes",
+    "field_physical_cleared_bytes",
+    "field_physical_uploaded_bytes",
     "field_scroll_x_pixels",
     "field_scroll_y_pixels",
     "field_translation_fallback_active",
@@ -108,6 +113,14 @@ INFORMATIONAL_OPTIMIZATION_SUFFIXES = (
 
 class BenchmarkError(RuntimeError):
     """A movement benchmark command or its JSON contract failed."""
+
+
+def require_legacy_player_view() -> None:
+    if not (Path(__file__).resolve().parents[1] / "src/client/player_view.c").is_file():
+        raise BenchmarkError(
+            "legacy player-view benchmark is unavailable on GPU-only revisions; "
+            "use the production GPU conformance harness"
+        )
 
 
 RecordValidator = Callable[[object], dict[str, object]]
@@ -539,6 +552,16 @@ def phase_summary(records: list[dict[str, object]], name: str) -> dict[str, obje
             ),
             "renderer_allocation_bytes": (
                 _median_integer([item["renderer_allocation_bytes"] for item in map_records])
+                if allocation_available
+                else 0
+            ),
+            "renderer_retained_bytes": (
+                _median_integer([item["renderer_retained_bytes"] for item in map_records])
+                if allocation_available
+                else 0
+            ),
+            "renderer_peak_retained_bytes": (
+                _median_integer([item["renderer_peak_retained_bytes"] for item in map_records])
                 if allocation_available
                 else 0
             ),
@@ -1569,7 +1592,7 @@ def _append_lighting_ab_report(
             "must not be added to these operation timings.",
             "",
             "| Viewport | Mode | Lighting work p50/p95 | Total work p95 | "
-            "Full/partial/reuse decisions | Dirty pixels (ratio) | Translated pixels/bytes | "
+            "Full/partial/reuse decisions | Dirty pixels (ratio) | Logical translated pixels/bytes | "
             "Full causes cache/active/bounds/control/other | Scroll offset X/Y |",
             "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
@@ -1589,8 +1612,8 @@ def _append_lighting_ab_report(
                 f"{summary['lighting_work_p95_ms']:.3f} ms | {summary['work_p95_ms']:.2f} ms | "
                 f"{lighting['field_full_rebuilds']}/{lighting['field_partial_rebuilds']}/"
                 f"{lighting['field_reuses']} | {dirty_pixels:,} ({dirty_ratio:.2f}%) | "
-                f"{lighting['field_translated_pixels']:,}/"
-                f"{_human_bytes(lighting['field_translated_bytes'])} | "
+                f"{lighting['field_translation_logical_pixels']:,}/"
+                f"{_human_bytes(lighting['field_translation_logical_bytes'])} | "
                 f"{lighting['field_full_rebuild_cache']}/"
                 f"{lighting['field_full_rebuild_active']}/"
                 f"{lighting['field_full_rebuild_bounds']}/"
@@ -1650,7 +1673,7 @@ def _append_lighting_ab_report(
                 f"| {level['depth']} | {mode} | {level['width']}×{level['height']} | "
                 f"{counters['field_full_rebuilds']}/{counters['field_partial_rebuilds']}/"
                 f"{counters['field_reuses']} | {ratio:.2f}% | "
-                f"{_human_bytes(counters['field_translated_bytes'])} | "
+                f"{_human_bytes(counters['field_translation_logical_bytes'])} | "
                 f"{counters['field_scroll_x_pixels']}/{counters['field_scroll_y_pixels']} px | "
                 f"{counters['field_full_rebuild_cache']}/"
                 f"{counters['field_full_rebuild_active']}/"
@@ -2585,7 +2608,8 @@ def _render_complete_evidence(
                 "local_minimap_update_interval_ms", "local_minimap_surface_width",
                 "local_minimap_surface_height",
                 "renderer_allocation_statistics_available", "renderer_allocations",
-                "renderer_allocation_bytes",
+                "renderer_allocation_bytes", "renderer_retained_bytes",
+                "renderer_peak_retained_bytes",
             },
             f"{viewport} {name} map summary",
         )
@@ -2607,7 +2631,9 @@ def _render_complete_evidence(
             raise BenchmarkError(f"invalid queue summary: {viewport} {name}")
         allocations = (
             f"{map_stats['renderer_allocations']} / "
-            f"{_human_bytes(map_stats['renderer_allocation_bytes'])}"
+            f"{_human_bytes(map_stats['renderer_allocation_bytes'])} / "
+            f"{_human_bytes(map_stats['renderer_retained_bytes'])} retained / "
+            f"{_human_bytes(map_stats['renderer_peak_retained_bytes'])} peak"
             if map_stats["renderer_allocation_statistics_available"]
             else "unavailable"
         )
@@ -2924,6 +2950,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
+        require_legacy_player_view()
         if arguments.command == "compare":
             expected_informational = (
                 arguments.comparison_note in INFORMATIONAL_COMPARISON_NOTES

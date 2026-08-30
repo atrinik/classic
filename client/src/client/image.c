@@ -510,7 +510,7 @@ static bool face_asset_loader_start(void) {
                           "./" DIRECTORY_GFX_USER,
                           gfx_installed_path,
                           cache_path,
-                          ScreenSurface != NULL ? ScreenSurface->format : SDL_PIXELFORMAT_RGBA32);
+                          SDL_PIXELFORMAT_RGBA32);
     free(cache_path);
     free(cache_marker);
     free(gfx_installed_path);

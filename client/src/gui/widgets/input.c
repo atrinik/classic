@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -99,7 +99,7 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
     if (widget->show && event->type == SDL_EVENT_KEY_DOWN) {
         input = WIDGET_INPUT(widget);
 
-        if (SDL_GetTicks() - widget->showed_ticks > 125 &&
+        if (client_ui_ticks() - widget->showed_ticks > 125 &&
             ((string_startswith(input->prepend_text, "/gettag ") &&
               keybind_command_matches_event("?GET", &event->key)) ||
              (string_startswith(input->prepend_text, "/droptag ") &&

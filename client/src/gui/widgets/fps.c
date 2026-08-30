@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -91,7 +91,7 @@ static void widget_background(widgetdata *widget, int draw) {
     tmp = widget->subwidget;
     tmp->frames++;
     tmp->frames_real += draw;
-    ticks = SDL_GetTicks();
+    ticks = client_ui_ticks();
 
     if (tmp->lasttime < ticks - 1000) {
         if (tmp->current != tmp->frames || tmp->current_real != tmp->frames_real) {
@@ -116,5 +116,5 @@ void widget_fps_init(widgetdata *widget) {
     widget->background_func = widget_background;
 
     widget->subwidget = tmp = xcalloc(1, sizeof(*tmp));
-    tmp->lasttime = SDL_GetTicks();
+    tmp->lasttime = client_ui_ticks();
 }

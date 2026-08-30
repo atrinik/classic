@@ -38,6 +38,16 @@ typedef struct map_protocol_continuation_state {
     uint16_t next;
 } map_protocol_continuation_state_t;
 
+/** Read-only routing information for one validated MAP2 envelope. */
+typedef struct map_protocol_packet_info {
+    uint8_t mapstat;
+    uint8_t x;
+    uint8_t y;
+    uint8_t sub_layer;
+    uint16_t continuation;
+    uint16_t depths;
+} map_protocol_packet_info_t;
+
 void map_protocol_continuation_reset(map_protocol_continuation_state_t *state);
 void map_protocol_continuation_begin(map_protocol_continuation_state_t *state,
                                      uint16_t count,
@@ -64,5 +74,13 @@ bool map_protocol_validate(const uint8_t *data,
                            size_t pos,
                            int map_width,
                            int map_height);
+
+/** Validate a MAP2 envelope and return side-effect-free routing metadata. */
+bool map_protocol_inspect(const uint8_t *data,
+                          size_t len,
+                          size_t pos,
+                          int map_width,
+                          int map_height,
+                          map_protocol_packet_info_t *info);
 
 #endif

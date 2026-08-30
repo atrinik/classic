@@ -42,6 +42,7 @@
  */
 
 #include <global.h>
+#include <video.h>
 #include <wrapper.h>
 #include <surface_primitives.h>
 #include <notification.h>
@@ -119,6 +120,7 @@ static widgetresize widget_event_resize = {0, NULL, 0, 0};
  *
  */
 static int IsMouseExclusive = 0;
+static bool widget_fixture_read_only;
 
 #ifdef ATRINIK_WIDGET_TESTS
 static bool widget_priority_test_mode;
@@ -147,7 +149,9 @@ static int widget_load(const char *path, uint8_t defaults, widgetdata *widgets[]
     widgetdata *widget;
     int depth, old_depth;
 
-    fp = path_fopen(path, "r");
+    /* Frozen fixture inputs are already closed, hash-verified absolute paths;
+     * never route them through the mutable user-data overlay. */
+    fp = widget_fixture_read_only ? fopen(path, "r") : path_fopen(path, "r");
 
     if (!fp) {
         return 0;
@@ -269,7 +273,7 @@ static int widget_load_layout(const char *path, widgetdata *widgets[]) {
  * Try to load the main interface file and initialize the priority list
  * On failure, initialize the widgets with init_widgets_fromDefault()
  */
-void toolkit_widget_init(void) {
+static void toolkit_widget_init_from(const char *interface_path) {
     widgetdata *widgets[100];
 
     widget_initializers[ACTIVE_EFFECTS_ID] = widget_active_effects_init;
@@ -309,12 +313,14 @@ void toolkit_widget_init(void) {
     }
 #endif
 
-    if (!widget_load("data/interface.cfg", 1, widgets)) {
-        LOG(ERROR, "Could not load widget defaults from data/interface.cfg.");
+    if (!widget_load(interface_path, 1, widgets)) {
+        LOG(ERROR, "Could not load widget defaults from '%s'.", interface_path);
         exit(1);
     }
 
-    widget_load_layout("settings/interface.cfg", widgets);
+    if (!widget_fixture_read_only) {
+        widget_load_layout("settings/interface.cfg", widgets);
+    }
 
 #ifdef ATRINIK_WIDGET_TESTS
     if (widget_priority_test_mode) {
@@ -342,6 +348,56 @@ void toolkit_widget_init(void) {
 
     widget_enforce_map_priority();
     widgets_ensure_onscreen();
+}
+
+void toolkit_widget_init(void) {
+    toolkit_widget_init_from("data/interface.cfg");
+}
+
+void toolkit_widget_fixture_init(const char *interface_path, const char *layout_path) {
+    HARD_ASSERT(interface_path != NULL);
+    HARD_ASSERT(layout_path != NULL);
+    widget_fixture_read_only = true;
+    toolkit_widget_init_from(interface_path);
+
+    /* The separately hashed saved layout gives repeated widgets their IDs,
+     * tabs, and type-specific settings. */
+    widgetdata *widgets[100];
+    if (!widget_load_layout(layout_path, widgets)) {
+        LOG(ERROR, "Could not load immutable widget fixture layout '%s'.", layout_path);
+        exit(1);
+    }
+
+    /* Materialize any singleton added after the pinned layout was authored. */
+    for (int type = 0; type < TOTAL_WIDGETS; type++) {
+        if (def_widget[type].required && cur_widget[type] == NULL) {
+            widgetdata *widget = create_widget_object(type);
+            HARD_ASSERT(widget != NULL);
+            SetPriorityWidget(widget);
+        }
+    }
+    widget_enforce_map_priority();
+    widgets_ensure_onscreen();
+}
+
+void toolkit_widget_fixture_deinit(void) {
+    kill_widgets();
+    widget_fixture_read_only = false;
+}
+
+bool toolkit_widget_fixture_is_read_only(void) {
+    return widget_fixture_read_only;
+}
+
+void toolkit_widget_fixture_show_all(void) {
+    HARD_ASSERT(widget_fixture_read_only);
+    for (size_t type = 0; type < TOTAL_SUBWIDGETS; type++) {
+        for (widgetdata *widget = cur_widget[type]; widget != NULL; widget = widget->type_next) {
+            widget->show = 1;
+            widget->hidden = 0;
+            widget->redraw = 1;
+        }
+    }
 }
 
 /** @copydoc widgetdata::menu_handle_func */
@@ -2000,6 +2056,12 @@ static void process_widgets_rec(int draw, widgetdata *widget) {
 
                     texture = texture_surface(widget->texture);
                     widget->surface = SDL_ConvertSurface(texture, texture->format);
+                    if (!gpu_renderer_canvas_register(&widget->surface)) {
+                        LOG(ERROR,
+                            "Could not create retained GPU widget target: %s",
+                            SDL_GetError());
+                        continue;
+                    }
                 }
 
                 if (widget->redraw) {
@@ -2031,7 +2093,7 @@ static void process_widgets_rec(int draw, widgetdata *widget) {
                 box.y = widget->y;
                 box.w = 0;
                 box.h = 0;
-                SDL_BlitSurface(widget->surface, NULL, ScreenSurface, &box);
+                surface_show(OfflineRenderSurface, box.x, box.y, NULL, widget->surface);
             }
 
             if (redraw != 0 && widget_render_debug) {
@@ -2043,7 +2105,7 @@ static void process_widgets_rec(int draw, widgetdata *widget) {
 
                 texture_debug =
                     texture_get(TEXTURE_TYPE_SOFTWARE, "rectangle:50,50,127;[bar=#ff66ff]");
-                surface_show_fill(ScreenSurface,
+                surface_show_fill(OfflineRenderSurface,
                                   widget->x,
                                   widget->y,
                                   NULL,
@@ -2848,7 +2910,7 @@ void menu_finalize(widgetdata *widget) {
     int xoff = 0, yoff = 0;
 
     /* Would the menu go over the maximum screen width? */
-    if (widget->x + widget->w > ScreenSurface->w) {
+    if (widget->x + widget->w > video_get_width()) {
         /* Will appear to the left of the cursor instead of right of it. */
         xoff = -widget->w;
 
@@ -2860,10 +2922,10 @@ void menu_finalize(widgetdata *widget) {
     }
 
     /* Similar checks for screen height. */
-    if (widget->y + widget->h > ScreenSurface->h) {
+    if (widget->y + widget->h > video_get_height()) {
         /* Submenu, shift it up, so all of it can appear. */
         if (widget->type_prev && widget->type_prev->sub_type == MENU_ID) {
-            yoff = ScreenSurface->h - widget->h - widget->y - 1;
+            yoff = video_get_height() - widget->h - widget->y - 1;
         } else {
             /* Will appear above the cursor. */
             yoff = -widget->h;
@@ -2880,6 +2942,19 @@ void widget_redraw_all(int widget_type_id) {
     for (widget = cur_widget[widget_type_id]; widget; widget = widget->type_next) {
         widget->redraw = 1;
     }
+}
+
+static void widget_redraw_everything_rec(widgetdata *widget) {
+    for (; widget != NULL; widget = widget->next) {
+        widget->redraw = 1;
+        if (widget->inv != NULL) {
+            widget_redraw_everything_rec(widget->inv);
+        }
+    }
+}
+
+void widget_redraw_everything(void) {
+    widget_redraw_everything_rec(widget_list_head);
 }
 
 void widget_redraw_type_id(int type, const char *id) {
@@ -2908,7 +2983,7 @@ void widget_show(widgetdata *widget, int show) {
     widget->show = show;
 
     if (show) {
-        widget->showed_ticks = SDL_GetTicks();
+        widget->showed_ticks = client_ui_ticks();
     }
 
     /* So that containers can factor in the widget's visibility */

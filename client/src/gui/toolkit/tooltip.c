@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <video.h>
 #include <surface_primitives.h>
 
 /** Tooltip's text. */
@@ -82,8 +83,8 @@ void tooltip_create(int mx, int my, font_struct *font, const char *text) {
 void tooltip_enable_delay(uint32_t delay) {
     tooltip_delay = delay;
 
-    if (tooltip_created + delay < SDL_GetTicks()) {
-        tooltip_created = SDL_GetTicks();
+    if (tooltip_created + delay < client_ui_ticks()) {
+        tooltip_created = client_ui_ticks();
     }
 }
 
@@ -134,12 +135,12 @@ void tooltip_show(void) {
     }
 
     if (tooltip_delay) {
-        if (SDL_GetTicks() - tooltip_created < tooltip_delay) {
+        if (client_ui_ticks() - tooltip_created < tooltip_delay) {
             tooltip_opacity = 0;
             return;
         }
 
-        tooltip_created = SDL_GetTicks() + tooltip_delay;
+        tooltip_created = client_ui_ticks() + tooltip_delay;
     } else {
         tooltip_opacity = 255;
     }
@@ -164,15 +165,15 @@ void tooltip_show(void) {
 
     /* Push the tooltip to the left if it would go beyond maximum screen
      * size. */
-    if (box.x + box.w >= ScreenSurface->w) {
-        box.x -= (box.x + box.w + 1) - ScreenSurface->w;
+    if (box.x + box.w >= video_get_width()) {
+        box.x -= (box.x + box.w + 1) - video_get_width();
     }
 
-    if (box.y + box.h >= ScreenSurface->h) {
-        box.y -= (box.y + box.h + 1) - ScreenSurface->h;
+    if (box.y + box.h >= video_get_height()) {
+        box.y -= (box.y + box.h + 1) - video_get_height();
     }
 
-    boxRGBA(ScreenSurface,
+    boxRGBA(OfflineRenderSurface,
             box.x,
             box.y,
             box.x + box.w,
@@ -181,16 +182,15 @@ void tooltip_show(void) {
             255,
             255,
             tooltip_opacity);
-    text_show_format(ScreenSurface,
-                     tooltip_font,
-                     box.x + 3,
-                     box.y,
-                     COLOR_BLACK,
-                     TEXT_MARKUP | TEXT_WORD_WRAP,
-                     &text_box,
-                     "[alpha=%d]%s[/alpha]",
-                     tooltip_opacity,
-                     tooltip_text);
+    text_show_format_root(tooltip_font,
+                          box.x + 3,
+                          box.y,
+                          COLOR_BLACK,
+                          TEXT_MARKUP | TEXT_WORD_WRAP,
+                          &text_box,
+                          "[alpha=%d]%s[/alpha]",
+                          tooltip_opacity,
+                          tooltip_text);
 
     if (tooltip_delay) {
         tooltip_opacity = MIN(255, tooltip_opacity + 25);

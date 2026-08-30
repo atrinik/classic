@@ -55,6 +55,14 @@ fi
 mkdir -p "${output_directory}"
 
 dependency_arguments=()
+shader_directory=${ATRINIK_GPU_SHADER_DIRECTORY:-}
+if [[ -n ${shader_directory} ]]; then
+  if [[ ! -d ${shader_directory} || -L ${shader_directory} ]]; then
+    echo "ATRINIK_GPU_SHADER_DIRECTORY does not identify a regular directory" >&2
+    exit 1
+  fi
+  dependency_arguments+=("-DATRINIK_GPU_SHADER_DIRECTORY=${shader_directory}")
+fi
 discord_config_file=${ATRINIK_DISCORD_APPLICATION_ID_FILE:-}
 if [[ -n ${ATRINIK_DISCORD_APPLICATION_ID_FILE:-} ]]; then
   if [[ ! -f ${ATRINIK_DISCORD_APPLICATION_ID_FILE} ]]; then
@@ -74,7 +82,7 @@ fi
 "${mxe_cmake}" -S . -B build/windows-release -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE="${MXE_TOOLCHAIN_FILE}" \
-  -DBUILD_TESTING=ON \
+  -DBUILD_TESTING=OFF \
   -DPACKAGE_TYPE=zip \
   -DATRINIK_PACKAGE_VERSION="${version}" \
   -DATRINIK_WINDOWS_RUNTIME_DIR="${MXE_RUNTIME_DIR}" \
@@ -82,6 +90,21 @@ fi
   "-DATRINIK_DISCORD_APPLICATION_ID_FILE=${discord_config_file}" \
   "${dependency_arguments[@]}"
 cmake --build build/windows-release --parallel "$(nproc)"
+
+mapfile -t production_executables < <(
+  find build/windows-release -maxdepth 3 -type f -name atrinik.exe -print
+)
+if [[ ${#production_executables[@]} -ne 1 ]]; then
+  echo "Expected exactly one Windows production executable, found ${#production_executables[@]}" >&2
+  exit 1
+fi
+for test_marker in '--gpu-player-view' 'injected GPU conformance fault'; do
+  if LC_ALL=C grep -aFq -- "${test_marker}" "${production_executables[0]}"; then
+    echo "Windows production executable contains test-only marker: ${test_marker}" >&2
+    exit 1
+  fi
+done
+
 cpack --config build/windows-release/CPackConfig.cmake \
   -G ZIP -B "${output_directory}"
 

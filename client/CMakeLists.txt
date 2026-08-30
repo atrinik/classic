@@ -22,6 +22,124 @@ endif ()
 
 include(CTest)
 include(FetchContent)
+find_package(Python3 3.11 COMPONENTS Interpreter REQUIRED)
+
+option(ATRINIK_GPU_CONFORMANCE_REQUIRED
+    "Require a runnable supported GPU for the production conformance test" OFF)
+
+set(ATRINIK_GPU_SHADER_DIRECTORY "" CACHE PATH
+    "Optional directory containing a pre-generated, validated GPU shader cohort")
+set(ATRINIK_DXC_EXECUTABLE "" CACHE FILEPATH
+    "DirectX Shader Compiler used to generate GPU shaders")
+set(ATRINIK_SPIRV_CROSS_EXECUTABLE "" CACHE FILEPATH
+    "SPIRV-Cross executable used to generate Metal shaders")
+set(ATRINIK_DXC_LIBRARY_DIRECTORY "" CACHE PATH
+    "Optional directory containing the DXC shared libraries")
+set(ATRINIK_GPU_SHADER_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/SHA256SUMS")
+set(ATRINIK_GPU_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/src/include/gpu_shader_data.h")
+file(SHA256 "${ATRINIK_GPU_SHADER_MANIFEST}" ATRINIK_GPU_SHADER_COHORT)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${ATRINIK_GPU_SHADER_MANIFEST}")
+set(ATRINIK_GPU_SHADER_NAMES
+    final_fragment final_vertex
+    light_fragment light_vertex
+    world_fragment world_vertex)
+set(ATRINIK_GPU_SHADER_ARTIFACTS)
+foreach (name IN LISTS ATRINIK_GPU_SHADER_NAMES)
+    foreach (extension IN ITEMS dxil msl spv)
+        list(APPEND ATRINIK_GPU_SHADER_ARTIFACTS "${name}.${extension}")
+    endforeach ()
+endforeach ()
+
+if (ATRINIK_GPU_SHADER_DIRECTORY)
+    get_filename_component(ATRINIK_GPU_SHADER_DIRECTORY
+        "${ATRINIK_GPU_SHADER_DIRECTORY}" ABSOLUTE)
+    set(ATRINIK_GPU_SHADER_OUTPUTS)
+    foreach (artifact IN LISTS ATRINIK_GPU_SHADER_ARTIFACTS)
+        list(APPEND ATRINIK_GPU_SHADER_OUTPUTS
+            "${ATRINIK_GPU_SHADER_DIRECTORY}/${artifact}")
+    endforeach ()
+    list(APPEND ATRINIK_GPU_SHADER_OUTPUTS
+        "${ATRINIK_GPU_SHADER_DIRECTORY}/SHA256SUMS")
+else ()
+    set(ATRINIK_GPU_SHADER_DIRECTORY
+        "${CMAKE_CURRENT_BINARY_DIR}/shaders/generated")
+    if (NOT ATRINIK_DXC_EXECUTABLE)
+        find_program(ATRINIK_DXC_DISCOVERED_EXECUTABLE NAMES dxc
+            HINTS "${CMAKE_CURRENT_SOURCE_DIR}/build/gpu-shader-toolchain/dxc/bin")
+        set(ATRINIK_DXC_EXECUTABLE "${ATRINIK_DXC_DISCOVERED_EXECUTABLE}"
+            CACHE FILEPATH "DirectX Shader Compiler used to generate GPU shaders" FORCE)
+    endif ()
+    if (NOT ATRINIK_SPIRV_CROSS_EXECUTABLE)
+        find_program(ATRINIK_SPIRV_CROSS_DISCOVERED_EXECUTABLE NAMES spirv-cross
+            HINTS "${CMAKE_CURRENT_SOURCE_DIR}/build/gpu-shader-toolchain/spirv-cross/bin")
+        set(ATRINIK_SPIRV_CROSS_EXECUTABLE
+            "${ATRINIK_SPIRV_CROSS_DISCOVERED_EXECUTABLE}" CACHE FILEPATH
+            "SPIRV-Cross executable used to generate Metal shaders" FORCE)
+    endif ()
+    if (NOT ATRINIK_DXC_EXECUTABLE OR NOT ATRINIK_SPIRV_CROSS_EXECUTABLE)
+        message(FATAL_ERROR
+            "GPU shader build tools are unavailable. Install dxc and spirv-cross, "
+            "run client/tools/prepare_gpu_shader_toolchain.py, or set "
+            "ATRINIK_GPU_SHADER_DIRECTORY to a generated cohort.")
+    endif ()
+    if (NOT ATRINIK_DXC_LIBRARY_DIRECTORY AND
+            EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/build/gpu-shader-toolchain/dxc/lib")
+        set(ATRINIK_DXC_LIBRARY_DIRECTORY
+            "${CMAKE_CURRENT_SOURCE_DIR}/build/gpu-shader-toolchain/dxc/lib")
+    endif ()
+    set(ATRINIK_GPU_SHADER_OUTPUTS)
+    foreach (artifact IN LISTS ATRINIK_GPU_SHADER_ARTIFACTS)
+        list(APPEND ATRINIK_GPU_SHADER_OUTPUTS
+            "${ATRINIK_GPU_SHADER_DIRECTORY}/${artifact}")
+    endforeach ()
+    list(APPEND ATRINIK_GPU_SHADER_OUTPUTS
+        "${ATRINIK_GPU_SHADER_DIRECTORY}/SHA256SUMS")
+    set(ATRINIK_GPU_SHADER_GENERATOR_COMMAND)
+    if (ATRINIK_DXC_LIBRARY_DIRECTORY)
+        if (APPLE)
+            list(APPEND ATRINIK_GPU_SHADER_GENERATOR_COMMAND
+                "${CMAKE_COMMAND}" -E env
+                "DYLD_LIBRARY_PATH=${ATRINIK_DXC_LIBRARY_DIRECTORY}:$ENV{DYLD_LIBRARY_PATH}")
+        elseif (UNIX)
+            list(APPEND ATRINIK_GPU_SHADER_GENERATOR_COMMAND
+                "${CMAKE_COMMAND}" -E env
+                "LD_LIBRARY_PATH=${ATRINIK_DXC_LIBRARY_DIRECTORY}:$ENV{LD_LIBRARY_PATH}")
+        endif ()
+    endif ()
+    list(APPEND ATRINIK_GPU_SHADER_GENERATOR_COMMAND
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_gpu_shaders.sh"
+        "${ATRINIK_DXC_EXECUTABLE}"
+        "${ATRINIK_SPIRV_CROSS_EXECUTABLE}"
+        "${ATRINIK_GPU_SHADER_DIRECTORY}")
+    add_custom_command(
+        OUTPUT ${ATRINIK_GPU_SHADER_OUTPUTS}
+        COMMAND ${ATRINIK_GPU_SHADER_GENERATOR_COMMAND}
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/map.hlsl"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_gpu_shaders.sh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/write_gpu_shader_manifest.py"
+            "${ATRINIK_DXC_EXECUTABLE}"
+            "${ATRINIK_SPIRV_CROSS_EXECUTABLE}"
+        COMMENT "Compiling Atrinik GPU shaders"
+        VERBATIM)
+endif ()
+
+add_custom_command(
+    OUTPUT "${ATRINIK_GPU_SHADER_HEADER}"
+    COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_gpu_shaders.py"
+        --input "${ATRINIK_GPU_SHADER_DIRECTORY}"
+        --manifest "${ATRINIK_GPU_SHADER_MANIFEST}"
+        --output "${ATRINIK_GPU_SHADER_HEADER}"
+    DEPENDS
+        ${ATRINIK_GPU_SHADER_OUTPUTS}
+        "${ATRINIK_GPU_SHADER_MANIFEST}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_gpu_shaders.py"
+    COMMENT "Embedding validated Atrinik GPU shaders"
+    VERBATIM)
+add_custom_target(atrinik-gpu-shaders DEPENDS "${ATRINIK_GPU_SHADER_HEADER}")
 
 function(atrinik_find_root_document output filename)
     file(REAL_PATH "${CMAKE_CURRENT_LIST_FILE}" ATRINIK_REAL_CMAKE_FILE)
@@ -240,6 +358,7 @@ set(HAVE_SDL_TTF true)
 
 # LibXML2 is required.
 find_package(LibXml2 REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 # Sound effects and music are core client functionality on every platform.
 find_package(SDL3_mixer 3.2.4 CONFIG REQUIRED)
@@ -259,11 +378,14 @@ endif ()
 
 # Compile the sources into an executable.
 add_executable(${EXECUTABLE} WIN32 ${SOURCES})
+add_dependencies(${EXECUTABLE} atrinik-gpu-shaders)
 atrinik_configure_target(${EXECUTABLE})
 if (ATRINIK_CLIENT_ENABLE_PRECOMPILED_HEADERS)
     target_precompile_headers(${EXECUTABLE} PRIVATE src/include/global.h)
 endif ()
-target_compile_definitions(${EXECUTABLE} PRIVATE SDL_DISABLE_OLD_NAMES)
+target_compile_definitions(${EXECUTABLE} PRIVATE
+    "ATRINIK_GPU_SHADER_COHORT=\"${ATRINIK_GPU_SHADER_COHORT}\""
+    SDL_DISABLE_OLD_NAMES)
 target_include_directories(${EXECUTABLE} BEFORE PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/src/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src/include
@@ -278,6 +400,9 @@ target_link_libraries(${EXECUTABLE} PRIVATE
     SDL3::SDL3
     SDL3_image::SDL3_image
     SDL3_ttf::SDL3_ttf)
+if (WIN32)
+    target_link_libraries(${EXECUTABLE} PRIVATE d3d12 dxgi dxguid)
+endif ()
 if (TARGET LibXml2::LibXml2)
     target_link_libraries(${EXECUTABLE} PRIVATE LibXml2::LibXml2)
 else ()
@@ -307,7 +432,7 @@ if (MINGW)
 endif ()
 
 if (BUILD_TESTING)
-    find_program(ATRINIK_PYTHON3_EXECUTABLE python3 REQUIRED)
+    set(ATRINIK_PYTHON3_EXECUTABLE "${Python3_EXECUTABLE}")
 
     add_executable(client-audio-log-tests
         src/tests/audio_log.c
@@ -383,10 +508,52 @@ if (BUILD_TESTING)
     add_test(NAME client-rich-presence COMMAND client-rich-presence-tests)
     set_tests_properties(client-rich-presence PROPERTIES TIMEOUT 10)
 
+    add_executable(client-gpu-renderer-integration-tests
+        src/tests/gpu_renderer_integration.c
+        src/client/gpu_renderer.c
+        src/client/gpu_map_renderer.c
+        src/client/lighting_transfer.c)
+    add_dependencies(client-gpu-renderer-integration-tests atrinik-gpu-shaders)
+    atrinik_configure_target(client-gpu-renderer-integration-tests)
+    target_compile_definitions(client-gpu-renderer-integration-tests PRIVATE
+        ATRINIK_GPU_CONFORMANCE_TESTS
+        "ATRINIK_GPU_SHADER_COHORT=\"${ATRINIK_GPU_SHADER_COHORT}\""
+        SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-gpu-renderer-integration-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-gpu-renderer-integration-tests PRIVATE
+        Atrinik::Core
+        OpenSSL::Crypto
+        SDL3::SDL3)
+    if (WIN32)
+        target_link_libraries(client-gpu-renderer-integration-tests PRIVATE
+            d3d12
+            dxgi
+            dxguid)
+    endif ()
+    add_test(NAME client-gpu-renderer-integration
+        COMMAND client-gpu-renderer-integration-tests)
+    if (ATRINIK_GPU_CONFORMANCE_REQUIRED)
+        set_tests_properties(client-gpu-renderer-integration PROPERTIES
+            ENVIRONMENT "ATRINIK_GPU_CONFORMANCE_REQUIRED=1"
+            LABELS gpu-conformance)
+    else ()
+        set_tests_properties(client-gpu-renderer-integration PROPERTIES
+            LABELS gpu-conformance
+            SKIP_RETURN_CODE 77)
+    endif ()
+
+    # The production GPU replay and its semantic assertions are portable and
+    # must compile on every supported backend, including MinGW/D3D12 runners.
+    target_compile_definitions(${EXECUTABLE} PRIVATE
+        ATRINIK_GPU_CONFORMANCE_TESTS
+        ATRINIK_WIDGET_TESTS)
+
     if (NOT MINGW)
-        target_compile_definitions(${EXECUTABLE} PRIVATE
-            ATRINIK_SOUND_TESTS
-            ATRINIK_WIDGET_TESTS)
+        target_compile_definitions(${EXECUTABLE} PRIVATE ATRINIK_SOUND_TESTS)
 
         add_test(NAME client-sound
             COMMAND atrinik --sound-test
@@ -770,6 +937,19 @@ if (BUILD_TESTING)
         SDL3_ttf::SDL3_ttf)
     add_test(NAME client-render-profiler COMMAND client-render-profiler-tests)
 
+    add_executable(client-gpu-renderer-tests
+        src/tests/gpu_renderer.c
+        src/client/gpu_renderer.c)
+    atrinik_configure_target(client-gpu-renderer-tests)
+    target_compile_definitions(client-gpu-renderer-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-gpu-renderer-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-gpu-renderer-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-gpu-renderer COMMAND client-gpu-renderer-tests)
+
     add_executable(client-map-light-state-tests src/tests/map_light_state.c)
     atrinik_configure_target(client-map-light-state-tests)
     target_compile_definitions(client-map-light-state-tests PRIVATE SDL_DISABLE_OLD_NAMES)
@@ -822,234 +1002,35 @@ if (BUILD_TESTING)
     set_tests_properties(client-widget-priority-integration PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
-    set(player_view_fixtures
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/player_view")
-    add_test(NAME client-player-view-smooth
-        COMMAND atrinik --player-view "${player_view_fixtures}/smooth.xml" -)
-    add_test(NAME client-player-view-smooth-player-sublayer
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/smooth-player-sublayer-1.xml" -)
-    add_test(NAME client-player-view-discrete
-        COMMAND atrinik --player-view "${player_view_fixtures}/discrete.xml" -)
-    add_test(NAME client-player-view-radial-light-smooth
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/radial-light-smooth.xml" -)
-    add_test(NAME client-player-view-radial-light-discrete
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/radial-light-discrete.xml" -)
-    add_test(NAME client-player-view-exit-cues
-        COMMAND atrinik --player-view "${player_view_fixtures}/exit-cues.xml" -)
-    add_test(NAME client-player-view-player-outline-unobscured
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/player-outline-unobscured.xml" -)
-    add_test(NAME client-player-view-player-outline-same-level
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/player-outline-same-level.xml" -)
-    add_test(NAME client-player-view-player-outline-upper-level
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/player-outline-upper-level.xml" -)
-    add_test(NAME client-player-view-player-outline-nearby-living
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/player-outline-nearby-living.xml" -)
-    add_test(NAME client-player-view-player-outline-non-primary
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/player-outline-non-primary.xml" -)
-    add_test(NAME client-player-view-player-outline-widget-state
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/player-outline-widget-state.xml" -)
-    add_test(NAME client-player-view-map-overlay-widget-state
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/map-overlay-widget-state.xml" -)
-    add_test(NAME client-player-view-map-overlay-linked-depth
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/map-overlay-linked-depth.xml" -)
-    add_test(NAME client-player-view-map-overlay-elevated
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/map-overlay-elevated.xml" -)
-    add_test(NAME client-player-view-zoom-filter-off
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/zoom-filter-off.xml" -)
-    add_test(NAME client-player-view-zoom-filter-pixelart
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/zoom-filter-pixelart.xml" -)
-    add_test(NAME client-player-view-zoom-filter-linear
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/zoom-filter-linear.xml" -)
-    add_test(NAME client-player-view-living-outline-unobscured
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-unobscured.xml" -)
-    add_test(NAME client-player-view-living-outline-same-level
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-same-level.xml" -)
-    add_test(NAME client-player-view-living-outline-upper-level
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-upper-level.xml" -)
-    add_test(NAME client-player-view-living-outline-nearby-wall
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-nearby-wall.xml" -)
-    add_test(NAME client-player-view-living-outline-translucent
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-translucent.xml" -)
-    add_test(NAME client-player-view-living-outline-double
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-double.xml" -)
-    add_test(NAME client-player-view-living-outline-dark-actor
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-dark-actor.xml" -)
-    add_test(NAME client-player-view-living-outline-dark-wall
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-dark-wall.xml" -)
-    add_test(NAME client-player-view-living-outline-multiple
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-multiple.xml" -)
-    add_test(NAME client-player-view-living-outline-crowded
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-crowded.xml" -)
-    add_test(NAME client-player-view-living-outline-crowded-unobscured
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-crowded-unobscured.xml" -)
-    add_test(NAME client-player-view-living-outline-retained-fow
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/living-outline-retained-fow.xml" -)
-    add_test(NAME client-player-view-visibility-fades
-        COMMAND atrinik --player-view
-            "${player_view_fixtures}/visibility-fade-centered.xml" -)
-    add_test(NAME client-player-view-movement-benchmark-smooth
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/movement-colored.xml"
-            standard)
-    add_test(NAME client-player-view-movement-benchmark-discrete
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/movement-colored-discrete.xml"
-            standard)
-    add_test(NAME client-player-view-movement-benchmark-brynknot
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/brynknot-movement.xml"
-            brynknot)
-    add_test(NAME client-player-view-movement-benchmark-smooth-large
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/movement-colored.xml"
-            large)
-    add_test(NAME client-player-view-movement-benchmark-discrete-large
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/movement-colored-discrete.xml"
-            large)
-    add_test(NAME client-player-view-cursor-benchmark-smooth
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_cursor_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/dense-cursor.xml"
-            standard)
-    add_test(NAME client-player-view-cursor-benchmark-discrete
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_cursor_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/dense-cursor-discrete.xml"
-            standard)
-    add_test(NAME client-player-view-cursor-benchmark-smooth-large
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_cursor_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/dense-cursor.xml"
-            large)
-    add_test(NAME client-player-view-cursor-benchmark-discrete-large
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_cursor_benchmark.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/dense-cursor-discrete.xml"
-            large)
-    add_test(NAME client-player-view-movement-fault-injection
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_fault_injection.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/colored-smooth.xml"
-            "${player_view_fixtures}/movement-colored.xml")
-    add_test(NAME client-player-view-movement-brynknot-fault-injection
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_fault_injection.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/colored-smooth.xml"
-            "${player_view_fixtures}/brynknot-movement.xml"
-            brynknot)
-    add_test(NAME client-player-view-movement-probe-control
-        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_movement_probe_control.py"
-            "$<TARGET_FILE:atrinik>"
-            "${player_view_fixtures}/movement-lighting-isolated.xml")
-    set_tests_properties(
-        client-player-view-movement-benchmark-smooth
-        client-player-view-movement-benchmark-discrete
-        client-player-view-movement-benchmark-brynknot
-        client-player-view-cursor-benchmark-smooth
-        client-player-view-cursor-benchmark-discrete
-        PROPERTIES
-        LABELS "performance;standard-performance"
-        TIMEOUT 420)
-    set_tests_properties(
-        client-player-view-movement-benchmark-smooth-large
-        client-player-view-movement-benchmark-discrete-large
-        client-player-view-cursor-benchmark-smooth-large
-        client-player-view-cursor-benchmark-discrete-large
-        PROPERTIES
-        LABELS "performance;long-performance"
-        TIMEOUT 1900)
-    set_tests_properties(client-player-view-movement-benchmark-brynknot PROPERTIES
-        LABELS "performance;long-performance"
-        TIMEOUT 1900)
-    set_tests_properties(client-player-view-movement-fault-injection PROPERTIES
-        LABELS fault-injection
-        TIMEOUT 75)
-    set_tests_properties(client-player-view-movement-brynknot-fault-injection PROPERTIES
-        LABELS fault-injection
-        TIMEOUT 75)
-    set_tests_properties(client-player-view-movement-probe-control PROPERTIES
-        LABELS "performance;standard-performance"
-        TIMEOUT 420)
-    add_test(NAME client-player-view-colored-smooth
-        COMMAND atrinik --player-view "${player_view_fixtures}/colored-smooth.xml" -)
-    add_test(NAME client-player-view-colored-discrete
-        COMMAND atrinik --player-view "${player_view_fixtures}/colored-discrete.xml" -)
-    add_test(NAME client-player-view-timed-light
-        COMMAND atrinik --player-view "${player_view_fixtures}/timed-light.xml" -)
-    add_test(NAME client-player-view-high-key-smooth
-        COMMAND atrinik --player-view "${player_view_fixtures}/high-key-smooth.xml" -)
-    add_test(NAME client-player-view-high-key-discrete
-        COMMAND atrinik --player-view "${player_view_fixtures}/high-key-discrete.xml" -)
-    add_test(NAME client-player-view-output
-        COMMAND ${CMAKE_COMMAND}
-            "-DATRINIK_CLIENT=$<TARGET_FILE:atrinik>"
-            "-DPLAYER_VIEW_MANIFEST=${player_view_fixtures}/smooth.xml"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_player_view.cmake")
-    add_test(NAME client-player-view-malformed-snapshot
-        COMMAND atrinik --player-view "${player_view_fixtures}/malformed.xml" -)
-    add_test(NAME client-player-view-mismatched-asset
-        COMMAND atrinik --player-view "${player_view_fixtures}/mismatched-asset.xml" -)
-    add_test(NAME client-player-view-missing-face
-        COMMAND atrinik --player-view "${player_view_fixtures}/missing-face.xml" -)
-    add_test(NAME client-player-view-unknown-field
-        COMMAND atrinik --player-view "${player_view_fixtures}/unknown-field.xml" -)
-    add_test(NAME client-player-view-invalid-animation-depth
-        COMMAND ${CMAKE_COMMAND}
-            "-DATRINIK_CLIENT=$<TARGET_FILE:atrinik>"
-            "-DPLAYER_VIEW_MANIFEST=${player_view_fixtures}/invalid-animation-depth.xml"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_player_view_manifest_rejected.cmake")
-    set_tests_properties(
-        client-player-view-malformed-snapshot
-        client-player-view-mismatched-asset
-        client-player-view-missing-face
-        client-player-view-unknown-field
-        PROPERTIES WILL_FAIL TRUE)
+    add_test(NAME client-map-state-integration COMMAND atrinik --map-state-test)
+
     endif ()
+
+    set(gpu_player_view_fixtures
+        smooth
+        radial-light-smooth
+        exit-cues
+        living-outline-translucent
+        living-outline-retained-fow
+        timed-light
+        map-overlay-linked-depth
+        map-overlay-widget-state
+        map-overlay-elevated
+        visibility-fade-centered
+        brynknot-movement
+        gpu-qualification-town-25x25
+        gpu-ui-closure)
+    foreach (fixture IN LISTS gpu_player_view_fixtures)
+        add_test(NAME client-gpu-player-view-${fixture}
+            COMMAND atrinik --gpu-player-view
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/player_view/${fixture}.xml")
+        set_tests_properties(client-gpu-player-view-${fixture} PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            ENVIRONMENT "SDL_VIDEODRIVER=offscreen"
+            LABELS "gpu-conformance;production-fixture"
+            SKIP_RETURN_CODE 77
+            TIMEOUT 60)
+    endforeach ()
 endif ()
 
 # Installer.

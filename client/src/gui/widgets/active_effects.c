@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -49,13 +49,13 @@ static void widget_draw(widgetdata *widget) {
 
     tmp = widget->subwidget;
 
-    if (SDL_GetTicks() - tmp->update_ticks > 1000) {
+    if (client_ui_ticks() - tmp->update_ticks > 1000) {
         uint8_t redraw;
         int sec;
 
         redraw = 0;
-        sec = (SDL_GetTicks() - tmp->update_ticks) / 1000;
-        tmp->update_ticks = SDL_GetTicks();
+        sec = (client_ui_ticks() - tmp->update_ticks) / 1000;
+        tmp->update_ticks = client_ui_ticks();
 
         redraw = active_effects_model_tick(sec);
 
@@ -75,6 +75,10 @@ static void widget_draw(widgetdata *widget) {
                                              0,
                                              0,
                                              0);
+        if (!gpu_renderer_canvas_register(&widget->surface)) {
+            LOG(ERROR, "Could not create retained GPU active-effects target: %s", SDL_GetError());
+            return;
+        }
         SDL_SetSurfaceColorKey(widget->surface, true, 0);
         SDL_SetSurfaceRLE(widget->surface, true);
     }
@@ -85,7 +89,7 @@ static void widget_draw(widgetdata *widget) {
 
         x = y = 0;
 
-        SDL_FillSurfaceRect(widget->surface, NULL, 0);
+        surface_fill_rect(widget->surface, NULL, 0);
 
         for (status = active_effects_model_rows(); status != NULL; status = status->next) {
             sprite = image_get_sprite(status->face);
@@ -140,7 +144,7 @@ static void widget_draw(widgetdata *widget) {
 
     box.x = widget->x;
     box.y = widget->y;
-    SDL_BlitSurface(widget->surface, NULL, ScreenSurface, &box);
+    surface_show(OfflineRenderSurface, box.x, box.y, NULL, widget->surface);
 }
 
 /** @copydoc widgetdata::event_func */
