@@ -93,14 +93,18 @@ static bool exit_is_dynamic(const object *op) {
  * Exit to find a connected exit for.
  * @param do_load
  * If true, will load maps if necessary.
+ * @param altern_capacity
+ * Number of elements available in altern.
  * @return
  * Connected exit if found, NULL otherwise.
  */
-static size_t exit_find_candidates(object *op, bool do_load, object **altern) {
+static size_t
+exit_find_candidates(object *op, bool do_load, object **altern, size_t altern_capacity) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(altern != NULL);
+    HARD_ASSERT(altern_capacity > 0);
 
-    int nrofalt = 0;
+    size_t nrofalt = 0;
 
     /* Find all other teleporters within range. This range should really
      * be settable by some object attribute instead of using hard coded
@@ -127,11 +131,11 @@ static size_t exit_find_candidates(object *op, bool do_load, object **altern) {
 
             FOR_MAP_PREPARE(m, x, y, tmp) {
                 if (tmp->type == op->type && tmp->sub_type == op->sub_type) {
-                    /* Assumes altern can hold at least one element */
+                    /* Assumes altern has enough capacity for one element. */
                     altern[nrofalt++] = tmp;
 
                     /* Reached the maximum, no point in going on. */
-                    if (nrofalt == arraysize(altern)) {
+                    if (nrofalt == altern_capacity) {
                         goto loop_exit;
                     }
                 }
@@ -151,7 +155,7 @@ loop_exit:
  */
 static object *exit_find(object *op, bool do_load) {
     object *altern[20];
-    size_t nrofalt = exit_find_candidates(op, do_load, altern);
+    size_t nrofalt = exit_find_candidates(op, do_load, altern, arraysize(altern));
 
     if (nrofalt == 0) {
         return NULL;
@@ -163,7 +167,7 @@ static object *exit_find(object *op, bool do_load) {
 /** Find the first statically enterable automatic-link peer. */
 static object *exit_find_static(object *op, bool do_load, object **fallback) {
     object *altern[20];
-    size_t nrofalt = exit_find_candidates(op, do_load, altern);
+    size_t nrofalt = exit_find_candidates(op, do_load, altern, arraysize(altern));
 
     if (fallback != NULL) {
         *fallback = NULL;
