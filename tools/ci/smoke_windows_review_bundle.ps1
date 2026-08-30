@@ -146,16 +146,58 @@ try {
     }
 
     $remainderTask = $process.StandardOutput.ReadToEndAsync()
-    $process.StandardInput.WriteLine("shutdown")
-    $process.StandardInput.Flush()
-    if (-not $process.WaitForExit(30000)) {
-        throw "Flat review-bundle server did not shut down within 30 seconds"
+    $shutdownDeadline = [System.DateTime]::UtcNow.AddSeconds(30)
+    $shutdownAttempts = 0
+    while (-not $process.HasExited -and [System.DateTime]::UtcNow -lt $shutdownDeadline) {
+        $shutdownAttempts++
+        try {
+            $process.StandardInput.WriteLine("shutdown")
+            $process.StandardInput.Flush()
+        } catch {
+            if (-not $process.HasExited) {
+                throw
+            }
+            break
+        }
+        if ($process.WaitForExit(1000)) {
+            break
+        }
+    }
+    $shutdownTimedOut = -not $process.HasExited
+    $process.StandardInput.Close()
+    if ($shutdownTimedOut) {
+        try {
+            $process.Kill($true)
+        } catch {
+            if (-not $process.HasExited) {
+                throw
+            }
+        }
+        if (-not $process.WaitForExit(10000)) {
+            throw "Flat review-bundle server process tree did not exit after forced containment"
+        }
     }
     if (-not $remainderTask.Wait(10000) -or -not $errorTask.Wait(10000)) {
         throw "Flat review-bundle server output did not close"
     }
+    $remainder = $remainderTask.Result
+    if ($remainder) {
+        $lines.Add($remainder)
+        Write-Host $remainder
+    }
+    $errorOutput = $errorTask.Result
+    $output = $lines -join "`n"
+    if ($errorOutput) {
+        $output += "`nSTDERR:`n$errorOutput"
+    }
+    if ($shutdownTimedOut) {
+        throw (
+            "Flat review-bundle server did not shut down after $shutdownAttempts " +
+            "graceful attempts within 30 seconds:`n$output"
+        )
+    }
     if ($process.ExitCode -ne 0) {
-        throw "Flat review-bundle server exited with code $($process.ExitCode)"
+        throw "Flat review-bundle server exited with code $($process.ExitCode):`n$output"
     }
     $bodySucceeded = $true
 } finally {

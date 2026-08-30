@@ -1228,6 +1228,24 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("Get-NetUDPEndpoint -LocalPort $serverPort", review_smoke)
         self.assertIn("$_.OwningProcess -eq $process.Id", review_smoke)
         self.assertIn('"atrinik-server.exe"', review_smoke)
+        review_shutdown_loop = review_smoke[
+            review_smoke.index("$shutdownDeadline =") : review_smoke.index(
+                'if ($process.ExitCode -ne 0)',
+                review_smoke.index("$shutdownDeadline ="),
+            )
+        ]
+        self.assertIn("AddSeconds(30)", review_shutdown_loop)
+        self.assertIn("while (-not $process.HasExited", review_shutdown_loop)
+        self.assertIn('$process.StandardInput.WriteLine("shutdown")', review_shutdown_loop)
+        self.assertIn("$process.WaitForExit(1000)", review_shutdown_loop)
+        self.assertIn("$shutdownTimedOut", review_shutdown_loop)
+        self.assertIn("$process.Kill($true)", review_shutdown_loop)
+        self.assertLess(
+            review_smoke.index("$remainderTask.Result"),
+            review_smoke.index(
+                '"Flat review-bundle server did not shut down after $shutdownAttempts "'
+            ),
+        )
         self.assertIn('"atrinik-classic-server-*-windows-x86_64.zip"', run)
         self.assertIn('"smoke_windows_server_package.ps1"', run)
         smoke = (ROOT / "tools" / "ci" / "smoke_windows_server_package.ps1").read_text(
