@@ -1582,8 +1582,10 @@ class WorkflowContractTests(unittest.TestCase):
             "COVERAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
             workflow,
         )
-        self.assertIn("commit: ${{ env.COVERAGE_SHA }}", client)
-        self.assertIn("commit: ${{ env.COVERAGE_SHA }}", gpu_coverage_job)
+        self.assertIn("override_commit: ${{ env.COVERAGE_SHA }}", server)
+        self.assertIn("override_commit: ${{ env.COVERAGE_SHA }}", client)
+        self.assertIn("override_commit: ${{ env.COVERAGE_SHA }}", gpu_coverage_job)
+        self.assertNotIn("\n          commit:", workflow)
         self.assertIn('"sha=${COVERAGE_SHA}"', gpu_coverage_job)
         self.assertNotIn('"sha=${GITHUB_SHA}"', gpu_coverage_job)
         client_readme = (ROOT / "client" / "README.md").read_text(encoding="utf-8")
