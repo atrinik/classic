@@ -5321,7 +5321,10 @@ map_lighting_diagnostic_emit_grid(int radius, int depth, int sub_layer, bool smo
 
 void map_lighting_diagnostic_command(const char *params) {
     const char *cursor = map_lighting_diagnostic_skip_space(params != NULL ? params : "");
-    bool smooth_lighting = setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0;
+    /* The command is normally reached after settings_init(), but keep the
+     * standalone map-state diagnostic safe before client startup completes. */
+    bool smooth_lighting =
+        setting_categories != NULL && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0;
     int default_sub_layer = MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
     int center_x = map_width > 0 ? map_width - map_width / 2 - 1 : 0;
     int center_y = map_height > 0 ? map_height - map_height / 2 - 1 : 0;
@@ -5607,6 +5610,61 @@ bool widget_map_lighting_diagnostic_test(void) {
               diagnostic.interpolated && diagnostic.working_available &&
               diagnostic.working_scalar == 200 &&
               (diagnostic.reasons & MAP_LIGHTING_DIAGNOSTIC_REASON_REPLACED) != 0;
+
+    const uint32_t all_reasons = MAP_LIGHTING_DIAGNOSTIC_REASON_ZERO |
+                                 MAP_LIGHTING_DIAGNOSTIC_REASON_UNAVAILABLE |
+                                 MAP_LIGHTING_DIAGNOSTIC_REASON_STALE |
+                                 MAP_LIGHTING_DIAGNOSTIC_REASON_CLAMPED |
+                                 MAP_LIGHTING_DIAGNOSTIC_REASON_REPLACED |
+                                 MAP_LIGHTING_DIAGNOSTIC_REASON_BORROWED;
+    char reason_text[96];
+    map_lighting_diagnostic_reason_text(0, reason_text, sizeof(reason_text));
+    success = success && strcmp(reason_text, "none") == 0;
+    map_lighting_diagnostic_reason_text(all_reasons, reason_text, sizeof(reason_text));
+    success = success && strstr(reason_text, "zero") != NULL &&
+              strstr(reason_text, "borrowed") != NULL;
+    map_lighting_diagnostic_reason_text(all_reasons, reason_text, 1);
+    map_lighting_diagnostic_reason_text(all_reasons, NULL, sizeof(reason_text));
+    success = success && strcmp(map_lighting_diagnostic_reason_name(MAP_LIGHTING_DIAGNOSTIC_REASON_ZERO),
+                                 "zero") == 0 &&
+              strcmp(map_lighting_diagnostic_reason_name(UINT32_C(0)), "unknown") == 0;
+
+    const char *cursor = "  -12 tail";
+    int parsed = 0;
+    success = success && map_lighting_diagnostic_parse_int(&cursor, -20, 20, &parsed) &&
+              parsed == -12 && !map_lighting_diagnostic_at_end(cursor);
+    cursor = "   ";
+    success = success && !map_lighting_diagnostic_parse_int(&cursor, 0, 20, &parsed) &&
+              map_lighting_diagnostic_at_end(cursor);
+    cursor = "999999999999999999999999";
+    success = success && !map_lighting_diagnostic_parse_int(&cursor, 0, 20, &parsed);
+    cursor = "21";
+    success = success && !map_lighting_diagnostic_parse_int(&cursor, 0, 20, &parsed);
+    cursor = " 7 ";
+    success = success && map_lighting_diagnostic_parse_int(&cursor, 0, 20, &parsed) &&
+              parsed == 7 && map_lighting_diagnostic_at_end(cursor);
+
+    map_lighting_diagnostic_t glyph = {0};
+    glyph.fogged = true;
+    glyph.cleared = true;
+    success = success && map_lighting_diagnostic_grid_glyph(&glyph) == 'c';
+    glyph.cleared = false;
+    glyph.stale = true;
+    success = success && map_lighting_diagnostic_grid_glyph(&glyph) == 's';
+    glyph.stale = false;
+    glyph.remembered = true;
+    success = success && map_lighting_diagnostic_grid_glyph(&glyph) == 'r';
+    glyph.fogged = false;
+    success = success && map_lighting_diagnostic_grid_glyph(&glyph) == '?';
+    glyph.working_available = true;
+    glyph.presentation_brightness = 0;
+    success = success && map_lighting_diagnostic_grid_glyph(&glyph) == '0';
+    glyph.presentation_brightness = 85;
+    success = success && map_lighting_diagnostic_grid_glyph(&glyph) == '1';
+    glyph.presentation_brightness = 170;
+    success = success && map_lighting_diagnostic_grid_glyph(&glyph) == '2';
+    glyph.presentation_brightness = 171;
+    success = success && map_lighting_diagnostic_grid_glyph(&glyph) == '#';
 
     for (size_t level = 0; level < arraysize(level_cells); level++) {
         map_cell_store_destroy(level_cells[level]);
