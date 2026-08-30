@@ -82,6 +82,8 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "UDP port 1731 is already owned by PID",
                     "Get-NetUDPEndpoint -LocalPort 1731",
                     "OwningProcess -eq $Server.Id",
+                    '"--no_console"',
+                    '"--network_stack=ipv4=127.0.0.1"',
                     "--connect=127.0.0.1",
                     '"--reconnect"',
                 ):

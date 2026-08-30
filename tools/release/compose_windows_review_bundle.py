@@ -229,7 +229,8 @@ try {
     }
     $Started = Get-Date
     $ServerArgs = @(
-        "--datapath=`"$State`"", "--port_quic=1731", "--server_public=false",
+        "--datapath=`"$State`"", "--port_quic=1731", "--no_console",
+        "--network_stack=ipv4=127.0.0.1", "--server_public=false",
         "--stun_server=off", "--port_mapping=off"
     )
     $Server = Start-Process -FilePath (Join-Path $Root "atrinik-server.exe") `
