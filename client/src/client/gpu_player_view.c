@@ -1984,11 +1984,21 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
     if (!gpu_player_view_ui_capture("popup_book", false)) {
         return false;
     }
-    if (!book_load("\n", 1) || book_test_content_retained() || popup_get_head() != NULL ||
+    server_add_open();
+    popup_struct *book_overlay = popup_get_head();
+    const char *updated_book = "Updated retained book behind another popup.";
+    if (book_overlay == NULL || !book_load(updated_book, (int)strlen(updated_book)) ||
+        popup_get_head() != book_overlay || !book_test_content_retained() ||
         !gpu_player_view_render_complete()) {
-        SDL_SetError("empty book update did not close and release the active popup safely");
+        SDL_SetError("book update did not retain the existing popup behind an overlay");
         return false;
     }
+    if (!book_load("\n", 1) || book_test_content_retained() ||
+        popup_get_head() != book_overlay || !gpu_player_view_render_complete()) {
+        SDL_SetError("empty book update did not close the active popup behind an overlay safely");
+        return false;
+    }
+    popup_destroy_all();
 
     settings_client_open();
     if (!gpu_player_view_ui_capture("popup_settings_controls", false)) {

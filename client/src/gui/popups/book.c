@@ -50,10 +50,12 @@ static uint8_t book_help_history_enabled = 0;
 static scrollbar_struct scrollbar;
 
 static popup_struct *book_popup_get(void) {
-    popup_struct *popup = popup_get_head();
+    popup_struct *popup;
 
-    if (popup != NULL && popup->texture == texture_get(TEXTURE_TYPE_CLIENT, "book")) {
-        return popup;
+    for (popup = popup_get_head(); popup != NULL; popup = popup->next) {
+        if (popup->texture == texture_get(TEXTURE_TYPE_CLIENT, "book")) {
+            return popup;
+        }
     }
 
     return NULL;
@@ -232,6 +234,7 @@ static const char *popup_clipboard_copy_func(popup_struct *popup) {
 bool book_load(const char *data, int len) {
     SDL_Rect box;
     int pos;
+    popup_struct *popup;
 
     /* Nothing to do. */
     if (!data || !len) {
@@ -260,7 +263,7 @@ bool book_load(const char *data, int len) {
 
     /* No data... */
     if (book_content[0] == '\0') {
-        popup_struct *popup = book_popup_get();
+        popup = book_popup_get();
 
         if (popup != NULL) {
             popup_destroy(popup);
@@ -285,9 +288,8 @@ bool book_load(const char *data, int len) {
     book_scroll_lines = box.y;
 
     /* Create the book popup if it doesn't exist yet. */
-    if (book_popup_get() == NULL) {
-        popup_struct *popup;
-
+    popup = book_popup_get();
+    if (popup == NULL) {
         popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "book"));
         if (popup == NULL) {
             book_state_clear();
@@ -318,9 +320,9 @@ bool book_load(const char *data, int len) {
                      &book_scroll,
                      &book_lines,
                      book_scroll_lines);
-    scrollbar.redraw = &popup_get_head()->redraw;
+    scrollbar.redraw = &popup->redraw;
 
-    popup_get_head()->redraw = 1;
+    popup->redraw = 1;
     return true;
 }
 
