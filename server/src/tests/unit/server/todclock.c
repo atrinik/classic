@@ -10,12 +10,60 @@
  ************************************************************************/
 
 #include <global.h>
+#include <celestial_lunar.h>
+#include <celestial_override.h>
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
+#include <commands.h>
 #include <initialization.h>
+#include <limits.h>
+#include <object.h>
+#include <player.h>
+#include <server.h>
 #include <toolkit/path.h>
+#include <toolkit/packet.h>
 #include <tod.h>
+
+static bool queued_drawinfo_has(socket_struct *cs, const char *expected) {
+    for (packet_struct *packet = cs->packets; packet != NULL; packet = packet->next) {
+        if (packet->type != CLIENT_CMD_DRAWINFO) {
+            continue;
+        }
+
+        packet_reader_t reader;
+        char color[64];
+        char message[HUGE_BUF];
+        packet_reader_init(&reader, packet->data, packet->len);
+        (void)packet_reader_read_uint8(&reader);
+        ck_assert(packet_reader_read_string(&reader, VS(color)));
+        ck_assert(packet_reader_read_string(&reader, VS(message)));
+        ck_assert_int_eq(packet_reader_error(&reader), PACKET_ERROR_NONE);
+        if (strcmp(message, expected) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void assert_time_lunar_output(object *pl,
+                                     unsigned long tick,
+                                     const char *phase,
+                                     const char *visibility,
+                                     const char *contribution) {
+    socket_buffer_clear(CONTR(pl)->cs);
+    todtick = tick;
+    command_time(pl, "time", NULL);
+
+    char expected[HUGE_BUF];
+    snprintf(VS(expected), "The current moon phase is %s.", phase);
+    ck_assert(queued_drawinfo_has(CONTR(pl)->cs, expected));
+    snprintf(VS(expected),
+             "Moon visibility: %s; moonlight contribution: %s.",
+             visibility,
+             contribution);
+    ck_assert(queued_drawinfo_has(CONTR(pl)->cs, expected));
+}
 
 static void assert_calendar_identity(unsigned long tick) {
     todtick = tick;
@@ -262,6 +310,69 @@ START_TEST(test_persisted_tick_reconstructs_without_rewrite) {
 }
 END_TEST
 
+START_TEST(test_time_reports_phase_separately_from_visibility_and_moonlight) {
+    static const struct {
+        unsigned long tick;
+        const char *phase;
+        const char *visibility;
+        const char *contribution;
+    } vectors[] = {
+        {0, "new moon", "below the horizon", "none"},
+        {84, "waxing crescent", "above the horizon", "present"},
+        {168, "first quarter", "below the horizon", "none"},
+        {252, "waxing gibbous", "below the horizon", "none"},
+        {336, "full moon", "above the horizon", "present"},
+        {420, "waning gibbous", "below the horizon", "none"},
+        {504, "last quarter", "below the horizon", "none"},
+        {588, "waning crescent", "above the horizon", "present"},
+    };
+
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    CONTR(pl)->cs->state = ST_PLAYING;
+    pticks = 0;
+
+    for (size_t i = 0; i < arraysize(vectors); i++) {
+        assert_time_lunar_output(pl,
+                                 vectors[i].tick,
+                                 vectors[i].phase,
+                                 vectors[i].visibility,
+                                 vectors[i].contribution);
+        if (i == 0) {
+            ck_assert(queued_drawinfo_has(
+                CONTR(pl)->cs,
+                "It is midnight, 0 minutes past 12 o'clock am, on the Day of the Moon."));
+            ck_assert(queued_drawinfo_has(
+                CONTR(pl)->cs,
+                "The 1st Day of the Month of the Winter, Year 1, in the Season of the Blizzard."));
+        }
+    }
+
+    assert_time_lunar_output(pl,
+                             HOURS_PER_YEAR + HOURS_PER_MONTH / 2,
+                             "full moon",
+                             "above the horizon",
+                             "present");
+
+    celestial_lunar_input input;
+    celestial_lunar_sample sample;
+    celestial_lunar_root_input((uint64_t)ULONG_MAX, &input);
+    ck_assert(celestial_lunar_evaluate(&input, &sample));
+    assert_time_lunar_output(pl,
+                             ULONG_MAX,
+                             celestial_lunar_phase_name(sample.phase),
+                             sample.visible ? "above the horizon" : "below the horizon",
+                             sample.moon_strength != 0 ? "present" : "none");
+
+    ck_assert(celestial_override_set_phase(CELESTIAL_LUNAR_FULL));
+    assert_time_lunar_output(pl, 0, "full moon", "above the horizon", "present");
+    ck_assert(celestial_override_clear());
+
+    object_destroy(pl);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("todclock");
     TCase *tc_calendar = tcase_create("Calendar");
@@ -275,6 +386,11 @@ static Suite *suite(void) {
     tcase_add_test(tc_parse, test_parse_rejects_malformed_values);
     tcase_add_test(tc_parse, test_parse_rejects_overflow);
     suite_add_tcase(s, tc_parse);
+
+    TCase *tc_output = tcase_create("Output");
+    tcase_add_unchecked_fixture(tc_output, check_setup, check_teardown);
+    tcase_add_test(tc_output, test_time_reports_phase_separately_from_visibility_and_moonlight);
+    suite_add_tcase(s, tc_output);
 
     TCase *tc_persistence = tcase_create("Persistence");
     tcase_add_unchecked_fixture(tc_persistence, check_setup, check_teardown);

@@ -59,6 +59,43 @@ START_TEST(test_exact_phase_anchors) {
 }
 END_TEST
 
+START_TEST(test_phase_names_are_stable_at_bin_boundaries) {
+    static const struct {
+        uint16_t age;
+        celestial_lunar_phase phase;
+        const char *name;
+    } vectors[] = {
+        {0, CELESTIAL_LUNAR_NEW, "new moon"},
+        {83, CELESTIAL_LUNAR_NEW, "new moon"},
+        {84, CELESTIAL_LUNAR_WAXING_CRESCENT, "waxing crescent"},
+        {167, CELESTIAL_LUNAR_WAXING_CRESCENT, "waxing crescent"},
+        {168, CELESTIAL_LUNAR_FIRST_QUARTER, "first quarter"},
+        {251, CELESTIAL_LUNAR_FIRST_QUARTER, "first quarter"},
+        {252, CELESTIAL_LUNAR_WAXING_GIBBOUS, "waxing gibbous"},
+        {335, CELESTIAL_LUNAR_WAXING_GIBBOUS, "waxing gibbous"},
+        {336, CELESTIAL_LUNAR_FULL, "full moon"},
+        {419, CELESTIAL_LUNAR_FULL, "full moon"},
+        {420, CELESTIAL_LUNAR_WANING_GIBBOUS, "waning gibbous"},
+        {503, CELESTIAL_LUNAR_WANING_GIBBOUS, "waning gibbous"},
+        {504, CELESTIAL_LUNAR_LAST_QUARTER, "last quarter"},
+        {587, CELESTIAL_LUNAR_LAST_QUARTER, "last quarter"},
+        {588, CELESTIAL_LUNAR_WANING_CRESCENT, "waning crescent"},
+        {671, CELESTIAL_LUNAR_WANING_CRESCENT, "waning crescent"},
+    };
+
+    for (size_t i = 0; i < arraysize(vectors); i++) {
+        celestial_lunar_input input;
+        celestial_lunar_sample sample;
+        celestial_lunar_root_input(vectors[i].age, &input);
+        ck_assert(celestial_lunar_evaluate(&input, &sample));
+        ck_assert_int_eq(sample.phase, vectors[i].phase);
+        ck_assert_str_eq(celestial_lunar_phase_name(sample.phase), vectors[i].name);
+    }
+
+    ck_assert_str_eq(celestial_lunar_phase_name(CELESTIAL_LUNAR_PHASE_COUNT), "unknown");
+}
+END_TEST
+
 START_TEST(test_orbit_rise_overhead_set_and_below_horizon) {
     celestial_lunar_input input;
     celestial_lunar_sample sample;
@@ -316,6 +353,7 @@ static Suite *suite(void) {
     Suite *s = suite_create("celestial_lunar");
     TCase *tc = tcase_create("fixed_point_orbit");
     tcase_add_test(tc, test_exact_phase_anchors);
+    tcase_add_test(tc, test_phase_names_are_stable_at_bin_boundaries);
     tcase_add_test(tc, test_orbit_rise_overhead_set_and_below_horizon);
     tcase_add_test(tc, test_new_moon_and_moonless_night_retain_only_starlight);
     tcase_add_test(tc, test_phase_strength_is_monotonic_and_bounded);
