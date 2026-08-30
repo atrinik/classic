@@ -369,6 +369,16 @@ The inventory never rewrites authored maps, `map_info` objects, or mutable
 state. Linked topology is discovered only from explicit reciprocal authored
 records; filenames never synthesize celestial-v1 neighbours.
 
+Celestial lighting diagnostics
+------------------------------
+
+Authorized `[OP]` and `[DEV]` sessions can use the process-local `/celestial`
+command to select named lunar phases or bounded ages, inspect the effective
+moon/starlight sample, and clear the override. It uses the existing
+authoritative lighting and MAP2 path and never changes `todtick` or persisted
+world state. See `doc/CELESTIAL_DIAGNOSTICS.md` for the command contract and
+isolated verification procedure.
+
 Authoritative gameplay metrics
 ------------------------------
 

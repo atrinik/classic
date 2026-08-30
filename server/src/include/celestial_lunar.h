@@ -25,6 +25,7 @@ typedef enum celestial_lunar_phase {
     CELESTIAL_LUNAR_WANING_GIBBOUS,
     CELESTIAL_LUNAR_LAST_QUARTER,
     CELESTIAL_LUNAR_WANING_CRESCENT,
+    CELESTIAL_LUNAR_PHASE_COUNT,
 } celestial_lunar_phase;
 
 /** Effective celestial inputs resolved by the regional profile owner. */
@@ -69,6 +70,9 @@ typedef struct celestial_lunar_sample {
     uint8_t starlight_strength;
     uint16_t starlight_radiance[3];
 } celestial_lunar_sample;
+
+/** Return the stable human-readable name for one lunar phase. */
+extern const char *celestial_lunar_phase_name(celestial_lunar_phase phase);
 
 /** Fill the frozen root profile using direct absolute-hour modulo. */
 extern void celestial_lunar_root_input(uint64_t absolute_hour, celestial_lunar_input *input);

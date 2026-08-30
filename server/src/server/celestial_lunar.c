@@ -80,6 +80,29 @@ static void project_color(uint8_t strength, const uint16_t color[3], uint16_t ou
     }
 }
 
+const char *celestial_lunar_phase_name(celestial_lunar_phase phase) {
+    switch (phase) {
+        case CELESTIAL_LUNAR_NEW:
+            return "new moon";
+        case CELESTIAL_LUNAR_WAXING_CRESCENT:
+            return "waxing crescent";
+        case CELESTIAL_LUNAR_FIRST_QUARTER:
+            return "first quarter";
+        case CELESTIAL_LUNAR_WAXING_GIBBOUS:
+            return "waxing gibbous";
+        case CELESTIAL_LUNAR_FULL:
+            return "full moon";
+        case CELESTIAL_LUNAR_WANING_GIBBOUS:
+            return "waning gibbous";
+        case CELESTIAL_LUNAR_LAST_QUARTER:
+            return "last quarter";
+        case CELESTIAL_LUNAR_WANING_CRESCENT:
+            return "waning crescent";
+        default:
+            return "unknown";
+    }
+}
+
 void celestial_lunar_root_input(uint64_t absolute_hour, celestial_lunar_input *input) {
     HARD_ASSERT(input != NULL);
 
