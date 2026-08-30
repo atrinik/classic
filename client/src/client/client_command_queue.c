@@ -233,7 +233,7 @@ void client_command_queue_drain(uint64_t budget_us,
         }
 
         size_t len = buf->len;
-        dispatch_func(buf->data, buf->len, dispatch_data);
+        bool continue_dispatch = dispatch_func(buf->data, buf->len, dispatch_data);
         uint64_t command_finished = clock_func(clock_data);
         uint64_t processing_us = elapsed_us(command_started, command_finished);
         command_buffer_free(buf);
@@ -256,7 +256,7 @@ void client_command_queue_drain(uint64_t budget_us,
             local_result.budget_due = true;
         }
         queue_unlock();
-        if (local_result.budget_due) {
+        if (!continue_dispatch || local_result.budget_due) {
             break;
         }
     }

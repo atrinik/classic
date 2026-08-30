@@ -185,7 +185,8 @@ extern int intro_event(SDL_Event *event);
 
 /** Public API implemented in src/gui/popups/characters.c. */
 
-extern void characters_open(void);
+/** Open a fully initialized character chooser, or return false on canvas failure. */
+extern bool characters_open(void);
 
 extern void socket_command_characters(uint8_t *data, size_t len, size_t pos);
 
@@ -234,10 +235,21 @@ extern void server_add_open(void);
 
 extern void connection_preference_open(server_struct *server);
 
+/** Recreate a pending connection-preference popup after GPU recovery. */
+extern bool connection_preference_recover(void);
+#ifdef ATRINIK_WIDGET_TESTS
+extern bool connection_preference_test_pending(void);
+extern bool connection_preference_test_active(void);
+#endif
+
 /** Public API implemented in src/gui/toolkit/popup.c. */
 
 /** Create a popup, or return NULL when its retained GPU canvas cannot be created. */
 extern popup_struct *popup_create(texture_struct *texture);
+#ifdef ATRINIK_WIDGET_TESTS
+/** Make the next production popup take its surface-allocation failure path. */
+extern void popup_test_surface_allocation_fail_once(void);
+#endif
 
 extern void popup_destroy(popup_struct *popup);
 

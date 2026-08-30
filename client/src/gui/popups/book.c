@@ -216,13 +216,13 @@ static const char *popup_clipboard_copy_func(popup_struct *popup) {
  * @param len
  * Length of 'data'.
  */
-void book_load(const char *data, int len) {
+bool book_load(const char *data, int len) {
     SDL_Rect box;
     int pos;
 
     /* Nothing to do. */
     if (!data || !len) {
-        return;
+        return true;
     }
 
     /* Free old book data and reset the values. */
@@ -247,7 +247,7 @@ void book_load(const char *data, int len) {
 
     /* No data... */
     if (book_content[0] == '\0') {
-        return;
+        return true;
     }
 
     /* Calculate the line numbers. */
@@ -271,7 +271,7 @@ void book_load(const char *data, int len) {
 
         popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "book"));
         if (popup == NULL) {
-            return;
+            return false;
         }
         popup->draw_func = popup_draw_func;
         popup->draw_post_func = popup_draw_post_func;
@@ -301,6 +301,7 @@ void book_load(const char *data, int len) {
     scrollbar.redraw = &popup_get_head()->redraw;
 
     popup_get_head()->redraw = 1;
+    return true;
 }
 
 /**

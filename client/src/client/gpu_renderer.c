@@ -574,6 +574,7 @@ bool gpu_renderer_recover_and_republish(SDL_Window *window,
                                         gpu_renderer_recovery_step_fn republish_complete_frame,
                                         void *userdata) {
     HARD_ASSERT(republish_complete_frame != NULL);
+    (void)gpu_renderer_recreation_take_request();
     unsigned int attempts_before = *attempts;
     bool succeeded = gpu_renderer_recover_bounded(window, attempts, conformance_device) &&
                      (apply_window_state == NULL || apply_window_state(userdata)) &&
@@ -771,6 +772,10 @@ static bool gpu_renderer_frame_target_create(void) {
 }
 
 bool gpu_renderer_begin_frame(void) {
+    if (recreation_requested) {
+        SDL_SetError("GPU resource recovery is pending");
+        return gpu_renderer_frame_result(false);
+    }
     frame_failed = false;
     if (!gpu_renderer_frame_target_create() || !SDL_SetRenderTarget(renderer, frame_target) ||
         !SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_OPAQUE)) {
@@ -1124,6 +1129,7 @@ static bool gpu_renderer_canvas_texture_create(gpu_canvas_t *canvas) {
 
 bool gpu_renderer_canvas_register(SDL_Surface **surface_pointer) {
     if (surface_pointer == NULL || *surface_pointer == NULL) {
+        gpu_renderer_recreation_request();
         return gpu_renderer_frame_result(false);
     }
     SDL_Surface *surface = *surface_pointer;
@@ -1152,6 +1158,7 @@ bool gpu_renderer_canvas_register(SDL_Surface **surface_pointer) {
             canvas = NULL;
         }
         if (canvas == NULL) {
+            gpu_renderer_recreation_request();
             gpu_renderer_frame_result(false);
             SDL_DestroySurface(surface);
             *surface_pointer = NULL;
@@ -1159,6 +1166,7 @@ bool gpu_renderer_canvas_register(SDL_Surface **surface_pointer) {
         }
     }
     if (renderer != NULL && !gpu_renderer_canvas_texture_create(canvas)) {
+        gpu_renderer_recreation_request();
         gpu_renderer_frame_result(false);
         SDL_DestroySurface(surface);
         *surface_pointer = NULL;

@@ -639,6 +639,9 @@ static bool gpu_renderer_recovery_apply_window(void *userdata) {
 
 static bool gpu_renderer_recovery_republish(void *userdata) {
     (void)userdata;
+    if (!client_command_retry_deferred() || !connection_preference_recover()) {
+        return false;
+    }
     map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
     minimap_redraw_force();
     widget_redraw_everything();
@@ -689,6 +692,10 @@ static bool gpu_renderer_recovery_republish(void *userdata) {
 static bool gpu_renderer_recover_frame(unsigned int *attempts, const char *context) {
     HARD_ASSERT(attempts != NULL);
     HARD_ASSERT(context != NULL);
+
+    /* A resource failure can be raised after the loop's initial request poll.
+     * Consume that exact incident before the recovery transaction republishes. */
+    (void)gpu_renderer_recreation_take_request();
 
     char backend_name[32];
     char gpu_name[256];

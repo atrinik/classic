@@ -1812,6 +1812,29 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
         return false;
     }
     popup_destroy_all();
+
+    packet_struct *characters_packet = packet_new(0, 256, 32);
+    char connection_id[SOCKET_CONNECTION_ID_SIZE];
+    memset(connection_id, 'a', sizeof(connection_id) - 1U);
+    connection_id[sizeof(connection_id) - 1U] = '\0';
+    packet_writer_write_uint8(characters_packet, CLIENT_CMD_CHARACTERS);
+    packet_writer_write_cstring(characters_packet, "renderer-fixture");
+    packet_writer_write_cstring(characters_packet, connection_id);
+    packet_writer_write_cstring(characters_packet, "");
+    packet_writer_write_uint64(characters_packet, 0);
+    popup_test_surface_allocation_fail_once();
+    cpl.state = ST_START;
+    bool characters_dispatch_complete =
+        client_command_dispatch_test(characters_packet->data, characters_packet->len);
+    packet_free(characters_packet);
+    if (characters_dispatch_complete || cpl.state != ST_START ||
+        !gpu_renderer_recreation_take_request() || !gpu_player_view_recover_once(ScreenWindow) ||
+        cpl.state != ST_CHARACTERS || popup_get_head() == NULL) {
+        SDL_SetError("pre-frame CHARACTERS popup failure was not retained and replayed");
+        return false;
+    }
+    popup_destroy_all();
+
     characters_open();
     cpl.state = ST_CHARACTERS;
     if (!gpu_player_view_ui_capture("popup_character_selection", false)) {
@@ -1948,6 +1971,29 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
         return false;
     }
     popup_destroy_all();
+
+    /* Popup allocation can fail while processing input, before begin_frame().
+     * Preserve the user intent, latch recovery, and publish it only after the
+     * replacement device has reconstructed the complete scene. Repeating the
+     * failure also proves that the superseded copied server state is released. */
+    popup_test_surface_allocation_fail_once();
+    connection_preference_open(selected_server);
+    if (!connection_preference_test_pending()) {
+        SDL_SetError("pre-frame popup allocation failure did not retain its model");
+        return false;
+    }
+    popup_test_surface_allocation_fail_once();
+    connection_preference_open(selected_server);
+    if (!connection_preference_test_pending() || !gpu_renderer_recreation_take_request() ||
+        !gpu_player_view_recover_once(ScreenWindow) || !connection_preference_test_active()) {
+        SDL_SetError("pre-frame popup allocation failure did not recover and republish");
+        return false;
+    }
+    popup_destroy_all();
+    if (connection_preference_test_pending() || connection_preference_test_active()) {
+        SDL_SetError("recovered connection-preference popup retained stale state");
+        return false;
+    }
 
     connection_preference_open(selected_server);
     if (!gpu_player_view_ui_capture("popup_connection_preference", false)) {
@@ -2588,6 +2634,9 @@ static bool gpu_player_view_recovery_apply(void *userdata) {
 
 static bool gpu_player_view_recovery_republish(void *userdata) {
     (void)userdata;
+    if (!client_command_retry_deferred() || !connection_preference_recover()) {
+        return false;
+    }
     map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
     minimap_redraw_force();
     widget_redraw_everything();

@@ -2056,8 +2056,7 @@ static void process_widgets_rec(int draw, widgetdata *widget) {
 
                     texture = texture_surface(widget->texture);
                     widget->surface = SDL_ConvertSurface(texture, texture->format);
-                    if (widget->surface != NULL &&
-                        !gpu_renderer_canvas_register(&widget->surface)) {
+                    if (!gpu_renderer_canvas_register(&widget->surface)) {
                         LOG(ERROR,
                             "Could not create retained GPU widget target: %s",
                             SDL_GetError());

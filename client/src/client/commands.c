@@ -46,8 +46,13 @@ static_assert(MAP2_PROTOCOL_METADATA_SHORT_MAX == MAX_BUF - 1,
 
 /** @copydoc socket_command_struct::handle_func */
 void socket_command_book(uint8_t *data, size_t len, size_t pos) {
+    if (!book_load((char *)data + pos, len)) {
+        if (!client_command_retry_current()) {
+            LOG(ERROR, "Could not retain BOOK command for GPU recovery");
+        }
+        return;
+    }
     sound_play_effect("book.ogg", 100);
-    book_load((char *)data + pos, len);
 }
 /** @copydoc socket_command_struct::handle_func */
 void socket_command_setup(uint8_t *data, size_t len, size_t pos) {

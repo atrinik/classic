@@ -78,7 +78,8 @@ extern UT_array *book_help_history;
 
 extern void book_name_change(const char *name, size_t len);
 
-extern void book_load(const char *data, int len);
+/** Load book state and create its popup, returning false on canvas failure. */
+extern bool book_load(const char *data, int len);
 
 extern void book_redraw(void);
 

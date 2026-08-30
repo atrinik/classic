@@ -24,8 +24,11 @@ typedef struct command_buffer command_buffer;
 /** Injectable monotonic clock used by deterministic offline replays. */
 typedef uint64_t (*client_command_queue_clock_func)(void *user_data);
 
-/** Handler invoked once for each complete server command envelope. */
-typedef void (*client_command_queue_dispatch_func)(uint8_t *data, size_t len, void *user_data);
+/**
+ * Handler invoked once for each complete server command envelope.
+ * Return false to preserve the remaining queue for a later drain.
+ */
+typedef bool (*client_command_queue_dispatch_func)(uint8_t *data, size_t len, void *user_data);
 
 /** Result of one bounded queue drain. */
 typedef struct client_command_queue_drain_result {

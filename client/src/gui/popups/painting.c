@@ -327,6 +327,9 @@ void socket_command_painting(uint8_t *data, size_t len, size_t pos) {
     popup_struct *popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "painting"));
     if (popup == NULL) {
         popup_painting_data_free(painting_data);
+        if (!client_command_retry_current()) {
+            LOG(ERROR, "Could not retain PAINTING command for GPU recovery");
+        }
         return;
     }
     popup->custom_data = painting_data;

@@ -429,6 +429,9 @@ void socket_command_interface(uint8_t *data, size_t len, size_t pos) {
     if (!interface_popup) {
         interface_popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "interface"));
         if (interface_popup == NULL) {
+            if (!client_command_retry_current()) {
+                LOG(ERROR, "Could not retain INTERFACE command for GPU recovery");
+            }
             return;
         }
         interface_popup->draw_func = popup_draw_func;

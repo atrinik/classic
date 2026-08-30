@@ -312,6 +312,7 @@ int handle_socket_shutdown(void) {
         SDL_UnlockMutex(socket_mutex);
 
         /* Empty all queues */
+        client_command_retry_clear();
         client_command_queue_clear();
         bool input_statistics_reset = client_command_queue_statistics_reset();
         HARD_ASSERT(input_statistics_reset);
@@ -393,6 +394,7 @@ void client_socket_deinitialize(void) {
     } else if (csocket.sc != NULL) {
         client_socket_close(&csocket);
     }
+    client_command_retry_clear();
     client_command_queue_deinitialize();
     if (output_buffer_mutex != NULL) {
         SDL_DestroyMutex(output_buffer_mutex);

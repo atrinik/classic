@@ -157,6 +157,20 @@ extern Client_Player cpl;
 
 extern void DoClient(void);
 
+/** Retain the command currently being dispatched for one post-recovery replay. */
+extern bool client_command_retry_current(void);
+
+/** Replay a command retained after a recoverable UI resource failure. */
+extern bool client_command_retry_deferred(void);
+
+/** Discard any command retained for recovery, such as during disconnect. */
+extern void client_command_retry_clear(void);
+
+#ifdef ATRINIK_WIDGET_TESTS
+/** Dispatch one complete envelope through the production table. */
+extern bool client_command_dispatch_test(uint8_t *data, size_t len);
+#endif
+
 /** Drain inbound envelopes through the production dispatcher using an injected clock. */
 extern void client_commands_drain_with_clock(uint64_t budget_us,
                                              client_command_queue_clock_func clock_func,

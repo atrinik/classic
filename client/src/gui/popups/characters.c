@@ -623,16 +623,15 @@ static int popup_destroy_callback(popup_struct *popup) {
 /**
  * Open the characters chooser popup.
  */
-void characters_open(void) {
+bool characters_open(void) {
     popup_struct *popup;
     size_t i;
 
-    progress_dots_create(&progress);
-
     popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));
     if (popup == NULL) {
-        return;
+        return false;
     }
+    progress_dots_create(&progress);
     popup->draw_func = popup_draw;
     popup->event_func = popup_event;
     popup->destroy_callback_func = popup_destroy_callback;
@@ -690,6 +689,7 @@ void characters_open(void) {
     list_set_column(list_characters, 0, 55, 0, NULL, -1);
     list_set_column(list_characters, 1, 150, 0, NULL, -1);
     list_scrollbar_enable(list_characters);
+    return true;
 }
 
 /**
@@ -816,7 +816,12 @@ void socket_command_characters(uint8_t *data, size_t len, size_t pos) {
     }
 
     if (cpl.state != ST_CHARACTERS) {
-        characters_open();
+        if (!characters_open()) {
+            if (!client_command_retry_current()) {
+                LOG(ERROR, "Could not retain CHARACTERS command for GPU recovery");
+            }
+            return;
+        }
         cpl.state = ST_CHARACTERS;
     }
 
