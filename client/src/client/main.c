@@ -846,23 +846,26 @@ int main(int argc, char *argv[]) {
         bool transaction = widget_map_transaction_abort_test();
         bool capacity = widget_map_light_keyframe_capacity_test();
         bool temporal = widget_map_temporal_lighting_test();
+        bool diagnostic = widget_map_lighting_diagnostic_test();
         bool projection = widget_map_projection_contract_test();
         bool descriptor = socket_command_map_timed_light_same_test();
         bool continuation = socket_command_map_continuation_transaction_test();
         bool clock_suspend = presentation_clock_suspend_test();
-        if (!(sparse && transaction && capacity && temporal && projection && descriptor &&
-              continuation && clock_suspend)) {
-            fprintf(stderr,
-                    "map state test failed: sparse=%d transaction=%d capacity=%d temporal=%d "
-                    "projection=%d descriptor=%d continuation=%d presentation-clock=%d\n",
-                    sparse,
-                    transaction,
-                    capacity,
-                    temporal,
-                    projection,
-                    descriptor,
-                    continuation,
-                    clock_suspend);
+        if (!(sparse && transaction && capacity && temporal && diagnostic && projection &&
+              descriptor && continuation && clock_suspend)) {
+            fprintf(
+                stderr,
+                "map state test failed: sparse=%d transaction=%d capacity=%d temporal=%d "
+                "diagnostic=%d projection=%d descriptor=%d continuation=%d presentation-clock=%d\n",
+                sparse,
+                transaction,
+                capacity,
+                temporal,
+                diagnostic,
+                projection,
+                descriptor,
+                continuation,
+                clock_suspend);
             return EXIT_FAILURE;
         }
         return EXIT_SUCCESS;
