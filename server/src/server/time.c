@@ -28,6 +28,9 @@
  */
 
 #include <global.h>
+#include <celestial_lunar.h>
+#include <object.h>
+#include <region.h>
 #include <server_main.h>
 #include <server.h>
 #include <initialization.h>
@@ -326,6 +329,35 @@ void get_tod(timeofday_t *tod) {
     }
 }
 
+/** Prints the current lunar phase and its independent lighting state. */
+static void print_lunar_tod(object *op) {
+    if (op == NULL || op->map == NULL) {
+        return;
+    }
+
+    const region_celestial_profile_t *profile = region_celestial_for_map(op->map);
+    if (profile == NULL) {
+        return;
+    }
+
+    celestial_lunar_input input;
+    celestial_lunar_sample sample;
+    region_celestial_lunar_input(profile, (uint64_t)todtick, &input);
+    if (!celestial_lunar_evaluate(&input, &sample)) {
+        return;
+    }
+
+    draw_info_format(COLOR_WHITE,
+                     op,
+                     "The current moon phase is %s.",
+                     celestial_lunar_phase_name(sample.phase));
+    draw_info_format(COLOR_WHITE,
+                     op,
+                     "Moon visibility: %s; moonlight contribution: %s.",
+                     sample.visible ? "above the horizon" : "below the horizon",
+                     sample.moon_strength != 0 ? "present" : "none");
+}
+
 /**
  * Prints the time.
  * @param op
@@ -366,6 +398,8 @@ void print_tod(object *op) {
                      month_name[tod.month],
                      tod.year + 1,
                      season_name[tod.season]);
+
+    print_lunar_tod(op);
 }
 
 /**
