@@ -92,7 +92,7 @@ START_TEST(test_phase_names_are_stable_at_bin_boundaries) {
         ck_assert_str_eq(celestial_lunar_phase_name(sample.phase), vectors[i].name);
     }
 
-    ck_assert_str_eq(celestial_lunar_phase_name((celestial_lunar_phase)8), "unknown");
+    ck_assert_str_eq(celestial_lunar_phase_name(CELESTIAL_LUNAR_PHASE_COUNT), "unknown");
 }
 END_TEST
 

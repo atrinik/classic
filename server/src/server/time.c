@@ -29,6 +29,7 @@
 
 #include <global.h>
 #include <celestial_lunar.h>
+#include <celestial_override.h>
 #include <object.h>
 #include <region.h>
 #include <server_main.h>
@@ -343,6 +344,7 @@ static void print_lunar_tod(object *op) {
     celestial_lunar_input input;
     celestial_lunar_sample sample;
     region_celestial_lunar_input(profile, (uint64_t)todtick, &input);
+    (void)celestial_override_apply(profile->lunar_period, &input.lunar_age);
     if (!celestial_lunar_evaluate(&input, &sample)) {
         return;
     }

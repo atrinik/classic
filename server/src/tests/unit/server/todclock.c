@@ -11,6 +11,7 @@
 
 #include <global.h>
 #include <celestial_lunar.h>
+#include <celestial_override.h>
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
@@ -363,6 +364,10 @@ START_TEST(test_time_reports_phase_separately_from_visibility_and_moonlight) {
                              celestial_lunar_phase_name(sample.phase),
                              sample.visible ? "above the horizon" : "below the horizon",
                              sample.moon_strength != 0 ? "present" : "none");
+
+    ck_assert(celestial_override_set_phase(CELESTIAL_LUNAR_FULL));
+    assert_time_lunar_output(pl, 0, "full moon", "above the horizon", "present");
+    ck_assert(celestial_override_clear());
 
     object_destroy(pl);
 }
