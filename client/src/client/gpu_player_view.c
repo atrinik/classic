@@ -1984,7 +1984,11 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
     if (!gpu_player_view_ui_capture("popup_book", false)) {
         return false;
     }
-    popup_destroy_all();
+    if (!book_load("\n", 1) || book_test_content_retained() || popup_get_head() != NULL ||
+        !gpu_player_view_render_complete()) {
+        SDL_SetError("empty book update did not close and release the active popup safely");
+        return false;
+    }
 
     settings_client_open();
     if (!gpu_player_view_ui_capture("popup_settings_controls", false)) {

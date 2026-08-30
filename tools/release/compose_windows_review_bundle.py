@@ -166,87 +166,112 @@ $State = Join-Path $Root "server-data"
 $Sentinel = Join-Path $State ".atrinik-review-initialized"
 $InstallData = Join-Path $Root "install_data"
 $Identity = Join-Path $State "quic-identity.pem"
-
-foreach ($Required in @("atrinik.exe", "atrinik-server.exe", "python.exe", "install_data")) {
-    if (-not (Test-Path -LiteralPath (Join-Path $Root $Required))) {
-        throw "The complete package was not extracted: missing $Required"
-    }
-}
-
-if (-not (Test-Path -LiteralPath $Sentinel)) {
-    if (Test-Path -LiteralPath $State) {
-        $Preserved = Join-Path $Root ("server-data-incomplete-" + [Guid]::NewGuid().ToString("N"))
-        Move-Item -LiteralPath $State -Destination $Preserved
-        Write-Warning "Preserved incomplete server state as $Preserved"
-    }
-    $Stage = Join-Path $Root ("server-data-stage-" + [Guid]::NewGuid().ToString("N"))
-    try {
-        Copy-Item -LiteralPath $InstallData -Destination $Stage -Recurse
-        New-Item -ItemType File -Path (Join-Path $Stage ".atrinik-review-initialized") | Out-Null
-        Move-Item -LiteralPath $Stage -Destination $State
-    } catch {
-        if (Test-Path -LiteralPath $Stage) {
-            $Failed = Join-Path $Root ("server-data-incomplete-" + [Guid]::NewGuid().ToString("N"))
-            Move-Item -LiteralPath $Stage -Destination $Failed
-        }
-        throw
-    }
-}
-
-$ClientMaps = Join-Path $InstallData "http\client-maps"
-if (Test-Path -LiteralPath $ClientMaps) {
-    $StateHttp = Join-Path $State "http"
-    New-Item -ItemType Directory -Force -Path $StateHttp | Out-Null
-    $StateMaps = Join-Path $StateHttp "client-maps"
-    if (Test-Path -LiteralPath $StateMaps) { Remove-Item -LiteralPath $StateMaps -Recurse }
-    Copy-Item -LiteralPath $ClientMaps -Destination $StateMaps -Recurse
-}
-New-Item -ItemType Directory -Force -Path (Join-Path $State "tmp") | Out-Null
-
-if (Test-Path -LiteralPath $Identity) {
-    Move-Item -LiteralPath $Identity -Destination ($Identity + ".previous-" + [Guid]::NewGuid().ToString("N"))
-}
-$Started = Get-Date
-$ServerArgs = @(
-    "--datapath=`"$State`"", "--port_quic=1731", "--server_public=false",
-    "--stun_server=off", "--port_mapping=off"
+$LaunchMutex = [System.Threading.Mutex]::new(
+    $false,
+    "Local\AtrinikClassicReviewUdp1731"
 )
-$Server = Start-Process -FilePath (Join-Path $Root "atrinik-server.exe") `
-    -ArgumentList $ServerArgs -WorkingDirectory $Root -PassThru
+$LaunchLockHeld = $false
 
 try {
-    $Deadline = (Get-Date).AddSeconds(60)
-    $Ready = $false
-    while ((Get-Date) -lt $Deadline) {
-        if ($Server.HasExited) { throw "Server exited with code $($Server.ExitCode)" }
-        $Endpoint = Get-NetUDPEndpoint -LocalPort 1731 -ErrorAction SilentlyContinue |
-            Where-Object { $_.OwningProcess -eq $Server.Id } | Select-Object -First 1
-        $IdentityInfo = Get-Item -LiteralPath $Identity -ErrorAction SilentlyContinue
-        if ($Endpoint -and $IdentityInfo -and $IdentityInfo.Length -gt 0 -and
-            $IdentityInfo.LastWriteTime -ge $Started) {
-            $Ready = $true
-            break
-        }
-        Start-Sleep -Milliseconds 250
-        $Server.Refresh()
+    try {
+        $LaunchLockHeld = $LaunchMutex.WaitOne(0)
+    } catch [System.Threading.AbandonedMutexException] {
+        $LaunchLockHeld = $true
     }
-    if (-not $Ready) { throw "Server did not own UDP port 1731 with a fresh QUIC identity within 60 seconds" }
+    if (-not $LaunchLockHeld) {
+        throw "Another Atrinik review launcher is already starting UDP port 1731"
+    }
 
-    $Fingerprint = & (Join-Path $Root "python.exe") `
-        (Join-Path $Root "review-quic-fingerprint.py") $Identity
-    if ($LASTEXITCODE -ne 0 -or $Fingerprint -notmatch "^[0-9a-f]{64}$") {
-        throw "Could not derive the server QUIC certificate fingerprint"
+    $ExistingEndpoint = Get-NetUDPEndpoint -LocalPort 1731 -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($null -ne $ExistingEndpoint) {
+        throw "UDP port 1731 is already owned by PID $($ExistingEndpoint.OwningProcess); stop it before launching this review"
     }
-    $ClientArgs = @(
-        "--nometa", "--stun_server=off",
-        "--server=`"127.0.0.1 1731 $Fingerprint`"", "--connect=127.0.0.1", "--reconnect"
+
+    foreach ($Required in @("atrinik.exe", "atrinik-server.exe", "python.exe", "install_data")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Root $Required))) {
+            throw "The complete package was not extracted: missing $Required"
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $Sentinel)) {
+        if (Test-Path -LiteralPath $State) {
+            $Preserved = Join-Path $Root ("server-data-incomplete-" + [Guid]::NewGuid().ToString("N"))
+            Move-Item -LiteralPath $State -Destination $Preserved
+            Write-Warning "Preserved incomplete server state as $Preserved"
+        }
+        $Stage = Join-Path $Root ("server-data-stage-" + [Guid]::NewGuid().ToString("N"))
+        try {
+            Copy-Item -LiteralPath $InstallData -Destination $Stage -Recurse
+            New-Item -ItemType File -Path (Join-Path $Stage ".atrinik-review-initialized") | Out-Null
+            Move-Item -LiteralPath $Stage -Destination $State
+        } catch {
+            if (Test-Path -LiteralPath $Stage) {
+                $Failed = Join-Path $Root ("server-data-incomplete-" + [Guid]::NewGuid().ToString("N"))
+                Move-Item -LiteralPath $Stage -Destination $Failed
+            }
+            throw
+        }
+    }
+
+    $ClientMaps = Join-Path $InstallData "http\client-maps"
+    if (Test-Path -LiteralPath $ClientMaps) {
+        $StateHttp = Join-Path $State "http"
+        New-Item -ItemType Directory -Force -Path $StateHttp | Out-Null
+        $StateMaps = Join-Path $StateHttp "client-maps"
+        if (Test-Path -LiteralPath $StateMaps) { Remove-Item -LiteralPath $StateMaps -Recurse }
+        Copy-Item -LiteralPath $ClientMaps -Destination $StateMaps -Recurse
+    }
+    New-Item -ItemType Directory -Force -Path (Join-Path $State "tmp") | Out-Null
+
+    if (Test-Path -LiteralPath $Identity) {
+        Move-Item -LiteralPath $Identity -Destination ($Identity + ".previous-" + [Guid]::NewGuid().ToString("N"))
+    }
+    $Started = Get-Date
+    $ServerArgs = @(
+        "--datapath=`"$State`"", "--port_quic=1731", "--server_public=false",
+        "--stun_server=off", "--port_mapping=off"
     )
-    Start-Process -FilePath (Join-Path $Root "atrinik.exe") `
-        -ArgumentList $ClientArgs -WorkingDirectory $Root
-    Write-Host "Server and client started. The server owns UDP port 1731 (PID $($Server.Id))."
-} catch {
-    if (-not $Server.HasExited) { Stop-Process -Id $Server.Id -Force }
-    throw
+    $Server = Start-Process -FilePath (Join-Path $Root "atrinik-server.exe") `
+        -ArgumentList $ServerArgs -WorkingDirectory $Root -PassThru
+
+    try {
+        $Deadline = (Get-Date).AddSeconds(60)
+        $Ready = $false
+        while ((Get-Date) -lt $Deadline) {
+            if ($Server.HasExited) { throw "Server exited with code $($Server.ExitCode)" }
+            $Endpoint = Get-NetUDPEndpoint -LocalPort 1731 -ErrorAction SilentlyContinue |
+                Where-Object { $_.OwningProcess -eq $Server.Id } | Select-Object -First 1
+            $IdentityInfo = Get-Item -LiteralPath $Identity -ErrorAction SilentlyContinue
+            if ($Endpoint -and $IdentityInfo -and $IdentityInfo.Length -gt 0 -and
+                $IdentityInfo.LastWriteTime -ge $Started) {
+                $Ready = $true
+                break
+            }
+            Start-Sleep -Milliseconds 250
+            $Server.Refresh()
+        }
+        if (-not $Ready) { throw "Server did not own UDP port 1731 with a fresh QUIC identity within 60 seconds" }
+
+        $Fingerprint = & (Join-Path $Root "python.exe") `
+            (Join-Path $Root "review-quic-fingerprint.py") $Identity
+        if ($LASTEXITCODE -ne 0 -or $Fingerprint -notmatch "^[0-9a-f]{64}$") {
+            throw "Could not derive the server QUIC certificate fingerprint"
+        }
+        $ClientArgs = @(
+            "--nometa", "--stun_server=off",
+            "--server=`"127.0.0.1 1731 $Fingerprint`"", "--connect=127.0.0.1", "--reconnect"
+        )
+        Start-Process -FilePath (Join-Path $Root "atrinik.exe") `
+            -ArgumentList $ClientArgs -WorkingDirectory $Root
+        Write-Host "Server and client started. The server owns UDP port 1731 (PID $($Server.Id))."
+    } catch {
+        if (-not $Server.HasExited) { Stop-Process -Id $Server.Id -Force }
+        throw
+    }
+} finally {
+    if ($LaunchLockHeld) { $LaunchMutex.ReleaseMutex() }
+    $LaunchMutex.Dispose()
 }
 '''
 

@@ -77,6 +77,9 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                 powershell = archive.read(prefix + "run-review.ps1").decode()
                 for token in (
                     "server-data-stage-",
+                    '"Local\\AtrinikClassicReviewUdp1731"',
+                    "$LaunchMutex.WaitOne(0)",
+                    "UDP port 1731 is already owned by PID",
                     "Get-NetUDPEndpoint -LocalPort 1731",
                     "OwningProcess -eq $Server.Id",
                     "--connect=127.0.0.1",

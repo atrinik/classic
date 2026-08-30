@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -48,6 +48,16 @@ UT_array *book_help_history = NULL;
 static uint8_t book_help_history_enabled = 0;
 /** Scrollbar in the book GUI. */
 static scrollbar_struct scrollbar;
+
+static popup_struct *book_popup_get(void) {
+    popup_struct *popup = popup_get_head();
+
+    if (popup != NULL && popup->texture == texture_get(TEXTURE_TYPE_CLIENT, "book")) {
+        return popup;
+    }
+
+    return NULL;
+}
 
 static void book_state_clear(void) {
     if (book_help_history != NULL) {
@@ -250,7 +260,13 @@ bool book_load(const char *data, int len) {
 
     /* No data... */
     if (book_content[0] == '\0') {
-        book_state_clear();
+        popup_struct *popup = book_popup_get();
+
+        if (popup != NULL) {
+            popup_destroy(popup);
+        } else {
+            book_state_clear();
+        }
         return true;
     }
 
@@ -269,8 +285,7 @@ bool book_load(const char *data, int len) {
     book_scroll_lines = box.y;
 
     /* Create the book popup if it doesn't exist yet. */
-    if (!popup_get_head() ||
-        popup_get_head()->texture != texture_get(TEXTURE_TYPE_CLIENT, "book")) {
+    if (book_popup_get() == NULL) {
         popup_struct *popup;
 
         popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "book"));
@@ -319,8 +334,10 @@ bool book_test_content_retained(void) {
  * Redraw the book GUI.
  */
 void book_redraw(void) {
-    if (popup_get_head() && popup_get_head()->texture == texture_get(TEXTURE_TYPE_CLIENT, "book")) {
-        popup_get_head()->redraw = 1;
+    popup_struct *popup = book_popup_get();
+
+    if (popup != NULL) {
+        popup->redraw = 1;
     }
 }
 

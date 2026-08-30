@@ -302,7 +302,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.COVERAGE_SHA }}
           persist-credentials: false
+      - name: Bind Windows artifacts to the exact selected revision
+        run: |
+          test "$(git rev-parse HEAD)" = "${COVERAGE_SHA}"
+          test -z "$(git status --short)"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: classic-dependency-inputs
@@ -407,6 +412,19 @@ jobs:
                 -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-mingw-source
               cmake --build build/windows-integrated \
                 --target atrinik atrinik-server --parallel "$(nproc)"
+              x86_64-w64-mingw32.shared-cmake \
+                -S client \
+                -B client/build/windows-tests \
+                -G Ninja \
+                -DBUILD_TESTING=ON \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DPACKAGE_TYPE=none \
+                -DATRINIK_PACKAGE_VERSION=0.0.0 \
+                -DATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders \
+                -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
+                -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
+              cmake --build client/build/windows-tests \
+                --target client-rich-presence-tests --parallel "$(nproc)"
               stage=libatrinik/build/windows-test-bundle
               cmake -E remove_directory "${stage}"
               python3 tools/ci/stage_windows_runtime.py \
@@ -421,9 +439,10 @@ jobs:
                 libatrinik/build/windows-tests/libatrinik-socket-address.exe \
                 libatrinik/build/windows-tests/libatrinik-socket-quic.exe \
                 libatrinik/build/windows-tests/libatrinik-stun.exe \
-                client/build/windows-release/client-rich-presence-tests.exe
+                client/build/windows-tests/client-rich-presence-tests.exe
               cmake -E copy_directory libatrinik/tests/fixtures "${stage}/fixtures"
               cmake -E copy tools/ci/smoke_windows_server_package.ps1 "${stage}"
+              cmake -E copy tools/ci/smoke_windows_review_bundle.ps1 "${stage}"
             '
       - name: Cross-build Windows server
         run: |
@@ -637,6 +656,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "client-rich-presence-tests.exe failed with exit code ${LASTEXITCODE}"
           }
+
+          $reviewPackages = @(Get-ChildItem -LiteralPath $bundle -File `
+            -Filter "atrinik-classic-issue-477-windows-one-click-*.zip")
+          if ($reviewPackages.Count -ne 1) {
+            throw "Expected exactly one Windows review bundle, found $($reviewPackages.Count)"
+          }
+          & (Join-Path $bundle "smoke_windows_review_bundle.ps1") `
+            -Package $reviewPackages[0].FullName -Revision $env:COVERAGE_SHA
 
           $packages = @(Get-ChildItem -LiteralPath $bundle -File `
             -Filter "atrinik-classic-server-*-windows-x86_64.zip")
