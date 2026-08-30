@@ -142,10 +142,61 @@ static SDL_Surface *gpu_indexed_alpha_surface(int width) {
     return surface;
 }
 
+static SDL_Surface *gpu_opaque_rgb_surface(int width) {
+    SDL_Surface *surface = SDL_CreateSurface(width, 1, SDL_PIXELFORMAT_RGB24);
+    if (surface == NULL) {
+        return NULL;
+    }
+    SDL_Rect opaque = {1, 0, 1, 1};
+    SDL_Rect second_opaque = {2, 0, 1, 1};
+    bool success =
+        SDL_SetSurfaceBlendMode(surface, SDL_BLENDMODE_NONE) &&
+        SDL_FillSurfaceRect(surface, NULL, SDL_MapSurfaceRGB(surface, 80, 30, 220)) &&
+        SDL_FillSurfaceRect(surface, &opaque, SDL_MapSurfaceRGB(surface, 220, 40, 10)) &&
+        SDL_FillSurfaceRect(surface, &second_opaque, SDL_MapSurfaceRGB(surface, 10, 200, 80));
+    if (!success) {
+        SDL_DestroySurface(surface);
+        return NULL;
+    }
+    return surface;
+}
+
+static SDL_Surface *gpu_opaque_indexed_surface(int width) {
+    SDL_Surface *surface = SDL_CreateSurface(width, 1, SDL_PIXELFORMAT_INDEX8);
+    if (surface == NULL) {
+        return NULL;
+    }
+    SDL_Color colors[256];
+    for (size_t index = 0; index < SDL_arraysize(colors); index++) {
+        colors[index] = (SDL_Color){255, 255, 255, SDL_ALPHA_OPAQUE};
+    }
+    colors[0] = (SDL_Color){80, 30, 220, SDL_ALPHA_OPAQUE};
+    colors[1] = (SDL_Color){220, 40, 10, SDL_ALPHA_OPAQUE};
+    colors[2] = (SDL_Color){10, 200, 80, SDL_ALPHA_OPAQUE};
+    SDL_Palette *palette = SDL_CreatePalette(SDL_arraysize(colors));
+    SDL_Rect opaque = {1, 0, 1, 1};
+    SDL_Rect second_opaque = {2, 0, 1, 1};
+    bool success = palette != NULL;
+    if (success) {
+        success = SDL_SetPaletteColors(palette, colors, 0, SDL_arraysize(colors)) &&
+                  SDL_SetSurfacePalette(surface, palette);
+    }
+    SDL_DestroyPalette(palette);
+    success = success && SDL_SetSurfaceBlendMode(surface, SDL_BLENDMODE_NONE) &&
+              SDL_FillSurfaceRect(surface, NULL, 0) && SDL_FillSurfaceRect(surface, &opaque, 1) &&
+              SDL_FillSurfaceRect(surface, &second_opaque, 2);
+    if (!success) {
+        SDL_DestroySurface(surface);
+        return NULL;
+    }
+    return surface;
+}
+
 static bool gpu_transparency_checkpoint(SDL_Surface *source,
                                         const SDL_Rect *source_rectangle,
                                         const char *label,
                                         bool render_to_canvas,
+                                        bool first_pixel_transparent,
                                         bool partial_alpha,
                                         bool prime_shared_blend) {
     const Uint8 background_red = 17;
@@ -195,13 +246,16 @@ static bool gpu_transparency_checkpoint(SDL_Surface *source,
     Uint8 partial_red = partial_alpha ? alpha_blend_channel(10, background_red, 128) : 10;
     Uint8 partial_green = partial_alpha ? alpha_blend_channel(200, background_green, 128) : 200;
     Uint8 partial_blue = partial_alpha ? alpha_blend_channel(80, background_blue, 128) : 80;
+    Uint8 first_red = first_pixel_transparent ? background_red : 80;
+    Uint8 first_green = first_pixel_transparent ? background_green : 30;
+    Uint8 first_blue = first_pixel_transparent ? background_blue : 220;
     bool valid = checkpoint != NULL &&
                  surface_pixel_is_near(checkpoint,
                                        1,
                                        1,
-                                       background_red,
-                                       background_green,
-                                       background_blue,
+                                       first_red,
+                                       first_green,
+                                       first_blue,
                                        SDL_ALPHA_OPAQUE,
                                        1) &&
                  surface_pixel_is_near(checkpoint, 2, 1, 220, 40, 10, SDL_ALPHA_OPAQUE, 1) &&
@@ -1258,8 +1312,10 @@ int main(void) {
     SDL_Surface *keyed_xrgb = gpu_keyed_surface(SDL_PIXELFORMAT_XRGB8888, 513);
     SDL_Surface *indexed_alpha = gpu_indexed_alpha_surface(3);
     SDL_Surface *indexed_alpha_standalone = gpu_indexed_alpha_surface(513);
+    SDL_Surface *opaque_rgb = gpu_opaque_rgb_surface(513);
+    SDL_Surface *opaque_indexed = gpu_opaque_indexed_surface(3);
     GPU_REQUIRE(keyed_rgb != NULL && keyed_xrgb != NULL && indexed_alpha != NULL &&
-                indexed_alpha_standalone != NULL);
+                indexed_alpha_standalone != NULL && opaque_rgb != NULL && opaque_indexed != NULL);
     /* The 3-pixel sources exercise an atlas upload; width 513 exceeds the
      * renderer's 512-pixel UI-atlas entry limit and exercises standalone
      * textures while the source rectangle keeps the readback compact. */
@@ -1267,12 +1323,14 @@ int main(void) {
                                             &transparency_source,
                                             "keyed RGB atlas via canvas",
                                             true,
+                                            true,
                                             false,
                                             true));
     GPU_REQUIRE(gpu_transparency_checkpoint(keyed_xrgb,
                                             &transparency_source,
                                             "keyed XRGB standalone",
                                             false,
+                                            true,
                                             false,
                                             false));
     GPU_REQUIRE(gpu_transparency_checkpoint(indexed_alpha,
@@ -1280,17 +1338,35 @@ int main(void) {
                                             "indexed alpha atlas",
                                             false,
                                             true,
+                                            true,
                                             false));
     GPU_REQUIRE(gpu_transparency_checkpoint(indexed_alpha_standalone,
                                             &transparency_source,
                                             "indexed alpha standalone",
                                             false,
                                             true,
+                                            true,
+                                            false));
+    GPU_REQUIRE(gpu_transparency_checkpoint(opaque_rgb,
+                                            &transparency_source,
+                                            "opaque RGB standalone",
+                                            false,
+                                            false,
+                                            false,
+                                            false));
+    GPU_REQUIRE(gpu_transparency_checkpoint(opaque_indexed,
+                                            &transparency_source,
+                                            "opaque indexed atlas",
+                                            true,
+                                            false,
+                                            false,
                                             false));
     SDL_DestroySurface(keyed_rgb);
     SDL_DestroySurface(keyed_xrgb);
     SDL_DestroySurface(indexed_alpha);
     SDL_DestroySurface(indexed_alpha_standalone);
+    SDL_DestroySurface(opaque_rgb);
+    SDL_DestroySurface(opaque_indexed);
 
     gpu_renderer_statistics_reset();
     GPU_REQUIRE(draw_checkpoint(source, 0, 255, 0, 2048));
