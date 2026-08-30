@@ -238,6 +238,7 @@ static bool exit_landing_position(object *applier,
                                   int y,
                                   int direction,
                                   bool do_load,
+                                  bool map_entry_rules,
                                   exit_landing_t *landing) {
     mapstruct *map = do_load ? get_map_from_coord(destination, &x, &y)
                              : get_map_from_coord2(destination, &x, &y);
@@ -257,7 +258,12 @@ static bool exit_landing_position(object *applier,
     }
 
     int blocked_flags;
-    if (do_load) {
+    if (map_entry_rules) {
+        /* Explicit exits historically test their direct destination with the
+         * actor's occupancy rules but all terrain enabled. Adjacency uses the
+         * terrain-neutral map_free_spot() contract below. */
+        blocked_flags = blocked(applier, map, x, y, TERRAIN_ALL);
+    } else if (do_load) {
         blocked_flags = arch_blocked(arch, applier, map, x, y);
     } else {
         /* Match arch_blocked(arch, NULL, ...): static validation ignores
@@ -343,8 +349,20 @@ static bool exit_find_landing_internal(object *applier,
         return false;
     }
 
-    if (allow_direct &&
-        exit_landing_position(applier, arch, target_map, target_x, target_y, 0, do_load, landing)) {
+    /* Explicit exits enter through object_enter_map(), whose direct check
+     * uses actor occupancy with all terrain enabled and whose adjacency
+     * fallback matches map_free_spot(). Automatic links use allow_direct=false
+     * and retain actor-specific arch_blocked() checks. */
+    bool map_entry_rules = allow_direct && applier != NULL;
+    if (allow_direct && exit_landing_position(applier,
+                                              arch,
+                                              target_map,
+                                              target_x,
+                                              target_y,
+                                              0,
+                                              do_load,
+                                              map_entry_rules,
+                                              landing)) {
         return true;
     }
 
@@ -354,14 +372,16 @@ static bool exit_find_landing_internal(object *applier,
 
     exit_landing_t alternatives[SIZEOFFREE1];
     size_t alternatives_count = 0;
+    object *alternative_applier = map_entry_rules ? NULL : applier;
     for (int i = 1; i <= SIZEOFFREE1; i++) {
-        if (exit_landing_position(applier,
+        if (exit_landing_position(alternative_applier,
                                   arch,
                                   target_map,
                                   target_x + freearr_x[i],
                                   target_y + freearr_y[i],
                                   freedir[i],
                                   do_load,
+                                  false,
                                   &alternatives[alternatives_count])) {
             alternatives_count++;
         }

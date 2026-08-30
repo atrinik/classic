@@ -48,8 +48,10 @@ typedef struct exit_landing {
  *
  * The destination tile must contain a floor. If allow_direct is false, the
  * destination is used as the anchor for an adjacent landing, as used by
- * automatic links and shop mats. If fixed_pos is true, adjacent fallback is
- * disabled. The renderer must never call this function.
+ * automatic links and shop mats. If an applier is supplied with direct entry,
+ * the direct and adjacent checks preserve object_enter_map() behavior. If
+ * fixed_pos is true, adjacent fallback is disabled. The renderer must never
+ * call this function.
  */
 bool exit_find_landing(object *applier,
                        mapstruct *destination,
