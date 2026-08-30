@@ -14,12 +14,14 @@
 #include <global.h>
 
 #include <celestial_lunar.h>
+#include <celestial_override.h>
 #include <celestial_structure.h>
 #include <initialization.h>
 #include <light.h>
 #include <map.h>
 #include <object.h>
 #include <region.h>
+#include <server_main.h>
 #include <tod.h>
 
 #include <stdint.h>
@@ -117,6 +119,7 @@ static void celestial_model_for_map(const mapstruct *map,
     model->solar_brightness = brightness;
 
     region_celestial_lunar_input(profile, absolute_hour, &lunar_input);
+    (void)celestial_override_apply(profile->lunar_period, &lunar_input.lunar_age);
     if (!celestial_lunar_evaluate(&lunar_input, &lunar)) {
         return;
     }
@@ -375,15 +378,24 @@ static uint64_t celestial_key(const mapstruct *map,
                               const region_celestial_profile_t *profile,
                               const region_celestial_phases_t *phases) {
     uint64_t hash = UINT64_C(1469598103934665603);
+    region_celestial_phases_t effective_phases = *phases;
 #define MIX_CELESTIAL(value)                                                                   \
     do {                                                                                        \
         hash ^= (uint64_t)(value);                                                              \
         hash *= UINT64_C(1099511628211);                                                        \
     } while (0)
     MIX_CELESTIAL(profile->revision);
-    MIX_CELESTIAL(phases->solar);
-    MIX_CELESTIAL(phases->season);
-    MIX_CELESTIAL(phases->lunar);
+    MIX_CELESTIAL(effective_phases.solar);
+    MIX_CELESTIAL(effective_phases.season);
+    (void)celestial_override_apply(profile->lunar_period, &effective_phases.lunar);
+    MIX_CELESTIAL(effective_phases.lunar);
+    celestial_override_state_t override;
+    celestial_override_get(&override);
+    MIX_CELESTIAL(override.revision);
+    MIX_CELESTIAL(override.active);
+    MIX_CELESTIAL(override.mode);
+    MIX_CELESTIAL(override.value);
+    MIX_CELESTIAL(override.period);
     MIX_CELESTIAL(map->celestial_structure_revision);
     MIX_CELESTIAL(map->celestial_schema);
     for (size_t i = 0; i < TILED_NUM; i++) {
@@ -484,6 +496,18 @@ void celestial_light_invalidate(mapstruct *map) {
         cursor->celestial_light_valid = false;
         cursor->celestial_light_keyframe_valid = false;
         cursor = cursor->tile_map[TILED_DOWN];
+    }
+}
+
+void celestial_light_invalidate_all(void) {
+    for (mapstruct *map = first_map; map != NULL; map = map->next) {
+        if (map->celestial_schema != 1) {
+            continue;
+        }
+        /* The override state is part of celestial_key(). Keep the current
+         * generation so the next ensure observes a real key transition. */
+        map->celestial_light_keyframe_valid = false;
+        map->celestial_light_next_key = 0;
     }
 }
 
