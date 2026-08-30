@@ -192,6 +192,10 @@ void join_password_open(server_struct *server) {
 
     join_password_server = server;
     join_password_popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));
+    if (join_password_popup == NULL) {
+        join_password_server = NULL;
+        return;
+    }
     join_password_popup->draw_func = popup_draw;
     join_password_popup->event_func = popup_event;
     join_password_popup->destroy_callback_func = popup_destroy_callback;

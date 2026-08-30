@@ -91,6 +91,10 @@ color_picker_struct *color_chooser_open(void) {
     popup = popup_create(
         texture_get(TEXTURE_TYPE_SOFTWARE,
                     "rectangle:300,200;[bar=widget_bg][border=widget_border -1 -1 2]"));
+    if (popup == NULL) {
+        free(color_picker);
+        return NULL;
+    }
     popup->draw_func = popup_draw;
     popup->event_func = popup_event;
     popup->custom_data = color_picker;

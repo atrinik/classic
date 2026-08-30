@@ -119,6 +119,9 @@ void credits_show(void) {
     credits_height = box.h;
 
     popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));
+    if (popup == NULL) {
+        return;
+    }
     popup->draw_func = popup_draw_func;
 }
 
@@ -143,6 +146,9 @@ void credits_test_show(const char *message) {
               &box);
     credits_height = box.h;
     popup_struct *popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));
+    if (popup == NULL) {
+        return;
+    }
     popup->draw_func = popup_draw_func;
 }
 #endif

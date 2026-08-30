@@ -377,6 +377,8 @@ extern void text_test_font_path_set(const char *path);
 extern void text_test_mono_font_path_set(const char *path);
 extern void text_root_glyph_statistics_reset(void);
 extern void text_root_glyph_statistics_get(text_root_glyph_statistics_t *statistics);
+extern void text_root_glyph_test_suppress_once(void);
+extern bool text_test_measurement_preserves_selection(font_struct *font);
 #endif
 
 extern void text_offset_set(int x, int y);

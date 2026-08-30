@@ -270,6 +270,9 @@ void book_load(const char *data, int len) {
         popup_struct *popup;
 
         popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "book"));
+        if (popup == NULL) {
+            return;
+        }
         popup->draw_func = popup_draw_func;
         popup->draw_post_func = popup_draw_post_func;
         popup->event_func = popup_event_func;

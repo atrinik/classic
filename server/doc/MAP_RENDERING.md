@@ -28,9 +28,10 @@ cell only when a validated generation publishes content for that coordinate.
 The GPU albedo pass preserves painter order and writes an exact integer owner
 and compact-light index; the final pass consumes compact Q5.11 quad vertices
 directly with the checked tone/LUT rules. It does not allocate viewport-pixel
-light fields per physical depth. The
-logical setting defaults to 25 and is capped at the existing 28-cell wire
-ceiling; empty state for 28 by 28 across all 13 depths remains below 64 MiB.
+light fields per physical depth. The production logical setting remains 17.
+The 25-by-25 and 28-by-28 views are qualification-only fixtures until their
+hardware, correctness, and performance release gates pass; empty state for 28
+by 28 across all 13 depths remains below 64 MiB.
 
 Resize, fullscreen, display migration, foreground resume, swapchain failure,
 and submission failure all use the same complete reconstruction path. A

@@ -289,7 +289,7 @@ void socket_command_notification(uint8_t *data, size_t len, size_t pos) {
     cur_widget[NOTIFICATION_ID]->surface =
         surface_create_rgb(get_video_flags(), box.w, box.h, video_get_bpp(), 0, 0, 0, 0);
     if (cur_widget[NOTIFICATION_ID]->surface == NULL ||
-        !gpu_renderer_canvas_register(cur_widget[NOTIFICATION_ID]->surface)) {
+        !gpu_renderer_canvas_register(&cur_widget[NOTIFICATION_ID]->surface)) {
         LOG(ERROR, "Could not create retained GPU notification canvas: %s", SDL_GetError());
         notification_destroy();
         return;

@@ -929,6 +929,38 @@ static bool recover_and_republish(SDL_Window *window,
            after.resource_creations > before.resource_creations;
 }
 
+static bool canvas_registration_fault_checkpoint(void) {
+    SDL_Surface *canvas = SDL_CreateSurface(16, 16, SDL_PIXELFORMAT_RGBA32);
+    bool success = canvas != NULL && gpu_renderer_begin_frame();
+    if (success) {
+        gpu_renderer_conformance_fault_set(GPU_RENDERER_CONFORMANCE_FAULT_CANVAS_REGISTRATION);
+        success = !gpu_renderer_canvas_register(&canvas) && canvas == NULL &&
+                  !gpu_renderer_frame_valid() && !gpu_renderer_present();
+    }
+    SDL_DestroySurface(canvas);
+    if (!success) {
+        SDL_SetError(
+            "failed canvas registration did not invalidate the frame and release ownership");
+    }
+    return success;
+}
+
+static bool canvas_registration_retry_checkpoint(void) {
+    SDL_Surface *canvas = SDL_CreateSurface(16, 16, SDL_PIXELFORMAT_RGBA32);
+    SDL_FRect destination = {8.0f, 8.0f, 16.0f, 16.0f};
+    bool success = canvas != NULL && gpu_renderer_begin_frame() &&
+                   gpu_renderer_canvas_register(&canvas) &&
+                   gpu_renderer_canvas_registered(canvas) &&
+                   gpu_renderer_canvas_fill(canvas, NULL, 32, 96, 192, SDL_ALPHA_OPAQUE) &&
+                   gpu_renderer_draw_surface(canvas, NULL, &destination) &&
+                   gpu_renderer_present() && gpu_renderer_conformance_wait_idle();
+    SDL_DestroySurface(canvas);
+    if (!success) {
+        SDL_SetError("canvas registration did not recover on the next recreated canvas");
+    }
+    return success;
+}
+
 int main(void) {
 #define GPU_REQUIRE(_condition)                                     \
     do {                                                            \
@@ -1073,6 +1105,10 @@ int main(void) {
     GPU_REQUIRE(retained_primary_auxiliary_checkpoint(source, sources[3], false));
     gpu_renderer_statistics_reset();
     GPU_REQUIRE(retained_primary_auxiliary_checkpoint(source, sources[3], true));
+
+    GPU_REQUIRE(canvas_registration_fault_checkpoint());
+    GPU_REQUIRE(recover_and_republish(window, source, qualified, 2048));
+    GPU_REQUIRE(canvas_registration_retry_checkpoint());
 
     gpu_renderer_conformance_fault_set(GPU_RENDERER_CONFORMANCE_FAULT_ALLOCATION);
     GPU_REQUIRE(!draw_checkpoint(source, 255, 0, 255, 2048));

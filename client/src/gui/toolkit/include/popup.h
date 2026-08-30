@@ -236,6 +236,7 @@ extern void connection_preference_open(server_struct *server);
 
 /** Public API implemented in src/gui/toolkit/popup.c. */
 
+/** Create a popup, or return NULL when its retained GPU canvas cannot be created. */
 extern popup_struct *popup_create(texture_struct *texture);
 
 extern void popup_destroy(popup_struct *popup);

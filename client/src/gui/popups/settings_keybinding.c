@@ -405,6 +405,9 @@ void settings_keybinding_open(void) {
     popup_struct *popup;
 
     popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));
+    if (popup == NULL) {
+        return;
+    }
     popup->draw_func = popup_draw;
     popup->event_func = popup_event;
     popup->destroy_callback_func = popup_destroy_callback;

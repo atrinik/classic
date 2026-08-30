@@ -1528,6 +1528,23 @@ typedef struct gpu_player_view_ui_closure {
 
 static gpu_player_view_ui_closure_t gpu_player_view_ui_closure;
 
+static bool gpu_player_view_root_glyphs_match(const gpu_player_view_ui_state_t *state) {
+    uint64_t expected_count;
+    uint64_t expected_hash;
+    if (strcmp(state->name, "intro_server_browser") == 0) {
+        expected_count = 383;
+        expected_hash = UINT64_C(0x29c427a4eff9acbd);
+    } else if (strcmp(state->name, "login_popup") == 0 ||
+               strcmp(state->name, "popup_character_selection") == 0) {
+        expected_count = 385;
+        expected_hash = UINT64_C(0x4266544b0b8b6fbd);
+    } else {
+        return true;
+    }
+    return state->root_glyphs.count == expected_count &&
+           state->root_glyphs.semantic_hash == expected_hash;
+}
+
 static bool gpu_player_view_ui_capture(const char *name, bool notification_fade) {
     if (gpu_player_view_ui_closure.states_num >= PLAYER_VIEW_UI_STATES) {
         SDL_SetError("UI closure state capacity exceeded before %s", name);
@@ -1543,6 +1560,12 @@ static bool gpu_player_view_ui_capture(const char *name, bool notification_fade)
     }
     gpu_renderer_statistics_reset();
     text_root_glyph_statistics_reset();
+    const char *suppressed_root_glyph =
+        SDL_GetEnvironmentVariable(SDL_GetEnvironment(),
+                                   "ATRINIK_GPU_CONFORMANCE_TEST_SUPPRESS_ROOT_GLYPH");
+    if (suppressed_root_glyph != NULL && strcmp(suppressed_root_glyph, name) == 0) {
+        text_root_glyph_test_suppress_once();
+    }
     if (notification_fade && !notification_test_fade(2500)) {
         SDL_SetError("could not advance notification fade for steady %s", name);
         return false;
@@ -1561,6 +1584,7 @@ static bool gpu_player_view_ui_capture(const char *name, bool notification_fade)
         !gpu_player_view_slot_uniform_uploads_bounded(&state->steady) ||
         state->steady.resource_creations != 0 || state->steady.resource_destructions != 0 ||
         state->steady.readbacks != 0 || state->steady.fallbacks != 0 ||
+        !gpu_player_view_root_glyphs_match(state) ||
         !gpu_renderer_output_size(&state->width, &state->height) ||
         !gpu_player_view_checkpoint_named(name,
                                           state->digest,
@@ -3216,6 +3240,12 @@ int gpu_player_view_main(int argc, char *argv[]) {
      * map-specific font override. */
     text_init();
     text_ready = true;
+#ifdef ATRINIK_WIDGET_TESTS
+    if (!text_test_measurement_preserves_selection(FONT_ARIAL11)) {
+        fprintf(stderr, "gpu-player-view: text measurement mutated an active root selection\n");
+        goto cleanup;
+    }
+#endif
     sprite_init_system();
     texture_init();
     texture_ready = true;

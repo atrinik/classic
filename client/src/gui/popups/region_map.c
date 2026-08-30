@@ -489,6 +489,9 @@ void region_map_open(void) {
     }
 
     popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "region_map"));
+    if (popup == NULL) {
+        return;
+    }
     popup->draw_post_func = popup_draw_post_func;
     popup->event_func = popup_event_func;
     popup->destroy_callback_func = popup_destroy_callback;

@@ -179,6 +179,10 @@ void connection_preference_open(server_struct *server) {
     }
     preference_server->port = server->port;
     preference_popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));
+    if (preference_popup == NULL) {
+        preference_server = NULL;
+        return;
+    }
     preference_popup->draw_func = popup_draw;
     preference_popup->event_func = popup_event;
     preference_popup->destroy_callback_func = popup_destroy_callback;

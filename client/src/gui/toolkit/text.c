@@ -64,6 +64,28 @@ static int64_t *selection_end = NULL;
 /** If 1, selection start has been set, and the end should be updated next. */
 static uint8_t *selection_started = NULL;
 
+#ifdef ATRINIK_WIDGET_TESTS
+static bool text_test_mouse_override;
+static SDL_MouseButtonFlags text_test_mouse_state;
+static int text_test_mouse_x;
+static int text_test_mouse_y;
+#endif
+
+static SDL_MouseButtonFlags text_mouse_get_state(int *x, int *y) {
+#ifdef ATRINIK_WIDGET_TESTS
+    if (text_test_mouse_override) {
+        if (x != NULL) {
+            *x = text_test_mouse_x;
+        }
+        if (y != NULL) {
+            *y = text_test_mouse_y;
+        }
+        return text_test_mouse_state;
+    }
+#endif
+    return mouse_get_state(x, y);
+}
+
 /** Default link color. */
 static SDL_Color text_link_color_default = {96, 160, 255, 0};
 /** Current text link color. */
@@ -231,6 +253,7 @@ static font_struct *fonts;
 static const char *text_test_font_path;
 static const char *text_test_mono_font_path;
 static text_root_glyph_statistics_t text_root_glyph_statistics;
+static bool text_root_glyph_suppress_once;
 
 static void text_root_glyph_hash_u32(uint32_t value) {
     for (size_t shift = 0; shift < sizeof(value) * CHAR_BIT; shift += CHAR_BIT) {
@@ -269,6 +292,10 @@ void text_root_glyph_statistics_reset(void) {
 void text_root_glyph_statistics_get(text_root_glyph_statistics_t *statistics) {
     HARD_ASSERT(statistics != NULL);
     *statistics = text_root_glyph_statistics;
+}
+
+void text_root_glyph_test_suppress_once(void) {
+    text_root_glyph_suppress_once = true;
 }
 #endif
 
@@ -770,7 +797,10 @@ char *text_escape_markup(const char *buf) {
  * @return
  * 1 if mouse-related checks can happen, 0 otherwise.
  */
-static int text_adjust_coords(SDL_Surface *surface, int *mx, int *my) {
+static int text_adjust_coords(SDL_Surface *surface, bool render_root, int *mx, int *my) {
+    if (surface == NULL && !render_root) {
+        return 0;
+    }
     if (popup_get_head() && surface != popup_get_head()->surface) {
         return 0;
     }
@@ -1720,9 +1750,10 @@ int text_show_character(font_struct **font,
                 char tooltip_width[MAX_BUF], tooltip_height[MAX_BUF], tooltip_text[HUGE_BUF];
                 int tooltip_max_width;
 
-                mouse_get_state(&mx, &my);
+                text_mouse_get_state(&mx, &my);
 
-                if (text_adjust_coords(surface, &mx, &my) && mx >= dest->x && my >= dest->y &&
+                if (text_adjust_coords(surface, render, &mx, &my) && mx >= dest->x &&
+                    my >= dest->y &&
                     sscanf(tag + 9,
                            "%64s %64s %d %512[^]>]",
                            tooltip_width,
@@ -1758,7 +1789,7 @@ int text_show_character(font_struct **font,
                     }
 
                     if (mx < dest->x + wd && my < dest->y + ht) {
-                        mouse_get_state(&mx, &my);
+                        text_mouse_get_state(&mx, &my);
                         tooltip_create(mx, my, *font, tooltip_text);
 
                         if (tooltip_max_width >= 0) {
@@ -1988,11 +2019,11 @@ int text_show_character(font_struct **font,
                 text_anchor_execute(info, text_anchor_info_ptr);
             }
 
-            state = mouse_get_state(&mx, &my);
+            state = text_mouse_get_state(&mx, &my);
             orig_mx = mx;
             orig_my = my;
 
-            if (text_adjust_coords(surface, &mx, &my)) {
+            if (text_adjust_coords(surface, render, &mx, &my)) {
                 if (mx >= dest->x && mx < dest->x + width && my >= dest->y &&
                     my < dest->y + FONT_HEIGHT(*font)) {
                     static uint32_t ticks = 0;
@@ -2095,11 +2126,17 @@ int text_show_character(font_struct **font,
                         : ttf_surface->h;
 
 #ifdef ATRINIK_WIDGET_TESTS
-        if (surface == NULL) {
+        bool suppress_root_glyph = surface == NULL && text_root_glyph_suppress_once;
+        if (suppress_root_glyph) {
+            text_root_glyph_suppress_once = false;
+        } else if (surface == NULL) {
             text_root_glyph_record(codepoint, flags);
         }
+        if (!suppress_root_glyph)
 #endif
-        surface_blit(ttf_surface, &srcrect, surface, &dstrect);
+        {
+            surface_blit(ttf_surface, &srcrect, surface, &dstrect);
+        }
     }
 
 rendered:
@@ -2246,7 +2283,8 @@ int glyph_get_height(font_struct *font, char c) {
             color = select_color_orig;                                                            \
             select_color_changed = 0;                                                             \
         }                                                                                         \
-        if (selection_start && selection_end && mstate == SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) {     \
+        if (render_target && selection_start && selection_end &&                                  \
+            mstate == SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) {                                         \
             if (my >= dest.y &&                                                                   \
                 my <= dest.y + FONT_HEIGHT(FONT_TRY_INFO(font, info, render_target)) &&           \
                 mx >= old_x &&                                                                    \
@@ -2343,10 +2381,10 @@ static void text_show_impl(SDL_Surface *surface,
         }
     }
 
-    if (selection_start && selection_end) {
-        mstate = mouse_get_state(&mx, &my);
+    if (render_target && selection_start && selection_end) {
+        mstate = text_mouse_get_state(&mx, &my);
 
-        if (!text_adjust_coords(surface, &mx, &my)) {
+        if (!text_adjust_coords(surface, render_root, &mx, &my)) {
             mstate = 0;
         }
 
@@ -2448,8 +2486,8 @@ static void text_show_impl(SDL_Surface *surface,
                 }
             }
 
-            if (selection_start && selection_end && mstate == SDL_BUTTON_MASK(SDL_BUTTON_LEFT) &&
-                box && my >= dest.y &&
+            if (render_target && selection_start && selection_end &&
+                mstate == SDL_BUTTON_MASK(SDL_BUTTON_LEFT) && box && my >= dest.y &&
                 my <= dest.y + FONT_HEIGHT(FONT_TRY_INFO(font, info, render_target)) &&
                 mx >= dest.x && mx <= dest.x + (box->w - (dest.x - info.start_x))) {
                 if (*selection_started) {
@@ -2557,8 +2595,8 @@ static void text_show_impl(SDL_Surface *surface,
         }
     }
 
-    if (selection_start && selection_end && mstate == SDL_BUTTON_MASK(SDL_BUTTON_LEFT) && box &&
-        my >= dest.y + max_height &&
+    if (render_target && selection_start && selection_end &&
+        mstate == SDL_BUTTON_MASK(SDL_BUTTON_LEFT) && box && my >= dest.y + max_height &&
         my <= dest.y + max_height + (box->h - ((dest.y + max_height) - info.start_y))) {
         if (*selection_started) {
             *selection_end = cp - text;
@@ -2904,6 +2942,31 @@ void text_get_width_height(font_struct *font,
         *h = box2.h;
     }
 }
+
+#ifdef ATRINIK_WIDGET_TESTS
+bool text_test_measurement_preserves_selection(font_struct *font) {
+    int64_t start = 7;
+    int64_t end = 11;
+    uint8_t started = 1;
+    SDL_Rect box = {.w = 256, .h = 64};
+    int width;
+    int height;
+    text_set_selection(&start, &end, &started);
+    text_test_mouse_override = true;
+    text_test_mouse_state = SDL_BUTTON_MASK(SDL_BUTTON_LEFT);
+    text_test_mouse_x = 0;
+    text_test_mouse_y = 0;
+    text_get_width_height(font,
+                          "[h=#ff0000]selectable highlighted text[/h]",
+                          TEXT_MARKUP,
+                          &box,
+                          &width,
+                          &height);
+    text_test_mouse_override = false;
+    text_set_selection(NULL, NULL, NULL);
+    return start == 7 && end == 11 && started == 1 && width > 0 && height > 0;
+}
+#endif
 
 /**
  * Truncate a text string if overflow would occur when rendering it.

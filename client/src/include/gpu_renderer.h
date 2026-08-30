@@ -99,6 +99,7 @@ typedef enum gpu_renderer_conformance_fault {
     GPU_RENDERER_CONFORMANCE_FAULT_DEVICE_LOSS,
     GPU_RENDERER_CONFORMANCE_FAULT_READBACK,
     GPU_RENDERER_CONFORMANCE_FAULT_UI_ATLAS_UPLOAD,
+    GPU_RENDERER_CONFORMANCE_FAULT_CANVAS_REGISTRATION,
 } gpu_renderer_conformance_fault_t;
 
 /** Test-only CPU-emulated GPU entry point; production always requires hardware. */
@@ -154,7 +155,8 @@ bool gpu_renderer_draw_surface_scaled_to(SDL_Surface *target,
                                          const SDL_Rect *source,
                                          const SDL_FRect *destination,
                                          SDL_ScaleMode scale_mode);
-bool gpu_renderer_canvas_register(SDL_Surface *surface);
+/** Register an owned canvas, destroying and nulling it on any failure. */
+bool gpu_renderer_canvas_register(SDL_Surface **surface);
 bool gpu_renderer_canvas_registered(SDL_Surface *surface);
 bool gpu_renderer_canvas_fill(SDL_Surface *surface,
                               const SDL_Rect *rectangle,

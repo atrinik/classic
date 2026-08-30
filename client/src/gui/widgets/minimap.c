@@ -170,7 +170,7 @@ static void widget_draw(widgetdata *widget) {
             LOG(ERROR, "Could not create minimap widget surface: %s", SDL_GetError());
             return;
         }
-        if (!gpu_renderer_canvas_register(widget->surface)) {
+        if (!gpu_renderer_canvas_register(&widget->surface)) {
             LOG(ERROR, "Could not create retained GPU minimap target: %s", SDL_GetError());
             return;
         }

@@ -1122,25 +1122,49 @@ static bool gpu_renderer_canvas_texture_create(gpu_canvas_t *canvas) {
     return true;
 }
 
-bool gpu_renderer_canvas_register(SDL_Surface *surface) {
-    if (surface == NULL) {
-        return false;
+bool gpu_renderer_canvas_register(SDL_Surface **surface_pointer) {
+    if (surface_pointer == NULL || *surface_pointer == NULL) {
+        return gpu_renderer_frame_result(false);
     }
+    SDL_Surface *surface = *surface_pointer;
     gpu_canvas_t *canvas = gpu_renderer_canvas(surface);
     if (canvas == NULL) {
         canvas = xcalloc(1, sizeof(*canvas));
         canvas->surface = surface;
         canvas->next = canvases;
         canvases = canvas;
-        if (!SDL_SetPointerPropertyWithCleanup(SDL_GetSurfaceProperties(surface),
-                                               GPU_RENDERER_CANVAS_PROPERTY,
-                                               canvas,
-                                               gpu_renderer_canvas_cleanup,
-                                               NULL)) {
+        bool injected = false;
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+        injected =
+            gpu_renderer_conformance_fault_take(GPU_RENDERER_CONFORMANCE_FAULT_CANVAS_REGISTRATION);
+#endif
+        if (injected) {
+            gpu_renderer_canvas_cleanup(NULL, canvas);
+            canvas = NULL;
+        } else if (SDL_SetPointerPropertyWithCleanup(SDL_GetSurfaceProperties(surface),
+                                                     GPU_RENDERER_CANVAS_PROPERTY,
+                                                     canvas,
+                                                     gpu_renderer_canvas_cleanup,
+                                                     NULL)) {
+            canvas = gpu_renderer_canvas(surface);
+        } else {
+            /* SDL invokes the supplied cleanup callback when setting fails. */
+            canvas = NULL;
+        }
+        if (canvas == NULL) {
+            gpu_renderer_frame_result(false);
+            SDL_DestroySurface(surface);
+            *surface_pointer = NULL;
             return false;
         }
     }
-    return renderer == NULL || gpu_renderer_canvas_texture_create(canvas);
+    if (renderer != NULL && !gpu_renderer_canvas_texture_create(canvas)) {
+        gpu_renderer_frame_result(false);
+        SDL_DestroySurface(surface);
+        *surface_pointer = NULL;
+        return false;
+    }
+    return true;
 }
 
 bool gpu_renderer_canvas_registered(SDL_Surface *surface) {
