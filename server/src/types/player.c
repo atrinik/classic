@@ -3651,7 +3651,7 @@ bool player_load_stream(player *pl, FILE *fp) {
                 continue;
             }
             stuck_cooldown_seen = true;
-            if (buf[14] != ' ' || buf[15] < '0' || buf[15] > '9') {
+            if (line_length <= 15 || buf[14] != ' ' || buf[15] < '0' || buf[15] > '9') {
                 LOG(ERROR,
                     "Invalid persisted /stuck cooldown for %s; retaining a fail-closed cooldown.",
                     pl->ob != NULL && pl->ob->name != NULL ? pl->ob->name : "<unnamed>");

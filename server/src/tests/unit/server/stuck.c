@@ -388,6 +388,19 @@ START_TEST(test_stuck_malformed_persisted_cooldown_fails_closed) {
 }
 END_TEST
 
+START_TEST(test_stuck_truncated_persisted_cooldown_fails_closed) {
+    FILE *fp = tmpfile();
+    ck_assert_ptr_nonnull(fp);
+    ck_assert_int_ne(fputs("stuck_cooldown ", fp), EOF);
+    rewind(fp);
+
+    object *restored;
+    player *loaded_state = stuck_test_load_state(fp, "Stuck Truncated Reload", &restored);
+    ck_assert_int_eq(fclose(fp), 0);
+    ck_assert_int_eq(loaded_state->stuck_cooldown.seconds, INT64_MAX);
+}
+END_TEST
+
 START_TEST(test_stuck_negative_in_memory_cooldown_fails_closed) {
     mapstruct *map;
     object *pl;
@@ -550,6 +563,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_stuck_rejects_unavailable_recovery_location_without_moving);
     tcase_add_test(tc_core, test_stuck_cooldown_survives_save_load_and_reconnect);
     tcase_add_test(tc_core, test_stuck_malformed_persisted_cooldown_fails_closed);
+    tcase_add_test(tc_core, test_stuck_truncated_persisted_cooldown_fails_closed);
     tcase_add_test(tc_core, test_stuck_negative_in_memory_cooldown_fails_closed);
     tcase_add_test(tc_core, test_stuck_main_processes_expired_countdown_in_post_event_phase);
     tcase_add_test(tc_core, test_stuck_save_failure_does_not_arm_or_persist_cooldown);
