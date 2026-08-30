@@ -866,7 +866,7 @@ jobs:
             https://api.codecov.io/api/v2/github/${{ github.repository_owner }}/repos/${{ github.event.repository.name }}/totals/
         run: |
           set -euo pipefail
-          for attempt in {1..30}; do
+          for attempt in {1..90}; do
             reports_ready=true
             for flag in client-unit client-gpu; do
               if ! sessions=$(
@@ -883,10 +883,10 @@ jobs:
               echo "Codecov processed both client coverage reports."
               exit 0
             fi
-            echo "Waiting for Codecov client coverage processing (${attempt}/30)..."
+            echo "Waiting for Codecov client coverage processing (${attempt}/90)..."
             sleep 10
           done
-          echo "Codecov did not process both client coverage reports within five minutes." >&2
+          echo "Codecov did not process both client coverage reports within 15 minutes." >&2
           exit 1
 
   integrated:

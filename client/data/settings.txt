@@ -201,17 +201,17 @@ category Map
 	end
 	setting Map width
 		type range
-		range 9 - 28
+		range 9 - 17
 		advance 1
-		default 25
-		desc Logical map width. The validated wire ceiling is 28.
+		default 17
+		desc Logical map width. Larger qualification views remain unavailable until their release gates pass.
 	end
 	setting Map height
 		type range
-		range 9 - 28
+		range 9 - 17
 		advance 1
-		default 25
-		desc Logical map height. The validated wire ceiling is 28.
+		default 17
+		desc Logical map height. Larger qualification views remain unavailable until their release gates pass.
 	end
 end
 
