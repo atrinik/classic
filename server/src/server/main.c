@@ -100,6 +100,10 @@ void version(object *op) {
         draw_info(COLOR_WHITE, op, buf);
     } else {
         LOG(INFO, "%s", buf);
+        LOG(INFO,
+            "Build identity: revision=%s dirty=%s",
+            ATRINIK_BENCHMARK_REVISION,
+            ATRINIK_BENCHMARK_DIRTY);
     }
 }
 

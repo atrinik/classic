@@ -49,6 +49,19 @@ static uint8_t book_help_history_enabled = 0;
 /** Scrollbar in the book GUI. */
 static scrollbar_struct scrollbar;
 
+static void book_state_clear(void) {
+    if (book_help_history != NULL) {
+        utarray_free(book_help_history);
+        book_help_history = NULL;
+    }
+    book_help_history_enabled = 0;
+    free(book_content);
+    book_content = NULL;
+    book_lines = 0;
+    book_scroll_lines = 0;
+    book_scroll = 0;
+}
+
 /**
  * Change the book's displayed name.
  * @param name
@@ -189,17 +202,7 @@ static int popup_event_func(popup_struct *popup, SDL_Event *event) {
 /** @copydoc popup_struct::destroy_callback_func */
 static int popup_destroy_callback(popup_struct *popup) {
     (void)popup;
-
-    if (book_help_history) {
-        utarray_free(book_help_history);
-        book_help_history = NULL;
-    }
-
-    book_help_history_enabled = 0;
-
-    free(book_content);
-    book_content = NULL;
-
+    book_state_clear();
     return 1;
 }
 
@@ -247,6 +250,7 @@ bool book_load(const char *data, int len) {
 
     /* No data... */
     if (book_content[0] == '\0') {
+        book_state_clear();
         return true;
     }
 
@@ -271,6 +275,7 @@ bool book_load(const char *data, int len) {
 
         popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "book"));
         if (popup == NULL) {
+            book_state_clear();
             return false;
         }
         popup->draw_func = popup_draw_func;
@@ -303,6 +308,12 @@ bool book_load(const char *data, int len) {
     popup_get_head()->redraw = 1;
     return true;
 }
+
+#ifdef ATRINIK_WIDGET_TESTS
+bool book_test_content_retained(void) {
+    return book_content != NULL;
+}
+#endif
 
 /**
  * Redraw the book GUI.

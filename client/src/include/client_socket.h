@@ -42,8 +42,16 @@ extern void socket_thread_stop(void);
 
 extern int handle_socket_shutdown(void);
 
+/** Whether the transport thread has requested main-thread shutdown handling. */
+extern bool client_socket_shutdown_pending(void);
+
 /** Whether a live client connection is present. */
 extern bool client_socket_active(void);
+
+#ifdef ATRINIK_WIDGET_TESTS
+/** Set the transport shutdown flag without starting an I/O thread. */
+extern void client_socket_shutdown_test_set(bool pending);
+#endif
 
 /** Snapshot the live QUIC connection mode while holding its lifetime lock. */
 extern bool client_socket_connection_mode(socket_connection_mode_t *mode);

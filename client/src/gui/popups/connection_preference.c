@@ -208,6 +208,14 @@ bool connection_preference_recover(void) {
     return true;
 }
 
+void connection_preference_popup_deinit(void) {
+    if (preference_popup != NULL) {
+        popup_destroy(preference_popup);
+    } else {
+        preference_server_free();
+    }
+}
+
 #ifdef ATRINIK_WIDGET_TESTS
 bool connection_preference_test_pending(void) {
     return preference_server != NULL && preference_popup == NULL;

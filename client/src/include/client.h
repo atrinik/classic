@@ -169,6 +169,12 @@ extern void client_command_retry_clear(void);
 #ifdef ATRINIK_WIDGET_TESTS
 /** Dispatch one complete envelope through the production table. */
 extern bool client_command_dispatch_test(uint8_t *data, size_t len);
+
+/** Whether an exact command envelope is retained for post-recovery replay. */
+extern bool client_command_retry_test_pending(void);
+
+/** Exercise the production recovery republish callback. */
+extern bool gpu_renderer_recovery_republish_test(void);
 #endif
 
 /** Drain inbound envelopes through the production dispatcher using an injected clock. */

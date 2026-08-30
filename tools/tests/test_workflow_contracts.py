@@ -1175,6 +1175,11 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("smoke_windows_server_package.ps1", build)
         self.assertIn("server/build/windows-pr-package/*.zip", build)
+        self.assertEqual(build.count('--env ATRINIK_BENCHMARK_REVISION="${COVERAGE_SHA}"'), 2)
+        self.assertEqual(build.count("--env ATRINIK_BENCHMARK_DIRTY=false"), 2)
+        self.assertIn("tools/release/compose_windows_review_bundle.py", build)
+        self.assertIn("--revision \"${COVERAGE_SHA}\"", build)
+        self.assertIn("windows-one-click-${COVERAGE_SHA:0:7}.zip", build)
 
         self.assertIn("runs-on: windows-2025", run)
         self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", run)

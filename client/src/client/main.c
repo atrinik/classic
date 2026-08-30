@@ -639,6 +639,10 @@ static bool gpu_renderer_recovery_apply_window(void *userdata) {
 
 static bool gpu_renderer_recovery_republish(void *userdata) {
     (void)userdata;
+    if (client_socket_shutdown_pending()) {
+        SDL_SetError("connection closed before GPU recovery republish");
+        return false;
+    }
     if (!client_command_retry_deferred() || !connection_preference_recover()) {
         return false;
     }
@@ -684,10 +688,20 @@ static bool gpu_renderer_recovery_republish(void *userdata) {
     if (!gpu_renderer_frame_valid()) {
         return false;
     }
+    if (client_socket_shutdown_pending()) {
+        SDL_SetError("connection closed during GPU recovery republish");
+        return false;
+    }
     bool presented = gpu_renderer_present();
     map_benchmark_statistics_present(presented);
     return presented;
 }
+
+#ifdef ATRINIK_WIDGET_TESTS
+bool gpu_renderer_recovery_republish_test(void) {
+    return gpu_renderer_recovery_republish(NULL);
+}
+#endif
 
 static bool gpu_renderer_recover_frame(unsigned int *attempts, const char *context) {
     HARD_ASSERT(attempts != NULL);
@@ -716,6 +730,11 @@ static bool gpu_renderer_recover_frame(unsigned int *attempts, const char *conte
                                            NULL)) {
         /* The complete republished frame ended this failure incident. A later
          * independent device/window failure receives its own bounded attempt. */
+        *attempts = 0;
+        return true;
+    }
+
+    if (client_socket_shutdown_pending()) {
         *attempts = 0;
         return true;
     }
@@ -863,6 +882,10 @@ int main(int argc, char *argv[]) {
 
     logger_open_log(LOG_FILE);
     LOG(INFO,
+        "Build identity: revision=%s dirty=%s",
+        ATRINIK_BENCHMARK_REVISION,
+        ATRINIK_BENCHMARK_DIRTY);
+    LOG(INFO,
         "Direct rendezvous STUN discovery: %s",
         client_stun_source_name(clioption_settings.stun.source));
 
@@ -922,11 +945,6 @@ int main(int argc, char *argv[]) {
         /* Screenshot copies complete independently of the render loop. */
         gpu_renderer_readback_poll();
 
-        if (gpu_renderer_recreation_take_request() &&
-            !gpu_renderer_recover_frame(&gpu_recovery_attempts, "a window or display change")) {
-            break;
-        }
-
         uint64_t profile_game_started = render_profiler_begin();
 
         /* Have we been shutdown? */
@@ -948,6 +966,11 @@ int main(int argc, char *argv[]) {
             render_profiler_end(RENDER_PROFILE_FRAME, profile_frame_started);
             render_profiler_frame_finished(false);
             continue;
+        }
+
+        if (gpu_renderer_recreation_take_request() &&
+            !gpu_renderer_recover_frame(&gpu_recovery_attempts, "a window or display change")) {
+            break;
         }
 
         if (cpl.state > ST_CONNECT) {

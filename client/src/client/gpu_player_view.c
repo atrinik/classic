@@ -16,6 +16,7 @@
 
 #include <animations.h>
 #include <commands.h>
+#include <client_socket.h>
 #include <image_codec.h>
 #include <libxml/parser.h>
 #include <libxml/tree.h>
@@ -1833,8 +1834,19 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
         client_command_dispatch_test(characters_packet->data, characters_packet->len);
     packet_free(characters_packet);
     if (characters_dispatch_complete || cpl.state != ST_START ||
-        !gpu_renderer_recreation_take_request() || !gpu_player_view_recover_once(ScreenWindow) ||
-        cpl.state != ST_CHARACTERS || popup_get_head() == NULL) {
+        !client_command_retry_test_pending() || !gpu_renderer_recreation_take_request()) {
+        SDL_SetError("pre-frame CHARACTERS popup failure was not retained");
+        return false;
+    }
+    client_socket_shutdown_test_set(true);
+    bool disconnected_republish = gpu_renderer_recovery_republish_test();
+    client_socket_shutdown_test_set(false);
+    if (disconnected_republish || cpl.state != ST_START || !client_command_retry_test_pending()) {
+        SDL_SetError("disconnected CHARACTERS command was replayed during GPU recovery");
+        return false;
+    }
+    if (!gpu_player_view_recover_once(ScreenWindow) || cpl.state != ST_CHARACTERS ||
+        popup_get_head() == NULL) {
         SDL_SetError("pre-frame CHARACTERS popup failure was not retained and replayed");
         return false;
     }
@@ -1959,7 +1971,16 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
     popup_destroy_all();
 
     const char *book = "[b]Retained GPU book[/b]\nEvery glyph and border is GPU composed.";
-    book_load(book, (int)strlen(book));
+    popup_test_surface_allocation_fail_once();
+    if (book_load(book, (int)strlen(book)) || book_test_content_retained() ||
+        !gpu_renderer_recreation_take_request()) {
+        SDL_SetError("failed book popup retained content outside teardown ownership");
+        return false;
+    }
+    if (!book_load(book, (int)strlen(book))) {
+        SDL_SetError("book popup did not recover after allocation failure");
+        return false;
+    }
     if (!gpu_player_view_ui_capture("popup_book", false)) {
         return false;
     }
@@ -1985,6 +2006,12 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
     connection_preference_open(selected_server);
     if (!connection_preference_test_pending()) {
         SDL_SetError("pre-frame popup allocation failure did not retain its model");
+        return false;
+    }
+    connection_preference_popup_deinit();
+    if (connection_preference_test_pending() || connection_preference_test_active() ||
+        !gpu_renderer_recreation_take_request()) {
+        SDL_SetError("pending connection-preference model survived explicit teardown");
         return false;
     }
     popup_test_surface_allocation_fail_once();

@@ -65,6 +65,7 @@ void system_end(void) {
     tooltip_dismiss();
     object_deinit();
     notification_destroy();
+    connection_preference_popup_deinit();
     popup_destroy_all();
     resources_deinit();
     toolkit_widget_deinit();

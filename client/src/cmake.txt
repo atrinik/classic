@@ -7,7 +7,6 @@ set(SOURCES
 	src/client/face_loader.c
 	src/client/gpu_renderer.c
 	src/client/gpu_map_renderer.c
-	src/client/gpu_player_view.c
 	src/client/animations.c
 	src/client/client.c
 	src/client/client_command_queue.c
@@ -134,3 +133,7 @@ set(SOURCES
 	${SOURCES_TOOLKIT})
 
 list(APPEND SOURCES src/client/gpu_lighting_runtime.c)
+
+if (BUILD_TESTING)
+	list(APPEND SOURCES src/client/gpu_player_view.c)
+endif ()

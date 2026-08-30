@@ -235,6 +235,9 @@ extern void server_add_open(void);
 
 extern void connection_preference_open(server_struct *server);
 
+/** Release active or pending connection-preference popup state. */
+extern void connection_preference_popup_deinit(void);
+
 /** Recreate a pending connection-preference popup after GPU recovery. */
 extern bool connection_preference_recover(void);
 #ifdef ATRINIK_WIDGET_TESTS

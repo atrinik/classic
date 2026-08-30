@@ -344,6 +344,8 @@ jobs:
             --env CCACHE_TEMPDIR=/tmp/atrinik-libatrinik-ccache-tmp \
             --env CCACHE_MAXSIZE=250M \
             --env ATRINIK_PACKAGE_VERSION=0.0.0 \
+            --env ATRINIK_BENCHMARK_REVISION="${COVERAGE_SHA}" \
+            --env ATRINIK_BENCHMARK_DIRTY=false \
             --env ATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders \
             --env ATRINIK_DISCORD_APPLICATION_ID_FILE=/workspace/build/discord-test-application-id \
             --env PATH=/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
@@ -460,6 +462,8 @@ jobs:
             --user "$(id -u):$(id -g)" \
             --network none \
             --env ATRINIK_PACKAGE_VERSION=0.0.0 \
+            --env ATRINIK_BENCHMARK_REVISION="${COVERAGE_SHA}" \
+            --env ATRINIK_BENCHMARK_DIRTY=false \
             --env ATRINIK_DEPENDENCY_DOWNLOADS=/workspace/build/dependency-inputs/downloads \
             --env ATRINIK_DEPENDENCY_CACHE_DIR=/workspace/build/dependency-source-cache \
             --env CCACHE_DIR=/workspace/server/build/ccache \
@@ -472,6 +476,17 @@ jobs:
             bash tools/build-windows-package.sh build/windows-pr-package
           cp server/build/windows-pr-package/*.zip \
             libatrinik/build/windows-test-bundle/
+          mapfile -t client_packages < <(find client/build/windows-pr-package \
+            -maxdepth 1 -type f -name 'atrinik-classic-client-*-windows-x86_64.zip' -print)
+          mapfile -t server_packages < <(find server/build/windows-pr-package \
+            -maxdepth 1 -type f -name 'atrinik-classic-server-*-windows-x86_64.zip' -print)
+          test "${#client_packages[@]}" -eq 1
+          test "${#server_packages[@]}" -eq 1
+          python3 tools/release/compose_windows_review_bundle.py \
+            --client-package "${client_packages[0]}" \
+            --server-package "${server_packages[0]}" \
+            --output "libatrinik/build/windows-test-bundle/atrinik-classic-issue-477-windows-one-click-${COVERAGE_SHA:0:7}.zip" \
+            --revision "${COVERAGE_SHA}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: native-windows-tests

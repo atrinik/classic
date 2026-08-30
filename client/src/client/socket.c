@@ -329,6 +329,22 @@ int handle_socket_shutdown(void) {
     return 0;
 }
 
+bool client_socket_shutdown_pending(void) {
+    return socket_mutex != NULL && socket_thread_aborted();
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+void client_socket_shutdown_test_set(bool pending) {
+    if (socket_mutex == NULL) {
+        socket_mutex = SDL_CreateMutex();
+        HARD_ASSERT(socket_mutex != NULL);
+    }
+    SDL_LockMutex(socket_mutex);
+    abort_thread = pending;
+    SDL_UnlockMutex(socket_mutex);
+}
+#endif
+
 bool client_socket_active(void) {
     if (socket_mutex == NULL) {
         return csocket.sc != NULL;

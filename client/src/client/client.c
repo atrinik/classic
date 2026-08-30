@@ -124,6 +124,10 @@ static bool client_command_dispatch(uint8_t *data, size_t len, void *user_data) 
 bool client_command_dispatch_test(uint8_t *data, size_t len) {
     return client_command_dispatch(data, len, NULL);
 }
+
+bool client_command_retry_test_pending(void) {
+    return deferred_command != NULL;
+}
 #endif
 
 bool client_command_retry_deferred(void) {
