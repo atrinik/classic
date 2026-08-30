@@ -1822,6 +1822,11 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
     packet_writer_write_cstring(characters_packet, connection_id);
     packet_writer_write_cstring(characters_packet, "");
     packet_writer_write_uint64(characters_packet, 0);
+    packet_writer_write_cstring(characters_packet, "invalid_fixture_arch");
+    packet_writer_write_cstring(characters_packet, "Renderer Character");
+    packet_writer_write_cstring(characters_packet, "Frozen Region");
+    packet_writer_write_uint16(characters_packet, 0);
+    packet_writer_write_uint8(characters_packet, 1);
     popup_test_surface_allocation_fail_once();
     cpl.state = ST_START;
     bool characters_dispatch_complete =

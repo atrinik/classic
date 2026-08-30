@@ -100,6 +100,12 @@ static bool client_command_dispatch(uint8_t *data, size_t len, void *user_data) 
         packet_reader_scope_begin(&scope);
         packet_reader_init_at(&reader, data, len, pos);
         commands[type].handle_func(data, len, pos);
+        if (deferred_command != NULL) {
+            /* The exact envelope is retained for replay, so this dispatch
+             * intentionally owns the unread suffix without classifying it as
+             * malformed input. */
+            (void)packet_reader_skip(&reader, packet_reader_remaining(&reader));
+        }
         packet_error_t error = packet_reader_scope_finish(&scope);
         if (error != PACKET_ERROR_NONE) {
             LOG(ERROR,
