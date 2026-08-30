@@ -31,6 +31,22 @@ moon orbit/elevation/visibility, moon contribution, starlight contribution,
 and the process-local revision. It reports no hidden object, light-source, or
 structural identity.
 
+For the default world profile, these fixed-clock anchors make the principal
+diagnostic states reproducible:
+
+```text
+/settime 0
+/celestial phase full   # full, visible, moonlit night
+/settime 12
+/celestial phase full   # full phase below the horizon
+/settime 0
+/celestial phase new    # new/moonless night with starlight only
+```
+
+`/settime` changes only the ordinary calendar clock; the named phase remains
+the controlled lunar input. Use `status` after each command to record the
+effective age, elevation, visibility, and contribution strengths.
+
 ## Lifecycle and clock boundaries
 
 The state is process-wide so every connected client sees the same controlled
