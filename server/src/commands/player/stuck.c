@@ -116,7 +116,8 @@ static bool stuck_resolve_walk_on_exits(object *op, mapstruct **map, int *x, int
     HARD_ASSERT(x != NULL);
     HARD_ASSERT(y != NULL);
 
-    const int trigger_flag = QUERY_FLAG(op, FLAG_FLYING) ? P_FLY_ON : P_WALK_ON;
+    const bool flying = QUERY_FLAG(op, FLAG_FLYING);
+    const int trigger_flag = flying ? P_FLY_ON : P_WALK_ON;
     for (unsigned int depth = 0; depth < 4; depth++) {
         MapSpace *space = GET_MAP_SPACE_PTR(*map, *x, *y);
         if ((space->flags & trigger_flag) == 0) {
@@ -126,8 +127,8 @@ static bool stuck_resolve_walk_on_exits(object *op, mapstruct **map, int *x, int
         object *walk_on_exit = NULL;
         for (object *candidate = GET_MAP_OB(*map, *x, *y); candidate != NULL;
              candidate = candidate->above) {
-            if (!QUERY_FLAG(candidate,
-                            trigger_flag == P_FLY_ON ? FLAG_FLY_ON : FLAG_WALK_ON)) {
+            if ((flying && !QUERY_FLAG(candidate, FLAG_FLY_ON)) ||
+                (!flying && !QUERY_FLAG(candidate, FLAG_WALK_ON))) {
                 continue;
             }
 
