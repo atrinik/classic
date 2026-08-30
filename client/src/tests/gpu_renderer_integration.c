@@ -146,15 +146,24 @@ static bool gpu_transparency_checkpoint(SDL_Surface *source,
                                         const SDL_Rect *source_rectangle,
                                         const char *label,
                                         bool render_to_canvas,
-                                        bool partial_alpha) {
+                                        bool partial_alpha,
+                                        bool prime_shared_blend) {
     const Uint8 background_red = 17;
     const Uint8 background_green = 47;
     const Uint8 background_blue = 83;
     const SDL_FRect destination = {1.0f, 1.0f, 3.0f, 1.0f};
     const SDL_FRect background = {0.0f, 0.0f, 8.0f, 4.0f};
     const SDL_FRect canvas_destination = {0.0f, 0.0f, 8.0f, 4.0f};
+    const SDL_FRect prime_destination = {0.0f, 0.0f, 1.0f, 1.0f};
     SDL_Surface *canvas = NULL;
+    SDL_Surface *priming = NULL;
     bool success = gpu_renderer_begin_frame();
+    if (prime_shared_blend) {
+        priming = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+        success = success && priming != NULL &&
+                  SDL_FillSurfaceRect(priming, NULL, SDL_MapSurfaceRGBA(priming, 1, 2, 3, 255)) &&
+                  SDL_SetSurfaceBlendMode(priming, SDL_BLENDMODE_ADD);
+    }
     if (render_to_canvas) {
         canvas = SDL_CreateSurface(8, 4, SDL_PIXELFORMAT_RGBA32);
         success = success && canvas != NULL && gpu_renderer_canvas_register(&canvas) &&
@@ -164,6 +173,8 @@ static bool gpu_transparency_checkpoint(SDL_Surface *source,
                                            background_green,
                                            background_blue,
                                            SDL_ALPHA_OPAQUE) &&
+                  (!prime_shared_blend ||
+                   gpu_renderer_draw_surface_to(canvas, priming, NULL, &prime_destination)) &&
                   gpu_renderer_draw_surface_to(canvas, source, source_rectangle, &destination) &&
                   gpu_renderer_draw_surface(canvas, NULL, &canvas_destination);
     } else {
@@ -174,6 +185,8 @@ static bool gpu_transparency_checkpoint(SDL_Surface *source,
                                          background_blue,
                                          SDL_ALPHA_OPAQUE,
                                          true) &&
+                  (!prime_shared_blend ||
+                   gpu_renderer_draw_surface_to(NULL, priming, NULL, &prime_destination)) &&
                   gpu_renderer_draw_surface_to(NULL, source, source_rectangle, &destination);
     }
     success = success && gpu_renderer_present();
@@ -205,6 +218,7 @@ static bool gpu_transparency_checkpoint(SDL_Surface *source,
     }
     SDL_DestroySurface(checkpoint);
     bool idle = gpu_renderer_conformance_wait_idle();
+    SDL_DestroySurface(priming);
     SDL_DestroySurface(canvas);
     return success && valid && idle;
 }
@@ -1253,22 +1267,26 @@ int main(void) {
                                             &transparency_source,
                                             "keyed RGB atlas via canvas",
                                             true,
-                                            false));
+                                            false,
+                                            true));
     GPU_REQUIRE(gpu_transparency_checkpoint(keyed_xrgb,
                                             &transparency_source,
                                             "keyed XRGB standalone",
+                                            false,
                                             false,
                                             false));
     GPU_REQUIRE(gpu_transparency_checkpoint(indexed_alpha,
                                             &transparency_source,
                                             "indexed alpha atlas",
                                             false,
-                                            true));
+                                            true,
+                                            false));
     GPU_REQUIRE(gpu_transparency_checkpoint(indexed_alpha_standalone,
                                             &transparency_source,
                                             "indexed alpha standalone",
                                             false,
-                                            true));
+                                            true,
+                                            false));
     SDL_DestroySurface(keyed_rgb);
     SDL_DestroySurface(keyed_xrgb);
     SDL_DestroySurface(indexed_alpha);

@@ -1318,9 +1318,11 @@ static bool gpu_renderer_draw_surface_to_impl(SDL_Surface *target,
     SDL_BlendMode blend_mode = texture_blend_mode;
     if (surface_blend_mode != SDL_BLENDMODE_NONE) {
         blend_mode = surface_blend_mode;
-    } else if (blend_mode == SDL_BLENDMODE_NONE &&
-               (source_canvas != NULL ||
-                (surface_entry != NULL && surface_entry->has_texture_alpha))) {
+    } else if (source_canvas != NULL || (surface_entry != NULL && surface_entry->atlased)) {
+        /* Atlas and canvas textures are shared by multiple source surfaces. */
+        blend_mode = SDL_BLENDMODE_BLEND;
+    } else if (blend_mode == SDL_BLENDMODE_NONE && surface_entry != NULL &&
+               surface_entry->has_texture_alpha) {
         blend_mode = SDL_BLENDMODE_BLEND;
     }
     if (!SDL_SetTextureBlendMode(texture, blend_mode)) {
