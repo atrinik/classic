@@ -3082,6 +3082,8 @@ static bool gpu_player_view_lifecycle(SDL_Window *window,
 }
 
 int gpu_player_view_main(int argc, char *argv[]) {
+    /* Reserve stdout for the single machine-readable evidence record. */
+    logger_set_filter_stdout("-all");
     bool benchmark_mode = argc == 3 && strcmp(argv[0], "--gpu-player-view-benchmark") == 0;
     bool lifecycle_mode = argc == 2 && strcmp(argv[0], "--gpu-player-view-lifecycle") == 0;
     const gpu_player_view_workload_t *workload =
