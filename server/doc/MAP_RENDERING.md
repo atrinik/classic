@@ -1878,9 +1878,13 @@ display the complete profile digest used for continuous-link validation.
   sequence number in the same position. The client accepts only the exact next
   sequence with matching player coordinates, sub-layer, and a subset of the
   full update's declared depths, and clears pending state after the final
-  partial or any cache reset. Continuations never scroll or replace the active
-  depth mask, and every packet is independently preflighted before client state
-  mutation.
+  partial or any cache reset. The client retains every independently validated
+  envelope as bounded wire data until the complete sequence is present, then
+  applies the batch without returning to input, widgets, or presentation.
+  Continuations therefore never expose staged coordinates, cells, targets,
+  music, weather, footsteps, or ambient-sound movement across a command-budget
+  yield. Continuations never scroll or replace the active depth mask, and any
+  apply-time failure rolls back the complete batch before its effects publish.
   One 21x21 depth gains at most 18,963 RGB bytes; a dense regression fixture
   forces a previously valid level across the boundary and verifies that every
   resulting packet remains within and passes the shared preflight.
@@ -1922,7 +1926,7 @@ The contract uses these terms:
 | hard clear | A map/cache invalidation that removes remembered geometry, live records, ownership metadata, and dependent resources. |
 | sky/structural visibility | Camera presentation of authorized floors, walls, roofs, and linked-depth structure; it is separate from gameplay LOS. |
 | player field | A fixed-point neutral presentation contribution centered on the local player and clipped by current server authorization. |
-| stale | A live record that has received no newer authoritative update by the expiry bound; it is not targetable or annotatable. |
+| stale | A revoked live record retained only while its bounded fade completes; it is not targetable or annotatable. |
 
 ### MAP2 classification
 
@@ -1965,19 +1969,21 @@ cache generation; coordinate reuse cannot resurrect a prior map.
 | --- | --- | --- | --- |
 | New MAP2 cell/layer | Replace with the complete validated static result, or publish no remembered state for a transient-only result. | Replace only the records present in the transaction. | Validate the whole framed command and all continuations before publishing any part. |
 | Same-cell delta | Keep unchanged static fields and replace only fields named by the delta. | Replace or remove only authoritative records named by the delta. | A semantic blocker, fog, depth, or resource change increments the affected revision. |
-| Partial/continuation update | Stage all pieces outside live state. | Stage all pieces outside live state. | Missing, duplicate, out-of-order, oversize, or malformed continuation rolls back the complete transaction. |
+| Partial/continuation update | Retain validated envelopes without mutating live state; apply the complete batch in one unpublished transaction. | Retain validated envelopes without mutating live state; publish deferred audiovisual and interaction effects only with the final map generation. | The prior valid map state and retained primary/minimap projections remain the sole displayed/read/action generation across command-drain yields; missing, duplicate, out-of-order, oversize, malformed, interrupted, or renderer-recovery continuations discard the buffered batch or roll back apply-time state, including the movement reference. |
 | Soft LOS/FOW clear | Keep eligible remembered static geometry and its last authorized resources. | Remove current records or start bounded fade-out; remove interaction metadata at its cutoff. | No player boost or current live object is allowed behind the lost authorization. |
 | Hard clear/map replacement | Destroy all remembered geometry, owners, fields, source locks, and cache entries for the affected identity. | Destroy every live/transient record and annotation. | Publish an empty generation only after dependents are invalidated; stale data cannot reappear. |
 | Scroll out of the live 17-by-17 window | Translate/reuse only the matching physical cache coordinates; retain no more than the five-window bound. | Mark out-of-window records not currently authorized and begin fade/expiry. | Reuse is valid only when map identity, depth, revision, transform, and resource identity match. |
 | Scroll back/A-to-B-to-A | Reproduce the last authorized remembered geometry for A. | Do not restore actors/effects/annotations without a newer authoritative update. | A hard reset or map identity change makes A unavailable, not recoverable from B. |
 | Linked-depth add/remove/shift | Preserve signed physical-depth/elevation relationships; allocate only within `MAP2_LEVELS`. | Clear records belonging to removed or shifted depths. | Missing, cyclic, misaligned, or unresolved links fail closed and invalidate affected columns. |
 | Visibility enter | Keep remembered geometry and accept current records from the new MAP2 transaction. | Fade in only newly authorized records; local player is always fully visible. | Entering a radial field never substitutes for server authorization. |
-| Visibility leave | Keep remembered geometry at the memory presentation floor. | Fade out, remove interactions, then expire at the stale bound. | No live target or annotation remains after current visibility is lost. |
-| Stale expiry | Unchanged. | Remove the record and all interaction references. | Expiry is deterministic and cannot schedule continuous redraw after alpha reaches zero. |
-| Teleport, reconnect, logout, renderer shutdown, or reset | Hard clear the affected map/session generation. | Hard clear all live records and annotations. | Reconnect starts from a new server-authorized MAP2 history; no client cache is trusted across identity change. |
+| Visibility leave | Keep remembered geometry at the memory presentation floor. | Fade out, remove interactions, then expire at the fade bound. | No live target or annotation remains after current visibility is lost. |
+| Stale expiry | Unchanged. | Remove the revoked visual/interaction payload while retaining a zero-alpha, generation-bound presentation tombstone for later fade-in. | The delta protocol never treats elapsed time without a packet as authoritative absence; expiry is deterministic and cannot schedule continuous redraw after alpha reaches zero. |
+| Teleport, reconnect, logout, renderer shutdown, or reset | Hard clear the affected map/session generation. | Hard clear all live records and annotations. | Reconnect invalidates both retained world and minimap targets before a split first update can render; no client cache is trusted across identity change. |
 
 The local render clock is an injected monotonic integer-millisecond clock. It
-does not use wall time or random state. Pausing, focus loss, and minimized
+advances only while the presentation window is active, so minimizing or hiding
+the client suspends rather than completes in-progress fades. It does not use
+wall time or random state. Pausing, focus loss, and minimized
 windows suspend the presentation clock; they do not advance fades or expire a
 record. Resume consumes the next authoritative update and then advances from
 the saved clock value. A new map, renderer reset, or reconnect starts a new
@@ -1998,7 +2004,6 @@ frozen constants are:
 | Outer radius squared | 64 (radius 8) |
 | Field weight unit | 256 |
 | Actor/effect fade duration | 250 ms |
-| Stale live-record bound | 500 ms after the last authoritative update |
 | Full alpha | 255 |
 | Interaction cutoff | alpha below 192 or no current authorization |
 
@@ -2112,6 +2117,14 @@ Player screenshots enqueue a completed-frame GPU copy and return immediately;
 the client polls its fence on later iterations before PNG encoding. Synchronous
 readback exists only for explicit conformance checkpoints.
 
+The primary world traversal visits the complete negotiated wire window,
+including its two-tile overscan on all four edges. Candidate admission never
+uses only the 48-by-24 owning-tile anchor: wide and tall sprites may project
+into the viewport from any overscan owner. GPU scissoring rejects their actual
+off-screen pixels. Projected ground/roof lighting resolves one compact row key
+per destination pixel; structural sprites retain their fixed sample row. The
+projected-row lookup uploads only changed contiguous key runs after warmup.
+
 ### Optional shadows and dependency gates
 
 The server's aggregate celestial/local radiance and structural spill remain
@@ -2152,7 +2165,7 @@ The following vectors are mandatory in unit/fixture coverage:
 | current visible, neutral raw 1280, `d2=25` | `(1280,1280,1280)` | `520` each channel | 255 |
 | fade-in at 125 ms | unchanged light | unchanged | 128 |
 | fade-out at 125 ms | unchanged static geometry | none | 127 |
-| stale at 500 ms | unchanged remembered geometry only | none | 0 for live record |
+| revoked at 500 ms | unchanged remembered geometry only | none | 0 for live record |
 
 Tests must cover every classification row, new/same/partial MAP2, soft/hard
 clear, scroll out/back, A-to-B-to-A, resize, teleport, reconnect, pause and

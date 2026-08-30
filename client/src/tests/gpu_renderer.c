@@ -38,9 +38,10 @@ bool gpu_map_renderer_begin(int width, int height, bool auxiliary) {
 bool gpu_map_renderer_active(void) {
     return false;
 }
-void gpu_map_renderer_set_owner(uint8_t owner, int sample_y) {
+void gpu_map_renderer_set_owner(uint8_t owner, int sample_y, bool projected) {
     (void)owner;
     (void)sample_y;
+    (void)projected;
 }
 void gpu_map_renderer_set_instance_identity(uint64_t record_identity, uint32_t draw_variant) {
     (void)record_identity;

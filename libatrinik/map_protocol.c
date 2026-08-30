@@ -327,12 +327,12 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
     return reader->pos == reader->len;
 }
 
-/** Validate a complete MAP command before any metadata or cache mutation. */
-bool map_protocol_validate(const uint8_t *data,
-                           size_t len,
-                           size_t pos,
-                           int map_width_limit,
-                           int map_height_limit) {
+bool map_protocol_inspect(const uint8_t *data,
+                          size_t len,
+                          size_t pos,
+                          int map_width_limit,
+                          int map_height_limit,
+                          map_protocol_packet_info_t *info) {
     if (data == NULL || pos > len || map_width_limit <= 0 || map_width_limit > 32 ||
         map_height_limit <= 0 || map_height_limit > 32) {
         return false;
@@ -445,7 +445,27 @@ bool map_protocol_validate(const uint8_t *data,
         }
     }
 
-    return packet_reader_finish(&reader) &&
-           (mapstat == MAP_UPDATE_CMD_PARTIAL ||
-            (level_mask & (UINT16_C(1) << MAP2_DEPTH_INDEX(0))) != 0);
+    bool valid = packet_reader_finish(&reader) &&
+                 (mapstat == MAP_UPDATE_CMD_PARTIAL ||
+                  (level_mask & (UINT16_C(1) << MAP2_DEPTH_INDEX(0))) != 0);
+    if (valid && info != NULL) {
+        *info = (map_protocol_packet_info_t){
+            .mapstat = mapstat,
+            .x = xpos,
+            .y = ypos,
+            .sub_layer = player_sub_layer,
+            .continuation = continuation_marker & ~MAP2_CONTINUATION_TIMED_LIGHT,
+            .depths = level_mask,
+        };
+    }
+    return valid;
+}
+
+/** Validate a complete MAP command before any metadata or cache mutation. */
+bool map_protocol_validate(const uint8_t *data,
+                           size_t len,
+                           size_t pos,
+                           int map_width_limit,
+                           int map_height_limit) {
+    return map_protocol_inspect(data, len, pos, map_width_limit, map_height_limit, NULL);
 }

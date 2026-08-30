@@ -1228,6 +1228,15 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("Get-NetUDPEndpoint -LocalPort $serverPort", review_smoke)
         self.assertIn("$_.OwningProcess -eq $process.Id", review_smoke)
         self.assertIn('"atrinik-server.exe"', review_smoke)
+        self.assertIn("$launcherStartInfo.FileName = $env:ComSpec", review_smoke)
+        self.assertIn('$launcherStartInfo.ArgumentList.Add("/d")', review_smoke)
+        self.assertIn('$launcherStartInfo.ArgumentList.Add("/c")', review_smoke)
+        self.assertIn('$launcherStartInfo.ArgumentList.Add("call")', review_smoke)
+        self.assertIn("$launcherStartInfo.ArgumentList.Add($launchers[0].FullName)", review_smoke)
+        self.assertNotIn("& $launcherPath", review_smoke)
+        self.assertIn('"atrinik.exe"', review_smoke)
+        self.assertIn("Get-NetUDPEndpoint -LocalPort 1731", review_smoke)
+        self.assertIn("One-click launcher server or client exited", review_smoke)
         review_shutdown_loop = review_smoke[
             review_smoke.index("$shutdownDeadline =") : review_smoke.index(
                 'if ($process.ExitCode -ne 0)',

@@ -109,7 +109,7 @@ static bool draw_checkpoint(SDL_Surface *source,
     } while (0)
     GPU_STEP(gpu_renderer_begin_frame());
     GPU_STEP(gpu_renderer_map_begin(map_size, map_size));
-    gpu_renderer_map_set_owner(0, map_size / 2);
+    gpu_renderer_map_set_owner(0, map_size / 2, false);
     gpu_renderer_map_light_quad(0, light_quad);
     GPU_STEP(gpu_renderer_draw_surface(source, NULL, &map_destination));
     /* Adjacent identical state must retain painter order in one instanced batch. */
@@ -268,7 +268,7 @@ static bool light_delta_frame(SDL_Surface *source, unsigned int changed_quad, ui
         };
         gpu_renderer_map_light_quad(0, quad);
     }
-    gpu_renderer_map_set_owner(0, 16);
+    gpu_renderer_map_set_owner(0, 16, false);
     gpu_renderer_map_set_instance_identity(0x477, 0);
     return gpu_renderer_draw_surface(source, NULL, &destination) && gpu_renderer_map_end() &&
            gpu_renderer_draw_map(0.0f, 0.0f, 32.0f, 32.0f) && gpu_renderer_present();
@@ -801,15 +801,15 @@ static bool lighting_lookup_checkpoint(SDL_Surface *source) {
     gpu_renderer_map_light_quad(2, gap_top_right);
     gpu_renderer_map_light_quad(2, gap_bottom_left);
     gpu_renderer_map_light_quad(2, gap_bottom_right);
-    gpu_renderer_map_set_owner(0, 16);
+    gpu_renderer_map_set_owner(0, 16, false);
     if (!gpu_renderer_draw_surface(source, NULL, &full)) {
         return false;
     }
-    gpu_renderer_map_set_owner(1, -200);
+    gpu_renderer_map_set_owner(1, -200, false);
     if (!gpu_renderer_draw_surface(source, NULL, &inset)) {
         return false;
     }
-    gpu_renderer_map_set_owner(2, 14);
+    gpu_renderer_map_set_owner(2, 14, false);
     if (!gpu_renderer_draw_surface(source, NULL, &extrapolation_pixel) || !gpu_renderer_map_end()) {
         return false;
     }
@@ -835,6 +835,35 @@ static bool lighting_lookup_checkpoint(SDL_Surface *source) {
         horizontal_then_vertical.final_color[2] != 0 ||
         horizontal_then_vertical.final_color[3] != SDL_ALPHA_OPAQUE) {
         SDL_SetError("compact GPU light precedence/extrapolation checkpoint failed");
+        return false;
+    }
+    return gpu_renderer_draw_map(0.0f, 0.0f, 32.0f, 32.0f) && gpu_renderer_present();
+}
+
+/** Preserve projected per-pixel lighting separately from fixed structural rows. */
+static bool projected_lighting_checkpoint(SDL_Surface *source, float height) {
+    SDL_FRect full = {0.0f, 0.0f, 32.0f, height};
+    lighting_vertex_t gradient[4] = {
+        {.x = 0, .y = 0, .scalar = 256, .red = 256, .green = 256, .blue = 256},
+        {.x = 32, .y = 0, .scalar = 256, .red = 256, .green = 256, .blue = 256},
+        {.x = 32, .y = 32, .scalar = 2048, .red = 2048, .green = 2048, .blue = 2048},
+        {.x = 0, .y = 32, .scalar = 2048, .red = 2048, .green = 2048, .blue = 2048},
+    };
+    if (!gpu_renderer_begin_frame() || !gpu_renderer_map_begin(32, 32)) {
+        return false;
+    }
+    gpu_renderer_map_light_quad(0, gradient);
+    gpu_renderer_map_set_owner(0, 0, true);
+    if (!gpu_renderer_draw_surface(source, NULL, &full) || !gpu_renderer_map_end()) {
+        return false;
+    }
+    gpu_map_renderer_probe_t upper;
+    gpu_map_renderer_probe_t lower;
+    if (!gpu_map_renderer_probe(16, 4, 0, &upper) || !gpu_map_renderer_probe(16, 28, 0, &lower) ||
+        upper.lighting_key == 0 || lower.lighting_key == 0 ||
+        upper.lighting_key == lower.lighting_key || upper.light[0] >= lower.light[0] ||
+        upper.final_color[0] >= lower.final_color[0]) {
+        SDL_SetError("projected GPU lighting collapsed to one structural sample row");
         return false;
     }
     return gpu_renderer_draw_map(0.0f, 0.0f, 32.0f, 32.0f) && gpu_renderer_present();
@@ -1102,7 +1131,26 @@ int main(void) {
     GPU_REQUIRE(ui_atlas_churn_plateau_checkpoint());
     GPU_REQUIRE(draw_checkpoint(source, 0, 255, 0, 2048));
     GPU_REQUIRE(lighting_lookup_checkpoint(source));
+    GPU_REQUIRE(projected_lighting_checkpoint(source, 32.0f));
+    gpu_renderer_statistics_reset();
+    GPU_REQUIRE(projected_lighting_checkpoint(source, 32.0f));
+    gpu_renderer_statistics_t projected_stable;
+    gpu_renderer_statistics_get(&projected_stable);
+    GPU_REQUIRE(projected_stable.projected_light_upload_count == 0);
+    GPU_REQUIRE(projected_stable.projected_light_upload_bytes == 0);
+    gpu_renderer_statistics_reset();
+    GPU_REQUIRE(projected_lighting_checkpoint(source, 31.0f));
+    gpu_renderer_statistics_t projected_changed;
+    gpu_renderer_statistics_get(&projected_changed);
+    GPU_REQUIRE(projected_changed.projected_light_upload_count == 1);
+    GPU_REQUIRE(projected_changed.projected_light_upload_bytes == sizeof(uint32_t));
     GPU_REQUIRE(retained_primary_auxiliary_checkpoint(source, sources[3], false));
+    GPU_REQUIRE(gpu_map_renderer_texture(false) != NULL);
+    GPU_REQUIRE(gpu_map_renderer_texture(true) != NULL);
+    gpu_map_renderer_invalidate_target(false);
+    gpu_map_renderer_invalidate_target(true);
+    GPU_REQUIRE(gpu_map_renderer_texture(false) == NULL);
+    GPU_REQUIRE(gpu_map_renderer_texture(true) == NULL);
     gpu_renderer_statistics_reset();
     GPU_REQUIRE(retained_primary_auxiliary_checkpoint(source, sources[3], true));
 

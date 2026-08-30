@@ -370,6 +370,8 @@ extern void map_set_data(int x,
 extern bool map_select_level(int depth, bool create);
 
 extern void map_set_level_mask(uint16_t mask);
+/** Return the published/staged physical-level mask. */
+extern uint16_t map_get_level_mask(void);
 /** Return the number of physical levels in the published map generation. */
 extern unsigned int map_active_level_count(void);
 
@@ -387,6 +389,8 @@ bool widget_map_transaction_abort_test(void);
 bool widget_map_light_keyframe_capacity_test(void);
 /** Verify timed-light redraw and FOW extension use the interpolated endpoint. */
 bool widget_map_temporal_lighting_test(void);
+/** Verify the complete negotiated overscan window remains a render candidate. */
+bool widget_map_projection_contract_test(void);
 #endif
 
 extern void map_level_scroll(int dz);
@@ -431,6 +435,8 @@ extern void map_light_keyframe_transaction_abort(void);
 extern void map_state_transaction_begin(bool full_snapshot);
 extern void map_state_transaction_commit(void);
 extern void map_state_transaction_abort(void);
+/** Return whether a multi-envelope MAP2 publication is still staged. */
+extern bool map_state_transaction_active(void);
 
 extern void map_animate(void);
 
@@ -592,6 +598,8 @@ extern bool minimap_redraw_due(void);
 
 /** Force the next minimap draw to rebuild its retained GPU canvas. */
 extern void minimap_redraw_force(void);
+/** Hide any retained minimap from a superseded map/session generation. */
+extern void minimap_invalidate_map_generation(void);
 
 extern void widget_minimap_init(widgetdata *widget);
 

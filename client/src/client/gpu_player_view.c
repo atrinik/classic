@@ -1938,7 +1938,18 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
         return false;
     }
     map_benchmark_statistics_reset();
+    map_state_transaction_begin(false);
+    map_protocol_continuation_begin(&MapData.continuation,
+                                    1,
+                                    MapData.posx,
+                                    MapData.posy,
+                                    MapData.player_sub_layer,
+                                    map_get_level_mask());
     if (!gpu_player_view_recover_once(ScreenWindow)) {
+        return false;
+    }
+    if (map_state_transaction_active() || MapData.continuation.pending) {
+        SDL_SetError("GPU recovery left an unpublished MAP2 continuation active");
         return false;
     }
     char recovery_digest[PLAYER_VIEW_SHA256_HEX_SIZE];
@@ -2680,6 +2691,9 @@ static bool gpu_player_view_recovery_apply(void *userdata) {
 
 static bool gpu_player_view_recovery_republish(void *userdata) {
     (void)userdata;
+    if (map_state_transaction_active() || MapData.continuation.pending) {
+        socket_command_map_abort_pending();
+    }
     if (!client_command_retry_deferred() || !connection_preference_recover()) {
         return false;
     }

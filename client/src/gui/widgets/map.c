@@ -170,6 +170,7 @@ static bool map_animation_redraw_flag;
 /* The temporal light presentation is invalidated at one-minute game-time
  * buckets, never by an exact per-frame clock value. */
 static uint64_t map_temporal_lighting_bucket = UINT64_MAX;
+static void map_hard_clear_abort_pending(void);
 
 typedef struct map_light_keyframe_stage {
     int depth;
@@ -909,6 +910,35 @@ bool widget_map_transaction_abort_test(void) {
             success && !map_get_fow(0, 0) && map_cell_retained_bytes == initial_retained_bytes;
     }
 
+    map_cell_t *baseline = map_cell_store_slot(cells, middle_index, true);
+    map_cell_layer_record_t *baseline_floor =
+        map_cell_layer_record(baseline, GET_MAP_LAYER(LAYER_FLOOR, 0), true);
+    baseline_floor->face = 7;
+    map_state_transaction_begin(true);
+    baseline_floor->face = 8;
+    MapData.continuation.pending = true;
+    MapData.continuation.total = 2;
+    MapData.continuation.next = 1;
+    success = success && map_state_transaction_active() && baseline_floor->face == 8;
+    baseline_floor->face = 9;
+    map_state_transaction_abort();
+    baseline = map_cell_store_slot(cells, middle_index, false);
+    success = success && !map_state_transaction_active() && !MapData.continuation.pending &&
+              baseline != NULL &&
+              map_cell_layer_record_read(baseline, GET_MAP_LAYER(LAYER_FLOOR, 0))->face == 7;
+
+    map_state_transaction_begin(false);
+    MapData.continuation.pending = true;
+    MapData.continuation.total = 2;
+    MapData.continuation.next = 1;
+    map_hard_clear_abort_pending();
+    success = success && !map_state_transaction_active() && !MapData.continuation.pending;
+    success = success && socket_command_map_buffered_generation_test_begin();
+    map_hard_clear_abort_pending();
+    success = success && !socket_command_map_buffered_generation_test_pending();
+    map_cell_store_clear_slot(cells, middle_index);
+    success = success && map_cell_retained_bytes == initial_retained_bytes;
+
     map_cell_store_destroy(level_cells[current_level_index]);
     level_cells[current_level_index] = NULL;
     cells = NULL;
@@ -1227,6 +1257,10 @@ void map_set_level_mask(uint16_t mask) {
     map_select_level(0, true);
 }
 
+uint16_t map_get_level_mask(void) {
+    return map_level_mask;
+}
+
 unsigned int map_active_level_count(void) {
     unsigned int count = 0;
     for (unsigned int index = 0; index < MAP2_LEVELS; index++) {
@@ -1277,6 +1311,10 @@ static struct {
     } *cells;
     size_t cells_count;
     size_t cells_capacity;
+    bool ambient_clear;
+    int ambient_scroll_x;
+    int ambient_scroll_y;
+    bool clear_target;
 } map_state_transaction;
 
 static bool map_state_transaction_should_defer_level_free(void) {
@@ -1413,6 +1451,10 @@ void map_state_transaction_begin(bool full_snapshot) {
     memcpy(map_state_transaction.lighting_revision,
            level_lighting_revision,
            sizeof(level_lighting_revision));
+    map_state_transaction.ambient_clear = false;
+    map_state_transaction.ambient_scroll_x = 0;
+    map_state_transaction.ambient_scroll_y = 0;
+    map_state_transaction.clear_target = false;
 
     if (full_snapshot) {
         for (size_t i = 0; i < arraysize(level_cells); i++) {
@@ -1424,6 +1466,10 @@ void map_state_transaction_begin(bool full_snapshot) {
     }
 
     map_state_transaction.active = true;
+}
+
+bool map_state_transaction_active(void) {
+    return map_state_transaction.active;
 }
 
 void map_state_transaction_commit(void) {
@@ -1442,10 +1488,22 @@ void map_state_transaction_commit(void) {
 
     bool region_changed =
         strcmp(map_state_transaction.map_data.region_name, MapData.region_name) != 0;
+    bool ambient_clear = map_state_transaction.ambient_clear;
+    int ambient_scroll_x = map_state_transaction.ambient_scroll_x;
+    int ambient_scroll_y = map_state_transaction.ambient_scroll_y;
+    bool clear_target = map_state_transaction.clear_target;
     map_state_transaction_release_snapshot();
     map_state_transaction.active = false;
     if (region_changed) {
         region_map_update(MapData.region_map, MapData.region_name);
+    }
+    if (ambient_clear) {
+        sound_ambient_clear();
+    } else if (ambient_scroll_x != 0 || ambient_scroll_y != 0) {
+        sound_ambient_mapcroll(ambient_scroll_x, ambient_scroll_y);
+    }
+    if (clear_target) {
+        cpl.target_object_index = 0;
     }
 }
 
@@ -1741,8 +1799,19 @@ void load_mapdef_dat(void) {
  * @param hard
  * Hard reset
  */
+static void map_hard_clear_abort_pending(void) {
+    socket_command_map_abort_pending();
+    gpu_map_renderer_invalidate_target(false);
+    gpu_map_renderer_invalidate_target(true);
+    minimap_invalidate_map_generation();
+}
+
 void clear_map(bool hard) {
-    map_light_keyframe_transaction_abort();
+    if (hard) {
+        map_hard_clear_abort_pending();
+    } else {
+        map_light_keyframe_transaction_abort();
+    }
 
     /* Cache the map width and height. */
     map_width = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_WIDTH));
@@ -1769,7 +1838,13 @@ void clear_map(bool hard) {
     map_cache_origin_x = 0;
     map_cache_origin_y = 0;
     map_select_level(0, true);
-    sound_ambient_clear();
+    if (map_state_transaction.active) {
+        map_state_transaction.ambient_clear = true;
+        map_state_transaction.ambient_scroll_x = 0;
+        map_state_transaction.ambient_scroll_y = 0;
+    } else {
+        sound_ambient_clear();
+    }
     map_anims_clear();
 
     if (hard) {
@@ -1955,9 +2030,17 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
 
     map_select_level(0, true);
 
-    sound_ambient_mapcroll(dx, dy);
+    if (map_state_transaction.active) {
+        if (!map_state_transaction.ambient_clear) {
+            map_state_transaction.ambient_scroll_x += dx;
+            map_state_transaction.ambient_scroll_y += dy;
+        }
+        map_state_transaction.clear_target = true;
+    } else {
+        sound_ambient_mapcroll(dx, dy);
+        cpl.target_object_index = 0;
+    }
     map_anims_mapscroll(dx, dy);
-    cpl.target_object_index = 0;
 }
 
 /** Shift independently cached levels after moving through an up/down link. */
@@ -2394,6 +2477,29 @@ static bool map_visibility_transient_layer(int layer) {
            layer == LAYER_EFFECT;
 }
 
+/** Return whether a decoded transient is the local player's living record. */
+static bool map_visibility_is_local_player(int x, int y, int object_layer, int sub_layer) {
+    return x == map_width - map_width / 2 - 1 && y == map_height - map_height / 2 - 1 &&
+           object_layer == LAYER_LIVING &&
+           sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
+}
+
+/** Authorize one decoded transient while distinguishing baseline from re-entry. */
+static void map_visibility_authorize_record(map_cell_layer_record_t *record, bool force_opaque) {
+    map_visibility_fade_t *fade = &record->visibility;
+    bool complete_snapshot_baseline =
+        !fade->initialized && map_state_transaction.active && map_state_transaction.full_snapshot;
+    map_visibility_fade_authorize(fade, UINT8_MAX, LastTick);
+    /* The first complete MAP2 snapshot is the renderer's baseline;
+     * transitions apply to later visibility enters/reappearances. */
+    if (complete_snapshot_baseline || force_opaque) {
+        fade->alpha = UINT8_MAX;
+        fade->from_alpha = UINT8_MAX;
+        fade->target_alpha = UINT8_MAX;
+        fade->transition_started = LastTick;
+    }
+}
+
 /** Clear one expired live layer after its presentation fade reaches zero. */
 static void map_clear_expired_visibility_layer(map_cell_t *cell, int sub_layer, int object_layer) {
     int layer = GET_MAP_LAYER(object_layer, sub_layer);
@@ -2420,7 +2526,15 @@ static void map_clear_expired_visibility_layer(map_cell_t *cell, int sub_layer, 
         }
     }
 
-    map_cell_layer_record_remove(cell, layer);
+    map_cell_layer_record_t *record = map_cell_layer_record(cell, layer, false);
+    if (record != NULL) {
+        /* Preserve a zero-alpha tombstone for this cache generation.  A later
+         * authoritative reappearance can then fade in from zero instead of
+         * being mistaken for the initial complete-snapshot baseline. */
+        map_visibility_fade_t visibility = record->visibility;
+        memset(record, 0, sizeof(*record));
+        record->visibility = visibility;
+    }
 }
 
 /**
@@ -2567,16 +2681,9 @@ void map_set_data(int x,
         if (face == 0) {
             map_visibility_fade_revoke(fade, LastTick);
         } else {
-            bool first_authoritative_record = !fade->initialized;
-            map_visibility_fade_authorize(fade, UINT8_MAX, LastTick);
-            /* The first complete MAP2 snapshot is the renderer's baseline;
-             * transitions apply to later visibility enters/reappearances. */
-            if (first_authoritative_record) {
-                fade->alpha = UINT8_MAX;
-                fade->from_alpha = UINT8_MAX;
-                fade->target_alpha = UINT8_MAX;
-                fade->transition_started = LastTick;
-            }
+            map_visibility_authorize_record(
+                layer_record,
+                map_visibility_is_local_player(x, y, object_layer, sub_layer));
         }
     }
     layer_record->rotate = rotate;
@@ -3038,20 +3145,25 @@ static bool map_animate_visibility(int depth, int cache_x, int cache_y, map_cell
             if (!fade->initialized) {
                 continue;
             }
+            bool local_player = depth == 0 && cache_x == player_x && cache_y == player_y &&
+                                object_layer == LAYER_LIVING &&
+                                sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
             if (!fade->authorized || record->face == 0 || cell->fow) {
                 map_visibility_fade_revoke(fade, LastTick);
             } else {
-                uint8_t target = map_visibility_field_alpha(
-                    map_visibility_field_weight(cache_x - player_x, cache_y - player_y));
-                bool local_player = depth == 0 && cache_x == player_x && cache_y == player_y &&
-                                    object_layer == LAYER_LIVING &&
-                                    sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
                 if (local_player) {
-                    target = UINT8_MAX;
+                    changed |= fade->alpha != UINT8_MAX || fade->target_alpha != UINT8_MAX;
+                    fade->alpha = UINT8_MAX;
+                    fade->from_alpha = UINT8_MAX;
+                    fade->target_alpha = UINT8_MAX;
+                    fade->transition_started = LastTick;
+                } else {
+                    map_visibility_fade_set_target(fade, UINT8_MAX, LastTick);
                 }
-                map_visibility_fade_set_target(fade, target, LastTick);
             }
-            changed |= map_visibility_fade_advance(fade, LastTick);
+            if (!local_player || !fade->authorized || record->face == 0 || cell->fow) {
+                changed |= map_visibility_fade_advance(fade, LastTick);
+            }
             if (!fade->authorized && fade->alpha == 0 && record->face != 0) {
                 map_clear_expired_visibility_layer(cell, sub_layer, object_layer);
             }
@@ -3555,6 +3667,11 @@ typedef struct map_visible_tile {
  * @param data
  * Rendering data. May be modified.
  */
+static bool map_object_uses_projected_lighting(const map_render_data_t *data,
+                                               const map_cell_layer_record_t *record) {
+    return data->ground_pass || record->roof;
+}
+
 static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     HARD_ASSERT(surface != NULL);
     HARD_ASSERT(data != NULL);
@@ -3686,7 +3803,8 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     } else if (map_cell_layer_record_read(data->cell, map_layer)->flags & FFLAG_INVISIBLE) {
         BIT_SET(effects.flags, SPRITE_FLAG_GRAY);
     } else if (data->world_surface && data->smooth_lighting && !data->lightmap_pending) {
-        if (map_cell_layer_record_read(data->cell, map_layer)->roof) {
+        if (map_object_uses_projected_lighting(data,
+                                               map_cell_layer_record_read(data->cell, map_layer))) {
             BIT_SET(effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
         } else {
             BIT_SET(effects.flags, SPRITE_FLAG_SMOOTH_DARK);
@@ -4180,17 +4298,7 @@ static bool map_should_draw(SDL_Surface *surface, map_render_data_t *data) {
         data->ypos -= map_height * MAP_TILE_YOFF;
     }
 
-    if (data->xpos > surface->w || data->xpos + MAP_TILE_POS_XOFF < 0 ||
-        data->ypos + MAP_TILE_POS_YOFF < 0) {
-        return false;
-    }
-
     data->cell = MAP_CELL_GET(data->x, data->y);
-
-    if (data->ypos - data->cell->render_max_height > surface->h) {
-        return false;
-    }
-
     return true;
 }
 
@@ -4272,36 +4380,29 @@ static void map_setup_render_data(SDL_Surface *surface,
         data->midx = map_width * MAP_FOW_SIZE / 2;
         data->midy = map_height * MAP_FOW_SIZE / 2;
 
-        int maxw = surface->w / 2.0 / (MAP_TILE_POS_XOFF / 2.0);
-        int maxh = surface->h / 2.0 / (MAP_TILE_POS_YOFF / 2.0);
-        int maxtiles = MAX(maxh, maxw);
+        /* The negotiated wire window already includes MAP_RENDER_OVERSCAN on
+         * every edge. Traverse that complete bounded window and let the GPU
+         * scissor actual sprite bounds; anchor-only culling drops wide/tall
+         * sprites whose owning tile lies just outside the viewport. */
+        int first_x = data->midx - map_width / 2;
+        int first_y = data->midy - map_height / 2;
+        int end_x = first_x + map_width;
+        int end_y = first_y + map_height;
 
         if (x != NULL) {
-            *x = data->midx - maxtiles;
-            if (*x < 0) {
-                *x = 0;
-            }
+            *x = MAX(0, first_x);
         }
 
         if (y != NULL) {
-            *y = data->midy - maxtiles;
-            if (*y < 0) {
-                *y = 0;
-            }
+            *y = MAX(0, first_y);
         }
 
         if (w != NULL) {
-            *w = data->midx + maxtiles;
-            if (*w > map_width * MAP_FOW_SIZE) {
-                *w = map_width * MAP_FOW_SIZE;
-            }
+            *w = MIN(map_width * MAP_FOW_SIZE, end_x);
         }
 
         if (h != NULL) {
-            *h = data->midy + maxtiles;
-            if (*h > map_height * MAP_FOW_SIZE) {
-                *h = map_height * MAP_FOW_SIZE;
-            }
+            *h = MIN(map_height * MAP_FOW_SIZE, end_y);
         }
     } else {
         if (x != NULL) {
@@ -5989,9 +6090,11 @@ static void map_render_commands(SDL_Surface *surface,
 
         bool scene_lit = BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK) ||
                          BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
+        bool projected_light = BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
         gpu_renderer_map_set_owner(scene_lit ? (uint8_t)MAP2_DEPTH_INDEX(command->depth)
                                              : GPU_RENDERER_OWNER_UNLIT,
-                                   command->effects.smooth_dark_y);
+                                   command->effects.smooth_dark_y,
+                                   projected_light);
         gpu_renderer_map_set_instance_identity(command->record_identity,
                                                (uint32_t)command->record_layer << 2U);
         surface_show_effects(surface,
@@ -6013,7 +6116,7 @@ static void map_render_commands(SDL_Surface *surface,
     }
     render_profiler_end(RENDER_PROFILE_MAP_SPRITE_EFFECTS, profile_effects_started);
 
-    gpu_renderer_map_set_owner(GPU_RENDERER_OWNER_UNLIT, 0);
+    gpu_renderer_map_set_owner(GPU_RENDERER_OWNER_UNLIT, 0, false);
 
     if (primary_surface) {
         /* Draw grouped cues after the world painter, matching the legacy
@@ -7154,18 +7257,19 @@ static void widget_draw(widgetdata *widget) {
 
     /* A complete GPU redraw remains the sole map compositor. Animation-only
      * invalidation is retained as evidence about why this redraw occurred. */
-    if (map_redraw_due()) {
+    if (!map_state_transaction_active() && map_redraw_due()) {
         map_draw_map(widget->surface);
         map_redraw_consume();
         effect_sprites_play();
-    } else if (map_animation_redraw_due()) {
+    } else if (!map_state_transaction_active() && map_animation_redraw_due()) {
         map_draw_map(widget->surface);
         map_animation_redraw_consume();
         effect_sprites_play();
     }
 
     SDL_Surface *displayed = map_displayed_surface(widget);
-    if (!gpu_renderer_draw_map((float)widget_x(widget),
+    if (gpu_renderer_map_available() &&
+        !gpu_renderer_draw_map((float)widget_x(widget),
                                (float)widget_y(widget),
                                (float)widget_w(widget),
                                (float)widget_h(widget))) {
@@ -7173,7 +7277,9 @@ static void widget_draw(widgetdata *widget) {
     }
 
     /* The damage numbers */
-    map_anims_play();
+    if (!map_state_transaction_active()) {
+        map_anims_play();
+    }
 
     map_render_data_t data = {0};
     map_setup_render_data(widget->surface, &data, NULL, NULL, NULL, NULL);
@@ -7386,14 +7492,29 @@ void widget_map_animation_test_death_texture_set(SDL_Surface *texture) {
 
 bool widget_map_visibility_test(void) {
     const uint32_t initial_tick = LastTick;
-    const int player_x = map_width * MAP_FOW_SIZE / 2;
-    const int player_y = map_height * MAP_FOW_SIZE / 2;
     const int center_view_x = map_width - map_width / 2 - 1;
     const int center_view_y = map_height - map_height / 2 - 1;
     bool success = true;
     bool center_item = false;
     bool center_living = false;
     bool center_effect = false;
+
+    map_cell_t *initial_center = MAP_CELL_GET_MIDDLE(center_view_x, center_view_y);
+    int player_layer = GET_MAP_LAYER(LAYER_LIVING,
+                                     MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1));
+    const map_cell_layer_record_t *initial_player =
+        map_cell_layer_record_read(initial_center, player_layer);
+    if (initial_player->face == 0 || !initial_player->visibility.initialized ||
+        !initial_player->visibility.authorized || initial_player->visibility.alpha != UINT8_MAX) {
+        fprintf(stderr,
+                "map visibility test: local player was not opaque before first animation "
+                "(face=%u initialized=%d authorized=%d alpha=%u)\n",
+                initial_player->face,
+                initial_player->visibility.initialized,
+                initial_player->visibility.authorized,
+                initial_player->visibility.alpha);
+        success = false;
+    }
 
     map_animate();
 
@@ -7406,9 +7527,6 @@ bool widget_map_visibility_test(void) {
         for (int x = 0; x < map_width; x++) {
             for (int y = 0; y < map_height; y++) {
                 map_cell_t *cell = MAP_CELL_GET_MIDDLE(x, y);
-                int cache_x = x + MAP_STARTX;
-                int cache_y = y + MAP_STARTY;
-
                 for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                     for (int object_layer = LAYER_ITEM; object_layer <= LAYER_EFFECT;
                          object_layer++) {
@@ -7423,15 +7541,7 @@ bool widget_map_visibility_test(void) {
                             continue;
                         }
 
-                        uint8_t expected = map_visibility_field_alpha(
-                            map_visibility_field_weight(cache_x - player_x, cache_y - player_y));
-                        bool local_player =
-                            depth == 0 && cache_x == player_x && cache_y == player_y &&
-                            object_layer == LAYER_LIVING &&
-                            sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
-                        if (local_player) {
-                            expected = UINT8_MAX;
-                        }
+                        uint8_t expected = UINT8_MAX;
                         if (fade->target_alpha != expected) {
                             fprintf(stderr,
                                     "map visibility test: target mismatch depth=%d x=%d y=%d "
@@ -7493,7 +7603,166 @@ bool widget_map_visibility_test(void) {
         }
     }
 
+    int item_sub_layer = 0;
+    int item_layer = GET_MAP_LAYER(LAYER_ITEM, item_sub_layer);
+    map_cell_layer_record_t *item = map_cell_layer_record(center, item_layer, false);
+    while ((item == NULL || item->face == 0) && ++item_sub_layer < NUM_SUB_LAYERS) {
+        item_layer = GET_MAP_LAYER(LAYER_ITEM, item_sub_layer);
+        item = map_cell_layer_record(center, item_layer, false);
+    }
+    if (item == NULL || item->face == 0) {
+        fprintf(stderr, "map visibility test: no center item for re-entry coverage\n");
+        success = false;
+    } else {
+        uint16_t face = item->face;
+        map_visibility_fade_revoke(&item->visibility, LastTick);
+        LastTick += MAP_VISIBILITY_FADE_DURATION_MS;
+        map_visibility_fade_advance(&item->visibility, LastTick);
+        map_clear_expired_visibility_layer(center, item_sub_layer, LAYER_ITEM);
+        item = map_cell_layer_record(center, item_layer, false);
+        if (item == NULL || item->face != 0 || !item->visibility.initialized ||
+            item->visibility.authorized || item->visibility.alpha != 0) {
+            fprintf(stderr, "map visibility test: expired item tombstone was not retained\n");
+            success = false;
+        } else {
+            item->face = face;
+            map_visibility_authorize_record(item, false);
+            if (item->visibility.alpha != 0 || item->visibility.target_alpha != UINT8_MAX) {
+                fprintf(stderr, "map visibility test: re-entry did not begin at zero alpha\n");
+                success = false;
+            }
+            LastTick += MAP_VISIBILITY_FADE_DURATION_MS / 2U;
+            map_visibility_fade_advance(&item->visibility, LastTick);
+            if (item->visibility.alpha != 128) {
+                fprintf(stderr,
+                        "map visibility test: half re-entry alpha expected 128 got %u\n",
+                        item->visibility.alpha);
+                success = false;
+            }
+        }
+    }
+
     /* Keep the simulated clock monotonic after advancing the fade interval. */
+    return success;
+}
+
+bool widget_map_projection_contract_test(void) {
+    int saved_width = map_width;
+    int saved_height = map_height;
+    size_t saved_level = current_level_index;
+    uint16_t saved_mask = map_level_mask;
+    map_cell_store_t *saved_cells = cells;
+    map_cell_store_t *saved_base = level_cells[MAP2_DEPTH_INDEX(0)];
+
+    map_render_data_t classification = {.ground_pass = true};
+    map_cell_layer_record_t classification_record = {0};
+    bool success = map_object_uses_projected_lighting(&classification, &classification_record);
+    classification.ground_pass = false;
+    success =
+        success && !map_object_uses_projected_lighting(&classification, &classification_record);
+    classification_record.roof = true;
+    success =
+        success && map_object_uses_projected_lighting(&classification, &classification_record);
+
+    map_width = MAP_WIRE_SIZE_MAX;
+    map_height = MAP_WIRE_SIZE_MAX;
+    current_level_index = MAP2_DEPTH_INDEX(0);
+    map_level_mask = UINT16_C(1) << current_level_index;
+    level_cells[current_level_index] = NULL;
+    success = success && map_select_level(0, true);
+    SDL_Surface *surface = success ? SDL_CreateSurface(320, 240, SDL_PIXELFORMAT_RGBA32) : NULL;
+    if (surface == NULL) {
+        success = false;
+    } else {
+        map_render_data_t data = {.world_surface = true};
+        int x, y, w, h;
+        map_setup_render_data(surface, &data, &x, &y, &w, &h);
+        success = x == data.midx - map_width / 2 && y == data.midy - map_height / 2 &&
+                  w - x == map_width && h - y == map_height;
+        const int corners[4][2] = {{x, y}, {x, h - 1}, {w - 1, y}, {w - 1, h - 1}};
+        for (size_t i = 0; i < arraysize(corners) && success; i++) {
+            data.x = corners[i][0];
+            data.y = corners[i][1];
+            success = map_should_draw(surface, &data);
+        }
+
+        SDL_Surface *tile = SDL_CreateSurface(32, 32, SDL_PIXELFORMAT_RGBA32);
+        sprite_struct sprite = {.bitmap = tile};
+        sprite_struct *saved_sprite = FaceList[1].sprite;
+        uint8_t saved_height_diff = MapData.height_diff;
+        map_render_context_t context = {0};
+        size_t physical_index =
+            (size_t)MAP_STARTY * (map_width * MAP_FOW_SIZE) + (size_t)MAP_STARTX;
+        map_cell_t *cell = map_cell_store_slot(cells, physical_index, true);
+        map_cell_layer_record_t *floor =
+            map_cell_layer_record(cell, GET_MAP_LAYER(LAYER_FLOOR, 0), true);
+        map_cell_layer_record_t *wall =
+            map_cell_layer_record(cell, GET_MAP_LAYER(LAYER_WALL, 0), true);
+        map_cell_layer_record_t *roof =
+            map_cell_layer_record(cell, GET_MAP_LAYER(LAYER_ITEM, 0), true);
+        if (tile == NULL || cell == NULL || floor == NULL || wall == NULL || roof == NULL) {
+            success = false;
+        } else {
+            FaceList[1].sprite = &sprite;
+            MapData.height_diff = 0;
+            floor->face = 1;
+            wall->face = 1;
+            roof->face = 1;
+            roof->roof = 1;
+            roof->visibility = (map_visibility_fade_t){
+                .initialized = true,
+                .authorized = true,
+                .alpha = UINT8_MAX,
+                .from_alpha = UINT8_MAX,
+                .target_alpha = UINT8_MAX,
+            };
+            map_render_data_t production = {
+                .cell = cell,
+                .render_context = &context,
+                .x = MAP_STARTX,
+                .y = MAP_STARTY,
+                .xpos = 64,
+                .ypos = 64,
+                .midx = MAP_STARTX,
+                .midy = MAP_STARTY,
+                .sub_layer = 0,
+                .smooth_lighting = true,
+                .defer_rendering = true,
+                .world_surface = true,
+                .primary_level = true,
+            };
+            production.layer = LAYER_FLOOR;
+            production.ground_pass = true;
+            draw_map_object(surface, &production);
+            production.layer = LAYER_ITEM;
+            production.ground_pass = false;
+            draw_map_object(surface, &production);
+            production.layer = LAYER_WALL;
+            draw_map_object(surface, &production);
+            success = success && context.commands_num == 3 &&
+                      BIT_QUERY(context.commands[0].effects.flags,
+                                SPRITE_FLAG_SMOOTH_DARK_SURFACE) &&
+                      BIT_QUERY(context.commands[1].effects.flags,
+                                SPRITE_FLAG_SMOOTH_DARK_SURFACE) &&
+                      BIT_QUERY(context.commands[2].effects.flags, SPRITE_FLAG_SMOOTH_DARK) &&
+                      !BIT_QUERY(context.commands[2].effects.flags,
+                                 SPRITE_FLAG_SMOOTH_DARK_SURFACE);
+        }
+        FaceList[1].sprite = saved_sprite;
+        MapData.height_diff = saved_height_diff;
+        free(context.commands);
+        map_cell_store_clear_slot(cells, physical_index);
+        SDL_DestroySurface(tile);
+        SDL_DestroySurface(surface);
+    }
+
+    map_cell_store_destroy(level_cells[current_level_index]);
+    level_cells[current_level_index] = saved_base;
+    cells = saved_cells;
+    map_width = saved_width;
+    map_height = saved_height;
+    current_level_index = saved_level;
+    map_level_mask = saved_mask;
     return success;
 }
 

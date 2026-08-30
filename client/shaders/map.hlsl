@@ -56,6 +56,11 @@ WorldVertexOutput world_vertex(uint vertex_id : SV_VertexID, uint instance_id : 
 
 Texture2D<float4> world_texture : register(t0, space2);
 SamplerState world_sampler : register(s0, space2);
+StructuredBuffer<uint> world_projected_light_rows : register(t1, space2);
+
+static const uint WORLD_PROJECTED_LIGHT_FLAG = 524288u;
+static const uint WORLD_PROJECTED_LIGHT_OWNER_MASK = 15u;
+static const uint WORLD_LIGHT_OWNER_COUNT = 13u;
 
 struct WorldFragmentOutput {
     float4 albedo : SV_Target0;
@@ -69,7 +74,13 @@ WorldFragmentOutput world_fragment(WorldVertexOutput input) {
     }
     WorldFragmentOutput output;
     output.albedo = color;
-    output.lighting_key = input.lighting_key;
+    if ((input.lighting_key & WORLD_PROJECTED_LIGHT_FLAG) != 0u) {
+        uint owner = input.lighting_key & WORLD_PROJECTED_LIGHT_OWNER_MASK;
+        uint row = uint(input.position.y);
+        output.lighting_key = world_projected_light_rows[row * WORLD_LIGHT_OWNER_COUNT + owner];
+    } else {
+        output.lighting_key = input.lighting_key;
+    }
     return output;
 }
 

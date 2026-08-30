@@ -99,6 +99,7 @@ static const char *const minimap_texture_names[MINIMAP_TEXTURE_NUM] = {"minimap_
 static const char *const minimap_display_modes[MINIMAP_TYPE_NUM] = {"Prefer region maps",
                                                                     "Only region maps",
                                                                     "Only dynamic maps"};
+static bool minimap_generation_valid;
 
 /** Return whether this minimap currently uses the dynamic world renderer. */
 static bool minimap_is_dynamic(const minimap_widget_t *minimap) {
@@ -108,7 +109,7 @@ static bool minimap_is_dynamic(const minimap_widget_t *minimap) {
 
 /** Return whether a requested minimap refresh should run this frame. */
 bool minimap_redraw_due(void) {
-    if (!minimap_redraw_flag) {
+    if (!minimap_redraw_flag || map_state_transaction_active()) {
         return false;
     }
 
@@ -138,6 +139,11 @@ void minimap_redraw_force(void) {
 
     minimap_widget_t *minimap = widget->subwidget;
     minimap->dynamic_redraw_ticks = client_ui_ticks() - MINIMAP_DYNAMIC_REDRAW_INTERVAL;
+}
+
+void minimap_invalidate_map_generation(void) {
+    minimap_generation_valid = false;
+    minimap_redraw_flag = 1;
 }
 
 /** @copydoc widgetdata::draw_func */
@@ -170,6 +176,7 @@ static void widget_draw(widgetdata *widget) {
             LOG(ERROR, "Could not create retained GPU minimap target: %s", SDL_GetError());
             return;
         }
+        minimap_generation_valid = false;
         minimap_redraw_flag = 1;
         /* A newly allocated canvas has no composed minimap to throttle. Make
          * its first dynamic draw due even during the first 250 ms of uptime. */
@@ -311,11 +318,14 @@ static void widget_draw(widgetdata *widget) {
 
         SDL_SetSurfaceColorKey(widget->surface, true, getpixel(widget->surface, 0, 0));
         SDL_SetSurfaceRLE(widget->surface, true);
+        minimap_generation_valid = true;
     }
 
     box.x = widget->x;
     box.y = widget->y;
-    surface_show(OfflineRenderSurface, box.x, box.y, NULL, widget->surface);
+    if (minimap_generation_valid) {
+        surface_show(OfflineRenderSurface, box.x, box.y, NULL, widget->surface);
+    }
 }
 
 #ifdef ATRINIK_WIDGET_TESTS

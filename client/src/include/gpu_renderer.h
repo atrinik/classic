@@ -58,6 +58,8 @@ typedef struct gpu_renderer_statistics {
     uint64_t instance_upload_bytes;
     uint64_t light_upload_count;
     uint64_t light_upload_bytes;
+    uint64_t projected_light_upload_count;
+    uint64_t projected_light_upload_bytes;
     uint64_t slot_uniform_upload_count;
     uint64_t slot_uniform_upload_bytes;
     uint64_t resource_creations;
@@ -133,12 +135,14 @@ bool gpu_renderer_frame_valid(void);
 bool gpu_renderer_map_begin(int width, int height);
 /** Begin the independently retained auxiliary/minimap map target. */
 bool gpu_renderer_map_begin_auxiliary(int width, int height);
-void gpu_renderer_map_set_owner(uint8_t owner, int sample_y);
+void gpu_renderer_map_set_owner(uint8_t owner, int sample_y, bool projected);
 /** Bind the stable semantic map-record identity for the next painter draw. */
 void gpu_renderer_map_set_instance_identity(uint64_t record_identity, uint32_t draw_variant);
 void gpu_renderer_map_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]);
 bool gpu_renderer_map_end(void);
 bool gpu_renderer_draw_map(float x, float y, float width, float height);
+/** Return whether a primary retained map generation is safe to display. */
+bool gpu_renderer_map_available(void);
 bool gpu_renderer_draw_map_to(SDL_Surface *target,
                               const SDL_FRect *source,
                               const SDL_FRect *destination,
@@ -222,6 +226,8 @@ void gpu_renderer_statistics_commands(uint64_t commands, uint64_t batches, uint6
 void gpu_renderer_statistics_source_upload(size_t bytes);
 void gpu_renderer_statistics_instance_upload(size_t bytes);
 void gpu_renderer_statistics_light_upload(size_t bytes);
+/** Record the projected-row subset of compact light uploads. */
+void gpu_renderer_statistics_projected_light_upload(size_t bytes);
 void gpu_renderer_statistics_slot_uniform_upload(size_t bytes);
 void gpu_renderer_statistics_resource_create(size_t retained_bytes);
 void gpu_renderer_statistics_resource_destroy(size_t retained_bytes);

@@ -248,8 +248,10 @@ rejection avoids mask allocation when no actor is occluded.
 
 The centered visibility-fade scene places authoritative item, living, and
 effect records on the MAP2 player cell. Its normal 320-by-240 player-view run
-advances the presentation clock and asserts that the records use the
-player-centered visibility field instead of the view origin.
+advances the presentation clock and asserts that current records remain at
+full alpha, while the local player cannot enter a presentation fade. It then
+expires one revoked item to its zero-alpha generation tombstone and verifies
+that authoritative re-entry interpolates from zero instead of snapping opaque.
 
 The widget-state scene freezes `sans.ttf`, enables names and target UI, renders
 through the real widget zoom/blit path at 125%, then applies a second validated

@@ -738,9 +738,124 @@ void socket_command_mapstats(uint8_t *data, size_t len, size_t pos) {
     (void)packet_reader_finish(&reader);
 }
 
-static void socket_command_map_abort_timed_light(void) {
+static bool map_continuation_visible_change;
+static bool map_continuation_region_fow_update;
+static uint64_t map_publication_generation;
+
+typedef struct map_pending_packet {
+    uint8_t *data;
+    size_t len;
+    size_t pos;
+    struct map_pending_packet *next;
+} map_pending_packet_t;
+
+/** Validated continuation envelopes retained until their complete generation arrives. */
+static struct {
+    map_protocol_continuation_state_t continuation;
+    map_pending_packet_t *head;
+    map_pending_packet_t *tail;
+    bool replaying;
+} map_pending_batch;
+
+/** Observable effects that must publish with the same generation as its map cells. */
+static struct {
+    bool active;
+    bool rich_presence;
+    bool music;
+    bool weather;
+    bool footstep;
+    char bg_music[HUGE_BUF];
+    char weather_name[MAX_BUF];
+} map_pending_effects;
+
+static void map_pending_batch_release(map_pending_packet_t *packet) {
+    while (packet != NULL) {
+        map_pending_packet_t *next = packet->next;
+        free(packet->data);
+        free(packet);
+        packet = next;
+    }
+}
+
+static void map_pending_batch_reset(void) {
+    map_pending_batch_release(map_pending_batch.head);
+    map_pending_batch.head = NULL;
+    map_pending_batch.tail = NULL;
+    map_protocol_continuation_reset(&map_pending_batch.continuation);
+}
+
+static void map_pending_batch_append(uint8_t *data, size_t len, size_t pos) {
+    map_pending_packet_t *packet = xcalloc(1, sizeof(*packet));
+    packet->data = xmalloc(len);
+    memcpy(packet->data, data, len);
+    packet->len = len;
+    packet->pos = pos;
+    if (map_pending_batch.tail == NULL) {
+        map_pending_batch.head = packet;
+    } else {
+        map_pending_batch.tail->next = packet;
+    }
+    map_pending_batch.tail = packet;
+}
+
+static void map_pending_effects_begin(void) {
+    memset(&map_pending_effects, 0, sizeof(map_pending_effects));
+    map_pending_effects.active = true;
+}
+
+static void map_pending_effects_abort(void) {
+    memset(&map_pending_effects, 0, sizeof(map_pending_effects));
+}
+
+static void map_pending_effects_commit(void) {
+    if (!map_pending_effects.active) {
+        return;
+    }
+    bool rich_presence = map_pending_effects.rich_presence;
+    bool music = map_pending_effects.music;
+    bool weather = map_pending_effects.weather;
+    bool footstep = map_pending_effects.footstep;
+    char bg_music[HUGE_BUF];
+    char weather_name[MAX_BUF];
+    snprintf(VS(bg_music), "%s", map_pending_effects.bg_music);
+    snprintf(VS(weather_name), "%s", map_pending_effects.weather_name);
+    map_pending_effects_abort();
+
+    if (rich_presence) {
+        rich_presence_zone_changed();
+    }
+    if (music) {
+        update_map_bg_music(bg_music);
+    }
+    if (weather) {
+        update_map_weather(weather_name);
+    }
+    if (footstep) {
+        map_play_footstep();
+    }
+}
+
+void socket_command_map_abort_pending(void) {
+    map_pending_batch_reset();
     map_light_keyframe_transaction_abort();
     map_state_transaction_abort();
+    map_pending_effects_abort();
+    map_continuation_visible_change = false;
+    map_continuation_region_fow_update = false;
+}
+
+static void socket_command_map_abort_timed_light(void) {
+    socket_command_map_abort_pending();
+}
+
+static bool socket_command_map_movement_delta(int mapstat,
+                                              int xpos,
+                                              int ypos,
+                                              int *dx,
+                                              int *dy) {
+    *dx = xpos - MapData.posx;
+    *dy = ypos - MapData.posy;
+    return mapstat == MAP_UPDATE_CMD_SAME && (*dx != 0 || *dy != 0);
 }
 
 static void socket_command_map_descriptor_absent(int mapstat, bool transaction_pending) {
@@ -786,11 +901,9 @@ bool socket_command_map_timed_light_same_test(void) {
 }
 #endif
 
-/** @copydoc socket_command_struct::handle_func */
-void socket_command_map(uint8_t *data, size_t len, size_t pos) {
+static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
-    static int mx = 0, my = 0;
     int mask, x, y, rx, ry;
     int mapstat;
     int xpos, ypos;
@@ -812,13 +925,22 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
             MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_WIDTH)),
             MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT)))) {
         LOG(PACKET, "Rejected malformed map packet.");
-        map_light_keyframe_transaction_abort();
+        socket_command_map_abort_pending();
         return;
     }
 
     mapstat = packet_reader_read_uint8(&reader);
-    map_state_transaction_begin(mapstat != MAP_UPDATE_CMD_SAME &&
-                                mapstat != MAP_UPDATE_CMD_PARTIAL);
+    if (mapstat != MAP_UPDATE_CMD_PARTIAL) {
+        if (MapData.continuation.pending) {
+            /* A different envelope interrupts the declared continuation. Roll
+             * the entire unpublished sequence back before accepting it. */
+            socket_command_map_abort_pending();
+        }
+        map_state_transaction_begin(mapstat != MAP_UPDATE_CMD_SAME);
+        map_pending_effects_begin();
+        map_continuation_visible_change = false;
+        map_continuation_region_fow_update = false;
+    }
     map_visible_change = mapstat != MAP_UPDATE_CMD_SAME && mapstat != MAP_UPDATE_CMD_PARTIAL;
 
     if (mapstat != MAP_UPDATE_CMD_SAME && mapstat != MAP_UPDATE_CMD_PARTIAL) {
@@ -842,8 +964,6 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
             map_h = packet_reader_read_uint8(&reader);
             xpos = packet_reader_read_uint8(&reader);
             ypos = packet_reader_read_uint8(&reader);
-            mx = xpos;
-            my = ypos;
             init_map_data(map_w, map_h, xpos, ypos);
         } else {
             int xoff, yoff, zoff;
@@ -854,17 +974,18 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
             zoff = packet_reader_read_int8(&reader);
             xpos = packet_reader_read_uint8(&reader);
             ypos = packet_reader_read_uint8(&reader);
-            mx = xpos;
-            my = ypos;
             display_mapscroll(xoff, yoff, 0, 0);
             map_level_scroll(zoff);
 
-            map_play_footstep();
+            map_pending_effects.footstep = true;
         }
 
-        update_map_name(mapname);
-        update_map_bg_music(bg_music);
-        update_map_weather(weather);
+        snprintf(MapData.name_new, sizeof(MapData.name_new), "%s", mapname);
+        map_pending_effects.rich_presence = true;
+        snprintf(VS(map_pending_effects.bg_music), "%s", bg_music);
+        map_pending_effects.music = true;
+        snprintf(VS(map_pending_effects.weather_name), "%s", weather);
+        map_pending_effects.weather = true;
         update_map_height_diff(height_diff);
         update_map_region_name(region_name);
         update_map_region_longname(region_longname);
@@ -874,16 +995,13 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
         ypos = packet_reader_read_uint8(&reader);
 
         /* Have we moved? */
-        if (mapstat == MAP_UPDATE_CMD_SAME && (xpos - mx || ypos - my)) {
-            display_mapscroll(xpos - mx, ypos - my, 0, 0);
-            map_play_footstep();
+        int dx, dy;
+        if (socket_command_map_movement_delta(mapstat, xpos, ypos, &dx, &dy)) {
+            display_mapscroll(dx, dy, 0, 0);
+            map_pending_effects.footstep = true;
             map_visible_change = true;
         }
 
-        if (mapstat == MAP_UPDATE_CMD_SAME) {
-            mx = xpos;
-            my = ypos;
-        }
     }
 
     uint8_t player_sub_layer = packet_reader_read_uint8(&reader);
@@ -1358,29 +1476,193 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
                                         level_mask);
     }
 
-    if (!MapData.continuation.pending && map_light_keyframe_transaction_pending()) {
+    map_continuation_visible_change |= map_visible_change;
+    map_continuation_region_fow_update |= region_map_fow_need_update;
+
+    if (MapData.continuation.pending) {
+        /* Atomic batch replay continues with the next buffered envelope before
+         * returning to input, widgets, or presentation. */
+        return;
+    }
+
+    if (map_light_keyframe_transaction_pending()) {
         map_light_keyframe_transaction_commit();
     }
 
+    uint16_t active_level_mask = map_get_level_mask();
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
-        if ((level_mask & (UINT16_C(1) << MAP2_DEPTH_INDEX(depth))) &&
+        if ((active_level_mask & (UINT16_C(1) << MAP2_DEPTH_INDEX(depth))) &&
             map_select_level(depth, false)) {
             adjust_tile_stretch();
         }
     }
     map_select_level(0, true);
-    map_visible_change |= region_map_fow_need_update;
-    if (map_visible_change) {
+    map_continuation_visible_change |= map_continuation_region_fow_update;
+    if (map_continuation_visible_change) {
         map_redraw_request(MAP_REDRAW_REASON_MAP_PACKET);
         minimap_redraw_flag = 1;
     }
 
-    if (region_map_fow_need_update) {
+    if (map_continuation_region_fow_update) {
         region_map_fow_update(MapData.region_map);
     }
 
     map_state_transaction_commit();
+    map_pending_effects_commit();
+    map_publication_generation++;
+    map_continuation_visible_change = false;
+    map_continuation_region_fow_update = false;
 }
+
+/** @copydoc socket_command_struct::handle_func */
+void socket_command_map(uint8_t *data, size_t len, size_t pos) {
+    int wire_width = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_WIDTH));
+    int wire_height = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT));
+    map_protocol_packet_info_t info;
+    if (!map_protocol_inspect(data, len, pos, wire_width, wire_height, &info)) {
+        LOG(PACKET, "Rejected malformed map packet.");
+        socket_command_map_abort_pending();
+        return;
+    }
+
+    if (map_pending_batch.replaying) {
+        socket_command_map_apply(data, len, pos);
+        return;
+    }
+
+    if (info.mapstat != MAP_UPDATE_CMD_PARTIAL) {
+        if (map_pending_batch.continuation.pending) {
+            LOG(PACKET, "Discarded interrupted unpublished map generation.");
+            map_pending_batch_reset();
+        }
+        if (info.continuation == 0) {
+            socket_command_map_apply(data, len, pos);
+            return;
+        }
+
+        map_pending_batch_append(data, len, pos);
+        map_protocol_continuation_begin(&map_pending_batch.continuation,
+                                        info.continuation,
+                                        info.x,
+                                        info.y,
+                                        info.sub_layer,
+                                        info.depths);
+        return;
+    }
+
+    if (!map_protocol_continuation_matches(&map_pending_batch.continuation,
+                                           info.continuation,
+                                           info.x,
+                                           info.y,
+                                           info.sub_layer,
+                                           info.depths)) {
+        LOG(PACKET, "Rejected unsolicited, mismatched, or out-of-sequence map continuation.");
+        map_pending_batch_reset();
+        return;
+    }
+
+    map_pending_batch_append(data, len, pos);
+    map_protocol_continuation_advance(&map_pending_batch.continuation);
+    if (map_pending_batch.continuation.pending) {
+        return;
+    }
+
+    map_pending_packet_t *batch = map_pending_batch.head;
+    map_pending_batch.head = NULL;
+    map_pending_batch.tail = NULL;
+    map_pending_batch.replaying = true;
+    uint64_t publication_before = map_publication_generation;
+    bool replay_complete = true;
+    for (map_pending_packet_t *packet = batch; packet != NULL; packet = packet->next) {
+        socket_command_map_apply(packet->data, packet->len, packet->pos);
+        if (packet->next != NULL &&
+            (!map_state_transaction_active() || !MapData.continuation.pending)) {
+            replay_complete = false;
+            break;
+        }
+    }
+    map_pending_batch.replaying = false;
+    map_pending_batch_release(batch);
+
+    if (!replay_complete || map_state_transaction_active() || MapData.continuation.pending ||
+        map_publication_generation != publication_before + 1) {
+        LOG(PACKET, "Rejected incomplete map generation during atomic publication.");
+        socket_command_map_abort_pending();
+    }
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+bool socket_command_map_buffered_generation_test_begin(void) {
+    if (map_pending_batch.continuation.pending || map_pending_batch.head != NULL) {
+        return false;
+    }
+    uint8_t staged_envelope[] = {CLIENT_CMD_MAP, MAP_UPDATE_CMD_NEW};
+    map_pending_batch_append(staged_envelope, sizeof(staged_envelope), 1);
+    map_protocol_continuation_begin(&map_pending_batch.continuation, 1, 18, 24, 0, 1);
+    return map_pending_batch.continuation.pending && map_pending_batch.head != NULL;
+}
+
+bool socket_command_map_buffered_generation_test_pending(void) {
+    return map_pending_batch.continuation.pending || map_pending_batch.head != NULL;
+}
+
+bool socket_command_map_continuation_transaction_test(void) {
+    if (map_state_transaction_active() || MapData.continuation.pending ||
+        map_pending_batch.continuation.pending) {
+        return false;
+    }
+    int saved_posx = MapData.posx;
+    int saved_posy = MapData.posy;
+    uint32_t saved_target = cpl.target_object_index;
+    MapData.posx = 17;
+    MapData.posy = 23;
+
+    /* Model a command-budget yield after the first envelope. The validated
+     * generation is retained as wire data, so every live read/action still
+     * sees the previously published coordinates and target. */
+    bool success = socket_command_map_buffered_generation_test_begin() &&
+                   !map_state_transaction_active() && MapData.posx == 17 && MapData.posy == 23 &&
+                   cpl.target_object_index == saved_target && !map_pending_effects.active;
+    socket_command_map_abort_pending();
+    success = success && !socket_command_map_buffered_generation_test_pending() &&
+              MapData.posx == 17 && MapData.posy == 23 &&
+              cpl.target_object_index == saved_target;
+
+    map_state_transaction_begin(false);
+    MapData.posx = 18;
+    MapData.posy = 24;
+    map_protocol_continuation_begin(&MapData.continuation, 1, 0, 0, 0, 0);
+    success = success && map_state_transaction_active() && MapData.continuation.pending &&
+              MapData.continuation.next == 1;
+    map_protocol_continuation_advance(&MapData.continuation);
+    map_state_transaction_commit();
+    success = success && !map_state_transaction_active() && !MapData.continuation.pending &&
+              MapData.posx == 18 && MapData.posy == 24;
+
+    map_state_transaction_begin(false);
+    map_pending_effects_begin();
+    map_pending_effects.rich_presence = true;
+    map_pending_effects.music = true;
+    map_pending_effects.weather = true;
+    map_pending_effects.footstep = true;
+    MapData.posx = 19;
+    MapData.posy = 25;
+    map_protocol_continuation_begin(&MapData.continuation, 1, 0, 0, 0, 0);
+    success = success && map_state_transaction_active() && MapData.continuation.pending;
+    socket_command_map_abort_pending();
+    int retry_dx, retry_dy;
+    success = success && !map_state_transaction_active() && !MapData.continuation.pending &&
+              !map_pending_effects.active &&
+              MapData.posx == 18 && MapData.posy == 24 &&
+              socket_command_map_movement_delta(
+                  MAP_UPDATE_CMD_SAME, 19, 25, &retry_dx, &retry_dy) &&
+              retry_dx == 1 && retry_dy == 1;
+    MapData.posx = saved_posx;
+    MapData.posy = saved_posy;
+    cpl.target_object_index = saved_target;
+    return success;
+}
+#endif
 
 /** @copydoc socket_command_struct::handle_func */
 void socket_command_version(uint8_t *data, size_t len, size_t pos) {

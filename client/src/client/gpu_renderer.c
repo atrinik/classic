@@ -817,8 +817,8 @@ bool gpu_renderer_map_begin_auxiliary(int width, int height) {
     return gpu_renderer_frame_result(gpu_map_renderer_begin(width, height, true));
 }
 
-void gpu_renderer_map_set_owner(uint8_t owner, int sample_y) {
-    gpu_map_renderer_set_owner(owner, sample_y);
+void gpu_renderer_map_set_owner(uint8_t owner, int sample_y, bool projected) {
+    gpu_map_renderer_set_owner(owner, sample_y, projected);
 }
 
 void gpu_renderer_map_set_instance_identity(uint64_t record_identity, uint32_t draw_variant) {
@@ -845,6 +845,10 @@ bool gpu_renderer_draw_map(float x, float y, float width, float height) {
             map_target,
             zoom_filter_to_scale_mode(setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER))) &&
         SDL_RenderTexture(renderer, map_target, NULL, &destination));
+}
+
+bool gpu_renderer_map_available(void) {
+    return gpu_map_renderer_texture(false) != NULL;
 }
 
 static gpu_texture_atlas_t *gpu_renderer_texture_atlas_create(void) {
@@ -1719,6 +1723,12 @@ void gpu_renderer_statistics_light_upload(size_t bytes) {
     gpu_renderer_statistics_upload(bytes);
     statistics.light_upload_count++;
     statistics.light_upload_bytes += bytes;
+}
+
+void gpu_renderer_statistics_projected_light_upload(size_t bytes) {
+    gpu_renderer_statistics_light_upload(bytes);
+    statistics.projected_light_upload_count++;
+    statistics.projected_light_upload_bytes += bytes;
 }
 
 void gpu_renderer_statistics_slot_uniform_upload(size_t bytes) {

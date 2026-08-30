@@ -26,6 +26,7 @@
 #define GPU_MAP_LIGHT_KEY_DARK (GPU_MAP_LIGHT_KEY_MASK - 1U)
 #define GPU_MAP_LIGHT_KEY_UNLIT GPU_MAP_LIGHT_KEY_MASK
 #define GPU_MAP_LIGHT_QUAD_KEY_MAX (GPU_MAP_LIGHT_KEY_MASK - 2U)
+#define GPU_MAP_LIGHT_KEY_PROJECTED (UINT32_C(1) << GPU_MAP_LIGHT_KEY_BITS)
 #define GPU_MAP_LIGHT_QUAD_INITIAL_CAPACITY 1024U
 #define GPU_MAP_LIGHT_ROW_INITIAL_CAPACITY 128U
 #define GPU_MAP_LIGHT_SPAN_INITIAL_CAPACITY 1024U
@@ -151,6 +152,7 @@ typedef struct gpu_map_target_set {
     int width;
     int height;
     bool accounted;
+    bool published;
     SDL_GPUBuffer *world_instance_buffer;
     SDL_GPUTransferBuffer *world_instance_transfer;
     size_t world_instance_capacity;
@@ -181,6 +183,10 @@ static size_t light_span_gpu_capacity;
 static size_t light_span_gpu_bytes;
 static SDL_GPUBuffer *light_forward_lut_buffer;
 static SDL_GPUBuffer *light_inverse_lut_buffer;
+static SDL_GPUBuffer *projected_light_row_buffer;
+static SDL_GPUTransferBuffer *projected_light_row_transfer;
+static size_t projected_light_row_gpu_capacity;
+static size_t projected_light_row_gpu_bytes;
 static SDL_GPUTexture *albedo_target;
 static SDL_GPUTexture *owner_target;
 static SDL_GPUTexture *final_target;
@@ -197,6 +203,7 @@ static int target_width;
 static int target_height;
 static uint8_t current_light_owner = GPU_RENDERER_OWNER_UNLIT;
 static int current_light_sample_y;
+static bool current_light_projected;
 static bool world_pass_has_content;
 static gpu_map_world_command_t *world_commands;
 static size_t world_commands_num;
@@ -227,6 +234,13 @@ static size_t light_horizontal_rows_capacity;
 static size_t *light_horizontal_row_lookup;
 static size_t *light_row_lookup;
 static size_t light_lookup_entries;
+static uint32_t *projected_light_rows;
+static size_t projected_light_rows_num;
+static bool projected_light_rows_used;
+static bool projected_light_rows_uploaded;
+static uint32_t *uploaded_projected_light_rows;
+static size_t uploaded_projected_light_rows_num;
+static bool uploaded_projected_light_rows_valid;
 static uint32_t *light_bucket_offsets;
 static uint32_t *light_bucket_cursors;
 static uint32_t *light_bucket_indices;
@@ -342,7 +356,7 @@ static bool gpu_map_pipelines_create(void) {
                                                           SDL_GPU_SHADERSTAGE_FRAGMENT,
                                                           1,
                                                           0,
-                                                          0,
+                                                          1,
                                                           0);
     SDL_GPUShader *final_vertex = gpu_map_shader_create("final_vertex",
                                                         "final_vertex",
@@ -1017,6 +1031,117 @@ static void gpu_map_assets_destroy(void) {
     }
 }
 
+static bool gpu_map_projected_light_rows_reserve(size_t required) {
+    if (required <= projected_light_row_gpu_capacity) {
+        return true;
+    }
+    if (required > UINT32_MAX / sizeof(*projected_light_rows)) {
+        SDL_SetError("GPU map projected-light lookup exceeds the backend limit");
+        return false;
+    }
+    size_t capacity = MAX(required, (size_t)MAP2_LEVELS * 256U);
+    uint32_t bytes = (uint32_t)(capacity * sizeof(*projected_light_rows));
+    SDL_GPUBufferCreateInfo buffer_info = {
+        .usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ,
+        .size = bytes,
+    };
+    SDL_GPUTransferBufferCreateInfo transfer_info = {
+        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+        .size = bytes,
+    };
+    SDL_GPUBuffer *buffer = SDL_CreateGPUBuffer(map_device, &buffer_info);
+    SDL_GPUTransferBuffer *transfer = SDL_CreateGPUTransferBuffer(map_device, &transfer_info);
+    if (buffer == NULL || transfer == NULL) {
+        SDL_ReleaseGPUBuffer(map_device, buffer);
+        SDL_ReleaseGPUTransferBuffer(map_device, transfer);
+        return false;
+    }
+    SDL_ReleaseGPUBuffer(map_device, projected_light_row_buffer);
+    SDL_ReleaseGPUTransferBuffer(map_device, projected_light_row_transfer);
+    if (projected_light_row_gpu_bytes != 0) {
+        gpu_renderer_statistics_resource_destroy(projected_light_row_gpu_bytes);
+        gpu_renderer_statistics_resource_destroy(projected_light_row_gpu_bytes);
+    }
+    projected_light_row_buffer = buffer;
+    projected_light_row_transfer = transfer;
+    projected_light_row_gpu_capacity = capacity;
+    projected_light_row_gpu_bytes = bytes;
+    uploaded_projected_light_rows_valid = false;
+    gpu_renderer_statistics_resource_create(bytes);
+    gpu_renderer_statistics_resource_create(bytes);
+    return true;
+}
+
+static bool gpu_map_projected_light_rows_upload(void) {
+    size_t required = MAX(projected_light_rows_num, (size_t)1);
+    if (!gpu_map_projected_light_rows_reserve(required)) {
+        return false;
+    }
+    if (!projected_light_rows_used) {
+        return true;
+    }
+    bool full_upload = !uploaded_projected_light_rows_valid ||
+                       projected_light_rows_num != uploaded_projected_light_rows_num;
+    if (!full_upload && memcmp(projected_light_rows,
+                               uploaded_projected_light_rows,
+                               projected_light_rows_num * sizeof(*projected_light_rows)) == 0) {
+        return true;
+    }
+    uint32_t *mapped = SDL_MapGPUTransferBuffer(map_device, projected_light_row_transfer, true);
+    if (mapped == NULL) {
+        return false;
+    }
+    size_t uploaded_bytes = 0;
+    for (size_t first = 0; first < projected_light_rows_num;) {
+        if (!full_upload && projected_light_rows[first] == uploaded_projected_light_rows[first]) {
+            first++;
+            continue;
+        }
+        size_t end = first + 1U;
+        while (end < projected_light_rows_num &&
+               (full_upload || projected_light_rows[end] != uploaded_projected_light_rows[end])) {
+            end++;
+        }
+        size_t bytes = (end - first) * sizeof(*projected_light_rows);
+        memcpy(&mapped[first], &projected_light_rows[first], bytes);
+        uploaded_bytes += bytes;
+        first = end;
+    }
+    SDL_UnmapGPUTransferBuffer(map_device, projected_light_row_transfer);
+    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(map_command_buffer);
+    if (copy == NULL) {
+        return false;
+    }
+    for (size_t first = 0; first < projected_light_rows_num;) {
+        if (!full_upload && projected_light_rows[first] == uploaded_projected_light_rows[first]) {
+            first++;
+            continue;
+        }
+        size_t end = first + 1U;
+        while (end < projected_light_rows_num &&
+               (full_upload || projected_light_rows[end] != uploaded_projected_light_rows[end])) {
+            end++;
+        }
+        uint32_t offset = (uint32_t)(first * sizeof(*projected_light_rows));
+        uint32_t bytes = (uint32_t)((end - first) * sizeof(*projected_light_rows));
+        SDL_GPUTransferBufferLocation source = {
+            .transfer_buffer = projected_light_row_transfer,
+            .offset = offset,
+        };
+        SDL_GPUBufferRegion destination = {
+            .buffer = projected_light_row_buffer,
+            .offset = offset,
+            .size = bytes,
+        };
+        SDL_UploadToGPUBuffer(copy, &source, &destination, false);
+        first = end;
+    }
+    SDL_EndGPUCopyPass(copy);
+    gpu_renderer_statistics_projected_light_upload(uploaded_bytes);
+    projected_light_rows_uploaded = true;
+    return true;
+}
+
 static bool gpu_map_world_instance_buffers_reserve(gpu_map_target_set_t *target, size_t required) {
     if (required <= target->world_instance_capacity) {
         return true;
@@ -1337,7 +1462,7 @@ static bool gpu_map_world_commands_submit(void) {
         SDL_EndGPUCopyPass(copy);
     }
 
-    if (!gpu_map_world_pass_begin()) {
+    if (!gpu_map_projected_light_rows_upload() || !gpu_map_world_pass_begin()) {
         return false;
     }
     gpu_map_vertex_uniforms_t vertex = {
@@ -1345,6 +1470,7 @@ static bool gpu_map_world_commands_submit(void) {
     };
     SDL_PushGPUVertexUniformData(map_command_buffer, 0, &vertex, sizeof(vertex));
     SDL_BindGPUVertexStorageBuffers(world_pass, 0, &target->world_instance_buffer, 1);
+    SDL_BindGPUFragmentStorageBuffers(world_pass, 0, &projected_light_row_buffer, 1);
 
     uint64_t batches = 0;
     for (size_t first = 0; first < world_commands_num;) {
@@ -1737,6 +1863,15 @@ void gpu_map_renderer_destroy(void) {
     light_horizontal_row_lookup = NULL;
     free(light_row_lookup);
     light_row_lookup = NULL;
+    free(projected_light_rows);
+    projected_light_rows = NULL;
+    projected_light_rows_num = 0;
+    projected_light_rows_used = false;
+    projected_light_rows_uploaded = false;
+    free(uploaded_projected_light_rows);
+    uploaded_projected_light_rows = NULL;
+    uploaded_projected_light_rows_num = 0;
+    uploaded_projected_light_rows_valid = false;
     light_lookup_entries = 0;
     free(light_bucket_offsets);
     light_bucket_offsets = NULL;
@@ -1771,6 +1906,8 @@ void gpu_map_renderer_destroy(void) {
     SDL_ReleaseGPUTransferBuffer(map_device, light_span_transfer);
     SDL_ReleaseGPUBuffer(map_device, light_forward_lut_buffer);
     SDL_ReleaseGPUBuffer(map_device, light_inverse_lut_buffer);
+    SDL_ReleaseGPUBuffer(map_device, projected_light_row_buffer);
+    SDL_ReleaseGPUTransferBuffer(map_device, projected_light_row_transfer);
     SDL_ReleaseGPUSampler(map_device, map_sampler);
     if (light_quad_gpu_bytes != 0) {
         gpu_renderer_statistics_resource_destroy(light_quad_gpu_bytes);
@@ -1789,6 +1926,12 @@ void gpu_map_renderer_destroy(void) {
         gpu_renderer_statistics_resource_destroy(light_span_gpu_bytes);
         light_span_gpu_bytes = 0;
         light_span_gpu_capacity = 0;
+    }
+    if (projected_light_row_gpu_bytes != 0) {
+        gpu_renderer_statistics_resource_destroy(projected_light_row_gpu_bytes);
+        gpu_renderer_statistics_resource_destroy(projected_light_row_gpu_bytes);
+        projected_light_row_gpu_bytes = 0;
+        projected_light_row_gpu_capacity = 0;
     }
     if (light_lut_resources_accounted) {
         gpu_renderer_statistics_resource_destroy(GPU_MAP_LIGHT_FORWARD_LUT_ENTRIES *
@@ -1813,6 +1956,8 @@ void gpu_map_renderer_destroy(void) {
     light_span_transfer = NULL;
     light_forward_lut_buffer = NULL;
     light_inverse_lut_buffer = NULL;
+    projected_light_row_buffer = NULL;
+    projected_light_row_transfer = NULL;
     map_sampler = NULL;
     map_device = NULL;
     map_renderer = NULL;
@@ -1834,10 +1979,18 @@ bool gpu_map_renderer_begin(int width, int height, bool auxiliary) {
         light_horizontal_row_lookup =
             xreallocarray(light_horizontal_row_lookup, lookup_entries, sizeof(size_t));
         light_row_lookup = xreallocarray(light_row_lookup, lookup_entries, sizeof(size_t));
+        projected_light_rows =
+            xreallocarray(projected_light_rows, lookup_entries, sizeof(*projected_light_rows));
         light_lookup_entries = lookup_entries;
     }
     memset(light_horizontal_row_lookup, 0xff, lookup_entries * sizeof(size_t));
     memset(light_row_lookup, 0xff, lookup_entries * sizeof(size_t));
+    for (size_t index = 0; index < lookup_entries; index++) {
+        projected_light_rows[index] = GPU_MAP_LIGHT_KEY_UNLIT;
+    }
+    projected_light_rows_num = lookup_entries;
+    projected_light_rows_used = false;
+    projected_light_rows_uploaded = false;
     map_command_buffer = SDL_AcquireGPUCommandBuffer(map_device);
     world_pass = NULL;
     world_pass_has_content = false;
@@ -1847,6 +2000,7 @@ bool gpu_map_renderer_begin(int width, int height, bool auxiliary) {
     current_draw_variant = 0;
     current_light_owner = GPU_RENDERER_OWNER_UNLIT;
     current_light_sample_y = 0;
+    current_light_projected = false;
     light_quads_num = 0;
     light_rows_num = 0;
     light_spans_num = 0;
@@ -1861,10 +2015,11 @@ bool gpu_map_renderer_active(void) {
     return map_command_buffer != NULL;
 }
 
-void gpu_map_renderer_set_owner(uint8_t owner, int sample_y) {
+void gpu_map_renderer_set_owner(uint8_t owner, int sample_y, bool projected) {
     HARD_ASSERT(owner < MAP2_LEVELS || owner == GPU_RENDERER_OWNER_UNLIT);
     current_light_owner = owner;
     current_light_sample_y = sample_y;
+    current_light_projected = projected && owner != GPU_RENDERER_OWNER_UNLIT;
 }
 
 void gpu_map_renderer_set_instance_identity(uint64_t record_identity, uint32_t draw_variant) {
@@ -2256,13 +2411,28 @@ bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
     }
     instance.owner = GPU_MAP_LIGHT_KEY_UNLIT;
     if (current_light_owner != GPU_RENDERER_OWNER_UNLIT) {
-        int sample_y = MAX(0, MIN(target_height - 1, current_light_sample_y));
-        size_t row = gpu_map_light_row_build(current_light_owner, sample_y);
-        if (row == SIZE_MAX) {
-            return false;
+        if (current_light_projected) {
+            int first_y = MAX(0, (int)floorf(destination->y));
+            int last_y = MIN(target_height, (int)ceilf(destination->y + destination->h));
+            for (int y = first_y; y < last_y; y++) {
+                size_t row = gpu_map_light_row_build(current_light_owner, y);
+                if (row == SIZE_MAX) {
+                    return false;
+                }
+                projected_light_rows[(size_t)y * MAP2_LEVELS + current_light_owner] =
+                    row == GPU_MAP_LIGHT_KEY_UNLIT ? GPU_MAP_LIGHT_KEY_UNLIT : (uint32_t)(row + 1U);
+            }
+            projected_light_rows_used = true;
+            instance.owner = GPU_MAP_LIGHT_KEY_PROJECTED | current_light_owner;
+        } else {
+            int sample_y = MAX(0, MIN(target_height - 1, current_light_sample_y));
+            size_t row = gpu_map_light_row_build(current_light_owner, sample_y);
+            if (row == SIZE_MAX) {
+                return false;
+            }
+            instance.owner =
+                row == GPU_MAP_LIGHT_KEY_UNLIT ? GPU_MAP_LIGHT_KEY_UNLIT : (uint32_t)(row + 1U);
         }
-        instance.owner =
-            row == GPU_MAP_LIGHT_KEY_UNLIT ? GPU_MAP_LIGHT_KEY_UNLIT : (uint32_t)(row + 1U);
     }
     if (world_commands_num == world_commands_capacity) {
         world_commands_capacity =
@@ -2502,8 +2672,19 @@ bool gpu_map_renderer_end(void) {
         uploaded_light_spans_num = light_spans_num;
         uploaded_light_quads_valid = true;
     }
+    if (completed && projected_light_rows_uploaded) {
+        uploaded_projected_light_rows = xreallocarray(uploaded_projected_light_rows,
+                                                      projected_light_rows_num,
+                                                      sizeof(*uploaded_projected_light_rows));
+        memcpy(uploaded_projected_light_rows,
+               projected_light_rows,
+               projected_light_rows_num * sizeof(*projected_light_rows));
+        uploaded_projected_light_rows_num = projected_light_rows_num;
+        uploaded_projected_light_rows_valid = true;
+    }
     if (completed) {
         gpu_map_world_commands_commit();
+        map_targets[active_target_index].published = true;
     } else {
         gpu_map_command_cancel();
     }
@@ -2511,7 +2692,12 @@ bool gpu_map_renderer_end(void) {
 }
 
 SDL_Texture *gpu_map_renderer_texture(bool auxiliary) {
-    return map_targets[auxiliary ? 1U : 0U].wrapped_final;
+    const gpu_map_target_set_t *target = &map_targets[auxiliary ? 1U : 0U];
+    return target->published ? target->wrapped_final : NULL;
+}
+
+void gpu_map_renderer_invalidate_target(bool auxiliary) {
+    map_targets[auxiliary ? 1U : 0U].published = false;
 }
 
 #ifdef ATRINIK_GPU_CONFORMANCE_TESTS

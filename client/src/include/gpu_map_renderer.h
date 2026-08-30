@@ -28,7 +28,7 @@ bool gpu_map_renderer_create(SDL_GPUDevice *device, SDL_Renderer *renderer);
 void gpu_map_renderer_destroy(void);
 bool gpu_map_renderer_begin(int width, int height, bool auxiliary);
 bool gpu_map_renderer_active(void);
-void gpu_map_renderer_set_owner(uint8_t owner, int sample_y);
+void gpu_map_renderer_set_owner(uint8_t owner, int sample_y, bool projected);
 /** Bind the stable semantic record identity for the next world draw. */
 void gpu_map_renderer_set_instance_identity(uint64_t record_identity, uint32_t draw_variant);
 void gpu_map_renderer_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]);
@@ -44,6 +44,8 @@ bool gpu_map_renderer_draw_rect(const SDL_FRect *destination,
 bool gpu_map_renderer_set_clip(const SDL_Rect *rectangle);
 bool gpu_map_renderer_end(void);
 SDL_Texture *gpu_map_renderer_texture(bool auxiliary);
+/** Mark a retained target unavailable until its next successful publication. */
+void gpu_map_renderer_invalidate_target(bool auxiliary);
 void gpu_map_renderer_invalidate_surface(SDL_Surface *surface);
 #ifdef ATRINIK_GPU_CONFORMANCE_TESTS
 typedef struct gpu_map_renderer_probe {

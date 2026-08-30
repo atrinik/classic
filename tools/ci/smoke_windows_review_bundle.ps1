@@ -12,6 +12,9 @@ $smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
     "atrinik-review-bundle-smoke-{0}" -f [System.Guid]::NewGuid()
 )
 $process = $null
+$launcherProcess = $null
+$launcherServer = $null
+$launcherClient = $null
 $bodySucceeded = $false
 $portProbe = [System.Net.Sockets.UdpClient]::new(0)
 try {
@@ -199,6 +202,62 @@ try {
     if ($process.ExitCode -ne 0) {
         throw "Flat review-bundle server exited with code $($process.ExitCode):`n$output"
     }
+
+    $launcherStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $launcherStartInfo.FileName = $env:ComSpec
+    $launcherStartInfo.WorkingDirectory = $reviewRoot
+    $launcherStartInfo.UseShellExecute = $false
+    $launcherStartInfo.CreateNoWindow = $true
+    $launcherStartInfo.ArgumentList.Add("/d")
+    $launcherStartInfo.ArgumentList.Add("/c")
+    $launcherStartInfo.ArgumentList.Add("call")
+    $launcherStartInfo.ArgumentList.Add($launchers[0].FullName)
+    $launcherProcess = [System.Diagnostics.Process]::new()
+    $launcherProcess.StartInfo = $launcherStartInfo
+    if (-not $launcherProcess.Start()) {
+        throw "Could not execute the user-facing run-review.bat launcher"
+    }
+    if (-not $launcherProcess.WaitForExit(60000)) {
+        $launcherProcess.Kill($true)
+        throw "run-review.bat did not return after launching the review processes"
+    }
+    if ($launcherProcess.ExitCode -ne 0) {
+        throw "run-review.bat exited with code $($launcherProcess.ExitCode)"
+    }
+    $launcherDeadline = [System.DateTime]::UtcNow.AddSeconds(60)
+    $serverExecutable = Join-Path $reviewRoot "atrinik-server.exe"
+    $clientExecutable = Join-Path $reviewRoot "atrinik.exe"
+    while ([System.DateTime]::UtcNow -lt $launcherDeadline) {
+        $launcherServers = @(Get-Process -Name "atrinik-server" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -eq $serverExecutable })
+        $launcherClients = @(Get-Process -Name "atrinik" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -eq $clientExecutable })
+        if ($launcherServers.Count -eq 1 -and $launcherClients.Count -eq 1) {
+            $launcherServer = $launcherServers[0]
+            $launcherClient = $launcherClients[0]
+            break
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    if ($null -eq $launcherServer -or $null -eq $launcherClient) {
+        throw "One-click launcher did not start exactly one packaged server and client"
+    }
+    $launcherEndpoints = @(Get-NetUDPEndpoint -LocalPort 1731 | Where-Object {
+        $_.OwningProcess -eq $launcherServer.Id
+    })
+    if ($launcherEndpoints.Count -ne 1) {
+        throw "One-click launcher server does not own UDP port 1731"
+    }
+    Start-Sleep -Seconds 5
+    $launcherServer.Refresh()
+    $launcherClient.Refresh()
+    if ($launcherServer.HasExited -or $launcherClient.HasExited) {
+        throw "One-click launcher server or client exited during the startup smoke interval"
+    }
+    Stop-Process -Id $launcherClient.Id -Force
+    Stop-Process -Id $launcherServer.Id -Force
+    [void]$launcherClient.WaitForExit(10000)
+    [void]$launcherServer.WaitForExit(10000)
     $bodySucceeded = $true
 } finally {
     $cleanupFailures = [System.Collections.Generic.List[string]]::new()
@@ -216,6 +275,32 @@ try {
             $cleanupFailures.Add("Could not contain flat review-bundle server")
         } finally {
             $process.Dispose()
+        }
+    }
+    foreach ($launched in @($launcherClient, $launcherServer)) {
+        if ($null -eq $launched) { continue }
+        try {
+            if (-not $launched.HasExited) {
+                $launched.Kill($true)
+            }
+            if (-not $launched.WaitForExit(10000)) {
+                $cleanupFailures.Add("One-click review process did not exit during cleanup")
+            }
+        } catch {
+            Write-Warning "Could not contain one-click review process: $_"
+            $cleanupFailures.Add("Could not contain one-click review process")
+        } finally {
+            $launched.Dispose()
+        }
+    }
+    if ($null -ne $launcherProcess) {
+        try {
+            if (-not $launcherProcess.HasExited) {
+                $launcherProcess.Kill($true)
+            }
+            [void]$launcherProcess.WaitForExit(10000)
+        } finally {
+            $launcherProcess.Dispose()
         }
     }
     if (Test-Path -LiteralPath $smokeRoot) {

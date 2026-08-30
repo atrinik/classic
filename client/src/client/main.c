@@ -423,8 +423,42 @@ static void sound_background_hook(void) {
 /** Whether the window is available for normal-rate rendering. */
 static bool window_is_active(void) {
     SDL_WindowFlags flags = SDL_GetWindowFlags(ScreenWindow);
-    return (flags & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) == 0;
+    return (flags & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) == 0 &&
+           (flags & SDL_WINDOW_INPUT_FOCUS) != 0;
 }
+
+typedef struct presentation_clock {
+    uint32_t tick;
+    uint32_t wall_tick;
+    bool active;
+} presentation_clock_t;
+
+static presentation_clock_t presentation_clock_start(uint32_t wall_tick, bool active) {
+    return (presentation_clock_t){.tick = wall_tick, .wall_tick = wall_tick, .active = active};
+}
+
+/** Advance only the interval that began while presentation was active. */
+static void presentation_clock_step(presentation_clock_t *clock,
+                                    uint32_t wall_tick,
+                                    bool active) {
+    if (clock->active) {
+        clock->tick += wall_tick - clock->wall_tick;
+    }
+    clock->wall_tick = wall_tick;
+    clock->active = active;
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+static bool presentation_clock_suspend_test(void) {
+    presentation_clock_t clock = presentation_clock_start(500, true);
+    presentation_clock_step(&clock, 600, false);
+    bool success = clock.tick == 600;
+    presentation_clock_step(&clock, 5000, true);
+    success = success && clock.tick == 600;
+    presentation_clock_step(&clock, 5050, true);
+    return success && clock.tick == 650;
+}
+#endif
 
 void clioption_settings_deinit(void) {
     size_t i;
@@ -643,6 +677,9 @@ static bool gpu_renderer_recovery_republish(void *userdata) {
         SDL_SetError("connection closed before GPU recovery republish");
         return false;
     }
+    if (map_state_transaction_active() || MapData.continuation.pending) {
+        socket_command_map_abort_pending();
+    }
     if (!client_command_retry_deferred() || !connection_preference_recover()) {
         return false;
     }
@@ -772,6 +809,7 @@ int main(int argc, char *argv[]) {
     int old_cursor_x = -1, old_cursor_y = -1;
     unsigned int gpu_recovery_attempts = 0;
     uint32_t anim_tick, frame_start_time, elapsed_time, fps_limit, last_frame_ticks;
+    presentation_clock_t presentation_clock;
     int fps_limits[] = {30, 60, 120, 0};
 
     toolkit_import(signals);
@@ -804,12 +842,30 @@ int main(int argc, char *argv[]) {
     }
 
     if (argc == 2 && strcmp(argv[1], "--map-state-test") == 0) {
-        return widget_map_sparse_state_test() && widget_map_transaction_abort_test() &&
-                       widget_map_light_keyframe_capacity_test() &&
-                       widget_map_temporal_lighting_test() &&
-                       socket_command_map_timed_light_same_test()
-                   ? EXIT_SUCCESS
-                   : EXIT_FAILURE;
+        bool sparse = widget_map_sparse_state_test();
+        bool transaction = widget_map_transaction_abort_test();
+        bool capacity = widget_map_light_keyframe_capacity_test();
+        bool temporal = widget_map_temporal_lighting_test();
+        bool projection = widget_map_projection_contract_test();
+        bool descriptor = socket_command_map_timed_light_same_test();
+        bool continuation = socket_command_map_continuation_transaction_test();
+        bool clock_suspend = presentation_clock_suspend_test();
+        if (!(sparse && transaction && capacity && temporal && projection && descriptor &&
+              continuation && clock_suspend)) {
+            fprintf(stderr,
+                    "map state test failed: sparse=%d transaction=%d capacity=%d temporal=%d "
+                    "projection=%d descriptor=%d continuation=%d presentation-clock=%d\n",
+                    sparse,
+                    transaction,
+                    capacity,
+                    temporal,
+                    projection,
+                    descriptor,
+                    continuation,
+                    clock_suspend);
+            return EXIT_FAILURE;
+        }
+        return EXIT_SUCCESS;
     }
 
     if (argc == 4 && strcmp(argv[1], "--widget-priority-test") == 0) {
@@ -931,7 +987,8 @@ int main(int argc, char *argv[]) {
 
     sound_background_hook_register(sound_background_hook);
 
-    LastTick = anim_tick = last_frame_ticks = SDL_GetTicks();
+    presentation_clock = presentation_clock_start(SDL_GetTicks(), window_is_active());
+    LastTick = anim_tick = last_frame_ticks = presentation_clock.tick;
     frames = 0;
 
     while (!done && !signals_termination_requested()) {
@@ -941,6 +998,9 @@ int main(int argc, char *argv[]) {
         uint64_t profile_events_started = render_profiler_begin();
         done = Event_PollInputDevice();
         render_profiler_end(RENDER_PROFILE_EVENTS, profile_events_started);
+
+        presentation_clock_step(&presentation_clock, SDL_GetTicks(), window_is_active());
+        LastTick = presentation_clock.tick;
 
         /* Screenshot copies complete independently of the render loop. */
         gpu_renderer_readback_poll();
@@ -1116,8 +1176,6 @@ int main(int argc, char *argv[]) {
             }
         }
         render_profiler_end(RENDER_PROFILE_PRESENT, profile_present_started);
-
-        LastTick = SDL_GetTicks();
 
         if (window_is_active()) {
             frames++;
