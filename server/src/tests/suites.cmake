@@ -25,6 +25,7 @@ set(ATRINIK_SERVER_TEST_SUITES
     "server.request|check_server_request|src/tests/unit/server/request.c"
     "server.rune|check_server_rune|src/tests/unit/server/rune.c"
     "server.server_clock|check_server_server_clock|src/tests/unit/server/server_clock.c"
+    "server.stuck|check_server_stuck|src/tests/unit/server/stuck.c"
     "server.todclock|check_server_todclock|src/tests/unit/server/todclock.c"
     "server.transport_benchmark|check_server_transport_benchmark|src/tests/unit/server/transport_benchmark.c"
     "server.shop|check_server_shop|src/tests/unit/server/shop.c"

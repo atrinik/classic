@@ -399,8 +399,11 @@ int cast_spell(object *op,
         }
     }
 
-    if (caster->type == PLAYER) {
-        CONTR(caster)->last_combat = pticks;
+    if (caster->type == PLAYER &&
+        ((spells[type].flags & SPELL_DESC_ENEMY) != 0 ||
+         ((spells[type].flags & SPELL_DESC_DIRECTION) != 0 &&
+          (spells[type].flags & SPELL_DESC_TOWN) == 0))) {
+        player_mark_combat(CONTR(caster));
     }
 
     /* We need to calculate the spell point cost before the spell actually

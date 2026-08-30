@@ -45,6 +45,7 @@ List of [a=help]contributors[/a]
 [a=help]say[/a]
 [a=help]shout[/a]
 [a=help]statistics[/a]
+[a=help]stuck[/a]
 [a=help]take[/a]
 [a=help]tell[/a]
 [a=help]time[/a]
@@ -685,6 +686,17 @@ The /statistics command will show you various statistics related to your charact
 
 [title]Syntax:[/title]
 /statistics
+endmsg
+end
+
+help stuck
+autocomplete 1
+title Stuck Command
+msg
+The /stuck command starts a countdown to move you to the server's fixed safe recovery location. Stay out of combat until the countdown completes. Starting recovery begins a cooldown that cannot be bypassed by reconnecting.
+
+[title]Syntax:[/title]
+/stuck
 endmsg
 end
 

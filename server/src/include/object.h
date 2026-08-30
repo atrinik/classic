@@ -1069,9 +1069,14 @@ int object_matches_string(object *op, object *caller, const char *str);
 int object_get_gender(const object *op);
 void object_reverse_inventory(object *op);
 bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool fixed_pos);
+/** Enter a map at the exact supplied coordinates, including fixed-login maps. */
+bool object_enter_map_exact(object *op, mapstruct *m, int x, int y, bool fixed_pos);
 /** Reason-aware map entry; AMBIGUOUS means the object may have moved or been destroyed. */
 object_semantic_result_t
 object_enter_map_reason(object *op, mapstruct *m, int x, int y, const char *reason);
+/** Reason-aware map entry that requires the supplied final map and coordinates. */
+object_semantic_result_t
+object_enter_map_reason_exact(object *op, mapstruct *m, int x, int y, const char *reason);
 const char *object_get_str(const object *op);
 char *object_get_str_r(const object *op, char *buf, size_t bufsize);
 int object_blocked(object *op, mapstruct *m, int x, int y);

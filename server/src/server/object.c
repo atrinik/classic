@@ -43,6 +43,7 @@
 #include <arch.h>
 #include <object.h>
 #include <player.h>
+#include <stuck.h>
 #include <gameplay_journal.h>
 #include <object_methods.h>
 #include <door.h>
@@ -2430,6 +2431,12 @@ object *object_insert_map(object *op, mapstruct *m, object *originator, int flag
         return op;
     }
 
+    /* A map insertion is a movement boundary for players. Clear transient
+     * movement-dependent actions before any map or walk-on callback can run. */
+    if (op->type == PLAYER) {
+        player_stuck_cancel(op);
+    }
+
     if (op->head == NULL && op->arch->more != NULL && op->more == NULL) {
         object *prev = op;
         for (archetype_t *at = op->arch->more; at != NULL; at = at->more) {
@@ -4442,7 +4449,14 @@ void object_reverse_inventory(object *op) {
  * @return
  * True on success, false on failure.
  */
-bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool fixed_pos) {
+static bool object_enter_map_internal(object *op,
+                                      object *exit,
+                                      mapstruct *m,
+                                      int x,
+                                      int y,
+                                      bool fixed_pos,
+                                      bool honor_fixed_login,
+                                      bool require_exact_target) {
     HARD_ASSERT(op != NULL);
 
     op = HEAD(op);
@@ -4527,7 +4541,7 @@ bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool
         fixed_pos = true;
     }
 
-    if (exit == NULL && MAP_FIXEDLOGIN(m)) {
+    if (exit == NULL && honor_fixed_login && MAP_FIXEDLOGIN(m)) {
         x = MAP_ENTER_X(m);
         y = MAP_ENTER_Y(m);
     }
@@ -4566,7 +4580,13 @@ bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool
     }
 
     if (op->map != NULL && op->type == PLAYER) {
+        tag_t leave_count = op->count;
+        mapstruct *leave_map = op->map;
         trigger_map_event(MEVENT_LEAVE, op->map, op, NULL, NULL, NULL, 0);
+        if (OBJECT_DESTROYED(op, leave_count) ||
+            (require_exact_target && op->map != leave_map)) {
+            return false;
+        }
     }
 
     op->x = x;
@@ -4581,12 +4601,23 @@ bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool
         living_update_player(op);
     }
 
+    tag_t insert_count = op->count;
     op = object_insert_map(op, m, NULL, 0);
-    if (op == NULL) {
+    if (op == NULL || OBJECT_DESTROYED(op, insert_count) || !OBJECT_ACTIVE(op)) {
         return false;
     }
+    if (op->map != m || op->x != x || op->y != y) {
+        return !require_exact_target;
+    }
 
+    tag_t enter_count = op->count;
     trigger_map_event(MEVENT_ENTER, m, op, NULL, NULL, NULL, 0);
+    if (OBJECT_DESTROYED(op, enter_count) || !OBJECT_ACTIVE(op)) {
+        return false;
+    }
+    if (op->map != m || op->x != x || op->y != y) {
+        return !require_exact_target;
+    }
     m->timeout = 0;
 
     /* Do some action special for players after we have inserted them. */
@@ -4612,8 +4643,21 @@ bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool
     return true;
 }
 
-object_semantic_result_t
-object_enter_map_reason(object *op, mapstruct *m, int x, int y, const char *reason) {
+bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool fixed_pos) {
+    return object_enter_map_internal(op, exit, m, x, y, fixed_pos, true, false);
+}
+
+bool object_enter_map_exact(object *op, mapstruct *m, int x, int y, bool fixed_pos) {
+    return object_enter_map_internal(op, NULL, m, x, y, fixed_pos, false, true);
+}
+
+static object_semantic_result_t
+object_enter_map_reason_internal(object *op,
+                                 mapstruct *m,
+                                 int x,
+                                 int y,
+                                 const char *reason,
+                                 bool require_exact_target) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(m != NULL);
     HARD_ASSERT(reason != NULL);
@@ -4644,7 +4688,7 @@ object_enter_map_reason(object *op, mapstruct *m, int x, int y, const char *reas
     if (journal) {
         object_custody_apply(op, &transaction);
     }
-    if (!object_enter_map(op, NULL, m, x, y, true)) {
+    if (!object_enter_map_internal(op, NULL, m, x, y, true, true, require_exact_target)) {
         /* Entry can fail after removal or a map effect mutated the object. */
         if (transaction.active) {
             bool attempted = gameplay_journal_attempt(transaction.transaction_id);
@@ -4657,6 +4701,16 @@ object_enter_map_reason(object *op, mapstruct *m, int x, int y, const char *reas
         return OBJECT_SEMANTIC_AMBIGUOUS;
     }
     return OBJECT_SEMANTIC_COMMITTED;
+}
+
+object_semantic_result_t
+object_enter_map_reason(object *op, mapstruct *m, int x, int y, const char *reason) {
+    return object_enter_map_reason_internal(op, m, x, y, reason, false);
+}
+
+object_semantic_result_t
+object_enter_map_reason_exact(object *op, mapstruct *m, int x, int y, const char *reason) {
+    return object_enter_map_reason_internal(op, m, x, y, reason, true);
 }
 
 /**

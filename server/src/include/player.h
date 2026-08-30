@@ -33,6 +33,7 @@
 #include <decls.h>
 #include <attack.h>
 #include <metrics.h>
+#include <server_clock.h>
 
 /** Level color structure. */
 typedef struct _level_color {
@@ -500,6 +501,23 @@ struct pl_player {
     /** Latest gameplay-journal commit included by a later player checkpoint. */
     char journal_run_id[33];
     uint64_t journal_sequence;
+
+    /* Keep new transient /stuck state at the end to preserve existing plugin
+     * offsets in this public player layout. */
+    /** Monotonic per-player combat event generation. */
+    uint64_t combat_event_sequence;
+
+    /** Simulation deadline for the active /stuck countdown. */
+    server_tick_t stuck_deadline;
+
+    /** UTC deadline for the durable /stuck cooldown. */
+    server_wall_utc_t stuck_cooldown;
+
+    /** Simulation tick at which the active /stuck countdown began. */
+    server_tick_t stuck_started;
+
+    /** Combat event generation observed when /stuck began. */
+    uint64_t stuck_combat_event_sequence;
 };
 
 /* Prototypes */
@@ -538,11 +556,19 @@ void put_object_in_sack(object *op, object *sack, object *tmp, long nrof);
 void drop_object(object *op, object *tmp, long nrof, int no_mevent);
 #ifdef ATRINIK_TESTING
 void player_event_veto_for_test(bool pickup, bool drop, bool map_pickup, bool map_drop);
+void player_save_fail_for_test(bool fail);
+void player_save_observation_reset_for_test(void);
+bool player_save_observed_stuck_clear_for_test(void);
 #endif
 void drop(object *op, object *tmp, int no_mevent);
 char *player_make_path(const char *name, const char *ext);
 int player_exists(const char *name);
+/** Record a combat event for a player. */
+void player_mark_combat(player *pl);
+/** Save a player, preserving the legacy fire-and-forget API. */
 void player_save(object *op);
+/** Save a player and report whether the player record was committed. */
+bool player_save_checked(object *op);
 bool player_load_stream(player *pl, FILE *fp);
 object *player_get_dummy(const char *name, const char *host);
 bool player_target_is_in_map_neighborhood(const player *pl);

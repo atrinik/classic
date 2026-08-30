@@ -50,6 +50,7 @@
 #include <celestial_structure.h>
 #include <gameplay_journal.h>
 #include <toolkit/console.h>
+#include <stuck.h>
 
 /** Object used in process_events(). */
 static object marker;
@@ -577,6 +578,10 @@ void main_process(void) {
 
     /* "do" something with objects with speed */
     process_events();
+
+    /* Resolve /stuck only after every active object has had its turn, so
+     * combat recorded later in this simulation tick still interrupts it. */
+    player_stuck_process_all();
 
     /* Removes unused maps after a certain timeout */
     check_active_maps();
