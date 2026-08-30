@@ -78,6 +78,10 @@ static bool exit_find_landing_internal(object *applier,
 static bool exit_is_dynamic(const object *op) {
     HARD_ASSERT(op != NULL);
 
+    if (op->type != EXIT) {
+        return false;
+    }
+
     return op->event_flags != 0 || op->last_eat == MAP_PLAYER_MAP ||
            (EXIT_PATH(op) != NULL && strncmp(EXIT_PATH(op), "/random/", 8) == 0);
 }
@@ -390,7 +394,7 @@ static bool exit_static_destination_usable(mapstruct *destination,
 }
 
 static bool exit_is_automatic(const object *op) {
-    return EXIT_PATH(op) == NULL && op->sub_type != 0;
+    return op->type == EXIT && EXIT_PATH(op) == NULL && op->sub_type != 0;
 }
 
 static void exit_cache_clear_destination(map_exit_t *entry) {
@@ -458,6 +462,7 @@ static void exit_refresh_tiled_route(map_exit_t *entry) {
 
     if (QUERY_FLAG(op, FLAG_XRAYS)) {
         if (!movement_direction_valid(op, op->direction, false)) {
+            FREE_AND_CLEAR_HASH(EXIT_PATH(op));
             EXIT_X(op) = -1;
             EXIT_Y(op) = -1;
             return;
@@ -469,13 +474,56 @@ static void exit_refresh_tiled_route(map_exit_t *entry) {
     }
 }
 
+/** Register the runtime cache entry owned by a mapped exit. */
+static void exit_cache_register(object *op) {
+    HARD_ASSERT(op != NULL);
+
+    if (op->type != EXIT || op->map == NULL || op->exit_cache_entry != NULL) {
+        return;
+    }
+
+    map_exit_t *entry = xcalloc(1, sizeof(*entry));
+    entry->obj = op;
+    entry->tiled_route =
+        op->last_heal > 0 && op->last_heal <= TILED_NUM &&
+        (EXIT_PATH(op) == NULL || EXIT_PATH(op) == op->map->tile_path[op->last_heal - 1]);
+    if (entry->tiled_route && EXIT_PATH(op) != NULL) {
+        entry->tiled_path = add_refcount(EXIT_PATH(op));
+    }
+    op->exit_cache_entry = entry;
+    DL_APPEND(op->map->exits, entry);
+    exit_refresh_tiled_route(entry);
+}
+
+/** Unregister the runtime cache entry owned by an exit. */
+static void exit_cache_unregister(object *op) {
+    HARD_ASSERT(op != NULL);
+
+    map_exit_t *entry = op->exit_cache_entry;
+    if (entry == NULL) {
+        return;
+    }
+
+    if (op->map != NULL) {
+        DL_DELETE(op->map->exits, entry);
+    }
+    FREE_AND_CLEAR_HASH(entry->tiled_path);
+    free(entry);
+    op->exit_cache_entry = NULL;
+}
+
 static void exit_cache_recompute(object *op, bool do_load) {
     HARD_ASSERT(op != NULL);
+
+    if (op->type != EXIT || op->map == NULL) {
+        return;
+    }
 
 #ifdef ATRINIK_TESTING
     exit_cache_recompute_count++;
 #endif
 
+    exit_cache_register(op);
     map_exit_t *entry = op->exit_cache_entry;
     if (entry == NULL) {
         return;
@@ -693,6 +741,15 @@ static bool exit_object_affects_destination(const object *op, int action) {
 void exit_destination_cache_object_changed(object *op, int action) {
     HARD_ASSERT(op != NULL);
 
+    if (op->type != EXIT && op->exit_cache_entry != NULL) {
+        exit_cache_invalidate_references(op);
+        exit_cache_unregister(op);
+        if (op->map != NULL && op->map->in_memory == MAP_IN_MEMORY) {
+            exit_cache_refresh_automatic(NULL, NULL);
+        }
+        return;
+    }
+
     if (op->map == NULL || !exit_object_affects_destination(op, action)) {
         return;
     }
@@ -705,6 +762,7 @@ void exit_destination_cache_object_changed(object *op, int action) {
     }
 
     if (op->type == EXIT && (action == UP_OBJ_INSERT || action == UP_OBJ_ALL)) {
+        exit_cache_register(op);
         exit_cache_recompute(op, true);
         exit_destination_cache_map_changed_internal(op->map, op, true);
     } else {
@@ -898,8 +956,6 @@ static int trigger_func(object *op, object *cause, int state) {
 static void insert_map_func(object *op) {
     HARD_ASSERT(op != NULL);
 
-    bool tiled_route = EXIT_PATH(op) == NULL && op->last_heal > 0 && op->last_heal <= TILED_NUM;
-
     if (EXIT_PATH(op) != NULL) {
         /* Exit has a path, ensure it's absolute and take unique maps
          * into account. */
@@ -916,15 +972,7 @@ static void insert_map_func(object *op) {
      * the same lifecycle-bound cache as explicit paths. The cached semantic
      * controls MAP2 presentation; map traversal retains the graph edge even
      * when its current destination is not enterable. */
-    map_exit_t *exit = xcalloc(1, sizeof(*exit));
-    exit->obj = op;
-    exit->tiled_route = tiled_route;
-    if (tiled_route && EXIT_PATH(op) != NULL) {
-        exit->tiled_path = add_refcount(EXIT_PATH(op));
-    }
-    op->exit_cache_entry = exit;
-    DL_APPEND(op->map->exits, exit);
-    exit_refresh_tiled_route(exit);
+    exit_cache_register(op);
 }
 
 /** @copydoc object_methods_t::remove_map_func */
@@ -933,14 +981,7 @@ static void remove_map_func(object *op) {
 
     bool refresh_automatic = op->sub_type != 0;
     exit_cache_invalidate_references(op);
-
-    map_exit_t *exit = op->exit_cache_entry;
-    if (exit != NULL) {
-        DL_DELETE(op->map->exits, exit);
-        FREE_AND_CLEAR_HASH(exit->tiled_path);
-        free(exit);
-        op->exit_cache_entry = NULL;
-    }
+    exit_cache_unregister(op);
 
     /* Removing a peer can expose an alternate on a different map, so no
      * cached destination pointer can identify every affected automatic link.

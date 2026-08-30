@@ -253,6 +253,7 @@ START_TEST(test_exit_cache_tracks_tiled_route_changes) {
     ck_assert_ptr_nonnull(destination);
     FREE_AND_COPY_HASH(destination->path, "/tests/exit-tiled-route-destination");
     exit_test_insert_floor(destination, 4, 4);
+    exit_test_insert_floor(destination, 5, 4);
 
     object *exit = arch_get("stairs_down");
     ck_assert_ptr_nonnull(exit);
@@ -270,6 +271,26 @@ START_TEST(test_exit_cache_tracks_tiled_route_changes) {
     ck_assert_ptr_eq(EXIT_PATH(exit), source->tile_path[TILED_EAST]);
     ck_assert_int_eq(EXIT_X(exit), exit->x);
     ck_assert_int_eq(EXIT_Y(exit), exit->y);
+    ck_assert(exit_has_usable_destination(exit));
+
+    SET_FLAG(exit, FLAG_XRAYS);
+    exit->direction = NUM_DIRECTION + 1;
+    object_update(exit, UP_OBJ_ALL);
+    ck_assert_ptr_null(EXIT_PATH(exit));
+    ck_assert(!exit_has_usable_destination(exit));
+
+    exit->direction = 3;
+    object_update(exit, UP_OBJ_ALL);
+    ck_assert_ptr_eq(EXIT_PATH(exit), source->tile_path[TILED_EAST]);
+    ck_assert(exit_has_usable_destination(exit));
+
+    exit->type = DOOR;
+    object_update(exit, UP_OBJ_ALL);
+    ck_assert_ptr_null(exit->exit_cache_entry);
+
+    exit->type = EXIT;
+    object_update(exit, UP_OBJ_ALL);
+    ck_assert_ptr_nonnull(exit->exit_cache_entry);
     ck_assert(exit_has_usable_destination(exit));
 
     map_set_tile(source, TILED_EAST, "/tests/exit-tiled-route-missing");

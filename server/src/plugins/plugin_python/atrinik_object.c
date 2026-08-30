@@ -3026,14 +3026,14 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
     OBJEXISTCHECK_INT(obj);
 
     was_exit = obj->obj->type == EXIT;
-    exit_destination_field = field->offset == offsetof(object, slaying) ||
-                             field->offset == offsetof(object, last_heal) ||
-                             field->offset == offsetof(object, last_eat) ||
-                             field->offset == offsetof(object, sub_type) ||
-                             field->offset == offsetof(object, event_flags) ||
-                             field->offset == offsetof(object, direction) ||
-                             field->offset == offsetof(object, stats.hp) ||
-                             field->offset == offsetof(object, stats.sp);
+    exit_destination_field =
+        field->offset == offsetof(object, type) || field->offset == offsetof(object, slaying) ||
+        field->offset == offsetof(object, last_heal) ||
+        field->offset == offsetof(object, last_eat) ||
+        field->offset == offsetof(object, sub_type) ||
+        field->offset == offsetof(object, event_flags) ||
+        field->offset == offsetof(object, direction) ||
+        field->offset == offsetof(object, stats.hp) || field->offset == offsetof(object, stats.sp);
 
     old_glow_radius = obj->obj->glow_radius;
     old_light_color = obj->obj->light_color;
