@@ -180,6 +180,9 @@ struct obj {
     /** Per-player, per-skill damage participation for kill experience. */
     combat_contribution_t *combat_contributions;
 
+    /** Runtime-only exit destination cache entry; never copied or persisted. */
+    struct map_exit *exit_cache_entry;
+
     /* These get an extra add_refcount(), after having been copied by memcpy().
      * All fields below this point are automatically copied by memcpy. If
      * adding something that needs a refcount updated, make sure you modify

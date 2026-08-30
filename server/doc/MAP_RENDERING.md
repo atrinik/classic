@@ -1827,13 +1827,26 @@ display the complete profile digest used for continuous-link validation.
   delta. Door reveal must not broaden LOS or disclose interiors.
 - Mark only serialized, visible `EXIT` objects with an established usable
   destination with `MAP2_FLAG2_EXIT`, and cache that semantic per socket layer
-  so gaining or losing destination eligibility emits a delta. Explicit-path,
-  same-map coordinate, and tiled-direction exits are eligible. Pathless exits
-  with a nonzero subtype use the automatic-link contract and are presumed
-  eligible without scanning for a peer. Destination checks for rendering
-  neither load maps nor choose randomly among auto-linked exits. The client
-  outlines eligible objects after the complete world pass only at the player's
-  physical depth. This presentation does not broaden line of sight or disclose
+  so gaining or losing destination eligibility emits a delta. The server
+  validates explicit-path, same-map, tiled-direction, automatic-link, and
+  shop-mat destinations at exit/map lifecycle boundaries. A valid destination
+  resolves to an in-bounds coordinate with a floor and either a legal direct
+  landing or a legal adjacent fallback; unresolved, no-floor, or fully blocked
+  destinations fail closed. Pathless automatic links retain a structurally
+  usable peer in the server cache; activation preserves the historical random
+  peer selection. Scripted, random-map, permission-dependent, or
+  otherwise player-specific exits are dynamic and are not published through
+  the shared static semantic.
+
+  `draw_client_map2()` reads only the exit's cached semantic. It never loads a
+  destination map, scans automatic-link peers, searches for a landing square,
+  pathfinds, or consumes RNG. Cache invalidation/recomputation occurs on exit
+  insertion/removal, routing or tile lifecycle changes, relevant floor/door/
+  blocker changes, and map load/unload boundaries. Activation performs the
+  final player-specific landing check before removing the player; failure
+  leaves the source map and coordinates unchanged. The client outlines
+  eligible objects after the complete world pass only at the player's physical
+  depth. This presentation does not broaden line of sight or disclose
   layer-0/system exits, unexplored transitions, or hidden objects that the
   server did not serialize.
 - Upper-level visibility is camera-top-down. A solid floor, gameplay-opaque

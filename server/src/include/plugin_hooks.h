@@ -771,6 +771,7 @@ struct plugin_hooklist
                          const char *)
     PLUGIN_HOOK_FUNCTION(object_semantic_result_t, bank_name_info_reason, object *, const char *)
     PLUGIN_HOOK_FUNCTION(bool, gameplay_journal_required, void)
+    PLUGIN_HOOK_FUNCTION(void, object_update, object *, int)
 
 };
 // clang-format on

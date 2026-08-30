@@ -3017,11 +3017,23 @@ static PyObject *Object_GetAttribute(Atrinik_Object *obj, void *context) {
 static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *context) {
     fields_struct *field = context;
     int ret;
+    bool was_exit;
+    bool exit_destination_field;
     int old_glow_radius;
     uint32_t old_light_color;
     uint32_t old_nrof;
 
     OBJEXISTCHECK_INT(obj);
+
+    was_exit = obj->obj->type == EXIT;
+    exit_destination_field = field->offset == offsetof(object, slaying) ||
+                             field->offset == offsetof(object, last_heal) ||
+                             field->offset == offsetof(object, last_eat) ||
+                             field->offset == offsetof(object, sub_type) ||
+                             field->offset == offsetof(object, event_flags) ||
+                             field->offset == offsetof(object, direction) ||
+                             field->offset == offsetof(object, stats.hp) ||
+                             field->offset == offsetof(object, stats.sp);
 
     old_glow_radius = obj->obj->glow_radius;
     old_light_color = obj->obj->light_color;
@@ -3288,6 +3300,11 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
         obj->obj->type = MONSTER;
     }
 
+    if (exit_destination_field && (was_exit || obj->obj->type == EXIT) && obj->obj->map != NULL &&
+        obj->obj->env == NULL) {
+        hooks->object_update(obj->obj, UP_OBJ_ALL);
+    }
+
     hooks->esrv_send_item(obj->obj);
 
     /* Special handling for some player stuff. */
@@ -3365,6 +3382,7 @@ static PyObject *Object_GetFlag(Atrinik_Object *obj, void *context) {
  */
 static int Object_SetFlag(Atrinik_Object *obj, PyObject *val, void *context) {
     size_t flagno = (size_t)context;
+    bool destination_flag;
 
     /* Should not happen. */
     if (flagno >= NUM_FLAGS) {
@@ -3373,6 +3391,10 @@ static int Object_SetFlag(Atrinik_Object *obj, PyObject *val, void *context) {
     }
 
     OBJEXISTCHECK_INT(obj);
+
+    destination_flag = obj->obj->type == EXIT || flagno == FLAG_IS_FLOOR ||
+                       flagno == FLAG_NO_PASS || flagno == FLAG_PASS_THRU ||
+                       flagno == FLAG_DOOR_CLOSED || flagno == FLAG_PLAYER_ONLY;
 
     if (val == Py_True) {
         SET_FLAG(obj->obj, flagno);
@@ -3383,6 +3405,10 @@ static int Object_SetFlag(Atrinik_Object *obj, PyObject *val, void *context) {
                         "Flag value must be either True or "
                         "False.");
         return -1;
+    }
+
+    if (destination_flag && obj->obj->map != NULL && obj->obj->env == NULL) {
+        hooks->object_update(obj->obj, UP_OBJ_ALL);
     }
 
     hooks->esrv_send_item(obj->obj);

@@ -920,6 +920,7 @@ static bool load_objects(mapstruct *m, FILE *fp, int mapflags) {
         LOG(ERROR, "Celestial structural validation failed: %s", error);
         return false;
     }
+    exit_destination_cache_refresh_all();
     return true;
 }
 
@@ -1116,6 +1117,10 @@ void map_set_tile(mapstruct *m, int tile, const char *pathname) {
     celestial_light_invalidate(m);
     if (neighbor != NULL) {
         celestial_light_invalidate(neighbor);
+    }
+    exit_destination_cache_map_changed(m);
+    if (neighbor != NULL) {
+        exit_destination_cache_map_changed(neighbor);
     }
 }
 
@@ -1798,6 +1803,8 @@ void free_map(mapstruct *m, int flag) {
     if (!m->in_memory) {
         return;
     }
+
+    exit_destination_cache_map_unloaded(m);
 
     remove_light_source_list(m);
 

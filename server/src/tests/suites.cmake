@@ -39,6 +39,7 @@ set(ATRINIK_SERVER_TEST_SUITES
     "toolkit.stringbuffer|check_server_stringbuffer|src/tests/unit/toolkit/stringbuffer.c"
     "types.container|check_types_container|src/tests/unit/types/container.c"
     "types.duplicator|check_types_duplicator|src/tests/unit/types/duplicator.c"
+    "types.exit|check_types_exit|src/tests/unit/types/exit.c"
     "types.light_apply|check_types_light_apply|src/tests/unit/types/light_apply.c"
     "types.poisoning|check_types_poisoning|src/tests/unit/types/poisoning.c"
     "types.projectile|check_types_projectile|src/tests/unit/types/projectile.c"

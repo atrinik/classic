@@ -616,6 +616,23 @@ typedef struct map_exit {
     struct map_exit *prev;
 
     object *obj;
+
+    /** Cached destination classification used by MAP2 and map traversal. */
+    uint8_t cache_state;
+
+    /** Whether this exit's route was derived from its tiled direction. */
+    bool tiled_route;
+
+    /** Last derived tiled route path, retained to detect authored overrides. */
+    shstr *tiled_path;
+
+    /** Last statically validated destination map and coordinates. */
+    struct mapdef *destination_map;
+    int destination_x;
+    int destination_y;
+
+    /** Cached automatic-link peer, if this is an automatic exit. */
+    object *destination_exit;
 } map_exit_t;
 
 /**

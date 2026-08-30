@@ -46,6 +46,7 @@
 #include <gameplay_journal.h>
 #include <object_methods.h>
 #include <door.h>
+#include <exit.h>
 #include <openssl/crypto.h>
 #include <openssl/rand.h>
 #include <errno.h>
@@ -1600,6 +1601,7 @@ void object_copy(object *op, const object *src, bool no_speed) {
     FREE_ONLY_HASH(op->custody_actor);
 
     object_free_key_values(op);
+    op->exit_cache_entry = NULL;
 
     memcpy((char *)op + offsetof(object, name),
            (const char *)src + offsetof(object, name),
@@ -1946,6 +1948,8 @@ void object_update(object *op, int action) {
         recalculate_light_sources(op->map);
         celestial_light_invalidate(op->map);
     }
+
+    exit_destination_cache_object_changed(op, action);
 
     if (op->more != NULL && action != UP_OBJ_INSERT) {
         object_update(op->more, action);
@@ -2321,6 +2325,7 @@ void object_remove(object *op, int flags) {
 
     /* In this case, the object to be removed is in someone's inventory. */
     if (op->env != NULL) {
+        object *container = op->env;
         if (!QUERY_FLAG(op, FLAG_SYS_OBJECT) && !(flags & REMOVE_NO_WEIGHT)) {
             object_weight_sub(op->env, WEIGHT_NROF(op, op->nrof));
         }
@@ -2346,6 +2351,13 @@ void object_remove(object *op, int flags) {
 
         esrv_del_item(op);
         object_cb_remove_inv(op);
+
+        if (container->type == EXIT) {
+            exit_destination_cache_refresh(container);
+            if (container->map != NULL) {
+                exit_destination_cache_map_changed(container->map);
+            }
+        }
 
         op->above = NULL;
         op->below = NULL;
@@ -2394,6 +2406,10 @@ void object_remove(object *op, int flags) {
         }
 
         object_cb_remove_map(op);
+
+        if (op->type == EXIT) {
+            exit_destination_cache_object_changed(op, UP_OBJ_REMOVE);
+        }
 
         if (!(flags & REMOVE_NO_WALK_OFF)) {
             object_check_move_on(op, NULL, 0);
@@ -2889,6 +2905,13 @@ object *object_insert_into(object *op, object *where, int flag) {
         where->event_flags |= (1U << (op->sub_type - 1));
     } else if (op->type == QUEST_CONTAINER && where->type == CONTAINER) {
         where->event_flags |= EVENT_FLAG(EVENT_QUEST);
+    }
+
+    if (where->type == EXIT) {
+        exit_destination_cache_refresh(where);
+        if (where->map != NULL) {
+            exit_destination_cache_map_changed(where->map);
+        }
     }
 
     /* Update living objects if inside living object. */
@@ -4535,13 +4558,26 @@ bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool
     mapstruct *m2 = get_map_from_coord(m, &x, &y);
     if (m2 == NULL) {
         LOG(ERROR, "Invalid exit coordinates (%d,%d): %s", x, y, object_get_str(exit));
+        if (exit != NULL) {
+            return false;
+        }
+
         x = MAP_ENTER_X(m);
         y = MAP_ENTER_Y(m);
     } else {
         m = m2;
     }
 
-    if (!fixed_pos && blocked(op, m, x, y, TERRAIN_ALL) != 0) {
+    if (exit != NULL) {
+        exit_landing_t landing;
+        if (!exit_find_landing(op, m, x, y, true, fixed_pos, true, &landing)) {
+            return false;
+        }
+
+        m = landing.map;
+        x = landing.x;
+        y = landing.y;
+    } else if (!fixed_pos && blocked(op, m, x, y, TERRAIN_ALL) != 0) {
         int i = map_free_spot(m, x, y, 1, SIZEOFFREE1, op->arch, NULL);
         if (i != -1) {
             x += freearr_x[i];
