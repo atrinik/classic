@@ -30,6 +30,12 @@
 #ifndef SERVER_SETTINGS_H
 #define SERVER_SETTINGS_H
 
+#include <stddef.h>
+#include <stdint.h>
+
+#include <main.h>
+#include <player.h>
+
 /** Text IDs from server_settings file. */
 enum {
     SERVER_TEXT_PROTECTION_GROUPS,

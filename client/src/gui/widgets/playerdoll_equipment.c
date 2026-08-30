@@ -12,6 +12,7 @@
 /** @file Player-doll equipment slot selection policy. */
 
 #include "playerdoll_equipment.h"
+#include <item.h>
 
 object *playerdoll_equipment_resolve(int slot, const tag_t equipment[PLAYER_EQUIP_MAX]) {
     object *obj = equipment[slot] == 0 ? NULL : object_find(equipment[slot]);

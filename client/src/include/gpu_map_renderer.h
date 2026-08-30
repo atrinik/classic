@@ -16,14 +16,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <lighting.h>
+
 typedef struct SDL_GPUDevice SDL_GPUDevice;
 typedef struct SDL_FRect SDL_FRect;
 typedef struct SDL_Rect SDL_Rect;
 typedef struct SDL_Renderer SDL_Renderer;
 typedef struct SDL_Surface SDL_Surface;
 typedef struct SDL_Texture SDL_Texture;
-typedef struct lighting_vertex lighting_vertex_t;
-
 bool gpu_map_renderer_create(SDL_GPUDevice *device, SDL_Renderer *renderer);
 void gpu_map_renderer_destroy(void);
 bool gpu_map_renderer_begin(int width, int height, bool auxiliary);

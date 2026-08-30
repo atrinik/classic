@@ -779,10 +779,13 @@ class WorkflowContractTests(unittest.TestCase):
                 sanitizers = component.index("cmake --preset linux-sanitizers")
                 self.assertLess(coverage, release)
                 self.assertLess(release, sanitizers)
-                self.assertIn("-DENABLE_PRECOMPILED_HEADERS=OFF", component)
-                self.assertEqual(
-                    component.count("-DENABLE_PRECOMPILED_HEADERS=OFF"), 1
-                )
+                if name == "server":
+                    self.assertIn("-DENABLE_PRECOMPILED_HEADERS=OFF", component)
+                    self.assertEqual(
+                        component.count("-DENABLE_PRECOMPILED_HEADERS=OFF"), 1
+                    )
+                else:
+                    self.assertNotIn("-DENABLE_PRECOMPILED_HEADERS=OFF", component)
                 self.assertIn("ctest --preset linux-coverage", component)
                 self.assertIn("ctest --preset linux-release", component)
                 self.assertIn("ctest --preset linux-sanitizers", component)

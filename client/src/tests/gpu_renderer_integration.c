@@ -9,8 +9,18 @@
  * (at your option) any later version.                                   *
  ************************************************************************/
 
-#include <global.h>
 #include <gpu_map_renderer.h>
+#include <gpu_renderer.h>
+#include <lighting.h>
+#include <settings.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <surface_primitives.h>
+#include <toolkit/memory.h>
+#include <toolkit/socket.h>
+#include <toolkit/toolkit.h>
 #include <openssl/evp.h>
 
 #define GPU_CONFORMANCE_SKIP 77

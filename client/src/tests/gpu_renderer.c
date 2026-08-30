@@ -9,7 +9,15 @@
  * (at your option) any later version.                                   *
  ************************************************************************/
 
-#include <global.h>
+#include <SDL3/SDL.h>
+#include <gpu_map_renderer.h>
+#include <gpu_renderer.h>
+#include <lighting.h>
+#include <settings.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <toolkit/toolkit.h>
 
 int64_t setting_get_int(int category, int setting) {
     (void)category;

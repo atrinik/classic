@@ -14,7 +14,9 @@
  * Sprite pixel access, visibility, and visible-bounds calculations.
  */
 
-#include <global.h>
+#include <SDL3/SDL.h>
+#include <sprite.h>
+#include <toolkit/toolkit.h>
 
 /** Calculate the transparent padding around a sprite's visible pixels. */
 bool sprite_borders_get(SDL_Surface *surface, sprite_struct *sprite) {

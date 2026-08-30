@@ -3,8 +3,10 @@
  * Serializes SDL_image while the client decodes faces in parallel.
  */
 
-#include <global.h>
 #include <image_codec.h>
+
+#include <SDL3_image/SDL_image.h>
+#include <toolkit/toolkit.h>
 
 static SDL_Mutex *image_codec_mutex;
 static SDL_Condition *image_codec_condition;

@@ -11,9 +11,13 @@
 
 /** @file Ordered inbound server-command queue and bounded dispatcher. */
 
-#include <global.h>
 #include <client_command_queue.h>
+#include <client.h>
+#include <string.h>
+#include <SDL3/SDL.h>
 #include <toolkit/datetime.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
 
 static SDL_Mutex *queue_mutex;
 static command_buffer *queue_start;

@@ -30,6 +30,12 @@
 #ifndef EVENT_H
 #define EVENT_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
+#include <SDL3/SDL.h>
+#include <toolkit/porting.h>
+
 enum {
     DRAG_GET_STATUS = -1,
     DRAG_NONE,

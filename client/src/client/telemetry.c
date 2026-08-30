@@ -11,7 +11,13 @@
 
 /** @file Client-side session telemetry. */
 
-#include <global.h>
+#include <main.h>
+#include <client.h>
+#include <player.h>
+#include <text.h>
+#include <textwin.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/datetime.h>
 
 typedef struct telemetry_state {

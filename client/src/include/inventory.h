@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -29,6 +29,16 @@
 
 #ifndef INVENTORY_H
 #define INVENTORY_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include <SDL3/SDL.h>
+#include <scrollbar.h>
+
+typedef struct obj object;
+typedef struct texture_struct texture_struct;
+typedef struct widgetdata widgetdata;
 
 /**
  * @defgroup INVENTORY_FILTER_xxx Inventory filters

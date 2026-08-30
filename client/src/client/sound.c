@@ -29,12 +29,25 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <audio_log.h>
+#include <config.h>
+#include <client.h>
+#include <event.h>
+#include <main.h>
+#include <map.h>
+#include <settings.h>
+#include <sound.h>
+#include <textwin.h>
 #include <wrapper.h>
+#include <toolkit/logger.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 #include <toolkit/path.h>
+#include <toolkit/toolkit.h>
+
+#ifdef HAVE_SDL_MIXER
+#include <SDL3_mixer/SDL_mixer.h>
+#endif
 
 #include "sound_command_internal.h"
 

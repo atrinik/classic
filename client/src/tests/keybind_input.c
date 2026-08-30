@@ -9,8 +9,14 @@
  * (at your option) any later version.                                   *
  ************************************************************************/
 
-#include <global.h>
 #include <toolkit/path.h>
+#include <SDL3/SDL.h>
+#include <keybind.h>
+#include <event.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <toolkit/toolkit.h>
 
 #define TEST_CHECK(condition)                                               \
     do {                                                                    \

@@ -29,8 +29,22 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <client_socket.h>
+#include <button.h>
+#include <client.h>
+#include <event.h>
+#include <list.h>
+#include <main.h>
+#include <player.h>
+#include <popup.h>
+#include <progress.h>
+#include <settings.h>
+#include <server_settings.h>
+#include <server_files.h>
+#include <text.h>
+#include <text_input.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 

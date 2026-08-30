@@ -177,7 +177,6 @@ message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
             self.assertNotIn("src/include/version.h", cmake)
             self.assertFalse((ROOT / component / "src/include/version.h.def").exists())
         for path in (
-            ROOT / "client/src/include/global.h",
             ROOT / "client/src/client/window_title.c",
             ROOT / "client/src/tests/window_title.c",
             ROOT / "server/src/include/includes.h",

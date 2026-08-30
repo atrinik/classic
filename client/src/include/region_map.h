@@ -32,6 +32,12 @@
 #ifndef REGION_MAP_H
 #define REGION_MAP_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <SDL3/SDL.h>
+#include <toolkit/toolkit.h>
 #include <toolkit/curl.h>
 #include <asset.h>
 #include <asset_source.h>

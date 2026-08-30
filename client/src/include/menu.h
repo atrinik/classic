@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -29,6 +29,11 @@
 
 #ifndef MENU_H
 #define MENU_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+typedef struct widgetdata widgetdata;
 
 /** Maximum quickslots in a single group. */
 #define MAX_QUICK_SLOTS 8

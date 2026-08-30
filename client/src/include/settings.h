@@ -30,6 +30,10 @@
 #ifndef SETTINGS_H
 #define SETTINGS_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
 /**
  * The different option categories.
  * @anchor OPT_CAT_xxx.

@@ -29,7 +29,6 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <packet_payload.h>
 #include <wrapper.h>
 #include <resources.h>

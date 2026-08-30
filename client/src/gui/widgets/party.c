@@ -29,8 +29,22 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <toolkit/packet.h>
+#include <button.h>
+#include <client.h>
+#include <event.h>
+#include <keybind.h>
+#include <list.h>
+#include <main.h>
+#include <party.h>
+#include <player.h>
+#include <popup.h>
+#include <text.h>
+#include <text_input.h>
+#include <sprite.h>
+#include <surface_primitives.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/string.h>
 
 /** Width of the hp/sp stat bar. */

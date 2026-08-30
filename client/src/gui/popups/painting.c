@@ -29,8 +29,20 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <surface_primitives.h>
+#include <SDL3/SDL.h>
+#include <button.h>
+#include <client.h>
+#include <event.h>
+#include <main.h>
+#include <popup.h>
+#include <misc.h>
+#include <settings.h>
+#include <sprite.h>
+#include <text.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/string.h>
 #include <resources.h>
 #include <toolkit/curl.h>

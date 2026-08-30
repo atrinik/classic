@@ -14,8 +14,22 @@
  * Raw SDL_GPU albedo/owner map passes and retained source textures.
  */
 
-#include <global.h>
 #include <gpu_shader_data.h>
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
+#include <SDL3/SDL.h>
+#include <gpu_map_renderer.h>
+#include <map.h>
+#include <toolkit/socket.h>
+#include <gpu_renderer.h>
+#include <lighting.h>
+#include <toolkit/logger.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
 
 #define GPU_MAP_SURFACE_GENERATION_PROPERTY "atrinik.gpu.map_surface_generation"
 #define GPU_MAP_SURFACE_ASSET_PROPERTY "atrinik.gpu.map_surface_asset"

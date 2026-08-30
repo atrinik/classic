@@ -28,8 +28,24 @@
  * parsing macro keys etc.
  */
 
-#include <global.h>
+#include <stdlib.h>
+#include <mouse.h>
+#include <client.h>
+#include <event.h>
+#include <gpu_renderer.h>
+#include <keybind.h>
+#include <main.h>
+#include <map.h>
+#include <misc.h>
+#include <popup.h>
+#include <settings.h>
+#include <sound.h>
+#include <texture.h>
+#include <toolkit/porting.h>
+#include <toolkit/toolkit.h>
+#include <player.h>
 #include <video.h>
+#include <widget.h>
 
 /** @copydoc event_drag_cb_fnc */
 static event_drag_cb_fnc event_drag_cb = NULL;

@@ -27,8 +27,9 @@
  * Handles image related code.
  */
 
-#include <global.h>
 #include <wrapper.h>
+#include <asset.h>
+#include <config.h>
 #include <client_socket.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
@@ -37,6 +38,16 @@
 #include <face_asset.h>
 #include <face_cache.h>
 #include <face_loader.h>
+#include <image.h>
+#include <book.h>
+#include <interface.h>
+#include <map.h>
+#include <main.h>
+#include <server_files.h>
+#include <sprite.h>
+#include <widget.h>
+#include <toolkit/porting.h>
+#include <zlib.h>
 
 #define FACE_ASSET_ADMISSION_MAX (ASSET_STREAM_ACTIVE_MAX * ASSET_FACE_BATCH_MAX)
 #define FACE_TRANSFER_RETRY_MAX 3U

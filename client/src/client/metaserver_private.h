@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -17,7 +17,11 @@
 #ifndef CLIENT_METASERVER_PRIVATE_H
 #define CLIENT_METASERVER_PRIVATE_H
 
-#include <global.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <main.h>
 
 void metaserver_server_add(server_struct *server);
 

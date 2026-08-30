@@ -3,9 +3,10 @@
  * Classic static-directory protocol 4 adapter.
  */
 
-#include <global.h>
 #include "metaserver_directory.h"
 #include "metaserver_private.h"
+
+#include <toolkit/memory.h>
 
 bool metaserver_direct_parse(const char *body,
                              size_t body_size,

@@ -30,6 +30,14 @@
 #ifndef NOTIFICATION_H
 #define NOTIFICATION_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <text.h>
+
+typedef struct widgetdata widgetdata;
+
 /**
  * The notification data.
  */

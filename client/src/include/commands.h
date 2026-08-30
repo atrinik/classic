@@ -30,6 +30,13 @@
 #ifndef COMMANDS_H
 #define COMMANDS_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+typedef struct obj object;
+struct packet_reader;
+
 /**
  * @defgroup SPLIST_MODE_xxx SPLIST_MODE_xxx
  * Spell list commands for client's spell list.

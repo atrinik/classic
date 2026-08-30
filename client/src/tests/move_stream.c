@@ -9,8 +9,15 @@
  * (at your option) any later version.                                   *
  ************************************************************************/
 
-#include <global.h>
 #include <toolkit/packet.h>
+#include <client.h>
+#include <event.h>
+#include <keybind.h>
+#include <player.h>
+#include <settings.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define TEST_CHECK(condition)                                               \
     do {                                                                    \

@@ -29,9 +29,27 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <client_socket.h>
 #include <animations.h>
+#include <button.h>
+#include <client.h>
+#include <event.h>
+#include <image.h>
+#include <list.h>
+#include <main.h>
+#include <misc.h>
+#include <player.h>
+#include <popup.h>
+#include <progress.h>
+#include <settings.h>
+#include <server_settings.h>
+#include <text.h>
+#include <text_input.h>
+#include <textwin.h>
+#include <texture.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
+#include <SDL3/SDL.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 #include <toolkit/datetime.h>

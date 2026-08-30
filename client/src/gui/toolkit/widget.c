@@ -41,11 +41,40 @@
  * @author Dantee
  */
 
-#include <global.h>
+#include <mouse.h>
+#include <event.h>
 #include <video.h>
 #include <wrapper.h>
+#include <button.h>
+#include <client.h>
+#include <effects.h>
+#include <gpu_renderer.h>
+#include <image.h>
+#include <inventory.h>
+#include <item.h>
+#include <list.h>
+#include <main.h>
+#include <misc.h>
+#include <map.h>
+#include <menu.h>
 #include <surface_primitives.h>
+#include <popup.h>
+#include <progress.h>
+#include <render_profiler.h>
+#include <scrollbar.h>
+#include <settings.h>
+#include <sound.h>
+#include <text.h>
+#include <text_input.h>
+#include <texture.h>
+#include <toolkit/logger.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <notification.h>
+#include <party.h>
+#include <player.h>
+#include <sprite.h>
 #include <toolkit/string.h>
 #include <network_graph.h>
 #include <toolkit/path.h>

@@ -4,8 +4,11 @@
  * Copyright 2026 The Atrinik Project
  *************************************************************************/
 
-#include <global.h>
 #include <map_visibility.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <toolkit/toolkit.h>
 
 #define CHECK(expression)                                                            \
     do {                                                                             \

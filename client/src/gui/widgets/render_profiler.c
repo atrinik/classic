@@ -14,7 +14,16 @@
  * Low-overhead frame profiling and its optional display widget.
  */
 
-#include <global.h>
+#include <gpu_renderer.h>
+#include <main.h>
+#include <render_profiler.h>
+#include <scrollbar.h>
+#include <event.h>
+#include <surface_primitives.h>
+#include <sprite.h>
+#include <text.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/datetime.h>
 #include <toolkit/string.h>
 

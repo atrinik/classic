@@ -12,6 +12,10 @@
 #ifndef SURFACE_PRIMITIVES_H
 #define SURFACE_PRIMITIVES_H
 
+#include <stdbool.h>
+
+#include <SDL3/SDL.h>
+
 extern SDL_Surface *surface_create_rgb(Uint32 flags,
                                        int width,
                                        int height,

@@ -14,7 +14,18 @@
  * Keybinding persistence compatibility and input matching helpers.
  */
 
-#include <global.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <ctype.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <SDL3/SDL.h>
+#include <event.h>
+#include <keybind.h>
+#include <toolkit/toolkit.h>
 
 /**
  * Translate an SDL 1.2 special-key value to its SDL3 keycode.

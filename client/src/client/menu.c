@@ -27,12 +27,29 @@
  * Menu related functions.
  */
 
-#include <global.h>
 #include <wrapper.h>
+#include <client.h>
+#include <effects.h>
+#include <event.h>
+#include <gpu_renderer.h>
+#include <inventory.h>
+#include <commands.h>
 #include <client_socket.h>
+#include <item.h>
+#include <main.h>
+#include <misc.h>
+#include <player.h>
+#include <popup.h>
+#include <textwin.h>
+#include <toolkit/logger.h>
+#include <toolkit/memory.h>
 #include <region_map.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
+#include <toolkit/toolkit.h>
+#include <sound.h>
+#include <sprite.h>
+#include <widget.h>
 
 /**
  * Analyze /cmd type commands the player has typed in the console or bound to a

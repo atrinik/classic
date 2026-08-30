@@ -14,9 +14,15 @@
  * SDL3 window and mandatory GPU presentation.
  */
 
-#include <global.h>
 #include <video.h>
+#include <gpu_renderer.h>
 #include <window_title.h>
+#include <stdlib.h>
+
+#include <main.h>
+#include <settings.h>
+#include <toolkit/logger.h>
+#include <toolkit/toolkit.h>
 
 void video_init(void) {
     list_vid_modes();

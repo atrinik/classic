@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -29,12 +29,19 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <client_socket.h>
+#include <config.h>
+#include <client.h>
+#include <server_files.h>
+#include <settings.h>
 #include <packet_payload.h>
 #include <toolkit/packet.h>
 #include <toolkit/path.h>
+#include <toolkit/logger.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
 #include <wrapper.h>
+#include <zlib.h>
 
 /** Bound server-directed allocations and decompression work. */
 #define FILE_UPDATE_UNCOMPRESSED_MAX (64U * 1024U * 1024U)

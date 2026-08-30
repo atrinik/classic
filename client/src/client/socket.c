@@ -27,11 +27,20 @@
  * Client sockets related code.
  */
 
-#include <global.h>
 #include <metaserver.h>
+#include <asset.h>
+#include <client.h>
 #include <client_socket.h>
+#include <event.h>
+#include <join_credentials.h>
+#include <main.h>
+#include <player.h>
+#include <SDL3/SDL.h>
+#include <toolkit/logger.h>
+#include <toolkit/memory.h>
 #include <toolkit/datetime.h>
 #include <toolkit/packet.h>
+#include <toolkit/toolkit.h>
 #include <network_graph.h>
 
 static SDL_Thread *io_thread;

@@ -14,7 +14,11 @@
  * Event routing helpers for text window widgets.
  */
 
-#include <global.h>
+#include <SDL3/SDL.h>
+#include <text_input.h>
+#include <textwin.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 
 textwin_tab_struct *textwin_chat_input_event_tab(widgetdata *widget, const SDL_Event *event) {
     textwin_struct *textwin;

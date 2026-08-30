@@ -30,6 +30,15 @@
 #ifndef TEXT_H
 #define TEXT_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <time.h>
+
+#include <SDL3/SDL.h>
+#include <SDL3_ttf/SDL_ttf.h>
+#include <toolkit/toolkit.h>
+
 /** One font. */
 typedef struct font_struct {
     /** Key of the font (name@size) */

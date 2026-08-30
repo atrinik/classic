@@ -11,9 +11,12 @@
 
 /** @file Player-doll equipment slot selection regression tests. */
 
-#include <global.h>
 
 #include "../gui/widgets/playerdoll_equipment.h"
+#include <item.h>
+#include <player.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #define TEST_CHECK(condition)                                                               \
     do {                                                                                    \

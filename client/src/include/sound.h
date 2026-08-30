@@ -30,6 +30,16 @@
 #ifndef SOUND_H
 #define SOUND_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <toolkit/toolkit.h>
+
+#ifdef HAVE_SDL_MIXER
+#include <SDL3_mixer/SDL_mixer.h>
+#endif
+
 /**
  * One 'cached' sound.
  */

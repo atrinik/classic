@@ -9,8 +9,12 @@
  * (at your option) any later version.                                   *
  ************************************************************************/
 
-#include <global.h>
 #include <audio_log.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <toolkit/logger.h>
+#include <toolkit/toolkit.h>
 
 #define TEST_CHECK(condition) \
     do {                      \

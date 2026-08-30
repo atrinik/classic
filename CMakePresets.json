@@ -26,7 +26,6 @@
       "binaryDir": "${sourceDir}/build/integrated-linux-coverage",
       "cacheVariables": {
         "ENABLE_COVERAGE": true,
-        "ATRINIK_CLIENT_ENABLE_PRECOMPILED_HEADERS": false,
         "ATRINIK_SERVER_ENABLE_PRECOMPILED_HEADERS": false
       }
     },

@@ -29,9 +29,25 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <video.h>
+#include <event.h>
+#include <gpu_renderer.h>
+#include <inventory.h>
+#include <menu.h>
+#include <popup.h>
 #include <surface_primitives.h>
+#include <button.h>
+#include <client.h>
+#include <list.h>
+#include <main.h>
+#include <scrollbar.h>
+#include <text.h>
+#include <text_input.h>
+#include <settings.h>
+#include <sprite.h>
+#include <textwin.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/string.h>
 
 /**

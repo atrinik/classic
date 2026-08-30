@@ -29,10 +29,15 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <surface_primitives.h>
+#include <event.h>
 #include <network_graph.h>
 #include <network_graph_data.h>
+#include <main.h>
+#include <player.h>
+#include <sprite.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/string.h>
 
 /**

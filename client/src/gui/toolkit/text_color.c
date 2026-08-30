@@ -9,7 +9,11 @@
  * (at your option) any later version.                                   *
  ************************************************************************/
 
-#include <global.h>
+#include <SDL3/SDL.h>
+#include <stdio.h>
+#include <text.h>
+#include <toolkit/toolkit.h>
+
 
 /**
  * Parse the given string as an HTML notation color, and store the opaque

@@ -71,6 +71,12 @@ aggregate on both attempts. Attempt 1 populated the four isolated compiler
 caches; attempt 2 ran on fresh hosted runners and restored every cacheable
 compilation with zero misses:
 
+The client values in this historical table predate issue #488. They include the
+client's former catch-all-header PCH calls and are retained as immutable image
+evidence, not as the current client build contract. Current client builds use
+direct headers and no PCH; the server remains the only Classic consumer of the
+`global.h` PCH policy.
+
 | Component | Direct hits | Misses | Uncacheable PCH calls |
 | --- | ---: | ---: | ---: |
 | Core | 87 | 0 | 0 |

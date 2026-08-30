@@ -29,7 +29,17 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <SDL3/SDL.h>
+#include <book.h>
+#include <event.h>
+#include <main.h>
+#include <popup.h>
+#include <scrollbar.h>
+#include <text.h>
+#include <texture.h>
+#include <sprite.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/string.h>
 
 /** The book's content. */

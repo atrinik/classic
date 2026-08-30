@@ -14,7 +14,14 @@
  * Small SDL3-native set of software-surface primitives used by Atrinik.
  */
 
-#include <global.h>
+#include <stdbool.h>
+#include <SDL3/SDL.h>
+#include <gpu_renderer.h>
+#include <sprite.h>
+#include <surface_primitives.h>
+#include <settings.h>
+#include <toolkit/toolkit.h>
+
 
 bool surface_blit(SDL_Surface *source,
                   const SDL_Rect *source_rect,

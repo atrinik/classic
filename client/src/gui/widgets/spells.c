@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -29,7 +29,23 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <button.h>
+#include <client.h>
+#include <event.h>
+#include <item.h>
+#include <image.h>
+#include <list.h>
+#include <main.h>
+#include <menu.h>
+#include <misc.h>
+#include <popup.h>
+#include <player.h>
+#include <server_settings.h>
+#include <text.h>
+#include <sprite.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 
 /**
  * The spell list. This is a multi-dimensional array, containing

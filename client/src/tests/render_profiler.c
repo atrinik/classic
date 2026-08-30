@@ -9,8 +9,15 @@
  * (at your option) any later version.                                   *
  ************************************************************************/
 
-#include <global.h>
 #include <toolkit/stringbuffer.h>
+#include <SDL3/SDL.h>
+#include <gpu_renderer.h>
+#include <render_profiler.h>
+#include <scrollbar.h>
+#include <stdlib.h>
+#include <text.h>
+#include <widget.h>
+#include <toolkit/toolkit.h>
 
 #define TEST_CHECK(condition) \
     do {                      \
