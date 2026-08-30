@@ -42,6 +42,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn(
             "-DATRINIK_GPU_SHADER_DIRECTORY=${{ github.workspace }}", workflow
         )
+        self.assertIn("name: Bind qualification source identity", workflow)
+        self.assertIn("revision=$(git rev-parse --verify HEAD)", workflow)
+        self.assertIn("ATRINIK_BENCHMARK_REVISION=${revision}", workflow)
+        self.assertIn("ATRINIK_BENCHMARK_DIRTY=false", workflow)
 
     def test_release_builds_use_one_cmake_version_interface(self) -> None:
         check = self.text("check.yml")
@@ -1532,6 +1536,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("api.codecov.io/api/v2/github/", gpu_coverage_job)
         self.assertIn("flags: client-unit", client)
         self.assertIn("flags: client-gpu", gpu_coverage_job)
+        self.assertIn(
+            "COVERAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
+            workflow,
+        )
+        self.assertIn("commit: ${{ env.COVERAGE_SHA }}", client)
+        self.assertIn("commit: ${{ env.COVERAGE_SHA }}", gpu_coverage_job)
+        self.assertIn('"sha=${COVERAGE_SHA}"', gpu_coverage_job)
+        self.assertNotIn('"sha=${GITHUB_SHA}"', gpu_coverage_job)
         client_readme = (ROOT / "client" / "README.md").read_text(encoding="utf-8")
         self.assertEqual(client_readme.count("flag=client-gpu"), 1)
         self.assertNotIn("flag=client)]", client_readme)
@@ -1621,6 +1633,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("xvfb-run -a", gpu_coverage)
         self.assertIn("client-gpu-renderer-integration-tests", gpu_coverage)
         self.assertIn("gpu-ui-closure.xml", gpu_coverage)
+        self.assertIn('expected_revision=$(git -C "${source_root}" rev-parse', gpu_coverage)
+        self.assertIn('--env ATRINIK_BENCHMARK_REVISION="${expected_revision}"', gpu_coverage)
+        self.assertIn("verify_gpu_coverage_record.py", gpu_coverage)
+        self.assertIn("ATRINIK_GPU_CONFORMANCE_TEST_SUPPRESS_ROOT_GLYPH", gpu_coverage)
         self.assertIn("cmake --preset linux-coverage", gpu_coverage)
         self.assertIn("ctest --preset linux-coverage", gpu_coverage)
         self.assertIn("lvp_icd.json", gpu_coverage)

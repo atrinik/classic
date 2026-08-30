@@ -12,6 +12,17 @@ build_image=$2
 gpu_image=$3
 client_root=${source_root}/client
 coverage_build=${client_root}/build/linux-coverage
+coverage_record=${coverage_build}/gpu-ui-closure.jsonl
+
+expected_revision=$(git -C "${source_root}" rev-parse --verify HEAD)
+if [[ ! ${expected_revision} =~ ^[0-9a-f]{40}$ ]]; then
+  echo "GPU coverage requires an exact Git revision" >&2
+  exit 2
+fi
+if [[ -n $(git -C "${source_root}" status --porcelain=v1 --untracked-files=normal) ]]; then
+  echo "GPU coverage requires a clean source checkout" >&2
+  exit 2
+fi
 
 if [[ ! ${build_image} =~ ^ghcr\.io/atrinik/classic-build:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$ ]]; then
   echo "build image must be an immutable versioned Atrinik Classic digest" >&2
@@ -23,15 +34,15 @@ if [[ ! ${gpu_image} =~ ^ghcr\.io/atrinik/linux-build:[0-9]+\.[0-9]+\.[0-9]+@sha
 fi
 command -v docker >/dev/null
 
-if [[ ! -x ${coverage_build}/client-gpu-renderer-integration-tests ||
-      ! -x ${coverage_build}/atrinik ]]; then
-  docker run --rm \
-    --user "$(id -u):$(id -g)" \
-    --network none \
-    --volume "${source_root}:/workspace" \
-    --workdir /workspace \
-    "${build_image}" \
-    sh -c '
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  --network none \
+  --env ATRINIK_BENCHMARK_REVISION="${expected_revision}" \
+  --env ATRINIK_BENCHMARK_DIRTY=false \
+  --volume "${source_root}:/workspace" \
+  --workdir /workspace \
+  "${build_image}" \
+  sh -c '
       set -eu
       python3 server/tools/dependencies.py bundle-verify \
         --client-lock client/dependencies.lock.json \
@@ -50,7 +61,6 @@ if [[ ! -x ${coverage_build}/client-gpu-renderer-integration-tests ||
       cmake --build --preset linux-coverage --parallel "$(nproc)"
       ctest --preset linux-coverage --output-on-failure --no-tests=error -LE performance
     '
-fi
 
 if [[ ! -x ${coverage_build}/client-gpu-renderer-integration-tests ||
       ! -x ${coverage_build}/atrinik ]]; then
@@ -86,7 +96,17 @@ docker run --rm \
   sh -c "xvfb-run -a sh -c 'set -eu; \
     ./build/linux-coverage/client-gpu-renderer-integration-tests; \
     ./build/linux-coverage/atrinik --gpu-player-view \
-      src/tests/fixtures/player_view/gpu-ui-closure.xml'"
+      src/tests/fixtures/player_view/gpu-ui-closure.xml \
+      > build/linux-coverage/gpu-ui-closure.jsonl; \
+    if ATRINIK_GPU_CONFORMANCE_TEST_SUPPRESS_ROOT_GLYPH=intro_server_browser \
+      ./build/linux-coverage/atrinik --gpu-player-view \
+        src/tests/fixtures/player_view/gpu-ui-closure.xml >/dev/null 2>&1; then \
+      echo GPU UI closure accepted a suppressed root glyph >&2; \
+      exit 1; \
+    fi'"
+
+python3 "${client_root}/tools/verify_gpu_coverage_record.py" \
+  --revision "${expected_revision}" "${coverage_record}"
 
 docker run --rm \
   --user "$(id -u):$(id -g)" \

@@ -74,6 +74,15 @@ jobs:
         with:
           name: qualification-gpu-shaders
           path: build/gpu-shaders
+      - name: Bind qualification source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision=$(git rev-parse --verify HEAD)
+          test "${#revision}" -eq 40
+          test -z "$(git status --porcelain=v1 --untracked-files=normal)"
+          echo "ATRINIK_BENCHMARK_REVISION=${revision}" >>"${GITHUB_ENV}"
+          echo "ATRINIK_BENCHMARK_DIRTY=false" >>"${GITHUB_ENV}"
       - name: Configure clean Release qualification build
         shell: bash
         env:
